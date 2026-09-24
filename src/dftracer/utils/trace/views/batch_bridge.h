@@ -14,9 +14,11 @@
 #include <variant>
 #include <vector>
 
-namespace dftracer::utils::trace::views::detail {
-
+namespace dftracer::utils::index::plan {
 class GroupResolver;
+}  // namespace dftracer::utils::index::plan
+
+namespace dftracer::utils::trace::views::detail {
 
 /// The value on a pipeline edge: a FoldBatch at the leaf (a zero-copy view over
 /// the scan, valid for one step call only, hence held by reference), a Morsel
@@ -26,13 +28,15 @@ using Batch =
 
 /// Which columns a scan batch materializes into. `select` holds build_row_frame
 /// select tokens (empty = every column); `resolver` is needed only when
-/// `select` names a resolved.*/r.* field; `emit_dyn` adds the auto-numeric
+/// `select` names a `resolved.` column; `emit_dyn` adds the auto-numeric
 /// per-arg columns.
 struct ColumnSpec {
     std::vector<std::string> select;
     double time_scale = 1.0;
-    const GroupResolver* resolver = nullptr;
+    const dftracer::utils::index::plan::GroupResolver* resolver = nullptr;
     bool emit_dyn = false;
+    /// Name columns by exact path (path-decoded records).
+    bool by_path = false;
 };
 
 /// Materialize `events` into columns: build_row_frame's order for

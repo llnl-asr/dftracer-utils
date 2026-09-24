@@ -12,5 +12,6 @@ versions. Each page documents one header group from the source through Doxygen.
    :maxdepth: 1
 
    dataframe
+   indexer
    query
    plugins

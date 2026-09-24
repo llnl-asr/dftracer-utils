@@ -1,12 +1,12 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/trace/indexing/bloom_filter.h>
+#include <dftracer/utils/index/extensions/bloom_filter.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
 #include <set>
 #include <string>
 
-using namespace dftracer::utils::trace::indexing;
+using namespace dftracer::utils::index::extensions;
 
 TEST_SUITE("BloomFilter") {
     TEST_CASE("BloomFilter - Add and query") {

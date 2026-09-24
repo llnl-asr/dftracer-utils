@@ -6,13 +6,14 @@
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/trace/indexing/index_resolver_utility.h>
-#include <dftracer/utils/trace/indexing/resolve_and_build.h>
+#include <dftracer/utils/index/build/batch_builder.h>
+#include <dftracer/utils/index/build/resolve_and_build.h>
+#include <dftracer/utils/index/build/resolver.h>
+#include <dftracer/utils/index/schemas/dft/merged_statistics.h>
+#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
-#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -23,9 +24,9 @@
 #include <vector>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::trace::indexing;
-using dftracer::utils::utilities::indexer::IndexBatchBuilderUtility;
-using dftracer::utils::utilities::indexer::IndexBuildBatchConfig;
+using namespace dftracer::utils::index::build;
+using dftracer::utils::index::build::BatchBuilder;
+using dftracer::utils::index::build::IndexBuildBatchConfig;
 
 class EventCountArgParse : public cli::ArgParse {
    public:
@@ -58,12 +59,12 @@ static EventCountBatchResult process_index_group_event_counts_sync(
 
     EventCountBatchResult batch_result;
 
-    utilities::indexer::IndexDatabase db(
-        index_path,
-        dftracer::utils::utilities::indexer::IndexOpenMode::ReadOnly);
+    dftracer::utils::index::store::IndexDatabase db(
+        index_path, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
 
     auto metadata_rows = db.query_file_metadata_batch(file_ids);
-    auto merged_stats = db.query_merged_statistics_batch(file_ids);
+    auto merged_stats =
+        dftracer::utils::index::schemas::dft::merged_statistics(db, file_ids);
 
     for (const auto file_id : file_ids) {
         auto merged_it = merged_stats.find(file_id);
@@ -113,7 +114,7 @@ static int run_event_count(const EventCountArgParse* cli) {
                                        cli->pipeline, log_dir, {}, index_dir,
                                        force_rebuild);
 
-    IndexResolverUtility resolver;
+    Resolver resolver;
     ResolverInput resolve_input;
     resolve_input.directory = log_dir;
     resolve_input.index_dir = index_dir;
@@ -160,9 +161,7 @@ static int run_event_count(const EventCountArgParse* cli) {
             batch_config->checkpoint_size = checkpoint_size;
             batch_config->parallelism = executor_threads;
             batch_config->force_rebuild = force_rebuild;
-            batch_config->rebuild_root_summaries = true;
-            co_await IndexBatchBuilderUtility::process(&scope,
-                                                       std::move(batch_config));
+            co_await BatchBuilder::process(&scope, std::move(batch_config));
         },
         "BatchIndex");
 
@@ -171,7 +170,7 @@ static int run_event_count(const EventCountArgParse* cli) {
          &files_processed, &is_approximate, index_dir, index_path,
          executor_threads](CoroScope& ctx) -> coro::CoroTask<void> {
             if (!needs_checkpoint.empty()) {
-                IndexResolverUtility re_resolver;
+                Resolver re_resolver;
                 ResolverInput refresh_input;
                 std::vector<std::string> newly_indexed;
                 newly_indexed.reserve(needs_checkpoint.size());

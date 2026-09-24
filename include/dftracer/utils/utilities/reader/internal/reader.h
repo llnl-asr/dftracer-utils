@@ -1,58 +1,10 @@
 #ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_READER_H
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_READER_H
 
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/reader/internal/line_processor.h>
 #include <dftracer/utils/utilities/reader/internal/stream.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
-#include <stddef.h>
-#include <stdint.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-// Forward declare indexer handle from indexer C API
-typedef void *dftu_indexer_handle_t;
-
-/**
- * Opaque handle for DFT reader
- */
-typedef void *dftu_reader_handle_t;
-dftu_reader_handle_t dftu_reader_create(const char *gz_path,
-                                        const char *index_path,
-                                        size_t index_ckpt_size);
-dftu_reader_handle_t dftu_reader_create_with_indexer(
-    dftu_indexer_handle_t indexer);
-void dftu_reader_destroy(dftu_reader_handle_t reader);
-int dftu_reader_get_max_bytes(dftu_reader_handle_t reader, size_t *max_bytes);
-int dftu_reader_get_num_lines(dftu_reader_handle_t reader, size_t *num_lines);
-int dftu_reader_read(dftu_reader_handle_t reader, size_t start_bytes,
-                     size_t end_bytes, char *buffer, size_t buffer_size);
-int dftu_reader_read_line_bytes(dftu_reader_handle_t reader, size_t start_bytes,
-                                size_t end_bytes, char *buffer,
-                                size_t buffer_size);
-int dftu_reader_read_lines(dftu_reader_handle_t reader, size_t start_line,
-                           size_t end_line, char *buffer, size_t buffer_size,
-                           size_t *bytes_written);
-int dftu_reader_read_lines_with_processor(
-    dftu_reader_handle_t reader, size_t start_line, size_t end_line,
-    dftu_line_processor_callback_t callback, void *user_data);
-void dftu_reader_reset(dftu_reader_handle_t reader);
-
-/**
- * Create a stream for incremental reading with configuration.
- *
- * @param reader Reader handle
- * @param config Stream configuration (type, range, buffer size)
- * @return Stream handle, or NULL on error
- */
-dftu_reader_stream_t dftu_reader_stream(dftu_reader_handle_t reader,
-                                        const dftu_stream_config_t *config);
-
-#ifdef __cplusplus
-}  // extern "C"
-
-#include <dftracer/utils/core/coro/task.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -172,7 +124,5 @@ class Reader {
 };
 
 }  // namespace dftracer::utils::utilities::reader::internal
-
-#endif  // __cplusplus
 
 #endif  // DFTRACER_UTILS_UTILITIES_READER_INTERNAL_READER_H

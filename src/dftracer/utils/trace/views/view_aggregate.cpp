@@ -1,6 +1,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
-#include <dftracer/utils/trace/views/view_resolver.h>
+#include <dftracer/utils/trace/views/view_scan.h>
 
 #include <algorithm>
 #include <cctype>
@@ -72,31 +73,50 @@ const AggSchema& ensure_schema(const ViewPlan& plan) {
     return *plan.schema;
 }
 
-const GroupResolver* ensure_resolver(const ViewPlan& plan) {
+namespace {
+
+constexpr std::string_view FILE_PATH = "resolved.fhash.path";
+constexpr std::string_view HOST_NAME = "resolved.hhash.name";
+
+}  // namespace
+
+const dftracer::utils::index::plan::GroupResolver* ensure_resolver(
+    const ViewPlan& plan) {
+    if (plan.resolver) return plan.resolver.get();
     bool needs = false;
-    for (const auto& gk : plan.group_by)
+    std::vector<std::string> columns;
+    auto want = [&](std::string_view name) {
+        for (const auto& c : columns)
+            if (c == name) return;
+        columns.emplace_back(name);
+    };
+    for (const auto& gk : plan.group_by) {
         if (gk.kind == GroupKey::Kind::FilePath ||
-            gk.kind == GroupKey::Kind::FileName ||
-            gk.kind == GroupKey::Kind::HostName ||
-            gk.kind == GroupKey::Kind::Rank) {
-            needs = true;
-            break;
-        }
-    if (!needs) return nullptr;
-    if (!plan.resolver) {
-        std::vector<std::string> paths;
-        for (const auto& f : plan.files) {
-            if (f.index_path.empty()) continue;
-            bool seen = false;
-            for (const auto& p : paths)
-                if (p == f.index_path) {
-                    seen = true;
-                    break;
-                }
-            if (!seen) paths.push_back(f.index_path);
-        }
-        plan.resolver = std::make_shared<GroupResolver>(paths);
+            gk.kind == GroupKey::Kind::FileName)
+            want(FILE_PATH);
+        else if (gk.kind == GroupKey::Kind::HostName)
+            want(HOST_NAME);
+        else if (gk.kind == GroupKey::Kind::Resolved)
+            want(gk.arg);
+        else if (gk.kind != GroupKey::Kind::Rank)
+            continue;
+        needs = true;
     }
+    if (!needs) return nullptr;
+    std::vector<std::string> paths;
+    for (const auto& f : plan.files) {
+        if (f.index_path.empty()) continue;
+        bool seen = false;
+        for (const auto& p : paths)
+            if (p == f.index_path) {
+                seen = true;
+                break;
+            }
+        if (!seen) paths.push_back(f.index_path);
+    }
+    plan.resolver =
+        std::make_shared<dftracer::utils::index::plan::GroupResolver>(
+            paths, plan_record_schema(plan), columns);
     return plan.resolver.get();
 }
 
@@ -110,17 +130,27 @@ void apply_ranks(const ViewPlan& plan,
     ranks.clear();
 }
 
-std::string resolve_group_value(const GroupResolver& r, GroupKey::Kind kind,
-                                const std::string& hash) {
-    if (kind == GroupKey::Kind::FilePath) return r.file_path(hash);
+std::string resolve_group_value(
+    const dftracer::utils::index::plan::GroupResolver& r, const GroupKey& gk,
+    const std::string& hash) {
+    const GroupKey::Kind kind = gk.kind;
+    if (kind == GroupKey::Kind::Resolved) return r.value(gk.arg, hash);
+    if (kind == GroupKey::Kind::FilePath) return r.value(FILE_PATH, hash);
     if (kind == GroupKey::Kind::FileName) {
-        const std::string& p = r.file_path(hash);
+        const std::string& p = r.value(FILE_PATH, hash);
         const std::size_t slash = p.find_last_of('/');
         return slash == std::string::npos ? p : p.substr(slash + 1);
     }
-    if (kind == GroupKey::Kind::HostName) return r.host_name(hash);
+    if (kind == GroupKey::Kind::HostName) return r.value(HOST_NAME, hash);
     if (kind == GroupKey::Kind::Rank) return r.rank(hash);
     return hash;
+}
+
+std::string_view resolved_key_field(const GroupKey& gk) {
+    std::string_view f = gk.arg;
+    f.remove_prefix(
+        std::min(f.size(), dftracer::utils::index::RESOLVED_PREFIX.size()));
+    return f.substr(0, f.find('.'));
 }
 
 std::string apply_group_transform(const GroupKey& gk, std::string v) {
@@ -179,6 +209,7 @@ std::string group_col_name(const GroupKey& gk) {
         case GroupKey::Kind::Arg:
         case GroupKey::Kind::Field:
         case GroupKey::Kind::Expr:
+        case GroupKey::Kind::Resolved:
             return gk.arg;
     }
     return {};

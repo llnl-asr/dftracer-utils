@@ -3,19 +3,22 @@
 namespace dftracer::utils::query {
 
 Query::Query(const Query& other)
-    : source_(other.source_), fields_(other.fields_) {
+    : source_(other.source_), any_paths_(other.any_paths_) {
     auto result = parse(source_);
     if (!result) throw QueryParseError(result.error());
     root_ = std::move(*result);
+    // Views into this query's own AST, not the other's.
+    fields_ = collect_fields(*root_);
 }
 
 Query& Query::operator=(const Query& other) {
     if (this != &other) {
         source_ = other.source_;
-        fields_ = other.fields_;
+        any_paths_ = other.any_paths_;
         auto result = parse(source_);
         if (!result) throw QueryParseError(result.error());
         root_ = std::move(*result);
+        fields_ = collect_fields(*root_);
     }
     return *this;
 }

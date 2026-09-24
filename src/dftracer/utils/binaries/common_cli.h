@@ -12,10 +12,11 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
-#include <dftracer/utils/core/rocksdb/database.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/trace/indexing/resolve_and_build.h>
+#include <dftracer/utils/index/build/resolve_and_build.h>
+#include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
 #include <algorithm>
@@ -136,7 +137,7 @@ int cli_main(int argc, char** argv, const char* name, const char* description,
     // the handles and leak them.
     struct RocksDbExitGuard {
         ~RocksDbExitGuard() {
-            dftracer::utils::rocksdb::mark_process_exiting_for_rocksdb();
+            dftracer::utils::index::store::mark_process_exiting_for_rocksdb();
         }
     } rocksdb_exit_guard;
     dftracer::utils::logger::init();
@@ -596,11 +597,12 @@ int run_single_task(const std::string& name, const PipelineArgs& pipeline,
 // Split out so the run_single_task lambda below holds no coroutine locals,
 // which ICEs GCC 12/13.
 inline coro::CoroTask<int> ensure_indexes_fresh_task(
-    CoroScope& ctx, const std::string& directory,
-    const std::vector<std::string>& files, const std::string& index_dir,
+    CoroScope& ctx, dftracer::utils::index::Indexer indexer,
     bool force_rebuild) {
-    co_await trace::indexing::ensure_indexes_fresh(&ctx, directory, files,
-                                                   index_dir, force_rebuild);
+    if (force_rebuild)
+        co_await indexer.rebuild(ctx);
+    else
+        co_await indexer.build(ctx);
     co_return 0;
 }
 
@@ -610,11 +612,20 @@ inline int ensure_indexes_fresh_blocking(const std::string& name,
                                          std::vector<std::string> files,
                                          const std::string& index_dir,
                                          bool force_rebuild = false) {
-    return run_single_task(
-        name, pipeline, [&](CoroScope& ctx) -> coro::CoroTask<int> {
-            co_return co_await ensure_indexes_fresh_task(
-                ctx, directory, files, index_dir, force_rebuild);
-        });
+    std::vector<std::string> paths = directory.empty()
+                                         ? std::move(files)
+                                         : std::vector<std::string>{directory};
+    if (paths.empty()) return 0;
+    dftracer::utils::index::IndexerOptions options;
+    options.index_dir = index_dir;
+    options.bloom->required = false;
+    auto indexer = dftracer::utils::index::Indexer::open(std::move(paths),
+                                                         std::move(options));
+    return run_single_task(name, pipeline,
+                           [&](CoroScope& ctx) -> coro::CoroTask<int> {
+                               co_return co_await ensure_indexes_fresh_task(
+                                   ctx, indexer, force_rebuild);
+                           });
 }
 
 // Channel-backed fan-out: a single bounded producer feeds `items` (moved in)

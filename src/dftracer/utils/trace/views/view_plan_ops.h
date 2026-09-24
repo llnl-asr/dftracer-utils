@@ -24,14 +24,14 @@ namespace dftracer::utils::trace::views::detail::scan {
 
 using detail::ScanPlan;
 
-ScanPlan from_files(std::vector<ViewFile> files,
-                    indexing::BloomFilterCache* bloom_cache = nullptr);
+ScanPlan from_files(std::vector<ViewFile> files);
 ScanPlan from_file(std::string file_path, std::string index_path = "");
 coro::CoroTask<ScanPlan> from_directory(std::string dir,
                                         std::string index_path = "");
 std::vector<TraceConfig> config(const ScanPlan& plan_);
 std::vector<std::string> columns(const ScanPlan& plan_);
 std::vector<ColumnInfo> schema(const ScanPlan& plan_);
+std::vector<SchemaLeaf> schema_tree(const ScanPlan& plan_);
 std::unordered_map<std::string, dataframe::TypeId> column_types(
     const ScanPlan& plan_);
 TimeMetric time_metric(const ScanPlan& plan_);
@@ -63,6 +63,9 @@ ScanPlan topk(const ScanPlan& plan_, std::string column, std::int64_t k,
 ScanPlan materialize(const ScanPlan& plan_, std::uint64_t checkpoint_size,
                      std::uint64_t part_size);
 ScanPlan metadata(const ScanPlan& plan_, bool include);
+/// The plan read by a trace operation: records without a time are skipped.
+ScanPlan timed(const ScanPlan& plan_);
+ScanPlan record_schema(const ScanPlan& plan_, const std::string& id);
 ScanPlan cancel_when(const ScanPlan& plan_, std::function<bool()> pred);
 ScanPlan rollup_root(const ScanPlan& plan_, std::string dir);
 ScanPlan views_root(const ScanPlan& plan_, std::string dir);

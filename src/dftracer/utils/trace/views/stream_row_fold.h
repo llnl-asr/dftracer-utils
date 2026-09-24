@@ -18,9 +18,11 @@
 #include <string>
 #include <vector>
 
-namespace dftracer::utils::trace::views::detail {
-
+namespace dftracer::utils::index::plan {
 class GroupResolver;
+}  // namespace dftracer::utils::index::plan
+
+namespace dftracer::utils::trace::views::detail {
 
 /// Approximate resident size of `m`'s columns (flat buffers exact via
 /// buffer_bytes; String/Binary data from the offset span; List/Struct and a
@@ -37,14 +39,17 @@ std::uint64_t morsel_bytes(const dataframe::Morsel& m);
 /// query select, as its own scan would.
 class StreamRowFold : public Fold {
    public:
-    StreamRowFold(std::shared_ptr<coro::Channel<dataframe::Morsel>> channel,
-                  std::shared_ptr<coro::CoroSemaphore> budget,
-                  std::shared_ptr<dftracer::utils::StringIntern> intern,
-                  std::vector<std::string> select, double time_scale = 1.0,
-                  std::shared_ptr<const GroupResolver> resolver = nullptr,
-                  bool keep_metadata = false, bool emit_dyn = false,
-                  std::shared_ptr<const ViewPlan> branch = nullptr,
-                  std::shared_ptr<const std::atomic<bool>> dropped = nullptr)
+    StreamRowFold(
+        std::shared_ptr<coro::Channel<dataframe::Morsel>> channel,
+        std::shared_ptr<coro::CoroSemaphore> budget,
+        std::shared_ptr<dftracer::utils::StringIntern> intern,
+        std::vector<std::string> select, double time_scale = 1.0,
+        std::shared_ptr<const dftracer::utils::index::plan::GroupResolver>
+            resolver = nullptr,
+        bool keep_metadata = false, bool emit_dyn = false,
+        std::shared_ptr<const ViewPlan> branch = nullptr,
+        std::shared_ptr<const std::atomic<bool>> dropped = nullptr,
+        bool by_path = false)
         : channel_(std::move(channel)),
           budget_(std::move(budget)),
           intern_(std::move(intern)),
@@ -55,10 +60,12 @@ class StreamRowFold : public Fold {
           emit_dyn_(emit_dyn),
           branch_(std::move(branch)),
           dropped_(std::move(dropped)),
+          by_path_(by_path),
           guard_(channel_.get()) {}
 
     bool accepts(const ScanShape&) const override { return true; }
     bool needs_args() const override { return true; }
+    bool wants_metadata() const override { return keep_metadata_; }
 
     std::vector<std::string> extra_captures() const override {
         std::vector<std::string> fields = select_;
@@ -71,7 +78,7 @@ class StreamRowFold : public Fold {
     std::unique_ptr<Fold> slice() const override {
         return std::make_unique<StreamRowFold>(
             channel_, budget_, intern_, select_, time_scale_, resolver_,
-            keep_metadata_, emit_dyn_, branch_, dropped_);
+            keep_metadata_, emit_dyn_, branch_, dropped_, by_path_);
     }
 
     void step(const FoldBatch& batch) override;
@@ -101,12 +108,14 @@ class StreamRowFold : public Fold {
     std::shared_ptr<dftracer::utils::StringIntern> intern_;
     std::vector<std::string> select_;
     double time_scale_;
-    std::shared_ptr<const GroupResolver> resolver_;
+    std::shared_ptr<const dftracer::utils::index::plan::GroupResolver>
+        resolver_;
     bool keep_metadata_;  // phase("metadata"): keep ph=M records
     bool emit_dyn_;       // auto_numeric_metrics: emit per-batch dyn columns
     std::shared_ptr<const ViewPlan> branch_;
     // Set once the consumer let go; the fold then stops sending to it.
     std::shared_ptr<const std::atomic<bool>> dropped_;
+    bool by_path_;
     query::ValueMap qmap_;
     coro::Channel<dataframe::Morsel>::ProducerGuard guard_;
 

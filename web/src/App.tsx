@@ -12,7 +12,9 @@ import {
   fetchVizDensity,
   fetchVizStats,
   fetchResolve,
+  fetchUntimed,
   SINGLE_FILE,
+  UNTIMED_PAGE,
 } from "./data/api";
 import { calleesTree, callersTree, functionListAsync, type FnRow } from "./flame/sandwich";
 import type {
@@ -22,6 +24,7 @@ import type {
   InfoResponse,
   SelectionStats,
   TraceEvent,
+  UntimedResponse,
   VizMetadata,
   VizDensityResponse,
 } from "./data/types";
@@ -91,6 +94,7 @@ const BOTTOM_TABS: [string, string, AnGroup][] = [
   ["files", "files", "file"],
   ["counters", "counters", null],
   ["eventlog", "event log", null],
+  ["untimed", "no time", null],
 ];
 
 // One-line explanations shown as hover tooltips on metric labels.
@@ -476,6 +480,7 @@ export default function App() {
   const [bottomTab, setBottomTab] = createSignal("summary");
   function selectBottomTab(id: string, group: AnGroup) {
     setBottomTab(id);
+    if (id === "untimed") return;
     if (id === "eventlog") {
       loadEventLog();
       return;
@@ -495,6 +500,7 @@ export default function App() {
   }
   function reloadBottom() {
     const tab = bottomTab();
+    if (tab === "untimed") return;
     if (tab === "eventlog") return loadEventLog();
     if (tab === "bottlenecks" || tab === "bottomup" || tab === "calltree") return loadAnFlame();
     const entry = BOTTOM_TABS.find(([bid]) => bid === tab);
@@ -530,6 +536,8 @@ export default function App() {
   const [analyzeStats, setAnalyzeStats] = createSignal<SelectionStats | null>(null);
   const [analyzeLoading, setAnalyzeLoading] = createSignal(false);
   let analyzeInflight: AbortController | undefined;
+  const [untimed, setUntimed] = createSignal<UntimedResponse | null>(null);
+  let untimedInflight: AbortController | undefined;
   const [eventLog, setEventLog] = createSignal<TraceEvent[] | null>(null);
   const [eventLogLoading, setEventLogLoading] = createSignal(false);
   const [eventLogTruncated, setEventLogTruncated] = createSignal(false);
@@ -1087,8 +1095,24 @@ export default function App() {
     if (sidebarOpen()) reloadBottom();
   }
 
+  // Events without a clock (ts 0) for the current query; they have no place on
+  // the timeline, so the status bar counts them and the "no time" tab lists them.
+  function loadUntimed(offset = 0) {
+    untimedInflight?.abort();
+    const ac = new AbortController();
+    untimedInflight = ac;
+    fetchUntimed(appliedQuery(), offset, ac.signal)
+      .then((res) => {
+        if (!ac.signal.aborted) setUntimed(res);
+      })
+      .catch((err) => {
+        if ((err as Error).name !== "AbortError") setError((err as Error).message);
+      });
+  }
+
   function afterQueryChange() {
     loadOverview();
+    loadUntimed();
     if (view() === "flamegraph" || view() === "sandwich") loadFlame();
     const vp = timeline?.getViewport();
     if (vp) ensureData(vp.begin, vp.end, true);
@@ -1345,6 +1369,7 @@ export default function App() {
             })
             .catch(() => {});
           loadOverview();
+          loadUntimed();
           void loadColumns();
         } else {
           setError("No indexed events with a valid time range were found.");
@@ -2033,6 +2058,68 @@ export default function App() {
                   </Show>
                 </Show>
 
+                <Show when={bottomTab() === "untimed"}>
+                  <Show
+                    when={untimed()?.count}
+                    fallback={<div class="muted">every event has a time</div>}
+                  >
+                    <div class="muted">
+                      Records written with ts 0 (no clock, such as CUDA activity), so the timeline
+                      cannot place them.
+                    </div>
+                    <div class="muted">
+                      {(untimed()!.offset + 1).toLocaleString()}-
+                      {(untimed()!.offset + untimed()!.events.length).toLocaleString()} of{" "}
+                      {untimed()!.count.toLocaleString()}, longest first{" "}
+                      <button
+                        class="ghost sm"
+                        disabled={untimed()!.offset === 0}
+                        onClick={() => loadUntimed(Math.max(0, untimed()!.offset - UNTIMED_PAGE))}
+                      >
+                        prev
+                      </button>
+                      <button
+                        class="ghost sm"
+                        disabled={untimed()!.offset + untimed()!.events.length >= untimed()!.count}
+                        onClick={() => loadUntimed(untimed()!.offset + UNTIMED_PAGE)}
+                      >
+                        next
+                      </button>
+                    </div>
+                    <table class="kv stats analyze-table op-table evlog-table">
+                      <thead>
+                        <tr>
+                          <th class="num">dur</th>
+                          <th>operation</th>
+                          <th>layer</th>
+                          <th>kind</th>
+                          <th class="num">pid/tid</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <For each={untimed()!.events}>
+                          {(e) => {
+                            const name = String(e.name ?? "");
+                            return (
+                              <tr>
+                                <td class="num">{e.dur == null ? "-" : formatTime(e.dur)}</td>
+                                <td class="op-name" style={{ color: colorFor(name) }} title={name}>
+                                  {name}
+                                </td>
+                                <td class="op-layer">{String(e.cat || layerOf(name))}</td>
+                                <td>{e.ph === 3 ? "aggregated" : "event"}</td>
+                                <td class="num">
+                                  {String(e.pid)}/{String(e.tid)}
+                                </td>
+                              </tr>
+                            );
+                          }}
+                        </For>
+                      </tbody>
+                    </table>
+                  </Show>
+                </Show>
+
                 <Show when={bottomTab() === "calltree"}>
                   <Show when={anFlameLoading() && !anFlameTree()}>
                     <div class="muted">building call tree...</div>
@@ -2129,6 +2216,7 @@ export default function App() {
                   when={
                     analyzeStats() &&
                     bottomTab() !== "eventlog" &&
+                    bottomTab() !== "untimed" &&
                     bottomTab() !== "calltree" &&
                     bottomTab() !== "counters" &&
                     !isFlameTab()
@@ -2969,6 +3057,20 @@ export default function App() {
             {(m) => (
               <>
                 <span>{m().count.toLocaleString()} events</span>
+                <Show when={untimed()?.count}>
+                  {(n) => (
+                    <button
+                      class="ghost sm"
+                      title="Events recorded with ts 0 cannot be placed on the timeline"
+                      onClick={() => {
+                        setSidebarOpen(true);
+                        setBottomTab("untimed");
+                      }}
+                    >
+                      {n().toLocaleString()} records without time
+                    </button>
+                  )}
+                </Show>
                 <span>summary {summary()}</span>
                 <Show when={m().truncated}>
                   <span class="warn">truncated at {m().limit.toLocaleString()}</span>

@@ -2,14 +2,28 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/hash/hash_combine.h>
 #include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/coro/when_all.h>
-#include <dftracer/utils/core/rocksdb/db_manager.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/index/build/resolve_and_build.h>
+#include <dftracer/utils/index/build/resolver.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_serialization.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregator_types.h>
+#include <dftracer/utils/index/schemas/dft/agg/event_aggregator.h>
+#include <dftracer/utils/index/schemas/dft/agg/system_metrics.h>
+#include <dftracer/utils/index/schemas/dft/agg/system_metrics_serialization.h>
+#include <dftracer/utils/index/store/db_manager.h>
+#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/python/batch_indexer.h>
 #include <dftracer/utils/python/indexer.h>
 #include <dftracer/utils/python/py_dict_helpers.h>
+#include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_list_helpers.h>
 #include <dftracer/utils/python/py_method.h>
 #include <dftracer/utils/python/py_runtime_mixin.h>
@@ -18,31 +32,20 @@
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/query/query.h>
-#include <dftracer/utils/trace/aggregators/aggregation_config.h>
-#include <dftracer/utils/trace/aggregators/aggregation_serialization.h>
-#include <dftracer/utils/trace/aggregators/aggregator_types.h>
-#include <dftracer/utils/trace/aggregators/event_aggregator.h>
-#include <dftracer/utils/trace/aggregators/system_metrics.h>
-#include <dftracer/utils/trace/aggregators/system_metrics_serialization.h>
-#include <dftracer/utils/trace/indexing/index_resolver_utility.h>
-#include <dftracer/utils/trace/indexing/resolve_and_build.h>
 #include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <optional>
 #include <string>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
 using dftracer::utils::coro::CoroTask;
-using namespace dftracer::utils::trace::indexing;
-using namespace dftracer::utils::trace::aggregators;
+using namespace dftracer::utils::index::build;
+using namespace dftracer::utils::index::schemas::dft::agg;
 
 // ---------------------------------------------------------------------------
 // BatchIndexer - directory-level indexer with resolve/build pattern
@@ -56,6 +59,8 @@ static void Indexer_dealloc(IndexerObject* self) {
     Py_XDECREF(self->group_keys);
     Py_XDECREF(self->custom_metric_fields);
     Py_XDECREF(self->bloom_fields);
+    Py_XDECREF(self->extensions);
+    Py_XDECREF(self->schema);
     Py_TYPE(self)->tp_free((PyObject*)self);
 }
 
@@ -71,10 +76,13 @@ static PyObject* Indexer_new(PyTypeObject* type, PyObject*, PyObject*) {
         self->build_bloom = 1;
         self->require_aggregation = 0;
         self->bloom_fields = nullptr;
+        self->extensions = nullptr;
+        self->memory_budget = 0;
+        self->schema = nullptr;
         self->false_positive_rate = ChunkIndexerConfig{}.false_positive_rate;
         self->expected_entries =
             ChunkIndexerConfig{}.expected_entries_per_chunk;
-        self->auto_fields = ChunkIndexerConfig{}.auto_fields ? 1 : 0;
+        self->path_budget = ChunkIndexerConfig{}.path_budget;
         self->auto_max_distinct = ChunkIndexerConfig{}.auto_max_distinct;
         self->time_interval_ms = 5000.0;
         self->group_keys = nullptr;
@@ -90,18 +98,31 @@ static PyObject* Indexer_new(PyTypeObject* type, PyObject*, PyObject*) {
 }
 
 static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
-    static const char* kwlist[] = {
-        "directory",           "files",
-        "index_dir",           "require_checkpoint",
-        "require_bloom",       "build_bloom",
-        "require_aggregation", "time_interval_ms",
-        "group_keys",          "custom_metric_fields",
-        "compute_percentiles", "group_by_file",
-        "checkpoint_size",     "parallelism",
-        "force_rebuild",       "runtime",
-        "bloom_fields",        "false_positive_rate",
-        "expected_entries",    "auto_fields",
-        "auto_max_distinct",   nullptr};
+    static const char* kwlist[] = {"directory",
+                                   "files",
+                                   "index_dir",
+                                   "require_checkpoint",
+                                   "require_bloom",
+                                   "build_bloom",
+                                   "require_aggregation",
+                                   "time_interval_ms",
+                                   "group_keys",
+                                   "custom_metric_fields",
+                                   "compute_percentiles",
+                                   "group_by_file",
+                                   "checkpoint_size",
+                                   "parallelism",
+                                   "force_rebuild",
+                                   "runtime",
+                                   "bloom_fields",
+                                   "false_positive_rate",
+                                   "expected_entries",
+                                   "path_budget",
+                                   "auto_max_distinct",
+                                   "extensions",
+                                   "memory_budget",
+                                   "schema",
+                                   nullptr};
 
     const char* directory = "";
     PyObject* files_obj = Py_None;
@@ -124,19 +145,22 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
     double false_positive_rate = self->false_positive_rate;
     Py_ssize_t expected_entries =
         static_cast<Py_ssize_t>(self->expected_entries);
-    int auto_fields = self->auto_fields;
+    Py_ssize_t path_budget = static_cast<Py_ssize_t>(self->path_budget);
     Py_ssize_t auto_max_distinct =
         static_cast<Py_ssize_t>(self->auto_max_distinct);
+    PyObject* extensions_obj = Py_None;
+    unsigned long long memory_budget = 0;
+    PyObject* schema_obj = Py_None;
 
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "|sOsppppdOOppnnpOOdnpn", const_cast<char**>(kwlist),
+            args, kwds, "|sOsppppdOOppnnpOOdnnnOKO", const_cast<char**>(kwlist),
             &directory, &files_obj, &index_dir, &require_checkpoint,
             &require_bloom, &build_bloom, &require_aggregation,
             &time_interval_ms, &group_keys_obj, &custom_metrics_obj,
             &compute_percentiles, &group_by_file, &checkpoint_size,
             &parallelism, &force_rebuild, &runtime_arg, &bloom_fields_obj,
-            &false_positive_rate, &expected_entries, &auto_fields,
-            &auto_max_distinct)) {
+            &false_positive_rate, &expected_entries, &path_budget,
+            &auto_max_distinct, &extensions_obj, &memory_budget, &schema_obj)) {
         return -1;
     }
     if (!(false_positive_rate > 0.0 && false_positive_rate < 1.0)) {
@@ -152,7 +176,11 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
         PyErr_SetString(PyExc_ValueError, "auto_max_distinct must be > 0");
         return -1;
     }
-    self->auto_fields = auto_fields;
+    if (path_budget < 0) {
+        PyErr_SetString(PyExc_ValueError, "path_budget must be >= 0");
+        return -1;
+    }
+    self->path_budget = static_cast<std::size_t>(path_budget);
     self->auto_max_distinct = static_cast<std::size_t>(auto_max_distinct);
     if (bloom_fields_obj != Py_None) {
         std::vector<std::string> check;
@@ -163,8 +191,25 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
         Py_INCREF(bloom_fields_obj);
         self->bloom_fields = bloom_fields_obj;
     }
+    self->memory_budget = memory_budget;
+    if (schema_obj != Py_None) {
+        if (!PyUnicode_Check(schema_obj)) {
+            PyErr_SetString(PyExc_TypeError, "schema must be a str or None");
+            return -1;
+        }
+        Py_INCREF(schema_obj);
+        Py_XSETREF(self->schema, schema_obj);
+    }
     self->false_positive_rate = false_positive_rate;
     self->expected_entries = static_cast<std::size_t>(expected_entries);
+    if (extensions_obj != Py_None) {
+        std::vector<std::string> check;
+        if (!dftracer::utils::python::parse_string_seq(
+                extensions_obj, "extensions must be a sequence of str", check))
+            return -1;
+        Py_INCREF(extensions_obj);
+        Py_XSETREF(self->extensions, extensions_obj);
+    }
 
     // Validate: at least one of directory or files must be provided
     bool has_directory = directory && directory[0] != '\0';
@@ -291,112 +336,143 @@ static std::optional<AggregationConfig> build_aggregation_config(
     return config;
 }
 
+static std::optional<dftracer::utils::index::IndexerOptions> indexer_options(
+    IndexerObject* self) {
+    dftracer::utils::index::IndexerOptions o;
+    const char* index_dir = as_utf8(self->index_dir);
+    o.index_dir = index_dir ? index_dir : "";
+    o.checkpoint_size = self->checkpoint_size;
+    o.parallelism = self->parallelism;
+    o.checkpoints = self->require_checkpoint;
+    o.aggregation = build_aggregation_config(self);
+    o.runtime = get_batch_indexer_runtime(self);
+    o.memory_budget = self->memory_budget;
+    if (self->schema) {
+        const char* p = as_utf8(self->schema);
+        o.schema = p ? p : "";
+    }
+    if (!self->build_bloom) {
+        o.bloom.reset();
+        return o;
+    }
+    auto& b = *o.bloom;
+    if (!requested_bloom_fields(self, b.fields)) return std::nullopt;
+    b.required = self->require_bloom;
+    b.false_positive_rate = self->false_positive_rate;
+    b.path_budget = self->path_budget;
+    b.auto_max_distinct = self->auto_max_distinct;
+    b.expected_entries_per_chunk = self->expected_entries;
+    if (self->extensions) o.extensions.clear();
+    if (self->extensions &&
+        !dftracer::utils::python::parse_string_seq(
+            self->extensions, "extensions must be a sequence of str",
+            o.extensions))
+        return std::nullopt;
+    return o;
+}
+
+static std::vector<std::string> indexer_paths(IndexerObject* self) {
+    const char* directory = as_utf8(self->directory);
+    if (directory && directory[0] != '\0') return {directory};
+    std::vector<std::string> paths;
+    if (self->files && PyList_Check(self->files)) {
+        Py_ssize_t n = PyList_Size(self->files);
+        for (Py_ssize_t i = 0; i < n; i++) {
+            const char* s = as_utf8(PyList_GetItem(self->files, i));
+            if (s) paths.emplace_back(s);
+        }
+    }
+    return paths;
+}
+
+// Runs `fn` on an Indexer over this object's paths and options, GIL released.
+template <class Fn>
+static bool with_indexer(IndexerObject* self, Fn fn) {
+    auto options = indexer_options(self);
+    if (!options) return false;
+    auto paths = indexer_paths(self);
+    return run_blocking([&] {
+        fn(dftracer::utils::index::Indexer::open(std::move(paths),
+                                                 std::move(*options)));
+    });
+}
+
+enum class IndexerCall { STATUS, BUILD, REBUILD, ENSURE };
+
+static bool run_indexer(IndexerObject* self, IndexerCall call,
+                        dftracer::utils::index::IndexStatus& out) {
+    auto options = indexer_options(self);
+    if (!options) return false;
+    auto paths = indexer_paths(self);
+    const bool force = self->force_rebuild != 0;
+    return run_blocking([&] {
+        auto ix = dftracer::utils::index::Indexer::open(std::move(paths),
+                                                        std::move(*options));
+        switch (call) {
+            case IndexerCall::STATUS:
+                out = ix.status();
+                break;
+            case IndexerCall::BUILD:
+                out = ix.build();
+                break;
+            case IndexerCall::REBUILD:
+                out = ix.rebuild();
+                break;
+            case IndexerCall::ENSURE: {
+                if (!force) {
+                    out = ix.build();
+                    break;
+                }
+                auto before = ix.status();
+                out = before.needs_work.empty() &&
+                              !before.aggregation_needs_rebuild
+                          ? std::move(before)
+                          : ix.rebuild();
+                break;
+            }
+        }
+    });
+}
+
+static PyObject* string_list(const std::vector<std::string>& items) {
+    PyObject* list = PyList_New(static_cast<Py_ssize_t>(items.size()));
+    if (!list) return nullptr;
+    for (std::size_t i = 0; i < items.size(); ++i) {
+        PyObject* s = PyUnicode_FromString(items[i].c_str());
+        if (!s) {
+            Py_DECREF(list);
+            return nullptr;
+        }
+        PyList_SET_ITEM(list, static_cast<Py_ssize_t>(i), s);
+    }
+    return list;
+}
+
+static PyObject* status_dict(const dftracer::utils::index::IndexStatus& st) {
+    PyObject* dict = PyDict_New();
+    if (!dict) return nullptr;
+    dict_set_steal(dict, "total_files", PyLong_FromSize_t(st.total));
+    dict_set_steal(dict, "index_path",
+                   PyUnicode_FromString(st.index_path.c_str()));
+    dict_set_steal(dict, "aggregation_interval_us",
+                   PyLong_FromUnsignedLongLong(st.aggregation_interval_us));
+    dict_set_steal(dict, "needs_rebuild",
+                   PyBool_FromLong(st.aggregation_needs_rebuild));
+    dict_set_steal(dict, "ready", string_list(st.ready));
+    dict_set_steal(dict, "needs_work", string_list(st.needs_work));
+    dict_set_steal(dict, "truncated", string_list(st.truncated));
+    return dict;
+}
+
 // ---------------------------------------------------------------------------
 // resolve() - check what exists vs needs building
 // ---------------------------------------------------------------------------
 
 static PyObject* Indexer_resolve(IndexerObject* self,
                                  PyObject* Py_UNUSED(ignored)) {
-    const char* directory = as_utf8(self->directory);
-    const char* index_dir = as_utf8(self->index_dir);
-
-    ResolverInput input;
-    input.directory = directory ? directory : "";
-    input.index_dir = index_dir ? index_dir : "";
-    input.require_checkpoints = self->require_checkpoint;
-    input.require_bloom = self->require_bloom;
-    input.require_aggregation = self->require_aggregation;
-    input.checkpoint_size = self->checkpoint_size;
-    input.aggregation_config = build_aggregation_config(self);
-    if (self->build_bloom) {
-        if (!requested_bloom_fields(self, input.bloom_fields)) return nullptr;
-        if (self->auto_fields)
-            input.bloom_fields.emplace_back(AUTO_FIELDS_MARKER);
-    }
-
-    // Add files if provided
-    if (self->files && PyList_Check(self->files)) {
-        Py_ssize_t n = PyList_Size(self->files);
-        for (Py_ssize_t i = 0; i < n; i++) {
-            const char* s = as_utf8(PyList_GetItem(self->files, i));
-            if (s) input.files.emplace_back(s);
-        }
-    }
-
-    ResolverResult result;
-
-    if (!run_blocking([&] {
-            Runtime* rt = get_batch_indexer_runtime(self);
-            rt->submit(run_coro_scope(
-                           rt->executor(),
-                           [](CoroScope& scope, ResolverInput in,
-                              ResolverResult* out) -> CoroTask<void> {
-                               IndexResolverUtility resolver;
-                               *out = co_await resolver(scope, std::move(in));
-                           },
-                           std::move(input), &result),
-                       "batch-indexer-resolve")
-                .get();
-        })) {
-        return nullptr;
-    }
-
-    // Build result dict
-    PyObject* dict = PyDict_New();
-    if (!dict) return nullptr;
-
-    dict_set_steal(dict, "total_files",
-                   PyLong_FromSize_t(result.all_files.size()));
-    dict_set_steal(dict, "index_path",
-                   PyUnicode_FromString(result.index_path.c_str()));
-    dict_set_steal(dict, "aggregation_interval_us",
-                   PyLong_FromUnsignedLongLong(result.stored_time_interval_us));
-    dict_set_steal(dict, "needs_rebuild",
-                   PyBool_FromLong(result.needs_augmentation));
-
-    // Ready files
-    PyObject* ready_list = PyList_New(result.cached.size());
-    for (std::size_t i = 0; i < result.cached.size(); ++i) {
-        PyList_SetItem(
-            ready_list, i,
-            PyUnicode_FromString(result.cached[i].file_path.c_str()));
-    }
-    PyDict_SetItemString(dict, "ready", ready_list);
-
-    // Needs work files (union of all needs_* lists)
-    std::vector<std::string> needs_work;
-    for (const auto& item : result.needs_checkpoint) {
-        needs_work.push_back(item.file_path);
-    }
-    for (const auto& item : result.needs_bloom) {
-        bool found = false;
-        for (const auto& existing : needs_work) {
-            if (existing == item.file_path) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) needs_work.push_back(item.file_path);
-    }
-    for (const auto& item : result.needs_aggregation) {
-        bool found = false;
-        for (const auto& existing : needs_work) {
-            if (existing == item.file_path) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) needs_work.push_back(item.file_path);
-    }
-
-    PyObject* needs_list = PyList_New(needs_work.size());
-    for (std::size_t i = 0; i < needs_work.size(); ++i) {
-        PyList_SetItem(needs_list, i,
-                       PyUnicode_FromString(needs_work[i].c_str()));
-    }
-    PyDict_SetItemString(dict, "needs_work", needs_list);
-
-    return dict;
+    dftracer::utils::index::IndexStatus st;
+    if (!run_indexer(self, IndexerCall::STATUS, st)) return nullptr;
+    return status_dict(st);
 }
 
 // ---------------------------------------------------------------------------
@@ -405,52 +481,12 @@ static PyObject* Indexer_resolve(IndexerObject* self,
 
 static PyObject* Indexer_build(IndexerObject* self,
                                PyObject* Py_UNUSED(ignored)) {
-    const char* directory = as_utf8(self->directory);
-    const char* index_dir = as_utf8(self->index_dir);
-
-    ResolveAndBuildInput input;
-    input.directory = directory ? directory : "";
-    input.index_dir = index_dir ? index_dir : "";
-    input.require_checkpoints = self->require_checkpoint;
-    input.require_bloom = self->require_bloom;
-    input.build_bloom = self->build_bloom;
-    input.require_aggregation = self->require_aggregation;
-    input.aggregation_config = build_aggregation_config(self);
-    if (!requested_bloom_fields(self, input.bloom_config.extra_dimensions))
+    dftracer::utils::index::IndexStatus st;
+    if (!run_indexer(
+            self,
+            self->force_rebuild ? IndexerCall::REBUILD : IndexerCall::BUILD,
+            st))
         return nullptr;
-    input.bloom_config.false_positive_rate = self->false_positive_rate;
-    input.bloom_config.auto_fields = self->auto_fields != 0;
-    input.bloom_config.auto_max_distinct = self->auto_max_distinct;
-    input.bloom_config.expected_entries_per_chunk = self->expected_entries;
-    input.checkpoint_size = self->checkpoint_size;
-    input.parallelism = self->parallelism;
-    input.force_rebuild = self->force_rebuild;
-
-    // Add files if provided
-    if (self->files && PyList_Check(self->files)) {
-        Py_ssize_t n = PyList_Size(self->files);
-        for (Py_ssize_t i = 0; i < n; i++) {
-            const char* s = as_utf8(PyList_GetItem(self->files, i));
-            if (s) input.files.emplace_back(s);
-        }
-    }
-
-    if (!run_blocking([&] {
-            Runtime* rt = get_batch_indexer_runtime(self);
-            rt->submit(run_coro_scope(
-                           rt->executor(),
-                           [](CoroScope& scope,
-                              ResolveAndBuildInput in) -> CoroTask<void> {
-                               co_await resolve_and_build_index(&scope,
-                                                                std::move(in));
-                           },
-                           std::move(input)),
-                       "batch-indexer-build")
-                .get();
-        })) {
-        return nullptr;
-    }
-
     Py_RETURN_NONE;
 }
 
@@ -460,34 +496,56 @@ static PyObject* Indexer_build(IndexerObject* self,
 
 static PyObject* Indexer_ensure_indexed(IndexerObject* self,
                                         PyObject* Py_UNUSED(ignored)) {
-    // First resolve
-    PyObject* status = Indexer_resolve(self, nullptr);
-    if (!status) return nullptr;
-
-    // Build if files need work, or the aggregation tier must be rebuilt
-    // (stored time interval differs from the requested one).
-    PyObject* needs_work = PyDict_GetItemString(status, "needs_work");
-    PyObject* needs_rebuild = PyDict_GetItemString(status, "needs_rebuild");
-    bool work_pending = needs_work && PyList_Size(needs_work) > 0;
-    bool rebuild_pending = needs_rebuild && PyObject_IsTrue(needs_rebuild);
-    if (work_pending || rebuild_pending) {
-        Py_DECREF(status);
-
-        // Build
-        PyObject* result = Indexer_build(self, nullptr);
-        if (!result) return nullptr;
-        Py_DECREF(result);
-
-        // Re-resolve
-        status = Indexer_resolve(self, nullptr);
-    }
-
-    return status;
+    dftracer::utils::index::IndexStatus st;
+    if (!run_indexer(self, IndexerCall::ENSURE, st)) return nullptr;
+    return status_dict(st);
 }
 
-// ---------------------------------------------------------------------------
-// get_checkpoint_indexer() - get a single-file checkpoint indexer
-// ---------------------------------------------------------------------------
+static PyObject* Indexer_manifest(IndexerObject* self,
+                                  PyObject* Py_UNUSED(ignored)) {
+    std::string json;
+    if (!with_indexer(self, [&](dftracer::utils::index::Indexer ix) {
+            json = dftracer::utils::index::to_json(ix.manifest());
+        }))
+        return nullptr;
+    return PyUnicode_FromStringAndSize(json.data(),
+                                       static_cast<Py_ssize_t>(json.size()));
+}
+
+static PyObject* Indexer_explain(IndexerObject* self, PyObject* args) {
+    const char* query = nullptr;
+    if (!PyArg_ParseTuple(args, "s", &query)) return nullptr;
+    std::string json;
+    if (!with_indexer(self, [&](dftracer::utils::index::Indexer ix) {
+            json = dftracer::utils::index::to_json(ix.explain(query));
+        }))
+        return nullptr;
+    return PyUnicode_FromStringAndSize(json.data(),
+                                       static_cast<Py_ssize_t>(json.size()));
+}
+
+static PyObject* Indexer_rebuild_extension(IndexerObject* self,
+                                           PyObject* args) {
+    const char* name = nullptr;
+    if (!PyArg_ParseTuple(args, "s", &name)) return nullptr;
+    dftracer::utils::index::IndexStatus st;
+    if (!with_indexer(self, [&](dftracer::utils::index::Indexer ix) {
+            st = ix.rebuild_extension(name);
+        }))
+        return nullptr;
+    return status_dict(st);
+}
+
+static PyObject* Indexer_drop_extension(IndexerObject* self, PyObject* args) {
+    const char* name = nullptr;
+    if (!PyArg_ParseTuple(args, "s", &name)) return nullptr;
+    dftracer::utils::index::IndexStatus st;
+    if (!with_indexer(self, [&](dftracer::utils::index::Indexer ix) {
+            st = ix.drop_extension(name);
+        }))
+        return nullptr;
+    return status_dict(st);
+}
 
 static PyObject* Indexer_get_checkpoint_indexer(IndexerObject* self,
                                                 PyObject* args) {
@@ -525,12 +583,20 @@ static PyObject* Indexer_get_checkpoint_indexer(IndexerObject* self,
     }
 
     // Create the native handle
-    indexer->handle = dftu_indexer_create(file_path, index_path.c_str(),
-                                          self->checkpoint_size, 0);
-    if (!indexer->handle) {
+    try {
+        auto native =
+            dftracer::utils::index::gzip::CheckpointIndexerFactory::create(
+                file_path, index_path, self->checkpoint_size, false);
+        if (!native) {
+            Py_DECREF((PyObject*)indexer);
+            PyErr_SetString(PyExc_RuntimeError, "Unsupported archive format");
+            return nullptr;
+        }
+        indexer->handle = new std::shared_ptr<
+            dftracer::utils::index::gzip::CheckpointIndexer>(std::move(native));
+    } catch (const std::exception& e) {
         Py_DECREF((PyObject*)indexer);
-        PyErr_SetString(PyExc_RuntimeError,
-                        "Failed to create checkpoint indexer");
+        PyErr_SetString(PyExc_RuntimeError, e.what());
         return nullptr;
     }
 
@@ -552,27 +618,18 @@ static std::optional<std::string> resolve_index_path(IndexerObject* self) {
     return result;
 }
 
-static PyObject* Indexer_get_hash_table(IndexerObject* self, PyObject* args) {
-    const char* type_str = nullptr;
-    if (!PyArg_ParseTuple(args, "s", &type_str)) {
-        return nullptr;
-    }
+static PyObject* Indexer_get_dictionary(IndexerObject* self, PyObject* args) {
+    const char* name = nullptr;
+    const char* field = nullptr;
+    if (!PyArg_ParseTuple(args, "ss", &name, &field)) return nullptr;
 
-    using dftracer::utils::utilities::indexer::IndexDatabase;
-    using HashType = IndexDatabase::HashType;
-
-    HashType type;
-    if (std::strcmp(type_str, "file") == 0) {
-        type = HashType::FILE;
-    } else if (std::strcmp(type_str, "host") == 0) {
-        type = HashType::HOST;
-    } else if (std::strcmp(type_str, "string") == 0) {
-        type = HashType::STRING;
-    } else if (std::strcmp(type_str, "proc") == 0) {
-        type = HashType::PROC;
-    } else {
-        PyErr_SetString(PyExc_ValueError,
-                        "type must be 'file', 'host', 'string', or 'proc'");
+    bool known = false;
+    for (const auto* p : dftracer::utils::index::registered_schemas())
+        for (const auto& d : p->dictionaries)
+            known = known || (d.name == name && d.has_field(field));
+    if (!known) {
+        PyErr_Format(PyExc_ValueError, "unknown dictionary field %s.%s", name,
+                     field);
         return nullptr;
     }
 
@@ -580,29 +637,32 @@ static PyObject* Indexer_get_hash_table(IndexerObject* self, PyObject* args) {
     if (!idx_opt) return nullptr;
     std::string index_path = std::move(*idx_opt);
 
-    std::unordered_map<std::string, std::string> hash_map;
+    dftracer::utils::StringViewMap<std::string> values;
     if (!run_blocking_r(
             [&] {
-                IndexDatabase db(index_path,
-                                 dftracer::utils::utilities::indexer::
-                                     IndexOpenMode::ReadOnly);
-                return db.query_hash_table(type);
+                dftracer::utils::index::store::IndexDatabase db(
+                    index_path,
+                    dftracer::utils::index::store::IndexOpenMode::ReadOnly);
+                return db.dict_field(name, field);
             },
-            hash_map)) {
+            values)) {
         return nullptr;
     }
 
     PyObject* dict = PyDict_New();
     if (!dict) return nullptr;
-
-    for (const auto& [hash, name] : hash_map) {
-        PyObject* key = PyUnicode_FromStringAndSize(hash.data(), hash.size());
-        PyObject* val = PyUnicode_FromStringAndSize(name.data(), name.size());
-        PyDict_SetItem(dict, key, val);
+    for (const auto& [k, v] : values) {
+        PyObject* key = PyUnicode_FromStringAndSize(k.data(), k.size());
+        PyObject* val = PyUnicode_FromStringAndSize(v.data(), v.size());
+        if (!key || !val || PyDict_SetItem(dict, key, val) < 0) {
+            Py_XDECREF(key);
+            Py_XDECREF(val);
+            Py_DECREF(dict);
+            return nullptr;
+        }
         Py_DECREF(key);
         Py_DECREF(val);
     }
-
     return dict;
 }
 
@@ -612,18 +672,18 @@ static PyObject* Indexer_query_file_pids(IndexerObject* self, PyObject* args) {
         return nullptr;
     }
 
-    using dftracer::utils::utilities::indexer::IndexDatabase;
+    using dftracer::utils::index::store::IndexDatabase;
 
     auto idx_opt = resolve_index_path(self);
     if (!idx_opt) return nullptr;
     std::string index_path = std::move(*idx_opt);
 
-    std::unordered_set<std::uint64_t> pids;
+    ankerl::unordered_dense::set<std::uint64_t> pids;
     if (!run_blocking_r(
             [&] {
-                IndexDatabase db(index_path,
-                                 dftracer::utils::utilities::indexer::
-                                     IndexOpenMode::ReadOnly);
+                IndexDatabase db(
+                    index_path,
+                    dftracer::utils::index::store::IndexOpenMode::ReadOnly);
                 return db.query_file_pids(file_id);
             },
             pids)) {
@@ -644,18 +704,20 @@ static PyObject* Indexer_query_file_pids(IndexerObject* self, PyObject* args) {
 
 static PyObject* Indexer_query_all_file_pids(IndexerObject* self,
                                              PyObject* Py_UNUSED(ignored)) {
-    using dftracer::utils::utilities::indexer::IndexDatabase;
+    using dftracer::utils::index::store::IndexDatabase;
 
     auto idx_opt = resolve_index_path(self);
     if (!idx_opt) return nullptr;
     std::string index_path = std::move(*idx_opt);
 
-    std::unordered_map<int, std::unordered_set<std::uint64_t>> all_pids;
+    ankerl::unordered_dense::map<int,
+                                 ankerl::unordered_dense::set<std::uint64_t>>
+        all_pids;
     if (!run_blocking_r(
             [&] {
-                IndexDatabase db(index_path,
-                                 dftracer::utils::utilities::indexer::
-                                     IndexOpenMode::ReadOnly);
+                IndexDatabase db(
+                    index_path,
+                    dftracer::utils::index::store::IndexOpenMode::ReadOnly);
                 return db.query_all_file_pids();
             },
             all_pids)) {
@@ -683,19 +745,21 @@ static PyObject* Indexer_query_all_file_pids(IndexerObject* self,
 
 static PyObject* Indexer_query_file_info(IndexerObject* self,
                                          PyObject* Py_UNUSED(ignored)) {
-    using dftracer::utils::utilities::indexer::IndexDatabase;
+    using dftracer::utils::index::store::IndexDatabase;
 
     auto idx_opt = resolve_index_path(self);
     if (!idx_opt) return nullptr;
     std::string index_path = std::move(*idx_opt);
 
-    std::unordered_map<std::string, int> file_ids;
-    std::unordered_map<int, std::unordered_set<std::uint64_t>> all_pids;
+    dftracer::utils::StringViewMap<int> file_ids;
+    ankerl::unordered_dense::map<int,
+                                 ankerl::unordered_dense::set<std::uint64_t>>
+        all_pids;
 
     if (!run_blocking([&] {
             IndexDatabase db(
                 index_path,
-                dftracer::utils::utilities::indexer::IndexOpenMode::ReadOnly);
+                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
             file_ids = db.query_all_file_info_ids();
             all_pids = db.query_all_file_pids();
         })) {
@@ -740,55 +804,6 @@ static PyObject* Indexer_query_file_info(IndexerObject* self,
     return result;
 }
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-static PyObject* count_hash_entries_fn(PyObject* /*self*/, PyObject* args) {
-    const char* index_path = nullptr;
-    const char* type_str = nullptr;
-    if (!PyArg_ParseTuple(args, "ss", &index_path, &type_str)) return nullptr;
-
-    using dftracer::utils::utilities::indexer::IndexDatabase;
-    using HashType = IndexDatabase::HashType;
-
-    HashType type;
-    if (std::strcmp(type_str, "file") == 0) {
-        type = HashType::FILE;
-    } else if (std::strcmp(type_str, "host") == 0) {
-        type = HashType::HOST;
-    } else if (std::strcmp(type_str, "string") == 0) {
-        type = HashType::STRING;
-    } else if (std::strcmp(type_str, "proc") == 0) {
-        type = HashType::PROC;
-    } else {
-        PyErr_SetString(PyExc_ValueError,
-                        "type must be 'file', 'host', 'string', or 'proc'");
-        return nullptr;
-    }
-
-    std::uint64_t count = 0;
-    if (!run_blocking_r(
-            [&] {
-                IndexDatabase db(index_path,
-                                 dftracer::utils::utilities::indexer::
-                                     IndexOpenMode::ReadOnly);
-                return db.count_hash_entries(type);
-            },
-            count)) {
-        return nullptr;
-    }
-    return PyLong_FromUnsignedLongLong(count);
-}
-
-static PyMethodDef BatchIndexerModuleMethods[] = {
-    {"count_hash_entries", DFTU_PYCFUNCTION(count_hash_entries_fn),
-     METH_VARARGS,
-     "count_hash_entries(index_path, type)\n"
-     "--\n\n"
-     "Number of hashes of `type` ('file', 'host', 'string', 'proc') in the\n"
-     "index at `index_path`. Counted by iteration, so a table holding tens\n"
-     "of millions of entries is not materialised to take its length.\n"},
-    {nullptr, nullptr, 0, nullptr}};
-#endif
-
 static PyMethodDef Indexer_methods[] = {
     {"get_checkpoint_indexer", DFTU_PYCFUNCTION(Indexer_get_checkpoint_indexer),
      METH_VARARGS,
@@ -815,14 +830,29 @@ static PyMethodDef Indexer_methods[] = {
      "Resolve and build if needed.\n\n"
      "Returns:\n"
      "    dict with index status after building.\n"},
-    {"get_hash_table", DFTU_PYCFUNCTION(Indexer_get_hash_table), METH_VARARGS,
-     "get_hash_table(type)\n"
+    {"manifest", DFTU_PYCFUNCTION(Indexer_manifest), METH_NOARGS,
+     "manifest()\n"
      "--\n\n"
-     "Query hash table mappings.\n\n"
-     "Args:\n"
-     "    type: 'file', 'host', 'string', or 'proc'\n\n"
-     "Returns:\n"
-     "    dict mapping hash values to resolved names.\n"},
+     "The manifest of every indexed file, as a JSON string.\n"},
+    {"explain", DFTU_PYCFUNCTION(Indexer_explain), METH_VARARGS,
+     "explain(query)\n"
+     "--\n\n"
+     "Per file, the chunks the query reads and what each pruning extension\n"
+     "rules out alone, as a JSON string.\n"},
+    {"rebuild_extension", DFTU_PYCFUNCTION(Indexer_rebuild_extension),
+     METH_VARARGS,
+     "rebuild_extension(name)\n"
+     "--\n\n"
+     "Rewrite one tier extension of every file; returns the status dict.\n"},
+    {"drop_extension", DFTU_PYCFUNCTION(Indexer_drop_extension), METH_VARARGS,
+     "drop_extension(name)\n"
+     "--\n\n"
+     "Remove one tier extension from every file; returns the status dict.\n"},
+    {"get_dictionary", DFTU_PYCFUNCTION(Indexer_get_dictionary), METH_VARARGS,
+     "get_dictionary(name, field)\n"
+     "--\n\n"
+     "Key -> `field` of every row of dictionary `name` (for example\n"
+     "'file', 'path'). Raises ValueError for an unknown dictionary field.\n"},
     {"query_file_pids", DFTU_PYCFUNCTION(Indexer_query_file_pids), METH_VARARGS,
      "query_file_pids(file_id)\n"
      "--\n\n"
@@ -876,7 +906,7 @@ PyTypeObject IndexerType = {
     "--\n\n"
     "Indexer with tiered index building.\n\n"
     "At least one of 'directory' or 'files' must be provided.\n"
-    "- directory: scan for .pfw/.pfw.gz files\n"
+    "- directory: scan for .pfw/.pfw.gz/.jsonl.gz/.ndjson.gz files\n"
     "- files: list of specific file paths\n\n"
     "Supports:\n"
     "- Tier 1: Checkpoints (require_checkpoint)\n"
@@ -901,12 +931,79 @@ PyTypeObject IndexerType = {
     Indexer_new,
 };
 
+namespace {
+
+template <class Fn>
+PyObject* schema_str(Fn fn) {
+    try {
+        const std::string s = fn();
+        return PyUnicode_FromStringAndSize(s.data(),
+                                           static_cast<Py_ssize_t>(s.size()));
+    } catch (const std::exception& e) {
+        dftracer::utils::python::set_typed_py_error(e);
+        return nullptr;
+    }
+}
+
+PyObject* schema_register_fn(PyObject*, PyObject* args) {
+    const char* text = nullptr;
+    const char* source = "<text>";
+    if (!PyArg_ParseTuple(args, "s|s", &text, &source)) return nullptr;
+    return schema_str([&] {
+        return dftracer::utils::index::register_schema(text, source).id;
+    });
+}
+
+PyObject* schema_load_fn(PyObject*, PyObject* args) {
+    const char* path = nullptr;
+    if (!PyArg_ParseTuple(args, "s", &path)) return nullptr;
+    return schema_str([&] {
+        dftracer::utils::index::load_schemas(path);
+        return dftracer::utils::index::schemas_json();
+    });
+}
+
+PyObject* schema_list_fn(PyObject*, PyObject*) {
+    return schema_str([] { return dftracer::utils::index::schemas_json(); });
+}
+
+PyObject* schema_detect_fn(PyObject*, PyObject* args) {
+    const char* path = nullptr;
+    if (!PyArg_ParseTuple(args, "s", &path)) return nullptr;
+    return schema_str(
+        [&] { return dftracer::utils::index::detect_file_schema(path).id; });
+}
+
+PyObject* schema_explain_fn(PyObject*, PyObject* args) {
+    const char* path = nullptr;
+    if (!PyArg_ParseTuple(args, "s", &path)) return nullptr;
+    return schema_str([&] {
+        return dftracer::utils::index::to_json(
+            dftracer::utils::index::explain_file_schema(path));
+    });
+}
+
+PyMethodDef SCHEMA_METHODS[] = {
+    {"_schema_register", schema_register_fn, METH_VARARGS,
+     "_schema_register(text, source='<text>')\n--\n\nRegister a YAML or "
+     "JSON schema spec; returns its id.\n"},
+    {"_schema_load", schema_load_fn, METH_VARARGS,
+     "_schema_load(path)\n--\n\nRegister every spec at a file or "
+     "directory; returns the registered schemas as JSON.\n"},
+    {"_schema_list", schema_list_fn, METH_NOARGS,
+     "_schema_list()\n--\n\nThe registered schemas as JSON.\n"},
+    {"_schema_detect", schema_detect_fn, METH_VARARGS,
+     "_schema_detect(path)\n--\n\nThe schema detected for a trace.\n"},
+    {"_schema_explain", schema_explain_fn, METH_VARARGS,
+     "_schema_explain(path)\n--\n\nEvery schema's detection share for a "
+     "trace and the chosen one, as JSON.\n"},
+    {nullptr, nullptr, 0, nullptr}};
+
+}  // namespace
+
 int dftracer::utils::python::init_indexer(PyObject* m) {
     if (register_type(m, &IndexerType, "Indexer") < 0) return -1;
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-    if (PyModule_AddFunctions(m, BatchIndexerModuleMethods) < 0) return -1;
-#endif
+    if (PyModule_AddFunctions(m, SCHEMA_METHODS) < 0) return -1;
 
     return 0;
 }

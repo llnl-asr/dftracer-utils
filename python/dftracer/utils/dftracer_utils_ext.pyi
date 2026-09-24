@@ -106,8 +106,11 @@ class Indexer:
         bloom_fields: Optional[Sequence[str]] = None,
         false_positive_rate: float = 0.01,
         expected_entries: int = 1024,
-        auto_fields: bool = True,
+        path_budget: int = 1024,
         auto_max_distinct: int = 256,
+        extensions: Optional[Sequence[str]] = None,
+        memory_budget: int = 0,
+        schema: Optional[str] = None,
     ) -> None:
         """Create an indexer for trace files.
 
@@ -132,9 +135,15 @@ class Indexer:
                 indexed without one is rebuilt.
             false_positive_rate: Bloom false-positive rate, in (0, 1).
             expected_entries: Expected distinct values per chunk.
-            auto_fields: Also index every other flat args key.
+            path_budget: Also index each file's N most frequent other args
+                paths; 0 indexes only the fixed fields and bloom_fields.
             auto_max_distinct: Per-chunk distinct cap for an auto string
                 field's bloom.
+            memory_budget: Bytes the build may hold at once; 0 is about a
+                third of available memory.
+            schema: A registered record schema id; None detects each file's.
+            extensions: Pruning extensions the bloom tier builds, from
+                "zonemap", "bloom", "counts" and "postings"; None builds all.
         """
         ...
 
@@ -162,6 +171,23 @@ class Indexer:
         """
         ...
 
+    def manifest(self) -> str:
+        """The manifest of every indexed file, as a JSON string."""
+        ...
+
+    def explain(self, query: str) -> str:
+        """Per file, the chunks the query reads and what each pruning
+        extension rules out alone, as a JSON string."""
+        ...
+
+    def rebuild_extension(self, name: str) -> Dict[str, object]:
+        """Rewrite one tier extension of every file; returns the status."""
+        ...
+
+    def drop_extension(self, name: str) -> Dict[str, object]:
+        """Remove one tier extension from every file; returns the status."""
+        ...
+
     def get_checkpoint_indexer(self, file_path: str) -> "CheckpointIndexer":
         """Get a checkpoint indexer for a specific file.
 
@@ -173,19 +199,11 @@ class Indexer:
         """
         ...
 
-    def get_hash_table(
-        self, hash_type: Literal["file", "host", "string", "proc"]
-    ) -> Dict[str, str]:
-        """Get hash table mapping hash values to original strings.
-
-        Args:
-            hash_type: Type of hash table ('file', 'host', or 'string').
-
-        Returns:
-            Dict mapping hash strings to original values.
+    def get_dictionary(self, name: str, field: str) -> Dict[str, str]:
+        """Key -> `field` of every row of the index dictionary `name`.
 
         Raises:
-            ValueError: If hash_type is not valid.
+            ValueError: If `name` has no field `field`.
         """
         ...
 
@@ -449,23 +467,22 @@ def read_arrow_files_parallel(
 class IndexDatabase:
     """Handle to a .dftindex RocksDB store.
 
-    Used by the distributed indexer coordinator to pre-register files,
-    reserve file_id ranges, bulk-ingest worker-produced SSTs, and rebuild
-    root summaries.
+    Used by the distributed indexer coordinator to assign file ids,
+    reserve file_id ranges and bulk-ingest worker-produced SSTs.
     """
 
     def __init__(self, index_path: str) -> None: ...
     def init_schema(self) -> None: ...
-    def register_files(self, paths: List[str]) -> List[int]:
-        """Register each path in the DEFAULT-CF file registry and return
-        the assigned file_ids (parallel to `paths`). Idempotent for files
-        with matching hash."""
+    def assign_file_ids(self, paths: List[str]) -> List[int]:
+        """The file_id of each path (parallel to `paths`): its registered id,
+        or a newly reserved one. The file record is written with the file's
+        index data."""
         ...
 
     def find_stale_files(self, paths: List[str]) -> dict:
         """Stat-only (mtime + size) staleness check of `paths` against the
         index. Returns a dict with keys `changed`, `added`, `removed`
-        (lists of paths), `schema_outdated` (bool) and `stale` (bool)."""
+        (lists of paths), `format_outdated` (bool) and `stale` (bool)."""
         ...
 
     def reserve_file_id_range(self, count: int) -> int:
@@ -488,36 +505,15 @@ class IndexDatabase:
         """
         ...
 
-    def rebuild_root_summaries(self) -> None:
-        """Recompute ROOT_* summary column families from per-file CFs."""
-        ...
-
-    def write_agg_global_config(
-        self, time_interval_us: int, config_hash: int = 0, group_by_file: bool = True
-    ) -> None:
-        """Write the aggregation global-config marker into the AGGREGATION CF.
-
-        Required for the typed read (`_TraceViewer.typed`) on distributed
-        builds (which never materialise the key via worker SSTs) and
-        post-consolidate indices.
-        """
-        ...
-
-    def write_agg_file_markers(self, file_ids: Iterable[int]) -> None:
-        """Write per-file aggregation completion markers into the AGGREGATION CF.
-
-        Each marker is ``\\xFF\\xFF + file_id_be32``. The index resolver uses
-        their presence to decide whether each file has aggregated data; if
-        missing, ``ensure_indexed()`` concludes the aggregation tier is
-        incomplete and re-runs the entire build. Distributed_index must
-        call this after ``bulk_ingest`` so subsequent ``read_trace`` calls
-        do not redundantly re-aggregate.
-        """
+    def write_agg_config(self, aggregation_config: Any) -> None:
+        """Record the aggregation config a distributed build aggregated its
+        files with (a ``dftracer.utils.indexer.AggregationConfig``). Each
+        file's ``dftracer.agg`` entry comes with its SSTs."""
         ...
 
     def write_aggregation_tracker(self, blobs: List[bytes]) -> None:
         """Merge serialized AssociationTracker blobs and write the result
-        to the AGGREGATION CF under the ``__tracker__`` key."""
+        to the aggregation tier."""
         ...
 
 class SstArtifactRegistry:
@@ -1089,12 +1085,16 @@ class _TraceViewer:
         """Keep events matching a query-DSL predicate (``str(dsl)``)."""
         ...
     def select(self, names: Sequence[str]) -> "_TraceViewer":
-        """Fields the scan reads (raw events), or a projection of the plan."""
+        """Fields the scan reads (raw events), or a projection of the plan. A
+        name without the ``args.`` prefix that is not an envelope field
+        (``dur.p99``) reads ``args.<name>``, as in filter."""
         ...
     def phase(
         self, phase: Literal["events", "counters", "aggregated", "metadata", "any"]
     ) -> "_TraceViewer": ...
-    def time_range(self, begin: float, end: float, /) -> "_TraceViewer": ...
+    def time_range(self, begin: float, end: float, /) -> "_TraceViewer":
+        """Keep events starting in [begin, end); occupancy clips to it."""
+        ...
     def time_bucket(
         self, interval_us: int, normalize_to: Union[int, Literal["min"], None] = None
     ) -> "_TraceViewer": ...
@@ -1107,12 +1107,15 @@ class _TraceViewer:
     def agg(self, *specs: str) -> "_TraceViewer": ...
     def agg_numeric_args(self, *reductions: str) -> "_TraceViewer": ...
     def metadata(self, include: bool, /) -> "_TraceViewer": ...
+    def record_schema(self, id: str, /) -> "_TraceViewer": ...
     def rollup_root(self, path: str, /) -> "_TraceViewer": ...
     def views_root(self, path: str, /) -> "_TraceViewer": ...
     def memory_budget(self, nbytes: int, /) -> "_TraceViewer": ...
     def columns(self) -> List[str]:
-        """Columns discoverable from the index. No trace scan."""
+        """Columns discoverable from the index, nested args as dotted paths
+        with one per array element (``hosts.1``). No trace scan."""
         ...
+    def schema_tree(self) -> str: ...
     def column_info(self) -> Dict[str, str]:
         """Index columns mapped to their type ("int64"/"float64"/"string").
         No trace scan."""
@@ -1264,11 +1267,22 @@ def set_log_color(mode: str) -> None:
     """Set the logger color mode (auto|always|never)."""
     ...
 
-def count_hash_entries(index_path: str, hash_type: str) -> int:
-    """Number of `hash_type` hashes in the index at `index_path`.
+def _schema_register(text: str, source: str = ..., /) -> str:
+    """Register a YAML or JSON record schema spec; returns its id."""
 
-    Counted by iteration rather than by materialising the table.
-    """
+def _schema_load(path: str, /) -> str:
+    """Register every spec at a file or directory; returns the registered
+    schemas as JSON."""
+
+def _schema_list() -> str:
+    """The registered schemas as JSON."""
+
+def _schema_detect(path: str, /) -> str:
+    """The schema detected for a trace."""
+
+def _schema_explain(path: str, /) -> str:
+    """Every schema's detection share for a trace and the chosen one, as
+    JSON."""
     ...
 
 def vec_eval(ast: List[tuple], columns: List[_Series]) -> _Series:

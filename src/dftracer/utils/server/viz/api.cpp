@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/query/query.h>
@@ -26,7 +27,6 @@
 #include <dftracer/utils/trace/views/view_planner_utility.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
 #include <simdjson.h>
 
 #include <algorithm>
@@ -118,6 +118,17 @@ void register_viz_api(Router& router, TraceIndex& index) {
                  "Visualization",
                  {},
                  R"({"columns":["cat","name","mhost","fhash"],"ready":true})"});
+
+    router.get(
+        "/api/viz/untimed", bind_index<handle_viz_untimed>(index),
+        RouteDoc{
+            "Records written without a clock (ts 0), which the timeline "
+            "cannot place; paged, longest first.",
+            "Visualization",
+            {{"query", "DSL predicate, e.g. cat == \"CUDA_KERNEL\"", false, ""},
+             {"offset", "First record of the page", false, "0"},
+             {"limit", "Records per page, at most 10000", false, "1000"}},
+            R"({"events":[],"count":0,"offset":0,"limit":1000})"});
 
     router.get(
         "/api/viz/events", bind_index<handle_viz_events>(index),

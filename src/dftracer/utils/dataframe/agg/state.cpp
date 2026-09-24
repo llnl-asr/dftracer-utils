@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -1505,6 +1506,136 @@ AggStatePtr agg_regroup(const AggState& src_in,
                                     [static_cast<std::size_t>(j)] != 0;
             });
         dst->merge_group(g, src, j);
+    }
+    return dst;
+}
+
+AggStatePtr agg_clip_occupancy(const AggState& src_in, std::uint64_t lo,
+                               std::uint64_t hi, std::int64_t bucket_width,
+                               double bucket_scale,
+                               std::int64_t bucket_origin) {
+    const AggState& src = settled(src_in);
+    std::vector<std::int32_t> all(src.nkeys);
+    std::iota(all.begin(), all.end(), 0);
+    AggStatePtr dst = agg_regroup(src, all);
+    AggState& st = *dst;
+    if (!st.has_occ) return dst;
+    const std::size_t n_occ = st.n_occ;
+    if (bucket_width <= 0) {
+        std::fill(st.occ_ts.begin(), st.occ_ts.end(), lo);
+        std::fill(st.occ_te.begin(), st.occ_te.end(), hi);
+        return dst;
+    }
+
+    auto bucket_of = [&](std::uint64_t t) {
+        const double rel = static_cast<double>(t) * bucket_scale -
+                           static_cast<double>(bucket_origin);
+        return static_cast<std::int64_t>(
+                   std::floor(rel / static_cast<double>(bucket_width))) *
+                   bucket_width +
+               bucket_origin;
+    };
+    // The first raw time past bucket k, settled against bucket_of so a
+    // rounded edge never splits an interval off its own bucket.
+    auto end_of = [&](std::int64_t k) {
+        const double e =
+            std::ceil(static_cast<double>(k + bucket_width) / bucket_scale);
+        std::uint64_t t = e > 0 ? static_cast<std::uint64_t>(e) : 0;
+        while (bucket_of(t) <= k) ++t;
+        while (t > 0 && bucket_of(t - 1) > k) --t;
+        return t;
+    };
+
+    const std::size_t nkeys = st.nkeys;
+    ankerl::unordered_dense::map<std::string, std::size_t> rest_at;
+    std::vector<std::vector<std::int64_t>> rests;
+    std::string sig;
+    const std::int64_t ng = st.ngroups();
+    for (std::int64_t g = 0; g < ng; ++g) {
+        const std::size_t gi = static_cast<std::size_t>(g);
+        sig.clear();
+        for (std::size_t k = 1; k < nkeys; ++k) {
+            const bool null = st.nkey_cols[k][gi] != 0;
+            sig.push_back(null ? '\0' : '\1');
+            if (null) continue;
+            if (st.key_is_bytes[k]) {
+                const std::string& v = st.skey_cols[k][gi];
+                const std::uint64_t len = v.size();
+                sig.append(reinterpret_cast<const char*>(&len), sizeof(len));
+                sig += v;
+            } else {
+                const std::int64_t v = st.ikey_cols[k][gi];
+                sig.append(reinterpret_cast<const char*>(&v), sizeof(v));
+            }
+        }
+        auto [it, fresh] = rest_at.try_emplace(sig, rests.size());
+        if (fresh) rests.emplace_back();
+        rests[it->second].push_back(g);
+    }
+
+    std::vector<std::pair<std::uint64_t, std::int64_t>> pts;
+    std::vector<std::int64_t> ik(nkeys);
+    std::vector<std::string> sk(nkeys);
+    std::vector<std::uint8_t> nk(nkeys);
+    for (const std::vector<std::int64_t>& members : rests) {
+        const std::size_t rep = static_cast<std::size_t>(members.front());
+        for (std::size_t k = 1; k < nkeys; ++k) {
+            ik[k] = st.key_is_bytes[k] ? 0 : st.ikey_cols[k][rep];
+            sk[k] = st.key_is_bytes[k] ? st.skey_cols[k][rep] : std::string();
+            nk[k] = st.nkey_cols[k][rep];
+        }
+        auto slot_of = [&](std::int64_t bucket, std::size_t slot) {
+            const std::int64_t g = st.find_or_add_group(
+                [&](std::size_t k) { return k == 0 ? bucket : ik[k]; },
+                [&](std::size_t k) { return std::string_view(sk[k]); },
+                [&](std::size_t k) { return k != 0 && nk[k] != 0; });
+            return static_cast<std::size_t>(g) * n_occ + slot;
+        };
+        for (std::size_t slot = 0; slot < n_occ; ++slot) {
+            pts.clear();
+            for (const std::int64_t g : members) {
+                const std::size_t o =
+                    static_cast<std::size_t>(g) * n_occ + slot;
+                pts.insert(pts.end(), st.occ_deltas[o].begin(),
+                           st.occ_deltas[o].end());
+                st.occ_deltas[o].clear();
+                st.occ_total[o] = 0;
+            }
+            std::sort(pts.begin(), pts.end());
+            std::int64_t depth = 0;
+            std::uint64_t prev = 0;
+            for (const auto& [t, d] : pts) {
+                for (std::uint64_t x = prev; depth > 0;) {
+                    const std::int64_t k = bucket_of(x);
+                    const std::uint64_t e = end_of(k);
+                    const std::size_t o = slot_of(k, slot);
+                    const auto dep = static_cast<std::uint64_t>(depth);
+                    if (e > t) {
+                        st.occ_total[o] += dep * (t - x);
+                        break;
+                    }
+                    st.occ_total[o] += dep * (e - x);
+                    st.occ_deltas[o][e] -= depth;
+                    const std::size_t next = slot_of(bucket_of(e), slot);
+                    st.occ_deltas[next][e] += depth;
+                    x = e;
+                }
+                const std::size_t o = slot_of(bucket_of(t), slot);
+                st.occ_deltas[o][t] += d;
+                depth += d;
+                prev = t;
+            }
+        }
+    }
+
+    for (std::int64_t g = 0; g < st.ngroups(); ++g) {
+        const std::int64_t k = st.ikey_cols[0][static_cast<std::size_t>(g)];
+        const std::uint64_t b = std::max(end_of(k - bucket_width), lo);
+        const std::uint64_t e = std::max(std::min(end_of(k), hi), b);
+        for (std::size_t slot = 0; slot < n_occ; ++slot) {
+            st.occ_ts[static_cast<std::size_t>(g) * n_occ + slot] = b;
+            st.occ_te[static_cast<std::size_t>(g) * n_occ + slot] = e;
+        }
     }
     return dst;
 }

@@ -21,10 +21,13 @@ namespace dftracer::utils::utilities::fileio::compress {
 /// decoded member: dftracer emits ~16MB members, so this is bounded in
 /// practice. A single foreign member whose decoded size exceeds
 /// `max_member_bytes` throws instead of decoding the whole file into memory;
-/// the caller should re-chunk it with dftracer_split.
+/// the caller should re-chunk it with dftracer_split. A last member cut short
+/// at end of file yields its complete lines when `recover_truncated` is set,
+/// and throws like corrupt data when it is not.
 inline coro::AsyncGenerator<std::string_view> decode_gzip_members(
     int fd, std::uint64_t file_size,
-    std::size_t max_member_bytes = std::size_t{1} << 31) {
+    std::size_t max_member_bytes = std::size_t{1} << 31,
+    bool recover_truncated = true) {
     constexpr std::size_t READ_CHUNK = 1u << 20;
     constexpr std::size_t INIT_OUT = 1u << 20;
 
@@ -67,8 +70,20 @@ inline coro::AsyncGenerator<std::string_view> decode_gzip_members(
             }
 
             if (next_read >= file_size) {
-                throw DFTUtilsException(ErrorCode::COMPRESSION,
-                                        "gzip member failed to decompress");
+                // The last member was cut short: yield its complete lines.
+                auto keep =
+                    recover_truncated
+                        ? decode_truncated_member(comp.data(), comp.size(), out)
+                        : std::nullopt;
+                if (!keep) {
+                    throw DFTUtilsException(ErrorCode::COMPRESSION,
+                                            "gzip member failed to decompress");
+                }
+                if (*keep > 0) {
+                    co_yield std::string_view(
+                        reinterpret_cast<const char*>(out.data()), *keep);
+                }
+                co_return;
             }
             const std::size_t want = static_cast<std::size_t>(
                 std::min<std::uint64_t>(READ_CHUNK, file_size - next_read));

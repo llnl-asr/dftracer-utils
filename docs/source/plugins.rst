@@ -206,7 +206,7 @@ columns even for a plugin that only reads ``dur``. A plugin that declares
 ``reads`` gets only those columns; every other column is simply absent from the
 frame, so a lookup for it returns NULL. Names are batch column names as
 ``on_batch`` sees them: ``"dur"``, ``"cat"``, ``"fhash"``, an arg as
-``"args.<key>"``, a virtual field as ``"resolved.fpath"``. A plugin that
+``"args.<key>"``, a resolved column as ``"resolved.fhash.path"``. A plugin that
 registers a state (section 6) is exempt - its state is handed the same frame
 regardless, so it always keeps every column.
 
@@ -1180,6 +1180,71 @@ frame the same way.
 touches every service slot, registers an op, a source, a state and a node,
 and is the one file to read for the exact C of each.
 
+15. Index extensions (DFTU_SVC_INDEX)
+-------------------------------------
+
+An index extension adds pruning evidence to the index. While a plugin set
+that registered it is loaded, every index build runs the extension's builder
+over each file it indexes, in the same pass as the built-in extensions, and
+stores the bytes the builder returns for each chunk and for the file. When a
+query runs, the host asks the extension, for each filter leaf, which chunks'
+bytes may hold a match, and reads only those chunks. The declarations are in
+``dftracer/utils/plugins/abi/index.h``.
+
+Register from the factory, which is the only place registration is allowed:
+
+.. code-block:: c
+
+   const dftu_svc_index* index =
+       (const dftu_svc_index*)h->get_service(h->h, DFTU_SVC_INDEX);
+   index->register_extension(h->h, "myplugin.range", &g_ext, NULL);
+
+The name must be ``<plugin>.<name>``, and a name already registered in the
+process fails the load. ``dftu_index_extension`` holds:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 28 72
+
+   * - Member
+     - Contract
+   * - ``version``, ``params_hash``
+     - Data built with another version or params hash is not used, and the
+       next build rebuilds it. ``params_hash`` identifies the configuration
+       that shapes the bytes.
+   * - ``max_payload``
+     - The largest payload stored (0 means 1 MiB). A larger payload is
+       dropped, so that chunk or file prunes nothing.
+   * - ``make_builder`` / ``destroy_builder``
+     - One builder per file, used by one thread. NULL stores nothing for the
+       file.
+   * - ``step``
+     - The next record lines of the current chunk, borrowed for the call.
+       Nonzero stores nothing for the chunk.
+   * - ``finish_granule`` / ``finish_file``
+     - Append the chunk's or the file's payload through ``dftu_index_out``;
+       the host owns the bytes. No bytes stores nothing.
+   * - ``compile`` / ``release``
+     - Prepare a ``dftu_index_leaf`` (path, ``any``, operator, literal as a
+       ``dftu_value``), or return NULL when the extension has no evidence for
+       it.
+   * - ``may_match`` / ``file_may_match``
+     - 0 only when the payload proves that no record satisfies the leaf.
+       ``file_may_match`` may be NULL.
+
+Missing, stale or failed data, a chunk without a payload, and an extension
+that is not registered all prune nothing, so an index built with a plugin
+stays correct without it. Soundness of a 0 answer is the plugin's contract:
+the host cannot check it, and a wrong 0 drops matching rows.
+
+Load the plugin set for the build and for the queries that should use it,
+and keep it loaded while they run: C++ ``Plugins::builder().add(path)``,
+Python ``dftracer.utils.plugins.Plugins``, or
+``dftracer_index --plugin path``. ``Indexer::manifest`` and ``explain`` list
+the extension by name, and ``rebuild_extension`` and ``drop_extension``
+accept it. ``tests/utilities/plugins/index_minmax_plugin.c`` is a complete
+extension: per chunk min and max of one number.
+
 Host services index
 --------------------
 
@@ -1244,6 +1309,9 @@ that covers it:
    * - ``PluginBuilder::state<T>``
      - ``DFTU_SVC_AGG`` (``register_state``)
      - `6. Mergeable aggregation (DFTU_SVC_AGG)`_
+   * - none (raw ``get_service``)
+     - ``DFTU_SVC_INDEX``
+     - `15. Index extensions (DFTU_SVC_INDEX)`_
 
 Building and scaffolding
 ------------------------

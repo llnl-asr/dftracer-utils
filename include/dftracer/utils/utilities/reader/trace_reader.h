@@ -96,12 +96,6 @@ struct ReadConfig {
     /// match the native index and are unaffected.
     TimeNormalization normalize_time = TimeNormalization::None;
 
-    /// Sub-chunk skip for a single member (see ArrowWorkItem). When
-    /// sub_event_counts is non-empty, the reader counts data events (ph != "M")
-    /// and skips those whose bucket has sub_keep == 0 before parse/eval.
-    std::vector<std::uint32_t> sub_event_counts;
-    std::vector<char> sub_keep;
-
     bool has_line_range() const { return start_line > 0 || end_line > 0; }
     bool has_byte_range() const { return start_byte > 0 || end_byte > 0; }
 };

@@ -142,12 +142,15 @@ Get global metadata about all trace files (time bounds, file listing).
 GET /api/resolve
 ++++++++++++++++++
 
-Resolve content hashes (file/host/string/proc) to their names.
+Resolve dictionary keys (file/host/string hashes) to their values.
 
 **Query Parameters:**
 
-- ``hash`` (string) - One hash, or several separated by commas [required]
-- ``type`` (string) - ``file`` (default), ``host``, ``string``, or ``proc``
+- ``hash`` (string) - One key, or several separated by commas [required]
+- ``type`` (string) - the dictionary: ``file`` (default), ``host``, or
+  ``string``
+- ``field`` (string) - the dictionary field: ``path``, ``name`` or ``value``;
+  the dictionary's own field by default
 
 **Response:**
 
@@ -279,6 +282,30 @@ Supported operators: ``=``, ``>=``, ``<=``, ``>``, ``<``
     # Same query with raw timestamps and PID filter
     curl "http://localhost:8080/api/viz/events?begin=1000000&end=2000000&summary=1&ts_normalize=0&pid=1"
 
+GET /api/viz/untimed
+++++++++++++++++++++++
+
+Records written without a clock (``ts`` 0, such as CUDA activity): events and
+aggregated records. The timeline starts at the first start above 0, so it
+cannot place them; the viewer counts them in its status bar and pages through
+them in the "no time" tab.
+
+**Query Parameters:**
+
+- ``query`` (string) - DSL predicate, as for ``/api/viz/events``
+- ``offset`` (integer) - First record of the page (default: 0)
+- ``limit`` (integer) - Records per page, at most 10000 (default: 1000)
+
+**Response:** ``count`` covers every matching record; ``events`` is the page,
+longest first, with ``dur`` in microseconds and ``ph`` 1 for an event or 3 for
+an aggregated record.
+
+.. code-block:: json
+
+    {"events": [{"name": "cudaLaunchKernel", "cat": "CUDA", "pid": 1,
+                 "tid": 2, "dur": 7, "ph": 1}],
+     "count": 3, "offset": 0, "limit": 1000}
+
 GET /api/viz/breaks
 ++++++++++++++++++++++
 
@@ -307,9 +334,9 @@ zoomed-out views still show where activity is. Returns full-size events (with
 ``begin``/``end``/``summary`` parameters as ``/api/viz/events``.
 
 Optional ``group_by=<column>`` splits blocks by an event column (a top-level
-field, an ``args`` key, or a ``resolved.*`` alias such as ``resolved.fpath``).
-Each block gains a ``group`` value; hash columns keep the raw hash and the
-response metadata carries a ``group_names`` map (hash to resolved name). Events
+field, an ``args`` key, or a resolved column such as ``resolved.fhash.path``).
+Each block gains a ``group`` value; dictionary key columns keep the raw key and
+the response metadata carries a ``group_names`` map (key to value). Events
 missing the column, or a column that does not exist, group under ``(none)`` on
 the client - they are never dropped.
 
@@ -332,8 +359,8 @@ GET /api/viz/columns
 +++++++++++++++++++++++
 
 The complete set of groupable columns in the trace (top-level scalar fields plus
-``args`` keys), for the lane-grouping UI. Harvested at index build (stored
-durably in the index) with the summary scan as fallback for older indexes;
+``args`` keys), for the lane-grouping UI. Read from the index's path catalog,
+with the summary scan as fallback for older indexes;
 ``ready`` is ``false`` while that fallback scan is still running.
 
 .. code-block:: bash
@@ -486,7 +513,7 @@ ANDed together:
     curl "http://localhost:8080/api/viz/events?begin=0&end=2000000&summary=1&query=dur%20%3E%3D%201000"
 
 Use ``GET /api/resolve`` to turn an interned hash (``fhash``, ``hhash``, a
-file/host/proc id from a response) back into its string.
+file or host id from a response) back into its string.
 
 Indexing
 --------

@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/query/query.h>
@@ -26,7 +27,6 @@
 #include <dftracer/utils/trace/views/view_planner_utility.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
 #include <simdjson.h>
 
 #include <algorithm>
@@ -88,14 +88,13 @@ coro::CoroTask<HttpResponse> handle_viz_columns(const HttpRequest& /*req*/,
                                                 const QueryParams& /*params*/,
                                                 TraceIndex& index) {
     // Schemaless discovery from the index (no scan): base axis fields, every
-    // harvested scalar leaf (nested args as dotted paths), and resolved.*
-    // aliases, each with its type. Shares View::column_info() with the
+    // harvested scalar leaf (nested args as dotted paths), and resolved
+    // columns, each with its type. Shares View::column_info() with the
     // C++/Python API instead of re-implementing a column union here.
     std::vector<const TraceIndex::FileInfo*> all_files;
     all_files.reserve(index.files().size());
     for (const auto& f : index.files()) all_files.push_back(&f);
-    views::View v =
-        views::View::from_files(to_view_files(all_files), &index.bloom_cache());
+    views::View v = views::View::from_files(to_view_files(all_files));
     // This endpoint offers groupable columns; the pid/tid/ts/dur axis fields
     // are timeline lanes, not group options, so drop them from
     // View::column_info().

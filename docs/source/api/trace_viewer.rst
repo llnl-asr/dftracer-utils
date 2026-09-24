@@ -72,9 +72,9 @@ aggregated output.
    * - ``phase(name)``
      - Restrict to a record family: ``"events"`` (``ph="X"``), ``"counters"`` (``ph="C"``), ``"aggregated"`` (rollup records), ``"metadata"`` (``ph="M"``), or ``"any"``.
    * - ``time_range(begin, end)``
-     - Keep events whose timestamp falls in ``[begin, end)``.
+     - Keep the events that start in ``[begin, end)``. The occupancy aggregates (``busy``, ``concurrency``, ``utilization``, ``active``) instead take every event that overlaps the window, clipped to it. Metadata records are not windowed.
    * - ``time_bucket(interval_us, normalize_to=None)``
-     - Bucket ``ts`` into fixed ``interval_us`` windows (a group key for time series). A number is microseconds; a string such as ``"1ms"`` is converted. ``normalize_to`` sets the window anchor: an int origin, or ``"min"`` for the trace's first timestamp instead of ``0``.
+     - Bucket ``ts`` into fixed ``interval_us`` windows (a group key for time series). A number is microseconds; a string such as ``"1ms"`` is converted. ``normalize_to`` sets the window anchor: an int origin, or ``"min"`` for the trace's first timestamp instead of ``0``. An event counts in the bucket of its start; the occupancy aggregates split it across every bucket it runs through.
    * - ``resolution(cell)``
      - Grid the occupancy aggregates (``busy``, ``concurrency``, ``utilization``, ``active``) snap interval edges to; microseconds or a string such as ``"1ms"``. ``0`` is the exact union. Also set by ``F.dur.busy(resolution="1ms")`` inside ``agg``.
    * - ``time_unit(unit)`` / ``time_scale(ns_ratio)``
@@ -213,12 +213,13 @@ properties describe the plan's output instead: its column names, and a
    v.group_by("name").agg("count").columns   # ['name', 'count']
 
 The set is schemaless: the base axis fields (``pid`` / ``tid`` / ``ts`` /
-``dur``), every scalar leaf harvested at index build (top-level fields plus flat
-and nested args), and a ``resolved.*`` alias for each hash column present. A
+``dur``), every path in the index's path catalog (top-level fields plus flat
+and nested args), and the resolved columns of each dictionary key field present. A
 nested-object arg surfaces as its dotted leaf columns (``pos.x``, ``pos.y``) and
-an array as its first element (``tags.0``), so no field is silently dropped. The
-type is harvested once per event name and folded across names and files
-(numeric widens to ``float64``; any mix with a string widens to ``string``).
+an array as one column per element (``tags.0``, ``tags.1``). The type folds
+every record of every file (booleans and integers read as ``int64``, any other
+number widens to ``float64``, and any mix with a string widens to
+``string``).
 
 Materialized views
 -------------------

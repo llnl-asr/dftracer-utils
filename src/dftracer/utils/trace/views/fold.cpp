@@ -2,14 +2,20 @@
 #include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/core/coro/async_semaphore.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/index/store/file.h>
+#include <dftracer/utils/json/canonical.h>
 #include <dftracer/utils/trace/views/event_source.h>
 #include <dftracer/utils/trace/views/fold.h>
+#include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <unordered_map>
 #include <utility>
 
@@ -53,27 +59,26 @@ std::uint32_t intern_string(dftracer::utils::StringIntern& intern,
     return intern.get_or_insert(val.get_string().value_unsafe());
 }
 
-// Type tag for a JSON scalar, matching utilities::indexer::ColumnType
-// (1=Int64, 2=Float64, 3=String); 0 for a non-scalar or null.
 std::uint8_t leaf_type_tag(simdjson::dom::element v) {
-    if (v.is_string()) return 3;
-    if (v.is_int64()) return 1;
-    if (v.is_uint64()) {
-        const std::uint64_t u = v.get_uint64().value_unsafe();
-        return u <= static_cast<std::uint64_t>(
-                        std::numeric_limits<std::int64_t>::max())
-                   ? 1
-                   : 2;
-    }
-    if (v.is_double()) return 2;
-    if (v.is_bool()) return 1;  // booleans read as 0/1 integers
-    return 0;
+    using dftracer::utils::index::store::PathType;
+    PathType t = PathType::NULL_VALUE;
+    if (v.is_string())
+        t = PathType::STRING;
+    else if (v.is_int64())
+        t = PathType::INT;
+    else if (v.is_uint64())
+        t = PathType::UINT;
+    else if (v.is_double())
+        t = PathType::DOUBLE;
+    else if (v.is_bool())
+        t = PathType::BOOL;
+    return static_cast<std::uint8_t>(t);
 }
 
-// Walk `v` to every scalar leaf, emitting (interned dotted path -> type tag)
-// into ev.schema_leaves. Objects recurse by key (a.b.c); an array recurses its
-// first element as a representative (a.0.b) so the path resolves and
-// cardinality stays bounded. `path` is a reused buffer (restored on return).
+// Walk `v` to every scalar or null leaf, emitting (interned dotted path ->
+// PathType) into ev.schema_leaves. Objects recurse by key (a.b.c), arrays by
+// index (a.0.b), so the harvest lists every column a row fold emits. `path` is
+// a reused buffer (restored on return).
 void enumerate_leaves(std::string& path, simdjson::dom::element v,
                       dftracer::utils::StringIntern& intern, FoldEvent& ev) {
     simdjson::dom::object obj;
@@ -89,19 +94,49 @@ void enumerate_leaves(std::string& path, simdjson::dom::element v,
     }
     simdjson::dom::array arr;
     if (v.get_array().get(arr) == simdjson::SUCCESS) {
-        auto it = arr.begin();
-        if (it != arr.end()) {
+        std::size_t i = 0;
+        for (auto el : arr) {
             const std::size_t base = path.size();
             if (base) path.push_back('.');
-            path.push_back('0');
-            enumerate_leaves(path, *it, intern, ev);
+            dftracer::utils::trace::detail::append_index(path, i++);
+            enumerate_leaves(path, el, intern, ev);
             path.resize(base);
         }
         return;
     }
-    const std::uint8_t tag = leaf_type_tag(v);
-    if (tag && !path.empty())
-        ev.schema_leaves.emplace_back(intern.get_or_insert(path), tag);
+    if (!path.empty())
+        ev.schema_leaves.emplace_back(intern.get_or_insert(path),
+                                      leaf_type_tag(v));
+}
+
+// Flatten a nested arg into dotted scalar keys named as event.h flatten_arg
+// names them: objects "a.b", arrays "a.0". `path` holds the key so far.
+void flatten_nested_arg(std::string& path, simdjson::dom::element v,
+                        dftracer::utils::StringIntern& intern, FoldEvent& ev) {
+    simdjson::dom::object obj;
+    if (v.get_object().get(obj) == simdjson::SUCCESS) {
+        for (auto kv : obj) {
+            const std::size_t base = path.size();
+            path.push_back('.');
+            path.append(kv.key);
+            flatten_nested_arg(path, kv.value, intern, ev);
+            path.resize(base);
+        }
+        return;
+    }
+    simdjson::dom::array arr;
+    if (v.get_array().get(arr) == simdjson::SUCCESS) {
+        std::size_t i = 0;
+        for (auto el : arr) {
+            const std::size_t base = path.size();
+            path.push_back('.');
+            dftracer::utils::trace::detail::append_index(path, i++);
+            flatten_nested_arg(path, el, intern, ev);
+            path.resize(base);
+        }
+        return;
+    }
+    append_scalar_arg(ev.args, intern.get_or_insert(path), v, intern);
 }
 
 }  // namespace
@@ -156,25 +191,17 @@ FoldEvent build_fold_event(const DFTracerEvent& scalars,
         } else if (key == "hhash") {
             ev.hhash_id = intern_string(intern, field.value);
         } else if (needs_args) {
-            simdjson::dom::element v = field.value;
-            const std::uint32_t key_id = intern.get_or_insert(key);
-            if (v.is_string()) {
-                ev.args.emplace_back(key_id,
-                                     intern.get_or_insert(v.get_string()));
-            } else if (v.is_int64()) {
-                ev.args.emplace_back(key_id, static_cast<std::int64_t>(
-                                                 v.get_int64().value_unsafe()));
-            } else if (v.is_uint64()) {
-                // Exact as int64 when it fits; a value above INT64_MAX falls
-                // back to double.
-                const std::uint64_t u = v.get_uint64().value_unsafe();
-                if (u <= static_cast<std::uint64_t>(
-                             std::numeric_limits<std::int64_t>::max()))
-                    ev.args.emplace_back(key_id, static_cast<std::int64_t>(u));
-                else
-                    ev.args.emplace_back(key_id, static_cast<double>(u));
-            } else if (v.is_double()) {
-                ev.args.emplace_back(key_id, v.get_double().value_unsafe());
+            const simdjson::dom::element v = field.value;
+            switch (v.type()) {
+                case simdjson::dom::element_type::OBJECT:
+                case simdjson::dom::element_type::ARRAY: {
+                    std::string path(key);
+                    flatten_nested_arg(path, v, intern, ev);
+                    break;
+                }
+                default:
+                    append_scalar_arg(ev.args, intern.get_or_insert(key), v,
+                                      intern);
             }
         }
     }
@@ -200,11 +227,220 @@ FoldEvent extract_fold_event(simdjson::dom::element root,
     return ev;
 }
 
+namespace {
+
+// The leaves of `v` under exact path `path`: scalars into ev.args and, with
+// `schema`, every leaf, null included, into ev.schema_leaves. With `paths`
+// (sorted), only those leaves, descending only toward them and stopping once
+// `left` of them remain to find.
+struct LeafDecode {
+    dftracer::utils::StringIntern& intern;
+    FoldEvent& ev;
+    bool schema;
+    const std::vector<std::string>* paths;
+    std::size_t left;
+    const dftracer::utils::index::RecordSchema* record_schema;
+    // With `paths`, the declared field at each path (null when undeclared).
+    const std::vector<const dftracer::utils::index::FieldSpec*>* path_fields;
+    // Whether a json field can be decoded, so objects and arrays are checked.
+    bool json;
+
+    // The declared field at `path`, found at `pos` in `paths` when set.
+    const dftracer::utils::index::FieldSpec* field(const std::string& path,
+                                                   std::size_t pos) const {
+        if (path_fields) return (*path_fields)[pos];
+        return record_schema ? record_schema->field_at(path) : nullptr;
+    }
+};
+
+// The position of `path` in the sorted `paths`, or nullopt.
+std::optional<std::size_t> position(const std::vector<std::string>& paths,
+                                    const std::string& path) {
+    const auto it = std::lower_bound(paths.begin(), paths.end(), path);
+    if (it == paths.end() || *it != path) return std::nullopt;
+    return static_cast<std::size_t>(it - paths.begin());
+}
+
+// A declared field's value as its type: integers stay integers, whole
+// doubles become integers, numbers become doubles for a float field, and
+// strings stay strings; any other value is left out, so it reads as null.
+// Role fields also set the event's time, duration or lane in microseconds.
+void bind_field(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
+                simdjson::dom::element v, LeafDecode& d) {
+    namespace ix = dftracer::utils::index;
+    using T = simdjson::dom::element_type;
+    const T type = v.type();
+    const bool numeric =
+        type == T::INT64 || type == T::UINT64 || type == T::DOUBLE;
+    double num = 0;
+    if (numeric) num = v.get_double().value_unsafe();
+    switch (f.type) {
+        case ix::FieldType::STRING:
+            if (type != T::STRING) return;
+            append_scalar_arg(d.ev.args, id, v, d.intern);
+            break;
+        case ix::FieldType::BOOL:
+            if (type != T::BOOL) return;
+            append_scalar_arg(d.ev.args, id, v, d.intern);
+            break;
+        case ix::FieldType::FLOAT:
+            if (!numeric) return;
+            d.ev.args.emplace_back(id, num);
+            break;
+        case ix::FieldType::JSON: {
+            std::string text;
+            dftracer::utils::json::append_canonical_json(text, v);
+            d.ev.args.emplace_back(id, d.intern.get_or_insert(text));
+            return;
+        }
+        case ix::FieldType::INT:
+            if (!numeric) return;
+            if (type != T::DOUBLE) {
+                append_scalar_arg(d.ev.args, id, v, d.intern);
+            } else {
+                const auto whole = ix::whole_int64(num);
+                if (!whole) return;
+                d.ev.args.emplace_back(id, *whole);
+            }
+            break;
+    }
+    const double micros =
+        ix::micros_per(f.unit.value_or(ix::TimeUnit::US)) * num;
+    switch (f.role) {
+        case ix::Role::NONE:
+            break;
+        case ix::Role::TIME:
+            if (micros >= 0)
+                d.ev.ts = static_cast<std::uint64_t>(std::llround(micros));
+            break;
+        case ix::Role::DURATION:
+            if (micros >= 0) {
+                d.ev.dur = static_cast<std::uint64_t>(std::llround(micros));
+                d.ev.has_dur = true;
+            }
+            break;
+        case ix::Role::ENTITY: {
+            const auto& value = d.ev.args.back().second;
+            if (const auto* i = std::get_if<std::int64_t>(&value))
+                d.ev.pid = static_cast<std::uint64_t>(*i);
+            else if (const auto* sid = std::get_if<std::uint32_t>(&value))
+                d.ev.pid = *sid;
+            break;
+        }
+    }
+}
+
+bool wanted_below(const std::vector<std::string>& paths,
+                  const std::string& path) {
+    auto it = std::lower_bound(paths.begin(), paths.end(), path);
+    for (; it != paths.end() && it->starts_with(path); ++it)
+        if (it->size() > path.size() && (*it)[path.size()] == '.') return true;
+    return false;
+}
+
+// A declared json field at an object or array: its canonical text, keyed by
+// the field's path; the leaves below are decoded as well.
+void capture_json(const std::string& path, simdjson::dom::element v,
+                  LeafDecode& d) {
+    std::size_t pos = 0;
+    if (d.paths) {
+        const auto at = position(*d.paths, path);
+        if (!at) return;
+        pos = *at;
+    }
+    const auto* f = d.field(path, pos);
+    if (!f || f->type != dftracer::utils::index::FieldType::JSON) return;
+    if (d.paths) --d.left;
+    std::string text;
+    dftracer::utils::json::append_canonical_json(text, v);
+    d.ev.args.emplace_back(d.intern.get_or_insert(path),
+                           d.intern.get_or_insert(text));
+}
+
+void decode_leaves(std::string& path, simdjson::dom::element v, LeafDecode& d) {
+    if (d.paths && d.left == 0) return;
+    if (d.json && !path.empty() && (v.is_object() || v.is_array()))
+        capture_json(path, v, d);
+    simdjson::dom::object obj;
+    if (v.get_object().get(obj) == simdjson::SUCCESS) {
+        if (d.paths && !path.empty() && !wanted_below(*d.paths, path)) return;
+        for (auto kv : obj) {
+            const std::size_t base = path.size();
+            if (base) path.push_back('.');
+            path.append(kv.key);
+            decode_leaves(path, kv.value, d);
+            path.resize(base);
+            if (d.paths && d.left == 0) return;
+        }
+        return;
+    }
+    simdjson::dom::array arr;
+    if (v.get_array().get(arr) == simdjson::SUCCESS) {
+        if (d.paths && !path.empty() && !wanted_below(*d.paths, path)) return;
+        std::size_t i = 0;
+        for (auto el : arr) {
+            const std::size_t base = path.size();
+            if (base) path.push_back('.');
+            dftracer::utils::trace::detail::append_index(path, i++);
+            decode_leaves(path, el, d);
+            path.resize(base);
+            if (d.paths && d.left == 0) return;
+        }
+        return;
+    }
+    if (path.empty()) return;
+    std::size_t pos = 0;
+    if (d.paths) {
+        const auto at = position(*d.paths, path);
+        if (!at) return;
+        pos = *at;
+        --d.left;
+    }
+    const std::uint32_t id = d.intern.get_or_insert(path);
+    if (d.schema) d.ev.schema_leaves.emplace_back(id, leaf_type_tag(v));
+    if (v.is_null()) return;
+    if (d.record_schema)
+        if (const auto* f = d.field(path, pos)) {
+            bind_field(*f, id, v, d);
+            return;
+        }
+    append_scalar_arg(d.ev.args, id, v, d.intern);
+}
+
+}  // namespace
+
+FoldEvent decode_record(
+    simdjson::dom::element root, dftracer::utils::StringIntern& intern,
+    bool capture_schema, const std::vector<std::string>* paths,
+    const dftracer::utils::index::RecordSchema* record_schema,
+    const std::vector<const dftracer::utils::index::FieldSpec*>* path_fields) {
+    namespace ix = dftracer::utils::index;
+    FoldEvent ev;
+    ev.phase = RecordPhase::COMPLETE;
+    ev.by_path = true;
+    const auto* fields = paths ? path_fields : nullptr;
+    bool json = record_schema && record_schema->has_json;
+    if (json && fields)
+        json = std::any_of(fields->begin(), fields->end(),
+                           [](const ix::FieldSpec* f) {
+                               return f && f->type == ix::FieldType::JSON;
+                           });
+    LeafDecode d{intern,
+                 ev,
+                 capture_schema,
+                 paths,
+                 paths ? paths->size() : 0,
+                 record_schema,
+                 fields,
+                 json};
+    std::string path;
+    decode_leaves(path, root, d);
+    return ev;
+}
+
 void capture_schema_leaves(FoldEvent& ev, simdjson::dom::element root,
                            dftracer::utils::StringIntern& intern) {
-    // Args children are bare columns (hostname, pos.x), matching the flat
-    // harvest and lifting fhash/hhash; other top-level fields keep their name;
-    // the axis/structural keys are not columns.
+    // The axis and structural keys are not catalog paths.
     simdjson::dom::object obj;
     if (root.get_object().get(obj) != simdjson::SUCCESS) return;
     std::string path;
@@ -213,17 +449,15 @@ void capture_schema_leaves(FoldEvent& ev, simdjson::dom::element root,
         if (k == "pid" || k == "tid" || k == "ts" || k == "dur" || k == "ph" ||
             k == "id")
             continue;
-        if (k == "args")
-            path.clear();
-        else
-            path.assign(k);
+        path.assign(k);
         enumerate_leaves(path, kv.value, intern, ev);
     }
 }
 
 std::vector<std::string> extra_capture_fields(const ViewPlan& plan) {
-    // Flat args come from needs_args; only top-level fields the POD does not
-    // carry (anything but the six scalars) and nested paths need capture.
+    // Args come from needs_args, nested ones flattened; only top-level fields
+    // the POD does not carry (anything but the six scalars) and nested paths
+    // need capture, since a fold may not set needs_args.
     auto is_pod_scalar = [](const std::string& f) {
         return f == "name" || f == "cat" || f == "pid" || f == "tid" ||
                f == "ts" || f == "dur";
@@ -238,6 +472,10 @@ std::vector<std::string> extra_capture_fields(const ViewPlan& plan) {
     for (const auto& gk : plan.group_by)
         if (gk.kind == GroupKey::Kind::Field && !is_pod_scalar(gk.arg))
             add(gk.arg);
+        else if (gk.kind == GroupKey::Kind::Resolved) {
+            const std::string_view key = resolved_key_field(gk);
+            if (key != "fhash" && key != "hhash") add(std::string(key));
+        }
     for (const auto& c : plan.computed)
         for (const auto& in : c.inputs)
             if (is_nested_path(in)) add(in);
@@ -366,11 +604,18 @@ coro::CoroTask<void> fuse_worker(FuseWorkerCtx ctx, std::size_t w) {
 }  // namespace
 
 coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
-                                 const ViewDefinition& vdef,
+                                 const ViewDefinition& vdef_in,
                                  std::span<Fold* const> folds,
                                  dftracer::utils::StringIntern& intern,
                                  const CoverageSet* covered,
                                  std::uint64_t limit, DynamicPrune* dyn_prune) {
+    // Folds that all drop metadata records need no chunk read for them.
+    ViewDefinition vdef = vdef_in;
+    if (std::none_of(folds.begin(), folds.end(),
+                     [](const Fold* f) { return f->wants_metadata(); })) {
+        vdef.include_metadata = false;
+        vdef.emit_all_metadata = false;
+    }
     std::uint64_t skipped = 0;
     auto units = co_await gather_units(plan, vdef, skipped);
     const std::uint64_t cap =

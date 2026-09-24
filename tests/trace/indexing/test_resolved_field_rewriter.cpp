@@ -1,11 +1,14 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/index/plan/resolved_field_rewriter.h>
+#include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/query/query.h>
-#include <dftracer/utils/trace/indexing/resolved_field_rewriter.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
-#include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
 #include <doctest/doctest.h>
+#include <index_test_helpers.h>
 #include <simdjson.h>
 #include <testing_utilities.h>
 
@@ -14,49 +17,46 @@
 #include <variant>
 #include <vector>
 
+using dftracer::utils::DFTUtilsException;
+using dftracer::utils::ErrorCode;
+using dftracer::utils::index::get_schema;
+using dftracer::utils::index::store::IndexDatabase;
 using dftracer::utils::query::Query;
-using dftracer::utils::utilities::indexer::IndexDatabase;
-namespace indexing = dftracer::utils::trace::indexing;
 
 namespace {
 
-// Build an index DB seeded with a small FILE and HOST hash table.
+// Build an index DB seeded with a small FILE and HOST dictionary.
 IndexDatabase make_db(const std::string& root) {
     fs::create_directories(root);
     IndexDatabase db((fs::path(root) / ".dftindex").string());
     auto writer = db.begin_write();
     writer->init_schema();
-    // FILE (type 0): hash -> path
-    writer->insert_hash_table_entry(0, "fh_read", "/scratch/data/train.h5");
-    writer->insert_hash_table_entry(0, "fh_write", "/scratch/data/out.h5");
-    writer->insert_hash_table_entry(0, "fh_log", "/var/log/run.txt");
-    // HOST (type 1): hash -> hostname
-    writer->insert_hash_table_entry(1, "hh_a", "node01");
-    writer->insert_hash_table_entry(1, "hh_b", "login02");
+    dftu_utils_test::index_records::put_dict_row(
+        *writer, "file", "fh_read", {{"path", "/scratch/data/train.h5"}});
+    dftu_utils_test::index_records::put_dict_row(
+        *writer, "file", "fh_write", {{"path", "/scratch/data/out.h5"}});
+    dftu_utils_test::index_records::put_dict_row(
+        *writer, "file", "fh_log", {{"path", "/var/log/run.txt"}});
+    dftu_utils_test::index_records::put_dict_row(*writer, "host", "hh_a",
+                                                 {{"name", "node01"}});
+    dftu_utils_test::index_records::put_dict_row(*writer, "host", "hh_b",
+                                                 {{"name", "login02"}});
     writer->commit();
     return db;
 }
 
-// Parse a rewritten query and confirm it is an `<dim> in [...]` (or not in)
-// over the expected set of hashes, order-independent.
-void check_in_clause(const Query& q, const std::string& dim, bool negated,
+// Parse a rewritten query and confirm it is a `<dim> in [...]` over the
+// expected set of keys, order-independent.
+void check_in_clause(const Query& q, const std::string& dim,
                      std::vector<std::string> expected) {
     using namespace dftracer::utils::query;
     const auto& node = q.root();
+    REQUIRE(std::holds_alternative<InNode>(node.data));
+    const auto& in = std::get<InNode>(node.data);
+    CHECK(in.field.path == dim);
     std::vector<std::string> got;
-    if (!negated) {
-        REQUIRE(std::holds_alternative<InNode>(node.data));
-        const auto& in = std::get<InNode>(node.data);
-        CHECK(in.field.path == dim);
-        for (const auto& e : in.values.elements)
-            got.push_back(std::get<std::string>(e.value));
-    } else {
-        REQUIRE(std::holds_alternative<NotInNode>(node.data));
-        const auto& in = std::get<NotInNode>(node.data);
-        CHECK(in.field.path == dim);
-        for (const auto& e : in.values.elements)
-            got.push_back(std::get<std::string>(e.value));
-    }
+    for (const auto& e : in.values.elements)
+        got.push_back(std::get<std::string>(e.value));
     std::sort(got.begin(), got.end());
     std::sort(expected.begin(), expected.end());
     CHECK(got == expected);
@@ -65,7 +65,8 @@ void check_in_clause(const Query& q, const std::string& dim, bool negated,
 Query rewrite(const std::string& dsl, const IndexDatabase& db) {
     auto q = Query::from_string(dsl);
     REQUIRE(q.has_value());
-    auto rw = indexing::rewrite_resolved_fields(*q, db);
+    auto rw = dftracer::utils::index::plan::rewrite_resolved_fields(
+        *q, db, get_schema("dftracer"));
     REQUIRE_MESSAGE(rw.has_value(), dsl);
     return std::move(*rw);
 }
@@ -74,15 +75,15 @@ Query rewrite(const std::string& dsl, const IndexDatabase& db) {
 
 TEST_SUITE("ResolvedFieldRewriter") {
     TEST_CASE("detects virtual fields") {
-        auto a = Query::from_string(R"(resolved.fpath ~ "train")");
-        auto b = Query::from_string(R"(r.hostname == "node01")");
+        auto a = Query::from_string(R"(resolved.fhash.path ~ "train")");
+        auto b = Query::from_string(R"(resolved.hhash.name == "node01")");
         auto c = Query::from_string(R"(cat == "POSIX")");
         REQUIRE(a.has_value());
         REQUIRE(b.has_value());
         REQUIRE(c.has_value());
-        CHECK(indexing::has_resolved_fields(*a));
-        CHECK(indexing::has_resolved_fields(*b));
-        CHECK_FALSE(indexing::has_resolved_fields(*c));
+        CHECK(dftracer::utils::index::plan::has_resolved_fields(*a));
+        CHECK(dftracer::utils::index::plan::has_resolved_fields(*b));
+        CHECK_FALSE(dftracer::utils::index::plan::has_resolved_fields(*c));
     }
 
     TEST_CASE("no rewrite when no virtual fields") {
@@ -90,71 +91,90 @@ TEST_SUITE("ResolvedFieldRewriter") {
         auto db = make_db(root.string());
         auto q = Query::from_string(R"(cat == "POSIX" and dur > 10)");
         REQUIRE(q.has_value());
-        CHECK_FALSE(indexing::rewrite_resolved_fields(*q, db).has_value());
+        CHECK_FALSE(dftracer::utils::index::plan::rewrite_resolved_fields(
+                        *q, db, get_schema("dftracer"))
+                        .has_value());
     }
 
-    TEST_CASE("exact fpath == resolves to single fhash") {
+    TEST_CASE("an old, no-longer-resolved name throws") {
+        auto root = dftu_utils_test::make_unique_test_path("rfr_old_name");
+        auto db = make_db(root.string());
+        auto q = Query::from_string(R"(resolved.fpath == "/var/log/run.txt")");
+        REQUIRE(q.has_value());
+        try {
+            dftracer::utils::index::plan::rewrite_resolved_fields(
+                *q, db, get_schema("dftracer"));
+            FAIL("expected DFTUtilsException");
+        } catch (const DFTUtilsException& e) {
+            CHECK(e.code() == ErrorCode::INVALID_ARGUMENT);
+            CHECK(std::string(e.what()).find("resolved.fhash.path") !=
+                  std::string::npos);
+        }
+    }
+
+    TEST_CASE("exact fhash.path == resolves to single fhash") {
         auto root = dftu_utils_test::make_unique_test_path("rfr_eq");
         auto db = make_db(root.string());
-        auto q = rewrite(R"(resolved.fpath == "/scratch/data/train.h5")", db);
-        check_in_clause(q, "fhash", false, {"fh_read"});
+        auto q =
+            rewrite(R"(resolved.fhash.path == "/scratch/data/train.h5")", db);
+        check_in_clause(q, "fhash", {"fh_read"});
     }
 
-    TEST_CASE("fpath != resolves to fhash not in") {
+    TEST_CASE("fhash.path != resolves to the keys that still satisfy it") {
         auto root = dftu_utils_test::make_unique_test_path("rfr_ne");
         auto db = make_db(root.string());
-        auto q = rewrite(R"(r.fpath != "/var/log/run.txt")", db);
-        check_in_clause(q, "fhash", true, {"fh_log"});
+        auto q = rewrite(R"(resolved.fhash.path != "/var/log/run.txt")", db);
+        check_in_clause(q, "fhash", {"fh_read", "fh_write"});
     }
 
-    TEST_CASE("regex over fpath collects all matching hashes") {
+    TEST_CASE("regex over fhash.path collects all matching hashes") {
         auto root = dftu_utils_test::make_unique_test_path("rfr_regex");
         auto db = make_db(root.string());
-        auto q = rewrite(R"(resolved.fpath ~ "/scratch/.*\.h5")", db);
-        check_in_clause(q, "fhash", false, {"fh_read", "fh_write"});
+        auto q = rewrite(R"(resolved.fhash.path ~ "/scratch/.*\.h5")", db);
+        check_in_clause(q, "fhash", {"fh_read", "fh_write"});
     }
 
-    TEST_CASE("substring 'x' in resolved.fpath is case-insensitive") {
+    TEST_CASE("substring 'x' in resolved.fhash.path is case-insensitive") {
         auto root = dftu_utils_test::make_unique_test_path("rfr_sub");
         auto db = make_db(root.string());
-        auto q = rewrite(R"('TRAIN' in resolved.fpath)", db);
-        check_in_clause(q, "fhash", false, {"fh_read"});
+        auto q = rewrite(R"('TRAIN' in resolved.fhash.path)", db);
+        check_in_clause(q, "fhash", {"fh_read"});
     }
 
-    TEST_CASE("like over fpath") {
+    TEST_CASE("like over fhash.path") {
         auto root = dftu_utils_test::make_unique_test_path("rfr_like");
         auto db = make_db(root.string());
-        auto q = rewrite(R"(r.fpath like "/scratch/%")", db);
-        check_in_clause(q, "fhash", false, {"fh_read", "fh_write"});
+        auto q = rewrite(R"(resolved.fhash.path like "/scratch/%")", db);
+        check_in_clause(q, "fhash", {"fh_read", "fh_write"});
     }
 
-    TEST_CASE("negated regex over fpath yields not in") {
+    TEST_CASE("negated regex over fhash.path keeps the non-matching keys") {
         auto root = dftu_utils_test::make_unique_test_path("rfr_nregex");
         auto db = make_db(root.string());
-        auto q = rewrite(R"(resolved.fpath !~ "\.h5")", db);
-        check_in_clause(q, "fhash", true, {"fh_read", "fh_write"});
+        auto q = rewrite(R"(resolved.fhash.path !~ "\.h5")", db);
+        check_in_clause(q, "fhash", {"fh_log"});
     }
 
-    TEST_CASE("hostname resolves against HOST table to hhash") {
+    TEST_CASE("hhash.name resolves against the host dictionary") {
         auto root = dftu_utils_test::make_unique_test_path("rfr_host");
         auto db = make_db(root.string());
-        auto q = rewrite(R"(r.hostname ilike "NODE%")", db);
-        check_in_clause(q, "hhash", false, {"hh_a"});
+        auto q = rewrite(R"(resolved.hhash.name ilike "NODE%")", db);
+        check_in_clause(q, "hhash", {"hh_a"});
     }
 
     TEST_CASE("no matches yields empty in-clause") {
         auto root = dftu_utils_test::make_unique_test_path("rfr_empty");
         auto db = make_db(root.string());
-        auto q = rewrite(R"(resolved.fpath ~ "nonexistent")", db);
-        check_in_clause(q, "fhash", false, {});
+        auto q = rewrite(R"(resolved.fhash.path ~ "nonexistent")", db);
+        check_in_clause(q, "fhash", {});
     }
 
     TEST_CASE("rewrite + evaluate end-to-end against events") {
         using dftracer::utils::json::JsonValue;
         auto root = dftu_utils_test::make_unique_test_path("rfr_e2e");
         auto db = make_db(root.string());
-        // resolved.fpath ~ "/scratch" -> fhash in [fh_read, fh_write]
-        auto q = rewrite(R"('scratch' in resolved.fpath)", db);
+        // resolved.fhash.path ~ "/scratch" -> fhash in [fh_read, fh_write]
+        auto q = rewrite(R"('scratch' in resolved.fhash.path)", db);
 
         simdjson::dom::parser p1;
         simdjson::dom::parser p2;
@@ -175,9 +195,10 @@ TEST_SUITE("ResolvedFieldRewriter") {
         auto root = dftu_utils_test::make_unique_test_path("rfr_compose");
         auto db = make_db(root.string());
         auto base = Query::from_string(
-            R"(cat == "POSIX" and 'train' in resolved.fpath)");
+            R"(cat == "POSIX" and 'train' in resolved.fhash.path)");
         REQUIRE(base.has_value());
-        auto rw = indexing::rewrite_resolved_fields(*base, db);
+        auto rw = dftracer::utils::index::plan::rewrite_resolved_fields(
+            *base, db, get_schema("dftracer"));
         REQUIRE(rw.has_value());
         // Top level stays an AND; the right branch became fhash in [...].
         using namespace dftracer::utils::query;
@@ -187,5 +208,27 @@ TEST_SUITE("ResolvedFieldRewriter") {
         CHECK(std::holds_alternative<CompareNode>(an.left->data));
         REQUIRE(std::holds_alternative<InNode>(an.right->data));
         CHECK(std::get<InNode>(an.right->data).field.path == "fhash");
+    }
+
+    TEST_CASE("an in-list past SEMI_JOIN_CAP still produces the full list") {
+        constexpr std::size_t OVER_CAP = 4097;
+        auto root = dftu_utils_test::make_unique_test_path("rfr_semi_join_cap");
+        fs::create_directories(root);
+        IndexDatabase db((fs::path(root) / ".dftindex").string());
+        {
+            auto writer = db.begin_write();
+            writer->init_schema();
+            for (std::size_t i = 0; i < OVER_CAP; ++i)
+                dftu_utils_test::index_records::put_dict_row(
+                    *writer, "file", "fh_" + std::to_string(i),
+                    {{"path", "/scratch/data/shared.h5"}});
+            writer->commit();
+        }
+        auto q =
+            rewrite(R"(resolved.fhash.path == "/scratch/data/shared.h5")", db);
+        using namespace dftracer::utils::query;
+        const auto& node = q.root();
+        REQUIRE(std::holds_alternative<InNode>(node.data));
+        CHECK(std::get<InNode>(node.data).values.elements.size() == OVER_CAP);
     }
 }

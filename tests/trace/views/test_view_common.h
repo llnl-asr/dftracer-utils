@@ -2,16 +2,16 @@
 #define DFTRACER_TESTS_VIEW_COMMON_H
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/rocksdb/database.h>
 #include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
+#include <dftracer/utils/index/store/database.h>
+#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/index_database_writer_context.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/query/query.h>
-#include <dftracer/utils/trace/indexing/chunk_statistics.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
-#include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
-#include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
@@ -36,7 +36,7 @@ namespace test_view_common_detail {
 struct RocksDbCleanupListener : doctest::IReporter {
     explicit RocksDbCleanupListener(const doctest::ContextOptions&) {}
     void test_run_end(const doctest::TestRunStats&) override {
-        dftracer::utils::rocksdb::mark_process_exiting_for_rocksdb();
+        dftracer::utils::index::store::mark_process_exiting_for_rocksdb();
     }
     void report_query(const doctest::QueryData&) override {}
     void test_run_start() override {}

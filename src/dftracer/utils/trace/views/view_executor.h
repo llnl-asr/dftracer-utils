@@ -202,6 +202,12 @@ void add_fold_branch(ViewSessionState& state,
                      std::function<BranchConsumer()> make_consumer,
                      std::function<void()> finalize);
 
+// Fold branch over the events the session's base plan selects (its query and
+// phase), as collect_events reads them.
+void add_selection_fold_branch(ViewSessionState& state,
+                               std::function<BranchConsumer()> make_consumer,
+                               std::function<void()> finalize);
+
 // Attach a match-all branch that aggregates (group_by + agg) and, on finalize,
 // persists the result as a rollup under the session's base plan overlaid with
 // this branch's group_by/agg. Build-only (no Batch), so one scan materializes

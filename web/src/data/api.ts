@@ -4,6 +4,7 @@ import type {
   InfoResponse,
   ProcTreeNode,
   SelectionStats,
+  UntimedResponse,
   VizCounters,
   VizDensityResponse,
   VizQuery,
@@ -112,6 +113,18 @@ export function fetchViz(q: VizQuery, signal?: AbortSignal): Promise<VizResponse
   if (q.query && q.query.trim()) params.set("query", q.query.trim());
   if (q.limit && q.limit > 0) params.set("limit", String(q.limit));
   return getJson<VizResponse>(`/api/viz/events?${withFile(params).toString()}`, signal);
+}
+
+export const UNTIMED_PAGE = 200;
+
+export function fetchUntimed(
+  query: string,
+  offset: number,
+  signal?: AbortSignal,
+): Promise<UntimedResponse> {
+  const params = new URLSearchParams({ limit: String(UNTIMED_PAGE), offset: String(offset) });
+  if (query.trim()) params.set("query", query.trim());
+  return getJson<UntimedResponse>(`/api/viz/untimed?${withFile(params).toString()}`, signal);
 }
 
 export function fetchVizDensity(q: VizQuery, signal?: AbortSignal): Promise<VizDensityResponse> {

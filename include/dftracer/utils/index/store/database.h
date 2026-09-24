@@ -1,0 +1,135 @@
+#ifndef DFTRACER_UTILS_INDEX_STORE_DATABASE_H
+#define DFTRACER_UTILS_INDEX_STORE_DATABASE_H
+
+#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/index/store/column_families.h>
+#include <rocksdb/db.h>
+#include <rocksdb/env.h>
+#include <rocksdb/file_system.h>
+#include <rocksdb/merge_operator.h>
+#include <rocksdb/options.h>
+#include <rocksdb/write_batch.h>
+
+#include <functional>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace dftracer::utils::index::store {
+
+void mark_process_exiting_for_rocksdb();
+
+/// Register a callback to run at the start of
+/// mark_process_exiting_for_rocksdb(), before RocksDB handles are abandoned.
+/// Use it to drop process-lifetime caches that keep DBs open (e.g. the view
+/// tier cache), so those DBs reach a zero refcount and close cleanly while
+/// RocksDB is still usable, rather than being leaked by the exit-time abandon
+/// path in RocksDatabase::close().
+void register_pre_exit_cleanup(std::function<void()> fn);
+
+class RocksDatabase {
+   public:
+    using Batch = ::rocksdb::WriteBatch;
+    enum class OpenMode { ReadWrite, ReadOnly };
+
+    RocksDatabase();
+    explicit RocksDatabase(const std::string& db_path,
+                           OpenMode open_mode = OpenMode::ReadWrite);
+    ~RocksDatabase();
+
+    RocksDatabase(const RocksDatabase&) = delete;
+    RocksDatabase& operator=(const RocksDatabase&) = delete;
+
+    RocksDatabase(RocksDatabase&& other) noexcept;
+    RocksDatabase& operator=(RocksDatabase&& other) noexcept;
+
+    bool open(const std::string& db_path,
+              OpenMode open_mode = OpenMode::ReadWrite);
+    void close();
+
+    bool is_open() const noexcept;
+    bool is_read_only() const noexcept;
+    const std::string& path() const noexcept;
+    ::rocksdb::DB* get() const noexcept;
+
+    ::rocksdb::Status put(
+        std::string_view key, std::string_view value,
+        std::string_view column_family = index::store::cf::DEFAULT);
+    ::rocksdb::Status get(
+        std::string_view key, std::string* value,
+        std::string_view column_family = index::store::cf::DEFAULT) const;
+    ::rocksdb::Status del(std::string_view key, std::string_view column_family =
+                                                    index::store::cf::DEFAULT);
+    ::rocksdb::Status delete_range(
+        std::string_view begin_key, std::string_view end_key,
+        std::string_view column_family = index::store::cf::DEFAULT);
+
+    ::rocksdb::Status put(Batch& batch, std::string_view column_family,
+                          std::string_view key, std::string_view value);
+    ::rocksdb::Status del(Batch& batch, std::string_view column_family,
+                          std::string_view key);
+    ::rocksdb::Status delete_range(Batch& batch, std::string_view column_family,
+                                   std::string_view begin_key,
+                                   std::string_view end_key);
+
+    ::rocksdb::Status merge(
+        std::string_view key, std::string_view value,
+        std::string_view column_family = index::store::cf::DEFAULT);
+    ::rocksdb::Status merge(Batch& batch, std::string_view column_family,
+                            std::string_view key, std::string_view value);
+
+    Batch begin_batch() const;
+    ::rocksdb::Status commit_batch(Batch& batch);
+
+    std::unique_ptr<::rocksdb::Iterator> new_iterator(
+        std::string_view column_family = index::store::cf::DEFAULT) const;
+
+    ::rocksdb::Status compact(
+        std::string_view column_family = index::store::cf::DEFAULT);
+
+    /// Bulk-ingest externally built SST files into the named column family.
+    /// Keys across the SSTs must be sorted and non-overlapping unless the
+    /// caller requests `ingest_behind`, which pushes entries to the bottom
+    /// level and silently drops duplicate keys (for content-addressed CFs).
+    ::rocksdb::Status ingest_external_files(
+        std::string_view column_family,
+        const std::vector<std::string>& external_files,
+        bool ingest_behind = false);
+
+    /// Ingest into several column families in one atomic call (one manifest
+    /// edit + fsync for all of them). Each entry's files must be
+    /// non-overlapping within that CF; the file lists are borrowed (not copied)
+    /// and must outlive the call. Empty/null lists are skipped.
+    ::rocksdb::Status ingest_external_files_multi(
+        const std::vector<std::pair<std::string_view,
+                                    const std::vector<std::string>*>>& per_cf);
+
+    using CfOptionsOverride = std::function<void(
+        const std::string&, ::rocksdb::ColumnFamilyOptions&)>;
+    void set_cf_options_override(CfOptionsOverride override);
+
+    static const decltype(index::store::cf::ALL)& default_column_families();
+    static ::rocksdb::Options default_options();
+    static ::rocksdb::ColumnFamilyOptions default_column_family_options();
+
+    /// Options for families read by key rather than scanned.
+    static ::rocksdb::ColumnFamilyOptions point_lookup_column_family_options();
+    static bool is_point_lookup_cf(std::string_view name) noexcept;
+
+   private:
+    ::rocksdb::ColumnFamilyHandle* column_family_handle(
+        std::string_view column_family) const;
+
+    std::string db_path_;
+    OpenMode open_mode_ = OpenMode::ReadWrite;
+    std::shared_ptr<::rocksdb::FileSystem> file_system_;
+    std::unique_ptr<::rocksdb::Env> env_;
+    ::rocksdb::DB* db_ = nullptr;
+    StringViewMap<::rocksdb::ColumnFamilyHandle*> column_families_;
+    CfOptionsOverride cf_options_override_;
+};
+
+}  // namespace dftracer::utils::index::store
+
+#endif  // DFTRACER_UTILS_INDEX_STORE_DATABASE_H

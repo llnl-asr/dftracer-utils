@@ -17,8 +17,8 @@ namespace dftracer::utils::utilities::filesystem {
 /// Directories that hold generated `.pfw.gz` output, never input traces, and
 /// so must be skipped by a recursive scan or it would ingest derived copies as
 /// source files (double-counting events). Two kinds:
-/// - Index-artifact dirs (`.dftindex`, `.dftindex-views`, `.dftindex_staging`):
-///   materialized views and index data.
+/// - Index-artifact dirs (`.dftindex`, `.dftindex-cache`, `.dftindex_staging`
+///   and older `.dftindex-views`): index data, rollups and materialized views.
 /// - `split/`: rechunked/split output written as a sibling by
 ///   `normalize_members_for_ingest` and by the `dftracer_split` CLI. A
 ///   recursive scan re-run after a split would otherwise pick up both the

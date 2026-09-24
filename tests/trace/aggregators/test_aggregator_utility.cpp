@@ -6,8 +6,8 @@
 #include <dftracer/utils/core/pipeline/thread_pool_executor.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/trace/aggregators/aggregation_intern.h>
-#include <dftracer/utils/trace/aggregators/aggregator_utility.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregator.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
@@ -15,11 +15,11 @@
 #include <vector>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::trace::aggregators;
+using namespace dftracer::utils::index::schemas::dft::agg;
 using namespace dftracer::utils::coro;
 using namespace dftu_utils_test;
 
-TEST_SUITE("AggregatorUtility") {
+TEST_SUITE("Aggregator") {
     TEST_CASE("Collects event profile and system counter batches end-to-end") {
         TestEnvironment env(0);
         REQUIRE(env.is_valid());
@@ -52,7 +52,7 @@ TEST_SUITE("AggregatorUtility") {
         std::vector<AggregationBatch> batches;
         auto task = make_task(
             [&](CoroScope& ctx) -> coro::CoroTask<void> {
-                AggregatorUtility agg;
+                Aggregator agg;
                 auto gen = agg(ctx, input);
                 while (auto batch = co_await gen.next()) {
                     batches.push_back(std::move(*batch));

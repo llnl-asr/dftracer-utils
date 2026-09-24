@@ -2,9 +2,9 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utils/string.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/trace/event_collector_utility.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <simdjson.h>
 

@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <dftracer/utils/utilities/reader/internal/stream.h>
@@ -13,7 +13,7 @@
 #include "testing_utilities.h"
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::indexer::internal;
+using namespace dftracer::utils::index::gzip;
 using namespace dftracer::utils::utilities::reader::internal;
 using namespace dftu_utils_test;
 
@@ -29,7 +29,8 @@ TEST_CASE("C++ Reader Streaming API - BYTES stream" *
 
     // Build index first
     {
-        auto indexer = IndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+        auto indexer =
+            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
         indexer->build();
     }
@@ -168,7 +169,8 @@ TEST_CASE("C++ Reader Streaming API - LINE_BYTES stream") {
 
     // Build index first
     {
-        auto indexer = IndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+        auto indexer =
+            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
         indexer->build();
     }
@@ -246,7 +248,8 @@ TEST_CASE("C++ Reader Streaming API - MULTI_LINES_BYTES stream" *
 
     // Build index first
     {
-        auto indexer = IndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+        auto indexer =
+            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
         indexer->build();
     }
@@ -333,7 +336,8 @@ TEST_CASE("C++ Reader Streaming API - LINE stream") {
 
     // Build index first
     {
-        auto indexer = IndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+        auto indexer =
+            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
         indexer->build();
     }
@@ -415,7 +419,8 @@ TEST_CASE("C++ Reader Streaming API - MULTI_LINES stream" *
 
     // Build index first
     {
-        auto indexer = IndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+        auto indexer =
+            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
         indexer->build();
     }
@@ -504,7 +509,8 @@ TEST_CASE("C++ Reader Streaming API - Edge cases") {
 
     // Build index first
     {
-        auto indexer = IndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+        auto indexer =
+            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
         indexer->build();
     }
@@ -609,7 +615,8 @@ TEST_CASE("C++ Reader Streaming API - Format identification") {
 
     // Build index first
     {
-        auto indexer = IndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+        auto indexer =
+            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
         indexer->build();
     }
@@ -641,7 +648,8 @@ TEST_CASE("C++ Reader Streaming API - Buffer Size Tests") {
 
     // Build index first
     {
-        auto indexer = IndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+        auto indexer =
+            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
         indexer->build();
     }

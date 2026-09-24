@@ -5,6 +5,7 @@ import gzip
 import json
 
 import pyarrow as pa
+import pytest
 
 import dftracer.utils as dftu_utils
 from dftracer.utils import TraceViewer
@@ -252,8 +253,8 @@ class TestTraceViewer:
             assert count("metadata") == 2  # ph="M" metadata, aggregated only when selected
 
     def test_collect_resolves_resolved_fields_per_event(self):
-        # resolved.fpath/hostname resolve fhash/hhash through the index name
-        # tables (built by the full bloom indexer), as per-event columns.
+        # resolved.<key>.<field> columns resolve their key field through the
+        # index dictionaries, as per-event columns and as group keys.
         with Environment(lines=1) as env:
             rows = [
                 {
@@ -271,6 +272,24 @@ class TestTraceViewer:
                     "tid": 1,
                     "ts": 0,
                     "args": {"name": "node01", "value": "h1"},
+                },
+                {
+                    "ph": "M",
+                    "name": "SH",
+                    "pid": 1,
+                    "tid": 1,
+                    "ts": 0,
+                    "args": {"name": "/opt/laghos", "value": "e1"},
+                },
+                {
+                    "ph": "X",
+                    "name": "start",
+                    "cat": "dftracer",
+                    "pid": 1,
+                    "tid": 1,
+                    "ts": 900,
+                    "dur": 0,
+                    "args": {"exec_hash": "e1"},
                 },
             ] + [
                 {
@@ -290,35 +309,55 @@ class TestTraceViewer:
             d = (
                 TraceViewer(gz)
                 .phase("events")
-                .select("name", "resolved.fpath", "r.host")
+                .query('name == "read"')
+                .select("name", "resolved.fhash.path", "resolved.hhash.name")
                 .collect()
                 .to_arrow()
                 .to_pydict()
             )
-            assert d["resolved.fpath"] == ["/data/f.dat"] * 3
-            assert d["r.host"] == ["node01"] * 3
+            assert d["resolved.fhash.path"] == ["/data/f.dat"] * 3
+            assert d["resolved.hhash.name"] == ["node01"] * 3
 
             # group_by on the resolved alias resolves the same value.
             gf = (
                 TraceViewer(gz)
                 .phase("events")
-                .group_by("resolved.fpath")
+                .query('name == "read"')
+                .group_by("resolved.fhash.path")
                 .agg("count")
                 .collect()
                 .to_arrow()
                 .to_pydict()
             )
-            assert gf["file_path"] == ["/data/f.dat"]
+            assert gf["resolved.fhash.path"] == ["/data/f.dat"]
             gh = (
                 TraceViewer(gz)
                 .phase("events")
-                .group_by("resolved.hostname")
+                .query('name == "read"')
+                .group_by("resolved.hhash.name")
                 .agg("count")
                 .collect()
                 .to_arrow()
                 .to_pydict()
             )
-            assert gh["host_name"] == ["node01"]
+            assert gh["resolved.hhash.name"] == ["node01"]
+
+            # A key field outside fhash/hhash: the start event's executable.
+            ge = (
+                TraceViewer(gz)
+                .phase("events")
+                .query('resolved.exec_hash.value like "%laghos%"')
+                .group_by("resolved.exec_hash.value")
+                .agg("count")
+                .collect()
+                .to_arrow()
+                .to_pydict()
+            )
+            assert ge["resolved.exec_hash.value"] == ["/opt/laghos"]
+            assert ge["count"] == [1]
+
+            with pytest.raises(dftu_utils.DFTUtilsValueError, match="resolved.fhash.path"):
+                TraceViewer(gz).query('resolved.fpath == "/data/f.dat"').collect()
 
     def test_collect_resolves_fhash_hhash_per_event(self):
         # fhash/hhash are parsed into dedicated fields (not generic args); the
@@ -1183,14 +1222,15 @@ class TestTraceViewer:
                 return cols[col][row[name]]
 
             assert int(g("overlap", "busy_cell_us")) == 5
-            # overlap: busy clamps to the makespan (150); serial: to sum(dur).
+            # overlap: busy is the union (150); serial: sum(dur). Utilization
+            # divides by the window, [900, 2200).
             assert int(g("overlap", "sum_dur")) == 200
             assert int(g("overlap", "busy")) == 150
             assert abs(g("overlap", "concurrency") - 200 / 150) < 1e-9
-            assert abs(g("overlap", "utilization") - 1.0) < 1e-9
+            assert abs(g("overlap", "utilization") - 150 / 1300) < 1e-9
             assert int(g("serial", "busy")) == 200
             assert abs(g("serial", "concurrency") - 1.0) < 1e-9
-            # Invariants hold everywhere a coverage bitmap can only overshoot.
+            # Invariants hold for every group.
             for i in range(t.num_rows):
                 assert cols["busy"][i] <= cols["sum_dur"][i]
                 assert cols["concurrency"][i] >= 1.0 - 1e-9
@@ -1251,11 +1291,12 @@ class TestTraceViewerSchema:
                 "rate",  # flat args
                 "pos.x",
                 "pos.y",
-                "tags.0",  # nested object + array leaf
+                "tags.0",
+                "tags.1",  # nested object + every array element
                 "fhash",
                 "hhash",  # lifted hashes
-                "resolved.fpath",
-                "resolved.hostname",  # aliases
+                "resolved.fhash.path",
+                "resolved.hhash.name",  # dictionary columns
             ]:
                 assert c in cols, c
 
@@ -1269,8 +1310,91 @@ class TestTraceViewerSchema:
             assert sch["rate"] == "float64"
             assert sch["pos.x"] == "int64"
             assert sch["tags.0"] == "string"
+            assert sch["tags.1"] == "string"
             assert sch["size"] == "float64"  # int in read, float in write
-            assert sch["resolved.fpath"] == "string"
+            assert sch["resolved.fhash.path"] == "string"
+
+
+class TestTraceViewerNestedArgs:
+    """Nested object and array args are flattened into args.<dotted path>
+    columns, and a short name resolves to args in select as in filter."""
+
+    def _rows(self):
+        def ev(name, ts, dur, args):
+            return {
+                "ph": "X",
+                "name": name,
+                "cat": "APP",
+                "pid": 1,
+                "tid": 1,
+                "ts": ts,
+                "dur": dur,
+                "args": args,
+            }
+
+        return [
+            ev("hot", 100, 42, {"dur": {"p99": 7000}, "counters": {"C": {"p50": 3}}}),
+            ev("cold", 200, 43, {"dur": {"p99": 500}}),
+            ev("flat", 300, 44, {"run": 1}),
+            {
+                "ph": 4,
+                "name": "RUN",
+                "cat": "meta",
+                "pid": 0,
+                "tid": 0,
+                "ts": 0,
+                "args": {"hosts": ["a", "b"]},
+            },
+        ]
+
+    def test_nested_leaf_in_default_columns(self):
+        with Environment() as env:
+            path = _make_trace(env, "nested.pfw.gz", self._rows())
+            tv = TraceViewer(path)
+            d = tv.collect().to_arrow().to_pydict()
+            by_name = dict(zip(d["name"], d["args.dur.p99"]))
+            assert by_name == {"hot": 7000, "cold": 500, "flat": None}
+            assert dict(zip(d["name"], d["args.counters.C.p50"]))["hot"] == 3
+            assert dict(zip(d["name"], d["args.run"]))["flat"] == 1
+            for c in ("args.dur.p99", "args.counters.C.p50", "args.run"):
+                assert c in tv.columns, c
+                assert c in tv.schema, c
+
+    def test_array_elements_under_metadata(self):
+        with Environment() as env:
+            path = _make_trace(env, "nested.pfw.gz", self._rows())
+            tv = TraceViewer(path).phase("metadata")
+            d = tv.collect().to_arrow().to_pydict()
+            assert d["args.hosts.0"] == ["a"]
+            assert d["args.hosts.1"] == ["b"]
+
+    def test_short_name_in_select_equals_args_name(self):
+        with Environment() as env:
+            path = _make_trace(env, "nested.pfw.gz", self._rows())
+            short = TraceViewer(path).select("name", "dur.p99").collect().to_arrow()
+            full = TraceViewer(path).select("name", "args.dur.p99").collect().to_arrow()
+            assert short.column_names == ["name", "args.dur.p99"]
+            assert short.to_pydict() == full.to_pydict()
+            assert dict(zip(*short.to_pydict().values()))["hot"] == 7000
+
+    def test_short_name_in_filter_and_select_agree(self):
+        from dftracer.utils import col
+
+        with Environment() as env:
+            path = _make_trace(env, "nested.pfw.gz", self._rows())
+            for tv in (
+                TraceViewer(path).filter(col("dur.p99") > 1000),
+                TraceViewer(path).filter("dur.p99 > 1000"),
+            ):
+                d = tv.select("name", "dur.p99").collect().to_arrow().to_pydict()
+                assert d["name"] == ["hot"]
+                assert all(v is not None and v > 1000 for v in d["args.dur.p99"])
+
+    def test_envelope_dur_unaffected(self):
+        with Environment() as env:
+            path = _make_trace(env, "nested.pfw.gz", self._rows())
+            d = TraceViewer(path).select("name", "dur").collect().to_arrow().to_pydict()
+            assert dict(zip(d["name"], d["dur"])) == {"hot": 42, "cold": 43, "flat": 44}
 
 
 class TestFlamegraphGroup:

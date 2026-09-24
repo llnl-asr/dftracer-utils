@@ -3,6 +3,7 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/plugins/config.h>
 #include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/plugins/result_registry.h>
@@ -15,7 +16,6 @@
 #include <dftracer/utils/python/py_str_helpers.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
-#include <dftracer/utils/trace/indexing/resolve_and_build.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
@@ -63,7 +63,6 @@ using dftracer::utils::plugins::PluginRun;
 using dftracer::utils::plugins::Plugins;
 using dftracer::utils::python::parse_seq;
 using dftracer::utils::python::parse_string_seq;
-namespace indexing = dftracer::utils::trace::indexing;
 namespace internal = dftracer::utils::trace::internal;
 namespace views = dftracer::utils::trace::views;
 namespace filesystem = dftracer::utils::utilities::filesystem;
@@ -129,9 +128,11 @@ CoroTask<void> run_host_scan(CoroScope& scope, std::vector<std::string> inputs,
             "no .pfw or .pfw.gz trace files found");
 
     if (auto_index) {
-        auto norm = co_await indexing::normalize_members_for_ingest(files, 0);
+        auto norm = co_await dftracer::utils::index::build::
+            normalize_members_for_ingest(files, 0);
         files = std::move(norm.files);
-        co_await indexing::ensure_indexes_fresh(&scope, "", files, index_dir);
+        co_await dftracer::utils::index::build::ensure_indexes_fresh(
+            &scope, "", files, index_dir);
     }
 
     std::vector<views::ViewFile> view_files;

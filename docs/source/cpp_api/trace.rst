@@ -15,9 +15,6 @@ Composition and inheritance across the trace-analysis types:
 .. mermaid:: /_generated/trace.mmd
 
 .. include:: /cpp_api/_generated/trace.rst.inc
-.. include:: /cpp_api/_generated/trace.aggregators.rst.inc
-.. include:: /cpp_api/_generated/trace.indexing.rst.inc
 .. include:: /cpp_api/_generated/trace.views.rst.inc
 .. include:: /cpp_api/_generated/trace.comparator.rst.inc
 .. include:: /cpp_api/_generated/trace.statistics.rst.inc
-.. include:: /cpp_api/_generated/trace.visitors.rst.inc

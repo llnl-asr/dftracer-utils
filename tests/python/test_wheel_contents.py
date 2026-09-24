@@ -47,7 +47,20 @@ REQUIRED_PATTERNS = (
     "dftracer/include/dftracer/utils/core/coro/abi.h",
     "dftracer/include/dftracer/utils/dataframe/abi.h",
     "dftracer/include/dftracer/utils/query/abi.h",
-    "dftracer/include/dftracer/utils/utilities/indexer/index_database.h",
+    "dftracer/include/dftracer/utils/index/store/index_database.h",
+    "dftracer/include/dftracer/utils/index/indexer.h",
+    "dftracer/include/dftracer/utils/index/abi.h",
+)
+
+# Index build internals stay private; Indexer (index/indexer.h) replaces them.
+PRIVATE_HEADERS = (
+    "index/build/resolve_and_build.h",
+    "index/build/batch_builder.h",
+    "index/build/resolver.h",
+    "index/store/shard_manifest.h",
+    "index/store/index_write.h",
+    "index/store/layout.h",
+    "index/schemas/dft/agg/aggregation_drain.h",
 )
 
 
@@ -136,3 +149,10 @@ def test_record_matches_contents():
             data = zf.read(name)
             digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
             assert rows[name][1:] == [f"sha256={digest}", str(len(data))], f"bad RECORD: {name}"
+
+
+def test_private_headers_not_shipped(wheel_names):
+    wheel, names = wheel_names
+    shipped = {n[len("dftracer/include/dftracer/utils/") :] for n in _include_tree_names(names)}
+    leaked = shipped & set(PRIVATE_HEADERS)
+    assert not leaked, f"{Path(wheel).name} ships private headers: {sorted(leaked)}"

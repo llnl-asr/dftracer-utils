@@ -63,10 +63,11 @@ namespace dftracer::utils::utilities::reader::internal {
 /// inflate instead of N.
 ///
 /// The key space is split into NSHARDS independent shards (each an ankerl map
-/// + eviction policy + byte budget under its own std::mutex), so lookups on
-/// different members do not contend. The eviction policy (LRU or CLOCK) is
-/// chosen at construction; the map/policy lock is held only for the brief
-/// bookkeeping, never across a decode.
+/// + eviction policy under its own std::mutex), so lookups on different
+/// members do not contend. The byte budget is one total: a shard holding a few
+/// large members keeps them while the cache as a whole has room. The eviction
+/// policy (LRU or CLOCK) is chosen at construction; the map/policy lock is held
+/// only for the brief bookkeeping, never across a decode.
 class MemberDecodeCache {
    public:
     using Bytes = std::shared_ptr<const DecodedMember>;
@@ -76,13 +77,12 @@ class MemberDecodeCache {
     static_assert((NSHARDS & (NSHARDS - 1)) == 0,
                   "NSHARDS must be a power of 2");
 
-    /// `capacity_bytes` bounds total retained decoded bytes (split evenly
-    /// across shards). 0 disables retention but still coalesces in-flight
-    /// decodes.
+    /// `capacity_bytes` bounds total retained decoded bytes. 0 disables
+    /// retention but still coalesces in-flight decodes.
     explicit MemberDecodeCache(
         std::size_t capacity_bytes,
         cache::EvictionKind kind = cache::EvictionKind::LRU)
-        : per_shard_capacity_(capacity_bytes / NSHARDS) {
+        : capacity_(capacity_bytes) {
         for (auto& shard : shards_) {
             shard.policy = cache::make_eviction_policy<MemberKey>(kind);
         }
@@ -130,22 +130,20 @@ class MemberDecodeCache {
             entry->size = entry->bytes ? entry->bytes->data.size() : 0;
             entry->ready.store(true, std::memory_order_release);
             decodes_.fetch_add(1, std::memory_order_relaxed);
-            std::lock_guard<std::mutex> g(shard.mu);
-            if (per_shard_capacity_ == 0) {
+            if (capacity_ == 0) {
+                std::lock_guard<std::mutex> g(shard.mu);
                 shard.map.erase(key);  // retain nothing; coalesce-only
             } else {
-                shard.cur_bytes += entry->size;
-                // Evict other ready entries (this key is not in the policy
-                // yet, so it is never the victim of its own insert).
-                while (shard.cur_bytes > per_shard_capacity_) {
-                    auto victim = shard.policy->pop_victim();
-                    if (!victim) break;
-                    auto vit = shard.map.find(*victim);
-                    if (vit == shard.map.end()) continue;
-                    shard.cur_bytes -= vit->second->size;
-                    shard.map.erase(vit);
-                    evictions_.fetch_add(1, std::memory_order_relaxed);
+                total_bytes_.fetch_add(entry->size, std::memory_order_relaxed);
+                // This key is not in a policy yet, so it is never the victim
+                // of its own insert. One shard lock at a time: no lock order.
+                const std::size_t own = h & (NSHARDS - 1);
+                for (std::size_t i = 0; i < NSHARDS && over_budget(); ++i) {
+                    Shard& s = shards_[(own + i) & (NSHARDS - 1)];
+                    std::lock_guard<std::mutex> g(s.mu);
+                    evict_over_budget(s);
                 }
+                std::lock_guard<std::mutex> g(shard.mu);
                 shard.policy->touch(key);
             }
         }
@@ -171,11 +169,30 @@ class MemberDecodeCache {
         std::mutex mu;
         ankerl::unordered_dense::map<MemberKey, std::shared_ptr<Entry>> map;
         std::unique_ptr<cache::EvictionPolicy<MemberKey>> policy;
-        std::size_t cur_bytes = 0;
     };
 
+    bool over_budget() const {
+        return total_bytes_.load(std::memory_order_relaxed) > capacity_;
+    }
+
+    /// Evicts `s`'s ready entries, least recent first, while the cache is over
+    /// budget. The caller holds `s.mu`.
+    void evict_over_budget(Shard& s) {
+        while (over_budget()) {
+            auto victim = s.policy->pop_victim();
+            if (!victim) return;
+            auto vit = s.map.find(*victim);
+            if (vit == s.map.end()) continue;
+            total_bytes_.fetch_sub(vit->second->size,
+                                   std::memory_order_relaxed);
+            s.map.erase(vit);
+            evictions_.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
     std::array<Shard, NSHARDS> shards_;
-    std::size_t per_shard_capacity_;
+    std::size_t capacity_;
+    std::atomic<std::size_t> total_bytes_{0};
     std::atomic<std::uint64_t> requests_{0};
     std::atomic<std::uint64_t> decodes_{0};
     std::atomic<std::uint64_t> hits_{0};

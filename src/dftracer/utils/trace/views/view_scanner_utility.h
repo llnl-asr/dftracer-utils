@@ -4,10 +4,10 @@
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/string_intern.h>
 #include <dftracer/utils/core/coro/async_generator.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/query/query.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view_definition.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/utilities/common/arrow/arrow_export.h>
 #include <dftracer/utils/utilities/common/arrow/column_builder.h>
@@ -25,8 +25,8 @@ namespace dftracer::utils::trace::views {
 struct ViewScannerInput {
     std::string file_path;
     std::string index_path;
-    std::size_t checkpoint_size =
-        utilities::indexer::internal::Indexer::DEFAULT_CHECKPOINT_SIZE;
+    std::size_t checkpoint_size = dftracer::utils::index::gzip::
+        CheckpointIndexer::DEFAULT_CHECKPOINT_SIZE;
     std::size_t start_byte = 0;
     std::size_t end_byte = 0;
     std::uint64_t checkpoint_idx = 0;

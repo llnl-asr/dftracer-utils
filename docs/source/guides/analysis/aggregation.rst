@@ -259,8 +259,9 @@ bare op name with no ``:field``.
        law, where ``sum(dur)`` is the integral of the active-event count over
        time.
    * - ``utilization``
-     - ``busy`` divided by the makespan (``max_end - min_ts``): the fraction of
-       the elapsed window that was busy.
+     - ``busy`` divided by the elapsed time: the group's makespan
+       (``max_end - min_ts``), or the window or bucket length when
+       ``time_range`` or ``time_bucket`` is set.
    * - ``active``
      - Peak concurrent headcount: the largest number of events active at once.
 
@@ -292,22 +293,28 @@ the number of concurrent ``pread`` calls per file is a ``concurrency`` (or
                .agg("concurrency", "active")   # or AggOp.CONCURRENCY, AggOp.ACTIVE
                .collect())
 
-Occupancy is computed during the parallel scan from a bounded per-bucket
-coverage mask, so it streams in constant memory and merges across files and
-ranks the same way the other aggregates do (see
-:doc:`../scale/distributed-aggregation`). The mask can only overshoot the true
-interval union, so ``busy`` is clamped to ``min(sum(dur), makespan)``: this
-makes ``concurrency >= 1`` and ``utilization <= 1`` hold exactly, never the
-impossible values a raw mask would report.
+Occupancy is computed during the parallel scan from each group's interval
+endpoints, which merge across files and ranks the same way the other
+aggregates do (see :doc:`../scale/distributed-aggregation`); ``busy`` is the
+exact union of the intervals.
+
+With ``time_range(begin, end)``, occupancy takes every event that overlaps the
+window and clips it to ``[max(ts, begin), min(ts + dur, end))``, so an event
+that started before the window counts for the part inside it and ``busy``
+never exceeds ``end - begin``. The other aggregates in the same query take
+only the events that start in the window, so a group whose events all started
+earlier reports ``count`` 0 and its clipped occupancy. With ``time_bucket``,
+occupancy clips each event to every bucket it overlaps: an event from 0 to
+3500 us in 1000 us buckets adds 1000 to ``busy`` in buckets 0, 1000 and 2000
+and 500 in bucket 3000, while its ``count`` and ``sum(dur)`` stay in bucket 0.
+Adjacent windows and buckets therefore add up to the whole.
 
 Resolution is a fixed cell, independent of the output ``time_bucket``. The cell
 is the busy quantum: a shorter event rounds up to one cell, so finer cells
 measure overlap on short events more tightly. Set it with ``resolution(cell)``
 on the viewer or ``F.dur.busy(resolution="1ms")`` inside ``agg`` (the
-``--occ-cell`` CLI flag), honored when a ``time_range`` bounds the window;
-the default is 64 us. Every occupancy result carries a ``busy_cell_us`` column
-reporting the effective cell (a wide window can coarsen it), so a caller can
-tell a grid-derived ``busy`` from a clamped one.
+``--occ-cell`` CLI flag); the default 0 is the exact union. Every occupancy
+result carries a ``busy_cell_us`` column reporting the cell.
 
 Typed aggregate specs
 ---------------------

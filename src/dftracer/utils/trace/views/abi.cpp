@@ -9,6 +9,7 @@
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_source.h>
 
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -71,6 +72,8 @@ GroupKey::Kind to_kind(dftu_group_key_kind k) {
             return GroupKey::Kind::Arg;
         case DFTU_GROUP_KEY_FIELD:
             return GroupKey::Kind::Field;
+        case DFTU_GROUP_KEY_RESOLVED:
+            return GroupKey::Kind::Resolved;
     }
     return GroupKey::Kind::Name;
 }
@@ -200,6 +203,30 @@ dftu_view* dftu_view_filter(const dftu_view* v, const dftu_query* q) {
     if (!v || !q) return nullptr;
     try {
         return wrap(scan::filter(v->p, query_handle_unwrap(q)));
+    } catch (const std::exception&) {
+        return nullptr;
+    }
+}
+
+char* dftu_view_schema_tree(const dftu_view* v) {
+    if (!v) return nullptr;
+    try {
+        const std::string s = schema_tree_json(scan::schema_tree(v->p));
+        char* out = static_cast<char*>(std::malloc(s.size() + 1));
+        if (!out) return nullptr;
+        std::memcpy(out, s.c_str(), s.size() + 1);
+        return out;
+    } catch (const std::exception&) {
+        return nullptr;
+    }
+}
+
+void dftu_view_string_free(char* s) { std::free(s); }
+
+dftu_view* dftu_view_record_schema(const dftu_view* v, const char* id) {
+    if (!v || !id) return nullptr;
+    try {
+        return wrap(scan::record_schema(v->p, id));
     } catch (const std::exception&) {
         return nullptr;
     }

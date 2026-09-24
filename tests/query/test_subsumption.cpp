@@ -111,3 +111,14 @@ TEST_CASE("subsumption - like/regex residuals matched verbatim") {
         subsumes("name like \"%read%\"", "name like \"%read%\" and dur > 100"));
     CHECK_FALSE(subsumes("name like \"%read%\"", "name like \"%write%\""));
 }
+
+TEST_CASE("subsumption - any() leaves are not intervals on the path") {
+    // A plain field and any() over it select different records.
+    CHECK_FALSE(subsumes("sizes > 50", "any(sizes) > 100"));
+    CHECK_FALSE(subsumes("any(sizes) > 50", "sizes > 100"));
+    // Two any() bounds may hold on different elements, so they do not narrow
+    // one interval.
+    CHECK_FALSE(subsumes("any(sizes) > 50 and any(sizes) < 60",
+                         "any(sizes) > 55 and any(sizes) < 58"));
+    CHECK(subsumes(R"(any(tags) == "a")", R"(any(tags) == "a")"));
+}

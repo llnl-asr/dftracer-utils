@@ -431,8 +431,8 @@ class TestDirectoryIndexer:
 class TestIndexerDfanalyzerAPIs:
     """Test cases for dfanalyzer integration APIs (hash tables, PIDs)"""
 
-    def test_get_hash_table_file(self):
-        """Test get_hash_table returns file hash mappings"""
+    def test_get_dictionary_file(self):
+        """get_dictionary returns the file dictionary's path by key"""
         with Environment() as env:
             gz_file = env.create_dft_trace_file()
 
@@ -442,11 +442,11 @@ class TestIndexerDfanalyzerAPIs:
             ) as indexer:
                 indexer.ensure_indexed()
 
-                file_hashes = indexer.get_hash_table("file")
+                file_hashes = indexer.get_dictionary("file", "path")
                 assert isinstance(file_hashes, dict)
 
-    def test_get_hash_table_host(self):
-        """Test get_hash_table returns host hash mappings"""
+    def test_get_dictionary_host(self):
+        """get_dictionary returns the host dictionary's name by key"""
         with Environment() as env:
             gz_file = env.create_dft_trace_file()
 
@@ -456,11 +456,11 @@ class TestIndexerDfanalyzerAPIs:
             ) as indexer:
                 indexer.ensure_indexed()
 
-                host_hashes = indexer.get_hash_table("host")
+                host_hashes = indexer.get_dictionary("host", "name")
                 assert isinstance(host_hashes, dict)
 
-    def test_get_hash_table_string(self):
-        """Test get_hash_table returns string hash mappings"""
+    def test_get_dictionary_string(self):
+        """get_dictionary returns the string dictionary's value by key"""
         with Environment() as env:
             gz_file = env.create_dft_trace_file()
 
@@ -470,11 +470,11 @@ class TestIndexerDfanalyzerAPIs:
             ) as indexer:
                 indexer.ensure_indexed()
 
-                string_hashes = indexer.get_hash_table("string")
+                string_hashes = indexer.get_dictionary("string", "value")
                 assert isinstance(string_hashes, dict)
 
-    def test_get_hash_table_invalid_type(self):
-        """Test get_hash_table raises error for invalid type"""
+    def test_get_dictionary_unknown_field(self):
+        """get_dictionary rejects a field the dictionary does not have"""
         with Environment() as env:
             gz_file = env.create_dft_trace_file()
 
@@ -484,8 +484,8 @@ class TestIndexerDfanalyzerAPIs:
             ) as indexer:
                 indexer.ensure_indexed()
 
-                with pytest.raises((ValueError, RuntimeError)):
-                    indexer.get_hash_table("invalid_type")
+                with pytest.raises(ValueError, match="unknown dictionary field"):
+                    indexer.get_dictionary("file", "name")
 
     def test_query_file_pids(self):
         """Test query_file_pids returns set of PIDs for a file"""
@@ -556,7 +556,7 @@ class TestIndexerDfanalyzerAPIs:
                 assert isinstance(all_pids, dict)
 
     @pytest.mark.valgrind
-    def test_integration_hash_tables_and_pids(self):
+    def test_integration_dictionaries_and_pids(self):
         """Integration test: hash tables and PIDs work together"""
         with Environment() as env:
             gz_file = env.create_dft_trace_file()
@@ -568,8 +568,8 @@ class TestIndexerDfanalyzerAPIs:
                 indexer.ensure_indexed()
 
                 # Get hash tables
-                file_hashes = indexer.get_hash_table("file")
-                host_hashes = indexer.get_hash_table("host")
+                file_hashes = indexer.get_dictionary("file", "path")
+                host_hashes = indexer.get_dictionary("host", "name")
 
                 # Get PIDs
                 all_pids = indexer.query_all_file_pids()
@@ -947,8 +947,8 @@ def _member_trace(path):
 
 
 class TestBloomFields:
-    def _index(self, trace, fields, auto=False):
-        cfg = dftu_utils.BloomConfig(fields=fields, auto=auto)
+    def _index(self, trace, fields, path_budget=0):
+        cfg = dftu_utils.BloomConfig(fields=fields, path_budget=path_budget)
         with dftu_utils.Indexer(files=[trace], require_bloom=cfg, checkpoint_size="4KB") as ix:
             return ix.ensure_indexed()
 
@@ -980,7 +980,7 @@ class TestBloomFields:
     def test_a_new_field_rebuilds_the_index(self, tmp_path):
         trace = _member_trace(str(tmp_path / "t.pfw.gz"))
         self._index(trace, [])
-        cfg = dftu_utils.BloomConfig(fields=["size"], auto=False)
+        cfg = dftu_utils.BloomConfig(fields=["size"], path_budget=0)
         with dftu_utils.Indexer(files=[trace], require_bloom=cfg, checkpoint_size="4KB") as ix:
             assert len(ix.resolve().needs_work) == 1
             assert len(ix.ensure_indexed().ready) == 1
@@ -1001,7 +1001,7 @@ class TestBloomFields:
             assert stats["events_matched"] == matched, dsl
             assert stats["chunks_skipped"] == skipped, dsl
 
-    def test_auto_on_an_index_without_it_rebuilds(self, tmp_path):
+    def test_a_changed_path_budget_rebuilds(self, tmp_path):
         trace = _member_trace(str(tmp_path / "t.pfw.gz"))
         self._index(trace, [])
         cfg = dftu_utils.BloomConfig()
@@ -1016,5 +1016,135 @@ class TestBloomFields:
             )
 
 
+class TestExtensions:
+    def _indexer(self, trace, **kw):
+        cfg = dftu_utils.BloomConfig(fields=["size"], path_budget=0)
+        return dftu_utils.Indexer(files=[trace], require_bloom=cfg, checkpoint_size="4KB", **kw)
+
+    def _matched(self, trace, tmp_path, dsl):
+        out = str(tmp_path / "out.json")
+        return dftu_utils.TraceViewer(trace).filter(dsl).sink_json(out)["events_matched"]
+
+    def test_manifest_lists_every_extension(self, tmp_path):
+        trace = _member_trace(str(tmp_path / "t.pfw.gz"))
+        with self._indexer(trace) as ix:
+            ix.ensure_indexed()
+            (entry,) = ix.manifest()
+        assert entry["path"] == trace
+        names = {e["name"] for e in entry["extensions"]}
+        assert names == {
+            "core.members",
+            "core.dict",
+            "zonemap",
+            "bloom",
+            "counts",
+            "postings",
+            "dft.stats",
+            "core.catalog",
+            "core.profile",
+            "dft.metadata",
+        }
+        assert all(e["current"] for e in entry["extensions"])
+
+    def test_explain_names_what_prunes(self, tmp_path):
+        trace = _member_trace(str(tmp_path / "t.pfw.gz"))
+        with self._indexer(trace) as ix:
+            ix.ensure_indexed()
+            (f,) = ix.explain("size == 201")
+            with pytest.raises(dftu_utils.DFTUtilsValueError):
+                ix.explain("size ==")
+        assert f["indexed"] and f["may_match"]
+        assert len(f["read"]) == f["chunks"] - 3
+        removed = {e["name"]: e["removed"] for e in f["extensions"]}
+        assert any(len(r) == 3 for r in removed.values())
+
+    def test_drop_then_build_restores_one_extension(self, tmp_path):
+        trace = _member_trace(str(tmp_path / "t.pfw.gz"))
+        with self._indexer(trace) as ix:
+            ix.ensure_indexed()
+            expected = self._matched(trace, tmp_path, "size == 201")
+            status = ix.drop_extension("counts")
+            assert status.needs_work == [trace]
+            (entry,) = ix.manifest()
+            assert "counts" not in {e["name"] for e in entry["extensions"]}
+            assert self._matched(trace, tmp_path, "size == 201") == expected
+            assert ix.ensure_indexed().ready == [trace]
+            (entry,) = ix.manifest()
+            assert "counts" in {e["name"] for e in entry["extensions"]}
+            assert ix.rebuild_extension("bloom").ready == [trace]
+            with pytest.raises(dftu_utils.DFTUtilsValueError):
+                ix.drop_extension("core.members")
+        assert self._matched(trace, tmp_path, "size == 201") == expected
+
+    def test_memory_budget_builds_the_same_index(self, tmp_path):
+        trace = _member_trace(str(tmp_path / "t.pfw.gz"))
+        explained = []
+        for budget in (0, "64KB"):
+            idx = str(tmp_path / f"idx_{budget}")
+            with self._indexer(trace, index_dir=idx, memory_budget=budget) as ix:
+                assert ix.ensure_indexed().ready == [trace]
+                explained.append(ix.explain("size == 201"))
+        assert explained[0] == explained[1]
+        with pytest.raises(ValueError):
+            dftu_utils.Indexer(files=[trace], memory_budget="lots")
+
+    def test_unrequested_extension_stays_dropped(self, tmp_path):
+        trace = _member_trace(str(tmp_path / "t.pfw.gz"))
+        with self._indexer(trace, extensions=["zonemap", "bloom", "postings"]) as ix:
+            ix.ensure_indexed()
+            ix.drop_extension("counts")
+            assert ix.resolve().needs_work == []
+
+
+class TestProfiles:
+    def _ndjson(self, path):
+        import gzip
+
+        ops = ["read", "write", "open", "close"]
+        with open(path, "wb") as out:
+            for m in range(8):
+                lines = "".join(
+                    '{"op":"%s","lat":%d,"io":{"off":%d}}\n' % (ops[m % 4], i, m * 100 + i)
+                    for i in range(100)
+                )
+                out.write(gzip.compress(lines.encode()))
+        return path
+
+    def test_generic_trace_is_indexed_and_pruned(self, tmp_path):
+        trace = self._ndjson(str(tmp_path / "g.ndjson.gz"))
+        with dftu_utils.Indexer(files=[trace], index_dir=str(tmp_path / "idx")) as ix:
+            assert ix.ensure_indexed().ready == [trace]
+            (f,) = ix.explain('op == "read"')
+            (entry,) = ix.manifest()
+        assert f["indexed"] and len(f["read"]) < f["chunks"]
+        assert "core.profile" in {e["name"] for e in entry["extensions"]}
+
+    def test_unknown_schema_raises(self, tmp_path):
+        trace = self._ndjson(str(tmp_path / "g.ndjson.gz"))
+        with pytest.raises(dftu_utils.DFTUtilsValueError):
+            dftu_utils.Indexer(files=[trace], schema="nope").resolve()
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+def test_status_reports_truncated_trace(tmp_path):
+    import gzip
+
+    full = tmp_path / "full.pfw.gz"
+    with gzip.open(full, "wt") as f:
+        f.write("[\n")
+        for i in range(2000):
+            f.write(
+                '{"id":%d,"pid":1,"tid":1,"name":"read","cat":"POSIX",'
+                '"ph":"X","ts":%d,"dur":5,"args":{"hhash":"a"}}\n' % (i, i)
+            )
+    data = full.read_bytes()
+    cut = tmp_path / "cut.pfw.gz"
+    cut.write_bytes(data[: len(data) // 2])
+
+    status = dftu_utils.Indexer(files=[str(full), str(cut)]).ensure_indexed()
+
+    assert sorted(status.ready) == sorted([str(full), str(cut)])
+    assert status.truncated == [str(cut)]

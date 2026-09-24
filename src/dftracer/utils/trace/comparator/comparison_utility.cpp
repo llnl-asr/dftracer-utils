@@ -132,7 +132,7 @@ std::vector<GroupComparison> ComparisonUtility::join_visitor(
     // Retained for API compatibility; unused by build_result_tree.
     // Baseline and variant come from different indexes, so their ids only
     // become comparable once collapsed into one table.
-    auto table = aggregators::make_intern_table();
+    auto table = dftracer::utils::index::schemas::dft::agg::make_intern_table();
     auto& intern = table->intern;
     auto base_collapsed = collapse_by_group(pair.baseline.aggregations,
                                             pair.baseline.strings(), intern);
@@ -184,7 +184,7 @@ NodeResult ComparisonUtility::build_result_tree(
 
     // Baseline and variant come from different indexes, so their ids only
     // become comparable once collapsed into one intern table.
-    auto table = aggregators::make_intern_table();
+    auto table = dftracer::utils::index::schemas::dft::agg::make_intern_table();
     auto& intern = table->intern;
     auto base_collapsed = collapse_by_group(pair.baseline.aggregations,
                                             pair.baseline.strings(), intern);

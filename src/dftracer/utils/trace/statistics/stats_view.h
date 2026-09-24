@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_TRACE_STATISTICS_STATS_VIEW_H
 
 #include <dftracer/utils/dataframe/batch_ops.h>
-#include <dftracer/utils/trace/indexing/chunk_statistics.h>
+#include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/trace/views/view.h>
 
 #include <algorithm>
@@ -298,8 +298,9 @@ inline std::string_view intern_stat_key(std::string_view s) {
 }  // namespace detail
 
 /// Fill a ChunkStatistics (the report data model) from collected ViewStats.
-inline void fill_chunk_statistics(indexing::ChunkStatistics& cs,
-                                  const ViewStats& v) {
+inline void fill_chunk_statistics(
+    dftracer::utils::index::schemas::dft::ChunkStatistics& cs,
+    const ViewStats& v) {
     cs.total_events = v.total_events;
     for (const auto& [k, c] : v.category_counts)
         cs.category_counts[detail::intern_stat_key(k)] = c;

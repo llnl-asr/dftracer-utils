@@ -1337,7 +1337,7 @@ int main(int argc, char** argv) {
     dftu_scalar thr{};
     thr.kind = DFTU_SCALAR_TAG_I64;
     thr.value.i = keep_from;
-    Expr keep = expr_cmp(DFTU_CMP_GT, expr_col(1), thr);  // column 1 = v
+    Expr keep = expr_cmp(CmpOp::Gt, expr_col(1), thr);  // column 1 = v
     auto eager_sort_filter = [&]() {
         DataFrame se = df.sort_by("s");
         Series m = se.column("v") > keep_from;
@@ -1383,7 +1383,7 @@ int main(int argc, char** argv) {
     dftu_scalar half{};
     half.kind = DFTU_SCALAR_TAG_I64;
     half.value.i = rows / 2;
-    Expr vpos = expr_cmp(DFTU_CMP_GT, expr_col(1), half);       // v > rows/2
+    Expr vpos = expr_cmp(CmpOp::Gt, expr_col(1), half);       // v > rows/2
     Expr kv = expr_binary(BinaryOp::Add, expr_col(0), expr_col(1));  // k + v
     auto eager_map = [&]() {
         Series m = df.column("v") > (rows / 2);

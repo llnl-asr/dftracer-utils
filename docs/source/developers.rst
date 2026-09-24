@@ -106,6 +106,37 @@ To run tests with coverage:
 
    make coverage
 
+Benchmarks
+----------
+
+The standalone benchmarks build with ``-DDFTRACER_UTILS_BUILD_BENCHMARKS=ON``
+and run by hand; they are not part of CTest. Use a release build:
+
+.. code-block:: bash
+
+   cmake --preset release -DDFTRACER_UTILS_BUILD_BENCHMARKS=ON
+   cmake --build --preset release --target index_bench view_api_bench
+
+``index_bench`` measures index build time, index size, decode throughput,
+pruning time per file, a fixed query set and peak memory for each input (a
+``.pfw.gz`` file or a directory scanned recursively). It picks the query
+values from the first events of each input, so it runs on any trace:
+
+.. code-block:: bash
+
+   build/build-release/src/index_bench --out new.json \
+       --baseline benchmarks/baselines/index_bench.json \
+       <input> [<input> ...]
+
+With ``--baseline`` it exits 1 when a metric is more than 5 percent worse,
+judged by the lower bound of a bootstrap 95 percent interval of the median
+ratio (and directly for index size and peak memory). The committed baseline
+records the machine, compiler and inputs it was measured on; compare only on
+the same machine. To re-record it after an intended change, run the same
+inputs with ``--out benchmarks/baselines/index_bench.json`` and no
+``--baseline``. ``--build-runs``, ``--runs`` and ``--warmups`` trade time for
+tighter intervals (defaults 3, 10 and 2).
+
 Building Documentation
 ----------------------
 

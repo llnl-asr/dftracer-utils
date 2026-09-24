@@ -3,16 +3,16 @@
 #include <dftracer/utils/core/common/scoped_fd.h>
 #include <dftracer/utils/core/io/io.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/rocksdb/db_manager.h>
 #include <dftracer/utils/core/task_graph/task_graph.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/index/build/batch_builder.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer.h>
+#include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/trace/chunk_extractor_utility.h>
 #include <dftracer/utils/trace/trace.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_rechunker.h>
 #include <dftracer/utils/utilities/fileio/types/types.h>
-#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -222,19 +222,18 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
          executor_threads](CoroScope& ctx) -> coro::CoroTask<void> {
             auto index_path = trace::internal::determine_index_path(
                 input_files_ptr->front(), index_dir);
-            dftracer::utils::rocksdb::RocksDBManager::instance().reset(
+            dftracer::utils::index::store::RocksDBManager::instance().reset(
                 index_path);
 
-            auto batch_config =
-                std::make_shared<utilities::indexer::IndexBuildBatchConfig>();
+            auto batch_config = std::make_shared<
+                dftracer::utils::index::build::IndexBuildBatchConfig>();
             batch_config->file_paths = *input_files_ptr;
             batch_config->index_dir = index_dir;
             batch_config->checkpoint_size = checkpoint_size;
             batch_config->parallelism = executor_threads;
-            batch_config->rebuild_root_summaries = true;
 
             auto result =
-                co_await utilities::indexer::IndexBatchBuilderUtility::process(
+                co_await dftracer::utils::index::build::BatchBuilder::process(
                     &ctx, std::move(batch_config));
             for (const auto& r : result.results) {
                 if (!r.success && !r.error_message.empty()) {

@@ -18,7 +18,7 @@ namespace dftracer::utils::trace::views::detail {
 
 /// Fields a bootstrap fold can evaluate a predicate on straight from the POD:
 /// always-present top-level scalars on a phase-filtered data event. A query
-/// touching anything else (args, te, fhash/hhash, resolved.*) cannot be
+/// touching anything else (args, te, fhash/hhash, resolved columns) cannot be
 /// filtered here and must take the indexed path.
 inline bool fold_query_field_supported(std::string_view f) {
     return f == "cat" || f == "name" || f == "pid" || f == "tid" || f == "ts" ||

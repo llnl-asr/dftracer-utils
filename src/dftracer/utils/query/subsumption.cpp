@@ -107,7 +107,7 @@ bool or_to_set(const QueryNode& node, std::string& field,
                 return or_to_set(*n.left, field, vals) &&
                        or_to_set(*n.right, field, vals);
             } else if constexpr (std::is_same_v<T, CompareNode>) {
-                if (n.op != CompareOp::EQ) return false;
+                if (n.op != CompareOp::EQ || n.field.any) return false;
                 if (field.empty())
                     field = n.field.path;
                 else if (field != n.field.path)
@@ -116,6 +116,7 @@ bool or_to_set(const QueryNode& node, std::string& field,
                              as_number(n.value.value));
                 return true;
             } else if constexpr (std::is_same_v<T, InNode>) {
+                if (n.field.any) return false;
                 if (field.empty())
                     field = n.field.path;
                 else if (field != n.field.path)
@@ -138,6 +139,12 @@ void flatten(const QueryNode& node, Buckets& b) {
                 flatten(*n.left, b);
                 flatten(*n.right, b);
             } else if constexpr (std::is_same_v<T, CompareNode>) {
+                // Two any() bounds may hold on different elements, so they
+                // do not narrow one interval.
+                if (n.field.any) {
+                    b.residual.insert(to_string(node));
+                    return;
+                }
                 const auto num = as_number(n.value.value);
                 if (n.op == CompareOp::EQ) {
                     if (num) {
@@ -159,6 +166,10 @@ void flatten(const QueryNode& node, Buckets& b) {
                     b.residual.insert(to_string(node));  // NE, or non-numeric
                 }
             } else if constexpr (std::is_same_v<T, InNode>) {
+                if (n.field.any) {
+                    b.residual.insert(to_string(node));
+                    return;
+                }
                 for (const auto& e : n.values.elements)
                     add_set_value(b, n.field.path, e.value);
             } else if constexpr (std::is_same_v<T, OrNode>) {

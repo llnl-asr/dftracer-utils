@@ -6,16 +6,16 @@
 // two binaries so each fits its own Valgrind budget.
 
 #include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/rocksdb/column_families.h>
-#include <dftracer/utils/core/rocksdb/database.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
-#include <dftracer/utils/trace/aggregators/aggregator_utility.h>
+#include <dftracer/utils/index/cache/rollup_store.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregator.h>
+#include <dftracer/utils/index/store/column_families.h>
+#include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/trace/comparator/compare_view.h>
 #include <dftracer/utils/trace/views/aggfold.h>
 #include <dftracer/utils/trace/views/fold.h>
-#include <dftracer/utils/trace/views/rollup_store.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_executor.h>

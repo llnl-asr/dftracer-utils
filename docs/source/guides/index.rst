@@ -126,6 +126,7 @@ Serve the index over HTTP and reach for the standalone analysis tools.
    serving/viz-api
    ../server
    tools/dlio-config
+   tools/genesis-gen-dist
    tools/replay
    tools/logging
    tools/dfanalyzer

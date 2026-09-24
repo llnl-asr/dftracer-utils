@@ -1,11 +1,11 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/trace/indexing/chunk_statistics.h>
+#include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <doctest/doctest.h>
 
 #include <cmath>
 #include <string>
 
-using namespace dftracer::utils::trace::indexing;
+using namespace dftracer::utils::index::schemas::dft;
 
 TEST_SUITE("ChunkStatistics") {
     TEST_CASE("ChunkStatistics - Single event update") {
@@ -95,5 +95,17 @@ TEST_SUITE("ChunkStatistics") {
 
         CHECK(a.total_events == 1);
         CHECK(a.duration_count == 1);
+    }
+
+    TEST_CASE("ChunkStatistics - First start above zero") {
+        ChunkStatistics a;
+        ChunkStatistics b;
+        a.update_from_event("cudaLaunch", "CUDA", 1, 1, 0, 5);
+        a.update_from_event("read", "POSIX", 1, 1, 5000, 10);
+        b.update_from_event("write", "POSIX", 1, 1, 3000, 10);
+        b.update_from_event("cudaLaunch", "CUDA", 1, 1, 0, 5);
+        a.merge_from(b);
+        CHECK(a.min_timestamp_us == 0);
+        CHECK(a.min_nonzero_timestamp_us == 3000);
     }
 }

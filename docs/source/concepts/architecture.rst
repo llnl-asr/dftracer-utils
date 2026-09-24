@@ -53,9 +53,13 @@ active.
        Util --> DF
 
 The domain logic itself is grouped by what it does rather than by a shared
-base class: readers and the fused scan under ``trace/``, index construction
-and pruning under ``trace/indexing/``, aggregation and comparison under
-``trace/aggregators`` and ``trace/comparator``, the columnar engine under
+base class: readers and the fused scan under ``trace/``, the index under
+``index/`` (in layers: ``store`` for RocksDB storage, ``gzip`` for
+checkpoints, ``extensions`` for blooms, dimension stats and dictionaries,
+``schemas/dft`` for the dftracer-specific statistics and aggregation,
+then ``build``, ``plan`` for pruning and ``cache`` for rollups; a CTest check
+keeps each layer from including a higher one), comparison under
+``trace/comparator``, the columnar engine under
 ``dataframe/``, the query DSL under ``query/``, and the plugin C ABI under
 ``plugins/``. See :doc:`fused-scan`, :doc:`indexing-and-pushdown`, and
 :doc:`dataframe-model` for each of those in turn.

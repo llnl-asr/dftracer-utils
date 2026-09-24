@@ -425,8 +425,7 @@ def _dv_events_task(
 ) -> "Optional[pa.Table]":
     """Worker: this shard's matching events at ts >= cursor, up to page_size."""
     if cursor is not None:
-        # Per-event predicate (time_range only prunes chunks, so it would leak
-        # earlier events sharing a boundary chunk); chunk ts-stats still prune.
+        # The page cursor is a lower bound on ts; chunk ts-stats still prune.
         plan = replace(plan, filters=plan.filters + (f"ts >= {int(cursor)}",))
     # Order by ts before the limit so each shard yields its smallest-ts page;
     # the ts cursor would otherwise skip the events a shard dropped.
@@ -1091,7 +1090,6 @@ def distributed_index(
     force_rebuild: bool = False,
     build_bloom: bool = True,
     partition: Literal["lpt", "round_robin"] = "lpt",
-    rebuild_root_summaries: bool = True,
     parallelism_per_worker: int = 0,
     flush_every_files: int = 0,
     aggregation_config: "Optional[Union[bool, AggregationConfig]]" = None,
@@ -1102,13 +1100,13 @@ def distributed_index(
     Steps (all O(1) on the coordinator except the fan-out):
       1. Enumerate files + sizes via parallel scan.
       2. LPT bin-pack files into one bucket per Dask worker.
-      3. Register all files on the coordinator's IndexDatabase (pre-assigns
-         file_ids and writes DEFAULT-CF entries once).
+      3. Assign file ids on the coordinator's IndexDatabase; each worker
+         writes its files' records with their index data.
       4. Submit one Dask task per non-empty worker that runs the existing
          indexer pipeline with an SST sink, writing SSTs to `local_staging`
          and (if different) moving them to `shared_staging`.
-      5. Collect artifact dicts into an SstArtifactRegistry; coordinator
-         calls bulk_ingest + rebuild_root_summaries.
+      5. Collect artifact dicts into an SstArtifactRegistry; the coordinator
+         ingests them in one atomic bulk_ingest.
 
     Args:
         directory: Directory containing trace files.
@@ -1122,7 +1120,6 @@ def distributed_index(
         client: Dask distributed Client. None -> run tasks inline.
         partition: "lpt" (greedy longest-processing-time bin-pack) or
             "round_robin".
-        rebuild_root_summaries: If True, recompute ROOT_* CFs after ingest.
         parallelism_per_worker: 0 -> let the plugin/default Runtime choose
             (one coroutine thread per core).
         flush_every_files: 0 -> build SSTs once per worker; >0 -> flush
@@ -1221,15 +1218,15 @@ def distributed_index(
             entries = [(p, s) for (p, s) in entries if p in _needs]
             all_paths = [p for (p, _) in entries]
 
-    # 2. Register all files once on coordinator (one register_files call;
-    #    file_ids are then parallel to `entries`).
+    # 2. Assign every file an id once on the coordinator (file_ids are then
+    #    parallel to `entries`).
     _t1 = _time.monotonic()
     _log.info("distributed_index: opening IndexDatabase at %s", index_path)
     db = _IndexDatabase(index_path)
     db.init_schema()
-    all_file_ids = db.register_files(all_paths)
+    all_file_ids = db.assign_file_ids(all_paths)
     _log.info(
-        "distributed_index: register_files done (%d files, %.1fs)",
+        "distributed_index: assign_file_ids done (%d files, %.1fs)",
         len(all_paths),
         _time.monotonic() - _t1,
     )
@@ -1415,8 +1412,8 @@ def distributed_index(
         _time.monotonic() - _t_collect,
     )
 
-    # bulk_ingest and rebuild_root_summaries are single coordinator calls with
-    # no granular counter yet, so report them as indeterminate labelled phases.
+    # bulk_ingest is a single coordinator call with no granular counter yet, so
+    # report it as an indeterminate labelled phase.
     _t_ingest = _time.monotonic()
     if progress is not None:
         progress(0, 0, "Ingesting SSTs")
@@ -1428,34 +1425,14 @@ def distributed_index(
         _time.monotonic() - _t_ingest,
         total_artifacts,
     )
-    if rebuild_root_summaries:
-        _t_root = _time.monotonic()
-        if progress is not None:
-            progress(0, 0, "Building summaries")
-        db.rebuild_root_summaries()
-        if progress is not None:
-            progress(1, 1, "Building summaries")
-        _log.info(
-            "distributed_index: rebuild_root_summaries done in %.1fs",
-            _time.monotonic() - _t_root,
-        )
-
     if aggregation_config is not None and has_aggregation:
         _t_meta = _time.monotonic()
-        time_interval_ms = getattr(aggregation_config, "time_interval_ms", 0) or 0
-        time_interval_us = int(round(time_interval_ms * 1000.0))
-        db.write_agg_global_config(
-            time_interval_us=time_interval_us,
-            group_by_file=getattr(aggregation_config, "group_by_file", True),
-        )
-        if all_file_ids:
-            db.write_agg_file_markers(list(all_file_ids))
+        db.write_agg_config(aggregation_config)
         if tracker_blobs:
             db.write_aggregation_tracker(tracker_blobs)
         _log.info(
-            "distributed_index: agg meta writes done in %.2fs (markers=%d, trackers=%d)",
+            "distributed_index: agg meta writes done in %.2fs (trackers=%d)",
             _time.monotonic() - _t_meta,
-            len(all_file_ids),
             len(tracker_blobs),
         )
 

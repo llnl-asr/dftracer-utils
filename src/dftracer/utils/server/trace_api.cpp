@@ -2,6 +2,8 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/index/build/resolver.h>
+#include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/query/query.h>
@@ -12,7 +14,6 @@
 #include <dftracer/utils/server/router.h>
 #include <dftracer/utils/server/trace_api.h>
 #include <dftracer/utils/server/trace_index.h>
-#include <dftracer/utils/trace/indexing/index_resolver_utility.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/statistics/statistics_query_utility.h>
 #include <dftracer/utils/trace/views/view_definition.h>
@@ -28,7 +29,7 @@
 namespace dftracer::utils::server {
 
 using namespace dftracer::utils::trace;
-using namespace dftracer::utils::trace::indexing;
+
 using namespace dftracer::utils::trace::statistics;
 using namespace dftracer::utils::trace::views;
 
@@ -211,18 +212,17 @@ void register_trace_api(Router& router, TraceIndex& index) {
             std::string hashes(params.get("hash"));
             if (hashes.empty())
                 co_return HttpResponse::bad_request("Missing parameter: hash");
-            auto kind = params.get("type");
-            using HashType = TraceIndex::HashType;
-            HashType type = HashType::FILE;
-            if (kind == "host")
-                type = HashType::HOST;
-            else if (kind == "string")
-                type = HashType::STRING;
-            else if (kind == "proc")
-                type = HashType::PROC;
-            else if (!kind.empty() && kind != "file")
-                co_return HttpResponse::bad_request("Invalid type: " +
-                                                    std::string(kind));
+            std::string dict(params.get("type"));
+            if (dict.empty()) dict = "file";
+            const dftracer::utils::index::Dictionary* d = nullptr;
+            for (const auto& c : index_ptr->record_schema().dictionaries)
+                if (c.name == dict) d = &c;
+            if (!d)
+                co_return HttpResponse::bad_request("Invalid type: " + dict);
+            std::string field(params.get("field"));
+            if (field.empty()) field = d->fields.front().first;
+            if (!d->has_field(field))
+                co_return HttpResponse::bad_request("Invalid field: " + field);
 
             auto& b = scratch_json_builder();
             b.start_object();
@@ -239,7 +239,7 @@ void register_trace_api(Router& router, TraceIndex& index) {
                 std::string one = hashes.substr(start, end - start);
                 start = end + 1;
                 if (one.empty()) continue;
-                auto name = index_ptr->resolve_hash(type, one);
+                auto name = index_ptr->resolve(dict, field, one);
                 if (name.empty()) continue;
                 if (!first) b.append_comma();
                 first = false;
@@ -252,10 +252,15 @@ void register_trace_api(Router& router, TraceIndex& index) {
             co_return HttpResponse::ok(std::string(b));
         },
         RouteDoc{
-            "Resolve content hashes (file/host/string) to their names.",
+            "Resolve dictionary keys (file/host/string) to their values.",
             "Control",
-            {{"hash", "Hash, or several separated by commas", true, ""},
-             {"type", "file (default), host, string or proc", false, "file"}},
+            {{"hash", "Key, or several separated by commas", true, ""},
+             {"type", "Dictionary: file (default), host or string", false,
+              "file"},
+             {"field",
+              "Dictionary field: path, name or value (the dictionary's own "
+              "by default)",
+              false, ""}},
             R"({"names":{"314c1a1cdb22a136":"/data/train/img_0.npz"}})"});
 
     router.post(

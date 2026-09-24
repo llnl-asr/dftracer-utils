@@ -24,21 +24,6 @@ namespace dftracer::utils::utilities::reader::internal {
 // Semantically false-positive-safe: any line we accept still gets re-checked
 // against the real query downstream. Lines we reject are guaranteed not to
 // match because the literal representation of the comparison is missing.
-struct LinePrefilter {
-    std::vector<std::string> required;
-
-    bool empty() const { return required.empty(); }
-
-    bool may_match(std::string_view bytes) const {
-        for (const auto& lit : required) {
-            if (::memmem(bytes.data(), bytes.size(), lit.data(), lit.size()) ==
-                nullptr)
-                return false;
-        }
-        return true;
-    }
-};
-
 // AND-of-EQ predicates with concrete typed literals can be evaluated
 // directly against simdjson without going through ValueMap (which costs
 // wyhash + per-field std::string allocation per row). Anything more
@@ -46,6 +31,8 @@ struct LinePrefilter {
 struct CompiledEqProbe {
     std::string top_key;     // "pid", "args", "name", etc.
     std::string nested_key;  // "" for top-level, else e.g. "fhash"
+    // A bare key missing (or null) at the top level is read under "args".
+    bool args_fallback = false;
     enum class Kind { String, Int64, UInt64, Double, Bool };
     Kind kind = Kind::String;
     std::string s_val;
@@ -54,8 +41,6 @@ struct CompiledEqProbe {
     double d_val = 0.0;
     bool b_val = false;
 };
-
-LinePrefilter build_prefilter(const query::Query& q);
 
 std::optional<std::vector<CompiledEqProbe>> try_compile_eq_probes(
     const query::QueryNode& node);

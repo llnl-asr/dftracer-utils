@@ -4,7 +4,7 @@
 #include <dftracer/utils/core/common/archive_format.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 
 #include <string>
@@ -17,8 +17,8 @@ namespace dftracer::utils::trace {
 struct MetadataCollectorUtilityInput {
     std::string file_path;
     std::string index_path;  ///< Empty for plain files, otherwise `.dftindex`.
-    std::size_t checkpoint_size = dftracer::utils::utilities::indexer::
-        internal::Indexer::DEFAULT_CHECKPOINT_SIZE;
+    std::size_t checkpoint_size = dftracer::utils::index::gzip::
+        CheckpointIndexer::DEFAULT_CHECKPOINT_SIZE;
     bool force_rebuild = false;
     bool compute_hash = false;
 
@@ -26,8 +26,8 @@ struct MetadataCollectorUtilityInput {
 
     MetadataCollectorUtilityInput(
         std::string fpath, std::string ipath = "",
-        std::size_t ckpt = dftracer::utils::utilities::indexer::internal::
-            Indexer::DEFAULT_CHECKPOINT_SIZE,
+        std::size_t ckpt = dftracer::utils::index::gzip::CheckpointIndexer::
+            DEFAULT_CHECKPOINT_SIZE,
         bool force = false, bool hash = false)
         : file_path(std::move(fpath)),
           index_path(std::move(ipath)),

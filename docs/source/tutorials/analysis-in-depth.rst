@@ -153,9 +153,10 @@ duration is at least 100 microseconds.
           0    read    100    10000     100.0
           1   write    100    20000     200.0
 
-      The DSL also has virtual **resolved** fields for path-like metadata the
-      index stores by hash - for example ``resolved("fpath").like("%/scratch/%")``
-      or ``resolved("hostname") == "node01"``. Those need traces that carry the
+      The DSL also has **resolved** columns for path-like metadata the
+      index stores by hash - for example
+      ``resolved("fhash.path").like("%/scratch/%")`` or
+      ``resolved("hhash.name") == "node01"``. Those need traces that carry the
       matching metadata, so they are not part of this lesson's path; see the
       :doc:`../guides/core/query-dsl` guide for the full operator list.
 

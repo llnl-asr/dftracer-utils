@@ -10,7 +10,7 @@
 namespace {
 
 std::string views_root_of(const std::string& gz) {
-    return fs::path(gz).parent_path() / ".dftindex-views";
+    return fs::path(gz).parent_path() / ".dftindex-cache" / "views";
 }
 
 // The part files inside the single MV directory under the views root.

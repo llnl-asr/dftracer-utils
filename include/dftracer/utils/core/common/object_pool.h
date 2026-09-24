@@ -175,9 +175,11 @@ class ObjectPool {
         }
     }
 
-    /// Reserved header holding the free-list `next`; max-aligned so the payload
-    /// past it keeps default-new alignment.
-    static constexpr std::size_t BLOCK_HEADER = alignof(std::max_align_t);
+    /// Reserved header holding the free-list `next`, as wide as default-new
+    /// alignment so the payload past it keeps it (coroutine frames rely on
+    /// it). alignof(max_align_t) is smaller on some targets (8 on Apple arm64).
+    static constexpr std::size_t BLOCK_HEADER =
+        __STDCPP_DEFAULT_NEW_ALIGNMENT__;
     static_assert(BLOCK_HEADER >= sizeof(void*),
                   "block header must hold a next pointer");
 

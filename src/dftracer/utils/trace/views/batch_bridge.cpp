@@ -11,7 +11,7 @@ dataframe::DataFrame base_frame(const std::vector<FoldEvent>& events,
                                 const dftracer::utils::StringIntern& intern,
                                 const ColumnSpec& spec) {
     return build_row_frame(events, intern, spec.select, spec.time_scale,
-                           spec.resolver);
+                           spec.resolver, spec.by_path);
 }
 
 }  // namespace
@@ -21,7 +21,8 @@ dataframe::DataFrame events_to_frame(
     const dftracer::utils::StringIntern& intern, const ColumnSpec& spec) {
     dataframe::DataFrame f = base_frame(events, intern, spec);
     if (spec.emit_dyn)
-        for (auto& [name, col] : build_dyn_numeric_columns(events, intern)) {
+        for (auto& [name, col] :
+             build_dyn_numeric_columns(events, intern, spec.select)) {
             f.names.push_back(std::move(name));
             f.columns.push_back(std::move(col));
         }
@@ -42,7 +43,7 @@ dataframe::Morsel events_to_morsel(
         m.name_ids.push_back(intern->get_or_insert(name));
 
     if (spec.emit_dyn) {
-        auto dyn = build_dyn_numeric_columns(events, *intern);
+        auto dyn = build_dyn_numeric_columns(events, *intern, spec.select);
         m.dyn_names.reserve(dyn.size());
         m.dyn_columns.reserve(dyn.size());
         for (auto& [name, col] : dyn) {

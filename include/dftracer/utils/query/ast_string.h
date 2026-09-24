@@ -67,21 +67,23 @@ inline void node_to_string(std::ostringstream& os, const QueryNode& node) {
         [&os](auto&& n) {
             using T = std::decay_t<decltype(n)>;
             if constexpr (std::is_same_v<T, CompareNode>) {
-                os << n.field.path << ' ' << compare_op_str(n.op) << ' ';
+                os << field_text(n.field) << ' ' << compare_op_str(n.op) << ' ';
                 literal_to_string(os, n.value);
             } else if constexpr (std::is_same_v<T, InNode>) {
-                os << n.field.path << " in ";
+                os << field_text(n.field) << " in ";
                 array_to_string(os, n.values);
             } else if constexpr (std::is_same_v<T, NotInNode>) {
-                os << n.field.path << " not in ";
+                os << field_text(n.field) << " not in ";
                 array_to_string(os, n.values);
             } else if constexpr (std::is_same_v<T, MatchNode>) {
                 if (n.op == MatchOp::ICONTAINS) {
                     os << '"' << n.pattern
-                       << (n.negated ? "\" not in " : "\" in ") << n.field.path;
+                       << (n.negated ? "\" not in " : "\" in ")
+                       << field_text(n.field);
                 } else {
-                    os << n.field.path << ' ' << match_op_str(n.op, n.negated)
-                       << " \"" << n.pattern << '"';
+                    os << field_text(n.field) << ' '
+                       << match_op_str(n.op, n.negated) << " \"" << n.pattern
+                       << '"';
                 }
             } else if constexpr (std::is_same_v<T, AndNode>) {
                 os << '(';

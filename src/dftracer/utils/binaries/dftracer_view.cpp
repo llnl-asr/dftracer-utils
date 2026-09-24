@@ -7,17 +7,18 @@
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/index/build/resolve_and_build.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer.h>
+#include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/shard_manifest.h>
 #include <dftracer/utils/query/query.h>
-#include <dftracer/utils/trace/aggregators/aggregation_config.h>
-#include <dftracer/utils/trace/indexing/resolve_and_build.h>
-#include <dftracer/utils/trace/indexing/shard_manifest.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -39,6 +40,7 @@
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::trace;
+using namespace dftracer::utils::index::store;
 using namespace dftracer::utils::trace::views;
 using namespace dftracer::utils::utilities::filesystem;
 
@@ -110,6 +112,7 @@ class ViewArgParse : public cli::ArgParse {
     bool flamegraph = false;
     std::string ct_partition;
     std::string phase;
+    std::string record_schema;
     bool merge = false;
     bool no_index = false;
     bool verify = false;
@@ -150,7 +153,7 @@ class ViewArgParse : public cli::ArgParse {
         parser()
             .add_argument("--time-range")
             .help(
-                "Timestamp filter as min,max in microseconds (e.g., "
+                "Keep events starting in [min, max), microseconds (e.g., "
                 "1000000,2000000)")
             .default_value<std::string>("");
 
@@ -218,9 +221,8 @@ class ViewArgParse : public cli::ArgParse {
             .add_argument("--occ-cell")
             .help(
                 "Occupancy cell size (busy quantum) for busy/concurrency/"
-                "utilization; a bare number is microseconds, 0 = default. "
-                "Finer resolves overlap on short events (honored with "
-                "--time-range)")
+                "utilization; a bare number is microseconds, 0 = the exact "
+                "union. Finer resolves overlap on short events")
             .default_value(std::string("0"));
 
         parser()
@@ -248,6 +250,13 @@ class ViewArgParse : public cli::ArgParse {
         parser()
             .add_argument("--phase")
             .help("Select events by phase: events (ph=X), counters (ph=C), any")
+            .default_value<std::string>("");
+
+        parser()
+            .add_argument("--schema")
+            .help(
+                "Read records as this registered schema instead of the "
+                "detected one")
             .default_value<std::string>("");
 
         parser()
@@ -349,6 +358,7 @@ class ViewArgParse : public cli::ArgParse {
         flamegraph = parser().get<bool>("--flamegraph");
         ct_partition = parser().get<std::string>("--ct-partition");
         phase = parser().get<std::string>("--phase");
+        record_schema = parser().get<std::string>("--schema");
         merge = parser().get<bool>("--merge");
         no_index = parser().get<bool>("--no-index");
         verify = parser().get<bool>("--verify");
@@ -388,7 +398,8 @@ static coro::CoroTask<void> verify_output(
     CoroScope& ctx, const std::string& final_output,
     const std::string& index_dir, std::size_t checkpoint_size,
     Configure&& configure, std::uint64_t expected_events, bool& verify_failed) {
-    co_await indexing::ensure_index_fresh(&ctx, "", final_output, index_dir);
+    co_await dftracer::utils::index::build::ensure_index_fresh(
+        &ctx, "", final_output, index_dir);
     ViewFile ovf;
     ovf.file_path = final_output;
     ovf.index_path = internal::determine_index_path(final_output, index_dir);
@@ -440,6 +451,8 @@ static bool parse_group_by(const std::string& spec,
             out.push_back(GroupKey::host_name());
         else if (tok == "rank")
             out.push_back(GroupKey::rank());
+        else if (tok.starts_with(dftracer::utils::index::RESOLVED_PREFIX))
+            out.push_back(GroupKey::resolved(tok));
         else if (tok.rfind("arg:", 0) == 0)
             out.push_back(GroupKey::of_arg(tok.substr(4)));
         else
@@ -630,17 +643,8 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         }
     }
 
-    // --time-range folds a ts predicate here for exact per-event filtering; it
-    // ALSO drives View::time_range() in `configure`, which prunes whole chunks
-    // by their ts range (a speed hint, not an exact filter on its own).
-    if (time_range || min_duration > 0 || max_duration > 0) {
+    if (min_duration > 0 || max_duration > 0) {
         std::string extra;
-        if (time_range) {
-            extra += "ts >= " +
-                     std::to_string(static_cast<uint64_t>(time_range->first));
-            extra += " and ts <= " +
-                     std::to_string(static_cast<uint64_t>(time_range->second));
-        }
         if (min_duration > 0) {
             if (!extra.empty()) extra += " and ";
             extra +=
@@ -720,12 +724,12 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         }
     }
 
-    if (!view.query && !aggregate && !merge && !typed_mode && !mv_mode &&
-        !ct_mode && !fg_mode) {
+    if (!view.query && !time_range && !aggregate && !merge && !typed_mode &&
+        !mv_mode && !ct_mode && !fg_mode) {
         DFTRACER_UTILS_LOG_ERROR(
             "%s",
-            "Nothing to do. Use --preset, --recipe, --query, --merge, "
-            "--call-tree, --flamegraph, or --group-by/--agg.");
+            "Nothing to do. Use --preset, --recipe, --query, --time-range, "
+            "--merge, --call-tree, --flamegraph, or --group-by/--agg.");
         co_return 1;
     }
 
@@ -794,8 +798,8 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     // every ingest path); index and reader both use the returned split copies.
     std::vector<std::pair<std::string, std::string>> auto_split;
     if (!no_auto_index) {
-        auto norm = co_await indexing::normalize_members_for_ingest(
-            std::move(files), checkpoint_size);
+        auto norm = co_await dftracer::utils::index::build::
+            normalize_members_for_ingest(std::move(files), checkpoint_size);
         files = std::move(norm.files);
         auto_split = std::move(norm.split);
     }
@@ -875,6 +879,8 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     // and distributed paths so both aggregate identically. The projection and
     // row window (--select/--offset/--limit) are applied by `windowed`.
     auto configure = [&](View v) {
+        if (!cli->record_schema.empty())
+            v = v.record_schema(cli->record_schema);
         if (view.query) v = v.filter(*view.query);
         v = v.phase(view_phase);
         v = v.metadata(view.include_metadata);
@@ -944,23 +950,23 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                     if (counters || fg_mode) {
                         // Event-only scans (counter/flamegraph partials) need
                         // only the base index, not the aggregation tier.
-                        co_await indexing::ensure_indexes_fresh(&ctx, "", shard,
-                                                                rank_idx);
+                        co_await dftracer::utils::index::build::
+                            ensure_indexes_fresh(&ctx, "", shard, rank_idx);
                     } else {
                         // Build the aggregation tier per rank so the partial -
                         // and any later read of the auto-written shard set - is
                         // answered from the index instead of re-scanning
                         // traces.
-                        indexing::ResolveAndBuildInput bin;
+                        dftracer::utils::index::build::ResolveAndBuildInput bin;
                         bin.files = shard;
                         bin.index_dir = rank_idx;
                         bin.checkpoint_size = checkpoint_size;
                         bin.require_checkpoints = true;
                         bin.require_aggregation = true;
-                        bin.aggregation_config =
-                            aggregators::AggregationConfig{};
-                        co_await indexing::resolve_and_build_index(
-                            &ctx, std::move(bin));
+                        bin.aggregation_config = dftracer::utils::index::
+                            schemas::dft::agg::AggregationConfig{};
+                        co_await dftracer::utils::index::build::
+                            resolve_and_build_index(&ctx, std::move(bin));
                     }
                 }
                 std::vector<ViewFile> shard_files_vf;
@@ -1029,8 +1035,8 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                 std::string rank_idx =
                     idx_base + "/rank_" + std::to_string(transport.rank());
                 if (!no_auto_index) {
-                    co_await indexing::ensure_indexes_fresh(&ctx, "", shard,
-                                                            rank_idx);
+                    co_await dftracer::utils::index::build::
+                        ensure_indexes_fresh(&ctx, "", shard, rank_idx);
                 }
                 std::vector<ViewFile> shard_vf;
                 for (const auto& f : shard) {
@@ -1059,8 +1065,9 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                         DFTRACER_UTILS_LOG_ERROR("merge_shards failed for %s",
                                                  final_output.c_str());
                     } else if (!no_index) {
-                        co_await indexing::ensure_index_fresh(
-                            &ctx, "", final_output, index_dir);
+                        co_await dftracer::utils::index::build::
+                            ensure_index_fresh(&ctx, "", final_output,
+                                               index_dir);
                     }
                 }
                 co_return;
@@ -1100,8 +1107,8 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                 (!counters && !aggregate && !write_trace &&
                  v.export_would_bootstrap());
             if (!no_auto_index && !will_bootstrap) {
-                co_await indexing::ensure_indexes_fresh(&ctx, "", files,
-                                                        index_dir);
+                co_await dftracer::utils::index::build::ensure_indexes_fresh(
+                    &ctx, "", files, index_dir);
             }
 
             if (ct_mode || fg_mode) {

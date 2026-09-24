@@ -3,10 +3,10 @@
 #include <dftracer/utils/core/common/string_intern.h>
 #include <dftracer/utils/core/coro/when_all.h>
 #include <dftracer/utils/dataframe/containment.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <dftracer/utils/utilities/replay/replay.h>
 

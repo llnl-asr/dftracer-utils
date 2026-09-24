@@ -70,12 +70,11 @@ indexed (a plain query does not detect that on its own).
 
       .. code-block:: cpp
 
-         #include <dftracer/utils/trace/indexing/resolve_and_build.h>
-         using namespace dftracer::utils::trace::indexing;
+         #include <dftracer/utils/index/indexer.h>
+         using namespace dftracer::utils::index;
 
-         ResolveAndBuildInput input;
-         input.files = {"trace.pfw.gz"};
-         auto result = resolve_and_build_index(scope, input);  // co_await inside a coroutine
+         Indexer indexer = Indexer::open({"traces/"});
+         indexer.build();  // no-op if already built
 
 Full detail, including the bootstrap and staleness rules: :doc:`core/indexing`.
 

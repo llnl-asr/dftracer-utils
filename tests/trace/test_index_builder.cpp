@@ -2,8 +2,8 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 #include <unistd.h>
@@ -12,7 +12,7 @@
 #include <memory>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::indexer;
+using namespace dftracer::utils::index::build;
 using namespace dftracer::utils::trace::internal;
 using namespace dftu_utils_test;
 
@@ -43,8 +43,7 @@ static BuildResult run_builder(const std::string& gz,
             cfg->force_rebuild = force;
             if (checkpoint_size > 0) cfg->checkpoint_size = checkpoint_size;
             try {
-                auto r = co_await IndexBatchBuilderUtility::process(
-                    &scope, std::move(cfg));
+                auto r = co_await BatchBuilder::process(&scope, std::move(cfg));
                 out_ptr->success = r.indexed >= 1 && r.failed == 0;
                 if (!r.results.empty()) {
                     out_ptr->index_path = r.results[0].index_path;

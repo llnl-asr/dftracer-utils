@@ -1,19 +1,22 @@
 #include <dftracer/utils/core/common/field_ref.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
-#include <dftracer/utils/trace/aggregators/reserved_args.h>
+#include <dftracer/utils/index/plan/view_resolver.h>
+#include <dftracer/utils/index/schemas/dft/agg/reserved_args.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/agg_fold.h>
 #include <dftracer/utils/trace/views/event_source.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
-#include <dftracer/utils/trace/views/view_resolver.h>
 
 #include <algorithm>
+#include <charconv>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <set>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -74,6 +77,41 @@ bool is_derived_agg_field(std::string_view sel, std::string_view& name) {
         return false;
     name = sel.substr(AGG_DERIVED_PREFIX.size());
     return true;
+}
+
+constexpr std::string_view WINDOW_PREFIX = "__win:";
+constexpr std::string_view CLIP_PREFIX = "__clip:";
+
+struct WindowSel {
+    std::uint64_t lo = 0;
+    std::uint64_t hi = 0;
+    std::string_view rest;
+};
+
+// "<prefix><lo>:<hi>:<rest>", as window_token and clip_token write it.
+bool parse_window_sel(std::string_view sel, std::string_view prefix,
+                      WindowSel& w) {
+    if (sel.substr(0, prefix.size()) != prefix) return false;
+    const std::string_view s = sel.substr(prefix.size());
+    const std::size_t a = s.find(':');
+    if (a == std::string_view::npos) return false;
+    const std::size_t b = s.find(':', a + 1);
+    if (b == std::string_view::npos) return false;
+    std::from_chars(s.data(), s.data() + a, w.lo);
+    std::from_chars(s.data() + a + 1, s.data() + b, w.hi);
+    w.rest = s.substr(b + 1);
+    return true;
+}
+
+std::string window_sel(std::string_view prefix, std::uint64_t lo,
+                       std::uint64_t hi, std::string_view rest) {
+    std::string out(prefix);
+    out += std::to_string(lo);
+    out += ':';
+    out += std::to_string(hi);
+    out += ':';
+    out += rest;
+    return out;
 }
 
 // An Arrow-layout validity bitmap (1 = valid) from a per-row present flag;
@@ -161,27 +199,27 @@ df::Series arg_column(const std::vector<FoldEvent>& evs, std::uint32_t keyid,
 
     if (any_str) {
         // Mixed numeric/string collapses to String (numbers stringified).
-        std::vector<std::string> owned;  // keeps stringified numbers alive
-        owned.reserve(evs.size());
+        // Interned strings are views into stable intern storage; only
+        // stringified numbers need owning, in a deque so views stay valid.
+        std::deque<std::string> owned;
         std::vector<std::string_view> vals;
         vals.reserve(evs.size());
         for (const auto& ev : evs) {
             const auto* v = lookup(ev);
             if (!v) {
-                owned.emplace_back();
+                vals.emplace_back();
                 present.push_back(false);
-            } else if (const auto* s = std::get_if<std::uint32_t>(v)) {
-                owned.emplace_back(intern.resolve(*s));
-                present.push_back(true);
-            } else if (const auto* i = std::get_if<std::int64_t>(v)) {
-                owned.push_back(std::to_string(*i));
-                present.push_back(true);
-            } else {
-                owned.push_back(std::to_string(std::get<double>(*v)));
-                present.push_back(true);
+                continue;
             }
+            if (const auto* s = std::get_if<std::uint32_t>(v))
+                vals.emplace_back(intern.resolve(*s));
+            else if (const auto* i = std::get_if<std::int64_t>(v))
+                vals.emplace_back(owned.emplace_back(std::to_string(*i)));
+            else
+                vals.emplace_back(
+                    owned.emplace_back(std::to_string(std::get<double>(*v))));
+            present.push_back(true);
         }
-        for (const auto& s : owned) vals.emplace_back(s);
         auto vbits = validity_of(present);
         return df::Series::strings(std::span<const std::string_view>(vals),
                                    vbits.empty() ? nullptr : vbits.data());
@@ -223,6 +261,92 @@ df::Series arg_column(const std::vector<FoldEvent>& evs, std::uint32_t keyid,
     auto vbits = validity_of(present);
     return df::Series::flat(df::TypeId::Int64, vals.data(), n,
                             vbits.empty() ? nullptr : vbits.data());
+}
+
+// Every arg column of the empty select, named "args.<key>" in sorted key order,
+// in two passes over the events rather than one pass per column. Each column is
+// typed and filled exactly as arg_column(evs, key, NO_ID) would.
+void append_all_arg_columns(const std::vector<FoldEvent>& evs,
+                            const dftracer::utils::StringIntern& intern,
+                            df::DataFrame& out, std::string_view prefix) {
+    enum class Kind : std::uint8_t { Int, Dbl, Str };
+    struct Col {
+        std::uint32_t key = 0;
+        Kind kind = Kind::Int;
+        std::vector<std::int64_t> i;
+        std::vector<double> d;
+        std::vector<std::string_view> s;
+        std::vector<bool> present;
+    };
+    std::unordered_map<std::uint32_t, std::uint32_t> slot;
+    std::vector<Col> cols;
+    for (const auto& ev : evs)
+        for (const auto& [k, v] : ev.args) {
+            auto [it, inserted] =
+                slot.emplace(k, static_cast<std::uint32_t>(cols.size()));
+            if (inserted) cols.emplace_back().key = k;
+            Col& c = cols[it->second];
+            if (std::holds_alternative<std::uint32_t>(v))
+                c.kind = Kind::Str;
+            else if (c.kind == Kind::Int && std::holds_alternative<double>(v))
+                c.kind = Kind::Dbl;
+        }
+    if (cols.empty()) return;
+
+    std::vector<std::pair<std::string_view, std::uint32_t>> order;
+    order.reserve(cols.size());
+    for (std::uint32_t c = 0; c < cols.size(); ++c)
+        order.emplace_back(intern.resolve(cols[c].key), c);
+    std::sort(order.begin(), order.end());
+
+    const std::size_t n = evs.size();
+    for (Col& c : cols) {
+        c.present.assign(n, false);
+        if (c.kind == Kind::Str)
+            c.s.assign(n, {});
+        else if (c.kind == Kind::Dbl)
+            c.d.assign(n, 0.0);
+        else
+            c.i.assign(n, 0);
+    }
+    std::deque<std::string> owned;
+    for (std::size_t r = 0; r < n; ++r)
+        for (const auto& [k, v] : evs[r].args) {
+            Col& c = cols[slot.find(k)->second];
+            if (c.present[r]) continue;
+            c.present[r] = true;
+            if (c.kind == Kind::Int) {
+                c.i[r] = std::get<std::int64_t>(v);
+            } else if (c.kind == Kind::Dbl) {
+                const auto* x = std::get_if<double>(&v);
+                c.d[r] =
+                    x ? *x : static_cast<double>(std::get<std::int64_t>(v));
+            } else if (const auto* id = std::get_if<std::uint32_t>(&v)) {
+                c.s[r] = intern.resolve(*id);
+            } else if (const auto* x = std::get_if<std::int64_t>(&v)) {
+                c.s[r] = owned.emplace_back(std::to_string(*x));
+            } else {
+                c.s[r] =
+                    owned.emplace_back(std::to_string(std::get<double>(v)));
+            }
+        }
+
+    const auto len = static_cast<std::int64_t>(n);
+    for (const auto& [name, idx] : order) {
+        Col& c = cols[idx];
+        out.names.push_back(std::string(prefix) + std::string(name));
+        auto vbits = validity_of(c.present);
+        const std::uint8_t* valid = vbits.empty() ? nullptr : vbits.data();
+        if (c.kind == Kind::Str)
+            out.columns.push_back(df::Series::strings(
+                std::span<const std::string_view>(c.s), valid));
+        else if (c.kind == Kind::Dbl)
+            out.columns.push_back(
+                df::Series::flat(df::TypeId::Float64, c.d.data(), len, valid));
+        else
+            out.columns.push_back(
+                df::Series::flat(df::TypeId::Int64, c.i.data(), len, valid));
+    }
 }
 
 df::Series top_column(const std::vector<FoldEvent>& evs, std::string_view name,
@@ -378,20 +502,57 @@ df::Series derived_agg_column(const std::vector<FoldEvent>& evs,
                             vbits.empty() ? nullptr : vbits.data());
 }
 
-// A resolved.* / r.* virtual field maps to a hash field resolved through the
-// index name tables (fpath <- fhash, hostname/host <- hhash).
-enum class ResolvedKind { None, File, Host };
-ResolvedKind resolved_kind(std::string_view f) {
-    std::string_view rest;
-    if (f.rfind("resolved.", 0) == 0)
-        rest = f.substr(9);
-    else if (f.rfind("r.", 0) == 0)
-        rest = f.substr(2);
-    else
-        return ResolvedKind::None;
-    if (rest == "fpath") return ResolvedKind::File;
-    if (rest == "hostname" || rest == "host") return ResolvedKind::Host;
-    return ResolvedKind::None;
+// An agg-engine token, built the same way for every record_schema.
+bool is_path_token(std::string_view sel) {
+    std::string_view f;
+    bool arg_only = false;
+    return is_agg_key_field(sel, f, arg_only) || is_num_arg_field(sel, f) ||
+           is_derived_agg_field(sel, f);
+}
+
+df::Series window_mask_column(const std::vector<FoldEvent>& evs,
+                              const WindowSel& w) {
+    const std::int64_t n = static_cast<std::int64_t>(evs.size());
+    std::vector<std::int64_t> ones(evs.size(), 1);
+    std::vector<bool> present;
+    present.reserve(evs.size());
+    for (const auto& ev : evs) present.push_back(ev.ts >= w.lo && ev.ts < w.hi);
+    auto vbits = validity_of(present);
+    return df::Series::flat_i64(ones.data(), n,
+                                vbits.empty() ? nullptr : vbits.data());
+}
+
+df::Series clip_column(const std::vector<FoldEvent>& evs, const WindowSel& w) {
+    const bool is_ts = w.rest == "ts";
+    const std::int64_t n = static_cast<std::int64_t>(evs.size());
+    std::vector<std::uint64_t> vals;
+    std::vector<bool> present;
+    vals.reserve(evs.size());
+    present.reserve(evs.size());
+    for (const auto& ev : evs) {
+        const std::uint64_t s = std::max(ev.ts, w.lo);
+        if (is_ts) {
+            vals.push_back(s);
+            present.push_back(true);
+            continue;
+        }
+        const std::uint64_t e = std::min(ev.ts + ev.dur, w.hi);
+        vals.push_back(ev.has_dur && e > s ? e - s : 0);
+        present.push_back(ev.has_dur);
+    }
+    auto vbits = validity_of(present);
+    return df::Series::flat(df::TypeId::Uint64, vals.data(), n,
+                            vbits.empty() ? nullptr : vbits.data());
+}
+
+bool is_resolved(std::string_view f) {
+    return f.starts_with(dftracer::utils::index::RESOLVED_PREFIX);
+}
+
+// The key field of `resolved.<key field>.<field>`.
+std::string_view resolved_key(std::string_view f) {
+    f.remove_prefix(dftracer::utils::index::RESOLVED_PREFIX.size());
+    return f.substr(0, f.find('.'));
 }
 
 // An all-null String column of length n (validity all zero).
@@ -401,35 +562,21 @@ df::Series null_string_column(std::size_t n) {
                                n ? vbits.data() : nullptr);
 }
 
-// Resolve each event's fhash/hhash through the name tables to its path/host
-// string; null where the hash field is unset or the name is unknown.
-df::Series resolved_column(const std::vector<FoldEvent>& evs, ResolvedKind kind,
-                           const dftracer::utils::StringIntern& intern,
-                           const GroupResolver& resolver) {
-    std::vector<std::string_view> vals;
-    std::vector<bool> present;
-    vals.reserve(evs.size());
-    present.reserve(evs.size());
-    for (const auto& ev : evs) {
-        const std::uint32_t id =
-            kind == ResolvedKind::File ? ev.fhash_id : ev.hhash_id;
-        if (id == dftracer::utils::StringIntern::NO_ID) {
-            vals.emplace_back();
-            present.push_back(false);
-            continue;
+// Each key of `keys` resolved through `table`; null where the key is unset or
+// unknown.
+df::Series resolved_column(const df::Series& keys,
+                           const StringViewMap<std::string>& table) {
+    const std::int64_t n = keys.length();
+    std::vector<std::string_view> vals(static_cast<std::size_t>(n));
+    std::vector<bool> present(static_cast<std::size_t>(n), false);
+    if (keys.type() == df::TypeId::String)
+        for (std::int64_t i = 0; i < n; ++i) {
+            if (keys.is_null(i)) continue;
+            auto it = table.find(keys.string_at(i));
+            if (it == table.end() || it->second.empty()) continue;
+            vals[static_cast<std::size_t>(i)] = it->second;
+            present[static_cast<std::size_t>(i)] = true;
         }
-        const std::string hash(intern.resolve(id));
-        const std::string& s = kind == ResolvedKind::File
-                                   ? resolver.file_path(hash)
-                                   : resolver.host_name(hash);
-        if (s.empty()) {
-            vals.emplace_back();
-            present.push_back(false);
-        } else {
-            vals.emplace_back(s);
-            present.push_back(true);
-        }
-    }
     auto vbits = validity_of(present);
     return df::Series::strings(std::span<const std::string_view>(vals),
                                vbits.empty() ? nullptr : vbits.data());
@@ -444,10 +591,43 @@ bool any_hash_present(const std::vector<FoldEvent>& evs,
 
 }  // namespace
 
-bool select_needs_resolver(const std::vector<std::string>& select) {
+std::string window_token(std::uint64_t lo, std::uint64_t hi,
+                         std::string_view sel) {
+    return window_sel(WINDOW_PREFIX, lo, hi, sel);
+}
+
+std::string clip_token(std::uint64_t lo, std::uint64_t hi,
+                       std::string_view part) {
+    return window_sel(CLIP_PREFIX, lo, hi, part);
+}
+
+std::string_view select_source_field(std::string_view sel) {
+    sel = window_inner(sel);
+    if (is_clip_token(sel)) return {};
+    std::string_view f;
+    bool arg_only = false;
+    if (is_agg_key_field(sel, f, arg_only) || is_num_arg_field(sel, f) ||
+        is_derived_agg_field(sel, f))
+        return f;
+    return sel;
+}
+
+std::string_view window_inner(std::string_view sel) {
+    WindowSel w;
+    return parse_window_sel(sel, WINDOW_PREFIX, w) ? w.rest : sel;
+}
+
+bool is_clip_token(std::string_view sel) {
+    return sel.substr(0, CLIP_PREFIX.size()) == CLIP_PREFIX;
+}
+
+std::vector<std::string> select_resolved(
+    const std::vector<std::string>& select) {
+    std::vector<std::string> out;
     for (const std::string& s : select)
-        if (resolved_kind(s) != ResolvedKind::None) return true;
-    return false;
+        if (const std::string_view f = window_inner(s); is_resolved(f))
+            out.emplace_back(f);
+    return out;
 }
 
 std::vector<std::string> row_fold_extra_captures(
@@ -463,7 +643,9 @@ std::vector<std::string> row_fold_extra_captures(
             if (e == f) return;
         out.emplace_back(f);
     };
-    for (const std::string& sel : select) {
+    for (const std::string& token : select) {
+        const std::string_view sel = window_inner(token);
+        if (is_clip_token(sel)) continue;
         std::string_view f = sel;
         std::string_view uf;
         bool ao = false;
@@ -480,16 +662,24 @@ std::vector<std::string> row_fold_extra_captures(
         // (from ts/dur scalars) are derived, not captured raw.
         std::string_view df_name;
         if (is_derived_agg_field(sel, df_name)) continue;
-        // resolved.*/r.*, io_cat and acc_pat are computed, not captured raw.
-        if (resolved_kind(f) != ResolvedKind::None || is_iocat_field(f) ||
-            is_accpat_field(f))
+        // A resolved column captures its key field; io_cat and acc_pat are
+        // computed, not captured raw.
+        if (is_resolved(f)) {
+            const std::string_view key = resolved_key(f);
+            if (!is_hash_field(key)) add(key);
             continue;
+        }
+        if (is_iocat_field(f) || is_accpat_field(f)) continue;
         add(f);
     }
     return out;
 }
 
-std::string canonical_row_column_name(std::string_view sel) {
+std::string canonical_row_column_name(std::string_view sel, bool by_path) {
+    if (sel.substr(0, WINDOW_PREFIX.size()) == WINDOW_PREFIX ||
+        is_clip_token(sel))
+        return std::string(sel);
+    if (by_path && !is_path_token(sel)) return std::string(sel);
     std::string_view f;
     bool arg_only = false;
     std::string_view num_name;
@@ -498,7 +688,7 @@ std::string canonical_row_column_name(std::string_view sel) {
     if (is_num_arg_field(sel, num_name)) return std::string(sel);
     if (is_derived_agg_field(sel, deriv_name)) return std::string(deriv_name);
     if (is_top_level(sel)) return std::string(sel);
-    if (resolved_kind(sel) != ResolvedKind::None) return std::string(sel);
+    if (is_resolved(sel)) return std::string(sel);
     if (is_iocat_field(sel)) return std::string(sel);
     if (is_accpat_field(sel)) return std::string(sel);
     const std::string_view key = strip_args_prefix(sel);
@@ -506,7 +696,13 @@ std::string canonical_row_column_name(std::string_view sel) {
     return std::string(dftracer::utils::ARGS_PREFIX) + std::string(key);
 }
 
-dataframe::TypeId row_column_type(std::string_view sel) {
+dataframe::TypeId row_column_type(std::string_view sel, bool by_path) {
+    WindowSel w;
+    if (parse_window_sel(sel, WINDOW_PREFIX, w))
+        return w.rest.empty() ? df::TypeId::Int64
+                              : row_column_type(w.rest, by_path);
+    if (parse_window_sel(sel, CLIP_PREFIX, w)) return df::TypeId::Uint64;
+    if (by_path && !is_path_token(sel)) return df::TypeId::Unknown;
     std::string_view f;
     bool arg_only = false;
     std::string_view num_name;
@@ -519,7 +715,7 @@ dataframe::TypeId row_column_type(std::string_view sel) {
         if (sel == "ph") return df::TypeId::Int64;
         return df::TypeId::Uint64;  // pid, tid, ts, dur
     }
-    if (resolved_kind(sel) != ResolvedKind::None) return df::TypeId::String;
+    if (is_resolved(sel)) return df::TypeId::String;
     if (is_iocat_field(sel)) return df::TypeId::Int64;
     if (is_accpat_field(sel)) return df::TypeId::String;
     const std::string_view key = strip_args_prefix(sel);
@@ -527,16 +723,79 @@ dataframe::TypeId row_column_type(std::string_view sel) {
     return df::TypeId::Unknown;  // a flattened arg: type is data-dependent
 }
 
+namespace {
+
+df::Series select_column(
+    const std::vector<FoldEvent>& evs,
+    const dftracer::utils::StringIntern& intern, const std::string& sel,
+    double time_scale,
+    const dftracer::utils::index::plan::GroupResolver* resolver, bool by_path) {
+    WindowSel win;
+    if (parse_window_sel(sel, WINDOW_PREFIX, win)) {
+        df::Series mask = window_mask_column(evs, win);
+        if (win.rest.empty()) return mask;
+        df::Series col = select_column(evs, intern, std::string(win.rest),
+                                       time_scale, resolver, by_path);
+        return col.where(mask.valid_mask(),
+                         df::Series::nulls(col.type(), col.length()));
+    }
+    if (parse_window_sel(sel, CLIP_PREFIX, win)) return clip_column(evs, win);
+    if (by_path && !is_path_token(sel)) {
+        auto& mut = const_cast<dftracer::utils::StringIntern&>(intern);
+        const std::uint32_t id = mut.get_or_insert(sel);
+        return arg_column(evs, id, id, intern);
+    }
+    std::string_view agg_key_f;
+    bool agg_key_arg_only = false;
+    std::string_view num_arg_name;
+    std::string_view deriv_name;
+    if (is_agg_key_field(sel, agg_key_f, agg_key_arg_only)) {
+        return group_key_str_column(evs, intern, agg_key_f, agg_key_arg_only);
+    } else if (is_num_arg_field(sel, num_arg_name)) {
+        return num_arg_column(evs, num_arg_name, intern);
+    } else if (is_derived_agg_field(sel, deriv_name)) {
+        return derived_agg_column(evs, deriv_name, intern);
+    } else if (is_top_level(sel)) {
+        return top_column(evs, sel, intern, time_scale);
+    } else if (is_resolved(sel)) {
+        const auto* table = resolver ? resolver->column(sel) : nullptr;
+        if (!table) return null_string_column(evs.size());
+        return resolved_column(
+            select_column(evs, intern, std::string(resolved_key(sel)),
+                          time_scale, resolver, by_path),
+            *table);
+    } else if (is_iocat_field(sel)) {
+        return iocat_column(evs, intern);
+    } else if (is_accpat_field(sel)) {
+        return accpat_column(evs);
+    } else if (const std::string_view key = strip_args_prefix(sel);
+               is_hash_field(key)) {
+        return hash_column(evs, key, intern);
+    } else {
+        // A nested/extra field (args.n.v) is captured under its full
+        // name, a flat arg under its bare key; try the full name first,
+        // then the stripped key, matching PodSource::find_arg.
+        auto& mut = const_cast<dftracer::utils::StringIntern&>(intern);
+        const std::uint32_t id_full = mut.get_or_insert(sel);
+        const std::uint32_t id_bare = mut.get_or_insert(key);
+        return arg_column(evs, id_full, id_bare, intern);
+    }
+}
+
+}  // namespace
+
 dataframe::DataFrame build_row_frame(
     const std::vector<FoldEvent>& evs,
     const dftracer::utils::StringIntern& intern,
     const std::vector<std::string>& select, double time_scale,
-    const GroupResolver* resolver) {
+    const dftracer::utils::index::plan::GroupResolver* resolver, bool by_path) {
     df::DataFrame out;
     const dftracer::utils::StringIntern* intern_ = &intern;
     const std::vector<std::string>& select_ = select;
 
-    if (select_.empty()) {
+    if (select_.empty() && by_path) {
+        append_all_arg_columns(evs, *intern_, out, {});
+    } else if (select_.empty()) {
         // Every column: fixed top-level order, then the sorted union of arg
         // keys, so the schema is deterministic across runs.
         for (const char* c : {"name", "cat", "pid", "tid", "ts", "dur", "ph"}) {
@@ -554,66 +813,13 @@ dataframe::DataFrame build_row_frame(
             out.names.emplace_back("hhash");
             out.columns.push_back(hash_column(evs, "hhash", *intern_));
         }
-        std::set<std::uint32_t> keys;
-        for (const auto& ev : evs)
-            for (const auto& [k, v] : ev.args) {
-                (void)v;
-                keys.insert(k);
-            }
-        std::vector<std::pair<std::string, std::uint32_t>> named;
-        named.reserve(keys.size());
-        for (std::uint32_t k : keys)
-            named.emplace_back(std::string(intern_->resolve(k)), k);
-        std::sort(named.begin(), named.end());
-        for (const auto& [nm, k] : named) {
-            out.names.push_back(std::string(dftracer::utils::ARGS_PREFIX) + nm);
-            out.columns.push_back(arg_column(
-                evs, k, dftracer::utils::StringIntern::NO_ID, *intern_));
-        }
+        append_all_arg_columns(evs, *intern_, out,
+                               dftracer::utils::ARGS_PREFIX);
     } else {
         for (const std::string& sel : select_) {
-            out.names.push_back(canonical_row_column_name(sel));
-            std::string_view agg_key_f;
-            bool agg_key_arg_only = false;
-            std::string_view num_arg_name;
-            std::string_view deriv_name;
-            if (is_agg_key_field(sel, agg_key_f, agg_key_arg_only)) {
-                out.columns.push_back(group_key_str_column(
-                    evs, *intern_, agg_key_f, agg_key_arg_only));
-            } else if (is_num_arg_field(sel, num_arg_name)) {
-                out.columns.push_back(
-                    num_arg_column(evs, num_arg_name, *intern_));
-            } else if (is_derived_agg_field(sel, deriv_name)) {
-                out.columns.push_back(
-                    derived_agg_column(evs, deriv_name, *intern_));
-            } else if (is_top_level(sel)) {
-                out.columns.push_back(
-                    top_column(evs, sel, *intern_, time_scale));
-            } else if (const ResolvedKind rk = resolved_kind(sel);
-                       rk != ResolvedKind::None) {
-                // resolved.*/r.* virtual fields: resolve fhash/hhash to a name;
-                // an all-null column when no index name table is loaded.
-                out.columns.push_back(
-                    resolver ? resolved_column(evs, rk, *intern_, *resolver)
-                             : null_string_column(evs.size()));
-            } else if (is_iocat_field(sel)) {
-                out.columns.push_back(iocat_column(evs, *intern_));
-            } else if (is_accpat_field(sel)) {
-                out.columns.push_back(accpat_column(evs));
-            } else if (const std::string_view key = strip_args_prefix(sel);
-                       is_hash_field(key)) {
-                out.columns.push_back(hash_column(evs, key, *intern_));
-            } else {
-                // A nested/extra field (args.n.v) is captured under its full
-                // name, a flat arg under its bare key; try the full name first,
-                // then the stripped key, matching PodSource::find_arg.
-                auto& mut =
-                    const_cast<dftracer::utils::StringIntern&>(*intern_);
-                const std::uint32_t id_full = mut.get_or_insert(sel);
-                const std::uint32_t id_bare = mut.get_or_insert(key);
-                out.columns.push_back(
-                    arg_column(evs, id_full, id_bare, *intern_));
-            }
+            out.names.push_back(canonical_row_column_name(sel, by_path));
+            out.columns.push_back(select_column(evs, *intern_, sel, time_scale,
+                                                resolver, by_path));
         }
     }
 
@@ -622,14 +828,28 @@ dataframe::DataFrame build_row_frame(
 
 std::vector<std::pair<std::string, dataframe::Series>>
 build_dyn_numeric_columns(const std::vector<FoldEvent>& evs,
-                          const dftracer::utils::StringIntern& intern) {
-    namespace agg = trace::aggregators;
+                          const dftracer::utils::StringIntern& intern,
+                          const std::vector<std::string>& select) {
+    namespace agg = dftracer::utils::index::schemas::dft::agg;
+    // A windowed select holds only the events that start in the window.
+    std::optional<WindowSel> win;
+    for (const std::string& sel : select) {
+        WindowSel w;
+        if (parse_window_sel(sel, WINDOW_PREFIX, w) ||
+            parse_window_sel(sel, CLIP_PREFIX, w)) {
+            win = w;
+            break;
+        }
+    }
+    std::optional<df::Series> keep;
+    if (win) keep = window_mask_column(evs, *win).valid_mask();
     // Discover the numeric-arg names present in this batch, matching
     // fold_numeric_args_t: the io-cat-derived "size" plus every non-reserved,
     // non-preagg numeric arg. Sorted (std::set) is not required (the agg
     // finalize sorts the name union), but keeps a deterministic layout.
     std::set<std::string> names;
     for (const FoldEvent& ev : evs) {
+        if (win && !(ev.ts >= win->lo && ev.ts < win->hi)) continue;
         PodSource src(ev, intern);
         if (derived_size_t(src)) names.insert("size");
         src.for_each_numeric_arg([&](std::string_view key, double) {
@@ -639,15 +859,19 @@ build_dyn_numeric_columns(const std::vector<FoldEvent>& evs,
     }
     std::vector<std::pair<std::string, dataframe::Series>> out;
     out.reserve(names.size());
-    for (const std::string& name : names)
+    for (const std::string& name : names) {
+        df::Series col = num_arg_column(evs, name, intern);
+        if (keep)
+            col = col.where(*keep, df::Series::nulls(col.type(), col.length()));
         out.emplace_back(std::string(AGG_NUM_ARG_PREFIX) + name,
-                         num_arg_column(evs, name, intern));
+                         std::move(col));
+    }
     return out;
 }
 
 dataframe::DataFrame NativeRowFold::build() {
-    dataframe::DataFrame out = build_row_frame(events_, *intern_, select_,
-                                               time_scale_, resolver_.get());
+    dataframe::DataFrame out = build_row_frame(
+        events_, *intern_, select_, time_scale_, resolver_.get(), by_path_);
     events_.clear();
     return out;
 }

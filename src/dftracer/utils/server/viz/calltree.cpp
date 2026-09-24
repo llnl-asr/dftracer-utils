@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/query/query.h>
@@ -26,7 +27,6 @@
 #include <dftracer/utils/trace/views/view_planner_utility.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
 #include <simdjson.h>
 
 #include <algorithm>
@@ -150,8 +150,7 @@ coro::CoroTask<HttpResponse> handle_viz_calltree(const HttpRequest& req,
     // per-group rooting, and cancellation - no hand-rolled worker here.
     CancelToken cancel = req.cancel_token;
     views::View v =
-        views::View::from_files(to_view_files(target_files),
-                                &index.bloom_cache())
+        views::View::from_files(to_view_files(target_files))
             .phase(views::Phase::Events)
             .metadata(false)
             .cancel_when([&req]() { return req.cancel_token.cancelled(); });

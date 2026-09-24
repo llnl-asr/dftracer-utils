@@ -31,7 +31,7 @@ def _agg_event_count(files, index_dir):
     return int(pa.compute.sum(pa.table(tbl)["count"]).as_py() or 0)
 
 
-def _build_distributed(env, pids, num_events=100, rebuild_root=True):
+def _build_distributed(env, pids, num_events=100):
     files = [env.create_dft_trace_file_with_pid(f"trace_p{p}.pfw.gz", p, num_events) for p in pids]
     index_dir = os.path.join(env.temp_dir, "idx")
     os.makedirs(index_dir, exist_ok=True)
@@ -45,7 +45,6 @@ def _build_distributed(env, pids, num_events=100, rebuild_root=True):
         shared_staging=staging,
         client=None,
         aggregation_config=AGG_CFG,
-        rebuild_root_summaries=rebuild_root,
     )
     return files, index_path, result
 

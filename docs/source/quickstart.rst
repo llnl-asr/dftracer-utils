@@ -378,86 +378,49 @@ Process data lazily without materializing everything in memory:
 C Quick Start
 -------------
 
-Reading Trace Files
-~~~~~~~~~~~~~~~~~~~
-
-Using the C API for reading trace files. This header now lives under
-``internal/`` and is not part of the public API.
-
-.. code-block:: c
-
-   #include <dftracer/utils/utilities/reader/internal/reader.h>
-   #include <stdio.h>
-   #include <stdlib.h>
-
-   int main() {
-       // Create reader
-       dftu_reader_handle_t reader = dftu_reader_create(
-           "trace.pfw.gz",
-           "trace.pfw.gz.idx",
-           1048576  // checkpoint_size
-       );
-
-       // Allocate buffer
-       char *buffer = malloc(1024 * 1024);  // 1MB buffer
-
-       // Read lines 1-100
-       size_t bytes_written = 0;
-       int result = dftu_reader_read_lines(
-           reader,
-           1, 100,              // start_line, end_line
-           buffer,
-           1024 * 1024,         // buffer_size
-           &bytes_written
-       );
-
-       if (result == 0) {
-           printf("%.*s", (int)bytes_written, buffer);
-       }
-
-       // Cleanup
-       free(buffer);
-       dftu_reader_destroy(reader);
-
-       return 0;
-   }
-
-Working with Indexer
-~~~~~~~~~~~~~~~~~~~~
-
-Creating and using an indexer. This header now lives under ``internal/``
-and is not part of the public API.
+C programs build the index with the indexer C ABI
+(``dftracer/utils/index/abi.h``) and read events through the View C ABI
+(``dftracer/utils/trace/views/abi.h``). Every returned handle is owned by the
+caller and freed with its ``_free`` call.
 
 .. code-block:: c
 
-   #include <dftracer/utils/utilities/indexer/internal/indexer.h>
+   #include <dftracer/utils/dataframe/abi.h>
+   #include <dftracer/utils/index/abi.h>
+   #include <dftracer/utils/query/abi.h>
+   #include <dftracer/utils/trace/views/abi.h>
+   #include <inttypes.h>
    #include <stdio.h>
 
-   int main() {
-       // Create indexer
-       dftu_indexer_handle_t indexer = dftu_indexer_create(
-           "trace.pfw.gz",
-           "trace.pfw.gz.idx",
-           1048576,  // checkpoint_size
-           0         // force_rebuild
-       );
+   int main(void) {
+       const char* paths[] = {"trace.pfw.gz"};
 
-       // Build index if needed
-       if (dftu_indexer_need_rebuild(indexer)) {
-           printf("Building index...\n");
-           dftu_indexer_build(indexer);
+       /* Build the checkpoint and bloom tiers; fresh files are skipped. */
+       dftu_indexer_open_result opened = dftu_indexer_open(paths, 1, NULL);
+       if (!DFTU_RESULT_OK(opened)) {
+           fprintf(stderr, "%s\n", DFTU_RESULT_ERROR(opened).message);
+           return 1;
        }
+       dftu_indexer* indexer = DFTU_RESULT_VALUE(opened);
+       dftu_indexer_status_result built = dftu_indexer_build(indexer);
+       if (!DFTU_RESULT_OK(built)) {
+           fprintf(stderr, "%s\n", DFTU_RESULT_ERROR(built).message);
+           dftu_indexer_free(indexer);
+           return 1;
+       }
+       dftu_indexer_free(indexer);
 
-       // Get index information
-       uint64_t max_bytes = dftu_indexer_get_max_bytes(indexer);
-       uint64_t num_lines = dftu_indexer_get_num_lines(indexer);
+       /* Count the read events. */
+       dftu_query* q = dftu_query_parse("name == \"read\"");
+       dftu_view* all = dftu_view_from_files(paths, NULL, 1);
+       dftu_view* reads = dftu_view_filter(all, q);
+       dftu_dataframe* df = dftu_view_collect(reads, NULL);
+       printf("%" PRId64 " read events\n", dftu_dataframe_num_rows(df));
 
-       printf("Max bytes: %llu\n", (unsigned long long)max_bytes);
-       printf("Num lines: %llu\n", (unsigned long long)num_lines);
-
-       // Cleanup
-       dftu_indexer_destroy(indexer);
-
+       dftu_dataframe_free(df);
+       dftu_view_free(reads);
+       dftu_view_free(all);
+       dftu_query_free(q);
        return 0;
    }
 

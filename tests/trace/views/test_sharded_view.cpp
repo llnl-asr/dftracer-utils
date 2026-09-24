@@ -1,10 +1,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/trace/aggregators/aggregator_utility.h>
-#include <dftracer/utils/trace/indexing/shard_manifest.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregator.h>
+#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/shard_manifest.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -15,14 +15,14 @@
 #include "test_view_common.h"
 #include "testing_runtime.h"
 
-using dftracer::utils::trace::IndexShardManifest;
-using dftracer::utils::trace::read_shard_manifest;
-using dftracer::utils::trace::write_shard_manifest;
+using dftracer::utils::index::store::IndexDatabase;
+using dftracer::utils::index::store::IndexShardManifest;
+using dftracer::utils::index::store::read_shard_manifest;
+using dftracer::utils::index::store::write_shard_manifest;
 using dftracer::utils::trace::views::consolidate_shard_set;
 using dftracer::utils::trace::views::merge_shard_set;
 using dftracer::utils::trace::views::ShardedView;
 using dftracer::utils::trace::views::write_shard_set;
-using dftracer::utils::utilities::indexer::IndexDatabase;
 using dftu_utils_test::run_coro;
 
 namespace {
@@ -49,7 +49,7 @@ std::string make_x_trace(TestEnvironment& env, const std::string& tag,
     return gz;
 }
 
-namespace aggregators = dftracer::utils::trace::aggregators;
+namespace aggregators = dftracer::utils::index::schemas::dft::agg;
 
 // Build a full sidecar index including the aggregation tier the way the
 // aggregator does, so agg_tier_collect can answer without a scan.
@@ -60,7 +60,7 @@ void build_shard_index(const std::string& gz) {
     run_coro(
         [&](dftracer::utils::CoroScope& ctx)
             -> dftracer::utils::coro::CoroTask<void> {
-            aggregators::AggregatorUtility agg;
+            aggregators::Aggregator agg;
             auto gen = agg(ctx, input);
             while (auto batch = co_await gen.next()) (void)batch;
             co_return;
@@ -165,7 +165,7 @@ TEST_SUITE("ShardedView") {
         build_shard_index(b);
 
         IndexShardManifest manifest;
-        manifest.schema_version = IndexDatabase::SCHEMA_VERSION;
+        manifest.format_version = IndexDatabase::FORMAT_VERSION;
         manifest.shards.push_back({ia, 0, 0, 1, 0});
         manifest.shards.push_back({ib, 0, 0, 1, 0});
         std::string root = env.get_dir() + "/set";
@@ -224,7 +224,7 @@ TEST_SUITE("ShardedView") {
 
         auto manifest = read_shard_manifest(root);
         REQUIRE(manifest.has_value());
-        CHECK(manifest->schema_version == IndexDatabase::SCHEMA_VERSION);
+        CHECK(manifest->format_version == IndexDatabase::FORMAT_VERSION);
         REQUIRE(manifest->shards.size() == 2);
         for (const auto& s : manifest->shards) CHECK(s.num_files == 1);
 
@@ -293,7 +293,7 @@ TEST_SUITE("ShardedView") {
         };
 
         IndexShardManifest m;
-        m.schema_version = IndexDatabase::SCHEMA_VERSION;
+        m.format_version = IndexDatabase::FORMAT_VERSION;
         m.shards.push_back({moved, 0, 0, 1, 0});
         std::string root = env.get_dir() + "/set";
         write_shard_manifest(root, m);

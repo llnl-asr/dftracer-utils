@@ -98,6 +98,15 @@ describe("resolveGroup", () => {
   });
 });
 
+describe("resolved group columns", () => {
+  it("group on their key field", () => {
+    const e = ev({ args: { fhash: "fh1", cwd: "c1" } });
+    expect(eventGroupValue(e, "resolved.fhash.path")).toBe("fh1");
+    expect(eventGroupValue(e, "resolved.cwd.path")).toBe("c1");
+    expect(eventGroupValue(ev({}), "resolved.hhash.name")).toBe(NONE_GROUP);
+  });
+});
+
 describe("collectGroupColumns", () => {
   it("collects scalar top-level and args columns with resolved aliases", () => {
     const into = new Set<string>();
@@ -109,8 +118,8 @@ describe("collectGroupColumns", () => {
     expect(into.has("name")).toBe(true);
     expect(into.has("ret")).toBe(true);
     expect(into.has("fhash")).toBe(true);
-    expect(into.has("resolved.fpath")).toBe(true);
-    expect(into.has("resolved.hostname")).toBe(true);
+    expect(into.has("resolved.fhash.path")).toBe(true);
+    expect(into.has("resolved.hhash.name")).toBe(true);
     // lane levels / bookkeeping fields are not suggestions
     expect(into.has("pid")).toBe(false);
     expect(into.has("ts")).toBe(false);

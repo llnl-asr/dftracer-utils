@@ -2,9 +2,9 @@
 #define DFTRACER_UTILS_TRACE_COMPARATOR_COMPARISON_RESULT_H
 
 #include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/trace/aggregators/aggregation_key.h>
-#include <dftracer/utils/trace/aggregators/aggregation_map.h>
-#include <dftracer/utils/trace/aggregators/aggregation_metrics.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_key.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_map.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_metrics.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/utilities/common/arrow/arrow_export.h>
 #endif
@@ -17,12 +17,12 @@
 
 namespace dftracer::utils::trace::comparator {
 
-using aggregators::AggregationKey;
-using aggregators::AggregationKeyEqual;
-using aggregators::AggregationKeyHash;
-using aggregators::AggregationMap;
-using aggregators::AggregationMetrics;
-using aggregators::MetricStats;
+using dftracer::utils::index::schemas::dft::agg::AggregationKey;
+using dftracer::utils::index::schemas::dft::agg::AggregationKeyEqual;
+using dftracer::utils::index::schemas::dft::agg::AggregationKeyHash;
+using dftracer::utils::index::schemas::dft::agg::AggregationMap;
+using dftracer::utils::index::schemas::dft::agg::AggregationMetrics;
+using dftracer::utils::index::schemas::dft::agg::MetricStats;
 
 /// Metric-name classification, shared by the Arrow exporter and the tree
 /// formatter so the atomic-name set cannot drift between them. Atomic names are

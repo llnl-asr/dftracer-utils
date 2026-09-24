@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/trace/aggregators/aggregation_intern.h>
-#include <dftracer/utils/trace/aggregators/aggregation_map.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_map.h>
 #include <dftracer/utils/trace/comparator/comparison_result.h>
 #include <doctest/doctest.h>
 
@@ -8,7 +8,7 @@
 #include <cmath>
 
 using namespace dftracer::utils::trace::comparator;
-using namespace dftracer::utils::trace::aggregators;
+using namespace dftracer::utils::index::schemas::dft::agg;
 
 // MetricStats representation change: `m2` now holds the raw power sum
 // `sum_x^2` (not Welford central M2). The caller passes `central_m2`
@@ -33,7 +33,7 @@ static MetricStats make_stats(double mean, double central_m2, uint64_t total,
 
 static dftracer::utils::StringIntern& test_intern() {
     static auto table =
-        dftracer::utils::trace::aggregators::make_intern_table();
+        dftracer::utils::index::schemas::dft::agg::make_intern_table();
     return table->intern;
 }
 

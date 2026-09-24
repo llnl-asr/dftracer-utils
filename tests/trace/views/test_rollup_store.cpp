@@ -1,10 +1,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/rocksdb/database.h>
-#include <dftracer/utils/core/rocksdb/db_manager.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
-#include <dftracer/utils/trace/views/rollup_store.h>
+#include <dftracer/utils/index/cache/rollup_store.h>
+#include <dftracer/utils/index/store/database.h>
+#include <dftracer/utils/index/store/db_manager.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
@@ -15,6 +15,7 @@
 #include <vector>
 
 using namespace dftracer::utils::trace::views::detail;
+using namespace dftracer::utils::index::cache;
 namespace df = dftracer::utils::dataframe;
 
 namespace {
@@ -76,7 +77,7 @@ TEST_SUITE("RollupStore") {
     // agg_merge, persisted as per-group blobs, and read back through a real
     // RocksDB into an equivalent state.
     TEST_CASE("agg_merge of rank partials persists and reads back") {
-        namespace rdb = dftracer::utils::rocksdb;
+        namespace rdb = dftracer::utils::index::store;
         const std::string dir =
             dftu_utils_test::make_unique_test_path("dftu_rollup_store_test")
                 .string();
@@ -112,7 +113,7 @@ TEST_SUITE("RollupStore") {
     // Two ranks' partials over three distinct groups round-trip: every group's
     // per-group blob persists and reads back into an equivalent merged state.
     TEST_CASE("multiple groups persist and read back") {
-        namespace rdb = dftracer::utils::rocksdb;
+        namespace rdb = dftracer::utils::index::store;
         const std::string dir = dftu_utils_test::make_unique_test_path(
                                     "dftu_rollup_store_multi_test")
                                     .string();

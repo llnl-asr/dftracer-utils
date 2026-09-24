@@ -218,3 +218,22 @@ TEST_CASE("C ABI builder null field is safe") {
     CHECK(dftu_query_cmp_i64(nullptr, DFTU_QCMP_EQ, 1) == nullptr);
     CHECK(dftu_query_and(nullptr, nullptr) == nullptr);
 }
+
+TEST_CASE("any() builds the same leaf from C++, the C ABI and the DSL") {
+    auto built = (Field("tags").any() == "a").build();
+    REQUIRE(built.has_value());
+    CHECK(built->to_string() == R"(any(tags) == "a")");
+    AbiQuery c(dftu_query_cmp_str("any(tags)", DFTU_QCMP_EQ, "a"));
+    REQUIRE(c.h != nullptr);
+    CHECK(c.str() == R"(any(tags) == "a")");
+    AbiQuery in(dftu_query_cmp_i64("any(sizes)", DFTU_QCMP_GT, 100));
+    REQUIRE(in.h != nullptr);
+    CHECK(in.str() == "any(sizes) > 100");
+
+    JsonDoc hit(R"({"tags":["b","a"],"sizes":[1,200]})");
+    JsonDoc miss(R"({"tags":["b"],"sizes":[1]})");
+    CHECK(c.query().evaluate(hit.root()));
+    CHECK_FALSE(c.query().evaluate(miss.root()));
+    CHECK(in.query().evaluate(hit.root()));
+    CHECK_FALSE(in.query().evaluate(miss.root()));
+}

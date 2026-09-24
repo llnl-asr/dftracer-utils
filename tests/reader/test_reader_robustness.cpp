@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <doctest/doctest.h>
@@ -21,7 +21,7 @@
 #include "testing_utilities.h"
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::indexer::internal;
+using namespace dftracer::utils::index::gzip;
 using namespace dftracer::utils::utilities::reader::internal;
 using namespace dftu_utils_test;
 
@@ -202,7 +202,8 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
 
     // Build index with large chunks for efficiency
     {
-        auto indexer = IndexerFactory::create(gz_file, idx_file, mb_to_b(32.0));
+        auto indexer =
+            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(32.0));
         REQUIRE(indexer != nullptr);
         indexer->build();
     }
@@ -369,7 +370,8 @@ TEST_CASE("Robustness - Different buffer sizes consistency") {
 
     // Build index
     {
-        auto indexer = IndexerFactory::create(gz_file, idx_file, mb_to_b(16.0));
+        auto indexer =
+            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(16.0));
         REQUIRE(indexer != nullptr);
         indexer->build();
     }
@@ -449,7 +451,8 @@ TEST_CASE("Robustness - Boundary edge cases") {
 
     // Build index with small chunks to create many boundaries
     {
-        auto indexer = IndexerFactory::create(gz_file, idx_file, mb_to_b(1.0));
+        auto indexer =
+            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(1.0));
         REQUIRE(indexer != nullptr);
         indexer->build();
     }
@@ -613,7 +616,8 @@ TEST_CASE("Robustness - Complete file sequential read") {
 
     // Build index
     {
-        auto indexer = IndexerFactory::create(gz_file, idx_file, mb_to_b(8.0));
+        auto indexer =
+            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(8.0));
         REQUIRE(indexer != nullptr);
         indexer->build();
     }
@@ -770,7 +774,8 @@ TEST_CASE("Robustness - JSON validation and consistency") {
 
     // Build index
     {
-        auto indexer = IndexerFactory::create(gz_file, idx_file, mb_to_b(8.0));
+        auto indexer =
+            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(8.0));
         REQUIRE(indexer != nullptr);
         indexer->build();
     }
@@ -981,7 +986,8 @@ TEST_CASE("Robustness - Complete file reading equivalence") {
 
     // Build index
     {
-        auto indexer = IndexerFactory::create(gz_file, idx_file, mb_to_b(8.0));
+        auto indexer =
+            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(8.0));
         REQUIRE(indexer != nullptr);
         indexer->build();
     }
@@ -1154,7 +1160,8 @@ TEST_CASE("Robustness - Memory and performance stress") {
 
     // Build index
     {
-        auto indexer = IndexerFactory::create(gz_file, idx_file, mb_to_b(4.0));
+        auto indexer =
+            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(4.0));
         REQUIRE(indexer != nullptr);
         indexer->build();
     }
@@ -1369,8 +1376,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
         printf(
             "Chunk size: 0.5 MB (small enough to create checkpoints during "
             "processing)\n");
-        auto indexer =
-            IndexerFactory::create(gz_file, idx_file, mb_to_b(0.5), true);
+        auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
+                                                        mb_to_b(0.5), true);
         REQUIRE(indexer != nullptr);
         printf("Building index...\n");
         indexer->build();
@@ -1423,8 +1430,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
 
         // Get total lines from indexer
         {
-            auto indexer =
-                IndexerFactory::create(gz_file, idx_file, mb_to_b(2.0));
+            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
+                                                            mb_to_b(2.0));
             REQUIRE(indexer != nullptr);
             total_lines = indexer->get_num_lines();
         }
@@ -1495,8 +1502,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
 
         // Get total lines from indexer
         {
-            auto indexer =
-                IndexerFactory::create(gz_file, idx_file, mb_to_b(2.0));
+            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
+                                                            mb_to_b(2.0));
             REQUIRE(indexer != nullptr);
             total_lines = indexer->get_num_lines();
         }
@@ -1562,8 +1569,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
 
         // Get total lines from indexer
         {
-            auto indexer =
-                IndexerFactory::create(gz_file, idx_file, mb_to_b(2.0));
+            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
+                                                            mb_to_b(2.0));
             REQUIRE(indexer != nullptr);
             total_lines = indexer->get_num_lines();
         }
@@ -1618,8 +1625,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
 
         // Get total lines from indexer
         {
-            auto indexer =
-                IndexerFactory::create(gz_file, idx_file, mb_to_b(2.0));
+            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
+                                                            mb_to_b(2.0));
             REQUIRE(indexer != nullptr);
             total_lines = indexer->get_num_lines();
         }
@@ -1674,8 +1681,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
 
         // Get total lines from indexer
         {
-            auto indexer =
-                IndexerFactory::create(gz_file, idx_file, mb_to_b(2.0));
+            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
+                                                            mb_to_b(2.0));
             REQUIRE(indexer != nullptr);
             total_lines = indexer->get_num_lines();
         }
@@ -1721,7 +1728,8 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
     // Build index
     std::size_t total_lines = 0;
     {
-        auto indexer = IndexerFactory::create(gz_file, idx_file, mb_to_b(4.0));
+        auto indexer =
+            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(4.0));
         REQUIRE(indexer != nullptr);
         indexer->build();
         total_lines = indexer->get_num_lines();

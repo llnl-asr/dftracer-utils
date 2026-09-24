@@ -9,9 +9,9 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/scalar.h>
+#include <dftracer/utils/index/plan/chunk_pruner.h>
 #include <dftracer/utils/query/builder.h>
 #include <dftracer/utils/query/query.h>
-#include <dftracer/utils/trace/indexing/chunk_pruner_utility.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
@@ -30,7 +30,6 @@
 
 using namespace dftracer::utils::trace::views::detail;
 using dftracer::utils::StringIntern;
-namespace indexing = dftracer::utils::trace::indexing;
 namespace q = dftracer::utils::query;
 namespace scan = dftracer::utils::trace::views::detail::scan;
 using scan::ScanPlan;
@@ -156,7 +155,6 @@ TEST_SUITE("Dynamic filter pushdown") {
         std::string gz = create_grouped_trace(env);
         const std::string idx_dir = env.get_dir() + "/grouped.dftindex";
         REQUIRE(dftu_utils_test::build_index(gz, idx_dir,
-                                             /*sub_chunk_events=*/0,
                                              /*checkpoint_size=*/256));
         const std::string idx = determine_index_path(gz, idx_dir);
 
@@ -187,9 +185,9 @@ TEST_SUITE("Dynamic filter pushdown") {
 
         DynamicPrune dyn_prune;
         for (const ViewFile& f : plan.files) {
-            indexing::ChunkPrunerInput pin{f.index_path, f.file_path,
-                                           narrow_query, plan.bloom_cache};
-            indexing::ChunkPrunerUtility pruner;
+            dftracer::utils::index::plan::ChunkPrunerInput pin{
+                f.index_path, f.file_path, narrow_query};
+            dftracer::utils::index::plan::ChunkPruner pruner;
             auto out = run(pruner(pin));
             REQUIRE(out.success);
             std::set<std::uint64_t> keep(out.candidate_checkpoints.begin(),
@@ -234,7 +232,6 @@ TEST_SUITE("Dynamic filter pushdown") {
         std::string gz = create_grouped_trace(env, /*per_name=*/200);
         const std::string idx_dir = env.get_dir() + "/grouped2.dftindex";
         REQUIRE(dftu_utils_test::build_index(gz, idx_dir,
-                                             /*sub_chunk_events=*/0,
                                              /*checkpoint_size=*/256));
         const std::string idx = determine_index_path(gz, idx_dir);
 
@@ -354,7 +351,6 @@ TEST_SUITE("Dynamic filter pushdown") {
         std::string gz = create_grouped_trace(env, /*per_name=*/200);
         const std::string idx_dir = env.get_dir() + "/grouped3.dftindex";
         REQUIRE(dftu_utils_test::build_index(gz, idx_dir,
-                                             /*sub_chunk_events=*/0,
                                              /*checkpoint_size=*/256));
         const std::string idx = determine_index_path(gz, idx_dir);
         ScanPlan plan_ptr = scan::metadata(scan::from_file(gz, idx), false);

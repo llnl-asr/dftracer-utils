@@ -1,14 +1,14 @@
 #ifndef DFTRACER_UTILS_TRACE_STATISTICS_TRACE_STATISTICS_H
 #define DFTRACER_UTILS_TRACE_STATISTICS_TRACE_STATISTICS_H
 
-#include <dftracer/utils/trace/indexing/chunk_statistics.h>
+#include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 
 #include <cstdint>
 #include <string>
 
 namespace dftracer::utils::trace::statistics {
 
-using indexing::ChunkStatistics;
+using dftracer::utils::index::schemas::dft::ChunkStatistics;
 
 struct TraceStatistics {
     std::string file_path;

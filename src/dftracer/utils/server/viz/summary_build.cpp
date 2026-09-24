@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/query/query.h>
@@ -22,7 +23,6 @@
 #include <dftracer/utils/trace/views/view_planner_utility.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
 #include <simdjson.h>
 
 #include <algorithm>
@@ -817,7 +817,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     files.reserve(index.files().size());
     for (const auto& f : index.files()) files.push_back(&f);
 
-    co_await views::View::from_files(to_view_files(files), &index.bloom_cache())
+    co_await views::View::from_files(to_view_files(files))
         .phase(views::Phase::Any)  // ph="X" cells + ph="C" counter series
         .emit_all_metadata(true)
         .for_each_batch(

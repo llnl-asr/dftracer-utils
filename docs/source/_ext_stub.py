@@ -254,17 +254,11 @@ def install_extension_stub() -> None:
             """
             return CheckpointIndexer(file_path)
 
-        def get_hash_table(self, hash_type: str) -> dict[str, str]:
-            """Get hash table mapping hash values to original strings.
-
-            Args:
-                hash_type: Type of hash table ('file', 'host', or 'string').
-
-            Returns:
-                Dict mapping hash strings to original values.
+        def get_dictionary(self, name: str, field: str) -> dict[str, str]:
+            """Key -> `field` of every row of the index dictionary `name`.
 
             Raises:
-                ValueError: If hash_type is not valid.
+                ValueError: If `name` has no field `field`.
             """
             return {}
 
@@ -448,7 +442,7 @@ def install_extension_stub() -> None:
         ) -> dict[str, object]:
             return {}
 
-    class AggregatorUtility(_BaseNative):
+    class Aggregator(_BaseNative):
         def __init__(self, runtime: Runtime | None = None) -> None:
             self.runtime = runtime
 
@@ -577,9 +571,8 @@ def install_extension_stub() -> None:
     class IndexDatabase(_BaseNative):
         """Handle to a .dftindex RocksDB store.
 
-        Used by the distributed indexer coordinator to pre-register files,
-        reserve file_id ranges, bulk-ingest worker-produced SSTs, and rebuild
-        root summaries.
+        Used by the distributed indexer coordinator to assign file ids,
+        reserve file_id ranges and bulk-ingest worker-produced SSTs.
         """
 
         def __init__(self, index_path: str) -> None:
@@ -588,10 +581,10 @@ def install_extension_stub() -> None:
         def init_schema(self) -> None:
             return None
 
-        def register_files(self, paths: list[str], build_manifest: bool = False) -> list[int]:
-            """Register each path in the DEFAULT-CF file registry and return
-            the assigned file_ids (parallel to `paths`). Idempotent for files
-            with matching hash."""
+        def assign_file_ids(self, paths: list[str]) -> list[int]:
+            """The file_id of each path (parallel to `paths`): its registered
+            id, or a newly reserved one. The file record is written with the
+            file's index data."""
             return []
 
         def reserve_file_id_range(self, count: int) -> int:
@@ -614,34 +607,15 @@ def install_extension_stub() -> None:
             """
             return None
 
-        def rebuild_root_summaries(self) -> None:
-            """Recompute ROOT_* summary column families from per-file CFs."""
-            return None
-
-        def write_agg_global_config(self, time_interval_us: int, config_hash: int = 0) -> None:
-            """Write the aggregation global-config marker into the AGGREGATION CF.
-
-            Required for the typed read (`TraceViewer.collect_typed`) on
-            distributed builds (which never materialise the key via worker
-            SSTs) and post-consolidate indices.
-            """
-            return None
-
-        def write_agg_file_markers(self, file_ids: object) -> None:
-            """Write per-file aggregation completion markers into the AGGREGATION CF.
-
-            Each marker is ``\\xFF\\xFF + file_id_be32``. The index resolver uses
-            their presence to decide whether each file has aggregated data; if
-            missing, ``ensure_indexed()`` concludes the aggregation tier is
-            incomplete and re-runs the entire build. Distributed_index must
-            call this after ``bulk_ingest`` so subsequent ``read_trace`` calls
-            do not redundantly re-aggregate.
-            """
+        def write_agg_config(self, aggregation_config: object) -> None:
+            """Record the aggregation config a distributed build aggregated its
+            files with (a ``dftracer.utils.indexer.AggregationConfig``). Each
+            file's ``dftracer.agg`` entry comes with its SSTs."""
             return None
 
         def write_aggregation_tracker(self, blobs: list[bytes]) -> None:
             """Merge serialized AssociationTracker blobs and write the result
-            to the AGGREGATION CF under the ``__tracker__`` key."""
+            to the aggregation tier."""
             return None
 
     class SstArtifactRegistry(_BaseNative):

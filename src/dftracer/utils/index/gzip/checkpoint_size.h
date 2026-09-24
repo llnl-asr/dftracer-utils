@@ -1,0 +1,21 @@
+#ifndef DFTRACER_UTILS_INDEX_GZIP_CHECKPOINT_SIZE_H
+#define DFTRACER_UTILS_INDEX_GZIP_CHECKPOINT_SIZE_H
+
+#include <dftracer/utils/core/common/constants.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
+
+namespace dftracer::utils::index::gzip {
+
+std::size_t determine_checkpoint_size(
+    std::size_t user_checkpoint_size, const std::string& path,
+    // Tunables:
+    std::size_t max_parts = 100000000, std::size_t max_chk = (512u << 20),
+    // default:
+    std::size_t window = constants::indexer::ZLIB_WINDOW_SIZE);
+
+}  // namespace dftracer::utils::index::gzip
+
+#endif  // DFTRACER_UTILS_INDEX_GZIP_CHECKPOINT_SIZE_H

@@ -211,6 +211,20 @@ AggStatePtr agg_regroup(const AggState& src,
                         const std::vector<std::int32_t>& keep,
                         std::int64_t bucket_recut = 0);
 
+/// Bound every group's occupancy (Busy/Concurrency/Utilization/Active) by the
+/// time window [lo, hi), whose length becomes the span Utilization divides by.
+/// With `bucket_width > 0`, key column 0 must be the integer time bucket
+/// k = floor((t * bucket_scale - bucket_origin) / bucket_width) * bucket_width
+/// + bucket_origin of each interval's start t: the intervals of the groups that
+/// share the other keys are split at bucket edges, each bucket keeps the part
+/// inside it (adding a group for a bucket an interval only runs through), and
+/// the span is the bucket within the window. The intervals must already lie in
+/// [lo, hi). The result shares src's specs and finalizes with agg_finalize.
+AggStatePtr agg_clip_occupancy(const AggState& src, std::uint64_t lo,
+                               std::uint64_t hi, std::int64_t bucket_width = 0,
+                               double bucket_scale = 1.0,
+                               std::int64_t bucket_origin = 0);
+
 /// Materialize the result: one key column per `key_names` (in order, each
 /// keeping its original type) plus one column per spec, in spec order.
 DataFrame agg_finalize(const AggState& state,

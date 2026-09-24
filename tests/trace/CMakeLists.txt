@@ -20,7 +20,6 @@ set(TRACE_TEST_SOURCES
     indexing/test_chunk_statistics.cpp
     indexing/test_chunk_indexer.cpp
     indexing/test_chunk_pruner.cpp
-    indexing/test_sub_chunk_prune.cpp
     indexing/test_resolved_field_rewriter.cpp
     indexing/test_shard_manifest.cpp
 
@@ -35,6 +34,12 @@ set(TRACE_TEST_SOURCES
     views/test_metadata_query.cpp
     views/test_field_filter.cpp
     views/test_view_aggregate.cpp
+    views/test_time_window.cpp
+    views/test_generic_view.cpp
+    views/test_schema_view.cpp
+    views/test_any_view.cpp
+    views/test_typed_rows.cpp
+    views/test_resolved_view.cpp
     views/test_view_agg_parity.cpp
     views/test_view_agg_keys.cpp
     views/test_view_agg_scan.cpp
@@ -47,6 +52,7 @@ set(TRACE_TEST_SOURCES
     views/test_stream_early_out.cpp
     views/test_vectorized_fold.cpp
     views/test_rollup_store.cpp
+    views/test_query_cache.cpp
     views/test_dict_fold.cpp
     views/test_bloom_fold.cpp
     views/test_raw_gzip_fuse.cpp

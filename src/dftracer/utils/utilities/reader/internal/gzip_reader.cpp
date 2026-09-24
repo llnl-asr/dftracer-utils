@@ -1,7 +1,7 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utils/timer.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/utilities/reader/error.h>
 #include <dftracer/utils/utilities/reader/internal/gzip_reader.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
@@ -69,8 +69,9 @@ GzipReader::GzipReader(const std::string &gz_path_,
       default_buffer_size(DEFAULT_READER_BUFFER_SIZE),
       indexer(nullptr) {
     try {
-        indexer = dftracer::utils::utilities::indexer::internal::
-            IndexerFactory::create(gz_path, index_path, index_ckpt_size, false);
+        indexer =
+            dftracer::utils::index::gzip::CheckpointIndexerFactory::create(
+                gz_path, index_path, index_ckpt_size, false);
         is_open = true;
 
         DFTRACER_UTILS_LOG_DEBUG(
@@ -84,8 +85,7 @@ GzipReader::GzipReader(const std::string &gz_path_,
 }
 
 GzipReader::GzipReader(
-    std::shared_ptr<dftracer::utils::utilities::indexer::internal::Indexer>
-        indexer_)
+    std::shared_ptr<dftracer::utils::index::gzip::CheckpointIndexer> indexer_)
     : default_buffer_size(DEFAULT_READER_BUFFER_SIZE),
       indexer(std::move(indexer_)) {
     if (!indexer) {

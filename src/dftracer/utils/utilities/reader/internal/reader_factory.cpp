@@ -1,6 +1,6 @@
 #include <dftracer/utils/core/common/format_detector.h>
 #include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/utilities/indexer/internal/gzip/gzip_indexer.h>
+#include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/utilities/reader/error.h>
 #include <dftracer/utils/utilities/reader/internal/gzip_reader.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
@@ -31,8 +31,7 @@ std::shared_ptr<Reader> ReaderFactory::create(const std::string &archive_path,
 }
 
 std::shared_ptr<Reader> ReaderFactory::create(
-    std::shared_ptr<dftracer::utils::utilities::indexer::internal::Indexer>
-        indexer) {
+    std::shared_ptr<dftracer::utils::index::gzip::CheckpointIndexer> indexer) {
     if (!indexer) {
         throw ReaderError(ReaderError::INVALID_ARGUMENT,
                           "Indexer cannot be null");

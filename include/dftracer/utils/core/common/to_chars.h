@@ -13,6 +13,7 @@
 // arm64 default is 11.0).
 #define DFTRACER_UTILS_FP_TO_CHARS_UNAVAILABLE 1
 #include <cstdio>
+#include <cstdlib>
 #endif
 
 namespace dftracer::utils {
@@ -47,6 +48,31 @@ inline char* to_chars_u64(char* first, char* last, std::uint64_t v) noexcept {
 inline char* to_chars_i64(char* first, char* last, std::int64_t v) noexcept {
     auto [p, ec] = std::to_chars(first, last, v);
     return ec == std::errc{} ? p : nullptr;
+}
+
+/// Parse a double from [first, last) like std::from_chars: no leading
+/// whitespace or '+', `ptr` at the first byte not consumed, `ec` set when no
+/// number starts there. Falls back to strtod on a copy where libc++
+/// availability-gates the floating-point overload.
+inline std::from_chars_result from_chars_double(const char* first,
+                                                const char* last,
+                                                double& out) noexcept {
+#ifdef DFTRACER_UTILS_FP_TO_CHARS_UNAVAILABLE
+    if (first == last || *first == ' ' || *first == '+')
+        return {first, std::errc::invalid_argument};
+    char buf[64];
+    const std::size_t n = static_cast<std::size_t>(last - first);
+    const std::size_t len = n < sizeof(buf) - 1 ? n : sizeof(buf) - 1;
+    for (std::size_t i = 0; i < len; ++i) buf[i] = first[i];
+    buf[len] = 0;
+    char* end = nullptr;
+    const double v = std::strtod(buf, &end);
+    if (end == buf) return {first, std::errc::invalid_argument};
+    out = v;
+    return {first + (end - buf), std::errc{}};
+#else
+    return std::from_chars(first, last, out);
+#endif
 }
 
 }  // namespace dftracer::utils

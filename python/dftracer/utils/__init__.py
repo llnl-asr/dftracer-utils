@@ -2,6 +2,7 @@ import atexit
 from importlib.metadata import PackageNotFoundError, version
 from typing import Optional
 
+from . import schemas  # noqa: F401
 from .columnar import (  # noqa: F401
     Agg,
     ColumnExpr,
@@ -139,6 +140,7 @@ __all__ = [
     "GroupBy",
     "count",
     "resolved",
+    "schemas",
     "Indexer",
     "IndexStatus",
     "AggOp",

@@ -3,7 +3,7 @@
 
 #include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/trace/aggregators/aggregation_output.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_output.h>
 #include <dftracer/utils/trace/comparator/comparison_config.h>
 #include <dftracer/utils/trace/comparator/comparison_result.h>
 
@@ -11,7 +11,7 @@
 
 namespace dftracer::utils::trace::comparator {
 
-using aggregators::EventAggregatorOutput;
+using dftracer::utils::index::schemas::dft::agg::EventAggregatorOutput;
 
 /// Paired baseline/variant aggregation outputs for a single comparison
 /// node.

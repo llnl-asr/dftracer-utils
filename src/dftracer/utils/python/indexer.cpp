@@ -1,5 +1,9 @@
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/index/build/batch_builder.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/python/indexer.h>
 #include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_method.h>
@@ -8,9 +12,6 @@
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
-#include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <structmember.h>
 
 #include <cstring>
@@ -21,7 +22,7 @@ static void CheckpointIndexer_dealloc(CheckpointIndexerObject *self) {
         // The Python wrapper owns only the native indexer handle. The
         // underlying RocksDB instance remains manager-owned and may continue to
         // live process-wide for the same .dftindex path.
-        dftu_indexer_destroy(self->handle);
+        delete self->handle;
         self->handle = NULL;
     }
     Py_XDECREF(self->gz_path);
@@ -34,7 +35,7 @@ static void CheckpointIndexer_release_handle(CheckpointIndexerObject *self) {
     if (self->handle) {
         // Releasing the handle drops this wrapper's native indexer state only.
         // Shared RocksDB lifetime is managed separately by RocksDBManager.
-        dftu_indexer_destroy(self->handle);
+        delete self->handle;
         self->handle = NULL;
     }
 }
@@ -121,10 +122,19 @@ static int CheckpointIndexer_init(CheckpointIndexerObject *self, PyObject *args,
         return -1;
     }
 
-    self->handle = dftu_indexer_create(gz_path, index_path_str, checkpoint_size,
-                                       force_rebuild);
-    if (!self->handle) {
-        PyErr_SetString(PyExc_RuntimeError, "Failed to create indexer");
+    try {
+        auto indexer =
+            dftracer::utils::index::gzip::CheckpointIndexerFactory::create(
+                gz_path, index_path_str, checkpoint_size, force_rebuild != 0);
+        if (!indexer) {
+            PyErr_SetString(PyExc_RuntimeError, "Unsupported archive format");
+            return -1;
+        }
+        self->handle = new std::shared_ptr<
+            dftracer::utils::index::gzip::CheckpointIndexer>(
+            std::move(indexer));
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
         return -1;
     }
 
@@ -146,12 +156,12 @@ static PyObject *CheckpointIndexer_build(CheckpointIndexerObject *self,
         return NULL;
     }
 
-    // Use IndexBatchBuilderUtility when bloom is requested.
-    // Otherwise, use the simpler dftu_indexer_build which only creates
-    // checkpoints.
+    // Use BatchBuilder when bloom is requested; otherwise build checkpoints
+    // only.
     if (self->build_bloom) {
         using namespace dftracer::utils;
-        using namespace dftracer::utils::utilities::indexer;
+        using namespace dftracer::utils::index::build;
+        using namespace dftracer::utils::index::store;
 
         const char *gz = as_utf8(self->gz_path);
         const char *idx = as_utf8(self->index_path);
@@ -164,7 +174,6 @@ static PyObject *CheckpointIndexer_build(CheckpointIndexerObject *self,
         batch_config->checkpoint_size =
             static_cast<std::size_t>(self->checkpoint_size);
         batch_config->parallelism = 1;
-        batch_config->rebuild_root_summaries = true;
 
         std::string idx_str(idx);
         auto pos = idx_str.find_last_of('/');
@@ -176,18 +185,17 @@ static PyObject *CheckpointIndexer_build(CheckpointIndexerObject *self,
         IndexBuildBatchResult batch_result;
 
         if (!run_blocking([&] {
-                rt->submit(
-                      run_coro_scope(
-                          rt->executor(),
-                          [](CoroScope &scope,
-                             std::shared_ptr<IndexBuildBatchConfig> cfg,
-                             IndexBuildBatchResult *out)
-                              -> coro::CoroTask<void> {
-                              *out = co_await IndexBatchBuilderUtility::process(
-                                  &scope, std::move(cfg));
-                          },
-                          batch_config, &batch_result),
-                      "indexer-build")
+                rt->submit(run_coro_scope(
+                               rt->executor(),
+                               [](CoroScope &scope,
+                                  std::shared_ptr<IndexBuildBatchConfig> cfg,
+                                  IndexBuildBatchResult *out)
+                                   -> coro::CoroTask<void> {
+                                   *out = co_await BatchBuilder::process(
+                                       &scope, std::move(cfg));
+                               },
+                               batch_config, &batch_result),
+                           "indexer-build")
                     .get();
             })) {
             return NULL;
@@ -203,12 +211,14 @@ static PyObject *CheckpointIndexer_build(CheckpointIndexerObject *self,
         }
     } else {
         // Simple checkpoint-only build
-        int result;
-        Py_BEGIN_ALLOW_THREADS result = dftu_indexer_build(self->handle);
-        Py_END_ALLOW_THREADS
-
-            if (result < 0) {
-            PyErr_SetString(PyExc_RuntimeError, "Failed to build index");
+        std::string error;
+        Py_BEGIN_ALLOW_THREADS try {
+            (*self->handle)->build();
+        } catch (const std::exception &e) {
+            error = e.what();
+        }
+        Py_END_ALLOW_THREADS if (!error.empty()) {
+            PyErr_SetString(PyExc_RuntimeError, error.c_str());
             return NULL;
         }
     }
@@ -223,8 +233,12 @@ static PyObject *CheckpointIndexer_need_rebuild(CheckpointIndexerObject *self,
         return NULL;
     }
 
-    int result = dftu_indexer_need_rebuild(self->handle);
-    return PyBool_FromLong(result);
+    try {
+        return PyBool_FromLong((*self->handle)->need_rebuild() ? 1 : 0);
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return NULL;
+    }
 }
 
 static PyObject *CheckpointIndexer_exists(CheckpointIndexerObject *self,
@@ -234,8 +248,12 @@ static PyObject *CheckpointIndexer_exists(CheckpointIndexerObject *self,
         return NULL;
     }
 
-    int result = dftu_indexer_exists(self->handle);
-    return PyBool_FromLong(result);
+    try {
+        return PyBool_FromLong((*self->handle)->exists() ? 1 : 0);
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return NULL;
+    }
 }
 
 static PyObject *CheckpointIndexer_get_max_bytes(CheckpointIndexerObject *self,
@@ -245,8 +263,12 @@ static PyObject *CheckpointIndexer_get_max_bytes(CheckpointIndexerObject *self,
         return NULL;
     }
 
-    uint64_t result = dftu_indexer_get_max_bytes(self->handle);
-    return PyLong_FromUnsignedLongLong(result);
+    try {
+        return PyLong_FromUnsignedLongLong((*self->handle)->get_max_bytes());
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return NULL;
+    }
 }
 
 static PyObject *CheckpointIndexer_get_num_lines(CheckpointIndexerObject *self,
@@ -256,8 +278,12 @@ static PyObject *CheckpointIndexer_get_num_lines(CheckpointIndexerObject *self,
         return NULL;
     }
 
-    uint64_t result = dftu_indexer_get_num_lines(self->handle);
-    return PyLong_FromUnsignedLongLong(result);
+    try {
+        return PyLong_FromUnsignedLongLong((*self->handle)->get_num_lines());
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return NULL;
+    }
 }
 
 static PyObject *CheckpointIndexer_has_bloom(CheckpointIndexerObject *self,
@@ -268,13 +294,14 @@ static PyObject *CheckpointIndexer_has_bloom(CheckpointIndexerObject *self,
         Py_RETURN_FALSE;
     }
     try {
-        using namespace dftracer::utils::utilities::indexer;
-        using namespace dftracer::utils::utilities::indexer::internal;
+        using namespace dftracer::utils::index::build;
+        using namespace dftracer::utils::index::store;
+        using namespace dftracer::utils::index::store::internal;
         IndexDatabase db(
-            idx, dftracer::utils::utilities::indexer::IndexOpenMode::ReadOnly);
+            idx, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
         std::string logical = get_logical_path(gz);
         int fid = db.get_file_info_id(logical);
-        if (fid >= 0 && db.has_bloom_data(fid)) {
+        if (fid >= 0 && db.pruning_tier_current(fid)) {
             Py_RETURN_TRUE;
         }
     } catch (...) {

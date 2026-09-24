@@ -1,15 +1,17 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/trace/indexing/resolve_and_build.h>
-#include <dftracer/utils/trace/indexing/scalable_bloom_filter.h>
-#include <dftracer/utils/trace/views/bloom_fold.h>
-#include <dftracer/utils/trace/views/dict_fold.h>
+#include <dftracer/utils/index/build/index_fold_driver.h>
+#include <dftracer/utils/index/build/resolve_and_build.h>
+#include <dftracer/utils/index/extensions/bloom_fold.h>
+#include <dftracer/utils/index/extensions/dict_fold.h>
+#include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
+#include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/index_database_writer_context.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
-#include <dftracer/utils/trace/views/index_fold_driver.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
-#include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
-#include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <doctest/doctest.h>
+#include <index_test_helpers.h>
 #include <simdjson.h>
 #include <testing_runtime.h>
 
@@ -22,9 +24,10 @@
 #include "test_view_common.h"
 
 using namespace dftracer::utils::trace::views::detail;
+using namespace dftracer::utils::index::build;
+using namespace dftracer::utils::index::extensions;
 using dftracer::utils::StringIntern;
-namespace idx = dftracer::utils::utilities::indexer;
-using dftracer::utils::trace::indexing::ScalableBloomFilter;
+using dftracer::utils::index::extensions::ScalableBloomFilter;
 
 namespace {
 
@@ -49,22 +52,30 @@ std::string create_bloom_trace(TestEnvironment& env, int n,
     return gz;
 }
 
-int file_id_of(idx::IndexDatabase& db, const std::string& gz) {
-    return db.get_file_info_id(idx::internal::get_logical_path(gz));
+int file_id_of(dftracer::utils::index::store::IndexDatabase& db,
+               const std::string& gz) {
+    return db.get_file_info_id(
+        dftracer::utils::index::store::internal::get_logical_path(gz));
 }
 
-bool file_bloom_contains(idx::IndexDatabase& db, int fid, std::string_view dim,
+bool file_bloom_contains(dftracer::utils::index::store::IndexDatabase& db,
+                         int fid, std::string_view dim,
                          std::string_view value) {
-    auto fb = db.query_file_bloom_filter(fid, dim);
+    auto fb = db.path_file_value(
+        fid, dftracer::utils::index::store::IndexExtension::BLOOM, dim);
     REQUIRE(fb.has_value());
-    auto bloom = ScalableBloomFilter::from_blob(fb->bloom_data.data(),
-                                                fb->bloom_data.size());
-    return bloom.possibly_contains(value);
+    auto bloom = dftracer::utils::index::extensions::kinds::decode_bloom(*fb);
+    REQUIRE(bloom.has_value());
+    return bloom->possibly_contains(value);
 }
 
 std::string padded(std::string s) {
     s.resize(s.size() + simdjson::SIMDJSON_PADDING, '\0');
     return s;
+}
+
+std::vector<dftracer::utils::index::Dictionary> dftracer_dictionaries() {
+    return dftracer::utils::index::get_schema("dftracer").dictionaries;
 }
 
 std::vector<FoldEvent> events_of(const std::vector<std::string>& lines,
@@ -84,6 +95,49 @@ std::vector<FoldEvent> events_of(const std::vector<std::string>& lines,
 }  // namespace
 
 TEST_SUITE("BloomFold") {
+    // A build that fails after spilling drops its fold; the runs go with it.
+    // Runs handed off by finish_spilled belong to the caller.
+    TEST_CASE("spill runs live until handed off or dropped") {
+        TestEnvironment env(10);
+        StringIntern intern;
+        std::vector<std::string> lines;
+        for (int i = 0; i < 8; ++i)
+            lines.push_back(R"({"ph":"X","name":"read","cat":"POSIX","pid":1,)"
+                            R"("tid":1,"ts":)" +
+                            std::to_string(i) +
+                            R"(,"dur":1,"args":{"k":"v"}})");
+        auto events = events_of(lines, intern);
+        auto drive = [&](BloomFold& fold) {
+            for (std::uint64_t cp = 0; cp < 4; ++cp) {
+                ScanUnit unit;
+                unit.file_path = "f.pfw.gz";
+                unit.index_path = env.get_dir() + "/.dftindex";
+                unit.checkpoint_idx = cp;
+                fold.step(FoldBatch{std::span<const FoldEvent>(events), unit});
+            }
+        };
+        const std::string dropped = env.get_dir() + "/dropped";
+        {
+            BloomFold fold(intern);
+            fold.enable_spill(1, dropped, 1);
+            drive(fold);
+            CHECK(fold.spill_runs() == 3);
+            CHECK(fs::exists(dropped));
+        }
+        CHECK_FALSE(fs::exists(dropped));
+
+        const std::string kept = env.get_dir() + "/kept";
+        std::size_t runs = 0;
+        {
+            BloomFold fold(intern);
+            fold.enable_spill(1, kept, 1);
+            drive(fold);
+            runs = fold.finish_spilled(1).size();
+        }
+        CHECK(runs == 4);
+        CHECK(fs::exists(kept));
+    }
+
     // An unfiltered export rides the fold along, so the pruner index it could
     // not build before is now a byproduct: has_bloom flips and the written
     // filters contain every value the trace carried (no false negatives).
@@ -100,9 +154,10 @@ TEST_SUITE("BloomFold") {
                 .get();
         }
 
-        idx::IndexDatabase db(index_path, idx::IndexOpenMode::ReadOnly);
+        dftracer::utils::index::store::IndexDatabase db(
+            index_path, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
         int fid = file_id_of(db, gz);
-        REQUIRE(db.has_bloom_data(fid));
+        REQUIRE(db.pruning_tier_current(fid));
 
         for (auto v : {"read", "write"})
             CHECK(file_bloom_contains(db, fid, "name", v));
@@ -114,9 +169,15 @@ TEST_SUITE("BloomFold") {
             CHECK(file_bloom_contains(db, fid, "fhash", v));
         CHECK(file_bloom_contains(db, fid, "hhash", "hh1"));
 
-        auto name_chunks = db.query_chunk_bloom_filters(fid, "name");
+        auto name_chunks = db.path_granules(
+            fid, dftracer::utils::index::store::IndexExtension::BLOOM, "name");
         REQUIRE(name_chunks.size() > 1);
-        for (const auto& c : name_chunks) CHECK(c.num_entries <= 2);
+        for (const auto& [chunk, bytes] : name_chunks) {
+            auto bloom =
+                dftracer::utils::index::extensions::kinds::decode_bloom(bytes);
+            REQUIRE(bloom.has_value());
+            CHECK(bloom->num_entries() <= 2);
+        }
     }
 
     // Only a file the scan read whole may publish a pruner index, and an index
@@ -134,8 +195,10 @@ TEST_SUITE("BloomFold") {
                 .query(R"(cat == "POSIX")")
                 .sink_json(s)
                 .get();
-            idx::IndexDatabase db(index_path, idx::IndexOpenMode::ReadOnly);
-            REQUIRE_FALSE(db.has_bloom_data(file_id_of(db, gz)));
+            dftracer::utils::index::store::IndexDatabase db(
+                index_path,
+                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
+            REQUIRE_FALSE(db.pruning_tier_current(file_id_of(db, gz)));
         }
 
         ScanUnit unit;
@@ -164,16 +227,20 @@ TEST_SUITE("BloomFold") {
         member_only.add(gz, 0);
         CHECK_FALSE(drive(member_only));
         {
-            idx::IndexDatabase db(index_path, idx::IndexOpenMode::ReadOnly);
-            CHECK_FALSE(db.has_bloom_data(file_id_of(db, gz)));
+            dftracer::utils::index::store::IndexDatabase db(
+                index_path,
+                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
+            CHECK_FALSE(db.pruning_tier_current(file_id_of(db, gz)));
         }
 
         CoverageSet whole_file;
         whole_file.add_file(gz);
         CHECK(drive(whole_file));
         {
-            idx::IndexDatabase db(index_path, idx::IndexOpenMode::ReadOnly);
-            CHECK(db.has_bloom_data(file_id_of(db, gz)));
+            dftracer::utils::index::store::IndexDatabase db(
+                index_path,
+                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
+            CHECK(db.pruning_tier_current(file_id_of(db, gz)));
         }
 
         // Already present: a second ride-along writes nothing.
@@ -183,7 +250,7 @@ TEST_SUITE("BloomFold") {
     // The streaming index build owns its write transaction, so the folds write
     // into a caller-provided sink (here a RocksDB writer) rather than opening
     // their own index. Both artifacts must come back queryable.
-    TEST_CASE("write_to_sink writes queryable bloom and hash") {
+    TEST_CASE("write writes queryable bloom and hash") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_bloom_trace(env, 20, /*member_bytes=*/2000);
@@ -209,7 +276,7 @@ TEST_SUITE("BloomFold") {
         StringIntern intern;
         auto events = events_of(lines, intern);
         BloomFold bloom(intern);
-        DictFold dict(intern);
+        DictFold dict(intern, dftracer_dictionaries());
         FoldBatch fb{std::span<const FoldEvent>(events), unit};
         bloom.step(fb);
         dict.step(fb);
@@ -218,21 +285,22 @@ TEST_SUITE("BloomFold") {
 
         int fid = -1;
         {
-            idx::IndexDatabase db(index_path);
-            fid = db.get_file_info_id(idx::internal::get_logical_path(gz));
+            dftracer::utils::index::store::IndexDatabase db(index_path);
+            fid = db.get_file_info_id(
+                dftracer::utils::index::store::internal::get_logical_path(gz));
             REQUIRE(fid >= 0);
             auto w = db.begin_write();
-            bloom.write_to_sink(*w, fid);
-            dict.write_to_sink(*w);
+            bloom.write(*w, fid);
+            dict.write(*w, fid);
             w->commit();
         }
 
-        idx::IndexDatabase rd(index_path, idx::IndexOpenMode::ReadOnly);
+        dftracer::utils::index::store::IndexDatabase rd(
+            index_path, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
         CHECK(file_bloom_contains(rd, fid, "name", "read"));
         CHECK(file_bloom_contains(rd, fid, "name", "write"));
         CHECK(file_bloom_contains(rd, fid, "fhash", "fh1"));
-        auto file_hashes =
-            rd.query_hash_table(idx::IndexDatabase::HashType::FILE);
+        auto file_hashes = rd.dict_field("file", "path");
         REQUIRE(file_hashes.count("fh1") == 1);
         CHECK(file_hashes.at("fh1") == "/data/a.bin");
     }
@@ -264,7 +332,7 @@ TEST_SUITE("BloomFold") {
 
         StringIntern intern;
         BloomFold bloom(intern);
-        DictFold dict(intern);
+        DictFold dict(intern, dftracer_dictionaries());
         std::array<Fold*, 2> fp{&bloom, &dict};
         IndexFoldDriver drv(intern, fp, gz, index_path);
         // Split mid-way (lands inside the "read" line) to force reassembly.
@@ -275,24 +343,25 @@ TEST_SUITE("BloomFold") {
 
         int fid = -1;
         {
-            idx::IndexDatabase db(index_path);
-            fid = db.get_file_info_id(idx::internal::get_logical_path(gz));
+            dftracer::utils::index::store::IndexDatabase db(index_path);
+            fid = db.get_file_info_id(
+                dftracer::utils::index::store::internal::get_logical_path(gz));
             REQUIRE(fid >= 0);
             auto w = db.begin_write();
-            bloom.write_to_sink(*w, fid);
-            dict.write_to_sink(*w);
+            bloom.write(*w, fid);
+            dict.write(*w, fid);
             w->commit();
         }
 
-        idx::IndexDatabase rd(index_path, idx::IndexOpenMode::ReadOnly);
+        dftracer::utils::index::store::IndexDatabase rd(
+            index_path, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
         // All three events survived the seam: both names, both cats, the fhash,
         // and the FH dictionary entry.
         CHECK(file_bloom_contains(rd, fid, "name", "read"));
         CHECK(file_bloom_contains(rd, fid, "name", "write"));
         CHECK(file_bloom_contains(rd, fid, "cat", "STDIO"));
         CHECK(file_bloom_contains(rd, fid, "fhash", "fh1"));
-        auto file_hashes =
-            rd.query_hash_table(idx::IndexDatabase::HashType::FILE);
+        auto file_hashes = rd.dict_field("file", "path");
         REQUIRE(file_hashes.count("fh1") == 1);
         CHECK(file_hashes.at("fh1") == "/data/a.bin");
     }
@@ -347,15 +416,16 @@ TEST_SUITE("BloomFold") {
         CHECK(has("hostname"));
         CHECK(has("size"));
         CHECK(has("rate"));
-        // Nested object -> dotted leaves; array -> representative index 0.
+        // Nested object -> dotted leaves; array -> one leaf per element.
         CHECK(has("pos.x"));
         CHECK(has("pos.y"));
         CHECK(has("tags.0"));
-        // Lifted hashes and their resolved.* aliases.
+        CHECK(has("tags.1"));
+        // Lifted hashes and their resolved columns.
         CHECK(has("fhash"));
         CHECK(has("hhash"));
-        CHECK(has("resolved.fpath"));
-        CHECK(has("resolved.hostname"));
+        CHECK(has("resolved.fhash.path"));
+        CHECK(has("resolved.hhash.name"));
 
         std::unordered_map<std::string, std::string> ty;
         for (const auto& ci : v.column_info()) ty[ci.name] = ci.type;
@@ -368,12 +438,12 @@ TEST_SUITE("BloomFold") {
         // size is int (1024) in one event and float (2.5) in another; the fold
         // widens it to float64.
         CHECK(ty["size"] == "float64");
-        CHECK(ty["resolved.fpath"] == "string");
+        CHECK(ty["resolved.fhash.path"] == "string");
     }
 }
 
 TEST_SUITE("BloomCore") {
-    using dftracer::utils::trace::visitors::BloomCore;
+    using dftracer::utils::index::schemas::dft::BloomCore;
 
     TEST_CASE("merging a chunk's states keeps numeric min and max") {
         BloomCore::ChunkIndexerConfig config;
@@ -381,10 +451,10 @@ TEST_SUITE("BloomCore") {
         BloomCore::init_chunk_state(a, config, {});
         BloomCore::init_chunk_state(b, config, {});
         BloomCore::PidTidCache cache;
-        BloomCore::observe_data(a, cache, config, "read", "POSIX", 9, 1, 9, 9,
-                                true, "", "", "");
-        BloomCore::observe_data(b, cache, config, "read", "POSIX", 10, 1, 10,
-                                10, true, "", "", "");
+        BloomCore::observe_data(a, cache, "read", "POSIX", 9, 1, 9, 9, true, "",
+                                "", "");
+        BloomCore::observe_data(b, cache, "read", "POSIX", 10, 1, 10, 10, true,
+                                "", "", "");
         BloomCore::merge_chunk_state(a, b);
         const auto& ts = a.fixed_dim_stats[BloomCore::FD_TS];
         CHECK(ts.min_value == "9");
@@ -463,37 +533,43 @@ TEST_SUITE("BloomFold - auto fields") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_auto_trace(env);
-        namespace ti = dftracer::utils::trace::indexing;
-        ti::ResolveAndBuildInput input;
+        dftracer::utils::index::build::ResolveAndBuildInput input;
         input.files = {gz};
         input.require_bloom = true;
         input.bloom_config.extra_dimensions.clear();
-        input.bloom_config.auto_fields = true;
+        input.bloom_config.path_budget = 1024;
         input.bloom_config.auto_max_distinct = 8;
         std::string index_path;
         dftu_utils_test::run_coro([&](dftracer::utils::CoroScope& scope)
                                       -> dftracer::utils::coro::CoroTask<void> {
-            auto res = co_await ti::resolve_and_build_index(&scope, input);
+            auto res =
+                co_await dftracer::utils::index::build::resolve_and_build_index(
+                    &scope, input);
             index_path = res.index_path;
         });
-        idx::IndexDatabase db(index_path, idx::IndexOpenMode::ReadOnly);
+        dftracer::utils::index::store::IndexDatabase db(
+            index_path, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
         const int fid = file_id_of(db, gz);
-        auto dims = db.query_index_dimensions(fid);
-        for (auto d : {"size", "mode", "fname", "@auto"})
+        using dftracer::utils::index::store::IndexExtension;
+        auto dims = db.extension_paths(fid, IndexExtension::ZONEMAP);
+        for (auto d : {"size", "mode", "fname"})
             CHECK(std::find(dims.begin(), dims.end(), d) != dims.end());
 
-        auto size = db.query_chunk_dimension_stats_for_dimension(fid, "size");
+        auto size = db.path_granules(fid, IndexExtension::ZONEMAP, "size");
         REQUIRE(size.size() >= 2);
-        for (const auto& s : size) {
-            CHECK(s.value_type == "int");
-            CHECK_FALSE(s.min_value.empty());
+        for (const auto& [chunk, bytes] : size) {
+            auto zone =
+                dftracer::utils::index::extensions::kinds::decode_zone(bytes);
+            REQUIRE(zone.has_value());
+            CHECK(zone->value_type == "int");
+            CHECK_FALSE(zone->min.empty());
         }
-        CHECK(db.query_chunk_bloom_filters(fid, "size").empty());
-        CHECK_FALSE(db.query_file_bloom_filter(fid, "size").has_value());
+        CHECK(dftu_utils_test::bloom_chunks(db, fid, "size") == 0);
+        CHECK_FALSE(dftu_utils_test::has_file_bloom(db, fid, "size"));
 
-        CHECK(db.query_chunk_bloom_filters(fid, "mode").size() == size.size());
-        CHECK(db.query_file_bloom_filter(fid, "mode").has_value());
-        CHECK(db.query_chunk_bloom_filters(fid, "fname").size() < size.size());
-        CHECK_FALSE(db.query_file_bloom_filter(fid, "fname").has_value());
+        CHECK(dftu_utils_test::bloom_chunks(db, fid, "mode") == size.size());
+        CHECK(dftu_utils_test::has_file_bloom(db, fid, "mode"));
+        CHECK(dftu_utils_test::bloom_chunks(db, fid, "fname") < size.size());
+        CHECK_FALSE(dftu_utils_test::has_file_bloom(db, fid, "fname"));
     }
 }

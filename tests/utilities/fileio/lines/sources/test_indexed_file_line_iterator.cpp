@@ -1,8 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/indexed_file_line_iterator.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
@@ -13,7 +13,7 @@
 using namespace dftracer::utils::utilities::fileio::lines::sources;
 using namespace dftracer::utils::utilities::fileio::lines;
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::indexer::internal;
+using namespace dftracer::utils::index::gzip;
 using namespace dftracer::utils::utilities::reader::internal;
 using namespace dftu_utils_test;
 
@@ -26,7 +26,8 @@ TEST_SUITE("IndexedFileLineIterator") {
             std::string gz_path = env.create_test_gzip_file();
 
             // Create index
-            auto indexer = IndexerFactory::create(gz_path, "", 1024, true);
+            auto indexer =
+                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
             indexer->build();
 
@@ -52,7 +53,8 @@ TEST_SUITE("IndexedFileLineIterator") {
             TestEnvironment env(20);
             std::string gz_path = env.create_test_gzip_file();
 
-            auto indexer = IndexerFactory::create(gz_path, "", 1024, true);
+            auto indexer =
+                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
             indexer->build();
 
@@ -77,7 +79,8 @@ TEST_SUITE("IndexedFileLineIterator") {
             TestEnvironment env(10);
             std::string gz_path = env.create_test_gzip_file();
 
-            auto indexer = IndexerFactory::create(gz_path, "", 1024, true);
+            auto indexer =
+                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
             indexer->build();
 
@@ -100,7 +103,8 @@ TEST_SUITE("IndexedFileLineIterator") {
             TestEnvironment env(15);
             std::string gz_path = env.create_test_gzip_file();
 
-            auto indexer = IndexerFactory::create(gz_path, "", 1024, true);
+            auto indexer =
+                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
             indexer->build();
 
@@ -128,7 +132,8 @@ TEST_SUITE("IndexedFileLineIterator") {
             TestEnvironment env(5);
             std::string gz_path = env.create_test_gzip_file();
 
-            auto indexer = IndexerFactory::create(gz_path, "", 1024, true);
+            auto indexer =
+                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
             indexer->build();
 
@@ -163,7 +168,8 @@ TEST_SUITE("IndexedFileLineIterator") {
             TestEnvironment env(10);
             std::string gz_path = env.create_test_gzip_file();
 
-            auto indexer = IndexerFactory::create(gz_path, "", 1024, true);
+            auto indexer =
+                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
             indexer->build();
 
@@ -204,7 +210,8 @@ TEST_SUITE("IndexedFileLineIterator") {
             TestEnvironment env(8);
             std::string gz_path = env.create_test_gzip_file();
 
-            auto indexer = IndexerFactory::create(gz_path, "", 1024, true);
+            auto indexer =
+                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
             indexer->build();
 
@@ -228,7 +235,8 @@ TEST_SUITE("IndexedFileLineIterator") {
             TestEnvironment env(5);
             std::string gz_path = env.create_test_gzip_file();
 
-            auto indexer = IndexerFactory::create(gz_path, "", 1024, true);
+            auto indexer =
+                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
             indexer->build();
 
@@ -258,7 +266,8 @@ TEST_SUITE("IndexedFileLineIterator") {
             TestEnvironment env(10);
             std::string gz_path = env.create_test_gzip_file();
 
-            auto indexer = IndexerFactory::create(gz_path, "", 1024, true);
+            auto indexer =
+                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
             indexer->build();
 
@@ -287,7 +296,8 @@ TEST_SUITE("IndexedFileLineIterator") {
             TestEnvironment env(20);
             std::string gz_path = env.create_test_gzip_file();
 
-            auto indexer = IndexerFactory::create(gz_path, "", 1024, true);
+            auto indexer =
+                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
             indexer->build();
 
@@ -307,7 +317,8 @@ TEST_SUITE("IndexedFileLineIterator") {
             TestEnvironment env(10);
             std::string gz_path = env.create_test_gzip_file();
 
-            auto indexer = IndexerFactory::create(gz_path, "", 1024, true);
+            auto indexer =
+                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
             indexer->build();
 
@@ -332,7 +343,8 @@ TEST_SUITE("IndexedFileLineIterator") {
             TestEnvironment env(10);
             std::string gz_path = env.create_test_gzip_file();
 
-            auto indexer = IndexerFactory::create(gz_path, "", 1024, true);
+            auto indexer =
+                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
             indexer->build();
 
@@ -357,7 +369,8 @@ TEST_SUITE("IndexedFileLineIterator") {
             TestEnvironment env(3);
             std::string gz_path = env.create_test_gzip_file();
 
-            auto indexer = IndexerFactory::create(gz_path, "", 1024, true);
+            auto indexer =
+                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
             indexer->build();
 
@@ -397,7 +410,8 @@ TEST_SUITE("IndexedFileLineIterator") {
             TestEnvironment env(valgrind_scale(1000, 4));
             std::string gz_path = env.create_test_gzip_file();
 
-            auto indexer = IndexerFactory::create(gz_path, "", 4096, true);
+            auto indexer =
+                CheckpointIndexerFactory::create(gz_path, "", 4096, true);
             REQUIRE(indexer != nullptr);
             indexer->build();
 
@@ -425,7 +439,8 @@ TEST_SUITE("IndexedFileLineIterator") {
             TestEnvironment env(50);
             std::string gz_path = env.create_test_gzip_file();
 
-            auto indexer = IndexerFactory::create(gz_path, "", 1024, true);
+            auto indexer =
+                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
             indexer->build();
 
@@ -470,7 +485,8 @@ TEST_SUITE("IndexedFileLineIterator") {
             TestEnvironment env(5);
             std::string gz_path = env.create_test_gzip_file();
 
-            auto indexer = IndexerFactory::create(gz_path, "", 1024, true);
+            auto indexer =
+                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
             indexer->build();
 
@@ -502,8 +518,8 @@ TEST_SUITE("IndexedFileLineIterator") {
     //         TestEnvironment env(15, Format::TAR_GZIP);
     //         std::string tar_gz_path = env.create_test_tar_gzip_file();
 
-    //         auto indexer = IndexerFactory::create(tar_gz_path, "", 1024,
-    //         true); REQUIRE(indexer != nullptr); indexer->build();
+    //         auto indexer = CheckpointIndexerFactory::create(tar_gz_path, "",
+    //         1024, true); REQUIRE(indexer != nullptr); indexer->build();
 
     //         auto config = IndexedFileLineIteratorConfig()
     //             .with_file(tar_gz_path, tar_gz_path + ".idx")
@@ -528,7 +544,8 @@ TEST_SUITE("IndexedFileLineIterator") {
             TestEnvironment env(5);
             std::string gz_path = env.create_test_gzip_file();
 
-            auto indexer = IndexerFactory::create(gz_path, "", 1024, true);
+            auto indexer =
+                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
             indexer->build();
 

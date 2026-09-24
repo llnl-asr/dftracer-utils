@@ -76,8 +76,7 @@ class Expr {
 
 /// field op value with an explicit CompareOp and prebuilt literal.
 inline Expr field_cmp(std::string_view name, CompareOp op, LiteralNode value) {
-    return Expr(make_node(
-        CompareNode{FieldNode{std::string(name)}, op, std::move(value)}));
+    return Expr(make_node(CompareNode{field_node(name), op, std::move(value)}));
 }
 
 #define DFTRACER_UTILS_QUERY_DEFINE_CMP(fn, op_enum)               \
@@ -102,8 +101,7 @@ inline Expr field_in(std::string_view name,
     ArrayNode arr;
     arr.elements.reserve(values.size());
     for (std::int64_t v : values) arr.elements.push_back(detail::literal(v));
-    return Expr(
-        make_node(InNode{FieldNode{std::string(name)}, std::move(arr)}));
+    return Expr(make_node(InNode{field_node(name), std::move(arr)}));
 }
 
 inline Expr field_in(std::string_view name,
@@ -111,8 +109,7 @@ inline Expr field_in(std::string_view name,
     ArrayNode arr;
     arr.elements.reserve(values.size());
     for (const auto& v : values) arr.elements.push_back(LiteralNode{v});
-    return Expr(
-        make_node(InNode{FieldNode{std::string(name)}, std::move(arr)}));
+    return Expr(make_node(InNode{field_node(name), std::move(arr)}));
 }
 
 /// field not in [values].
@@ -121,8 +118,7 @@ inline Expr field_not_in(std::string_view name,
     ArrayNode arr;
     arr.elements.reserve(values.size());
     for (std::int64_t v : values) arr.elements.push_back(detail::literal(v));
-    return Expr(
-        make_node(NotInNode{FieldNode{std::string(name)}, std::move(arr)}));
+    return Expr(make_node(NotInNode{field_node(name), std::move(arr)}));
 }
 
 inline Expr field_not_in(std::string_view name,
@@ -130,8 +126,7 @@ inline Expr field_not_in(std::string_view name,
     ArrayNode arr;
     arr.elements.reserve(values.size());
     for (const auto& v : values) arr.elements.push_back(LiteralNode{v});
-    return Expr(
-        make_node(NotInNode{FieldNode{std::string(name)}, std::move(arr)}));
+    return Expr(make_node(NotInNode{field_node(name), std::move(arr)}));
 }
 
 /// field like/ilike/~/~*/icontains pattern. The compiled matcher is filled in
@@ -139,7 +134,7 @@ inline Expr field_not_in(std::string_view name,
 inline Expr field_match(std::string_view name, MatchOp op,
                         std::string_view pattern, bool negated = false) {
     MatchNode node;
-    node.field = FieldNode{std::string(name)};
+    node.field = field_node(name);
     node.op = op;
     node.pattern = std::string(pattern);
     node.negated = negated;
@@ -174,6 +169,9 @@ inline Expr operator!(Expr a) { return negate(std::move(a)); }
 class Field {
    public:
     explicit Field(std::string_view name) : name_(name) {}
+    /// The same field as `any(<name>)`: a leaf on it holds when any element
+    /// of the array holds.
+    Field any() const { return Field("any(" + name_ + ")"); }
 
     template <typename T>
     Expr operator==(T&& v) const {

@@ -30,7 +30,6 @@ set(UTILITIES_TEST_SOURCES
     # Indexer
     indexer/test_rocksdb_storage.cpp
     indexer/test_scan_prefix.cpp
-    indexer/test_column_type_codec.cpp
     indexer/test_index_database.cpp
     indexer/test_index_builder.cpp
     indexer/test_hash_table_aggregation.cpp
@@ -53,6 +52,7 @@ set(UTILITIES_TEST_SOURCES
     fileio/test_indexed_file_reader.cpp
     fileio/test_file_compressor.cpp
     fileio/test_file_decompressor.cpp
+    fileio/test_truncated_member.cpp
 
     # I/O Parallel
     fileio/parallel/test_layout_sizing.cpp
@@ -69,7 +69,6 @@ set(UTILITIES_TEST_SOURCES
 
     # Reader
     reader/test_trace_reader.cpp
-    reader/test_sub_chunk_skip.cpp
     reader/test_member_decode_cache.cpp
     reader/test_member_cache_integration.cpp
 
@@ -92,6 +91,7 @@ set(UTILITIES_TEST_SOURCES
     plugins/test_plugin_order.cpp
     plugins/test_plugin_transform.cpp
     plugins/test_plugin_abi_gate.cpp
+    plugins/test_plugin_index_extension.cpp
     plugins/test_plugin_factory_host.cpp
     plugins/test_plugin_config.cpp
     plugins/test_plugin_public_config.cpp
@@ -442,6 +442,14 @@ if(TARGET utilities_plugins_test_plugin_abi_gate)
                    bad_abi_version_plugin)
 endif()
 
+if(TARGET utilities_plugins_test_plugin_index_extension)
+  target_compile_definitions(
+    utilities_plugins_test_plugin_index_extension PRIVATE
+    INDEX_MINMAX_PLUGIN_PATH="$<TARGET_FILE:index_minmax_plugin>")
+  add_dependencies(utilities_plugins_test_plugin_index_extension
+                   index_minmax_plugin)
+endif()
+
 # +++++++++++++++++++++++++++++++++++++++++
 # Build-phase host: one plugin whose factory registers an op at load, one whose
 # factory reaches past the registration surface. Both are real .so files loaded
@@ -449,7 +457,7 @@ endif()
 # +++++++++++++++++++++++++++++++++++++++++
 
 foreach(fh_plugin factory_registers_op_plugin factory_escapes_plugin
-                  scan_registers_op_plugin)
+                  scan_registers_op_plugin index_minmax_plugin)
   add_library(${fh_plugin} MODULE plugins/${fh_plugin}.c)
   set_target_properties(
     ${fh_plugin}

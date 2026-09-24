@@ -13,9 +13,17 @@
 #include <utility>
 #include <vector>
 
-namespace dftracer::utils::trace::indexing {
-class BloomFilterCache;
-}
+namespace dftracer::utils::index::extensions {}
+
+namespace dftracer::utils::index {
+struct RecordSchema;
+}  // namespace dftracer::utils::index
+
+namespace dftracer::utils::index::plan {
+/// Index-backed name maps for resolved-name group keys. Defined in
+/// view_resolver.h.
+class GroupResolver;
+}  // namespace dftracer::utils::index::plan
 
 namespace dftracer::utils::trace::views::detail {
 
@@ -23,10 +31,6 @@ namespace dftracer::utils::trace::views::detail {
 /// function of the plan. Cached lazily on the plan so the per-event fold builds
 /// it once, not per event. Defined in view_aggregate.h.
 struct AggSchema;
-
-/// Index-backed name maps for resolved-name group keys. Defined in
-/// view_resolver.h.
-class GroupResolver;
 
 /// A column computed per event before grouping: `expr` is positional against
 /// `inputs`, which name row columns (as a row select would). A group key of
@@ -41,7 +45,6 @@ struct ComputedColumn {
 /// struct captures it; each builder copies and mutates one field.
 struct ViewPlan {
     std::vector<ViewFile> files;
-    indexing::BloomFilterCache* bloom_cache = nullptr;
 
     std::optional<query::Query> query;
     std::optional<std::pair<double, double>> time_range;
@@ -67,6 +70,9 @@ struct ViewPlan {
     /// unit to a target (source_ns / target_ns; 1.0 = no scaling). Applied
     /// before time_bucket so bucketing is in the target unit.
     double time_scale = 1.0;
+    /// A trace operation (time range, bucket, occupancy, call tree,
+    /// flamegraph) reads this plan, so records need a time.
+    bool timed = false;
     std::vector<ComputedColumn> computed;
     std::vector<GroupKey> group_by;
     std::vector<AggSpec> agg;
@@ -146,7 +152,12 @@ struct ViewPlan {
     /// Index-backed name maps, built lazily by ensure_resolver when the plan
     /// has a FilePath/HostName group key; used by the post-aggregation re-key
     /// pass.
-    mutable std::shared_ptr<const GroupResolver> resolver;
+    mutable std::shared_ptr<const dftracer::utils::index::plan::GroupResolver>
+        resolver;
+
+    /// The files' record_schema, memoized by plan_record_schema.
+    mutable std::shared_ptr<const dftracer::utils::index::RecordSchema>
+        record_schema;
 };
 
 }  // namespace dftracer::utils::trace::views::detail

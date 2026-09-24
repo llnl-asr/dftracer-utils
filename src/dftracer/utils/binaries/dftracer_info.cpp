@@ -2,38 +2,38 @@
 #include <dftracer/utils/core/common/archive_format.h>
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/rocksdb/db_manager.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/core/utils/string.h>
 #include <dftracer/utils/core/utils/timer.h>
-#include <dftracer/utils/trace/indexing/index_resolver_utility.h>
-#include <dftracer/utils/trace/indexing/resolve_and_build.h>
+#include <dftracer/utils/index/build/batch_builder.h>
+#include <dftracer/utils/index/build/resolve_and_build.h>
+#include <dftracer/utils/index/build/resolver.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/index/schemas/dft/merged_statistics.h>
+#include <dftracer/utils/index/store/db_manager.h>
+#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/index_database_writer_context.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
-#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
-#include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
-#include <dftracer/utils/utilities/indexer/internal/helpers.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 
 #include <memory>
 #include <mutex>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace;
-using namespace dftracer::utils::trace::indexing;
-using dftracer::utils::utilities::indexer::FileRegistryEntry;
-using dftracer::utils::utilities::indexer::has_capability;
-using dftracer::utils::utilities::indexer::IndexBatchBuilderUtility;
-using dftracer::utils::utilities::indexer::IndexBuildBatchConfig;
-using dftracer::utils::utilities::indexer::IndexDatabase;
-using dftracer::utils::utilities::indexer::IndexFileEntryCapability;
-using dftracer::utils::utilities::indexer::internal::IndexerFactory;
+using namespace dftracer::utils::index::build;
+using dftracer::utils::index::build::BatchBuilder;
+using dftracer::utils::index::build::IndexBuildBatchConfig;
+using dftracer::utils::index::gzip::CheckpointIndexerFactory;
+using dftracer::utils::index::store::FileRegistryEntry;
+using dftracer::utils::index::store::IndexDatabase;
 
 class InfoArgParse : public cli::ArgParse {
    public:
@@ -77,7 +77,7 @@ static std::string format_size(std::uint64_t bytes) {
     return cli::human_bytes(static_cast<double>(bytes), "", 2);
 }
 
-using FileRegistry = std::unordered_map<std::string, FileRegistryEntry>;
+using FileRegistry = StringViewMap<FileRegistryEntry>;
 
 struct RootInfoSummary {
     std::size_t file_count = 0;
@@ -90,41 +90,25 @@ static coro::CoroTask<std::shared_ptr<RootInfoSummary>> load_root_info_summary(
     std::string index_path) {
     auto result = std::make_shared<RootInfoSummary>();
 
-    std::optional<dftracer::utils::utilities::indexer::RootStatisticsResult>
-        root;
-    {
-        IndexDatabase db(
-            index_path,
-            dftracer::utils::utilities::indexer::IndexOpenMode::ReadOnly);
-        root = db.query_root_scalar_stats();
-    }
-
-    if (!root) {
-        DFTRACER_UTILS_LOG_INFO(
-            "Root scalar stats missing for %s; rebuilding from file "
-            "registry",
-            index_path.c_str());
-        IndexDatabase db(index_path);
-        auto writer = db.begin_write();
-        writer->rebuild_root_summaries();
-        writer->commit();
-        root = db.query_root_scalar_stats();
-    }
-
-    if (root) {
-        result->file_count = root->num_files;
-        result->total_events = root->stats.total_events;
-        result->total_lines = root->total_lines;
-        result->total_uncompressed = root->total_uncompressed_bytes;
+    IndexDatabase db(index_path,
+                     dftracer::utils::index::store::IndexOpenMode::ReadOnly);
+    std::vector<int> ids;
+    for (const auto& [path, file_id] : db.query_all_file_info_ids())
+        ids.push_back(file_id);
+    result->file_count = ids.size();
+    for (const auto& [file_id, summary] : db.query_file_scalar_stats_batch(ids))
+        result->total_events += summary.stats.total_events;
+    for (const auto& [file_id, meta] : db.query_file_metadata_batch(ids)) {
+        result->total_lines += meta.num_lines;
+        result->total_uncompressed += meta.max_bytes;
     }
     co_return result;
 }
 
 static coro::CoroTask<std::shared_ptr<FileRegistry>> load_file_registry(
     std::string index_path) {
-    IndexDatabase db(
-        index_path,
-        dftracer::utils::utilities::indexer::IndexOpenMode::ReadOnly);
+    IndexDatabase db(index_path,
+                     dftracer::utils::index::store::IndexOpenMode::ReadOnly);
     co_return std::make_shared<FileRegistry>(db.query_all_file_registry());
 }
 
@@ -137,11 +121,11 @@ process_index_group_info_sync(std::string index_path,
         file_ids.push_back(entry.file_id);
     }
 
-    IndexDatabase db(
-        index_path,
-        dftracer::utils::utilities::indexer::IndexOpenMode::ReadOnly);
+    IndexDatabase db(index_path,
+                     dftracer::utils::index::store::IndexOpenMode::ReadOnly);
     auto metadata_rows = db.query_file_metadata_batch(file_ids);
-    auto merged_stats = db.query_merged_statistics_batch(file_ids);
+    auto merged_stats =
+        dftracer::utils::index::schemas::dft::merged_statistics(db, file_ids);
 
     std::vector<MetadataCollectorUtilityOutput> results;
     results.reserve(entries.size());
@@ -161,7 +145,7 @@ process_index_group_info_sync(std::string index_path,
             continue;
         }
 
-        meta.format = IndexerFactory::detect_format(entry.file_path);
+        meta.format = CheckpointIndexerFactory::detect_format(entry.file_path);
         meta.compressed_size = 0;
         meta.checkpoint_size = metadata_it->second.checkpoint_size;
         meta.num_lines = metadata_it->second.num_lines;
@@ -203,6 +187,42 @@ process_index_group_info(std::shared_ptr<std::string> index_path,
                          std::shared_ptr<std::vector<ResolvedFile>> entries) {
     co_return process_index_group_info_sync(std::move(*index_path),
                                             std::move(*entries));
+}
+
+// The file's manifest: each extension built for it, and whether it is usable.
+static void print_extensions(const MetadataCollectorUtilityOutput& info) {
+    using dftracer::utils::index::store::ALL_EXTENSIONS;
+    using dftracer::utils::index::store::extension_name;
+    try {
+        IndexDatabase db(
+            info.index_path,
+            dftracer::utils::index::store::IndexOpenMode::ReadOnly);
+        const int fid = db.get_file_info_id(
+            dftracer::utils::index::store::internal::get_logical_path(
+                info.file_path));
+        if (fid < 0) return;
+        if (auto schema = db.file_schema(fid))
+            std::printf("  Schema: %s\n", schema->c_str());
+        std::printf("  Extensions:");
+        for (auto ext : ALL_EXTENSIONS) {
+            auto state = db.extension_state(fid, ext);
+            if (!state) continue;
+            const auto name = extension_name(ext);
+            const char* note = !state->ready                    ? " (failed)"
+                               : db.extension_current(fid, ext) ? ""
+                                                                : " (outdated)";
+            std::printf(" %.*s%s", static_cast<int>(name.size()), name.data(),
+                        note);
+        }
+        // No plugin is loaded here, so a plugin extension's currency is
+        // unknown.
+        for (const auto& [name, state] : db.plugin_extension_states(fid))
+            std::printf(" %s (plugin%s)", name.c_str(),
+                        state.ready ? "" : ", failed");
+        std::printf("\n");
+    } catch (const std::exception& e) {
+        std::printf("  Extensions: unreadable (%s)\n", e.what());
+    }
 }
 
 static void print_file_info(const MetadataCollectorUtilityOutput& info,
@@ -249,6 +269,7 @@ static void print_file_info(const MetadataCollectorUtilityOutput& info,
         std::printf("  Checkpoint Size: %s\n",
                     format_size(info.checkpoint_size).c_str());
         std::printf("  Checkpoints: %zu\n", info.num_checkpoints);
+        print_extensions(info);
     }
 
     if (detailed) {
@@ -279,7 +300,7 @@ static coro::CoroTask<void> auto_index_and_resolve(
         indexed_groups) {
     auto index_path = internal::determine_index_path(
         files_needing_index.front().file_path, index_dir);
-    dftracer::utils::rocksdb::RocksDBManager::instance().reset(index_path);
+    dftracer::utils::index::store::RocksDBManager::instance().reset(index_path);
 
     {
         auto batch_config = std::make_shared<IndexBuildBatchConfig>();
@@ -290,10 +311,9 @@ static coro::CoroTask<void> auto_index_and_resolve(
         batch_config->index_dir = index_dir;
         batch_config->checkpoint_size = checkpoint_size;
         batch_config->parallelism = executor_threads;
-        batch_config->rebuild_root_summaries = true;
 
-        auto batch_result = co_await IndexBatchBuilderUtility::process(
-            &ctx, std::move(batch_config));
+        auto batch_result =
+            co_await BatchBuilder::process(&ctx, std::move(batch_config));
 
         for (const auto& result : batch_result.results) {
             if (!result.success && !result.error_message.empty()) {
@@ -310,7 +330,7 @@ static coro::CoroTask<void> auto_index_and_resolve(
         newly_indexed.push_back(item.file_path);
     }
 
-    IndexResolverUtility resolver;
+    Resolver resolver;
     ResolverInput refresh_input;
     refresh_input.files = std::move(newly_indexed);
     refresh_input.index_dir = index_dir;
@@ -401,22 +421,21 @@ static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
                     files.reserve(registry_ptr->size());
                     auto& group = indexed_groups[trusted_index_path];
                     group.reserve(registry_ptr->size());
+                    IndexDatabase db(
+                        trusted_index_path,
+                        dftracer::utils::index::store::IndexOpenMode::ReadOnly);
                     std::size_t fi = 0;
                     for (auto& [logical_path, reg] : *registry_ptr) {
                         files.push_back(logical_path);
-                        if (has_capability(
-                                reg.capabilities,
-                                IndexFileEntryCapability::FILE_SUMMARY)) {
-                            group.push_back(ResolvedFile{fi, logical_path,
-                                                         reg.file_id,
-                                                         reg.capabilities});
-                        }
+                        if (db.pruning_tier_current(reg.file_id))
+                            group.push_back(ResolvedFile{
+                                fi, logical_path, reg.file_id, {}});
                         ++fi;
                     }
                 }
             } else {
                 ScopedTimer _ds(stages, "scan_and_resolve");
-                IndexResolverUtility resolver;
+                Resolver resolver;
                 auto input = std::make_unique<ResolverInput>();
                 input->directory = directory;
                 input->index_dir = index_dir;
@@ -432,7 +451,7 @@ static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
             ScopedTimer _rs(stages, "resolve_index_state");
             co_await ensure_indexes_fresh(&ctx, "", cli->files_args.value,
                                           index_dir, force_rebuild);
-            IndexResolverUtility resolver;
+            Resolver resolver;
             auto input = std::make_unique<ResolverInput>();
             input->files = cli->files_args.value;
             input->index_dir = index_dir;

@@ -14,6 +14,7 @@
 #include <dftracer/utils/plugins/abi/compose.h>
 #include <dftracer/utils/plugins/abi/core.h>
 #include <dftracer/utils/plugins/abi/coro.h>
+#include <dftracer/utils/plugins/abi/index.h>
 #include <dftracer/utils/plugins/abi/io.h>
 #include <dftracer/utils/plugins/abi/nodes.h>
 #include <dftracer/utils/plugins/abi/ops.h>

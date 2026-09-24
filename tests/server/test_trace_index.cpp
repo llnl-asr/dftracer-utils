@@ -5,6 +5,7 @@
 #include <dftracer/utils/core/pipeline/scheduler.h>
 #include <dftracer/utils/core/pipeline/thread_pool_executor.h>
 #include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/server/trace_index.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -207,4 +208,42 @@ TEST_CASE("TraceIndex - directory and index_dir accessors") {
     CHECK(index.index_dir() == "/some/index");
     CHECK(index.file_count() == 0);
     CHECK(index.files().empty());
+}
+
+TEST_CASE("TraceIndex - genesis output resolves run keys") {
+    dftu_utils_test::TestEnvironment env(10);
+    REQUIRE(env.is_valid());
+    std::string text =
+        R"({"name":"RUN","cat":"dftracer","pid":0,"tid":0,"ts":0,"ph":4,)"
+        R"("args":{"run":"ab","app":"laghos","nodes":4}})"
+        "\n";
+    for (int i = 0; i < 20; ++i)
+        text += R"({"name":"f","cat":"c","pid":0,"tid":0,"ts":1,"ph":3,)"
+                R"("args":{"run":"ab","path":"main;f)" +
+                std::to_string(i) + R"(","depth":1,"count":2}})" + "\n";
+    const std::string gz = env.get_dir() + "/genesis.pfw.gz";
+    dftu_utils_test::write_gz_trace(gz, text);
+    dftracer::utils::index::IndexerOptions o;
+    o.index_dir = env.get_dir();
+    dftracer::utils::index::Indexer::open({gz}, o).build();
+
+    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 2});
+    Scheduler scheduler(&executor);
+    std::string schema, app, nodes;
+    auto task = make_task(
+        [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
+            TraceIndex index(env.get_dir(), env.get_dir());
+            co_await index.initialize();
+            schema = index.record_schema().id;
+            app = index.resolve("run", "app", "ab");
+            nodes = index.resolve("run", "nodes", "ab");
+            co_return;
+        },
+        "TraceIndexGenesis");
+    scheduler.schedule(task);
+    task->wait();
+    CHECK(schema == "genesis");
+    CHECK(app == "laghos");
+    CHECK(nodes == "4");
+    executor.shutdown();
 }

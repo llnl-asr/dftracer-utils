@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <dftracer/utils/utilities/reader/internal/stream.h>
@@ -19,7 +19,7 @@
 #include <vector>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::indexer::internal;
+using namespace dftracer::utils::index::gzip;
 using namespace dftracer::utils::utilities::reader::internal;
 using namespace dftu_utils_test;
 
@@ -86,8 +86,8 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
 
         // Build index
         {
-            auto indexer =
-                IndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
+                                                            mb_to_b(0.5));
             REQUIRE(indexer != nullptr);
             indexer->build();
         }
@@ -135,8 +135,8 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
         std::string idx_file = env.get_index_path(gz_file);
 
         {
-            auto indexer =
-                IndexerFactory::create(gz_file, idx_file, mb_to_b(1.0));
+            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
+                                                            mb_to_b(1.0));
             indexer->build();
         }
 
@@ -212,7 +212,7 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
 
         {
             auto indexer =
-                IndexerFactory::create(gz_file, idx_file, mb_to_b(1));
+                CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(1));
             indexer->build();
         }
 
@@ -310,8 +310,8 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
         std::string idx_file = env.get_index_path(gz_file);
 
         {
-            auto indexer =
-                IndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
+                                                            mb_to_b(0.5));
             indexer->build();
         }
 
@@ -392,8 +392,8 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
         std::string idx_file = env.get_index_path(gz_file);
 
         {
-            auto indexer =
-                IndexerFactory::create(gz_file, idx_file, mb_to_b(2.0));
+            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
+                                                            mb_to_b(2.0));
             indexer->build();
         }
 
@@ -504,8 +504,8 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
         std::string idx_file = env.get_index_path(gz_file);
 
         {
-            auto indexer =
-                IndexerFactory::create(gz_file, idx_file, mb_to_b(4.0));
+            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
+                                                            mb_to_b(4.0));
             indexer->build();
         }
 
@@ -609,8 +609,8 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
         std::string idx_file = env.get_index_path(gz_file);
 
         {
-            auto indexer =
-                IndexerFactory::create(gz_file, idx_file, mb_to_b(1.0));
+            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
+                                                            mb_to_b(1.0));
             indexer->build();
         }
 
@@ -712,8 +712,8 @@ TEST_CASE("LINE_BYTES Stream - Edge Cases") {
         std::string idx_file = env.get_index_path(gz_file);
 
         {
-            auto indexer =
-                IndexerFactory::create(gz_file, idx_file, mb_to_b(0.1));
+            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
+                                                            mb_to_b(0.1));
             indexer->build();
         }
 
@@ -765,8 +765,8 @@ TEST_CASE("LINE_BYTES Stream - Edge Cases") {
         std::string idx_file = env.get_index_path(gz_file);
 
         {
-            auto indexer =
-                IndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
+                                                            mb_to_b(0.5));
             indexer->build();
         }
 
@@ -826,8 +826,8 @@ TEST_CASE("LINE_BYTES Stream - Edge Cases") {
         std::string idx_file = env.get_index_path(gz_file);
 
         {
-            auto indexer =
-                IndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
+                                                            mb_to_b(0.5));
             indexer->build();
         }
 
@@ -873,8 +873,8 @@ TEST_CASE("LINE_BYTES Stream - Arbitrary Boundary Tests" *
         std::string idx_file = env.get_index_path(gz_file);
 
         {
-            auto indexer =
-                IndexerFactory::create(gz_file, idx_file, mb_to_b(2.0));
+            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
+                                                            mb_to_b(2.0));
             indexer->build();
         }
 
@@ -955,8 +955,8 @@ TEST_CASE("LINE_BYTES Stream - Arbitrary Boundary Tests" *
         std::string idx_file = env.get_index_path(gz_file);
 
         {
-            auto indexer =
-                IndexerFactory::create(gz_file, idx_file, mb_to_b(1.0));
+            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
+                                                            mb_to_b(1.0));
             indexer->build();
         }
 
@@ -1044,8 +1044,8 @@ TEST_CASE("LINE_BYTES Stream - Arbitrary Boundary Tests" *
         std::string idx_file = env.get_index_path(gz_file);
 
         {
-            auto indexer =
-                IndexerFactory::create(gz_file, idx_file, mb_to_b(1.0));
+            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
+                                                            mb_to_b(1.0));
             indexer->build();
         }
 
@@ -1115,8 +1115,8 @@ TEST_CASE("LINE_BYTES Stream - Multiple Worker Counts") {
         std::string idx_file = env.get_index_path(gz_file);
 
         {
-            auto indexer =
-                IndexerFactory::create(gz_file, idx_file, mb_to_b(3.0));
+            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
+                                                            mb_to_b(3.0));
             indexer->build();
         }
 
@@ -1229,8 +1229,8 @@ TEST_CASE("LINE_BYTES Stream - Event Ordering Verification") {
         std::string idx_file = env.get_index_path(gz_file);
 
         {
-            auto indexer =
-                IndexerFactory::create(gz_file, idx_file, mb_to_b(2.0));
+            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
+                                                            mb_to_b(2.0));
             indexer->build();
         }
 
@@ -1334,8 +1334,8 @@ TEST_CASE("LINE_BYTES Stream - Buffer Size Tests") {
         std::string idx_file = env.get_index_path(gz_file);
 
         {
-            auto indexer =
-                IndexerFactory::create(gz_file, idx_file, mb_to_b(2.0));
+            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
+                                                            mb_to_b(2.0));
             indexer->build();
         }
 
@@ -1431,8 +1431,8 @@ TEST_CASE("LINE_BYTES Stream - Buffer Size Tests") {
         std::string idx_file = env.get_index_path(gz_file);
 
         {
-            auto indexer =
-                IndexerFactory::create(gz_file, idx_file, mb_to_b(1.5));
+            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
+                                                            mb_to_b(1.5));
             indexer->build();
         }
 

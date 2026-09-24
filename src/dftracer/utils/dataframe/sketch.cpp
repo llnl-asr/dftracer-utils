@@ -7,7 +7,8 @@
 
 namespace dftracer::utils::dataframe {
 
-DDSketch::DDSketch(double relative_accuracy)
+template <int BINS>
+BasicDDSketch<BINS>::BasicDDSketch(double relative_accuracy)
     : gamma_((1.0 + relative_accuracy) / (1.0 - relative_accuracy)),
       log_gamma_(std::log(gamma_)),
       min_(std::numeric_limits<double>::infinity()),
@@ -17,15 +18,18 @@ DDSketch::DDSketch(double relative_accuracy)
     store_.fill(0);
 }
 
-double DDSketch::bin_lower_bound(int index) const {
+template <int BINS>
+double BasicDDSketch<BINS>::bin_lower_bound(int index) const {
     return std::pow(gamma_, index - 1);
 }
 
-double DDSketch::bin_upper_bound(int index) const {
+template <int BINS>
+double BasicDDSketch<BINS>::bin_upper_bound(int index) const {
     return std::pow(gamma_, index);
 }
 
-void DDSketch::add_to_bin(int index, std::uint32_t count) {
+template <int BINS>
+void BasicDDSketch<BINS>::add_to_bin(int index, std::uint32_t count) {
     if (!initialized_) {
         offset_ = index;
         min_key_ = index;
@@ -90,7 +94,8 @@ void DDSketch::add_to_bin(int index, std::uint32_t count) {
     store_[0] = count;
 }
 
-void DDSketch::collapse_to_fit(int new_max_key) {
+template <int BINS>
+void BasicDDSketch<BINS>::collapse_to_fit(int new_max_key) {
     int new_min_key = new_max_key - MAX_BINS + 1;
 
     if (new_min_key >= max_key_) {
@@ -165,7 +170,8 @@ void DDSketch::collapse_to_fit(int new_max_key) {
     collapsed_ = true;
 }
 
-std::vector<HistogramBin> DDSketch::bins() const {
+template <int BINS>
+std::vector<HistogramBin> BasicDDSketch<BINS>::bins() const {
     std::vector<HistogramBin> out;
     if (zero_count_ > 0)
         out.push_back({0.0, 0.0, static_cast<std::uint64_t>(zero_count_)});
@@ -180,7 +186,8 @@ std::vector<HistogramBin> DDSketch::bins() const {
     return out;
 }
 
-void DDSketch::add(double value, double weight) {
+template <int BINS>
+void BasicDDSketch<BINS>::add(double value, double weight) {
     if (weight <= 0.0) return;
 
     auto w = static_cast<std::uint32_t>(
@@ -202,7 +209,9 @@ void DDSketch::add(double value, double weight) {
     add_to_bin(idx, w);
 }
 
-void DDSketch::add_key(std::int32_t key, double value, std::uint32_t weight) {
+template <int BINS>
+void BasicDDSketch<BINS>::add_key(std::int32_t key, double value,
+                                  std::uint32_t weight) {
     if (weight == 0) weight = 1;
     if (value < min_) min_ = value;
     if (value > max_) max_ = value;
@@ -214,7 +223,8 @@ void DDSketch::add_key(std::int32_t key, double value, std::uint32_t weight) {
     add_to_bin(static_cast<int>(key), weight);
 }
 
-void DDSketch::merge(const DDSketch& other) {
+template <int BINS>
+void BasicDDSketch<BINS>::merge(const BasicDDSketch& other) {
     if (other.count_ == 0) return;
 
     if (other.min_ < min_) min_ = other.min_;
@@ -284,7 +294,8 @@ void DDSketch::merge(const DDSketch& other) {
     }
 }
 
-double DDSketch::quantile(double q) const {
+template <int BINS>
+double BasicDDSketch<BINS>::quantile(double q) const {
     if (count_ == 0) return std::numeric_limits<double>::quiet_NaN();
     if (q <= 0.0) return min_;
     if (q >= 1.0) return max_;
@@ -312,7 +323,8 @@ double DDSketch::quantile(double q) const {
     return max_;
 }
 
-void DDSketch::reset() {
+template <int BINS>
+void BasicDDSketch<BINS>::reset() {
     store_.fill(0);
     offset_ = 0;
     min_key_ = 0;
@@ -326,15 +338,20 @@ void DDSketch::reset() {
     zero_count_ = 0;
 }
 
-std::size_t DDSketch::memory_usage() const { return sizeof(DDSketch); }
+template <int BINS>
+std::size_t BasicDDSketch<BINS>::memory_usage() const {
+    return sizeof(BasicDDSketch);
+}
 
-std::vector<std::uint8_t> DDSketch::serialize() const {
+template <int BINS>
+std::vector<std::uint8_t> BasicDDSketch<BINS>::serialize() const {
     std::vector<std::uint8_t> buf;
     serialize_into(buf);
     return buf;
 }
 
-void DDSketch::serialize_into(std::vector<std::uint8_t>& buf) const {
+template <int BINS>
+void BasicDDSketch<BINS>::serialize_into(std::vector<std::uint8_t>& buf) const {
     constexpr std::size_t HEADER_SIZE =
         sizeof(double) * 3 + sizeof(std::uint64_t) * 2 + sizeof(std::int32_t) +
         sizeof(std::uint32_t);
@@ -365,16 +382,18 @@ void DDSketch::serialize_into(std::vector<std::uint8_t>& buf) const {
     std::memcpy(p, store_.data(), num * sizeof(std::uint32_t));
 }
 
-DDSketch DDSketch::deserialize(const std::uint8_t* data, std::size_t len) {
+template <int BINS>
+BasicDDSketch<BINS> BasicDDSketch<BINS>::deserialize(const std::uint8_t* data,
+                                                     std::size_t len) {
     constexpr std::size_t HEADER_SIZE =
         sizeof(double) * 3 + sizeof(std::uint64_t) * 2 + sizeof(std::int32_t) +
         sizeof(std::uint32_t);
 
     if (len < HEADER_SIZE) {
-        return DDSketch{};
+        return BasicDDSketch{};
     }
 
-    DDSketch s;
+    BasicDDSketch s;
     const std::uint8_t* p = data;
 
     std::memcpy(&s.gamma_, p, sizeof(double));
@@ -400,7 +419,7 @@ DDSketch DDSketch::deserialize(const std::uint8_t* data, std::size_t len) {
 
     if (num > MAX_BINS) num = MAX_BINS;
     if (len < HEADER_SIZE + num * sizeof(std::uint32_t)) {
-        return DDSketch{};
+        return BasicDDSketch{};
     }
 
     s.store_.fill(0);
@@ -412,5 +431,8 @@ DDSketch DDSketch::deserialize(const std::uint8_t* data, std::size_t len) {
 
     return s;
 }
+
+template class BasicDDSketch<128>;
+template class BasicDDSketch<2048>;
 
 }  // namespace dftracer::utils::dataframe

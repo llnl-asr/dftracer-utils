@@ -20,11 +20,12 @@ namespace dftracer::utils::utilities::fileio::lines::sources {
  * Decodes the file a gzip member at a time with libdeflate (peak memory one
  * member) and splits the decompressed bytes into lines. A single foreign
  * member too large to decode in memory throws with a hint to run
- * dftracer_split.
+ * dftracer_split. A last member cut short yields its complete lines unless
+ * `recover_truncated` is false, when it throws instead.
  */
 inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
-    std::string file_path, std::size_t start_line = 0,
-    std::size_t end_line = 0) {
+    std::string file_path, std::size_t start_line = 0, std::size_t end_line = 0,
+    bool recover_truncated = true) {
     ssize_t fd_result =
         co_await ::dftracer::utils::io::open(file_path.c_str(), O_RDONLY);
     if (fd_result < 0) {
@@ -47,7 +48,8 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
     std::exception_ptr ex;
 
     try {
-        auto bytes = compress::decode_gzip_members(fd.get(), file_size);
+        auto bytes = compress::decode_gzip_members(
+            fd.get(), file_size, std::size_t{1} << 31, recover_truncated);
         while (auto chunk = co_await bytes.next()) {
             const char* data = chunk->data();
             const std::size_t remaining = chunk->size();

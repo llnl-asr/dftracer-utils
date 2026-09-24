@@ -6,22 +6,26 @@
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/trace/indexing/chunk_indexer_utility.h>
-#include <dftracer/utils/trace/indexing/resolve_and_build.h>
+#include <dftracer/utils/index/build/batch_builder.h>
+#include <dftracer/utils/index/build/chunk_indexer.h>
+#include <dftracer/utils/index/build/resolve_and_build.h>
+#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/index_database_sst_writer_context.h>
+#include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
-#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
-#include <dftracer/utils/utilities/indexer/index_database_sst_writer_context.h>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <mutex>
+#include <optional>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
-using namespace dftracer::utils::trace::indexing;
-using namespace dftracer::utils::utilities::indexer;
+using namespace dftracer::utils::index::build;
+using namespace dftracer::utils::index::build;
+using namespace dftracer::utils::index::store;
 
 class IndexArgParse : public cli::ArgParse {
    public:
@@ -30,11 +34,13 @@ class IndexArgParse : public cli::ArgParse {
     cli::IndexingArgs indexing;
 
     std::string dimensions;
-    bool no_auto_dimensions = false;
-    bool rebuild_summaries = false;
+    std::size_t path_budget = 1024;
+    std::uint64_t memory_budget = 0;
+    std::string record_schema;
     std::size_t read_batch_size = 4;
     std::size_t expected_entries = 1024;
     double false_positive_rate = 0.01;
+    std::vector<std::string> plugins;
 
     explicit IndexArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
         indexing.index_dir_help =
@@ -53,21 +59,14 @@ class IndexArgParse : public cli::ArgParse {
             .default_value<std::string>("");
 
         parser()
-            .add_argument("--no-auto-dimensions")
+            .add_argument("--path-budget")
             .help(
-                "Index only the fixed fields and --dimensions, not every other "
-                "flat args key (by default numbers get a per-chunk min/max and "
-                "strings a per-chunk bloom up to 256 distinct values)")
-            .flag();
-
-        parser()
-            .add_argument("--rebuild-summaries")
-            .help(
-                "Rebuild ROOT_* aggregated summaries after ingest. Off by "
-                "default; ROOT_* CFs are only used by summary tools like "
-                "dftracer_info. Bloom-filter chunk-skipping queries do not "
-                "need them.")
-            .flag();
+                "Also index each file's N most frequent other args paths: "
+                "numbers get a per-chunk min/max, strings a per-chunk bloom up "
+                "to 256 distinct values; 0 indexes only the fixed fields and "
+                "--dimensions (default: 1024)")
+            .scan<'d', std::size_t>()
+            .default_value(static_cast<std::size_t>(1024));
 
         parser()
             .add_argument("--read-batch-size")
@@ -75,6 +74,22 @@ class IndexArgParse : public cli::ArgParse {
                 "Batch read size for stream processing (default: 4MB). A bare "
                 "number is MB; suffixed values (e.g. 512KB) are absolute")
             .default_value(std::string("4"));
+
+        parser()
+            .add_argument("--schema")
+            .help(
+                "Record schema of every trace: a registered id such as "
+                "dftracer or generic (default: detected per file from its "
+                "first lines)")
+            .default_value(std::string(""));
+
+        parser()
+            .add_argument("--memory-budget")
+            .help(
+                "Bytes the build may hold at once; past it large files are "
+                "indexed fewer at a time and spill to disk (0 = auto: ~1/3 of "
+                "available memory). Accepts units, e.g. 512MB, 4GB")
+            .default_value(std::string("0"));
 
         parser()
             .add_argument("--expected-entries")
@@ -89,16 +104,26 @@ class IndexArgParse : public cli::ArgParse {
             .help("Bloom filter false positive rate (default: 0.01)")
             .scan<'g', double>()
             .default_value(0.01);
+
+        parser()
+            .add_argument("--plugin")
+            .help(
+                "Plugin shared library to load for the build; its index "
+                "extensions are built for every file (repeatable)")
+            .append()
+            .default_value(std::vector<std::string>{});
     }
 
     void post_parse() override {
         dimensions = parser().get<std::string>("--dimensions");
-        no_auto_dimensions = parser().get<bool>("--no-auto-dimensions");
-        rebuild_summaries = parser().get<bool>("--rebuild-summaries");
+        path_budget = parser().get<std::size_t>("--path-budget");
+        memory_budget = cli::get_bytes_arg(parser(), "--memory-budget");
+        record_schema = parser().get<std::string>("--schema");
         read_batch_size =
             cli::get_bytes_arg(parser(), "--read-batch-size", 1024ull * 1024);
         expected_entries = parser().get<std::size_t>("--expected-entries");
         false_positive_rate = parser().get<double>("--false-positive-rate");
+        plugins = parser().get<std::vector<std::string>>("--plugin");
     }
 };
 
@@ -117,14 +142,28 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
         cli->indexing.index_dir.empty() ? log_dir : cli->indexing.index_dir;
     const auto expected_entries = cli->expected_entries;
     const auto false_positive_rate = cli->false_positive_rate;
-    const auto rebuild_summaries = cli->rebuild_summaries;
 
     std::vector<std::string> user_dimensions = cli::split_csv(dimensions_str);
+
+    // Held for the whole build: loading registers the plugins' index
+    // extensions, and destroying the set removes them.
+    std::optional<plugins::Plugins> loaded;
+    if (!cli->plugins.empty()) {
+        auto builder = plugins::Plugins::builder();
+        for (const auto& path : cli->plugins) builder.add(path);
+        auto built = builder.build();
+        if (!built) {
+            DFTRACER_UTILS_LOG_ERROR("Failed to load plugins: %s",
+                                     built.error().format().c_str());
+            co_return 1;
+        }
+        loaded.emplace(std::move(*built));
+    }
 
     std::vector<std::string> extra_dimensions;
     for (const auto& field : user_dimensions) {
         const std::string dim =
-            dftracer::utils::trace::indexing::extra_dimension_name(field);
+            dftracer::utils::index::build::extra_dimension_name(field);
         if (std::find(extra_dimensions.begin(), extra_dimensions.end(), dim) ==
             extra_dimensions.end()) {
             extra_dimensions.push_back(dim);
@@ -133,13 +172,13 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
 
     ChunkIndexerConfig indexer_config;
     indexer_config.extra_dimensions = extra_dimensions;
-    indexer_config.auto_fields = !cli->no_auto_dimensions;
+    indexer_config.path_budget = cli->path_budget;
     indexer_config.expected_entries_per_chunk = expected_entries;
     indexer_config.false_positive_rate = false_positive_rate;
 
     std::vector<std::string> all_dimensions(
-        dftracer::utils::utilities::indexer::DEFAULT_BLOOM_DIMENSIONS.begin(),
-        dftracer::utils::utilities::indexer::DEFAULT_BLOOM_DIMENSIONS.end());
+        dftracer::utils::index::build::DEFAULT_BLOOM_DIMENSIONS.begin(),
+        dftracer::utils::index::build::DEFAULT_BLOOM_DIMENSIONS.end());
     for (const auto& dim : extra_dimensions) {
         all_dimensions.push_back(dim);
     }
@@ -167,7 +206,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     // Discover input files
     filesystem::PatternDirectoryScannerUtility scanner;
     filesystem::PatternDirectoryScannerUtilityInput scan_input{
-        log_dir, {".pfw", ".pfw.gz"}, false};
+        log_dir, {".pfw", ".pfw.gz", ".jsonl.gz", ".ndjson.gz"}, false};
     auto matched_entries = co_await scanner(scan_input);
 
     std::vector<std::string> input_files;
@@ -177,7 +216,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     }
 
     if (input_files.empty()) {
-        DFTRACER_UTILS_LOG_ERROR("No .pfw or .pfw.gz files found in: %s",
+        DFTRACER_UTILS_LOG_ERROR("No trace files found in: %s",
                                  log_dir.c_str());
         co_return 1;
     }
@@ -220,7 +259,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     {
         IndexDatabase coord_db(index_dir);
         coord_db.init_schema();
-        preassigned_file_ids = coord_db.register_files(input_files);
+        preassigned_file_ids = coord_db.assign_file_ids(input_files);
     }
 
     const std::string staging_root =
@@ -240,16 +279,28 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     batch_config->force_rebuild = force_rebuild;
     batch_config->bloom_config = indexer_config;
     batch_config->bloom_dimensions = all_dimensions;
-    batch_config->rebuild_root_summaries = false;
+    batch_config->memory_budget = cli->memory_budget;
+    batch_config->schema = cli->record_schema;
 
     batch_config->sink_factory =
-        [staging_root, batch_counter]() -> std::unique_ptr<IndexBatchSink> {
+        [staging_root, batch_counter]() -> std::unique_ptr<IndexWrite> {
         const std::size_t idx =
             batch_counter->fetch_add(1, std::memory_order_relaxed);
         return std::make_unique<IndexDatabaseSstWriterContext>(
             staging_root, "batch_" + std::to_string(idx));
     };
-    batch_config->sink_commit = [artifacts_queue](IndexBatchSink& sink) {
+    // A spilled file's runs stay in order: its last run's range deletes must
+    // ingest after the others.
+    auto spilled = std::make_shared<std::pair<
+        std::mutex,
+        std::vector<std::vector<IndexDatabaseSstWriterContext::Artifacts>>>>();
+    batch_config->spill_dir = staging_root + "/spill";
+    batch_config->spill_commit =
+        [spilled](std::vector<IndexDatabaseSstWriterContext::Artifacts> runs) {
+            std::lock_guard<std::mutex> lock(spilled->first);
+            spilled->second.push_back(std::move(runs));
+        };
+    batch_config->sink_commit = [artifacts_queue](IndexWrite& sink) {
         auto& sst = static_cast<IndexDatabaseSstWriterContext&>(sink);
         auto a = sst.commit();
         if (!a.empty()) artifacts_queue->enqueue(std::move(a));
@@ -259,8 +310,8 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     auto streaming_task = make_task(
         [&batch_result,
          batch_config](CoroScope& scope) -> coro::CoroTask<void> {
-            batch_result = co_await IndexBatchBuilderUtility::process(
-                &scope, std::move(batch_config));
+            batch_result =
+                co_await BatchBuilder::process(&scope, std::move(batch_config));
         },
         "StreamingIndex");
 
@@ -274,27 +325,17 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
         while (artifacts_queue->try_dequeue(a)) {
             registry.append(std::move(a));
         }
+        for (auto& runs : spilled->second)
+            for (auto& run : runs) registry.append(std::move(run));
     }
-    DFTRACER_UTILS_LOG_INFO(
-        "dftracer_index: %zu SSTs in registry (chunk_bloom=%zu file_bloom=%zu)",
-        registry.chunk_bloom().size() + registry.file_bloom().size() +
-            registry.chunk_stats().size(),
-        registry.chunk_bloom().size(), registry.file_bloom().size());
     {
         IndexDatabase ingest_db(index_dir);
         auto t0 = std::chrono::high_resolution_clock::now();
         ingest_db.bulk_ingest(registry, {});
         auto t1 = std::chrono::high_resolution_clock::now();
-        if (rebuild_summaries) {
-            ingest_db.rebuild_root_summaries();
-        }
-        auto t2 = std::chrono::high_resolution_clock::now();
         DFTRACER_UTILS_LOG_INFO(
-            "dftracer_index: bulk_ingest=%.2fms "
-            "rebuild_root_summaries=%.2fms%s",
-            std::chrono::duration<double, std::milli>(t1 - t0).count(),
-            std::chrono::duration<double, std::milli>(t2 - t1).count(),
-            rebuild_summaries ? "" : " (skipped)");
+            "dftracer_index: bulk_ingest=%.2fms",
+            std::chrono::duration<double, std::milli>(t1 - t0).count());
     }
 
     std::error_code ec;

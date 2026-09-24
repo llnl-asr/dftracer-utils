@@ -15,7 +15,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/field_stat.h>
 #include <dftracer/utils/dataframe/sketch.h>
-#include <dftracer/utils/trace/aggregators/reserved_args.h>
+#include <dftracer/utils/index/schemas/dft/agg/reserved_args.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/agg_fold.h>
 #include <dftracer/utils/trace/views/aggfold.h>
@@ -134,7 +134,9 @@ void append_group_dim(std::string& out, const Src& src, const GroupKey& gk) {
             src.append_value(out, gk.arg);
             break;
         case GroupKey::Kind::Expr:
-            // The oracle predates computed columns; no parity case uses one.
+        case GroupKey::Kind::Resolved:
+            // The oracle predates computed and resolved keys; no parity case
+            // uses one.
             break;
     }
 }
@@ -148,7 +150,7 @@ std::string group_dim_str(const Src& src, const GroupKey& gk) {
 
 template <class Src>
 void fold_numeric_args_t(AggAccum& a, const Src& src, bool want_sketch) {
-    namespace agg = dftracer::utils::trace::aggregators;
+    namespace agg = dftracer::utils::index::schemas::dft::agg;
     auto feed = [&](std::string_view key, double num) {
         a.dyn[std::string(key)].add(num);
         if (want_sketch) a.dyn_sketches[std::string(key)].add(num);

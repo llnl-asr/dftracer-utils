@@ -137,13 +137,52 @@ Every field supports the full set. In Python they are methods on ``Field``/``F``
      - ``a & b``, ``a | b``, ``~a``
      - ``a && b``, ``a || b``, ``!a``
 
-Resolved (virtual) fields
--------------------------
+Match any element of an array
+-----------------------------
+
+``any(<path>)`` stands for any element of the array at ``<path>``: a predicate
+on it holds when at least one scalar element satisfies it. It takes every
+operator above.
+
+.. tab-set::
+
+   .. tab-item:: DSL
+
+      .. code-block:: text
+
+         any(tags) == "gpu"
+         any(sizes) > 4096
+         any(tags) in ["gpu", "cpu"]
+         not any(tags) == "debug"
+
+   .. tab-item:: Python
+
+      .. code-block:: python
+
+         TraceViewer("logs/").filter(F.tags.any() == "gpu").collect()
+
+   .. tab-item:: C++
+
+      .. code-block:: cpp
+
+         auto q = (Field("tags").any() == "gpu").build();
+         // C ABI: dftu_query_cmp_str("any(tags)", DFTU_QCMP_EQ, "gpu")
+
+A value that is not an array, an empty array, and elements that are objects or
+arrays match nothing. The index skips chunks through the evidence it keeps for
+each position (``tags.0``, ``tags.1``, ...), so a membership filter prunes like
+a filter on one position; an array wider than 256 positions is scanned. In
+memory, ``Expr.apply`` cannot evaluate ``any()``.
+
+Resolved columns
+----------------
 
 Traces store hashes, not the full strings, for host, file path, and command.
-``resolved.<name>`` (or ``r.<name>``) queries the real value; the engine
-rewrites it to a hash lookup against the index, so you filter on a readable name
-without denormalizing the trace.
+The index keeps a dictionary per hash kind, and ``resolved.<key field>.<field>``
+reads ``field`` of the dictionary row whose key the event's ``key field``
+holds. The engine rewrites a filter on it to a key lookup against the index, so
+you filter on a readable name without denormalizing the trace. The same names
+work in ``select`` and ``group_by``.
 
 .. tab-set::
 
@@ -153,17 +192,36 @@ without denormalizing the trace.
 
          from dftracer.utils.query import resolved
 
-         q = resolved("fpath").like("%/scratch/%") & (resolved("hostname") == "node01")
+         q = resolved("fhash.path").like("%/scratch/%") & (resolved("hhash.name") == "node01")
 
    .. tab-item:: C++
 
       .. code-block:: cpp
 
-         auto q = (resolved("fpath").like("%/scratch/%")
-                   && (resolved("hostname") == "node01")).build();
+         auto q = (resolved("fhash.path").like("%/scratch/%")
+                   && (resolved("hhash.name") == "node01")).build();
 
-Known names: ``fpath``, ``cwd``, ``hostname`` (alias ``host``), ``exec``,
-``cmd``.
+The dftracer schema resolves these columns:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Column
+     - Value
+   * - ``resolved.fhash.path``
+     - path of the file an I/O event touches
+   * - ``resolved.cwd.path``
+     - working directory of a process
+   * - ``resolved.hhash.name``
+     - host name
+   * - ``resolved.exec_hash.value``
+     - executable of a process
+   * - ``resolved.cmd_hash.value``
+     - command line of a process
+
+Any other ``resolved.`` name fails with an error that lists these. A filter
+that matches more than 4096 keys still returns the right rows, but the index
+does not prune with it.
 
 How it runs
 -----------

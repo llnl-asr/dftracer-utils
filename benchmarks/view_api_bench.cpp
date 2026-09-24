@@ -14,6 +14,7 @@
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/trace/views/typed_rows.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -87,6 +88,76 @@ std::string write_trace(const std::string& dir, std::int64_t events) {
     return gz;
 }
 
+// The same records without a ph, read by path.
+std::string write_generic(const std::string& dir, std::int64_t records) {
+    const std::string gz = dir + "/bench.ndjson.gz";
+    std::ofstream out(gz, std::ios::binary);
+    compress::GzipMemberCompressor comp(6);
+    const char* ops[] = {"read", "write", "open", "close"};
+    std::mt19937_64 rng(7);
+    std::string chunk;
+    auto flush = [&] {
+        if (chunk.empty()) return;
+        auto m = comp.compress_member(
+            reinterpret_cast<const std::uint8_t*>(chunk.data()), chunk.size());
+        if (!m) {
+            std::fprintf(stderr, "compress failed\n");
+            std::exit(1);
+        }
+        out.write(reinterpret_cast<const char*>(m->data()),
+                  static_cast<std::streamsize>(m->size()));
+        chunk.clear();
+    };
+    for (std::int64_t i = 0; i < records; ++i) {
+        chunk += R"({"op":")";
+        chunk += ops[rng() % 4];
+        chunk += R"(","lat":)" + std::to_string(1 + rng() % 500);
+        chunk += R"(,"io":{"file":"/data/f)" + std::to_string(rng() % 64);
+        chunk += R"(","size":)" + std::to_string(rng() % 65536) + "}}\n";
+        if (chunk.size() > (1u << 20)) flush();
+    }
+    flush();
+    return gz;
+}
+
+struct EventRow {
+    index::Field<std::string, "name"> name;
+    index::Field<std::int64_t, "dur"> dur;
+    index::Field<std::int64_t, "args.size"> size;
+};
+
+struct GenericRow {
+    index::Field<std::string, "op"> op;
+    index::Field<std::int64_t, "lat"> lat;
+    index::Field<std::int64_t, "io.size"> size;
+};
+
+std::int64_t int_at(const df::DataFrame& f, std::size_t c, std::int64_t r) {
+    const auto& col = f.columns[c];
+    if (col.type() == df::TypeId::Uint64)
+        return static_cast<std::int64_t>(col.data<std::uint64_t>()[r]);
+    if (col.type() == df::TypeId::Float64)
+        return static_cast<std::int64_t>(col.data<double>()[r]);
+    return col.data<std::int64_t>()[r];
+}
+
+// collect() of three columns, then each row read into a struct, as a caller
+// of collect() gets its own rows.
+template <class Row, class Fill>
+std::vector<Row> rows_via_collect(const View& v,
+                                  const std::vector<std::string>& names,
+                                  Fill fill) {
+    const df::DataFrame f = run(v.select(names).collect());
+    std::vector<std::size_t> at;
+    for (const auto& n : names)
+        at.push_back(static_cast<std::size_t>(
+            std::find(f.names.begin(), f.names.end(), n) - f.names.begin()));
+    std::vector<Row> out(static_cast<std::size_t>(f.num_rows()));
+    for (std::int64_t r = 0; r < f.num_rows(); ++r)
+        fill(f, at, r, out[static_cast<std::size_t>(r)]);
+    return out;
+}
+
 double seconds(const std::function<void()>& f) {
     const auto t0 = std::chrono::steady_clock::now();
     f();
@@ -148,7 +219,36 @@ int main(int argc, char** argv) {
             std::find(cols.begin(), cols.end(), name) - cols.begin());
     };
 
+    const std::string generic = write_generic(dir, events);
+    run(View::from_file(generic).agg({{AggOp::Count, "", "n"}}).collect());
+    const View gv = View::from_file(generic);
+
     std::vector<Case> cases = {
+        {"typed rows vs collect + read",
+         [&] {
+             rows_via_collect<EventRow>(
+                 tv, {"name", "dur", "args.size"},
+                 [](const df::DataFrame& f, const std::vector<std::size_t>& at,
+                    std::int64_t r, EventRow& row) {
+                     row.name.value =
+                         std::string(f.columns[at[0]].string_at(r));
+                     row.dur.value = int_at(f, at[1], r);
+                     row.size.value = int_at(f, at[2], r);
+                 });
+         },
+         [&] { run(rows<EventRow>(tv)); }},
+        {"generic typed rows vs collect + read",
+         [&] {
+             rows_via_collect<GenericRow>(
+                 gv, {"op", "lat", "io.size"},
+                 [](const df::DataFrame& f, const std::vector<std::size_t>& at,
+                    std::int64_t r, GenericRow& row) {
+                     row.op.value = std::string(f.columns[at[0]].string_at(r));
+                     row.lat.value = int_at(f, at[1], r);
+                     row.size.value = int_at(f, at[2], r);
+                 });
+         },
+         [&] { run(rows<GenericRow>(gv)); }},
         {"agg name: count, sum dur",
          [&] {
              scan::ScanPlan p =

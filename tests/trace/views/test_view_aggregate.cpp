@@ -1,15 +1,15 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/rocksdb/column_families.h>
-#include <dftracer/utils/core/rocksdb/database.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
-#include <dftracer/utils/trace/aggregators/aggregator_utility.h>
+#include <dftracer/utils/index/cache/rollup_store.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregator.h>
+#include <dftracer/utils/index/store/column_families.h>
+#include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/trace/comparator/compare_view.h>
 #include <dftracer/utils/trace/views/aggfold.h>
 #include <dftracer/utils/trace/views/fold.h>
-#include <dftracer/utils/trace/views/rollup_store.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_executor.h>
@@ -120,13 +120,13 @@ dataframe::DataFrame scan_only(const scan::ScanPlan& v) {
 // Build the sidecar aggregation tier the way the aggregator does, so
 // agg_tier_collect can answer without a scan.
 void build_tier_index(const std::string& gz) {
-    namespace aggregators = dftracer::utils::trace::aggregators;
+    namespace aggregators = dftracer::utils::index::schemas::dft::agg;
     aggregators::AggregatorInput input;
     input.directory = fs::path(gz).parent_path().string();
     input.force_rebuild = true;
     Runtime rt(4);
     rt.run_blocking("build-tier", [&](CoroScope& ctx) -> coro::CoroTask<void> {
-        aggregators::AggregatorUtility agg;
+        aggregators::Aggregator agg;
         auto gen = agg(ctx, input);
         while (auto batch = co_await gen.next()) (void)batch;
         co_return;
@@ -875,20 +875,21 @@ TEST_SUITE("View") {
         auto expect = canon(run(scan::collect_frame(make())));
         REQUIRE(expect.size() >= 1);
 
-        namespace detail = dftracer::utils::trace::views::detail;
-        namespace rdb = dftracer::utils::rocksdb;
+        namespace rdb = dftracer::utils::index::store;
 
-        // A materialize plan persists the result into the index's ROLLUP CF as
-        // a byproduct of answering it.
+        // A materialize plan persists the result into the rollup store beside
+        // the index as a byproduct of answering it.
         CHECK(canon(run(scan::collect_frame(
                   scan::materialize(make(), 0, 0)))) == expect);
         {
-            auto db = detail::open_rollup_db(
-                idx, rdb::RocksDatabase::OpenMode::ReadOnly);
+            auto db = dftracer::utils::index::cache::open_rollup_db(
+                (fs::path(idx).parent_path() / ".dftindex-cache" / "rollups")
+                    .string(),
+                rdb::RocksDatabase::OpenMode::ReadOnly);
             REQUIRE(db);
             auto it = db->new_iterator(rdb::cf::ROLLUP);
             it->SeekToFirst();
-            CHECK(it->Valid());  // the ROLLUP CF holds the materialized view
+            CHECK(it->Valid());  // the store holds the materialized view
         }
 
         // A repeat query - even without materialize - reads the rollup back.
@@ -901,8 +902,7 @@ TEST_SUITE("View") {
         std::string gz = create_mixed_trace(env, 200, 60);
         std::string idx = determine_index_path(gz, "");
 
-        namespace detail = dftracer::utils::trace::views::detail;
-        namespace rdb = dftracer::utils::rocksdb;
+        namespace rdb = dftracer::utils::index::store;
 
         auto canon = [](const dataframe::DataFrame& df) {
             std::vector<std::string> rows;
@@ -942,8 +942,10 @@ TEST_SUITE("View") {
             .materialize()
             .get();  // build-only terminal: materialize the rollup
         {
-            auto db = detail::open_rollup_db(
-                idx, rdb::RocksDatabase::OpenMode::ReadOnly);
+            auto db = dftracer::utils::index::cache::open_rollup_db(
+                (fs::path(idx).parent_path() / ".dftindex-cache" / "rollups")
+                    .string(),
+                rdb::RocksDatabase::OpenMode::ReadOnly);
             REQUIRE(db);
             auto it = db->new_iterator(rdb::cf::ROLLUP);
             it->SeekToFirst();
@@ -1723,7 +1725,8 @@ TEST_SUITE("View") {
         CHECK(bnum(b, ov, "sum_dur") == 200);
         CHECK(bnum(b, ov, "busy") == 150);
         CHECK(bnum(b, ov, "concurrency") == doctest::Approx(200.0 / 150.0));
-        CHECK(bnum(b, ov, "utilization") == doctest::Approx(1.0));
+        // Utilization divides by the window, [900, 2200).
+        CHECK(bnum(b, ov, "utilization") == doctest::Approx(150.0 / 1300.0));
         // serial: disjoint, so busy == sum(dur) and concurrency == 1.
         CHECK(bnum(b, se, "busy") == 200);
         CHECK(bnum(b, se, "concurrency") == doctest::Approx(1.0));

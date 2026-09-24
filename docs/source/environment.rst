@@ -67,6 +67,11 @@ RocksDB and indexing
        it explicitly also overrides the read-only fast path, which otherwise
        keeps every SST file open (``-1``) to avoid re-reading filter/index
        blocks on point lookups.
+   * - ``DFTRACER_SCHEMA_PATH``
+     - unset
+     - Record schema spec files or directories, ``:``-separated, registered
+       on first use of the schema registry. See
+       :doc:`reference/record-schema`.
    * - ``DFTRACER_INDEX_SIZE_FACTOR``
      - ``3``
      - Multiplier applied to total input bytes to size the scratch reservation
@@ -82,6 +87,12 @@ RocksDB and indexing
      - Controls when an index build stages to local scratch before publishing
        to its final destination. ``never``, ``off``, or ``0`` disables
        staging; ``always`` forces staging even for local destinations.
+   * - ``DFTRACER_CACHE_MAX_BYTES``
+     - ``2G``
+     - Size cap for each query cache store (rollups and materialized views
+       in ``.dftindex-cache``). A size such as ``512M`` or ``4G``. When a
+       store grows past the cap, the least recently used entries are
+       removed.
 
 Logging
 --------

@@ -1,11 +1,11 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/trace/aggregators/aggregation_intern.h>
-#include <dftracer/utils/trace/aggregators/aggregation_serialization.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_serialization.h>
 #include <doctest/doctest.h>
 
 #include <memory>
 
-using namespace dftracer::utils::trace::aggregators;
+using namespace dftracer::utils::index::schemas::dft::agg;
 
 TEST_SUITE("AggregationSerialization") {
     TEST_CASE("key roundtrip - basic") {
@@ -20,7 +20,7 @@ TEST_SUITE("AggregationSerialization") {
         key.fhash = 0xdef456ULL;
         key.time_bucket = 5000000;
 
-        auto data = serialize_agg_key(42, AggMapType::EVENT, key, intern);
+        auto data = serialize_agg_key(AggMapType::EVENT, key, intern);
         auto result = deserialize_agg_key(data);
 
         CHECK(result.map_type == AggMapType::EVENT);
@@ -46,7 +46,7 @@ TEST_SUITE("AggregationSerialization") {
             key.fhash = 0xf07c4ebf132e3799ULL;
             const auto before = intern.entry_count();
 
-            auto data = serialize_agg_key(0, AggMapType::EVENT, key, intern);
+            auto data = serialize_agg_key(AggMapType::EVENT, key, intern);
             auto result = deserialize_agg_key(data);
             CHECK(result.key.fhash_inline);
             CHECK(result.key.fhash == key.fhash);
@@ -60,8 +60,8 @@ TEST_SUITE("AggregationSerialization") {
 
         SUBCASE("a hash outside that form keeps its text") {
             std::string out;
-            serialize_agg_key_into(out, 0, AggMapType::EVENT, "posix", "read",
-                                   1, 2, "", "NOT-A-HASH", 0, intern);
+            serialize_agg_key_into(out, AggMapType::EVENT, "posix", "read", 1,
+                                   2, "", "NOT-A-HASH", 0, intern);
             AggKeyView view;
             REQUIRE(parse_agg_key_view(out, intern, view));
             CHECK_FALSE(view.fhash_inline);
@@ -71,8 +71,8 @@ TEST_SUITE("AggregationSerialization") {
 
         SUBCASE("no file hash resolves to empty") {
             std::string out;
-            serialize_agg_key_into(out, 0, AggMapType::EVENT, "posix", "read",
-                                   1, 2, "", "", 0, intern);
+            serialize_agg_key_into(out, AggMapType::EVENT, "posix", "read", 1,
+                                   2, "", "", 0, intern);
             AggKeyView view;
             REQUIRE(parse_agg_key_view(out, intern, view));
             char buf[dftracer::utils::hash::HEX64_DIGITS];
@@ -98,7 +98,7 @@ TEST_SUITE("AggregationSerialization") {
         key.extra_keys->emplace_back(ek_a, ev_a);
         key.extra_keys->emplace_back(ek_b, ev_b);
 
-        auto data = serialize_agg_key(99, AggMapType::PROFILE, key, intern);
+        auto data = serialize_agg_key(AggMapType::PROFILE, key, intern);
         auto result = deserialize_agg_key(data);
 
         CHECK(result.map_type == AggMapType::PROFILE);
@@ -137,7 +137,7 @@ TEST_SUITE("AggregationSerialization") {
 
         for (auto mt :
              {AggMapType::EVENT, AggMapType::PROFILE, AggMapType::SYSTEM}) {
-            auto data = serialize_agg_key(0, mt, key, intern);
+            auto data = serialize_agg_key(mt, key, intern);
             auto result = deserialize_agg_key(data);
             CHECK(result.map_type == mt);
         }
@@ -155,8 +155,8 @@ TEST_SUITE("AggregationSerialization") {
 
         b = a;
         b.cat_id = intern.get_or_insert("BBB");
-        auto ka = serialize_agg_key(0, AggMapType::EVENT, a, intern);
-        auto kb = serialize_agg_key(0, AggMapType::EVENT, b, intern);
+        auto ka = serialize_agg_key(AggMapType::EVENT, a, intern);
+        auto kb = serialize_agg_key(AggMapType::EVENT, b, intern);
         CHECK(ka < kb);
     }
 
@@ -173,8 +173,8 @@ TEST_SUITE("AggregationSerialization") {
         b = a;
         b.time_bucket = 2000000;
 
-        auto ka = serialize_agg_key(0, AggMapType::EVENT, a, intern);
-        auto kb = serialize_agg_key(0, AggMapType::EVENT, b, intern);
+        auto ka = serialize_agg_key(AggMapType::EVENT, a, intern);
+        auto kb = serialize_agg_key(AggMapType::EVENT, b, intern);
         CHECK(ka != kb);
     }
 

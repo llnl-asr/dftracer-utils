@@ -4,11 +4,11 @@
 #include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/rocksdb/db_manager.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/index/store/db_manager.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/fileio/file_process_types.h>
-#include <dftracer/utils/utilities/indexer/internal/helpers.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 
@@ -59,7 +59,8 @@ class IndexedFileReaderUtility {
             input.index_path.empty()
                 ? dftracer::utils::trace::internal::determine_index_path(
                       input.file_path, "")
-                : indexer::internal::normalize_index_root(input.index_path);
+                : dftracer::utils::index::store::internal::normalize_index_root(
+                      input.index_path);
 
         // Step 1: Check if index needs to be built/rebuilt
         bool need_build =
@@ -71,32 +72,34 @@ class IndexedFileReaderUtility {
                 // Force rebuild must discard the manager-owned DB instance
                 // before removing the root directory so the next open is a
                 // true reopen, not a reuse of the previous live handle.
-                rocksdb::RocksDBManager::instance().reset(
+                dftracer::utils::index::store::RocksDBManager::instance().reset(
                     normalized_index_path);
                 fs::remove_all(normalized_index_path);
             }
 
             // Build new index
-            auto indexer = dftracer::utils::utilities::indexer::internal::
-                IndexerFactory::create(input.file_path, input.index_path,
-                                       input.checkpoint_size, true);
+            auto indexer =
+                dftracer::utils::index::gzip::CheckpointIndexerFactory::create(
+                    input.file_path, input.index_path, input.checkpoint_size,
+                    true);
             co_await indexer->build_async();
         } else {
             // Check if existing index needs rebuild
-            auto indexer = dftracer::utils::utilities::indexer::internal::
-                IndexerFactory::create(input.file_path, input.index_path,
-                                       input.checkpoint_size, false);
+            auto indexer =
+                dftracer::utils::index::gzip::CheckpointIndexerFactory::create(
+                    input.file_path, input.index_path, input.checkpoint_size,
+                    false);
 
             if (indexer->need_rebuild()) {
                 // Rebuild the index
                 // Drop the cached DB instance before deleting the store.
-                rocksdb::RocksDBManager::instance().reset(
+                dftracer::utils::index::store::RocksDBManager::instance().reset(
                     normalized_index_path);
                 fs::remove_all(normalized_index_path);
-                auto new_indexer = dftracer::utils::utilities::indexer::
-                    internal::IndexerFactory::create(
-                        input.file_path, input.index_path,
-                        input.checkpoint_size, true);
+                auto new_indexer =
+                    dftracer::utils::index::gzip::CheckpointIndexerFactory::
+                        create(input.file_path, input.index_path,
+                               input.checkpoint_size, true);
                 co_await new_indexer->build_async();
             }
         }

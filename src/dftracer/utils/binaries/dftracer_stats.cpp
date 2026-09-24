@@ -2,32 +2,32 @@
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/rocksdb/db_manager.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/core/utils/timer.h>
+#include <dftracer/utils/index/build/batch_builder.h>
+#include <dftracer/utils/index/build/index_batch_writer.h>
+#include <dftracer/utils/index/build/resolve_and_build.h>
+#include <dftracer/utils/index/build/resolver.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer.h>
+#include <dftracer/utils/index/gzip/gzip_indexer.h>
+#include <dftracer/utils/index/schemas/dft/bloom_core.h>
+#include <dftracer/utils/index/store/db_manager.h>
+#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/index_database_writer_context.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/queries.h>
 #include <dftracer/utils/json/json.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/query/query.h>
 #include <dftracer/utils/trace/event.h>
-#include <dftracer/utils/trace/indexing/index_resolver_utility.h>
-#include <dftracer/utils/trace/indexing/queries/queries.h>
-#include <dftracer/utils/trace/indexing/resolve_and_build.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/statistics/detail_stats_view.h>
 #include <dftracer/utils/trace/statistics/detailed_statistics.h>
 #include <dftracer/utils/trace/statistics/statistics_query_utility.h>
 #include <dftracer/utils/trace/statistics/stats_view.h>
-#include <dftracer/utils/trace/visitors/bloom_core.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
-#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
-#include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
-#include <dftracer/utils/utilities/indexer/internal/gzip/gzip_indexer.h>
-#include <dftracer/utils/utilities/indexer/internal/helpers.h>
-#include <dftracer/utils/utilities/indexer/internal/index_batch_writer.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer.h>
 
 #include <algorithm>
 #include <array>
@@ -45,13 +45,13 @@
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::trace;
+using namespace dftracer::utils::index::store;
 using namespace dftracer::utils::trace::statistics;
-using namespace dftracer::utils::trace::indexing;
+using namespace dftracer::utils::index::build;
+using namespace dftracer::utils::index::schemas::dft;
 using namespace dftracer::utils::utilities::filesystem;
-using dftracer::utils::utilities::indexer::ChunkStatistics;
-using dftracer::utils::utilities::indexer::has_capability;
-using dftracer::utils::utilities::indexer::IndexDatabase;
-using dftracer::utils::utilities::indexer::IndexFileEntryCapability;
+using dftracer::utils::index::schemas::dft::ChunkStatistics;
+using dftracer::utils::index::store::IndexDatabase;
 using query::Query;
 namespace cli = dftracer::utils::cli;
 
@@ -237,11 +237,11 @@ class StatsArgParse : public cli::ArgParse {
     }
 };
 
-using indexing::FileWorkItem;
-using indexing::IndexResolverUtility;
-using indexing::ResolvedFile;
-using indexing::ResolverInput;
-using indexing::ResolverResult;
+using dftracer::utils::index::build::FileWorkItem;
+using dftracer::utils::index::build::ResolvedFile;
+using dftracer::utils::index::build::Resolver;
+using dftracer::utils::index::build::ResolverInput;
+using dftracer::utils::index::build::ResolverResult;
 
 struct IndexPartition {
     std::vector<FileWorkItem> files_needing_index;
@@ -690,7 +690,7 @@ static coro::CoroTask<void> process_file_detailed(
     (void)fctx;
     (void)checkpoint_size;
     std::string index_path =
-        internal::determine_index_path(file_path, index_dir);
+        trace::internal::determine_index_path(file_path, index_dir);
 
     DetailNeeds detail_needs;
     detail_needs.group_by = group_by_ptr;
@@ -707,10 +707,11 @@ static coro::CoroTask<void> process_file_detailed(
     if (needs_hash_resolution && fs::exists(index_path)) {
         try {
             IndexDatabase idx_db(index_path);
-            auto resolve_hashes = [&](IndexDatabase::HashType hash_type) {
+            auto resolve_hashes = [&](std::string_view dict,
+                                      std::string_view field) {
                 for (const auto& [key, _] : file_detailed.grouped_duration) {
                     if (hash_resolutions.count(key) == 0) {
-                        auto resolved = idx_db.resolve_hash(hash_type, key);
+                        auto resolved = idx_db.dict_value(dict, key, field);
                         if (resolved.has_value()) {
                             hash_resolutions[key] = resolved.value();
                         }
@@ -718,7 +719,7 @@ static coro::CoroTask<void> process_file_detailed(
                 }
                 for (const auto& [key, _] : file_detailed.grouped_io) {
                     if (hash_resolutions.count(key) == 0) {
-                        auto resolved = idx_db.resolve_hash(hash_type, key);
+                        auto resolved = idx_db.dict_value(dict, key, field);
                         if (resolved.has_value()) {
                             hash_resolutions[key] = resolved.value();
                         }
@@ -728,9 +729,9 @@ static coro::CoroTask<void> process_file_detailed(
 
             for (const auto& dim : *group_by_ptr) {
                 if (dim == "fhash") {
-                    resolve_hashes(IndexDatabase::HashType::FILE);
+                    resolve_hashes("file", "path");
                 } else if (dim == "hhash") {
-                    resolve_hashes(IndexDatabase::HashType::HOST);
+                    resolve_hashes("host", "name");
                 }
             }
         } catch (const std::exception& e) {
@@ -905,9 +906,8 @@ static coro::CoroTask<std::vector<std::string>> collect_files(
 static std::unique_ptr<IndexedRootSnapshot> load_index_root_snapshot_impl(
     const std::string& index_path) {
     auto snapshot = std::make_unique<IndexedRootSnapshot>();
-    IndexDatabase db(
-        index_path,
-        dftracer::utils::utilities::indexer::IndexOpenMode::ReadOnly);
+    IndexDatabase db(index_path,
+                     dftracer::utils::index::store::IndexOpenMode::ReadOnly);
 
     auto registry = db.query_all_file_registry();
 
@@ -917,8 +917,7 @@ static std::unique_ptr<IndexedRootSnapshot> load_index_root_snapshot_impl(
     std::size_t file_index = 0;
     for (auto& [logical_path, reg] : registry) {
         snapshot->logical_files.push_back(logical_path);
-        const bool has_summary = has_capability(
-            reg.capabilities, IndexFileEntryCapability::FILE_SUMMARY);
+        const bool has_summary = db.pruning_tier_current(reg.file_id);
         if (!has_summary) {
             append_failed_stats_result(
                 snapshot->partition.precomputed_failures, file_index,
@@ -926,8 +925,8 @@ static std::unique_ptr<IndexedRootSnapshot> load_index_root_snapshot_impl(
                 "File registry entry exists but no file summary data was "
                 "found in the shared index");
         } else {
-            snapshot->partition.indexed_entries.push_back(ResolvedFile{
-                file_index, logical_path, reg.file_id, reg.capabilities});
+            snapshot->partition.indexed_entries.push_back(
+                ResolvedFile{file_index, logical_path, reg.file_id, {}});
         }
         ++file_index;
     }
@@ -959,7 +958,7 @@ static IndexPartition build_partition(ResolverResult result) {
 static coro::CoroTask<IndexPartition> resolve_index_state(
     std::vector<std::string> files, std::string index_dir,
     StatisticsQueryType report_type) {
-    IndexResolverUtility resolver;
+    Resolver resolver;
     ResolverInput input;
     input.files = std::move(files);
     input.index_dir = std::move(index_dir);
@@ -968,9 +967,12 @@ static coro::CoroTask<IndexPartition> resolve_index_state(
     co_return build_partition(std::move(result));
 }
 
-static coro::CoroTask<indexer::IndexBuildBatchResult> run_batch_build(
-    CoroScope* ctx, std::shared_ptr<indexer::IndexBuildBatchConfig> config) {
-    co_return co_await indexer::IndexBatchBuilderUtility::process(
+static coro::CoroTask<dftracer::utils::index::build::IndexBuildBatchResult>
+run_batch_build(
+    CoroScope* ctx,
+    std::shared_ptr<dftracer::utils::index::build::IndexBuildBatchConfig>
+        config) {
+    co_return co_await dftracer::utils::index::build::BatchBuilder::process(
         ctx, std::move(config));
 }
 
@@ -979,15 +981,16 @@ static coro::CoroTask<void> auto_index_files(CoroScope& ctx,
                                              const std::string& index_dir,
                                              std::size_t checkpoint_size,
                                              std::size_t executor_threads) {
-    auto index_path = internal::determine_index_path(
+    auto index_path = trace::internal::determine_index_path(
         partition.files_needing_index.front().file_path, index_dir);
-    dftracer::utils::rocksdb::RocksDBManager::instance().reset(index_path);
+    dftracer::utils::index::store::RocksDBManager::instance().reset(index_path);
 
     std::printf("Auto-building index for %zu file(s)...\n",
                 partition.files_needing_index.size());
 
     {
-        auto batch_config = std::make_shared<indexer::IndexBuildBatchConfig>();
+        auto batch_config = std::make_shared<
+            dftracer::utils::index::build::IndexBuildBatchConfig>();
         batch_config->file_paths.reserve(partition.files_needing_index.size());
         for (const auto& item : partition.files_needing_index) {
             batch_config->file_paths.push_back(item.file_path);
@@ -995,8 +998,6 @@ static coro::CoroTask<void> auto_index_files(CoroScope& ctx,
         batch_config->index_dir = index_dir;
         batch_config->checkpoint_size = checkpoint_size;
         batch_config->parallelism = executor_threads;
-
-        batch_config->rebuild_root_summaries = true;
 
         auto batch_result =
             co_await run_batch_build(&ctx, std::move(batch_config));
@@ -1031,7 +1032,7 @@ static coro::CoroTask<void> auto_index_files(CoroScope& ctx,
         newly_indexed.push_back(item.file_path);
     }
 
-    IndexResolverUtility resolver;
+    Resolver resolver;
     ResolverInput refresh_input;
     refresh_input.files = std::move(newly_indexed);
     refresh_input.index_dir = index_dir;
@@ -1040,9 +1041,14 @@ static coro::CoroTask<void> auto_index_files(CoroScope& ctx,
     auto refresh_result = co_await resolver(refresh_input);
 
     // Add successfully indexed files
+    std::optional<IndexDatabase> refreshed_db;
+    if (!refresh_result.cached.empty())
+        refreshed_db.emplace(
+            refresh_result.index_path,
+            dftracer::utils::index::store::IndexOpenMode::ReadOnly);
     for (auto& entry : refresh_result.cached) {
-        bool has_bloom = indexer::has_capability(
-            entry.capabilities, indexer::IndexFileEntryCapability::BLOOM);
+        const bool has_bloom =
+            refreshed_db->pruning_tier_current(entry.file_id);
         if (has_bloom) {
             partition.indexed_entries.push_back(std::move(entry));
         } else {
@@ -1168,7 +1174,7 @@ static coro::CoroTask<void> process_index_group(
         {
             IndexDatabase idx_db(
                 *index_path_ptr,
-                dftracer::utils::utilities::indexer::IndexOpenMode::ReadOnly);
+                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
             std::vector<int> file_ids;
             file_ids.reserve(group_ptr->size());
             for (const auto& rf : *group_ptr) file_ids.push_back(rf.file_id);
@@ -1413,7 +1419,7 @@ static coro::CoroTask<int> run_stats(CoroScope& ctx,
         }
         if (!config.directory.empty() &&
             config.report_type != StatisticsQueryType::DETAILED) {
-            auto trusted_index_path = internal::determine_index_path(
+            auto trusted_index_path = trace::internal::determine_index_path(
                 config.directory, config.index_dir);
             const bool trusted_index_exists = fs::exists(trusted_index_path);
             DFTRACER_UTILS_LOG_DEBUG(

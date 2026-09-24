@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/trace/indexing/chunk_indexer_utility.h>
+#include <dftracer/utils/index/build/chunk_indexer.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
@@ -8,7 +8,7 @@
 #include <string>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::trace::indexing;
+using namespace dftracer::utils::index::build;
 
 // Helper to create a test trace file (plain text), then compress to gzip.
 // Returns the .gz path and the uncompressed size.
@@ -54,7 +54,7 @@ static std::pair<std::string, std::size_t> create_test_trace_gz(
     return {gz_path, uncompressed_size};
 }
 
-TEST_SUITE("ChunkIndexerUtility") {
+TEST_SUITE("ChunkIndexer") {
     TEST_CASE("ChunkIndexer - Process trace with metadata and events") {
         std::string test_dir =
             dftu_utils_test::make_unique_test_path("test_chunk_indexer")
@@ -77,7 +77,7 @@ TEST_SUITE("ChunkIndexerUtility") {
             .with_config(config)
             .with_batch_size(4 * 1024 * 1024);
 
-        ChunkIndexerUtility indexer;
+        ChunkIndexer indexer;
         auto output = indexer(input).get();
 
         CHECK(output.success == true);
@@ -111,15 +111,6 @@ TEST_SUITE("ChunkIndexerUtility") {
         CHECK(output.statistics.name_counts.count("read") == 1);
         CHECK(output.statistics.duration_count == 50);
 
-        // Verify hash resolutions from metadata events
-        CHECK(output.hash_resolutions.count("hhash") == 1);
-        CHECK(output.hash_resolutions.at("hhash").at("abc123") == "testhost");
-        CHECK(output.hash_resolutions.count("fhash") == 1);
-        CHECK(output.hash_resolutions.at("fhash").at("def456") ==
-              "./data/file.h5");
-        CHECK(output.hash_resolutions.count("shash") == 1);
-        CHECK(output.hash_resolutions.at("shash").at("ghi789") == "my_app");
-
         fs::remove_all(test_dir);
     }
 
@@ -147,7 +138,7 @@ TEST_SUITE("ChunkIndexerUtility") {
             .with_config(config)
             .with_batch_size(4 * 1024 * 1024);
 
-        ChunkIndexerUtility indexer;
+        ChunkIndexer indexer;
         auto output = indexer(input).get();
 
         CHECK(output.success == true);
@@ -204,7 +195,7 @@ TEST_SUITE("ChunkIndexerUtility") {
             .with_config(config)
             .with_batch_size(4 * 1024 * 1024);
 
-        ChunkIndexerUtility indexer;
+        ChunkIndexer indexer;
         auto output = indexer(input).get();
 
         CHECK(output.success == true);

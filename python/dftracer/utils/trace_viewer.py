@@ -15,6 +15,7 @@ naming the first op it cannot take.
 
 from __future__ import annotations
 
+import json
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -26,6 +27,8 @@ from typing import (
     NamedTuple,
     Optional,
     Sequence,
+    Type,
+    TypeVar,
     Union,
     overload,
 )
@@ -35,7 +38,10 @@ from ._units import coerce_bytes, coerce_duration
 from .columnar import Agg, Expr, _Col
 from .dataframe import DataFrame, PhaseArg, TimeUnitArg
 from .lazyframe import LazyFrame, LazyResult, collect_all
+from .schemas import RecordSchema, schema_id
 from .series import _wrap
+
+_S = TypeVar("_S", bound=RecordSchema)
 
 if TYPE_CHECKING:
     from .plugins import Plugins
@@ -123,7 +129,10 @@ def _partial(frame: DataFrame) -> bytes:
 
 class TraceViewer(LazyFrame):
     """A lazy view over trace files (a file, a directory or a list of files);
-    see the module docstring."""
+    see the module docstring. ``record_schema`` names a registered record
+    schema (an id or a :class:`dftracer.utils.schemas.RecordSchema` class) to
+    read the files as, instead of their recorded or detected one; an
+    unregistered id raises ``DFTUtilsValueError``."""
 
     __slots__ = ("_tv",)
 
@@ -133,14 +142,23 @@ class TraceViewer(LazyFrame):
         files: Union[str, Sequence[str]],
         index_path: Optional[str] = ...,
         runtime: "Optional[Runtime]" = ...,
+        record_schema: "Union[str, Type[RecordSchema], None]" = ...,
     ) -> None: ...
     @overload
     def __init__(self, files: "_ext._TraceViewer", /) -> None: ...
 
-    def __init__(self, files: Any, index_path: Optional[str] = None, runtime: Any = None) -> None:
+    def __init__(
+        self,
+        files: Any,
+        index_path: Optional[str] = None,
+        runtime: Any = None,
+        record_schema: "Union[str, Type[RecordSchema], None]" = None,
+    ) -> None:
         native = (
             files if isinstance(files, _ext._TraceViewer) else _ext._TraceViewer(files, index_path)
         )
+        if record_schema is not None:
+            native = native.record_schema(schema_id(record_schema))
         super().__init__(native.lazy(), runtime)
         self._tv = native
 
@@ -173,8 +191,9 @@ class TraceViewer(LazyFrame):
     def select(self, *items: object) -> "TraceViewer":
         """Project to ``items``, as :meth:`LazyFrame.select`. Names on raw
         events, with only filters before, are the fields the scan reads: any
-        field, indexed or not, and a bare arg name (``"size"``) reads its
-        ``args.size`` column."""
+        field, indexed or not, and a name without the ``args.`` prefix that
+        is not an envelope field (``"size"``, ``"dur.p99"``) reads its
+        ``args.<name>`` column, as in :meth:`filter`."""
         names = [i for i in items if isinstance(i, str)]
         if items and len(names) == len(items):
             return self._trace(self._tv.select(names))
@@ -216,6 +235,9 @@ class TraceViewer(LazyFrame):
         return self._trace(self._tv.phase(phase))
 
     def time_range(self, begin: float, end: float) -> "TraceViewer":
+        """Keep the events that start in ``[begin, end)``. Busy, concurrency,
+        utilization and active take every event overlapping the window,
+        clipped to it; utilization divides by ``end - begin``."""
         return self._trace(self._tv.time_range(float(begin), float(end)))
 
     def time_bucket(
@@ -233,7 +255,7 @@ class TraceViewer(LazyFrame):
     def resolution(self, cell: Union[int, float, str]) -> "TraceViewer":
         """The grid the occupancy aggregates (busy, concurrency, utilization,
         active) snap interval edges to; a bare number is microseconds. 0 is the
-        exact union. Honored with a ``time_range``."""
+        exact union."""
         us = int(round(coerce_duration(cell, 1e6, "resolution")))
         return self._trace(self._tv.resolution(us))
 
@@ -284,12 +306,44 @@ class TraceViewer(LazyFrame):
         column per arg; op names give one ``<op>_<arg>`` column each."""
         return self._trace(self._tv.agg_numeric_args(*reductions))
 
+    def rows(self, cls: Type[_S]) -> Iterator[_S]:
+        """One ``cls`` instance per selected record, each field set from the
+        column at its path (``None`` when absent). Collects first, so it holds
+        every row; use :meth:`collect` for bulk work."""
+        paths = cls._paths
+        frame = self.select(*dict.fromkeys(paths.values())).collect()
+        data = frame.to_dict()
+        columns = {name: data.get(path) for name, path in paths.items()}
+        for i in range(len(frame)):
+            yield cls(
+                **{name: (col[i] if col is not None else None) for name, col in columns.items()}
+            )
+
     # -- inspection -------------------------------------------------------------------
     def column_info(self) -> Dict[str, str]:
         """Every column the index knows, mapped to its type name (``"int64"``
         / ``"float64"`` / ``"string"``), with a ``resolved.*`` alias per hash
         column. Reads index metadata only."""
         return dict(self._tv.column_info())
+
+    def schema_tree(self) -> Dict[str, Any]:
+        """The paths the files hold, from the index without scanning, nested by
+        ``.`` segments: each node maps a segment to a dict with ``type`` (the
+        observed type), ``count`` (records holding it non-null), ``field`` and
+        ``declared_type`` (the record schema's field, when declared) and
+        ``children`` (the nodes below it); keys without a value are left out.
+        A declared field that no file holds has ``count`` 0."""
+        tree: Dict[str, Any] = {}
+        for leaf in json.loads(self._tv.schema_tree()):
+            nodes = tree
+            *parents, last = leaf["path"].split(".")
+            for part in parents:
+                nodes = nodes.setdefault(part, {}).setdefault("children", {})
+            node = nodes.setdefault(last, {})
+            for key in ("type", "count", "field", "declared_type"):
+                if leaf[key] is not None:
+                    node[key] = leaf[key]
+        return tree
 
     def time_metric(self) -> str:
         """The trace's own time unit (``"us"``/``"ns"``/``"ms"``/``"sec"``)."""

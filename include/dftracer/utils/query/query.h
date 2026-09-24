@@ -41,16 +41,20 @@ class Query {
     bool references(std::string_view field) const {
         return fields_.count(field) > 0;
     }
+    /// The paths used as any(path), sorted.
+    const std::vector<std::string>& any_paths() const { return any_paths_; }
 
    private:
     Query(QueryNodePtr root, std::string source)
         : root_(std::move(root)),
           source_(std::move(source)),
-          fields_(collect_fields(*root_)) {}
+          fields_(collect_fields(*root_)),
+          any_paths_(collect_any_paths(*root_)) {}
 
     QueryNodePtr root_;
     std::string source_;
     dftracer::utils::StringViewSet fields_;
+    std::vector<std::string> any_paths_;
 };
 
 inline auto Expr::build() const { return Query::from_string(to_string()); }

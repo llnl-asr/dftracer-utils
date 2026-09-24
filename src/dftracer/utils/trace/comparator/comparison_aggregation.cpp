@@ -1,8 +1,8 @@
 #include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_logic.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_map.h>
 #include <dftracer/utils/json/json_value.h>
-#include <dftracer/utils/trace/aggregators/aggregation_intern.h>
-#include <dftracer/utils/trace/aggregators/aggregation_logic.h>
-#include <dftracer/utils/trace/aggregators/aggregation_map.h>
 #include <dftracer/utils/trace/comparator/comparison_aggregation.h>
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -16,7 +16,7 @@ namespace dftracer::utils::trace::comparator {
 
 namespace {
 
-using aggregators::AggregationMap;
+using dftracer::utils::index::schemas::dft::agg::AggregationMap;
 using dftracer::utils::trace::DFTracerEvent;
 
 // The three aggregation tiers a session accumulates, one per map_batches slot.
@@ -40,9 +40,11 @@ void merge_into(AggregationMap& dst, AggregationMap& src) {
 
 }  // namespace
 
-coro::CoroTask<aggregators::EventAggregatorOutput> run_comparison_aggregation(
+coro::CoroTask<dftracer::utils::index::schemas::dft::agg::EventAggregatorOutput>
+run_comparison_aggregation(
     CoroScope& /*ctx*/, const std::vector<std::string>& input_files,
-    const aggregators::AggregationConfig& agg_config,
+    const dftracer::utils::index::schemas::dft::agg::AggregationConfig&
+        agg_config,
     const std::optional<query::Query>& query, const std::string& index_dir,
     std::size_t checkpoint_size, bool /*force_rebuild*/,
     std::size_t executor_threads) {
@@ -60,9 +62,11 @@ coro::CoroTask<aggregators::EventAggregatorOutput> run_comparison_aggregation(
 
     // One shared intern (thread-safe get_or_insert) so the per-slot maps use
     // the same string ids and merge key-for-key.
-    auto intern_table = std::make_shared<aggregators::AggInternTable>();
+    auto intern_table = std::make_shared<
+        dftracer::utils::index::schemas::dft::agg::AggInternTable>();
     dftracer::utils::StringIntern& intern = intern_table->intern;
-    const aggregators::AggregationConfig& config = agg_config;
+    const dftracer::utils::index::schemas::dft::agg::AggregationConfig& config =
+        agg_config;
 
     // Mirrors ChunkAggregator's per-event core so results merge identically.
     auto fold = [&config, &intern](Tiers& acc,
@@ -77,16 +81,20 @@ coro::CoroTask<aggregators::EventAggregatorOutput> run_comparison_aggregation(
             DFTracerEvent ev;
             if (!DFTracerEvent::parse(json, ev)) continue;
             if (ev.is_metadata()) continue;
-            auto key = aggregators::build_aggregation_key(ev, config, intern);
+            auto key = dftracer::utils::index::schemas::dft::agg::
+                build_aggregation_key(ev, config, intern);
             if (ev.is_system())
-                aggregators::update_aggregation_entry(ev, config, acc.system,
-                                                      key, intern);
+                dftracer::utils::index::schemas::dft::agg::
+                    update_aggregation_entry(ev, config, acc.system, key,
+                                             intern);
             else if (ev.is_profile())
-                aggregators::update_aggregation_entry(ev, config, acc.profile,
-                                                      key, intern);
+                dftracer::utils::index::schemas::dft::agg::
+                    update_aggregation_entry(ev, config, acc.profile, key,
+                                             intern);
             else
-                aggregators::update_aggregation_entry(ev, config, acc.event,
-                                                      key, intern);
+                dftracer::utils::index::schemas::dft::agg::
+                    update_aggregation_entry(ev, config, acc.event, key,
+                                             intern);
         }
     };
     auto combine = [](Tiers&& a, Tiers&& b) -> Tiers {
@@ -99,7 +107,7 @@ coro::CoroTask<aggregators::EventAggregatorOutput> run_comparison_aggregation(
     auto res = co_await view.map_batches<Tiers>(
         std::move(fold), std::move(combine), executor_threads);
 
-    aggregators::EventAggregatorOutput out;
+    dftracer::utils::index::schemas::dft::agg::EventAggregatorOutput out;
     out.intern = intern_table;
     out.aggregations = std::move(res.value.event);
     out.profile_aggregations = std::move(res.value.profile);

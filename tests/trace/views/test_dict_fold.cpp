@@ -1,5 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/trace/views/dict_fold.h>
+#include <dftracer/utils/index/extensions/dict_fold.h>
+#include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
@@ -11,6 +13,7 @@
 #include "test_view_common.h"
 
 using namespace dftracer::utils::trace::views::detail;
+using namespace dftracer::utils::index::extensions;
 using dftracer::utils::StringIntern;
 
 namespace {
@@ -18,6 +21,10 @@ namespace {
 std::string padded(std::string s) {
     s.resize(s.size() + simdjson::SIMDJSON_PADDING, '\0');
     return s;
+}
+
+std::vector<dftracer::utils::index::Dictionary> dftracer_dictionaries() {
+    return dftracer::utils::index::get_schema("dftracer").dictionaries;
 }
 
 // FH + HH + SH definitions plus a data event the fold must ignore.
@@ -68,9 +75,9 @@ std::string create_metadata_trace(TestEnvironment& env, int n) {
 }  // namespace
 
 TEST_SUITE("DictFold") {
-    // The fold harvests from owned FoldEvents and drives HashTableDictionary's
-    // commit. create_mixed_trace emits no metadata, so its index has no hash
-    // tables for these entries and the commit is a genuine write.
+    // The fold harvests from owned FoldEvents and drives DictionaryRows'
+    // commit. create_mixed_trace emits no metadata, so its index has no
+    // dictionary rows for these entries and the commit is a genuine write.
     TEST_CASE(
         "harvests from FoldEvents and commits under whole-file coverage") {
         TestEnvironment env(200);
@@ -88,7 +95,7 @@ TEST_SUITE("DictFold") {
 
         StringIntern intern;
         auto events = fold_events_of(metadata_lines(), intern);
-        DictFold fold(intern);
+        DictFold fold(intern, dftracer_dictionaries());
         FoldBatch batch{std::span<const FoldEvent>(events), unit};
         fold.step(batch);
         CHECK(fold.entry_count() == 0);  // nothing published before sealing
@@ -109,7 +116,7 @@ TEST_SUITE("DictFold") {
         unit.file_path = "a.pfw.gz";
         StringIntern intern;
         auto events = fold_events_of(metadata_lines(), intern);
-        DictFold fold(intern, /*budget_bytes=*/1);
+        DictFold fold(intern, dftracer_dictionaries(), /*budget_bytes=*/1);
         FoldBatch batch{std::span<const FoldEvent>(events), unit};
         fold.step(batch);
         fold.seal_unit(unit);
@@ -140,10 +147,55 @@ TEST_SUITE("DictFold") {
         vdef.emit_all_metadata = true;
 
         StringIntern intern;
-        DictFold fold(intern);
+        DictFold fold(intern, dftracer_dictionaries());
         std::array<Fold*, 1> folds{&fold};
         fuse(plan, vdef, folds, intern).get();
 
         CHECK(fold.entry_count() == 2);  // FH + HH
+    }
+
+    // FH/HH/SH each land in the index as one row per distinct key, holding
+    // the field their schema dictionary names, and the reverse lookup finds
+    // the key back from that field's value.
+    TEST_CASE("dictionary rows and reverse keys after folding metadata") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        std::string gz = create_mixed_trace(env, 4, 0);
+        std::string idx = determine_index_path(gz, "");
+        {
+            StringSink s;
+            View::from_file(gz, idx).sink_json(s).get();
+        }
+
+        ScanUnit unit;
+        unit.file_path = gz;
+        unit.index_path = idx;
+
+        StringIntern intern;
+        auto events = fold_events_of(metadata_lines(), intern);
+        DictFold fold(intern, dftracer_dictionaries());
+        FoldBatch batch{std::span<const FoldEvent>(events), unit};
+        fold.step(batch);
+        fold.seal_unit(unit);
+
+        CoverageSet whole_file;
+        whole_file.add_file(gz);
+        CHECK(fold.finalize(whole_file).get());
+
+        dftracer::utils::index::store::IndexDatabase db(
+            idx, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
+
+        REQUIRE(db.dict_row("file", "fh1").has_value());
+        CHECK(db.dict_value("file", "fh1", "path") == "/data/a.bin");
+        CHECK(db.dict_keys("file", "path", "/data/a.bin") ==
+              std::vector<std::string>{"fh1"});
+
+        CHECK(db.dict_value("host", "hh1", "name") == "node0");
+        CHECK(db.dict_keys("host", "name", "node0") ==
+              std::vector<std::string>{"hh1"});
+
+        CHECK(db.dict_value("string", "sh1", "value") == "s");
+        CHECK(db.dict_keys("string", "value", "s") ==
+              std::vector<std::string>{"sh1"});
     }
 }

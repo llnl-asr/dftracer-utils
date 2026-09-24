@@ -1,10 +1,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/rocksdb/database.h>
-#include <dftracer/utils/core/rocksdb/db_manager.h>
-#include <dftracer/utils/core/rocksdb/filesystem.h>
-#include <dftracer/utils/core/rocksdb/key_codec.h>
+#include <dftracer/utils/index/store/database.h>
+#include <dftracer/utils/index/store/db_manager.h>
+#include <dftracer/utils/index/store/filesystem.h>
+#include <dftracer/utils/index/store/key_codec.h>
 #include <doctest/doctest.h>
 #include <rocksdb/file_system.h>
 #include <testing_utilities.h>
@@ -13,10 +13,10 @@
 #include <cstring>
 #include <memory>
 
-using dftracer::utils::rocksdb::KeyBuilder;
-using dftracer::utils::rocksdb::KeyCodec;
-using dftracer::utils::rocksdb::RocksDatabase;
-using dftracer::utils::rocksdb::RocksDBManager;
+using dftracer::utils::index::store::KeyBuilder;
+using dftracer::utils::index::store::KeyCodec;
+using dftracer::utils::index::store::RocksDatabase;
+using dftracer::utils::index::store::RocksDBManager;
 
 TEST_SUITE("RocksDBStorage") {
     TEST_CASE("key codec round-trips big-endian integers") {
@@ -41,13 +41,13 @@ TEST_SUITE("RocksDBStorage") {
 
         CHECK(db.is_open());
         CHECK(db.put("hello", "world").ok());
-        CHECK(db.put("k1", "v1", "provenance").ok());
+        CHECK(db.put("k1", "v1", "blob").ok());
 
         std::string value;
         CHECK(db.get("hello", &value).ok());
         CHECK(value == "world");
 
-        CHECK(db.get("k1", &value, "provenance").ok());
+        CHECK(db.get("k1", &value, "blob").ok());
         CHECK(value == "v1");
     }
 
@@ -167,7 +167,7 @@ TEST_SUITE("RocksDBStorage") {
         fs::create_directories(root);
 
         auto file_system =
-            dftracer::utils::rocksdb::make_dftracer_file_system();
+            dftracer::utils::index::store::make_dftracer_file_system();
         auto test_file = (root / "async-read.bin").string();
 
         {

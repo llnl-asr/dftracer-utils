@@ -7,8 +7,8 @@
 
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/core/common/hash/constants.h>
+#include <dftracer/utils/index/schemas/dft/agg/reserved_args.h>
 #include <dftracer/utils/server/viz/internal.h>
-#include <dftracer/utils/trace/aggregators/reserved_args.h>
 #include <simdjson.h>
 
 #include <cmath>
@@ -550,7 +550,7 @@ inline void fold_counter_density(simdjson::dom::element root, double begin,
 
     auto args = root["args"];
     if (args.error() || !args.is_object()) return;
-    namespace agg = trace::aggregators;
+    namespace agg = dftracer::utils::index::schemas::dft::agg;
     for (auto field : args.get_object()) {
         double val = 0;
         auto v = field.value;

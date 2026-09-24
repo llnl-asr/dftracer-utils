@@ -1,15 +1,15 @@
 #include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/rocksdb/database.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/index/cache/rollup_store.h>
+#include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/trace/views/aggfold.h>
 #include <dftracer/utils/trace/views/batch_bridge.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
-#include <dftracer/utils/trace/views/rollup_store.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_executor.h>
@@ -21,6 +21,7 @@
 #include <cctype>
 #include <cmath>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <set>
 #include <span>
@@ -47,31 +48,61 @@ namespace {
 // The frame column name the raw scan produces for `field` fed as a value/by
 // column: a top-level field keeps its name, an arg field becomes args.<name>
 // (canonical_row_column_name), so the group_by references the column the scan
-// emits. Empty field stays empty (Count()'s neutral value column).
-std::string value_col_name(const std::string& field) {
-    return field.empty() ? std::string() : canonical_row_column_name(field);
+// emits. Empty field stays empty (Count()'s neutral value column). A
+// path-decoded record's field is named by its path.
+std::string value_col_name(const std::string& field, bool by_path) {
+    return field.empty() ? std::string()
+                         : canonical_row_column_name(field, by_path);
 }
 
 // A field agg_field_typed_t/agg_field_t derives instead of reading straight
 // (size = io-cat byte size, te = ts+dur). The raw scan builds it as a typed
 // derived column (AGG_DERIVED_PREFIX / derived_agg_column) rather than reading
-// a stored field.
-bool is_derived_field(const std::string& f) { return f == "size" || f == "te"; }
+// a stored field. A path-decoded record has no derived fields.
+bool is_derived_field(const std::string& f, bool by_path) {
+    return !by_path && (f == "size" || f == "te");
+}
 
 // The frame column name a value/by field's group agg reads: a derived field
 // (size/te) keeps its own name (build_row_frame emits it under that name from
 // the derived token), any other field maps through value_col_name.
-std::string value_col(const std::string& field) {
-    return is_derived_field(field) ? field : value_col_name(field);
+std::string value_col(const std::string& field, bool by_path) {
+    return is_derived_field(field, by_path) ? field
+                                            : value_col_name(field, by_path);
 }
 
 // The raw-scan select token that produces a value/by field's column: a derived
 // field routes through AGG_DERIVED_PREFIX (a typed derived column), any other
 // field is selected by its own name. Empty field stays empty.
-std::string value_select_token(const std::string& field) {
+std::string value_select_token(const std::string& field, bool by_path) {
     if (field.empty()) return std::string();
-    return is_derived_field(field) ? std::string(AGG_DERIVED_PREFIX) + field
-                                   : field;
+    return is_derived_field(field, by_path)
+               ? std::string(AGG_DERIVED_PREFIX) + field
+               : field;
+}
+
+bool has_occupancy(const ViewPlan& plan) {
+    return std::any_of(plan.agg.begin(), plan.agg.end(),
+                       [](const AggSpec& s) { return is_occupancy_op(s.op); });
+}
+
+// The raw [lo, hi) a windowed occupancy plan clips its intervals to; ts is
+// integral, so the window's start rule lo <= ts < hi holds on the ceilings.
+std::optional<std::pair<std::uint64_t, std::uint64_t>> occupancy_window(
+    const ViewPlan& plan) {
+    if (!plan.time_range || !has_occupancy(plan)) return std::nullopt;
+    auto edge = [](double v) {
+        return v > 0 ? static_cast<std::uint64_t>(std::ceil(v))
+                     : std::uint64_t{0};
+    };
+    return std::make_pair(edge(plan.time_range->first),
+                          edge(plan.time_range->second));
+}
+
+// Occupancy over a window or in buckets is bounded by them at finalize
+// (agg_clip_occupancy), which needs the whole AggState.
+bool clips_occupancy(const ViewPlan& plan) {
+    return (plan.time_range || plan.time_bucket_us > 0) && has_occupancy(plan);
 }
 
 // ts/dur/te accumulate in the unrounded time_scale domain (agg_fold.h's
@@ -123,14 +154,14 @@ dataframe::Agg to_engine_agg(AggOp op) {
                                  "agg engine: unknown aggregate op");
 }
 
-dataframe::GroupAgg to_group_agg(const AggSpec& spec) {
+dataframe::GroupAgg to_group_agg(const AggSpec& spec, bool by_path) {
     dataframe::GroupAgg g;
     g.op = to_engine_agg(spec.op);
     g.out = agg_col_name(spec);
     g.param = spec.q;
     if (spec.op == AggOp::ArgMax) {
-        g.column = value_col(spec.field);
-        g.by = value_col(spec.by);
+        g.column = value_col(spec.field, by_path);
+        g.by = value_col(spec.by, by_path);
     } else if (is_occupancy_op(spec.op)) {
         // Occupancy has no value field; it reads the raw (ts, dur) pair, with
         // the endpoint-snap tolerance carried in param.
@@ -142,10 +173,10 @@ dataframe::GroupAgg to_group_agg(const AggSpec& spec) {
         // field's per-group stat (FieldStat::n).
         if (!spec.field.empty()) {
             g.op = dataframe::Agg::CountValid;
-            g.column = value_col(spec.field);
+            g.column = value_col(spec.field, by_path);
         }
     } else {
-        g.column = value_col(spec.field);
+        g.column = value_col(spec.field, by_path);
     }
     return g;
 }
@@ -192,7 +223,8 @@ dataframe::Series key_column_to_string(const dataframe::Series& col) {
 bool key_is_resolved(GroupKey::Kind kind) {
     return kind == GroupKey::Kind::FilePath ||
            kind == GroupKey::Kind::FileName ||
-           kind == GroupKey::Kind::HostName || kind == GroupKey::Kind::Rank;
+           kind == GroupKey::Kind::HostName || kind == GroupKey::Kind::Rank ||
+           kind == GroupKey::Kind::Resolved;
 }
 
 // The raw scan/group-by field a key groups on: fhash/hhash for a resolved
@@ -214,6 +246,11 @@ std::string key_group_field(const GroupKey& gk) {
             return std::string(AGG_KEY_ARG_PREFIX) + gk.arg;
         case GroupKey::Kind::Field:
             return std::string(AGG_KEY_FIELD_PREFIX) + gk.arg;
+        case GroupKey::Kind::Resolved: {
+            const std::string_view key = resolved_key_field(gk);
+            if (key == "fhash" || key == "hhash") return std::string(key);
+            return std::string(AGG_KEY_FIELD_PREFIX) + std::string(key);
+        }
         case GroupKey::Kind::Expr:
             return gk.arg;
         default:
@@ -224,14 +261,15 @@ std::string key_group_field(const GroupKey& gk) {
 // Resolve one already-stringified hash group-key column to its resolved name,
 // matching resolve_group_keys/resolve_group_value exactly (same GroupResolver,
 // same FileName-from-FilePath basename derivation).
-dataframe::Series resolve_key_column(const dataframe::Series& hashes,
-                                     const GroupResolver& resolver,
-                                     GroupKey::Kind kind) {
+dataframe::Series resolve_key_column(
+    const dataframe::Series& hashes,
+    const dftracer::utils::index::plan::GroupResolver& resolver,
+    const GroupKey& gk) {
     const std::int64_t n = hashes.length();
     std::vector<std::string> vals(static_cast<std::size_t>(n));
     for (std::int64_t i = 0; i < n; ++i)
-        vals[static_cast<std::size_t>(i)] = resolve_group_value(
-            resolver, kind, std::string(hashes.string_at(i)));
+        vals[static_cast<std::size_t>(i)] =
+            resolve_group_value(resolver, gk, std::string(hashes.string_at(i)));
     return dataframe::Series::strings(vals);
 }
 
@@ -260,10 +298,11 @@ std::string cell_to_key_string(const dataframe::Series& col, std::int64_t r) {
 // rendering). A resolved-name key resolves its hash (or keeps the raw hash when
 // no resolver is loaded); cat is lowercased like agg_fold.h's append_group_dim;
 // the rest keep their rendered value.
-std::string transform_key_base(const GroupKey& gk, std::string raw,
-                               const GroupResolver* resolver) {
+std::string transform_key_base(
+    const GroupKey& gk, std::string raw,
+    const dftracer::utils::index::plan::GroupResolver* resolver) {
     if (key_is_resolved(gk.kind))
-        return resolver ? resolve_group_value(*resolver, gk.kind, raw) : raw;
+        return resolver ? resolve_group_value(*resolver, gk, raw) : raw;
     if (gk.kind == GroupKey::Kind::Cat)
         for (char& ch : raw)
             ch = static_cast<char>(::tolower(static_cast<unsigned char>(ch)));
@@ -476,13 +515,14 @@ dataframe::DataFrame finalize_engine_frame(
             needs_resolver ||
             (key_is_resolved(plan.group_by[j].kind) && !key_transformed[j]);
     if (needs_resolver) {
-        const GroupResolver* resolver = ensure_resolver(plan);
+        const dftracer::utils::index::plan::GroupResolver* resolver =
+            ensure_resolver(plan);
         for (std::size_t j = 0; j < ng; ++j) {
             if (!key_is_resolved(plan.group_by[j].kind) || key_transformed[j])
                 continue;
             const std::size_t idx = off + j;
-            r.columns[idx] = resolve_key_column(r.columns[idx], *resolver,
-                                                plan.group_by[j].kind);
+            r.columns[idx] =
+                resolve_key_column(r.columns[idx], *resolver, plan.group_by[j]);
             r.names[idx] = key_names[j];
         }
     }
@@ -567,16 +607,51 @@ dataframe::DataFrame finalize_engine_result(const dataframe::AggState& st,
     names.reserve(1 + plan.group_by.size());
     if (plan.time_bucket_us > 0) names.push_back("time_bucket");
     for (const auto& gk : plan.group_by) names.push_back(group_col_name(gk));
+    if (clips_occupancy(plan) && dataframe::agg_num_groups(st) > 0) {
+        const auto win = occupancy_window(plan).value_or(std::make_pair(
+            std::uint64_t{0}, std::numeric_limits<std::uint64_t>::max()));
+        dataframe::AggStatePtr clipped = dataframe::agg_clip_occupancy(
+            st, win.first, win.second,
+            static_cast<std::int64_t>(plan.time_bucket_us), plan.time_scale,
+            static_cast<std::int64_t>(plan.bucket_origin_us));
+        return finalize_engine_frame(dataframe::agg_finalize(*clipped, names),
+                                     plan, build_dyn_specs(plan));
+    }
     dataframe::DataFrame r = dataframe::agg_finalize(st, names);
     return finalize_engine_frame(std::move(r), plan, build_dyn_specs(plan));
 }
 
+bool scans_by_overlap(const ViewPlan& plan) {
+    return occupancy_window(plan).has_value();
+}
+
 AggInputSpec make_agg_input_spec(const ViewPlan& plan) {
     AggInputSpec spec;
+    const bool by_path = plan_by_path(plan);
+    spec.by_path = by_path;
     const bool has_bucket = plan.time_bucket_us > 0;
-    const bool has_occ =
-        std::any_of(plan.agg.begin(), plan.agg.end(),
-                    [](const AggSpec& s) { return is_occupancy_op(s.op); });
+    const bool has_occ = has_occupancy(plan);
+    // A windowed occupancy plan scans every event overlapping the window:
+    // occupancy reads the clipped interval, every other aggregate only the
+    // events that start in the window.
+    const auto win = occupancy_window(plan);
+    auto masked = [&](const std::string& tok) {
+        return win && !tok.empty() ? window_token(win->first, win->second, tok)
+                                   : tok;
+    };
+    // Path-decoded records carry their bound time and duration on the event,
+    // not as "ts"/"dur" fields; an unbounded clip reads them unchanged.
+    const bool role_time =
+        by_path && !plan_record_schema(plan).roles.time.empty();
+    const auto clip_or = [&](const char* part) -> std::string {
+        if (win) return clip_token(win->first, win->second, part);
+        if (role_time)
+            return clip_token(0, std::numeric_limits<std::uint64_t>::max(),
+                              part);
+        return part;
+    };
+    const std::string clip_ts = clip_or("ts");
+    const std::string clip_dur = clip_or("dur");
 
     std::vector<std::string> key_fields;
     key_fields.reserve(plan.group_by.size());
@@ -624,7 +699,7 @@ AggInputSpec make_agg_input_spec(const ViewPlan& plan) {
                        [&](const ComputedColumn& c) { return c.name == f; });
         };
         for (const auto& s : plan.agg) {
-            dataframe::GroupAgg g = to_group_agg(s);
+            dataframe::GroupAgg g = to_group_agg(s, by_path);
             // A computed column is read under its own name, not a row column's.
             if (computed_name(s.field)) g.column = s.field;
             if (computed_name(s.by)) g.by = s.by;
@@ -632,9 +707,28 @@ AggInputSpec make_agg_input_spec(const ViewPlan& plan) {
             // agg over a scaled field routes to its pre-scaled column.
             if (is_occupancy_op(s.op)) {
                 g.param = static_cast<double>(plan.occ_cell_us);
+                g.column = clip_ts;
+                g.by = clip_dur;
             } else {
                 g.column = scaled_name(g.column);
                 g.by = scaled_name(g.by);
+                if (win) {
+                    if (g.op == dataframe::Agg::Count) {
+                        g.op = dataframe::Agg::CountValid;
+                        g.column = window_token(win->first, win->second, "");
+                    }
+                    auto mask_col = [&](const std::string& field,
+                                        std::string& col) {
+                        if (field.empty() ||
+                            (needs_value_scale && is_scaled_field(field)))
+                            return;
+                        col = masked(computed_name(field)
+                                         ? field
+                                         : value_select_token(field, by_path));
+                    };
+                    mask_col(s.field, g.column);
+                    mask_col(s.by, g.by);
+                }
             }
             if (s.op == AggOp::ArgMax || s.op == AggOp::SetUnion)
                 text_gaggs.push_back(std::move(g));
@@ -668,26 +762,41 @@ AggInputSpec make_agg_input_spec(const ViewPlan& plan) {
     for (const std::string& f : key_fields) add_field(f);
     for (const ComputedColumn& c : plan.computed)
         for (const std::string& in : c.inputs) add_select(in);
+    std::set<std::string> masked_computed;
     for (const auto& s : plan.agg) {
+        if (win && is_occupancy_op(s.op)) continue;
+        if (win && s.op == AggOp::Count && s.field.empty())
+            add_select(window_token(win->first, win->second, ""));
         // A derived value/by field (size/te) selects its typed derived column.
-        add_field(value_select_token(s.field));
-        add_field(value_select_token(s.by));
+        for (const std::string* f : {&s.field, &s.by}) {
+            if (win && is_computed(*f))
+                masked_computed.insert(*f);
+            else
+                add_field(masked(value_select_token(*f, by_path)));
+        }
     }
-    if (has_bucket) add_field("ts");
+    if (has_bucket) add_field(clip_ts);
     if (has_occ) {
-        add_field("ts");
-        add_field("dur");
+        add_field(clip_ts);
+        add_field(clip_dur);
     }
 
-    for (const ComputedColumn& c : plan.computed) {
+    auto add_computed = [&](const ComputedColumn& c, bool mask) {
         std::vector<std::int32_t> at;
         at.reserve(c.inputs.size());
-        for (const std::string& in : c.inputs)
+        for (const std::string& in : c.inputs) {
+            const std::string tok = mask ? masked(in) : in;
+            add_select(tok);
             at.push_back(static_cast<std::int32_t>(
-                std::find(spec.select.begin(), spec.select.end(), in) -
+                std::find(spec.select.begin(), spec.select.end(), tok) -
                 spec.select.begin()));
-        spec.computed.push_back(
-            {c.name, dataframe::expr_remap_cols(c.expr, at)});
+        }
+        spec.computed.push_back({mask ? masked(c.name) : c.name,
+                                 dataframe::expr_remap_cols(c.expr, at)});
+    };
+    for (const ComputedColumn& c : plan.computed) {
+        add_computed(c, false);
+        if (masked_computed.count(c.name)) add_computed(c, true);
     }
 
     // build_row_frame would pre-scale+round ts/dur; bucketing/occupancy/scaled
@@ -726,7 +835,7 @@ AggInputSpec make_agg_input_spec(const ViewPlan& plan) {
     // fold applies time_scale, floors (ts*scale - origin)/interval toward -inf,
     // rescales by the interval width, and shifts back by origin.
     if (has_bucket) {
-        spec.bucket_ts_src = "ts";
+        spec.bucket_ts_src = clip_ts;
         spec.bucket_scale = plan.time_scale;
         spec.bucket_interval = static_cast<double>(plan.time_bucket_us);
         spec.bucket_w = static_cast<std::int64_t>(plan.time_bucket_us);
@@ -754,10 +863,12 @@ AggInputSpec make_agg_input_spec(const ViewPlan& plan) {
         // Sources are select tokens (positional on the streaming path); the C++
         // path maps each to its frame column via canonical_row_column_name
         // (te's derived token becomes "te").
-        if (need_ts && in_select("ts")) spec.scale_ts_src = "ts";
-        if (need_dur && in_select("dur")) spec.scale_dur_src = "dur";
-        if (need_te && in_select(value_select_token("te")))
-            spec.scale_te_src = value_select_token("te");
+        if (need_ts && in_select(masked("ts")))
+            spec.scale_ts_src = masked("ts");
+        if (need_dur && in_select(masked("dur")))
+            spec.scale_dur_src = masked("dur");
+        if (need_te && in_select(masked(value_select_token("te", by_path))))
+            spec.scale_te_src = masked(value_select_token("te", by_path));
     }
 
     return spec;
@@ -783,7 +894,7 @@ static double cell_as_double(const dataframe::Series& c, std::int64_t r) {
 static void append_transform_columns(
     dataframe::DataFrame& frame,
     const std::vector<AggInputSpec::Transform>& transforms,
-    const GroupResolver* resolver) {
+    const dftracer::utils::index::plan::GroupResolver* resolver) {
     const std::int64_t n = frame.num_rows();
     for (const AggInputSpec::Transform& t : transforms) {
         const dataframe::Series& src = frame.columns[static_cast<std::size_t>(
@@ -801,10 +912,11 @@ static void append_transform_columns(
 dataframe::DataFrame build_agg_input_frame(
     const std::vector<FoldEvent>& events,
     const dftracer::utils::StringIntern& intern, const AggInputSpec& spec,
-    const GroupResolver* resolver) {
-    dataframe::DataFrame f = events_to_frame(
-        events, intern,
-        ColumnSpec{spec.select, spec.base_time_scale, nullptr, spec.emit_dyn});
+    const dftracer::utils::index::plan::GroupResolver* resolver) {
+    dataframe::DataFrame f =
+        events_to_frame(events, intern,
+                        ColumnSpec{spec.select, spec.base_time_scale, nullptr,
+                                   spec.emit_dyn, spec.by_path});
     const std::int64_t n = f.num_rows();
 
     append_transform_columns(f, spec.transforms, resolver);
@@ -814,7 +926,7 @@ dataframe::DataFrame build_agg_input_frame(
         inputs.reserve(spec.select.size());
         for (const std::string& tok : spec.select)
             inputs.push_back(&f.columns[static_cast<std::size_t>(
-                f.column_index(canonical_row_column_name(tok)))]);
+                f.column_index(canonical_row_column_name(tok, spec.by_path)))]);
         std::vector<std::pair<std::string, dataframe::Series>> out;
         out.reserve(spec.computed.size());
         for (const AggInputSpec::Computed& c : spec.computed)
@@ -835,7 +947,7 @@ dataframe::DataFrame build_agg_input_frame(
     auto col_by_token =
         [&](const std::string& tok) -> const dataframe::Series& {
         return f.columns[static_cast<std::size_t>(
-            f.column_index(canonical_row_column_name(tok)))];
+            f.column_index(canonical_row_column_name(tok, spec.by_path)))];
     };
 
     if (!spec.cat_lower_src.empty()) {
@@ -952,7 +1064,7 @@ coro::CoroTask<EnginePrep> prepare_engine_group(const ViewPlan& plan) {
     // then group over the in-memory frame.
     if (!spec.transforms.empty()) {
         dataframe::DataFrame frame = co_await lf.collect();
-        const GroupResolver* resolver =
+        const dftracer::utils::index::plan::GroupResolver* resolver =
             spec.transform_wants_resolver ? ensure_resolver(plan) : nullptr;
         append_transform_columns(frame, spec.transforms, resolver);
         lf =
@@ -1029,15 +1141,20 @@ coro::CoroTask<dataframe::DataFrame> run_collect_via_engine(
     if (plan.materialize && !plan.limit && !plan.offset) {
         auto state = co_await ep.lf->collect_group_state(
             ep.group_key_names, ep.gaggs, ep.dyn_specs, ep.dyn_prefix);
-        const std::string rdir = rollup_index_path(plan);
+        const std::string rdir =
+            dftracer::utils::index::cache::rollup_cache_path(plan);
+        if (!rdir.empty()) plan_record_schema(plan);
         if (!rdir.empty()) {
             try {
-                auto db = open_rollup_db(
-                    rdir, rocksdb::RocksDatabase::OpenMode::ReadWrite);
+                auto db = dftracer::utils::index::cache::open_rollup_db(
+                    rdir, dftracer::utils::index::store::RocksDatabase::
+                              OpenMode::ReadWrite);
                 if (db)
-                    persist_rollup(*db, plan_signature(plan),
-                                   rest_signature(plan), plan.time_bucket_us,
-                                   plan.group_by, *state);
+                    dftracer::utils::index::cache::persist_rollup(
+                        *db,
+                        dftracer::utils::index::cache::plan_signature(plan),
+                        dftracer::utils::index::cache::rest_signature(plan),
+                        plan.time_bucket_us, plan.group_by, *state);
             } catch (const std::exception& e) {
                 DFTRACER_UTILS_LOG_WARN("rollup materialize skipped: %s",
                                         e.what());
@@ -1046,10 +1163,11 @@ coro::CoroTask<dataframe::DataFrame> run_collect_via_engine(
         co_return finalize_engine_result(*state, plan);
     }
 
-    // A global aggregation (no group_by, no time_bucket) is one group; the
-    // streaming group_by wants at least one key column, so fold it into a
-    // single AggState (empty key list) and finalize that.
-    if (plan.group_by.empty() && plan.time_bucket_us == 0) {
+    // A global aggregation (no group_by, no time_bucket) is one group, which
+    // the streaming group_by cannot key, and clipped occupancy needs the whole
+    // state; both fold into a single AggState and finalize that.
+    if ((plan.group_by.empty() && plan.time_bucket_us == 0) ||
+        clips_occupancy(plan)) {
         auto state = co_await ep.lf->collect_group_state(
             ep.group_key_names, ep.gaggs, ep.dyn_specs, ep.dyn_prefix);
         co_return finalize_engine_result(*state, plan);

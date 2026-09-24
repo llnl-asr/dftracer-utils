@@ -5,8 +5,8 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/io/io.h>
+#include <dftracer/utils/index/gzip/gzip_member_record.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
-#include <dftracer/utils/utilities/indexer/internal/gzip_member_record.h>
 #include <dftracer/utils/utilities/reader/internal/member_decode_cache.h>
 #include <sys/stat.h>
 
@@ -61,8 +61,7 @@ class ReaderInflater {
     /// boundary, so this just restarts the forward walk at member.c_offset.
     coro::CoroTask<bool> seek_to_member(
         int fd, off_t& offset,
-        const dftracer::utils::utilities::indexer::internal::GzipMemberRecord&
-            member,
+        const dftracer::utils::index::gzip::GzipMemberRecord& member,
         std::size_t expected_out = 0) {
         DFTRACER_UTILS_LOG_DEBUG("Seeking to member %" PRIu64
                                  ": c_offset=%" PRIu64 ", uc_offset=%" PRIu64,
@@ -216,7 +215,18 @@ class ReaderInflater {
                 // BadData can just mean the member is not fully buffered yet;
                 // pull more input before treating it as corrupt.
             }
-            if (next_read_ >= file_size_) co_return false;  // truncated member
+            if (next_read_ >= file_size_) {
+                // The last member was cut short: keep its complete lines.
+                auto keep = compress::decode_truncated_member(
+                    comp_.data(), comp_.size(), member_owned_);
+                if (!keep) co_return false;
+                member_data_ = member_owned_.data();
+                member_len_ = *keep;
+                comp_off_ = file_size_;
+                comp_.clear();
+                offset = static_cast<off_t>(comp_off_);
+                co_return true;
+            }
             const std::size_t want = static_cast<std::size_t>(
                 std::min<std::uint64_t>(READ_CHUNK, file_size_ - next_read_));
             const std::size_t old = comp_.size();
@@ -260,7 +270,14 @@ class ReaderInflater {
                     continue;
                 }
             }
-            if (next_read >= file_size) co_return std::nullopt;
+            if (next_read >= file_size) {
+                // The last member was cut short: keep its complete lines.
+                auto keep = compress::decode_truncated_member(comp.data(),
+                                                              comp.size(), out);
+                if (!keep) co_return std::nullopt;
+                out.resize(*keep);
+                co_return DecodedMember{std::move(out), comp.size()};
+            }
             const std::size_t want = static_cast<std::size_t>(
                 std::min<std::uint64_t>(READ_CHUNK, file_size - next_read));
             const std::size_t old = comp.size();

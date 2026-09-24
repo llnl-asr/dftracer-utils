@@ -30,7 +30,9 @@ std::int64_t column_index(const dataframe::DataFrame& b,
 }
 
 const dataframe::Series& require_column(const dataframe::DataFrame& b,
-                                        const std::string& path) {
+                                        const FieldNode& field) {
+    if (field.any) unsupported("any() has no dataframe-mask lowering");
+    const std::string& path = field.path;
     std::int64_t i = column_index(b, path);
     if (i < 0) unsupported("field not materialized: " + path);
     return b.columns[static_cast<std::size_t>(i)];
@@ -115,14 +117,14 @@ dataframe::Series lower(const QueryNode& node, const dataframe::DataFrame& b) {
         [&](const auto& n) -> dataframe::Series {
             using T = std::decay_t<decltype(n)>;
             if constexpr (std::is_same_v<T, CompareNode>) {
-                return compare_mask(require_column(b, n.field.path), n.op,
+                return compare_mask(require_column(b, n.field), n.op,
                                     n.value.value);
             } else if constexpr (std::is_same_v<T, InNode>) {
-                return or_reduce_equals(require_column(b, n.field.path),
-                                        n.values, false);
+                return or_reduce_equals(require_column(b, n.field), n.values,
+                                        false);
             } else if constexpr (std::is_same_v<T, NotInNode>) {
-                return or_reduce_equals(require_column(b, n.field.path),
-                                        n.values, true);
+                return or_reduce_equals(require_column(b, n.field), n.values,
+                                        true);
             } else if constexpr (std::is_same_v<T, MatchNode>) {
                 unsupported("pattern match has no dataframe-mask lowering");
             } else if constexpr (std::is_same_v<T, AndNode>) {

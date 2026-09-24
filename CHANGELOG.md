@@ -97,6 +97,10 @@ and this project aims to adhere to [Semantic Versioning](https://semver.org/spec
   and its `offset` / `limit` trim the merged result instead of each shard's.
 - The server, `dftracer_view`, `dftracer_run`, the statistics tools and the
   C ABI run on the same `View`; the separate builder API is internal.
+- A shard set aggregates its shards concurrently, as many at once as the
+  spill budget gives each at least 64 MB, and `collect_all` splits each
+  plan's spill budget across the plans it runs together, so concurrent work
+  stays within the budget.
 
 ### Removed
 

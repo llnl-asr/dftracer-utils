@@ -62,6 +62,7 @@ class ShardedView {
         : shard_dirs_(std::move(shard_dirs)) {}
 
     std::vector<ViewFile> shard_view_files(const std::string& shard_dir) const;
+    std::vector<View> shards(const Configure& configure) const;
 
     std::vector<std::string> shard_dirs_;
 };

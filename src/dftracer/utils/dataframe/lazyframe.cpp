@@ -5647,11 +5647,13 @@ coro::CoroTask<std::vector<DataFrame>> collect_all(
     }
     co_await batch_leaves(std::move(leaves), roots);
 
-    // Drained together: a streamed batch feeds every root from one read.
+    // Drained together: a streamed batch feeds every root from one read, so
+    // the roots run at once and split each one's spill budget between them.
     std::vector<coro::CoroTask<DataFrame>> runs;
     runs.reserve(trees.size());
     for (PlannedTree& t : trees) {
-        const std::uint64_t budget = t.memory_budget;
+        const std::uint64_t budget =
+            share_spill_budget(t.memory_budget, trees.size());
         runs.push_back(collect_plan(finish_tree(std::move(t)), budget, 0));
     }
     co_return co_await coro::when_all(std::move(runs));

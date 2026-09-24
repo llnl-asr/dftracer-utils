@@ -23,6 +23,17 @@ static constexpr std::uint64_t NO_SPILL_BUDGET = ~std::uint64_t{0};
 /// treat 0 identically.
 std::uint64_t resolve_spill_budget(std::uint64_t configured);
 
+/// One of `ways` concurrent runs' share of the spill budget `configured`, so
+/// the shares add up to at most the resolved budget. `configured` is returned
+/// unchanged when `ways <= 1` or it is NO_SPILL_BUDGET; a share is never 0,
+/// which would mean "auto".
+std::uint64_t share_spill_budget(std::uint64_t configured, std::size_t ways);
+
+/// How many of `n` independent runs to start at once under the spill budget
+/// `configured` so each share is at least MIN_MEMORY_BUDGET_BYTES; in [1, n]
+/// (n when `configured` is NO_SPILL_BUDGET).
+std::size_t concurrent_spill_ways(std::uint64_t configured, std::size_t n);
+
 /// Peak resident memory of a read + aggregate + HLM pass is ~this multiple of
 /// the aggregated result's own size: at the peak the gathered partials, the
 /// group-by intermediate, and the final frame are all live at once.

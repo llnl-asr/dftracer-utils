@@ -1,5 +1,6 @@
 #include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/common/memory_budget.h>
 #include <dftracer/utils/core/common/string_intern.h>
 #include <dftracer/utils/core/rocksdb/column_families.h>
 #include <dftracer/utils/core/rocksdb/database.h>
@@ -12,11 +13,43 @@
 #include <dftracer/utils/trace/views/sharded_view.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 
+#include <algorithm>
+#include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace dftracer::utils::trace::views {
+
+namespace {
+
+// Each shard's aggregate_partial, run concurrently in waves as wide as the
+// spill budget allows, the budget split evenly across a wave.
+coro::CoroTask<std::vector<std::string>> collect_partials(
+    std::vector<View> shards) {
+    std::vector<std::string> partials;
+    if (shards.empty()) co_return partials;
+    const std::uint64_t configured = shards.front().memory_budget_bytes();
+    const std::size_t ways = concurrent_spill_ways(configured, shards.size());
+    const std::uint64_t share = share_spill_budget(configured, ways);
+    partials.reserve(shards.size());
+    for (std::size_t at = 0; at < shards.size(); at += ways) {
+        const std::size_t end = std::min(shards.size(), at + ways);
+        std::vector<dataframe::LazyResult<std::string>> plans;
+        plans.reserve(end - at);
+        for (std::size_t i = at; i < end; ++i)
+            plans.push_back(shards[i].memory_budget(share).aggregate_partial());
+        std::vector<coro::CoroTask<std::string>> runs;
+        runs.reserve(plans.size());
+        for (const auto& p : plans) runs.push_back(p.collect());
+        std::vector<std::string> done =
+            co_await coro::when_all(std::move(runs));
+        for (std::string& d : done) partials.push_back(std::move(d));
+    }
+    co_return partials;
+}
+
+}  // namespace
 
 ShardedView ShardedView::from_shard_dirs(std::vector<std::string> shard_dirs) {
     return ShardedView(std::move(shard_dirs));
@@ -65,36 +98,35 @@ std::vector<ViewFile> ShardedView::shard_view_files(
     return files;
 }
 
-coro::CoroTask<dftracer::utils::dataframe::DataFrame> ShardedView::aggregate(
-    Configure configure) const {
-    std::vector<std::string> partials;
-    partials.reserve(shard_dirs_.size());
+std::vector<View> ShardedView::shards(const Configure& configure) const {
+    std::vector<View> out;
+    out.reserve(shard_dirs_.size());
     for (const auto& dir : shard_dirs_) {
         std::vector<ViewFile> files = shard_view_files(dir);
         if (files.empty()) continue;
-        View shard_view = configure(View::from_files(std::move(files)));
-        partials.push_back(co_await shard_view.aggregate_partial());
+        out.push_back(configure(View::from_files(std::move(files))));
     }
+    return out;
+}
+
+coro::CoroTask<dftracer::utils::dataframe::DataFrame> ShardedView::aggregate(
+    Configure configure) const {
+    std::vector<View> views = shards(configure);
+    std::vector<std::string> partials =
+        co_await collect_partials(std::move(views));
 
     std::vector<std::string_view> pv(partials.begin(), partials.end());
-    View merger = configure(View::from_files({}));
-    co_return merger.merge_partials_to_table(pv);
+    co_return configure(View::from_files({})).merge_partials(pv);
 }
 
 coro::CoroTask<ExportStats> ShardedView::aggregate_counters(
     Configure configure, ExportSink& sink) const {
-    std::vector<std::string> partials;
-    partials.reserve(shard_dirs_.size());
-    for (const auto& dir : shard_dirs_) {
-        std::vector<ViewFile> files = shard_view_files(dir);
-        if (files.empty()) continue;
-        View shard_view = configure(View::from_files(std::move(files)));
-        partials.push_back(co_await shard_view.aggregate_partial());
-    }
+    std::vector<View> views = shards(configure);
+    std::vector<std::string> partials =
+        co_await collect_partials(std::move(views));
 
     std::vector<std::string_view> pv(partials.begin(), partials.end());
-    View merger = configure(View::from_files({}));
-    co_return merger.merge_counter_partials(pv, sink);
+    co_return configure(View::from_files({})).merge_counter_partials(pv, sink);
 }
 
 void write_shard_set(const std::string& root,

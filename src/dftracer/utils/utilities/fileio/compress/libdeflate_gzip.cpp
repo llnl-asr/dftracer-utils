@@ -1,10 +1,36 @@
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <libdeflate.h>
 
+#include <cstddef>
+
 namespace dftracer::utils::utilities::fileio::compress {
 
+namespace {
+
+// libdeflate selects its crc32, adler32 and inflate kernels (and reads the CPU
+// features) on first use by writing unsynchronized globals. Resolve them once,
+// under a function-local static, so concurrent codecs only read them.
+void resolve_dispatch() {
+    static const bool RESOLVED = [] {
+        static const unsigned char EMPTY_BLOCK[] = {0x03, 0x00};
+        unsigned char byte = 0;
+        libdeflate_crc32(0, &byte, 0);
+        libdeflate_adler32(1, &byte, 0);
+        if (libdeflate_decompressor* d = libdeflate_alloc_decompressor()) {
+            std::size_t n = 0;
+            libdeflate_deflate_decompress(d, EMPTY_BLOCK, sizeof(EMPTY_BLOCK),
+                                          &byte, 0, &n);
+            libdeflate_free_decompressor(d);
+        }
+        return true;
+    }();
+    (void)RESOLVED;
+}
+
+}  // namespace
+
 GzipMemberDecompressor::GzipMemberDecompressor()
-    : d_(libdeflate_alloc_decompressor()) {}
+    : d_((resolve_dispatch(), libdeflate_alloc_decompressor())) {}
 
 GzipMemberDecompressor::~GzipMemberDecompressor() {
     if (d_) libdeflate_free_decompressor(d_);
@@ -70,7 +96,7 @@ GzipMemberDecompressor::decompress_member(const void* comp,
 }
 
 GzipMemberCompressor::GzipMemberCompressor(int level)
-    : c_(libdeflate_alloc_compressor(level)) {}
+    : c_((resolve_dispatch(), libdeflate_alloc_compressor(level))) {}
 
 GzipMemberCompressor::~GzipMemberCompressor() {
     if (c_) libdeflate_free_compressor(c_);

@@ -6,6 +6,7 @@
 #include <doctest/doctest.h>
 
 #include <fstream>
+#include <functional>
 #include <map>
 #include <string>
 
@@ -60,7 +61,6 @@ TEST_SUITE("stats via View") {
                                         .group_by({GroupKey::cat()})
                                         .agg({{AggOp::Count, "", "n"}})
                                         .collect()
-                                        .collect()
                                         .get();
 
         // num_categories == distinct groups; total events == sum of counts.
@@ -78,7 +78,6 @@ TEST_SUITE("stats via View") {
                                          .group_by({GroupKey::name()})
                                          .agg({{AggOp::Count, "", "n"}})
                                          .collect()
-                                         .collect()
                                          .get();
         CHECK(names.num_rows() > 0);  // num_unique_names
         CHECK(sum_i64(names, "n") == 50);
@@ -87,7 +86,6 @@ TEST_SUITE("stats via View") {
             View::from_file(gz, idx)
                 .group_by({GroupKey::pid(), GroupKey::tid()})
                 .agg({{AggOp::Count, "", "n"}})
-                .collect()
                 .collect()
                 .get();
         CHECK(pt.num_rows() > 0);  // num_pid_tids
@@ -180,10 +178,16 @@ TEST_SUITE("stats via View") {
             "materialize",
             [&](dftracer::utils::CoroScope&)
                 -> dftracer::utils::coro::CoroTask<void> {
-                auto run = View::from_file(gz, idx).session();
-                run.materialize({GroupKey::cat()}, {{AggOp::Count, "", "n"}});
-                run.materialize({GroupKey::name()}, {{AggOp::Count, "", "n"}});
-                co_await run.execute();
+                dataframe::LazyFrame plan =
+                    View::from_file(gz, idx).branch([](ViewSession& s) {
+                        s.materialize({GroupKey::cat()},
+                                      {{AggOp::Count, "", "n"}});
+                        s.materialize({GroupKey::name()},
+                                      {{AggOp::Count, "", "n"}});
+                        return std::function<void(const ExportStats&)>(
+                            [](const ExportStats&) {});
+                    });
+                co_await plan.collect();
             });
 
         // Both rollups are now reconstructable with no scan.
@@ -212,25 +216,38 @@ TEST_SUITE("stats via View") {
             "materialize",
             [&](dftracer::utils::CoroScope&)
                 -> dftracer::utils::coro::CoroTask<void> {
-                auto r = View::from_file(gz, idx).session();
-                r.materialize({GroupKey::cat()}, {{AggOp::Count, "", "n"}});
-                r.materialize({GroupKey::name()}, {{AggOp::Count, "", "n"}});
-                co_await r.execute();
+                dataframe::LazyFrame plan =
+                    View::from_file(gz, idx).branch([](ViewSession& s) {
+                        s.materialize({GroupKey::cat()},
+                                      {{AggOp::Count, "", "n"}});
+                        s.materialize({GroupKey::name()},
+                                      {{AggOp::Count, "", "n"}});
+                        return std::function<void(const ExportStats&)>(
+                            [](const ExportStats&) {});
+                    });
+                co_await plan.collect();
             });
 
         ExportStats stats;
         std::int64_t cat_sum = 0;
-        rt.run_blocking("collect",
-                        [&](dftracer::utils::CoroScope&)
-                            -> dftracer::utils::coro::CoroTask<void> {
-                            auto r = View::from_file(gz, idx).session();
-                            auto cat = r.collect({GroupKey::cat()},
-                                                 {{AggOp::Count, "", "n"}});
-                            auto name = r.collect({GroupKey::name()},
-                                                  {{AggOp::Count, "", "n"}});
-                            stats = co_await r.execute();
-                            cat_sum = sum_i64(cat.get(), "n");
-                        });
+        rt.run_blocking(
+            "collect",
+            [&](dftracer::utils::CoroScope&)
+                -> dftracer::utils::coro::CoroTask<void> {
+                dataframe::LazyFrame plan =
+                    View::from_file(gz, idx).branch([&](ViewSession& s) {
+                        auto cat = s.collect({GroupKey::cat()},
+                                             {{AggOp::Count, "", "n"}});
+                        auto name = s.collect({GroupKey::name()},
+                                              {{AggOp::Count, "", "n"}});
+                        return std::function<void(const ExportStats&)>(
+                            [&, cat](const ExportStats& st) {
+                                stats = st;
+                                cat_sum = sum_i64(cat.get(), "n");
+                            });
+                    });
+                co_await plan.collect();
+            });
 
         // Both branches were served from rollups, so nothing was scanned.
         CHECK(stats.chunks_scanned == 0);
@@ -252,11 +269,17 @@ TEST_SUITE("stats via View") {
             "spill",
             [&](dftracer::utils::CoroScope&)
                 -> dftracer::utils::coro::CoroTask<void> {
-                auto run = View::from_file(gz, idx).memory_budget(1).session();
-                auto c =
-                    run.collect({GroupKey::cat()}, {{AggOp::Count, "", "n"}});
-                co_await run.execute();
-                cats = std::move(c.get());
+                dataframe::LazyFrame plan =
+                    View::from_file(gz, idx).memory_budget(1).branch(
+                        [&](ViewSession& s) {
+                            auto c = s.collect({GroupKey::cat()},
+                                               {{AggOp::Count, "", "n"}});
+                            return std::function<void(const ExportStats&)>(
+                                [&, c](const ExportStats&) {
+                                    cats = std::move(c.get());
+                                });
+                        });
+                co_await plan.collect();
             });
         CHECK(cats.num_rows() == 2);
         CHECK(sum_i64(cats, "n") == 50);
@@ -306,7 +329,6 @@ TEST_SUITE("stats via View") {
                                            {AggOp::Max, "dur", "dmax"},
                                            {AggOp::Min, "ts", "tmin"},
                                            {AggOp::Max, "ts", "tmax"}})
-                                     .collect()
                                      .collect()
                                      .get();
         REQUIRE(d.num_rows() == 2);

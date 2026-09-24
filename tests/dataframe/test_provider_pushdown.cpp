@@ -199,7 +199,7 @@ void fixture_destroy(void*) {}
 
 std::shared_ptr<Source> make_fixture_source(FixtureConfig& cfg) {
     static const dftu_source_vt vt = {fixture_schema, fixture_scan,
-                                      fixture_destroy, nullptr};
+                                      fixture_destroy, nullptr, nullptr};
     return make_provider_source(vt, &cfg);
 }
 

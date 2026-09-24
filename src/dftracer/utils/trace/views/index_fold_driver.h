@@ -8,6 +8,7 @@
 #include <dftracer/utils/utilities/indexer/index_visitor.h>
 #include <simdjson.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <span>
 #include <string>
@@ -36,6 +37,10 @@ class IndexFoldDriver : public utilities::indexer::IndexVisitor {
         for (auto* f : folds_) {
             needs_args_ |= f->needs_args();
             capture_schema_ |= f->wants_schema();
+            for (std::string& name : f->extra_captures())
+                if (std::find(extra_fields_.begin(), extra_fields_.end(),
+                              name) == extra_fields_.end())
+                    extra_fields_.push_back(std::move(name));
         }
     }
 

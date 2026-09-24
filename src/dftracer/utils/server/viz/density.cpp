@@ -624,7 +624,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
         limit > 0 ? static_cast<std::uint64_t>(limit) : 0;
     bool single_file = !params.get("file").empty();
     auto cancel_pred = [&req]() { return req.cancel_token.cancelled(); };
-    // Build a window View over the target files. build_viz_view puts the ts
+    // Build a window view over the target files. build_viz_view puts the ts
     // window into the per-event query; an explicit ?file= scans every chunk
     // (cached per-chunk bounds can be wrong under clock skew), so skip the
     // time_range chunk pruning then - the per-event filter still applies.
@@ -641,6 +641,9 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
         if (!single_file) v = v.time_range(lo, hi);
         return v;
     };
+    auto capped = [scan_cap](views::View v) {
+        return scan_cap > 0 ? v.head(static_cast<std::int64_t>(scan_cap)) : v;
+    };
 
     // Number of density columns spanning [begin, end]; counter series share
     // this column grid.
@@ -653,65 +656,76 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     // into per-(name.arg) counter blocks on the same column grid, so counters
     // land in the same density map and render as ordinary events. The two
     // phases split as fused partition branches so a single decode feeds both.
-    auto p1run = make_window_view(begin, end)
-                     .phase(views::Phase::Any)
-                     .limit(scan_cap)
-                     .session();
-    auto ev_out = p1run.fold<Acc>(
-        query::parse_or_throw("ph == 1 or ph == \"X\""),
-        [&group_col, threshold, begin](Acc& acc, const auto& jv,
-                                       std::string_view raw) {
-            double dur = 0;
-            if (!fold_density(jv.element(), threshold, begin, acc.dens, &dur,
-                              group_col)) {
-                acc.big.emplace_back(raw);
-                acc.big_dur.push_back(dur);
-            }
-            if (dur > acc.max_dur) acc.max_dur = dur;
-        },
-        merge_acc);
-    auto cs_out = p1run.fold<Acc>(
-        query::parse_or_throw("ph == 2 or ph == \"C\""),
-        [begin, threshold, ncols](Acc& acc, const auto& jv, std::string_view) {
-            fold_counter_density(jv.element(), begin, threshold, ncols,
-                                 acc.dens);
-        },
-        merge_acc);
-    // ph=3 SELECTIVE-aggregation records: the individual events were dropped at
-    // capture time, so keep each whole (all args intact for selection) and give
-    // it a renderable span below once the aggregation window is known.
-    auto ag_out = p1run.fold<Acc>(
-        query::parse_or_throw("ph == 3 or ph == \"A\""),
-        [](Acc& acc, const auto& jv, std::string_view raw) {
-            collect_aggregated(jv.element(), raw, acc.agg);
-        },
-        merge_acc);
-    auto p1 = co_await p1run.execute();
-    bool truncated = p1.truncated;
+    Acc ev_out, cs_out, ag_out;
+    bool truncated = false;
+    auto pass1 = [&](views::ViewSession& p1run) {
+        auto ev_h = p1run.fold<Acc>(
+            query::parse_or_throw("ph == 1 or ph == \"X\""),
+            [&group_col, threshold, begin](Acc& acc, const auto& jv,
+                                           std::string_view raw) {
+                double dur = 0;
+                if (!fold_density(jv.element(), threshold, begin, acc.dens,
+                                  &dur, group_col)) {
+                    acc.big.emplace_back(raw);
+                    acc.big_dur.push_back(dur);
+                }
+                if (dur > acc.max_dur) acc.max_dur = dur;
+            },
+            merge_acc);
+        auto cs_h = p1run.fold<Acc>(
+            query::parse_or_throw("ph == 2 or ph == \"C\""),
+            [begin, threshold, ncols](Acc& acc, const auto& jv,
+                                      std::string_view) {
+                fold_counter_density(jv.element(), begin, threshold, ncols,
+                                     acc.dens);
+            },
+            merge_acc);
+        // ph=3 SELECTIVE-aggregation records: the individual events were
+        // dropped at capture time, so keep each whole (all args intact for
+        // selection) and give it a renderable span below once the aggregation
+        // window is known.
+        auto ag_h = p1run.fold<Acc>(
+            query::parse_or_throw("ph == 3 or ph == \"A\""),
+            [](Acc& acc, const auto& jv, std::string_view raw) {
+                collect_aggregated(jv.element(), raw, acc.agg);
+            },
+            merge_acc);
+        return std::function<void(const views::ExportStats&)>(
+            [&, ev_h, cs_h, ag_h](const views::ExportStats& st) mutable {
+                ev_out = std::move(ev_h.get());
+                cs_out = std::move(cs_h.get());
+                ag_out = std::move(ag_h.get());
+                truncated = st.truncated;
+            });
+    };
+    dataframe::LazyFrame p1 =
+        capped(make_window_view(begin, end).phase(views::Phase::Any))
+            .branch(pass1);
+    co_await p1.collect();
 
-    DensityMap dens = std::move(ev_out->dens);
+    DensityMap dens = std::move(ev_out.dens);
     // Fold the counter blocks into the same density map (disjoint keys:
     // counters carry the series identity in the density key's group).
-    for (auto& [k, a] : cs_out->dens) {
+    for (auto& [k, a] : cs_out.dens) {
         auto it = dens.find(k);
         if (it == dens.end())
             dens.emplace(k, std::move(a));
         else
             it->second.merge_from(a);
     }
-    std::vector<std::string> big = std::move(ev_out->big);
-    std::vector<double> big_dur = std::move(ev_out->big_dur);
+    std::vector<std::string> big = std::move(ev_out.big);
+    std::vector<double> big_dur = std::move(ev_out.big_dur);
     // Longest event scanned (folded ones included); the client feeds it back as
     // `lookback` so deep zooms still catch long enclosing events.
-    double max_dur = ev_out->max_dur;
+    double max_dur = ev_out.max_dur;
 
     // Aggregation window, from the ts spacing of the in-window aggregates, with
     // the trace-declared cfg as cross-check and single-window fallback.
     double agg_interval = 0;
-    if (trace_has_agg || !ag_out->agg.empty()) {
+    if (trace_has_agg || !ag_out.agg.empty()) {
         std::vector<double> ats;
-        ats.reserve(ag_out->agg.size());
-        for (const auto& r : ag_out->agg) ats.push_back(r.ts);
+        ats.reserve(ag_out.agg.size());
+        for (const auto& r : ag_out.agg) ats.push_back(r.ts);
         agg_interval = infer_agg_interval(std::move(ats));
         double cfg_native = cfg_agg_interval;
         if (cfg_agg_interval > 0 &&
@@ -738,18 +752,18 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
         double asb = begin - agg_interval;
         if (asb < 0) asb = 0;
         if (asb < begin) {
-            auto er = make_window_view(asb, begin)
-                          .phase(views::Phase::Any)
-                          .limit(scan_cap)
-                          .session();
-            auto eo = er.fold<Acc>(
-                query::parse_or_throw("ph == 3 or ph == \"A\""),
-                [](Acc& acc, const auto& jv, std::string_view raw) {
-                    collect_aggregated(jv.element(), raw, acc.agg);
-                },
-                merge_acc);
-            co_await er.execute();
-            for (auto& r : eo->agg) ag_out->agg.emplace_back(std::move(r));
+            dataframe::LazyResult<Acc> er =
+                capped(make_window_view(asb, begin).phase(views::Phase::Any))
+                    .branch<Acc>([&](views::ViewSession& s) {
+                        return s.fold<Acc>(
+                            query::parse_or_throw("ph == 3 or ph == \"A\""),
+                            [](Acc& acc, const auto& jv, std::string_view raw) {
+                                collect_aggregated(jv.element(), raw, acc.agg);
+                            },
+                            merge_acc);
+                    });
+            Acc eo = co_await er.collect();
+            for (auto& r : eo.agg) ag_out.agg.emplace_back(std::move(r));
         }
     }
 
@@ -885,16 +899,16 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     // the user zooms. A per-request budget bounds the count: split it across
     // the aggregates, subsampling them when there are more than the budget so a
     // full-trace view never floods the response.
-    if (agg_interval > 0 && !ag_out->agg.empty()) {
+    if (agg_interval > 0 && !ag_out.agg.empty()) {
         constexpr std::size_t SYNTHETIC_BUDGET = 40000;
-        std::size_t nagg = ag_out->agg.size();
+        std::size_t nagg = ag_out.agg.size();
         std::size_t per_agg_cap =
             std::min(static_cast<std::size_t>(std::max(1, width)),
                      std::max<std::size_t>(1, SYNTHETIC_BUDGET / nagg));
         std::size_t step =
             nagg > SYNTHETIC_BUDGET ? nagg / SYNTHETIC_BUDGET : 1;
         for (std::size_t i = 0; i < nagg; i += step)
-            extrapolate_aggregate(ag_out->agg[i], agg_interval, begin, end,
+            extrapolate_aggregate(ag_out.agg[i], agg_interval, begin, end,
                                   per_agg_cap, big, big_dur);
         if (agg_interval > max_dur) max_dur = agg_interval;
     }

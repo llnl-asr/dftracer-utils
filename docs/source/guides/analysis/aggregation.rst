@@ -19,10 +19,10 @@ Pick group keys, pick aggregates, collect.
    .. tab-item:: C++
 
       Group keys are ``GroupKey`` values; aggregates are ``AggSpec`` values.
-      ``group_by``/``agg`` return an ``AggregatedView``; ``collect()`` builds
-      the plan and returns a ``LazyFrame``, whose own ``collect()`` is the
-      coroutine that runs the scan - ``.get()`` drives it to completion for a
-      non-coroutine caller.
+      ``group_by``/``agg`` return a ``View``, still a ``LazyFrame`` over the
+      trace scan; its inherited ``collect()`` is the coroutine that runs the
+      scan and returns the ``DataFrame`` directly - ``.get()`` drives it to
+      completion for a non-coroutine caller.
 
       .. code-block:: cpp
 
@@ -36,7 +36,6 @@ Pick group keys, pick aggregates, collect.
                              {AggOp::Sum, "dur", "sum_dur"},
                              {AggOp::Mean, "dur", "mean_dur"}})
                        .collect()
-                       .collect()
                        .get();
 
       Scan a whole directory with ``View::from_directory`` (itself a coroutine):
@@ -47,14 +46,12 @@ Pick group keys, pick aggregates, collect.
          auto df = v.group_by({GroupKey::cat()})
                     .agg({{AggOp::Count, "", "count"}})
                     .collect()
-                    .collect()
                     .get();
 
    .. tab-item:: Python
 
-      Group keys and aggregates are strings. ``collect()`` builds the plan
-      and returns a ``LazyFrame``; call its own ``collect()`` for the
-      ``DataFrame``.
+      Group keys and aggregates are strings. The chain is lazy;
+      ``collect()`` runs the scan and returns the ``DataFrame``.
 
       .. code-block:: python
 
@@ -63,7 +60,6 @@ Pick group keys, pick aggregates, collect.
          df = (TraceViewer("traces/")
                .group_by("cat")
                .agg("count", "sum:dur", "mean:dur")
-               .collect()
                .collect())
 
 Both produce a frame with one row per distinct category and the columns
@@ -90,7 +86,6 @@ top-level and ``args.*`` alike (``F("args.level").mean()``).
                        .group_by({GroupKey::cat()})
                        .agg(F("dur").sum(), F("dur").mean(), F.any.count())
                        .collect()
-                       .collect()
                        .get();
 
    .. tab-item:: Python
@@ -103,7 +98,6 @@ top-level and ``args.*`` alike (``F("args.level").mean()``).
          df = (TraceViewer("trace.pfw.gz")
                .group_by("cat")
                .agg(F.dur.sum(), F("dur").mean(), F.any.count())
-               .collect()
                .collect())
 
 The reductions are ``sum`` / ``min`` / ``max`` / ``mean`` / ``var`` / ``std`` /
@@ -285,7 +279,6 @@ the number of concurrent ``pread`` calls per file is a ``concurrency`` (or
                        .agg({{AggOp::Concurrency, "dur", "concurrency"},
                              {AggOp::Active, "dur", "active"}})
                        .collect()
-                       .collect()
                        .get();
 
    .. tab-item:: Python
@@ -297,7 +290,6 @@ the number of concurrent ``pread`` calls per file is a ``concurrency`` (or
          df = (TraceViewer("trace.pfw.gz")
                .group_by("name")
                .agg("concurrency", "active")   # or AggOp.CONCURRENCY, AggOp.ACTIVE
-               .collect()
                .collect())
 
 Occupancy is computed during the parallel scan from a bounded per-bucket
@@ -310,8 +302,9 @@ impossible values a raw mask would report.
 
 Resolution is a fixed cell, independent of the output ``time_bucket``. The cell
 is the busy quantum: a shorter event rounds up to one cell, so finer cells
-measure overlap on short events more tightly. Set it with ``occ_cell(cell_us)``
-(the ``--occ-cell`` CLI flag), honored when a ``time_range`` bounds the window;
+measure overlap on short events more tightly. Set it with ``resolution(cell)``
+on the viewer or ``F.dur.busy(resolution="1ms")`` inside ``agg`` (the
+``--occ-cell`` CLI flag), honored when a ``time_range`` bounds the window;
 the default is 64 us. Every occupancy result carries a ``busy_cell_us`` column
 reporting the effective cell (a wide window can coarsen it), so a caller can
 tell a grid-derived ``busy`` from a clamped one.
@@ -345,7 +338,7 @@ the rollup as a re-indexable ``ph="C"`` counter trace instead of collecting it:
 
    .. tab-item:: C++
 
-      ``export_counters`` writes each aggregated row as a counter event to an
+      ``sink_counters`` writes each aggregated row as a counter event to an
       ``ExportSink``.
 
       .. code-block:: cpp
@@ -354,7 +347,7 @@ the rollup as a re-indexable ``ph="C"`` counter trace instead of collecting it:
              .group_by({GroupKey::cat()})
              .time_bucket(1000)
              .agg({{AggOp::Count, "", "n"}})
-             .export_counters(sink)
+             .sink_counters(sink)
              .get();
 
    .. tab-item:: Python
@@ -365,7 +358,7 @@ the rollup as a re-indexable ``ph="C"`` counter trace instead of collecting it:
           .group_by("cat")
           .time_bucket(1000)
           .agg("count"))
-         # collect() for a DataFrame, or export to a counter trace.
+         # collect() for a DataFrame, or export_trace(path) for a counter trace.
 
 Counters without naming the fields
 ----------------------------------
@@ -388,7 +381,6 @@ reduction): the ``FieldStat`` ones - ``sum`` / ``min`` / ``max`` / ``mean`` /
                        .group_by({GroupKey::cat()})
                        .agg_numeric_args()
                        .collect()
-                       .collect()
                        .get();
 
    .. tab-item:: Python
@@ -398,14 +390,12 @@ reduction): the ``FieldStat`` ones - ``sum`` / ``min`` / ``max`` / ``mean`` /
          df = (TraceViewer("counters.pfw.gz")
                .group_by("cat")
                .agg_numeric_args()
-               .collect()
                .collect())
 
          # sum + p90 per numeric counter arg (sum_<arg>, p90_<arg>):
          bands = (TraceViewer("counters.pfw.gz")
                   .group_by("cat")
                   .agg_numeric_args("sum", "p90")
-                  .collect()
                   .collect())
 
 ``F.any.mean()`` in an ``agg`` call is the same as the no-argument form
@@ -436,33 +426,34 @@ above.
 Sharing one scan across branches
 --------------------------------
 
-Each ``collect``/``export``/``materialize`` above runs its own scan of the
+Each ``collect``/``sink_json``/``materialize`` above runs its own scan of the
 trace. When several reads of the same files should share a single pass - a few
 unrelated aggregations at once, or an aggregate alongside an export - open a
-session with ``TraceViewer.session()``. Each ``session.view()`` starts an
-independent branch with the full builder API; its terminal registers the branch
-and returns a ``Handle``. ``execute()`` (or leaving the ``with`` block, or the
-first ``Handle.result()``) runs every branch over one decompression:
+session with ``TraceViewer.session()``. ``s.collect(plan)`` registers any
+``LazyFrame`` or ``LazyResult`` built from the viewer and returns a ``Handle``;
+``s.sink_json(view, path)`` and ``s.materialize(view)`` register those
+terminals. ``execute()`` (or leaving the ``with`` block, or the first
+``Handle.result()``) runs every registered plan, and plans over the same trace
+share one decompression:
 
 .. code-block:: python
 
    with tv.session() as s:
-       by_cat  = s.view().group_by("cat").agg("count", "mean:dur").collect()
-       by_rank = s.view().group_by("rank").agg("count").collect()
-       s.view().filter('cat == "POSIX"').export("posix.pfw")
+       by_cat  = s.collect(tv.group_by("cat").agg("count", "mean:dur"))
+       by_rank = s.collect(tv.group_by("rank").agg("count"))
+       s.sink_json(tv.filter('cat == "POSIX"'), "posix.pfw")
 
    cat_df  = by_cat.result()    # DataFrame, resolved after the shared scan
    rank_df = by_rank.result()
 
 Reading a ``Handle`` before the session executes triggers the scan; adding a
-branch after it has executed raises. Two collect branches that group the same
-way can be combined after the one scan without a second read: ``s.join(a, b,
-how)`` equi-joins them into ``l_``/``r_`` columns, and ``s.compare(baseline,
-variant)`` appends the ``delta_``/``pct_`` result ``View.compare`` produces. The
-shared key width is inferred, so neither takes it. Each returns a ``Handle``
-resolved on execute like any other branch. ``join``/``compare`` are methods of
-the C++ ``ViewSession`` too (:doc:`views`); the Python session forwards to
-them.
+plan after it has executed raises. Two aggregations that group the same way can
+be joined in the same scan: ``s.collect(a.join(b, on="cat"))`` equi-joins them
+(clashing right-side columns get a ``_right`` suffix). For a baseline/variant
+comparison use ``base.compare(variant)``, a ``LazyFrame`` of the group key, the
+``l_``/``r_`` metrics and the ``delta_``/``pct_`` columns; register it with
+``s.collect`` to run it with the rest. ``collect_all([...])`` gives the same
+shared scan without a session.
 
 See also
 --------

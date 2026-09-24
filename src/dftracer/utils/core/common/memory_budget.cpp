@@ -194,6 +194,21 @@ std::uint64_t resolve_spill_budget(std::uint64_t configured) {
     return configured;  // explicit bytes, or NO_SPILL_BUDGET passthrough
 }
 
+std::uint64_t share_spill_budget(std::uint64_t configured, std::size_t ways) {
+    if (ways <= 1 || configured == NO_SPILL_BUDGET) return configured;
+    const std::uint64_t share = resolve_spill_budget(configured) / ways;
+    return share == 0 ? 1 : share;
+}
+
+std::size_t concurrent_spill_ways(std::uint64_t configured, std::size_t n) {
+    if (n <= 1) return 1;
+    if (configured == NO_SPILL_BUDGET) return n;
+    const std::uint64_t fit =
+        resolve_spill_budget(configured) / MIN_MEMORY_BUDGET_BYTES;
+    if (fit <= 1) return 1;
+    return fit < n ? static_cast<std::size_t>(fit) : n;
+}
+
 std::size_t estimate_per_file_bytes(const std::vector<std::size_t> &file_sizes,
                                     std::size_t user_override_bytes) {
     if (user_override_bytes > 0) return user_override_bytes;

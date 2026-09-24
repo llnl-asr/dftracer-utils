@@ -8,6 +8,25 @@
 
 namespace dftracer::utils::trace::indexing {
 
+bool dimension_value_less(std::string_view a, std::string_view b,
+                          std::string_view value_type) {
+    if (value_type == "uint") {
+        std::uint64_t x = 0, y = 0;
+        std::from_chars(a.data(), a.data() + a.size(), x);
+        std::from_chars(b.data(), b.data() + b.size(), y);
+        return x < y;
+    }
+    if (value_type == "int") {
+        std::int64_t x = 0, y = 0;
+        std::from_chars(a.data(), a.data() + a.size(), x);
+        std::from_chars(b.data(), b.data() + b.size(), y);
+        return x < y;
+    }
+    if (value_type == "double")
+        return std::stod(std::string(a)) < std::stod(std::string(b));
+    return a < b;
+}
+
 void ChunkDimensionStats::observe(std::string_view value) {
     if (last_key_ != nullptr && *last_key_ == value) {
         ++*last_counter_;

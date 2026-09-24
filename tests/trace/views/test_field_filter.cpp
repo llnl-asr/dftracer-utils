@@ -13,7 +13,7 @@ TEST_SUITE("View unified F filter") {
         auto stats = View::from_file(s.gz, s.idx)
                          .metadata(false)
                          .filter(F("cat") == "POSIX")
-                         .export_json(sink)
+                         .sink_json(sink)
                          .get();
 
         auto lines = sink.lines();
@@ -30,7 +30,7 @@ TEST_SUITE("View unified F filter") {
         View::from_file(s.gz, s.idx)
             .metadata(false)
             .filter(F("dur") >= 30)
-            .export_json(sink)
+            .sink_json(sink)
             .get();
         CHECK(sink.lines().size() > 0);
         CHECK(sink.lines().size() < 50);
@@ -48,18 +48,18 @@ TEST_SUITE("View unified F filter") {
         View::from_file(s.gz, s.idx)
             .metadata(false)
             .filter(F("dur") >= 30)
-            .export_json(pos)
+            .sink_json(pos)
             .get();
 
         StringSink neg;
         View::from_file(s.gz, s.idx)
             .metadata(false)
             .filter(!(F("dur") >= 30))
-            .export_json(neg)
+            .sink_json(neg)
             .get();
 
         StringSink all;
-        View::from_file(s.gz, s.idx).metadata(false).export_json(all).get();
+        View::from_file(s.gz, s.idx).metadata(false).sink_json(all).get();
 
         CHECK(pos.lines().size() > 0);
         CHECK(neg.lines().size() > 0);

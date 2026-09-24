@@ -214,7 +214,7 @@ TEST_SUITE("ViewPlannerUtility") {
         fs::remove_all(test_dir);
     }
 
-    TEST_CASE("ViewPlanner - No bidx path returns all chunks") {
+    TEST_CASE("ViewPlanner - No index reads the file as one unit") {
         ViewDefinition view;
         view.with_name("no_bidx");
 
@@ -230,41 +230,10 @@ TEST_SUITE("ViewPlannerUtility") {
 
         CHECK(output);
         CHECK(output->file_may_match);
-        CHECK(output->candidates.size() == 3);
-        CHECK(output->skipped_checkpoints == 0);
-    }
-
-    TEST_CASE("ViewPlanner - Byte range computation") {
-        // No bidx so all chunks are returned -- verify byte ranges
-        ViewDefinition view;
-        view.with_name("byte_range_test");
-
-        ViewPlannerInput input;
-        input.with_view(view)
-            .with_file_path("/fake/file.pfw.gz")
-            .with_index_path("")
-            .with_uncompressed_size(12000)
-            .with_num_checkpoints(3);
-
-        ViewPlannerUtility builder;
-        auto output = builder(input).get();
-
-        CHECK(output);
-        REQUIRE(output->candidates.size() == 3);
-
-        // 12000 / 3 = 4000 bytes per checkpoint
-        CHECK(output->candidates[0].checkpoint_idx == 0);
+        REQUIRE(output->candidates.size() == 1);
         CHECK(output->candidates[0].start_byte == 0);
-        CHECK(output->candidates[0].end_byte == 4000);
-
-        CHECK(output->candidates[1].checkpoint_idx == 1);
-        CHECK(output->candidates[1].start_byte == 4000);
-        CHECK(output->candidates[1].end_byte == 8000);
-
-        // Last checkpoint covers remainder
-        CHECK(output->candidates[2].checkpoint_idx == 2);
-        CHECK(output->candidates[2].start_byte == 8000);
-        CHECK(output->candidates[2].end_byte == 12000);
+        CHECK(output->candidates[0].end_byte == 30000);
+        CHECK(output->skipped_checkpoints == 0);
     }
 
     TEST_CASE("ViewPlanner - Zero checkpoints defaults to 1") {

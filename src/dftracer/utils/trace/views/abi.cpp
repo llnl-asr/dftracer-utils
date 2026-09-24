@@ -6,6 +6,7 @@
 #include <dftracer/utils/trace/views/abi.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_plan.h>
+#include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_source.h>
 
 #include <cstring>
@@ -13,10 +14,10 @@
 #include <string>
 #include <vector>
 
-// The opaque dftu_view handle owns a C++ View (AggregatedView slices to View;
-// they share the same plan and terminals, so nothing is lost).
+// The opaque dftu_view handle owns one immutable scan plan; each builder call
+// returns a handle to a new plan.
 struct dftu_view {
-    dftracer::utils::trace::views::View v;
+    dftracer::utils::trace::views::detail::scan::ScanPlan p;
 };
 
 namespace {
@@ -29,11 +30,11 @@ using dftracer::utils::query::query_handle_unwrap;
 using dftracer::utils::trace::views::AggOp;
 using dftracer::utils::trace::views::AggSpec;
 using dftracer::utils::trace::views::GroupKey;
-using dftracer::utils::trace::views::View;
+namespace scan = dftracer::utils::trace::views::detail::scan;
 using dftracer::utils::trace::views::ViewFile;
 using dftracer::utils::trace::views::ViewSource;
 
-dftu_view* wrap(View&& v) { return new dftu_view{std::move(v)}; }
+dftu_view* wrap(scan::ScanPlan p) { return new dftu_view{std::move(p)}; }
 
 Runtime& runtime_of(dftu_runtime* rt) {
     return rt ? *reinterpret_cast<Runtime*>(rt)
@@ -172,7 +173,7 @@ dftu_view* dftu_view_from_files(const char* const* paths,
             if (index_paths && index_paths[i]) f.index_path = index_paths[i];
             files.push_back(std::move(f));
         }
-        return wrap(View::from_files(std::move(files)));
+        return wrap(scan::from_files(std::move(files)));
     } catch (const std::exception&) {
         return nullptr;
     }
@@ -182,11 +183,11 @@ dftu_view* dftu_view_from_directory(const char* dir, const char* index_path,
                                     dftu_runtime* rt) {
     if (!dir) return nullptr;
     try {
-        View v =
+        scan::ScanPlan v =
             runtime_of(rt)
-                .submit(View::from_directory(dir, index_path ? index_path : ""))
+                .submit(scan::from_directory(dir, index_path ? index_path : ""))
                 .get();
-        if (v.plan().files.empty()) return nullptr;
+        if (v->files.empty()) return nullptr;
         return wrap(std::move(v));
     } catch (const std::exception&) {
         return nullptr;
@@ -198,7 +199,7 @@ void dftu_view_free(dftu_view* v) { delete v; }
 dftu_view* dftu_view_filter(const dftu_view* v, const dftu_query* q) {
     if (!v || !q) return nullptr;
     try {
-        return wrap(v->v.filter(query_handle_unwrap(q)));
+        return wrap(scan::filter(v->p, query_handle_unwrap(q)));
     } catch (const std::exception&) {
         return nullptr;
     }
@@ -214,7 +215,7 @@ dftu_view* dftu_view_select(const dftu_view* v, const char* const* cols,
             if (!cols[i]) return nullptr;
             c.emplace_back(cols[i]);
         }
-        return wrap(v->v.select(std::move(c)));
+        return wrap(scan::select(v->p, std::move(c)));
     } catch (const std::exception&) {
         return nullptr;
     }
@@ -223,7 +224,7 @@ dftu_view* dftu_view_select(const dftu_view* v, const char* const* cols,
 dftu_view* dftu_view_limit(const dftu_view* v, uint64_t n) {
     if (!v) return nullptr;
     try {
-        return wrap(v->v.limit(n));
+        return wrap(scan::limit(v->p, n));
     } catch (const std::exception&) {
         return nullptr;
     }
@@ -232,7 +233,7 @@ dftu_view* dftu_view_limit(const dftu_view* v, uint64_t n) {
 dftu_view* dftu_view_offset(const dftu_view* v, uint64_t n) {
     if (!v) return nullptr;
     try {
-        return wrap(v->v.offset(n));
+        return wrap(scan::offset(v->p, n));
     } catch (const std::exception&) {
         return nullptr;
     }
@@ -242,7 +243,7 @@ dftu_view* dftu_view_sort_by(const dftu_view* v, const char* column,
                              int32_t descending) {
     if (!v || !column) return nullptr;
     try {
-        return wrap(v->v.sort_by(column, descending != 0));
+        return wrap(scan::sort_by(v->p, column, descending != 0));
     } catch (const std::exception&) {
         return nullptr;
     }
@@ -269,7 +270,7 @@ dftu_view* dftu_view_group_by(const dftu_view* v, const dftu_group_key* keys,
             }
             ks.push_back(std::move(k));
         }
-        return wrap(v->v.group_by(std::move(ks)));
+        return wrap(scan::group_by(v->p, std::move(ks)));
     } catch (const std::exception&) {
         return nullptr;
     }
@@ -287,7 +288,7 @@ dftu_view* dftu_view_agg(const dftu_view* v, const dftu_view_agg_spec* specs,
                             specs[i].out ? specs[i].out : "",
                             specs[i].by ? specs[i].by : "", specs[i].q);
         }
-        return wrap(v->v.agg(std::move(ag)));
+        return wrap(scan::agg(v->p, std::move(ag)));
     } catch (const std::exception&) {
         return nullptr;
     }
@@ -297,7 +298,7 @@ dftu_dataframe* dftu_view_collect(const dftu_view* v, dftu_runtime* rt) {
     if (!v) return nullptr;
     try {
         return dataframe_handle_wrap(
-            runtime_of(rt).submit(v->v.collect_frame()).get());
+            runtime_of(rt).submit(scan::collect_frame(v->p)).get());
     } catch (const std::exception&) {
         return nullptr;
     }
@@ -307,7 +308,7 @@ dftu_lazyframe* dftu_view_lazy(const dftu_view* v) {
     if (!v) return nullptr;
     try {
         return lazyframe_handle_wrap(
-            LazyFrame::scan(std::make_shared<ViewSource>(v->v)));
+            LazyFrame::scan(std::make_shared<ViewSource>(v->p)));
     } catch (const std::exception&) {
         return nullptr;
     }

@@ -175,7 +175,7 @@ foreach(test_file ${TEST_CPP_SOURCES})
      OR bin_exec STREQUAL "pipeline/test_pipeline"
      OR bin_exec STREQUAL "coro/test_channel")
     set(heavy_thread_timeout 180)
-    if(DFTRACER_UTILS_ENABLE_TSAN OR DFTRACER_UTILS_ENABLE_COVERAGE
+    if(DFTRACER_UTILS_ENABLE_TSAN OR DFTRACER_UTILS_COVERAGE
        OR DFTRACER_UTILS_ENABLE_ASAN)
       set(heavy_thread_timeout 600)
     endif()
@@ -185,11 +185,15 @@ foreach(test_file ${TEST_CPP_SOURCES})
   endif()
 
   # Robustness test generates large (128 MB) gzip files; coverage
-  # instrumentation on macOS CI runners makes it significantly slower.
+  # instrumentation on macOS CI runners makes it significantly slower, and
+  # TSan more so (about 1200 s on an M4 Pro).
   if(bin_exec STREQUAL "reader/test_reader_robustness")
     set(robustness_timeout 600)
     if(DFTRACER_UTILS_COVERAGE)
       set(robustness_timeout 900)
+    endif()
+    if(DFTRACER_UTILS_ENABLE_TSAN)
+      set(robustness_timeout 1800)
     endif()
     set_tests_properties(${bin_exec} PROPERTIES TIMEOUT ${robustness_timeout})
   endif()

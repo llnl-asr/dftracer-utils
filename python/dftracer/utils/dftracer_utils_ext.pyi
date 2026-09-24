@@ -8,6 +8,7 @@ from typing import (
     Dict,
     Generic,
     Iterable,
+    Iterator,
     List,
     Literal,
     Optional,
@@ -22,15 +23,13 @@ from typing import (
 if TYPE_CHECKING:
     import pyarrow as pa  # ty: ignore[unresolved-import]
 
-    from .query import Expr
-
 _T = TypeVar("_T")
 
 # A run() map result value: emitted bytes, or an eager/streamed pyarrow object.
 _RunResultValue = Union[bytes, "pa.Table", "pa.RecordBatchReader"]
 
 class CollectTypedResult(TypedDict):
-    """The three record families returned by _TraceViewer.collect_typed()."""
+    """The three record families returned by _TraceViewer.typed()."""
 
     regular: "_DataFrame"
     aggregated: "_DataFrame"
@@ -104,6 +103,11 @@ class Indexer:
         parallelism: int = 0,
         force_rebuild: bool = False,
         runtime: Optional["Runtime"] = None,
+        bloom_fields: Optional[Sequence[str]] = None,
+        false_positive_rate: float = 0.01,
+        expected_entries: int = 1024,
+        auto_fields: bool = True,
+        auto_max_distinct: int = 256,
     ) -> None:
         """Create an indexer for trace files.
 
@@ -124,6 +128,13 @@ class Indexer:
             parallelism: Number of parallel indexers. 0 = auto.
             force_rebuild: If True, rebuild indices even if they exist.
             runtime: Runtime instance for thread pool control.
+            bloom_fields: Args fields the bloom tier indexes by name; a file
+                indexed without one is rebuilt.
+            false_positive_rate: Bloom false-positive rate, in (0, 1).
+            expected_entries: Expected distinct values per chunk.
+            auto_fields: Also index every other flat args key.
+            auto_max_distinct: Per-chunk distinct cap for an auto string
+                field's bloom.
         """
         ...
 
@@ -412,7 +423,7 @@ class ComparatorUtility:
 
 def read_arrow_files_parallel(
     paths: List[str],
-    runtime: Optional[Runtime] = None,
+    runtime: Optional[object] = None,
 ) -> Dict[str, object]:
     """Read multiple Arrow IPC files in parallel using the Runtime.
 
@@ -486,7 +497,7 @@ class IndexDatabase:
     ) -> None:
         """Write the aggregation global-config marker into the AGGREGATION CF.
 
-        Required for the typed read (`_TraceViewer.collect_typed`) on distributed
+        Required for the typed read (`_TraceViewer.typed`) on distributed
         builds (which never materialise the key via worker SSTs) and
         post-consolidate indices.
         """
@@ -823,9 +834,21 @@ class _LazyFrame:
     def describe(self) -> "_LazyFrame": ...
     def memory_budget(self, nbytes: int) -> "_LazyFrame": ...
     def auto_spill(self) -> "_LazyFrame": ...
-    def schema(self) -> List[str]: ...
+    def schema(self) -> List[str]:
+        """Output column names without running, or [] when data-dependent."""
+        ...
+    def output_schema(self) -> List[Tuple[str, int]]:
+        """``[(name, dtype id)]`` without running; a type the plan cannot know
+        statically is 0 (unknown)."""
+        ...
     def explain(self) -> str: ...
-    def collect(self, morsel_rows: int = 0) -> "_DataFrame": ...
+    def collect(self, morsel_rows: int = 0, runtime: Optional[object] = None) -> "_DataFrame": ...
+    def stream(
+        self, morsel_rows: int = 0, runtime: Optional[object] = None
+    ) -> Iterator["_DataFrame"]:
+        """The rows as _DataFrame chunks of about ``morsel_rows`` rows (0 is
+        auto); starts on the first pull."""
+        ...
 
 class _DataFrame:
     """A native vec batch: named vec columns (our SIMD columnar format). Column
@@ -984,9 +1007,19 @@ def _dataframe_from_arrow(table: object) -> _DataFrame:
     """Import a pyarrow Table's columns into a native vec batch."""
     ...
 
-def merge_flamegraph_partials(partials: List[bytes]) -> _DataFrame:
-    """Merge serialized flamegraph arena partials (from
-    _TraceViewer.flamegraph_partial) into the final node DataFrame. No scan."""
+def collect_all(plans: Sequence[_LazyFrame], runtime: Optional[object] = None) -> List[_DataFrame]:
+    """One _DataFrame per plan, in order; plans over the same trace base share
+    one scan."""
+    ...
+
+def merge_flamegraph_partials(partials: Sequence[bytes]) -> _DataFrame:
+    """Merge serialized flamegraph partials (the ``partial`` column of a
+    _TraceViewer.flamegraph_partial plan) into the node DataFrame. No scan."""
+    ...
+
+def plugin_results(plugins: "Plugins") -> Dict[str, object]:
+    """``{name: result}`` of the last run of ``plugins``, as a
+    _TraceViewer.plugins plan left them."""
     ...
 
 def scan_files(
@@ -1034,227 +1067,171 @@ def set_log_level(
     ...
 
 class _TraceViewer:
-    """Arrow-first composable view over a trace (lazy; builder ops return a
-    new _TraceViewer, terminals execute once)."""
+    """A trace scan and the plan over it. Builders return a new _TraceViewer;
+    lazy() is the plan as a _LazyFrame, and the plan-returning terminals give
+    a _LazyFrame that runs on collect()."""
 
     def __init__(
         self,
         files: Union[str, Sequence[str]],
         index_path: Optional[str] = ...,
-        runtime: Optional[object] = ...,
     ) -> None:
-        """``files`` is a trace path, a list of paths, or a directory; a
+        """``files`` is a trace path, a sequence of paths, or a directory; a
         directory is scanned recursively for ``.pfw.gz`` traces."""
         ...
-    def filter(self, dsl: "str | Expr") -> "_TraceViewer": ...
-    def query(self, dsl: "str | Expr") -> "_TraceViewer": ...
+    def lazy(self) -> _LazyFrame:
+        """The plan as a _LazyFrame."""
+        ...
+    def with_lazy(self, plan: _LazyFrame) -> "_TraceViewer":
+        """This scan with ``plan`` (a _LazyFrame over it) as its plan."""
+        ...
+    def filter(self, dsl: object) -> "_TraceViewer":
+        """Keep events matching a query-DSL predicate (``str(dsl)``)."""
+        ...
+    def select(self, names: Sequence[str]) -> "_TraceViewer":
+        """Fields the scan reads (raw events), or a projection of the plan."""
+        ...
     def phase(
         self, phase: Literal["events", "counters", "aggregated", "metadata", "any"]
     ) -> "_TraceViewer": ...
-    def group_by(self, *keys: str) -> "_AggregatedTraceViewer": ...
-    def agg(self, *specs: str) -> "_AggregatedTraceViewer": ...
+    def time_range(self, begin: float, end: float, /) -> "_TraceViewer": ...
     def time_bucket(
-        self, interval_us: int, normalize_to: Union[int, Literal["min"], None] = ...
+        self, interval_us: int, normalize_to: Union[int, Literal["min"], None] = None
     ) -> "_TraceViewer": ...
-    def occ_cell(self, cell_us: int) -> "_TraceViewer": ...
-    def time_unit(self, unit: Literal["ns", "us", "ms", "sec", "s"]) -> "_TraceViewer": ...
-    def time_scale(self, ns_ratio: float) -> "_TraceViewer": ...
-    def time_range(self, begin: float, end: float) -> "_TraceViewer": ...
-    def select(self, *cols: str) -> "_TraceViewer": ...
-    def memory_budget(self, nbytes: int) -> "_TraceViewer": ...
-    def auto_spill(self) -> "_TraceViewer": ...
-    def agg_numeric_args(self, *reductions: str) -> "_AggregatedTraceViewer": ...
-    def limit(self, n: int) -> "_TraceViewer": ...
-    def offset(self, n: int) -> "_TraceViewer": ...
-    def sort_by(self, name: str, descending: bool = False) -> "_TraceViewer": ...
-    def topk(self, name: str, k: int, largest: bool = True) -> "_TraceViewer": ...
-    def rollup_root(self, path: str) -> "_TraceViewer": ...
-    def views_root(self, path: str) -> "_TraceViewer": ...
+    def resolution(self, cell_us: int, /) -> "_TraceViewer":
+        """Grid in microseconds the occupancy aggregates snap to; 0 is exact."""
+        ...
+    def time_scale(self, ns_ratio: float, /) -> "_TraceViewer": ...
+    def time_unit(self, unit: Literal["ns", "us", "ms", "sec", "s"], /) -> "_TraceViewer": ...
+    def group_by(self, *keys: str) -> "_TraceViewer": ...
+    def agg(self, *specs: str) -> "_TraceViewer": ...
+    def agg_numeric_args(self, *reductions: str) -> "_TraceViewer": ...
+    def metadata(self, include: bool, /) -> "_TraceViewer": ...
+    def rollup_root(self, path: str, /) -> "_TraceViewer": ...
+    def views_root(self, path: str, /) -> "_TraceViewer": ...
+    def memory_budget(self, nbytes: int, /) -> "_TraceViewer": ...
+    def columns(self) -> List[str]:
+        """Columns discoverable from the index. No trace scan."""
+        ...
+    def column_info(self) -> Dict[str, str]:
+        """Index columns mapped to their type ("int64"/"float64"/"string").
+        No trace scan."""
+        ...
+    def time_metric(self) -> str:
+        """The trace's own time unit ("us"/"ns"/"ms"/"sec")."""
+        ...
+    def aggregates(self) -> bool:
+        """True when the plan absorbs into an aggregating scan."""
+        ...
+    def filters_events(self) -> bool:
+        """True while a filter still selects raw events. Reads no index."""
+        ...
+    def call_tree(
+        self,
+        partition: Optional[Sequence[str]] = ...,
+        ts: str = ...,
+        dur: str = ...,
+        name: str = ...,
+    ) -> _LazyFrame:
+        """Plan of the events plus containment level/parent_id per lane."""
+        ...
+    def flamegraph(
+        self,
+        partition: Optional[Sequence[str]] = ...,
+        ts: str = ...,
+        dur: str = ...,
+        name: str = ...,
+        group: Optional[Sequence[str]] = ...,
+    ) -> _LazyFrame:
+        """Plan of the folded flamegraph node frame."""
+        ...
+    def containment(
+        self,
+        partition: Optional[Sequence[str]] = ...,
+        ts: str = ...,
+        dur: str = ...,
+        name: str = ...,
+        group: Optional[Sequence[str]] = ...,
+    ) -> Tuple[_LazyFrame, _LazyFrame]:
+        """(call_tree plan, flamegraph plan) sharing one buffered fold."""
+        ...
+    def flamegraph_partial(
+        self,
+        partition: Optional[Sequence[str]] = ...,
+        ts: str = ...,
+        dur: str = ...,
+        name: str = ...,
+        group: Optional[Sequence[str]] = ...,
+    ) -> _LazyFrame:
+        """Plan of a one-row frame whose ``partial`` column holds the
+        serialized flamegraph partial."""
+        ...
+    def aggregate_partial(self) -> _LazyFrame:
+        """Plan of a one-row frame whose ``partial`` column holds the
+        serialized aggregation partial."""
+        ...
+    def sink_json(self, path: str, /) -> _LazyFrame:
+        """Plan writing the selected events to ``path``; yields one stats row."""
+        ...
+    def typed(
+        self,
+        shard_begin: int = 0,
+        shard_end: int = 0,
+        progress: Optional[Callable[[int, int], None]] = None,
+        runtime: Optional[object] = None,
+    ) -> CollectTypedResult:
+        """The aggregation index's record families over shard range
+        ``[shard_begin, shard_end)`` (0 = all). Runs now."""
+        ...
     def materialize(
         self,
         checkpoint_size: int = 0,
         part_size: int = 0,
         progress: Optional[Callable[[int, int], None]] = None,
-    ) -> None:
-        """Build-only: persist this query as a materialized view for reuse.
-
-        A row query writes a filtered trace split into ``part_size``-byte files
-        at ``checkpoint_size`` granularity (0 = engine defaults); an aggregation
-        persists a rollup. Idempotent; a later matching read reuses it.
-        ``progress``, if given, is called with ``(done, total)`` scan units.
-        """
+        runtime: Optional[object] = None,
+    ) -> Dict[str, object]:
+        """Persist this query as a materialized view. Runs now; returns the
+        scan stats."""
         ...
-
-    def mv_source(self) -> List[str]:
-        """The materialized-view trace file(s) that would serve this query, or
-        an empty list if a read would scan the base."""
-        ...
-
-    def materialize_dir(self) -> str:
-        """Distributed row-MV coordinator: create and return the shared MV dir.
-
-        Call on a view over the FULL file set. Each rank then exports its
-        filtered files into a subdir of the returned path; finally the
-        coordinator calls ``register_materialized(dir)``.
-        """
-        ...
-
-    def register_materialized(self, dir: str) -> None:
-        """Write the MV manifest at ``dir`` over this view's base set."""
-        ...
-
-    def collect(self) -> "_LazyFrame": ...
-    def join(
-        self,
-        other: "_TraceViewer",
-        how: Literal["inner", "left", "right", "full", "semi", "anti"] = "inner",
-    ) -> "_DataFrame":
-        """Aggregate both viewers and equi-join on the shared group key.
-
-        ``how`` is inner|left|right|full|semi|anti. Returns a _DataFrame of the key
-        columns plus each side's value columns, prefixed ``l_``/``r_``; outer
-        rows null the absent side, semi/anti carry the left columns only. Raises
-        ValueError on a bad ``how`` or a group-key schema mismatch.
-        """
-        ...
-
-    def compare(self, other: "_TraceViewer") -> "_DataFrame":
-        """Aggregate this viewer and ``other`` with THIS viewer's group_by + agg
-        plan and return the comparison _DataFrame: the group key, each side's
-        value columns (``l_``/``r_``), and the ``delta_``/``pct_`` deltas. Needs a
-        group_by + agg plan on the baseline; raises ValueError otherwise.
-        """
-        ...
-
-    def collect_typed(
-        self,
-        shard_begin: int = 0,
-        shard_end: int = 0,
-        progress: Optional[Callable[[int, int], None]] = None,
-    ) -> CollectTypedResult:
-        """One-pass read of the aggregation index's three record families.
-
-        Reads shard range ``[shard_begin, shard_end)`` (``shard_end <= 0`` means
-        all shards); distributed callers fan disjoint ranges across workers and
-        concatenate. Returns ``{"regular", "aggregated", "counters"}`` mapping to
-        native DataFrames: regular ph="X" events, aggregated records (with any
-        extra-key dims), and ph="C" counters (incl. system). ``progress``, if
-        given, is called with ``(done, total)`` shard units as the scan advances.
-        """
-        ...
-
-    def columns(self) -> List[str]:
-        """Distinct columns discoverable from the index (base axis + harvested
-        scalar leaves + resolved.* aliases). No trace scan."""
-        ...
-
-    def schema(self) -> Dict[str, str]:
-        """Each column mapped to its type ("int64"/"float64"/"string"). No trace
-        scan."""
-        ...
-
-    def time_metric(self) -> str:
-        """The trace's native time unit ("us"/"ns"/"ms"/"sec") from the first
-        file's CM record. Head-read only, no scan; "us" with no files."""
-        ...
-
-    def stream(
-        self,
-        batch_size: int = ...,
-        workers: int = ...,
-        normalize: bool = ...,
-        dict: bool = ...,
-    ) -> Iterable["_DataFrame"]: ...
-    def _session_execute(
-        self,
-        branches: List[Tuple[str, object, "str | None"]],
-    ) -> Tuple[List[object], Dict[str, int]]: ...
-    def statistics(self) -> Dict[str, object]: ...
-    def aggregate_partial(self) -> bytes: ...
-    def merge_partials_to_table(self, partials: List[bytes]) -> object: ...
     def export_trace(
         self,
         path: str,
-        compress: bool = ...,
-        index: bool = ...,
-        member_size: int = ...,
-        level: int = ...,
-        part_size: int = ...,
-    ) -> None: ...
-    def call_tree(
-        self,
-        partition: List[str] = ...,
-        ts: str = ...,
-        dur: str = ...,
-        name: str = ...,
-    ) -> "_DataFrame":
-        """Scan the view and return the events plus containment level/parent_id
-        per lane (rows sharing partition)."""
+        compress: bool = True,
+        index: bool = False,
+        member_size: int = 0,
+        level: int = 6,
+        part_size: int = 0,
+        runtime: Optional[object] = None,
+    ) -> Dict[str, object]:
+        """Write a trace file now; returns the scan stats."""
         ...
-
-    def flamegraph(
-        self,
-        partition: List[str] = ...,
-        ts: str = ...,
-        dur: str = ...,
-        name: str = ...,
-        group: List[str] = ...,
-    ) -> "_DataFrame":
-        """Scan the view and fold events by name path into the flamegraph node
-        DataFrame (node_id, parent, name, level, total, self, count). `group`
-        roots the tree by an arbitrary key over the raw events."""
+    def merge_partials(self, partials: Sequence[bytes], /) -> "_DataFrame":
+        """Merge aggregate partials with this aggregation. No scan."""
         ...
-
-    def containment(
-        self,
-        partition: List[str] = ...,
-        ts: str = ...,
-        dur: str = ...,
-        name: str = ...,
-        group: List[str] = ...,
-    ) -> Tuple["_DataFrame", "_DataFrame"]:
-        """Both containment frames (call_tree, flamegraph) from one scan."""
+    def materialize_partials(
+        self, partials: Sequence[bytes], runtime: Optional[object] = None
+    ) -> None:
+        """Write the rollup from partials."""
         ...
-
-    def flamegraph_partial(
-        self,
-        partition: List[str] = ...,
-        ts: str = ...,
-        dur: str = ...,
-        name: str = ...,
-        group: List[str] = ...,
-    ) -> bytes:
-        """Fold this view's files into a serialized flamegraph arena partial,
-        for a distributed merge (combine with merge_flamegraph_partials)."""
+    def reconstruct_if_cached(self) -> Optional["_DataFrame"]:
+        """The rollup as a _DataFrame, or None on a miss."""
         ...
-
-class _AggregatedTraceViewer(_TraceViewer):
-    """A _TraceViewer with a group_by/agg set. Adds the materialized-view cache
-    terminals and a cache-capable collect(); builder ops preserve this type."""
-
-    def filter(self, dsl: "str | Expr") -> "_AggregatedTraceViewer": ...
-    def query(self, dsl: "str | Expr") -> "_AggregatedTraceViewer": ...
-    def phase(
-        self, phase: Literal["events", "counters", "aggregated", "metadata", "any"]
-    ) -> "_AggregatedTraceViewer": ...
-    def time_bucket(
-        self, interval_us: int, normalize_to: Union[int, Literal["min"], None] = ...
-    ) -> "_AggregatedTraceViewer": ...
-    def occ_cell(self, cell_us: int) -> "_AggregatedTraceViewer": ...
-    def time_unit(self, unit: str) -> "_AggregatedTraceViewer": ...
-    def time_scale(self, ns_ratio: float) -> "_AggregatedTraceViewer": ...
-    def time_range(self, begin: float, end: float) -> "_AggregatedTraceViewer": ...
-    def select(self, *cols: str) -> "_AggregatedTraceViewer": ...
-    def memory_budget(self, nbytes: int) -> "_AggregatedTraceViewer": ...
-    def auto_spill(self) -> "_AggregatedTraceViewer": ...
-    def limit(self, n: int) -> "_AggregatedTraceViewer": ...
-    def offset(self, n: int) -> "_AggregatedTraceViewer": ...
-    def sort_by(self, name: str, descending: bool = False) -> "_AggregatedTraceViewer": ...
-    def topk(self, name: str, k: int, largest: bool = True) -> "_AggregatedTraceViewer": ...
-    def rollup_root(self, path: str) -> "_AggregatedTraceViewer": ...
-    def collect(self, cache: bool = ...) -> "_LazyFrame": ...
-    def materialize_partials(self, partials: List[bytes]) -> None: ...
-    def reconstruct_if_cached(self) -> object: ...
+    def mv_source(self) -> List[str]:
+        """Materialized-view files that would serve this query, or []."""
+        ...
+    def materialize_dir(self) -> str:
+        """Create and return the shared materialized-view directory."""
+        ...
+    def register_materialized(self, dir: str, /) -> None:
+        """Write the materialized-view manifest at ``dir``."""
+        ...
+    def compare(self, other: "_TraceViewer", /) -> _LazyFrame:
+        """Plan comparing this aggregation against ``other``'s events."""
+        ...
+    def plugins(self, host: "Plugins", /) -> _LazyFrame:
+        """Plan folding a Plugins set over the scan; plugin_results(host)
+        reads the results after the collect."""
+        ...
 
 class Plugins:
     """A fixed, built set of compiled DFTracer plugins."""

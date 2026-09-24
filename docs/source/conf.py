@@ -29,6 +29,57 @@ if shutil.which("doxygen") and _doxyfile.exists():
 
 _script = _docs_dir / "scripts" / "generate_class_diagrams.py"
 _xml_dir = _docs_dir / "doxygen" / "xml"
+
+
+def _name_files_by_path(xml_dir: Path) -> None:
+    # Breathe 5 matches a doxygenfile path against the index name, which
+    # Doxygen writes as the bare file name, so "dftracer/utils/query/abi.h"
+    # would never match. Name each file compound by its location path.
+    index = xml_dir / "index.xml"
+    if not index.exists():
+        return
+    location = re.compile(r'<compounddef[^>]*kind="file".*?<location file="([^"]+)"', re.S)
+
+    def full_name(m: re.Match) -> str:
+        compound = xml_dir / f"{m.group(1)}.xml"
+        found = location.search(compound.read_text()) if compound.exists() else None
+        name = found.group(1) if found else m.group(2)
+        return f'<compound refid="{m.group(1)}" kind="file"><name>{name}</name>'
+
+    text = index.read_text()
+    renamed = re.sub(r'<compound refid="([^"]+)" kind="file"><name>([^<]*)</name>', full_name, text)
+    if renamed != text:
+        index.write_text(renamed)
+
+
+_name_files_by_path(_xml_dir)
+
+
+# Doxygen gives a function-pointer field or typedef as type "R (*)", name,
+# args "(...)", which Breathe joins into the invalid "R (*) name (...)"; move
+# the closing parenthesis so it reads "R (* name)(...)".
+_FUNCTION_POINTER = re.compile(
+    r'(<memberdef kind="(?:variable|typedef)"[^>]*>\s*<type>(?:(?!</type>).)*?)'
+    r"\(\*\)</type>((?:(?!</memberdef>).)*?<argsstring>)\(",
+    re.S,
+)
+# Doxygen writes constexpr / consteval both as an attribute and in the type,
+# and Breathe prints both; keep the attribute.
+_SPECIFIER_IN_TYPE = re.compile(
+    r'(<memberdef [^>]*\b(constexpr|consteval)="yes"[^>]*>\s*<type>)\2\b\s*'
+)
+
+
+def _fix_member_declarations(xml_dir: Path) -> None:
+    for path in xml_dir.glob("*.xml"):
+        text = path.read_text()
+        fixed = _FUNCTION_POINTER.sub(r"\1(*</type>\2)(", text)
+        fixed = _SPECIFIER_IN_TYPE.sub(r"\1", fixed)
+        if fixed != text:
+            path.write_text(fixed)
+
+
+_fix_member_declarations(_xml_dir)
 _gen_dir = _docs_dir / "source" / "_generated"
 if _script.exists() and _xml_dir.exists():
     print("Generating Mermaid class diagrams from Doxygen XML...")

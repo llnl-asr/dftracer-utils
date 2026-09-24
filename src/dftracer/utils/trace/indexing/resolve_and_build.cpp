@@ -46,6 +46,13 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
     resolve_input.require_aggregation = input.require_aggregation;
     resolve_input.checkpoint_size = input.checkpoint_size;
     resolve_input.aggregation_config = input.aggregation_config;
+    for (std::string& field : input.bloom_config.extra_dimensions)
+        field = extra_dimension_name(field);
+    if (input.build_bloom) {
+        resolve_input.bloom_fields = input.bloom_config.extra_dimensions;
+        if (input.bloom_config.auto_fields)
+            resolve_input.bloom_fields.emplace_back(AUTO_FIELDS_MARKER);
+    }
 
     auto result = co_await resolver(resolve_input);
 
@@ -97,6 +104,9 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
             files_needing_work_set.insert(item.file_path);
         }
         for (const auto& item : result.needs_aggregation) {
+            files_needing_work_set.insert(item.file_path);
+        }
+        for (const auto& item : result.needs_bloom) {
             files_needing_work_set.insert(item.file_path);
         }
         files_needing_work.assign(files_needing_work_set.begin(),
@@ -171,6 +181,14 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
         batch_config->force_rebuild = input.force_rebuild;
         batch_config->build_bloom = input.build_bloom;
         batch_config->rebuild_root_summaries = true;
+        batch_config->bloom_config = input.bloom_config;
+        batch_config->bloom_dimensions.assign(
+            utilities::indexer::DEFAULT_BLOOM_DIMENSIONS.begin(),
+            utilities::indexer::DEFAULT_BLOOM_DIMENSIONS.end());
+        batch_config->bloom_dimensions.insert(
+            batch_config->bloom_dimensions.end(),
+            input.bloom_config.extra_dimensions.begin(),
+            input.bloom_config.extra_dimensions.end());
 
         if (agg_db && agg_config_ptr) {
             batch_config->agg_fold_factory =

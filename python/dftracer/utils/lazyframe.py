@@ -14,13 +14,18 @@ from __future__ import annotations
 
 from typing import (
     TYPE_CHECKING,
+    Any,
     Callable,
+    Dict,
+    Generic,
+    Iterator,
     List,
     Literal,
     Mapping,
     Optional,
     Sequence,
     Tuple,
+    TypeVar,
     Union,
 )
 
@@ -30,8 +35,10 @@ from .series import Series, _unwrap, _wrap
 
 if TYPE_CHECKING:
     from . import dftracer_utils_ext as _ext
-    from .columnar import _GroupResample, _GroupRolling
+    from .columnar import Agg, _GroupResample, _GroupRolling
+    from .enums import DType
     from .indexing import LazyILoc, LazyLoc, Resampler
+    from .runtime import Runtime
 
 Value = Union[int, float]
 
@@ -39,19 +46,24 @@ Value = Union[int, float]
 class LazyFrame:
     """A deferred query over a native batch; :meth:`collect` runs it."""
 
-    __slots__ = ("_native", "_index")
+    __slots__ = ("_native", "_index", "_runtime")
 
-    def __init__(self, native: "_ext._LazyFrame") -> None:
+    def __init__(self, native: "_ext._LazyFrame", runtime: "Optional[Runtime]" = None) -> None:
         self._native = native
         self._index: Optional[List[str]] = None
+        self._runtime = runtime
+
+    def _new(self, native: "_ext._LazyFrame") -> "LazyFrame":
+        """Wrap a native plan built from this one, on this plan's runtime."""
+        return LazyFrame(native, self._runtime)
 
     def _like(self, native: "_ext._LazyFrame") -> "LazyFrame":
-        """Wrap a native plan, carrying this plan's index column names when
-        the result's schema still holds every one of them."""
-        out = LazyFrame(native)
+        """:meth:`_new`, also carrying this plan's index column names when the
+        result's schema still holds every one of them."""
+        out = self._new(native)
         if self._index is not None:
-            schema = out.schema()
-            if all(name in schema for name in self._index):
+            names = out.columns
+            if all(name in names for name in self._index):
                 out._index = self._index
         return out
 
@@ -71,7 +83,7 @@ class LazyFrame:
         resolve = self._resolve("set_index")
         for name in keys:
             resolve(name)
-        out = LazyFrame(self._native)
+        out = self._new(self._native)
         out._index = keys
         return out
 
@@ -81,9 +93,9 @@ class LazyFrame:
         if self._index is None:
             return self if drop else self._like(self._native.with_row_index("index"))
         if drop:
-            keep = [c for c in self.schema() if c not in self._index]
-            return LazyFrame(self._native.select(keep))
-        return LazyFrame(self._native)
+            keep = [c for c in self.columns if c not in self._index]
+            return self._new(self._native.select(keep))
+        return self._new(self._native)
 
     @property
     def iloc(self) -> "LazyILoc":
@@ -116,10 +128,20 @@ class LazyFrame:
         self._resolve("resample")(time)
         return Resampler(self, time, rule_to_units(rule, unit))
 
-    def schema(self) -> List[str]:
+    @property
+    def columns(self) -> List[str]:
         """Output column names without running, or ``[]`` when the plan ends in
         a data-dependent op (``pivot`` / ``to_dummies`` / ``describe``)."""
         return self._native.schema()
+
+    @property
+    def schema(self) -> "Dict[str, DType]":
+        """Output column names and dtypes without running; a dtype the plan
+        cannot know before it runs is ``DType.UNKNOWN``. Empty where
+        :attr:`columns` is."""
+        from .enums import DType
+
+        return {name: DType(code) for name, code in self._native.output_schema()}
 
     def explain(self) -> str:
         """The optimized plan as text, for introspection and tests."""
@@ -192,7 +214,7 @@ class LazyFrame:
         for name, expr in pairs:
             if expr is not None:
                 out = out.with_column(name, expr)
-        return LazyFrame(out._native.select([name for name, _ in pairs]))
+        return out._new(out._native.select([name for name, _ in pairs]))
 
     def drop(self, *names: Union[str, Sequence[str]]) -> "LazyFrame":
         """Every column except ``names``."""
@@ -202,7 +224,7 @@ class LazyFrame:
         schema = self._resolve("drop")
         for n in dropped:
             schema(n)
-        return LazyFrame(
+        return self._new(
             self._native.select([c for c in self._native.schema() if c not in dropped])
         )
 
@@ -300,7 +322,7 @@ class LazyFrame:
         """:meth:`DataFrame.gap_fill` over the collected plan."""
         if (start is None) != (end is None):
             raise ValueError("gap_fill: pass both start and end, or neither")
-        return LazyFrame(
+        return self._new(
             self._native.gap_fill(
                 _names(partition_by), time, int(bucket), _names(values), mode, start, end
             )
@@ -327,7 +349,7 @@ class LazyFrame:
         outer: bool = False,
     ) -> "LazyFrame":
         """:meth:`DataFrame.interval` over the two collected plans."""
-        return LazyFrame(
+        return self._new(
             self._native.interval(other._native, point, lo, hi, _names(by), bool(outer))
         )
 
@@ -444,7 +466,7 @@ class LazyFrame:
             out = self
             for name, key in zip(keys[::2], names):
                 out = out.with_column(name, col(key).is_not_null().cast("int64"))
-            return LazyFrame(out._native.sort_by_multi(keys, flags).select(self.schema()))
+            return out._new(out._native.sort_by_multi(keys, flags).select(self.columns))
         if isinstance(by, str) and isinstance(descending, bool):
             return self._like(self._native.sort_by(by, descending))
         return self._like(self._native.sort_by_multi(names, descending))
@@ -479,7 +501,9 @@ class LazyFrame:
         ``other`` is collected in full when this plan runs (the build side);
         this plan streams through it morsel by morsel. No filter or projection
         is moved across the join."""
-        return LazyFrame(
+        if not isinstance(other, LazyFrame):
+            raise TypeError(f"join expects a LazyFrame, got {type(other).__name__}")
+        return self._new(
             self._native.join(
                 other._native,
                 on=on,
@@ -532,7 +556,7 @@ class LazyFrame:
     ) -> "LazyFrame":
         """Tumbling/sliding time-window aggregation over an ascending Int64
         time column. ``period`` defaults to ``every`` (tumbling)."""
-        return LazyFrame(
+        return self._new(
             self._native.group_by_dynamic(
                 time_col, every, period, list(aggs or []), origin, origin_min
             )
@@ -563,10 +587,42 @@ class LazyFrame:
         """Run the pipeline and materialize a :class:`DataFrame`. ``morsel_rows``
         is the chunk a streaming source is pulled in; ``0`` (the default) is
         auto, and runs a resident source whole-column, as the eager path."""
-        out = _wrap(self._native.collect(morsel_rows))
+        return self._finish(_wrap(self._native.collect(morsel_rows, self._runtime)))
+
+    def _finish(self, out: DataFrame) -> DataFrame:
         if self._index is not None and all(name in out for name in self._index):
             out._index = self._index
         return out
+
+    def stream(self, morsel_rows: int = 0) -> "Iterator[DataFrame]":
+        """Run the pipeline and yield its rows as :class:`DataFrame` chunks of
+        about ``morsel_rows`` rows (``0`` is auto), holding a bounded amount in
+        memory. Each chunk carries its own schema. Starts on the first pull."""
+        return (_wrap(chunk) for chunk in self._native.stream(morsel_rows, self._runtime))
+
+    def __getitem__(self, key: object) -> "Union[BoundColumn, LazyFrame]":
+        """Lazy indexing: a name gives a column expression bound to this plan
+        (its reductions are :class:`LazyScalar` values), a list of names a
+        :meth:`select`, an expression a :meth:`filter`, and a unit-step slice
+        with non-negative bounds a :meth:`slice`."""
+        if isinstance(key, str):
+            if key not in self.columns:
+                raise KeyError(key)
+            return BoundColumn(key, self)
+        if isinstance(key, slice):
+            if key.step not in (None, 1):
+                raise ValueError("a lazy slice takes no step")
+            start = 0 if key.start is None else key.start
+            if start < 0 or (key.stop is not None and key.stop < 0):
+                raise ValueError("a lazy slice takes non-negative bounds")
+            if key.stop is None:
+                return self.slice(start, _ALL_ROWS)
+            return self.slice(start, max(0, key.stop - start))
+        if isinstance(key, Expr):
+            return self.filter(key)
+        if isinstance(key, (list, tuple)) and all(isinstance(k, str) for k in key):
+            return self.select(*key)
+        raise TypeError(f"cannot index a LazyFrame with {type(key).__name__}")
 
     def __repr__(self) -> str:
         try:
@@ -708,7 +764,7 @@ class LazyGroupBy:
         self._plan = rows
 
     def _grouped(self, native: "_ext._LazyFrame") -> LazyFrame:
-        out = LazyFrame(native)
+        out = self._source._new(native)
         return _drop_null_key_groups(out, self._keys) if self._dropna else out
 
     @property
@@ -724,7 +780,7 @@ class LazyGroupBy:
     def reduce(self, agg: str) -> LazyFrame:
         native = self._source._native
         if not self._keys:
-            return LazyFrame(native.reduce(agg))
+            return self._source._new(native.reduce(agg))
         return self._grouped(native.group_by(self._keys, native.reduce_specs(agg, self._keys)))
 
     def sum(self) -> LazyFrame:
@@ -771,7 +827,7 @@ class LazyGroupBy:
     def _transform(
         self, kind: str, n: int = 0, method: str = "average", ascending: bool = True
     ) -> LazyFrame:
-        return LazyFrame(
+        return self._plan._new(
             self._plan._native.group_transform(self._keys, kind, int(n), method, bool(ascending))
         )
 
@@ -868,7 +924,7 @@ class LazyGroupBy:
         if not picked:
             return self._plan.head(0)
         out = picked[0].concat(*picked[1:]) if len(picked) > 1 else picked[0]
-        return out.unique(row).sort_by(row).select(*self._plan.schema())
+        return out.unique(row).sort_by(row).select(*self._plan.columns)
 
     def sample(self, n: int, seed: int = 0, *, random_state: Optional[int] = None) -> LazyFrame:
         """:meth:`GroupBy.sample` as plan steps: the ``n`` rows per group
@@ -880,7 +936,7 @@ class LazyGroupBy:
         hashed = indexed.with_column(key, (_Col(row) + int(seed)).mix64())
         ordered = hashed.sort_by_multi(self._keys + [key])
         picked = LazyGroupBy(ordered, self._keys).head(int(n))
-        return picked.sort_by(row).select(*self._plan.schema())
+        return picked.sort_by(row).select(*self._plan.columns)
 
     def resample(
         self, rule: "Union[int, str]", on: Optional[str] = None, unit: str = "us"
@@ -920,7 +976,7 @@ class LazyGroupBy:
         """Distinct present values per group and non-key column, exact: a
         group-by over the keys plus the column, then a count per key."""
         out: Optional[LazyFrame] = None
-        for c in [n for n in self._plan.schema() if n not in self._keys]:
+        for c in [n for n in self._plan.columns if n not in self._keys]:
             pairs = LazyGroupBy(self._plan.filter(col(c).is_not_null()), self._keys + [c]).size()
             counts = pairs.group_by(self._keys).agg(f"count::{c}")
             out = counts if out is None else out.join(counts, on=self._keys)
@@ -1024,7 +1080,7 @@ class LazyGroupBy:
     def value_counts(self, ascending: bool = False) -> LazyFrame:
         """Distinct rows of the non-key columns within each group with their
         count, most frequent first."""
-        cols = [c for c in self._plan.schema() if c not in self._keys]
+        cols = [c for c in self._plan.columns if c not in self._keys]
         plan = self._plan
         for c in cols:
             plan = plan.filter(col(c).is_not_null())
@@ -1060,7 +1116,7 @@ class LazyGroupBy:
         Python tier)."""
         from .columnar import Agg, _collect_columns, _trace_group, has_agg_leaf, split_aggs
 
-        traced = _trace_group(func, self._plan.schema(), "LazyGroupBy.apply")
+        traced = _trace_group(func, self._plan.columns, "LazyGroupBy.apply")
         if traced is None:
             raise TypeError("apply: the group function could not be traced into the plan")
         if isinstance(traced, Agg):
@@ -1069,7 +1125,7 @@ class LazyGroupBy:
         if not has_agg_leaf(traced):
             return self._plan.with_column("value", traced).select("value")
         rewritten, aggs = split_aggs(traced)
-        row_cols = [c for c in _collect_columns(traced) if c in self._plan.schema()]
+        row_cols = [c for c in _collect_columns(traced) if c in self._plan.columns]
         if not row_cols:
             grouped = self.agg(*aggs)
             return grouped.with_column("value", rewritten).select(*(self._keys + ["value"]))
@@ -1095,14 +1151,14 @@ class LazyGroupBy:
             split_aggs,
         )
 
-        traced = _trace_group(func, self._plan.schema(), "LazyGroupBy.filter")
+        traced = _trace_group(func, self._plan.columns, "LazyGroupBy.filter")
         if traced is None:
             raise TypeError("filter: the group function could not be traced into the plan")
         if isinstance(traced, Agg):
             traced = _AggLeaf(traced) != 0
         assert isinstance(traced, Expr)
         if not has_agg_leaf(traced) or [
-            c for c in _collect_columns(traced) if c in self._plan.schema()
+            c for c in _collect_columns(traced) if c in self._plan.columns
         ]:
             raise TypeError("filter: the group function must return a condition over aggregates")
         rewritten, aggs = split_aggs(traced)
@@ -1111,10 +1167,126 @@ class LazyGroupBy:
         keep = self.agg(*aggs).filter(rewritten).select(*self._keys)
         row = "__dftu_row__"
         indexed = self._plan.with_row_index(row)
-        schema = self._plan.schema()
+        schema = self._plan.columns
         return indexed.join(keep, on=self._keys).sort_by(row).select(*schema)
 
 
 def lazy(frame: DataFrame) -> LazyFrame:
     """Free-function form of :meth:`DataFrame.lazy`."""
     return frame.lazy()
+
+
+_ALL_ROWS = (1 << 63) - 1
+
+T = TypeVar("T")
+
+
+class LazyResult(Generic[T]):
+    """A lazy value that is not one frame: the plans it reads and the step
+    that turns their frames into the value. :meth:`collect` runs it; pass it
+    to :func:`collect_all` to run its plans with others', so plans over the
+    same trace share one scan."""
+
+    __slots__ = ("_plans", "_finish")
+
+    def __init__(
+        self, plans: Sequence[LazyFrame], finish: "Callable[[List[DataFrame]], T]"
+    ) -> None:
+        self._plans = list(plans)
+        self._finish = finish
+
+    def collect(self) -> T:
+        return collect_all([self])[0]
+
+    def __repr__(self) -> str:
+        return f"<{type(self).__name__} over {len(self._plans)} plan(s)>"
+
+
+class LazyScalar(LazyResult[object]):
+    """One value from a plan, such as ``tv["dur"].mean()``; :meth:`collect`
+    returns the Python value (``None`` for a null)."""
+
+    __slots__ = ()
+
+    def __init__(self, plan: LazyFrame) -> None:
+        super().__init__([plan], _first_value)
+
+
+def _first_value(frames: List[DataFrame]) -> object:
+    frame = frames[0]
+    if frame.height == 0:
+        return None
+    return next(iter(frame.to_dict().values()))[0]
+
+
+class BoundColumn(_Col):
+    """A column expression bound to the plan it came from, as ``lf["dur"]``.
+    It is an ordinary column expression in a filter or a projection; its
+    reductions run over that plan and return a :class:`LazyScalar`."""
+
+    __slots__ = ("_frame",)
+
+    def __init__(self, name: str, frame: LazyFrame) -> None:
+        super().__init__(name)
+        self._frame = frame
+
+    def _scalar(self, agg: "Agg") -> LazyScalar:
+        return LazyScalar(self._frame.select(agg.alias("value")))
+
+    def sum(self) -> LazyScalar:  # type: ignore[override]  # ty: ignore[invalid-method-override]
+        return self._scalar(_Col(self.name).sum())
+
+    def mean(self) -> LazyScalar:  # type: ignore[override]  # ty: ignore[invalid-method-override]
+        return self._scalar(_Col(self.name).mean())
+
+    def min(self) -> LazyScalar:  # type: ignore[override]  # ty: ignore[invalid-method-override]
+        return self._scalar(_Col(self.name).min())
+
+    def max(self) -> LazyScalar:  # type: ignore[override]  # ty: ignore[invalid-method-override]
+        return self._scalar(_Col(self.name).max())
+
+    def var(self) -> LazyScalar:  # type: ignore[override]  # ty: ignore[invalid-method-override]
+        return self._scalar(_Col(self.name).var())
+
+    def std(self) -> LazyScalar:  # type: ignore[override]  # ty: ignore[invalid-method-override]
+        return self._scalar(_Col(self.name).std())
+
+    def first(self) -> LazyScalar:  # type: ignore[override]  # ty: ignore[invalid-method-override]
+        return self._scalar(_Col(self.name).first())
+
+    def last(self) -> LazyScalar:  # type: ignore[override]  # ty: ignore[invalid-method-override]
+        return self._scalar(_Col(self.name).last())
+
+    def count(self) -> LazyScalar:  # type: ignore[override]  # ty: ignore[invalid-method-override]
+        from .columnar import Agg
+
+        return self._scalar(Agg("count_valid", _Col(self.name)))
+
+
+def collect_all(roots: "Sequence[Union[LazyFrame, LazyResult[Any]]]") -> List[Any]:
+    """Collect every root, one result per root in input order: a
+    :class:`DataFrame` for a ``LazyFrame``, the value for a
+    :class:`LazyResult`. Plans over the same trace base share one scan; any
+    other plan collects as :meth:`LazyFrame.collect` would."""
+    from . import dftracer_utils_ext as _native_ext
+
+    plans: List[LazyFrame] = []
+    for root in roots:
+        plans.extend(root._plans if isinstance(root, LazyResult) else [root])
+    runtime = next((p._runtime for p in plans if p._runtime is not None), None)
+    frames = (
+        [_wrap(f) for f in _native_ext.collect_all([p._native for p in plans], runtime)]
+        if plans
+        else []
+    )
+    out: List[Any] = []
+    at = 0
+    for root in roots:
+        if isinstance(root, LazyResult):
+            n = len(root._plans)
+            out.append(root._finish(frames[at : at + n]))
+            at += n
+        else:
+            out.append(root._finish(frames[at]))
+            at += 1
+    return out

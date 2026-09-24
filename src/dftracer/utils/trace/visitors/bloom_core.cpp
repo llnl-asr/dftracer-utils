@@ -71,6 +71,7 @@ BloomCore::ChunkStatistics persist_bloom_sink_writes(
                                        config.false_positive_rate);
     }
 
+    std::vector<std::uint8_t> file_extra_skip(extra_dim_names.size(), 0);
     std::vector<unsigned char> blob;
 
     for (std::size_t i = 0; i < chunks.size(); ++i) {
@@ -88,6 +89,11 @@ BloomCore::ChunkStatistics persist_bloom_sink_writes(
         }
         for (std::size_t e = 0;
              e < extra_dim_names.size() && e < chunk.extra_blooms.size(); ++e) {
+            if (e < chunk.extra_bloom_skip.size() &&
+                chunk.extra_bloom_skip[e]) {
+                file_extra_skip[e] = 1;
+                continue;
+            }
             const ScalableBloomFilter& bf = chunk.extra_blooms[e];
             bf.serialize_into(blob);
             db.insert_chunk_bloom_filter(
@@ -120,6 +126,7 @@ BloomCore::ChunkStatistics persist_bloom_sink_writes(
             static_cast<std::uint64_t>(bf.num_entries()));
     }
     for (std::size_t e = 0; e < extra_dim_names.size(); ++e) {
+        if (file_extra_skip[e]) continue;
         const ScalableBloomFilter& bf = file_extra_blooms[e];
         bf.serialize_into(blob);
         db.insert_file_bloom_filter(
@@ -185,6 +192,71 @@ void persist_bloom_concrete_tail(
 
 BloomCore::ChunkState::ChunkState() = default;
 
+namespace {
+
+// The type of a dimension holding values of both types; "" is no value yet.
+std::string join_value_types(const std::string& a, const std::string& b) {
+    if (a.empty() || a == b) return b;
+    if (b.empty()) return a;
+    if (a == "mixed" || b == "mixed") return "mixed";
+    const bool num_a = a == "int" || a == "double";
+    const bool num_b = b == "int" || b == "double";
+    return num_a && num_b ? "double" : "mixed";
+}
+
+void observe_stats(indexing::ChunkDimensionStats& ds, const std::string& text,
+                   const char* type) {
+    if (ds.value_type == "mixed") return;
+    const std::string joined = join_value_types(ds.value_type, type);
+    if (joined != ds.value_type) ds.value_type = joined;
+    if (joined == "mixed") {
+        ds.min_value.clear();
+        ds.max_value.clear();
+        return;
+    }
+    if (ds.min_value.empty() ||
+        indexing::dimension_value_less(text, ds.min_value, ds.value_type))
+        ds.min_value = text;
+    if (ds.max_value.empty() ||
+        indexing::dimension_value_less(ds.max_value, text, ds.value_type))
+        ds.max_value = text;
+}
+
+}  // namespace
+
+void BloomCore::observe_value(ChunkDimensionStats& stats, std::int64_t value) {
+    observe_stats(stats, std::to_string(value), "int");
+}
+
+void BloomCore::observe_value(ChunkDimensionStats& stats, double value) {
+    observe_stats(stats, indexing::canonical_number_text(value), "double");
+}
+
+void BloomCore::observe_value(ChunkDimensionStats& stats,
+                              std::string_view value) {
+    observe_stats(stats, std::string(value), "string");
+}
+
+void BloomCore::observe_extra(ChunkState& chunk, std::size_t e,
+                              std::int64_t value) {
+    const std::string text = std::to_string(value);
+    chunk.extra_blooms[e].add(text);
+    observe_stats(chunk.extra_dim_stats[e], text, "int");
+}
+
+void BloomCore::observe_extra(ChunkState& chunk, std::size_t e, double value) {
+    const std::string text = indexing::canonical_number_text(value);
+    chunk.extra_blooms[e].add(text);
+    observe_stats(chunk.extra_dim_stats[e], text, "double");
+}
+
+void BloomCore::observe_extra(ChunkState& chunk, std::size_t e,
+                              std::string_view value) {
+    const std::string text(value);
+    chunk.extra_blooms[e].add(text);
+    observe_stats(chunk.extra_dim_stats[e], text, "string");
+}
+
 void BloomCore::init_chunk_state(ChunkState& chunk,
                                  const ChunkIndexerConfig& config,
                                  const std::vector<std::string>& extra_dims) {
@@ -208,8 +280,9 @@ void BloomCore::init_chunk_state(ChunkState& chunk,
         chunk.extra_blooms.emplace_back(config.expected_entries_per_chunk,
                                         config.false_positive_rate);
         chunk.extra_dim_stats[e].dimension = extra_dims[e];
-        chunk.extra_dim_stats[e].value_type = "string";
+        chunk.extra_dim_stats[e].value_type.clear();
     }
+    chunk.extra_bloom_skip.assign(extra_dims.size(), 0);
 }
 
 void BloomCore::observe_metadata(ChunkState& chunk,
@@ -305,6 +378,38 @@ void BloomCore::observe_data(ChunkState& chunk, PidTidCache& cache,
     chunk.events_processed++;
 }
 
+void BloomCore::merge_dimension_stats(ChunkDimensionStats& dst,
+                                      ChunkDimensionStats& src) {
+    if (src.value_counts) {
+        if (!dst.value_counts) dst.value_counts.emplace();
+        for (const auto& [k, v] : *src.value_counts) {
+            (*dst.value_counts)[k] += v;
+        }
+        dst.distinct_count = dst.value_counts->size();
+    }
+    if (!src.value_type.empty() && dst.value_type != src.value_type) {
+        const std::string joined =
+            join_value_types(dst.value_type, src.value_type);
+        if (joined != dst.value_type) dst.value_type = joined;
+        if (joined == "mixed") {
+            dst.min_value.clear();
+            dst.max_value.clear();
+            return;
+        }
+    }
+    if (src.min_value.empty() && src.max_value.empty()) return;
+    if (dst.min_value.empty() ||
+        (!src.min_value.empty() &&
+         indexing::dimension_value_less(src.min_value, dst.min_value,
+                                        dst.value_type)))
+        dst.min_value = src.min_value;
+    if (dst.max_value.empty() ||
+        (!src.max_value.empty() &&
+         indexing::dimension_value_less(dst.max_value, src.max_value,
+                                        dst.value_type)))
+        dst.max_value = src.max_value;
+}
+
 void BloomCore::merge_chunk_state(ChunkState& dst, ChunkState& src) {
     for (std::size_t b = 0; b < BF_COUNT; ++b) {
         dst.fixed_blooms[b].merge_from(src.fixed_blooms[b]);
@@ -315,20 +420,7 @@ void BloomCore::merge_chunk_state(ChunkState& dst, ChunkState& src) {
     }
 
     auto merge_dim = [](ChunkDimensionStats& dds, ChunkDimensionStats& sds) {
-        if (sds.value_counts) {
-            if (!dds.value_counts) dds.value_counts.emplace();
-            for (const auto& [k, v] : *sds.value_counts) {
-                (*dds.value_counts)[k] += v;
-            }
-            dds.distinct_count = dds.value_counts->size();
-        }
-        if (dds.min_value.empty() ||
-            (!sds.min_value.empty() && sds.min_value < dds.min_value)) {
-            dds.min_value = sds.min_value;
-        }
-        if (sds.max_value > dds.max_value) {
-            dds.max_value = sds.max_value;
-        }
+        merge_dimension_stats(dds, sds);
     };
     for (std::size_t d = 0; d < FD_COUNT; ++d) {
         merge_dim(dst.fixed_dim_stats[d], src.fixed_dim_stats[d]);
@@ -338,6 +430,10 @@ void BloomCore::merge_chunk_state(ChunkState& dst, ChunkState& src) {
          ++e) {
         merge_dim(dst.extra_dim_stats[e], src.extra_dim_stats[e]);
     }
+    for (std::size_t e = 0;
+         e < src.extra_bloom_skip.size() && e < dst.extra_bloom_skip.size();
+         ++e)
+        dst.extra_bloom_skip[e] |= src.extra_bloom_skip[e];
 
     dst.statistics.merge_from(src.statistics);
 

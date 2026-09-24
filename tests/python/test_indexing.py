@@ -205,8 +205,8 @@ def test_lazy_iloc_loc_and_assignment():
     with pytest.raises(TypeError):
         k.loc[Series([10, 20])]
     assert k.reset_index()._index is None
-    assert k.reset_index(drop=True).schema() == ["a", "s"]
-    assert lf.reset_index().schema() == ["index", "k", "a", "s"]
+    assert k.reset_index(drop=True).columns == ["a", "s"]
+    assert lf.reset_index().columns == ["index", "k", "a", "s"]
 
     k.loc[col("a") > 2, "a"] = 0
     k.iloc[0, 1] = 99
@@ -217,12 +217,12 @@ def test_lazy_iloc_loc_and_assignment():
         "a": [100, 41, 1, 1],
         "s": ["x", "y", "z", "w"],
     }
-    assert k.schema() == ["k", "a", "s"]
+    assert k.columns == ["k", "a", "s"]
     # Positional labels with no index set: the hidden row index is gone after.
     p = df.lazy()
     p.loc[1:2, "a"] = -1
     assert _d(p.collect())["a"] == [1, -1, -1, 4]
-    assert p.schema() == ["k", "a", "s"]
+    assert p.columns == ["k", "a", "s"]
     with pytest.raises(KeyError, match="cannot create"):
         k.loc[:, "new"] = 1
     with pytest.raises(TypeError):

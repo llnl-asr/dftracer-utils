@@ -26,7 +26,7 @@ inline dftracer::utils::trace::views::ViewFile index_trace(
     struct Sink : ExportSink {
         void write(std::string_view) override {}
     } sink;
-    View::from_file(gz, idx).metadata(false).export_json(sink).get();
+    View::from_file(gz, idx).metadata(false).sink_json(sink).get();
     return ViewFile{gz, idx};
 }
 

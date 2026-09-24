@@ -29,6 +29,13 @@ struct ChunkIndexerConfig {
     /// e.g. "args.level", "args.mode", "args.io.size"
     std::vector<std::string> extra_dimensions;
 
+    /// Also index every other flat args key: numbers get a per-chunk
+    /// min/max, strings a per-chunk bloom while the chunk holds at most
+    /// auto_max_distinct of their values. On by default, so every build path
+    /// (explicit or a query's first touch) makes the same index.
+    bool auto_fields = true;
+    std::size_t auto_max_distinct = 256;
+
     std::size_t expected_entries_per_chunk = 1024;
     double false_positive_rate = 0.01;
 
@@ -55,9 +62,22 @@ struct ChunkIndexerConfig {
         hasher.update(expected_entries_per_chunk);
         hasher.update(false_positive_rate);
         hasher.update(sub_chunk_events);
+        hasher.update(auto_fields);
+        hasher.update(auto_max_distinct);
         return hasher.get_hash().value;
     }
 };
+
+/// Recorded among a file's index dimensions when auto_fields built it, so a
+/// request for auto fields can tell such an index from an older one.
+inline constexpr std::string_view AUTO_FIELDS_MARKER = "@auto";
+
+/// A field as the index names its dimension: an args key or a dotted path
+/// below args, without the "args." prefix a query column carries.
+inline std::string extra_dimension_name(std::string_view field) {
+    if (field.rfind("args.", 0) == 0) field.remove_prefix(5);
+    return std::string(field);
+}
 
 /// Hash resolution maps (collected once per file from metadata events)
 using HashResolveMap = std::shared_ptr<StringViewMap<std::string>>;

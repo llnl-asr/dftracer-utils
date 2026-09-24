@@ -26,7 +26,7 @@ struct StatNeeds {
 };
 
 /// Trace statistics collected from a StatsView. Strings are owned, so the
-/// result outlives the View batches it was read from.
+/// result outlives the batches it was read from.
 struct ViewStats {
     std::uint64_t total_events = 0;
     std::vector<StatCount> category_counts;
@@ -82,7 +82,8 @@ class StatsView {
     }
 
     coro::CoroTask<std::vector<StatCount>> pid_tid_counts() const {
-        dataframe::DataFrame b = co_await pid_agg().collect().collect();
+        const views::View agg = pid_agg();
+        dataframe::DataFrame b = co_await agg.collect();
         const dataframe::Series& n = b.columns[col(b, "n")];
         const dataframe::Series& pid = b.columns[0];
         const dataframe::Series& tid = b.columns[1];
@@ -103,17 +104,16 @@ class StatsView {
         st.min_timestamp_us = std::numeric_limits<std::uint64_t>::max();
         st.duration_min_us = std::numeric_limits<std::uint64_t>::max();
 
-        views::ViewSession run = view().session();
-        views::Deferred<dataframe::DataFrame> cat =
-            run.collect(cat_keys(), cat_specs());
-        views::Deferred<dataframe::DataFrame> name, pid;
-        if (needs.names) name = run.collect(name_keys(), count_specs());
-        if (needs.pid_tids) pid = run.collect(pid_keys(), count_specs());
-        co_await run.execute();
+        // One scan serves every breakdown; a materialized one reads its rollup.
+        std::vector<dataframe::LazyFrame> plans{cat_agg().lazy()};
+        if (needs.names) plans.push_back(name_agg().lazy());
+        if (needs.pid_tids) plans.push_back(pid_agg().lazy());
+        std::vector<dataframe::DataFrame> frames =
+            co_await dataframe::collect_all(std::move(plans));
 
         // The category pass also carries the global duration/timestamp
         // aggregates needed to combine into the summary.
-        const dataframe::DataFrame& c = cat.get();
+        const dataframe::DataFrame& c = frames[0];
         const dataframe::Series& cn = c.columns[col(c, "n")];
         const dataframe::Series& cdsum = c.columns[col(c, "dsum")];
         const dataframe::Series& cdmin = c.columns[col(c, "dmin")];
@@ -154,7 +154,7 @@ class StatsView {
         }
 
         if (needs.names) {
-            const dataframe::DataFrame& nb = name.get();
+            const dataframe::DataFrame& nb = frames[1];
             const dataframe::Series& nn = nb.columns[col(nb, "n")];
             st.name_counts.reserve(static_cast<std::size_t>(nb.num_rows()));
             for (std::int64_t i = 0; i < nb.num_rows(); ++i)
@@ -163,7 +163,7 @@ class StatsView {
                     static_cast<std::uint64_t>(i64_at(nn, i)));
         }
         if (needs.pid_tids) {
-            const dataframe::DataFrame& pb = pid.get();
+            const dataframe::DataFrame& pb = frames.back();
             const dataframe::Series& pn = pb.columns[col(pb, "n")];
             const dataframe::Series& pid_col = pb.columns[0];
             const dataframe::Series& tid_col = pb.columns[1];
@@ -188,11 +188,18 @@ class StatsView {
             needs.pid_tids && !pid_agg().reconstruct_if_cached().has_value();
         if (!want_cat && !want_name && !want_pid) co_return;
 
-        views::ViewSession run = view().session();
-        if (want_cat) run.materialize(cat_keys(), cat_specs());
-        if (want_name) run.materialize(name_keys(), count_specs());
-        if (want_pid) run.materialize(pid_keys(), count_specs());
-        co_await run.execute();
+        if (want_cat) {
+            const views::View agg = cat_agg();
+            co_await agg.materialize();
+        }
+        if (want_name) {
+            const views::View agg = name_agg();
+            co_await agg.materialize();
+        }
+        if (want_pid) {
+            const views::View agg = pid_agg();
+            co_await agg.materialize();
+        }
     }
 
    private:
@@ -233,7 +240,7 @@ class StatsView {
         }
     }
 
-    // The scan branches, the AggregatedView builders, and the count accessors
+    // The scan branches, the View builders, and the count accessors
     // share these so a rollup is reused only on an exact query-shape match.
     static std::vector<views::GroupKey> cat_keys() {
         return {views::GroupKey::cat()};
@@ -255,18 +262,18 @@ class StatsView {
         return {{views::AggOp::Count, "", "n"}};
     }
 
-    views::AggregatedView cat_agg() const {
+    views::View cat_agg() const {
         return view().group_by(cat_keys()).agg(cat_specs());
     }
-    views::AggregatedView name_agg() const {
+    views::View name_agg() const {
         return view().group_by(name_keys()).agg(count_specs());
     }
-    views::AggregatedView pid_agg() const {
+    views::View pid_agg() const {
         return view().group_by(pid_keys()).agg(count_specs());
     }
 
     coro::CoroTask<std::vector<StatCount>> group_counts(views::View v) const {
-        dataframe::DataFrame b = co_await v.collect().collect();
+        dataframe::DataFrame b = co_await v.collect();
         const dataframe::Series& n = b.columns[col(b, "n")];
         std::vector<StatCount> out;
         out.reserve(static_cast<std::size_t>(b.num_rows()));

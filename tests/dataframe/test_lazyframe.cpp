@@ -1250,6 +1250,15 @@ TEST_SUITE("lazyframe") {
         }
     }
 
+    TEST_CASE("a comparison the column type cannot take throws") {
+        std::vector<std::string> names{"a", "b", "c"};
+        DataFrame f;
+        f.names = {"name"};
+        f.columns.push_back(Series::strings(names));
+        LazyFrame lf = f.lazy().with_column("big", col(0) > std::int64_t{25});
+        CHECK_THROWS_AS(run(lf.collect()), std::invalid_argument);
+    }
+
     TEST_CASE("predicate pushdown keeps a dependent filter after with_column") {
         // Filter on 'c' (col 2, the added column) must NOT move up.
         auto lf = make_df()

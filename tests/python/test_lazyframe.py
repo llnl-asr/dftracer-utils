@@ -79,14 +79,14 @@ def test_unique():
 
 def test_schema_and_explain():
     lf = _df({"a": [1], "b": [2]}).lazy().with_column("c", col("a") + col("b"))
-    assert lf.schema() == ["a", "b", "c"]
+    assert lf.columns == ["a", "b", "c"]
     assert isinstance(lf.explain(), str)
     assert lf.explain()
 
 
 def test_filter_after_data_dependent_schema_raises():
     lf = _df({"a": [1, 2, 2]}).lazy().to_dummies("a")
-    assert lf.schema() == []  # data-dependent until collected
+    assert lf.columns == []  # data-dependent until collected
     with pytest.raises(ValueError):
         lf.filter(col("a") > 0)
 

@@ -1168,7 +1168,8 @@ TEST_CASE("DFTracer Server - calltree endpoint") {
         CHECK(body.find("\"ret\"") != std::string::npos);
         // Lane-level / bookkeeping fields are not offered as columns.
         CHECK(body.find("\"pid\"") == std::string::npos);
-        // The response also carries a per-column type map (View::schema()).
+        // The response also carries a per-column type map
+        // (View::column_info()).
         CHECK(body.find("\"types\"") != std::string::npos);
     }
 

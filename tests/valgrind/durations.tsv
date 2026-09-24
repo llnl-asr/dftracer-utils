@@ -199,7 +199,6 @@ dataframe/test_expr_infer_type	6.3
 dataframe/test_arrow_types_compute	6.3
 core/test_task_abi	6.3
 utilities/indexer/test_column_type_codec	6.2
-dataframe/test_result_batch	6.2
 trace/indexing/test_shard_manifest	6.1
 pipeline/test_pipeline_elasticity	6.1
 core/test_hex64	6.1

@@ -61,7 +61,7 @@ merged store. ``write_shard_set(root, shard_dirs)`` catalogs the shards into a
 ``shards.json`` manifest at ``root``; ``ShardedView::from_manifest(root)``
 reads that catalog back. Under the hood, ``aggregate()`` runs each shard's
 ``aggregate_partial()`` and reduces the partials with
-``merge_partials_to_table()`` - see :doc:`../guides/scale/distributed-aggregation`
+``merge_partials()`` - see :doc:`../guides/scale/distributed-aggregation`
 for that pattern used directly (e.g. across MPI ranks):
 
 .. code-block:: cpp
@@ -133,7 +133,7 @@ See also
   ``distributed_index()`` (Python, ``dftracer.utils.dask``) for building shards
   across a real dask cluster instead of by hand.
 - :doc:`../guides/scale/distributed-aggregation` - the ``aggregate_partial`` /
-  ``merge_partials_to_table`` fan-out/fan-in pattern ``ShardedView`` runs
+  ``merge_partials`` fan-out/fan-in pattern ``ShardedView`` runs
   in-process, spelled out for a caller-owned transport (MPI, dask, ...).
 - :doc:`../guides/scale/mpi` - the one distributed CLI binary in the tree,
   for the cluster case this tutorial's two-shard example stands in for.

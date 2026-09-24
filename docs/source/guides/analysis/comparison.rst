@@ -37,16 +37,16 @@ Compare two views
 
    .. tab-item:: Python
 
-      ``TraceViewer.compare(other)`` compares against another viewer. The
-      baseline must already carry a ``group_by`` + ``agg`` plan; that plan drives
-      both sides.
+      ``TraceViewer.compare(other)`` compares against another viewer and
+      returns a lazy ``LazyFrame``; ``collect()`` runs it. The baseline must
+      already carry a ``group_by`` + ``agg`` plan; that plan drives both sides.
 
       .. code-block:: python
 
          from dftracer.utils import TraceViewer
 
          baseline = TraceViewer("baseline.pfw.gz").group_by("cat").agg("count", "mean:dur")
-         cmp = baseline.compare(TraceViewer("variant.pfw.gz"))
+         cmp = baseline.compare(TraceViewer("variant.pfw.gz")).collect()
 
 The result carries the group key columns, an ``l_<m>`` / ``r_<m>`` pair for each
 metric (left = baseline, right = variant), and the derived ``delta_<m>`` and

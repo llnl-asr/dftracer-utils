@@ -12,8 +12,9 @@ Querying with TraceViewer
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 :class:`~dftracer.utils.TraceViewer` is the primary way to query a trace. It is
-lazy and Arrow-first: builder methods compose a query and a terminal
-(``collect``) runs it in one pass, served from the index when one exists.
+a lazy :class:`~dftracer.utils.LazyFrame` over the trace: builder methods
+compose a query and ``collect()`` runs it in one pass, served from the index
+when one exists.
 
 .. code-block:: python
 
@@ -26,7 +27,6 @@ lazy and Arrow-first: builder methods compose a query and a terminal
        view.filter('cat == "POSIX"')
            .group_by("name")
            .agg("count", "sum:dur", "max:dur")
-           .collect()                       # -> LazyFrame
            .collect()                       # -> DataFrame
    )
    pdf = df.to_pandas()
@@ -38,7 +38,6 @@ lazy and Arrow-first: builder methods compose a query and a terminal
            .group_by("name", "time_bucket")
            .agg("sum:size")
            .collect()
-           .collect()
    )
 
 See :doc:`api/trace_viewer` for the full builder, aggregation specs, and
@@ -49,15 +48,12 @@ for task-oriented recipes. The rest of this page covers ``Runtime``,
 Reading events
 ~~~~~~~~~~~~~~
 
-``collect()`` builds the group-by/aggregate query plan into a lazy
-:class:`~dftracer.utils.LazyFrame`; nothing scans until you call ``.collect()``
-on that in turn, which materializes the result as a native
+Nothing scans until ``collect()``, which materializes the result as a native
 :class:`~dftracer.utils.DataFrame` (``to_arrow()`` / ``to_pandas()`` convert only
-at the edge, on the ``DataFrame``, not the ``LazyFrame``). A query with no
-``group_by``/``agg`` reduces to a one-row ``count`` - it does **not** return
-the raw events. To read matching events as native DataFrames, use
-``collect_typed()`` (splits into the ``regular`` / ``counters`` / ``aggregated``
-phase families) or ``stream()`` for out-of-core reads.
+at the edge, on the ``DataFrame``, not the ``TraceViewer``). A query with no
+``group_by``/``agg`` returns the matching events, one row each. To split them
+into the ``regular`` / ``counters`` / ``aggregated`` phase families use
+``collect_typed()``, and use ``stream()`` for out-of-core reads.
 
 .. code-block:: python
 
@@ -66,16 +62,18 @@ phase families) or ``stream()`` for out-of-core reads.
    # Per-cat aggregate as a pandas DataFrame.
    df = (
        view.filter('cat == "POSIX"').group_by("cat").agg("count", "mean:dur")
-           .collect().collect().to_pandas()
+           .collect().to_pandas()
    )
 
-   # Raw matching events as native DataFrames, by phase family.
+   # Raw matching events as a native DataFrame.
+   events = view.filter('cat == "POSIX"').collect()
+
+   # The same events by phase family.
    regular = view.filter('cat == "POSIX"').collect_typed()["regular"]
 
-   # Stream Arrow batches instead of materializing.
-   import pyarrow
-   for batch in view.filter('cat == "POSIX"').stream(batch_size=10000):
-       process(pyarrow.record_batch(batch))
+   # Stream DataFrame chunks instead of materializing.
+   for chunk in view.filter('cat == "POSIX"').stream(batch_size=10000):
+       process(chunk.to_arrow())
 
 Time-unit normalization
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -171,7 +169,7 @@ For distributed processing with ``dask.distributed``:
 
    def count_events(path):
        from dftracer.utils import TraceViewer
-       return TraceViewer([path]).agg("count").collect().collect().to_pandas()["count"].sum()
+       return TraceViewer([path]).agg("count").collect().to_pandas()["count"].sum()
 
    futures = client.map(count_events, file_paths)
    results = client.gather(futures)
@@ -223,7 +221,7 @@ exception derives ``DFTUtilsError``, which derives the built-in ``RuntimeError``
    )
 
    try:
-       TraceViewer(["missing.pfw.gz"]).agg("count").collect().collect()
+       TraceViewer(["missing.pfw.gz"]).agg("count").collect()
    except DFTUtilsIOError as e:
        print(f"I/O failed: {e}")
    except DFTUtilsError as e:

@@ -122,6 +122,16 @@ int build_register_provider(void* h, const char* name,
 
 const ::dftu_svc_providers g_build_providers = {build_register_provider};
 
+int build_register_node(void* h, const char* name, const ::dftu_node_vt* vt,
+                        void* self) {
+    BuildHost& bh = self_of(h);
+    int rc = detail::register_plugin_node(name, vt, self);
+    if (rc == 0) bh.registered_nodes().emplace_back(name);
+    return rc;
+}
+
+const ::dftu_svc_nodes g_build_nodes = {build_register_node};
+
 const void* build_get_service(void* h, const char* ext_id) {
     if (!ext_id) return nullptr;
     if (std::string_view{ext_id} == DFTU_SVC_OPS) return &g_build_ops;
@@ -129,6 +139,7 @@ const void* build_get_service(void* h, const char* ext_id) {
     if (std::string_view{ext_id} == DFTU_SVC_PORTS) return &g_build_ports;
     if (std::string_view{ext_id} == DFTU_SVC_PROVIDERS)
         return &g_build_providers;
+    if (std::string_view{ext_id} == DFTU_SVC_NODES) return &g_build_nodes;
     self_of(h).deny(ext_id);
     return nullptr;
 }

@@ -77,10 +77,9 @@ spec: ``count``, ``sum_dur``, ``mean_dur``.
 
    .. tab-item:: Python
 
-      ``TraceViewer`` is the entry point for reading a trace. Its builder
-      methods chain; ``collect()`` builds the query plan and returns a
-      ``LazyFrame``, whose own ``collect()`` runs the scan and returns the
-      native ``DataFrame``.
+      ``TraceViewer`` is the entry point for reading a trace. It is a lazy
+      ``LazyFrame`` over the trace: its builder methods chain and do no work,
+      and ``collect()`` runs the scan and returns the native ``DataFrame``.
 
       .. code-block:: python
 
@@ -91,7 +90,6 @@ spec: ``count``, ``sum_dur``, ``mean_dur``.
              .group_by("cat")
              .agg("count", "sum:dur", "mean:dur")
              .sort_by("cat")
-             .collect()
              .collect()
          )
          print(df.to_pandas())
@@ -104,7 +102,7 @@ spec: ``count``, ``sum_dur``, ``mean_dur``.
          0  posix    250    65000     260.0
          1  stdio    250    64750     259.0
 
-      ``collect().collect()`` returns a native ``DataFrame``; ``to_pandas()``
+      ``collect()`` returns a native ``DataFrame``; ``to_pandas()``
       converts it at the edge, only when you ask. Note the lowercase
       ``posix``/``stdio``:
       ``group_by`` canonicalizes ``cat`` to lowercase, so a
@@ -115,10 +113,10 @@ spec: ``count``, ``sum_dur``, ``mean_dur``.
 
       ``View`` is the C++ entry point (namespace
       ``dftracer::utils::trace::views``). The builder methods chain the same
-      way; ``View::collect()`` builds the query plan and returns a
-      ``LazyFrame``, whose own ``collect()`` runs the scan and returns a
-      ``coro::CoroTask<DataFrame>`` - ``.get()`` drives that to completion for
-      a non-coroutine caller like ``main()``.
+      way; ``View`` is itself a ``LazyFrame`` over the trace scan
+      (``dataframe::LazyOps<View>``), so its own ``collect()`` runs the scan
+      directly and returns a ``coro::CoroTask<DataFrame>`` - ``.get()`` drives
+      that to completion for a non-coroutine caller like ``main()``.
 
       .. code-block:: cpp
 
@@ -136,7 +134,6 @@ spec: ``count``, ``sum_dur``, ``mean_dur``.
                                  AggSpec(AggOp::Sum, "dur"),
                                  AggSpec(AggOp::Mean, "dur")})
                            .sort_by("cat")
-                           .collect()
                            .collect()
                            .get();  // blocks; a dataframe::DataFrame
 
@@ -192,7 +189,6 @@ the same predicate reads almost identically in Python and C++. Keep only the
              .group_by("cat")
              .agg("count", "mean:dur")
              .collect()
-             .collect()
          )
          print(df.to_pandas())
 
@@ -227,7 +223,6 @@ the same predicate reads almost identically in Python and C++. Keep only the
                            .group_by({GroupKey::cat()})
                            .agg({AggSpec(AggOp::Count),
                                  AggSpec(AggOp::Mean, "dur")})
-                           .collect()
                            .collect()
                            .get();
 
@@ -281,7 +276,6 @@ Now read the folder.
              .agg("count")
              .sort_by("cat")
              .collect()
-             .collect()
          )
          print(df.to_pandas())
 
@@ -314,7 +308,6 @@ Now read the folder.
              auto df = view.group_by({GroupKey::cat()})
                            .agg({AggSpec(AggOp::Count)})
                            .sort_by("cat")
-                           .collect()
                            .collect()
                            .get();
 

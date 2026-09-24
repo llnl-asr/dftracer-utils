@@ -323,12 +323,12 @@ def test_lazy_join_matches_eager():
     for how in ("inner", "left", "right", "outer", "semi", "anti"):
         eager = left.join(right, "k", how)
         plan = left.lazy().join(right.lazy(), "k", how)
-        assert plan.schema() == eager.to_arrow().column_names
+        assert plan.columns == eager.to_arrow().column_names
         assert _dict(plan.collect()) == _dict(eager)
         assert _dict(plan.collect(morsel_rows=1)) == _dict(eager)
     assert "join left [k] = [k]" in left.lazy().join(right.lazy(), "k", "left").explain()
     with pytest.raises(ValueError):
-        left.lazy().join(right.lazy(), "nope").schema()
+        left.lazy().join(right.lazy(), "nope").columns
 
 
 def test_lazy_concat_and_union_match_eager():
@@ -336,7 +336,7 @@ def test_lazy_concat_and_union_match_eager():
     b = _df({"k": [2, 4], "s": ["y", "w"]})
     eager = a.concat(b)
     plan = a.lazy().concat(b.lazy())
-    assert plan.schema() == ["k", "s"]
+    assert plan.columns == ["k", "s"]
     assert "concat" in plan.explain()
     assert _dict(plan.collect()) == _dict(eager)
     assert _dict(plan.collect(morsel_rows=1)) == _dict(eager)
@@ -359,7 +359,7 @@ def test_lazy_relational_ops_match_eager():
     lazy = ev.lazy().window(["pid"], ["ts"], specs)
     # The window states its names (input, then one per spec), so a later op
     # resolves them before collect.
-    assert lazy.schema() == ["pid", "ts", "dur", "rn", "cum", "prev"]
+    assert lazy.columns == ["pid", "ts", "dur", "rn", "cum", "prev"]
     assert "frame_op dftu.frame.window" in lazy.explain()
     assert _dict(lazy.collect()) == _dict(ev.window(["pid"], ["ts"], specs))
     assert _dict(lazy.collect(morsel_rows=1)) == _dict(ev.window(["pid"], ["ts"], specs))
@@ -389,13 +389,13 @@ def test_lazy_relational_ops_match_eager():
         left.lazy().asof(right.lazy(), "ts", ["pid"], "sideways")
     # asof / interval state their names too: left, then the right's value
     # columns, a collision suffixed _right.
-    assert left.lazy().asof(right.lazy(), "ts", ["pid"], "backward").schema() == [
+    assert left.lazy().asof(right.lazy(), "ts", ["pid"], "backward").columns == [
         "pid",
         "ts",
         "x",
         "y",
     ]
-    assert left.lazy().asof(left.lazy(), "ts", ["pid"], "backward").schema() == [
+    assert left.lazy().asof(left.lazy(), "ts", ["pid"], "backward").columns == [
         "pid",
         "ts",
         "x",
@@ -427,7 +427,7 @@ def test_lazy_relational_ops_match_eager():
         }
     )
     un = nested.lazy().unnest("tk")
-    assert un.schema() == ["pid", "value", "count"]
+    assert un.columns == ["pid", "value", "count"]
     assert "unnest tk" in un.explain()
     assert _dict(un.collect()) == _dict(nested.unnest("tk"))
     assert _dict(nested.lazy().unnest("tk", keep_empty=True).collect(morsel_rows=1)) == _dict(

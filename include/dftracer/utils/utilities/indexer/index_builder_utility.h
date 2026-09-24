@@ -37,10 +37,6 @@ inline constexpr std::array<std::string_view, 7> DEFAULT_BLOOM_DIMENSIONS = {
     "name", "cat", "pid", "tid", "hhash", "fhash", "shash",
 };
 
-inline constexpr std::array<std::string_view, 5> DEFAULT_EXTRA_DIMENSIONS = {
-    "ret", "count", "offset", "epoch", "step",
-};
-
 struct IndexBuildResult {
     std::string file_path;
     std::string index_path;

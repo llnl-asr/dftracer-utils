@@ -47,44 +47,61 @@ registered branch sees every matching event from the same traversal.
 
    .. tab-item:: C++
 
-      ``ViewSession`` (``base_view.session()``) registers ops - ``collect``,
-      ``export_json``, ``fold``, ``materialize`` - each returning a
-      ``Deferred<T>``, then ``execute()`` runs the one scan.
+      ``TraceSession`` (``base_view.session()``) registers ops - ``collect``
+      (over any ``LazyFrame`` or ``LazyResult``: an aggregation view's
+      ``.lazy()``, a plugin attached through ``View::branch``, or any other
+      plan), ``sink_json``, ``materialize`` - each returning a ``Deferred<T>``,
+      then ``execute()`` runs the one scan.
 
       .. code-block:: cpp
 
-         ViewSession session = base_view.session();
-         auto counts = session.collect(predicate_a, group_by_a, agg_a);
-         auto stats  = session.fold<Stats>(predicate_b, accumulate, combine);
+         View counted = base_view.filter(predicate_a)
+                            .group_by(group_by_a)
+                            .agg(agg_a);
+
+         TraceSession session = base_view.session();
+         auto counts = session.collect(counted.lazy());
+         auto exported = session.sink_json(base_view.filter(predicate_b), sink);
          co_await session.execute();   // one scan, both branches resolved
 
          counts->num_rows();           // read a Deferred after execute()
 
    .. tab-item:: Python
 
-      ``TraceViewer.session()`` gives each branch the full builder API;
-      ``view()`` starts a branch and its terminal returns a ``Handle``.
-      Leaving the ``with`` block (or the first ``Handle.result()``) runs the
-      one scan.
+      ``TraceViewer.session()`` registers lazy plans: ``collect`` takes any
+      ``LazyFrame`` or ``LazyResult`` over the trace, and ``sink_json``,
+      ``materialize``, and ``attach`` (a compiled plugin set) are branches
+      too. Each returns a ``Handle``. Leaving the ``with`` block (or the first
+      ``Handle.result()``) runs the one scan.
 
       .. code-block:: python
 
+         from dftracer.utils.plugins import Plugins
+
          with base_view.session() as s:
-             counts = s.view().group_by("cat").agg("count").collect()
-             stats  = s.view().statistics()
-             hist   = s.view().plugin("dur_histogram.so")   # plugin/JIT fold
-             s.view().filter('cat == "POSIX"').export("posix.pfw")
+             counts = s.collect(base_view.group_by("cat").agg("count"))
+             stats  = s.collect(base_view.statistics(lazy=True))
+             hist   = s.attach(Plugins(["dur_histogram.so"]))   # plugin/JIT fold
+             s.sink_json(base_view.filter('cat == "POSIX"'), "posix.pfw")
 
          counts_df = counts.result()   # resolved from the shared scan
          stats_dict = stats.result()
-         hist_df = hist.result()
+         hist_df = hist.result()["dur_histogram"]
 
-Two ``collect`` branches that group the same way can be combined after the one
-scan with ``session.join`` and ``session.compare`` (C++ and Python alike), so a
-delta between two filtered aggregates still costs a single traversal. The shared
-key width is inferred from the branch, and each returns a handle resolved on
-execute like any other branch. See :doc:`../guides/analysis/aggregation` for the
-Python how-to and :doc:`../guides/analysis/views` for the C++ terminals.
+      ``collect_all([...])`` does the same without a session: it collects a
+      list of plans and lazy results, one value per root, and plans over the
+      same trace share one scan.
+
+An aggregation view can be diffed against a second view's events after the one
+scan with ``View::compare`` in C++:
+``base.group_by(keys).agg(specs).compare(variant)`` returns a ``LazyFrame``
+already joined on the group key and carrying ``delta_``/``pct_`` per metric,
+and since both views read the same files the comparison still costs one
+traversal. In Python the join is part of the plan:
+``s.collect(a.join(b, on="cat"))`` over two plans of one trace, or
+``base.compare(variant)``, still reads the trace once. See
+:doc:`../guides/analysis/aggregation` for the Python how-to and
+:doc:`../guides/analysis/views` for the C++ terminals.
 
 This is why a CLI invocation with multiple analytics, or a query that runs a
 compiled plugin alongside a built-in aggregation, does not multiply the I/O

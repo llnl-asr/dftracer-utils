@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""TraceViewer.compare: View-based two-viewer comparison (CompareView)."""
+"""TraceViewer.compare: a lazy two-viewer comparison over one group_by/agg."""
 
 import math
 
 import pytest
 
 import dftracer.utils as dftu_utils
-from dftracer.utils import TraceViewer
+from dftracer.utils import DFTUtilsValueError, TraceViewer
 
 from .common import Environment
 
@@ -23,7 +23,7 @@ class TestCompare:
         with Environment(lines=200) as env:
             gz = _indexed(env)
             base = TraceViewer(gz).group_by("cat").agg("count")
-            df = base.compare(TraceViewer(gz)).to_pandas()
+            df = base.compare(TraceViewer(gz)).collect().to_pandas()
             assert {
                 "cat",
                 "l_count",
@@ -40,7 +40,7 @@ class TestCompare:
             base_gz = _indexed(base_env)
             var_gz = _indexed(var_env)
             base = TraceViewer(base_gz).group_by("cat").agg("count")
-            df = base.compare(TraceViewer(var_gz)).to_pandas()
+            df = base.compare(TraceViewer(var_gz)).collect().to_pandas()
 
             # delta and pct are self-consistent with the joined l_/r_ columns.
             assert (df["delta_count"] == df["r_count"] - df["l_count"]).all()
@@ -57,5 +57,5 @@ class TestCompare:
     def test_compare_requires_an_agg_plan(self):
         with Environment(lines=100) as env:
             gz = _indexed(env)
-            with pytest.raises(ValueError):
+            with pytest.raises(DFTUtilsValueError, match="group_by or agg"):
                 TraceViewer(gz).compare(TraceViewer(gz))

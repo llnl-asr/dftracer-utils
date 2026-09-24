@@ -114,7 +114,6 @@ def test_flat_dotted_arg_key_resolves_at_runtime(tmp_path):
             .group_by("mlx5.op")
             .agg("count")
             .collect()
-            .collect()
         )
         df = pa.table(tbl).to_pandas()
         return int(df["count"].sum())
@@ -152,7 +151,6 @@ def test_traceviewer_filter_accepts_expr(tmp_path):
             .filter(pred)
             .group_by("cat")
             .agg("count")
-            .collect()
             .collect()
         )
         df = pa.table(tbl).to_pandas()
@@ -275,7 +273,7 @@ def test_string_values_apply_in_memory():
 
 def test_traceviewer_filter_unified_predicates(tmp_path):
     """filter() accepts unified-F predicates (comparison, membership, like,
-    resolved) and raises the clear error on a non-pushable one."""
+    resolved); a non-pushable one filters the plan's rows instead."""
     pa = pytest.importorskip("pyarrow")
     from dftracer.utils import AggregationConfig, F, Indexer, TraceViewer, resolved
 
@@ -297,7 +295,6 @@ def test_traceviewer_filter_unified_predicates(tmp_path):
             .group_by("cat")
             .agg("count")
             .collect()
-            .collect()
         )
         return int(pa.table(tbl).to_pandas()["count"].sum())
 
@@ -310,6 +307,12 @@ def test_traceviewer_filter_unified_predicates(tmp_path):
     v2 = TraceViewer(str(tmp_path), index_path=idx).filter(resolved("hostname") == "n01")
     assert isinstance(v2, TraceViewer)
 
-    # A non-pushable predicate raises the clear error at filter time.
-    with pytest.raises(TypeError, match="not an index-pushable predicate"):
-        TraceViewer(str(tmp_path), index_path=idx).filter((F.dur + F.ts) > 3)
+    # A non-pushable predicate filters the collected rows, not the index.
+    events = TraceViewer(str(tmp_path), index_path=idx).phase("events")
+    v3 = events.filter((F.dur + F.ts) > 1005)
+    assert isinstance(v3, TraceViewer)
+    every = pa.table(events.collect()).to_pandas()
+    kept = pa.table(v3.collect()).to_pandas()
+    expected = every[every["dur"] + every["ts"] > 1005]
+    assert 0 < len(kept) < len(every)
+    assert sorted(kept["ts"]) == sorted(expected["ts"])

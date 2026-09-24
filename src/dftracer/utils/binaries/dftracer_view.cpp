@@ -12,7 +12,6 @@
 #include <dftracer/utils/trace/indexing/resolve_and_build.h>
 #include <dftracer/utils/trace/indexing/shard_manifest.h>
 #include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/trace/views/result_batch.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_definition.h>
@@ -24,6 +23,7 @@
 #include <cstdlib>
 #include <exception>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -395,7 +395,7 @@ static coro::CoroTask<void> verify_output(
     ovf.checkpoint_size = checkpoint_size;
     NullSink ns;
     View v = configure(View::from_files({ovf}));
-    ExportStats vs = co_await v.export_json(ns);
+    ExportStats vs = co_await v.sink_json(ns);
     if (vs.events_matched != expected_events) {
         DFTRACER_UTILS_LOG_ERROR(
             "Verify failed: wrote %llu events but re-scan found %llu",
@@ -872,7 +872,8 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
 
     ExportStats stats;
     // Apply the parsed view options to a base View; shared by the single-node
-    // and distributed paths so both aggregate identically.
+    // and distributed paths so both aggregate identically. The projection and
+    // row window (--select/--offset/--limit) are applied by `windowed`.
     auto configure = [&](View v) {
         if (view.query) v = v.filter(*view.query);
         v = v.phase(view_phase);
@@ -880,19 +881,38 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         if (time_range) v = v.time_range(time_range->first, time_range->second);
         if (cli->time_scale > 0) v = v.time_scale(cli->time_scale);
         if (time_bucket > 0) v = v.time_bucket(time_bucket);
-        if (cli->occ_cell > 0) v = v.occ_cell(cli->occ_cell);
-        if (!group_keys.empty()) v = v.group_by(group_keys);
-        if (!agg_specs.empty()) v = v.agg(agg_specs);
-        if (cli->agg_numeric_args) v = v.agg_numeric_args();
-        if (!cli->select.empty()) v = v.select(cli::split_csv(cli->select));
+        if (cli->occ_cell > 0) v = v.resolution(cli->occ_cell);
         if (cli->no_spill)
             v = v.memory_budget(NO_SPILL_BUDGET);
         else if (cli->memory_budget > 0)
             v = v.memory_budget(cli->memory_budget);
         // else: leave the plan default (0), which resolves to auto (~1/3 RAM).
-        if (cli->offset > 0) v = v.offset(cli->offset);
-        if (cli->limit > 0) v = v.limit(cli->limit);
+        if (!group_keys.empty()) v = v.group_by(group_keys);
+        if (!agg_specs.empty()) v = v.agg(agg_specs);
+        if (cli->agg_numeric_args) v = v.agg_numeric_args();
         return v;
+    };
+    const bool has_window = cli->offset > 0 || cli->limit > 0;
+    const std::int64_t window_len =
+        cli->limit > 0 ? static_cast<std::int64_t>(cli->limit)
+                       : std::numeric_limits<std::int64_t>::max();
+    auto windowed = [&](View v) {
+        if (!cli->select.empty()) v = v.select(cli::split_csv(cli->select));
+        if (has_window)
+            v = v.slice(static_cast<std::int64_t>(cli->offset), window_len);
+        return v;
+    };
+    // The same projection and window over a table merged from partials.
+    auto windowed_table = [&](dataframe::DataFrame table)
+        -> coro::CoroTask<dataframe::DataFrame> {
+        if (cli->select.empty() && !has_window) co_return table;
+        dataframe::LazyFrame rows = dataframe::lazy(std::move(table));
+        if (!cli->select.empty())
+            rows = rows.select(cli::split_csv(cli->select));
+        if (has_window)
+            rows =
+                rows.slice(static_cast<std::int64_t>(cli->offset), window_len);
+        co_return co_await rows.collect();
     };
     auto combined_task = make_task(
         [&](CoroScope& ctx) -> coro::CoroTask<void> {
@@ -953,12 +973,10 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                 }
                 View shard_view =
                     configure(View::from_files(std::move(shard_files_vf)));
-                std::string partial;
-                if (fg_mode)
-                    partial =
-                        co_await shard_view.flamegraph_partial(ct_partition);
-                else
-                    partial = co_await shard_view.aggregate_partial();
+                dataframe::LazyResult<std::string> partial_plan =
+                    fg_mode ? shard_view.flamegraph_partial(ct_partition)
+                            : shard_view.aggregate_partial();
+                std::string partial = co_await partial_plan.collect();
                 auto partials = transport.all_gather(partial);
                 if (transport.rank() == 0) {
                     std::vector<std::string_view> pv(partials.begin(),
@@ -972,8 +990,9 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                     } else if (counters) {
                         stats = merger.merge_counter_partials(pv, sink);
                     } else {
+                        dataframe::DataFrame merged = merger.merge_partials(pv);
                         dataframe::DataFrame table =
-                            merger.merge_partials_to_table(pv);
+                            co_await windowed_table(std::move(merged));
                         print_table(out_target, table);
                         stats.events_matched = table.num_rows();
                     }
@@ -1029,8 +1048,8 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                 topts.num_workers = cli->pipeline.executor_threads;
                 topts.compress = true;
                 View shard_view =
-                    configure(View::from_files(std::move(shard_vf)));
-                stats = co_await shard_view.export_trace(topts);
+                    windowed(configure(View::from_files(std::move(shard_vf))));
+                stats = co_await shard_view.sink_trace(topts);
                 auto rank_outs = transport.all_gather(rank_out);
                 if (transport.rank() == 0) {
                     std::vector<std::string> parts(rank_outs.begin(),
@@ -1056,22 +1075,28 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                 if (counters) {
                     stats = co_await sv.aggregate_counters(configure, sink);
                 } else {
-                    dataframe::DataFrame table =
+                    dataframe::DataFrame merged =
                         co_await sv.aggregate(configure);
+                    dataframe::DataFrame table =
+                        co_await windowed_table(std::move(merged));
                     print_table(out_target, table);
                     stats.events_matched = table.num_rows();
                 }
                 co_return;
             }
 
-            View v = configure(View::from_files(view_files));
+            // The typed, rollup and counter terminals read the whole
+            // aggregation; the projection and row window apply to the other
+            // outputs.
+            View base = configure(View::from_files(view_files));
+            View v = windowed(base);
 
             // Skip the eager pre-build when the query would take the raw-gzip
             // bootstrap (answer the query and build the index in one pass);
             // pre-building first would make the index exist so the bootstrap
             // never fires. Only the plain export / collect paths bootstrap.
             const bool will_bootstrap =
-                (aggregate && v.collect_would_bootstrap()) ||
+                (aggregate && base.collect_would_bootstrap()) ||
                 (!counters && !aggregate && !write_trace &&
                  v.export_would_bootstrap());
             if (!no_auto_index && !will_bootstrap) {
@@ -1080,29 +1105,27 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
             }
 
             if (ct_mode || fg_mode) {
-                dataframe::DataFrame table;
-                if (fg_mode)
-                    table = co_await v.flamegraph(ct_partition);
-                else
-                    table = co_await v.call_tree(ct_partition);
+                dataframe::LazyFrame tree = fg_mode ? v.flamegraph(ct_partition)
+                                                    : v.call_tree(ct_partition);
+                dataframe::DataFrame table = co_await tree.collect();
                 print_table(out_target, table);
                 stats.events_matched = table.num_rows();
             } else if (mv_mode) {
                 // Build-only terminal: compute the aggregation and persist it
                 // as a rollup so a later matching query hits the fast path.
-                stats = co_await v.materialize().run();
+                stats = co_await base.materialize();
                 std::fprintf(stderr, "Materialized rollup (%llu events).\n",
                              (unsigned long long)stats.events_matched);
             } else if (typed_mode) {
-                auto tr = co_await v.collect_typed();
+                auto tr = co_await base.collect_typed();
                 emit_typed(out_target, tr.regular, tr.aggregated, tr.counters);
                 stats.events_matched = static_cast<std::uint64_t>(
                     tr.regular.num_rows() + tr.aggregated.num_rows() +
                     tr.counters.num_rows());
             } else if (counters) {
-                stats = co_await v.export_counters(sink);
+                stats = co_await base.sink_counters(sink);
             } else if (aggregate) {
-                dataframe::DataFrame table = co_await collect_batch(v);
+                dataframe::DataFrame table = co_await v.collect();
                 print_table(out_target, table);
                 stats.events_matched = table.num_rows();
             } else if (write_trace) {
@@ -1115,17 +1138,18 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                 topts.compress = true;
                 topts.build_index = !no_index;
                 topts.index_path = index_dir;
-                stats = co_await v.export_trace(topts);
+                stats = co_await v.sink_trace(topts);
             } else {
-                stats = co_await v.export_json(sink);
+                stats = co_await v.sink_json(sink);
             }
 
             if (out_file) std::fflush(out_file);
 
             if (verify && write_trace) {
-                co_await verify_output(ctx, final_output, index_dir,
-                                       checkpoint_size, configure,
-                                       stats.events_matched, verify_failed);
+                co_await verify_output(
+                    ctx, final_output, index_dir, checkpoint_size,
+                    [&](View b) { return windowed(configure(b)); },
+                    stats.events_matched, verify_failed);
             }
             co_return;
         },

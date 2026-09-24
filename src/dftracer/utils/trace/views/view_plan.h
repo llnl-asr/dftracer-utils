@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_VIEW_PLAN_H
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_PLAN_H
 
+#include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/query/query.h>
 #include <dftracer/utils/trace/views/view.h>
 
@@ -26,6 +27,15 @@ struct AggSchema;
 /// Index-backed name maps for resolved-name group keys. Defined in
 /// view_resolver.h.
 class GroupResolver;
+
+/// A column computed per event before grouping: `expr` is positional against
+/// `inputs`, which name row columns (as a row select would). A group key of
+/// kind Expr, or an aggregate's field, names it.
+struct ComputedColumn {
+    std::string name;
+    dataframe::Expr expr;
+    std::vector<std::string> inputs;
+};
 
 /// The logical plan a `View` carries. The ops form a linear pipeline, so a flat
 /// struct captures it; each builder copies and mutates one field.
@@ -57,6 +67,7 @@ struct ViewPlan {
     /// unit to a target (source_ns / target_ns; 1.0 = no scaling). Applied
     /// before time_bucket so bucketing is in the target unit.
     double time_scale = 1.0;
+    std::vector<ComputedColumn> computed;
     std::vector<GroupKey> group_by;
     std::vector<AggSpec> agg;
     /// Aggregate every numeric args.* field as a dynamic per-group metric

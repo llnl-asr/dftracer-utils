@@ -45,10 +45,11 @@ Build a predicate with the unified ``F`` (namespace
 ``dftracer::utils::dataframe::field``, header
 ``dftracer/utils/dataframe/field.h``): ``F("dur") < 300`` is a field predicate
 that ``View::filter`` takes directly and pushes down to the index. The same
-``F`` also builds value/derived columns (see step 5). ``View::collect()``
-builds the query plan and returns a ``LazyFrame``; its own ``collect()`` runs
-the scan and returns the ``coro::CoroTask<DataFrame>`` that ``.get()`` drives
-to completion, hence the ``.collect().collect().get()`` chain below.
+``F`` also builds value/derived columns (see step 5). ``View`` derives from
+``dataframe::LazyOps<View>``, so it is itself a ``LazyFrame`` over the trace
+scan: its own ``collect()`` runs the scan and returns the
+``coro::CoroTask<DataFrame>`` that ``.get()`` drives to completion, hence the
+``.collect().get()`` chain below.
 
 .. code-block:: cpp
 
@@ -67,7 +68,6 @@ to completion, hence the ``.collect().collect().get()`` chain below.
                      .group_by({GroupKey::cat()})
                      .agg({AggSpec(AggOp::Count), AggSpec(AggOp::Sum, "dur")})
                      .sort_by("cat")
-                     .collect()
                      .collect()
                      .get();  // blocks; a dataframe::DataFrame
 
@@ -120,7 +120,6 @@ back typed with ``.f64()`` or ``.i64()``:
                      .group_by({GroupKey::cat()})
                      .agg({AggSpec(AggOp::Sum, "dur")})
                      .collect()
-                     .collect()
                      .get();
 
        auto sum_dur = df.column("sum_dur");
@@ -134,14 +133,15 @@ Expected output (the full, unfiltered trace: POSIX 65000 + STDIO 64750):
 
    total dur across both categories: 129750.0
 
-4. A custom fold with ViewSession
+4. A custom fold with View::branch
 ------------------------------------
 
 The built-in ``AggSpec`` ops cover common reductions, but sometimes you want a
 one-off accumulation without writing a full plugin (see
-:doc:`write-a-c-plugin` for that path). ``View::session()`` opens a
-``ViewSession``: register one or more ops, then ``execute()`` runs a single
-shared scan and resolves every registered ``Deferred`` handle at once.
+:doc:`write-a-c-plugin` for that path). ``View::branch<T>`` registers a caller
+branch on the view's scan: the callback receives a ``ViewSession&`` to attach
+the branch to and returns the branch's ``Deferred<T>``, and ``branch<T>``
+wraps that into a ``dataframe::LazyResult<T>`` you drive like any other plan.
 ``ViewSession::fold<P>`` folds each matching event's raw JSON into a partial
 ``P``, combining per-worker partials with the function you supply:
 
@@ -155,21 +155,25 @@ shared scan and resolves every registered ``Deferred`` handle at once.
 
    using namespace dftracer::utils::trace::views;
    using dftracer::utils::dataframe::field::F;
+   using dftracer::utils::dataframe::LazyResult;
    using dftracer::utils::json::JsonValue;
 
    int main() {
        View view = View::from_file("trace.pfw.gz");
-       ViewSession run = view.session();
 
-       Deferred<double> posix_dur_sum = run.fold<double>(
-           F("cat") == "POSIX",
-           [](double& acc, const JsonValue& jv, std::string_view /*raw*/) {
-               acc += jv["dur"].get<double>(0.0);
-           },
-           [](double&& a, double&& b) { return a + b; });
+       LazyResult<double> posix_dur_sum_plan = view.branch<double>(
+           [](ViewSession& session) {
+               return session.fold<double>(
+                   F("cat") == "POSIX",
+                   [](double& acc, const JsonValue& jv,
+                      std::string_view /*raw*/) {
+                       acc += jv["dur"].get<double>(0.0);
+                   },
+                   [](double&& a, double&& b) { return a + b; });
+           });
 
-       run.execute().get();  // one shared scan; resolves posix_dur_sum
-       std::printf("POSIX dur sum: %.1f\n", *posix_dur_sum);
+       double posix_dur_sum = posix_dur_sum_plan.collect().get();
+       std::printf("POSIX dur sum: %.1f\n", posix_dur_sum);
    }
 
 Expected output (matches the ``sum_dur`` a ``group_by("cat")`` would give the
@@ -184,10 +188,10 @@ sensitivity is unaffected by the lowercasing ``group_by({GroupKey::cat()})``
 does in step 2: ``F("cat") == "POSIX"`` only matches events whose ``cat`` field
 is literally ``"POSIX"``. ``fold`` accepts the ``F`` predicate directly (it
 derives the pushdown ``Query`` via ``.to_query()``); a predicate that mixes in
-value ops is not pushable and throws. ``Deferred<P>::get()`` (or ``*``/``->``)
-throws if read before ``execute()``
-has resolved it - that is what makes ``run.execute().get()`` a hard
-prerequisite, not an optimization.
+value ops is not pushable and throws. Reading the ``Deferred<P>`` the callback
+returns (via ``get()``/``*``/``->``) before the branch's scan has run throws -
+``posix_dur_sum_plan.collect()`` is what runs that scan and resolves it, so the
+``.collect()`` above is a hard prerequisite, not an optimization.
 
 What you learned
 -----------------
@@ -196,14 +200,14 @@ What you learned
   ``F("field")`` (``dftracer/utils/dataframe/field.h``) builds a predicate that
   ``View::filter`` / ``fold`` take directly (pushdown), and the same ``F`` builds
   value/derived columns via ``.apply(df)``.
-- ``group_by`` + ``agg`` + ``collect().collect().get()`` gives a ``DataFrame``; read a
+- ``group_by`` + ``agg`` + ``collect().get()`` gives a ``DataFrame``; read a
   column with ``df.column(name)`` and reduce it with ``Series::sum()`` /
   ``min()`` / ``max()``, each returning a ``Scalar`` read back with ``.f64()``
   / ``.i64()``.
-- For a one-off computation the built-in ``AggOp`` set does not cover, open a
-  ``ViewSession`` with ``View::session()`` and register a ``fold<P>`` op;
-  ``execute()`` runs the one shared scan and resolves every registered
-  ``Deferred``.
+- For a one-off computation the built-in ``AggOp`` set does not cover, use
+  ``View::branch<T>`` with a callback that registers a ``ViewSession::fold<P>``
+  op; ``.collect()`` on the returned ``LazyResult<T>`` runs the scan and
+  resolves it.
 
 For the built-in aggregates in depth, see :doc:`../guides/analysis/views`; for
 a computation that needs its own mergeable state and runs as a first-class

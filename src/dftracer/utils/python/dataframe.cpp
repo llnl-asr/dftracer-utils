@@ -1576,7 +1576,7 @@ int init_dataframe(PyObject* m) {
     DataFrameType.tp_as_sequence = &DataFrame_as_sequence;
     DataFrameType.tp_methods = DataFrame_methods;
     DataFrameType.tp_getset = DataFrame_getset;
-    DataFrameType.tp_new = nullptr;  // created only by the View
+    DataFrameType.tp_new = nullptr;  // created only by a trace view
     if (register_type(m, &DataFrameType, "_DataFrame") < 0) return -1;
 
     static PyMethodDef from_arrow_def = {

@@ -1,4 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/trace/indexing/resolve_and_build.h>
 #include <dftracer/utils/trace/indexing/scalable_bloom_filter.h>
 #include <dftracer/utils/trace/views/bloom_fold.h>
 #include <dftracer/utils/trace/views/dict_fold.h>
@@ -10,6 +11,7 @@
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
+#include <testing_runtime.h>
 
 #include <algorithm>
 #include <span>
@@ -94,7 +96,7 @@ TEST_SUITE("BloomFold") {
             StringSink s;
             View::from_file(gz, index_path)
                 .emit_all_metadata(true)
-                .export_json(s)
+                .sink_json(s)
                 .get();
         }
 
@@ -130,7 +132,7 @@ TEST_SUITE("BloomFold") {
             StringSink s;
             View::from_file(gz, index_path)
                 .query(R"(cat == "POSIX")")
-                .export_json(s)
+                .sink_json(s)
                 .get();
             idx::IndexDatabase db(index_path, idx::IndexOpenMode::ReadOnly);
             REQUIRE_FALSE(db.has_bloom_data(file_id_of(db, gz)));
@@ -190,7 +192,7 @@ TEST_SUITE("BloomFold") {
             StringSink s;
             View::from_file(gz, index_path)
                 .query(R"(cat == "POSIX")")
-                .export_json(s)
+                .sink_json(s)
                 .get();
         }
 
@@ -247,7 +249,7 @@ TEST_SUITE("BloomFold") {
             StringSink s;
             View::from_file(gz, index_path)
                 .query(R"(cat == "POSIX")")
-                .export_json(s)
+                .sink_json(s)
                 .get();
         }
 
@@ -296,8 +298,8 @@ TEST_SUITE("BloomFold") {
     }
 
     // Schemaless column harvest: nested-object and array args surface as dotted
-    // leaf columns with their types, and View::columns()/schema() read them
-    // back from the index with no trace scan.
+    // leaf columns with their types, and View::columns()/column_info() read
+    // them back from the index with no trace scan.
     TEST_CASE("schemaless columns and schema over nested args") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
@@ -325,7 +327,7 @@ TEST_SUITE("BloomFold") {
             StringSink s;
             View::from_file(gz, index_path)
                 .emit_all_metadata(true)
-                .export_json(s)
+                .sink_json(s)
                 .get();
         }
 
@@ -356,7 +358,7 @@ TEST_SUITE("BloomFold") {
         CHECK(has("resolved.hostname"));
 
         std::unordered_map<std::string, std::string> ty;
-        for (const auto& ci : v.schema()) ty[ci.name] = ci.type;
+        for (const auto& ci : v.column_info()) ty[ci.name] = ci.type;
         CHECK(ty["pid"] == "int64");
         CHECK(ty["ts"] == "int64");
         CHECK(ty["hostname"] == "string");
@@ -367,5 +369,131 @@ TEST_SUITE("BloomFold") {
         // widens it to float64.
         CHECK(ty["size"] == "float64");
         CHECK(ty["resolved.fpath"] == "string");
+    }
+}
+
+TEST_SUITE("BloomCore") {
+    using dftracer::utils::trace::visitors::BloomCore;
+
+    TEST_CASE("merging a chunk's states keeps numeric min and max") {
+        BloomCore::ChunkIndexerConfig config;
+        BloomCore::ChunkState a, b;
+        BloomCore::init_chunk_state(a, config, {});
+        BloomCore::init_chunk_state(b, config, {});
+        BloomCore::PidTidCache cache;
+        BloomCore::observe_data(a, cache, config, "read", "POSIX", 9, 1, 9, 9,
+                                true, "", "", "");
+        BloomCore::observe_data(b, cache, config, "read", "POSIX", 10, 1, 10,
+                                10, true, "", "", "");
+        BloomCore::merge_chunk_state(a, b);
+        const auto& ts = a.fixed_dim_stats[BloomCore::FD_TS];
+        CHECK(ts.min_value == "9");
+        CHECK(ts.max_value == "10");
+    }
+
+    TEST_CASE("an extra dimension keeps min and max in its own type") {
+        BloomCore::ChunkIndexerConfig config;
+        BloomCore::ChunkState c;
+        BloomCore::init_chunk_state(c, config, {"size", "mode", "mix"});
+        BloomCore::observe_extra(c, 0, std::int64_t{9});
+        BloomCore::observe_extra(c, 0, std::int64_t{10});
+        BloomCore::observe_extra(c, 0, 2.5);
+        BloomCore::observe_extra(c, 1, std::string_view("rw"));
+        BloomCore::observe_extra(c, 1, std::string_view("r"));
+        BloomCore::observe_extra(c, 2, std::int64_t{1});
+        BloomCore::observe_extra(c, 2, std::string_view("x"));
+
+        const auto& size = c.extra_dim_stats[0];
+        CHECK(size.value_type == "double");
+        CHECK(size.min_value == "2.500000");
+        CHECK(size.max_value == "10");
+        CHECK(c.extra_blooms[0].possibly_contains("10"));
+        CHECK(c.extra_blooms[0].possibly_contains("2.500000"));
+
+        const auto& mode = c.extra_dim_stats[1];
+        CHECK(mode.value_type == "string");
+        CHECK(mode.min_value == "r");
+        CHECK(mode.max_value == "rw");
+
+        const auto& mix = c.extra_dim_stats[2];
+        CHECK(mix.value_type == "mixed");
+        CHECK(mix.min_value.empty());
+        CHECK(mix.max_value.empty());
+    }
+
+    TEST_CASE("merging an extra dimension joins its types") {
+        BloomCore::ChunkIndexerConfig config;
+        BloomCore::ChunkState a, b, c;
+        for (auto* s : {&a, &b, &c})
+            BloomCore::init_chunk_state(*s, config, {"n"});
+        BloomCore::observe_extra(a, 0, std::int64_t{9});
+        BloomCore::observe_extra(b, 0, std::int64_t{10});
+        BloomCore::merge_chunk_state(a, b);
+        CHECK(a.extra_dim_stats[0].min_value == "9");
+        CHECK(a.extra_dim_stats[0].max_value == "10");
+        BloomCore::observe_extra(c, 0, std::string_view("x"));
+        BloomCore::merge_chunk_state(a, c);
+        CHECK(a.extra_dim_stats[0].value_type == "mixed");
+        CHECK(a.extra_dim_stats[0].min_value.empty());
+    }
+}
+
+TEST_SUITE("BloomFold - auto fields") {
+    // Four members; member m holds size m*100+{0,1,2}, mode "m<m>", and
+    // fname unique per event.
+    static std::string create_auto_trace(TestEnvironment & env) {
+        std::string pfw = env.get_dir() + "/auto.pfw";
+        {
+            std::ofstream ofs(pfw);
+            for (int m = 0; m < 4; ++m)
+                for (int i = 0; i < 60; ++i)
+                    ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+                        << m * 1000 + i << R"(,"dur":5,"args":{"size":)"
+                        << m * 100 + i % 3 << R"(,"mode":"m)" << m
+                        << R"(","fname":"/f/)" << m << "/" << i << R"("}})"
+                        << "\n";
+        }
+        std::string gz = pfw + ".gz";
+        dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 4000);
+        fs::remove(pfw);
+        return gz;
+    }
+
+    TEST_CASE("auto fields keep numeric min/max and capped string blooms") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        std::string gz = create_auto_trace(env);
+        namespace ti = dftracer::utils::trace::indexing;
+        ti::ResolveAndBuildInput input;
+        input.files = {gz};
+        input.require_bloom = true;
+        input.bloom_config.extra_dimensions.clear();
+        input.bloom_config.auto_fields = true;
+        input.bloom_config.auto_max_distinct = 8;
+        std::string index_path;
+        dftu_utils_test::run_coro([&](dftracer::utils::CoroScope& scope)
+                                      -> dftracer::utils::coro::CoroTask<void> {
+            auto res = co_await ti::resolve_and_build_index(&scope, input);
+            index_path = res.index_path;
+        });
+        idx::IndexDatabase db(index_path, idx::IndexOpenMode::ReadOnly);
+        const int fid = file_id_of(db, gz);
+        auto dims = db.query_index_dimensions(fid);
+        for (auto d : {"size", "mode", "fname", "@auto"})
+            CHECK(std::find(dims.begin(), dims.end(), d) != dims.end());
+
+        auto size = db.query_chunk_dimension_stats_for_dimension(fid, "size");
+        REQUIRE(size.size() >= 2);
+        for (const auto& s : size) {
+            CHECK(s.value_type == "int");
+            CHECK_FALSE(s.min_value.empty());
+        }
+        CHECK(db.query_chunk_bloom_filters(fid, "size").empty());
+        CHECK_FALSE(db.query_file_bloom_filter(fid, "size").has_value());
+
+        CHECK(db.query_chunk_bloom_filters(fid, "mode").size() == size.size());
+        CHECK(db.query_file_bloom_filter(fid, "mode").has_value());
+        CHECK(db.query_chunk_bloom_filters(fid, "fname").size() < size.size());
+        CHECK_FALSE(db.query_file_bloom_filter(fid, "fname").has_value());
     }
 }

@@ -78,7 +78,7 @@ you ask for it**, through a zero-copy edge conversion:
 
 .. code-block:: python
 
-   batch = view.group_by("cat").agg("count", "sum:dur").collect().collect()  # -> DataFrame
+   batch = view.group_by("cat").agg("count", "sum:dur").collect()  # -> DataFrame
 
    avg = (F.sum_dur / F.count).apply(batch)   # -> Series, all in the engine
    avg.to_arrow()                                      # pyarrow.Array, zero-copy
@@ -88,8 +88,7 @@ you ask for it**, through a zero-copy edge conversion:
    batch.to_pandas()   # pandas DataFrame  Arrow C stream interface)
    batch.to_polars()   # polars DataFrame
 
-``collect_typed()`` / ``join()`` return a ``DataFrame`` directly, and
-``collect()`` returns a ``LazyFrame`` whose own ``.collect()`` does, so
+``collect()`` and ``collect_typed()`` return a ``DataFrame`` directly, so
 post-aggregation derived metrics stay entirely in the engine with no input Arrow.
 ``apply`` accepts a ``DataFrame`` (or a ``{name: Series}`` mapping) directly,
 or a ``pyarrow.Table``, whose columns are imported into the engine at the boundary.
@@ -228,7 +227,7 @@ exposes ``group_by``/``agg``/``join``/``limit``, ``sort_by(name,
 descending)`` and ``topk(name, k, largest)``. The View records them in its plan and
 applies the ordering to the aggregated result with the same SIMD kernels, so
 ``view.group_by(...).agg(...).topk("count", 10)`` and
-``view.group_by(...).agg(...).collect().collect().topk("count", 10)`` return
+``view.group_by(...).agg(...).collect().topk("count", 10)`` return
 the same rows.
 
 ``sort_by`` / ``topk`` use a SIMD sort (Highway ``VQSort`` / ``VQPartialSort``
@@ -238,7 +237,7 @@ values with SIMD ``VQSort``; ``abs`` / ``clip`` / ``round`` are Highway kernels.
 
 .. code-block:: python
 
-   batch = view.group_by("cat").agg("count", "sum:dur").collect().collect()
+   batch = view.group_by("cat").agg("count", "sum:dur").collect()
    worst = batch.sort_by("sum_dur", descending=True).head(10)   # all in the engine
    p99 = batch["sum_dur"].quantile(0.99)
    merged = part_a.concat(part_b, part_c)                        # distributed merge

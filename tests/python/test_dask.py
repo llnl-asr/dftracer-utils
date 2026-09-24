@@ -191,9 +191,29 @@ class TestDaskTraceViewer:
                     .group_by("cat")
                     .agg("count", "mean:dur", "std:dur")
                     .collect()
-                    .collect()
                 ).sort_by("cat")
                 assert dist.to_pandas().round(4).equals(whole.to_pandas().round(4))
+            finally:
+                client.close()
+                cluster.close()
+
+    def test_plan_order_is_free_and_limit_applies_to_merged_rows(self):
+        from dask.distributed import Client, LocalCluster
+
+        from dftracer.utils.dask import DaskTraceViewer
+
+        with Environment(lines=200) as env:
+            files = self._cluster_files(env)
+            cluster = LocalCluster(processes=False, n_workers=2, threads_per_worker=2)
+            client = Client(cluster)
+            try:
+                base = DaskTraceViewer(files, env.temp_dir, client=client)
+                full = base.group_by("cat").agg("count", "busy:dur").resolution("1ms").collect()
+                assert full.height > 1
+                # Builders after limit still shape the scan; the limit trims the
+                # merged result, not each shard.
+                one = base.limit(1).resolution("1ms").group_by("cat").agg("count", "busy:dur")
+                assert one.collect().height == 1
             finally:
                 client.close()
                 cluster.close()
@@ -230,7 +250,13 @@ class TestDaskTraceViewer:
                 .to_arrow()
                 .to_pydict()
             )
-            whole = TraceViewer(files, index_path=str(tmp_path)).flamegraph().to_arrow().to_pydict()
+            whole = (
+                TraceViewer(files, index_path=str(tmp_path))
+                .flamegraph()
+                .collect()
+                .to_arrow()
+                .to_pydict()
+            )
 
             def totals(d):
                 return {n: d["total"][i] for i, n in enumerate(d["name"])}

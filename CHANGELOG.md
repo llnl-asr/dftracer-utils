@@ -47,6 +47,22 @@ and this project aims to adhere to [Semantic Versioning](https://semver.org/spec
   polars and DuckDB on the same Arrow tables, eagerly and as a plan, with a
   correctness check of every result against ours, the cores each engine kept
   busy and `--memory` for the peak resident set per op.
+- The trace `View` (C++) and `TraceViewer` (Python) are a `LazyFrame` over a
+  trace scan: generic ops (filter, select, sort, head, join, ...) chain on
+  it, and the scan absorbs what it can at plan time (filters, projections,
+  group keys, a trailing row window). Trace terminals (`call_tree`,
+  `flamegraph`, `containment`, `flamegraph_partial`, `aggregate_partial`,
+  `sink_json`, `sink_trace`, `materialize`) are lazy results, and
+  `collect_all` runs several of them over one shared scan. Python adds lazy
+  `[]`, `LazyScalar` reductions and `LazyResult`.
+- Python `Indexer(bloom=BloomConfig(fields=...))` names extra args fields to
+  index.
+- The index covers every flat args field by default: numbers by per-chunk
+  min/max, strings by a per-chunk bloom up to 256 distinct values, so a
+  filter on any arg prunes chunks (equality prunes on min/max as well).
+  `dftracer_index --no-auto-dimensions` opts out. On a 2M-event trace the
+  index is 1.2 MB, against 8.7 MB for the previous named defaults. An
+  existing index rebuilds once.
 
 ### Changed
 
@@ -67,11 +83,32 @@ and this project aims to adhere to [Semantic Versioning](https://semver.org/spec
   budget assumed 1 GB there).
 - `Series.rolling(...).mean()` and the other windows write their output in
   place and run a chunk per thread.
+- **Breaking (C++):** `View` terminals follow the `LazyFrame` names:
+  `export_json` / `export_trace` / `export_counters` became `sink_json` /
+  `sink_trace` / `sink_counters`, `merge_partials_to_table` became
+  `merge_partials`, `limit` / `offset` became `head` / `slice`, `occ_cell`
+  became `resolution` and `schema()` became `column_info()`. `collect()`
+  returns the `DataFrame`; `lazy()` returns the plan. `call_tree`,
+  `flamegraph`, `containment` and the partials return plans to collect.
+  Several outputs over one scan use `collect_all` or `TraceSession`;
+  caller folds attach with `View::branch`.
+- **Breaking (Python):** `TraceViewer` is a `LazyFrame`; `AggregatedTraceViewer`
+  and `SessionView` are gone. `DaskTraceViewer.occ_cell` became `resolution`,
+  and its `offset` / `limit` trim the merged result instead of each shard's.
+- The server, `dftracer_view`, `dftracer_run`, the statistics tools and the
+  C ABI run on the same `View`; the separate builder API is internal.
+- A shard set aggregates its shards concurrently, as many at once as the
+  spill budget gives each at least 64 MB, and `collect_all` splits each
+  plan's spill budget across the plans it runs together, so concurrent work
+  stays within the budget.
 
 ### Removed
 
 - **Breaking:** the previous plugin ABI. A plugin built against it does not
   load; rebuild against `dftracer/utils/plugins/abi/plugin.h`.
+- **Breaking (C++):** `AggregatedView`, `ViewSession`'s public constructor,
+  `View::join` and `trace/views/result_batch.h` (`collect_batch`); use
+  `View` plans, `View::branch` and `LazyFrame::join`.
 
 ### Fixed
 
@@ -83,6 +120,25 @@ and this project aims to adhere to [Semantic Versioning](https://semver.org/spec
   data was resident.
 - `df.groupby(series)` raised a `SystemError`: the frame's `in` test left a
   pending error for a non-string key.
+- A scan of an unindexed multi-member trace read the lines at each member
+  boundary twice.
+- Index extra args fields were dropped by the fold-based build, so
+  `dftracer_index --dimensions` did nothing; nested fields were dropped in the
+  first-touch build; merged chunk stats ordered numeric min/max as text; and
+  a float literal (`pid == 1.0`) probed the bloom as `"1.000000"` and pruned
+  matching chunks.
+- Session containment branches ignored `phase()`, so `phase(Events)` kept
+  aggregated records; session aggregations with string-arg predicates or
+  transformed keys wrote rollups that later reads served wrongly.
+- A blocking `get()` on a finished coroutine task could miss its result;
+  `LazyFrame::collect()` on a temporary plan read the freed plan.
+- A plan's export sink flushes when the export ends.
+- Data races: libdeflate chose its kernels on first use from several threads
+  at once, and the reader's member decode cache read an entry's ready flag
+  outside the lock that wrote it.
+- An expression the column type cannot take (a string column compared with a
+  number) produced a null column that crashed a later `group_by`; it now
+  raises an error.
 
 - Interactive web trace viewer gains a counter timeline track (with malformed-value
   handling), per-counter pid/tid breakdown, bounded-density serving, and active-time

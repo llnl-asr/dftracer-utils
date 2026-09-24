@@ -46,7 +46,7 @@ if TYPE_CHECKING:
     from dask.distributed import Client  # ty: ignore[unresolved-import]
 
     from .dask import DaskTraceViewer
-    from .dataframe import TraceViewer
+    from .trace_viewer import TraceViewer
 
 try:
     from dask.distributed import get_client
@@ -992,7 +992,7 @@ class DFAnalyzerAggregatedTraceViewer(DaskAggregatedTraceViewer):
         if temporal:
             agg_view = agg_view.time_bucket(bucket_us)
         if family == "regular":
-            tbl = agg_view.agg(*aggs).collect().collect()
+            tbl = agg_view.agg(*aggs).collect()
         else:
             tbl = agg_view.agg(*aggs).collect_typed().get(family)
 

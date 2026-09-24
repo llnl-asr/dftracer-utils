@@ -7,8 +7,8 @@ DataFrame
 ordered set of typed :doc:`Series <series>`, computed with SIMD kernels and
 bridged zero-copy to Arrow, pandas, NumPy, and polars only at the edge. It is
 what :class:`~dftracer.utils.TraceViewer` terminals (``collect``,
-``collect_typed``, ``join``) return, and what the constructors below build
-from other sources.
+``collect_typed``, ``merge_partials``) return, and what the constructors below
+build from other sources.
 
 .. code-block:: python
 

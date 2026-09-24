@@ -128,9 +128,9 @@ Write a new trace
 -----------------
 
 To export matching events back out as a re-indexable ``.pfw.gz`` trace (rather
-than a table), use the trace query's own export path - ``export_json`` for
-newline-delimited events or ``export_trace`` for the parallel multi-member
-writer. See :doc:`../../trace-viewer`.
+than a table), use the trace query's own export path - ``sink_json`` (C++ and
+Python) for newline-delimited events or ``sink_trace`` (C++) / ``export_trace``
+(Python) for the parallel multi-member writer. See :doc:`../../trace-viewer`.
 
 See also
 --------

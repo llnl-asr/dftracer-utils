@@ -352,7 +352,6 @@ class TestDirectoryIndexer:
                     .group_by("name")
                     .agg("count")
                     .collect()
-                    .collect()
                 )
                 assert tbl is not None and pa.table(tbl).num_rows > 0
 
@@ -659,7 +658,7 @@ class TestCollectTypedRawFallback:
         return dftu_utils.TraceViewer(files, index_path=directory)
 
     def _agg_total(self, pa, base):
-        t = pa.table(base.group_by("name").agg("count").collect().collect())
+        t = pa.table(base.group_by("name").agg("count").collect())
         return int(pa.compute.sum(t["count"]).as_py()) if t.num_rows else 0
 
     def test_ts_filter_returns_raw_rows(self):
@@ -743,7 +742,6 @@ class TestOccupancyMetrics:
                 .group_by("cat")
                 .agg("busy", "concurrency", "sum:dur")
                 .collect()
-                .collect()
             )
             assert t["sum_dur"][0].as_py() == 1_000_000
             assert t["busy"][0].as_py() == 500_000  # capped at the window
@@ -768,7 +766,6 @@ class TestOccupancyMetrics:
                 .group_by("cat")
                 .agg("busy", "concurrency", "sum:dur")
                 .collect()
-                .collect()
             )
             assert t["sum_dur"][0].as_py() == 1_000_000
             assert t["busy"][0].as_py() == 1_000_000
@@ -792,7 +789,6 @@ class TestOccupancyMetrics:
                 .filter('cat == "c" and ts >= 100000')
                 .group_by("cat")
                 .agg("busy", "count")
-                .collect()
                 .collect()
             )
             assert win["count"][0].as_py() == 1
@@ -821,7 +817,6 @@ class TestOccupancyMetrics:
                 .group_by("cat")
                 .agg("busy", "concurrency", "sum:dur")
                 .collect()
-                .collect()
             )
             assert t["sum_dur"][0].as_py() == 1_000_000
             assert t["busy"][0].as_py() == 500_000  # union across files, OR-merged
@@ -844,7 +839,6 @@ class TestOccupancyMetrics:
                 .group_by("cat")
                 .agg("active", "count")
                 .collect()
-                .collect()
             )
             assert t["count"][0].as_py() == 3
             assert t["active"][0].as_py() == 3  # peak concurrent
@@ -852,7 +846,7 @@ class TestOccupancyMetrics:
     def test_partial_transport_round_trip(self):
         # The distributed wire: each "rank" viewer serializes a partial via
         # aggregate_partial(); the coordinator merges them with
-        # merge_partials_to_table(). Occupancy must survive that serialization
+        # merge_partials(). Occupancy must survive that serialization
         # and OR-merge to the union - if the partial dropped the masks, busy
         # would come back 0.
         pa = pytest.importorskip("pyarrow")
@@ -874,11 +868,11 @@ class TestOccupancyMetrics:
                     .group_by("cat")
                     .agg("busy", "concurrency", "sum:dur")
                 )
-                return v, v.aggregate_partial()
+                return v, v.aggregate_partial().collect()
 
             v0, b0 = partial(p0)
             _, b1 = partial(p1)
-            t = pa.table(v0.merge_partials_to_table([b0, b1]))
+            t = pa.table(v0.merge_partials([b0, b1]))
             assert t["sum_dur"][0].as_py() == 1_000_000
             assert t["busy"][0].as_py() == 500_000  # union survived the wire
             assert abs(t["concurrency"][0].as_py() - 2.0) < 1e-9
@@ -922,6 +916,104 @@ class TestShardPartitionCompleteness:
                         tv.collect_typed(shard_begin=begin, shard_end=end)["regular"], pa
                     )
                 assert total == full, f"{parts}-way shard split summed {total}, full scan {full}"
+
+
+def _member_trace(path):
+    """Four gzip members; member m holds size m*100+{0,1,2}, mode "m<m>" and a
+    nested io.off of m."""
+    import gzip
+    import json
+
+    with open(path, "wb") as f:
+        for m in range(4):
+            lines = "".join(
+                json.dumps(
+                    {
+                        "ph": "X",
+                        "name": "read",
+                        "cat": "POSIX",
+                        "pid": 1,
+                        "tid": 1,
+                        "ts": m * 1000 + i,
+                        "dur": 5,
+                        "args": {"size": m * 100 + i % 3, "mode": f"m{m}", "io": {"off": m}},
+                    }
+                )
+                + "\n"
+                for i in range(300)
+            )
+            f.write(gzip.compress(lines.encode()))
+    return path
+
+
+class TestBloomFields:
+    def _index(self, trace, fields, auto=False):
+        cfg = dftu_utils.BloomConfig(fields=fields, auto=auto)
+        with dftu_utils.Indexer(files=[trace], require_bloom=cfg, checkpoint_size="4KB") as ix:
+            return ix.ensure_indexed()
+
+    def _scan(self, trace, tmp_path, dsl):
+        return dftu_utils.TraceViewer(trace).filter(dsl).sink_json(str(tmp_path / "out.json"))
+
+    def test_indexed_fields_skip_chunks(self, tmp_path):
+        trace = _member_trace(str(tmp_path / "t.pfw.gz"))
+        status = self._index(trace, ["args.size", "mode", "io.off"])
+        assert len(status.ready) == 1
+        for dsl, matched in (
+            ("size == 201", 100),
+            ("size == 201.0", 100),
+            ("size > 250", 300),
+            ('mode == "m2"', 300),
+            ("io.off == 3", 300),
+        ):
+            stats = self._scan(trace, tmp_path, dsl)
+            assert stats["events_matched"] == matched, dsl
+            assert stats["chunks_skipped"] == 3, dsl
+
+    def test_unindexed_field_skips_nothing(self, tmp_path):
+        trace = _member_trace(str(tmp_path / "t.pfw.gz"))
+        self._index(trace, [])
+        stats = self._scan(trace, tmp_path, "size == 201")
+        assert stats["events_matched"] == 100
+        assert stats["chunks_skipped"] == 0
+
+    def test_a_new_field_rebuilds_the_index(self, tmp_path):
+        trace = _member_trace(str(tmp_path / "t.pfw.gz"))
+        self._index(trace, [])
+        cfg = dftu_utils.BloomConfig(fields=["size"], auto=False)
+        with dftu_utils.Indexer(files=[trace], require_bloom=cfg, checkpoint_size="4KB") as ix:
+            assert len(ix.resolve().needs_work) == 1
+            assert len(ix.ensure_indexed().ready) == 1
+        assert self._scan(trace, tmp_path, "size == 201")["chunks_skipped"] == 3
+
+    def test_auto_fields_skip_chunks(self, tmp_path):
+        trace = _member_trace(str(tmp_path / "t.pfw.gz"))
+        cfg = dftu_utils.BloomConfig(auto_max_distinct=2)
+        with dftu_utils.Indexer(files=[trace], require_bloom=cfg, checkpoint_size="4KB") as ix:
+            assert len(ix.ensure_indexed().ready) == 1
+        for dsl, matched, skipped in (
+            ("size == 201", 100, 3),
+            ("size > 250", 300, 3),
+            ("size == 999", 0, 4),
+            ('mode == "m2"', 300, 3),
+        ):
+            stats = self._scan(trace, tmp_path, dsl)
+            assert stats["events_matched"] == matched, dsl
+            assert stats["chunks_skipped"] == skipped, dsl
+
+    def test_auto_on_an_index_without_it_rebuilds(self, tmp_path):
+        trace = _member_trace(str(tmp_path / "t.pfw.gz"))
+        self._index(trace, [])
+        cfg = dftu_utils.BloomConfig()
+        with dftu_utils.Indexer(files=[trace], require_bloom=cfg, checkpoint_size="4KB") as ix:
+            assert len(ix.resolve().needs_work) == 1
+
+    def test_bad_settings_raise(self, tmp_path):
+        trace = _member_trace(str(tmp_path / "t.pfw.gz"))
+        with pytest.raises(ValueError):
+            dftu_utils.Indexer(
+                files=[trace], require_bloom=dftu_utils.BloomConfig(false_positive_rate=1.5)
+            )
 
 
 if __name__ == "__main__":

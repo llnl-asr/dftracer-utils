@@ -7,19 +7,20 @@ Sessions: many reads, one scan
    :class: goal
 
    Answer several questions about the same trace without scanning it several
-   times. A **session** registers a batch of independent branch views and runs
+   times. A **session** registers a batch of independent plans and runs
    them all over one shared pass, so N reads cost one decompression and one
    parse, not N.
 
 Why a session
 -------------
 
-Every View terminal (``collect``, ``export``, ``materialize``, ``call_tree``,
-...) runs its own scan: it decompresses the gzip members and parses the JSON
-once, for that one result. When you want several results from the same base
-view - a couple of unrelated aggregations, a custom fold next to a built-in
-aggregate, an aggregate next to an export - running each terminal separately
-pays that decompression and parse once **per terminal**.
+Every terminal you run on its own (``collect``, ``sink_json``,
+``materialize``, ``call_tree(...).collect()``, ...) runs its own scan: it
+decompresses the gzip members and parses the JSON once, for that one result.
+When you want several results from the same base view - a couple of unrelated
+aggregations, a custom fold next to a built-in aggregate, an aggregate next to
+an export - running each terminal separately pays that decompression and parse
+once **per terminal**.
 
 A session pays it **once** and splits the result across every branch. This is
 the user-facing capability built on the engine's :doc:`../../concepts/fused-scan`
@@ -34,21 +35,24 @@ The shape
 ---------
 
 1. Open a session off a base view.
-2. Register each branch: start a branch view, chain the per-branch builder API
-   (its own ``filter`` / ``group_by`` / ``agg`` / ...), and end in a terminal.
-   The terminal returns a **handle**, not a result.
+2. Register each branch: build a lazy plan over the view (its own ``filter`` /
+   ``group_by`` / ``agg`` / ...) and hand it to the session. Registering
+   returns a **handle**, not a result.
 3. Execute the session once. Every branch resolves together; then read each
    handle.
 
-A handle read before execution throws - the value is not there yet.
+In C++, a handle read before execution throws - the value is not there yet.
+In Python, the first ``handle.result()`` executes the session.
 
 Python
 ------
 
-Each ``s.view()`` is a full lazy ``TraceViewer`` branch with its own schema and
-filters; the terminal registers it and returns a :class:`~dftracer.utils.dataframe.Handle`.
-A ``with`` block executes on exit, or call ``s.execute()`` (the first
-``handle.result()`` also triggers it):
+``s.collect(root)`` registers any :class:`~dftracer.utils.LazyFrame` (a
+``TraceViewer`` plan included) or :class:`~dftracer.utils.LazyResult` and
+returns a :class:`~dftracer.utils.Handle`. ``s.sink_json(viewer, path)``,
+``s.materialize(viewer)`` and ``s.attach(plugins)`` register an export, a
+materialization and a plugin set the same way. A ``with`` block executes on
+exit, or call ``s.execute()`` (the first ``handle.result()`` also triggers it):
 
 .. code-block:: python
 
@@ -57,25 +61,29 @@ A ``with`` block executes on exit, or call ``s.execute()`` (the first
    tv = TraceViewer("trace.pfw.gz")
 
    with tv.session() as s:
-       by_cat  = s.view().group_by("cat").agg("count", "mean:dur").collect()
-       by_rank = s.view().group_by("rank").agg("count").sort_by("count").collect()
-       posix   = s.view().filter('cat == "POSIX"').export("posix.pfw.gz")
-       tree    = s.view().filter('cat == "POSIX"').call_tree(partition=("pid", "tid"))
+       by_cat  = s.collect(tv.group_by("cat").agg("count", "mean:dur"))
+       by_rank = s.collect(tv.group_by("rank").agg("count").sort_by("count"))
+       posix   = s.sink_json(tv.filter('cat == "POSIX"'), "posix.json")
+       tree    = s.collect(tv.filter('cat == "POSIX"').call_tree(partition=("pid", "tid")))
 
    cat_df  = by_cat.result()     # a DataFrame, resolved by the one scan
    rank_df = by_rank.result()
    tree_df = tree.result()       # events + level / parent_id
 
-Any branch terminal works: ``collect``, ``export``, ``materialize`` (build-only,
-no handle), ``statistics``, ``events``, ``aggregate_partial``, and the
-containment terminals ``call_tree`` / ``flamegraph`` / ``containment`` (same
-``partition`` / ``ts`` / ``dur`` / ``name`` arguments as on ``TraceViewer``).
+Any lazy root works: a row plan (``tv.filter(...)``), an aggregation, the
+containment plans ``call_tree`` / ``flamegraph`` and the ``containment()``
+result (same ``partition`` / ``ts`` / ``dur`` / ``name`` arguments as on
+``TraceViewer``), ``tv.statistics(lazy=True)`` and ``agg.aggregate_partial()``.
+Outside a session, :func:`~dftracer.utils.collect_all` runs a list of the same
+roots over one shared scan and returns their values in order.
 
 C++
 ---
 
-``View::session()`` returns a ``ViewSession``. Register ops - each returns a
-``Deferred<T>`` handle - then ``execute()`` runs the one shared scan:
+``View::session()`` returns a ``TraceSession``. Register a
+``dataframe::LazyFrame`` (or ``dataframe::LazyResult<T>``) built from the base
+view with ``collect()`` - each call returns a ``Deferred<T>`` handle - then
+``execute()`` runs every registered plan over the one shared scan:
 
 .. code-block:: cpp
 
@@ -84,27 +92,39 @@ C++
    namespace df = dftracer::utils::dataframe;
 
    View base = View::from_file("trace.pfw.gz");
-   ViewSession run = base.session();
+   TraceSession run;
 
    // A built-in aggregate branch.
-   auto by_cat = run.collect(
-       Query::from_string(R"(cat == "POSIX")").value(), {GroupKey::cat()},
-       {{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "sum_dur"}});
+   df::LazyFrame by_cat_plan =
+       base.filter(Query::from_string(R"(cat == "POSIX")").value())
+           .group_by({GroupKey::cat()})
+           .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "sum_dur"}});
+   auto by_cat = run.collect(by_cat_plan);
 
-   // A custom fold branch over the same scan (reuses the parsed event).
+   // A custom fold branch over the same scan. ViewSession has no public
+   // constructor; View::branch() hands it to the callback and returns a plan
+   // you register like any other.
    struct Small { std::size_t n = 0; double sum = 0; };
-   auto small = run.fold<Small>(
-       Query::from_string("dur < 25").value(),
-       [](Small& s, const json::JsonValue& jv, std::string_view) {
-           ++s.n;
-           s.sum += jv["dur"].get<double>(0);
-       },
-       [](Small&& a, Small&& b) { a.n += b.n; a.sum += b.sum; return std::move(a); });
+   df::LazyResult<Small> small_plan = base.branch<Small>([](ViewSession& s) {
+       return s.fold<Small>(
+           Query::from_string("dur < 25").value(),
+           [](Small& acc, const json::JsonValue& jv, std::string_view) {
+               ++acc.n;
+               acc.sum += jv["dur"].get<double>(0);
+           },
+           [](Small&& a, Small&& b) {
+               a.n += b.n;
+               a.sum += b.sum;
+               return std::move(a);
+           });
+   });
+   auto small = run.collect(small_plan);
 
    // A containment branch: a call tree over a filtered sub-view of the base.
-   auto tree = run.call_tree(
-       base.filter(Query::from_string(R"(cat == "POSIX")").value()),
-       {"pid", "tid"});
+   df::LazyFrame tree_plan =
+       base.filter(Query::from_string(R"(cat == "POSIX")").value())
+           .call_tree({"pid", "tid"});
+   auto tree = run.collect(tree_plan);
 
    run.execute().get();          // the single shared scan
 
@@ -112,34 +132,49 @@ C++
    std::size_t total  = small->n;
    df::DataFrame tree_df = *tree;
 
-Reading a ``Deferred`` before ``execute()`` resolves it throws, exactly like the
-Python handle.
+Reading a ``Deferred`` before ``execute()`` resolves it throws.
 
 Combining two branches: join and compare
 ----------------------------------------
 
-Two ``collect`` branches that group the same way can be joined or compared
-**after** the one scan - the shared key width is inferred - and the combination
-is itself a handle:
+In Python, a join or a comparison of two plans over the same trace is itself
+a plan, and both sides share the one scan. ``a.join(b, on=...)`` is the
+generic ``LazyFrame`` join (clashing right-side columns get the ``_right``
+suffix); ``base.compare(variant)`` applies ``base``'s ``group_by`` / ``agg``
+to ``variant``'s events and adds the ``l_`` / ``r_`` / ``delta_`` / ``pct_``
+columns:
 
 .. code-block:: python
 
+   base = tv.filter('rank == 0').group_by("name").agg("mean:dur")
+   var  = tv.filter('rank == 1').group_by("name").agg("mean:dur")
    with tv.session() as s:
-       base = s.view().filter('rank == 0').group_by("name").agg("mean:dur").collect()
-       var  = s.view().filter('rank == 1').group_by("name").agg("mean:dur").collect()
-       delta = s.compare(base, var)          # or s.join(base, var)
+       joined = s.collect(base.join(var, on="name"))
+       delta  = s.collect(base.compare(tv.filter('rank == 1')))
    diff = delta.result()
+
+In C++, ``View::compare(variant)`` applies this view's ``group_by`` / ``agg``
+to ``variant``'s events too and joins on the shared group key - both views
+over the same files share one scan, no session needed. Two independently
+aggregated views join with the generic ``LazyOps`` ``join`` that ``View``
+inherits:
 
 .. code-block:: cpp
 
-   ViewSession run = View::from_file("trace.pfw.gz").session();
-   auto base = run.collect(Query::from_string("rank == 0").value(),
-                           {GroupKey::name()}, {{AggOp::Mean, "dur", "mean_dur"}});
-   auto var  = run.collect(Query::from_string("rank == 1").value(),
-                           {GroupKey::name()}, {{AggOp::Mean, "dur", "mean_dur"}});
-   auto delta = run.compare(base, var);      // or run.join(base, var)
-   run.execute().get();
-   df::DataFrame diff = *delta;
+   View trace = View::from_file("trace.pfw.gz");
+   View base = trace.filter(Query::from_string("rank == 0").value())
+                   .group_by({GroupKey::name()})
+                   .agg({{AggOp::Mean, "dur", "mean_dur"}});
+   View var = trace.filter(Query::from_string("rank == 1").value())
+                  .group_by({GroupKey::name()})
+                  .agg({{AggOp::Mean, "dur", "mean_dur"}});
+
+   df::LazyFrame joined = base.join(var, {"name"});
+   df::LazyFrame delta =
+       base.compare(trace.filter(Query::from_string("rank == 1").value()));
+
+   df::DataFrame joined_df = co_await joined.collect();
+   df::DataFrame diff = co_await delta.collect();
 
 Notes
 -----
@@ -147,8 +182,8 @@ Notes
 - Branches are independent: each carries its own filter, group_by, and result
   schema. Only the base files and scan-wide settings (phase, time range, time
   scale) are shared.
-- ``materialize`` in a session is build-only - it persists a rollup as a side
-  effect and returns no handle.
+- ``s.materialize(viewer)`` persists the query as a side effect; its handle
+  resolves to the scan stats dict.
 - A session is the in-process form. Across nodes, the same one-pass-many-results
   idea is the partial/reduce pattern - see :doc:`../scale/distributed-aggregation`.
 
@@ -157,7 +192,7 @@ See also
 
 - :doc:`../../concepts/fused-scan` - the one-scan-many-folds mechanism a session
   drives.
-- :doc:`views` - the single-terminal View API each branch is built from.
+- :doc:`views` - the single-terminal TraceViewer API each branch is built from.
 - :doc:`aggregation` - the ``group_by`` / ``agg`` vocabulary branches use.
 - :doc:`../../api/trace_viewer` - the Python ``TraceViewer`` / ``Session`` /
-  ``SessionView`` / ``Handle`` reference.
+  ``Handle`` reference.

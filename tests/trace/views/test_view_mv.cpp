@@ -63,16 +63,16 @@ TEST_SUITE("ViewMV") {
         };
 
         StringSink base;
-        ExportStats bstats = reads().export_json(base).get();
+        ExportStats bstats = reads().sink_json(base).get();
         auto want = sorted_lines(base);
         REQUIRE(want.size() == 30);
         CHECK(bstats.events_scanned == 50);  // whole trace scanned
 
-        reads().materialize().run().get();   // build the filtered-trace MV
+        reads().materialize().get();         // build the filtered-trace MV
         REQUIRE(mv_parts(gz).size() >= 1);
 
         StringSink again;
-        ExportStats astats = reads().export_json(again).get();
+        ExportStats astats = reads().sink_json(again).get();
         CHECK(sorted_lines(again) == want);  // same rows
         CHECK(astats.events_scanned == 30);  // only the MV's rows scanned
     }
@@ -87,22 +87,18 @@ TEST_SUITE("ViewMV") {
         StringSink base;
         View::from_file(gz, idx)
             .query(R"((name == "read") and (dur > 20))")
-            .export_json(base)
+            .sink_json(base)
             .get();
         auto want = sorted_lines(base);
         REQUIRE(!want.empty());
 
         // Materialize the broad query, then ask the narrow one.
-        View::from_file(gz, idx)
-            .query(R"(name == "read")")
-            .materialize()
-            .run()
-            .get();
+        View::from_file(gz, idx).query(R"(name == "read")").materialize().get();
 
         StringSink narrow;
         ExportStats st = View::from_file(gz, idx)
                              .query(R"((name == "read") and (dur > 20))")
-                             .export_json(narrow)
+                             .sink_json(narrow)
                              .get();
         CHECK(sorted_lines(narrow) == want);
         CHECK(st.events_scanned == 30);  // scanned the MV (30 reads), not 50
@@ -114,18 +110,14 @@ TEST_SUITE("ViewMV") {
         std::string gz = create_mixed_trace(env, 30, 20);
         std::string idx = determine_index_path(gz, "");
 
-        View::from_file(gz, idx)
-            .query(R"(name == "read")")
-            .materialize()
-            .run()
-            .get();
+        View::from_file(gz, idx).query(R"(name == "read")").materialize().get();
 
         // fwrite is not in the read-only MV, so this must fall back to the
         // base.
         StringSink other;
         ExportStats st = View::from_file(gz, idx)
                              .query(R"(name == "fwrite")")
-                             .export_json(other)
+                             .sink_json(other)
                              .get();
         CHECK(other.lines().size() == 20);
         CHECK(st.events_scanned == 50);  // whole base, not the MV
@@ -141,7 +133,6 @@ TEST_SUITE("ViewMV") {
         View::from_file(gz, idx)
             .query(R"(name == "read")")
             .materialize(/*checkpoint_size=*/2048, /*part_size=*/2048)
-            .run()
             .get();
         CHECK(mv_parts(gz).size() > 1);
 
@@ -149,7 +140,7 @@ TEST_SUITE("ViewMV") {
         StringSink all;
         View::from_file(gz, idx)
             .query(R"(name == "read")")
-            .export_json(all)
+            .sink_json(all)
             .get();
         CHECK(all.lines().size() == 300);
     }
@@ -160,11 +151,7 @@ TEST_SUITE("ViewMV") {
         std::string gz = create_mixed_trace(env, 30, 20);
         std::string idx = determine_index_path(gz, "");
 
-        View::from_file(gz, idx)
-            .query(R"(name == "read")")
-            .materialize()
-            .run()
-            .get();
+        View::from_file(gz, idx).query(R"(name == "read")").materialize().get();
         REQUIRE(mv_dir_count(gz) == 1);
 
         // Rewrite the base with clearly different content (new size), so the
@@ -173,10 +160,7 @@ TEST_SUITE("ViewMV") {
 
         // A read triggers discovery, which GCs the now-unservable MV.
         StringSink s;
-        View::from_file(gz, idx)
-            .query(R"(name == "read")")
-            .export_json(s)
-            .get();
+        View::from_file(gz, idx).query(R"(name == "read")").sink_json(s).get();
         CHECK(mv_dir_count(gz) == 0);
     }
 
@@ -217,7 +201,7 @@ TEST_SUITE("ViewMV") {
         };
 
         StringSink base;
-        ExportStats bstats = full().export_json(base).get();
+        ExportStats bstats = full().sink_json(base).get();
         REQUIRE(base.lines().size() == 60);   // 30 read per file
         CHECK(bstats.events_scanned == 100);  // 50 events per file
 
@@ -234,14 +218,14 @@ TEST_SUITE("ViewMV") {
             opts.build_index = true;
             View::from_file(f.file_path, f.index_path)
                 .query(R"(name == "read")")
-                .export_trace(opts)
+                .sink_trace(opts)
                 .get();
         }
         full().register_materialized(dir);
 
         // The full query now reads the two shard parts, not the base.
         StringSink again;
-        ExportStats astats = full().export_json(again).get();
+        ExportStats astats = full().sink_json(again).get();
         CHECK(again.lines().size() == 60);
         CHECK(astats.events_scanned == 60);  // only the shards' read events
     }

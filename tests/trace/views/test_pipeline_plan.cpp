@@ -1,5 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/trace/views/pipeline.h>
+#include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <doctest/doctest.h>
 
 #include <stdexcept>
@@ -8,6 +9,8 @@
 #include "test_view_common.h"
 
 namespace views_detail = dftracer::utils::trace::views::detail;
+namespace scan = dftracer::utils::trace::views::detail::scan;
+using scan::ScanPlan;
 
 TEST_SUITE("Pipeline plan") {
     TEST_CASE("execute rejects a shape no lowering handles") {
@@ -35,20 +38,17 @@ TEST_SUITE("Pipeline plan") {
         std::string gz = test_view_common::create_mixed_trace(env, 30, 20);
         std::string idx = determine_index_path(gz, "");
 
-        dataframe::DataFrame all =
-            run(View::from_file(gz, idx).metadata(false).collect_frame());
+        ScanPlan base = scan::metadata(scan::from_file(gz, idx), false);
+        dataframe::DataFrame all = run(scan::collect_frame(base));
         REQUIRE(all.num_rows() == 50);
         CHECK(bhas(all, "cat"));
         CHECK(bhas(all, "name"));
         CHECK(bhas(all, "dur"));
 
-        dataframe::DataFrame posix = run(View::from_file(gz, idx)
-                                             .metadata(false)
-                                             .query(R"(cat == "POSIX")")
-                                             .sort_by("dur", true)
-                                             .offset(2)
-                                             .limit(10)
-                                             .collect_frame());
+        ScanPlan sorted =
+            scan::sort_by(scan::query(base, R"(cat == "POSIX")"), "dur", true);
+        ScanPlan posix_plan = scan::limit(scan::offset(sorted, 2), 10);
+        dataframe::DataFrame posix = run(scan::collect_frame(posix_plan));
         REQUIRE(posix.num_rows() == 10);
         for (std::int64_t i = 0; i < posix.num_rows(); ++i)
             CHECK(bstr(posix, i, "cat") == "POSIX");

@@ -11,6 +11,7 @@
 
 #include <dftracer/utils/core/common/memory_budget.h>  // NO_SPILL_BUDGET
 #include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
@@ -26,6 +27,7 @@
 #include <dftracer/utils/python/py_seq_helpers.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/series.h>
+#include <dftracer/utils/python/streaming_iterator.h>
 
 #include <cstdint>
 #include <new>
@@ -801,18 +803,99 @@ PyObject* LazyFrame_collect(PyObject* self, PyObject* args, PyObject* kwds) {
     LazyFrameObject* b = as_lazyframe(self);
     if (!b) return nullptr;
     long long morsel_rows = 0;
-    static const char* kw[] = {"morsel_rows", nullptr};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|L", const_cast<char**>(kw),
-                                     &morsel_rows))
+    PyObject* runtime_arg = nullptr;
+    static const char* kw[] = {"morsel_rows", "runtime", nullptr};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|LO", const_cast<char**>(kw),
+                                     &morsel_rows, &runtime_arg))
         return nullptr;
+    std::shared_ptr<dftracer::utils::Runtime> rt =
+        runtime_from_arg(runtime_arg);
+    if (!rt) return nullptr;
     dataframe::DataFrame out;
-    if (!run_blocking([&] {
-            out = dftracer::utils::default_runtime()
-                      .submit(b->lf.collect(morsel_rows))
-                      .get();
-        }))
+    if (!run_blocking(
+            [&] { out = rt->submit(b->lf.collect(morsel_rows)).get(); }))
         return nullptr;
     return dftracer::utils::python::wrap_dataframe(std::move(out));
+}
+
+// Drains the plan's chunk generator into `state`, which the Python iterator
+// pulls from with the GIL released.
+dftracer::utils::coro::CoroTask<void> drain_stream(
+    dftracer::utils::CoroScope&,
+    std::shared_ptr<
+        dftracer::utils::python::StreamingState<dataframe::DataFrame>>
+        state,
+    LazyFrame lf, std::int64_t morsel_rows) {
+    try {
+        auto gen = lf.stream(morsel_rows);
+        while (auto df = co_await gen.next()) {
+            if (state->cancelled()) break;
+            const std::size_t bytes =
+                static_cast<std::size_t>(df->num_rows()) *
+                static_cast<std::size_t>(df->num_columns() + 1) * 16;
+            if (!state->push(std::move(*df), bytes)) break;
+        }
+        state->complete();
+    } catch (...) {
+        state->fail(std::current_exception());
+    }
+}
+
+PyObject* LazyFrame_stream(PyObject* self, PyObject* args, PyObject* kwds) {
+    LazyFrameObject* b = as_lazyframe(self);
+    if (!b) return nullptr;
+    long long morsel_rows = 0;
+    PyObject* runtime_arg = nullptr;
+    static const char* kw[] = {"morsel_rows", "runtime", nullptr};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|LO", const_cast<char**>(kw),
+                                     &morsel_rows, &runtime_arg))
+        return nullptr;
+    std::shared_ptr<dftracer::utils::Runtime> rt =
+        runtime_from_arg(runtime_arg);
+    if (!rt) return nullptr;
+    namespace py = dftracer::utils::python;
+    auto state = std::make_shared<py::StreamingState<dataframe::DataFrame>>(
+        dftracer::utils::compute_memory_budget(0));
+    auto* it = reinterpret_cast<py::ArrowStreamingIteratorObject*>(
+        py::ArrowStreamingIteratorType.tp_new(&py::ArrowStreamingIteratorType,
+                                              nullptr, nullptr));
+    if (!it) return nullptr;
+    it->cpp_state->state = state;
+    it->cpp_state->pull_df = [state]() { return state->pull(); };
+    it->cpp_state->get_error = [state]() { return state->error(); };
+    it->cpp_state->cancel = [state]() { state->cancel(); };
+    LazyFrame lf = b->lf;
+    Py_BEGIN_ALLOW_THREADS rt->submit(
+        dftracer::utils::run_coro_scope(rt->executor(), drain_stream, state,
+                                        std::move(lf),
+                                        static_cast<std::int64_t>(morsel_rows)),
+        "lazyframe_stream");
+    Py_END_ALLOW_THREADS return reinterpret_cast<PyObject*>(it);
+}
+
+PyObject* LazyFrame_output_schema(PyObject* self, PyObject*) {
+    LazyFrameObject* b = as_lazyframe(self);
+    if (!b) return nullptr;
+    dataframe::Schema schema;
+    try {
+        schema = b->lf.output_schema();
+    } catch (const std::exception& e) {
+        PyErr_SetString(PyExc_ValueError, e.what());
+        return nullptr;
+    }
+    PyObject* out = PyList_New(static_cast<Py_ssize_t>(schema.fields.size()));
+    if (!out) return nullptr;
+    for (std::size_t i = 0; i < schema.fields.size(); ++i) {
+        const dataframe::Field& f = schema.fields[i];
+        PyObject* item =
+            Py_BuildValue("(si)", f.name.c_str(), static_cast<int>(f.type.id));
+        if (!item) {
+            Py_DECREF(out);
+            return nullptr;
+        }
+        PyList_SET_ITEM(out, static_cast<Py_ssize_t>(i), item);
+    }
+    return out;
 }
 
 PyMethodDef LazyFrame_methods[] = {
@@ -934,6 +1017,11 @@ PyMethodDef LazyFrame_methods[] = {
      "set."},
     {"auto_spill", LazyFrame_auto_spill, METH_NOARGS,
      "auto_spill() -> LazyFrame with the spill budget at ~1/3 of memory."},
+    {"output_schema", LazyFrame_output_schema, METH_NOARGS,
+     "output_schema() -> [(name, dtype id)] without running; a type the "
+     "plan cannot know statically is 0 (unknown)."},
+    {"stream", DFTU_PYCFUNCTION(LazyFrame_stream), METH_VARARGS | METH_KEYWORDS,
+     "stream(morsel_rows=0, runtime=None) -> iterator of DataFrame chunks."},
     {"schema", LazyFrame_schema, METH_NOARGS,
      "schema() -> list[str] of output column names, or [] if data-dependent."},
     {"explain", LazyFrame_explain, METH_NOARGS,
@@ -941,6 +1029,56 @@ PyMethodDef LazyFrame_methods[] = {
     {"collect", DFTU_PYCFUNCTION(LazyFrame_collect),
      METH_VARARGS | METH_KEYWORDS,
      "collect(morsel_rows=65536) -> _DataFrame, running the pipeline."},
+    {nullptr, nullptr, 0, nullptr}};
+
+PyObject* collect_all_py(PyObject*, PyObject* args, PyObject* kwds) {
+    PyObject* arg = nullptr;
+    PyObject* runtime_arg = nullptr;
+    static const char* kw[] = {"plans", "runtime", nullptr};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|O", const_cast<char**>(kw),
+                                     &arg, &runtime_arg))
+        return nullptr;
+    std::shared_ptr<dftracer::utils::Runtime> rt =
+        runtime_from_arg(runtime_arg);
+    if (!rt) return nullptr;
+    PyObject* seq = PySequence_Fast(arg, "collect_all expects a sequence");
+    if (!seq) return nullptr;
+    const Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
+    std::vector<LazyFrame> plans;
+    plans.reserve(static_cast<std::size_t>(n));
+    for (Py_ssize_t i = 0; i < n; ++i) {
+        LazyFrameObject* b = as_lazyframe(PySequence_Fast_GET_ITEM(seq, i));
+        if (!b) {
+            Py_DECREF(seq);
+            return nullptr;
+        }
+        plans.push_back(b->lf);
+    }
+    Py_DECREF(seq);
+    std::vector<dataframe::DataFrame> frames;
+    if (!run_blocking([&] {
+            frames = rt->submit(dataframe::collect_all(std::move(plans))).get();
+        }))
+        return nullptr;
+    PyObject* out = PyList_New(static_cast<Py_ssize_t>(frames.size()));
+    if (!out) return nullptr;
+    for (std::size_t i = 0; i < frames.size(); ++i) {
+        PyObject* df =
+            dftracer::utils::python::wrap_dataframe(std::move(frames[i]));
+        if (!df) {
+            Py_DECREF(out);
+            return nullptr;
+        }
+        PyList_SET_ITEM(out, static_cast<Py_ssize_t>(i), df);
+    }
+    return out;
+}
+
+PyMethodDef lazyframe_module_methods[] = {
+    {"collect_all", DFTU_PYCFUNCTION(collect_all_py),
+     METH_VARARGS | METH_KEYWORDS,
+     "collect_all(plans) -> list of DataFrames, one per plan in order; plans "
+     "over the same trace base share one scan."},
     {nullptr, nullptr, 0, nullptr}};
 
 }  // namespace
@@ -957,11 +1095,17 @@ int init_lazyframe(PyObject* m) {
     LazyFrameType.tp_dealloc = reinterpret_cast<destructor>(LazyFrame_dealloc);
     LazyFrameType.tp_methods = LazyFrame_methods;
     LazyFrameType.tp_new = nullptr;  // created only by DataFrame.lazy()
-    return register_type(m, &LazyFrameType, "_LazyFrame");
+    if (register_type(m, &LazyFrameType, "_LazyFrame") < 0) return -1;
+    return PyModule_AddFunctions(m, lazyframe_module_methods);
 }
 
 PyObject* wrap_lazyframe(dataframe::LazyFrame&& lf) {
     return make_lazyframe(std::move(lf));
+}
+
+const dataframe::LazyFrame* lazyframe_of(PyObject* o) {
+    LazyFrameObject* b = as_lazyframe(o);
+    return b ? &b->lf : nullptr;
 }
 
 }  // namespace dftracer::utils::python
@@ -971,6 +1115,11 @@ PyObject* wrap_lazyframe(dataframe::LazyFrame&& lf) {
 namespace dftracer::utils::python {
 int init_lazyframe(PyObject*) { return 0; }
 PyObject* wrap_lazyframe(dftracer::utils::dataframe::LazyFrame&&) {
+    PyErr_SetString(PyExc_RuntimeError, "LazyFrame requires the Arrow build");
+    return nullptr;
+}
+
+const dftracer::utils::dataframe::LazyFrame* lazyframe_of(PyObject*) {
     PyErr_SetString(PyExc_RuntimeError, "LazyFrame requires the Arrow build");
     return nullptr;
 }

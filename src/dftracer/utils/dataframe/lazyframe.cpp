@@ -3,6 +3,7 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/memory_budget.h>  // compute_memory_budget
 #include <dftracer/utils/core/coro/task_abi.h>         // task_to_abi
+#include <dftracer/utils/core/coro/when_all.h>
 #include <dftracer/utils/dataframe/agg.h>        // streaming group-by state
 #include <dftracer/utils/dataframe/batch_ops.h>  // concat_columns, take, concat
 #include <dftracer/utils/dataframe/field_stat.h>         // FieldStat (describe)
@@ -10,6 +11,8 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>  // dftu_series (typed null templates)
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>  // dataframe_handle_wrap/take
 #include <dftracer/utils/dataframe/internal/expr_handle.h>  // expr_handle_wrap/unwrap
+#include <dftracer/utils/dataframe/internal/fingerprint.h>
+#include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/dataframe/internal/node_registry.h>  // find_node
 #include <dftracer/utils/dataframe/internal/reclaim_registry.h>
 #include <dftracer/utils/dataframe/internal/schema_types.h>   // dftu_schema
@@ -26,9 +29,12 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <numeric>
 #include <stdexcept>
 #include <string>
+#include <typeindex>
+#include <typeinfo>
 #include <utility>
 #include <variant>
 
@@ -3142,6 +3148,31 @@ class OwnedFrameOpArgs {
 
     const std::vector<LazyFrame>& frames() const noexcept { return frames_; }
 
+    // The same operands over other frame plans; `frames` must match the
+    // frame operand count.
+    std::shared_ptr<const OwnedFrameOpArgs> with_frames(
+        std::vector<LazyFrame> frames) const {
+        auto out = std::shared_ptr<OwnedFrameOpArgs>(new OwnedFrameOpArgs());
+        out->slots_.reserve(slots_.size());
+        for (const Slot& s : slots_) {
+            Slot c;
+            c.tok = s.tok;
+            c.val = s.val;
+            c.series = s.series.valid() ? s.series.share() : Series{};
+            c.strings = s.strings;
+            c.i32s = s.i32s;
+            c.i64s = s.i64s;
+            c.aggs = s.aggs;
+            c.wins = s.wins;
+            c.has_value = s.has_value;
+            c.has_time = s.has_time;
+            c.frame_index = s.frame_index;
+            out->slots_.push_back(std::move(c));
+        }
+        out->frames_ = std::move(frames);
+        return out;
+    }
+
     // The C operand bag, pointing into this object's storage; `cstrs` and
     // `wins` are scratch the bag points into and must outlive the run.
     dftu_op_arg bind(std::vector<std::vector<const char*>>& cstrs,
@@ -3228,6 +3259,8 @@ class OwnedFrameOpArgs {
     }
 
    private:
+    OwnedFrameOpArgs() = default;
+
     struct Slot {
         dftu_op_tok tok = DFTU_TOK_NONE;
         dftu_op_val val{};
@@ -3474,6 +3507,34 @@ class LazyOp {
                  JoinOp, ConcatOp, UnnestOp, FrameOp, NodeOp>
         node;
 };
+
+namespace detail {
+
+struct PlanAccess {
+    static const Source& source(const LazyFrame& lf) { return *lf.source_; }
+    static const std::shared_ptr<const Source>& source_ptr(
+        const LazyFrame& lf) {
+        return lf.source_;
+    }
+    static const std::vector<std::shared_ptr<const LazyOp>>& ops(
+        const LazyFrame& lf) {
+        return lf.ops_;
+    }
+    static std::uint64_t memory_budget(const LazyFrame& lf) {
+        return lf.memory_budget_;
+    }
+    static LazyFrame make(std::shared_ptr<const Source> source,
+                          std::vector<std::shared_ptr<const LazyOp>> ops,
+                          std::uint64_t memory_budget) {
+        return LazyFrame(std::move(source), std::move(ops), memory_budget);
+    }
+    static coro::CoroTask<DataFrame> run_in_memory(
+        DataFrame df, std::vector<std::shared_ptr<const LazyOp>> ops) {
+        return LazyFrame::run_ops_in_memory(std::move(df), std::move(ops));
+    }
+};
+
+}  // namespace detail
 
 namespace {
 
@@ -4058,6 +4119,232 @@ std::vector<std::shared_ptr<const LazyOp>> pushdown_projections(
         }
     }
     return out;
+}
+
+struct PlanParts {
+    std::shared_ptr<const Source> source;
+    std::vector<std::shared_ptr<const LazyOp>> ops;
+};
+
+PlanParts optimize_parts(std::shared_ptr<const Source> source,
+                         std::vector<std::shared_ptr<const LazyOp>> ops);
+
+// `g` as an AggregateSpec: each named column is the expression `by` gives it
+// (`names[i]` is `by[i]`), positional against the offering source.
+std::optional<AggregateSpec> aggregate_spec(
+    const GroupByOp& g, const std::vector<std::string>& names,
+    const std::vector<Expr>& by) {
+    if (!g.dyn.empty()) return std::nullopt;
+    auto expr_of = [&](const std::string& name) -> std::optional<Expr> {
+        const int c = col_index(names, name);
+        if (c < 0) return std::nullopt;
+        return by[static_cast<std::size_t>(c)];
+    };
+    AggregateSpec spec;
+    spec.keys.reserve(g.keys.size());
+    for (const std::string& key : g.keys) {
+        std::optional<Expr> e = expr_of(key);
+        if (!e) return std::nullopt;
+        spec.keys.push_back({key, std::move(*e)});
+    }
+    spec.aggs.reserve(g.aggs.size());
+    for (const GroupAgg& a : g.aggs) {
+        AggregateExpr e;
+        e.op = a.op;
+        e.param = a.param;
+        e.out = a.out;
+        if (a.op != Agg::Count) {
+            std::optional<Expr> in = expr_of(a.column);
+            if (!in) return std::nullopt;
+            e.input = std::move(*in);
+        }
+        if (!a.by.empty()) {
+            std::optional<Expr> b = expr_of(a.by);
+            if (!b) return std::nullopt;
+            e.by = std::move(*b);
+        }
+        spec.aggs.push_back(std::move(e));
+    }
+    return spec;
+}
+
+// The aggregate-projection merge: with_column steps directly before a
+// group-by, offered as one aggregation whose keys and inputs are their
+// expressions over the source columns. The number of ops it covers, or 0.
+std::size_t offer_merged_aggregation(
+    const Source& source, const std::vector<std::string>& source_names,
+    const std::vector<std::shared_ptr<const LazyOp>>& ops, std::size_t at,
+    std::optional<SourceApplication>& app) {
+    std::vector<std::string> names = source_names;
+    std::vector<Expr> by;
+    by.reserve(names.size());
+    for (std::size_t i = 0; i < names.size(); ++i)
+        by.push_back(expr_col(static_cast<std::int32_t>(i)));
+    std::size_t j = at;
+    for (; j < ops.size(); ++j) {
+        const auto* w = std::get_if<WithColumnOp>(&ops[j]->node);
+        if (!w) break;
+        Expr e = expr_rebind_cols(w->expr, by);
+        const int c = col_index(names, w->name);
+        if (c >= 0) {
+            by[static_cast<std::size_t>(c)] = std::move(e);
+        } else {
+            names.push_back(w->name);
+            by.push_back(std::move(e));
+        }
+    }
+    if (j == at || j >= ops.size()) return 0;
+    const auto* g = std::get_if<GroupByOp>(&ops[j]->node);
+    if (!g) return 0;
+    std::optional<AggregateSpec> spec = aggregate_spec(*g, names, by);
+    if (!spec) return 0;
+    app = source.apply_aggregation(*spec);
+    return app ? j - at + 1 : 0;
+}
+
+// Offer `op` to the matching planning hook. `schema_changing` reports whether
+// an accepted answer replaces the source schema.
+std::optional<SourceApplication> offer_op(const Source& source,
+                                          const std::vector<std::string>& names,
+                                          const LazyOp& op,
+                                          bool& schema_changing) {
+    schema_changing = false;
+    if (const auto* f = std::get_if<FilterOp>(&op.node))
+        return source.apply_filter(f->pred);
+    if (const auto* s = std::get_if<SelectOp>(&op.node)) {
+        std::vector<NamedExpr> exprs;
+        exprs.reserve(s->names.size());
+        for (const std::string& name : s->names) {
+            const int c = col_index(names, name);
+            if (c < 0) return std::nullopt;
+            exprs.push_back({name, expr_col(c)});
+        }
+        schema_changing = true;
+        return source.apply_projection(exprs);
+    }
+    if (const auto* g = std::get_if<GroupByOp>(&op.node)) {
+        std::vector<Expr> by;
+        by.reserve(names.size());
+        for (std::size_t i = 0; i < names.size(); ++i)
+            by.push_back(expr_col(static_cast<std::int32_t>(i)));
+        std::optional<AggregateSpec> spec = aggregate_spec(*g, names, by);
+        if (!spec) return std::nullopt;
+        schema_changing = true;
+        return source.apply_aggregation(*spec);
+    }
+    if (const auto* o = std::get_if<SortByOp>(&op.node))
+        return source.apply_sort({{o->name}, {o->descending}});
+    if (const auto* o = std::get_if<SortByMultiOp>(&op.node))
+        return source.apply_sort({o->by, o->descending});
+    if (const auto* o = std::get_if<TopkOp>(&op.node))
+        return source.apply_topn({{o->name}, {o->largest}}, o->k);
+    if (const auto* o = std::get_if<SliceOp>(&op.node)) {
+        if (o->offset < 0 || o->len < 0) return std::nullopt;
+        return source.apply_limit(o->offset, o->len);
+    }
+    if (const auto* o = std::get_if<TailOp>(&op.node)) {
+        if (o->n < 0) return std::nullopt;
+        return source.apply_tail(o->n);
+    }
+    if (const auto* j = std::get_if<JoinOp>(&op.node)) {
+        // Only a right side that its own source fully absorbed can be handed
+        // over; anything left above it would have to run first.
+        PlanParts right =
+            optimize_parts(detail::PlanAccess::source_ptr(j->other),
+                           detail::PlanAccess::ops(j->other));
+        if (!right.ops.empty()) return std::nullopt;
+        schema_changing = true;
+        return source.apply_join({std::move(right.source), j->left_on,
+                                  j->right_on, j->how, j->suffix});
+    }
+    return std::nullopt;
+}
+
+// Offer ops to the source bottom up. An Exact answer removes the op; an
+// Inexact one keeps it above the derived source, after which only filters
+// (which commute with it) are still offered. The first refused op ends the
+// walk.
+PlanParts absorb_into_source(const std::vector<std::string>& source_names,
+                             PlanParts plan) {
+    std::shared_ptr<const Source> source = std::move(plan.source);
+    std::vector<std::string> names = source_names;
+    std::vector<std::shared_ptr<const LazyOp>> kept;
+    kept.reserve(plan.ops.size());
+    bool offering = true;
+    bool kept_only_filters = true;
+    auto accept = [&](SourceApplication app, const LazyOp& op,
+                      bool schema_changing) {
+        if (!app.source || app.source == source)
+            throw std::logic_error("source planning hook accepted '" +
+                                   describe_op(op) + "' without a new source");
+        if (schema_changing && app.status != ApplyStatus::Exact)
+            throw std::logic_error("source planning hook accepted '" +
+                                   describe_op(op) +
+                                   "' as inexact, but it changes the schema");
+        source = std::move(app.source);
+        if (schema_changing) names = source->names();
+        return app.status;
+    };
+    for (std::size_t i = 0; i < plan.ops.size(); ++i) {
+        auto& op = plan.ops[i];
+        const bool is_filter = std::holds_alternative<FilterOp>(op->node);
+        if (offering && !kept.empty() && !(kept_only_filters && is_filter))
+            offering = false;
+        if (!offering) {
+            kept.push_back(std::move(op));
+            continue;
+        }
+        if (kept.empty() && std::holds_alternative<WithColumnOp>(op->node)) {
+            std::optional<SourceApplication> app;
+            const std::size_t covered =
+                offer_merged_aggregation(*source, names, plan.ops, i, app);
+            if (covered) {
+                accept(std::move(*app), *plan.ops[i + covered - 1], true);
+                i += covered - 1;
+                continue;
+            }
+        }
+        bool schema_changing = false;
+        std::optional<SourceApplication> app =
+            offer_op(*source, names, *op, schema_changing);
+        if (!app) {
+            offering = false;
+            kept.push_back(std::move(op));
+            continue;
+        }
+        if (accept(std::move(*app), *op, schema_changing) ==
+            ApplyStatus::Inexact) {
+            kept_only_filters = kept_only_filters && is_filter;
+            kept.push_back(std::move(op));
+        }
+    }
+    return {std::move(source), std::move(kept)};
+}
+
+PlanParts run_plan_rule(detail::PlanRule rule,
+                        const std::vector<std::string>& source_names,
+                        PlanParts plan) {
+    switch (rule) {
+        case detail::PlanRule::PredicatePushdown:
+            plan.ops = pushdown_predicates(source_names, plan.ops);
+            return plan;
+        case detail::PlanRule::ProjectionPushdown:
+            plan.ops = pushdown_projections(source_names, plan.ops);
+            return plan;
+        case detail::PlanRule::SourceAbsorption:
+            return absorb_into_source(source_names, std::move(plan));
+    }
+    return plan;
+}
+
+// Absorption is last, so the source names stay valid for every rule.
+PlanParts optimize_parts(std::shared_ptr<const Source> source,
+                         std::vector<std::shared_ptr<const LazyOp>> ops) {
+    const std::vector<std::string> names = source->names();
+    PlanParts plan{std::move(source), std::move(ops)};
+    for (detail::PlanRule rule : detail::PLAN_PIPELINE)
+        plan = run_plan_rule(rule, names, std::move(plan));
+    return plan;
 }
 
 // Fuse [filter]* [with_column]* [select] into one pass: one AND-ed mask, gather
@@ -4900,10 +5187,9 @@ std::vector<std::string> LazyFrame::schema() const {
 }
 
 std::string LazyFrame::explain() const {
-    std::string s = "scan [" + join_names(source_->names()) + "]";
-    for (const auto& op : pushdown_projections(
-             source_->names(), pushdown_predicates(source_->names(), ops_)))
-        s += "\n" + describe_op(*op);
+    const PlanParts plan = optimize_parts(source_, ops_);
+    std::string s = "scan [" + join_names(plan.source->names()) + "]";
+    for (const auto& op : plan.ops) s += "\n" + describe_op(*op);
     return s;
 }
 
@@ -4912,7 +5198,8 @@ LazyFrame LazyFrame::memory_budget(std::uint64_t bytes) const {
 }
 
 LazyFrame LazyFrame::auto_spill() const {
-    // Same policy as the default (0) and as View: ~1/3 of available memory.
+    // Same policy as the default (0) and as View: ~1/3 of available
+    // memory.
     return LazyFrame(source_, ops_, resolve_spill_budget(0));
 }
 
@@ -4932,6 +5219,8 @@ namespace {
 // The pull chain a streaming terminal drives: the source cursor with every
 // op the source did not apply stacked on it, plus the schema at its output.
 struct CursorChain {
+    // Declared first so it outlives the cursor built over it.
+    std::shared_ptr<const Source> source;
     std::unique_ptr<Cursor> cursor;
     std::vector<std::string> schema;
     std::uint64_t budget = 0;
@@ -4978,8 +5267,10 @@ coro::CoroTask<void> reclaim_chain(CursorChain& chain, bool& reported) {
 // of filters after it into the scan, then stack every op the source did not
 // apply exactly. This is the plan's lowering (b); the driver below runs it.
 CursorChain lower_cursor_chain(
-    const Source& source, const std::vector<std::shared_ptr<const LazyOp>>& ops,
+    std::shared_ptr<const Source> source_ptr,
+    const std::vector<std::shared_ptr<const LazyOp>>& ops,
     std::uint64_t budget) {
+    const Source& source = *source_ptr;
     const std::vector<std::string> names = source.names();
 
     // A leading Select is a pure source projection: pushdown_projections emits
@@ -5054,6 +5345,7 @@ CursorChain lower_cursor_chain(
         if (r.filters[k] == Pushed::Exact) drop[cand_pos[k]] = true;
 
     CursorChain chain;
+    chain.source = std::move(source_ptr);
     chain.cursor = std::move(r.cursor);
     chain.schema = projection.empty() ? names : projection;
     chain.budget = budget;
@@ -5090,12 +5382,13 @@ coro::AsyncGenerator<DataFrame> drive_cursor_chain(CursorChain chain,
 
 }  // namespace
 
-coro::AsyncGenerator<DataFrame> LazyFrame::stream(
-    std::int64_t morsel_rows) const {
-    const std::vector<std::string> names = source_->names();
-    auto ops = pushdown_projections(names, pushdown_predicates(names, ops_));
+namespace {
+
+coro::AsyncGenerator<DataFrame> stream_plan(PlanParts plan,
+                                            std::uint64_t memory_budget,
+                                            std::int64_t morsel_rows) {
     // 0 resolves to auto (~1/3 RAM), same policy as View.
-    const std::uint64_t budget = resolve_spill_budget(memory_budget_);
+    const std::uint64_t budget = resolve_spill_budget(memory_budget);
     const std::int64_t eff_rows =
         morsel_rows > 0 ? morsel_rows : DEFAULT_MORSEL_ROWS;
 
@@ -5103,34 +5396,267 @@ coro::AsyncGenerator<DataFrame> LazyFrame::stream(
     // parallel drain has miscompiled frames before (project_coro_threadlocal_
     // parser_pitfall), and it would delay the chain's destruction past the
     // consumer's last pull, which is the scan early-out.
-    return drive_cursor_chain(lower_cursor_chain(*source_, ops, budget),
-                              eff_rows);
+    return drive_cursor_chain(
+        lower_cursor_chain(std::move(plan.source), plan.ops, budget), eff_rows);
+}
+
+}  // namespace
+
+coro::AsyncGenerator<DataFrame> LazyFrame::stream(
+    std::int64_t morsel_rows) const {
+    return stream_plan(optimize_parts(source_, ops_), memory_budget_,
+                       morsel_rows);
 }
 
 std::unique_ptr<Cursor> LazyFrame::open_cursor() const {
-    const std::vector<std::string> names = source_->names();
-    auto ops = pushdown_projections(names, pushdown_predicates(names, ops_));
+    PlanParts plan = optimize_parts(source_, ops_);
     const std::uint64_t budget = resolve_spill_budget(memory_budget_);
-    return lower_cursor_chain(*source_, ops, budget).cursor;
+    return lower_cursor_chain(std::move(plan.source), plan.ops, budget).cursor;
 }
 
-coro::CoroTask<DataFrame> LazyFrame::collect(std::int64_t morsel_rows) const {
+namespace {
+
+DataFrame share_frame(const DataFrame& f) {
+    DataFrame out;
+    out.names = f.names;
+    out.columns.reserve(f.columns.size());
+    for (const Series& c : f.columns) out.columns.push_back(c.share());
+    return out;
+}
+
+coro::CoroTask<DataFrame> collect_plan(PlanParts plan,
+                                       std::uint64_t memory_budget,
+                                       std::int64_t morsel_rows) {
     // A resident source runs whole-column, matching eager. An explicit
     // morsel_rows or memory_budget asks to stream/spill instead.
-    if (morsel_rows <= 0 && memory_budget_ == 0) {
-        if (const DataFrame* f = source_->as_frame()) {
-            auto ops = pushdown_projections(
-                source_->names(), pushdown_predicates(source_->names(), ops_));
-            DataFrame start;
-            start.names = f->names;
-            start.columns.reserve(f->columns.size());
-            for (const Series& c : f->columns)
-                start.columns.push_back(c.share());  // zero-copy, move-only
-            co_return co_await run_ops_in_memory(std::move(start),
-                                                 std::move(ops));
+    if (morsel_rows <= 0 && memory_budget == 0) {
+        if (const DataFrame* f = plan.source->as_frame())
+            co_return co_await detail::PlanAccess::run_in_memory(
+                share_frame(*f), std::move(plan.ops));
+    }
+    co_return co_await drain_stream(
+        stream_plan(std::move(plan), memory_budget, morsel_rows));
+}
+
+}  // namespace
+
+namespace {
+
+// A plan optimized at every level: its own source and ops, and each child
+// plan (a join's or concat's other side, a frame op's frame operands) keyed
+// by the op that holds it.
+struct PlannedTree {
+    PlanParts parts;
+    std::uint64_t memory_budget = 0;
+    std::vector<std::pair<std::size_t, std::vector<PlannedTree>>> children;
+};
+
+PlannedTree plan_tree(const LazyFrame& lf) {
+    using detail::PlanAccess;
+    PlannedTree t{
+        optimize_parts(PlanAccess::source_ptr(lf), PlanAccess::ops(lf)),
+        PlanAccess::memory_budget(lf),
+        {}};
+    for (std::size_t i = 0; i < t.parts.ops.size(); ++i) {
+        const LazyOp& op = *t.parts.ops[i];
+        std::vector<PlannedTree> kids;
+        if (const auto* j = std::get_if<JoinOp>(&op.node)) {
+            kids.push_back(plan_tree(j->other));
+        } else if (const auto* c = std::get_if<ConcatOp>(&op.node)) {
+            kids.push_back(plan_tree(c->other));
+        } else if (const auto* f = std::get_if<FrameOp>(&op.node)) {
+            if (f->args)
+                for (const LazyFrame& child : f->args->frames())
+                    kids.push_back(plan_tree(child));
+        }
+        if (!kids.empty()) t.children.emplace_back(i, std::move(kids));
+    }
+    return t;
+}
+
+void tree_leaves(PlannedTree& t, std::vector<PlannedTree*>& out) {
+    out.push_back(&t);
+    for (auto& [idx, kids] : t.children)
+        for (PlannedTree& k : kids) tree_leaves(k, out);
+}
+
+// A source over one cursor a batch already opened; scanned exactly once.
+class OpenedSource final : public Source {
+   public:
+    OpenedSource(Schema schema, std::unique_ptr<Cursor> cursor)
+        : schema_(std::move(schema)), cursor_(std::move(cursor)) {}
+
+    Schema schema() const override { return schema_; }
+
+    ScanResult scan(const ScanRequest& req) const override {
+        if (!req.projection.empty() && req.projection != names())
+            throw std::logic_error(
+                "a batch-opened source cannot take a projection");
+        std::lock_guard<std::mutex> lock(mu_);
+        if (!cursor_)
+            throw std::logic_error("a batch-opened source was scanned twice");
+        ScanResult r;
+        r.filters.assign(req.filters.size(), Pushed::No);
+        r.cursor = std::move(cursor_);
+        return r;
+    }
+
+   private:
+    Schema schema_;
+    mutable std::mutex mu_;
+    mutable std::unique_ptr<Cursor> cursor_;
+};
+
+// The tree's own parts with every child op pointing at its rebuilt child.
+PlanParts finish_tree(PlannedTree t) {
+    for (auto& [idx, kids] : t.children) {
+        std::vector<LazyFrame> rebuilt;
+        rebuilt.reserve(kids.size());
+        for (PlannedTree& k : kids) {
+            const std::uint64_t budget = k.memory_budget;
+            PlanParts p = finish_tree(std::move(k));
+            rebuilt.push_back(detail::PlanAccess::make(
+                std::move(p.source), std::move(p.ops), budget));
+        }
+        const LazyOp& op = *t.parts.ops[idx];
+        if (const auto* j = std::get_if<JoinOp>(&op.node)) {
+            JoinOp next = *j;
+            next.other = std::move(rebuilt.front());
+            t.parts.ops[idx] =
+                std::make_shared<LazyOp>(LazyOp{std::move(next)});
+        } else if (const auto* c = std::get_if<ConcatOp>(&op.node)) {
+            ConcatOp next = *c;
+            next.other = std::move(rebuilt.front());
+            t.parts.ops[idx] =
+                std::make_shared<LazyOp>(LazyOp{std::move(next)});
+        } else if (const auto* f = std::get_if<FrameOp>(&op.node)) {
+            FrameOp next = *f;
+            next.args = f->args->with_frames(std::move(rebuilt));
+            t.parts.ops[idx] =
+                std::make_shared<LazyOp>(LazyOp{std::move(next)});
         }
     }
-    co_return co_await drain_stream(stream(morsel_rows));
+    return std::move(t.parts);
+}
+
+// Leaves whose sources share a batch key (within one source type) read their
+// data once. A group of top-level plans (`roots`) whose ops start with no
+// projection streams through Source::open_batch() when the source supports it,
+// so the caller must then drain those roots concurrently; any other group
+// reads through Source::collect_batch(), each leaf then scanning its result
+// from memory. Either way a leaf keeps its remaining ops above its source.
+coro::CoroTask<void> batch_leaves(std::vector<PlannedTree*> leaves,
+                                  const std::vector<PlannedTree*>& roots = {}) {
+    struct Group {
+        std::type_index type;
+        std::string key;
+        std::vector<PlannedTree*> members;
+    };
+    std::vector<Group> groups;
+    for (PlannedTree* leaf : leaves) {
+        std::optional<std::string> key = leaf->parts.source->batch_key();
+        if (!key) continue;
+        const Source& source = *leaf->parts.source;
+        const std::type_index type(typeid(source));
+        auto it = std::find_if(
+            groups.begin(), groups.end(),
+            [&](const Group& g) { return g.type == type && g.key == *key; });
+        if (it == groups.end())
+            groups.push_back({type, std::move(*key), {leaf}});
+        else
+            it->members.push_back(leaf);
+    }
+    auto streamable = [&](const PlannedTree* m) {
+        return std::find(roots.begin(), roots.end(), m) != roots.end() &&
+               (m->parts.ops.empty() ||
+                !std::holds_alternative<SelectOp>(m->parts.ops.front()->node));
+    };
+    for (Group& g : groups) {
+        if (g.members.size() < 2) continue;
+        std::vector<std::shared_ptr<const Source>> sources;
+        sources.reserve(g.members.size());
+        for (PlannedTree* m : g.members) sources.push_back(m->parts.source);
+        if (std::all_of(g.members.begin(), g.members.end(), streamable)) {
+            const std::uint64_t budget =
+                resolve_spill_budget(g.members.front()->memory_budget);
+            if (auto cursors = sources.front()->open_batch(sources, budget)) {
+                if (cursors->size() != g.members.size())
+                    throw std::logic_error(
+                        "Source::open_batch returned " +
+                        std::to_string(cursors->size()) + " cursors for " +
+                        std::to_string(g.members.size()) + " members");
+                for (std::size_t k = 0; k < g.members.size(); ++k)
+                    g.members[k]->parts.source = std::make_shared<OpenedSource>(
+                        sources[k]->schema(), std::move((*cursors)[k]));
+                continue;
+            }
+        }
+        std::vector<DataFrame> frames =
+            co_await sources.front()->collect_batch(sources);
+        if (frames.size() != g.members.size())
+            throw std::logic_error(
+                "Source::collect_batch returned " +
+                std::to_string(frames.size()) + " frames for " +
+                std::to_string(g.members.size()) + " members");
+        for (std::size_t k = 0; k < g.members.size(); ++k)
+            g.members[k]->parts.source =
+                std::make_shared<InMemorySource>(std::move(frames[k]));
+    }
+}
+
+}  // namespace
+
+namespace {
+
+coro::CoroTask<DataFrame> collect_owned(LazyFrame plan, std::uint64_t budget,
+                                        std::int64_t morsel_rows) {
+    PlannedTree tree = plan_tree(plan);
+    if (!tree.children.empty()) {
+        std::vector<PlannedTree*> leaves;
+        tree_leaves(tree, leaves);
+        co_await batch_leaves(std::move(leaves));
+    }
+    co_return co_await collect_plan(finish_tree(std::move(tree)), budget,
+                                    morsel_rows);
+}
+
+}  // namespace
+
+coro::CoroTask<DataFrame> LazyFrame::collect(std::int64_t morsel_rows) const {
+    return collect_owned(*this, memory_budget_, morsel_rows);
+}
+
+coro::CoroTask<std::vector<DataFrame>> Source::collect_batch(
+    std::vector<std::shared_ptr<const Source>> members) const {
+    (void)members;
+    throw std::logic_error(
+        "Source::collect_batch: a source with a batch_key() must override it");
+    co_return {};
+}
+
+coro::CoroTask<std::vector<DataFrame>> collect_all(
+    std::vector<LazyFrame> plans) {
+    std::vector<PlannedTree> trees;
+    trees.reserve(plans.size());
+    for (const LazyFrame& lf : plans) trees.push_back(plan_tree(lf));
+    std::vector<PlannedTree*> leaves;
+    std::vector<PlannedTree*> roots;
+    for (PlannedTree& t : trees) {
+        roots.push_back(&t);
+        tree_leaves(t, leaves);
+    }
+    co_await batch_leaves(std::move(leaves), roots);
+
+    // Drained together: a streamed batch feeds every root from one read, so
+    // the roots run at once and split each one's spill budget between them.
+    std::vector<coro::CoroTask<DataFrame>> runs;
+    runs.reserve(trees.size());
+    for (PlannedTree& t : trees) {
+        const std::uint64_t budget =
+            share_spill_budget(t.memory_budget, trees.size());
+        runs.push_back(collect_plan(finish_tree(std::move(t)), budget, 0));
+    }
+    co_return co_await coro::when_all(std::move(runs));
 }
 
 LoweredGroupAggs lower_group_aggs(const std::vector<GroupAgg>& aggs) {
@@ -5214,5 +5740,238 @@ LazyFrame DataFrame::lazy() const {
 LazyFrame lazy(DataFrame frame) {
     return LazyFrame::scan(std::make_shared<InMemorySource>(std::move(frame)));
 }
+
+namespace detail {
+
+const char* plan_rule_name(PlanRule rule) noexcept {
+    switch (rule) {
+        case PlanRule::PredicatePushdown:
+            return "predicate_pushdown";
+        case PlanRule::ProjectionPushdown:
+            return "projection_pushdown";
+        case PlanRule::SourceAbsorption:
+            return "source_absorption";
+    }
+    return "unknown";
+}
+
+namespace {
+
+LazyFrame rebuild(const LazyFrame& lf, PlanParts plan) {
+    return PlanAccess::make(std::move(plan.source), std::move(plan.ops),
+                            PlanAccess::memory_budget(lf));
+}
+
+}  // namespace
+
+LazyFrame apply_plan_rule(const LazyFrame& lf, PlanRule rule) {
+    return rebuild(
+        lf, run_plan_rule(rule, PlanAccess::source(lf).names(),
+                          {PlanAccess::source_ptr(lf), PlanAccess::ops(lf)}));
+}
+
+LazyFrame optimize_plan(const LazyFrame& lf) {
+    return rebuild(
+        lf, optimize_parts(PlanAccess::source_ptr(lf), PlanAccess::ops(lf)));
+}
+
+namespace {
+
+void fingerprint_group_aggs(Fingerprint& fp,
+                            const std::vector<GroupAgg>& aggs) {
+    fp.pod(static_cast<std::uint64_t>(aggs.size()));
+    for (const GroupAgg& a : aggs) {
+        fp.pod(a.op);
+        fp.str(a.column);
+        fp.str(a.out);
+        fp.pod(a.param);
+        fp.str(a.by);
+    }
+}
+
+void fingerprint_op(Fingerprint& fp, const LazyOp& op) {
+    fp.pod(static_cast<std::uint64_t>(op.node.index()));
+    std::visit(
+        overloaded{
+            [&](const FilterOp& o) { fp.pod(expr_fingerprint(o.pred)); },
+            [&](const SelectOp& o) { fp.strs(o.names); },
+            [&](const WithColumnOp& o) {
+                fp.str(o.name);
+                fp.pod(expr_fingerprint(o.expr));
+            },
+            [&](const RenameOp& o) { fp.strs(o.names); },
+            [&](const SliceOp& o) {
+                fp.pod(o.offset);
+                fp.pod(o.len);
+            },
+            [&](const TailOp& o) { fp.pod(o.n); },
+            [&](const DropNullsOp&) {},
+            [&](const FillNullOp& o) { fp.scalar(o.value); },
+            [&](const WithRowIndexOp& o) { fp.str(o.name); },
+            [&](const NullCountOp&) {},
+            [&](const ExplodeOp& o) { fp.str(o.column); },
+            [&](const UnpivotOp& o) {
+                fp.strs(o.id_vars);
+                fp.strs(o.value_vars);
+            },
+            [&](const TopkOp& o) {
+                fp.str(o.name);
+                fp.pod(o.k);
+                fp.pod(o.largest);
+            },
+            [&](const GroupByOp& o) {
+                fp.strs(o.keys);
+                fingerprint_group_aggs(fp, o.aggs);
+                fp.pod(static_cast<std::uint64_t>(o.dyn.size()));
+                for (const AggDynSpec& d : o.dyn) {
+                    fp.pod(d.op);
+                    fp.pod(d.param);
+                    fp.str(d.out_prefix);
+                }
+                fp.str(o.dyn_prefix);
+            },
+            [&](const SortByOp& o) {
+                fp.str(o.name);
+                fp.pod(o.descending);
+            },
+            [&](const UniqueOp& o) { fp.strs(o.subset); },
+            [&](const SampleOp& o) {
+                fp.pod(o.n);
+                fp.pod(o.seed);
+            },
+            [&](const IsDupOp& o) { fp.pod(o.unique); },
+            [&](const GroupByDynamicOp& o) {
+                fp.str(o.time_col);
+                fp.pod(o.every);
+                fp.pod(o.period);
+                fingerprint_group_aggs(fp, o.aggs);
+                fp.pod(o.origin);
+                fp.pod(o.origin_min);
+            },
+            [&](const PivotOp& o) {
+                fp.str(o.index);
+                fp.str(o.on);
+                fp.str(o.values);
+                fp.str(o.agg);
+            },
+            [&](const ToDummiesOp& o) { fp.str(o.column); },
+            [&](const DescribeOp&) {},
+            [&](const ReverseOp&) {},
+            [&](const TakeOp& o) {
+                fp.pod(static_cast<std::uint64_t>(o.indices.size()));
+                fp.bytes(o.indices.data(),
+                         o.indices.size() * sizeof(std::int64_t));
+            },
+            [&](const FilterMaskOp& o) {
+                const dftu_series* m = o.mask.handle();
+                fp.pod(m ? dftu_series_data(m) : nullptr);
+                fp.pod(m ? o.mask.length() : std::int64_t{0});
+            },
+            [&](const SortByMultiOp& o) {
+                fp.strs(o.by);
+                fp.pod(static_cast<std::uint64_t>(o.descending.size()));
+                for (bool d : o.descending) fp.pod(d);
+            },
+            [&](const JoinOp& o) {
+                fp.pod(plan_fingerprint(o.other));
+                fp.strs(o.left_on);
+                fp.strs(o.right_on);
+                fp.pod(o.how);
+                fp.str(o.suffix);
+                fp.pod(static_cast<std::uint64_t>(o.left_fields.size()));
+                for (const Field& f : o.left_fields) {
+                    fp.str(f.name);
+                    fp.pod(f.type.id);
+                }
+            },
+            [&](const ConcatOp& o) { fp.pod(plan_fingerprint(o.other)); },
+            [&](const UnnestOp& o) {
+                fp.str(o.column);
+                fp.pod(o.keep_empty);
+                fp.strs(o.out_names);
+            },
+            [&](const FrameOp& o) {
+                fp.str(o.name);
+                fp.pod(static_cast<const void*>(o.op));
+                fp.pod(static_cast<const void*>(o.args.get()));
+                fp.strs(o.out_names);
+                if (o.args)
+                    for (const LazyFrame& f : o.args->frames())
+                        fp.pod(plan_fingerprint(f));
+            },
+            [&](const NodeOp& o) {
+                fp.str(o.name);
+                fp.pod(static_cast<const void*>(o.self));
+                fp.pod(static_cast<const void*>(&op));
+            }},
+        op.node);
+}
+
+void visit_plan_at(const LazyFrame& lf,
+                   const std::function<void(const LazyFrame&, int)>& f,
+                   int depth) {
+    f(lf, depth);
+    for (const auto& op : PlanAccess::ops(lf)) {
+        if (const auto* j = std::get_if<JoinOp>(&op->node)) {
+            visit_plan_at(j->other, f, depth + 1);
+        } else if (const auto* c = std::get_if<ConcatOp>(&op->node)) {
+            visit_plan_at(c->other, f, depth + 1);
+        } else if (const auto* fo = std::get_if<FrameOp>(&op->node)) {
+            if (fo->args)
+                for (const LazyFrame& child : fo->args->frames())
+                    visit_plan_at(child, f, depth + 1);
+        }
+    }
+}
+
+}  // namespace
+
+std::uint64_t plan_fingerprint(const LazyFrame& lf) {
+    Fingerprint fp;
+    fp.pod(static_cast<const void*>(&PlanAccess::source(lf)));
+    fp.pod(PlanAccess::memory_budget(lf));
+    const auto& ops = PlanAccess::ops(lf);
+    fp.pod(static_cast<std::uint64_t>(ops.size()));
+    for (const auto& op : ops) fingerprint_op(fp, *op);
+    return fp.value();
+}
+
+void visit_plan(const LazyFrame& lf,
+                const std::function<void(const LazyFrame&, int depth)>& f) {
+    visit_plan_at(lf, f, 0);
+}
+
+const std::shared_ptr<const Source>& plan_source(const LazyFrame& lf) {
+    return PlanAccess::source_ptr(lf);
+}
+
+LazyFrame rebase(const LazyFrame& lf, std::shared_ptr<const Source> source) {
+    return PlanAccess::make(std::move(source), PlanAccess::ops(lf),
+                            PlanAccess::memory_budget(lf));
+}
+
+std::optional<std::string> first_non_filter_op(const LazyFrame& lf) {
+    for (const auto& op : PlanAccess::ops(lf))
+        if (!std::holds_alternative<FilterOp>(op->node))
+            return describe_op(*op);
+    return std::nullopt;
+}
+
+std::optional<std::string> first_op(const LazyFrame& lf) {
+    const auto& ops = PlanAccess::ops(lf);
+    if (ops.empty()) return std::nullopt;
+    return describe_op(*ops.front());
+}
+
+std::optional<std::pair<std::int64_t, std::int64_t>> sole_slice(
+    const LazyFrame& lf) {
+    const auto& ops = PlanAccess::ops(lf);
+    if (ops.size() != 1) return std::nullopt;
+    const auto* s = std::get_if<SliceOp>(&ops.front()->node);
+    if (!s || s->offset < 0 || s->len < 0) return std::nullopt;
+    return std::make_pair(s->offset, s->len);
+}
+
+}  // namespace detail
 
 }  // namespace dftracer::utils::dataframe

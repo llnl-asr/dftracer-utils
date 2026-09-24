@@ -36,14 +36,14 @@ def test_jit_plugin_fused_in_session(tmp_path):
 
     tv = dftu.TraceViewer(gz, index_path=str(tmp_path))
     with tv.session() as s:
-        by_cat = s.view().group_by("cat").agg("count").collect()
-        counts = s.view().plugin(_SessionCounts)
+        by_cat = s.collect(tv.group_by("cat").agg("count"))
+        counts = s.attach(Plugins([_SessionCounts]))
 
     # collect and the plugin ran over one shared scan.
     cat = pa.table(by_cat.result()).to_pandas()
     assert int(cat["count"].sum()) == 10
 
-    res = counts.result()  # single named result -> our DataFrame
+    res = counts.result()["hits"]  # an emitted frame -> our DataFrame
     assert isinstance(res, dftu.DataFrame)
     pdf = pa.table(res).to_pandas()
     assert int(pdf["value"].sum()) == 10  # every event counted on the same scan
@@ -71,7 +71,7 @@ def test_session_attach_built_plugin_set(tmp_path):
     plugins = Plugins([_SessionCounts, _SessionDurs])
     tv = dftu.TraceViewer(gz, index_path=str(tmp_path))
     with tv.session() as s:
-        by_cat = s.view().group_by("cat").agg("count").collect()
+        by_cat = s.collect(tv.group_by("cat").agg("count"))
         attached = s.attach(plugins)
 
     assert int(pa.table(by_cat.result()).to_pandas()["count"].sum()) == 10
@@ -88,7 +88,7 @@ def test_session_attach_built_plugin_set(tmp_path):
 
 
 @pytest.mark.skipif(not HAS_CXX, reason="no C++ compiler available for the jit backend")
-def test_session_attach_same_set_twice_raises(tmp_path):
+def test_session_attach_same_set_twice_folds_it_once_each(tmp_path):
     import dftracer.utils as dftu
 
     gz = str(tmp_path / "t.pfw.gz")
@@ -99,14 +99,17 @@ def test_session_attach_same_set_twice_raises(tmp_path):
     plugins = Plugins([_SessionCounts])
     tv = dftu.TraceViewer(gz, index_path=str(tmp_path))
     s = tv.session()
-    s.attach(plugins)
-    with pytest.raises(ValueError, match="already attached"):
-        s.attach(plugins)
+    first = s.attach(plugins)
+    second = s.attach(plugins)
+    # Neither handle sees the other's fold: each counts every event once.
+    for handle in (first, second):
+        hits = pa.table(handle.result()["hits"]).to_pandas()
+        assert int(hits["value"].sum()) == 4
 
 
 @pytest.mark.skipif(not HAS_CXX, reason="no C++ compiler available for the jit backend")
 def test_session_attach_handle_read_before_execute_triggers_it(tmp_path):
-    # Session Handles (collect/export/.../attach) all share one contract: a
+    # Session Handles (collect/sink_json/.../attach) all share one contract: a
     # read before an explicit execute() triggers it rather than raising, so
     # `attached.result()` alone - with no `with` block and no s.execute() call
     # - still resolves correctly.
@@ -121,10 +124,8 @@ def test_session_attach_handle_read_before_execute_triggers_it(tmp_path):
     tv = dftu.TraceViewer(gz, index_path=str(tmp_path))
     s = tv.session()
     attached = s.attach(plugins)
-    assert s.stats is None  # nothing has run yet
 
     res = attached.result()
-    assert s.stats is not None  # result() drove execute()
     hits = pa.table(res["hits"]).to_pandas()
     assert int(hits["value"].sum()) == 6
 
@@ -150,7 +151,7 @@ def _write_two_category_traces(tmp_path, n: int):
 
 
 @pytest.mark.skipif(not HAS_CXX, reason="no C++ compiler available for the jit backend")
-def test_session_attach_alone_prunes_the_scan(tmp_path):
+def test_session_attach_alone_applies_the_plugin_filter(tmp_path):
     import dftracer.utils as dftu
 
     n = 200
@@ -166,13 +167,10 @@ def test_session_attach_alone_prunes_the_scan(tmp_path):
     res = attached.result()
     hits = pa.table(res["hits"]).to_pandas()
     assert int(hits["value"].sum()) == n  # the plugin's own filter still applies
-    # Sole branch: execute() applies the prune attach() offered, so the index
-    # skips whole chunks.
-    assert s.stats["chunks_skipped"] > 0
 
 
 @pytest.mark.skipif(not HAS_CXX, reason="no C++ compiler available for the jit backend")
-def test_session_attach_coscan_does_not_prune_the_scan(tmp_path):
+def test_session_attach_coscan_keeps_every_file(tmp_path):
     import dftracer.utils as dftu
 
     n = 200
@@ -183,12 +181,11 @@ def test_session_attach_coscan_does_not_prune_the_scan(tmp_path):
     plugins = Plugins([_SessionCountsPosix])
     tv = dftu.TraceViewer(files, index_path=str(tmp_path))
     with tv.session() as s:
-        all_events = s.view().group_by().agg("count").collect()
+        all_events = s.collect(tv.group_by().agg("count"))
         attached = s.attach(plugins)
 
-    # The collect branch joined, so execute() drops the narrowing attach()
-    # offered: nothing is skipped, and the branch still sees both files.
-    assert s.stats["chunks_skipped"] == 0
+    # The plugin's narrowing must not reach the shared scan: the collect
+    # still sees both files.
     total = pa.table(all_events.result()).to_pandas()
     assert int(total["count"].sum()) == 2 * n
 

@@ -1,5 +1,7 @@
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/trace/views/aggfold.h>
 #include <dftracer/utils/trace/views/batch_bridge.h>
+#include <dftracer/utils/trace/views/event_source.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/trace/views/stream_row_fold.h>
 
@@ -28,10 +30,18 @@ std::uint64_t morsel_bytes(const dataframe::Morsel& m) {
 }
 
 void StreamRowFold::step(const FoldBatch& batch) {
+    if (dropped_ && dropped_->load(std::memory_order_relaxed)) return;
+    const RecordPhase target =
+        branch_ ? agg_phase_target(*branch_) : RecordPhase::UNKNOWN;
     std::vector<FoldEvent> events =
         select_events(batch, [&](const FoldEvent& ev) {
-            return ev.phase != RecordPhase::UNKNOWN &&
-                   (keep_metadata_ || ev.phase != RecordPhase::METADATA);
+            if (ev.phase == RecordPhase::UNKNOWN) return false;
+            if (!keep_metadata_ && ev.phase == RecordPhase::METADATA)
+                return false;
+            if (target != RecordPhase::UNKNOWN && ev.phase != target)
+                return false;
+            return !branch_ || !branch_->query ||
+                   pod_matches(*branch_->query, ev, *intern_, qmap_);
         });
     if (events.empty()) return;
 

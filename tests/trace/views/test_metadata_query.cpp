@@ -1,12 +1,16 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/trace/views/view.h>
+#include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <doctest/doctest.h>
 
 #include <fstream>
 #include <string>
 
 #include "test_view_common.h"
+
+namespace scan = dftracer::utils::trace::views::detail::scan;
+using scan::ScanPlan;
 
 namespace {
 
@@ -42,7 +46,7 @@ std::string create_metadata_trace(TestEnvironment& env, bool numeric_ph) {
 // index must already exist).
 void prime_index(const std::string& gz, const std::string& idx) {
     StringSink sink;
-    View::from_file(gz, idx).export_json(sink).get();
+    View::from_file(gz, idx).sink_json(sink).get();
 }
 
 // Rows whose top-level name column equals `name`.
@@ -62,9 +66,10 @@ void check_metadata_variant(bool numeric_ph) {
     prime_index(gz, idx);
 
     // phase("metadata") returns the CM record as a row, args flattened.
-    View meta = View::from_file(gz, idx).phase(Phase::Metadata);
-    dataframe::DataFrame via_lazy = run(meta.collect().collect());
-    dataframe::DataFrame via_eager = run(meta.collect_frame());
+    ScanPlan meta = scan::phase(scan::from_file(gz, idx), Phase::Metadata);
+    dataframe::LazyFrame meta_lazy = scan::collect(meta);
+    dataframe::DataFrame via_lazy = run(meta_lazy.collect());
+    dataframe::DataFrame via_eager = run(scan::collect_frame(meta));
 
     REQUIRE(via_lazy.num_rows() > 0);
     REQUIRE(via_eager.num_rows() == via_lazy.num_rows());
@@ -80,25 +85,28 @@ void check_metadata_variant(bool numeric_ph) {
     CHECK(found);
 
     // The query filter applies to metadata rows (both collect paths).
-    View filtered = View::from_file(gz, idx)
-                        .phase(Phase::Metadata)
-                        .query("args.name == \"time_metric\"");
-    dataframe::DataFrame f_lazy = run(filtered.collect().collect());
-    dataframe::DataFrame f_eager = run(filtered.collect_frame());
+    ScanPlan filtered =
+        scan::query(scan::phase(scan::from_file(gz, idx), Phase::Metadata),
+                    "args.name == \"time_metric\"");
+    dataframe::LazyFrame filtered_lazy = scan::collect(filtered);
+    dataframe::DataFrame f_lazy = run(filtered_lazy.collect());
+    dataframe::DataFrame f_eager = run(scan::collect_frame(filtered));
     CHECK(f_lazy.num_rows() == 1);
     CHECK(f_eager.num_rows() == 1);
     CHECK(bstr(f_lazy, 0, "args.value") == "NS");
 
     // A non-matching metadata filter returns nothing (the filter really runs).
-    View no_match = View::from_file(gz, idx)
-                        .phase(Phase::Metadata)
-                        .query("args.name == \"nope\"");
-    CHECK(run(no_match.collect().collect()).num_rows() == 0);
-    CHECK(run(no_match.collect_frame()).num_rows() == 0);
+    ScanPlan no_match =
+        scan::query(scan::phase(scan::from_file(gz, idx), Phase::Metadata),
+                    "args.name == \"nope\"");
+    dataframe::LazyFrame no_match_lazy = scan::collect(no_match);
+    CHECK(run(no_match_lazy.collect()).num_rows() == 0);
+    CHECK(run(scan::collect_frame(no_match)).num_rows() == 0);
 
     // A normal event row query never includes the metadata record.
-    View events = View::from_file(gz, idx).phase(Phase::Events);
-    dataframe::DataFrame ev_lazy = run(events.collect().collect());
+    ScanPlan events = scan::phase(scan::from_file(gz, idx), Phase::Events);
+    dataframe::LazyFrame events_lazy = scan::collect(events);
+    dataframe::DataFrame ev_lazy = run(events_lazy.collect());
     CHECK(ev_lazy.num_rows() == 5);
     CHECK(rows_named(ev_lazy, "CM") == 0);
     CHECK(rows_named(ev_lazy, "read") == 5);

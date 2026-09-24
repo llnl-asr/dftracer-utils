@@ -5,6 +5,7 @@
 #include <dftracer/utils/core/pipeline/executor.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/expr.h>
+#include <dftracer/utils/dataframe/internal/expr_handle.h>  // expr_fingerprint
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/query/builder.h>
 #include <dftracer/utils/query/query.h>
@@ -12,7 +13,11 @@
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/trace/views/stream_row_fold.h>
+#include <dftracer/utils/trace/views/view_agg_engine.h>
+#include <dftracer/utils/trace/views/view_executor.h>
 #include <dftracer/utils/trace/views/view_plan.h>
+#include <dftracer/utils/trace/views/view_plan_ops.h>
+#include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/trace/views/view_source.h>
 
 #include <algorithm>
@@ -31,6 +36,8 @@
 #include <vector>
 
 namespace dftracer::utils::trace::views {
+
+namespace scan = detail::scan;
 
 bool ViewCursor::has_nested_column() const {
     if (!nested_) {
@@ -521,12 +528,470 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
     std::int64_t next_index_ = 0;
 };
 
+// A group key the view folds natively with the raw value, named as its output
+// column. cat is left out: the view lowercases it, the engine does not.
+std::optional<GroupKey> fixed_group_key(const std::string& name) {
+    if (name == "name") return GroupKey::name();
+    if (name == "pid") return GroupKey::pid();
+    if (name == "tid") return GroupKey::tid();
+    if (name == "fhash") return GroupKey::fhash();
+    if (name == "hhash") return GroupKey::hhash();
+    return std::nullopt;
+}
+
+// Numeric event fields every event carries, so the view's per-event fold and
+// the engine's column reduction see the same values.
+bool is_fixed_numeric_field(const std::string& name) {
+    return name == "ts" || name == "dur" || name == "pid" || name == "tid";
+}
+
+std::optional<AggOp> simple_agg_op(df::Agg op) {
+    switch (op) {
+        case df::Agg::Count:
+            return AggOp::Count;
+        case df::Agg::Sum:
+            return AggOp::Sum;
+        case df::Agg::Min:
+            return AggOp::Min;
+        case df::Agg::Max:
+            return AggOp::Max;
+        case df::Agg::Mean:
+            return AggOp::Mean;
+        default:
+            return std::nullopt;
+    }
+}
+
+// The source column a bare column reference reads, or nullopt.
+std::optional<std::string> column_of(const df::Expr& e,
+                                     const std::vector<std::string>& names) {
+    const std::int32_t ci = df::expr_col_index(e);
+    if (ci < 0 || static_cast<std::size_t>(ci) >= names.size())
+        return std::nullopt;
+    return names[static_cast<std::size_t>(ci)];
+}
+
 }  // namespace
 
+std::optional<df::SourceApplication> ViewSource::apply_filter(
+    const df::Expr& predicate) const {
+    if (!can_stream_rows()) return std::nullopt;
+    const std::uint64_t fp = df::expr_fingerprint(predicate);
+    if (std::find(applied_filters_.begin(), applied_filters_.end(), fp) !=
+        applied_filters_.end())
+        return std::nullopt;
+    std::optional<Pushable> pushed =
+        translate_pred(predicate, names(), plan_->time_scale);
+    if (!pushed) return std::nullopt;
+    auto built = std::move(pushed->expr).build();
+    if (!built.has_value()) return std::nullopt;
+    auto next = std::make_shared<ViewSource>(
+        scan::filter(plan_, std::move(built.value())), emit_dyn_);
+    next->applied_filters_ = applied_filters_;
+    next->applied_filters_.push_back(fp);
+    next->absorb_aggregation_ = absorb_aggregation_;
+    return df::SourceApplication{
+        std::move(next),
+        pushed->exact ? df::ApplyStatus::Exact : df::ApplyStatus::Inexact};
+}
+
+std::optional<df::SourceApplication> ViewSource::apply_projection(
+    const std::vector<df::NamedExpr>& exprs) const {
+    if (!can_stream_rows()) return std::nullopt;
+    const std::vector<std::string> current = names();
+    std::vector<std::string> cols;
+    cols.reserve(exprs.size());
+    for (const df::NamedExpr& e : exprs) {
+        std::optional<std::string> c = column_of(e.expr, current);
+        if (!c || *c != e.name) return std::nullopt;
+        cols.push_back(std::move(*c));
+    }
+    if (cols == current) return std::nullopt;
+    auto next =
+        std::make_shared<ViewSource>(scan::select(plan_, cols), emit_dyn_);
+    next->applied_filters_ = applied_filters_;
+    next->absorb_aggregation_ = absorb_aggregation_;
+    if (next->names() != cols) return std::nullopt;
+    return df::SourceApplication{std::move(next), df::ApplyStatus::Exact};
+}
+
+namespace {
+
+// `e`, positional against `current`, as a computed column over the columns it
+// reads, or std::nullopt when it reads none it can name.
+std::optional<detail::ComputedColumn> computed_from(
+    std::string name, const df::Expr& e,
+    const std::vector<std::string>& current) {
+    detail::ComputedColumn c;
+    c.name = std::move(name);
+    std::vector<std::int32_t> at(current.size(), -1);
+    for (std::size_t i = 0; i < current.size(); ++i) {
+        if (!df::expr_references(e, static_cast<std::int32_t>(i))) continue;
+        at[i] = static_cast<std::int32_t>(c.inputs.size());
+        c.inputs.push_back(current[i]);
+    }
+    if (df::expr_max_col(e) >= static_cast<std::int32_t>(current.size()))
+        return std::nullopt;
+    c.expr = df::expr_remap_cols(e, at);
+    return c;
+}
+
+}  // namespace
+
+std::optional<df::SourceApplication> ViewSource::apply_aggregation(
+    const df::AggregateSpec& spec) const {
+    const detail::ViewPlan& p = *plan_;
+    if (output_ != TraceOutput::Events || !absorb_aggregation_ ||
+        !detail::is_row_query(*plan_) || p.auto_numeric_metrics)
+        return std::nullopt;
+    const std::vector<std::string> current = names();
+    std::vector<GroupKey> keys;
+    std::vector<detail::ComputedColumn> computed;
+    std::vector<std::string> raw_reads;
+    std::vector<std::string> expected;
+    for (const df::NamedExpr& k : spec.keys) {
+        std::optional<std::string> c = column_of(k.expr, current);
+        if (c && *c == k.name)
+            if (std::optional<GroupKey> key = fixed_group_key(*c)) {
+                keys.push_back(std::move(*key));
+                raw_reads.push_back(*c);
+                expected.push_back(k.name);
+                continue;
+            }
+        std::optional<detail::ComputedColumn> col =
+            computed_from(k.name, k.expr, current);
+        if (!col) return std::nullopt;
+        keys.push_back({GroupKey::Kind::Expr, k.name});
+        computed.push_back(std::move(*col));
+        expected.push_back(k.name);
+    }
+    std::vector<AggSpec> aggs;
+    for (std::size_t i = 0; i < spec.aggs.size(); ++i) {
+        const df::AggregateExpr& a = spec.aggs[i];
+        std::optional<AggOp> op = simple_agg_op(a.op);
+        if (!op || a.by.valid() || a.out.empty()) return std::nullopt;
+        std::string field;
+        if (*op != AggOp::Count) {
+            std::optional<std::string> c = column_of(a.input, current);
+            if (c && is_fixed_numeric_field(*c)) {
+                field = *c;
+                raw_reads.push_back(*c);
+            } else {
+                field = "__view_agg_in_" + std::to_string(i);
+                std::optional<detail::ComputedColumn> col =
+                    computed_from(field, a.input, current);
+                if (!col) return std::nullopt;
+                computed.push_back(std::move(*col));
+            }
+        }
+        aggs.push_back(AggSpec(*op, std::move(field), a.out));
+        expected.push_back(a.out);
+    }
+    if (!computed.empty()) {
+        // The view reads ts/dur unscaled for some aggregates; a computed column
+        // must see the values the row stream would.
+        if (p.time_scale != 1.0) return std::nullopt;
+        // A computed column replaces a same-named field for every reader, so
+        // it may not shadow one the aggregation reads raw.
+        for (const detail::ComputedColumn& c : computed)
+            if (std::find(raw_reads.begin(), raw_reads.end(), c.name) !=
+                raw_reads.end())
+                return std::nullopt;
+    }
+    // A row select here only narrowed the scan to what the aggregation reads;
+    // on an aggregation the view would read it as an output projection.
+    detail::ScanPlan grouped = scan::select(plan_, {});
+    if (!computed.empty()) {
+        auto plan = std::make_shared<detail::ViewPlan>(*grouped);
+        plan->computed = std::move(computed);
+        plan->schema.reset();
+        grouped = std::move(plan);
+    }
+    if (!keys.empty()) grouped = scan::group_by(grouped, std::move(keys));
+    grouped = scan::agg(grouped, std::move(aggs));
+    auto next = std::make_shared<ViewSource>(std::move(grouped), emit_dyn_);
+    if (next->names() != expected) return std::nullopt;
+    return df::SourceApplication{std::move(next), df::ApplyStatus::Exact};
+}
+
+std::optional<std::string> ViewSource::batch_key() const {
+    const detail::ViewPlan& p = *plan_;
+    if (emit_dyn_ || !absorb_aggregation_ || p.cancelled || p.materialize ||
+        p.auto_numeric_metrics || !p.sort_col.empty() || !p.topk_col.empty() ||
+        p.limit || p.offset)
+        return std::nullopt;
+    if (output_ == TraceOutput::Events && detail::is_row_query(*plan_) &&
+        detail::select_needs_resolver(p.select))
+        return std::nullopt;
+    // The session's export branch writes whole events.
+    if (output_ == TraceOutput::ExportJson && !p.select.empty())
+        return std::nullopt;
+    // A branch sees the whole shared scan, so only an unfiltered one shares.
+    if (output_ == TraceOutput::Branch && (p.query || p.phase != Phase::Any))
+        return std::nullopt;
+    std::string key;
+    for (const ViewFile& f : p.files) {
+        key += f.file_path;
+        key += '\0';
+        key += f.index_path;
+        key += '\0';
+    }
+    key += std::to_string(reinterpret_cast<std::uintptr_t>(p.bloom_cache));
+    key += '\0';
+    if (p.time_range)
+        key += std::to_string(p.time_range->first) + ',' +
+               std::to_string(p.time_range->second);
+    key += '\0';
+    key += std::to_string(p.time_scale) + '\0' +
+           std::to_string(p.include_metadata) +
+           std::to_string(p.emit_all_metadata) + '\0' + p.rollup_root + '\0' +
+           p.views_root + '\0' + std::to_string(p.memory_budget);
+    return key;
+}
+
+namespace {}  // namespace
+
+ViewSession ViewSource::base_session(const detail::ViewPlan& p) {
+    auto base = std::make_shared<detail::ViewPlan>();
+    base->files = p.files;
+    base->bloom_cache = p.bloom_cache;
+    base->include_metadata = p.include_metadata;
+    base->emit_all_metadata = p.emit_all_metadata;
+    base->time_scale = p.time_scale;
+    base->rollup_root = p.rollup_root;
+    base->views_root = p.views_root;
+    base->memory_budget = p.memory_budget;
+    base->time_range = p.time_range;
+    return ViewSession(std::move(base));
+}
+
+namespace {
+
+// A zero-copy view of `f`, for members that read the same output.
+df::DataFrame shared_frame(const df::DataFrame& f) {
+    df::DataFrame out;
+    out.names = f.names;
+    out.columns.reserve(f.columns.size());
+    for (const df::Series& c : f.columns) out.columns.push_back(c.share());
+    return out;
+}
+
+bool is_containment(TraceOutput o) {
+    return o == TraceOutput::CallTree || o == TraceOutput::Flamegraph ||
+           o == TraceOutput::FlamegraphPartial;
+}
+
+}  // namespace
+
+std::vector<std::function<df::DataFrame(const ExportStats&)>>
+ViewSource::add_branches(ViewSession& session,
+                         const std::vector<const ViewSource*>& members,
+                         const std::vector<bool>& skip) {
+    // Containment members over the same events and fields share one buffered
+    // fold, whichever of its outputs each one reads.
+    struct Tree {
+        detail::ScanPlan plan;
+        const ContainmentArgs* args;
+        std::shared_ptr<df::DataFrame> call_tree, flamegraph;
+        std::shared_ptr<std::string> partial;
+    };
+    std::vector<Tree> trees;
+    std::vector<std::size_t> tree_of(members.size(), 0);
+    for (std::size_t i = 0; i < members.size(); ++i) {
+        const ViewSource& m = *members[i];
+        if (skip[i] || !is_containment(m.output_)) continue;
+        auto it = std::find_if(trees.begin(), trees.end(), [&](const Tree& t) {
+            return t.plan == m.plan_ && *t.args == m.tree_;
+        });
+        if (it == trees.end()) {
+            trees.push_back(Tree{m.plan_, &m.tree_, nullptr, nullptr, nullptr});
+            it = std::prev(trees.end());
+        }
+        tree_of[i] = static_cast<std::size_t>(it - trees.begin());
+        if (m.output_ == TraceOutput::CallTree && !it->call_tree)
+            it->call_tree = std::make_shared<df::DataFrame>();
+        if (m.output_ == TraceOutput::Flamegraph && !it->flamegraph)
+            it->flamegraph = std::make_shared<df::DataFrame>();
+        if (m.output_ == TraceOutput::FlamegraphPartial && !it->partial)
+            it->partial = std::make_shared<std::string>();
+    }
+    for (const Tree& t : trees)
+        session.add_containment_branch(t.plan, t.args->partition, t.args->ts,
+                                       t.args->dur, t.args->name, t.args->group,
+                                       t.call_tree, t.flamegraph, t.partial);
+
+    std::vector<std::function<df::DataFrame(const ExportStats&)>> out(
+        members.size());
+    for (std::size_t i = 0; i < members.size(); ++i) {
+        if (skip[i]) continue;
+        const ViewSource& m = *members[i];
+        switch (m.output_) {
+            case TraceOutput::Events: {
+                Deferred<df::DataFrame> h =
+                    detail::is_row_query(*m.plan_)
+                        ? session.collect_events(m.plan_)
+                        : session.collect(m.plan_);
+                out[i] = [h](const ExportStats&) { return std::move(h.get()); };
+                break;
+            }
+            case TraceOutput::CallTree:
+                out[i] = [f = trees[tree_of[i]].call_tree](const ExportStats&) {
+                    return shared_frame(*f);
+                };
+                break;
+            case TraceOutput::Flamegraph:
+                out[i] = [f = trees[tree_of[i]].flamegraph](
+                             const ExportStats&) { return shared_frame(*f); };
+                break;
+            case TraceOutput::FlamegraphPartial:
+                out[i] = [p = trees[tree_of[i]].partial](const ExportStats&) {
+                    return detail::partial_frame(*p);
+                };
+                break;
+            case TraceOutput::AggregatePartial: {
+                Deferred<std::string> h = session.aggregate_partial(m.plan_);
+                out[i] = [h](const ExportStats&) {
+                    return detail::partial_frame(h.get());
+                };
+                break;
+            }
+            case TraceOutput::Branch: {
+                std::function<void(const ExportStats&)> publish =
+                    m.branch_(session);
+                out[i] = [publish](const ExportStats& stats) {
+                    publish(stats);
+                    return df::DataFrame{};
+                };
+                break;
+            }
+            case TraceOutput::ExportJson: {
+                std::optional<Query> q = detail::effective_query(*m.plan_);
+                Deferred<ExportStats> h =
+                    q ? session.export_json(std::move(*q), *m.sink_)
+                      : session.export_json(*m.sink_);
+                out[i] = [h, sink = m.sink_](const ExportStats&) {
+                    sink->flush();
+                    return detail::stats_frame(h.get());
+                };
+                break;
+            }
+        }
+    }
+    return out;
+}
+
+coro::CoroTask<ViewSource::Batch> ViewSource::run_batch(
+    std::vector<std::shared_ptr<const ViewSource>> members) {
+    Batch out;
+    if (members.empty()) co_return out;
+    ViewSession session = base_session(*members.front()->plan_);
+    std::vector<const ViewSource*> raw;
+    raw.reserve(members.size());
+    for (const auto& m : members) raw.push_back(m.get());
+    std::vector<std::function<df::DataFrame(const ExportStats&)>> resolve =
+        add_branches(session, raw, std::vector<bool>(raw.size(), false));
+    out.stats = co_await session.execute();
+    out.frames.reserve(resolve.size());
+    for (auto& r : resolve) out.frames.push_back(r(out.stats));
+    co_return out;
+}
+
+namespace {
+
+// The shared scan every open_batch cursor reads from. Holding each channel's
+// producer slot until it ends means every channel closes, even when the scan
+// fails before its folds exist.
+coro::CoroTask<void> run_open_batch(
+    std::shared_ptr<ViewSession> session,
+    std::vector<std::function<df::DataFrame(const ExportStats&)>> frames,
+    std::vector<std::shared_ptr<coro::Channel<df::Morsel>>> channels,
+    std::vector<std::shared_ptr<coro::CoroSemaphore>> budgets) {
+    std::vector<std::unique_ptr<coro::Channel<df::Morsel>::ProducerGuard>>
+        guards;
+    guards.reserve(channels.size());
+    for (auto& ch : channels)
+        guards.push_back(
+            std::make_unique<coro::Channel<df::Morsel>::ProducerGuard>(
+                ch.get()));
+    const ExportStats stats = co_await session->execute();
+    for (std::size_t i = 0; i < frames.size(); ++i) {
+        if (!frames[i]) continue;
+        df::DataFrame f = frames[i](stats);
+        df::Morsel m;
+        m.rows = f.num_rows();
+        m.columns = std::move(f.columns);
+        const std::uint64_t bytes = detail::morsel_bytes(m);
+        co_await budgets[i]->acquire(bytes);
+        co_await channels[i]->send(std::move(m));
+    }
+}
+
+}  // namespace
+
+std::optional<std::vector<std::unique_ptr<df::Cursor>>> ViewSource::open_batch(
+    std::vector<std::shared_ptr<const df::Source>> members,
+    std::uint64_t memory_budget) const {
+    std::vector<const ViewSource*> views;
+    views.reserve(members.size());
+    for (const auto& m : members) {
+        const auto* v = dynamic_cast<const ViewSource*>(m.get());
+        if (!v || (v->output_ == TraceOutput::Events &&
+                   detail::is_row_query(*v->plan_) && !v->can_stream_rows()))
+            return std::nullopt;
+        views.push_back(v);
+    }
+    // Streaming only pays for members whose rows it bounds; finished frames
+    // hand over directly through collect_batch().
+    if (std::none_of(views.begin(), views.end(),
+                     [](const ViewSource* v) { return v->can_stream_rows(); }))
+        return std::nullopt;
+
+    auto session =
+        std::make_shared<ViewSession>(base_session(*views.front()->plan_));
+    std::vector<std::shared_ptr<coro::Channel<df::Morsel>>> channels;
+    std::vector<std::shared_ptr<coro::CoroSemaphore>> budgets;
+    std::vector<std::shared_ptr<std::atomic<bool>>> dropped;
+    std::vector<bool> streamed(views.size(), false);
+    for (std::size_t i = 0; i < views.size(); ++i) {
+        channels.push_back(coro::make_channel<df::Morsel>(0));
+        budgets.push_back(std::make_shared<coro::CoroSemaphore>(memory_budget));
+        dropped.push_back(std::make_shared<std::atomic<bool>>(false));
+        const ViewSource& v = *views[i];
+        if (v.can_stream_rows()) {
+            detail::add_stream_branch(*session->state_, v.plan_, channels[i],
+                                      budgets[i], dropped[i]);
+            streamed[i] = true;
+        }
+    }
+    std::vector<std::function<df::DataFrame(const ExportStats&)>> frames =
+        add_branches(*session, views, streamed);
+
+    std::shared_future<void> producer = spawn_on_current_executor(
+        run_open_batch(session, std::move(frames), channels, budgets));
+    std::vector<std::unique_ptr<df::Cursor>> cursors;
+    cursors.reserve(views.size());
+    for (std::size_t i = 0; i < views.size(); ++i)
+        cursors.push_back(std::make_unique<StreamViewCursor>(
+            channels[i], budgets[i], producer, dropped[i], nullptr,
+            std::vector<ViewFile>{}, 1.0, std::vector<std::string>{}, nullptr));
+    return cursors;
+}
+
+coro::CoroTask<std::vector<df::DataFrame>> ViewSource::collect_batch(
+    std::vector<std::shared_ptr<const df::Source>> members) const {
+    std::vector<std::shared_ptr<const ViewSource>> views;
+    views.reserve(members.size());
+    for (auto& m : members)
+        views.push_back(std::static_pointer_cast<const ViewSource>(m));
+    Batch b = co_await run_batch(std::move(views));
+    co_return std::move(b.frames);
+}
+
 bool ViewSource::can_stream_rows() const {
-    if (!view_.is_row_query()) return false;
-    const detail::ViewPlan& p = *view_.plan_;
-    // View::collect() always strips sort/topk/offset/limit before building a
+    if (output_ != TraceOutput::Events || !detail::is_row_query(*plan_))
+        return false;
+    const detail::ViewPlan& p = *plan_;
+    // scan::collect() always strips sort/topk/offset/limit before building a
     // ViewSource, and select unless it needs the resolver (resolved.*/r.*
     // fields, which the raw stream never computes); these checks stay as a
     // defensive guard for any other caller.
@@ -542,7 +1007,7 @@ std::vector<std::string> ViewSource::row_schema() const {
                                             "ts",   "dur", "ph"};
     std::vector<std::string> out(std::begin(TOP_LEVEL), std::end(TOP_LEVEL));
 
-    std::vector<std::string> cols = view_.columns();  // sorted
+    std::vector<std::string> cols = scan::columns(plan_);  // sorted
     const bool has_fhash =
         std::binary_search(cols.begin(), cols.end(), std::string("fhash"));
     const bool has_hhash =
@@ -563,7 +1028,60 @@ std::vector<std::string> ViewSource::row_schema() const {
 }
 
 dftracer::utils::dataframe::Schema ViewSource::schema() const {
+    std::lock_guard<std::mutex> lock(schema_mu_);
+    if (!schema_) schema_ = compute_schema();
+    return *schema_;
+}
+
+namespace {
+
+df::Schema fixed_schema(
+    std::initializer_list<std::pair<const char*, df::TypeId>> cols) {
+    df::Schema s;
+    for (const auto& [name, type] : cols)
+        s.fields.push_back(df::Field{name, df::scalar(type), true});
+    return s;
+}
+
+}  // namespace
+
+dftracer::utils::dataframe::Schema ViewSource::compute_schema() const {
     namespace df = dftracer::utils::dataframe;
+    using T = df::TypeId;
+    switch (output_) {
+        case TraceOutput::Events:
+            break;
+        case TraceOutput::CallTree:
+            return fixed_schema({{"pid", T::Int64},
+                                 {"tid", T::Int64},
+                                 {"ts", T::Int64},
+                                 {"dur", T::Int64},
+                                 {"name", T::String},
+                                 {"level", T::Int64},
+                                 {"parent_id", T::Int64}});
+        case TraceOutput::Flamegraph:
+            return fixed_schema({{"node_id", T::Int64},
+                                 {"parent", T::Int64},
+                                 {"name", T::String},
+                                 {"level", T::Int64},
+                                 {"total", T::Float64},
+                                 {"self", T::Float64},
+                                 {"count", T::Int64}});
+        case TraceOutput::FlamegraphPartial:
+        case TraceOutput::AggregatePartial:
+            return fixed_schema({{"partial", T::Binary}});
+        case TraceOutput::Branch:
+            return df::Schema{};
+        case TraceOutput::ExportJson:
+            return fixed_schema({{"events_matched", T::Int64},
+                                 {"events_scanned", T::Int64},
+                                 {"chunks_scanned", T::Int64},
+                                 {"chunks_skipped", T::Int64},
+                                 {"chunks_covered", T::Int64},
+                                 {"artifacts_committed", T::Bool},
+                                 {"truncated", T::Bool},
+                                 {"served_from_mv", T::Bool}});
+    }
     df::Schema s;
     if (can_stream_rows()) {
         // row_column_type() reports TypeId::Unknown for a flattened arg
@@ -574,7 +1092,7 @@ dftracer::utils::dataframe::Schema ViewSource::schema() const {
         auto resolve = [&](const std::string& name) {
             df::TypeId id = detail::row_column_type(name);
             if (id != df::TypeId::Unknown) return id;
-            if (harvested.empty()) harvested = view_.column_types();
+            if (harvested.empty()) harvested = scan::column_types(plan_);
             std::string_view key = name;
             if (key.rfind(dftracer::utils::ARGS_PREFIX, 0) == 0)
                 key.remove_prefix(dftracer::utils::ARGS_PREFIX.size());
@@ -587,9 +1105,9 @@ dftracer::utils::dataframe::Schema ViewSource::schema() const {
         // the same way build_row_frame does, so a bare arg name (or one
         // colliding with a top-level field) resolves to the same column name
         // the producer actually emits.
-        if (!view_.plan_->select.empty()) {
-            s.fields.reserve(view_.plan_->select.size());
-            for (const std::string& sel : view_.plan_->select) {
+        if (!plan_->select.empty()) {
+            s.fields.reserve(plan_->select.size());
+            for (const std::string& sel : plan_->select) {
                 std::string col_name = detail::canonical_row_column_name(sel);
                 s.fields.push_back(
                     df::Field{col_name, df::scalar(resolve(col_name)), true});
@@ -603,8 +1121,14 @@ dftracer::utils::dataframe::Schema ViewSource::schema() const {
         }
         return s;
     }
-    // Aggregated / post-scan-op view: buffer() already ran the scan, so its
-    // columns' real types are known (unlike the row-query branches above).
+    // An aggregation's columns follow from its plan, so planning and explain()
+    // never run it. A data-dependent (numeric-arg) aggregation, a row query
+    // the stream cannot serve, or a plan still carrying an output select read
+    // them from the result instead.
+    if (!detail::is_row_query(*plan_) && plan_->select.empty())
+        if (std::optional<df::Schema> planned =
+                detail::aggregated_output_schema(*plan_))
+            return *planned;
     const df::DataFrame& buf = *buffer();
     s.fields.reserve(buf.columns.size());
     for (std::size_t i = 0; i < buf.columns.size(); ++i)
@@ -613,13 +1137,45 @@ dftracer::utils::dataframe::Schema ViewSource::schema() const {
     return s;
 }
 
+coro::CoroTask<df::DataFrame> ViewSource::run_alone() const {
+    const ContainmentArgs& t = tree_;
+    switch (output_) {
+        case TraceOutput::Events:
+            break;
+        case TraceOutput::CallTree:
+            co_return co_await scan::call_tree(plan_, t.partition, t.ts, t.dur,
+                                               t.name);
+        case TraceOutput::Flamegraph:
+            co_return co_await scan::flamegraph(plan_, t.partition, t.ts, t.dur,
+                                                t.name, t.group);
+        case TraceOutput::FlamegraphPartial:
+            co_return detail::partial_frame(co_await scan::flamegraph_partial(
+                plan_, t.partition, t.ts, t.dur, t.name, t.group));
+        case TraceOutput::AggregatePartial:
+            co_return detail::partial_frame(
+                co_await scan::aggregate_partial(plan_));
+        case TraceOutput::ExportJson: {
+            const ExportStats stats = co_await scan::export_json(plan_, *sink_);
+            sink_->flush();
+            co_return detail::stats_frame(stats);
+        }
+        case TraceOutput::Branch: {
+            ViewSession session = ViewSession(plan_);
+            std::function<void(const ExportStats&)> publish = branch_(session);
+            publish(co_await session.execute());
+            co_return df::DataFrame{};
+        }
+    }
+    co_return co_await scan::collect_frame(plan_);
+}
+
 const dftracer::utils::dataframe::DataFrame* ViewSource::as_frame() const {
     if (can_stream_rows()) return nullptr;
     return buffer().get();
 }
 
 std::unique_ptr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
-    const View& v, std::uint64_t memory_budget,
+    const detail::ScanPlan& v, std::uint64_t memory_budget,
     std::vector<std::string> fnames) const {
     // Capacity 0 = an effectively unbounded ring (see Channel's ctor); the
     // shared budget semaphore is the sole backpressure, acquired before send
@@ -627,7 +1183,7 @@ std::unique_ptr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
     auto channel = coro::make_channel<dftracer::utils::dataframe::Morsel>(0);
     auto budget = std::make_shared<coro::CoroSemaphore>(memory_budget);
     auto intern = std::make_shared<dftracer::utils::StringIntern>();
-    const double time_scale = v.plan_->time_scale;
+    const double time_scale = v->time_scale;
     // Backing state for Cursor::narrow(): fuse() polls it per unit for as
     // long as this scan runs, so a narrow() call after the scan has already
     // started can still prune units it has not claimed yet.
@@ -637,9 +1193,10 @@ std::unique_ptr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
     // and per batch, so the flag is composed into it rather than added beside
     // it. Composed, never overwritten, so a caller's own cancel_when survives.
     auto stop = std::make_shared<std::atomic<bool>>(false);
-    View scan_view = v.cancel_when([stop, prev = v.plan_->cancelled] {
-        return stop->load(std::memory_order_relaxed) || (prev && prev());
-    });
+    detail::ScanPlan scan_view =
+        scan::cancel_when(v, [stop, prev = v->cancelled] {
+            return stop->load(std::memory_order_relaxed) || (prev && prev());
+        });
 
     // Empty select: each batch discovers its own columns from the actual
     // scanned events, so morsels can differ batch to batch; name_ids lets
@@ -647,26 +1204,25 @@ std::unique_ptr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
     // morsel's columns to that exact list (build_row_frame's select branch
     // always emits each one, null-filled where absent), matching schema().
     auto task =
-        [](View vv, double ts,
+        [](detail::ScanPlan vv, double ts,
            std::shared_ptr<coro::Channel<dftracer::utils::dataframe::Morsel>>
                ch,
            std::shared_ptr<coro::CoroSemaphore> sem,
            std::shared_ptr<dftracer::utils::StringIntern> iv,
            std::shared_ptr<detail::DynamicPrune> dp,
            bool emit_dyn) -> coro::CoroTask<void> {
-        detail::StreamRowFold fold(ch, sem, iv, vv.plan_->select, ts, nullptr,
-                                   vv.plan_->phase == Phase::Metadata,
-                                   emit_dyn);
+        detail::StreamRowFold fold(ch, sem, iv, vv->select, ts, nullptr,
+                                   vv->phase == Phase::Metadata, emit_dyn);
         std::array<detail::Fold*, 1> folds{&fold};
-        co_await vv.run_folds(folds, *iv, dp.get());
+        co_await scan::run_folds(vv, folds, *iv, dp.get());
     }(scan_view, time_scale, channel, budget, intern, dyn_prune, emit_dyn_);
 
     std::shared_future<void> producer =
         spawn_on_current_executor(std::move(task));
     return std::make_unique<StreamViewCursor>(
         std::move(channel), std::move(budget), std::move(producer),
-        std::move(stop), std::move(dyn_prune), v.plan_->files, time_scale,
-        std::move(fnames), v.plan_->bloom_cache);
+        std::move(stop), std::move(dyn_prune), v->files, time_scale,
+        std::move(fnames), v->bloom_cache);
 }
 
 dftracer::utils::dataframe::ScanResult ViewSource::scan(
@@ -688,28 +1244,88 @@ dftracer::utils::dataframe::ScanResult ViewSource::scan(
         return r;
     }
 
-    // Streamable row query: translate each simple predicate into the View's
-    // query (Exact) and push projection into View::select so the fold harvests
-    // only those columns.
+    // Streamable row query: translate each simple predicate into the scan
+    // plan query (Exact) and push projection into scan::select so the fold
+    // harvests only those columns.
     const std::vector<std::string> fnames =
         req.projection.empty() ? names() : req.projection;
-    const double time_scale = view_.plan_->time_scale;
-    View v = view_;
+    const double time_scale = plan_->time_scale;
+    detail::ScanPlan v = plan_;
     for (std::size_t i = 0; i < req.filters.size(); ++i) {
         std::optional<Pushable> pushed =
             translate_pred(req.filters[i], fnames, time_scale);
         if (!pushed) continue;
         auto built = std::move(pushed->expr).build();
         if (!built.has_value()) continue;
-        v = v.filter(std::move(built.value()));
+        v = scan::filter(v, std::move(built.value()));
         r.filters[i] = pushed->exact
                            ? dftracer::utils::dataframe::Pushed::Exact
                            : dftracer::utils::dataframe::Pushed::Inexact;
     }
-    if (!req.projection.empty()) v = v.select(req.projection);
+    if (!req.projection.empty()) v = scan::select(v, req.projection);
 
     r.cursor = open_stream(v, req.memory_budget, fnames);
     return r;
 }
+
+namespace detail {
+
+df::DataFrame partial_frame(std::string_view partial) {
+    const std::int32_t offsets[2] = {0,
+                                     static_cast<std::int32_t>(partial.size())};
+    df::DataFrame f;
+    f.names = {"partial"};
+    f.columns.push_back(df::Series{
+        dftu_series_new_string(static_cast<dftu_dtype>(df::TypeId::Binary),
+                               offsets, partial.data(), 1, nullptr)});
+    return f;
+}
+
+std::string partial_of(const df::DataFrame& frame) {
+    return std::string(frame.column("partial").materialize().string_at(0));
+}
+
+df::DataFrame stats_frame(const ExportStats& stats) {
+    df::DataFrame f;
+    auto count = [&](const char* name, std::uint64_t v) {
+        const auto x = static_cast<std::int64_t>(v);
+        f.names.emplace_back(name);
+        f.columns.push_back(df::Series::flat_i64(&x, 1));
+    };
+    auto flag = [&](const char* name, bool v) {
+        const std::uint8_t bits = v ? 1 : 0;
+        f.names.emplace_back(name);
+        f.columns.push_back(df::Series::flat(df::TypeId::Bool, &bits, 1));
+    };
+    count("events_matched", stats.events_matched);
+    count("events_scanned", stats.events_scanned);
+    count("chunks_scanned", stats.chunks_scanned);
+    count("chunks_skipped", stats.chunks_skipped);
+    count("chunks_covered", stats.chunks_covered);
+    flag("artifacts_committed", stats.artifacts_committed);
+    flag("truncated", stats.truncated);
+    flag("served_from_mv", stats.served_from_mv);
+    return f;
+}
+
+ExportStats stats_of(const df::DataFrame& frame) {
+    auto count = [&](const char* name) {
+        return static_cast<std::uint64_t>(
+            frame.column(name).materialize().data<std::int64_t>()[0]);
+    };
+    auto flag = [&](const char* name) { return frame.column(name).any(); };
+    ExportStats s;
+    s.events_matched = count("events_matched");
+    s.events_scanned = count("events_scanned");
+    s.chunks_scanned = count("chunks_scanned");
+    s.chunks_skipped = count("chunks_skipped");
+    s.chunks_covered = count("chunks_covered");
+    s.artifacts_committed = flag("artifacts_committed");
+    s.truncated = flag("truncated");
+    s.served_from_mv = flag("served_from_mv");
+    return s;
+}
+
+}  // namespace detail
 
 }  // namespace dftracer::utils::trace::views

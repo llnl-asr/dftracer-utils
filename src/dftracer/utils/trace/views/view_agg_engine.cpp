@@ -214,6 +214,8 @@ std::string key_group_field(const GroupKey& gk) {
             return std::string(AGG_KEY_ARG_PREFIX) + gk.arg;
         case GroupKey::Kind::Field:
             return std::string(AGG_KEY_FIELD_PREFIX) + gk.arg;
+        case GroupKey::Kind::Expr:
+            return gk.arg;
         default:
             return group_col_name(gk);
     }
@@ -444,11 +446,12 @@ dataframe::DataFrame finalize_engine_frame(
     for (std::size_t j = 0; j < ng; ++j) {
         const GroupKey::Kind k = plan.group_by[j].kind;
         if (key_transformed[j] || k == GroupKey::Kind::Arg ||
-            k == GroupKey::Kind::Field)
+            k == GroupKey::Kind::Field || k == GroupKey::Kind::Expr)
             r.names[off + j] = key_names[j];
     }
     for (std::size_t i = 0; i < off + ng; ++i)
-        r.columns[i] = key_column_to_string(r.columns[i]);
+        if (i < off || plan.group_by[i - off].kind != GroupKey::Kind::Expr)
+            r.columns[i] = key_column_to_string(r.columns[i]);
 
     const bool occ_cell_col =
         std::any_of(plan.agg.begin(), plan.agg.end(), [](const AggSpec& s) {
@@ -523,6 +526,41 @@ std::string agg_value_base_field(const std::string& value_name) {
     return value_name;
 }
 
+std::optional<dataframe::Schema> aggregated_output_schema(
+    const ViewPlan& plan_in) {
+    if (plan_in.auto_numeric_metrics) return std::nullopt;
+    const ViewPlan plan = resolve_bucket_origin(plan_in);
+    ensure_schema(plan);
+    AggInputSpec spec = make_agg_input_spec(plan);
+    dataframe::LoweredGroupAggs lowered =
+        dataframe::lower_group_aggs(spec.gaggs);
+    dataframe::AggStatePtr st =
+        dataframe::agg_new(std::move(lowered.specs), spec.dyn_specs);
+    dataframe::DataFrame r = finalize_engine_result(*st, plan);
+    // An aggregate that passes its input's values through (sum/min/max of an
+    // integer field) takes the input's type, which only a scan settles.
+    std::vector<std::string> input_typed;
+    for (const GroupKey& gk : plan.group_by)
+        if (gk.kind == GroupKey::Kind::Expr) input_typed.push_back(gk.arg);
+    for (const AggSpec& a : plan.agg)
+        if (a.op == AggOp::Sum || a.op == AggOp::SumSq || a.op == AggOp::Min ||
+            a.op == AggOp::Max || a.op == AggOp::ArgMax)
+            input_typed.push_back(agg_col_name(a));
+    dataframe::Schema s;
+    s.fields.reserve(r.columns.size());
+    for (std::size_t i = 0; i < r.columns.size(); ++i) {
+        const bool follows_input =
+            std::find(input_typed.begin(), input_typed.end(), r.names[i]) !=
+            input_typed.end();
+        s.fields.push_back(dataframe::Field{
+            r.names[i],
+            follows_input ? dataframe::scalar(dataframe::TypeId::Unknown)
+                          : r.columns[i].data_type(),
+            true});
+    }
+    return s;
+}
+
 dataframe::DataFrame finalize_engine_result(const dataframe::AggState& st,
                                             const ViewPlan& plan) {
     std::vector<std::string> names;
@@ -579,8 +617,17 @@ AggInputSpec make_agg_input_spec(const ViewPlan& plan) {
         g.out = agg_col_name(AggSpec(AggOp::Count));
         spec.gaggs.push_back(std::move(g));
     } else {
+        auto computed_name = [&](const std::string& f) {
+            return !f.empty() &&
+                   std::any_of(
+                       plan.computed.begin(), plan.computed.end(),
+                       [&](const ComputedColumn& c) { return c.name == f; });
+        };
         for (const auto& s : plan.agg) {
             dataframe::GroupAgg g = to_group_agg(s);
+            // A computed column is read under its own name, not a row column's.
+            if (computed_name(s.field)) g.column = s.field;
+            if (computed_name(s.by)) g.by = s.by;
             // Occupancy reads raw ts/dur (never rescaled); every other value
             // agg over a scaled field routes to its pre-scaled column.
             if (is_occupancy_op(s.op)) {
@@ -602,14 +649,25 @@ AggInputSpec make_agg_input_spec(const ViewPlan& plan) {
     // A fixed select list keeps every streamed morsel's columns identical, so
     // the streaming group_by (which resolves columns once against the schema)
     // cannot misalign. A group key selects the field it folds on (a hash for a
-    // resolved-name key), not the resolved output column.
-    spec.select = key_fields;
-    auto add_field = [&](const std::string& f) {
+    // resolved-name key), not the resolved output column. A computed column is
+    // not an event field: its inputs are selected instead.
+    auto is_computed = [&](const std::string& f) {
+        return std::any_of(
+            plan.computed.begin(), plan.computed.end(),
+            [&](const ComputedColumn& c) { return c.name == f; });
+    };
+    auto add_select = [&](const std::string& f) {
         if (f.empty()) return;
         if (std::find(spec.select.begin(), spec.select.end(), f) ==
             spec.select.end())
             spec.select.push_back(f);
     };
+    auto add_field = [&](const std::string& f) {
+        if (!is_computed(f)) add_select(f);
+    };
+    for (const std::string& f : key_fields) add_field(f);
+    for (const ComputedColumn& c : plan.computed)
+        for (const std::string& in : c.inputs) add_select(in);
     for (const auto& s : plan.agg) {
         // A derived value/by field (size/te) selects its typed derived column.
         add_field(value_select_token(s.field));
@@ -619,6 +677,17 @@ AggInputSpec make_agg_input_spec(const ViewPlan& plan) {
     if (has_occ) {
         add_field("ts");
         add_field("dur");
+    }
+
+    for (const ComputedColumn& c : plan.computed) {
+        std::vector<std::int32_t> at;
+        at.reserve(c.inputs.size());
+        for (const std::string& in : c.inputs)
+            at.push_back(static_cast<std::int32_t>(
+                std::find(spec.select.begin(), spec.select.end(), in) -
+                spec.select.begin()));
+        spec.computed.push_back(
+            {c.name, dataframe::expr_remap_cols(c.expr, at)});
     }
 
     // build_row_frame would pre-scale+round ts/dur; bucketing/occupancy/scaled
@@ -740,6 +809,27 @@ dataframe::DataFrame build_agg_input_frame(
 
     append_transform_columns(f, spec.transforms, resolver);
 
+    if (!spec.computed.empty()) {
+        std::vector<const dataframe::Series*> inputs;
+        inputs.reserve(spec.select.size());
+        for (const std::string& tok : spec.select)
+            inputs.push_back(&f.columns[static_cast<std::size_t>(
+                f.column_index(canonical_row_column_name(tok)))]);
+        std::vector<std::pair<std::string, dataframe::Series>> out;
+        out.reserve(spec.computed.size());
+        for (const AggInputSpec::Computed& c : spec.computed)
+            out.emplace_back(c.name, dataframe::eval(c.expr, inputs));
+        for (auto& [name, col] : out) {
+            const std::int64_t at = f.column_index(name);
+            if (at >= 0) {
+                f.columns[static_cast<std::size_t>(at)] = std::move(col);
+            } else {
+                f.names.push_back(name);
+                f.columns.push_back(std::move(col));
+            }
+        }
+    }
+
     // cat/bucket/scale sources are select tokens; map each to its built frame
     // column (te's derived token resolves to "te").
     auto col_by_token =
@@ -850,10 +940,10 @@ coro::CoroTask<EnginePrep> prepare_engine_group(const ViewPlan& plan) {
     next->bucket_origin_min = false;
     next->time_scale = spec.base_time_scale;
 
-    View raw(std::move(next));
+    std::shared_ptr<const ViewPlan> raw(std::move(next));
     dataframe::LazyFrame lf =
         dataframe::LazyFrame::scan(
-            std::make_shared<ViewSource>(raw, plan.auto_numeric_metrics))
+            ViewSource::engine_scan(raw, plan.auto_numeric_metrics))
             .memory_budget(plan.memory_budget);
 
     // Group-key transforms: the engine has no dirname/basename/bucket string
@@ -868,6 +958,9 @@ coro::CoroTask<EnginePrep> prepare_engine_group(const ViewPlan& plan) {
         lf =
             dataframe::lazy(std::move(frame)).memory_budget(plan.memory_budget);
     }
+
+    for (const AggInputSpec::Computed& c : spec.computed)
+        lf = lf.with_column(c.name, c.expr);
 
     // Hidden columns index their source by its select position: expr_col is
     // positional, and the select columns keep positions 0..N-1 in both the

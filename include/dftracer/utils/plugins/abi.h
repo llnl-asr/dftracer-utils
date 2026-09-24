@@ -15,6 +15,7 @@
 #include <dftracer/utils/plugins/abi/core.h>
 #include <dftracer/utils/plugins/abi/coro.h>
 #include <dftracer/utils/plugins/abi/io.h>
+#include <dftracer/utils/plugins/abi/nodes.h>
 #include <dftracer/utils/plugins/abi/ops.h>
 #include <dftracer/utils/plugins/abi/plugin.h>
 #include <dftracer/utils/plugins/abi/ports.h>

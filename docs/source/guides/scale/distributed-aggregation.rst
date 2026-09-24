@@ -20,8 +20,8 @@ the caller's job.
 The pattern
 -----------
 
-1. Each rank builds a ``View``/``AggregatedView`` over its own file slice, with
-   the same ``group_by``/``agg`` plan as every other rank.
+1. Each rank builds a ``View`` over its own file slice, with the same
+   ``group_by``/``agg`` plan as every other rank.
 2. Each rank calls ``aggregate_partial()``, which scans its slice once and
    returns an opaque serialized partial (running count/sum/sumsq/sketch
    accumulators, not finalized values - so merging is exact for mean, stddev,
@@ -29,8 +29,8 @@ The pattern
 3. The partials travel to a coordinator (MPI, dask, a shared file, ...).
 4. The coordinator combines them with **one** of:
 
-   - ``merge_partials_to_table(partials)`` - a materialized-collect result, as
-     a ``DataFrame``.
+   - ``merge_partials(partials)`` - a materialized-collect result, as a
+     ``DataFrame``.
    - ``merge_counter_partials(partials, sink)`` - the streamed ``ph="C"``
      counter form, written to an ``ExportSink`` (C++-only; no Python binding).
 
@@ -48,12 +48,14 @@ No rank rescans the trace files to produce the combined result.
 
          // Each rank builds the same group_by/agg plan over its own shard of
          // files (partition files across ranks however your job scheduler does).
-         AggregatedView shard_view = View::from_files(my_rank_files)
-                                         .group_by({GroupKey::name()})
-                                         .agg({{AggOp::Count, "", "count"},
-                                               {AggOp::Sum, "dur", "sum_dur"}});
+         View shard_view = View::from_files(my_rank_files)
+                                .group_by({GroupKey::name()})
+                                .agg({{AggOp::Count, "", "count"},
+                                      {AggOp::Sum, "dur", "sum_dur"}});
 
-         std::string partial = shard_view.aggregate_partial().get();
+         dftracer::utils::dataframe::LazyResult<std::string> partial_plan =
+             shard_view.aggregate_partial();
+         std::string partial = partial_plan.collect().get();
          // send `partial` to the coordinator over your transport (MPI, etc.)
 
          // On the coordinator, once every rank's partial has arrived:
@@ -63,7 +65,7 @@ No rank rescans the trace files to produce the combined result.
                            .agg({{AggOp::Count, "", "count"},
                                  {AggOp::Sum, "dur", "sum_dur"}});
          dftracer::utils::dataframe::DataFrame table =
-             merger.merge_partials_to_table(partials);
+             merger.merge_partials(partials);
 
       For the streamed counter-trace form, merge into an ``ExportSink`` instead.
       ``ExportSink`` is abstract (just ``write(std::string_view)``); implement a
@@ -81,7 +83,9 @@ No rank rescans the trace files to produce the combined result.
    .. tab-item:: Python
 
       ``merge_counter_partials`` has no Python binding; use
-      ``merge_partials_to_table`` for the materialized form.
+      ``merge_partials`` for the materialized form. ``aggregate_partial()`` is
+      lazy (a ``LazyResult``); ``collect()`` runs the scan and returns the
+      bytes.
 
       .. code-block:: python
 
@@ -89,12 +93,12 @@ No rank rescans the trace files to produce the combined result.
 
          # Each rank: aggregate its own file slice, get back combinable bytes.
          shard = TraceViewer(my_rank_files).group_by("name").agg("count", "sum:dur")
-         partial = shard.aggregate_partial()   # bytes
+         partial = shard.aggregate_partial().collect()   # bytes
          # send `partial` to the coordinator over your transport
 
          # Coordinator, once every rank's partial has arrived:
          merger = TraceViewer(my_rank_files).group_by("name").agg("count", "sum:dur")
-         table = merger.merge_partials_to_table(all_partials)   # DataFrame
+         table = merger.merge_partials(all_partials)   # DataFrame
 
 The merging view's ``group_by``/``agg`` plan must match the shape the partials
 were produced with; a mismatched plan produces a meaningless (or empty)
@@ -109,10 +113,9 @@ When the aggregation should also be **persisted** (so a later matching
 ``collect()`` reads it back instead of rescanning), use the rollup pair
 instead of a plain in-memory merge:
 
-- ``materialize_partials(partials)`` (C++: protected on ``View``, public on
-  ``AggregatedView``; Python: ``AggregatedTraceViewer.materialize_partials``) -
-  reduces the gathered partials and writes the rollup, without any rank
-  rescanning.
+- ``materialize_partials(partials)`` (C++: public on ``View``; Python:
+  ``TraceViewer.materialize_partials``) - reduces the gathered partials and
+  writes the rollup, without any rank rescanning.
 - ``reconstruct_if_cached()`` - reads a subsuming rollup back as a native
   ``DataFrame``, or returns ``std::nullopt``/``None`` on a cache miss, so a
   caller can choose "read the cached rollup" vs. "recompute" without running a
@@ -124,9 +127,9 @@ instead of a plain in-memory merge:
 
       .. code-block:: cpp
 
-         AggregatedView v = View::from_files(files)
-                                 .group_by({GroupKey::name()})
-                                 .agg({{AggOp::Count, "", "count"}});
+         View v = View::from_files(files)
+                      .group_by({GroupKey::name()})
+                      .agg({{AggOp::Count, "", "count"}});
 
          if (auto cached = v.reconstruct_if_cached()) {
              use(*cached);          // served from the rollup, no scan
@@ -182,8 +185,8 @@ Python). ``progress`` is a ``(done, total)`` callback over shard units.
 See also
 --------
 
-- :doc:`../analysis/views` - the ``View``/``AggregatedView`` builder and
-  terminal reference this guide's fan-in pattern sits on top of.
+- :doc:`../analysis/views` - the ``View`` builder and terminal reference this
+  guide's fan-in pattern sits on top of.
 - :doc:`distributed-index` - build and query an index across ranks/workers;
   ``ShardedView::aggregate`` is the in-process form of this same partial
   fan-in, run over immutable index shards.

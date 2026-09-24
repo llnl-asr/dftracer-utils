@@ -42,13 +42,7 @@ class TestTraceViewer:
     def test_collect_group_by_agg_returns_arrow(self):
         with Environment(lines=200) as env:
             gz = _indexed(env)
-            tbl = (
-                TraceViewer(gz)
-                .group_by("cat")
-                .agg("count", "mean:dur", "std:dur")
-                .collect()
-                .collect()
-            )
+            tbl = TraceViewer(gz).group_by("cat").agg("count", "mean:dur", "std:dur").collect()
             df = tbl.to_pandas()
             assert set(["cat", "count", "mean_dur", "std_dur"]).issubset(df.columns)
             # Every event lands in exactly one cat group.
@@ -58,7 +52,7 @@ class TestTraceViewer:
     def test_agg_set_union_distinct_values(self):
         with Environment(lines=200) as env:
             gz = _indexed(env)
-            df = TraceViewer(gz).agg("set_union:cat").collect().collect().to_pandas()
+            df = TraceViewer(gz).agg("set_union:cat").collect().to_pandas()
             assert df.shape[0] == 1
             # One string column of the distinct cat values, joined by \x1e.
             assert set(df["set_cat"].iloc[0].split("\x1e")) == {"POSIX", "STDIO"}
@@ -121,7 +115,7 @@ class TestTraceViewer:
             ]
             gz = _make_trace(env, "meta_rows.pfw.gz", rows)
 
-            meta = TraceViewer(gz).phase("metadata").collect().collect().to_arrow()
+            meta = TraceViewer(gz).phase("metadata").collect().to_arrow()
             assert meta.num_rows >= 1
             assert "args.name" in meta.column_names
             assert "args.value" in meta.column_names
@@ -134,7 +128,6 @@ class TestTraceViewer:
                 .phase("metadata")
                 .query(Field("args.name") == "time_metric")
                 .collect()
-                .collect()
                 .to_arrow()
             )
             assert filtered.num_rows == 1
@@ -146,13 +139,12 @@ class TestTraceViewer:
                 .phase("metadata")
                 .query(Field("args.name") == "nope")
                 .collect()
-                .collect()
                 .to_arrow()
             )
             assert none.num_rows == 0
 
             # A normal event row query never includes the metadata record.
-            events = TraceViewer(gz).phase("events").collect().collect().to_arrow()
+            events = TraceViewer(gz).phase("events").collect().to_arrow()
             assert events.num_rows == 5
             assert "CM" not in events.to_pydict()["name"]
 
@@ -186,7 +178,6 @@ class TestTraceViewer:
                     .group_by("cat")
                     .time_bucket(700, normalize_to)
                     .agg("count")
-                    .collect()
                     .collect()
                 )
                 buckets = tbl.to_arrow().column("time_bucket").to_pylist()
@@ -252,15 +243,7 @@ class TestTraceViewer:
             gz = _make_trace(env, "phases.pfw.gz", rows)
 
             def count(ph):
-                t = (
-                    TraceViewer(gz)
-                    .phase(ph)
-                    .agg("count")
-                    .collect()
-                    .collect()
-                    .to_arrow()
-                    .to_pydict()
-                )
+                t = TraceViewer(gz).phase(ph).agg("count").collect().to_arrow().to_pydict()
                 return int(t["count"][0]) if t["count"] else 0
 
             assert count("events") == 5
@@ -309,7 +292,6 @@ class TestTraceViewer:
                 .phase("events")
                 .select("name", "resolved.fpath", "r.host")
                 .collect()
-                .collect()
                 .to_arrow()
                 .to_pydict()
             )
@@ -323,7 +305,6 @@ class TestTraceViewer:
                 .group_by("resolved.fpath")
                 .agg("count")
                 .collect()
-                .collect()
                 .to_arrow()
                 .to_pydict()
             )
@@ -333,7 +314,6 @@ class TestTraceViewer:
                 .phase("events")
                 .group_by("resolved.hostname")
                 .agg("count")
-                .collect()
                 .collect()
                 .to_arrow()
                 .to_pydict()
@@ -359,32 +339,17 @@ class TestTraceViewer:
             ]
             gz = _make_trace(env, "hash.pfw.gz", rows)
 
-            sel = (
-                TraceViewer(gz)
-                .select("name", "fhash", "hhash")
-                .collect()
-                .collect()
-                .to_arrow()
-                .to_pydict()
-            )
+            sel = TraceViewer(gz).select("name", "fhash", "hhash").collect().to_arrow().to_pydict()
             assert sel["fhash"] == ["fa"] * 4
             assert sel["hhash"] == ["h1"] * 4
 
             # The all-columns collect includes them too.
-            allc = TraceViewer(gz).collect().collect().to_arrow().to_pydict()
+            allc = TraceViewer(gz).collect().to_arrow().to_pydict()
             assert allc["fhash"] == ["fa"] * 4
             assert allc["hhash"] == ["h1"] * 4
 
             # And they still resolve as group_by keys (the pre-existing path).
-            g = (
-                TraceViewer(gz)
-                .group_by("fhash")
-                .agg("count")
-                .collect()
-                .collect()
-                .to_arrow()
-                .to_pydict()
-            )
+            g = TraceViewer(gz).group_by("fhash").agg("count").collect().to_arrow().to_pydict()
             assert g["fhash"] == ["fa"]
 
     def test_view_var_std_match_dataframe_engine(self):
@@ -405,11 +370,10 @@ class TestTraceViewer:
             ]
             gz = _make_trace(env, "parity.pfw.gz", rows)
             tv = TraceViewer(gz)
-            view = tv.group_by("cat").agg("var:dur", "std:dur", "mean:dur").collect().collect()
+            view = tv.group_by("cat").agg("var:dur", "std:dur", "mean:dur").collect()
             view = view.to_arrow().to_pydict()
             eng = (
                 tv.phase("events")
-                .collect()
                 .collect()
                 .group_by("cat", "var:dur", "std:dur", "mean:dur")
                 .to_arrow()
@@ -439,7 +403,7 @@ class TestTraceViewer:
             # with every column - top-level plus a union of the args, each
             # flattened arg prefixed "args." so it can't collide with a
             # top-level column of the same bare name.
-            d = TraceViewer(gz).collect().collect().to_arrow().to_pydict()
+            d = TraceViewer(gz).collect().to_arrow().to_pydict()
             assert {"name", "cat", "pid", "tid", "ts", "dur", "ph", "args.ret", "args.path"} <= set(
                 d
             )
@@ -450,19 +414,12 @@ class TestTraceViewer:
             # select projects a subset (top-level + arg names); a bare arg name
             # still resolves, but the output column is canonicalized to
             # "args.<key>".
-            sel = (
-                TraceViewer(gz)
-                .select("name", "ts", "ret")
-                .collect()
-                .collect()
-                .to_arrow()
-                .to_pydict()
-            )
+            sel = TraceViewer(gz).select("name", "ts", "ret").collect().to_arrow().to_pydict()
             assert set(sel) == {"name", "ts", "args.ret"}
 
             # filter narrows the event rows (query DSL still resolves the bare
             # arg name).
-            assert TraceViewer(gz).filter("ret > 102").collect().collect().num_rows == 2
+            assert TraceViewer(gz).filter("ret > 102").collect().height == 2
 
     def test_call_tree_and_flamegraph(self):
         # One (pid,tid) lane, nested: A[0,100) > B[10,40) > C[15,25).
@@ -473,7 +430,7 @@ class TestTraceViewer:
             ]
             gz = _make_trace(env, "tree.pfw.gz", rows)
 
-            ct = TraceViewer(gz).call_tree().to_arrow().to_pydict()
+            ct = TraceViewer(gz).call_tree().collect().to_arrow().to_pydict()
             order = {n: i for i, n in enumerate(ct["name"])}
             assert ct["level"][order["A"]] == 0
             assert ct["parent_id"][order["A"]] == -1
@@ -482,7 +439,7 @@ class TestTraceViewer:
             assert ct["level"][order["C"]] == 2
             assert ct["parent_id"][order["C"]] == order["B"]
 
-            fg = TraceViewer(gz).flamegraph().to_arrow().to_pydict()
+            fg = TraceViewer(gz).flamegraph().collect().to_arrow().to_pydict()
             node = {n: i for i, n in enumerate(fg["name"])}
             assert fg["total"][node["A"]] == 100 and fg["self"][node["A"]] == 70
             assert fg["total"][node["B"]] == 30 and fg["self"][node["B"]] == 20
@@ -491,7 +448,9 @@ class TestTraceViewer:
 
             # Composes with builder ops: filter drops B, so the tree recomputes
             # and C folds directly under A (self 70 -> 90).
-            fg2 = TraceViewer(gz).filter('name != "B"').flamegraph().to_arrow().to_pydict()
+            fg2 = (
+                TraceViewer(gz).filter('name != "B"').flamegraph().collect().to_arrow().to_pydict()
+            )
             n2 = {n: i for i, n in enumerate(fg2["name"])}
             assert "B" not in n2
             assert fg2["self"][n2["A"]] == 90
@@ -506,19 +465,21 @@ class TestTraceViewer:
             gz = _make_trace(env, "both.pfw.gz", rows)
 
             # Standalone: one scan, both frames.
-            c = TraceViewer(gz).containment()
-            ct = c.call_tree().to_arrow().to_pydict()
-            fg = c.flamegraph().to_arrow().to_pydict()
+            c = TraceViewer(gz).containment().collect()
+            ct = c.call_tree.to_arrow().to_pydict()
+            fg = c.flamegraph.to_arrow().to_pydict()
             order = {n: i for i, n in enumerate(ct["name"])}
             assert ct["parent_id"][order["B"]] == order["A"]
             node = {n: i for i, n in enumerate(fg["name"])}
             assert fg["self"][node["A"]] == 70
 
             # Session single branch: one fold feeds both.
-            with TraceViewer(gz).session() as s:
-                cc = s.view().containment()
-            ct2 = cc.call_tree().to_arrow().to_pydict()
-            fg2 = cc.flamegraph().to_arrow().to_pydict()
+            tv = TraceViewer(gz)
+            with tv.session() as s:
+                h = s.collect(tv.containment())
+            cc = h.result()
+            ct2 = cc.call_tree.to_arrow().to_pydict()
+            fg2 = cc.flamegraph.to_arrow().to_pydict()
             assert set(ct2["name"]) == {"A", "B", "C"}
             n2 = {n: i for i, n in enumerate(fg2["name"])}
             assert fg2["total"][n2["A"]] == 100
@@ -537,11 +498,11 @@ class TestTraceViewer:
             ]
             g1 = _make_trace(env, "rank1.pfw.gz", r1)
             g2 = _make_trace(env, "rank2.pfw.gz", r2)
-            p1 = TraceViewer(g1).flamegraph_partial()
-            p2 = TraceViewer(g2).flamegraph_partial()
+            p1 = TraceViewer(g1).flamegraph_partial().collect()
+            p2 = TraceViewer(g2).flamegraph_partial().collect()
             assert isinstance(p1, bytes) and len(p1) > 0
             merged = TraceViewer.merge_flamegraph_partials([p1, p2]).to_arrow().to_pydict()
-            single = TraceViewer([g1, g2]).flamegraph().to_arrow().to_pydict()
+            single = TraceViewer([g1, g2]).flamegraph().collect().to_arrow().to_pydict()
 
             def totals(d):
                 return {n: d["total"][i] for i, n in enumerate(d["name"])}
@@ -558,10 +519,11 @@ class TestTraceViewer:
                 for n, t, d in [("A", 0, 100), ("B", 10, 30), ("C", 15, 10)]
             ]
             gz = _make_trace(env, "sess_tree.pfw.gz", rows)
-            with TraceViewer(gz).session() as s:
-                agg = s.view().group_by("cat").agg("count").collect()
-                fg = s.view().flamegraph()
-                ct = s.view().call_tree()
+            tv = TraceViewer(gz)
+            with tv.session() as s:
+                agg = s.collect(tv.group_by("cat").agg("count"))
+                fg = s.collect(tv.flamegraph())
+                ct = s.collect(tv.call_tree())
             adict = agg.result().to_arrow().to_pydict()
             assert int(adict["count"][0]) == 3
             fdict = fg.result().to_arrow().to_pydict()
@@ -594,6 +556,7 @@ class TestTraceViewer:
             ct = (
                 TraceViewer(gz)
                 .call_tree(partition=["rank"], ts="begin", dur="span")
+                .collect()
                 .to_arrow()
                 .to_pydict()
             )
@@ -630,7 +593,7 @@ class TestTraceViewer:
 
             def stdio_count():
                 v = stdio_view()
-                return sum(c.num_rows for c in v.stream(batch_size=128))
+                return sum(c.height for c in v.stream(batch_size=128))
 
             base = stdio_count()
             base_stats = stdio_view().statistics()
@@ -715,7 +678,7 @@ class TestTraceViewer:
             # covered exactly once across them.
             chunks = list(TraceViewer(gz).stream(batch_size=64))
             assert len(chunks) > 1
-            assert sum(c.num_rows for c in chunks) == 600
+            assert sum(c.height for c in chunks) == 600
             tbl = _concat(chunks)
             assert pa.types.is_string(tbl.schema.field("cat").type)
 
@@ -733,11 +696,11 @@ class TestTraceViewer:
                     .agg("count", "mean:dur", "std:dur")
                 )
 
-            whole = pa.table(view(files).collect().collect()).sort_by("cat")
-            partials = [view([f]).aggregate_partial() for f in files]
+            whole = pa.table(view(files).collect()).sort_by("cat")
+            partials = [view([f]).aggregate_partial().collect() for f in files]
             for b in partials:
                 assert isinstance(b, bytes) and b
-            merged = pa.table(view([]).merge_partials_to_table(partials)).sort_by("cat")
+            merged = pa.table(view([]).merge_partials(partials)).sort_by("cat")
 
             assert whole.column("count").to_pylist() == merged.column("count").to_pylist()
             for col in ("mean_dur", "std_dur"):
@@ -758,7 +721,7 @@ class TestTraceViewer:
                     .agg("count", "mean:dur")
                 )
 
-            fresh = pa.table(view().collect().collect()).sort_by(order)
+            fresh = pa.table(view().collect()).sort_by(order)
             assert view().reconstruct_if_cached() is None  # cold
             view().materialize()  # build the rollup
             warm = view().reconstruct_if_cached()
@@ -772,7 +735,7 @@ class TestTraceViewer:
                 .equals(fresh.to_pandas().round(6))
             )
             assert (
-                pa.table(view().collect().collect())
+                pa.table(view().collect())
                 .sort_by(order)
                 .to_pandas()
                 .round(6)
@@ -780,24 +743,24 @@ class TestTraceViewer:
             )
 
     def test_cache_terminals_gated_to_aggregation(self):
-        """group_by/agg promote TraceViewer -> AggregatedTraceViewer, which alone
-        carries the cache terminals; a raw TraceViewer cannot reach them."""
+        """The cache terminals need a group_by or agg: on a raw viewer they
+        raise, and group_by/agg keep the TraceViewer type that carries them."""
         import pytest
 
-        from dftracer.utils import AggregatedTraceViewer
+        from dftracer.utils import DFTUtilsValueError
 
         with Environment(lines=100) as env:
             gz = _indexed(env)
             base = TraceViewer(gz)
-            assert not hasattr(base, "materialize_partials")
-            assert not hasattr(base.filter("cat == POSIX"), "reconstruct_if_cached")
-            assert isinstance(base.group_by("cat"), AggregatedTraceViewer)
-            assert isinstance(base.agg("count"), AggregatedTraceViewer)
-            # Aggregation stays through a further op, and only it has the rollup.
+            with pytest.raises(DFTUtilsValueError, match="group_by or agg"):
+                base.materialize_partials([])
+            with pytest.raises(DFTUtilsValueError, match="group_by or agg"):
+                base.filter('cat == "POSIX"').reconstruct_if_cached()
+            assert isinstance(base.group_by("cat"), TraceViewer)
+            assert isinstance(base.agg("count"), TraceViewer)
             agg = base.group_by("cat").time_bucket(1000)
-            assert isinstance(agg, AggregatedTraceViewer)
-            assert hasattr(agg, "materialize_partials")
-            # Base collect() takes no cache kwarg.
+            assert isinstance(agg, TraceViewer)
+            assert agg.rollup_root(env.temp_dir + "/vc").reconstruct_if_cached() is None
             with pytest.raises(TypeError):
                 base.collect(cache=True)
 
@@ -819,7 +782,6 @@ class TestTraceViewer:
                 dftu_utils.TraceViewer(gz, index_path=str(tmp_path))
                 .group_by("io_cat")
                 .agg("count", "sumsq:dur")
-                .collect()
                 .collect()
             )
             .to_pandas()
@@ -858,10 +820,10 @@ class TestTraceViewer:
         out = str(tmp_path / "posix.pfw")
         tv = dftu_utils.TraceViewer(gz, index_path=str(tmp_path))
         with tv.session() as s:
-            by_cat = s.view().group_by("cat").agg("count", "mean:dur").collect()
-            by_rank = s.view().group_by("rank").agg("count").collect()
-            posix = s.view().filter('cat == "POSIX"').group_by("cat").agg("count").collect()
-            exported = s.view().filter('cat == "POSIX"').export(out)
+            by_cat = s.collect(tv.group_by("cat").agg("count", "mean:dur"))
+            by_rank = s.collect(tv.group_by("rank").agg("count"))
+            posix = s.collect(tv.filter('cat == "POSIX"').group_by("cat").agg("count"))
+            exported = s.sink_json(tv.filter('cat == "POSIX"'), out)
 
         cat = pa.table(by_cat.result()).to_pandas().set_index("cat")
         rank = pa.table(by_rank.result()).to_pandas().set_index("rank")
@@ -870,78 +832,74 @@ class TestTraceViewer:
         assert cat.loc["posix", "count"] == 3 and cat.loc["stdio", "count"] == 2
         # rank resolves the pid groups via the PR metadata harvested in the scan.
         assert rank.loc["0", "count"] == 3 and rank.loc["1", "count"] == 2
-        # per-branch filter is independent of the other branches.
+        # per-plan filter is independent of the other plans.
         assert list(pox.index) == ["posix"] and pox.loc["posix", "count"] == 3
-        # the export branch streamed just its matching events over the same scan.
+        # the sink streamed just its matching events over the same scan.
         assert exported.result()["events_matched"] == 3
         lines = [json.loads(line) for line in open(out) if line.strip()]
         assert len(lines) == 3 and all(e["cat"] == "POSIX" for e in lines)
 
-        # per-branch sort_by/limit apply to that branch only.
+        # per-plan sort_by/limit apply to that plan only.
         with tv.session() as s2:
-            top = s2.view().group_by("cat").agg("count").sort_by("count", True).limit(1).collect()
+            top = s2.collect(tv.group_by("cat").agg("count").sort_by("count", True).limit(1))
         top_df = pa.table(top.result()).to_pandas()
         assert len(top_df) == 1 and top_df.iloc[0]["cat"] == "posix"
 
-        # statistics branch matches the standalone TraceViewer.statistics().
+        # a statistics plan matches the standalone TraceViewer.statistics().
         with tv.session() as s3:
-            allst = s3.view().statistics()
-            poxst = s3.view().filter('cat == "POSIX"').statistics()
+            allst = s3.collect(tv.statistics(lazy=True))
+            poxst = s3.collect(tv.filter('cat == "POSIX"').statistics(lazy=True))
         assert allst.result() == tv.statistics()
         assert poxst.result()["duration_count"] == 3
 
-        # join / compare of two collect branches over the one scan.
+        # a join of two plans and a compare, all over the one scan.
+        all_cat = tv.group_by("cat").agg("count")
+        pox_cat = tv.filter('cat == "POSIX"').group_by("cat").agg("count")
         with tv.session() as s5:
-            a = s5.view().group_by("cat").agg("count").collect()
-            b = s5.view().filter('cat == "POSIX"').group_by("cat").agg("count").collect()
-            j = s5.join(a, b, "left")
-            c = s5.compare(a, b)
+            j = s5.collect(all_cat.join(pox_cat, on="cat", how="left"))
+            c = s5.collect(all_cat.compare(tv.filter('cat == "POSIX"')))
         jdf = pa.table(j.result()).to_pandas().set_index("cat")
-        assert sorted(jdf.columns) == ["l_count", "r_count"]
-        assert jdf.loc["posix", "l_count"] == 3 and jdf.loc["posix", "r_count"] == 3
+        assert sorted(jdf.columns) == ["count", "count_right"]
+        assert jdf.loc["posix", "count"] == 3 and jdf.loc["posix", "count_right"] == 3
         cdf = pa.table(c.result()).to_pandas().set_index("cat")
         assert {"l_count", "r_count", "delta_count", "pct_count"} <= set(cdf.columns)
         assert (
             cdf.loc["stdio", "r_count"] != cdf.loc["stdio", "r_count"]
         )  # NaN: stdio absent in variant
 
-        # default (inner) join drops stdio (absent on the posix-filtered side);
-        # exercises the native n_key inference with no explicit key width.
+        # default (inner) join drops stdio (absent on the posix-filtered side).
         with tv.session() as s7:
-            ai = s7.view().group_by("cat").agg("count").collect()
-            bi = s7.view().filter('cat == "POSIX"').group_by("cat").agg("count").collect()
-            ji = s7.join(ai, bi)
+            ji = s7.collect(all_cat.join(pox_cat, on="cat"))
         assert list(pa.table(ji.result()).to_pandas()["cat"]) == ["posix"]
 
-        # aggregate_partial branch: a raw serialized partial that merges back to
-        # the same table a direct collect produces.
+        # aggregate_partial: a raw serialized partial that merges back to the
+        # same table a direct collect produces.
         with tv.session() as s6:
-            p = s6.view().group_by("cat").agg("count").aggregate_partial()
+            p = s6.collect(tv.group_by("cat").agg("count").aggregate_partial())
         part = p.result()
         assert isinstance(part, bytes) and len(part) > 0
         merged = (
-            pa.table(tv.group_by("cat").agg("count").merge_partials_to_table([part]))
+            pa.table(tv.group_by("cat").agg("count").merge_partials([part]))
             .to_pandas()
             .set_index("cat")
         )
         assert merged["count"].to_dict() == {"posix": 3, "stdio": 2}
 
-        # events (raw events -> DataFrame) and stream (chunks) fuse with collect.
+        # raw event plans fuse with the rest of the session.
         with tv.session() as s4:
-            ev = s4.view().events()
-            evp = s4.view().filter('cat == "POSIX"').select("cat", "dur").events()
-            stc = s4.view().stream(batch_size=2)
+            ev = s4.collect(tv)
+            evp = s4.collect(tv.filter('cat == "POSIX"').select("cat", "dur"))
         edf = pa.table(ev.result()).to_pandas()
         assert len(edf) == 5 and "ts" in edf.columns
         pdf = pa.table(evp.result()).to_pandas()
         assert len(pdf) == 3 and sorted(pdf.columns) == ["cat", "dur"]
         assert (pdf["cat"] == "POSIX").all()
-        chunks = list(stc.result())
-        assert [c.num_rows for c in chunks] == [2, 2, 1]
+        chunks = list(tv.stream(batch_size=2))
+        assert [c.height for c in chunks] == [2, 2, 1]
 
         # Parity: the fused branch equals the standalone aggregation.
         standalone = (
-            pa.table(tv.group_by("cat").agg("count", "mean:dur").collect().collect())
+            pa.table(tv.group_by("cat").agg("count", "mean:dur").collect())
             .to_pandas()
             .set_index("cat")
             .sort_index()
@@ -960,7 +918,7 @@ class TestTraceViewer:
             ix.ensure_indexed()
         tv = dftu_utils.TraceViewer(gz, index_path=str(tmp_path))
         s = tv.session()
-        h = s.view().group_by("cat").agg("count").collect()
+        h = s.collect(tv.group_by("cat").agg("count"))
         # no explicit execute(): the first result() triggers the shared scan.
         assert pa.table(h.result()).num_rows == 1
 
@@ -994,7 +952,6 @@ class TestTraceViewer:
                 .group_by("rank")
                 .agg("count")
                 .collect()
-                .collect()
             )
             .to_pandas()
             .set_index("rank")
@@ -1018,7 +975,6 @@ class TestTraceViewer:
             .group_by("cat")
             .agg("sum:size")
             .collect()
-            .collect()
         )
         assert tbl.column("sum_size").to_pylist()[0] == 10 * (100 * 101 // 2)
 
@@ -1037,7 +993,6 @@ class TestTraceViewer:
             .group_by("cat")
             .agg("count")
             .agg_numeric_args()
-            .collect()
             .collect()
         )
         assert "size" in tbl.column_names
@@ -1058,7 +1013,6 @@ class TestTraceViewer:
                 .phase(Phase.EVENTS)
                 .group_by(GroupKey.CAT)
                 .agg(AggOp.COUNT.of(""), AggOp.MEAN.of("dur"))
-                .collect()
                 .collect()
             )
             assert {"cat", "count", "mean_dur"}.issubset(tbl.column_names)
@@ -1082,10 +1036,10 @@ class TestTraceViewer:
             ix.ensure_indexed()
 
         tv = dftu_utils.TraceViewer(gz, index_path=str(tmp_path))
-        native = pa.table(tv.group_by("cat").agg("mean:dur").collect().collect())
+        native = pa.table(tv.group_by("cat").agg("mean:dur").collect())
         assert native.column("mean_dur").to_pylist()[0] == 2.0  # seconds
 
-        us = pa.table(tv.time_unit(TimeUnit.US).group_by("cat").agg("mean:dur").collect().collect())
+        us = pa.table(tv.time_unit(TimeUnit.US).group_by("cat").agg("mean:dur").collect())
         assert us.column("mean_dur").to_pylist()[0] == 2_000_000.0  # 2 s in us
 
         strm = _concat(tv.time_unit("us").select("ts", "dur").stream())
@@ -1125,7 +1079,7 @@ class TestTraceViewer:
             gz = _make_trace(env, "schemaless.pfw.gz", rows)
 
             def counts(col, key):
-                t = pa.table(TraceViewer(gz).group_by(key).agg("count").collect().collect())
+                t = pa.table(TraceViewer(gz).group_by(key).agg("count").collect())
                 return {
                     k: int(v)
                     for k, v in zip(t.column(col).to_pylist(), t.column("count").to_pylist())
@@ -1138,9 +1092,7 @@ class TestTraceViewer:
             assert counts("args.tags[0]", "args.tags[0]") == {"x": 2, "z": 2}
             assert counts("args.tags.0", "args.tags.0") == {"x": 2, "z": 2}
 
-            t = pa.table(
-                TraceViewer(gz).group_by("args.meta.host").agg("mean:args.n.v").collect().collect()
-            )
+            t = pa.table(TraceViewer(gz).group_by("args.meta.host").agg("mean:args.n.v").collect())
             m = {
                 k: v
                 for k, v in zip(
@@ -1182,7 +1134,7 @@ class TestTraceViewer:
             gz = _make_trace(env, "shadow.pfw.gz", rows)
 
             def counts(col, key):
-                t = pa.table(TraceViewer(gz).group_by(key).agg("count").collect().collect())
+                t = pa.table(TraceViewer(gz).group_by(key).agg("count").collect())
                 return {
                     k: int(v)
                     for k, v in zip(t.column(col).to_pylist(), t.column("count").to_pylist())
@@ -1218,10 +1170,9 @@ class TestTraceViewer:
             t = pa.table(
                 TraceViewer(gz)
                 .time_range(900, 2200)
-                .occ_cell(5)
+                .resolution(5)
                 .group_by("name")
                 .agg("count", "sum:dur", "busy", "concurrency", "utilization")
-                .collect()
                 .collect()
             )
             assert "busy_cell_us" in t.column_names
@@ -1287,7 +1238,7 @@ class TestTraceViewerSchema:
     def test_columns_lists_base_args_and_nested_leaves(self):
         with Environment() as env:
             path = _make_trace(env, "schema.pfw.gz", self._rows())
-            cols = set(TraceViewer(path).columns())
+            cols = set(TraceViewer(path).column_info())
             for c in [
                 "pid",
                 "tid",
@@ -1311,7 +1262,7 @@ class TestTraceViewerSchema:
     def test_schema_reports_types(self):
         with Environment() as env:
             path = _make_trace(env, "schema.pfw.gz", self._rows())
-            sch = TraceViewer(path).schema()
+            sch = TraceViewer(path).column_info()
             assert sch["pid"] == "int64"
             assert sch["ts"] == "int64"
             assert sch["hostname"] == "string"
@@ -1353,7 +1304,7 @@ class TestFlamegraphGroup:
     def test_group_by_cat_roots_by_cat(self):
         with Environment() as env:
             path = _make_trace(env, "fg.pfw.gz", self._rows())
-            fg = TraceViewer(path).flamegraph(group=["cat"]).to_pandas()
+            fg = TraceViewer(path).flamegraph(group=["cat"]).collect().to_pandas()
             names = set(fg["name"])
             # cat-valued root nodes appear...
             assert "POSIX" in names
@@ -1362,7 +1313,7 @@ class TestFlamegraphGroup:
     def test_ungrouped_has_no_cat_nodes(self):
         with Environment() as env:
             path = _make_trace(env, "fg.pfw.gz", self._rows())
-            fg = TraceViewer(path).flamegraph().to_pandas()
+            fg = TraceViewer(path).flamegraph().collect().to_pandas()
             names = set(fg["name"])
             assert "POSIX" not in names  # no group rooting -> only call names
             assert "read" in names and "write" in names
@@ -1408,10 +1359,11 @@ class TestSessionPerBranchPhase:
     def test_per_branch_phase_in_one_session(self):
         with Environment() as env:
             path = _make_trace(env, "mixed_phase.pfw.gz", self._rows())
-            with TraceViewer(path).session() as s:
-                a = s.view().phase("events").events()
-                b = s.view().phase("aggregated").events()
-                c = s.view().events()
+            tv = TraceViewer(path)
+            with tv.session() as s:
+                a = s.collect(tv.phase("events"))
+                b = s.collect(tv.phase("aggregated"))
+                c = s.collect(tv)
             assert self._ph(a.result()) == [1, 1, 1]  # complete only
             assert self._ph(b.result()) == [3, 3, 3, 3]  # aggregated only
             assert sorted(self._ph(c.result())) == [1, 1, 1, 3, 3, 3, 3]  # all
@@ -1441,15 +1393,44 @@ class TestTimeBucketGroupByDedup:
             path = _make_trace(env, "tb.pfw.gz", self._rows())
             base = TraceViewer(path).time_bucket(100, normalize_to=1000)
             with_key = (
-                base.group_by("pid", "time_bucket")
-                .agg("count")
-                .collect()
-                .collect()
-                .to_arrow()
-                .to_pydict()
+                base.group_by("pid", "time_bucket").agg("count").collect().to_arrow().to_pydict()
             )
-            without = base.group_by("pid").agg("count").collect().collect().to_arrow().to_pydict()
+            without = base.group_by("pid").agg("count").collect().to_arrow().to_pydict()
             # same result either way, and the bucket column has real values
             assert with_key == without
             assert all(v != "" for v in with_key["time_bucket"])
             assert sorted(with_key["time_bucket"]) == ["1000", "1100"]
+
+
+class TestCollectAll:
+    def test_matches_collecting_each_plan(self):
+        with Environment(lines=200) as env:
+            gz = _indexed(env)
+            tv = TraceViewer(gz)
+            plans = [
+                tv.group_by("cat").agg("count").sort_by("cat"),
+                tv.filter('cat == "POSIX"'),
+                tv.group_by("name").agg("sum:dur").sort_by("name"),
+            ]
+            together = dftu_utils.collect_all(plans)
+            assert len(together) == len(plans)
+            for got, plan in zip(together, plans):
+                assert got.to_arrow().equals(plan.collect().to_arrow())
+
+    def test_keeps_input_order_across_sources(self):
+        with Environment(lines=200) as env:
+            gz = _indexed(env)
+            small = dftu_utils.DataFrame.from_dict({"a": [1, 2, 3]}).lazy()
+            out = dftu_utils.collect_all(
+                [
+                    TraceViewer(gz),
+                    small,
+                    TraceViewer(gz).filter('cat == "POSIX"'),
+                ]
+            )
+            assert out[0].height == 200
+            assert out[1].height == 3
+            assert 0 < out[2].height < 200
+
+    def test_empty_list(self):
+        assert dftu_utils.collect_all([]) == []

@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/trace/indexing/chunk_indexer_utility.h>
 #include <dftracer/utils/trace/indexing/index_resolver_utility.h>
 
 #include <cstddef>
@@ -28,6 +29,10 @@ struct ResolveAndBuildInput {
     /// Build the bloom/stats/dimension tier. Off for aggregation-only
     /// consumers (dfanalyzer) that never read it.
     bool build_bloom = true;
+    /// The bloom tier's settings. Its extra_dimensions are args fields
+    /// indexed by name besides auto_fields; a file whose index lacks one of
+    /// them, or auto_fields, is rebuilt when require_bloom is set.
+    ChunkIndexerConfig bloom_config;
     bool require_aggregation = false;
 
     std::optional<aggregators::AggregationConfig> aggregation_config;

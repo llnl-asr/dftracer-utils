@@ -95,7 +95,7 @@ struct NameStat {
 
 using NameMap = dftracer::utils::StringViewMap<NameStat>;
 
-// Map selected index files to View sources (path + index + cached sizes).
+// Map selected index files to view sources (path + index + cached sizes).
 inline std::vector<trace::views::ViewFile> to_view_files(
     const std::vector<const TraceIndex::FileInfo*>& fis) {
     std::vector<trace::views::ViewFile> v;

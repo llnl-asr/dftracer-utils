@@ -14,14 +14,7 @@ from .columnar import (  # noqa: F401
     lit,
     where,
 )
-from .dataframe import (  # noqa: F401
-    AggregatedTraceViewer,
-    DataFrame,
-    Handle,
-    Session,
-    SessionView,
-    TraceViewer,
-)
+from .dataframe import DataFrame  # noqa: F401
 from .dftracer_utils_ext import (  # noqa: F401
     CheckpointIndexer,  # noqa: F401
     DFTUtilsAggregationError,
@@ -52,14 +45,23 @@ from .dftracer_utils_ext import (
 from .enums import AggOp, DType, GroupKey, Phase  # noqa: F401
 from .indexer import (  # noqa: F401
     AggregationConfig,
+    BloomConfig,
     Indexer,
     IndexStatus,
 )
-from .lazyframe import LazyFrame, lazy  # noqa: F401
+from .lazyframe import (  # noqa: F401
+    BoundColumn,
+    LazyFrame,
+    LazyResult,
+    LazyScalar,
+    collect_all,
+    lazy,
+)
 from .query import Expr, Field, resolved  # noqa: F401
 from .runtime import Runtime, TaskHandle  # noqa: F401
 from .series import Series  # noqa: F401
 from .time_unit import TimeUnit  # noqa: F401
+from .trace_viewer import Containment, Handle, Session, TraceViewer  # noqa: F401
 
 _default_wrapper: Optional["Runtime"] = None
 
@@ -123,6 +125,7 @@ except PackageNotFoundError:
 
 __all__ = [
     "AggregationConfig",
+    "BloomConfig",
     "CheckpointIndexer",
     "Expr",
     "Field",
@@ -144,12 +147,15 @@ __all__ = [
     "Phase",
     "TimeUnit",
     "TraceViewer",
-    "AggregatedTraceViewer",
+    "Containment",
     "Session",
-    "SessionView",
     "Handle",
     "DataFrame",
     "LazyFrame",
+    "LazyResult",
+    "LazyScalar",
+    "BoundColumn",
+    "collect_all",
     "lazy",
     "Series",
     "Runtime",

@@ -137,8 +137,8 @@ spill instead of scaling threads further:
 
          result = (view.memory_budget(4 * 1024**3)
                        .group_by("cat").agg("sum:dur")
-                       .collect().collect())
-         # or: view.auto_spill().group_by("cat").agg("sum:dur").collect().collect()
+                       .collect())
+         # or: view.auto_spill().group_by("cat").agg("sum:dur").collect()
 
    .. tab-item:: C++
 
@@ -165,7 +165,7 @@ repeatedly - a dashboard re-running the same shape, or a batch job re-deriving
 the same rollup - stop paying the scan cost every time. ``.materialize()``
 persists a query's result (a filtered trace for a row query, a rollup for an
 aggregation) so a later matching query is served from it instead of
-rescanning; ``.run()`` is the build-only form when you only want the side
+rescanning; ``.run()`` (C++) is the build-only form when you only want the side
 effect. This trades one-time build cost for repeated-query speed - reach for
 it once step 1-4 confirm the per-query cost itself is already as low as it
 can go, not as a first move. See "Materialized views" in

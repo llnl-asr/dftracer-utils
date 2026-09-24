@@ -174,8 +174,10 @@ std::optional<Schema> to_schema(const ::dftu_schema& built,
 class ProviderCursor final : public Cursor {
    public:
     ProviderCursor(const ::dftu_cursor_vt* vt, void* self,
-                   std::vector<std::string> expected_projection)
-        : vt_(vt),
+                   std::vector<std::string> expected_projection,
+                   std::shared_ptr<const Source> source)
+        : source_(std::move(source)),
+          vt_(vt),
           self_(self),
           expected_projection_(std::move(expected_projection)) {}
 
@@ -261,6 +263,9 @@ class ProviderCursor final : public Cursor {
         return m;
     }
 
+    // Released after the cursor itself: a derived source's destroy() runs
+    // only once every cursor it opened is gone.
+    std::shared_ptr<const Source> source_;
     const ::dftu_cursor_vt* vt_;
     void* self_;
     std::vector<std::string> expected_projection_;
@@ -268,9 +273,152 @@ class ProviderCursor final : public Cursor {
     ::dftu_task* pending_task_ = nullptr;
 };
 
-class ProviderSource final : public Source {
+// A value outside dftu_apply_status reads as NO_CHANGE, like to_pushed.
+std::optional<ApplyStatus> to_apply_status(std::int32_t v) {
+    switch (v) {
+        case DFTU_APPLY_EXACT:
+            return ApplyStatus::Exact;
+        case DFTU_APPLY_INEXACT:
+            return ApplyStatus::Inexact;
+        default:
+            return std::nullopt;
+    }
+}
+
+// Owns the dftu_expr handles lent to one apply() call.
+class ExprLoans {
+   public:
+    ExprLoans() = default;
+    ExprLoans(const ExprLoans&) = delete;
+    ExprLoans& operator=(const ExprLoans&) = delete;
+    ~ExprLoans() {
+        for (dftu_expr* h : owned_) dftu_expr_free(h);
+    }
+    const dftu_expr* lend(const Expr& e) {
+        if (!e.valid()) return nullptr;
+        owned_.push_back(expr_handle_wrap(e));
+        return owned_.back();
+    }
+
+   private:
+    std::vector<dftu_expr*> owned_;
+};
+
+class ProviderSource final
+    : public Source,
+      public std::enable_shared_from_this<ProviderSource> {
    public:
     explicit ProviderSource(ProviderEntry entry) : entry_(entry) {}
+
+    // A source a plugin derived through apply(): owned here, destroyed once,
+    // and holding the sources it was derived from (its parent, and a join's
+    // right side) so the plugin's state behind them outlives it.
+    ProviderSource(ProviderEntry entry,
+                   std::vector<std::shared_ptr<const Source>> inputs)
+        : entry_(entry), inputs_(std::move(inputs)), owned_(true) {}
+
+    ~ProviderSource() override {
+        if (owned_ && entry_.vt.destroy) entry_.vt.destroy(entry_.self);
+    }
+
+    ProviderSource(const ProviderSource&) = delete;
+    ProviderSource& operator=(const ProviderSource&) = delete;
+
+    std::optional<SourceApplication> apply_filter(
+        const Expr& predicate) const override {
+        ExprLoans loans;
+        ::dftu_apply_request req{};
+        req.kind = DFTU_APPLY_FILTER;
+        req.u.filter.predicate = loans.lend(predicate);
+        return offer(req, false);
+    }
+
+    std::optional<SourceApplication> apply_projection(
+        const std::vector<NamedExpr>& exprs) const override {
+        ExprLoans loans;
+        std::vector<::dftu_named_expr> cexprs;
+        cexprs.reserve(exprs.size());
+        for (const NamedExpr& e : exprs)
+            cexprs.push_back({e.name.c_str(), loans.lend(e.expr)});
+        ::dftu_apply_request req{};
+        req.kind = DFTU_APPLY_PROJECTION;
+        req.u.projection.exprs = cexprs.data();
+        req.u.projection.n_exprs = static_cast<std::int32_t>(cexprs.size());
+        return offer(req, true);
+    }
+
+    std::optional<SourceApplication> apply_aggregation(
+        const AggregateSpec& spec) const override {
+        ExprLoans loans;
+        std::vector<::dftu_named_expr> keys;
+        keys.reserve(spec.keys.size());
+        for (const NamedExpr& k : spec.keys)
+            keys.push_back({k.name.c_str(), loans.lend(k.expr)});
+        std::vector<::dftu_apply_agg> aggs;
+        aggs.reserve(spec.aggs.size());
+        for (const AggregateExpr& a : spec.aggs)
+            aggs.push_back({to_string(a.op), loans.lend(a.input),
+                            loans.lend(a.by), a.param, a.out.c_str()});
+        ::dftu_apply_request req{};
+        req.kind = DFTU_APPLY_AGGREGATION;
+        req.u.aggregation.keys = keys.data();
+        req.u.aggregation.n_keys = static_cast<std::int32_t>(keys.size());
+        req.u.aggregation.aggs = aggs.data();
+        req.u.aggregation.n_aggs = static_cast<std::int32_t>(aggs.size());
+        return offer(req, true);
+    }
+
+    std::optional<SourceApplication> apply_sort(
+        const SortSpec& spec) const override {
+        return offer_sort(DFTU_APPLY_SORT, spec, 0);
+    }
+
+    std::optional<SourceApplication> apply_topn(const SortSpec& spec,
+                                                std::int64_t k) const override {
+        return offer_sort(DFTU_APPLY_TOPN, spec, k);
+    }
+
+    std::optional<SourceApplication> apply_limit(
+        std::int64_t offset, std::int64_t n) const override {
+        ::dftu_apply_request req{};
+        req.kind = DFTU_APPLY_LIMIT;
+        req.u.limit.offset = offset;
+        req.u.limit.n = n;
+        return offer(req, false);
+    }
+
+    std::optional<SourceApplication> apply_tail(std::int64_t n) const override {
+        ::dftu_apply_request req{};
+        req.kind = DFTU_APPLY_TAIL;
+        req.u.tail.n = n;
+        return offer(req, false);
+    }
+
+    // Only a right side from a provider can cross the C ABI; a plugin tells
+    // whether it is its own by comparing other_vt.
+    std::optional<SourceApplication> apply_join(
+        const JoinSpec& spec) const override {
+        const auto* other =
+            dynamic_cast<const ProviderSource*>(spec.other.get());
+        if (!other) return std::nullopt;
+        std::vector<const char*> left_on;
+        left_on.reserve(spec.left_on.size());
+        for (const std::string& k : spec.left_on) left_on.push_back(k.c_str());
+        std::vector<const char*> right_on;
+        right_on.reserve(spec.right_on.size());
+        for (const std::string& k : spec.right_on)
+            right_on.push_back(k.c_str());
+        ::dftu_apply_request req{};
+        req.kind = DFTU_APPLY_JOIN;
+        req.u.join.other_self = other->entry_.self;
+        req.u.join.other_vt = &other->entry_.vt;
+        req.u.join.left_on = left_on.data();
+        req.u.join.right_on = right_on.data();
+        req.u.join.n_on = static_cast<std::int32_t>(left_on.size());
+        req.u.join.how = static_cast<std::int32_t>(spec.how);
+        req.u.join.suffix = spec.suffix.c_str();
+        return offer(req, true, spec.other);
+    }
 
     Schema schema() const override {
         Schema s;
@@ -339,13 +487,55 @@ class ProviderSource final : public Source {
 
         for (std::size_t i = 0; i < r.filters.size(); ++i)
             r.filters[i] = to_pushed(out_pushed[i]);
-        r.cursor =
-            std::make_unique<ProviderCursor>(vt, cursor_self, req.projection);
+        r.cursor = std::make_unique<ProviderCursor>(
+            vt, cursor_self, req.projection, shared_from_this());
         return r;
     }
 
    private:
+    std::optional<SourceApplication> offer_sort(::dftu_apply_kind kind,
+                                                const SortSpec& spec,
+                                                std::int64_t k) const {
+        std::vector<const char*> by;
+        by.reserve(spec.by.size());
+        for (const std::string& b : spec.by) by.push_back(b.c_str());
+        std::vector<std::int32_t> descending;
+        descending.reserve(spec.descending.size());
+        for (bool d : spec.descending) descending.push_back(d ? 1 : 0);
+        ::dftu_apply_sort_args sort{by.data(), descending.data(),
+                                    static_cast<std::int32_t>(by.size())};
+        ::dftu_apply_request req{};
+        req.kind = kind;
+        if (kind == DFTU_APPLY_TOPN)
+            req.u.topn = {sort, k};
+        else
+            req.u.sort = sort;
+        return offer(req, false);
+    }
+
+    std::optional<SourceApplication> offer(
+        const ::dftu_apply_request& req, bool schema_changing,
+        std::shared_ptr<const Source> other = nullptr) const {
+        if (!entry_.vt.apply) return std::nullopt;
+        ::dftu_apply_result out{};
+        out.status = DFTU_APPLY_NO_CHANGE;
+        entry_.vt.apply(entry_.self, &req, &out);
+        if (out.status == DFTU_APPLY_NO_CHANGE) return std::nullopt;
+        std::optional<ApplyStatus> status = to_apply_status(out.status);
+        if (!out.vt) return std::nullopt;
+        std::vector<std::shared_ptr<const Source>> inputs{shared_from_this()};
+        if (other) inputs.push_back(std::move(other));
+        auto derived = std::make_shared<ProviderSource>(
+            ProviderEntry{*out.vt, out.self}, std::move(inputs));
+        // Constructed first so an answer refused below is still destroyed.
+        if (!status || (schema_changing && *status != ApplyStatus::Exact))
+            return std::nullopt;
+        return SourceApplication{std::move(derived), *status};
+    }
+
     ProviderEntry entry_;
+    std::vector<std::shared_ptr<const Source>> inputs_;
+    bool owned_ = false;
 };
 
 }  // namespace

@@ -289,7 +289,7 @@ def test_reduce_family_eager_lazy_and_grouped():
     assert _dict(df.group_by(None, "sum:a", "max:b")) == {"sum_a": [6], "max_b": [6.5]}
     # Lazy: a streaming group-by.
     lazy = df.lazy().group_by("k").sum()
-    assert lazy.schema() == ["k", "a", "b"]
+    assert lazy.columns == ["k", "a", "b"]
     assert _dict(lazy.collect(morsel_rows=1)) == _dict(df.group_by("k").sum())
     assert _dict(df.lazy().mean().collect()) == _dict(df.mean())
     assert _dict(df.lazy().group_by(None, "sum:a").collect()) == {"sum_a": [6]}

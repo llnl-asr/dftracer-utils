@@ -3,14 +3,33 @@
 
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 
+#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace dftracer::utils::trace::indexing {
 
 /// Per-dimension per-chunk metadata for query optimization.
+/// The text a number has in a bloom filter, shared by the index and the
+/// pruner's probe: an integral value as a plain integer, any other as
+/// std::to_string. Distinct values may share a text, which only makes the
+/// probe answer "may match".
+inline std::string canonical_number_text(double v) {
+    constexpr double INT64_BOUND = 9223372036854775808.0;
+    if (std::isfinite(v) && std::trunc(v) == v && v >= -INT64_BOUND &&
+        v < INT64_BOUND)
+        return std::to_string(static_cast<std::int64_t>(v));
+    return std::to_string(v);
+}
+
+/// Orders two value texts of a dimension by its value_type: numerically for
+/// "uint"/"int"/"double", bytewise otherwise.
+bool dimension_value_less(std::string_view a, std::string_view b,
+                          std::string_view value_type);
+
 struct ChunkDimensionStats {
     std::string dimension;  ///< Dimension name (e.g., "cat", "name").
     std::uint64_t distinct_count = 0;  ///< Number of unique values.

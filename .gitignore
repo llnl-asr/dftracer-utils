@@ -66,6 +66,7 @@ build
 *.idx
 .claude
 CLAUDE.md
+AGENTS.md
 TODO
 temp
 

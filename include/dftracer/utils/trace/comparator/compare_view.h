@@ -2,7 +2,6 @@
 #define DFTRACER_UTILS_TRACE_COMPARATOR_COMPARE_VIEW_H
 
 #include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/coro/when_all.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/trace/views/view.h>
 
@@ -19,8 +18,8 @@ namespace dftracer::utils::trace::comparator {
  * engine.
  *
  * collect() aggregates the baseline and variant with the same group_by + agg
- * IN PARALLEL (one scan each, run concurrently), joins their result DataFrames
- * on the group key, and appends per metric `m`:
+ * (one shared scan when both read the same files), joins their result
+ * DataFrames on the group key, and appends per metric `m`:
  *   - `delta_<m>`  = variant - baseline
  *   - `pct_<m>`    = 100 * (delta / baseline)
  *
@@ -47,12 +46,9 @@ class CompareView {
     /// The comparison DataFrame: the group key columns, `l_<m>`/`r_<m>` for
     /// each aggregated metric, plus `delta_<m>` and `pct_<m>`.
     coro::CoroTask<dataframe::DataFrame> collect() const {
-        // Both sides aggregate concurrently: two pruned scans, one when_all.
-        auto [base, variant] = co_await coro::when_all(
-            baseline_.group_by(group_by_).agg(agg_).collect().collect(),
-            variant_.group_by(group_by_).agg(agg_).collect().collect());
-        co_return compare_batches(base, variant,
-                                  static_cast<std::int64_t>(group_by_.size()));
+        dataframe::LazyFrame plan =
+            baseline_.group_by(group_by_).agg(agg_).compare(variant_);
+        co_return co_await plan.collect();
     }
 
     /// FULL-join two aggregation results on their first `n_key` group-key

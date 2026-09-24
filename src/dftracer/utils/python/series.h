@@ -15,7 +15,7 @@ int init_series(PyObject* m);
 
 // Wrap an owned dataframe::Series in a new Series Python object (steals the
 // column). Requires the arrow-enabled build; returns nullptr with a Python
-// error otherwise. Used by the View to hand its scanned batch to Python.
+// error otherwise. Used by the trace view to hand its scanned batch to Python.
 PyObject* wrap_vec_column(dftracer::utils::dataframe::Series&& col);
 
 // Borrow the dataframe::Series backing a Series object, or nullptr (without

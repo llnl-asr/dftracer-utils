@@ -1,7 +1,9 @@
-#include <dftracer/utils/dataframe/batch_ops.h>        // concat_columns
+#include <dftracer/utils/dataframe/batch_ops.h>          // concat_columns
 #include <dftracer/utils/dataframe/expr.h>
+#include <dftracer/utils/dataframe/internal/cell_ops.h>  // cell_to_string
 #include <dftracer/utils/dataframe/internal/expr_handle.h>
-#include <dftracer/utils/dataframe/internal/scalar.h>  // scalar_as
+#include <dftracer/utils/dataframe/internal/fingerprint.h>
+#include <dftracer/utils/dataframe/internal/scalar.h>    // scalar_as
 #include <dftracer/utils/dataframe/parallel.h>
 
 #include <algorithm>
@@ -83,6 +85,35 @@ Expr expr_col(std::int32_t index) {
 std::int32_t expr_col_index(const Expr& e) {
     const auto& n = e.node();
     return n && n->kind == ExprKind::Col ? n->i : -1;
+}
+
+namespace {
+
+void fingerprint_node(detail::Fingerprint& fp, const ExprNode* n) {
+    if (!n) {
+        fp.pod(std::int32_t{-1});
+        return;
+    }
+    fp.pod(static_cast<std::int32_t>(n->kind));
+    fp.pod(n->i);
+    fp.scalar(n->scalar);
+    fp.scalar(n->scalar2);
+    fp.str(n->text);
+    fp.str(n->text2);
+    const dftu_series* vals = n->values.handle();
+    fp.pod(vals ? dftu_series_data(vals) : nullptr);
+    fp.pod(vals ? n->values.length() : std::int64_t{0});
+    fingerprint_node(fp, n->a.get());
+    fingerprint_node(fp, n->b.get());
+    fingerprint_node(fp, n->c.get());
+}
+
+}  // namespace
+
+std::uint64_t expr_fingerprint(const Expr& e) {
+    detail::Fingerprint fp;
+    fingerprint_node(fp, e.node().get());
+    return fp.value();
 }
 
 bool expr_as_col_cmp(const Expr& e, std::int32_t* col, CmpOp* op, Scalar* rhs) {
@@ -190,11 +221,96 @@ std::shared_ptr<const ExprNode> node_remap(
     c->c = std::move(c3);
     return c;
 }
+std::shared_ptr<const ExprNode> node_rebind(
+    const std::shared_ptr<const ExprNode>& n, const std::vector<Expr>& by) {
+    if (!n) return nullptr;
+    if (n->kind == ExprKind::Col) {
+        const bool in_range =
+            n->i >= 0 && static_cast<std::size_t>(n->i) < by.size();
+        return in_range && by[static_cast<std::size_t>(n->i)].valid()
+                   ? by[static_cast<std::size_t>(n->i)].node()
+                   : n;
+    }
+    auto a = node_rebind(n->a, by);
+    auto b = node_rebind(n->b, by);
+    auto c3 = node_rebind(n->c, by);
+    if (a == n->a && b == n->b && c3 == n->c) return n;
+    auto c = clone(*n);
+    c->a = std::move(a);
+    c->b = std::move(b);
+    c->c = std::move(c3);
+    return c;
+}
+
+void canonical_scalar(std::string& out, const dftu_scalar& v) {
+    out += std::to_string(v.kind);
+    out += ':';
+    if (v.kind == DFTU_SCALAR_TAG_STR) {
+        const std::string_view s =
+            v.value.s ? std::string_view(v.value.s, v.len) : std::string_view();
+        out += std::to_string(s.size());
+        out += ':';
+        out += s;
+    } else {
+        out += std::to_string(v.value.u);
+    }
+}
+
+void canonical_text(std::string& out, std::string_view s) {
+    out += std::to_string(s.size());
+    out += ':';
+    out += s;
+}
+
+void canonical_node(std::string& out, const ExprNode* n) {
+    if (!n) {
+        out += '_';
+        return;
+    }
+    out += '(';
+    out += std::to_string(static_cast<int>(n->kind));
+    out += ',';
+    out += std::to_string(n->i);
+    out += ',';
+    canonical_scalar(out, n->scalar);
+    out += ',';
+    canonical_scalar(out, n->scalar2);
+    out += ',';
+    canonical_text(out, n->text);
+    out += ',';
+    canonical_text(out, n->text2);
+    out += ',';
+    if (n->values.valid()) {
+        out += std::to_string(static_cast<int>(n->values.type()));
+        for (std::int64_t r = 0; r < n->values.length(); ++r) {
+            out += ',';
+            canonical_text(out, cell_to_string(n->values, r));
+        }
+    }
+    out += ',';
+    canonical_node(out, n->a.get());
+    out += ',';
+    canonical_node(out, n->b.get());
+    out += ',';
+    canonical_node(out, n->c.get());
+    out += ')';
+}
+
 }  // namespace
 
 Expr expr_remap_cols(const Expr& e,
                      const std::vector<std::int32_t>& old_to_new) {
     return Expr{node_remap(e.node(), old_to_new)};
+}
+
+Expr expr_rebind_cols(const Expr& e, const std::vector<Expr>& by_index) {
+    return Expr{node_rebind(e.node(), by_index)};
+}
+
+std::string expr_canonical(const Expr& e) {
+    std::string out;
+    canonical_node(out, e.node().get());
+    return out;
 }
 Expr expr_lit(std::int64_t value) {
     dftu_scalar s{};
@@ -1294,6 +1410,62 @@ dftu_expr* dftu_expr_unary(int32_t op, const dftu_expr* a) {
 }
 dftu_expr* dftu_expr_clip(const dftu_expr* a, dftu_scalar lo, dftu_scalar hi) {
     return wrap(dataframe::expr_clip(unwrap(a), lo, hi));
+}
+int32_t dftu_expr_col_index(const dftu_expr* e) {
+    return e ? dataframe::expr_col_index(unwrap(e)) : -1;
+}
+int32_t dftu_expr_as_col_cmp(const dftu_expr* e, int32_t* col, int32_t* cmp,
+                             dftu_scalar* rhs) {
+    if (!e || !col || !cmp || !rhs) return 0;
+    std::int32_t c = -1;
+    dataframe::CmpOp op{};
+    dataframe::Scalar r;
+    if (!dataframe::expr_as_col_cmp(unwrap(e), &c, &op, &r)) return 0;
+    *col = c;
+    *cmp = static_cast<int32_t>(op);
+    *rhs = r;
+    return 1;
+}
+int32_t dftu_expr_as_logical(const dftu_expr* e, int32_t* op, dftu_expr** a,
+                             dftu_expr** b) {
+    if (!e || !op || !a || !b) return 0;
+    dataframe::LogicalOp lop{};
+    dataframe::Expr lhs, rhs;
+    if (!dataframe::expr_as_logical(unwrap(e), &lop, &lhs, &rhs)) return 0;
+    *op = static_cast<int32_t>(lop);
+    *a = wrap(std::move(lhs));
+    *b = wrap(std::move(rhs));
+    return 1;
+}
+int32_t dftu_expr_as_not(const dftu_expr* e, dftu_expr** a) {
+    if (!e || !a) return 0;
+    dataframe::Expr inner;
+    if (!dataframe::expr_as_not(unwrap(e), &inner)) return 0;
+    *a = wrap(std::move(inner));
+    return 1;
+}
+int32_t dftu_expr_as_col_str_pred(const dftu_expr* e, int32_t* col, int32_t* op,
+                                  const char** pattern, int32_t* pattern_len) {
+    if (!e || !col || !op || !pattern || !pattern_len) return 0;
+    std::int32_t c = -1;
+    dataframe::StrPredOp sop{};
+    std::string_view pat;
+    if (!dataframe::expr_as_col_str_pred(unwrap(e), &c, &sop, &pat)) return 0;
+    *col = c;
+    *op = static_cast<int32_t>(sop);
+    *pattern = pat.data();
+    *pattern_len = static_cast<int32_t>(pat.size());
+    return 1;
+}
+int32_t dftu_expr_as_col_is_in(const dftu_expr* e, int32_t* col,
+                               dftu_series** values) {
+    if (!e || !col || !values) return 0;
+    std::int32_t c = -1;
+    dataframe::Series v;
+    if (!dataframe::expr_as_col_is_in(unwrap(e), &c, &v)) return 0;
+    *col = c;
+    *values = v.release();
+    return 1;
 }
 dftu_expr* dftu_expr_cmp(int32_t cmp, const dftu_expr* a, dftu_scalar rhs) {
     return wrap(dataframe::expr_cmp(static_cast<dataframe::CmpOp>(cmp),

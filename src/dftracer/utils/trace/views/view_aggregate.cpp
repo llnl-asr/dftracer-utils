@@ -178,6 +178,7 @@ std::string group_col_name(const GroupKey& gk) {
             return "rank";
         case GroupKey::Kind::Arg:
         case GroupKey::Kind::Field:
+        case GroupKey::Kind::Expr:
             return gk.arg;
     }
     return {};

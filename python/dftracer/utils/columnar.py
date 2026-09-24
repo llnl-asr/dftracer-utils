@@ -627,6 +627,28 @@ class Expr:
         ``F.dur.percentile(99)`` is ``F.dur.quantile(0.99)``."""
         return Agg("pct", self, param=p / 100.0)
 
+    def busy(self, resolution: "Union[int, float, str, None]" = None) -> "Agg":
+        """Trace occupancy (``TraceViewer.agg`` only): the time at least one
+        event was active. ``resolution`` snaps interval edges to that grid (a
+        number is microseconds, a string such as ``"1ms"`` is converted);
+        unset is the exact union."""
+        return _occupancy("busy", self, resolution)
+
+    def concurrency(self, resolution: "Union[int, float, str, None]" = None) -> "Agg":
+        """Trace occupancy: average parallelism, summed duration over
+        :meth:`busy` time; see :meth:`busy` for ``resolution``."""
+        return _occupancy("concurrency", self, resolution)
+
+    def utilization(self, resolution: "Union[int, float, str, None]" = None) -> "Agg":
+        """Trace occupancy: :meth:`busy` time over the makespan; see
+        :meth:`busy` for ``resolution``."""
+        return _occupancy("utilization", self, resolution)
+
+    def active(self, resolution: "Union[int, float, str, None]" = None) -> "Agg":
+        """Trace occupancy: the peak number of events active at once; see
+        :meth:`busy` for ``resolution``."""
+        return _occupancy("active", self, resolution)
+
     def hist(self) -> "Agg":
         """The DDSketch histogram per group: a ``list<struct{lo, hi, count}>``
         column (mergeable, relative-error buckets)."""
@@ -1743,6 +1765,13 @@ class Agg:
         return (code, ast, self.out, self.param, by_ast)
 
 
+def _occupancy(op: str, value: Expr, resolution: "Union[int, float, str, None]") -> Agg:
+    from ._units import coerce_duration
+
+    grid = 0 if resolution is None else int(round(coerce_duration(resolution, 1e6, "resolution")))
+    return Agg(op, value, param=float(grid))
+
+
 def count() -> Agg:
     """The group row count (``count()`` -> column ``count``)."""
     return Agg("count", None)
@@ -2631,9 +2660,7 @@ class _GroupResample:
 
         def call(*args: object, **kwargs: object) -> object:
             out = attr(*args, **kwargs)
-            names = out.columns if isinstance(out, DataFrame) else None
-            if names is None and hasattr(out, "schema"):
-                names = out.schema()
+            names = out.columns if hasattr(out, "columns") else None
             if names is not None and all(c in names for c in self._order):
                 out = out.sort_by_multi(self._order)
                 out._index = list(self._order)

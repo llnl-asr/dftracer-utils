@@ -25,7 +25,7 @@ Start from a field, compare it, and combine.
          q = (F.cat == "POSIX") & (F.dur > 1000)
 
          # filter()/query() accept the Expr directly (or a DSL string):
-         df = TraceViewer("traces/").filter(q).group_by("cat").agg("count").collect().collect()
+         df = TraceViewer("traces/").filter(q).group_by("cat").agg("count").collect()
 
       ``F.dur`` is shorthand for ``Field("dur")``. For a nested or
       non-identifier field name, call or subscript it:
@@ -40,8 +40,7 @@ Start from a field, compare it, and combine.
       :doc:`../analysis/aggregation`). This is the same ``F``
       used for columnar value expressions (see :doc:`../../api/columnar`); a
       pure predicate pushes down to the index, while a predicate that mixes in
-      value ops is refused by ``filter()`` (compute it with ``.apply()``
-      instead).
+      value ops filters the scanned rows as a plan step (no index pruning).
 
    .. tab-item:: C++
 

@@ -55,6 +55,9 @@ struct Plugins::Impl {
            outlives the plugin, so these must be unregistered before dlclose or
            a later LazyFrame::scan calls into unmapped memory. */
         std::vector<std::string> registered_providers;
+        /* Node names registered via dftu_svc_nodes::register_node; same
+           reason as the providers. */
+        std::vector<std::string> registered_nodes;
     };
 
     ~Impl() {
@@ -67,6 +70,8 @@ struct Plugins::Impl {
                 ::dftu_op_unregister(name.c_str());
             for (const std::string& name : p.registered_providers)
                 ::dftu_provider_unregister(name.c_str());
+            for (const std::string& name : p.registered_nodes)
+                ::dftu_node_unregister(name.c_str());
             if (p.owned && p.plugin && p.plugin->destroy)
                 p.plugin->destroy(p.plugin->self);
             if (p.handle) dlclose(p.handle);
@@ -291,6 +296,8 @@ Result<Plugins::Impl::Loaded> load_plugin(const std::string& path,
             ::dftu_op_unregister(name.c_str());
         for (const std::string& name : build_host.registered_providers())
             ::dftu_provider_unregister(name.c_str());
+        for (const std::string& name : build_host.registered_nodes())
+            ::dftu_node_unregister(name.c_str());
     };
 
     // A factory that reached outside the registration surface built itself on
@@ -366,7 +373,8 @@ Result<Plugins::Impl::Loaded> load_plugin(const std::string& path,
                                  path,
                                  build_host.take_states(),
                                  build_host.take_registered_ops(),
-                                 build_host.take_registered_providers()};
+                                 build_host.take_registered_providers(),
+                                 build_host.take_registered_nodes()};
 }
 
 // Kahn topological sort of `n` nodes over `from -> to` edges (from must precede
@@ -684,7 +692,7 @@ Result<Plugins> build_injected_plugins(std::vector<dftu_plugin*> plugins) {
     auto impl = std::make_unique<Plugins::Impl>();
     impl->plugins.reserve(plugins.size());
     for (dftu_plugin* pl : plugins)
-        impl->plugins.push_back({nullptr, pl, false, {}, {}, {}, {}, {}});
+        impl->plugins.push_back({nullptr, pl, false, {}, {}, {}, {}, {}, {}});
     auto ordered = settle_order(*impl);
     if (!ordered) return unexpected(std::move(ordered).error());
     settle_prune(*impl);

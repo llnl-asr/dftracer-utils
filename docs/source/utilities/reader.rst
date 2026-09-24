@@ -224,10 +224,9 @@ Python API
 
 There is no Python binding for ``TraceReader`` directly; the Python API
 reads traces through :class:`dftracer.utils.TraceViewer`, a lazy,
-composable view that wraps the same reader/indexer machinery. Its
-``collect()`` builds the query plan and returns a ``LazyFrame``; that
-``LazyFrame``'s own ``collect()`` runs the scan and returns an Arrow-backed
-:class:`~dftracer.utils.DataFrame`.
+composable view that wraps the same reader/indexer machinery. It is a
+``LazyFrame`` over the trace scan: builders do no work, and ``collect()`` runs
+the scan and returns an Arrow-backed :class:`~dftracer.utils.DataFrame`.
 
 .. code-block:: python
 
@@ -236,7 +235,7 @@ composable view that wraps the same reader/indexer machinery. Its
    viewer = TraceViewer("trace.pfw.gz")
 
    # Filter with the query DSL and collect to a DataFrame
-   df = viewer.filter("cat == 'POSIX'").collect().collect()
+   df = viewer.filter("cat == 'POSIX'").collect()
    print(df)
 
 See Also

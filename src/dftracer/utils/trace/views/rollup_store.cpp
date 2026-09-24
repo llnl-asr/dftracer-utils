@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/rocksdb/column_families.h>
 #include <dftracer/utils/core/rocksdb/db_manager.h>
 #include <dftracer/utils/dataframe/agg.h>
+#include <dftracer/utils/dataframe/internal/expr_handle.h>  // expr_canonical
 #include <dftracer/utils/trace/views/rollup_store.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_plan.h>
@@ -38,11 +39,30 @@ std::uint64_t get_be64(std::string_view b) {
 
 // Every plan field except group_by - the basis shared by plan_signature and
 // rest_signature.
+// Bumped whenever what a key's identity covers changes, so a rollup persisted
+// under an older identity is never matched (it is recomputed instead).
+constexpr std::string_view ROLLUP_FORMAT = "2";
+
+// Everything that decides a group key's values: a transform coarsens them, so
+// dirname(file_path) and file_path are different keys.
+std::string key_identity(const GroupKey& gk) {
+    std::string id = gk.arg;
+    if (gk.transform == GroupKey::Transform::None) return id;
+    id.push_back('\x1f');
+    id += std::to_string(static_cast<int>(gk.transform));
+    for (const std::string& a : gk.transform_args) {
+        id.push_back('\x1f');
+        id += a;
+    }
+    return id;
+}
+
 void add_rest_fields(std::string& sig, const ViewPlan& plan) {
     auto add = [&](std::string_view s) {
         sig.append(s);
         sig.push_back('\0');
     };
+    add(ROLLUP_FORMAT);
     std::vector<const ViewFile*> files;
     files.reserve(plan.files.size());
     for (const auto& f : plan.files) files.push_back(&f);
@@ -57,6 +77,11 @@ void add_rest_fields(std::string& sig, const ViewPlan& plan) {
             static_cast<long long>(ec ? 0 : wt.time_since_epoch().count())));
     }
     add(plan.query ? plan.query->source() : "");
+    for (const ComputedColumn& c : plan.computed) {
+        add(c.name);
+        add(dataframe::expr_canonical(c.expr));
+        for (const std::string& in : c.inputs) add(in);
+    }
     add(std::to_string(static_cast<int>(plan.phase)));
     // time_bucket_us is intentionally NOT part of the rest basis: a coarser
     // query can be served by re-bucketing a finer rollup, so buckets must not
@@ -149,15 +174,15 @@ void persist_rollup(rdb::RocksDatabase& db, std::uint64_t sig,
                                     "rollup persist: " + st.ToString());
     }
     // Shape descriptor the planner matches against: rest hash + this rollup's
-    // time bucket (for coarsening) + this view's grouping (kind + arg per key,
-    // in order).
+    // time bucket (for coarsening) + this view's grouping (kind + key identity
+    // per key, in order).
     std::string desc;
     codec::put_be64(desc, rest_sig);
     codec::put_be64(desc, time_bucket_us);
     codec::put_be32(desc, static_cast<std::uint32_t>(group_by.size()));
     for (const auto& gk : group_by) {
         codec::put_be32(desc, static_cast<std::uint32_t>(gk.kind));
-        codec::put_str(desc, gk.arg);
+        codec::put_str(desc, key_identity(gk));
     }
     if (const auto st = db.put(rollup_desc_key(sig), desc, rdb::cf::ROLLUP);
         !st.ok())
@@ -203,7 +228,7 @@ std::uint64_t plan_signature(const ViewPlan& plan) {
     for (const auto& g : plan.group_by) {
         sig.append(std::to_string(static_cast<int>(g.kind)));
         sig.push_back('\0');
-        sig.append(g.arg);
+        sig.append(key_identity(g));
         sig.push_back('\0');
     }
     return dftracer::utils::hash::fnv1a_hash(sig);
@@ -257,7 +282,7 @@ std::optional<dataframe::DataFrame> find_subsuming_rollup(
         for (const auto& qg : plan.group_by) {
             bool found = false;
             for (const auto& rg : r_gb)
-                if (rg.kind == qg.kind && rg.arg == qg.arg) {
+                if (rg.kind == qg.kind && rg.arg == key_identity(qg)) {
                     found = true;
                     break;
                 }
@@ -297,7 +322,8 @@ std::optional<dataframe::DataFrame> find_subsuming_rollup(
     for (const auto& qg : plan.group_by) {
         std::size_t at = best_gb.size();
         for (std::size_t i = 0; i < best_gb.size(); ++i)
-            if (best_gb[i].kind == qg.kind && best_gb[i].arg == qg.arg) {
+            if (best_gb[i].kind == qg.kind &&
+                best_gb[i].arg == key_identity(qg)) {
                 at = i;
                 break;
             }

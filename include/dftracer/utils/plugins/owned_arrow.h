@@ -1,9 +1,9 @@
 #ifndef DFTRACER_UTILS_PLUGINS_OWNED_ARROW_H
 #define DFTRACER_UTILS_PLUGINS_OWNED_ARROW_H
 
-// arrow_abi.h defines ArrowArray/ArrowSchema under the ARROW_C_DATA_INTERFACE
-// guard but not ArrowArrayStream; in an Arrow build nanoarrow owns that guard
-// and defines the whole interface, so prefer it to avoid a half-set guard.
+// In an Arrow build nanoarrow provides the Arrow C interfaces; otherwise
+// arrow_abi.h does. Either one defines them all, so the include order of the
+// two does not matter.
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <nanoarrow/nanoarrow.hpp>
 #else

@@ -1,17 +1,17 @@
-:description: Reference for TraceViewer, the lazy Arrow-first API to filter, group, aggregate, and collect DFTracer traces in a single indexed pass.
+:description: Reference for TraceViewer, the lazy LazyFrame over DFTracer traces to filter, group, aggregate, and collect in a single indexed pass.
 
 TraceViewer (Querying Traces)
 =============================
 
-``TraceViewer`` is the primary API for querying DFTracer traces. It is an
-Arrow-first, lazy, composable view: builder methods (``filter``, ``group_by``,
-``agg``, ...) each return a new view and do no work. ``collect`` builds the
-query plan into a :class:`~dftracer.utils.LazyFrame` (still no scan); its own
-``.collect()`` runs the plan in a single pass and returns a
-:class:`~dftracer.utils.DataFrame`. Other terminals (``collect_typed``,
-``stream``, ``export_trace``) run the scan directly. When an index exists next
-to the traces, the same query is served from the index (chunk pruning,
-aggregation tiers, summaries) instead of a full decompress.
+``TraceViewer`` is the primary API for querying DFTracer traces. It is a
+:class:`~dftracer.utils.LazyFrame` whose source is a trace scan: builder
+methods (``filter``, ``group_by``, ``agg``, ...) each return a new plan and do
+no work. ``collect()`` runs the plan in a single pass and returns a
+:class:`~dftracer.utils.DataFrame`. Terminals that are not one frame
+(``containment``, the partials, ``statistics(lazy=True)``) return a
+:class:`~dftracer.utils.LazyResult`, which also runs on ``collect()``. When an
+index exists next to the traces, the same query is served from the index
+(chunk pruning, aggregation tiers, summaries) instead of a full decompress.
 
 .. code-block:: python
 
@@ -25,7 +25,6 @@ aggregation tiers, summaries) instead of a full decompress.
        view.filter('cat == "POSIX"')
            .group_by("name")
            .agg("count", "sum:dur", "max:dur")
-           .collect()                       # -> LazyFrame (no scan yet)
            .collect()                       # -> DataFrame (runs the plan)
    )
    pdf = df.to_pandas()
@@ -45,10 +44,22 @@ directory explicitly; omit it to use the sidecar convention. An optional
 The fluent builder
 ------------------
 
-Builder methods are lazy and chainable. Row-shaping operators keep a
-``TraceViewer``; ``group_by`` / ``agg`` promote to an
-:class:`~dftracer.utils.AggregatedTraceViewer` (which preserves its type
-through further builder calls).
+Builder methods are lazy and chainable, and every one below returns a
+``TraceViewer``: ``group_by`` / ``agg`` shape the trace scan itself, and the
+``LazyFrame`` ops it overrides (``filter``, ``select``, ``with_column``,
+``rename``, ``sort_by``, ``topk``, ``head`` / ``limit`` / ``offset`` /
+``slice``) are absorbed into the plan. Any other ``LazyFrame`` op (``join``,
+``pivot``, ...) returns a plain :class:`~dftracer.utils.LazyFrame`.
+
+The trace builders (``phase``, ``time_range``, ``time_bucket``,
+``resolution``, ``time_unit``, ``time_scale``, ``metadata``, ``rollup_root``,
+``views_root``, ``group_by``, ``agg``, ``agg_numeric_args``, a query-DSL
+``filter``, a ``select`` of names) may only follow filters. After ``sort_by``,
+``head``, ``limit``, ``offset``, ``topk``, ``with_column`` and the like they
+raise ``DFTUtilsValueError`` naming that op, so put trace settings and
+``group_by`` / ``agg`` first. ``memory_budget`` and ``auto_spill`` may go
+anywhere. A ``select`` of names after ``group_by`` / ``agg`` projects the
+aggregated output.
 
 .. list-table::
    :header-rows: 1
@@ -56,33 +67,38 @@ through further builder calls).
 
    * - Method
      - Effect
-   * - ``filter(dsl)`` / ``query(dsl)``
-     - Keep events matching the :doc:`query DSL <query>` (e.g. ``'dur >= 1000 and cat == "POSIX"'``).
+   * - ``filter(pred)`` / ``query(pred)``
+     - Keep events matching the :doc:`query DSL <query>` (e.g. ``'dur >= 1000 and cat == "POSIX"'``) or a columnar expression (``col("dur") > 1000``). A plain field predicate with only filters before it is pushed to the index; otherwise it filters the plan's rows.
    * - ``phase(name)``
      - Restrict to a record family: ``"events"`` (``ph="X"``), ``"counters"`` (``ph="C"``), ``"aggregated"`` (rollup records), ``"metadata"`` (``ph="M"``), or ``"any"``.
    * - ``time_range(begin, end)``
      - Keep events whose timestamp falls in ``[begin, end)``.
-   * - ``time_bucket(interval_us, origin=...)``
-     - Bucket ``ts`` into fixed ``interval_us`` windows (a group key for time series). ``origin`` sets the window anchor; ``"min"`` anchors on the first event's timestamp instead of ``0``.
+   * - ``time_bucket(interval_us, normalize_to=None)``
+     - Bucket ``ts`` into fixed ``interval_us`` windows (a group key for time series). A number is microseconds; a string such as ``"1ms"`` is converted. ``normalize_to`` sets the window anchor: an int origin, or ``"min"`` for the trace's first timestamp instead of ``0``.
+   * - ``resolution(cell)``
+     - Grid the occupancy aggregates (``busy``, ``concurrency``, ``utilization``, ``active``) snap interval edges to; microseconds or a string such as ``"1ms"``. ``0`` is the exact union. Also set by ``F.dur.busy(resolution="1ms")`` inside ``agg``.
    * - ``time_unit(unit)`` / ``time_scale(ns_ratio)``
      - Interpret/scale the trace's native time unit (see the :doc:`quickstart <../quickstart>`).
    * - ``select(*cols)``
-     - Project a subset of columns.
-   * - ``limit(n)`` / ``offset(n)``
+     - Names on raw events are the fields the scan reads (a bare arg name such as ``"size"`` reads ``args.size``); after ``group_by`` / ``agg`` it projects the output.
+   * - ``head(n)`` / ``limit(n)`` / ``offset(n)`` / ``slice(offset, length)``
      - Paginate the result rows.
    * - ``group_by(*keys)``
-     - Group by one or more keys (promotes to ``AggregatedTraceViewer``).
+     - Group by zero or more keys; no keys folds every event into one row.
    * - ``agg(*specs)``
-     - Aggregate with ``op:field`` specs (promotes to ``AggregatedTraceViewer``).
+     - Aggregate with ``op:field`` spec strings or bare-field ``Agg`` expressions (``F.dur.sum()``, ``F.dur.busy(resolution="1ms")``, ``F.any.mean()``).
+   * - ``agg_numeric_args(*reductions)``
+     - Aggregate every discovered numeric arg: one mean column per arg, or one ``<op>_<arg>`` column per named reduction.
    * - ``memory_budget(nbytes)`` / ``auto_spill()``
-     - Bound in-memory aggregation state, spilling to disk past the budget.
+     - Bound in-memory aggregation state, spilling to disk past the budget. ``nbytes`` takes bytes or a unit string.
 
 Group keys accept the raw event dimensions - ``name``, ``cat``, ``pid``,
 ``tid``, ``io_cat``, ``acc_pat``, ``fhash``, ``hhash``, ``file_path``,
 ``file_name``, ``host_name``, ``rank`` (pid resolved to MPI rank via ``PR``
-metadata) - plus ``bucket(file_path, 'sub1', 'sub2', ...)``,
-which folds a path to the first listed substring it contains (values matching
-none fold to an empty string).
+metadata), ``arg:<key>`` and any other field - optionally wrapped in a
+transform: ``dirname(...)``, ``basename(...)``, ``lower(...)``, or
+``bucket(file_path, 'sub1', 'sub2', ...)``, which folds a path to the first
+listed substring it contains (values matching none fold to an empty string).
 
 Aggregation specs are ``op:field`` (or bare ``count``):
 
@@ -112,8 +128,7 @@ Aggregation specs are ``op:field`` (or bare ``count``):
 Reading the result
 -------------------
 
-``collect`` builds the query plan into a :class:`~dftracer.utils.LazyFrame`;
-call its own ``.collect()`` to run the plan and get a native
+``collect()`` runs the plan and returns a native
 :class:`~dftracer.utils.DataFrame` (a set of typed
 :class:`~dftracer.utils.Series`). Convert with ``to_arrow()`` /
 ``to_pandas()`` / ``to_polars()`` only at the edge, or keep computing on it in
@@ -128,7 +143,6 @@ the columnar engine (see :doc:`../columnar-engine`):
        .time_bucket(1_000_000)          # 1 s windows (microseconds)
        .group_by("name", "time_bucket")
        .agg("count", "sum:size")
-       .collect()                        # -> LazyFrame
        .collect()                        # -> DataFrame
    )
 
@@ -143,26 +157,60 @@ scan:
    aggregated = typed["aggregated"]   # aggregated records (incl. extra-key dims)
    counters   = typed["counters"]     # ph="C" counters (incl. system)
 
-Other terminals: ``stream(batch_size=...)`` yields Arrow batches for
-out-of-core reads; ``statistics()`` returns a summary dict; ``export_trace(path)``
-writes a filtered trace (optionally re-compressed and re-indexed);
-``columns()`` / ``schema()`` list the columns and their types from the index
-(no scan, see below).
+``collect_typed`` runs now; ``typed(...)`` is its lazy form, a
+:class:`~dftracer.utils.LazyResult`.
+
+Other terminals: ``stream(batch_size=65536)`` yields
+:class:`~dftracer.utils.DataFrame` chunks of about ``batch_size`` rows for
+out-of-core reads; ``statistics()`` returns a summary dict;
+``sink_json(path)`` writes the selected events as NDJSON and
+``export_trace(path)`` writes a trace file (optionally re-compressed and
+re-indexed), both returning the scan stats dict; ``column_info()`` lists the
+columns and their types from the index (no scan, see below).
+``statistics``, ``sink_json`` and ``materialize`` take ``lazy=True`` to return
+a :class:`~dftracer.utils.LazyResult` instead of running now.
+
+Lazy indexing mirrors :class:`~dftracer.utils.LazyFrame`: ``view["dur"]`` is a
+column expression bound to the plan whose reductions return a
+:class:`~dftracer.utils.LazyScalar`, ``view[["name", "dur"]]`` selects,
+``view[expr]`` filters, and ``view[2:10]`` slices:
+
+.. code-block:: python
+
+   mean_dur = view["dur"].mean().collect()      # a Python float
+   rows = view[view["dur"] > 1000][["name", "dur"]][:10].collect()
+
+Several roots run together with :func:`~dftracer.utils.collect_all`, which
+returns one value per root in order; plans over the same trace share one scan:
+
+.. code-block:: python
+
+   from dftracer.utils import collect_all
+
+   by_name, flame, stats = collect_all([
+       view.group_by("name").agg("count", "sum:dur"),
+       view.flamegraph(),
+       view.sink_json("posix.json", lazy=True),
+   ])
 
 Inspecting the schema
 ---------------------
 
-``columns()`` lists the columns discoverable from the index and ``schema()``
-maps each to its type (``"int64"`` / ``"float64"`` / ``"string"``). Both read
-index metadata only - no trace scan - so they are cheap and do not need the
-whole trace materialized the way ``collect().collect().keys()`` does (which
-also only sees the columns present in the collected rows).
+``column_info()`` maps every column discoverable from the index to its type
+(``"int64"`` / ``"float64"`` / ``"string"``). It reads index metadata only - no
+trace scan - so it is cheap and does not need the whole trace materialized the
+way ``collect().columns`` does (which also only sees the columns present in
+the collected rows).
+
+As on any :class:`~dftracer.utils.LazyFrame`, the ``columns`` and ``schema``
+properties describe the plan's output instead: its column names, and a
+``{name: DType}`` mapping, without running.
 
 .. code-block:: python
 
    v = TraceViewer(files)
-   v.columns()   # ['cat', 'dur', 'hostname', 'name', 'pid', 'pos.x', ...]
-   v.schema()    # {'dur': 'int64', 'hostname': 'string', 'pos.x': 'int64', ...}
+   v.column_info()   # {'dur': 'int64', 'hostname': 'string', 'pos.x': 'int64', ...}
+   v.group_by("name").agg("count").columns   # ['name', 'count']
 
 The set is schemaless: the base axis fields (``pid`` / ``tid`` / ``ts`` /
 ``dur``), every scalar leaf harvested at index build (top-level fields plus flat
@@ -177,7 +225,8 @@ Materialized views
 
 ``materialize()`` persists a query so a later matching read reuses it instead of
 re-scanning. A row query writes a filtered, re-split trace; an aggregation
-persists a rollup. It is idempotent, and ``mv_source()`` reports which
+persists a rollup. It is idempotent and returns the scan stats dict, and
+``mv_source()`` reports which
 materialized file(s) would serve the current query (empty if a read would scan
 the base).
 
@@ -194,21 +243,28 @@ Three terminals fold events by their ``[ts, ts + dur)`` containment within each
 lane (rows sharing ``partition``, ``("pid", "tid")`` by default; ``ts`` /
 ``dur`` / ``name`` name the interval and label columns):
 
-- ``call_tree(partition, ts, dur, name)`` scans the view and returns the events
-  plus ``level`` and ``parent_id`` (the containing event per lane).
-- ``flamegraph(partition, ts, dur, name)`` folds events by root-to-node
-  ``name`` path and returns one row per node: ``node_id``, ``parent``,
-  ``name``, ``level``, ``total`` (inclusive), ``self`` (exclusive), ``count``.
-- ``containment(partition, ts, dur, name)`` scans once and buffers one fold,
-  then returns a :class:`~dftracer.utils.dataframe.Containment` whose ``call_tree()`` and
-  ``flamegraph()`` give both frames from the shared scan - cheaper than calling
-  both terminals separately.
+- ``call_tree(partition, ts, dur, name)`` returns a
+  :class:`~dftracer.utils.LazyFrame` of the events plus ``level`` and
+  ``parent_id`` (the containing event per lane).
+- ``flamegraph(partition, ts, dur, name)`` returns a
+  :class:`~dftracer.utils.LazyFrame` that folds events by root-to-node
+  ``name`` path, one row per node: ``node_id``, ``parent``, ``name``,
+  ``level``, ``total`` (inclusive), ``self`` (exclusive), ``count``.
+- ``containment(partition, ts, dur, name)`` returns a
+  :class:`~dftracer.utils.LazyResult` that buffers one fold; its ``collect()``
+  gives a :class:`~dftracer.utils.Containment` whose ``call_tree`` and
+  ``flamegraph`` fields hold both frames from the shared scan - cheaper than
+  collecting both terminals separately.
+
+These terminals take the trace scan and filters only; one after an op they
+cannot take (such as ``sort_by``) raises naming that op. Sort or cut the
+result after the terminal instead.
 
 .. code-block:: python
 
-   c = TraceViewer("traces/").containment()
-   tree = c.call_tree()          # events + level, parent_id
-   flame = c.flamegraph()        # node_id, parent, name, level, total, self, count
+   c = TraceViewer("traces/").containment().collect()
+   tree = c.call_tree            # events + level, parent_id
+   flame = c.flamegraph          # node_id, parent, name, level, total, self, count
 
 ``flamegraph`` / ``containment`` / ``flamegraph_partial`` also take a ``group``
 key - any field(s) - that roots the tree by that value over the raw events, so
@@ -220,11 +276,12 @@ nested one:
 
 .. code-block:: python
 
-   flame = TraceViewer("traces/").flamegraph(group=("cat",))
+   flame = TraceViewer("traces/").flamegraph(group=("cat",)).collect()
    # top-level nodes are "POSIX", "STDIO", ... each holding that layer's tree
 
 For a distributed flamegraph, ``flamegraph_partial(partition, ts, dur, name)``
-scans one rank's files into a serialized arena (``bytes``); partition by ``pid``
+returns a :class:`~dftracer.utils.LazyResult` whose ``collect()`` scans one
+rank's files into a serialized partial (``bytes``); partition by ``pid``
 so each lane lives on one rank. Gather the partials (MPI all-gather or Dask) and
 reduce them with the static
 ``TraceViewer.merge_flamegraph_partials(partials)``, which needs no scan or
@@ -232,9 +289,29 @@ viewer and returns the final node DataFrame:
 
 .. code-block:: python
 
-   part = TraceViewer(my_files).flamegraph_partial(partition=("pid",))
+   part = TraceViewer(my_files).flamegraph_partial(partition=("pid",)).collect()
    # ... gather every rank's `part` bytes ...
    nodes = TraceViewer.merge_flamegraph_partials(all_partials)   # on rank 0
+
+Sessions
+--------
+
+``view.session()`` returns a :class:`~dftracer.utils.Session`. Plans and lazy
+results registered on it run together, as :func:`~dftracer.utils.collect_all`
+runs them, at the end of the ``with`` block or on the first
+:meth:`Handle.result <dftracer.utils.Handle.result>`:
+
+.. code-block:: python
+
+   with view.session() as s:
+       by_cat = s.collect(view.group_by("cat").agg("count", "mean:dur"))
+       tree = s.collect(view.containment())
+       stats = s.sink_json(view.filter('cat == "POSIX"'), "posix.json")
+   by_cat.result()                  # DataFrame
+   tree.result().flamegraph         # Containment field
+
+``s.materialize(viewer)`` and ``s.attach(plugins)`` register a materialization
+and a plugin set the same way. See :doc:`../guides/analysis/sessions`.
 
 Distributed use
 ---------------
@@ -258,7 +335,7 @@ How the viewer types relate and what they return:
    :members:
    :undoc-members:
 
-.. autoclass:: dftracer.utils.AggregatedTraceViewer
+.. autoclass:: dftracer.utils.Containment
    :members:
    :undoc-members:
 
@@ -266,10 +343,16 @@ How the viewer types relate and what they return:
    :members:
    :undoc-members:
 
-.. autoclass:: dftracer.utils.SessionView
+.. autoclass:: dftracer.utils.Handle
    :members:
    :undoc-members:
 
-.. autoclass:: dftracer.utils.dataframe.Containment
+.. autoclass:: dftracer.utils.LazyResult
    :members:
    :undoc-members:
+
+.. autoclass:: dftracer.utils.LazyScalar
+   :members:
+   :undoc-members:
+
+.. autofunction:: dftracer.utils.collect_all

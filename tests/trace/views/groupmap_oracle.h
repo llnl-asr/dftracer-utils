@@ -132,6 +132,9 @@ void append_group_dim(std::string& out, const Src& src, const GroupKey& gk) {
         case GroupKey::Kind::Field:
             src.append_value(out, gk.arg);
             break;
+        case GroupKey::Kind::Expr:
+            // The oracle predates computed columns; no parity case uses one.
+            break;
     }
 }
 

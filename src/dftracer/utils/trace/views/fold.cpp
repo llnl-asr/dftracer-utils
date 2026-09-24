@@ -238,6 +238,9 @@ std::vector<std::string> extra_capture_fields(const ViewPlan& plan) {
     for (const auto& gk : plan.group_by)
         if (gk.kind == GroupKey::Kind::Field && !is_pod_scalar(gk.arg))
             add(gk.arg);
+    for (const auto& c : plan.computed)
+        for (const auto& in : c.inputs)
+            if (is_nested_path(in)) add(in);
     for (const auto& spec : plan.agg) {
         if (is_nested_path(spec.field)) add(spec.field);
         if (spec.op == AggOp::ArgMax && is_nested_path(spec.by)) add(spec.by);

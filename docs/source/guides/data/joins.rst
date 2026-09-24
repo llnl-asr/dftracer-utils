@@ -144,6 +144,11 @@ result frames equi-join on the shared group key.
 
    .. tab-item:: Python
 
+      ``TraceViewer`` is a ``LazyFrame``, so ``join`` is the lazy join above:
+      name the key with ``on``; a clashing right-side column gets the
+      ``_right`` suffix. When both sides read the same trace, the join shares
+      one scan.
+
       .. code-block:: python
 
          from dftracer.utils import TraceViewer
@@ -151,7 +156,8 @@ result frames equi-join on the shared group key.
          base = TraceViewer("baseline.pfw.gz").group_by("cat").agg("count")
          vary = TraceViewer("variant.pfw.gz").group_by("cat").agg("count")
 
-         joined = base.join(vary, how="inner")
+         joined = base.join(vary, on="cat", how="inner").collect()
+         # columns: cat, count, count_right
 
 For a ready-made baseline-vs-variant delta on top of this join, see
 :doc:`../analysis/comparison`.

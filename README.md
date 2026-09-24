@@ -29,7 +29,7 @@ df = (
     view.filter('cat == "POSIX"')
         .group_by("name")
         .agg("count", "sum:dur", "max:dur")
-        .collect().collect()              # plan, then frame
+        .collect()                        # runs the plan, returns a DataFrame
 )
 print(df.sort_values("sum_dur", ascending=False).head(3).to_pandas())
 ```

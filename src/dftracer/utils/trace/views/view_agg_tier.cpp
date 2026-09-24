@@ -191,7 +191,8 @@ bool aggs_and_fields_answerable(const ViewPlan& plan, const AggSchema& sch) {
 }
 
 bool answerable(const ViewPlan& plan, const AggSchema& sch) {
-    if (plan.time_bucket_us != 0 || plan.time_range || plan.files.empty())
+    if (plan.time_bucket_us != 0 || plan.time_range || plan.files.empty() ||
+        !plan.computed.empty())
         return false;
     if (plan.query && !query_answerable(*plan.query)) return false;
     for (const auto& gk : plan.group_by)
@@ -228,6 +229,9 @@ std::string key_value(const AggKeyView& kv, const GroupKey& gk,
         case GroupKey::Kind::Rank:
             // Never reached: Rank keeps a plan off the tier (answerable()).
             return std::to_string(kv.pid);
+        case GroupKey::Kind::Expr:
+            // Never reached: a computed column keeps a plan off the tier.
+            return {};
         case GroupKey::Kind::Arg:
         case GroupKey::Kind::Field:
             // Resolved from the key's extra_keys (e.g. PROFILE epoch/step);

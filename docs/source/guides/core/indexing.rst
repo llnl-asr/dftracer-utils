@@ -151,7 +151,7 @@ eager build:
          from dftracer.utils import TraceViewer
 
          # No prior Indexer call needed: the first touch builds the index.
-         df = TraceViewer("traces/").group_by("cat").agg("count").collect().collect()
+         df = TraceViewer("traces/").group_by("cat").agg("count").collect()
 
    .. tab-item:: C++
 

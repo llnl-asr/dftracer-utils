@@ -60,10 +60,10 @@ Compare them
 
    .. tab-item:: Python
 
-      ``TraceViewer.compare(other)`` aggregates both sides with the plan you
-      set on the baseline (``group_by`` + ``agg``), runs both scans, and joins
-      the results on the group key. The baseline is the side the plan is set
-      on; the argument is the variant:
+      ``TraceViewer.compare(other)`` returns a lazy plan that aggregates both
+      sides with the plan you set on the baseline (``group_by`` + ``agg``) and
+      joins the results on the group key; ``collect()`` runs both scans. The
+      baseline is the side the plan is set on; the argument is the variant:
 
       .. code-block:: python
 
@@ -74,7 +74,7 @@ Compare them
              .group_by("cat")
              .agg("count", "mean:dur")
          )
-         cmp = baseline.compare(TraceViewer("variant.pfw.gz"))
+         cmp = baseline.compare(TraceViewer("variant.pfw.gz")).collect()
 
    .. tab-item:: C++
 

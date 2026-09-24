@@ -4,6 +4,8 @@
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/plugin/async.h>
 #include <dftracer/utils/plugins/plugin/map.h>
+#include <dftracer/utils/plugins/plugin/node.h>
+#include <dftracer/utils/plugins/plugin/source.h>
 #include <dftracer/utils/plugins/plugin/types.h>
 
 #include <concepts>
@@ -637,6 +639,40 @@ class PluginBuilder {
         if (!ops || !ops->register_op) return fail("no op registry at load");
         if (ops->register_op(host_->h, &desc) != 0)
             return fail("op registration refused");
+        return *this;
+    }
+
+    /// Register `src` as the LazyFrame source `name`, which must be
+    /// `<plugin>.<name>`; see plugin/source.h for what S provides. The host
+    /// owns it once registered and destroys it when the provider goes away.
+    template <class S>
+    PluginBuilder& source(const char* name, std::unique_ptr<S> src) {
+        const dftu_svc_providers* p =
+            ext<dftu_svc_providers>(DFTU_SVC_PROVIDERS);
+        if (!p || !p->register_provider)
+            return fail("no provider registry at load");
+        const dftu_source_vt* vt = source_vtable<S>();
+        void* self = make_source_self(std::move(src));
+        if (p->register_provider(host_->h, name, vt, self) != 0) {
+            vt->destroy(self);
+            return fail("provider registration refused");
+        }
+        return *this;
+    }
+
+    /// Register `node` as the plan node `name`, which must be
+    /// `<plugin>.<name>`; see plugin/node.h for what N provides. The host
+    /// owns it once registered and unregisters it before the plugin unloads.
+    template <class N>
+    PluginBuilder& node(const char* name, std::unique_ptr<N> node) {
+        const dftu_svc_nodes* p = ext<dftu_svc_nodes>(DFTU_SVC_NODES);
+        if (!p || !p->register_node) return fail("no node registry at load");
+        const dftu_node_vt* vt = node_vtable<N>();
+        void* self = make_node_self(std::move(node));
+        if (p->register_node(host_->h, name, vt, self) != 0) {
+            vt->destroy(self);
+            return fail("node registration refused");
+        }
         return *this;
     }
 

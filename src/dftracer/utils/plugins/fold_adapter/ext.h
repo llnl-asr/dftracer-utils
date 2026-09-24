@@ -47,6 +47,7 @@ const void* agg_ext_vtable();
 const void* result_ext_vtable();
 const void* ops_ext_vtable();
 const void* providers_ext_vtable();
+const void* nodes_ext_vtable();
 
 /// dftu_svc_ops::register_op with the plugin-name gate applied. Shared with
 /// the build-phase host, whose op registration is the same call.
@@ -57,6 +58,11 @@ int register_plugin_op(const ::dftu_op_desc* desc);
 /// build-phase host, whose provider registration is the same call.
 int register_plugin_provider(const char* name, const ::dftu_source_vt* vt,
                              void* self);
+
+/// dftu_svc_nodes::register_node with the same plugin-name gate, forwarding
+/// into the process-lifetime node registry.
+int register_plugin_node(const char* name, const ::dftu_node_vt* vt,
+                         void* self);
 
 }  // namespace detail
 

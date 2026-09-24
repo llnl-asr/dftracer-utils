@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Op parity between the two surfaces.
 
-Every op that exists on both the lazy ``View`` (``TraceViewer``, applied in the
-plan) and the materialized ``vec`` batch (``VecBatch``, applied after collect)
-must return the same result. This file pins that contract: for each op it runs
+Every op that exists on both the lazy ``TraceViewer`` (applied in the plan)
+and the collected ``DataFrame`` (applied after collect) must return the same
+result. This file pins that contract: for each op it runs
 ``view.<op>(...).collect()`` and ``view.collect().<op>(...)`` and asserts the two
 batches are identical column-for-column.
 """
@@ -36,8 +36,8 @@ def _dict(batch):
     return batch.to_arrow().to_pydict()
 
 
-# (op-name, view-call, vec-call) - each call takes the built object and returns
-# a VecBatch, one via the View plan and one on the materialized batch.
+# (op-name, view-call, vec-call): one op applied in the plan and on the
+# collected DataFrame.
 PARITY_OPS = [
     ("sort_by-count-asc", lambda v: v.sort_by("count"), lambda b: b.sort_by("count")),
     (
@@ -70,25 +70,13 @@ PARITY_OPS = [
 
 @pytest.mark.parametrize("name,view_op,vec_op", PARITY_OPS, ids=[o[0] for o in PARITY_OPS])
 def test_view_vec_op_parity(indexed_trace, name, view_op, vec_op):
-    on_view = view_op(_view(indexed_trace)).collect().collect()
-    on_vec = vec_op(_view(indexed_trace).collect().collect())
+    on_view = view_op(_view(indexed_trace)).collect()
+    on_vec = vec_op(_view(indexed_trace).collect())
     assert _dict(on_view) == _dict(on_vec)
 
 
 def test_view_vec_chained_parity(indexed_trace):
     # A chain of ops must also agree end to end.
-    on_view = (
-        _view(indexed_trace)
-        .sort_by("sum_dur", descending=True)
-        .topk("count", 2)
-        .collect()
-        .collect()
-    )
-    on_vec = (
-        _view(indexed_trace)
-        .collect()
-        .collect()
-        .sort_by("sum_dur", descending=True)
-        .topk("count", 2)
-    )
+    on_view = _view(indexed_trace).sort_by("sum_dur", descending=True).topk("count", 2).collect()
+    on_vec = _view(indexed_trace).collect().sort_by("sum_dur", descending=True).topk("count", 2)
     assert _dict(on_view) == _dict(on_vec)

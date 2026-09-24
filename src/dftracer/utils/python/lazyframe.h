@@ -18,6 +18,10 @@ int init_lazyframe(PyObject* m);
 // by DataFrame.lazy() to hand a deferred query to Python.
 PyObject* wrap_lazyframe(dftracer::utils::dataframe::LazyFrame&& lf);
 
+// The plan behind a native _LazyFrame object, or nullptr with a Python
+// TypeError set when `o` is not one. Borrowed: valid while `o` lives.
+const dftracer::utils::dataframe::LazyFrame* lazyframe_of(PyObject* o);
+
 }  // namespace dftracer::utils::python
 
 #endif  // DFTRACER_UTILS_PYTHON_LAZYFRAME_H

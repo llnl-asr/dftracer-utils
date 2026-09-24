@@ -52,7 +52,8 @@ class EngineAggFold : public Fold {
 
     // Marking too few args silently drops fields, so stay conservative.
     bool needs_args() const override {
-        if (plan_->auto_numeric_metrics) return true;
+        if (plan_->auto_numeric_metrics || !plan_->computed.empty())
+            return true;
         for (const auto& gk : plan_->group_by)
             if (gk.kind == GroupKey::Kind::Arg ||
                 gk.kind == GroupKey::Kind::Field ||
@@ -85,7 +86,8 @@ class EngineAggFold : public Fold {
                 if (phase_target_ != RecordPhase::UNKNOWN &&
                     ev.phase != phase_target_)
                     return false;
-                return !apply_query_ || passes_query(ev);
+                return !apply_query_ ||
+                       pod_matches(*plan_->query, ev, *intern_, qmap_);
             });
         if (keep.empty()) return;
         dftracer::utils::dataframe::DataFrame f =
@@ -120,19 +122,6 @@ class EngineAggFold : public Fold {
         return f.empty() || f == "ts" || f == "dur" || f == "te" ||
                f == "cat" || f == "name" || f == "pid" || f == "tid" ||
                f == "fhash" || f == "hhash";
-    }
-
-    bool passes_query(const FoldEvent& ev) {
-        PodSource src(ev, *intern_);
-        qmap_.clear();
-        for (std::string_view f : plan_->query->fields()) {
-            if (f == "cat" || f == "name") {
-                qmap_[f] = src.value(f);
-            } else if (auto n = src.number(f)) {
-                qmap_[f] = *n;
-            }
-        }
-        return plan_->query->evaluate(qmap_);
     }
 
     const ViewPlan* plan_;

@@ -5,6 +5,7 @@
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/trace/comparator/compare_view.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -950,12 +951,15 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(const View& branch) {
 void ViewSession::add_containment_branch(
     const View& branch, const std::vector<std::string>& partition,
     const std::string& ts, const std::string& dur, const std::string& name,
+    const std::vector<std::string>& group,
     std::shared_ptr<dataframe::DataFrame> out_ct,
-    std::shared_ptr<dataframe::DataFrame> out_fg) {
+    std::shared_ptr<dataframe::DataFrame> out_fg,
+    std::shared_ptr<std::string> out_partial) {
     const auto& bp = *branch.plan_;
     auto intern = std::make_shared<dftracer::utils::StringIntern>();
-    auto spec = std::make_shared<detail::ContainmentSpec>(
-        detail::make_containment_spec(*intern, partition, ts, dur, name));
+    auto spec =
+        std::make_shared<detail::ContainmentSpec>(detail::make_containment_spec(
+            *intern, partition, ts, dur, name, group));
     auto bufs = std::make_shared<
         std::vector<std::shared_ptr<std::vector<detail::ContainmentRow> > > >();
     const double time_scale = bp.time_scale;
@@ -975,10 +979,12 @@ void ViewSession::add_containment_branch(
                     rows->push_back(r);
             };
     };
-    auto finalize = [intern, bufs, out_ct, out_fg, time_scale]() {
+    auto finalize = [intern, bufs, out_ct, out_fg, out_partial, time_scale]() {
         std::vector<detail::ContainmentRow> all;
         for (const auto& rows : *bufs)
             all.insert(all.end(), rows->begin(), rows->end());
+        if (out_partial)
+            *out_partial = detail::flamegraph_partial(all, *intern, time_scale);
         if (out_ct && out_fg) {
             auto pr = detail::build_containment_both(all, *intern, time_scale);
             *out_ct = std::move(pr.first);
@@ -992,9 +998,9 @@ void ViewSession::add_containment_branch(
         }
     };
 
-    if (bp.query)
-        detail::add_fold_branch(*state_, *bp.query, std::move(make_consumer),
-                                std::move(finalize));
+    if (auto eq = detail::effective_query(bp))
+        detail::add_fold_branch(*state_, std::move(*eq),
+                                std::move(make_consumer), std::move(finalize));
     else
         detail::add_fold_branch(*state_, std::move(make_consumer),
                                 std::move(finalize));
@@ -1004,7 +1010,7 @@ Deferred<dataframe::DataFrame> ViewSession::call_tree(
     const View& branch, std::vector<std::string> partition, std::string ts,
     std::string dur, std::string name) {
     auto out = std::make_shared<dataframe::DataFrame>();
-    add_containment_branch(branch, partition, ts, dur, name, out, nullptr);
+    add_containment_branch(branch, partition, ts, dur, name, {}, out, nullptr);
     return {out, executed_};
 }
 
@@ -1012,7 +1018,7 @@ Deferred<dataframe::DataFrame> ViewSession::flamegraph(
     const View& branch, std::vector<std::string> partition, std::string ts,
     std::string dur, std::string name) {
     auto out = std::make_shared<dataframe::DataFrame>();
-    add_containment_branch(branch, partition, ts, dur, name, nullptr, out);
+    add_containment_branch(branch, partition, ts, dur, name, {}, nullptr, out);
     return {out, executed_};
 }
 
@@ -1022,7 +1028,8 @@ ContainmentHandles ViewSession::containment(const View& branch,
                                             std::string name) {
     auto out_ct = std::make_shared<dataframe::DataFrame>();
     auto out_fg = std::make_shared<dataframe::DataFrame>();
-    add_containment_branch(branch, partition, ts, dur, name, out_ct, out_fg);
+    add_containment_branch(branch, partition, ts, dur, name, {}, out_ct,
+                           out_fg);
     return {{out_ct, executed_}, {out_fg, executed_}};
 }
 
@@ -1033,6 +1040,502 @@ coro::CoroTask<ExportStats> ViewSession::execute() {
     for (auto& c : combines_) c();
     *executed_ = true;
     co_return stats;
+}
+
+void TraceSession::add(const std::vector<dataframe::LazyFrame>& plans,
+                       Resolve resolve) {
+    if (*executed_)
+        throw DFTUtilsException::cat(ErrorCode::INVALID_ARGUMENT,
+                                     "TraceSession::collect after execute()");
+    plans_.insert(plans_.end(), plans.begin(), plans.end());
+    pending_.push_back(Pending{plans.size(), std::move(resolve)});
+}
+
+Deferred<dataframe::DataFrame> TraceSession::collect(
+    dataframe::LazyFrame plan) {
+    return collect(dataframe::detail::as_result(std::move(plan)));
+}
+
+Deferred<ExportStats> TraceSession::sink_json(const TraceViewer& tv,
+                                              ExportSink& sink) {
+    return collect(tv.sink_json(sink, LAZY));
+}
+
+Deferred<ExportStats> TraceSession::materialize(const TraceViewer& tv) {
+    return collect(tv.materialize(LAZY));
+}
+
+coro::CoroTask<void> TraceSession::execute() {
+    std::vector<dataframe::DataFrame> frames;
+    if (!plans_.empty())
+        frames = co_await dataframe::collect_all(std::move(plans_));
+    plans_.clear();
+    std::size_t at = 0;
+    for (Pending& p : pending_) {
+        std::vector<dataframe::DataFrame> mine(
+            std::make_move_iterator(frames.begin() + at),
+            std::make_move_iterator(frames.begin() + at + p.count));
+        at += p.count;
+        co_await p.resolve(std::move(mine));
+    }
+    pending_.clear();
+    *executed_ = true;
+}
+
+namespace {
+
+// The scan View::collect() leaves under its engine ops.
+View scanned_view(const dataframe::LazyFrame& lf) {
+    return static_cast<const ViewSource&>(*dataframe::detail::plan_source(lf))
+        .view();
+}
+
+}  // namespace
+
+TraceViewer::TraceViewer() : TraceViewer(View()) {}
+
+TraceViewer::TraceViewer(View view) : view_(), lf_(view.collect()) {
+    view_ = scanned_view(lf_);
+}
+
+TraceViewer::TraceViewer(View view, dataframe::LazyFrame lf)
+    : view_(std::move(view)), lf_(std::move(lf)) {}
+
+TraceViewer TraceViewer::from_file(std::string file_path,
+                                   std::string index_path) {
+    return TraceViewer(
+        View::from_file(std::move(file_path), std::move(index_path)));
+}
+
+TraceViewer TraceViewer::from_files(std::vector<ViewFile> files,
+                                    indexing::BloomFilterCache* bloom_cache) {
+    return TraceViewer(View::from_files(std::move(files), bloom_cache));
+}
+
+coro::CoroTask<TraceViewer> TraceViewer::from_directory(
+    std::string dir, std::string index_path) {
+    co_return TraceViewer(
+        co_await View::from_directory(std::move(dir), std::move(index_path)));
+}
+
+TraceViewer TraceViewer::with_lazy(dataframe::LazyFrame lf) const {
+    return TraceViewer(view_, std::move(lf));
+}
+
+TraceViewer TraceViewer::reshape(
+    const char* builder, const std::function<View(const View&)>& step) const {
+    auto refuse = [&](const std::string& why) {
+        return DFTUtilsException::cat(
+            ErrorCode::INVALID_ARGUMENT,
+            std::string("TraceViewer::") + builder + " " + why);
+    };
+    if (std::optional<std::string> op =
+            dataframe::detail::first_non_filter_op(lf_))
+        throw refuse("must come before '" + *op + "'");
+    if (!dataframe::detail::first_op(lf_)) {
+        View next = step(view_);
+        dataframe::LazyFrame lf =
+            dataframe::detail::rebase(lf_, std::make_shared<ViewSource>(next));
+        return TraceViewer(std::move(next), std::move(lf));
+    }
+    // The filters before a builder select the events it sees, so they move
+    // into the scan first.
+    dataframe::LazyFrame planned = dataframe::detail::optimize_plan(lf_);
+    std::optional<std::string> residual = dataframe::detail::first_op(planned);
+    if (!residual) {
+        const auto& src = static_cast<const ViewSource&>(
+            *dataframe::detail::plan_source(planned));
+        View next = step(src.view());
+        dataframe::LazyFrame lf = dataframe::detail::rebase(
+            planned, std::make_shared<ViewSource>(next));
+        return TraceViewer(std::move(next), std::move(lf));
+    }
+    // A filter the scan cannot evaluate stays above it, which is sound only
+    // while the builder leaves the columns and their values as they were.
+    View next = step(view_);
+    if (std::string_view(builder) == "time_scale" ||
+        ViewSource(next).names() != ViewSource(view_).names())
+        throw refuse("cannot follow '" + *residual +
+                     "': the trace scan cannot evaluate that filter");
+    dataframe::LazyFrame lf =
+        dataframe::detail::rebase(lf_, std::make_shared<ViewSource>(next));
+    return TraceViewer(std::move(next), std::move(lf));
+}
+
+bool TraceViewer::aggregates() const {
+    const auto* src = dynamic_cast<const ViewSource*>(
+        dataframe::detail::plan_source(dataframe::detail::optimize_plan(lf_))
+            .get());
+    return src && src->output() == TraceOutput::Events &&
+           !src->view().is_row_query();
+}
+
+View TraceViewer::absorbed(const char* method, Need need) const {
+    auto fail = [&](const std::string& why) {
+        return DFTUtilsException::cat(
+            ErrorCode::INVALID_ARGUMENT,
+            std::string("TraceViewer::") + method + " " + why);
+    };
+    dataframe::LazyFrame planned = dataframe::detail::optimize_plan(lf_);
+    if (std::optional<std::string> op = dataframe::detail::first_op(planned))
+        throw fail("cannot follow '" + *op + "'");
+    const auto* src = dynamic_cast<const ViewSource*>(
+        dataframe::detail::plan_source(planned).get());
+    if (!src || src->output() != TraceOutput::Events)
+        throw fail("needs a trace scan");
+    const View& v = src->view();
+    if (need == Need::Events && !v.is_row_query())
+        throw fail("needs events, but the plan aggregates them");
+    if (need == Need::Aggregate && v.is_row_query())
+        throw fail("needs a group_by or agg");
+    return v;
+}
+
+namespace {
+
+dataframe::LazyFrame terminal_plan(View v, TraceOutput output,
+                                   ContainmentArgs tree = {},
+                                   std::shared_ptr<ExportSink> sink = nullptr) {
+    const std::uint64_t budget = v.plan().memory_budget;
+    return dataframe::LazyFrame::scan(
+               std::make_shared<ViewSource>(std::move(v), output,
+                                            std::move(tree), std::move(sink)))
+        .memory_budget(budget);
+}
+
+dataframe::LazyResult<std::string> partial_result(dataframe::LazyFrame plan) {
+    return {
+        {std::move(plan)}, [](std::vector<dataframe::DataFrame> frames) {
+            return dataframe::detail::ready(detail::partial_of(frames.front()));
+        }};
+}
+
+dataframe::LazyResult<ExportStats> stats_result(dataframe::LazyFrame plan) {
+    return {
+        {std::move(plan)}, [](std::vector<dataframe::DataFrame> frames) {
+            return dataframe::detail::ready(detail::stats_of(frames.front()));
+        }};
+}
+
+coro::CoroTask<TypedResult> run_typed(View v, int shard_begin, int shard_end,
+                                      ProgressFn progress) {
+    co_return co_await v.collect_typed(shard_begin, shard_end,
+                                       progress ? &progress : nullptr);
+}
+
+coro::CoroTask<ExportStats> run_materialize(View v, ProgressFn progress) {
+    co_return co_await v.run(progress ? &progress : nullptr);
+}
+
+coro::CoroTask<void> materialize_from_partials(
+    View v, std::vector<std::string_view> partials) {
+    co_await detail::run_materialize_partials(v.plan(), partials);
+}
+
+coro::CoroTask<ExportStats> run_sink_counters(View v, ExportSink& sink) {
+    co_return co_await v.export_counters(sink);
+}
+
+coro::CoroTask<ExportStats> run_sink_trace(View v, TraceWriteOptions opts) {
+    co_return co_await v.export_trace(std::move(opts));
+}
+
+}  // namespace
+
+dataframe::LazyFrame TraceViewer::call_tree(std::vector<std::string> partition,
+                                            std::string ts, std::string dur,
+                                            std::string name) const {
+    return terminal_plan(absorbed("call_tree", Need::Events),
+                         TraceOutput::CallTree,
+                         {std::move(partition),
+                          std::move(ts),
+                          std::move(dur),
+                          std::move(name),
+                          {}});
+}
+
+dataframe::LazyFrame TraceViewer::flamegraph(
+    std::vector<std::string> partition, std::string ts, std::string dur,
+    std::string name, std::vector<std::string> group) const {
+    return terminal_plan(absorbed("flamegraph", Need::Events),
+                         TraceOutput::Flamegraph,
+                         {std::move(partition), std::move(ts), std::move(dur),
+                          std::move(name), std::move(group)});
+}
+
+dataframe::LazyResult<ContainmentResult> TraceViewer::containment(
+    std::vector<std::string> partition, std::string ts, std::string dur,
+    std::string name, std::vector<std::string> group) const {
+    View v = absorbed("containment", Need::Events);
+    ContainmentArgs tree{std::move(partition), std::move(ts), std::move(dur),
+                         std::move(name), std::move(group)};
+    return {{terminal_plan(v, TraceOutput::CallTree, tree),
+             terminal_plan(v, TraceOutput::Flamegraph, tree)},
+            [](std::vector<dataframe::DataFrame> frames) {
+                return dataframe::detail::ready(ContainmentResult{
+                    std::move(frames[0]), std::move(frames[1])});
+            }};
+}
+
+dataframe::LazyResult<std::string> TraceViewer::flamegraph_partial(
+    std::vector<std::string> partition, std::string ts, std::string dur,
+    std::string name, std::vector<std::string> group) const {
+    return partial_result(
+        terminal_plan(absorbed("flamegraph_partial", Need::Events),
+                      TraceOutput::FlamegraphPartial,
+                      {std::move(partition), std::move(ts), std::move(dur),
+                       std::move(name), std::move(group)}));
+}
+
+dataframe::LazyResult<std::string> TraceViewer::aggregate_partial() const {
+    return partial_result(
+        terminal_plan(absorbed("aggregate_partial", Need::Aggregate),
+                      TraceOutput::AggregatePartial));
+}
+
+dataframe::DataFrame TraceViewer::merge_flamegraph_partials(
+    const std::vector<std::string_view>& partials) {
+    return View::merge_flamegraph_partials(partials);
+}
+
+dataframe::DataFrame TraceViewer::merge_partials(
+    const std::vector<std::string_view>& partials) const {
+    return absorbed("merge_partials", Need::Aggregate)
+        .merge_partials_to_table(partials);
+}
+
+dataframe::LazyResult<TypedResult> TraceViewer::typed(
+    int shard_begin, int shard_end, ProgressFn progress) const {
+    View v = absorbed("typed", Need::Any);
+    return {
+        {},
+        [v = std::move(v), shard_begin, shard_end,
+         progress = std::move(progress)](std::vector<dataframe::DataFrame>) {
+            return run_typed(v, shard_begin, shard_end, progress);
+        }};
+}
+
+coro::CoroTask<TypedResult> TraceViewer::collect_typed(
+    int shard_begin, int shard_end, ProgressFn progress) const {
+    return run_typed(absorbed("collect_typed", Need::Any), shard_begin,
+                     shard_end, std::move(progress));
+}
+
+coro::CoroTask<ExportStats> TraceViewer::sink_json(ExportSink& sink) const {
+    return sink_json(sink, LAZY).collect();
+}
+
+dataframe::LazyResult<ExportStats> TraceViewer::sink_json(ExportSink& sink,
+                                                          Lazy) const {
+    return sink_json(
+        std::shared_ptr<ExportSink>(std::shared_ptr<void>(), &sink), LAZY);
+}
+
+dataframe::LazyResult<ExportStats> TraceViewer::sink_json(
+    std::shared_ptr<ExportSink> sink, Lazy) const {
+    return stats_result(terminal_plan(absorbed("sink_json", Need::Events),
+                                      TraceOutput::ExportJson, {},
+                                      std::move(sink)));
+}
+
+coro::CoroTask<ExportStats> TraceViewer::sink_trace(
+    TraceWriteOptions opts) const {
+    return sink_trace(std::move(opts), LAZY).collect();
+}
+
+dataframe::LazyResult<ExportStats> TraceViewer::sink_trace(
+    TraceWriteOptions opts, Lazy) const {
+    View v = absorbed("sink_trace", Need::Events);
+    return {{},
+            [v = std::move(v),
+             opts = std::move(opts)](std::vector<dataframe::DataFrame>) {
+                return run_sink_trace(v, opts);
+            }};
+}
+
+coro::CoroTask<ExportStats> TraceViewer::sink_counters(ExportSink& sink) const {
+    return run_sink_counters(absorbed("sink_counters", Need::Aggregate), sink);
+}
+
+dataframe::LazyFrame TraceViewer::compare(const TraceViewer& variant) const {
+    const View base = absorbed("compare", Need::Aggregate);
+    const detail::ViewPlan& p = base.plan();
+    const View other = variant.absorbed("compare", Need::Events)
+                           .group_by(p.group_by)
+                           .agg(p.agg);
+    return TraceViewer(base).lazy().compare_agg(
+        TraceViewer(other).lazy(),
+        static_cast<std::int64_t>(p.group_by.size()));
+}
+
+dataframe::LazyFrame TraceViewer::branch(SessionBranch attach) const {
+    View v = absorbed("branch", Need::Events);
+    const std::uint64_t budget = v.plan().memory_budget;
+    return dataframe::LazyFrame::scan(
+               std::make_shared<ViewSource>(std::move(v), std::move(attach)))
+        .memory_budget(budget);
+}
+
+coro::CoroTask<void> TraceViewer::materialize_partials(
+    const std::vector<std::string_view>& partials) const {
+    return materialize_from_partials(
+        absorbed("materialize_partials", Need::Aggregate), partials);
+}
+
+std::optional<dataframe::DataFrame> TraceViewer::reconstruct_if_cached() const {
+    return absorbed("reconstruct_if_cached", Need::Aggregate)
+        .reconstruct_if_cached();
+}
+
+coro::CoroTask<ExportStats> TraceViewer::materialize(
+    std::uint64_t checkpoint_size, std::uint64_t part_size,
+    ProgressFn progress) const {
+    return materialize(LAZY, checkpoint_size, part_size, std::move(progress))
+        .collect();
+}
+
+dataframe::LazyResult<ExportStats> TraceViewer::materialize(
+    Lazy, std::uint64_t checkpoint_size, std::uint64_t part_size,
+    ProgressFn progress) const {
+    View v = absorbed("materialize", Need::Any)
+                 .materialize(checkpoint_size, part_size);
+    return {{},
+            [v = std::move(v), progress = std::move(progress)](
+                std::vector<dataframe::DataFrame>) {
+                return run_materialize(v, progress);
+            }};
+}
+
+std::vector<std::string> TraceViewer::mv_source() const {
+    return absorbed("mv_source", Need::Any).mv_source();
+}
+
+std::string TraceViewer::materialize_dir() const {
+    return absorbed("materialize_dir", Need::Any).materialize_dir();
+}
+
+void TraceViewer::register_materialized(const std::string& dir) const {
+    absorbed("register_materialized", Need::Any).register_materialized(dir);
+}
+
+TraceViewer TraceViewer::select(std::vector<std::string> names) const {
+    if (view_.is_row_query() && !dataframe::detail::first_non_filter_op(lf_))
+        return reshape("select", [&](const View& v) {
+            return v.select(std::move(names));
+        });
+    return LazyOps<TraceViewer>::select(std::move(names));
+}
+
+TraceViewer TraceViewer::filter(Query q) const {
+    return reshape("filter",
+                   [&](const View& v) { return v.filter(std::move(q)); });
+}
+
+TraceViewer TraceViewer::filter(const FieldExpr& pred) const {
+    return reshape("filter", [&](const View& v) { return v.filter(pred); });
+}
+
+TraceViewer TraceViewer::query(const std::string& dsl) const {
+    return reshape("query", [&](const View& v) { return v.query(dsl); });
+}
+
+TraceViewer TraceViewer::phase(Phase p) const {
+    return reshape("phase", [&](const View& v) { return v.phase(p); });
+}
+
+TraceViewer TraceViewer::time_range(double begin, double end) const {
+    return reshape("time_range",
+                   [&](const View& v) { return v.time_range(begin, end); });
+}
+
+TraceViewer TraceViewer::time_bucket(std::uint64_t interval_us) const {
+    return reshape("time_bucket",
+                   [&](const View& v) { return v.time_bucket(interval_us); });
+}
+
+TraceViewer TraceViewer::time_bucket(std::uint64_t interval_us,
+                                     std::uint64_t origin_us) const {
+    return reshape("time_bucket", [&](const View& v) {
+        return v.time_bucket(interval_us, origin_us);
+    });
+}
+
+TraceViewer TraceViewer::time_bucket_min(std::uint64_t interval_us) const {
+    return reshape("time_bucket_min", [&](const View& v) {
+        return v.time_bucket_min(interval_us);
+    });
+}
+
+TraceViewer TraceViewer::resolution(std::uint64_t cell_us) const {
+    return reshape("resolution",
+                   [&](const View& v) { return v.occ_cell(cell_us); });
+}
+
+TraceViewer TraceViewer::time_scale(double ns_ratio) const {
+    return reshape("time_scale",
+                   [&](const View& v) { return v.time_scale(ns_ratio); });
+}
+
+TraceViewer TraceViewer::group_by(std::vector<GroupKey> keys) const {
+    return reshape("group_by",
+                   [&](const View& v) { return v.group_by(std::move(keys)); });
+}
+
+TraceViewer TraceViewer::agg(std::vector<AggSpec> specs) const {
+    return reshape("agg",
+                   [&](const View& v) { return v.agg(std::move(specs)); });
+}
+
+TraceViewer TraceViewer::agg(std::vector<FieldAggExpr> exprs) const {
+    return reshape("agg",
+                   [&](const View& v) { return v.agg(std::move(exprs)); });
+}
+
+TraceViewer TraceViewer::agg_numeric_args() const {
+    return reshape("agg_numeric_args",
+                   [&](const View& v) { return v.agg_numeric_args(); });
+}
+
+TraceViewer TraceViewer::agg_numeric_args(
+    std::vector<AggSpec> reductions) const {
+    return reshape("agg_numeric_args", [&](const View& v) {
+        return v.agg_numeric_args(std::move(reductions));
+    });
+}
+
+TraceViewer TraceViewer::metadata(bool include) const {
+    return reshape("metadata",
+                   [&](const View& v) { return v.metadata(include); });
+}
+
+TraceViewer TraceViewer::emit_all_metadata(bool v) const {
+    return reshape("emit_all_metadata",
+                   [&](const View& base) { return base.emit_all_metadata(v); });
+}
+
+TraceViewer TraceViewer::rollup_root(std::string dir) const {
+    return reshape("rollup_root", [&](const View& v) {
+        return v.rollup_root(std::move(dir));
+    });
+}
+
+TraceViewer TraceViewer::views_root(std::string dir) const {
+    return reshape("views_root",
+                   [&](const View& v) { return v.views_root(std::move(dir)); });
+}
+
+TraceViewer TraceViewer::cancel_when(std::function<bool()> pred) const {
+    return reshape("cancel_when", [&](const View& v) {
+        return v.cancel_when(std::move(pred));
+    });
+}
+
+TraceViewer TraceViewer::memory_budget(std::uint64_t bytes) const {
+    View next = view_.memory_budget(bytes);
+    dataframe::LazyFrame lf =
+        dataframe::detail::rebase(lf_, std::make_shared<ViewSource>(next))
+            .memory_budget(bytes);
+    return TraceViewer(std::move(next), std::move(lf));
 }
 
 }  // namespace dftracer::utils::trace::views

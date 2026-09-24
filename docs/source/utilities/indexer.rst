@@ -273,7 +273,7 @@ Arrow-native builder over the index), not through a Python ``TraceReader``
 
    # files is a path, list of paths, or a directory (scanned recursively)
    tv = TraceViewer(["trace.pfw.gz"])
-   df = tv.filter("name == 'read'").collect().collect()  # LazyFrame, then DataFrame
+   df = tv.filter("name == 'read'").collect()  # runs the scan, returns a DataFrame
 
 See Also
 --------

@@ -8,9 +8,9 @@ Provides:
   parallelization.
 
 These wrappers are pure Python. The actual Arrow data is produced by the
-C extension (TraceViewer.stream/collect, utility to_arrow methods). Conversion
-to pandas requires pyarrow; conversion to polars requires polars. Neither
-is a required dependency.
+C extension (the DataFrames of TraceViewer.collect/stream, utility to_arrow
+methods). Conversion to pandas requires pyarrow; conversion to polars requires
+polars. Neither is a required dependency.
 """
 
 from __future__ import annotations

@@ -33,6 +33,7 @@ typedef enum {
     REF_SVC_COMPOSE,
     REF_SVC_CORO,
     REF_SVC_IO,
+    REF_SVC_NODES,
     REF_SVC_OPS,
     REF_SVC_PORTS,
     REF_SVC_PROVIDERS,
@@ -63,6 +64,8 @@ static const char* ref_svc_name(ref_svc_id id) {
             return "coro";
         case REF_SVC_IO:
             return "io";
+        case REF_SVC_NODES:
+            return "nodes";
         case REF_SVC_OPS:
             return "ops";
         case REF_SVC_PORTS:
@@ -97,6 +100,8 @@ static const char* ref_svc_ext_id(ref_svc_id id) {
             return DFTU_SVC_CORO;
         case REF_SVC_IO:
             return DFTU_SVC_IO;
+        case REF_SVC_NODES:
+            return DFTU_SVC_NODES;
         case REF_SVC_OPS:
             return DFTU_SVC_OPS;
         case REF_SVC_PORTS:
@@ -217,7 +222,7 @@ static void* src_scan(void* self, const dftu_scan_request* req,
 static void src_destroy(void* self) { (void)self; }
 
 static const dftu_source_vt SRC_VT = {src_schema, src_scan, src_destroy,
-                                      src_schema_types};
+                                      src_schema_types, NULL};
 
 /* ---- Node: "reference_plugin.node", doubles column "n", passes "amount"
  * through unchanged.
@@ -667,6 +672,17 @@ static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
                 int rc = pr->register_provider(
                     host->h, "reference_plugin.rejected", &SRC_VT, NULL);
                 g_status[REF_SVC_PROVIDERS] = (rc != 0) ? REF_OK : REF_FAIL;
+            }
+        }
+
+        {
+            /* Likewise for a node: the plugin registered its node at load. */
+            const dftu_svc_nodes* nd =
+                (const dftu_svc_nodes*)ref_get_service(host, REF_SVC_NODES);
+            if (nd) {
+                int rc = nd->register_node(host->h, "reference_plugin.rejected",
+                                           &NODE_VT, NULL);
+                g_status[REF_SVC_NODES] = (rc != 0) ? REF_OK : REF_FAIL;
             }
         }
     }
@@ -1145,7 +1161,12 @@ DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
         }
     }
 
-    dftu_node_register("reference_plugin.node", &NODE_VT, NULL);
+    {
+        const dftu_svc_nodes* nodes =
+            (const dftu_svc_nodes*)h->get_service(h->h, DFTU_SVC_NODES);
+        if (nodes && nodes->register_node)
+            nodes->register_node(h->h, "reference_plugin.node", &NODE_VT, NULL);
+    }
 
     memset(&g_plugin, 0, sizeof(g_plugin));
     g_plugin.abi_version = DFTRACER_PLUGIN_ABI_VERSION;

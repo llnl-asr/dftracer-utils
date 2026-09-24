@@ -1,12 +1,15 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_VIEW_EXECUTOR_H
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_EXECUTOR_H
 
+#include <dftracer/utils/core/coro/async_semaphore.h>
+#include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <span>
@@ -209,6 +212,16 @@ void add_materialize_branch(ViewSessionState& state,
 std::shared_ptr<ViewSessionState> make_view_session_state(
     std::shared_ptr<const ViewPlan> plan);
 void add_branch(ViewSessionState& state, BranchHooks hooks);
+
+/// Stream the events `plan` selects (its phase and query, over the session's
+/// base scan) as morsels of its select into `channel`, throttled by `budget`
+/// bytes in flight. The channel closes when the scan ends. Once `dropped` is
+/// set, the branch stops sending.
+void add_stream_branch(
+    ViewSessionState& state, std::shared_ptr<const ViewPlan> plan,
+    std::shared_ptr<coro::Channel<dataframe::Morsel>> channel,
+    std::shared_ptr<coro::CoroSemaphore> budget,
+    std::shared_ptr<const std::atomic<bool>> dropped);
 
 /// Offer `q` as a narrowing of the session's shared scan. execute() applies it
 /// only when no other branch is registered; see ViewSessionState.

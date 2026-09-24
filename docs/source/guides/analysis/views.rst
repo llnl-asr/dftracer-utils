@@ -72,8 +72,8 @@ Row-shaping builders: ``.phase(p)`` restricts to one ``Phase`` value -
 counters), ``Phase::Aggregated`` (rollup records), ``Phase::Metadata``
 (``ph="M"``), or ``Phase::Any``; ``.time_range(begin,
 end)`` and ``.time_bucket(interval_us, origin)`` window and bucket by timestamp
-(``origin`` anchors the windows; ``"min"`` anchors on the first event's
-timestamp instead of ``0``);
+(``origin`` anchors the windows; Python's ``normalize_to="min"`` anchors on
+the first event's timestamp instead of ``0``);
 ``.select({...})`` projects columns; ``.limit(n)`` / ``.offset(n)`` paginate;
 ``.sort_by(column, descending)`` / ``.topk(column, k)`` order the result. All
 return a new ``View`` (or, in Python, a new ``TraceViewer``).
@@ -93,7 +93,7 @@ Aggregate
 ---------
 
 ``.group_by({...})`` and ``.agg({...})`` promote a ``View`` to an
-``AggregatedView`` (Python: ``TraceViewer`` to ``AggregatedTraceViewer``); see
+``AggregatedView`` (in Python both return a ``TraceViewer``); see
 :doc:`aggregation` for the full ``GroupKey`` / ``AggOp`` vocabulary. The
 terminal that runs everything built so far is ``.collect()``:
 
@@ -120,14 +120,13 @@ terminal that runs everything built so far is ``.collect()``:
              .filter('cat == "POSIX"')
              .group_by("name")
              .agg("count", "sum:dur")
-             .collect()               # -> LazyFrame
              .collect()               # -> DataFrame
          )
 
 In C++, ``collect()`` returns a native ``dftracer::utils::dataframe::DataFrame``
-directly. In Python, ``TraceViewer.collect()`` builds the query plan and
-returns a lazy ``LazyFrame``; nothing scans until you call its own
-``.collect()``, which runs the plan and returns the ``DataFrame``. See
+directly. In Python, ``TraceViewer`` is itself a lazy ``LazyFrame``; nothing
+scans until ``collect()``, which runs the plan and returns the ``DataFrame``.
+See
 :doc:`../data/dataframe` and :doc:`../core/columnar-ops` for what to do with
 the frame next.
 
@@ -150,28 +149,9 @@ The set is schemaless: the base axis fields (``pid`` / ``tid`` / ``ts`` /
 and nested args as dotted paths, e.g. ``pos.x``), and a ``resolved.*`` alias for
 each hash column present. Types fold across event names and files. The harvest
 happens in the one index-building pass (``BloomFold``, ``wants_schema()``), so
-it costs no extra scan.
-
-Inspecting the schema
----------------------
-
-``columns()`` returns the distinct columns discoverable from the view's index
-and ``schema()`` returns each with its type. Both read index metadata only (no
-trace scan) and read the per-index metadata in parallel:
-
-.. code-block:: cpp
-
-   View v = View::from_file("trace.pfw.gz");
-   std::vector<std::string> cols = v.columns();
-   for (const View::ColumnInfo& c : v.schema())
-       std::printf("%s: %s\n", c.name.c_str(), c.type.c_str());
-
-The set is schemaless: the base axis fields (``pid`` / ``tid`` / ``ts`` /
-``dur``), every scalar leaf harvested at index build (top-level fields plus flat
-and nested args as dotted paths, e.g. ``pos.x``), and a ``resolved.*`` alias for
-each hash column present. Types fold across event names and files. The harvest
-happens in the one index-building pass (``BloomFold``, ``wants_schema()``), so
-it costs no extra scan.
+it costs no extra scan. In Python, ``TraceViewer.column_info()`` returns the
+same set as a ``{name: type}`` dict; the ``columns`` and ``schema``
+properties describe the plan's output instead, as on any ``LazyFrame``.
 
 Export
 ------
@@ -200,7 +180,9 @@ through the parallel writer - the engine behind ``dftracer_view --merge``.
        .export_counters(sink)
        .get();
 
-In Python, ``TraceViewer.export_trace(path)`` writes a filtered trace; see
+In Python, ``TraceViewer.sink_json(path)`` streams the selected events as
+NDJSON and ``TraceViewer.export_trace(path)`` writes a trace file (counter
+events when the viewer aggregates); both return the scan stats dict. See
 :doc:`../../api/trace_viewer`.
 
 Custom folds: map_batches
@@ -283,12 +265,14 @@ other op:
    posix->num_rows();
 
 Reading a ``Deferred`` handle before ``execute()`` resolves it throws. From
-Python the same fused scan is ``TraceViewer.session()``; each ``s.view()``
-branch (a ``SessionView``) registers the same terminals over the shared scan,
-and also the containment terminals ``call_tree`` / ``flamegraph`` /
-``containment`` (same ``partition`` / ``ts`` / ``dur`` / ``name`` arguments as
-:doc:`../../api/trace_viewer`), each returning a ``Handle`` resolved on
-``execute()``. See :doc:`aggregation` and :doc:`../../api/trace_viewer`.
+Python the same fused scan is ``TraceViewer.session()``: ``s.collect(plan)``
+registers any lazy plan over the view (an aggregation, a row filter, a
+``call_tree`` / ``flamegraph`` plan, the ``containment()`` result), and
+``s.sink_json(viewer, path)``, ``s.materialize(viewer)`` and
+``s.attach(plugins)`` register the other branches, each returning a ``Handle``
+resolved on ``execute()``. :func:`~dftracer.utils.collect_all` shares the scan
+the same way without a session. See :doc:`sessions` and
+:doc:`../../api/trace_viewer`.
 
 Materialized views
 -------------------
@@ -335,9 +319,11 @@ coordinator publishing the result:
    // Coordinator, after every rank has finished exporting:
    coordinator.register_materialized(mv_dir);
 
-This has no Python binding; it is a C++-only building block for a
-caller-driven distributed materialize (the caller owns rank coordination and
-the barrier between steps 2 and 3, same as the distributed patterns in
+In Python the same steps are ``TraceViewer.materialize_dir()``,
+``TraceViewer.export_trace(path, index=True)`` and
+``TraceViewer.register_materialized(dir)``. Either way it is a building block
+for a caller-driven distributed materialize (the caller owns rank coordination
+and the barrier between steps 2 and 3, same as the distributed patterns in
 :doc:`../scale/distributed-aggregation`).
 
 See also
@@ -347,6 +333,6 @@ See also
 - :doc:`../data/dataframe` and :doc:`../core/columnar-ops` for what to do
   with a collected ``DataFrame``.
 - :doc:`../../api/trace_viewer` for the complete Python ``TraceViewer`` /
-  ``AggregatedTraceViewer`` reference.
+  ``Session`` reference.
 - :doc:`../../concepts/fused-scan` for why one pass serves every terminal
   above.

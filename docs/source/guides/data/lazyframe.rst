@@ -21,8 +21,8 @@ Where a plan comes from
 
          from dftracer.utils import TraceViewer, DataFrame, col
 
-         plan = TraceViewer("traces/").filter('cat == "POSIX"').collect()  # a plan over the scan
-         plan = df.lazy()                                                  # a plan over a frame
+         plan = TraceViewer("traces/").filter('cat == "POSIX"')  # a plan over the scan
+         plan = df.lazy()                                        # a plan over a frame
 
          out = (plan.filter(col("dur") > 100)
                     .group_by("name").agg("count", "sum:dur")
@@ -56,16 +56,18 @@ Where a plan comes from
       ``dftu_svc_ops::run_lazy`` (``OwnedLazyFrame`` in the SDK) without
       linking the engine.
 
-A trace query's ``collect()`` returns a plan over the fused scan
-(``ViewSource``), so the steps you add after it run inside the same pull
-chain as the scan; ``collect()`` on that plan is what reads the files.
+A Python ``TraceViewer`` is itself a plan over the fused scan
+(``ViewSource``; in C++ the trace query's ``collect()`` returns that plan), so
+the steps you add run inside the same pull chain as the scan; ``collect()`` on
+the plan is what reads the files.
 
 Read the plan before it runs
 ----------------------------
 
 ``explain()`` prints the optimized plan, the source then one step per line.
-``schema()`` gives the output column names and ``output_schema()`` the typed
-fields, both without running: the plan walks its steps from the source's
+The ``columns`` property gives the output column names and ``schema`` the
+typed fields (``schema()`` and ``output_schema()`` in C++), both without
+running: the plan walks its steps from the source's
 schema. A column whose type a step cannot know statically is ``Unknown``,
 never a guess; a step whose columns are data-dependent (``pivot``,
 ``to_dummies``, ``describe``) leaves both empty until collect.
@@ -78,7 +80,7 @@ never a guess; a step whose columns are data-dependent (``pivot``,
    # group_by [name] count, sum(dur)
    # sort_by sum_dur desc
    # head 10
-   plan.schema()      # ['name', 'count', 'sum_dur']
+   plan.columns       # ['name', 'count', 'sum_dur']
 
 The optimizer inserts a projection of the columns the plan reads (a
 ``select``, or a group-by's keys and aggregate columns) and pushes it with
@@ -92,7 +94,7 @@ Collect, or stream under a budget
 ``collect(morsel_rows)`` drains the plan into one frame. A resident source
 runs whole-column, the same as eager, every op included (one with no
 eager form runs its own cursor over the frame as a single morsel); a
-streaming source runs morsel by morsel. ``stream()`` (C++) yields the morsels instead, each a standalone
+streaming source runs morsel by morsel. ``stream()`` yields the morsels instead, each a standalone
 frame, so a consumer can stop early: dropping the generator is the scan's
 early-out.
 
@@ -157,6 +159,109 @@ from a plugin) and opened with ``dftu_lazyframe_from_provider``. A source
 declares its column types through ``schema_types`` with the ``dftu_schema``
 builders, nested types included; one that declares nothing reports
 ``Unknown``.
+
+Planning hooks
+~~~~~~~~~~~~~~
+
+A source can also take whole ops at plan time, before ``scan``. The
+optimizer offers the ops directly above the source, bottom up, through
+``apply_filter``, ``apply_projection``, ``apply_aggregation``,
+``apply_sort``, ``apply_topn``, ``apply_limit``, ``apply_tail`` and
+``apply_join``. Each returns ``std::nullopt`` (the default: unsupported or
+no change) or a new immutable source that carries the op, marked:
+
+- ``Exact``: the new source returns what the op returns; the op leaves the
+  plan.
+- ``Inexact``: the new source only narrowed its rows; the op stays above it.
+  After an inexact answer only filters are offered, since they commute.
+
+The first refused op ends the walk. A projection, aggregation or join
+changes the schema, so it may only be ``Exact``; the new source's
+``schema()`` is its output. Offering the same op to the new source again
+must return ``std::nullopt``. Aggregation keys and inputs arrive as
+positional expressions (``AggregateSpec``), and a join arrives with the
+other side already absorbed into its own source (``JoinSpec``); it is only
+offered when nothing is left to run above that side. ``with_column`` steps
+directly before a ``group_by`` are offered with it as one aggregation, each
+key and input written as its expression over the source's columns, so
+``with_column("big", col("dur") > 250).group_by("big")`` reaches the source
+whole. ``explain()`` shows the plan after these hooks ran.
+
+In C the hooks are one optional ``apply`` callback on ``dftu_source_vt``: a
+``dftu_apply_request`` whose ``kind`` selects one ``dftu_apply_*_args``
+member of its union, answered with a ``dftu_apply_result``
+(``DFTU_APPLY_NO_CHANGE`` / ``EXACT`` / ``INEXACT`` plus a new
+``self``/``vt`` the host owns and destroys once). A ``NULL`` callback keeps
+the ``scan`` path alone.
+
+Collecting several plans
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+``collect_all(plans)`` returns one frame per plan, in order. Every plan is
+optimized at every level (a join's or concat's other side and a frame op's
+frame operands included), and the sources at all those leaves that report
+the same ``batch_key()`` run through one ``collect_batch()`` call, so their
+data is read once; each leaf then runs its remaining ops over its result.
+``collect()`` does the same within one plan, so ``a.join(b)`` over one trace
+reads it once. A trace source keys on its files and scan settings, so several
+aggregations and row queries over one trace share a single scan.
+
+When the plans of a group are the top-level plans of ``collect_all`` (not a
+join's or concat's other side) and a source supports ``open_batch()``, the
+shared read streams instead: each plan gets its own bounded cursor and runs its
+remaining ops as rows arrive, and ``collect_all`` drains all the plans
+together, so memory stays bounded by the budget rather than by the matching
+rows. A plan that stops early (``head``) releases its share of the read. Other
+groups (a child plan, or a plan starting with a projection) read through
+``collect_batch()`` into memory. ``stream()`` does not batch: each leaf
+streams on its own.
+
+.. tab-set::
+
+   .. tab-item:: C++
+
+      .. code-block:: cpp
+
+         auto frames = co_await collect_all({by_cat, posix_rows, by_name});
+
+   .. tab-item:: Python
+
+      .. code-block:: python
+
+         by_cat, posix_rows, by_name = dft.collect_all([by_cat, posix_rows, by_name])
+
+Results that are not one frame
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A ``LazyResult<T>`` is a lazy value of any type: the plans it reads and a
+step that turns their frames into a ``T``. Its ``collect()`` returns the
+``T``. A source uses it for a terminal that is not a frame. For example, a
+trace's ``containment()`` gives both containment frames, a partial gives
+mergeable bytes, and a sink gives its write stats. The C++ variadic
+``collect_all(roots...)`` takes ``LazyFrame`` and ``LazyResult`` roots
+together. It returns a tuple with one value per root, in order, and batches
+the plans of all roots as above. Python's ``collect_all([...])`` takes both
+kinds of root in one list and returns a list. A reduction of a bound column
+(``tv["dur"].mean()``) is a ``LazyScalar``, a ``LazyResult`` of one value.
+
+.. tab-set::
+
+   .. tab-item:: C++
+
+      .. code-block:: cpp
+
+         auto [fg, both, stats] = co_await collect_all(
+             tv.flamegraph(), tv.containment(), tv.sink_json(sink, LAZY));
+
+   .. tab-item:: Python
+
+      .. code-block:: python
+
+         fg, both, stats, mean_dur = dft.collect_all([
+             tv.flamegraph(), tv.containment(),
+             tv.sink_json("out.pfw", lazy=True), tv["dur"].mean(),
+         ])
+         both.call_tree, both.flamegraph   # the Containment fields
 
 A plugin's own step
 -------------------

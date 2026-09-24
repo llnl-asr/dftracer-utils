@@ -178,7 +178,7 @@ and :doc:`../trace-viewer` (interactive UI over the same index).
 If something goes wrong along the way
 ------------------------------------------
 
-- Empty results, a stale-looking index, or a rejected non-pushable predicate: :doc:`troubleshooting`.
+- Empty results, a stale-looking index, or a predicate the index cannot prune: :doc:`troubleshooting`.
 - A correct but slow query: :doc:`analysis/diagnosing-slow-queries`.
 
 See also

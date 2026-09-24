@@ -7,6 +7,7 @@
 #include <dftracer/utils/python/runtime.h>
 
 #include <exception>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -57,6 +58,31 @@ int bind_runtime_arg(T *self, PyObject *runtime_arg) {
         }
     }
     return 0;
+}
+
+// The Runtime a `runtime=` argument names: a Runtime, an object exposing a
+// `_native` Runtime, or None/NULL for the default. Null with a Python error set
+// on any other argument.
+inline std::shared_ptr<dftracer::utils::Runtime> runtime_from_arg(
+    PyObject *runtime_arg) {
+    if (!runtime_arg || runtime_arg == Py_None)
+        return std::shared_ptr<dftracer::utils::Runtime>(
+            std::shared_ptr<void>(),
+            dftracer::utils::python::get_default_runtime());
+    if (PyObject_TypeCheck(runtime_arg, &RuntimeType))
+        return ((RuntimeObject *)runtime_arg)->runtime;
+    PyObject *native = PyObject_GetAttrString(runtime_arg, "_native");
+    if (native && PyObject_TypeCheck(native, &RuntimeType)) {
+        std::shared_ptr<dftracer::utils::Runtime> rt =
+            ((RuntimeObject *)native)->runtime;
+        Py_DECREF(native);
+        return rt;
+    }
+    Py_XDECREF(native);
+    PyErr_Clear();
+    PyErr_SetString(PyExc_TypeError,
+                    "runtime must be a Runtime instance or None");
+    return nullptr;
 }
 
 // Parse an optional `runtime=` kwarg and bind it into self->runtime_obj.

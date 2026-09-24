@@ -161,3 +161,77 @@ TEST_CASE("a provider is gone once the loading plugin set is destroyed") {
     CHECK(source_destroys() - before == 1);
     CHECK(dftu_lazyframe_from_provider("provider_fixture.rows") == nullptr);
 }
+
+TEST_CASE("a C++ SDK source absorbs a filter and is freed with the plugin") {
+    FixtureAccessors fx;
+    REQUIRE(fx.handle);
+    auto alive = fx.sym<int (*)()>("provider_fixture_sdk_alive");
+    auto filters = fx.sym<int (*)()>("provider_fixture_sdk_filters");
+    REQUIRE(alive);
+    REQUIRE(filters);
+    const int filters_before = filters();
+
+    {
+        std::optional<Plugins> plugins = load_fixture();
+        dftu_lazyframe* lf =
+            dftu_lazyframe_from_provider("provider_fixture.sdk");
+        REQUIRE(lf);
+        dftu_expr* id = dftu_expr_col(0);
+        dftu_scalar six{};
+        six.kind = DFTU_SCALAR_TAG_I64;
+        six.value.i = 6;
+        dftu_expr* pred = dftu_expr_cmp(DFTU_CMP_GT, id, six);
+        dftu_lazyframe* filtered = dftu_lazyframe_filter(lf, pred);
+        dftu_expr_free(pred);
+        dftu_expr_free(id);
+        dftu_lazyframe_free(lf);
+        REQUIRE(filtered);
+
+        dftu_dataframe* out = dftu_lazyframe_collect(filtered, -1);
+        REQUIRE(out);
+        CHECK(read_i64_column(out, "id") == std::vector<std::int64_t>{7, 8, 9});
+        CHECK(filters() > filters_before);
+        dftu_dataframe_free(out);
+        dftu_lazyframe_free(filtered);
+    }
+
+    CHECK(alive() == 0);
+    CHECK(dftu_lazyframe_from_provider("provider_fixture.sdk") == nullptr);
+}
+
+TEST_CASE("a C++ SDK node runs over a provider and leaves with the plugin") {
+    {
+        std::optional<Plugins> plugins = load_fixture();
+        dftu_lazyframe* lf =
+            dftu_lazyframe_from_provider("provider_fixture.sdk");
+        REQUIRE(lf);
+        dftu_lazyframe* doubled =
+            dftu_lazyframe_op(lf, "provider_fixture.double", nullptr);
+        dftu_lazyframe_free(lf);
+        REQUIRE(doubled);
+
+        dftu_dataframe* out = dftu_lazyframe_collect(doubled, -1);
+        REQUIRE(out);
+        CHECK(read_i64_column(out, "id") ==
+              std::vector<std::int64_t>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
+        CHECK(read_i64_column(out, "val") ==
+              std::vector<std::int64_t>{0, 20, 40, 60, 80, 100, 120, 140, 160,
+                                        180});
+        dftu_dataframe_free(out);
+        dftu_lazyframe_free(doubled);
+    }
+
+    dftu_dataframe* one = nullptr;
+    {
+        const char* names[] = {"id", "val"};
+        std::int64_t v[] = {1};
+        dftu_series* cols[] = {
+            dftu_series_new_flat(DFTU_TYPE_INT64, v, 1, nullptr),
+            dftu_series_new_flat(DFTU_TYPE_INT64, v, 1, nullptr)};
+        one = dftu_dataframe_new(names, cols, 2);
+    }
+    dftu_lazyframe* lf = dftu_dataframe_lazy(one);
+    CHECK(dftu_lazyframe_op(lf, "provider_fixture.double", nullptr) == nullptr);
+    dftu_lazyframe_free(lf);
+    dftu_dataframe_free(one);
+}

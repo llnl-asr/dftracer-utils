@@ -5,6 +5,7 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/field.h>
+#include <dftracer/utils/dataframe/lazy_ops.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/query/query.h>
 #include <dftracer/utils/trace/trace_config.h>
@@ -74,7 +75,10 @@ struct GroupKey {
         Arg,
         /// Any field by name, resolved top-level then args; `arg` holds the
         /// name. Unlike Arg (args-only) this also sees top-level fields.
-        Field
+        Field,
+        /// A column the plan computes per event from other fields; `arg`
+        /// names it. Its values keep their type.
+        Expr
     };
     /// Value transform applied to the resolved group value, before the
     /// merge key is built. Coarsens the grain (many values fold to one), so
@@ -235,6 +239,10 @@ class ExportSink {
    public:
     virtual ~ExportSink() = default;
     virtual void write(std::string_view data) = 0;
+    /// Called once an export into this sink has written everything, so a
+    /// buffering sink can make the output visible. A sink may be written by
+    /// several exports, so this is not an end of stream.
+    virtual void flush() {}
 };
 
 /// The three record families of one aggregation index, read in a single pass:
@@ -464,6 +472,7 @@ class ViewSession {
 
    private:
     friend class View;
+    friend class ViewSource;
     explicit ViewSession(std::shared_ptr<const detail::ViewPlan> plan);
     /// Type-erased seam behind fold(): attach one branch to the run. The engine
     /// (BranchHooks etc.) stays internal; defined in the .cpp. `make_consumer`
@@ -480,8 +489,10 @@ class ViewSession {
     void add_containment_branch(
         const View& branch, const std::vector<std::string>& partition,
         const std::string& ts, const std::string& dur, const std::string& name,
+        const std::vector<std::string>& group,
         std::shared_ptr<dftracer::utils::dataframe::DataFrame> out_ct,
-        std::shared_ptr<dftracer::utils::dataframe::DataFrame> out_fg);
+        std::shared_ptr<dftracer::utils::dataframe::DataFrame> out_fg,
+        std::shared_ptr<std::string> out_partial = nullptr);
     std::shared_ptr<detail::ViewSessionState> state_;
     std::shared_ptr<bool> executed_ = std::make_shared<bool>(false);
     /// Leading key-column count per collect branch, keyed by its output
@@ -863,6 +874,7 @@ class View {
    private:
     friend class ViewSession;
     friend class ViewSource;
+    friend class TraceViewer;
     friend coro::CoroTask<dftracer::utils::dataframe::DataFrame>
     detail::run_collect_via_engine(const detail::ViewPlan& plan);
     friend coro::CoroTask<detail::EnginePrep> detail::prepare_engine_group(
@@ -982,6 +994,269 @@ template <class... Aggs, class>
 AggregatedView View::agg(Aggs&&... exprs) const {
     return agg(std::vector<FieldAggExpr>{std::forward<Aggs>(exprs)...});
 }
+
+/// Collects several plans together: record them with collect(), then
+/// execute() once. Plans over the same trace base share one scan, as
+/// dataframe::collect_all() does; each handle resolves on execute().
+class TraceViewer;
+
+/// A caller branch of a trace scan: registers itself on the session that runs
+/// the scan and returns the call that publishes its result once that session
+/// has executed. The branch sees every event the session scans.
+using SessionBranch = std::function<std::function<void()>(ViewSession&)>;
+
+/// Both containment frames of one buffered fold.
+struct ContainmentResult {
+    dataframe::DataFrame call_tree;
+    dataframe::DataFrame flamegraph;
+};
+
+/// Selects the deferred overload of a sink: it returns a LazyResult for
+/// collect_all() or a session instead of running at once.
+struct Lazy {};
+inline constexpr Lazy LAZY{};
+
+namespace detail {
+template <class T>
+coro::CoroTask<void> resolve_into(
+    std::shared_ptr<T> out, typename dataframe::LazyResult<T>::Finish finish,
+    std::vector<dataframe::DataFrame> frames) {
+    *out = co_await finish(std::move(frames));
+}
+}  // namespace detail
+
+/// Plans registered here run together on execute(), as collect_all() runs
+/// them: plans over the same trace files share one scan.
+class TraceSession {
+   public:
+    Deferred<dataframe::DataFrame> collect(dataframe::LazyFrame plan);
+    template <class T>
+    Deferred<T> collect(dataframe::LazyResult<T> result) {
+        auto out = std::make_shared<T>();
+        add(result.plans(), [out, finish = result.finish()](
+                                std::vector<dataframe::DataFrame> frames) {
+            return detail::resolve_into<T>(out, finish, std::move(frames));
+        });
+        return {out, executed_};
+    }
+    /// tv.sink_json(sink, LAZY) and tv.materialize(LAZY), registered.
+    Deferred<ExportStats> sink_json(const TraceViewer& tv, ExportSink& sink);
+    Deferred<ExportStats> materialize(const TraceViewer& tv);
+    coro::CoroTask<void> execute();
+
+   private:
+    using Resolve =
+        std::function<coro::CoroTask<void>(std::vector<dataframe::DataFrame>)>;
+    struct Pending {
+        std::size_t count;
+        Resolve resolve;
+    };
+    void add(const std::vector<dataframe::LazyFrame>& plans, Resolve resolve);
+
+    std::vector<dataframe::LazyFrame> plans_;
+    std::vector<Pending> pending_;
+    std::shared_ptr<bool> executed_ = std::make_shared<bool>(false);
+};
+
+/// A LazyFrame over trace files. Generic LazyFrame builders (inherited from
+/// LazyOps) record ops that the trace source absorbs at plan time; the trace
+/// builders below (event filters, phase, time range, time buckets, group keys,
+/// trace aggregates) shape the scan itself, exactly as the View builders do.
+/// Nothing runs until collect(), which returns the DataFrame.
+///
+/// A trace builder shapes the events the scan reads, so it may only follow
+/// filters: calling one after any other op throws INVALID_ARGUMENT naming that
+/// op. Event filters (query / Query / FieldExpr) always select raw events, even
+/// after a trace group_by; an Expr filter follows LazyFrame order.
+class TraceViewer : public dataframe::LazyOps<TraceViewer> {
+   public:
+    /// An empty viewer (no files); collects to an empty result.
+    TraceViewer();
+    /// The plan of `view`, with its post-scan ops (sort, top-k, offset,
+    /// limit, an aggregate's select) as the LazyFrame ops View::collect()
+    /// places above the scan.
+    explicit TraceViewer(View view);
+
+    static TraceViewer from_file(std::string file_path,
+                                 std::string index_path = "");
+    static TraceViewer from_files(
+        std::vector<ViewFile> files,
+        indexing::BloomFilterCache* bloom_cache = nullptr);
+    /// Scans `dir` recursively for .pfw.gz traces, as View::from_directory.
+    static coro::CoroTask<TraceViewer> from_directory(
+        std::string dir, std::string index_path = "");
+
+    using LazyOps<TraceViewer>::filter;
+    using LazyOps<TraceViewer>::group_by;
+
+    using LazyOps<TraceViewer>::select;
+
+    /// On raw events with only filters before it, the fields the scan reads:
+    /// any field, indexed or not, and a bare arg name reads that arg as
+    /// "args.<key>" (View::select). Otherwise a projection of the plan's
+    /// columns.
+    TraceViewer select(std::vector<std::string> names) const;
+    TraceViewer filter(Query q) const;
+    TraceViewer filter(const FieldExpr& pred) const;
+    TraceViewer query(const std::string& dsl) const;
+    TraceViewer phase(Phase p) const;
+    TraceViewer time_range(double begin, double end) const;
+    TraceViewer time_bucket(std::uint64_t interval_us) const;
+    TraceViewer time_bucket(std::uint64_t interval_us,
+                            std::uint64_t origin_us) const;
+    TraceViewer time_bucket_min(std::uint64_t interval_us) const;
+    /// Grid, in microseconds, that the occupancy aggregates (busy,
+    /// concurrency, utilization, active) snap interval edges to; 0 is the
+    /// exact union. Honored only with a time_range.
+    TraceViewer resolution(std::uint64_t cell_us) const;
+    TraceViewer time_scale(double ns_ratio) const;
+    TraceViewer group_by(std::vector<GroupKey> keys) const;
+    TraceViewer agg(std::vector<AggSpec> specs) const;
+    TraceViewer agg(std::vector<FieldAggExpr> exprs) const;
+    TraceViewer agg_numeric_args() const;
+    TraceViewer agg_numeric_args(std::vector<AggSpec> reductions) const;
+    TraceViewer metadata(bool include) const;
+    TraceViewer emit_all_metadata(bool v) const;
+    TraceViewer rollup_root(std::string dir) const;
+    TraceViewer views_root(std::string dir) const;
+    TraceViewer cancel_when(std::function<bool()> pred) const;
+    /// Spill budget for both the trace aggregation and the LazyFrame ops.
+    TraceViewer memory_budget(std::uint64_t bytes) const;
+
+    /// Index metadata only; no trace event is decoded.
+    std::vector<std::string> columns() const { return view_.columns(); }
+    std::vector<View::ColumnInfo> column_info() const { return view_.schema(); }
+    TimeMetric time_metric() const { return view_.time_metric(); }
+
+    TraceSession session() const { return {}; }
+
+    /// True when this viewer's ops all absorb into an aggregating trace scan.
+    bool aggregates() const;
+
+    /// Containment terminals: a plan over the events this viewer selects, as
+    /// View::call_tree / View::flamegraph compute them. The returned plan
+    /// chains like any LazyFrame; the trace methods end here. Each throws
+    /// INVALID_ARGUMENT naming the first op of this viewer that the terminal
+    /// cannot take (anything but absorbed filters and projections).
+    dataframe::LazyFrame call_tree(std::vector<std::string> partition = {"pid",
+                                                                         "tid"},
+                                   std::string ts = "ts",
+                                   std::string dur = "dur",
+                                   std::string name = "name") const;
+    dataframe::LazyFrame flamegraph(
+        std::vector<std::string> partition = {"pid", "tid"},
+        std::string ts = "ts", std::string dur = "dur",
+        std::string name = "name", std::vector<std::string> group = {}) const;
+    /// Both frames from one buffered fold.
+    dataframe::LazyResult<ContainmentResult> containment(
+        std::vector<std::string> partition = {"pid", "tid"},
+        std::string ts = "ts", std::string dur = "dur",
+        std::string name = "name", std::vector<std::string> group = {}) const;
+
+    /// Mergeable partials for a distributed run: merge flamegraph partials
+    /// with merge_flamegraph_partials(), aggregate partials with
+    /// merge_partials() on a viewer of the same aggregation.
+    dataframe::LazyResult<std::string> flamegraph_partial(
+        std::vector<std::string> partition = {"pid", "tid"},
+        std::string ts = "ts", std::string dur = "dur",
+        std::string name = "name", std::vector<std::string> group = {}) const;
+    dataframe::LazyResult<std::string> aggregate_partial() const;
+    static dataframe::DataFrame merge_flamegraph_partials(
+        const std::vector<std::string_view>& partials);
+    dataframe::DataFrame merge_partials(
+        const std::vector<std::string_view>& partials) const;
+
+    /// The aggregation index's record families (View::collect_typed).
+    dataframe::LazyResult<TypedResult> typed(int shard_begin = 0,
+                                             int shard_end = 4096,
+                                             ProgressFn progress = {}) const;
+    coro::CoroTask<TypedResult> collect_typed(int shard_begin = 0,
+                                              int shard_end = 4096,
+                                              ProgressFn progress = {}) const;
+
+    /// Sinks run when awaited; the LAZY overloads defer for collect_all() or
+    /// a session. sink_json writes the selected events (their projection when
+    /// one was absorbed) to `sink`, which must outlive the run. materialize
+    /// persists this viewer's result for later reads to serve (View::run).
+    coro::CoroTask<ExportStats> sink_json(ExportSink& sink) const;
+    dataframe::LazyResult<ExportStats> sink_json(ExportSink& sink, Lazy) const;
+    /// As sink_json(sink, LAZY), with the plan sharing ownership of `sink`.
+    dataframe::LazyResult<ExportStats> sink_json(
+        std::shared_ptr<ExportSink> sink, Lazy) const;
+    /// Writes the selected events as a new indexed trace (View::export_trace).
+    coro::CoroTask<ExportStats> sink_trace(TraceWriteOptions opts) const;
+    dataframe::LazyResult<ExportStats> sink_trace(TraceWriteOptions opts,
+                                                  Lazy) const;
+    coro::CoroTask<ExportStats> materialize(std::uint64_t checkpoint_size = 0,
+                                            std::uint64_t part_size = 0,
+                                            ProgressFn progress = {}) const;
+    dataframe::LazyResult<ExportStats> materialize(
+        Lazy, std::uint64_t checkpoint_size = 0, std::uint64_t part_size = 0,
+        ProgressFn progress = {}) const;
+
+    /// Writes this viewer's aggregation as ph="C" counter events
+    /// (View::export_counters).
+    coro::CoroTask<ExportStats> sink_counters(ExportSink& sink) const;
+
+    /// This viewer's group_by + agg applied to `variant`'s events as well,
+    /// joined on the group key: keys, `l_`/`r_` per metric, then
+    /// `delta_`/`pct_` (DataFrame::compare_agg). Both sides over the same
+    /// files share one scan.
+    dataframe::LazyFrame compare(const TraceViewer& variant) const;
+
+    /// A caller branch of the scan over this viewer's events, as a plan that
+    /// yields no columns; `attach` runs once per collect of the plan. It
+    /// shares a batch's scan only when this viewer has no filter, since the
+    /// branch sees every event that scan reads.
+    dataframe::LazyFrame branch(SessionBranch attach) const;
+    /// branch() for a branch whose result is a Deferred<T>, such as
+    /// plugins::Plugins::attach. The result is read from a slot the plan owns,
+    /// so collect one such result at a time.
+    template <class T>
+    dataframe::LazyResult<T> branch(
+        std::function<Deferred<T>(ViewSession&)> attach) const {
+        auto slot = std::make_shared<T>();
+        dataframe::LazyFrame plan =
+            branch([attach = std::move(attach), slot](ViewSession& s) {
+                Deferred<T> h = attach(s);
+                return std::function<void()>(
+                    [h, slot]() mutable { *slot = std::move(h.get()); });
+            });
+        return {{std::move(plan)}, [slot](std::vector<dataframe::DataFrame>) {
+                    return dataframe::detail::ready(std::move(*slot));
+                }};
+    }
+
+    /// The distributed rollup terminals of AggregatedView, over this viewer's
+    /// aggregation. The bytes behind `partials` must outlive the task.
+    coro::CoroTask<void> materialize_partials(
+        const std::vector<std::string_view>& partials) const;
+    std::optional<dataframe::DataFrame> reconstruct_if_cached() const;
+
+    /// Materialized-view bookkeeping over this viewer's events (see View).
+    std::vector<std::string> mv_source() const;
+    std::string materialize_dir() const;
+    void register_materialized(const std::string& dir) const;
+
+    /// The plan: the trace scan as a source plus the ops above it.
+    const dataframe::LazyFrame& lazy() const { return lf_; }
+    TraceViewer with_lazy(dataframe::LazyFrame lf) const;
+    /// The scan the trace builders have shaped, before any LazyFrame op.
+    const View& view() const { return view_; }
+
+   private:
+    enum class Need : std::uint8_t { Any, Events, Aggregate };
+
+    TraceViewer(View view, dataframe::LazyFrame lf);
+    TraceViewer reshape(const char* builder,
+                        const std::function<View(const View&)>& step) const;
+    /// The view with every op of this viewer absorbed into it, for the
+    /// terminal `method`; throws naming the first op that stays behind.
+    View absorbed(const char* method, Need need) const;
+
+    View view_;
+    dataframe::LazyFrame lf_;
+};
 
 }  // namespace dftracer::utils::trace::views
 

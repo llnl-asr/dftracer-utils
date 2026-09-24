@@ -133,7 +133,8 @@ See also
   ``distributed_index()`` (Python, ``dftracer.utils.dask``) for building shards
   across a real dask cluster instead of by hand.
 - :doc:`../guides/scale/distributed-aggregation` - the ``aggregate_partial`` /
-  ``merge_partials_to_table`` fan-out/fan-in pattern ``ShardedView`` runs
+  ``merge_partials`` (C++ ``merge_partials_to_table``) fan-out/fan-in pattern
+  ``ShardedView`` runs
   in-process, spelled out for a caller-owned transport (MPI, dask, ...).
 - :doc:`../guides/scale/mpi` - the one distributed CLI binary in the tree,
   for the cluster case this tutorial's two-shard example stands in for.

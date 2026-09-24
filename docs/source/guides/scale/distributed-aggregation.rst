@@ -29,8 +29,8 @@ The pattern
 3. The partials travel to a coordinator (MPI, dask, a shared file, ...).
 4. The coordinator combines them with **one** of:
 
-   - ``merge_partials_to_table(partials)`` - a materialized-collect result, as
-     a ``DataFrame``.
+   - ``merge_partials_to_table(partials)`` (Python: ``merge_partials``) - a
+     materialized-collect result, as a ``DataFrame``.
    - ``merge_counter_partials(partials, sink)`` - the streamed ``ph="C"``
      counter form, written to an ``ExportSink`` (C++-only; no Python binding).
 
@@ -81,7 +81,9 @@ No rank rescans the trace files to produce the combined result.
    .. tab-item:: Python
 
       ``merge_counter_partials`` has no Python binding; use
-      ``merge_partials_to_table`` for the materialized form.
+      ``merge_partials`` for the materialized form. ``aggregate_partial()`` is
+      lazy (a ``LazyResult``); ``collect()`` runs the scan and returns the
+      bytes.
 
       .. code-block:: python
 
@@ -89,12 +91,12 @@ No rank rescans the trace files to produce the combined result.
 
          # Each rank: aggregate its own file slice, get back combinable bytes.
          shard = TraceViewer(my_rank_files).group_by("name").agg("count", "sum:dur")
-         partial = shard.aggregate_partial()   # bytes
+         partial = shard.aggregate_partial().collect()   # bytes
          # send `partial` to the coordinator over your transport
 
          # Coordinator, once every rank's partial has arrived:
          merger = TraceViewer(my_rank_files).group_by("name").agg("count", "sum:dur")
-         table = merger.merge_partials_to_table(all_partials)   # DataFrame
+         table = merger.merge_partials(all_partials)   # DataFrame
 
 The merging view's ``group_by``/``agg`` plan must match the shape the partials
 were produced with; a mismatched plan produces a meaningless (or empty)
@@ -110,7 +112,7 @@ When the aggregation should also be **persisted** (so a later matching
 instead of a plain in-memory merge:
 
 - ``materialize_partials(partials)`` (C++: protected on ``View``, public on
-  ``AggregatedView``; Python: ``AggregatedTraceViewer.materialize_partials``) -
+  ``AggregatedView``; Python: ``TraceViewer.materialize_partials``) -
   reduces the gathered partials and writes the rollup, without any rank
   rescanning.
 - ``reconstruct_if_cached()`` - reads a subsuming rollup back as a native

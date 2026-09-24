@@ -1080,9 +1080,54 @@ included), ``scan`` opens a cursor honoring a ``dftu_scan_request``
 applied it (``DFTU_PUSHED_NO`` / ``INEXACT`` / ``EXACT``; the host re-applies
 anything short of exact), and the cursor's ``next`` pulls one frame at a
 time, synchronously or as a task. ``dftu_lazyframe_from_provider(name)``
-then scans it like a file, from any language.
+then scans it like a file, from any language. An optional ``apply`` callback lets the source
+absorb whole ops at plan time (filter, projection, aggregation, sort,
+top-N, limit, tail, join); see the planning hooks in
+:doc:`guides/data/lazyframe`.
 
-**A plan node** (``dftu_node_register``, in the dataframe ABI). A
+In C++, write the source as a class and let ``plugins/plugin/source.h``
+build the vtables. The class names its columns and scans; each planning hook
+is optional, and only the ones it defines are wired up. Requests arrive as
+views (``ExprView`` with ``as_compare`` / ``as_logical`` / ``as_not`` /
+``as_str_pred`` / ``as_is_in``, ``SortView``, ``AggregationView``,
+``JoinView<S>`` with the other side as ``S``), and results are owned C++
+values (``OwnedFrame``, ``Applied<S>``). Exceptions never cross the ABI: a
+throwing cursor surfaces as a scan error and a throwing hook as no change.
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/plugins/plugin.h>
+   namespace pl = dftracer::utils::plugins;
+
+   class Range {                        // rows id = lo..hi-1
+    public:
+       std::vector<std::string> names() const { return {"id"}; }
+       struct Cursor {
+           pl::OwnedFrame frame;
+           std::optional<pl::OwnedFrame> next(std::int64_t) {
+               if (!frame) return std::nullopt;
+               return std::move(frame);
+           }
+       };
+       pl::ScanResult<Cursor> scan(const pl::ScanView&) const;
+       // `id > k` becomes a narrower range; anything else stays with the engine.
+       std::optional<pl::Applied<Range>> apply_filter(pl::ExprView p) const {
+           auto c = p.as_compare();
+           if (!c || c->column != 0 || c->op != DFTU_CMP_GT) return std::nullopt;
+           return pl::Applied<Range>{
+               std::make_unique<Range>(c->rhs.value.i + 1, hi_)};
+       }
+       // ...
+   };
+
+   return pl::plugin(h, config)
+       .source<Range>("me.range", std::make_unique<Range>(0, 1000))
+       .build();
+
+**A plan node** (``DFTU_SVC_NODES``; ``dftu_node_register`` in the
+dataframe ABI for a non-plugin caller). Register it from the factory through
+the service: the host gates the name to ``<plugin>.<name>`` and unregisters
+the node before the plugin unloads, so no plan can reach code that is gone. A
 ``dftu_node_vt`` is a cursor that takes an input cursor and returns an
 output cursor: a streaming op (one morsel in, one out, state kept between
 morsels: sessionize, coalesce, a GPU kernel) or a breaker (drain the input
@@ -1094,6 +1139,30 @@ plan like any built-in step. The cursor's optional slots let it take part in
 the plan's machinery: ``narrow`` forwards a join's key set to its input,
 ``bytes`` / ``reclaim`` hold it to the memory budget
 (:doc:`guides/runtime/memory-budget`).
+
+In C++, ``plugins/plugin/node.h`` does the same for a node class:
+``output_schema(SchemaView in, OpArgs args, SchemaBuilder& out)`` and
+``open(InputCursor in, OpArgs args)`` returning a cursor like a source's.
+``InputCursor`` owns the upstream: ``next()`` pulls it (running an upstream
+task to completion when it has to) and it is destroyed exactly once, by the
+node when ``open`` succeeds and by the host when it fails.
+
+.. code-block:: cpp
+
+   struct Double {
+       void output_schema(const pl::SchemaView& in, const pl::OpArgs&,
+                          pl::SchemaBuilder& out) const { in.copy_all(out); }
+       struct Cursor {
+           pl::InputCursor in;
+           std::optional<pl::OwnedFrame> next(std::int64_t rows);  // pull, transform
+       };
+       std::unique_ptr<Cursor> open(pl::InputCursor in, const pl::OpArgs&) const {
+           return std::make_unique<Cursor>(Cursor{std::move(in)});
+       }
+   };
+
+   return pl::plugin(h, config).node<Double>("me.double",
+                                             std::make_unique<Double>()).build();
 
 **Plans inside a plugin.** ``OwnedLazyFrame`` (``result_registry.h``) is the
 fluent facade over ``dftu.lazy.*``: build a plan from a frame
@@ -1163,8 +1232,11 @@ that covers it:
        ``PluginBuilder::op``, ``OwnedLazyFrame``
      - ``DFTU_SVC_OPS``
      - `14. Extending the engine: ops, sources, plan nodes`_
-   * - none (raw ``get_service``)
+   * - ``PluginBuilder::source<S>``
      - ``DFTU_SVC_PROVIDERS``
+     - `14. Extending the engine: ops, sources, plan nodes`_
+   * - ``PluginBuilder::node<N>``
+     - ``DFTU_SVC_NODES``
      - `14. Extending the engine: ops, sources, plan nodes`_
    * - ``Host::emit_result_frame`` / ``emit_result_lazyframe``
      - ``DFTU_SVC_RESULT``

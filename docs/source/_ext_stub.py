@@ -116,193 +116,6 @@ def install_extension_stub() -> None:
         def to_dict(self) -> dict[str, object]:
             return {}
 
-    class TraceViewer(_BaseNative):
-        """Arrow-first composable view over a trace (lazy; builder ops return a
-        new TraceViewer, terminals execute once)."""
-
-        def __init__(
-            self,
-            files: object,
-            index_path: str | None = None,
-            runtime: "Runtime | None" = None,
-        ) -> None:
-            return None
-
-        def filter(self, dsl: str) -> "TraceViewer":
-            """Keep events matching the query DSL."""
-            return self
-
-        def query(self, dsl: str) -> "TraceViewer":
-            """Alias for :meth:`filter`."""
-            return self
-
-        def phase(self, phase: str) -> "TraceViewer":
-            """Restrict to a record family: 'events', 'counters', or 'any'."""
-            return self
-
-        def group_by(self, *keys: str) -> "AggregatedTraceViewer":
-            """Group by one or more keys (promotes to AggregatedTraceViewer)."""
-            return AggregatedTraceViewer(None)
-
-        def sort_by(self, name: str, descending: bool = False) -> "TraceViewer":
-            """Sort result rows by a column."""
-            return self
-
-        def topk(self, name: str, k: int, largest: bool = True) -> "TraceViewer":
-            """Keep the top/bottom ``k`` rows by a column."""
-            return self
-
-        def join(self, other: "TraceViewer", how: str = "inner") -> object:
-            """Join against another view, returning a DataFrame."""
-            return None
-
-        def agg(self, *specs: str) -> "AggregatedTraceViewer":
-            """Aggregate with ``op:field`` specs (e.g. 'count', 'sum:dur')."""
-            return AggregatedTraceViewer(None)
-
-        def agg_numeric_args(self, *reductions: str) -> "AggregatedTraceViewer":
-            """Aggregate every numeric arg field without naming them. No args
-            emits one bare-named mean column per arg; op names (sum/min/max/
-            mean/var/std/skew/kurt, or pNN like ``p90``) emit one ``<op>_<arg>``
-            column each."""
-            return AggregatedTraceViewer(None)
-
-        def time_bucket(self, interval_us: int) -> "TraceViewer":
-            """Bucket ``ts`` into fixed ``interval_us`` windows."""
-            return self
-
-        def time_range(self, begin: float, end: float) -> "TraceViewer":
-            """Keep events whose timestamp falls in ``[begin, end)``."""
-            return self
-
-        def time_unit(self, unit: str) -> "TraceViewer":
-            """Interpret the trace's native time unit."""
-            return self
-
-        def time_scale(self, ns_ratio: float) -> "TraceViewer":
-            """Scale timestamps by a nanoseconds-per-unit ratio."""
-            return self
-
-        def select(self, *cols: str) -> "TraceViewer":
-            """Project a subset of columns."""
-            return self
-
-        def limit(self, n: int) -> "TraceViewer":
-            """Keep at most ``n`` result rows."""
-            return self
-
-        def offset(self, n: int) -> "TraceViewer":
-            """Skip the first ``n`` result rows."""
-            return self
-
-        def memory_budget(self, nbytes: int) -> "TraceViewer":
-            """Bound in-memory aggregation state, spilling past the budget."""
-            return self
-
-        def auto_spill(self) -> "TraceViewer":
-            """Derive the aggregation memory budget from available memory."""
-            return self
-
-        def columns(self) -> list[str]:
-            """List the columns discoverable from the index (base axis fields,
-            harvested scalar leaves incl. nested args as dotted paths, and
-            resolved.* aliases). No trace scan."""
-            return []
-
-        def schema(self) -> dict[str, str]:
-            """Map each column to its type ('int64'/'float64'/'string'). Same
-            discovery as :meth:`columns`; no trace scan."""
-            return {}
-
-        def collect(self) -> object:
-            """Run the query and return a pyarrow Table."""
-            return None
-
-        def collect_typed(
-            self,
-            shard_begin: int = 0,
-            shard_end: int = 0,
-            progress: object = None,
-        ) -> object:
-            """One-pass read of the aggregation index's three record families:
-            ``{"regular", "aggregated", "counters"}`` as pyarrow Tables."""
-            return None
-
-        def call_tree(
-            self,
-            partition: object = ("pid", "tid"),
-            ts: str = "ts",
-            dur: str = "dur",
-            name: str = "name",
-        ) -> object:
-            """Scan the view and return the events plus containment
-            ``level``/``parent_id`` per lane."""
-            return None
-
-        def flamegraph(
-            self,
-            partition: object = ("pid", "tid"),
-            ts: str = "ts",
-            dur: str = "dur",
-            name: str = "name",
-            group: object = (),
-        ) -> object:
-            """Scan the view and fold events by name path into the flamegraph
-            node DataFrame. ``group`` roots the tree by an arbitrary key."""
-            return None
-
-        def containment(
-            self,
-            partition: object = ("pid", "tid"),
-            ts: str = "ts",
-            dur: str = "dur",
-            name: str = "name",
-            group: object = (),
-        ) -> object:
-            """Both containment frames (call_tree, flamegraph) from one scan."""
-            return None
-
-        def flamegraph_partial(
-            self,
-            partition: object = ("pid", "tid"),
-            ts: str = "ts",
-            dur: str = "dur",
-            name: str = "name",
-            group: object = (),
-        ) -> bytes:
-            """Fold this view's files into a serialized flamegraph arena
-            partial, for a distributed merge."""
-            return b""
-
-        def stream(self, batch_size: int = 0, **kwargs: object) -> object:
-            """Stream Arrow batches for out-of-core reads."""
-            return None
-
-        def statistics(self) -> dict:
-            """Return a summary-statistics dict for the current view."""
-            return {}
-
-        def export_trace(self, path: str, **kwargs: object) -> None:
-            """Write a filtered trace, optionally re-compressed and re-indexed."""
-            return None
-
-        def materialize(self, **kwargs: object) -> None:
-            """Persist this query as a materialized view for later reuse."""
-            return None
-
-        def mv_source(self) -> list:
-            """Materialized-view file(s) that would serve this query, else []."""
-            return []
-
-    class AggregatedTraceViewer(TraceViewer):
-        """A TraceViewer with a group_by/agg set. Adds the materialized-view
-        cache terminals and a cache-capable collect(); builder ops preserve this
-        type."""
-
-        def collect(self, cache: bool = True) -> object:
-            """Run the aggregation and return a pyarrow Table (cached by default)."""
-            return None
-
     class IndexerCheckpoint(_BaseNative):
         """Information about a checkpoint in the index."""
 
@@ -842,8 +655,7 @@ def install_extension_stub() -> None:
             return None
 
     def merge_flamegraph_partials(partials: list[bytes]) -> object:
-        """Merge serialized flamegraph arena partials (from
-        ``TraceViewer.flamegraph_partial``) into the final node DataFrame."""
+        """Merge serialized flamegraph partials into the node DataFrame."""
         return None
 
     def get_default_runtime() -> Runtime:
@@ -1042,7 +854,6 @@ def install_extension_stub() -> None:
         "_ArrowBatchStream",
         "_DataFrame",
         "_Series",
-        "AggregatedTraceViewer",
         "CheckpointIndexer",
         "DFTUtilsAggregationError",
         "DFTUtilsCompressionError",
@@ -1062,7 +873,6 @@ def install_extension_stub() -> None:
         "Runtime",
         "SstArtifactRegistry",
         "TaskHandle",
-        "TraceViewer",
     ]
     _function_symbols = [
         "_dataframe_from_arrow",

@@ -87,23 +87,25 @@ knobs.
 :doc:`runtime/memory-budget`. If the advice says the peak does not fit on one
 node, spread it with the MPI tools (:doc:`scale/mpi`).
 
-A non-pushable predicate is rejected by ``filter()`` / ``.query()``
+A non-pushable predicate is not pushed to the index
 -----------------------------------------------------------------------------
 
 **Symptom**: ``viewer.filter((F.a + F.b) > 3)`` (or any predicate that mixes
-arithmetic or the numeric primitives into the comparison) raises a ``TypeError``
-saying it is *not an index-pushable predicate*.
+arithmetic or the numeric primitives into the comparison) returns the right
+rows but reads every chunk, with no index pruning.
 
-**Cause**: ``filter()`` / ``.query()`` push a predicate down to the index, and
-only a pure predicate over field names is pushable. An expression with a value
-op inside the comparison (``F.a + F.b``, ``F.dur.ilog2()``) has no index form,
-so it is refused rather than silently evaluated in memory.
+**Cause**: ``filter()`` / ``.query()`` push a predicate down to the index only
+when it is a pure predicate over field names and nothing but filters came
+before it. An expression with a value op inside the comparison (``F.a + F.b``,
+``F.dur.ilog2()``) has no index form, so the ``TraceViewer`` applies it as a
+plan filter over the scanned rows instead.
 
-**Fix**: compute the derived value in memory instead - collect the frame and
-apply the expression (``df.apply((F.a + F.b))``) or filter the materialized
-frame with :func:`~dftracer.utils.where`. Plain field predicates
-(``F.dur > 1000``, ``F.cat.is_in([...])``, ``F.name.like("%read%")``,
-``resolved(...)``) push down normally. See :doc:`core/query-dsl`.
+**Fix**: split the predicate so its pushable part is a plain field predicate
+and filter on that first (``viewer.filter(F.dur > 1000).filter((F.a + F.b) >
+3)``); the plain part prunes chunks and the rest filters the survivors. Plain
+field predicates (``F.dur > 1000``, ``F.cat.is_in([...])``,
+``F.name.like("%read%")``, ``resolved(...)``) push down normally. See
+:doc:`core/query-dsl`.
 
 Query predicate parses but does not filter what you expect
 -----------------------------------------------------------------

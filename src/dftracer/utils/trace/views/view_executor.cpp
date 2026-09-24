@@ -18,6 +18,7 @@
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/trace/views/pipeline.h>
 #include <dftracer/utils/trace/views/rollup_store.h>
+#include <dftracer/utils/trace/views/stream_row_fold.h>
 #include <dftracer/utils/trace/views/typed_collect_fold.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_agg_tier.h>
@@ -876,10 +877,18 @@ struct FoldFactory {
     std::function<void()> finalize;
 };
 
+struct StreamBranch {
+    std::shared_ptr<const ViewPlan> plan;
+    std::shared_ptr<coro::Channel<dataframe::Morsel>> channel;
+    std::shared_ptr<coro::CoroSemaphore> budget;
+    std::shared_ptr<const std::atomic<bool>> dropped;
+};
+
 struct ViewSessionState {
     std::shared_ptr<const ViewPlan> plan;
     std::vector<BranchHooks> branches;
     std::vector<FoldFactory> fold_factories;
+    std::vector<StreamBranch> stream_branches;
     /// A narrowing an attached fold offered for the shared scan, applied by
     /// execute() only when no other branch exists. The scan feeds every
     /// branch, so narrowing it for one would starve the rest; whether that
@@ -900,6 +909,15 @@ void propose_base_prune(ViewSessionState& state, query::Query q) {
 
 void add_branch(ViewSessionState& state, BranchHooks hooks) {
     state.branches.push_back(std::move(hooks));
+}
+
+void add_stream_branch(
+    ViewSessionState& state, std::shared_ptr<const ViewPlan> plan,
+    std::shared_ptr<coro::Channel<dataframe::Morsel>> channel,
+    std::shared_ptr<coro::CoroSemaphore> budget,
+    std::shared_ptr<const std::atomic<bool>> dropped) {
+    state.stream_branches.push_back({std::move(plan), std::move(channel),
+                                     std::move(budget), std::move(dropped)});
 }
 
 void add_fold_factory(
@@ -1104,7 +1122,9 @@ coro::CoroTask<ExportStats> run_session(
         scan_branches.push_back({&br, nullptr, false});
     }
     const bool has_factories = !state->fold_factories.empty();
-    if (scan_branches.empty() && !has_factories) co_return ExportStats{};
+    const bool has_streams = !state->stream_branches.empty();
+    if (scan_branches.empty() && !has_factories && !has_streams)
+        co_return ExportStats{};
 
     std::vector<const ScanBranch*> agg_b, raw_b;
     for (const auto& sb : scan_branches)
@@ -1114,7 +1134,7 @@ coro::CoroTask<ExportStats> run_session(
     // rollup/tier fast paths already missed above, so this is the scan). A fold
     // factory (plugin) rides the shared fused scan and a partial wants the raw
     // map, so both disqualify it.
-    if (agg_b.size() == 1 && raw_b.empty() && !has_factories &&
+    if (agg_b.size() == 1 && raw_b.empty() && !has_factories && !has_streams &&
         !agg_b[0]->br->agg->partial_out) {
         auto agg_state = co_await build_engine_agg_state(*agg_b[0]->agg_plan);
         *agg_b[0]->br->agg->out = apply_agg_post_ops(
@@ -1154,7 +1174,21 @@ coro::CoroTask<ExportStats> run_session(
         avdef.include_metadata = true;
         avdef.emit_all_metadata = true;
     }
-    dftracer::utils::StringIntern intern;
+    // Streamed morsels hold the intern their ids resolve through, and outlive
+    // this scan in their consumers' hands.
+    auto intern_owner = std::make_shared<dftracer::utils::StringIntern>();
+    dftracer::utils::StringIntern& intern = *intern_owner;
+
+    std::vector<std::unique_ptr<StreamRowFold>> streams;
+    streams.reserve(state->stream_branches.size());
+    for (const StreamBranch& sb : state->stream_branches) {
+        const bool keep_metadata = sb.plan->phase == Phase::Metadata;
+        if (keep_metadata) avdef.include_metadata = true;
+        streams.push_back(std::make_unique<StreamRowFold>(
+            sb.channel, sb.budget, intern_owner, sb.plan->select,
+            sb.plan->time_scale, nullptr, keep_metadata, false, sb.plan,
+            sb.dropped));
+    }
 
     std::vector<std::unique_ptr<EngineAggFold>> aggs;
     aggs.reserve(agg_b.size());
@@ -1187,12 +1221,13 @@ coro::CoroTask<ExportStats> run_session(
     for (auto& a : aggs) fold_ptrs.push_back(a.get());
     if (raw_fold) fold_ptrs.push_back(raw_fold.get());
     for (auto& f : factory_folds) fold_ptrs.push_back(f.get());
+    for (auto& f : streams) fold_ptrs.push_back(f.get());
 
     // A scan cap (viz-style early-out) applies only to a pure raw session; an
     // aggregation or plugin must see every event, and its limit is
     // post-aggregation.
     const std::uint64_t scan_cap =
-        (agg_b.empty() && !has_factories) ? plan.limit : 0;
+        (agg_b.empty() && !has_factories && !has_streams) ? plan.limit : 0;
     ExportStats stats =
         co_await execute(lower_fused_folds(scan_plan, avdef, fold_ptrs), intern,
                          nullptr, scan_cap);

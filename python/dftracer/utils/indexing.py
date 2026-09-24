@@ -569,7 +569,7 @@ def lazy_assign_rows(lf: "LazyFrame", rows: Rows, columns: List[str], value: obj
         raise TypeError(
             f"a lazy assignment takes a number or an expression, not {type(value).__name__}"
         )
-    schema = lf.schema()
+    schema = lf.columns
     plan, mask = _lazy_mask_expr(lf, rows)
     fill: Expr = value if isinstance(value, Expr) else lit(value)
     for name in columns:
@@ -581,7 +581,7 @@ def lazy_assign_rows(lf: "LazyFrame", rows: Rows, columns: List[str], value: obj
         plan = plan.with_column(
             name, fill if mask is None else when(mask).then(fill).otherwise(col(name))
         )
-    if plan.schema() != schema:
+    if plan.columns != schema:
         plan = plan.select(*schema)
     lf._native = plan._native
 
@@ -628,12 +628,12 @@ class LazyILoc:
         out = _lazy_rows(self._lf, lazy_rows_by_position(rk))
         if ck is None:
             return out
-        cols, _ = columns_by_position(self._lf.schema(), ck)
+        cols, _ = columns_by_position(self._lf.columns, ck)
         return out.select(*cols)
 
     def __setitem__(self, key: object, value: object) -> None:
         rk, ck = _split(key)
-        cols, _ = columns_by_position(self._lf.schema(), ck)
+        cols, _ = columns_by_position(self._lf.columns, ck)
         lazy_assign_rows(self._lf, lazy_rows_by_position(rk), cols, value)
 
 
@@ -645,13 +645,13 @@ class LazyLoc:
 
     def _rows(self, key: object) -> Tuple[Rows, object]:
         lf = self._lf
-        rk, ck = _split(key, len(lf._index_names()), lf.schema())
+        rk, ck = _split(key, len(lf._index_names()), lf.columns)
         return lazy_rows_by_label(lf, rk), ck
 
     def __getitem__(self, key: object) -> "LazyFrame":
         lf = self._lf
         rows, ck = self._rows(key)
-        cols, _ = columns_by_name(lf.schema(), ck)
+        cols, _ = columns_by_name(lf.columns, ck)
         # With no index column the labels are row positions: a hidden row
         # index feeds the mask and is projected away again.
         needs_row = rows.kind == "mask" and _reads_row(rows.mask)
@@ -661,7 +661,7 @@ class LazyLoc:
 
     def __setitem__(self, key: object, value: object) -> None:
         rows, ck = self._rows(key)
-        cols, _ = columns_by_name(self._lf.schema(), ck, new_ok=True)
+        cols, _ = columns_by_name(self._lf.columns, ck, new_ok=True)
         lazy_assign_rows(self._lf, rows, cols, value)
 
 

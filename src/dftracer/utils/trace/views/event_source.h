@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/common/string_intern.h>
 #include <dftracer/utils/core/common/to_chars.h>
 #include <dftracer/utils/dataframe/field_stat.h>
+#include <dftracer/utils/query/query.h>
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <simdjson.h>
@@ -371,6 +372,25 @@ class PodSource {
     const FoldEvent& ev_;
     const dftracer::utils::StringIntern& intern_;
 };
+
+/// Evaluate `q` on a parsed event: a field reads as a number when the event
+/// holds one, else as its string, and an absent field is left out (which
+/// evaluates false, as on the JSON path). `scratch` is reused across calls.
+inline bool pod_matches(const query::Query& q, const FoldEvent& ev,
+                        const dftracer::utils::StringIntern& intern,
+                        query::ValueMap& scratch) {
+    PodSource src(ev, intern);
+    scratch.clear();
+    for (std::string_view f : q.fields()) {
+        if (std::optional<double> n = src.number(f)) {
+            scratch[f] = *n;
+        } else {
+            std::string v = src.value(f);
+            if (!v.empty()) scratch[f] = std::move(v);
+        }
+    }
+    return q.evaluate(scratch);
+}
 
 }  // namespace dftracer::utils::trace::views::detail
 

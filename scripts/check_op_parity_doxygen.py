@@ -541,7 +541,16 @@ PY_ALLOWLIST = {
         "to_parquet",
         "to_feather",
     },
-    "LazyFrame": {"collect", "explain", "schema", "reduce_specs", "set_index"},
+    "LazyFrame": {
+        "collect",
+        "columns",
+        "explain",
+        "output_schema",
+        "reduce_specs",
+        "schema",
+        "set_index",
+        "stream",
+    },
 }
 
 # Python methods whose logic is not an engine op. Measured 2026-09-16 at nine

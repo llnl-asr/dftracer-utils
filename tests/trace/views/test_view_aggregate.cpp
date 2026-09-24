@@ -787,6 +787,43 @@ TEST_SUITE("View") {
         CHECK(in_mem == spilled);  // spill + k-way merge == in-memory result
     }
 
+    TEST_CASE("View - a transformed-key rollup serves only that key") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        std::string gz = create_mixed_trace(env, 30, 20);
+        std::string idx = determine_index_path(gz, "");
+        StringSink sink;
+        View::from_file(gz, idx).metadata(false).export_json(sink).get();
+        View base = View::from_file(gz, idx).metadata(false).rollup_root(
+            env.get_dir() + "/rollups");
+
+        GroupKey bucketed = GroupKey::name();
+        bucketed.transform = GroupKey::Transform::Bucket;
+        bucketed.transform_args = {"rea"};
+        auto names_of = [](const dataframe::DataFrame& df) {
+            std::vector<std::string> out;
+            for (std::int64_t i = 0; i < df.num_rows(); ++i)
+                out.push_back(bstr(df, i, "name"));
+            std::sort(out.begin(), out.end());
+            return out;
+        };
+        const auto bucketed_first =
+            names_of(run(base.group_by({bucketed})
+                             .agg({{AggOp::Count, "", "n"}})
+                             .materialize()
+                             .collect_frame()));
+
+        // Same kind and field, no transform: a different key.
+        CHECK(names_of(run(base.group_by({GroupKey::name()})
+                               .agg({{AggOp::Count, "", "n"}})
+                               .collect_frame())) ==
+              std::vector<std::string>{"fwrite", "read"});
+        // The transformed key itself is still served, with the same groups.
+        CHECK(names_of(run(base.group_by({bucketed})
+                               .agg({{AggOp::Count, "", "n"}})
+                               .collect_frame())) == bucketed_first);
+    }
+
     TEST_CASE("View - materialize() persists a rollup a repeat query reads") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());

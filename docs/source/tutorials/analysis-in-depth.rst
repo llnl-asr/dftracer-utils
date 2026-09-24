@@ -59,7 +59,6 @@ by name so the output is stable.
              .agg("count", "sum:dur", "mean:dur")
              .sort_by("name")
              .collect()
-             .collect()
          )
          print(df.to_pandas())
 
@@ -142,7 +141,6 @@ duration is at least 100 microseconds.
              .group_by("name")
              .agg("count", "sum:dur", "mean:dur")
              .sort_by("name")
-             .collect()
              .collect()
          )
          print(df.to_pandas())
@@ -243,7 +241,6 @@ see it match.
              .group_by("name")
              .agg("count", "sum:dur")
              .sort_by("name")
-             .collect()
              .collect()
          )
 

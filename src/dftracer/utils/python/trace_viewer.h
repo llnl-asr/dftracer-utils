@@ -3,24 +3,20 @@
 
 #include <Python.h>
 
-// TraceViewer: the arrow-first Python surface over the C++ View. Builder
-// methods
-// (filter/query/phase/group_by/agg/time_bucket/time_range/select/memory_budget/
-// auto_spill/limit/offset) return a new TraceViewer holding an updated plan;
-// terminals execute once (collect -> pyarrow.Table, stream -> arrow batch
-// iterator, export_*). The plan is carried as a Python-owned config and lowered
-// onto a fresh View in each terminal, so a TraceViewer is cheap to copy.
+namespace dftracer::utils::trace::views {
+class TraceViewer;
+}
 
+// _TraceViewer: the native handle behind the Python TraceViewer, one C++
+// trace::views::TraceViewer. The trace builders return a new handle; lazy()
+// hands its plan to Python as a _LazyFrame, and with_lazy() takes one back
+// after the Python side appended generic ops. Terminals return _LazyFrame
+// plans (or run at once, for the ones with no scan to share).
 typedef struct {
-    PyObject_HEAD PyObject *files;  // list[str] of trace paths
-    PyObject *index_path;           // str or None
-    void *plan_ptr;                 // ViewerPlan*: the accumulated builder ops
-    PyObject *runtime_obj;          // RuntimeObject* or NULL (uses default)
+    PyObject_HEAD dftracer::utils::trace::views::TraceViewer *tv;
 } TraceViewerObject;
 
 extern PyTypeObject TraceViewerType;
-// group_by/agg/agg_numeric_args promote to this; it adds the cache terminals.
-extern PyTypeObject AggregatedTraceViewerType;
 
 namespace dftracer::utils::python {
 

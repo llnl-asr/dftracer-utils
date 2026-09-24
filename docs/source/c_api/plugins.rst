@@ -62,6 +62,12 @@ for a plugin's own mergeable state type (spilled by the host through its
 .. doxygenfile:: dftracer/utils/plugins/abi/providers.h
    :project: dftracer-utils
 
+``dftu.svc.nodes``: register a named plan node that ``dftu_lazyframe_op``
+stacks on a plan; the host unregisters it before the plugin unloads.
+
+.. doxygenfile:: dftracer/utils/plugins/abi/nodes.h
+   :project: dftracer-utils
+
 ``dftu.svc.result``: emit a named result (bytes, an Arrow array, a frame or a
 lazy plan) the caller reads back after the scan.
 

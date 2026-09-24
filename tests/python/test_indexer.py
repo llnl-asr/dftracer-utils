@@ -352,7 +352,6 @@ class TestDirectoryIndexer:
                     .group_by("name")
                     .agg("count")
                     .collect()
-                    .collect()
                 )
                 assert tbl is not None and pa.table(tbl).num_rows > 0
 
@@ -659,7 +658,7 @@ class TestCollectTypedRawFallback:
         return dftu_utils.TraceViewer(files, index_path=directory)
 
     def _agg_total(self, pa, base):
-        t = pa.table(base.group_by("name").agg("count").collect().collect())
+        t = pa.table(base.group_by("name").agg("count").collect())
         return int(pa.compute.sum(t["count"]).as_py()) if t.num_rows else 0
 
     def test_ts_filter_returns_raw_rows(self):
@@ -743,7 +742,6 @@ class TestOccupancyMetrics:
                 .group_by("cat")
                 .agg("busy", "concurrency", "sum:dur")
                 .collect()
-                .collect()
             )
             assert t["sum_dur"][0].as_py() == 1_000_000
             assert t["busy"][0].as_py() == 500_000  # capped at the window
@@ -768,7 +766,6 @@ class TestOccupancyMetrics:
                 .group_by("cat")
                 .agg("busy", "concurrency", "sum:dur")
                 .collect()
-                .collect()
             )
             assert t["sum_dur"][0].as_py() == 1_000_000
             assert t["busy"][0].as_py() == 1_000_000
@@ -792,7 +789,6 @@ class TestOccupancyMetrics:
                 .filter('cat == "c" and ts >= 100000')
                 .group_by("cat")
                 .agg("busy", "count")
-                .collect()
                 .collect()
             )
             assert win["count"][0].as_py() == 1
@@ -821,7 +817,6 @@ class TestOccupancyMetrics:
                 .group_by("cat")
                 .agg("busy", "concurrency", "sum:dur")
                 .collect()
-                .collect()
             )
             assert t["sum_dur"][0].as_py() == 1_000_000
             assert t["busy"][0].as_py() == 500_000  # union across files, OR-merged
@@ -844,7 +839,6 @@ class TestOccupancyMetrics:
                 .group_by("cat")
                 .agg("active", "count")
                 .collect()
-                .collect()
             )
             assert t["count"][0].as_py() == 3
             assert t["active"][0].as_py() == 3  # peak concurrent
@@ -852,7 +846,7 @@ class TestOccupancyMetrics:
     def test_partial_transport_round_trip(self):
         # The distributed wire: each "rank" viewer serializes a partial via
         # aggregate_partial(); the coordinator merges them with
-        # merge_partials_to_table(). Occupancy must survive that serialization
+        # merge_partials(). Occupancy must survive that serialization
         # and OR-merge to the union - if the partial dropped the masks, busy
         # would come back 0.
         pa = pytest.importorskip("pyarrow")
@@ -874,11 +868,11 @@ class TestOccupancyMetrics:
                     .group_by("cat")
                     .agg("busy", "concurrency", "sum:dur")
                 )
-                return v, v.aggregate_partial()
+                return v, v.aggregate_partial().collect()
 
             v0, b0 = partial(p0)
             _, b1 = partial(p1)
-            t = pa.table(v0.merge_partials_to_table([b0, b1]))
+            t = pa.table(v0.merge_partials([b0, b1]))
             assert t["sum_dur"][0].as_py() == 1_000_000
             assert t["busy"][0].as_py() == 500_000  # union survived the wire
             assert abs(t["concurrency"][0].as_py() - 2.0) < 1e-9

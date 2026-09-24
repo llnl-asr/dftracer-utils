@@ -9,10 +9,14 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/op.h>
 
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 namespace dftracer::utils::dataframe {
@@ -169,11 +173,78 @@ struct ScanResult {
     std::vector<Pushed> filters;
 };
 
+class Source;
+
+/// How a source took an op offered by a planning hook (Source::apply_*).
+/// Mirrors dftu_apply_status (dataframe/abi.h).
+enum class ApplyStatus {
+    Exact,    ///< Fully applied; the planner removes the op.
+    Inexact,  ///< Rows narrowed only; the planner keeps the op above.
+};
+
+/// A planning hook's accepted result: a new immutable source that carries the
+/// op. Its schema() is the output after the op.
+struct SourceApplication {
+    std::shared_ptr<const Source> source;
+    ApplyStatus status = ApplyStatus::Exact;
+};
+
+/// One output column of a projection offered to Source::apply_projection.
+/// `expr` is positional against the offering source's schema().
+struct NamedExpr {
+    std::string name;
+    Expr expr;
+};
+
+/// One aggregate of an AggregateSpec. `input` and `by` are positional against
+/// the offering source's schema(). `input` is unset for count; `by` is set
+/// only for the ops that read a second column (agg_uses_by_col). `param` is
+/// the quantile or k where the op takes one.
+struct AggregateExpr {
+    Agg op = Agg::Count;
+    Expr input;
+    Expr by;
+    double param = 0.0;
+    std::string out;
+};
+
+/// A group-by offered to Source::apply_aggregation. The output is one column
+/// per key, named by its `name`, in order, then one column per agg named by
+/// its `out`.
+struct AggregateSpec {
+    std::vector<NamedExpr> keys;
+    std::vector<AggregateExpr> aggs;
+};
+
+/// A lexicographic ordering: `by[i]` sorts descending when `descending[i]`.
+struct SortSpec {
+    std::vector<std::string> by;
+    std::vector<bool> descending;
+};
+
+/// A join offered to Source::apply_join. `other` is the right side with every
+/// op it had already absorbed, so nothing remains to run above it. The output
+/// is what LazyFrame::join makes for the same arguments.
+struct JoinSpec {
+    std::shared_ptr<const Source> other;
+    std::vector<std::string> left_on;
+    std::vector<std::string> right_on;
+    JoinHow how = JoinHow::Inner;
+    std::string suffix;
+};
+
 /// A pushdown-aware data source for a lazy query. Immutable: schema() reports
 /// the columns without scanning and scan() hands out a fresh Cursor honoring
 /// the pushed projection/filters, so one Source can back many collect()s.
 /// Implement these two to plug any producer (a file, another engine, a trace
 /// scan) into LazyFrame.
+///
+/// The apply_* planning hooks let a source absorb the op directly above it at
+/// plan time, before scan(). Each returns std::nullopt for "unsupported or no
+/// change", which is the default. An accepted op must yield a new source
+/// handle, and offering the same op to that handle again must return
+/// std::nullopt. A schema-changing op (projection, aggregation, join) may only
+/// be accepted as Exact.
 class Source {
    public:
     virtual ~Source() = default;
@@ -188,6 +259,79 @@ class Source {
     /// (rows produced only by streaming). collect() runs a resident source
     /// whole-column, matching the eager path instead of paying the morsel tax.
     virtual const DataFrame* as_frame() const { return nullptr; }
+
+    virtual std::optional<SourceApplication> apply_filter(
+        const Expr& predicate) const {
+        (void)predicate;
+        return std::nullopt;
+    }
+    virtual std::optional<SourceApplication> apply_projection(
+        const std::vector<NamedExpr>& exprs) const {
+        (void)exprs;
+        return std::nullopt;
+    }
+    virtual std::optional<SourceApplication> apply_aggregation(
+        const AggregateSpec& spec) const {
+        (void)spec;
+        return std::nullopt;
+    }
+    virtual std::optional<SourceApplication> apply_sort(
+        const SortSpec& spec) const {
+        (void)spec;
+        return std::nullopt;
+    }
+    /// The first `k` rows of apply_sort(spec). Exact means no more than `k`
+    /// rows come back, already in order.
+    virtual std::optional<SourceApplication> apply_topn(const SortSpec& spec,
+                                                        std::int64_t k) const {
+        (void)spec;
+        (void)k;
+        return std::nullopt;
+    }
+    /// Rows [offset, offset + n) in source order.
+    virtual std::optional<SourceApplication> apply_limit(std::int64_t offset,
+                                                         std::int64_t n) const {
+        (void)offset;
+        (void)n;
+        return std::nullopt;
+    }
+    /// The last `n` rows in source order.
+    virtual std::optional<SourceApplication> apply_tail(std::int64_t n) const {
+        (void)n;
+        return std::nullopt;
+    }
+    virtual std::optional<SourceApplication> apply_join(
+        const JoinSpec& spec) const {
+        (void)spec;
+        return std::nullopt;
+    }
+
+    /// Sources with equal non-empty keys can run as one batch through
+    /// collect_batch(), so collect_all() reads their data once. The default,
+    /// std::nullopt, never batches.
+    virtual std::optional<std::string> batch_key() const {
+        return std::nullopt;
+    }
+    /// One frame per member, in order, each what collecting that member alone
+    /// would return. Called on members.front(); every member shares its
+    /// batch_key(). The default throws std::logic_error: a source that returns
+    /// a batch_key() must override it.
+    virtual coro::CoroTask<std::vector<DataFrame>> collect_batch(
+        std::vector<std::shared_ptr<const Source>> members) const;
+    /// One cursor per member, in order, over one shared read that runs in the
+    /// background, each yielding what scanning that member alone would. Each
+    /// cursor's buffer holds at most `memory_budget` bytes and throttles the
+    /// shared read, so the caller must drain every cursor concurrently.
+    /// Called on members.front() for members sharing its batch_key();
+    /// std::nullopt (the default) means the source only batches through
+    /// collect_batch().
+    virtual std::optional<std::vector<std::unique_ptr<Cursor>>> open_batch(
+        std::vector<std::shared_ptr<const Source>> members,
+        std::uint64_t memory_budget) const {
+        (void)members;
+        (void)memory_budget;
+        return std::nullopt;
+    }
 
     /// Convenience: the schema's column names. Non-virtual; a caller that only
     /// needs names reads this instead of building a full scan.
@@ -217,6 +361,9 @@ class InMemorySource : public Source {
 /// refers to the i-th column of the frame at that point.
 class LazyOp;
 class LazyGroupBy;
+namespace detail {
+struct PlanAccess;
+}
 
 class LazyFrame {
    public:
@@ -463,6 +610,7 @@ class LazyFrame {
         std::int64_t morsel_rows = 0) const;
 
    private:
+    friend struct detail::PlanAccess;
     LazyFrame(std::shared_ptr<const Source> source,
               std::vector<std::shared_ptr<const LazyOp>> ops,
               std::uint64_t memory_budget = 0)
@@ -576,6 +724,102 @@ class LazyGroupBy {
 
 /// Free-function form of DataFrame::lazy(), for `lazy(df)` call sites.
 LazyFrame lazy(DataFrame frame);
+
+/// Collect every plan, one DataFrame per plan in input order. After each plan
+/// is optimized, plans whose sources share a Source::batch_key() read their
+/// data in one Source::collect_batch() call; the rest collect as collect()
+/// would.
+coro::CoroTask<std::vector<DataFrame>> collect_all(
+    std::vector<LazyFrame> plans);
+
+/// A lazy result that is not one frame: the plans it reads, collected
+/// together, and the step that turns their frames into a `T`. A source-specific
+/// terminal (a trace flamegraph partial, a sink's stats) is one, and
+/// collect_all() batches its plans with every other root's.
+template <class T>
+class LazyResult {
+   public:
+    using value_type = T;
+    using Finish = std::function<coro::CoroTask<T>(std::vector<DataFrame>)>;
+
+    LazyResult(std::vector<LazyFrame> plans, Finish finish)
+        : plans_(std::move(plans)), finish_(std::move(finish)) {}
+
+    const std::vector<LazyFrame>& plans() const { return plans_; }
+    const Finish& finish() const { return finish_; }
+
+    coro::CoroTask<T> collect() const { return run(plans_, finish_); }
+
+   private:
+    static coro::CoroTask<T> run(std::vector<LazyFrame> plans, Finish finish) {
+        std::vector<DataFrame> frames;
+        if (!plans.empty()) frames = co_await collect_all(std::move(plans));
+        co_return co_await finish(std::move(frames));
+    }
+
+    std::vector<LazyFrame> plans_;
+    Finish finish_;
+};
+
+namespace detail {
+
+template <class T>
+coro::CoroTask<T> ready(T value) {
+    co_return value;
+}
+
+inline LazyResult<DataFrame> as_result(LazyFrame plan) {
+    return {{std::move(plan)}, [](std::vector<DataFrame> frames) {
+                return ready(std::move(frames.front()));
+            }};
+}
+
+template <class T>
+LazyResult<T> as_result(LazyResult<T> result) {
+    return result;
+}
+
+template <class R>
+using result_of_root =
+    typename decltype(as_result(std::declval<R>()))::value_type;
+
+template <std::size_t I, class Results, class Out>
+coro::CoroTask<void> finish_roots(Results& results,
+                                  std::vector<DataFrame>& frames,
+                                  std::size_t at, Out& out) {
+    if constexpr (I < std::tuple_size_v<Results>) {
+        auto& r = std::get<I>(results);
+        const std::size_t n = r.plans().size();
+        std::vector<DataFrame> mine(
+            std::make_move_iterator(frames.begin() + at),
+            std::make_move_iterator(frames.begin() + at + n));
+        std::get<I>(out) = co_await r.finish()(std::move(mine));
+        co_await finish_roots<I + 1>(results, frames, at + n, out);
+    }
+}
+
+}  // namespace detail
+
+/// Collect LazyFrame and LazyResult roots together, one value per root in
+/// argument order: a DataFrame for a LazyFrame, a `T` for a LazyResult<T>.
+/// Every root's plans batch as collect_all(plans) batches them.
+template <class... R>
+coro::CoroTask<std::tuple<detail::result_of_root<R>...>> collect_all(
+    R... roots) {
+    auto results = std::make_tuple(detail::as_result(std::move(roots))...);
+    std::vector<LazyFrame> plans;
+    std::apply(
+        [&](const auto&... r) {
+            (plans.insert(plans.end(), r.plans().begin(), r.plans().end()),
+             ...);
+        },
+        results);
+    std::vector<DataFrame> frames;
+    if (!plans.empty()) frames = co_await collect_all(std::move(plans));
+    std::tuple<detail::result_of_root<R>...> out;
+    co_await detail::finish_roots<0>(results, frames, 0, out);
+    co_return out;
+}
 
 /// Lower name-based GroupAggs to index-based AggSpecs plus the deduped list of
 /// value column names they reference (Count references none); the i-th spec's

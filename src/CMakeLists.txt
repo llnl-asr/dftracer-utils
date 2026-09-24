@@ -214,6 +214,7 @@ list(APPEND DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/fold_adapter/ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/fold_adapter/state.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/fold_adapter/providers.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/fold_adapter/nodes.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/state_registry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/plugins.cpp
 
@@ -1453,7 +1454,8 @@ option(DFTRACER_UTILS_BUILD_BENCHMARKS "Build standalone benchmarks" OFF)
 if(DFTRACER_UTILS_BUILD_BENCHMARKS)
   set(DFTRACER_BENCHMARKS
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/member_cache_bench.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/dataframe_parallel_bench.cpp)
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/dataframe_parallel_bench.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/view_api_bench.cpp)
 
   foreach(bench ${DFTRACER_BENCHMARKS})
     get_filename_component(bench_name ${bench} NAME_WE)
@@ -1534,16 +1536,6 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/batch_indexer.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_viewer.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_viewer.h
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_viewer_detail.h
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_viewer/plan.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_viewer/builders.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_viewer/collect.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_viewer/session.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_viewer/join.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_viewer/materialize.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_viewer/export.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_viewer/stream.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_viewer/containment.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/plugin_host.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/op_runner.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/ops.cpp

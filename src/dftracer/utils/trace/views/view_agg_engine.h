@@ -23,6 +23,13 @@ namespace dftracer::utils::trace::views::detail {
 /// same key rendering, resolver relabel, busy_cell_us column and dyn column
 /// fixes as the streaming scan path - so a rollup-served result matches a fresh
 /// scan byte-for-byte. `plan` supplies the grouping/resolver/occupancy context.
+/// The columns an aggregation of `plan` produces, from finalizing an empty
+/// state through the same path, so no trace is read. A column whose type
+/// follows its input's (sum, sumsq, min, max, argmax) is Unknown.
+/// std::nullopt for auto_numeric_metrics, whose columns depend on the data.
+std::optional<dftracer::utils::dataframe::Schema> aggregated_output_schema(
+    const ViewPlan& plan);
+
 dftracer::utils::dataframe::DataFrame finalize_engine_result(
     const dftracer::utils::dataframe::AggState& state, const ViewPlan& plan);
 
@@ -64,8 +71,15 @@ class GroupResolver;
 /// transforms both paths apply on top of the base frame.
 struct AggInputSpec {
     std::vector<std::string> select;  ///< build_row_frame select tokens
-    double base_time_scale = 1.0;     ///< time_scale passed to build_row_frame
-    bool emit_dyn = false;            ///< append build_dyn_numeric_columns
+    /// The plan's computed columns, each expression positional against
+    /// `select`, appended (or replacing a same-named column) before grouping.
+    struct Computed {
+        std::string name;
+        dftracer::utils::dataframe::Expr expr;
+    };
+    std::vector<Computed> computed;
+    double base_time_scale = 1.0;  ///< time_scale passed to build_row_frame
+    bool emit_dyn = false;         ///< append build_dyn_numeric_columns
 
     std::vector<std::string> group_key_names;  ///< final key column names
     std::vector<dftracer::utils::dataframe::GroupAgg> gaggs;

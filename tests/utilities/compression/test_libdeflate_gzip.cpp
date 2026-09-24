@@ -3,6 +3,9 @@
 #include <doctest/doctest.h>
 
 #include <cstdint>
+#include <latch>
+#include <string>
+#include <thread>
 #include <vector>
 
 using dftracer::utils::utilities::fileio::compress::GzipMemberCompressor;
@@ -24,6 +27,35 @@ std::vector<std::uint8_t> make_payload(std::size_t n, unsigned seed) {
 }  // namespace
 
 TEST_SUITE("libdeflate_gzip") {
+    // First in the file: libdeflate's lazy kernel selection must be resolved
+    // before threads first decode at once (a data race under TSan otherwise).
+    TEST_CASE("concurrent first use decodes on every thread") {
+        // gzip.compress(b"dftracer " * 64, mtime=0)
+        static const std::uint8_t MEMBER[] = {
+            0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+            0xff, 0x4b, 0x49, 0x2b, 0x29, 0x4a, 0x4c, 0x4e, 0x2d,
+            0x52, 0x48, 0x19, 0x65, 0x8c, 0x32, 0x48, 0x67, 0x00,
+            0x00, 0x13, 0xc0, 0xd8, 0x38, 0x40, 0x02, 0x00, 0x00};
+        std::string want;
+        for (int i = 0; i < 64; ++i) want += "dftracer ";
+
+        constexpr int THREADS = 8;
+        std::latch start(THREADS);
+        std::vector<int> ok(THREADS, 0);
+        std::vector<std::thread> threads;
+        for (int t = 0; t < THREADS; ++t)
+            threads.emplace_back([&, t] {
+                start.arrive_and_wait();
+                GzipMemberDecompressor dec;
+                auto out =
+                    dec.decompress_member(MEMBER, sizeof(MEMBER), want.size());
+                ok[static_cast<std::size_t>(t)] =
+                    out && std::string(out->begin(), out->end()) == want;
+            });
+        for (auto& th : threads) th.join();
+        for (int v : ok) CHECK(v == 1);
+    }
+
     TEST_CASE("round-trips a single member") {
         GzipMemberCompressor comp;
         GzipMemberDecompressor dec;

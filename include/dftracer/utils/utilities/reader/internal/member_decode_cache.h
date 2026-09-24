@@ -111,7 +111,7 @@ class MemberDecodeCache {
             auto it = shard.map.find(key);
             if (it != shard.map.end()) {
                 entry = it->second;
-                if (entry->ready) {
+                if (entry->ready.load(std::memory_order_acquire)) {
                     hits_.fetch_add(1, std::memory_order_relaxed);
                     shard.policy->touch(key);
                 }
@@ -125,10 +125,10 @@ class MemberDecodeCache {
 
         co_await entry->mutex.lock();
         coro::AsyncMutexGuard guard(entry->mutex);
-        if (!entry->ready) {
+        if (!entry->ready.load(std::memory_order_relaxed)) {
             entry->bytes = co_await produce();
             entry->size = entry->bytes ? entry->bytes->data.size() : 0;
-            entry->ready = true;
+            entry->ready.store(true, std::memory_order_release);
             decodes_.fetch_add(1, std::memory_order_relaxed);
             std::lock_guard<std::mutex> g(shard.mu);
             if (per_shard_capacity_ == 0) {
@@ -162,7 +162,8 @@ class MemberDecodeCache {
    private:
     struct Entry {
         coro::AsyncMutex mutex;
-        bool ready = false;
+        // Written under `mutex`, also read under the shard lock.
+        std::atomic<bool> ready{false};
         Bytes bytes;
         std::size_t size = 0;
     };

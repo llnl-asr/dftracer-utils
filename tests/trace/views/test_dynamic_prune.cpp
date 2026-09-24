@@ -14,6 +14,7 @@
 #include <dftracer/utils/trace/indexing/chunk_pruner_utility.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_plan.h>
+#include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_source.h>
 #include <doctest/doctest.h>
 
@@ -31,6 +32,8 @@ using namespace dftracer::utils::trace::views::detail;
 using dftracer::utils::StringIntern;
 namespace indexing = dftracer::utils::trace::indexing;
 namespace q = dftracer::utils::query;
+namespace scan = dftracer::utils::trace::views::detail::scan;
+using scan::ScanPlan;
 
 namespace {
 
@@ -151,12 +154,14 @@ TEST_SUITE("Dynamic filter pushdown") {
         "a narrow() prune reads strictly fewer chunks and the same rows") {
         TestEnvironment env(200);
         std::string gz = create_grouped_trace(env);
-        std::string idx = env.get_dir() + "/grouped.dftindex";
-        REQUIRE(dftu_utils_test::build_index(gz, idx, /*sub_chunk_events=*/0,
+        const std::string idx_dir = env.get_dir() + "/grouped.dftindex";
+        REQUIRE(dftu_utils_test::build_index(gz, idx_dir,
+                                             /*sub_chunk_events=*/0,
                                              /*checkpoint_size=*/256));
+        const std::string idx = determine_index_path(gz, idx_dir);
 
-        View v = View::from_file(gz, idx).metadata(false);
-        const ViewPlan& plan = v.plan();
+        ScanPlan plan_ptr = scan::metadata(scan::from_file(gz, idx), false);
+        const ViewPlan& plan = *plan_ptr;
         ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
 
         std::uint64_t static_skipped = 0;
@@ -227,12 +232,14 @@ TEST_SUITE("Dynamic filter pushdown") {
         "keeps results correct") {
         TestEnvironment env(200);
         std::string gz = create_grouped_trace(env, /*per_name=*/200);
-        std::string idx = env.get_dir() + "/grouped2.dftindex";
-        REQUIRE(dftu_utils_test::build_index(gz, idx, /*sub_chunk_events=*/0,
+        const std::string idx_dir = env.get_dir() + "/grouped2.dftindex";
+        REQUIRE(dftu_utils_test::build_index(gz, idx_dir,
+                                             /*sub_chunk_events=*/0,
                                              /*checkpoint_size=*/256));
+        const std::string idx = determine_index_path(gz, idx_dir);
 
-        View v = View::from_file(gz, idx).metadata(false);
-        ViewSource src(v);
+        ScanPlan plan_ptr = scan::metadata(scan::from_file(gz, idx), false);
+        ViewSource src(plan_ptr);
         // A pushed projection fixes every morsel's columns to exactly this
         // list, in this order (see ScanRequest::projection); the unselected
         // path instead lets a morsel's columns vary batch to batch, which
@@ -345,10 +352,12 @@ TEST_SUITE("Dynamic filter pushdown") {
 
         TestEnvironment env(200);
         std::string gz = create_grouped_trace(env, /*per_name=*/200);
-        std::string idx = env.get_dir() + "/grouped3.dftindex";
-        REQUIRE(dftu_utils_test::build_index(gz, idx, /*sub_chunk_events=*/0,
+        const std::string idx_dir = env.get_dir() + "/grouped3.dftindex";
+        REQUIRE(dftu_utils_test::build_index(gz, idx_dir,
+                                             /*sub_chunk_events=*/0,
                                              /*checkpoint_size=*/256));
-        View v = View::from_file(gz, idx).metadata(false);
+        const std::string idx = determine_index_path(gz, idx_dir);
+        ScanPlan plan_ptr = scan::metadata(scan::from_file(gz, idx), false);
 
         // The build side: one key, pid 3, the last of the three groups, in
         // the scan's own key type.
@@ -361,8 +370,8 @@ TEST_SUITE("Dynamic filter pushdown") {
         // The same tight budget as the cursor-level test above, so the
         // producer cannot run the whole scan before the join's first pull
         // sends the narrowing.
-        auto joined_src =
-            std::make_shared<CountingSource>(std::make_shared<ViewSource>(v));
+        auto joined_src = std::make_shared<CountingSource>(
+            std::make_shared<ViewSource>(plan_ptr));
         DataFrame out = run(LazyFrame::scan(joined_src)
                                 .select({"pid"})
                                 .join(right.lazy(), {"pid"}, JoinHow::Inner)
@@ -375,8 +384,8 @@ TEST_SUITE("Dynamic filter pushdown") {
 
         // Against a plain scan: the join read strictly fewer rows from the
         // source, and every pid-3 row the full scan has is in the join.
-        auto full_src =
-            std::make_shared<CountingSource>(std::make_shared<ViewSource>(v));
+        auto full_src = std::make_shared<CountingSource>(
+            std::make_shared<ViewSource>(plan_ptr));
         DataFrame full = run(LazyFrame::scan(full_src)
                                  .select({"pid"})
                                  .memory_budget(300)

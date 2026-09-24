@@ -62,7 +62,7 @@ Start from a field, compare it, and combine.
          auto df = View::from_file("trace.pfw.gz")
                        .filter((F("cat") == "POSIX") && (F("dur") > 1000))
                        .group_by({}).agg({{AggOp::Count, "", "n"}})
-                       .collect().collect().get();
+                       .collect().get();
          // Or a DSL string directly: View::from_file(...).query(str)
 
          // The SAME F builds a value/derived column, evaluated in memory on a

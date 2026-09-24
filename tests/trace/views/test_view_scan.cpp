@@ -2,6 +2,7 @@
 #include <doctest/doctest.h>
 
 #include <atomic>
+#include <limits>
 #include <map>
 
 #include "test_view_common.h"
@@ -16,9 +17,9 @@ TEST_SUITE("View") {
 
         // Deriving posix/stdio must not mutate base or each other.
         StringSink s_base, s_posix, s_stdio;
-        base.export_json(s_base).get();
-        posix.export_json(s_posix).get();
-        stdio.export_json(s_stdio).get();
+        base.sink_json(s_base).get();
+        posix.sink_json(s_posix).get();
+        stdio.sink_json(s_stdio).get();
 
         CHECK(s_base.lines().size() == 50);
         CHECK(s_posix.lines().size() == 30);
@@ -31,7 +32,7 @@ TEST_SUITE("View") {
         auto stats = View::from_file(s.gz, s.idx)
                          .metadata(false)
                          .query(R"(cat == "POSIX")")
-                         .export_json(sink)
+                         .sink_json(sink)
                          .get();
 
         auto lines = sink.lines();
@@ -49,7 +50,7 @@ TEST_SUITE("View") {
             .metadata(false)
             .query(R"(cat == "POSIX")")
             .query(R"(name == "read")")
-            .export_json(sink)
+            .sink_json(sink)
             .get();
 
         CHECK(sink.lines().size() == 30);  // all POSIX are "read"
@@ -58,49 +59,44 @@ TEST_SUITE("View") {
     TEST_CASE("View - no filter streams all events") {
         const auto& s = shared_trace();
         StringSink sink;
-        auto stats = View::from_file(s.gz, s.idx)
-                         .metadata(false)
-                         .export_json(sink)
-                         .get();
+        auto stats =
+            View::from_file(s.gz, s.idx).metadata(false).sink_json(sink).get();
 
         CHECK(sink.lines().size() == 50);
         CHECK(stats.events_matched == 50);
     }
 
-    TEST_CASE("View - limit caps exported events") {
+    TEST_CASE("View - head caps exported events") {
         const auto& s = shared_trace();
         StringSink sink;
         auto stats = View::from_file(s.gz, s.idx)
                          .metadata(false)
-                         .limit(10)
-                         .export_json(sink)
+                         .head(10)
+                         .sink_json(sink)
                          .get();
 
         CHECK(sink.lines().size() == 10);
         CHECK(stats.truncated);
     }
 
-    TEST_CASE("View - limit/offset paginate collect rows") {
+    TEST_CASE("View - head/slice paginate collect rows") {
         const auto& s = shared_trace();
         auto full = View::from_file(s.gz, s.idx)
                         .group_by({GroupKey::name()})
-                        .collect()
                         .collect()
                         .get();
         REQUIRE(full.num_rows() == 2);  // read (POSIX), fwrite (STDIO)
 
         auto one = View::from_file(s.gz, s.idx)
                        .group_by({GroupKey::name()})
-                       .limit(1)
-                       .collect()
+                       .head(1)
                        .collect()
                        .get();
         CHECK(one.num_rows() == 1);
 
         auto rest = View::from_file(s.gz, s.idx)
                         .group_by({GroupKey::name()})
-                        .offset(1)
-                        .collect()
+                        .slice(1, std::numeric_limits<std::int64_t>::max())
                         .collect()
                         .get();
         CHECK(rest.num_rows() == 1);
@@ -109,24 +105,22 @@ TEST_SUITE("View") {
     TEST_CASE("View - a completed scan covers every chunk it read") {
         const auto& s = shared_trace();
         StringSink sink;
-        auto stats = View::from_file(s.gz, s.idx)
-                         .metadata(false)
-                         .export_json(sink)
-                         .get();
+        auto stats =
+            View::from_file(s.gz, s.idx).metadata(false).sink_json(sink).get();
 
         CHECK(stats.chunks_scanned > 0);
         CHECK(stats.chunks_covered == stats.chunks_scanned);
     }
 
-    // Coverage is what the scan read, not what it returned: a limit stops the
+    // Coverage is what the scan read, not what it returned: a head stops the
     // fan-out but does not un-read a chunk the scan had already drained.
-    TEST_CASE("View - a limit does not retract coverage of a drained chunk") {
+    TEST_CASE("View - a head does not retract coverage of a drained chunk") {
         const auto& s = shared_trace();
         StringSink sink;
         auto stats = View::from_file(s.gz, s.idx)
                          .metadata(false)
-                         .limit(10)
-                         .export_json(sink)
+                         .head(10)
+                         .sink_json(sink)
                          .get();
 
         CHECK(stats.truncated);
@@ -150,7 +144,7 @@ TEST_SUITE("View") {
             auto stats = View::from_file(gz, idx)
                              .metadata(false)
                              .cancel_when([] { return true; })
-                             .export_json(sink)
+                             .sink_json(sink)
                              .get();
             CHECK(stats.chunks_covered == 0);
         }
@@ -169,7 +163,7 @@ TEST_SUITE("View") {
                 View::from_file(gz, idx)
                     .metadata(false)
                     .cancel_when([&] { return sink.events.load() > 0; })
-                    .export_json(sink)
+                    .sink_json(sink)
                     .get();
 
             REQUIRE(stats.chunks_scanned == 1);
@@ -192,15 +186,15 @@ TEST_SUITE("View") {
 
         StringSink sink;
         auto stats =
-            View::from_file(gz, idx).metadata(false).export_json(sink).get();
+            View::from_file(gz, idx).metadata(false).sink_json(sink).get();
 
         CHECK(stats.events_matched == static_cast<std::uint64_t>(n));
         CHECK(sink.lines().size() == static_cast<std::size_t>(n));
     }
 
-    // export_trace writes the events back out through the parallel writer as a
+    // sink_trace writes the events back out through the parallel writer as a
     // multi-member gzip trace; every event must survive the round-trip.
-    TEST_CASE("View - export_trace round-trips every event") {
+    TEST_CASE("View - sink_trace round-trips every event") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         const int n = 60;  // multi-member source; small members below
@@ -214,18 +208,18 @@ TEST_SUITE("View") {
         opts.num_workers = 4;
         opts.compress = true;
         auto stats =
-            View::from_file(gz, idx).metadata(false).export_trace(opts).get();
+            View::from_file(gz, idx).metadata(false).sink_trace(opts).get();
         CHECK(stats.events_matched == static_cast<std::uint64_t>(n));
 
         std::string oidx = determine_index_path(out, "");
         StringSink sink;
         auto rstats =
-            View::from_file(out, oidx).metadata(false).export_json(sink).get();
+            View::from_file(out, oidx).metadata(false).sink_json(sink).get();
         CHECK(rstats.events_matched == static_cast<std::uint64_t>(n));
         CHECK(sink.lines().size() == static_cast<std::size_t>(n));
     }
 
-    // The index built inline during export_trace (build_index) must be
+    // The index built inline during sink_trace (build_index) must be
     // byte-for-byte equivalent, for reads and pruned queries, to one built
     // lazily by the standard indexer over the identical output bytes.
     TEST_CASE("View - fused inline index matches a lazily-built index") {
@@ -246,7 +240,7 @@ TEST_SUITE("View") {
         opts.compress = true;
         opts.build_index = true;
         auto st =
-            View::from_file(gz, idx).metadata(false).export_trace(opts).get();
+            View::from_file(gz, idx).metadata(false).sink_trace(opts).get();
         REQUIRE(fs::exists(outAgz));
         const std::string idxA = determine_index_path(outAgz, "");
         // The write built the index, not a separate pass.
@@ -265,7 +259,7 @@ TEST_SUITE("View") {
             StringSink s;
             View v = View::from_file(f, ix).metadata(false);
             if (q != nullptr) v = v.query(q);
-            v.export_json(s).get();
+            v.sink_json(s).get();
             auto ls = s.lines();
             std::sort(ls.begin(), ls.end());
             return ls;
@@ -295,7 +289,6 @@ TEST_SUITE("View") {
                                {AggOp::Max, "dur", "max_dur"},
                                {AggOp::Mean, "dur", "mean_dur"}})
                          .collect()
-                         .collect()
                          .get();
 
         CHECK(bhas(table, "cat"));
@@ -316,11 +309,8 @@ TEST_SUITE("View") {
 
     TEST_CASE("View - collect with no group_by returns the matching events") {
         const auto& s = shared_trace();  // 30 POSIX + 20 STDIO = 50 events
-        auto table = View::from_file(s.gz, s.idx)
-                         .metadata(false)
-                         .collect()
-                         .collect()
-                         .get();
+        auto table =
+            View::from_file(s.gz, s.idx).metadata(false).collect().get();
         REQUIRE(table.num_rows() == 50);
         // Every event row carries the top-level columns.
         for (const char* c : {"name", "cat", "pid", "tid", "ts", "dur", "ph"})
@@ -333,7 +323,6 @@ TEST_SUITE("View") {
                          .metadata(false)
                          .query(R"(cat == "POSIX")")
                          .select({"name", "dur"})
-                         .collect()
                          .collect()
                          .get();
         CHECK(posix.num_rows() == 30);
@@ -367,7 +356,7 @@ TEST_SUITE("View") {
 
         // Empty select: every column, including both "name" and "args.name".
         dataframe::DataFrame all =
-            View::from_file(gz, idx).metadata(false).collect().collect().get();
+            View::from_file(gz, idx).metadata(false).collect().get();
         REQUIRE(bhas(all, "name"));
         REQUIRE(bhas(all, "args.name"));
         std::map<std::string, std::string> top_by_arg;
@@ -382,7 +371,6 @@ TEST_SUITE("View") {
                                              .metadata(false)
                                              .select({"name"})
                                              .collect()
-                                             .collect()
                                              .get();
         REQUIRE(bare_name.num_columns() == 1);
         CHECK(bhas(bare_name, "name"));
@@ -391,7 +379,6 @@ TEST_SUITE("View") {
         dataframe::DataFrame arg_name = View::from_file(gz, idx)
                                             .metadata(false)
                                             .select({"args.name"})
-                                            .collect()
                                             .collect()
                                             .get();
         REQUIRE(arg_name.num_columns() == 1);
@@ -411,7 +398,6 @@ TEST_SUITE("View") {
                          .phase(Phase::Counters)
                          .group_by({GroupKey::name()})
                          .agg_numeric_args()
-                         .collect()
                          .collect()
                          .get();
 
@@ -444,7 +430,6 @@ TEST_SUITE("View") {
                 .group_by({GroupKey::name()})
                 .agg_numeric_args({AggSpec(AggOp::Sum), AggSpec(AggOp::Max),
                                    AggSpec(AggOp::Mean)})
-                .collect()
                 .collect()
                 .get();
 
@@ -495,7 +480,6 @@ TEST_SUITE("View") {
             dataframe::DataFrame rows = View::from_file(gz, idx)
                                             .metadata(false)
                                             .select({"name", "cycles"})
-                                            .collect()
                                             .collect()
                                             .get();
             REQUIRE(rows.num_columns() == 2);
@@ -562,7 +546,7 @@ TEST_SUITE("View") {
         }
     }
 
-    TEST_CASE("View - export_counters emits a ph=C event per group") {
+    TEST_CASE("View - sink_counters emits a ph=C event per group") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_trace_with_counters(env);
@@ -573,7 +557,7 @@ TEST_SUITE("View") {
             .phase(Phase::Counters)
             .group_by({GroupKey::name()})
             .agg_numeric_args()
-            .export_counters(sink)
+            .sink_counters(sink)
             .get();
 
         auto lines = sink.lines();
@@ -611,7 +595,6 @@ TEST_SUITE("View") {
         auto table = v.phase(Phase::Events)
                          .group_by({GroupKey::cat()})
                          .agg({{AggOp::Count, "", "count"}})
-                         .collect()
                          .collect()
                          .get();
 

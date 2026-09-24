@@ -110,10 +110,8 @@ TEST_SUITE("ShardedView") {
                 .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
         };
 
-        auto expect = canon(configure(View::from_files({{a, ia}, {b, ib}}))
-                                .collect()
-                                .collect()
-                                .get());
+        auto expect = canon(
+            configure(View::from_files({{a, ia}, {b, ib}})).collect().get());
         REQUIRE(expect.size() == 2);  // POSIX + STDIO
 
         auto got = canon(
@@ -139,7 +137,7 @@ TEST_SUITE("ShardedView") {
 
         StringSink single;
         configure(View::from_files({{a, ia}, {b, ib}}))
-            .export_counters(single)
+            .sink_counters(single)
             .get();
 
         StringSink sharded;
@@ -177,10 +175,8 @@ TEST_SUITE("ShardedView") {
             return v.group_by({GroupKey::cat()}).agg({{AggOp::Count, "", "n"}});
         };
 
-        auto expect = canon(configure(View::from_files({{a, ia}, {b, ib}}))
-                                .collect()
-                                .collect()
-                                .get());
+        auto expect = canon(
+            configure(View::from_files({{a, ia}, {b, ib}})).collect().get());
         auto got =
             canon(ShardedView::from_manifest(root).aggregate(configure).get());
         CHECK(got == expect);
@@ -235,10 +231,8 @@ TEST_SUITE("ShardedView") {
         auto configure = [](View v) -> View {
             return v.group_by({GroupKey::cat()}).agg({{AggOp::Count, "", "n"}});
         };
-        auto expect = canon(configure(View::from_files({{a, ia}, {b, ib}}))
-                                .collect()
-                                .collect()
-                                .get());
+        auto expect = canon(
+            configure(View::from_files({{a, ia}, {b, ib}})).collect().get());
         auto got =
             canon(ShardedView::from_manifest(root).aggregate(configure).get());
         CHECK(got == expect);

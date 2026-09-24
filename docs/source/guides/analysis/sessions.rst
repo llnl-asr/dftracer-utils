@@ -80,8 +80,10 @@ roots over one shared scan and returns their values in order.
 C++
 ---
 
-``View::session()`` returns a ``ViewSession``. Register ops - each returns a
-``Deferred<T>`` handle - then ``execute()`` runs the one shared scan:
+``View::session()`` returns a ``TraceSession``. Register a
+``dataframe::LazyFrame`` (or ``dataframe::LazyResult<T>``) built from the base
+view with ``collect()`` - each call returns a ``Deferred<T>`` handle - then
+``execute()`` runs every registered plan over the one shared scan:
 
 .. code-block:: cpp
 
@@ -90,27 +92,39 @@ C++
    namespace df = dftracer::utils::dataframe;
 
    View base = View::from_file("trace.pfw.gz");
-   ViewSession run = base.session();
+   TraceSession run;
 
    // A built-in aggregate branch.
-   auto by_cat = run.collect(
-       Query::from_string(R"(cat == "POSIX")").value(), {GroupKey::cat()},
-       {{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "sum_dur"}});
+   df::LazyFrame by_cat_plan =
+       base.filter(Query::from_string(R"(cat == "POSIX")").value())
+           .group_by({GroupKey::cat()})
+           .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "sum_dur"}});
+   auto by_cat = run.collect(by_cat_plan);
 
-   // A custom fold branch over the same scan (reuses the parsed event).
+   // A custom fold branch over the same scan. ViewSession has no public
+   // constructor; View::branch() hands it to the callback and returns a plan
+   // you register like any other.
    struct Small { std::size_t n = 0; double sum = 0; };
-   auto small = run.fold<Small>(
-       Query::from_string("dur < 25").value(),
-       [](Small& s, const json::JsonValue& jv, std::string_view) {
-           ++s.n;
-           s.sum += jv["dur"].get<double>(0);
-       },
-       [](Small&& a, Small&& b) { a.n += b.n; a.sum += b.sum; return std::move(a); });
+   df::LazyResult<Small> small_plan = base.branch<Small>([](ViewSession& s) {
+       return s.fold<Small>(
+           Query::from_string("dur < 25").value(),
+           [](Small& acc, const json::JsonValue& jv, std::string_view) {
+               ++acc.n;
+               acc.sum += jv["dur"].get<double>(0);
+           },
+           [](Small&& a, Small&& b) {
+               a.n += b.n;
+               a.sum += b.sum;
+               return std::move(a);
+           });
+   });
+   auto small = run.collect(small_plan);
 
    // A containment branch: a call tree over a filtered sub-view of the base.
-   auto tree = run.call_tree(
-       base.filter(Query::from_string(R"(cat == "POSIX")").value()),
-       {"pid", "tid"});
+   df::LazyFrame tree_plan =
+       base.filter(Query::from_string(R"(cat == "POSIX")").value())
+           .call_tree({"pid", "tid"});
+   auto tree = run.collect(tree_plan);
 
    run.execute().get();          // the single shared scan
 
@@ -139,20 +153,28 @@ columns:
        delta  = s.collect(base.compare(tv.filter('rank == 1')))
    diff = delta.result()
 
-In C++, two ``collect`` branches that group the same way can be joined or
-compared **after** the one scan - the shared key width is inferred - and the
-combination is itself a handle:
+In C++, ``View::compare(variant)`` applies this view's ``group_by`` / ``agg``
+to ``variant``'s events too and joins on the shared group key - both views
+over the same files share one scan, no session needed. Two independently
+aggregated views join with the generic ``LazyOps`` ``join`` that ``View``
+inherits:
 
 .. code-block:: cpp
 
-   ViewSession run = View::from_file("trace.pfw.gz").session();
-   auto base = run.collect(Query::from_string("rank == 0").value(),
-                           {GroupKey::name()}, {{AggOp::Mean, "dur", "mean_dur"}});
-   auto var  = run.collect(Query::from_string("rank == 1").value(),
-                           {GroupKey::name()}, {{AggOp::Mean, "dur", "mean_dur"}});
-   auto delta = run.compare(base, var);      // or run.join(base, var)
-   run.execute().get();
-   df::DataFrame diff = *delta;
+   View trace = View::from_file("trace.pfw.gz");
+   View base = trace.filter(Query::from_string("rank == 0").value())
+                   .group_by({GroupKey::name()})
+                   .agg({{AggOp::Mean, "dur", "mean_dur"}});
+   View var = trace.filter(Query::from_string("rank == 1").value())
+                  .group_by({GroupKey::name()})
+                  .agg({{AggOp::Mean, "dur", "mean_dur"}});
+
+   df::LazyFrame joined = base.join(var, {"name"});
+   df::LazyFrame delta =
+       base.compare(trace.filter(Query::from_string("rank == 1").value()));
+
+   df::DataFrame joined_df = co_await joined.collect();
+   df::DataFrame diff = co_await delta.collect();
 
 Notes
 -----

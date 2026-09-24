@@ -45,7 +45,6 @@ From a query, via :doc:`TraceViewer <../../trace-viewer>`:
                        .group_by({GroupKey::cat()})
                        .agg({{AggOp::Count, "", "count"},
                              {AggOp::Sum, "dur", "sum_dur"}})
-                       .collect()   // -> LazyFrame
                        .collect()   // -> coro::CoroTask<DataFrame>
                        .get();
 

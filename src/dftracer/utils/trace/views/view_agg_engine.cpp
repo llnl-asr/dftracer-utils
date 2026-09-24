@@ -940,7 +940,7 @@ coro::CoroTask<EnginePrep> prepare_engine_group(const ViewPlan& plan) {
     next->bucket_origin_min = false;
     next->time_scale = spec.base_time_scale;
 
-    View raw(std::move(next));
+    std::shared_ptr<const ViewPlan> raw(std::move(next));
     dataframe::LazyFrame lf =
         dataframe::LazyFrame::scan(
             ViewSource::engine_scan(raw, plan.auto_numeric_metrics))

@@ -499,7 +499,8 @@ dftracer_index
 **Options:**
 
 - ``-d, --directory <path>`` - Input directory containing .pfw.gz files (default: .)
-- ``--dimensions <dims>`` - Comma-separated extra dimensions to index from args (e.g., args.level,args.mode)
+- ``--dimensions <dims>`` - Comma-separated args fields to index by name, nested ones included (e.g., level,mode,io.size)
+- ``--no-auto-dimensions`` - Index only the fixed fields and ``--dimensions``. By default every other flat args key is indexed too: numbers get a per-chunk min/max, strings a per-chunk bloom up to 256 distinct values
 - ``-f, --force`` - Force index recreation even if already built
 - ``--checkpoint-size <bytes>`` - Checkpoint size for gzip indexing in bytes (default: 33554432 B / 32 MB)
 - ``--executor-threads <count>`` - Number of worker threads for parallel processing (default: number of CPU cores)
@@ -521,8 +522,8 @@ Indexing).
     # Build bloom indices for all traces
     dftracer_index -d ./traces
 
-    # Build with custom dimensions and force rebuild
-    dftracer_index -d ./traces --dimensions "args.level,args.io.size" --force
+    # Also index a nested args field by name, and force a rebuild
+    dftracer_index -d ./traces --dimensions "io.size" --force
 
     # Rebuild ROOT_* aggregated summaries after ingest
     dftracer_index -d ./traces --rebuild-summaries

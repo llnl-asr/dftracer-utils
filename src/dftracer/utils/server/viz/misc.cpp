@@ -89,17 +89,18 @@ coro::CoroTask<HttpResponse> handle_viz_columns(const HttpRequest& /*req*/,
                                                 TraceIndex& index) {
     // Schemaless discovery from the index (no scan): base axis fields, every
     // harvested scalar leaf (nested args as dotted paths), and resolved.*
-    // aliases, each with its type. Shares View::schema() with the C++/Python
-    // API instead of re-implementing a column union here.
+    // aliases, each with its type. Shares View::column_info() with the
+    // C++/Python API instead of re-implementing a column union here.
     std::vector<const TraceIndex::FileInfo*> all_files;
     all_files.reserve(index.files().size());
     for (const auto& f : index.files()) all_files.push_back(&f);
     views::View v =
         views::View::from_files(to_view_files(all_files), &index.bloom_cache());
     // This endpoint offers groupable columns; the pid/tid/ts/dur axis fields
-    // are timeline lanes, not group options, so drop them from View::schema().
-    std::vector<views::View::ColumnInfo> schema;
-    for (auto& c : v.schema()) {
+    // are timeline lanes, not group options, so drop them from
+    // View::column_info().
+    std::vector<views::ColumnInfo> schema;
+    for (auto& c : v.column_info()) {
         if (c.name == "pid" || c.name == "tid" || c.name == "ts" ||
             c.name == "dur")
             continue;

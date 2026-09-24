@@ -96,7 +96,7 @@ TEST_SUITE("BloomFold") {
             StringSink s;
             View::from_file(gz, index_path)
                 .emit_all_metadata(true)
-                .export_json(s)
+                .sink_json(s)
                 .get();
         }
 
@@ -132,7 +132,7 @@ TEST_SUITE("BloomFold") {
             StringSink s;
             View::from_file(gz, index_path)
                 .query(R"(cat == "POSIX")")
-                .export_json(s)
+                .sink_json(s)
                 .get();
             idx::IndexDatabase db(index_path, idx::IndexOpenMode::ReadOnly);
             REQUIRE_FALSE(db.has_bloom_data(file_id_of(db, gz)));
@@ -192,7 +192,7 @@ TEST_SUITE("BloomFold") {
             StringSink s;
             View::from_file(gz, index_path)
                 .query(R"(cat == "POSIX")")
-                .export_json(s)
+                .sink_json(s)
                 .get();
         }
 
@@ -249,7 +249,7 @@ TEST_SUITE("BloomFold") {
             StringSink s;
             View::from_file(gz, index_path)
                 .query(R"(cat == "POSIX")")
-                .export_json(s)
+                .sink_json(s)
                 .get();
         }
 
@@ -298,8 +298,8 @@ TEST_SUITE("BloomFold") {
     }
 
     // Schemaless column harvest: nested-object and array args surface as dotted
-    // leaf columns with their types, and View::columns()/schema() read them
-    // back from the index with no trace scan.
+    // leaf columns with their types, and View::columns()/column_info() read
+    // them back from the index with no trace scan.
     TEST_CASE("schemaless columns and schema over nested args") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
@@ -327,7 +327,7 @@ TEST_SUITE("BloomFold") {
             StringSink s;
             View::from_file(gz, index_path)
                 .emit_all_metadata(true)
-                .export_json(s)
+                .sink_json(s)
                 .get();
         }
 
@@ -358,7 +358,7 @@ TEST_SUITE("BloomFold") {
         CHECK(has("resolved.hostname"));
 
         std::unordered_map<std::string, std::string> ty;
-        for (const auto& ci : v.schema()) ty[ci.name] = ci.type;
+        for (const auto& ci : v.column_info()) ty[ci.name] = ci.type;
         CHECK(ty["pid"] == "int64");
         CHECK(ty["ts"] == "int64");
         CHECK(ty["hostname"] == "string");

@@ -77,7 +77,7 @@ struct StatRow {
 // distinct occupied buckets, not this count.
 static constexpr double COVERAGE_BUCKETS = 8192.0;
 
-// Per-group accumulator that merges real events (from the View) with the
+// Per-group accumulator that merges real events (from the view scan) with the
 // prorated contribution of ph=3 aggregates overlapping the window.
 struct StatAgg {
     double count =

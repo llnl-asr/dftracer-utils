@@ -496,6 +496,17 @@ TEST_SUITE("DFTracerView") {
 
         CHECK(!shard_out.empty());
         CHECK(sorted_lines(shard_out) == sorted_lines(direct_out));
+
+        // The projection and row window apply to the merged table too.
+        std::string shaped;
+        CHECK(run_view_capture(
+                  binary,
+                  {"--group-by", "cat", "--agg", "count,sum:dur", "--select",
+                   "cat,count", "--limit", "1", "-d", root},
+                  cap, shaped) == 0);
+        CHECK(sorted_lines(shaped).size() == 1);
+        CHECK(shaped.find("\"count\"") != std::string::npos);
+        CHECK(shaped.find("sum_dur") == std::string::npos);
     }
 
     // --select projects raw (non-aggregate) events to the chosen fields,

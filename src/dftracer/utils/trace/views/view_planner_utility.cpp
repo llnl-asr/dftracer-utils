@@ -145,6 +145,7 @@ coro::CoroTask<Result<ViewPlannerOutput>> ViewPlannerUtility::operator()(
         &chunk_spans_local;
     const std::vector<utilities::indexer::ChunkStatisticsResult>* chunk_stats =
         nullptr;
+    const bool indexed = !input.index_path.empty() || input.cached_spans;
     if (!candidate_checkpoints.empty() || input.scan_all_chunks) {
         if (input.cached_spans) {
             chunk_spans = input.cached_spans;
@@ -230,6 +231,14 @@ coro::CoroTask<Result<ViewPlannerOutput>> ViewPlannerUtility::operator()(
             const auto& span = (*chunk_spans)[ckpt_idx];
             candidate.start_byte = span.uc_offset;
             candidate.end_byte = span.uc_offset + span.uc_size;
+        } else if (!indexed) {
+            // With no index to seek by, a byte cut re-reads the lines around
+            // it, so the file is read as one unit.
+            candidate.checkpoint_idx = 0;
+            candidate.start_byte = 0;
+            candidate.end_byte = input.uncompressed_size;
+            output.candidates.push_back(candidate);
+            break;
         } else if (input.num_checkpoints > 0) {
             std::size_t bytes_per =
                 input.uncompressed_size / input.num_checkpoints;

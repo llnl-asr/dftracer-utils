@@ -113,7 +113,7 @@ TEST_SUITE("RawGzipFuse") {
         std::string ref_idx = determine_index_path(gz, env.get_dir() + "/refi");
         {
             StringSink s;
-            View::from_file(gz, ref_idx).export_json(s).get();
+            View::from_file(gz, ref_idx).sink_json(s).get();
         }
         gmoracle::GroupMap ref;
         {
@@ -213,12 +213,11 @@ TEST_SUITE("RawGzipFuse") {
         std::string ref_idx = determine_index_path(gz, env.get_dir() + "/ri");
         {
             StringSink s;
-            View::from_file(gz, ref_idx).export_json(s).get();
+            View::from_file(gz, ref_idx).sink_json(s).get();
         }
         auto ref = View::from_file(gz, ref_idx)
                        .group_by({GroupKey::cat()})
                        .agg({{AggOp::Count, "", "n"}})
-                       .collect()
                        .collect()
                        .get();
 
@@ -227,7 +226,6 @@ TEST_SUITE("RawGzipFuse") {
         auto boot = View::from_file(gz, boot_idx)
                         .group_by({GroupKey::cat()})
                         .agg({{AggOp::Count, "", "n"}})
-                        .collect()
                         .collect()
                         .get();
 
@@ -245,7 +243,7 @@ TEST_SUITE("RawGzipFuse") {
     // verbatim (both ph="M" metadata records and all data events, unlike the
     // indexed scanner which reconstructs only FH metadata) AND leaves a
     // complete bloom index behind.
-    TEST_CASE("View.export_json on a first-touch file bootstraps every line") {
+    TEST_CASE("View.sink_json on a first-touch file bootstraps every line") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_meta_trace(env);  // 2 metadata + 20 data events
@@ -253,7 +251,7 @@ TEST_SUITE("RawGzipFuse") {
         std::string idx = determine_index_path(gz, env.get_dir() + "/ei");
         REQUIRE_FALSE(fs::exists(idx));
         StringSink boot;
-        View::from_file(gz, idx).export_json(boot).get();  // bootstrap path
+        View::from_file(gz, idx).sink_json(boot).get();  // bootstrap path
 
         auto lines = boot.lines();
         CHECK(lines.size() == 22);
@@ -279,13 +277,12 @@ TEST_SUITE("RawGzipFuse") {
         std::string ref_idx = determine_index_path(gz, env.get_dir() + "/fr");
         {
             StringSink s;
-            View::from_file(gz, ref_idx).export_json(s).get();
+            View::from_file(gz, ref_idx).sink_json(s).get();
         }
         auto ref = View::from_file(gz, ref_idx)
                        .query(R"(cat == "POSIX")")
                        .group_by({GroupKey::cat()})
                        .agg({{AggOp::Count, "", "n"}})
-                       .collect()
                        .collect()
                        .get();
         REQUIRE(ref.num_rows() == 1);  // only POSIX
@@ -296,7 +293,6 @@ TEST_SUITE("RawGzipFuse") {
                        .query(R"(cat == "POSIX")")
                        .group_by({GroupKey::cat()})
                        .agg({{AggOp::Count, "", "n"}})
-                       .collect()
                        .collect()
                        .get();
         CHECK(got.num_rows() == ref.num_rows());  // filter applied: 1 group
@@ -318,13 +314,12 @@ TEST_SUITE("RawGzipFuse") {
         std::string ref_idx = determine_index_path(gz, env.get_dir() + "/nr");
         {
             StringSink s;
-            View::from_file(gz, ref_idx).export_json(s).get();
+            View::from_file(gz, ref_idx).sink_json(s).get();
         }
         auto ref = View::from_file(gz, ref_idx)
                        .query(R"(fhash == "fh1")")
                        .group_by({GroupKey::cat()})
                        .agg({{AggOp::Count, "", "n"}})
-                       .collect()
                        .collect()
                        .get();
 
@@ -333,7 +328,6 @@ TEST_SUITE("RawGzipFuse") {
                        .query(R"(fhash == "fh1")")
                        .group_by({GroupKey::cat()})
                        .agg({{AggOp::Count, "", "n"}})
-                       .collect()
                        .collect()
                        .get();
         CHECK(rows_equal(got, ref));  // correctly filtered via the fallback

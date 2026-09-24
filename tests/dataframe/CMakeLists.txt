@@ -2,7 +2,7 @@
 # DataFrame Library Tests
 # ##############################################################################
 
-set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_result_batch.cpp test_methods.cpp
+set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_methods.cpp
                            test_arrow.cpp test_arrow_types.cpp test_arrow_types_compute.cpp
                            test_arrow_large_types_compute.cpp
                            test_arrow_types_matrix.cpp test_arrow_types_tail.cpp

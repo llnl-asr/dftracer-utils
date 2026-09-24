@@ -47,17 +47,17 @@ using views::AggSpec;
 using views::ExportStats;
 using views::GroupKey;
 using views::Phase;
-using views::TraceViewer;
+using views::View;
 
-TraceViewer& tv_of(PyObject* self) {
+View& tv_of(PyObject* self) {
     return *reinterpret_cast<TraceViewerObject*>(self)->tv;
 }
 
-PyObject* make_viewer(TraceViewer&& t) {
+PyObject* make_viewer(View&& t) {
     auto* self = reinterpret_cast<TraceViewerObject*>(
         TraceViewerType.tp_alloc(&TraceViewerType, 0));
     if (!self) return nullptr;
-    self->tv = new TraceViewer(std::move(t));
+    self->tv = new View(std::move(t));
     return reinterpret_cast<PyObject*>(self);
 }
 
@@ -392,11 +392,11 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
                                      paths)) {
         return -1;
     }
-    TraceViewer tv;
+    View tv;
     if (dir) {
         if (!run_blocking([&] {
                 tv = py::get_default_runtime()
-                         ->submit(TraceViewer::from_directory(*dir, index_dir))
+                         ->submit(View::from_directory(*dir, index_dir))
                          .get();
             }))
             return -1;
@@ -407,10 +407,10 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
             vfiles.push_back(views::ViewFile{
                 p, dftracer::utils::trace::internal::determine_index_path(
                        p, index_dir)});
-        tv = TraceViewer::from_files(std::move(vfiles));
+        tv = View::from_files(std::move(vfiles));
     }
     delete self->tv;
-    self->tv = new TraceViewer(std::move(tv));
+    self->tv = new View(std::move(tv));
     return 0;
 }
 
@@ -422,7 +422,7 @@ PyObject* tv_lazy(PyObject* self, PyObject*) {
 PyObject* tv_with_lazy(PyObject* self, PyObject* arg) {
     const LazyFrame* lf = py::lazyframe_of(arg);
     if (!lf) return nullptr;
-    return build(self, [&](const TraceViewer& t) { return t.with_lazy(*lf); });
+    return build(self, [&](const View& t) { return t.with_lazy(*lf); });
 }
 
 PyObject* tv_filter(PyObject* self, PyObject* arg) {
@@ -440,7 +440,7 @@ PyObject* tv_filter(PyObject* self, PyObject* arg) {
                      parsed.error().message.c_str());
         return nullptr;
     }
-    return build(self, [&](const TraceViewer& t) {
+    return build(self, [&](const View& t) {
         return t.filter(std::move(parsed.value()));
     });
 }
@@ -449,8 +449,8 @@ PyObject* tv_select(PyObject* self, PyObject* arg) {
     std::vector<std::string> names;
     if (!py::parse_string_seq(arg, "select expects a sequence of names", names))
         return nullptr;
-    return build(
-        self, [&](const TraceViewer& t) { return t.select(std::move(names)); });
+    return build(self,
+                 [&](const View& t) { return t.select(std::move(names)); });
 }
 
 PyObject* tv_phase(PyObject* self, PyObject* arg) {
@@ -474,14 +474,13 @@ PyObject* tv_phase(PyObject* self, PyObject* arg) {
                         "'metadata', or 'any'");
         return nullptr;
     }
-    return build(self, [&](const TraceViewer& v) { return v.phase(ph); });
+    return build(self, [&](const View& v) { return v.phase(ph); });
 }
 
 PyObject* tv_time_range(PyObject* self, PyObject* args) {
     double begin = 0, end = 0;
     if (!PyArg_ParseTuple(args, "dd", &begin, &end)) return nullptr;
-    return build(
-        self, [&](const TraceViewer& t) { return t.time_range(begin, end); });
+    return build(self, [&](const View& t) { return t.time_range(begin, end); });
 }
 
 PyObject* tv_time_bucket(PyObject* self, PyObject* args, PyObject* kwds) {
@@ -497,8 +496,7 @@ PyObject* tv_time_bucket(PyObject* self, PyObject* args, PyObject* kwds) {
     }
     const auto width = static_cast<std::uint64_t>(us);
     if (!normalize_to || normalize_to == Py_None)
-        return build(
-            self, [&](const TraceViewer& t) { return t.time_bucket(width); });
+        return build(self, [&](const View& t) { return t.time_bucket(width); });
     if (PyUnicode_Check(normalize_to)) {
         const char* s = PyUnicode_AsUTF8(normalize_to);
         if (!s) return nullptr;
@@ -507,9 +505,8 @@ PyObject* tv_time_bucket(PyObject* self, PyObject* args, PyObject* kwds) {
                             "normalize_to must be an int origin or 'min'");
             return nullptr;
         }
-        return build(self, [&](const TraceViewer& t) {
-            return t.time_bucket_min(width);
-        });
+        return build(self,
+                     [&](const View& t) { return t.time_bucket_min(width); });
     }
     const long long origin = PyLong_AsLongLong(normalize_to);
     if (origin == -1 && PyErr_Occurred()) return nullptr;
@@ -517,7 +514,7 @@ PyObject* tv_time_bucket(PyObject* self, PyObject* args, PyObject* kwds) {
         PyErr_SetString(PyExc_ValueError, "normalize_to must be >= 0");
         return nullptr;
     }
-    return build(self, [&](const TraceViewer& t) {
+    return build(self, [&](const View& t) {
         return t.time_bucket(width, static_cast<std::uint64_t>(origin));
     });
 }
@@ -529,7 +526,7 @@ PyObject* tv_resolution(PyObject* self, PyObject* arg) {
         PyErr_SetString(PyExc_ValueError, "resolution must be >= 0");
         return nullptr;
     }
-    return build(self, [&](const TraceViewer& t) {
+    return build(self, [&](const View& t) {
         return t.resolution(static_cast<std::uint64_t>(us));
     });
 }
@@ -537,8 +534,7 @@ PyObject* tv_resolution(PyObject* self, PyObject* arg) {
 PyObject* tv_time_scale(PyObject* self, PyObject* arg) {
     const double ratio = PyFloat_AsDouble(arg);
     if (ratio == -1.0 && PyErr_Occurred()) return nullptr;
-    return build(self,
-                 [&](const TraceViewer& t) { return t.time_scale(ratio); });
+    return build(self, [&](const View& t) { return t.time_scale(ratio); });
 }
 
 PyObject* tv_time_unit(PyObject* self, PyObject* arg) {
@@ -559,7 +555,7 @@ PyObject* tv_time_unit(PyObject* self, PyObject* arg) {
         PyErr_SetString(PyExc_ValueError, "time_unit must be ns/us/ms/sec/s");
         return nullptr;
     }
-    return build(self, [&](const TraceViewer& v) {
+    return build(self, [&](const View& v) {
         const double ratio =
             static_cast<double>(
                 trace::time_metric_ns_per_unit(v.time_metric())) /
@@ -576,22 +572,20 @@ PyObject* tv_group_by(PyObject* self, PyObject* args) {
         if (!s) return nullptr;
         keys.push_back(parse_group_key(s));
     }
-    return build(self, [&](const TraceViewer& t) {
-        return t.group_by(std::move(keys));
-    });
+    return build(self,
+                 [&](const View& t) { return t.group_by(std::move(keys)); });
 }
 
 PyObject* tv_agg(PyObject* self, PyObject* args) {
     std::vector<AggSpec> specs;
     if (!parse_specs(args, specs)) return nullptr;
-    return build(self,
-                 [&](const TraceViewer& t) { return t.agg(std::move(specs)); });
+    return build(self, [&](const View& t) { return t.agg(std::move(specs)); });
 }
 
 PyObject* tv_agg_numeric_args(PyObject* self, PyObject* args) {
     std::vector<AggSpec> specs;
     if (!parse_specs(args, specs)) return nullptr;
-    return build(self, [&](const TraceViewer& t) {
+    return build(self, [&](const View& t) {
         return specs.empty() ? t.agg_numeric_args()
                              : t.agg_numeric_args(std::move(specs));
     });
@@ -600,21 +594,19 @@ PyObject* tv_agg_numeric_args(PyObject* self, PyObject* args) {
 PyObject* tv_metadata(PyObject* self, PyObject* arg) {
     const int on = PyObject_IsTrue(arg);
     if (on < 0) return nullptr;
-    return build(self,
-                 [&](const TraceViewer& t) { return t.metadata(on != 0); });
+    return build(self, [&](const View& t) { return t.metadata(on != 0); });
 }
 
 PyObject* tv_rollup_root(PyObject* self, PyObject* arg) {
     const char* dir = as_utf8(arg);
     if (!dir) return nullptr;
-    return build(self,
-                 [&](const TraceViewer& t) { return t.rollup_root(dir); });
+    return build(self, [&](const View& t) { return t.rollup_root(dir); });
 }
 
 PyObject* tv_views_root(PyObject* self, PyObject* arg) {
     const char* dir = as_utf8(arg);
     if (!dir) return nullptr;
-    return build(self, [&](const TraceViewer& t) { return t.views_root(dir); });
+    return build(self, [&](const View& t) { return t.views_root(dir); });
 }
 
 PyObject* tv_memory_budget(PyObject* self, PyObject* arg) {
@@ -624,7 +616,7 @@ PyObject* tv_memory_budget(PyObject* self, PyObject* arg) {
         PyErr_SetString(PyExc_ValueError, "memory_budget must be >= 0");
         return nullptr;
     }
-    return build(self, [&](const TraceViewer& t) {
+    return build(self, [&](const View& t) {
         return t.memory_budget(static_cast<std::uint64_t>(b));
     });
 }
@@ -636,7 +628,7 @@ PyObject* tv_columns(PyObject* self, PyObject*) {
 }
 
 PyObject* tv_column_info(PyObject* self, PyObject*) {
-    std::vector<views::View::ColumnInfo> info;
+    std::vector<views::ColumnInfo> info;
     if (!run_blocking([&] { info = tv_of(self).column_info(); }))
         return nullptr;
     PyObject* d = PyDict_New();
@@ -667,10 +659,7 @@ PyObject* tv_aggregates(PyObject* self, PyObject*) {
 // True while a filter still selects raw events: no trace aggregation and no
 // op but filters on the plan. Reads no index.
 PyObject* tv_filters_events(PyObject* self, PyObject*) {
-    const TraceViewer& t = tv_of(self);
-    return PyBool_FromLong(
-        t.view().is_row_query() &&
-        !dftracer::utils::dataframe::detail::first_non_filter_op(t.lazy()));
+    return PyBool_FromLong(tv_of(self).filters_events());
 }
 
 PyObject* tv_call_tree(PyObject* self, PyObject* args, PyObject* kwds) {
@@ -821,7 +810,7 @@ PyObject* tv_export_trace(PyObject* self, PyObject* args, PyObject* kwds) {
             args, kwds, "s|ppLiLO", const_cast<char**>(kwlist), &path,
             &compress, &index, &member_size, &level, &part_size, &runtime_arg))
         return nullptr;
-    const TraceViewer& t = tv_of(self);
+    const View& t = tv_of(self);
     ExportStats stats;
     bool aggregates = false;
     try {
@@ -954,9 +943,10 @@ PyObject* tv_plugins(PyObject* self, PyObject* host) {
     });
     views::SessionBranch attach = [set, results, keep](views::ViewSession& s) {
         views::Deferred<dftracer::utils::plugins::PluginRun> h = set->attach(s);
-        return std::function<void()>([h, results, keep]() mutable {
-            *results = std::move(h.get().results);
-        });
+        return std::function<void(const ExportStats&)>(
+            [h, results, keep](const ExportStats&) mutable {
+                *results = std::move(h.get().results);
+            });
     };
     return guarded([&] {
         return py::wrap_lazyframe(tv_of(self).branch(std::move(attach)));
@@ -970,8 +960,7 @@ PyObject* merge_flamegraph_partials_py(PyObject*, PyObject* arg) {
         return nullptr;
     std::vector<std::string_view> parts(owned.begin(), owned.end());
     return guarded([&] {
-        return py::wrap_dataframe(
-            TraceViewer::merge_flamegraph_partials(parts));
+        return py::wrap_dataframe(View::merge_flamegraph_partials(parts));
     });
 }
 

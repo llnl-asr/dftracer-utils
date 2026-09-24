@@ -1262,11 +1262,20 @@ std::vector<Series> eval_chunk(const std::vector<SlotOp>& prog,
             default:
                 return {};
         }
+        if (!s[k].handle()) return {};
     }
     std::vector<Series> outs;
     outs.reserve(finals.size());
     for (int f : finals) outs.push_back(s[static_cast<std::size_t>(f)].share());
     return outs;
+}
+
+// eval_chunk returns no columns when a kernel does not take its input type;
+// raised here, on the calling thread, since the parallel workers cannot throw.
+void require_evaluated(const std::vector<Series>& outs) {
+    if (outs.empty())
+        throw std::invalid_argument(
+            "expr: an operation does not take its input column type");
 }
 
 Series ensure_flat(const Series& c) {
@@ -1330,7 +1339,11 @@ std::vector<Series> eval_many(const std::vector<Expr>& roots,
         if (used[i]) flat[i] = ensure_flat(*inputs[i]);
 
     const std::int64_t n = inputs.front()->length();
-    if (n <= GRAIN) return eval_chunk(c.program, flat, finals, 0, n);
+    if (n <= GRAIN) {
+        std::vector<Series> outs = eval_chunk(c.program, flat, finals, 0, n);
+        require_evaluated(outs);
+        return outs;
+    }
 
     const std::int64_t chunks = (n + GRAIN - 1) / GRAIN;
     std::vector<std::vector<Series>> parts(static_cast<std::size_t>(chunks));
@@ -1338,6 +1351,7 @@ std::vector<Series> eval_many(const std::vector<Expr>& roots,
         parts[static_cast<std::size_t>(b / GRAIN)] =
             eval_chunk(c.program, flat, finals, b, e - b);
     });
+    for (const std::vector<Series>& part : parts) require_evaluated(part);
     std::vector<Series> outs;
     outs.reserve(finals.size());
     for (std::size_t j = 0; j < finals.size(); ++j) {

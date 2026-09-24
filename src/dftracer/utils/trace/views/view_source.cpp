@@ -16,6 +16,7 @@
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_executor.h>
 #include <dftracer/utils/trace/views/view_plan.h>
+#include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/trace/views/view_source.h>
 
@@ -35,6 +36,8 @@
 #include <vector>
 
 namespace dftracer::utils::trace::views {
+
+namespace scan = detail::scan;
 
 bool ViewCursor::has_nested_column() const {
     if (!nested_) {
@@ -578,12 +581,12 @@ std::optional<df::SourceApplication> ViewSource::apply_filter(
         applied_filters_.end())
         return std::nullopt;
     std::optional<Pushable> pushed =
-        translate_pred(predicate, names(), view_.plan_->time_scale);
+        translate_pred(predicate, names(), plan_->time_scale);
     if (!pushed) return std::nullopt;
     auto built = std::move(pushed->expr).build();
     if (!built.has_value()) return std::nullopt;
     auto next = std::make_shared<ViewSource>(
-        view_.filter(std::move(built.value())), emit_dyn_);
+        scan::filter(plan_, std::move(built.value())), emit_dyn_);
     next->applied_filters_ = applied_filters_;
     next->applied_filters_.push_back(fp);
     next->absorb_aggregation_ = absorb_aggregation_;
@@ -604,7 +607,8 @@ std::optional<df::SourceApplication> ViewSource::apply_projection(
         cols.push_back(std::move(*c));
     }
     if (cols == current) return std::nullopt;
-    auto next = std::make_shared<ViewSource>(view_.select(cols), emit_dyn_);
+    auto next =
+        std::make_shared<ViewSource>(scan::select(plan_, cols), emit_dyn_);
     next->applied_filters_ = applied_filters_;
     next->absorb_aggregation_ = absorb_aggregation_;
     if (next->names() != cols) return std::nullopt;
@@ -636,9 +640,9 @@ std::optional<detail::ComputedColumn> computed_from(
 
 std::optional<df::SourceApplication> ViewSource::apply_aggregation(
     const df::AggregateSpec& spec) const {
-    const detail::ViewPlan& p = *view_.plan_;
+    const detail::ViewPlan& p = *plan_;
     if (output_ != TraceOutput::Events || !absorb_aggregation_ ||
-        !view_.is_row_query() || p.auto_numeric_metrics)
+        !detail::is_row_query(*plan_) || p.auto_numeric_metrics)
         return std::nullopt;
     const std::vector<std::string> current = names();
     std::vector<GroupKey> keys;
@@ -696,27 +700,27 @@ std::optional<df::SourceApplication> ViewSource::apply_aggregation(
     }
     // A row select here only narrowed the scan to what the aggregation reads;
     // on an aggregation the view would read it as an output projection.
-    View grouped = view_.select({});
+    detail::ScanPlan grouped = scan::select(plan_, {});
     if (!computed.empty()) {
-        auto plan = std::make_shared<detail::ViewPlan>(*grouped.plan_);
+        auto plan = std::make_shared<detail::ViewPlan>(*grouped);
         plan->computed = std::move(computed);
         plan->schema.reset();
-        grouped = View(std::move(plan));
+        grouped = std::move(plan);
     }
-    if (!keys.empty()) grouped = grouped.group_by(std::move(keys));
-    grouped = grouped.agg(std::move(aggs));
+    if (!keys.empty()) grouped = scan::group_by(grouped, std::move(keys));
+    grouped = scan::agg(grouped, std::move(aggs));
     auto next = std::make_shared<ViewSource>(std::move(grouped), emit_dyn_);
     if (next->names() != expected) return std::nullopt;
     return df::SourceApplication{std::move(next), df::ApplyStatus::Exact};
 }
 
 std::optional<std::string> ViewSource::batch_key() const {
-    const detail::ViewPlan& p = *view_.plan_;
+    const detail::ViewPlan& p = *plan_;
     if (emit_dyn_ || !absorb_aggregation_ || p.cancelled || p.materialize ||
         p.auto_numeric_metrics || !p.sort_col.empty() || !p.topk_col.empty() ||
         p.limit || p.offset)
         return std::nullopt;
-    if (output_ == TraceOutput::Events && view_.is_row_query() &&
+    if (output_ == TraceOutput::Events && detail::is_row_query(*plan_) &&
         detail::select_needs_resolver(p.select))
         return std::nullopt;
     // The session's export branch writes whole events.
@@ -745,20 +749,23 @@ std::optional<std::string> ViewSource::batch_key() const {
     return key;
 }
 
-namespace {
+namespace {}  // namespace
 
-View session_base(const detail::ViewPlan& p) {
-    View base = View::from_files(p.files, p.bloom_cache)
-                    .metadata(p.include_metadata)
-                    .emit_all_metadata(p.emit_all_metadata)
-                    .time_scale(p.time_scale)
-                    .rollup_root(p.rollup_root)
-                    .views_root(p.views_root)
-                    .memory_budget(p.memory_budget);
-    if (p.time_range)
-        base = base.time_range(p.time_range->first, p.time_range->second);
-    return base;
+ViewSession ViewSource::base_session(const detail::ViewPlan& p) {
+    auto base = std::make_shared<detail::ViewPlan>();
+    base->files = p.files;
+    base->bloom_cache = p.bloom_cache;
+    base->include_metadata = p.include_metadata;
+    base->emit_all_metadata = p.emit_all_metadata;
+    base->time_scale = p.time_scale;
+    base->rollup_root = p.rollup_root;
+    base->views_root = p.views_root;
+    base->memory_budget = p.memory_budget;
+    base->time_range = p.time_range;
+    return ViewSession(std::move(base));
 }
+
+namespace {
 
 // A zero-copy view of `f`, for members that read the same output.
 df::DataFrame shared_frame(const df::DataFrame& f) {
@@ -776,13 +783,14 @@ bool is_containment(TraceOutput o) {
 
 }  // namespace
 
-std::vector<std::function<df::DataFrame()>> ViewSource::add_branches(
-    ViewSession& session, const std::vector<const ViewSource*>& members,
-    const std::vector<bool>& skip) {
+std::vector<std::function<df::DataFrame(const ExportStats&)>>
+ViewSource::add_branches(ViewSession& session,
+                         const std::vector<const ViewSource*>& members,
+                         const std::vector<bool>& skip) {
     // Containment members over the same events and fields share one buffered
     // fold, whichever of its outputs each one reads.
     struct Tree {
-        const View* view;
+        detail::ScanPlan plan;
         const ContainmentArgs* args;
         std::shared_ptr<df::DataFrame> call_tree, flamegraph;
         std::shared_ptr<std::string> partial;
@@ -793,11 +801,10 @@ std::vector<std::function<df::DataFrame()>> ViewSource::add_branches(
         const ViewSource& m = *members[i];
         if (skip[i] || !is_containment(m.output_)) continue;
         auto it = std::find_if(trees.begin(), trees.end(), [&](const Tree& t) {
-            return t.view->plan_ == m.view_.plan_ && *t.args == m.tree_;
+            return t.plan == m.plan_ && *t.args == m.tree_;
         });
         if (it == trees.end()) {
-            trees.push_back(
-                Tree{&m.view_, &m.tree_, nullptr, nullptr, nullptr});
+            trees.push_back(Tree{m.plan_, &m.tree_, nullptr, nullptr, nullptr});
             it = std::prev(trees.end());
         }
         tree_of[i] = static_cast<std::size_t>(it - trees.begin());
@@ -809,57 +816,60 @@ std::vector<std::function<df::DataFrame()>> ViewSource::add_branches(
             it->partial = std::make_shared<std::string>();
     }
     for (const Tree& t : trees)
-        session.add_containment_branch(*t.view, t.args->partition, t.args->ts,
+        session.add_containment_branch(t.plan, t.args->partition, t.args->ts,
                                        t.args->dur, t.args->name, t.args->group,
                                        t.call_tree, t.flamegraph, t.partial);
 
-    std::vector<std::function<df::DataFrame()>> out(members.size());
+    std::vector<std::function<df::DataFrame(const ExportStats&)>> out(
+        members.size());
     for (std::size_t i = 0; i < members.size(); ++i) {
         if (skip[i]) continue;
         const ViewSource& m = *members[i];
         switch (m.output_) {
             case TraceOutput::Events: {
                 Deferred<df::DataFrame> h =
-                    m.view_.is_row_query() ? session.collect_events(m.view_)
-                                           : session.collect(m.view_);
-                out[i] = [h] { return std::move(h.get()); };
+                    detail::is_row_query(*m.plan_)
+                        ? session.collect_events(m.plan_)
+                        : session.collect(m.plan_);
+                out[i] = [h](const ExportStats&) { return std::move(h.get()); };
                 break;
             }
             case TraceOutput::CallTree:
-                out[i] = [f = trees[tree_of[i]].call_tree] {
+                out[i] = [f = trees[tree_of[i]].call_tree](const ExportStats&) {
                     return shared_frame(*f);
                 };
                 break;
             case TraceOutput::Flamegraph:
-                out[i] = [f = trees[tree_of[i]].flamegraph] {
-                    return shared_frame(*f);
-                };
+                out[i] = [f = trees[tree_of[i]].flamegraph](
+                             const ExportStats&) { return shared_frame(*f); };
                 break;
             case TraceOutput::FlamegraphPartial:
-                out[i] = [p = trees[tree_of[i]].partial] {
+                out[i] = [p = trees[tree_of[i]].partial](const ExportStats&) {
                     return detail::partial_frame(*p);
                 };
                 break;
             case TraceOutput::AggregatePartial: {
-                Deferred<std::string> h = session.aggregate_partial(m.view_);
-                out[i] = [h] { return detail::partial_frame(h.get()); };
+                Deferred<std::string> h = session.aggregate_partial(m.plan_);
+                out[i] = [h](const ExportStats&) {
+                    return detail::partial_frame(h.get());
+                };
                 break;
             }
             case TraceOutput::Branch: {
-                std::function<void()> publish = m.branch_(session);
-                out[i] = [publish] {
-                    publish();
+                std::function<void(const ExportStats&)> publish =
+                    m.branch_(session);
+                out[i] = [publish](const ExportStats& stats) {
+                    publish(stats);
                     return df::DataFrame{};
                 };
                 break;
             }
             case TraceOutput::ExportJson: {
-                std::optional<Query> q =
-                    detail::effective_query(*m.view_.plan_);
+                std::optional<Query> q = detail::effective_query(*m.plan_);
                 Deferred<ExportStats> h =
                     q ? session.export_json(std::move(*q), *m.sink_)
                       : session.export_json(*m.sink_);
-                out[i] = [h, sink = m.sink_] {
+                out[i] = [h, sink = m.sink_](const ExportStats&) {
                     sink->flush();
                     return detail::stats_frame(h.get());
                 };
@@ -874,15 +884,15 @@ coro::CoroTask<ViewSource::Batch> ViewSource::run_batch(
     std::vector<std::shared_ptr<const ViewSource>> members) {
     Batch out;
     if (members.empty()) co_return out;
-    ViewSession session = session_base(*members.front()->view_.plan_).session();
+    ViewSession session = base_session(*members.front()->plan_);
     std::vector<const ViewSource*> raw;
     raw.reserve(members.size());
     for (const auto& m : members) raw.push_back(m.get());
-    std::vector<std::function<df::DataFrame()>> resolve =
+    std::vector<std::function<df::DataFrame(const ExportStats&)>> resolve =
         add_branches(session, raw, std::vector<bool>(raw.size(), false));
     out.stats = co_await session.execute();
     out.frames.reserve(resolve.size());
-    for (auto& r : resolve) out.frames.push_back(r());
+    for (auto& r : resolve) out.frames.push_back(r(out.stats));
     co_return out;
 }
 
@@ -893,7 +903,7 @@ namespace {
 // fails before its folds exist.
 coro::CoroTask<void> run_open_batch(
     std::shared_ptr<ViewSession> session,
-    std::vector<std::function<df::DataFrame()>> frames,
+    std::vector<std::function<df::DataFrame(const ExportStats&)>> frames,
     std::vector<std::shared_ptr<coro::Channel<df::Morsel>>> channels,
     std::vector<std::shared_ptr<coro::CoroSemaphore>> budgets) {
     std::vector<std::unique_ptr<coro::Channel<df::Morsel>::ProducerGuard>>
@@ -903,10 +913,10 @@ coro::CoroTask<void> run_open_batch(
         guards.push_back(
             std::make_unique<coro::Channel<df::Morsel>::ProducerGuard>(
                 ch.get()));
-    co_await session->execute();
+    const ExportStats stats = co_await session->execute();
     for (std::size_t i = 0; i < frames.size(); ++i) {
         if (!frames[i]) continue;
-        df::DataFrame f = frames[i]();
+        df::DataFrame f = frames[i](stats);
         df::Morsel m;
         m.rows = f.num_rows();
         m.columns = std::move(f.columns);
@@ -926,7 +936,7 @@ std::optional<std::vector<std::unique_ptr<df::Cursor>>> ViewSource::open_batch(
     for (const auto& m : members) {
         const auto* v = dynamic_cast<const ViewSource*>(m.get());
         if (!v || (v->output_ == TraceOutput::Events &&
-                   v->view_.is_row_query() && !v->can_stream_rows()))
+                   detail::is_row_query(*v->plan_) && !v->can_stream_rows()))
             return std::nullopt;
         views.push_back(v);
     }
@@ -936,8 +946,8 @@ std::optional<std::vector<std::unique_ptr<df::Cursor>>> ViewSource::open_batch(
                      [](const ViewSource* v) { return v->can_stream_rows(); }))
         return std::nullopt;
 
-    auto session = std::make_shared<ViewSession>(
-        session_base(*views.front()->view_.plan_).session());
+    auto session =
+        std::make_shared<ViewSession>(base_session(*views.front()->plan_));
     std::vector<std::shared_ptr<coro::Channel<df::Morsel>>> channels;
     std::vector<std::shared_ptr<coro::CoroSemaphore>> budgets;
     std::vector<std::shared_ptr<std::atomic<bool>>> dropped;
@@ -948,12 +958,12 @@ std::optional<std::vector<std::unique_ptr<df::Cursor>>> ViewSource::open_batch(
         dropped.push_back(std::make_shared<std::atomic<bool>>(false));
         const ViewSource& v = *views[i];
         if (v.can_stream_rows()) {
-            detail::add_stream_branch(*session->state_, v.view_.plan_,
-                                      channels[i], budgets[i], dropped[i]);
+            detail::add_stream_branch(*session->state_, v.plan_, channels[i],
+                                      budgets[i], dropped[i]);
             streamed[i] = true;
         }
     }
-    std::vector<std::function<df::DataFrame()>> frames =
+    std::vector<std::function<df::DataFrame(const ExportStats&)>> frames =
         add_branches(*session, views, streamed);
 
     std::shared_future<void> producer = spawn_on_current_executor(
@@ -978,9 +988,10 @@ coro::CoroTask<std::vector<df::DataFrame>> ViewSource::collect_batch(
 }
 
 bool ViewSource::can_stream_rows() const {
-    if (output_ != TraceOutput::Events || !view_.is_row_query()) return false;
-    const detail::ViewPlan& p = *view_.plan_;
-    // View::collect() always strips sort/topk/offset/limit before building a
+    if (output_ != TraceOutput::Events || !detail::is_row_query(*plan_))
+        return false;
+    const detail::ViewPlan& p = *plan_;
+    // scan::collect() always strips sort/topk/offset/limit before building a
     // ViewSource, and select unless it needs the resolver (resolved.*/r.*
     // fields, which the raw stream never computes); these checks stay as a
     // defensive guard for any other caller.
@@ -996,7 +1007,7 @@ std::vector<std::string> ViewSource::row_schema() const {
                                             "ts",   "dur", "ph"};
     std::vector<std::string> out(std::begin(TOP_LEVEL), std::end(TOP_LEVEL));
 
-    std::vector<std::string> cols = view_.columns();  // sorted
+    std::vector<std::string> cols = scan::columns(plan_);  // sorted
     const bool has_fhash =
         std::binary_search(cols.begin(), cols.end(), std::string("fhash"));
     const bool has_hhash =
@@ -1081,7 +1092,7 @@ dftracer::utils::dataframe::Schema ViewSource::compute_schema() const {
         auto resolve = [&](const std::string& name) {
             df::TypeId id = detail::row_column_type(name);
             if (id != df::TypeId::Unknown) return id;
-            if (harvested.empty()) harvested = view_.column_types();
+            if (harvested.empty()) harvested = scan::column_types(plan_);
             std::string_view key = name;
             if (key.rfind(dftracer::utils::ARGS_PREFIX, 0) == 0)
                 key.remove_prefix(dftracer::utils::ARGS_PREFIX.size());
@@ -1094,9 +1105,9 @@ dftracer::utils::dataframe::Schema ViewSource::compute_schema() const {
         // the same way build_row_frame does, so a bare arg name (or one
         // colliding with a top-level field) resolves to the same column name
         // the producer actually emits.
-        if (!view_.plan_->select.empty()) {
-            s.fields.reserve(view_.plan_->select.size());
-            for (const std::string& sel : view_.plan_->select) {
+        if (!plan_->select.empty()) {
+            s.fields.reserve(plan_->select.size());
+            for (const std::string& sel : plan_->select) {
                 std::string col_name = detail::canonical_row_column_name(sel);
                 s.fields.push_back(
                     df::Field{col_name, df::scalar(resolve(col_name)), true});
@@ -1114,9 +1125,9 @@ dftracer::utils::dataframe::Schema ViewSource::compute_schema() const {
     // never run it. A data-dependent (numeric-arg) aggregation, a row query
     // the stream cannot serve, or a plan still carrying an output select read
     // them from the result instead.
-    if (!view_.is_row_query() && view_.plan_->select.empty())
+    if (!detail::is_row_query(*plan_) && plan_->select.empty())
         if (std::optional<df::Schema> planned =
-                detail::aggregated_output_schema(*view_.plan_))
+                detail::aggregated_output_schema(*plan_))
             return *planned;
     const df::DataFrame& buf = *buffer();
     s.fields.reserve(buf.columns.size());
@@ -1132,30 +1143,30 @@ coro::CoroTask<df::DataFrame> ViewSource::run_alone() const {
         case TraceOutput::Events:
             break;
         case TraceOutput::CallTree:
-            co_return co_await view_.call_tree(t.partition, t.ts, t.dur,
+            co_return co_await scan::call_tree(plan_, t.partition, t.ts, t.dur,
                                                t.name);
         case TraceOutput::Flamegraph:
-            co_return co_await view_.flamegraph(t.partition, t.ts, t.dur,
+            co_return co_await scan::flamegraph(plan_, t.partition, t.ts, t.dur,
                                                 t.name, t.group);
         case TraceOutput::FlamegraphPartial:
-            co_return detail::partial_frame(co_await view_.flamegraph_partial(
-                t.partition, t.ts, t.dur, t.name, t.group));
+            co_return detail::partial_frame(co_await scan::flamegraph_partial(
+                plan_, t.partition, t.ts, t.dur, t.name, t.group));
         case TraceOutput::AggregatePartial:
-            co_return detail::partial_frame(co_await view_.aggregate_partial());
+            co_return detail::partial_frame(
+                co_await scan::aggregate_partial(plan_));
         case TraceOutput::ExportJson: {
-            const ExportStats stats = co_await view_.export_json(*sink_);
+            const ExportStats stats = co_await scan::export_json(plan_, *sink_);
             sink_->flush();
             co_return detail::stats_frame(stats);
         }
         case TraceOutput::Branch: {
-            ViewSession session = view_.session();
-            std::function<void()> publish = branch_(session);
-            co_await session.execute();
-            publish();
+            ViewSession session = ViewSession(plan_);
+            std::function<void(const ExportStats&)> publish = branch_(session);
+            publish(co_await session.execute());
             co_return df::DataFrame{};
         }
     }
-    co_return co_await view_.collect_frame();
+    co_return co_await scan::collect_frame(plan_);
 }
 
 const dftracer::utils::dataframe::DataFrame* ViewSource::as_frame() const {
@@ -1164,7 +1175,7 @@ const dftracer::utils::dataframe::DataFrame* ViewSource::as_frame() const {
 }
 
 std::unique_ptr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
-    const View& v, std::uint64_t memory_budget,
+    const detail::ScanPlan& v, std::uint64_t memory_budget,
     std::vector<std::string> fnames) const {
     // Capacity 0 = an effectively unbounded ring (see Channel's ctor); the
     // shared budget semaphore is the sole backpressure, acquired before send
@@ -1172,7 +1183,7 @@ std::unique_ptr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
     auto channel = coro::make_channel<dftracer::utils::dataframe::Morsel>(0);
     auto budget = std::make_shared<coro::CoroSemaphore>(memory_budget);
     auto intern = std::make_shared<dftracer::utils::StringIntern>();
-    const double time_scale = v.plan_->time_scale;
+    const double time_scale = v->time_scale;
     // Backing state for Cursor::narrow(): fuse() polls it per unit for as
     // long as this scan runs, so a narrow() call after the scan has already
     // started can still prune units it has not claimed yet.
@@ -1182,9 +1193,10 @@ std::unique_ptr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
     // and per batch, so the flag is composed into it rather than added beside
     // it. Composed, never overwritten, so a caller's own cancel_when survives.
     auto stop = std::make_shared<std::atomic<bool>>(false);
-    View scan_view = v.cancel_when([stop, prev = v.plan_->cancelled] {
-        return stop->load(std::memory_order_relaxed) || (prev && prev());
-    });
+    detail::ScanPlan scan_view =
+        scan::cancel_when(v, [stop, prev = v->cancelled] {
+            return stop->load(std::memory_order_relaxed) || (prev && prev());
+        });
 
     // Empty select: each batch discovers its own columns from the actual
     // scanned events, so morsels can differ batch to batch; name_ids lets
@@ -1192,26 +1204,25 @@ std::unique_ptr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
     // morsel's columns to that exact list (build_row_frame's select branch
     // always emits each one, null-filled where absent), matching schema().
     auto task =
-        [](View vv, double ts,
+        [](detail::ScanPlan vv, double ts,
            std::shared_ptr<coro::Channel<dftracer::utils::dataframe::Morsel>>
                ch,
            std::shared_ptr<coro::CoroSemaphore> sem,
            std::shared_ptr<dftracer::utils::StringIntern> iv,
            std::shared_ptr<detail::DynamicPrune> dp,
            bool emit_dyn) -> coro::CoroTask<void> {
-        detail::StreamRowFold fold(ch, sem, iv, vv.plan_->select, ts, nullptr,
-                                   vv.plan_->phase == Phase::Metadata,
-                                   emit_dyn);
+        detail::StreamRowFold fold(ch, sem, iv, vv->select, ts, nullptr,
+                                   vv->phase == Phase::Metadata, emit_dyn);
         std::array<detail::Fold*, 1> folds{&fold};
-        co_await vv.run_folds(folds, *iv, dp.get());
+        co_await scan::run_folds(vv, folds, *iv, dp.get());
     }(scan_view, time_scale, channel, budget, intern, dyn_prune, emit_dyn_);
 
     std::shared_future<void> producer =
         spawn_on_current_executor(std::move(task));
     return std::make_unique<StreamViewCursor>(
         std::move(channel), std::move(budget), std::move(producer),
-        std::move(stop), std::move(dyn_prune), v.plan_->files, time_scale,
-        std::move(fnames), v.plan_->bloom_cache);
+        std::move(stop), std::move(dyn_prune), v->files, time_scale,
+        std::move(fnames), v->bloom_cache);
 }
 
 dftracer::utils::dataframe::ScanResult ViewSource::scan(
@@ -1233,25 +1244,25 @@ dftracer::utils::dataframe::ScanResult ViewSource::scan(
         return r;
     }
 
-    // Streamable row query: translate each simple predicate into the View's
-    // query (Exact) and push projection into View::select so the fold harvests
-    // only those columns.
+    // Streamable row query: translate each simple predicate into the scan
+    // plan query (Exact) and push projection into scan::select so the fold
+    // harvests only those columns.
     const std::vector<std::string> fnames =
         req.projection.empty() ? names() : req.projection;
-    const double time_scale = view_.plan_->time_scale;
-    View v = view_;
+    const double time_scale = plan_->time_scale;
+    detail::ScanPlan v = plan_;
     for (std::size_t i = 0; i < req.filters.size(); ++i) {
         std::optional<Pushable> pushed =
             translate_pred(req.filters[i], fnames, time_scale);
         if (!pushed) continue;
         auto built = std::move(pushed->expr).build();
         if (!built.has_value()) continue;
-        v = v.filter(std::move(built.value()));
+        v = scan::filter(v, std::move(built.value()));
         r.filters[i] = pushed->exact
                            ? dftracer::utils::dataframe::Pushed::Exact
                            : dftracer::utils::dataframe::Pushed::Inexact;
     }
-    if (!req.projection.empty()) v = v.select(req.projection);
+    if (!req.projection.empty()) v = scan::select(v, req.projection);
 
     r.cursor = open_stream(v, req.memory_budget, fnames);
     return r;

@@ -72,13 +72,12 @@ coro::CoroTask<dftracer::utils::dataframe::DataFrame> ShardedView::aggregate(
     for (const auto& dir : shard_dirs_) {
         std::vector<ViewFile> files = shard_view_files(dir);
         if (files.empty()) continue;
-        View shard_view = configure(View::from_files(std::move(files)));
-        partials.push_back(co_await shard_view.aggregate_partial());
+        View shard = configure(View::from_files(std::move(files)));
+        partials.push_back(co_await shard.aggregate_partial().collect());
     }
 
     std::vector<std::string_view> pv(partials.begin(), partials.end());
-    View merger = configure(View::from_files({}));
-    co_return merger.merge_partials_to_table(pv);
+    co_return configure(View::from_files({})).merge_partials(pv);
 }
 
 coro::CoroTask<ExportStats> ShardedView::aggregate_counters(
@@ -88,13 +87,12 @@ coro::CoroTask<ExportStats> ShardedView::aggregate_counters(
     for (const auto& dir : shard_dirs_) {
         std::vector<ViewFile> files = shard_view_files(dir);
         if (files.empty()) continue;
-        View shard_view = configure(View::from_files(std::move(files)));
-        partials.push_back(co_await shard_view.aggregate_partial());
+        View shard = configure(View::from_files(std::move(files)));
+        partials.push_back(co_await shard.aggregate_partial().collect());
     }
 
     std::vector<std::string_view> pv(partials.begin(), partials.end());
-    View merger = configure(View::from_files({}));
-    co_return merger.merge_counter_partials(pv, sink);
+    co_return configure(View::from_files({})).merge_counter_partials(pv, sink);
 }
 
 void write_shard_set(const std::string& root,

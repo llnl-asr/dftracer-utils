@@ -155,8 +155,9 @@ coro::CoroTask<HttpResponse> handle_viz_counters(const HttpRequest& req,
     std::size_t slots = std::max<std::size_t>(1, index.max_concurrent());
     bool single_file = !params.get("file").empty();
 
-    // Fold per-bucket read/write bytes and op counts over View's scan. Partials
-    // init lazily (an unused slot stays empty, the identity for merge below).
+    // Fold per-bucket read/write bytes and op counts over the view's scan.
+    // Partials init lazily (an unused slot stays empty, the identity for merge
+    // below).
     views::View v =
         views::View::from_files(
             to_view_files(select_viz_target_files(index, params, begin, end)),

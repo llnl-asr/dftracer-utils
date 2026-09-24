@@ -199,7 +199,6 @@ eager build:
          View view = View::from_directory("traces/").get();
          auto df = view.group_by({GroupKey::cat()})
                        .agg({AggSpec(AggOp::Count)})
-                       .collect()   // -> LazyFrame
                        .collect()   // -> coro::CoroTask<DataFrame>
                        .get();
 

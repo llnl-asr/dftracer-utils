@@ -74,9 +74,10 @@ counters), ``Phase::Aggregated`` (rollup records), ``Phase::Metadata``
 end)`` and ``.time_bucket(interval_us, origin)`` window and bucket by timestamp
 (``origin`` anchors the windows; Python's ``normalize_to="min"`` anchors on
 the first event's timestamp instead of ``0``);
-``.select({...})`` projects columns; ``.limit(n)`` / ``.offset(n)`` paginate;
-``.sort_by(column, descending)`` / ``.topk(column, k)`` order the result. All
-return a new ``View`` (or, in Python, a new ``TraceViewer``).
+``.select({...})`` projects columns; ``.head(n)`` takes the first ``n`` rows
+and ``.slice(offset, len)`` pages through the rest; ``.sort_by(column,
+descending)`` / ``.topk(column, k)`` order the result. All return a new
+``View`` (or, in Python, a new ``TraceViewer``).
 
 ``.time_scale(ns_ratio)`` normalizes ``ts``/``dur``/``te`` by
 ``source_ns_per_unit / target_ns_per_unit`` (``1.0`` = no change), applied
@@ -92,8 +93,8 @@ file and derives the ``time_scale`` ratio for you:
 Aggregate
 ---------
 
-``.group_by({...})`` and ``.agg({...})`` promote a ``View`` to an
-``AggregatedView`` (in Python both return a ``TraceViewer``); see
+``.group_by({...})`` and ``.agg({...})`` return a ``View`` whose scan
+aggregates (in Python, a ``TraceViewer``); see
 :doc:`aggregation` for the full ``GroupKey`` / ``AggOp`` vocabulary. The
 terminal that runs everything built so far is ``.collect()``:
 
@@ -134,14 +135,16 @@ Inspecting the schema
 ---------------------
 
 ``columns()`` returns the distinct columns discoverable from the view's index
-and ``schema()`` returns each with its type. Both read index metadata only (no
-trace scan) and read the per-index metadata in parallel:
+and ``column_info()`` returns each with its type. Both read index metadata
+only (no trace scan) and read the per-index metadata in parallel:
 
 .. code-block:: cpp
 
+   using namespace dftracer::utils::trace::views;
+
    View v = View::from_file("trace.pfw.gz");
    std::vector<std::string> cols = v.columns();
-   for (const View::ColumnInfo& c : v.schema())
+   for (const ColumnInfo& c : v.column_info())
        std::printf("%s: %s\n", c.name.c_str(), c.type.c_str());
 
 The set is schemaless: the base axis fields (``pid`` / ``tid`` / ``ts`` /
@@ -156,11 +159,11 @@ properties describe the plan's output instead, as on any ``LazyFrame``.
 Export
 ------
 
-``export_json`` streams matching events verbatim as newline-delimited JSON to
+``sink_json`` streams matching events verbatim as newline-delimited JSON to
 an ``ExportSink`` (a re-indexable dftracer trace if the sink is a file/gzip
-writer). ``export_trace`` writes a new multi-member, re-indexable trace
+writer). ``sink_trace`` writes a new multi-member, re-indexable trace
 through the parallel writer - the engine behind ``dftracer_view --merge``.
-``export_counters`` runs the view's ``group_by`` +
+``sink_counters`` runs the view's ``group_by`` +
 ``agg`` and emits each result row as a ``ph="C"`` counter event, which with a
 ``time_bucket`` set produces the aggregator's counter-trace format:
 
@@ -177,7 +180,7 @@ through the parallel writer - the engine behind ``dftracer_view --merge``.
        .phase(Phase::Counters)
        .group_by({GroupKey::name()})
        .agg_numeric_args()
-       .export_counters(sink)
+       .sink_counters(sink)
        .get();
 
 In Python, ``TraceViewer.sink_json(path)`` streams the selected events as
@@ -230,45 +233,57 @@ carries the same ``ExportStats`` (events matched/scanned, chunks skipped,
 too much structure - a fold that keeps one big shared accumulator merged by
 hand - use the lower-level ``for_each_batch`` terminal instead.
 
-Sharing one scan: ViewSession
+These folds read raw events, so the view may carry only event filters and
+trace builders before them. A trailing ``head(n)`` (or the ``limit``
+argument) caps the scan: it stops between batches once ``n`` events were
+delivered, so the last batch may carry more. The same cap applies to
+``branch()`` and ``flamegraph_partial()``. ``call_tree()``, ``flamegraph()``
+and ``containment()`` reject a ``head``, since they would fold more than
+``n`` events; any other op before one of these terminals (a sort, a
+``with_column``, an aggregation) throws ``INVALID_ARGUMENT`` naming it.
+
+Sharing one scan: sessions
 -------------------------------
 
 Each terminal above runs its own scan. When several reads should share a
-single pass over the same base view - a custom fold alongside a built-in
-aggregate, or several unrelated aggregates at once - open a
-``ViewSession``. Register ops (``collect``, ``materialize``, ``fold``,
-``export_json``); each returns a ``Deferred<T>`` handle that resolves only
-once; then call ``execute()`` to run every registered op together. ``join`` and
-``compare`` combine two ``collect`` handles that group the same way after the
-one scan (their shared key width is inferred), returning a ``Deferred`` like any
-other op:
+single pass over the same base view - a couple of unrelated aggregates, or an
+aggregate alongside a call tree - open a session. ``View::session()`` returns
+a ``TraceSession``: register a ``dataframe::LazyFrame`` (or
+``dataframe::LazyResult<T>``) built from the base view with ``collect()`` -
+each call returns a ``Deferred<T>`` handle that resolves only once - then call
+``execute()`` to run every registered plan together:
 
 .. code-block:: cpp
 
-   auto run = View::from_file("trace.pfw.gz").session();
+   namespace df = dftracer::utils::dataframe;
 
-   auto small = run.fold<Small>(
-       F("dur") < 25,   // or Query::from_string("dur < 25").value()
-       [](Small& s, const json::JsonValue& jv, std::string_view) {
-           ++s.n;
-           s.sum += jv["dur"].get<double>(0);
-       },
-       [](Small&& a, Small&& b) { a.n += b.n; a.sum += b.sum; return std::move(a); });
+   View base = View::from_file("trace.pfw.gz");
+   TraceSession run;
 
-   auto posix = run.collect(
-       Query::from_string(R"(cat == "POSIX")").value(), {GroupKey::cat()},
-       {{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "sum_dur"}});
+   df::LazyFrame by_cat =
+       base.filter(Query::from_string(R"(cat == "POSIX")").value())
+           .group_by({GroupKey::cat()})
+           .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "sum_dur"}});
+   auto posix = run.collect(by_cat);
 
-   auto stats = run.execute().get();   // runs the one shared scan
+   df::LazyFrame tree =
+       base.filter(Query::from_string(R"(cat == "POSIX")").value())
+           .call_tree({"pid", "tid"});
+   auto tree_h = run.collect(tree);
 
-   small->n;        // Deferred<T>::get() (or operator*/->) after execute()
-   posix->num_rows();
+   run.execute().get();   // runs the one shared scan
 
-Reading a ``Deferred`` handle before ``execute()`` resolves it throws. From
-Python the same fused scan is ``TraceViewer.session()``: ``s.collect(plan)``
-registers any lazy plan over the view (an aggregation, a row filter, a
-``call_tree`` / ``flamegraph`` plan, the ``containment()`` result), and
-``s.sink_json(viewer, path)``, ``s.materialize(viewer)`` and
+   df::DataFrame posix_df = *posix;   // Deferred<T>::get() (or operator*/->)
+   df::DataFrame tree_df  = *tree_h;
+
+Reading a ``Deferred`` handle before ``execute()`` resolves it throws. A
+custom fold that needs its own per-event accumulator, or a join/compare of
+two branches after the shared scan, goes through the lower-level
+``ViewSession`` reached via ``View::branch()`` - see :doc:`sessions` for that
+path. From Python the same fused scan is ``TraceViewer.session()``:
+``s.collect(plan)`` registers any lazy plan over the view (an aggregation, a
+row filter, a ``call_tree`` / ``flamegraph`` plan, the ``containment()``
+result), and ``s.sink_json(viewer, path)``, ``s.materialize(viewer)`` and
 ``s.attach(plugins)`` register the other branches, each returning a ``Handle``
 resolved on ``execute()``. :func:`~dftracer.utils.collect_all` shares the scan
 the same way without a session. See :doc:`sessions` and
@@ -279,9 +294,10 @@ Materialized views
 
 ``.materialize(checkpoint_size, part_size)`` persists a query's result (a
 filtered trace for a row query, a rollup for an aggregation) so a later
-matching query is served from it instead of rescanning. ``.run()`` is the
-build-only form (side effect only, no result). See :doc:`aggregation` and
-:doc:`../../api/trace_viewer` for the Python equivalent.
+matching query is served from it instead of rescanning; it returns a
+``coro::CoroTask<ExportStats>`` (``co_await`` it, or ``.get()`` outside a
+coroutine). See :doc:`aggregation` and :doc:`../../api/trace_viewer` for the
+Python equivalent.
 
 Distributed row-materialize coordinator protocol
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -295,7 +311,7 @@ coordinator publishing the result:
    shared materialized-view directory (empty if the view has no views
    anchor - see ``.views_root()``).
 2. Each rank exports its own slice of files' filtered events into a subdir of
-   that directory, e.g. via ``export_trace`` with ``build_index`` set, at
+   that directory, e.g. via ``sink_trace`` with ``build_index`` set, at
    ``<dir>/shard-<rank>/part.pfw.gz``.
 3. Once every rank has finished, the coordinator calls
    ``register_materialized(dir)`` to write the manifest describing the full
@@ -310,7 +326,7 @@ coordinator publishing the result:
    // Each rank (files_for_rank is that rank's slice of all_files):
    View::from_files(files_for_rank)
        .filter(q)
-       .export_trace(TraceWriteOptions{
+       .sink_trace(TraceWriteOptions{
            .output_path = mv_dir + "/shard-" + std::to_string(rank) + "/part.pfw.gz",
            .build_index = true,
        })

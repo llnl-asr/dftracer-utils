@@ -91,7 +91,6 @@ first - add ``time_bucket`` (microseconds) to a trace query. Combined with a
                              .group_by({GroupKey::cat()})
                              .time_bucket(1000)   // 1 ms buckets
                              .agg({{AggOp::Count, "", "n"}})
-                             .collect()   // -> LazyFrame
                              .collect()   // -> coro::CoroTask<DataFrame>
                              .get();
 

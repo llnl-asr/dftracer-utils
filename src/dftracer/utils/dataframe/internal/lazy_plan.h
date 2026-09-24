@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 
 namespace dftracer::utils::dataframe::detail {
 
@@ -49,6 +50,10 @@ std::optional<std::string> first_non_filter_op(const LazyFrame& lf);
 
 // explain()'s description of the first op in `lf`, or nullopt when it has none.
 std::optional<std::string> first_op(const LazyFrame& lf);
+
+// (offset, len) when `lf`'s only op is a row window (head / slice / limit).
+std::optional<std::pair<std::int64_t, std::int64_t>> sole_slice(
+    const LazyFrame& lf);
 
 // Calls `f` on `lf`, then depth first on every child plan: the other side of a
 // join or concat and each frame operand of a frame op.

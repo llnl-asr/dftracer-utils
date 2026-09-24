@@ -124,8 +124,9 @@ result frames equi-join on the shared group key.
 
    .. tab-item:: C++
 
-      ``AggregatedView::join`` is a terminal on the aggregated view (from
-      ``group_by``/``agg``); it returns the joined ``DataFrame``.
+      ``View`` has no aggregated-join terminal of its own; call ``.lazy()`` on
+      each aggregated view and join the resulting ``LazyFrame``\ s directly, as
+      above, naming the shared group key.
 
       .. code-block:: cpp
 
@@ -133,14 +134,15 @@ result frames equi-join on the shared group key.
 
          using namespace dftracer::utils::trace::views;
 
-         auto base = View::from_file("baseline.pfw.gz")
+         View base = View::from_file("baseline.pfw.gz")
                          .group_by({GroupKey::cat()})
                          .agg({{AggOp::Count, "", "n"}});
-         auto vary = View::from_file("variant.pfw.gz")
+         View vary = View::from_file("variant.pfw.gz")
                          .group_by({GroupKey::cat()})
                          .agg({{AggOp::Count, "", "n"}});
 
-         auto joined = base.join(vary, JoinType::FULL).get();
+         LazyFrame plan = base.lazy().join(vary.lazy(), {"cat"}, JoinHow::Outer);
+         DataFrame joined = plan.collect().get();
 
    .. tab-item:: Python
 

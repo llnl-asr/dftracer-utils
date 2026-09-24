@@ -19,6 +19,7 @@
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_executor.h>
+#include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <doctest/doctest.h>
 
@@ -95,17 +96,18 @@ inline std::vector<HistBin> hist_bins(const dataframe::DataFrame& b,
 using gmoracle::groupmap_oracle;
 
 // The engine collect path (run_collect_via_engine + post-ops), the production
-// aggregation path every non-row-query View::collect() takes.
-inline dataframe::DataFrame engine_collect(const View& v) {
+// aggregation path every aggregating View collect takes.
+inline dataframe::DataFrame engine_collect(
+    const dftracer::utils::trace::views::detail::scan::ScanPlan& v) {
     namespace detail = dftracer::utils::trace::views::detail;
     // One pool for the whole binary: these cases each drive a collect, and a
     // fresh pool per call dominates the run under valgrind.
     static Runtime rt;
     dataframe::DataFrame result;
     rt.run_blocking("engine-collect", [&](CoroScope&) -> coro::CoroTask<void> {
-        result = co_await detail::run_collect_via_engine(v.plan());
+        result = co_await detail::run_collect_via_engine(*v);
     });
-    return detail::apply_agg_post_ops(std::move(result), v.plan());
+    return detail::apply_agg_post_ops(std::move(result), *v);
 }
 
 // Two aggregation frames equal, pairing rows by their composite key text so a
@@ -168,8 +170,9 @@ inline std::string write_agg_engine_trace(const std::string& dir) {
     return gz;
 }
 
-// The engine collect path and the GroupMap oracle over the same built View.
-inline dataframe::DataFrame collect_engine_plan(const View& v) {
+// The engine collect path and the GroupMap oracle over the same built plan.
+inline dataframe::DataFrame collect_engine_plan(
+    const dftracer::utils::trace::views::detail::scan::ScanPlan& v) {
     namespace detail = dftracer::utils::trace::views::detail;
     // One pool for the whole binary: a fresh one per collect dominates the
     // run under Valgrind.
@@ -178,12 +181,12 @@ inline dataframe::DataFrame collect_engine_plan(const View& v) {
     rt.run_blocking("agg-engine",
                     [&](dftracer::utils::CoroScope&)
                         -> dftracer::utils::coro::CoroTask<void> {
-                        result =
-                            co_await detail::run_collect_via_engine(v.plan());
+                        result = co_await detail::run_collect_via_engine(*v);
                     });
-    return detail::apply_agg_post_ops(std::move(result), v.plan());
+    return detail::apply_agg_post_ops(std::move(result), *v);
 }
-inline dataframe::DataFrame collect_groupmap_plan(const View& v) {
+inline dataframe::DataFrame collect_groupmap_plan(
+    const dftracer::utils::trace::views::detail::scan::ScanPlan& v) {
     return groupmap_oracle(v);
 }
 
@@ -248,20 +251,22 @@ inline void run_both_file(const std::string& file, const std::string& file_idx,
                           const GroupKey& gk, const std::string& key_col,
                           std::uint64_t mem_budget) {
     auto build = [&] {
-        View v = View::from_file(file, file_idx);
-        if (mem_budget) v = v.memory_budget(mem_budget);
-        return v.group_by({gk}).agg({
-            {AggOp::Count, "", "n"},
-            {AggOp::Sum, "dur", "sum_dur"},
-            {AggOp::Mean, "dur", "mean_dur"},
-            {AggOp::Min, "dur", "min_dur"},
-            {AggOp::Max, "dur", "max_dur"},
-            {AggOp::Var, "dur", "var_dur"},
-            {AggOp::Std, "dur", "std_dur"},
-            {AggOp::Pct, "dur", "p90_dur", "", 0.9},
-            {AggOp::ArgMax, "name", "top_name", "dur"},
-            {AggOp::SetUnion, "cat", "cats"},
-        });
+        namespace scan = dftracer::utils::trace::views::detail::scan;
+        scan::ScanPlan v = scan::from_file(file, file_idx);
+        if (mem_budget) v = scan::memory_budget(v, mem_budget);
+        return scan::agg(scan::group_by(v, {gk}),
+                         {
+                             {AggOp::Count, "", "n"},
+                             {AggOp::Sum, "dur", "sum_dur"},
+                             {AggOp::Mean, "dur", "mean_dur"},
+                             {AggOp::Min, "dur", "min_dur"},
+                             {AggOp::Max, "dur", "max_dur"},
+                             {AggOp::Var, "dur", "var_dur"},
+                             {AggOp::Std, "dur", "std_dur"},
+                             {AggOp::Pct, "dur", "p90_dur", "", 0.9},
+                             {AggOp::ArgMax, "name", "top_name", "dur"},
+                             {AggOp::SetUnion, "cat", "cats"},
+                         });
     };
     dataframe::DataFrame legacy = collect_groupmap_plan(build());
     dataframe::DataFrame engine = collect_engine_plan(build());
@@ -273,16 +278,18 @@ inline void run_both_multi(std::vector<ViewFile> files,
                            const std::vector<std::string>& key_cols,
                            std::uint64_t mem_budget) {
     auto build = [&] {
-        View v = View::from_files(files);
-        if (mem_budget) v = v.memory_budget(mem_budget);
-        return v.group_by(gks).agg({
-            {AggOp::Count, "", "n"},
-            {AggOp::Sum, "dur", "sum_dur"},
-            {AggOp::Mean, "dur", "mean_dur"},
-            {AggOp::Var, "dur", "var_dur"},
-            {AggOp::Pct, "dur", "p90_dur", "", 0.9},
-            {AggOp::ArgMax, "name", "top_name", "dur"},
-        });
+        namespace scan = dftracer::utils::trace::views::detail::scan;
+        scan::ScanPlan v = scan::from_files(files);
+        if (mem_budget) v = scan::memory_budget(v, mem_budget);
+        return scan::agg(scan::group_by(v, gks),
+                         {
+                             {AggOp::Count, "", "n"},
+                             {AggOp::Sum, "dur", "sum_dur"},
+                             {AggOp::Mean, "dur", "mean_dur"},
+                             {AggOp::Var, "dur", "var_dur"},
+                             {AggOp::Pct, "dur", "p90_dur", "", 0.9},
+                             {AggOp::ArgMax, "name", "top_name", "dur"},
+                         });
     };
     dataframe::DataFrame legacy = collect_groupmap_plan(build());
     dataframe::DataFrame engine = collect_engine_plan(build());

@@ -5198,7 +5198,8 @@ LazyFrame LazyFrame::memory_budget(std::uint64_t bytes) const {
 }
 
 LazyFrame LazyFrame::auto_spill() const {
-    // Same policy as the default (0) and as View: ~1/3 of available memory.
+    // Same policy as the default (0) and as View: ~1/3 of available
+    // memory.
     return LazyFrame(source_, ops_, resolve_spill_budget(0));
 }
 
@@ -5605,15 +5606,24 @@ coro::CoroTask<void> batch_leaves(std::vector<PlannedTree*> leaves,
 
 }  // namespace
 
-coro::CoroTask<DataFrame> LazyFrame::collect(std::int64_t morsel_rows) const {
-    PlannedTree tree = plan_tree(*this);
+namespace {
+
+coro::CoroTask<DataFrame> collect_owned(LazyFrame plan, std::uint64_t budget,
+                                        std::int64_t morsel_rows) {
+    PlannedTree tree = plan_tree(plan);
     if (!tree.children.empty()) {
         std::vector<PlannedTree*> leaves;
         tree_leaves(tree, leaves);
         co_await batch_leaves(std::move(leaves));
     }
-    co_return co_await collect_plan(finish_tree(std::move(tree)),
-                                    memory_budget_, morsel_rows);
+    co_return co_await collect_plan(finish_tree(std::move(tree)), budget,
+                                    morsel_rows);
+}
+
+}  // namespace
+
+coro::CoroTask<DataFrame> LazyFrame::collect(std::int64_t morsel_rows) const {
+    return collect_owned(*this, memory_budget_, morsel_rows);
 }
 
 coro::CoroTask<std::vector<DataFrame>> Source::collect_batch(
@@ -5949,6 +5959,15 @@ std::optional<std::string> first_op(const LazyFrame& lf) {
     const auto& ops = PlanAccess::ops(lf);
     if (ops.empty()) return std::nullopt;
     return describe_op(*ops.front());
+}
+
+std::optional<std::pair<std::int64_t, std::int64_t>> sole_slice(
+    const LazyFrame& lf) {
+    const auto& ops = PlanAccess::ops(lf);
+    if (ops.size() != 1) return std::nullopt;
+    const auto* s = std::get_if<SliceOp>(&ops.front()->node);
+    if (!s || s->offset < 0 || s->len < 0) return std::nullopt;
+    return std::make_pair(s->offset, s->len);
 }
 
 }  // namespace detail

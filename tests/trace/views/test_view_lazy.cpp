@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/trace/views/view_plan.h>
+#include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_source.h>
 #include <doctest/doctest.h>
 
@@ -12,17 +13,20 @@
 
 #include "test_view_common.h"
 
-TEST_SUITE("View - lazy collect") {
-    TEST_CASE("View::collect() returns a LazyFrame matching collect_frame()") {
-        const auto& s = shared_trace();
-        View v = View::from_file(s.gz, s.idx)
-                     .metadata(false)
-                     .group_by({GroupKey::cat()})
-                     .agg({{AggOp::Count, "", "n"}});
+namespace scan = dftracer::utils::trace::views::detail::scan;
 
-        dataframe::LazyFrame lz = v.collect();
+TEST_SUITE("trace scan - lazy collect") {
+    TEST_CASE(
+        "scan::collect() returns a LazyFrame matching scan::collect_frame()") {
+        const auto& s = shared_trace();
+        scan::ScanPlan v = scan::agg(
+            scan::group_by(scan::metadata(scan::from_file(s.gz, s.idx), false),
+                           {GroupKey::cat()}),
+            {{AggOp::Count, "", "n"}});
+
+        dataframe::LazyFrame lz = scan::collect(v);
         dataframe::DataFrame via_lazy = run(lz.collect());
-        dataframe::DataFrame via_eager = run(v.collect_frame());
+        dataframe::DataFrame via_eager = run(scan::collect_frame(v));
 
         REQUIRE(via_lazy.num_rows() == via_eager.num_rows());
         REQUIRE(via_lazy.num_rows() == 2);
@@ -32,14 +36,16 @@ TEST_SUITE("View - lazy collect") {
         }
     }
 
-    TEST_CASE("View::collect() lazy plan composes filter + select") {
+    TEST_CASE("scan::collect() lazy plan composes filter + select") {
         const auto& s = shared_trace();
-        View base = View::from_file(s.gz, s.idx).metadata(false);
+        scan::ScanPlan base =
+            scan::metadata(scan::from_file(s.gz, s.idx), false);
 
-        dataframe::DataFrame all_events = run(base.collect_frame());
+        dataframe::DataFrame all_events = run(scan::collect_frame(base));
 
         dataframe::LazyFrame lz =
-            base.query(R"(cat == "POSIX")").collect().select({"cat", "name"});
+            scan::collect(scan::query(base, R"(cat == "POSIX")"))
+                .select({"cat", "name"});
         dataframe::DataFrame subset = run(lz.collect());
 
         CHECK(subset.num_rows() == 30);
@@ -52,8 +58,8 @@ TEST_SUITE("View - lazy collect") {
     }
 }
 
-// TraceViewer: legacy plan equality against the View builders, source
-// absorption and builder order.
+// View: plan equality against the scan builders, source absorption and
+// builder order.
 
 using dftracer::utils::dataframe::Agg;
 using dftracer::utils::dataframe::CmpOp;
@@ -112,7 +118,7 @@ std::string optimized(const LazyFrame& lf) {
     std::string ops = opt.explain();
     ops = ops.substr(ops.find('\n') == std::string::npos ? ops.size()
                                                          : ops.find('\n'));
-    return canonical(src->view().plan()) + "\nops:" + ops;
+    return canonical(*src->plan()) + "\nops:" + ops;
 }
 
 void check_same_rows(const DataFrame& a, const DataFrame& b) {
@@ -124,93 +130,101 @@ void check_same_rows(const DataFrame& a, const DataFrame& b) {
                   dftracer::utils::dataframe::cell_to_string(b.columns[c], r));
 }
 
-View base_view() {
+scan::ScanPlan base_plan() {
+    const auto& s = shared_trace();
+    return scan::metadata(scan::from_file(s.gz, s.idx), false);
+}
+
+View base_viewer() {
     const auto& s = shared_trace();
     return View::from_file(s.gz, s.idx).metadata(false);
 }
 
-TraceViewer base_viewer() {
-    const auto& s = shared_trace();
-    return TraceViewer::from_file(s.gz, s.idx).metadata(false);
-}
-
 }  // namespace
 
-TEST_SUITE("TraceViewer - legacy plan equality") {
+TEST_SUITE("View - scan plan equality") {
     TEST_CASE("an aggregation with sort and limit") {
-        View v = base_view()
+        scan::ScanPlan v = scan::limit(
+            scan::sort_by(
+                scan::agg(scan::group_by(base_plan(), {GroupKey::cat()}),
+                          {{AggOp::Count, "", "n"}}),
+                "n", true),
+            1);
+        View t = base_viewer()
                      .group_by({GroupKey::cat()})
                      .agg({{AggOp::Count, "", "n"}})
                      .sort_by("n", true)
-                     .limit(1);
-        TraceViewer t = base_viewer()
-                            .group_by({GroupKey::cat()})
-                            .agg({{AggOp::Count, "", "n"}})
-                            .sort_by("n", true)
-                            .slice(0, 1);
-        CHECK(optimized(v.collect()) == optimized(t.lazy()));
-        check_same_rows(run(v.collect().collect()), run(t.collect()));
+                     .slice(0, 1);
+        CHECK(optimized(scan::collect(v)) == optimized(t.lazy()));
+        check_same_rows(run(scan::collect(v).collect()), run(t.collect()));
     }
 
     TEST_CASE("an event filter, phase and time range before a group-by") {
-        View v = base_view()
+        scan::ScanPlan v = scan::agg(
+            scan::group_by(
+                scan::time_range(
+                    scan::phase(scan::query(base_plan(), R"(cat == "POSIX")"),
+                                Phase::Events),
+                    1000, 3000),
+                {GroupKey::name()}),
+            {{AggOp::Sum, "dur", "sum_dur"}});
+        View t = base_viewer()
                      .query(R"(cat == "POSIX")")
                      .phase(Phase::Events)
                      .time_range(1000, 3000)
                      .group_by({GroupKey::name()})
                      .agg({{AggOp::Sum, "dur", "sum_dur"}});
-        TraceViewer t = base_viewer()
-                            .query(R"(cat == "POSIX")")
-                            .phase(Phase::Events)
-                            .time_range(1000, 3000)
-                            .group_by({GroupKey::name()})
-                            .agg({{AggOp::Sum, "dur", "sum_dur"}});
-        CHECK(optimized(v.collect()) == optimized(t.lazy()));
-        check_same_rows(run(v.collect().collect()), run(t.collect()));
+        CHECK(optimized(scan::collect(v)) == optimized(t.lazy()));
+        check_same_rows(run(scan::collect(v).collect()), run(t.collect()));
     }
 
     TEST_CASE("a time bucket with top-k") {
-        View v = base_view()
+        scan::ScanPlan v = scan::topk(
+            scan::agg(scan::group_by(scan::time_bucket(base_plan(), 1000),
+                                     {GroupKey::cat()}),
+                      {{AggOp::Count, "", "n"}}),
+            "n", 2);
+        View t = base_viewer()
                      .time_bucket(1000)
                      .group_by({GroupKey::cat()})
                      .agg({{AggOp::Count, "", "n"}})
                      .topk("n", 2);
-        TraceViewer t = base_viewer()
-                            .time_bucket(1000)
-                            .group_by({GroupKey::cat()})
-                            .agg({{AggOp::Count, "", "n"}})
-                            .topk("n", 2);
-        CHECK(optimized(v.collect()) == optimized(t.lazy()));
-        check_same_rows(run(v.collect().collect()), run(t.collect()));
+        CHECK(optimized(scan::collect(v)) == optimized(t.lazy()));
+        check_same_rows(run(scan::collect(v).collect()), run(t.collect()));
     }
 
     TEST_CASE("a row query with a select") {
-        View v = base_view().query(R"(cat == "STDIO")").select({"cat", "name"});
-        TraceViewer t =
+        scan::ScanPlan v = scan::select(
+            scan::query(base_plan(), R"(cat == "STDIO")"), {"cat", "name"});
+        View t =
             base_viewer().query(R"(cat == "STDIO")").select({"cat", "name"});
-        CHECK(optimized(v.collect()) == optimized(t.lazy()));
-        check_same_rows(run(v.collect().collect()), run(t.collect()));
+        CHECK(optimized(scan::collect(v)) == optimized(t.lazy()));
+        check_same_rows(run(scan::collect(v).collect()), run(t.collect()));
     }
 
-    TEST_CASE("constructing from a View keeps its post-scan ops") {
-        View v = base_view()
+    TEST_CASE("a trace aggregation keeps its post-scan sort") {
+        scan::ScanPlan v = scan::sort_by(
+            scan::agg(scan::group_by(base_plan(), {GroupKey::cat()}),
+                      {{AggOp::Count, "", "n"}}),
+            "cat");
+        View t = base_viewer()
                      .group_by({GroupKey::cat()})
                      .agg({{AggOp::Count, "", "n"}})
                      .sort_by("cat");
-        CHECK(optimized(v.collect()) == optimized(TraceViewer(v).lazy()));
+        CHECK(optimized(scan::collect(v)) == optimized(t.lazy()));
+        check_same_rows(run(scan::collect(v).collect()), run(t.collect()));
     }
 }
 
-TEST_SUITE("TraceViewer - source absorption") {
+TEST_SUITE("View - source absorption") {
     TEST_CASE("an Expr filter is absorbed like the DSL filter") {
-        TraceViewer t = base_viewer();
+        View t = base_viewer();
         const std::vector<std::string> names = t.schema();
         std::int32_t cat = -1;
         for (std::size_t i = 0; i < names.size(); ++i)
             if (names[i] == "cat") cat = static_cast<std::int32_t>(i);
         REQUIRE(cat >= 0);
-        TraceViewer by_expr =
-            t.filter(expr_cmp(CmpOp::Eq, col(cat), str("POSIX")));
+        View by_expr = t.filter(expr_cmp(CmpOp::Eq, col(cat), str("POSIX")));
         CHECK(by_expr.explain().find("filter") == std::string::npos);
         DataFrame a = run(by_expr.collect());
         DataFrame b = run(t.query(R"(cat == "POSIX")").collect());
@@ -219,13 +233,13 @@ TEST_SUITE("TraceViewer - source absorption") {
     }
 
     TEST_CASE("a generic group-by on fixed fields is absorbed") {
-        TraceViewer t = base_viewer();
-        TraceViewer generic =
+        View t = base_viewer();
+        View generic =
             t.group_by(std::vector<std::string>{"name"},
                        {{Agg::Count, "", "n"}, {Agg::Sum, "dur", "sum_dur"}})
                 .sort_by("name");
         CHECK(generic.explain().find("group_by") == std::string::npos);
-        TraceViewer traced =
+        View traced =
             t.group_by({GroupKey::name()})
                 .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "sum_dur"}})
                 .sort_by("name");
@@ -233,10 +247,10 @@ TEST_SUITE("TraceViewer - source absorption") {
     }
 
     TEST_CASE("a generic group-by on cat keeps its raw case") {
-        TraceViewer g = base_viewer()
-                            .group_by(std::vector<std::string>{"cat"},
-                                      {{Agg::Count, "", "n"}})
-                            .sort_by("cat");
+        View g = base_viewer()
+                     .group_by(std::vector<std::string>{"cat"},
+                               {{Agg::Count, "", "n"}})
+                     .sort_by("cat");
         CHECK(g.explain().find("group_by") == std::string::npos);
         DataFrame r = run(g.collect());
         REQUIRE(r.num_rows() == 2);
@@ -246,8 +260,8 @@ TEST_SUITE("TraceViewer - source absorption") {
 
     TEST_CASE(
         "a group-by on any other field is absorbed as an expression key") {
-        TraceViewer t = base_viewer();
-        TraceViewer g =
+        View t = base_viewer();
+        View g =
             t.group_by(std::vector<std::string>{"ph"}, {{Agg::Count, "", "n"}});
         CHECK(g.explain().find("group_by") == std::string::npos);
         DataFrame r = run(g.collect());
@@ -256,10 +270,10 @@ TEST_SUITE("TraceViewer - source absorption") {
     }
 
     TEST_CASE("an aggregated scan keeps a later Expr filter as an engine op") {
-        TraceViewer t = base_viewer()
-                            .group_by({GroupKey::cat()})
-                            .agg({{AggOp::Count, "", "n"}});
-        TraceViewer f = t.filter(col(1) > std::int64_t{25});
+        View t = base_viewer()
+                     .group_by({GroupKey::cat()})
+                     .agg({{AggOp::Count, "", "n"}});
+        View f = t.filter(col(1) > std::int64_t{25});
         CHECK(f.explain().find("filter") != std::string::npos);
         DataFrame r = run(f.collect());
         REQUIRE(r.num_rows() == 1);
@@ -268,20 +282,20 @@ TEST_SUITE("TraceViewer - source absorption") {
     }
 }
 
-TEST_SUITE("TraceViewer - builder order") {
+TEST_SUITE("View - builder order") {
     TEST_CASE("a trace builder after a non-filter op is refused") {
-        TraceViewer t = base_viewer().sort_by("ts");
+        View t = base_viewer().sort_by("ts");
         CHECK_THROWS_WITH_AS(t.phase(Phase::Events),
                              doctest::Contains("sort_by"), DFTUtilsException);
     }
 
     TEST_CASE("a trace builder may follow an Expr filter") {
-        TraceViewer t = base_viewer().filter(col(0) > std::int64_t{0});
+        View t = base_viewer().filter(col(0) > std::int64_t{0});
         CHECK_NOTHROW(t.phase(Phase::Events));
     }
 
-    TEST_CASE("the chain keeps the TraceViewer type") {
-        TraceViewer t = base_viewer().select({"cat", "name"}).head(3);
+    TEST_CASE("the chain keeps the View type") {
+        View t = base_viewer().select({"cat", "name"}).head(3);
         CHECK(run(t.collect()).num_rows() == 3);
     }
 }
@@ -294,7 +308,7 @@ std::shared_ptr<const ViewSource> absorbed_source(const LazyFrame& lf) {
 }
 
 std::vector<LazyFrame> mixed_plans() {
-    TraceViewer t = base_viewer();
+    View t = base_viewer();
     return {
         t.group_by({GroupKey::cat()})
             .agg({{AggOp::Count, "", "n"}})
@@ -311,7 +325,7 @@ std::vector<LazyFrame> mixed_plans() {
 
 }  // namespace
 
-TEST_SUITE("TraceViewer - collect_all and sessions") {
+TEST_SUITE("View - collect_all and sessions") {
     TEST_CASE("collect_all matches collecting each plan alone") {
         std::vector<LazyFrame> plans = mixed_plans();
         std::vector<DataFrame> together =
@@ -339,8 +353,8 @@ TEST_SUITE("TraceViewer - collect_all and sessions") {
     }
 
     TEST_CASE("a different time range is a different base") {
-        TraceViewer t = base_viewer();
-        TraceViewer early = t.time_range(0, 3000);
+        View t = base_viewer();
+        View early = t.time_range(0, 3000);
         CHECK(absorbed_source(t.lazy())->batch_key() !=
               absorbed_source(early.lazy())->batch_key());
         std::vector<DataFrame> r = run(
@@ -355,7 +369,7 @@ TEST_SUITE("TraceViewer - collect_all and sessions") {
         small.names = {"a"};
         small.columns.push_back(
             dftracer::utils::dataframe::Series::flat_i64(a.data(), 3));
-        TraceViewer t = base_viewer();
+        View t = base_viewer();
         std::vector<DataFrame> r = run(dftracer::utils::dataframe::collect_all(
             {t.query(R"(cat == "POSIX")").lazy(),
              small.lazy().filter(col(0) > std::int64_t{1}),
@@ -366,11 +380,11 @@ TEST_SUITE("TraceViewer - collect_all and sessions") {
     }
 
     TEST_CASE("a join of two branches on one trace matches each side alone") {
-        TraceViewer t = base_viewer();
-        TraceViewer counts =
+        View t = base_viewer();
+        View counts =
             t.group_by({GroupKey::name()}).agg({{AggOp::Count, "", "n"}});
-        TraceViewer durs = t.group_by({GroupKey::name()})
-                               .agg({{AggOp::Sum, "dur", "sum_dur"}});
+        View durs = t.group_by({GroupKey::name()})
+                        .agg({{AggOp::Sum, "dur", "sum_dur"}});
         DataFrame got =
             run(counts.join(durs, {"name"}).sort_by("name").collect());
         DataFrame want = run(run(counts.collect())
@@ -382,7 +396,7 @@ TEST_SUITE("TraceViewer - collect_all and sessions") {
     }
 
     TEST_CASE("a concat of two row branches on one trace keeps every row") {
-        TraceViewer t = base_viewer();
+        View t = base_viewer();
         DataFrame got = run(
             t.query(R"(cat == "POSIX")")
                 .select({"cat", "name"})
@@ -392,7 +406,7 @@ TEST_SUITE("TraceViewer - collect_all and sessions") {
     }
 
     TEST_CASE("a session resolves its handles on execute") {
-        TraceViewer t = base_viewer();
+        View t = base_viewer();
         TraceSession s = t.session();
         Deferred<DataFrame> by_cat = s.collect(
             t.group_by({GroupKey::cat()}).agg({{AggOp::Count, "", "n"}}));
@@ -405,10 +419,10 @@ TEST_SUITE("TraceViewer - collect_all and sessions") {
     }
 }
 
-TEST_SUITE("TraceViewer - planning reads no trace") {
+TEST_SUITE("View - planning reads no trace") {
     TEST_CASE("an aggregation's planned schema matches its result") {
-        TraceViewer t = base_viewer();
-        std::vector<TraceViewer> plans = {
+        View t = base_viewer();
+        std::vector<View> plans = {
             t.group_by({GroupKey::cat()}).agg({{AggOp::Count, "", "n"}}),
             t.group_by({GroupKey::name(), GroupKey::pid()})
                 .agg({{AggOp::Sum, "dur", "s"}, {AggOp::Mean, "dur", "m"}}),
@@ -426,7 +440,7 @@ TEST_SUITE("TraceViewer - planning reads no trace") {
                 .agg({{AggOp::Pct, "dur", "p90", "", 0.9}}),
             t.agg({{AggOp::Count, "", "n"}}),
         };
-        for (const TraceViewer& p : plans) {
+        for (const View& p : plans) {
             dftracer::utils::dataframe::Schema planned = p.output_schema();
             DataFrame got = run(p.collect());
             REQUIRE(planned.fields.size() == got.names.size());
@@ -442,13 +456,13 @@ TEST_SUITE("TraceViewer - planning reads no trace") {
 
     TEST_CASE("explain on an aggregation does not scan") {
         auto polls = std::make_shared<int>(0);
-        TraceViewer t = base_viewer()
-                            .cancel_when([polls] {
-                                ++*polls;
-                                return false;
-                            })
-                            .group_by({GroupKey::name()})
-                            .agg({{AggOp::Count, "", "n"}});
+        View t = base_viewer()
+                     .cancel_when([polls] {
+                         ++*polls;
+                         return false;
+                     })
+                     .group_by({GroupKey::name()})
+                     .agg({{AggOp::Count, "", "n"}});
         (void)t.explain();
         (void)t.schema();
         CHECK(*polls == 0);
@@ -479,15 +493,15 @@ struct FnameTrace {
         fs::remove(pfw);
         idx = determine_index_path(gz, "");
         StringSink sink;
-        View::from_file(gz, idx).metadata(false).export_json(sink).get();
+        run(View::from_file(gz, idx).metadata(false).sink_json(sink));
     }
 };
 
 }  // namespace
 
-TEST_SUITE("TraceViewer - streamed batches") {
+TEST_SUITE("View - streamed batches") {
     TEST_CASE("row roots stream through one scan with their own filters") {
-        TraceViewer t = base_viewer();
+        View t = base_viewer();
         std::vector<LazyFrame> plans = {
             t.query(R"(cat == "POSIX")").select({"name", "dur"}).lazy(),
             t.phase(Phase::Events).query("dur > 25").lazy(),
@@ -506,7 +520,7 @@ TEST_SUITE("TraceViewer - streamed batches") {
     }
 
     TEST_CASE("a root that stops early does not stall the others") {
-        TraceViewer t = base_viewer();
+        View t = base_viewer();
         std::vector<DataFrame> r = run(dftracer::utils::dataframe::collect_all(
             {t.query(R"(cat == "POSIX")").head(2).lazy(),
              t.query(R"(cat == "STDIO")").lazy()}));
@@ -516,7 +530,7 @@ TEST_SUITE("TraceViewer - streamed batches") {
 
     TEST_CASE("a branch predicate on a string arg selects its events") {
         FnameTrace f;
-        TraceViewer t = TraceViewer::from_file(f.gz, f.idx).metadata(false);
+        View t = View::from_file(f.gz, f.idx).metadata(false);
         std::vector<DataFrame> r = run(dftracer::utils::dataframe::collect_all(
             {t.query(R"(fname == "/a")").lazy(),
              t.query(R"(fname == "/b")").lazy(),
@@ -533,7 +547,7 @@ TEST_SUITE("TraceViewer - streamed batches") {
 
 namespace {
 
-std::int32_t column_at(const TraceViewer& t, const std::string& name) {
+std::int32_t column_at(const View& t, const std::string& name) {
     const std::vector<std::string> names = t.schema();
     for (std::size_t i = 0; i < names.size(); ++i)
         if (names[i] == name) return static_cast<std::int32_t>(i);
@@ -542,16 +556,16 @@ std::int32_t column_at(const TraceViewer& t, const std::string& name) {
 }
 
 // The same plan run by the generic engine over the trace's rows in memory.
-DataFrame engine_result(const TraceViewer& t,
+DataFrame engine_result(const View& t,
                         const std::function<LazyFrame(LazyFrame)>& shape) {
     return run(shape(run(t.collect()).lazy()).collect());
 }
 
 }  // namespace
 
-TEST_SUITE("TraceViewer - expression keys") {
+TEST_SUITE("View - expression keys") {
     TEST_CASE("with_column then group_by is absorbed and matches the engine") {
-        TraceViewer t = base_viewer();
+        View t = base_viewer();
         const std::int32_t dur = column_at(t, "dur");
         auto shape = [&](auto lf) {
             return lf.with_column("big", col(dur) > std::int64_t{25})
@@ -559,7 +573,7 @@ TEST_SUITE("TraceViewer - expression keys") {
                           {{Agg::Count, "", "n"}, {Agg::Sum, "dur", "s"}})
                 .sort_by("big");
         };
-        TraceViewer absorbed = shape(t);
+        View absorbed = shape(t);
         CHECK(absorbed.explain().find("group_by") == std::string::npos);
         CHECK(absorbed.explain().find("with_column") == std::string::npos);
         DataFrame got = run(absorbed.collect());
@@ -570,7 +584,7 @@ TEST_SUITE("TraceViewer - expression keys") {
     }
 
     TEST_CASE("an expression aggregate input is absorbed") {
-        TraceViewer t = base_viewer();
+        View t = base_viewer();
         const std::int32_t dur = column_at(t, "dur");
         auto shape = [&](auto lf) {
             return lf
@@ -580,7 +594,7 @@ TEST_SUITE("TraceViewer - expression keys") {
                           {{Agg::Sum, "dur2", "s2"}, {Agg::Sum, "dur", "s"}})
                 .sort_by("name");
         };
-        TraceViewer absorbed = shape(t);
+        View absorbed = shape(t);
         CHECK(absorbed.explain().find("group_by") == std::string::npos);
         DataFrame got = run(absorbed.collect());
         check_same_rows(got, engine_result(t, [&](LazyFrame lf) {
@@ -593,13 +607,13 @@ TEST_SUITE("TraceViewer - expression keys") {
         TestEnvironment env(10);
         const std::string roots = env.get_dir() + "/rollups";
         auto polls = std::make_shared<int>(0);
-        TraceViewer t = TraceViewer::from_file(sh.gz, sh.idx)
-                            .metadata(false)
-                            .rollup_root(roots)
-                            .cancel_when([polls] {
-                                ++*polls;
-                                return false;
-                            });
+        View t = View::from_file(sh.gz, sh.idx)
+                     .metadata(false)
+                     .rollup_root(roots)
+                     .cancel_when([polls] {
+                         ++*polls;
+                         return false;
+                     });
         const std::int32_t dur = column_at(t, "dur");
         auto keyed = [&](std::int64_t cut) {
             return t.with_column("big", col(dur) > cut)
@@ -619,8 +633,10 @@ TEST_SUITE("TraceViewer - expression keys") {
         };
 
         // Materialize the rollup through the absorbed view.
-        const View absorbed = absorbed_source(keyed(25).lazy())->view();
-        const auto want25 = counts(run(absorbed.materialize().collect_frame()));
+        const scan::ScanPlan absorbed =
+            absorbed_source(keyed(25).lazy())->plan();
+        const auto want25 =
+            counts(run(scan::collect_frame(scan::materialize(absorbed, 0, 0))));
 
         *polls = 0;
         CHECK(counts(run(keyed(25).collect())) == want25);
@@ -634,9 +650,9 @@ TEST_SUITE("TraceViewer - expression keys") {
     }
 }
 
-TEST_SUITE("TraceViewer - expression keys in a shared scan") {
+TEST_SUITE("View - expression keys in a shared scan") {
     TEST_CASE("computed keys and inputs match collecting alone") {
-        TraceViewer t = base_viewer();
+        View t = base_viewer();
         const std::int32_t dur = column_at(t, "dur");
         std::vector<LazyFrame> plans = {
             t.with_column("big", col(dur) > std::int64_t{25})
@@ -691,7 +707,7 @@ struct NestedTrace {
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         fs::remove(pfw);
         StringSink sink;
-        View::from_file(gz).metadata(false).export_json(sink).get();
+        run(View::from_file(gz).metadata(false).sink_json(sink));
     }
 };
 
@@ -700,12 +716,23 @@ const NestedTrace& nested_trace() {
     return t;
 }
 
-View nested_view() {
-    return View::from_file(nested_trace().gz).metadata(false);
+scan::ScanPlan nested_plan() {
+    return scan::metadata(scan::from_file(nested_trace().gz), false);
 }
 
-TraceViewer nested_viewer() {
-    return TraceViewer::from_file(nested_trace().gz).metadata(false);
+DataFrame scan_flamegraph(scan::ScanPlan p,
+                          std::vector<std::string> group = {}) {
+    return run(scan::flamegraph(std::move(p), {"pid", "tid"}, "ts", "dur",
+                                "name", std::move(group)));
+}
+
+DataFrame scan_call_tree(scan::ScanPlan p) {
+    return run(
+        scan::call_tree(std::move(p), {"pid", "tid"}, "ts", "dur", "name"));
+}
+
+View nested_viewer() {
+    return View::from_file(nested_trace().gz).metadata(false);
 }
 
 // The rows of `f` over `cols`, one string each, in sorted order: containment
@@ -729,21 +756,17 @@ const std::vector<std::string> FLAME_COLS = {"name", "level", "total", "self",
 const std::vector<std::string> TREE_COLS = {"pid", "tid",  "ts",
                                             "dur", "name", "level"};
 
-std::shared_ptr<const ViewSource> leaf(const LazyFrame& lf) {
-    return std::dynamic_pointer_cast<const ViewSource>(plan_source(lf));
-}
-
 }  // namespace
 
-TEST_SUITE("TraceViewer - trace terminals") {
-    TEST_CASE("flamegraph and call_tree match the View terminals") {
+TEST_SUITE("View - trace terminals") {
+    TEST_CASE("flamegraph and call_tree match the scan terminals") {
         const DataFrame fg = run(nested_viewer().flamegraph().collect());
         CHECK(rows_of(fg, FLAME_COLS) ==
-              rows_of(run(nested_view().flamegraph()), FLAME_COLS));
+              rows_of(scan_flamegraph(nested_plan()), FLAME_COLS));
         CHECK(fg.num_rows() == 5);
         const DataFrame ct = run(nested_viewer().call_tree().collect());
         CHECK(rows_of(ct, TREE_COLS) ==
-              rows_of(run(nested_view().call_tree()), TREE_COLS));
+              rows_of(scan_call_tree(nested_plan()), TREE_COLS));
         CHECK(ct.num_rows() == 32);
     }
 
@@ -753,9 +776,7 @@ TEST_SUITE("TraceViewer - trace terminals") {
                     .flamegraph({"pid", "tid"}, "ts", "dur", "name", {"tid"})
                     .collect());
         CHECK(rows_of(got, FLAME_COLS) ==
-              rows_of(run(nested_view().flamegraph({"pid", "tid"}, "ts", "dur",
-                                                   "name", {"tid"})),
-                      FLAME_COLS));
+              rows_of(scan_flamegraph(nested_plan(), {"tid"}), FLAME_COLS));
     }
 
     TEST_CASE("a terminal's frame chains as a LazyFrame") {
@@ -773,7 +794,7 @@ TEST_SUITE("TraceViewer - trace terminals") {
 
     TEST_CASE("planning a terminal reads no trace") {
         auto polls = std::make_shared<int>(0);
-        TraceViewer t = nested_viewer().cancel_when([polls] {
+        View t = nested_viewer().cancel_when([polls] {
             ++*polls;
             return false;
         });
@@ -791,23 +812,23 @@ TEST_SUITE("TraceViewer - trace terminals") {
     }
 
     TEST_CASE("accepted prefixes reach the terminal") {
-        TraceViewer t = nested_viewer();
+        View t = nested_viewer();
         const std::int32_t cat = column_at(t, "cat");
-        auto same = [](const TraceViewer& tv, const View& v) {
+        auto same = [](const View& tv, scan::ScanPlan v) {
             CHECK(rows_of(run(tv.flamegraph().collect()), FLAME_COLS) ==
-                  rows_of(run(v.flamegraph()), FLAME_COLS));
+                  rows_of(scan_flamegraph(std::move(v)), FLAME_COLS));
         };
         same(t.query(R"(cat == "POSIX")"),
-             nested_view().query(R"(cat == "POSIX")"));
+             scan::query(nested_plan(), R"(cat == "POSIX")"));
         same(t.filter(expr_cmp(CmpOp::Eq, col(cat), str("APP"))),
-             nested_view().query(R"(cat == "APP")"));
-        same(t.phase(Phase::Events), nested_view().phase(Phase::Events));
-        same(t.time_range(0, 2500), nested_view().time_range(0, 2500));
-        same(t.select({"name", "ts", "dur", "pid", "tid"}), nested_view());
+             scan::query(nested_plan(), R"(cat == "APP")"));
+        same(t.phase(Phase::Events), scan::phase(nested_plan(), Phase::Events));
+        same(t.time_range(0, 2500), scan::time_range(nested_plan(), 0, 2500));
+        same(t.select({"name", "ts", "dur", "pid", "tid"}), nested_plan());
     }
 
     TEST_CASE("rejected prefixes name the first op the terminal cannot take") {
-        TraceViewer t = nested_viewer();
+        View t = nested_viewer();
         CHECK_THROWS_WITH_AS(t.sort_by("ts").flamegraph(),
                              doctest::Contains("sort_by"), DFTUtilsException);
         CHECK_THROWS_WITH_AS(t.head(3).call_tree(), doctest::Contains("slice"),
@@ -835,20 +856,21 @@ TEST_SUITE("TraceViewer - trace terminals") {
 
     TEST_CASE("containment returns both frames from one collect") {
         ContainmentResult both = run(nested_viewer().containment().collect());
-        auto [ct, fg] = run(nested_view().containment());
+        auto [ct, fg] = run(scan::containment(nested_plan(), {"pid", "tid"},
+                                              "ts", "dur", "name", {}));
         CHECK(rows_of(both.call_tree, TREE_COLS) == rows_of(ct, TREE_COLS));
         CHECK(rows_of(both.flamegraph, FLAME_COLS) == rows_of(fg, FLAME_COLS));
     }
 
     TEST_CASE("partials merge to the collected result") {
-        TraceViewer t = nested_viewer();
+        View t = nested_viewer();
         const std::string fp = run(t.flamegraph_partial().collect());
         const std::vector<std::string_view> fps{fp, fp};
-        const DataFrame merged = TraceViewer::merge_flamegraph_partials(fps);
+        const DataFrame merged = View::merge_flamegraph_partials(fps);
         CHECK(rows_of(merged, {"name", "level"}) ==
               rows_of(run(t.flamegraph().collect()), {"name", "level"}));
 
-        TraceViewer agg =
+        View agg =
             t.group_by({GroupKey::name()}).agg({{AggOp::Count, "", "n"}});
         const std::string ap = run(agg.aggregate_partial().collect());
         const std::vector<std::string_view> aps{ap};
@@ -861,16 +883,16 @@ TEST_SUITE("TraceViewer - trace terminals") {
         const ExportStats s =
             run(nested_viewer().query(R"(cat == "POSIX")").sink_json(eager));
         StringSink old;
-        const ExportStats want =
-            run(nested_view().query(R"(cat == "POSIX")").export_json(old));
+        const ExportStats want = run(scan::export_json(
+            scan::query(nested_plan(), R"(cat == "POSIX")"), old));
         CHECK(eager.lines() == old.lines());
         CHECK(eager.lines().size() == 16);
         CHECK(s.events_matched == want.events_matched);
     }
 
     TEST_CASE("one shared scan serves every terminal kind") {
-        TraceViewer t = nested_viewer();
-        TraceViewer agg =
+        View t = nested_viewer();
+        View agg =
             t.group_by({GroupKey::name()}).agg({{AggOp::Count, "", "n"}});
         StringSink sink;
         std::vector<LazyFrame> plans = {
@@ -892,14 +914,14 @@ TEST_SUITE("TraceViewer - trace terminals") {
               rows_of(run(plans[0].collect()), FLAME_COLS));
         CHECK(rows_of(b.frames[1], TREE_COLS) ==
               rows_of(run(plans[1].collect()), TREE_COLS));
-        CHECK(
-            rows_of(b.frames[2], FLAME_COLS) ==
-            rows_of(run(nested_view().query(R"(cat == "POSIX")").flamegraph()),
-                    FLAME_COLS));
+        CHECK(rows_of(b.frames[2], FLAME_COLS) ==
+              rows_of(scan_flamegraph(
+                          scan::query(nested_plan(), R"(cat == "POSIX")")),
+                      FLAME_COLS));
         const std::string fp = trace::views::detail::partial_of(b.frames[3]);
         const std::vector<std::string_view> fps{fp};
-        CHECK(rows_of(TraceViewer::merge_flamegraph_partials(fps),
-                      FLAME_COLS) == rows_of(b.frames[0], FLAME_COLS));
+        CHECK(rows_of(View::merge_flamegraph_partials(fps), FLAME_COLS) ==
+              rows_of(b.frames[0], FLAME_COLS));
         const std::string ap = trace::views::detail::partial_of(b.frames[4]);
         const std::vector<std::string_view> aps{ap};
         CHECK(rows_of(agg.merge_partials(aps), {"name", "n"}) ==
@@ -909,7 +931,7 @@ TEST_SUITE("TraceViewer - trace terminals") {
     }
 
     TEST_CASE("collect_all takes frames and lazy results in one call") {
-        TraceViewer t = nested_viewer();
+        View t = nested_viewer();
         StringSink sink;
         auto [fg, both, stats, rows] =
             run(dftracer::utils::dataframe::collect_all(
@@ -924,7 +946,7 @@ TEST_SUITE("TraceViewer - trace terminals") {
     }
 
     TEST_CASE("a session registers terminals and sinks") {
-        TraceViewer t = nested_viewer();
+        View t = nested_viewer();
         TraceSession s = t.session();
         StringSink sink;
         Deferred<ContainmentResult> both = s.collect(t.containment());
@@ -939,7 +961,8 @@ TEST_SUITE("TraceViewer - trace terminals") {
               rows_of(both.get().flamegraph, FLAME_COLS));
         CHECK(stats.get().events_matched == 16);
         CHECK(sink.lines().size() == 16);
-        const TypedResult want = run(nested_view().collect_typed());
+        const TypedResult want =
+            run(scan::collect_typed(nested_plan(), 0, 4096));
         CHECK(typed.get().regular.num_rows() == want.regular.num_rows());
     }
 
@@ -955,11 +978,9 @@ TEST_SUITE("TraceViewer - trace terminals") {
         }
         const std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        TraceViewer t = TraceViewer::from_file(gz).metadata(false);
-        const DataFrame want = run(View::from_file(gz)
-                                       .metadata(false)
-                                       .phase(Phase::Events)
-                                       .flamegraph());
+        View t = View::from_file(gz).metadata(false);
+        const DataFrame want = scan_flamegraph(scan::phase(
+            scan::metadata(scan::from_file(gz), false), Phase::Events));
         auto [events, any] = run(dftracer::utils::dataframe::collect_all(
             t.phase(Phase::Events).flamegraph(), t.flamegraph()));
         CHECK(rows_of(events, FLAME_COLS) == rows_of(want, FLAME_COLS));
@@ -970,14 +991,14 @@ TEST_SUITE("TraceViewer - trace terminals") {
     TEST_CASE("materialize persists a rollup that later reads serve") {
         TestEnvironment env(10);
         auto polls = std::make_shared<int>(0);
-        TraceViewer t = nested_viewer()
-                            .rollup_root(env.get_dir() + "/rollups")
-                            .cancel_when([polls] {
-                                ++*polls;
-                                return false;
-                            })
-                            .group_by({GroupKey::name()})
-                            .agg({{AggOp::Count, "", "n"}});
+        View t = nested_viewer()
+                     .rollup_root(env.get_dir() + "/rollups")
+                     .cancel_when([polls] {
+                         ++*polls;
+                         return false;
+                     })
+                     .group_by({GroupKey::name()})
+                     .agg({{AggOp::Count, "", "n"}});
         run(t.collect());
         CHECK(*polls > 0);
         TraceSession s = t.session();
@@ -986,16 +1007,15 @@ TEST_SUITE("TraceViewer - trace terminals") {
         CHECK_NOTHROW(built.get());
         *polls = 0;
         CHECK(rows_of(run(t.collect()), {"name", "n"}) ==
-              rows_of(run(nested_view()
-                              .group_by({GroupKey::name()})
-                              .agg({{AggOp::Count, "", "n"}})
-                              .collect_frame()),
+              rows_of(run(scan::collect_frame(scan::agg(
+                          scan::group_by(nested_plan(), {GroupKey::name()}),
+                          {{AggOp::Count, "", "n"}}))),
                       {"name", "n"}));
         CHECK(*polls == 0);
     }
 
     TEST_CASE("a session branch runs alone or shares an unfiltered scan") {
-        TraceViewer t = nested_viewer();
+        View t = nested_viewer();
         auto seen = std::make_shared<std::atomic<std::int64_t>>(0);
         auto counting = [seen](ViewSession& s) -> Deferred<std::int64_t> {
             return s.fold<std::int64_t>(
@@ -1044,18 +1064,16 @@ TEST_SUITE("TraceViewer - trace terminals") {
         opts.output_path = env.get_dir() + "/posix.pfw.gz";
         opts.compress = true;
         run(nested_viewer().query(R"(cat == "POSIX")").sink_trace(opts));
-        CHECK(run(TraceViewer::from_file(opts.output_path)
-                      .metadata(false)
-                      .collect())
+        CHECK(run(View::from_file(opts.output_path).metadata(false).collect())
                   .num_rows() == 16);
     }
 
     TEST_CASE("distributed rollup terminals work through the viewer") {
         TestEnvironment env(10);
-        TraceViewer agg = nested_viewer()
-                              .rollup_root(env.get_dir() + "/rollups")
-                              .group_by({GroupKey::name()})
-                              .agg({{AggOp::Count, "", "n"}});
+        View agg = nested_viewer()
+                       .rollup_root(env.get_dir() + "/rollups")
+                       .group_by({GroupKey::name()})
+                       .agg({{AggOp::Count, "", "n"}});
         CHECK_FALSE(agg.reconstruct_if_cached());
         const std::string p = run(agg.aggregate_partial().collect());
         run(agg.materialize_partials({p}));
@@ -1069,9 +1087,9 @@ TEST_SUITE("TraceViewer - trace terminals") {
     }
 
     TEST_CASE("compare applies the baseline aggregation to the variant") {
-        TraceViewer base = nested_viewer()
-                               .group_by({GroupKey::name()})
-                               .agg({{AggOp::Count, "", "n"}});
+        View base = nested_viewer()
+                        .group_by({GroupKey::name()})
+                        .agg({{AggOp::Count, "", "n"}});
         DataFrame self = run(base.compare(nested_viewer()).collect());
         CHECK(self.num_rows() == 4);
         for (std::int64_t i = 0; i < self.num_rows(); ++i) {
@@ -1110,7 +1128,7 @@ TEST_SUITE("TraceViewer - trace terminals") {
         }
         const std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        TraceViewer t = TraceViewer::from_file(gz).metadata(false);
+        View t = View::from_file(gz).metadata(false);
         DataFrame rows = run(t.select({"name", "size"}).collect());
         CHECK(rows.names == std::vector<std::string>{"name", "args.size"});
         CHECK(rows.num_rows() == 4);
@@ -1124,7 +1142,7 @@ TEST_SUITE("TraceViewer - trace terminals") {
     }
 
     TEST_CASE("an Expr filter before a trace group_by filters the events") {
-        TraceViewer t = nested_viewer();
+        View t = nested_viewer();
         const std::int32_t cat = column_at(t, "cat");
         DataFrame got =
             run(t.filter(expr_cmp(CmpOp::Eq, col(cat), str("POSIX")))
@@ -1136,15 +1154,89 @@ TEST_SUITE("TraceViewer - trace terminals") {
     }
 
     TEST_CASE("a filter the scan cannot evaluate refuses a trace group_by") {
-        TraceViewer t = nested_viewer();
+        View t = nested_viewer();
         const std::int32_t dur = column_at(t, "dur");
         const std::int32_t ts = column_at(t, "ts");
-        TraceViewer f =
-            t.filter(expr_cmp(CmpOp::Gt, col(dur) + col(ts),
-                              dftracer::utils::dataframe::i64(1005)));
+        View f = t.filter(expr_cmp(CmpOp::Gt, col(dur) + col(ts),
+                                   dftracer::utils::dataframe::i64(1005)));
         CHECK(run(f.collect()).num_rows() > 0);
         CHECK_THROWS_WITH_AS(f.group_by({GroupKey::name()}),
                              doctest::Contains("filter"), DFTUtilsException);
         CHECK_NOTHROW(f.phase(Phase::Events));
+    }
+}
+
+TEST_SUITE("View - low-level scans") {
+    TEST_CASE("for_each_batch and map_batches see every selected event") {
+        View t = nested_viewer().query(R"(cat == "POSIX")");
+        std::atomic<std::int64_t> n{0};
+        run(t.for_each_batch(
+            [&](std::size_t, const std::vector<std::string_view>& events) {
+                n += static_cast<std::int64_t>(events.size());
+            },
+            4));
+        CHECK(n == 16);
+        auto counted = run(t.map_batches<std::int64_t>(
+            [](std::int64_t& acc, const std::vector<std::string_view>& ev) {
+                acc += static_cast<std::int64_t>(ev.size());
+            },
+            [](std::int64_t&& a, std::int64_t&& b) { return a + b; }, 3));
+        CHECK(counted.value == 16);
+    }
+
+    TEST_CASE("a head caps the low-level scans and the sinks") {
+        View t = nested_viewer();
+        std::atomic<std::int64_t> n{0};
+        run(t.head(5).for_each_batch(
+            [&](std::size_t, const std::vector<std::string_view>& events) {
+                n += static_cast<std::int64_t>(events.size());
+            },
+            1));
+        CHECK(n >= 5);
+        StringSink sink;
+        run(t.head(5).sink_json(sink));
+        CHECK(sink.lines().size() == 5);
+        StringSink skipped;
+        run(t.slice(30, 10).sink_json(skipped));
+        CHECK(skipped.lines().size() == 2);
+        CHECK_THROWS_WITH_AS(
+            run(t.slice(2, 5).for_each_batch(
+                [](std::size_t, const std::vector<std::string_view>&) {}, 1)),
+            doctest::Contains("head"), DFTUtilsException);
+        CHECK_THROWS_WITH_AS(t.head(5).flamegraph(), doctest::Contains("slice"),
+                             DFTUtilsException);
+        dataframe::LazyResult<std::string> part =
+            t.head(5).flamegraph_partial();
+        CHECK_FALSE(run(part.collect()).empty());
+        CHECK_THROWS_WITH_AS(t.slice(1, 5).flamegraph_partial(),
+                             doctest::Contains("skips rows"),
+                             DFTUtilsException);
+    }
+
+    TEST_CASE("config reads the trace description without a filter") {
+        CHECK(nested_viewer().query(R"(cat == "POSIX")").config().size() ==
+              scan::config(nested_plan()).size());
+    }
+}
+
+TEST_SUITE("View - unindexed reads") {
+    TEST_CASE("an unindexed multi-member trace reads every event once") {
+        TestEnvironment env(10);
+        const std::string gz = create_multimember_trace(env, 5000, 20000);
+        const auto rows =
+            run(View::from_file(gz, "").metadata(false).collect()).num_rows();
+        CHECK(rows == 5000);
+    }
+
+    TEST_CASE(
+        "a first-touch multi-member read builds its index and reads every "
+        "event once") {
+        TestEnvironment env(10);
+        const std::string gz = create_multimember_trace(env, 5000, 20000);
+        const std::string idx = determine_index_path(gz, "");
+        CHECK(run(View::from_file(gz, idx).metadata(false).collect())
+                  .num_rows() == 5000);
+        CHECK(run(View::from_file(gz, idx).metadata(false).collect())
+                  .num_rows() == 5000);
     }
 }

@@ -13,7 +13,7 @@
 namespace dftracer::utils::dataframe {
 
 /// The LazyFrame builder surface for a type that wraps a LazyFrame and wants
-/// its chain to keep its own type (a TraceViewer stays a TraceViewer through
+/// its chain to keep its own type (a View stays a View through
 /// filter/select/sort). `Derived` provides `const LazyFrame& lazy() const` and
 /// `Derived with_lazy(LazyFrame) const`. Builders whose result the wrapped
 /// source can still own return `Derived`; the rest return a plain LazyFrame.

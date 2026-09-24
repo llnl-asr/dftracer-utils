@@ -34,7 +34,6 @@ Get a DataFrame
                        .group_by({GroupKey::cat()})
                        .agg({{AggOp::Count, "", "count"},
                              {AggOp::Sum, "dur", "sum_dur"}})
-                       .collect()   // -> LazyFrame
                        .collect()   // -> coro::CoroTask<DataFrame>
                        .get();
 

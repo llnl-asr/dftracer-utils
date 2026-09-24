@@ -78,8 +78,9 @@ FOLDS = {
 }
 
 # Methods that are not ops and never will be: accessors into a handle, the
-# Arrow/IPC boundary, and the lazy terminals that end a plan instead of
-# extending it.
+# Arrow/IPC boundary, the lazy terminals that end a plan instead of extending
+# it, plan inspection that runs nothing, and the generic entries that dispatch
+# a registered op or node by name.
 ALLOWLIST = {
     "Series": {
         "type",
@@ -92,6 +93,10 @@ ALLOWLIST = {
         "is_flat",
         "offsets",
         "offsets_span",
+        "offsets64",
+        "offsets64_span",
+        "field_name",
+        "data_type",
         "valid",
         "handle",
         "release",
@@ -127,7 +132,12 @@ ALLOWLIST = {
         "explain",
         "scan",
         "schema",
+        "output_schema",
+        "reduce_specs",
         "stream",
+        "open_cursor",
+        "frame_op",
+        "op",
     },
 }
 

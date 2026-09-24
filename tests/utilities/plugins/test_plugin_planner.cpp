@@ -252,16 +252,18 @@ TEST_SUITE("PluginPlannerScan") {
 
 // Plugins::attach() returns a Deferred<PluginRun> handle and owns applying the
 // index prune itself. Unlike run() (which always owns the whole scan it
-// drives), attach() shares a caller-built ViewSession whose base scan is fixed
-// at View::session() with no way for this call to see whether another branch
-// is, or will be, registered on it - so attach() never chunk-prunes the shared
-// scan (run() above is the only path that does).
+// drives), attach() shares the ViewSession a View::branch() callback is given,
+// with no way for this call to see whether another branch is, or will be,
+// registered on it - so attach() never chunk-prunes the shared scan (run()
+// above is the only path that does).
 TEST_SUITE("PluginAttachHandle") {
     using dftracer::utils::plugins::PluginRun;
     using dftracer::utils::trace::views::AggOp;
     using dftracer::utils::trace::views::AggSpec;
     using dftracer::utils::trace::views::Deferred;
+    using dftracer::utils::trace::views::ExportStats;
     using dftracer::utils::trace::views::GroupKey;
+    using dftracer::utils::trace::views::TraceSession;
     using dftracer::utils::trace::views::ViewSession;
 
     static double col_sum(const dftracer::utils::dataframe::DataFrame& df,
@@ -287,8 +289,11 @@ TEST_SUITE("PluginAttachHandle") {
         REQUIRE(set.has_value());
 
         View base = View::from_files(files);
-        ViewSession sess = base.session();
-        Deferred<PluginRun> h = set->attach(sess);
+        dftracer::utils::dataframe::LazyResult<PluginRun> plugin_result =
+            base.branch<PluginRun>(
+                [&](ViewSession& s) { return set->attach(s); });
+        TraceSession sess = base.session();
+        Deferred<PluginRun> h = sess.collect(plugin_result);
         CHECK_THROWS_AS(static_cast<void>(h->results), std::logic_error);
     }
 
@@ -311,14 +316,22 @@ TEST_SUITE("PluginAttachHandle") {
         REQUIRE(set.has_value());
 
         View base = View::from_files(files);
-        ViewSession sess = base.session();
-        Deferred<PluginRun> h = set->attach(sess);
-
         ExportStats scan{};
+        PluginRun run;
+        auto plugin_branch = [&](ViewSession& s) {
+            Deferred<PluginRun> h = set->attach(s);
+            return std::function<void(const ExportStats&)>(
+                [&, h](const ExportStats& stats) mutable {
+                    run = std::move(h.get());
+                    scan = stats;
+                });
+        };
+        dftracer::utils::dataframe::LazyFrame plan = base.branch(plugin_branch);
+
         Runtime rt(4);
         auto task = dftracer::utils::run_coro_scope(
             rt.executor(), [&](CoroScope&) -> coro::CoroTask<void> {
-                scan = co_await sess.execute();
+                co_await plan.collect();
                 co_return;
             });
         rt.submit(std::move(task), "plugin-attach-solo").wait();
@@ -326,11 +339,12 @@ TEST_SUITE("PluginAttachHandle") {
 
         CHECK(st.total.load() == N);  // the plugin's own filter still applies
         // Sole branch, so execute() applies the narrowing attach() offered and
-        // the index skips whole chunks. Read it from execute()'s own counters:
-        // PluginRun::stats is not populated on the attach path, so asserting
-        // through the handle would pass whether or not the prune ran.
+        // the index skips whole chunks. Read it from the branch's own
+        // ExportStats: PluginRun::stats is not populated on the attach path,
+        // so asserting through the handle would pass whether or not the
+        // prune ran.
         CHECK(scan.chunks_skipped > 0);
-        (void)h;
+        (void)run;
     }
 
     // The regression that matters: a plugin with a narrow plan_query must not
@@ -351,16 +365,34 @@ TEST_SUITE("PluginAttachHandle") {
         REQUIRE(set.has_value());
 
         View base = View::from_files(files);
-        ViewSession sess = base.session();
-        Deferred<PluginRun> h = set->attach(sess);
-        Deferred<dftracer::utils::dataframe::DataFrame> all =
-            sess.collect({}, {{AggOp::Count, "", "n"}});
-
         ExportStats scan{};
+        PluginRun run;
+        auto plugin_branch = [&](ViewSession& s) {
+            Deferred<PluginRun> h = set->attach(s);
+            return std::function<void(const ExportStats&)>(
+                [&, h](const ExportStats& stats) mutable {
+                    run = std::move(h.get());
+                    scan = stats;
+                });
+        };
+        dftracer::utils::dataframe::LazyFrame plugin_plan =
+            base.branch(plugin_branch);
+        dftracer::utils::dataframe::LazyResult<
+            dftracer::utils::dataframe::DataFrame>
+            all_plan = base.branch<dftracer::utils::dataframe::DataFrame>(
+                [](ViewSession& s) {
+                    return s.collect({}, {{AggOp::Count, "", "n"}});
+                });
+
+        dftracer::utils::dataframe::DataFrame all;
         Runtime rt(4);
         auto task = dftracer::utils::run_coro_scope(
             rt.executor(), [&](CoroScope&) -> coro::CoroTask<void> {
-                scan = co_await sess.execute();
+                auto [ignored, agg] =
+                    co_await dftracer::utils::dataframe::collect_all(
+                        plugin_plan, all_plan);
+                (void)ignored;
+                all = std::move(agg);
                 co_return;
             });
         rt.submit(std::move(task), "plugin-attach-coscan").wait();
@@ -371,7 +403,8 @@ TEST_SUITE("PluginAttachHandle") {
         // offered: nothing is skipped, and the branch sees both files. Had the
         // prune applied, it would have missed the POSIX file entirely.
         CHECK(scan.chunks_skipped == 0);
-        REQUIRE(all->num_rows() == 1);
-        CHECK(col_sum(*all, "n") == 2 * N);
+        REQUIRE(all.num_rows() == 1);
+        CHECK(col_sum(all, "n") == 2 * N);
+        (void)run;
     }
 }

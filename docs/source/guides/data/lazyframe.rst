@@ -56,10 +56,10 @@ Where a plan comes from
       ``dftu_svc_ops::run_lazy`` (``OwnedLazyFrame`` in the SDK) without
       linking the engine.
 
-A Python ``TraceViewer`` is itself a plan over the fused scan
-(``ViewSource``; in C++ the trace query's ``collect()`` returns that plan), so
-the steps you add run inside the same pull chain as the scan; ``collect()`` on
-the plan is what reads the files.
+A Python ``TraceViewer`` and a C++ ``View`` are each a plan over the fused
+scan (``lazy()`` returns it as a ``LazyFrame``), so the steps you add run
+inside the same pull chain as the scan; ``collect()`` on the plan is what reads
+the files.
 
 Read the plan before it runs
 ----------------------------

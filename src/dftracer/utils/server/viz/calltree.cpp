@@ -145,7 +145,7 @@ coro::CoroTask<HttpResponse> handle_viz_calltree(const HttpRequest& req,
     static constexpr const char* CANCELLED_TREE =
         R"({"truncated":true,"tree":{"name":"all","total":0,"self":0,"count":0,"children":[]}})";
 
-    // Fold the flamegraph over one shared View scan: the engine does the
+    // Fold the flamegraph over one shared view scan: the engine does the
     // index-pruned parallel scan, the containment_walk name-path arena, the
     // per-group rooting, and cancellation - no hand-rolled worker here.
     CancelToken cancel = req.cancel_token;
@@ -157,15 +157,16 @@ coro::CoroTask<HttpResponse> handle_viz_calltree(const HttpRequest& req,
             .cancel_when([&req]() { return req.cancel_token.cancelled(); });
     if (view.query) v = v.filter(*view.query);
     if (!single_file) v = v.time_range(begin, end);
-    if (limit > 0) v = v.limit(static_cast<std::uint64_t>(cap));
+    if (limit > 0) v = v.head(static_cast<std::int64_t>(cap));
 
     // Hoist the fold arguments to named locals: as co_await full-expression
     // temporaries these vectors/strings would be lifetime-extended into the
     // coroutine frame, which the compiler mishandles.
     std::vector<std::string> partition{"pid", "tid"};
     std::string ts_field{"ts"}, dur_field{"dur"}, name_field{"name"};
-    std::string blob = co_await v.flamegraph_partial(
-        partition, ts_field, dur_field, name_field, group);
+    dataframe::LazyResult<std::string> partial =
+        v.flamegraph_partial(partition, ts_field, dur_field, name_field, group);
+    std::string blob = co_await partial.collect();
     if (cancel.cancelled()) co_return HttpResponse::ok(CANCELLED_TREE);
 
     const double dur_us =

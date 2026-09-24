@@ -15,7 +15,7 @@
 
 namespace dftracer::utils::trace::views {
 
-/// Cursor over a View's buffered scan result: yields max_rows-sized slices of
+/// Cursor over a view's buffered scan result: yields max_rows-sized slices of
 /// the buffer, zero-copy. A buffer with any nested (List/Struct) column
 /// - a histogram agg produces one - is handed out as a single whole morsel
 /// instead, since concat_columns can't rejoin a nested column across chunks.
@@ -60,40 +60,43 @@ struct ContainmentArgs {
     bool operator==(const ContainmentArgs&) const = default;
 };
 
-/// Adapts a View as a LazyFrame Source, so View::collect() can build a
+/// Adapts a scan plan as a LazyFrame Source, so a View can build a
 /// LazyFrame without running the scan. An aggregation buffers one cached run
-/// of View::collect_frame(); a plain row query (see can_stream_rows) streams
+/// of the plan; a plain row query (see can_stream_rows) streams
 /// instead, so collect() never buffers the whole matching set.
 class ViewSource : public dftracer::utils::dataframe::Source {
    public:
     /// `emit_dyn` makes the streaming cursor attach per-morsel auto-numeric-arg
     /// dyn columns (the aggregation engine's single-scan dyn feed); it is
     /// independent of the plan's row-query classification.
-    explicit ViewSource(View view, bool emit_dyn = false)
-        : view_(std::move(view)), emit_dyn_(emit_dyn) {}
+
+    explicit ViewSource(detail::ScanPlan plan, bool emit_dyn = false)
+        : plan_(std::move(plan)), emit_dyn_(emit_dyn) {}
 
     /// A trace terminal over `view` as a plan leaf. A containment output
     /// takes `tree`; ExportJson writes to `sink` and yields its ExportStats as
     /// one row. A partial yields one
     /// Binary row named "partial". Terminal leaves absorb nothing: the ops
     /// above them apply to the terminal's frame.
-    ViewSource(View view, TraceOutput output, ContainmentArgs tree = {},
+    ViewSource(detail::ScanPlan plan, TraceOutput output,
+               ContainmentArgs tree = {},
                std::shared_ptr<ExportSink> sink = nullptr)
-        : view_(std::move(view)),
+        : plan_(std::move(plan)),
           output_(output),
           tree_(std::move(tree)),
           sink_(std::move(sink)) {}
 
     /// A caller branch of the scan as a plan leaf that yields no columns.
-    ViewSource(View view, SessionBranch branch)
-        : view_(std::move(view)),
+    ViewSource(detail::ScanPlan plan, SessionBranch branch)
+        : plan_(std::move(plan)),
           output_(TraceOutput::Branch),
           branch_(std::move(branch)) {}
 
     /// The raw row scan the view's own aggregation engine groups over. It
     /// never absorbs a group-by: that group-by is the view's execution, and
     /// absorbing it would recurse into the same engine.
-    static std::shared_ptr<ViewSource> engine_scan(View raw, bool emit_dyn) {
+    static std::shared_ptr<ViewSource> engine_scan(detail::ScanPlan raw,
+                                                   bool emit_dyn) {
         auto s = std::make_shared<ViewSource>(std::move(raw), emit_dyn);
         s->absorb_aggregation_ = false;
         return s;
@@ -105,7 +108,7 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     /// A row query absorbs a filter (the same translation scan() applies, run
     /// at plan time), a plain column projection, and a group-by on fixed
     /// event fields with simple numeric aggregates. Sort, top-k and limits
-    /// stay with the engine, as View::collect() places them.
+    /// stay with the engine above the scan.
     std::optional<dftracer::utils::dataframe::SourceApplication> apply_filter(
         const dftracer::utils::dataframe::Expr& predicate) const override;
     std::optional<dftracer::utils::dataframe::SourceApplication>
@@ -146,19 +149,24 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     static coro::CoroTask<Batch> run_batch(
         std::vector<std::shared_ptr<const ViewSource>> members);
 
-    /// The view this source scans.
-    const View& view() const { return view_; }
+    /// The plan this source scans.
+    const detail::ScanPlan& plan() const { return plan_; }
     TraceOutput output() const { return output_; }
-    /// Push projection into View::select and each translatable predicate into
-    /// the View's query (reported Exact - the View filters events, not just
+    /// Push projection into the plan's select and each translatable predicate
+    /// into its query (reported Exact - the scan filters events, not just
     /// prunes I/O); the untranslatable rest stay No for the engine to apply.
     dftracer::utils::dataframe::ScanResult scan(
         const dftracer::utils::dataframe::ScanRequest& req) const override;
 
    private:
+    /// The session every member of a batch shares: their files and scan
+    /// settings, with no member's own shape.
+    static ViewSession base_session(const detail::ViewPlan& p);
+
     /// Register each member not in `skip` as a branch of `session`; the i-th
     /// call reads member i's frame once the session has executed.
-    static std::vector<std::function<dftracer::utils::dataframe::DataFrame()>>
+    static std::vector<std::function<
+        dftracer::utils::dataframe::DataFrame(const ExportStats&)>>
     add_branches(ViewSession& session,
                  const std::vector<const ViewSource*>& members,
                  const std::vector<bool>& skip);
@@ -179,7 +187,7 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     /// was pushed), so the returned cursor's narrow() can translate a
     /// predicate positional against it the same way scan() does.
     std::unique_ptr<dftracer::utils::dataframe::Cursor> open_stream(
-        const View& v, std::uint64_t memory_budget,
+        const detail::ScanPlan& v, std::uint64_t memory_budget,
         std::vector<std::string> fnames) const;
 
     std::shared_ptr<const dftracer::utils::dataframe::DataFrame> buffer()
@@ -194,7 +202,7 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     /// This source's frame from a scan of its own.
     coro::CoroTask<dftracer::utils::dataframe::DataFrame> run_alone() const;
 
-    View view_;
+    detail::ScanPlan plan_;
     TraceOutput output_ = TraceOutput::Events;
     ContainmentArgs tree_;
     std::shared_ptr<ExportSink> sink_;

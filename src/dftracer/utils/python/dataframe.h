@@ -15,8 +15,8 @@ int init_dataframe(PyObject* m);
 
 // Wrap an owned dataframe::DataFrame in a new DataFrame Python object (steals
 // the batch). Requires the arrow-enabled build; returns nullptr with a Python
-// error otherwise. Used by the View to hand its scanned batch to Python as
-// native vec columns; Arrow is produced only on an explicit
+// error otherwise. Used by the trace view to hand its scanned batch to Python
+// as native vec columns; Arrow is produced only on an explicit
 // to_arrow()/to_pandas().
 PyObject* wrap_dataframe(dftracer::utils::dataframe::DataFrame&& batch);
 

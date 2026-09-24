@@ -19,10 +19,10 @@ Pick group keys, pick aggregates, collect.
    .. tab-item:: C++
 
       Group keys are ``GroupKey`` values; aggregates are ``AggSpec`` values.
-      ``group_by``/``agg`` return an ``AggregatedView``; ``collect()`` builds
-      the plan and returns a ``LazyFrame``, whose own ``collect()`` is the
-      coroutine that runs the scan - ``.get()`` drives it to completion for a
-      non-coroutine caller.
+      ``group_by``/``agg`` return a ``View``, still a ``LazyFrame`` over the
+      trace scan; its inherited ``collect()`` is the coroutine that runs the
+      scan and returns the ``DataFrame`` directly - ``.get()`` drives it to
+      completion for a non-coroutine caller.
 
       .. code-block:: cpp
 
@@ -36,7 +36,6 @@ Pick group keys, pick aggregates, collect.
                              {AggOp::Sum, "dur", "sum_dur"},
                              {AggOp::Mean, "dur", "mean_dur"}})
                        .collect()
-                       .collect()
                        .get();
 
       Scan a whole directory with ``View::from_directory`` (itself a coroutine):
@@ -46,7 +45,6 @@ Pick group keys, pick aggregates, collect.
          View v = View::from_directory("traces/").get();
          auto df = v.group_by({GroupKey::cat()})
                     .agg({{AggOp::Count, "", "count"}})
-                    .collect()
                     .collect()
                     .get();
 
@@ -87,7 +85,6 @@ top-level and ``args.*`` alike (``F("args.level").mean()``).
          auto df = View::from_file("trace.pfw.gz")
                        .group_by({GroupKey::cat()})
                        .agg(F("dur").sum(), F("dur").mean(), F.any.count())
-                       .collect()
                        .collect()
                        .get();
 
@@ -282,7 +279,6 @@ the number of concurrent ``pread`` calls per file is a ``concurrency`` (or
                        .agg({{AggOp::Concurrency, "dur", "concurrency"},
                              {AggOp::Active, "dur", "active"}})
                        .collect()
-                       .collect()
                        .get();
 
    .. tab-item:: Python
@@ -342,7 +338,7 @@ the rollup as a re-indexable ``ph="C"`` counter trace instead of collecting it:
 
    .. tab-item:: C++
 
-      ``export_counters`` writes each aggregated row as a counter event to an
+      ``sink_counters`` writes each aggregated row as a counter event to an
       ``ExportSink``.
 
       .. code-block:: cpp
@@ -351,7 +347,7 @@ the rollup as a re-indexable ``ph="C"`` counter trace instead of collecting it:
              .group_by({GroupKey::cat()})
              .time_bucket(1000)
              .agg({{AggOp::Count, "", "n"}})
-             .export_counters(sink)
+             .sink_counters(sink)
              .get();
 
    .. tab-item:: Python
@@ -384,7 +380,6 @@ reduction): the ``FieldStat`` ones - ``sum`` / ``min`` / ``max`` / ``mean`` /
          auto df = View::from_file("counters.pfw.gz")
                        .group_by({GroupKey::cat()})
                        .agg_numeric_args()
-                       .collect()
                        .collect()
                        .get();
 

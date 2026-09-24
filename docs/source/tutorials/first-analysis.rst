@@ -113,10 +113,10 @@ spec: ``count``, ``sum_dur``, ``mean_dur``.
 
       ``View`` is the C++ entry point (namespace
       ``dftracer::utils::trace::views``). The builder methods chain the same
-      way; ``View::collect()`` builds the query plan and returns a
-      ``LazyFrame``, whose own ``collect()`` runs the scan and returns a
-      ``coro::CoroTask<DataFrame>`` - ``.get()`` drives that to completion for
-      a non-coroutine caller like ``main()``.
+      way; ``View`` is itself a ``LazyFrame`` over the trace scan
+      (``dataframe::LazyOps<View>``), so its own ``collect()`` runs the scan
+      directly and returns a ``coro::CoroTask<DataFrame>`` - ``.get()`` drives
+      that to completion for a non-coroutine caller like ``main()``.
 
       .. code-block:: cpp
 
@@ -134,7 +134,6 @@ spec: ``count``, ``sum_dur``, ``mean_dur``.
                                  AggSpec(AggOp::Sum, "dur"),
                                  AggSpec(AggOp::Mean, "dur")})
                            .sort_by("cat")
-                           .collect()
                            .collect()
                            .get();  // blocks; a dataframe::DataFrame
 
@@ -225,7 +224,6 @@ the same predicate reads almost identically in Python and C++. Keep only the
                            .agg({AggSpec(AggOp::Count),
                                  AggSpec(AggOp::Mean, "dur")})
                            .collect()
-                           .collect()
                            .get();
 
              auto cat = df.column("cat");
@@ -310,7 +308,6 @@ Now read the folder.
              auto df = view.group_by({GroupKey::cat()})
                            .agg({AggSpec(AggOp::Count)})
                            .sort_by("cat")
-                           .collect()
                            .collect()
                            .get();
 

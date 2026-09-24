@@ -636,7 +636,7 @@ coro::CoroTask<Result<PluginRun>> Plugins::run(const View& view) const {
     for (std::size_t i : impl_->order) {
         owned.push_back(std::make_unique<PluginFold>(
             impl_->plugins[i].plugin, intern, &shared, &out.results,
-            impl_->plugins[i].name, view.plan().memory_budget,
+            impl_->plugins[i].name, view.memory_budget_bytes(),
             &impl_->plugins[i].states));
         folds.push_back(owned.back().get());
     }

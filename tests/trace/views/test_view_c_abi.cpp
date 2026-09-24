@@ -136,7 +136,7 @@ std::string write_and_index(const std::string& dir, const std::string& name,
     fs::remove(pfw);
     std::string idx = determine_index_path(gz, "");
     StringSink sink;
-    View::from_file(gz, idx).metadata(false).export_json(sink).get();
+    View::from_file(gz, idx).metadata(false).sink_json(sink).get();
     return gz;
 }
 
@@ -160,7 +160,7 @@ TEST_SUITE("View C ABI") {
         REQUIRE(df != nullptr);
 
         View cpp_view = View::from_file(s.gz, s.idx).query(R"(cat == "POSIX")");
-        DataFrame cpp_df = run(cpp_view.collect_frame());
+        DataFrame cpp_df = run(cpp_view.collect());
 
         CHECK(dftu_dataframe_num_rows(df) == cpp_df.num_rows());
         CHECK(dftu_dataframe_num_rows(df) == 30);
@@ -179,7 +179,7 @@ TEST_SUITE("View C ABI") {
         std::string gz = write_group_trace(env);
         std::string idx = determine_index_path(gz, "");
         StringSink sink;
-        View::from_file(gz, idx).metadata(false).export_json(sink).get();
+        View::from_file(gz, idx).metadata(false).sink_json(sink).get();
 
         const char* paths[1] = {gz.c_str()};
         const char* idxs[1] = {idx.c_str()};
@@ -198,10 +198,10 @@ TEST_SUITE("View C ABI") {
             dftu_dataframe* df = dftu_view_collect(agged, nullptr);
             REQUIRE(df != nullptr);
 
-            AggregatedView cpp_view = View::from_file(gz, idx)
-                                          .group_by({GroupKey::name()})
-                                          .agg({{AggOp::Count, "", "n"}});
-            DataFrame cpp_df = run(cpp_view.collect_frame());
+            View cpp_view = View::from_file(gz, idx)
+                                .group_by({GroupKey::name()})
+                                .agg({{AggOp::Count, "", "n"}});
+            DataFrame cpp_df = run(cpp_view.collect());
 
             REQUIRE(dftu_dataframe_num_rows(df) == cpp_df.num_rows());
             REQUIRE(dftu_dataframe_num_rows(df) == 2);
@@ -231,11 +231,10 @@ TEST_SUITE("View C ABI") {
             dftu_dataframe* df = dftu_view_collect(agged, nullptr);
             REQUIRE(df != nullptr);
 
-            AggregatedView cpp_view =
-                View::from_file(gz, idx)
-                    .group_by({GroupKey::pid()})
-                    .agg({{AggOp::Sum, "dur", "total_dur"}});
-            DataFrame cpp_df = run(cpp_view.collect_frame());
+            View cpp_view = View::from_file(gz, idx)
+                                .group_by({GroupKey::pid()})
+                                .agg({{AggOp::Sum, "dur", "total_dur"}});
+            DataFrame cpp_df = run(cpp_view.collect());
 
             REQUIRE(dftu_dataframe_num_rows(df) == cpp_df.num_rows());
             REQUIRE(dftu_dataframe_num_rows(df) == 2);
@@ -268,10 +267,10 @@ TEST_SUITE("View C ABI") {
             dftu_dataframe* df = dftu_view_collect(agged, nullptr);
             REQUIRE(df != nullptr);
 
-            AggregatedView cpp_view = View::from_file(gz, idx)
-                                          .group_by({GroupKey::field("dur")})
-                                          .agg({{AggOp::Count, "", "n"}});
-            DataFrame cpp_df = run(cpp_view.collect_frame());
+            View cpp_view = View::from_file(gz, idx)
+                                .group_by({GroupKey::field("dur")})
+                                .agg({{AggOp::Count, "", "n"}});
+            DataFrame cpp_df = run(cpp_view.collect());
 
             REQUIRE(dftu_dataframe_num_rows(df) == cpp_df.num_rows());
             REQUIRE(dftu_dataframe_num_rows(df) == 2);
@@ -292,7 +291,7 @@ TEST_SUITE("View C ABI") {
             StringSink am_sink;
             View::from_file(am_gz, am_idx)
                 .metadata(false)
-                .export_json(am_sink)
+                .sink_json(am_sink)
                 .get();
             const char* am_paths[1] = {am_gz.c_str()};
             const char* am_idxs[1] = {am_idx.c_str()};
@@ -310,11 +309,11 @@ TEST_SUITE("View C ABI") {
             dftu_dataframe* df = dftu_view_collect(agged, nullptr);
             REQUIRE(df != nullptr);
 
-            AggregatedView cpp_view =
+            View cpp_view =
                 View::from_file(am_gz, am_idx)
                     .group_by({GroupKey::pid()})
                     .agg({{AggOp::ArgMax, "name", "argmax_name", "dur"}});
-            DataFrame cpp_df = run(cpp_view.collect_frame());
+            DataFrame cpp_df = run(cpp_view.collect());
 
             REQUIRE(dftu_dataframe_num_rows(df) == cpp_df.num_rows());
             REQUIRE(dftu_dataframe_num_rows(df) == 2);
@@ -340,7 +339,7 @@ TEST_SUITE("View C ABI") {
             StringSink am_sink;
             View::from_file(am_gz, am_idx)
                 .metadata(false)
-                .export_json(am_sink)
+                .sink_json(am_sink)
                 .get();
             const char* am_paths[1] = {am_gz.c_str()};
             const char* am_idxs[1] = {am_idx.c_str()};
@@ -358,11 +357,10 @@ TEST_SUITE("View C ABI") {
             dftu_dataframe* df = dftu_view_collect(agged, nullptr);
             REQUIRE(df != nullptr);
 
-            AggregatedView cpp_view =
-                View::from_file(am_gz, am_idx)
-                    .group_by({GroupKey::pid()})
-                    .agg({{AggOp::Pct, "dur", "p50_dur", "", 0.5}});
-            DataFrame cpp_df = run(cpp_view.collect_frame());
+            View cpp_view = View::from_file(am_gz, am_idx)
+                                .group_by({GroupKey::pid()})
+                                .agg({{AggOp::Pct, "dur", "p50_dur", "", 0.5}});
+            DataFrame cpp_df = run(cpp_view.collect());
 
             REQUIRE(dftu_dataframe_num_rows(df) == cpp_df.num_rows());
             REQUIRE(dftu_dataframe_num_rows(df) == 2);
@@ -383,7 +381,7 @@ TEST_SUITE("View C ABI") {
             StringSink am_sink;
             View::from_file(am_gz, am_idx)
                 .metadata(false)
-                .export_json(am_sink)
+                .sink_json(am_sink)
                 .get();
             const char* am_paths[1] = {am_gz.c_str()};
             const char* am_idxs[1] = {am_idx.c_str()};
@@ -401,10 +399,10 @@ TEST_SUITE("View C ABI") {
             dftu_dataframe* df = dftu_view_collect(agged, nullptr);
             REQUIRE(df != nullptr);
 
-            AggregatedView cpp_view = View::from_file(am_gz, am_idx)
-                                          .group_by({GroupKey::pid()})
-                                          .agg({{AggOp::Busy, "", "busy_us"}});
-            DataFrame cpp_df = run(cpp_view.collect_frame());
+            View cpp_view = View::from_file(am_gz, am_idx)
+                                .group_by({GroupKey::pid()})
+                                .agg({{AggOp::Busy, "", "busy_us"}});
+            DataFrame cpp_df = run(cpp_view.collect());
 
             REQUIRE(dftu_dataframe_num_rows(df) == cpp_df.num_rows());
             REQUIRE(dftu_dataframe_num_rows(df) == 2);
@@ -498,8 +496,8 @@ TEST_SUITE("View C ABI") {
         View cpp_view = View::from_file(s.gz, s.idx)
                             .query(R"(cat == "POSIX")")
                             .sort_by("ts", false)
-                            .limit(5);
-        DataFrame via_eager = run(cpp_view.collect_frame());
+                            .head(5);
+        DataFrame via_eager = run(cpp_view.collect());
 
         REQUIRE(dftu_dataframe_num_rows(via_lazy) == via_eager.num_rows());
         REQUIRE(dftu_dataframe_num_rows(via_lazy) == 5);

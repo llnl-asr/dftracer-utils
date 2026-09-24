@@ -240,7 +240,7 @@ struct SharedIndexedTrace {
         gz = create_mixed_trace(env, 30, 20);
         idx = determine_index_path(gz, "");
         StringSink sink;
-        View::from_file(gz, idx).metadata(false).export_json(sink).get();
+        View::from_file(gz, idx).metadata(false).sink_json(sink).get();
     }
 };
 

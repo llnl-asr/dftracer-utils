@@ -132,14 +132,4 @@ dataframe::DataFrame join_batches(const dataframe::DataFrame& left,
     return out;
 }
 
-coro::CoroTask<dataframe::DataFrame> AggregatedView::join(
-    const AggregatedView& other, JoinType how) const {
-    dataframe::DataFrame left = co_await collect().collect();
-    dataframe::DataFrame right = co_await other.collect().collect();
-    const std::int64_t n_key =
-        (plan_->time_bucket_us > 0 ? 1 : 0) +
-        static_cast<std::int64_t>(plan_->group_by.size());
-    co_return join_batches(left, right, n_key, how);
-}
-
 }  // namespace dftracer::utils::trace::views

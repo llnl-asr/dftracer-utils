@@ -25,6 +25,7 @@
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_executor.h>
+#include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/utilities/common/statistics/ddsketch.h>
 #include <testing_utilities.h>
@@ -812,9 +813,8 @@ class OracleAggFold : public detail::Fold {
 // from the trace's own FH/HH/PR metadata, materialize via to_batch, then apply
 // the plan's post-ops. A pure scan with self-contained name resolution, so it
 // is a genuine reference for the engine collect.
-inline dataframe::DataFrame groupmap_oracle(
-    const dftracer::utils::trace::views::View& v) {
-    ViewPlan plan = detail::resolve_bucket_origin(v.plan());
+inline dataframe::DataFrame groupmap_oracle(const detail::scan::ScanPlan& v) {
+    ViewPlan plan = detail::resolve_bucket_origin(*v);
     // Scan through throwaway index paths so the oracle never builds or mutates
     // the engine's index (which would make the engine see non-fresh files and
     // skip its bootstrap). The oracle resolves names from harvested metadata,

@@ -4,16 +4,16 @@
 #include <Python.h>
 
 namespace dftracer::utils::trace::views {
-class TraceViewer;
+class View;
 }
 
 // _TraceViewer: the native handle behind the Python TraceViewer, one C++
-// trace::views::TraceViewer. The trace builders return a new handle; lazy()
+// trace::views::View. The trace builders return a new handle; lazy()
 // hands its plan to Python as a _LazyFrame, and with_lazy() takes one back
 // after the Python side appended generic ops. Terminals return _LazyFrame
 // plans (or run at once, for the ones with no scan to share).
 typedef struct {
-    PyObject_HEAD dftracer::utils::trace::views::TraceViewer *tv;
+    PyObject_HEAD dftracer::utils::trace::views::View *tv;
 } TraceViewerObject;
 
 extern PyTypeObject TraceViewerType;

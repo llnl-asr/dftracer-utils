@@ -167,7 +167,7 @@ TEST_SUITE("Fold") {
         std::string idx = determine_index_path(gz, "");
         {
             StringSink s;
-            View::from_file(gz, idx).export_json(s).get();
+            View::from_file(gz, idx).sink_json(s).get();
         }
 
         ViewPlan plan;
@@ -214,7 +214,7 @@ TEST_SUITE("Fold") {
         std::string idx = determine_index_path(gz, "");
         {
             StringSink s;
-            View::from_file(gz, idx).export_json(s).get();
+            View::from_file(gz, idx).sink_json(s).get();
         }
 
         // A minimal dictionary fold: collects (type -> {name -> value}) from

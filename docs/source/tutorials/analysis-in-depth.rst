@@ -90,7 +90,6 @@ by name so the output is stable.
                                  AggSpec(AggOp::Mean, "dur")})
                            .sort_by("name")
                            .collect()
-                           .collect()
                            .get();
 
              auto name = df.column("name");
@@ -188,7 +187,6 @@ duration is at least 100 microseconds.
                                  AggSpec(AggOp::Mean, "dur")})
                            .sort_by("name")
                            .collect()
-                           .collect()
                            .get();
 
              auto name = df.column("name");
@@ -282,7 +280,6 @@ see it match.
                                  AggSpec(AggOp::Sum, "dur")})
                            .sort_by("name")
                            .collect()
-                           .collect()
                            .get();
 
              Series avg = df.column("sum_dur").cast(TypeId::Float64)
@@ -370,7 +367,6 @@ total duration in milliseconds.
                            .agg({AggSpec(AggOp::Count),
                                  AggSpec(AggOp::Sum, "dur")})
                            .sort_by("name")
-                           .collect()
                            .collect()
                            .get();
 

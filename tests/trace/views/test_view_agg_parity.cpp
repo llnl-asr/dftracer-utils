@@ -1,6 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "agg_parity_common.h"
 
+namespace scan = dftracer::utils::trace::views::detail::scan;
+
 TEST_SUITE("View") {
     TEST_CASE("View - agg engine path matches the GroupMap path") {
         REQUIRE(parity_env().is_valid());
@@ -47,20 +49,20 @@ TEST_SUITE("View") {
             const std::string rgz = write_agg_engine_trace(renv.get_dir());
             const std::string ridx = determine_index_path(rgz, "");
             auto fine = [&] {
-                return View::from_file(rgz, ridx)
-                    .group_by({GroupKey::cat(), GroupKey::name()})
-                    .agg({{AggOp::Count, "", "n"},
-                          {AggOp::Sum, "dur", "sum_dur"}});
+                return scan::agg(
+                    scan::group_by(scan::from_file(rgz, ridx),
+                                   {GroupKey::cat(), GroupKey::name()}),
+                    {{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "sum_dur"}});
             };
             auto coarse = [&] {
-                return View::from_file(rgz, ridx)
-                    .group_by({GroupKey::cat()})
-                    .agg({{AggOp::Count, "", "n"},
-                          {AggOp::Sum, "dur", "sum_dur"}});
+                return scan::agg(
+                    scan::group_by(scan::from_file(rgz, ridx),
+                                   {GroupKey::cat()}),
+                    {{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "sum_dur"}});
             };
 
             dataframe::DataFrame expect = collect_groupmap_plan(coarse());
-            fine().run().get();  // materialize only the finer rollup
+            scan::run(fine()).get();  // materialize only the finer rollup
             dataframe::DataFrame engine_served = collect_engine_plan(coarse());
             check_match(expect, engine_served, "cat");
         }
@@ -74,23 +76,23 @@ TEST_SUITE("View") {
             const std::string rgz = write_agg_engine_trace(renv.get_dir());
             const std::string ridx = determine_index_path(rgz, "");
             auto q = [&] {
-                return View::from_file(rgz, ridx)
-                    .group_by({GroupKey::cat()})
-                    .agg({
-                        {AggOp::Count, "", "n"},
-                        {AggOp::Sum, "dur", "sum_dur"},
-                        {AggOp::Mean, "dur", "mean_dur"},
-                        {AggOp::Min, "dur", "min_dur"},
-                        {AggOp::Max, "dur", "max_dur"},
-                        {AggOp::Var, "dur", "var_dur"},
-                        {AggOp::Std, "dur", "std_dur"},
-                        {AggOp::Pct, "dur", "p90_dur", "", 0.9},
-                        {AggOp::SetUnion, "cat", "cats"},
-                        {AggOp::ArgMax, "name", "top_name", "dur"},
-                    });
+                return scan::agg(scan::group_by(scan::from_file(rgz, ridx),
+                                                {GroupKey::cat()}),
+                                 {
+                                     {AggOp::Count, "", "n"},
+                                     {AggOp::Sum, "dur", "sum_dur"},
+                                     {AggOp::Mean, "dur", "mean_dur"},
+                                     {AggOp::Min, "dur", "min_dur"},
+                                     {AggOp::Max, "dur", "max_dur"},
+                                     {AggOp::Var, "dur", "var_dur"},
+                                     {AggOp::Std, "dur", "std_dur"},
+                                     {AggOp::Pct, "dur", "p90_dur", "", 0.9},
+                                     {AggOp::SetUnion, "cat", "cats"},
+                                     {AggOp::ArgMax, "name", "top_name", "dur"},
+                                 });
             };
             dataframe::DataFrame expect = collect_groupmap_plan(q());
-            q().run().get();
+            scan::run(q()).get();
             check_match(expect, collect_engine_plan(q()), "cat");
         }
 
@@ -112,17 +114,18 @@ TEST_SUITE("View") {
                     {AggOp::SetUnion, "name", "names"}};
             };
             auto fine = [&] {
-                return View::from_file(rgz, ridx)
-                    .group_by({GroupKey::cat(), GroupKey::name()})
-                    .agg(specs());
+                return scan::agg(
+                    scan::group_by(scan::from_file(rgz, ridx),
+                                   {GroupKey::cat(), GroupKey::name()}),
+                    specs());
             };
             auto coarse = [&] {
-                return View::from_file(rgz, ridx)
-                    .group_by({GroupKey::cat()})
-                    .agg(specs());
+                return scan::agg(scan::group_by(scan::from_file(rgz, ridx),
+                                                {GroupKey::cat()}),
+                                 specs());
             };
             dataframe::DataFrame expect = collect_groupmap_plan(coarse());
-            fine().run().get();
+            scan::run(fine()).get();
             check_match(expect, collect_engine_plan(coarse()), "cat");
         }
 
@@ -136,22 +139,22 @@ TEST_SUITE("View") {
             const std::string rgz = write_agg_engine_trace(renv.get_dir());
             const std::string ridx = determine_index_path(rgz, "");
             auto occ = [&](std::vector<GroupKey> gb) {
-                return View::from_file(rgz, ridx)
-                    .group_by(std::move(gb))
-                    .agg({
+                return scan::agg(
+                    scan::group_by(scan::from_file(rgz, ridx), std::move(gb)),
+                    {
                         {AggOp::Busy, "", "busy"},
                         {AggOp::Active, "", "active"},
                     });
             };
             dataframe::DataFrame same_expect =
                 collect_groupmap_plan(occ({GroupKey::cat()}));
-            occ({GroupKey::cat()}).run().get();
+            scan::run(occ({GroupKey::cat()})).get();
             check_match(same_expect,
                         collect_engine_plan(occ({GroupKey::cat()})), "cat");
 
             dataframe::DataFrame coarse_expect =
                 collect_groupmap_plan(occ({GroupKey::cat()}));
-            occ({GroupKey::cat(), GroupKey::name()}).run().get();
+            scan::run(occ({GroupKey::cat(), GroupKey::name()})).get();
             check_match(coarse_expect,
                         collect_engine_plan(occ({GroupKey::cat()})), "cat");
         }
@@ -186,18 +189,18 @@ TEST_SUITE("View") {
                 }
             };
             auto hv = [&](std::vector<GroupKey> gb) {
-                return View::from_file(rgz, ridx)
-                    .group_by(std::move(gb))
-                    .agg({{AggOp::Count, "", "n"}, {AggOp::Hist, "dur", "h"}});
+                return scan::agg(
+                    scan::group_by(scan::from_file(rgz, ridx), std::move(gb)),
+                    {{AggOp::Count, "", "n"}, {AggOp::Hist, "dur", "h"}});
             };
             dataframe::DataFrame same_expect =
                 collect_groupmap_plan(hv({GroupKey::cat()}));
-            hv({GroupKey::cat()}).run().get();
+            scan::run(hv({GroupKey::cat()})).get();
             check_hist(same_expect, collect_engine_plan(hv({GroupKey::cat()})));
 
             dataframe::DataFrame coarse_expect =
                 collect_groupmap_plan(hv({GroupKey::cat()}));
-            hv({GroupKey::cat(), GroupKey::name()}).run().get();
+            scan::run(hv({GroupKey::cat(), GroupKey::name()})).get();
             check_hist(coarse_expect,
                        collect_engine_plan(hv({GroupKey::cat()})));
         }

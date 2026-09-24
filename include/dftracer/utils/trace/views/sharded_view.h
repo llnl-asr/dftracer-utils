@@ -29,10 +29,9 @@ namespace dftracer::utils::trace::views {
 /// read-only mount or NFS.
 class ShardedView {
    public:
-    /// Applies the caller's view options to a base View and returns it, exactly
-    /// like the `configure` lambda in `dftracer_view`. `group_by`/`agg` yield
-    /// an AggregatedView, which slices back to View. The same configuration is
-    /// applied to every shard and to the merger, so all partials are
+    /// Applies the caller's view options to a base View and returns it, as
+    /// the `configure` lambda in `dftracer_view` does. The same configuration
+    /// is applied to every shard and to the merger, so all partials are
     /// compatible.
     using Configure = std::function<View(View)>;
 

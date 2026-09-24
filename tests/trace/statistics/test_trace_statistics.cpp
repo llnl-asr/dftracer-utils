@@ -8,7 +8,6 @@
 #include <string>
 
 using namespace dftracer::utils::trace::statistics;
-using namespace dftracer::utils::trace::indexing;
 
 TEST_SUITE("TraceStatistics") {
     TEST_CASE("TraceStatistics - Convenience accessors") {

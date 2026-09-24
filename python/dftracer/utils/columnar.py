@@ -109,9 +109,6 @@ _CMP_CODES = {"gt": 0, "ge": 1, "lt": 2, "le": 3, "eq": 4, "ne": 5}
 _CMP_SYMBOL = {"gt": ">", "ge": ">=", "lt": "<", "le": "<=", "eq": "==", "ne": "!="}
 _LOGICAL_CODES = {"and": 0, "or": 1}
 
-# Resolved virtual-field leaf names accepted after the resolved./r. prefix.
-_RESOLVED_FIELDS = frozenset({"fpath", "cwd", "hostname", "host", "exec", "cmd"})
-
 # vec_eval opcodes (mirror the Op enum in columnar_eval.cpp).
 # Post-order AST node opcodes for vec_eval (mirror columnar_eval.cpp). This is a
 # pure structural serialization - no type logic; the C++ compiler does type
@@ -793,6 +790,16 @@ class _Col(Expr):
     def __init__(self, name: str) -> None:
         self.name = name
 
+    def any(self) -> "_AnyCol":
+        """The same field as ``any(name)``: a predicate on it holds when any
+        element of the array holds. It filters in the trace scan
+        (``TraceViewer.query``); ``apply`` cannot evaluate it."""
+        return _AnyCol(f"any({self.name})")
+
+
+class _AnyCol(_Col):
+    """``any(name)``: renders to the query DSL; no column to evaluate."""
+
 
 #: Back-compat alias: ``Field("dur")`` is the field leaf, same as ``F.dur``.
 Field = _Col
@@ -1391,13 +1398,11 @@ F.any = _Wildcard()  # type: ignore[attr-defined]
 
 
 def resolved(name: str) -> Expr:
-    """A resolved virtual field (``resolved.<name>``), which the engine rewrites
-    to a concrete hash lookup against the index. Known names: fpath, cwd,
-    hostname (alias host), exec, cmd."""
-    if name not in _RESOLVED_FIELDS:
-        raise ValueError(
-            f"unknown resolved field {name!r}; expected one of {sorted(_RESOLVED_FIELDS)}"
-        )
+    """The column ``resolved.<name>``, where `name` is ``<key field>.<field>``:
+    `field` of the index dictionary row whose key the event's `key field`
+    holds, such as ``resolved("fhash.path")``. The dftracer schema resolves
+    ``fhash.path``, ``cwd.path``, ``hhash.name``, ``exec_hash.value`` and
+    ``cmd_hash.value``; the engine rejects any other name."""
     return _Col("resolved." + name)
 
 
@@ -2738,6 +2743,11 @@ def _collect_columns(expr: Expr) -> List[str]:
     def walk(e: Expr) -> None:
         if isinstance(e, _AggLeaf):
             return
+        if isinstance(e, _AnyCol):
+            raise _ext.DFTUtilsValueError(
+                f"{e.name} filters in the trace scan (TraceViewer.query); "
+                "apply cannot evaluate any()"
+            )
         if isinstance(e, _Col):
             if e.name not in seen:
                 seen.append(e.name)

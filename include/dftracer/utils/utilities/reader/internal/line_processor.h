@@ -1,7 +1,6 @@
 #ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_LINE_PROCESSOR_H
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_LINE_PROCESSOR_H
 
-#ifdef __cplusplus
 #include <dftracer/utils/core/coro/task.h>
 
 #include <cstddef>
@@ -41,47 +40,6 @@ class LineProcessor {
     virtual void end() {}
 };
 
-/**
- * Bridge class that wraps C callback as C++ LineProcessor.
- * Internal use only - converts C function pointer to C++ virtual interface.
- */
-class CLineProcessor : public LineProcessor {
-   private:
-    int (*callback_)(const char* data, std::size_t length, void* user_data);
-    void* user_data_;
-
-   public:
-    CLineProcessor(int (*callback)(const char*, std::size_t, void*),
-                   void* user_data)
-        : callback_(callback), user_data_(user_data) {}
-
-    coro::CoroTask<bool> process(const char* data,
-                                 std::size_t length) override {
-        // Convert C++ call to C callback
-        int result = callback_(data, length, user_data_);
-        co_return result != 0;  // Non-zero means continue
-    }
-};
-
 }  // namespace dftracer::utils::utilities::reader::internal
-
-extern "C" {
-#endif
-
-#include <stddef.h>
-
-/**
- * C callback function type for line processing.
- * @param data Pointer to line data (not null-terminated)
- * @param length Length of the line data in bytes
- * @param user_data User-provided data pointer
- * @return Non-zero to continue processing, 0 to stop early
- */
-typedef int (*dftu_line_processor_callback_t)(const char* data, size_t length,
-                                              void* user_data);
-
-#ifdef __cplusplus
-}  // extern "C"
-#endif
 
 #endif  // DFTRACER_UTILS_UTILITIES_READER_INTERNAL_LINE_PROCESSOR_H

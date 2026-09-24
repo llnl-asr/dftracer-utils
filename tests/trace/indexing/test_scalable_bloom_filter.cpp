@@ -1,12 +1,12 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/trace/indexing/bloom_filter.h>
-#include <dftracer/utils/trace/indexing/scalable_bloom_filter.h>
+#include <dftracer/utils/index/extensions/bloom_filter.h>
+#include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 #include <doctest/doctest.h>
 
 #include <string>
 #include <vector>
 
-using namespace dftracer::utils::trace::indexing;
+using namespace dftracer::utils::index::extensions;
 
 namespace {
 

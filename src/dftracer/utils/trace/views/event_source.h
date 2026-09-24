@@ -210,6 +210,7 @@ class PodSource {
     RecordPhase phase() const { return ev_.phase; }
 
     std::optional<double> number(std::string_view field) const {
+        if (ev_.by_path) return as_double(find_arg_by(field));
         if (field == "pid") return static_cast<double>(ev_.pid);
         if (field == "tid") return static_cast<double>(ev_.tid);
         if (field == "ts") return static_cast<double>(ev_.ts);
@@ -217,19 +218,23 @@ class PodSource {
             return ev_.has_dur
                        ? std::optional<double>(static_cast<double>(ev_.dur))
                        : std::nullopt;
-        const auto* v =
-            is_schema_field(field) ? find_top(field) : find_arg(field);
-        if (v) {
-            if (const auto* d = std::get_if<double>(v)) return *d;
-            if (const auto* i = std::get_if<std::int64_t>(v))
-                return static_cast<double>(*i);
-        }
-        return std::nullopt;
+        return as_double(is_schema_field(field) ? find_top(field)
+                                                : find_arg(field));
     }
 
     std::optional<dftracer::utils::dataframe::FieldNum> number_typed(
         std::string_view field) const {
         using dftracer::utils::dataframe::FieldNum;
+        const auto* v = ev_.by_path ? find_arg_by(field) : nullptr;
+        if (ev_.by_path) {
+            if (v) {
+                if (const auto* d = std::get_if<double>(v))
+                    return FieldNum::of(*d);
+                if (const auto* i = std::get_if<std::int64_t>(v))
+                    return FieldNum::of(*i);
+            }
+            return std::nullopt;
+        }
         // Top-level POD scalars are unsigned integers.
         if (field == "pid") return FieldNum::of(ev_.pid);
         if (field == "tid") return FieldNum::of(ev_.tid);
@@ -237,8 +242,7 @@ class PodSource {
         if (field == "dur")
             return ev_.has_dur ? std::optional<FieldNum>(FieldNum::of(ev_.dur))
                                : std::nullopt;
-        const auto* v =
-            is_schema_field(field) ? find_top(field) : find_arg(field);
+        v = is_schema_field(field) ? find_top(field) : find_arg(field);
         if (v) {
             if (const auto* d = std::get_if<double>(v)) return FieldNum::of(*d);
             if (const auto* i = std::get_if<std::int64_t>(v))
@@ -248,7 +252,9 @@ class PodSource {
     }
 
     void append_value(std::string& out, std::string_view field) const {
-        if (field == "cat") {
+        if (ev_.by_path) {
+            if (const auto* v = find_arg_by(field)) append_arg_value(out, *v);
+        } else if (field == "cat") {
             append_id(out, ev_.cat_id);
         } else if (field == "name") {
             append_id(out, ev_.name_id);
@@ -269,6 +275,10 @@ class PodSource {
     }
 
     void append_arg(std::string& out, std::string_view key) const {
+        if (ev_.by_path) {
+            if (const auto* v = find_arg_by(key)) append_arg_value(out, *v);
+            return;
+        }
         const std::string_view bare = strip_args_prefix(key);
         if (bare == "fhash")
             append_id(out, ev_.fhash_id);
@@ -295,6 +305,15 @@ class PodSource {
     }
 
    private:
+    static std::optional<double> as_double(const FoldEvent::ArgValue* v) {
+        if (v) {
+            if (const auto* d = std::get_if<double>(v)) return *d;
+            if (const auto* i = std::get_if<std::int64_t>(v))
+                return static_cast<double>(*i);
+        }
+        return std::nullopt;
+    }
+
     // Nested/extra fields are captured under their full name including the
     // "args." prefix (capture_extra_field), while top-level args are stored
     // bare. Match the field as written first, then its stripped form, so both
@@ -387,6 +406,27 @@ inline bool pod_matches(const query::Query& q, const FoldEvent& ev,
         } else {
             std::string v = src.value(f);
             if (!v.empty()) scratch[f] = std::move(v);
+        }
+    }
+    // An any() field reads the flattened positions `<path>.<k>`; a dftracer
+    // event's args carry no "args." prefix.
+    for (const std::string& path : q.any_paths()) {
+        const std::string_view bare =
+            std::string_view(path).starts_with("args.")
+                ? std::string_view(path).substr(5)
+                : std::string_view(path);
+        for (const auto& [key, value] : ev.args) {
+            const std::string_view name = intern.resolve(key);
+            if (name.size() <= bare.size() || !name.starts_with(bare) ||
+                name[bare.size()] != '.')
+                continue;
+            const auto* slot = std::get_if<std::uint32_t>(&value);
+            query::LiteralValue lit =
+                slot ? query::LiteralValue(std::string(intern.resolve(*slot)))
+                : std::holds_alternative<std::int64_t>(value)
+                    ? query::LiteralValue(std::get<std::int64_t>(value))
+                    : query::LiteralValue(std::get<double>(value));
+            scratch[name] = std::move(lit);
         }
     }
     return q.evaluate(scratch);

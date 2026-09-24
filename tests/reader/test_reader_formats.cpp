@@ -1,8 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/utilities/indexer/error.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/index/store/error.h>
 #include <dftracer/utils/utilities/reader/error.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
@@ -18,9 +18,9 @@
 
 using namespace dftu_utils_test;
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::indexer::internal;
+using namespace dftracer::utils::index::gzip;
 using namespace dftracer::utils::utilities::reader::internal;
-using dftracer::utils::utilities::indexer::IndexerError;
+using dftracer::utils::index::store::IndexerError;
 
 std::string format_name(Format format);
 
@@ -70,7 +70,7 @@ TEST_CASE_TEMPLATE("Indexer creation and destruction", FormatType, GZIPFormat) {
     FormatTestFixture fixture(FormatType::value);
 
     SUBCASE("Basic indexer creation") {
-        auto indexer = IndexerFactory::create(
+        auto indexer = CheckpointIndexerFactory::create(
             fixture.get_test_file(), fixture.get_index_file(), 1024 * 1024);
         REQUIRE(indexer != nullptr);
         CHECK_FALSE(indexer->exists());
@@ -79,8 +79,8 @@ TEST_CASE_TEMPLATE("Indexer creation and destruction", FormatType, GZIPFormat) {
 
     SUBCASE("Invalid file path") {
         CHECK_THROWS_AS(
-            IndexerFactory::create("/nonexistent/file.gz",
-                                   fixture.get_index_file(), 1024 * 1024),
+            CheckpointIndexerFactory::create(
+                "/nonexistent/file.gz", fixture.get_index_file(), 1024 * 1024),
             IndexerError);
     }
 }
@@ -89,7 +89,7 @@ TEST_CASE_TEMPLATE("Index building", FormatType, GZIPFormat) {
     FormatTestFixture fixture(FormatType::value);
 
     SUBCASE("Basic index building") {
-        auto indexer = IndexerFactory::create(
+        auto indexer = CheckpointIndexerFactory::create(
             fixture.get_test_file(), fixture.get_index_file(), 1024 * 1024);
         REQUIRE(indexer != nullptr);
 
@@ -98,7 +98,7 @@ TEST_CASE_TEMPLATE("Index building", FormatType, GZIPFormat) {
     }
 
     SUBCASE("Rebuild detection") {
-        auto indexer = IndexerFactory::create(
+        auto indexer = CheckpointIndexerFactory::create(
             fixture.get_test_file(), fixture.get_index_file(), 1024 * 1024);
         REQUIRE(indexer != nullptr);
 
@@ -110,9 +110,9 @@ TEST_CASE_TEMPLATE("Index building", FormatType, GZIPFormat) {
     }
 
     SUBCASE("Force rebuild") {
-        auto indexer =
-            IndexerFactory::create(fixture.get_test_file(),
-                                   fixture.get_index_file(), 1024 * 1024, true);
+        auto indexer = CheckpointIndexerFactory::create(
+            fixture.get_test_file(), fixture.get_index_file(), 1024 * 1024,
+            true);
         REQUIRE(indexer != nullptr);
 
         indexer->build();
@@ -123,7 +123,7 @@ TEST_CASE_TEMPLATE("Reader creation and basic functionality", FormatType,
                    GZIPFormat) {
     FormatTestFixture fixture(FormatType::value);
 
-    auto indexer = IndexerFactory::create(
+    auto indexer = CheckpointIndexerFactory::create(
         fixture.get_test_file(), fixture.get_index_file(), 1024 * 1024);
     REQUIRE(indexer != nullptr);
     indexer->build();
@@ -145,8 +145,8 @@ TEST_CASE_TEMPLATE("Reader creation and basic functionality", FormatType,
 TEST_CASE_TEMPLATE("Data reading operations", FormatType, GZIPFormat) {
     FormatTestFixture fixture(FormatType::value);
 
-    auto indexer = IndexerFactory::create(fixture.get_test_file(),
-                                          fixture.get_index_file(), 512 * 1024);
+    auto indexer = CheckpointIndexerFactory::create(
+        fixture.get_test_file(), fixture.get_index_file(), 512 * 1024);
     REQUIRE(indexer != nullptr);
     indexer->build();
 
@@ -226,8 +226,8 @@ TEST_CASE_TEMPLATE("Data reading operations", FormatType, GZIPFormat) {
 TEST_CASE_TEMPLATE("JSON boundary detection", FormatType, GZIPFormat) {
     FormatTestFixture fixture(FormatType::value);
 
-    auto indexer = IndexerFactory::create(fixture.get_test_file(),
-                                          fixture.get_index_file(), 512 * 1024);
+    auto indexer = CheckpointIndexerFactory::create(
+        fixture.get_test_file(), fixture.get_index_file(), 512 * 1024);
     REQUIRE(indexer != nullptr);
     indexer->build();
 
@@ -279,8 +279,8 @@ TEST_CASE_TEMPLATE("Line-based reading", FormatType, GZIPFormat) {
 
     std::string large_index_file = large_env.get_index_path(large_test_file);
 
-    auto indexer =
-        IndexerFactory::create(large_test_file, large_index_file, 100 * 1024);
+    auto indexer = CheckpointIndexerFactory::create(
+        large_test_file, large_index_file, 100 * 1024);
     REQUIRE(indexer != nullptr);
     indexer->build();
 

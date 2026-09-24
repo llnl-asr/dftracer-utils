@@ -43,7 +43,7 @@ exposes:
   parallel; ``ReadConfig::skip_pruning`` lets the dispatcher avoid
   re-running the chunk pruner per work item.
 - **Batch chunk pruning**: a single pruner pass per file feeds all work
-  items, using ``ChunkPrunerUtility`` over bloom filters, chunk
+  items, using ``ChunkPruner`` over bloom filters, chunk
   statistics, and the manifest CF.
 - **flatten_objects**: when set, top-level JSON object values
   (e.g. ``args``) are expanded one level into ``parent.child`` columns
@@ -180,42 +180,10 @@ Process lines without materializing them into a container:
 C API
 -----
 
-Opaque handle-based interface for C interoperability:
-
-.. code-block:: c
-
-   #include <dftracer/utils/utilities/reader/internal/reader.h>
-
-   /* Create reader (index_ckpt_size = 0 uses the default) */
-   dftu_reader_handle_t reader = dftu_reader_create(
-       "trace.pfw.gz", "trace-dir/.dftindex", 0);
-
-   /* Query metadata (returns non-zero on error) */
-   size_t num_lines = 0;
-   dftu_reader_get_num_lines(reader, &num_lines);
-
-   /* Create stream */
-   dftu_stream_config_t config = {
-       .stream_type = DFTU_STREAM_TYPE_LINE,
-       .range_type = DFTU_RANGE_TYPE_LINES,
-       .start = 1,
-       .end = 100,
-       .buffer_size = 0,  /* 0 = use default */
-   };
-   dftu_reader_stream_t stream = dftu_reader_stream(reader, &config);
-
-   /* Read lines */
-   char buffer[1024 * 1024];
-   while (!dftu_reader_stream_done(stream)) {
-       size_t bytes = dftu_reader_stream_read(
-           stream, buffer, sizeof(buffer));
-       if (bytes == 0) break;
-       /* process buffer[0..bytes-1] */
-   }
-
-   /* Cleanup */
-   dftu_reader_stream_destroy(stream);
-   dftu_reader_destroy(reader);
+The reader has no C API. C programs build the index with
+``dftracer/utils/index/abi.h`` and read events through the View C ABI
+(``dftracer/utils/trace/views/abi.h``); see the C section of
+:doc:`../quickstart`. Raw byte-range and line-range reads are C++ only.
 
 .. _reader-python-api:
 

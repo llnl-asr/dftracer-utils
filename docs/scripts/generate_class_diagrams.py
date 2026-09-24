@@ -163,7 +163,6 @@ COMPONENT_GROUPS = [
     ),
     ("task_graph", ["dftracer::utils::task_graph::"], "Task Graph"),
     ("io", ["dftracer::utils::io::"], "I/O Backends"),
-    ("rocksdb", ["dftracer::utils::rocksdb::"], "RocksDB Wrappers"),
     ("query", ["dftracer::utils::query::"], "Query DSL"),
     (
         "dataframe",
@@ -177,7 +176,7 @@ COMPONENT_GROUPS = [
         "Trace Domain",
     ),
     ("reader", ["dftracer::utils::utilities::reader::"], "Trace Reader"),
-    ("indexer", ["dftracer::utils::utilities::indexer::"], "Indexer"),
+    ("index", ["dftracer::utils::index::"], "Index"),
     ("arrow", ["dftracer::utils::utilities::common::arrow::"], "Arrow Bridge"),
     (
         "utilities",
@@ -200,7 +199,11 @@ _INTERNAL_SUFFIXES = ("Awaitable", "Awaiter", "WaiterNode", "State", "SharedStat
 _INTERNAL_NAMES = frozenset(
     {"promise_type", "FinalAwaiter", "Awaiter", "Adopt", "iterator", "sentinel", "PromiseBase"}
 )
-_NS_SEGMENTS = {"internal", "detail", "impl", "types", "sources", "reflect"}
+_NS_SEGMENTS = {
+    "internal", "detail", "impl", "types", "sources", "reflect",
+    "store", "cf", "queries", "gzip", "extensions", "profiles", "dft", "agg",
+    "build", "plan", "cache",
+}
 
 
 def _is_internal(cls: ClassInfo, prefixes: list[str]) -> bool:
@@ -357,11 +360,11 @@ def generate_collaboration(
 # Bottom-to-top: core is the foundation at the base; each arrow points from a
 # library to the one built on top of it (A --> B reads "B is built on A").
 ARCHITECTURE_MMD = """graph BT
-    utilities["dftracer_utils_utilities<br/><i>readers, indexer, aggregation,<br/>comparison, statistics, plugins, dlio, replay</i>"]
+    utilities["dftracer_utils_utilities<br/><i>readers, index, aggregation,<br/>comparison, statistics, plugins, dlio, replay</i>"]
     dataframe["dftracer_utils_dataframe<br/><i>Series/DataFrame, Highway SIMD kernels,<br/>Arrow bridge, columnar query execution</i>"]
     query["dftracer_utils_query<br/><i>predicate IR, string codec, evaluator</i>"]
     json["dftracer_utils_json<br/><i>simdjson-backed parsing</i>"]
-    core["dftracer_utils_core<br/><i>coroutines, tasks, task graph, io backend,<br/>pipelines, rocksdb wrappers, primitives</i>"]
+    core["dftracer_utils_core<br/><i>coroutines, tasks, task graph, io backend,<br/>pipelines, primitives</i>"]
 
     core --> json
     json --> query

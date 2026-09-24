@@ -1,18 +1,20 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/rocksdb/db_manager.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/index/build/batch_builder.h>
+#include <dftracer/utils/index/extensions/kinds/payloads.h>
+#include <dftracer/utils/index/gzip/gzip_indexer.h>
+#include <dftracer/utils/index/gzip/gzip_member_scanner.h>
+#include <dftracer/utils/index/schemas/dft/bloom_core.h>
+#include <dftracer/utils/index/store/db_manager.h>
+#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/index_database_writer_context.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/event.h>
-#include <dftracer/utils/trace/visitors/bloom_core.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
-#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
-#include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
-#include <dftracer/utils/utilities/indexer/internal/common/gzip_member_scanner.h>
-#include <dftracer/utils/utilities/indexer/internal/gzip/gzip_indexer.h>
-#include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <doctest/doctest.h>
+#include <index_test_helpers.h>
 #include <simdjson.h>
 #include <testing_runtime.h>
 #include <testing_utilities.h>
@@ -20,8 +22,9 @@
 #include <memory>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::indexer;
-using namespace dftracer::utils::trace::visitors;
+using namespace dftracer::utils::index::build;
+using namespace dftracer::utils::index::store;
+
 using namespace dftu_utils_test;
 
 namespace {
@@ -34,17 +37,13 @@ struct BuildOutcome {
     std::size_t total_lines = 0;
 };
 
-BuildOutcome build_one(const std::string& gz, bool force = false,
-                       std::size_t sub_chunk_events = 0) {
+BuildOutcome build_one(const std::string& gz, bool force = false) {
     BuildOutcome out;
     run_coro([&](CoroScope& scope) -> coro::CoroTask<void> {
         auto cfg = std::make_shared<IndexBuildBatchConfig>();
         cfg->file_paths = {gz};
         cfg->force_rebuild = force;
-        if (sub_chunk_events > 0)
-            cfg->bloom_config.sub_chunk_events = sub_chunk_events;
-        auto r =
-            co_await IndexBatchBuilderUtility::process(&scope, std::move(cfg));
+        auto r = co_await BatchBuilder::process(&scope, std::move(cfg));
         out.success = r.indexed >= 1 && r.failed == 0;
         if (!r.results.empty()) {
             out.index_path = r.results[0].index_path;
@@ -105,8 +104,8 @@ TEST_SUITE("IndexBuilder") {
     // exactly one slice. If either is wrong, summed slice line counts drift
     // from the whole-file count.
     TEST_CASE("Sliced builds conserve lines across member boundaries") {
-        namespace gz = dftracer::utils::utilities::indexer::internal::gzip;
-        using dftracer::utils::utilities::indexer::internal::GzipMember;
+        namespace gz = dftracer::utils::index::gzip;
+        using dftracer::utils::index::gzip::GzipMember;
 
         // Members deliberately end mid-line so lines straddle boundaries.
         const std::vector<std::string> texts = {
@@ -124,7 +123,7 @@ TEST_SUITE("IndexBuilder") {
                 (i + 1 < offs.size() ? offs[i + 1] : fsize) - offs[i];
         }
 
-        dftracer::utils::utilities::indexer::internal::Indexer::VisitorList
+        dftracer::utils::index::gzip::CheckpointIndexer::VisitorList
             no_visitors;
 
         std::uint64_t whole_lines = 0;
@@ -175,9 +174,10 @@ TEST_SUITE("IndexBuilder") {
         REQUIRE(fs::exists(result.index_path));
 
         IndexDatabase db(result.index_path);
-        int fid = db.get_file_info_id(internal::get_logical_path(gz_file));
+        int fid = db.get_file_info_id(
+            dftracer::utils::index::store::internal::get_logical_path(gz_file));
         REQUIRE(fid >= 0);
-        CHECK(db.has_bloom_data(fid));
+        CHECK(db.pruning_tier_current(fid));
     }
 
     TEST_CASE("Member table covers every gzip member") {
@@ -190,7 +190,8 @@ TEST_SUITE("IndexBuilder") {
         REQUIRE(result.success);
 
         IndexDatabase db(result.index_path);
-        int fid = db.get_file_info_id(internal::get_logical_path(gz_file));
+        int fid = db.get_file_info_id(
+            dftracer::utils::index::store::internal::get_logical_path(gz_file));
         REQUIRE(fid >= 0);
 
         auto members = db.query_gzip_members(fid);
@@ -212,41 +213,6 @@ TEST_SUITE("IndexBuilder") {
         CHECK(members.back().last_line_num == 100);
     }
 
-    TEST_CASE("Sub-chunk zone-maps cover every event within a member") {
-        const std::vector<std::string> texts = {
-            dftu_lines(0, 40), dftu_lines(40, 25), dftu_lines(65, 35)};
-        auto [gz_file, c_offsets] = write_multi_member_gz(texts);
-
-        const std::size_t sub = 10;
-        auto result = build_one(gz_file, /*force=*/false, sub);
-        REQUIRE(result.success);
-
-        IndexDatabase db(result.index_path);
-        int fid = db.get_file_info_id(internal::get_logical_path(gz_file));
-        REQUIRE(fid >= 0);
-        auto rows = db.query_chunk_statistics(fid);
-        REQUIRE(rows.size() == texts.size());
-        for (const auto& row : rows) {
-            const auto& s = row.stats;
-            const auto& buckets = s.sub_zonemaps;
-            REQUIRE(!buckets.empty());
-
-            std::uint64_t summed = 0;
-            for (const auto& z : buckets) {
-                summed += z.event_count;
-                CHECK(z.event_count > 0);
-                CHECK(z.event_count <= sub);
-                // Bucket zone-map lies within the member's range.
-                CHECK(z.min_timestamp_us >= s.min_timestamp_us);
-                CHECK(z.max_timestamp_us <= s.max_timestamp_us);
-                CHECK(z.min_duration_us == 10);
-                CHECK(z.max_duration_us == 10);
-            }
-            CHECK(summed == s.total_events);
-            CHECK(buckets.size() == (s.total_events + sub - 1) / sub);
-        }
-    }
-
     TEST_CASE("Pruner chunks are gzip members") {
         const std::vector<std::string> texts = {
             dftu_lines(0, 40), dftu_lines(40, 25, "rare"), dftu_lines(65, 35)};
@@ -256,7 +222,8 @@ TEST_SUITE("IndexBuilder") {
         REQUIRE(result.success);
 
         IndexDatabase db(result.index_path);
-        int fid = db.get_file_info_id(internal::get_logical_path(gz_file));
+        int fid = db.get_file_info_id(
+            dftracer::utils::index::store::internal::get_logical_path(gz_file));
         REQUIRE(fid >= 0);
 
         auto members = db.query_gzip_members(fid);
@@ -271,11 +238,15 @@ TEST_SUITE("IndexBuilder") {
 
         // Events are attributed to the member that holds them, so a name
         // confined to one member yields exactly that chunk.
-        auto rare_chunks = db.query_name_chunk_postings("rare", fid);
+        auto rare_chunks = db.posting_granules(
+            fid, "name",
+            dftracer::utils::index::extensions::kinds::value_hash("rare"));
         REQUIRE(rare_chunks.size() == 1);
         CHECK(rare_chunks[0] == 1);
 
-        auto common_chunks = db.query_name_chunk_postings("op", fid);
+        auto common_chunks = db.posting_granules(
+            fid, "name",
+            dftracer::utils::index::extensions::kinds::value_hash("op"));
         std::sort(common_chunks.begin(), common_chunks.end());
         REQUIRE(common_chunks.size() == 2);
         CHECK(common_chunks[0] == 0);
@@ -289,7 +260,8 @@ TEST_SUITE("IndexBuilder") {
         REQUIRE(result.success);
 
         IndexDatabase db(result.index_path);
-        int fid = db.get_file_info_id(internal::get_logical_path(gz_file));
+        int fid = db.get_file_info_id(
+            dftracer::utils::index::store::internal::get_logical_path(gz_file));
         REQUIRE(fid >= 0);
 
         auto members = db.query_gzip_members(fid);
@@ -313,9 +285,10 @@ TEST_SUITE("IndexBuilder") {
         CHECK(second.success);
 
         IndexDatabase db(second.index_path);
-        int fid = db.get_file_info_id(internal::get_logical_path(gz_file));
+        int fid = db.get_file_info_id(
+            dftracer::utils::index::store::internal::get_logical_path(gz_file));
         REQUIRE(fid >= 0);
-        CHECK(db.has_bloom_data(fid));
+        CHECK(db.pruning_tier_current(fid));
     }
 
     TEST_CASE("Force rebuild") {

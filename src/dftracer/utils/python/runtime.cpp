@@ -1,6 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
-#include <dftracer/utils/core/rocksdb/database.h>
+#include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/python/py_dict_helpers.h>
 #include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_method.h>
@@ -485,7 +485,7 @@ static void dftracer_utils_atexit_cleanup() {
     if (auto rt = dftracer::utils::peek_default_runtime()) {
         rt->shutdown();
     }
-    dftracer::utils::rocksdb::mark_process_exiting_for_rocksdb();
+    dftracer::utils::index::store::mark_process_exiting_for_rocksdb();
 }
 
 int dftracer::utils::python::init_runtime(PyObject *m) {

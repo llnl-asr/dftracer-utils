@@ -77,10 +77,7 @@ set(DFTRACER_UTILS_CORE_SOURCES
     # Utilities
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/utilities/monitor.cpp
     # RocksDB
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/rocksdb/database.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/rocksdb/filesystem.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/rocksdb/key_codec.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/rocksdb/db_manager.cpp)
+)
 
 # Conditionally add io_uring backend sources
 if(DFTRACER_UTILS_HAVE_IO_URING)
@@ -134,152 +131,176 @@ set(DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/dlio/barrier_simulator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/dlio/trace_loader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/dlio/optimizer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/dlio/yaml_emit.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/dlio/yaml_emit.cpp
+)
 
-list(
-  APPEND
-  DFTRACER_UTILS_UTILITIES_SOURCES
-  # DFT Aggregators
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/aggregators/aggregation_drain.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/aggregators/agg_db_open.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/aggregators/aggregation_metrics.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/aggregators/aggregation_runner.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/aggregators/aggregation_intern.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/aggregators/aggregation_serialization.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/aggregators/aggregation_merge_operator.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/aggregators/system_metrics_serialization.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/aggregators/system_metrics_merge_operator.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/aggregators/aggregation_logic.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/aggregators/aggregation_augmentation.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/aggregators/event_aggregator.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/aggregators/association_tracker.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/aggregators/dftracer_trace_writer_utility.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/aggregators/aggregator_utility.cpp
-  # DFT Indexing (bloom filters, statistics, queries)
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/indexing/bloom_filter.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/indexing/scalable_bloom_filter.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/indexing/chunk_statistics.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/indexing/chunk_dimension_stats.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/indexing/chunk_indexer_utility.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/indexing/chunk_pruner_utility.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/indexing/resolved_field_rewriter.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/indexing/index_resolver_utility.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/indexing/resolve_and_build.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/indexing/shard_manifest.cpp
-  # DFT Statistics (trace statistics, aggregation, querying)
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/statistics/trace_statistics.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/statistics/statistics_query_utility.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/statistics/log2_histogram.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/statistics/timestamp_histogram.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/statistics/detailed_statistics.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/statistics/detail_stats_view.cpp
-  # DFT Views (filtered lenses over trace files)
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_definition.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_scanner_utility.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_planner_utility.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/provenance/provenance_graph.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_source.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_plan_ops.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_aggregate.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_agg_engine.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_agg_tier.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_resolver.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_scan.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/native_row_fold.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/stream_row_fold.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/containment_fold.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/hash_table_dictionary.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/dict_fold.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/index_write_lock.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/bloom_fold.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/aggregation_fold.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/fold.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/pipeline.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/batch_bridge.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_counter_format.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/rollup_store.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/mv_store.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_executor.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/sharded_view.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_export_index.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/result_join.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/abi.cpp
-  # Plugins (C ABI fold adapter + dlopen host + config tree builder)
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/build_host.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/config.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/fold_adapter.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/fold_adapter/agg.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/fold_adapter/result.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/fold_adapter/ops.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/fold_adapter/state.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/fold_adapter/providers.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/fold_adapter/nodes.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/state_registry.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/plugins.cpp
-  # DFT Comparator
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/comparator/comparison_aggregation.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/comparator/comparison_config.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/comparator/comparison_result.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/comparator/comparison_utility.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/comparator/tree_table_formatter.cpp
-  # Indexer
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/index_database.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/index_database_sst_writer_context.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/index_database_writer_context.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/index_batch_builder_utility.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/visitors/bloom_core.cpp
-  # Reader
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/trace_reader.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/trace_reader_arrow.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/trace_reader_prefilter.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/arrow_row_builder.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/chunk_geometry.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/json_dict_builder.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/member_decode_cache.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/indexer_c.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/helpers.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/index_encoding.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/column_type_codec.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/checkpoint_size.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/error.cpp
-  # Indexer factory
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/indexer_factory.cpp
-  # GZIP indexer
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/gzip_indexer.cpp
-  # TAR indexer Reader
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/reader_c.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/stream_c.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/gzip_reader.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/reader_factory.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/error.cpp
-  # Replay
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/replay/replay.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/replay/replay_executors.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/replay/replay_result.cpp
-  # Server (HTTP/TCP)
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/cancel.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/cursor.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/http_connection.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/http_request.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/http_response.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/router.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/signal_handler.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/tcp_listener.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/trace_index.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/trace_api.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/viz/api.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/viz/calltree.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/viz/counters.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/viz/density.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/viz/events.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/viz/histogram.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/viz/misc.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/viz/proctree.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/viz/prov.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/viz/stats.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/viz/summary_build.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/http_parser.cpp)
+set(DFTRACER_UTILS_INDEX_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/database.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/db_manager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/error.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/filesystem.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/index_database.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/index_database_sst_writer_context.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/index_database_writer_context.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/index_write.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/internal/helpers.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/internal/index_encoding.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/internal/statistics_codec.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/key_codec.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/layout.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/shard_manifest.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/gzip/checkpoint_size.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/gzip/gzip_indexer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/gzip/checkpoint_indexer_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/abi.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/indexer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/record_schema.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/bloom_filter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/bloom_fold.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/chunk_dimension_stats.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/dict_fold.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/dictionary_rows.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/kinds/payloads.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/plugin_extension.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/kinds/time_bounds.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/scalable_bloom_filter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/agg_db_open.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/agg_store.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/aggregation_augmentation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/aggregation_drain.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/aggregation_fold.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/aggregation_intern.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/aggregation_logic.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/aggregation_merge_operator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/aggregation_metrics.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/aggregation_runner.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/aggregation_serialization.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/aggregator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/association_tracker.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/dft_trace_writer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/event_aggregator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/system_metrics_merge_operator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/system_metrics_serialization.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/view_agg_tier.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/bloom_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/merged_statistics.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/chunk_statistics.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/build/chunk_indexer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/build/batch_builder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/build/resolver.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/build/index_write_lock.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/build/resolve_and_build.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/plan/chunk_pruner.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/plan/conditions.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/plan/file_index_data.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/plan/prefilter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/plan/prune.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/plan/resolved_field_rewriter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/plan/view_resolver.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/cache/mv_store.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/cache/rollup_store.cpp
+)
+
+list(APPEND DFTRACER_UTILS_UTILITIES_SOURCES
+    ${DFTRACER_UTILS_INDEX_SOURCES}
+
+    # DFT Indexing (bloom filters, statistics, queries)
+
+    # DFT Statistics (trace statistics, aggregation, querying)
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/statistics/trace_statistics.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/statistics/statistics_query_utility.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/statistics/log2_histogram.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/statistics/timestamp_histogram.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/statistics/detailed_statistics.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/statistics/detail_stats_view.cpp
+
+    # DFT Views (filtered lenses over trace files)
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_definition.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_scanner_utility.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_planner_utility.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/provenance/provenance_graph.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_source.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_plan_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_aggregate.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_agg_engine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_scan.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/native_row_fold.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/stream_row_fold.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/containment_fold.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/genesis/discover.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/genesis/process.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/fold.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/pipeline.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/batch_bridge.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_counter_format.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_executor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/sharded_view.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_export_index.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/result_join.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/abi.cpp
+
+    # Plugins (C ABI fold adapter + dlopen host + config tree builder)
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/build_host.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/fold_adapter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/fold_adapter/agg.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/fold_adapter/result.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/fold_adapter/ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/fold_adapter/state.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/fold_adapter/providers.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/fold_adapter/index.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/fold_adapter/nodes.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/state_registry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/plugins.cpp
+
+    # DFT Comparator
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/comparator/comparison_aggregation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/comparator/comparison_config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/comparator/comparison_result.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/comparator/comparison_utility.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/comparator/tree_table_formatter.cpp
+
+    # Reader
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/trace_reader.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/trace_reader_arrow.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/trace_reader_prefilter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/arrow_row_builder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/json_dict_builder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/member_decode_cache.cpp
+    # Indexer factory
+    # Reader
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/gzip_reader.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/reader_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/error.cpp
+    # Replay
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/replay/replay.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/replay/replay_executors.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/replay/replay_result.cpp
+    # Server (HTTP/TCP)
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/cancel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/cursor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/http_connection.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/http_request.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/http_response.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/router.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/signal_handler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/tcp_listener.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/trace_index.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/trace_api.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/viz/api.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/viz/prov.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/viz/calltree.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/viz/counters.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/viz/density.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/viz/events.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/viz/histogram.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/viz/misc.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/viz/proctree.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/viz/stats.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/viz/summary_build.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/http_parser.cpp
+)
 
 # Add MPI-specific sources if MPI is enabled
 if(DFTRACER_UTILS_ENABLE_MPI)
@@ -367,7 +388,7 @@ create_library(
   VERSION
   ${PROJECT_VERSION}
   DESCRIPTION
-  "DFTracer utils core library (indexer, reader, pipeline)"
+    "DFTracer utils core library (reader, pipeline)"
   URL
   "https://github.com/llnl-asr/dftracer-utils"
   BUILD_SHARED
@@ -397,26 +418,14 @@ foreach(variant shared static)
   if(TARGET dftracer_utils_core_${variant})
     # Link dependencies using helper functions
     link_simdjson(dftracer_utils_core_${variant} ${VARIANT_UPPER})
-    link_rocksdb(dftracer_utils_core_${variant} ${VARIANT_UPPER})
     link_zlib(dftracer_utils_core_${variant} ${VARIANT_UPPER})
     link_unordered_dense(dftracer_utils_core_${variant})
     link_tl_expected(dftracer_utils_core_${variant})
 
-    # RocksDB is a static archive linked into this .so. Without this its symbols
-    # are re-exported into ELF's flat namespace, where they can bind against a
-    # different RocksDB loaded in the same process.
-    if(variant STREQUAL "shared"
-       AND ROCKSDB_IS_STATIC
-       AND NOT APPLE
-       AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-      target_link_options(dftracer_utils_core_shared PRIVATE
-                          "LINKER:--exclude-libs,librocksdb.a")
-    endif()
-
-    # The coroutine monitor (monitor.cpp) calls dladdr() for symbolization. On
-    # older glibc (e.g. manylinux aarch64) dladdr lives in libdl, so the core
-    # library must link it explicitly; CMAKE_DL_LIBS is empty where the symbol
-    # is already in libc (newer glibc) or libSystem (macOS).
+    # The coroutine monitor (monitor.cpp) calls dladdr() for symbolization.
+    # On older glibc (e.g. manylinux aarch64) dladdr lives in libdl, so the
+    # core library must link it explicitly; CMAKE_DL_LIBS is empty where the
+    # symbol is already in libc (newer glibc) or libSystem (macOS).
     target_link_libraries(dftracer_utils_core_${variant}
                           PUBLIC ${CMAKE_DL_LIBS})
 
@@ -546,6 +555,7 @@ set_source_files_properties(
 # +++++++++++++++++++++++++++++++++++++++++
 
 set(DFTRACER_UTILS_JSON_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/json/canonical.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/json/json_value.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/json/parser.cpp)
 
@@ -805,7 +815,19 @@ set_source_files_properties(
 
 foreach(variant shared static)
   if(TARGET dftracer_utils_utilities_${variant})
-    # No need to link dependencies here - they're inherited from core
+    string(TOUPPER ${variant} VARIANT_UPPER)
+    link_rocksdb(dftracer_utils_utilities_${variant} ${VARIANT_UPPER})
+
+    # RocksDB is a static archive linked into this .so. Without this its
+    # symbols are re-exported into ELF's flat namespace, where they can bind
+    # against a different RocksDB loaded in the same process.
+    if(variant STREQUAL "shared"
+       AND ROCKSDB_IS_STATIC
+       AND NOT APPLE
+       AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+      target_link_options(dftracer_utils_utilities_shared PRIVATE
+                          "LINKER:--exclude-libs,librocksdb.a")
+    endif()
 
     # Link tl::expected for C++20/23 expected shim
     link_tl_expected(dftracer_utils_utilities_${variant})
@@ -914,7 +936,7 @@ create_unified_library_config(
   VERSION
   ${PROJECT_VERSION}
   DESCRIPTION
-  "DFTracer utils core library (indexer, reader, pipeline)"
+    "DFTracer utils core library (reader, pipeline)"
   URL
   "https://github.com/llnl-asr/dftracer-utils"
   BUILD_SHARED
@@ -1224,10 +1246,11 @@ install(
   PATTERN "*.h")
 
 # Public headers under include/ include these implementation headers that live
-# in src/ (both trees share the <dftracer/utils/...> include path at build
-# time). They must be installed to their mirrored public destination so the
-# installed public headers are self-contained against the install prefix alone.
-set(DFTRACER_UTILS_SRC_PUBLIC_HEADERS utilities/indexer/internal/helpers.h)
+# in src/ (both trees share the <dftracer/utils/...> include path at build time).
+# They must be installed to their mirrored public destination so the installed
+# public headers are self-contained against the install prefix alone.
+set(DFTRACER_UTILS_SRC_PUBLIC_HEADERS
+    index/store/internal/helpers.h)
 
 foreach(hdr ${DFTRACER_UTILS_SRC_PUBLIC_HEADERS})
   get_filename_component(hdr_dir ${hdr} DIRECTORY)
@@ -1255,7 +1278,7 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_server.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_comparator.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_gen_dlio_config.cpp
-  )
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_genesis_gen_dist.cpp)
 
   set(DFTRACER_MPI_BINARIES "")
 
@@ -1469,7 +1492,8 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
   set(DFTRACER_BENCHMARKS
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/member_cache_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/dataframe_parallel_bench.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/view_api_bench.cpp)
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/view_api_bench.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/index_bench.cpp)
 
   foreach(bench ${DFTRACER_BENCHMARKS})
     get_filename_component(bench_name ${bench} NAME_WE)

@@ -7,15 +7,19 @@
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/index/extensions/kinds/time_bounds.h>
+#include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/index/plan/resolved_field_rewriter.h>
+#include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/index/store/db_manager.h>
+#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/index_database_writer_context.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/server/router.h>
 #include <dftracer/utils/server/trace_index.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
-#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
-#include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
-#include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 
 #include <cinttypes>
@@ -29,10 +33,28 @@
 
 namespace dftracer::utils::server {
 
+namespace {
+
+// The file's time bounds for the timeline. Events without a clock sit at
+// ts 0, so the start is the first start above 0 when the file has one.
+dftracer::utils::index::gzip::TimeBounds timeline_bounds(
+    const dftracer::utils::index::store::IndexDatabase& db, int fid) {
+    auto bounds =
+        dftracer::utils::index::extensions::kinds::file_time_bounds(db, fid);
+    if (!bounds.valid || bounds.min_timestamp_us != 0) return bounds;
+    const auto stats = db.query_file_scalar_stats_batch({fid});
+    const auto it = stats.find(fid);
+    if (it != stats.end() &&
+        it->second.stats.min_nonzero_timestamp_us <= bounds.max_timestamp_us)
+        bounds.min_timestamp_us = it->second.stats.min_nonzero_timestamp_us;
+    return bounds;
+}
+
+}  // namespace
+
 using namespace dftracer::utils::trace;
-using namespace dftracer::utils::trace::indexing;
+
 using namespace dftracer::utils::utilities::filesystem;
-namespace indexer = dftracer::utils::utilities::indexer;
 
 namespace {
 
@@ -444,7 +466,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
             if (!fs::exists(root)) continue;
             bool stale = false;
             try {
-                indexer::IndexDatabase db(root);
+                dftracer::utils::index::store::IndexDatabase db(root);
                 stale = db.find_stale_files(paths).stale();
             } catch (const std::exception& e) {
                 DFTRACER_UTILS_LOG_WARN(
@@ -456,6 +478,9 @@ coro::CoroTask<void> TraceIndex::initialize() {
                 DFTRACER_UTILS_LOG_WARN(
                     "TraceIndex: source changed since indexing; rebuilding %s",
                     root.c_str());
+                // Drop the cached handle first, as the builder does: a live
+                // handle on a removed directory would serve the old data.
+                index::store::RocksDBManager::instance().reset(root);
                 std::error_code ec;
                 fs::remove_all(root, ec);
             }
@@ -524,28 +549,34 @@ coro::CoroTask<void> TraceIndex::initialize() {
                         by_index[(*files_ptr)[idx].index_path].push_back(idx);
 
                     for (auto& [ipath, idxs] : by_index) {
-                        auto batch_config =
-                            std::make_shared<indexer::IndexBuildBatchConfig>();
-                        batch_config->file_paths.reserve(idxs.size());
+                        std::vector<std::string> paths;
+                        paths.reserve(idxs.size());
                         for (auto idx : idxs)
-                            batch_config->file_paths.push_back(
-                                (*files_ptr)[idx].path);
-                        batch_config->index_dir = index_dir;
-                        batch_config->checkpoint_size = checkpoint_size;
-                        batch_config->parallelism = max_concurrent;
-                        co_await indexer::IndexBatchBuilderUtility::process(
-                            &ctx, std::move(batch_config));
+                            paths.push_back((*files_ptr)[idx].path);
+                        dftracer::utils::index::IndexerOptions opts;
+                        opts.index_dir = index_dir;
+                        opts.checkpoint_size = checkpoint_size;
+                        opts.parallelism = max_concurrent;
+                        try {
+                            auto ix = dftracer::utils::index::Indexer::open(
+                                std::move(paths), std::move(opts));
+                            co_await ix.build(ctx);
+                        } catch (const std::exception& e) {
+                            DFTRACER_UTILS_LOG_WARN("TraceIndex: %s", e.what());
+                        }
 
                         for (auto idx : idxs) {
                             auto* info = &(*files_ptr)[idx];
                             bool bloom_ok = false;
                             try {
-                                indexer::IndexDatabase db(
-                                    ipath, indexer::IndexOpenMode::ReadOnly);
+                                dftracer::utils::index::store::IndexDatabase db(
+                                    ipath, dftracer::utils::index::store::
+                                               IndexOpenMode::ReadOnly);
                                 int fid = db.get_file_info_id(
-                                    indexer::internal::get_logical_path(
-                                        info->path));
-                                bloom_ok = fid >= 0 && db.has_bloom_data(fid);
+                                    dftracer::utils::index::store::internal::
+                                        get_logical_path(info->path));
+                                bloom_ok =
+                                    fid >= 0 && db.pruning_tier_current(fid);
                             } catch (const std::exception&) {
                                 bloom_ok = false;
                             }
@@ -590,16 +621,18 @@ coro::CoroTask<void> TraceIndex::initialize() {
 
                                     if (info->has_bloom_data) {
                                         try {
-                                            indexer::IndexDatabase idx_db(
-                                                info->index_path);
-                                            auto logical = indexer::internal::
-                                                get_logical_path(info->path);
+                                            dftracer::utils::index::store::
+                                                IndexDatabase idx_db(
+                                                    info->index_path);
+                                            auto logical =
+                                                dftracer::utils::index::store::
+                                                    internal::get_logical_path(
+                                                        info->path);
                                             int fid = idx_db.get_file_info_id(
                                                 logical);
                                             if (fid >= 0) {
-                                                auto bounds =
-                                                    idx_db.query_time_bounds(
-                                                        fid);
+                                                auto bounds = timeline_bounds(
+                                                    idx_db, fid);
                                                 if (bounds.valid) {
                                                     info->min_timestamp_us =
                                                         bounds.min_timestamp_us;
@@ -681,6 +714,28 @@ coro::CoroTask<void> TraceIndex::initialize() {
         }
     }
 
+    if (!files_.empty()) {
+        const FileInfo& f = files_.front();
+        try {
+            dftracer::utils::index::load_index_schemas(f.index_path);
+            const dftracer::utils::index::RecordSchema* recorded = nullptr;
+            if (fs::exists(f.index_path)) {
+                dftracer::utils::index::store::IndexDatabase db(
+                    f.index_path,
+                    dftracer::utils::index::store::IndexOpenMode::ReadOnly);
+                recorded =
+                    dftracer::utils::index::plan::recorded_schema(db, f.path);
+            }
+            record_schema_ =
+                recorded ? recorded
+                         : &dftracer::utils::index::detect_file_schema(f.path);
+        } catch (const std::exception& e) {
+            DFTRACER_UTILS_LOG_WARN(
+                "TraceIndex: failed to resolve the record schema: %s",
+                e.what());
+        }
+    }
+
     DFTRACER_UTILS_LOG_INFO("TraceIndex: found %zu trace files in %s",
                             files_.size(), directory_.c_str());
     if (global_max_ts_ > 0) {
@@ -695,16 +750,18 @@ coro::CoroTask<void> TraceIndex::initialize() {
     load_persisted_viz_summary();
 }
 
-// Looks up single hashes and keeps each root's database open, rather than
-// caching whole hash tables per request.
-std::string TraceIndex::resolve_hash(HashType type, const std::string& hash) {
-    if (hash.empty()) return {};
+// Looks up single keys and keeps each root's database open, rather than
+// caching whole dictionaries per request.
+std::string TraceIndex::resolve(std::string_view dict, std::string_view field,
+                                const std::string& key) {
+    if (key.empty()) return {};
     // Memoized across requests, misses included: the viewer re-asks for the
-    // same hashes on every zoom.
+    // same keys on every zoom.
     std::string memo_key;
-    memo_key.reserve(hash.size() + 1);
-    memo_key.push_back(static_cast<char>(static_cast<int>(type)));
-    memo_key.append(hash);
+    memo_key.reserve(dict.size() + field.size() + key.size() + 2);
+    memo_key.append(dict).push_back('\0');
+    memo_key.append(field).push_back('\0');
+    memo_key.append(key);
     {
         std::lock_guard<std::mutex> lk(hash_db_mutex_);
         auto it = hash_names_.find(memo_key);
@@ -713,7 +770,7 @@ std::string TraceIndex::resolve_hash(HashType type, const std::string& hash) {
     std::string resolved;
     for (const auto& f : files_) {
         if (f.index_path.empty()) continue;
-        std::shared_ptr<indexer::IndexDatabase> db;
+        std::shared_ptr<dftracer::utils::index::store::IndexDatabase> db;
         {
             std::lock_guard<std::mutex> lk(hash_db_mutex_);
             auto it = hash_dbs_.find(f.index_path);
@@ -721,9 +778,10 @@ std::string TraceIndex::resolve_hash(HashType type, const std::string& hash) {
                 db = it->second;
             } else {
                 try {
-                    db = std::make_shared<indexer::IndexDatabase>(
-                        f.index_path, dftracer::utils::utilities::indexer::
-                                          IndexOpenMode::ReadOnly);
+                    db = std::make_shared<
+                        dftracer::utils::index::store::IndexDatabase>(
+                        f.index_path,
+                        dftracer::utils::index::store::IndexOpenMode::ReadOnly);
                 } catch (const std::exception&) {
                     db = nullptr;
                 }
@@ -732,7 +790,7 @@ std::string TraceIndex::resolve_hash(HashType type, const std::string& hash) {
         }
         if (!db) continue;
         try {
-            auto name = db->lookup_hash(type, hash);
+            auto name = db->dict_value(dict, key, field);
             if (name && !name->empty()) {
                 resolved = std::move(*name);
                 break;
@@ -870,11 +928,12 @@ std::shared_ptr<const TraceIndex::FileChunkMeta> TraceIndex::chunk_meta(
     std::shared_ptr<const FileChunkMeta> meta;  // null == known-unavailable
     if (!file.index_path.empty()) {
         try {
-            indexer::IndexDatabase db(
+            dftracer::utils::index::store::IndexDatabase db(
                 file.index_path,
-                dftracer::utils::utilities::indexer::IndexOpenMode::ReadOnly);
+                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
             int fid = db.get_file_info_id(
-                indexer::internal::get_logical_path(file.path));
+                dftracer::utils::index::store::internal::get_logical_path(
+                    file.path));
             if (fid >= 0) {
                 auto m = std::make_shared<FileChunkMeta>();
                 m->spans = db.query_chunk_spans(fid);

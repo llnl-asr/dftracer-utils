@@ -13,7 +13,7 @@ mask evaluation (the columnar half).
     q = F.cat.is_in(["POSIX", "STDIO"])          # membership
     q = F.name.like("%read%")                    # SQL LIKE (also ilike/regex)
     q = F("args.file").contains("tmp")           # substring
-    q = resolved("hostname") == "node01"         # virtual field -> hash lookup
+    q = resolved("hhash.name") == "node01"       # dictionary field -> key lookup
 
     query_string = str(q)                        # render for the C++ parser
 """

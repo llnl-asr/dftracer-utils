@@ -85,6 +85,10 @@ class Fold {
     /// path pays nothing.
     virtual bool wants_schema() const { return false; }
 
+    /// Whether the fold reads metadata (`ph="M"`) records. ORed across folds;
+    /// when none does, the scan neither emits them nor reads chunks for them.
+    virtual bool wants_metadata() const { return true; }
+
     /// Extra fields (top-level type/ph/id, or nested a.b/a[0]) this fold needs
     /// captured into each event beyond what the POD carries and beyond flat
     /// args (which needs_args() already covers). Merged with the plan's own

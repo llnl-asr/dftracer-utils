@@ -1,9 +1,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/index/build/batch_builder.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -15,7 +15,7 @@
 #include <vector>
 
 using namespace dftracer::utils::utilities::reader;
-using namespace dftracer::utils::utilities::indexer::internal;
+using namespace dftracer::utils::index::gzip;
 using namespace dftracer::utils::coro;
 using namespace dftracer::utils::trace::internal;
 using namespace dftu_utils_test;
@@ -138,8 +138,8 @@ TEST_SUITE("TraceReader") {
         std::string index_dir = env.get_dir();
         std::string index_path = env.get_index_path(gz_file);
 
-        auto indexer = IndexerFactory::create(gz_file, index_path,
-                                              32 * 1024 * 1024, false);
+        auto indexer = CheckpointIndexerFactory::create(
+            gz_file, index_path, 32 * 1024 * 1024, false);
         REQUIRE(indexer != nullptr);
         indexer->build();
         REQUIRE(fs::exists(determine_index_path(gz_file, index_dir)));
@@ -169,8 +169,8 @@ TEST_SUITE("TraceReader") {
         std::string gz_file = env.create_dft_test_gzip_file(100);
         std::string index_dir = env.get_dir();
         std::string index_path = env.get_index_path(gz_file);
-        auto indexer = IndexerFactory::create(gz_file, index_path,
-                                              32 * 1024 * 1024, false);
+        auto indexer = CheckpointIndexerFactory::create(
+            gz_file, index_path, 32 * 1024 * 1024, false);
         REQUIRE(indexer != nullptr);
         indexer->build();
 
@@ -285,8 +285,8 @@ TEST_SUITE("TraceReader") {
         std::string index_dir = env.get_dir();
         std::string index_path = env.get_index_path(gz_file);
 
-        auto indexer = IndexerFactory::create(gz_file, index_path,
-                                              32 * 1024 * 1024, false);
+        auto indexer = CheckpointIndexerFactory::create(
+            gz_file, index_path, 32 * 1024 * 1024, false);
         REQUIRE(indexer != nullptr);
         indexer->build();
         REQUIRE(fs::exists(determine_index_path(gz_file, index_dir)));
@@ -376,8 +376,8 @@ TEST_SUITE("TraceReader") {
         auto plain_chunks =
             count_raw_chunks(plain_reader.read_raw(single_line)).get();
 
-        auto indexer = IndexerFactory::create(gz_file, index_path,
-                                              32 * 1024 * 1024, false);
+        auto indexer = CheckpointIndexerFactory::create(
+            gz_file, index_path, 32 * 1024 * 1024, false);
         REQUIRE(indexer != nullptr);
         indexer->build();
 
@@ -520,8 +520,8 @@ TEST_SUITE("TraceReader") {
         std::string index_dir = env.get_dir();
         std::string index_path = env.get_index_path(gz_file);
 
-        auto indexer = IndexerFactory::create(gz_file, index_path,
-                                              32 * 1024 * 1024, false);
+        auto indexer = CheckpointIndexerFactory::create(
+            gz_file, index_path, 32 * 1024 * 1024, false);
         REQUIRE(indexer != nullptr);
         indexer->build();
         REQUIRE(fs::exists(determine_index_path(gz_file, index_dir)));
@@ -678,7 +678,7 @@ TEST_SUITE("TraceReader") {
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
         fs::remove(pfw);
 
-        REQUIRE(dftu_utils_test::build_index(gz, "", 0,
+        REQUIRE(dftu_utils_test::build_index(gz, "",
                                              /*checkpoint_size=*/32 * 1024));
 
         TraceReader reader({.file_path = gz, .checkpoint_size = 32 * 1024});
@@ -833,7 +833,7 @@ TEST_SUITE("TraceReader::read_json") {
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
         fs::remove(pfw);
 
-        REQUIRE(dftu_utils_test::build_index(gz, "", 0,
+        REQUIRE(dftu_utils_test::build_index(gz, "",
                                              /*checkpoint_size=*/32 * 1024));
 
         TraceReader reader({.file_path = gz, .checkpoint_size = 32 * 1024});

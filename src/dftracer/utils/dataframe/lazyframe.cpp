@@ -1162,7 +1162,10 @@ class GroupByCursor : public Cursor {
     static int index_in(const std::vector<std::string>& s,
                         const std::string& n) {
         auto it = std::find(s.begin(), s.end(), n);
-        return it == s.end() ? -1 : static_cast<int>(it - s.begin());
+        if (it == s.end())
+            throw DFTUtilsException::cat(ErrorCode::INVALID_ARGUMENT,
+                                         "group_by: no column named ", n);
+        return static_cast<int>(it - s.begin());
     }
 
     static Morsel to_morsel(const DataFrame& r) {
@@ -1477,7 +1480,10 @@ class GroupByDynamicCursor : public Cursor {
     static int index_in(const std::vector<std::string>& s,
                         const std::string& n) {
         auto it = std::find(s.begin(), s.end(), n);
-        return it == s.end() ? -1 : static_cast<int>(it - s.begin());
+        if (it == s.end())
+            throw DFTUtilsException::cat(ErrorCode::INVALID_ARGUMENT,
+                                         "group_by: no column named ", n);
+        return static_cast<int>(it - s.begin());
     }
     std::unique_ptr<Cursor> in_;
     std::vector<std::string> sch_;
@@ -2764,9 +2770,13 @@ class ReverseCursor : public Cursor {
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         if (done_) co_return std::nullopt;
         done_ = true;
-        while (auto m = co_await in_->next(max_rows))
+        bool any = false;
+        while (auto m = co_await in_->next(max_rows)) {
             spool_.add(std::move(m->columns), m->rows);
+            any = true;
+        }
         in_.reset();
+        if (!any) co_return std::nullopt;
         std::unique_ptr<Cursor> reader = spool_.reader();
         DataFrame df = co_await drain_cursor(*reader, sch_, max_rows);
         co_return morsel_of(df.reverse());
@@ -2833,9 +2843,13 @@ class SortByMultiCursor : public Cursor {
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         if (done_) co_return std::nullopt;
         done_ = true;
-        while (auto m = co_await in_->next(max_rows))
+        bool any = false;
+        while (auto m = co_await in_->next(max_rows)) {
             spool_.add(std::move(m->columns), m->rows);
+            any = true;
+        }
         in_.reset();
+        if (!any) co_return std::nullopt;
         std::unique_ptr<Cursor> reader = spool_.reader();
         DataFrame df = co_await drain_cursor(*reader, sch_, max_rows);
         Morsel out = morsel_of(df.sort_by_multi(by_, descending_));

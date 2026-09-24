@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/trace/aggregators/aggregation_metrics.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_metrics.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-using namespace dftracer::utils::trace::aggregators;
+using namespace dftracer::utils::index::schemas::dft::agg;
 
 namespace {
 

@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <doctest/doctest.h>
 
@@ -8,7 +8,7 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
-using namespace dftracer::utils::utilities::indexer::internal;
+using namespace dftracer::utils::index::gzip;
 using namespace dftracer::utils::utilities::reader::internal;
 using namespace dftu_utils_test;
 
@@ -22,15 +22,17 @@ TEST_CASE("Factory Pattern - Basic GZIP functionality") {
     std::string idx_file = env.get_index_path(gz_file);
     std::string db_root = determine_index_path(gz_file, "");
 
-    SUBCASE("IndexerFactory creates valid indexer") {
-        auto indexer = IndexerFactory::create(gz_file, idx_file, 1024 * 1024);
+    SUBCASE("CheckpointIndexerFactory creates valid indexer") {
+        auto indexer =
+            CheckpointIndexerFactory::create(gz_file, idx_file, 1024 * 1024);
         REQUIRE(indexer != nullptr);
         CHECK(indexer->get_archive_path() == gz_file);
         CHECK(indexer->get_index_path() == db_root);
     }
 
     SUBCASE("ReaderFactory creates valid reader") {
-        auto indexer = IndexerFactory::create(gz_file, idx_file, 1024 * 1024);
+        auto indexer =
+            CheckpointIndexerFactory::create(gz_file, idx_file, 1024 * 1024);
         REQUIRE(indexer != nullptr);
         indexer->build();
 
@@ -43,7 +45,8 @@ TEST_CASE("Factory Pattern - Basic GZIP functionality") {
 
     SUBCASE("Reader factory from files") {
         // First create index
-        auto indexer = IndexerFactory::create(gz_file, idx_file, 1024 * 1024);
+        auto indexer =
+            CheckpointIndexerFactory::create(gz_file, idx_file, 1024 * 1024);
         REQUIRE(indexer != nullptr);
         indexer->build();
 
@@ -63,7 +66,8 @@ TEST_CASE("Basic Reading Operations") {
 
     std::string idx_file = env.get_index_path(gz_file);
 
-    auto indexer = IndexerFactory::create(gz_file, idx_file, 512 * 1024);
+    auto indexer =
+        CheckpointIndexerFactory::create(gz_file, idx_file, 512 * 1024);
     REQUIRE(indexer != nullptr);
     indexer->build();
 

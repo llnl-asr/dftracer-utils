@@ -7,9 +7,9 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>  // expr_fingerprint
 #include <dftracer/utils/dataframe/scalar.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/query/builder.h>
 #include <dftracer/utils/query/query.h>
-#include <dftracer/utils/trace/indexing/chunk_pruner_utility.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/trace/views/stream_row_fold.h>
@@ -31,7 +31,6 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -398,8 +397,7 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
         std::shared_ptr<std::atomic<bool>> stop,
         std::shared_ptr<detail::DynamicPrune> dyn_prune,
         std::vector<ViewFile> files, double time_scale,
-        std::vector<std::string> fnames,
-        dftracer::utils::trace::indexing::BloomFilterCache* bloom_cache)
+        std::vector<std::string> fnames, bool metadata_rows)
         : channel_(std::move(channel)),
           budget_(std::move(budget)),
           producer_(std::move(producer)),
@@ -408,7 +406,7 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
           files_(std::move(files)),
           time_scale_(time_scale),
           fnames_(std::move(fnames)),
-          bloom_cache_(bloom_cache) {}
+          metadata_rows_(metadata_rows) {}
 
     // Abandoning the cursor must stop the scan behind it: the producer holds
     // its own channel registration, so nothing else ends it, and the byte
@@ -484,25 +482,27 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
 
         bool any = false;
         for (const ViewFile& f : files_) {
-            dftracer::utils::trace::indexing::ChunkPrunerInput pin{
-                f.index_path, f.file_path, built.value(), bloom_cache_};
-            dftracer::utils::trace::indexing::ChunkPrunerUtility pruner;
-            auto out = co_await pruner(pin);
-            if (!out.success) continue;  // ambiguous - leave every unit as is
-            if (!out.file_may_match) {
-                // A definite bloom/dictionary miss: the file provably has no
-                // matching event, regardless of chunk count.
+            namespace ip = dftracer::utils::index::plan;
+            auto out = co_await ip::prune_file(
+                {.index_path = f.index_path,
+                 .file_path = f.file_path,
+                 .query = &built.value(),
+                 .metadata = metadata_rows_ ? ip::MetadataUse::RECORDS
+                                            : ip::MetadataUse::NONE});
+            if (!out->file_may_match) {
                 dyn_prune_->exclude_file(f.file_path);
                 any = true;
                 continue;
             }
-            if (out.total_checkpoints == 0) continue;  // nothing to prune by
-            std::unordered_set<std::uint64_t> keep(
-                out.candidate_checkpoints.begin(),
-                out.candidate_checkpoints.end());
+            if (out->all_chunks) continue;
             std::vector<std::uint64_t> excluded;
-            for (std::uint64_t c = 0; c < out.total_checkpoints; ++c)
-                if (!keep.count(c)) excluded.push_back(c);
+            std::size_t k = 0;
+            for (std::uint64_t c = 0; c < out->total_chunks; ++c) {
+                while (k < out->candidates.size() && out->candidates[k] < c)
+                    ++k;
+                if (k == out->candidates.size() || out->candidates[k] != c)
+                    excluded.push_back(c);
+            }
             if (!excluded.empty()) {
                 dyn_prune_->exclude_checkpoints(f.file_path,
                                                 std::move(excluded));
@@ -521,7 +521,8 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
     std::vector<ViewFile> files_;
     double time_scale_ = 1.0;
     std::vector<std::string> fnames_;
-    dftracer::utils::trace::indexing::BloomFilterCache* bloom_cache_ = nullptr;
+    // The rows are metadata records, which data evidence says nothing about.
+    bool metadata_rows_ = false;
     std::optional<dftracer::utils::dataframe::Morsel> pending_;
     std::int64_t offset_ = 0;
     std::uint64_t pending_bytes_ = 0;
@@ -721,7 +722,7 @@ std::optional<std::string> ViewSource::batch_key() const {
         p.limit || p.offset)
         return std::nullopt;
     if (output_ == TraceOutput::Events && detail::is_row_query(*plan_) &&
-        detail::select_needs_resolver(p.select))
+        !detail::select_resolved(p.select).empty())
         return std::nullopt;
     // The session's export branch writes whole events.
     if (output_ == TraceOutput::ExportJson && !p.select.empty())
@@ -736,8 +737,6 @@ std::optional<std::string> ViewSource::batch_key() const {
         key += f.index_path;
         key += '\0';
     }
-    key += std::to_string(reinterpret_cast<std::uintptr_t>(p.bloom_cache));
-    key += '\0';
     if (p.time_range)
         key += std::to_string(p.time_range->first) + ',' +
                std::to_string(p.time_range->second);
@@ -754,7 +753,6 @@ namespace {}  // namespace
 ViewSession ViewSource::base_session(const detail::ViewPlan& p) {
     auto base = std::make_shared<detail::ViewPlan>();
     base->files = p.files;
-    base->bloom_cache = p.bloom_cache;
     base->include_metadata = p.include_metadata;
     base->emit_all_metadata = p.emit_all_metadata;
     base->time_scale = p.time_scale;
@@ -973,7 +971,7 @@ std::optional<std::vector<std::unique_ptr<df::Cursor>>> ViewSource::open_batch(
     for (std::size_t i = 0; i < views.size(); ++i)
         cursors.push_back(std::make_unique<StreamViewCursor>(
             channels[i], budgets[i], producer, dropped[i], nullptr,
-            std::vector<ViewFile>{}, 1.0, std::vector<std::string>{}, nullptr));
+            std::vector<ViewFile>{}, 1.0, std::vector<std::string>{}, false));
     return cursors;
 }
 
@@ -992,17 +990,19 @@ bool ViewSource::can_stream_rows() const {
         return false;
     const detail::ViewPlan& p = *plan_;
     // scan::collect() always strips sort/topk/offset/limit before building a
-    // ViewSource, and select unless it needs the resolver (resolved.*/r.*
-    // fields, which the raw stream never computes); these checks stay as a
+    // ViewSource, and select unless it needs the resolver (resolved.
+    // columns, which the raw stream never computes); these checks stay as a
     // defensive guard for any other caller.
     return p.sort_col.empty() && p.topk_col.empty() && p.offset == 0 &&
-           p.limit == 0 && !detail::select_needs_resolver(p.select);
+           p.limit == 0 && detail::select_resolved(p.select).empty();
 }
 
 // Matches build_row_frame's own empty-select order (fixed top-level fields,
 // fhash/hhash if present, then sorted args), from index metadata rather than
 // a scan - best-effort, may omit an arg key not yet indexed.
 std::vector<std::string> ViewSource::row_schema() const {
+    // Path-decoded records: every column is a catalog path, as written.
+    if (detail::plan_by_path(*plan_)) return scan::columns(plan_);
     static const char* const TOP_LEVEL[] = {"name", "cat", "pid", "tid",
                                             "ts",   "dur", "ph"};
     std::vector<std::string> out(std::begin(TOP_LEVEL), std::end(TOP_LEVEL));
@@ -1019,7 +1019,7 @@ std::vector<std::string> ViewSource::row_schema() const {
         if (c == "pid" || c == "tid" || c == "ts" || c == "dur" ||
             c == "name" || c == "cat" || c == "fhash" || c == "hhash")
             continue;
-        if (c.find('.') != std::string::npos) continue;  // nested/resolved.*
+        if (c.rfind("resolved.", 0) == 0) continue;
         // A flattened arg column: build_row_frame's empty-select branch
         // always names these "args.<key>", so the schemas must match.
         out.push_back(std::string(dftracer::utils::ARGS_PREFIX) + c);
@@ -1088,13 +1088,14 @@ dftracer::utils::dataframe::Schema ViewSource::compute_schema() const {
         // column, since it is data-dependent and the function has no index
         // access; fill those in from the same harvest columns()/schema() use,
         // so name and type cannot disagree.
+        const bool by_path = detail::plan_by_path(*plan_);
         std::unordered_map<std::string, df::TypeId> harvested;
         auto resolve = [&](const std::string& name) {
-            df::TypeId id = detail::row_column_type(name);
+            df::TypeId id = detail::row_column_type(name, by_path);
             if (id != df::TypeId::Unknown) return id;
             if (harvested.empty()) harvested = scan::column_types(plan_);
-            std::string_view key = name;
-            if (key.rfind(dftracer::utils::ARGS_PREFIX, 0) == 0)
+            std::string_view key = detail::window_inner(name);
+            if (!by_path && key.rfind(dftracer::utils::ARGS_PREFIX, 0) == 0)
                 key.remove_prefix(dftracer::utils::ARGS_PREFIX.size());
             auto it = harvested.find(std::string(key));
             return it == harvested.end() ? id : it->second;
@@ -1108,7 +1109,8 @@ dftracer::utils::dataframe::Schema ViewSource::compute_schema() const {
         if (!plan_->select.empty()) {
             s.fields.reserve(plan_->select.size());
             for (const std::string& sel : plan_->select) {
-                std::string col_name = detail::canonical_row_column_name(sel);
+                std::string col_name =
+                    detail::canonical_row_column_name(sel, by_path);
                 s.fields.push_back(
                     df::Field{col_name, df::scalar(resolve(col_name)), true});
             }
@@ -1212,7 +1214,8 @@ std::unique_ptr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
            std::shared_ptr<detail::DynamicPrune> dp,
            bool emit_dyn) -> coro::CoroTask<void> {
         detail::StreamRowFold fold(ch, sem, iv, vv->select, ts, nullptr,
-                                   vv->phase == Phase::Metadata, emit_dyn);
+                                   vv->phase == Phase::Metadata, emit_dyn,
+                                   nullptr, nullptr, detail::plan_by_path(*vv));
         std::array<detail::Fold*, 1> folds{&fold};
         co_await scan::run_folds(vv, folds, *iv, dp.get());
     }(scan_view, time_scale, channel, budget, intern, dyn_prune, emit_dyn_);
@@ -1222,7 +1225,7 @@ std::unique_ptr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
     return std::make_unique<StreamViewCursor>(
         std::move(channel), std::move(budget), std::move(producer),
         std::move(stop), std::move(dyn_prune), v->files, time_scale,
-        std::move(fnames), v->bloom_cache);
+        std::move(fnames), v->phase == Phase::Metadata);
 }
 
 dftracer::utils::dataframe::ScanResult ViewSource::scan(

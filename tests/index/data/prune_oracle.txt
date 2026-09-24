@@ -1,0 +1,720 @@
+trace1.pfw.gz|name == "read"|-|pruner|1/1/36|18,19,20,21
+trace1.pfw.gz|name == "read"|-|batch|1/1/36|18,19,20,21
+trace1.pfw.gz|name == "read"|-|view|1/32|18,19,20,21
+trace1.pfw.gz|name == "read"|1050000..1150000|view|0/36|
+trace1.pfw.gz|name == "read"|0..1020000|view|0/36|
+trace1.pfw.gz|name == "read"|1300000..0|view|1/32|18,19,20,21
+trace1.pfw.gz|name == "absent"|-|pruner|1/0/0|
+trace1.pfw.gz|name == "absent"|-|batch|1/0/0|
+trace1.pfw.gz|name == "absent"|-|view|0/36|
+trace1.pfw.gz|name == "absent"|1050000..1150000|view|0/36|
+trace1.pfw.gz|name == "absent"|0..1020000|view|0/36|
+trace1.pfw.gz|name == "absent"|1300000..0|view|0/36|
+trace1.pfw.gz|name != "read"|-|pruner|1/1/36|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|name != "read"|-|batch|1/1/36|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|name != "read"|-|view|1/2|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|name != "read"|1050000..1150000|view|1/18|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17
+trace1.pfw.gz|name != "read"|0..1020000|view|0/36|
+trace1.pfw.gz|name != "read"|1300000..0|view|1/19|17,18,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|name in ["read", "write"]|-|pruner|1/1/36|18,19,20,21,28,29,30
+trace1.pfw.gz|name in ["read", "write"]|-|batch|1/1/36|18,19,20,21,28,29,30
+trace1.pfw.gz|name in ["read", "write"]|-|view|1/29|18,19,20,21,28,29,30
+trace1.pfw.gz|name in ["read", "write"]|1050000..1150000|view|0/36|
+trace1.pfw.gz|name in ["read", "write"]|0..1020000|view|0/36|
+trace1.pfw.gz|name in ["read", "write"]|1300000..0|view|1/29|18,19,20,21,28,29,30
+trace1.pfw.gz|name not in ["read", "write", "open"]|-|pruner|1/1/36|0,1,2,3,4,5,6,7,8,9,10,13,14,15,16,17,18,21,22,23,26,27,28,30,31,32,33,34,35
+trace1.pfw.gz|name not in ["read", "write", "open"]|-|batch|1/1/36|0,1,2,3,4,5,6,7,8,9,10,13,14,15,16,17,18,21,22,23,26,27,28,30,31,32,33,34,35
+trace1.pfw.gz|name not in ["read", "write", "open"]|-|view|1/7|0,1,2,3,4,5,6,7,8,9,10,13,14,15,16,17,18,21,22,23,26,27,28,30,31,32,33,34,35
+trace1.pfw.gz|name not in ["read", "write", "open"]|1050000..1150000|view|1/20|0,1,2,3,4,5,6,7,8,9,10,13,14,15,16,17
+trace1.pfw.gz|name not in ["read", "write", "open"]|0..1020000|view|0/36|
+trace1.pfw.gz|name not in ["read", "write", "open"]|1300000..0|view|1/22|17,18,21,22,23,26,27,28,30,31,32,33,34,35
+trace1.pfw.gz|cat == "COMPUTE"|-|pruner|1/1/36|8,9,10,11,12,13,14,15,16,25,26
+trace1.pfw.gz|cat == "COMPUTE"|-|batch|1/1/36|8,9,10,11,12,13,14,15,16,25,26
+trace1.pfw.gz|cat == "COMPUTE"|-|view|1/25|8,9,10,11,12,13,14,15,16,25,26
+trace1.pfw.gz|cat == "COMPUTE"|1050000..1150000|view|1/27|8,9,10,11,12,13,14,15,16
+trace1.pfw.gz|cat == "COMPUTE"|0..1020000|view|0/36|
+trace1.pfw.gz|cat == "COMPUTE"|1300000..0|view|1/34|25,26
+trace1.pfw.gz|cat != "POSIX"|-|pruner|1/1/36|0,1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,21,22,23,24,25,26,27,28,29,30,31,32,33,34
+trace1.pfw.gz|cat != "POSIX"|-|batch|1/1/36|0,1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,21,22,23,24,25,26,27,28,29,30,31,32,33,34
+trace1.pfw.gz|cat != "POSIX"|-|view|1/6|0,1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,21,22,23,24,25,26,27,28,29,30,31,32,33,34
+trace1.pfw.gz|cat != "POSIX"|1050000..1150000|view|1/20|0,1,2,3,4,5,6,8,9,10,11,12,13,14,15,16
+trace1.pfw.gz|cat != "POSIX"|0..1020000|view|0/36|
+trace1.pfw.gz|cat != "POSIX"|1300000..0|view|1/22|21,22,23,24,25,26,27,28,29,30,31,32,33,34
+trace1.pfw.gz|cat in ["AI", "STDIO"]|-|pruner|1/1/36|0,1,2,3,4,5,6,21,22,23,24,25,26,27,28,29,30,31,32,33,34
+trace1.pfw.gz|cat in ["AI", "STDIO"]|-|batch|1/1/36|0,1,2,3,4,5,6,21,22,23,24,25,26,27,28,29,30,31,32,33,34
+trace1.pfw.gz|cat in ["AI", "STDIO"]|-|view|1/15|0,1,2,3,4,5,6,21,22,23,24,25,26,27,28,29,30,31,32,33,34
+trace1.pfw.gz|cat in ["AI", "STDIO"]|1050000..1150000|view|1/29|0,1,2,3,4,5,6
+trace1.pfw.gz|cat in ["AI", "STDIO"]|0..1020000|view|0/36|
+trace1.pfw.gz|cat in ["AI", "STDIO"]|1300000..0|view|1/22|21,22,23,24,25,26,27,28,29,30,31,32,33,34
+trace1.pfw.gz|pid == 2|-|pruner|1/1/36|3,4,5,6,10,11,12,13,14,15,16,23,24,25,33,34
+trace1.pfw.gz|pid == 2|-|batch|1/1/36|3,4,5,6,10,11,12,13,14,15,16,23,24,25,33,34
+trace1.pfw.gz|pid == 2|-|view|1/20|3,4,5,6,10,11,12,13,14,15,16,23,24,25,33,34
+trace1.pfw.gz|pid == 2|1050000..1150000|view|1/25|3,4,5,6,10,11,12,13,14,15,16
+trace1.pfw.gz|pid == 2|0..1020000|view|0/36|
+trace1.pfw.gz|pid == 2|1300000..0|view|1/31|23,24,25,33,34
+trace1.pfw.gz|pid > 3|-|pruner|1/1/36|18,19,20,21,28,29,30,31,32,33,34,35
+trace1.pfw.gz|pid > 3|-|batch|1/1/36|18,19,20,21,28,29,30,31,32,33,34,35
+trace1.pfw.gz|pid > 3|-|view|1/24|18,19,20,21,28,29,30,31,32,33,34,35
+trace1.pfw.gz|pid > 3|1050000..1150000|view|0/36|
+trace1.pfw.gz|pid > 3|0..1020000|view|0/36|
+trace1.pfw.gz|pid > 3|1300000..0|view|1/24|18,19,20,21,28,29,30,31,32,33,34,35
+trace1.pfw.gz|dur >= 900|-|pruner|1/1/36|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|dur >= 900|-|batch|1/1/36|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|dur >= 900|-|view|1/0|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|dur >= 900|1050000..1150000|view|1/18|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17
+trace1.pfw.gz|dur >= 900|0..1020000|view|0/36|
+trace1.pfw.gz|dur >= 900|1300000..0|view|1/17|17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|dur < 20|-|pruner|1/1/36|2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34
+trace1.pfw.gz|dur < 20|-|batch|1/1/36|2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34
+trace1.pfw.gz|dur < 20|-|view|1/4|2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34
+trace1.pfw.gz|dur < 20|1050000..1150000|view|1/20|2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17
+trace1.pfw.gz|dur < 20|0..1020000|view|0/36|
+trace1.pfw.gz|dur < 20|1300000..0|view|1/19|17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34
+trace1.pfw.gz|args.size == 256|-|pruner|1/1/36|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|args.size == 256|-|batch|1/1/36|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|args.size == 256|-|view|1/0|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|args.size == 256|1050000..1150000|view|1/18|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17
+trace1.pfw.gz|args.size == 256|0..1020000|view|0/36|
+trace1.pfw.gz|args.size == 256|1300000..0|view|1/17|17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|args.size > 8000|-|pruner|1/1/36|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|args.size > 8000|-|batch|1/1/36|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|args.size > 8000|-|view|1/0|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|args.size > 8000|1050000..1150000|view|1/18|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17
+trace1.pfw.gz|args.size > 8000|0..1020000|view|0/36|
+trace1.pfw.gz|args.size > 8000|1300000..0|view|1/17|17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|ts >= 1200000|-|pruner|1/1/36|17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|ts >= 1200000|-|batch|1/1/36|17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|ts >= 1200000|-|view|1/17|17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|ts >= 1200000|1050000..1150000|view|1/35|17
+trace1.pfw.gz|ts >= 1200000|0..1020000|view|0/36|
+trace1.pfw.gz|ts >= 1200000|1300000..0|view|1/17|17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|ts > 1100000 and ts < 1150000|-|pruner|1/1/36|9,10,11,12,13,14,15,16,17
+trace1.pfw.gz|ts > 1100000 and ts < 1150000|-|batch|1/1/36|9,10,11,12,13,14,15,16,17
+trace1.pfw.gz|ts > 1100000 and ts < 1150000|-|view|1/27|9,10,11,12,13,14,15,16,17
+trace1.pfw.gz|ts > 1100000 and ts < 1150000|1050000..1150000|view|1/27|9,10,11,12,13,14,15,16,17
+trace1.pfw.gz|ts > 1100000 and ts < 1150000|0..1020000|view|0/36|
+trace1.pfw.gz|ts > 1100000 and ts < 1150000|1300000..0|view|1/35|17
+trace1.pfw.gz|name == "read" and pid == 1|-|pruner|1/1/36|18,21
+trace1.pfw.gz|name == "read" and pid == 1|-|batch|1/1/36|18,21
+trace1.pfw.gz|name == "read" and pid == 1|-|view|1/34|18,21
+trace1.pfw.gz|name == "read" and pid == 1|1050000..1150000|view|0/36|
+trace1.pfw.gz|name == "read" and pid == 1|0..1020000|view|0/36|
+trace1.pfw.gz|name == "read" and pid == 1|1300000..0|view|1/34|18,21
+trace1.pfw.gz|name == "read" or cat == "COMPUTE"|-|pruner|1/1/36|8,9,10,11,12,13,14,15,16,18,19,20,21,25,26
+trace1.pfw.gz|name == "read" or cat == "COMPUTE"|-|batch|1/1/36|8,9,10,11,12,13,14,15,16,18,19,20,21,25,26
+trace1.pfw.gz|name == "read" or cat == "COMPUTE"|-|view|1/21|8,9,10,11,12,13,14,15,16,18,19,20,21,25,26
+trace1.pfw.gz|name == "read" or cat == "COMPUTE"|1050000..1150000|view|1/27|8,9,10,11,12,13,14,15,16
+trace1.pfw.gz|name == "read" or cat == "COMPUTE"|0..1020000|view|0/36|
+trace1.pfw.gz|name == "read" or cat == "COMPUTE"|1300000..0|view|1/30|18,19,20,21,25,26
+trace1.pfw.gz|not (dur > 25)|-|pruner|1/1/36|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|not (dur > 25)|-|batch|1/1/36|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|not (dur > 25)|-|view|1/1|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|not (dur > 25)|1050000..1150000|view|1/18|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17
+trace1.pfw.gz|not (dur > 25)|0..1020000|view|0/36|
+trace1.pfw.gz|not (dur > 25)|1300000..0|view|1/18|17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|not (name == "read")|-|pruner|1/1/36|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|not (name == "read")|-|batch|1/1/36|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|not (name == "read")|-|view|1/2|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|not (name == "read")|1050000..1150000|view|1/18|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17
+trace1.pfw.gz|not (name == "read")|0..1020000|view|0/36|
+trace1.pfw.gz|not (name == "read")|1300000..0|view|1/19|17,18,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|not (cat in ["POSIX", "STDIO"])|-|pruner|1/1/36|0,1,2,3,8,9,10,11,12,13,14,15,16,25,26,35
+trace1.pfw.gz|not (cat in ["POSIX", "STDIO"])|-|batch|1/1/36|0,1,2,3,8,9,10,11,12,13,14,15,16,25,26,35
+trace1.pfw.gz|not (cat in ["POSIX", "STDIO"])|-|view|1/20|0,1,2,3,8,9,10,11,12,13,14,15,16,25,26,35
+trace1.pfw.gz|not (cat in ["POSIX", "STDIO"])|1050000..1150000|view|1/23|0,1,2,3,8,9,10,11,12,13,14,15,16
+trace1.pfw.gz|not (cat in ["POSIX", "STDIO"])|0..1020000|view|0/36|
+trace1.pfw.gz|not (cat in ["POSIX", "STDIO"])|1300000..0|view|1/33|25,26,35
+trace1.pfw.gz|name like "re%"|-|pruner|1/1/36|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|name like "re%"|-|batch|1/1/36|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|name like "re%"|-|view|1/0|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|name like "re%"|1050000..1150000|view|1/18|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17
+trace1.pfw.gz|name like "re%"|0..1020000|view|0/36|
+trace1.pfw.gz|name like "re%"|1300000..0|view|1/17|17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|fhash == "/data/b.dat"|-|pruner|1/0/0|
+trace1.pfw.gz|fhash == "/data/b.dat"|-|batch|1/0/0|
+trace1.pfw.gz|fhash == "/data/b.dat"|-|view|0/36|
+trace1.pfw.gz|fhash == "/data/b.dat"|1050000..1150000|view|0/36|
+trace1.pfw.gz|fhash == "/data/b.dat"|0..1020000|view|0/36|
+trace1.pfw.gz|fhash == "/data/b.dat"|1300000..0|view|0/36|
+trace1.pfw.gz|fhash == "92a3b4c5d6e7f809"|-|pruner|1/1/36|0,1,2,3,8,9,10,11,12,13,18,19,20,21,22,23
+trace1.pfw.gz|fhash == "92a3b4c5d6e7f809"|-|batch|1/1/36|0,1,2,3,8,9,10,11,12,13,18,19,20,21,22,23
+trace1.pfw.gz|fhash == "92a3b4c5d6e7f809"|-|view|1/20|0,1,2,3,8,9,10,11,12,13,18,19,20,21,22,23
+trace1.pfw.gz|fhash == "92a3b4c5d6e7f809"|1050000..1150000|view|1/26|0,1,2,3,8,9,10,11,12,13
+trace1.pfw.gz|fhash == "92a3b4c5d6e7f809"|0..1020000|view|0/36|
+trace1.pfw.gz|fhash == "92a3b4c5d6e7f809"|1300000..0|view|1/30|18,19,20,21,22,23
+trace1.pfw.gz|hhash == "node-2"|-|pruner|1/0/0|
+trace1.pfw.gz|hhash == "node-2"|-|batch|1/0/0|
+trace1.pfw.gz|hhash == "node-2"|-|view|0/36|
+trace1.pfw.gz|hhash == "node-2"|1050000..1150000|view|0/36|
+trace1.pfw.gz|hhash == "node-2"|0..1020000|view|0/36|
+trace1.pfw.gz|hhash == "node-2"|1300000..0|view|0/36|
+trace1.pfw.gz|hhash == "deadbeefdeadbeef" and name == "write"|-|pruner|1/1/36|28,30
+trace1.pfw.gz|hhash == "deadbeefdeadbeef" and name == "write"|-|batch|1/1/36|28,30
+trace1.pfw.gz|hhash == "deadbeefdeadbeef" and name == "write"|-|view|1/34|28,30
+trace1.pfw.gz|hhash == "deadbeefdeadbeef" and name == "write"|1050000..1150000|view|0/36|
+trace1.pfw.gz|hhash == "deadbeefdeadbeef" and name == "write"|0..1020000|view|0/36|
+trace1.pfw.gz|hhash == "deadbeefdeadbeef" and name == "write"|1300000..0|view|1/34|28,30
+trace1.pfw.gz|(name == "train" or name == "forward") and not (pid == 1)|-|pruner|1/1/36|8,10,16,18
+trace1.pfw.gz|(name == "train" or name == "forward") and not (pid == 1)|-|batch|1/1/36|8,10,16,18
+trace1.pfw.gz|(name == "train" or name == "forward") and not (pid == 1)|-|view|1/32|8,10,16,18
+trace1.pfw.gz|(name == "train" or name == "forward") and not (pid == 1)|1050000..1150000|view|1/33|8,10,16
+trace1.pfw.gz|(name == "train" or name == "forward") and not (pid == 1)|0..1020000|view|0/36|
+trace1.pfw.gz|(name == "train" or name == "forward") and not (pid == 1)|1300000..0|view|1/35|18
+trace1.pfw.gz|name == "target_op"|-|pruner|1/0/0|
+trace1.pfw.gz|name == "target_op"|-|batch|1/0/0|
+trace1.pfw.gz|name == "target_op"|-|view|0/36|
+trace1.pfw.gz|name == "target_op"|1050000..1150000|view|0/36|
+trace1.pfw.gz|name == "target_op"|0..1020000|view|0/36|
+trace1.pfw.gz|name == "target_op"|1300000..0|view|0/36|
+trace1.pfw.gz|name == "absent_op"|-|pruner|1/0/0|
+trace1.pfw.gz|name == "absent_op"|-|batch|1/0/0|
+trace1.pfw.gz|name == "absent_op"|-|view|0/36|
+trace1.pfw.gz|name == "absent_op"|1050000..1150000|view|0/36|
+trace1.pfw.gz|name == "absent_op"|0..1020000|view|0/36|
+trace1.pfw.gz|name == "absent_op"|1300000..0|view|0/36|
+trace1.pfw.gz|name in ["target_op", "absent_op"]|-|pruner|1/0/0|
+trace1.pfw.gz|name in ["target_op", "absent_op"]|-|batch|1/0/0|
+trace1.pfw.gz|name in ["target_op", "absent_op"]|-|view|0/36|
+trace1.pfw.gz|name in ["target_op", "absent_op"]|1050000..1150000|view|0/36|
+trace1.pfw.gz|name in ["target_op", "absent_op"]|0..1020000|view|0/36|
+trace1.pfw.gz|name in ["target_op", "absent_op"]|1300000..0|view|0/36|
+trace1.pfw.gz|not (name == "target_op")|-|pruner|1/1/36|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|not (name == "target_op")|-|batch|1/1/36|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|not (name == "target_op")|-|view|1/0|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|not (name == "target_op")|1050000..1150000|view|1/18|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17
+trace1.pfw.gz|not (name == "target_op")|0..1020000|view|0/36|
+trace1.pfw.gz|not (name == "target_op")|1300000..0|view|1/17|17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|ts > 1150000 and ts < 1400000|-|pruner|1/1/36|17
+trace1.pfw.gz|ts > 1150000 and ts < 1400000|-|batch|1/1/36|17
+trace1.pfw.gz|ts > 1150000 and ts < 1400000|-|view|1/35|17
+trace1.pfw.gz|ts > 1150000 and ts < 1400000|1050000..1150000|view|1/35|17
+trace1.pfw.gz|ts > 1150000 and ts < 1400000|0..1020000|view|0/36|
+trace1.pfw.gz|ts > 1150000 and ts < 1400000|1300000..0|view|1/35|17
+trace1.pfw.gz|ts >= 1400000 and ts <= 1450000|-|pruner|1/1/36|17
+trace1.pfw.gz|ts >= 1400000 and ts <= 1450000|-|batch|1/1/36|17
+trace1.pfw.gz|ts >= 1400000 and ts <= 1450000|-|view|1/35|17
+trace1.pfw.gz|ts >= 1400000 and ts <= 1450000|1050000..1150000|view|1/35|17
+trace1.pfw.gz|ts >= 1400000 and ts <= 1450000|0..1020000|view|0/36|
+trace1.pfw.gz|ts >= 1400000 and ts <= 1450000|1300000..0|view|1/35|17
+trace1.pfw.gz|not (cat == "COMPUTE")|-|pruner|1/1/36|0,1,2,3,4,5,6,7,8,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|not (cat == "COMPUTE")|-|batch|1/1/36|0,1,2,3,4,5,6,7,8,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|not (cat == "COMPUTE")|-|view|1/7|0,1,2,3,4,5,6,7,8,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|not (cat == "COMPUTE")|1050000..1150000|view|1/25|0,1,2,3,4,5,6,7,8,16,17
+trace1.pfw.gz|not (cat == "COMPUTE")|0..1020000|view|0/36|
+trace1.pfw.gz|not (cat == "COMPUTE")|1300000..0|view|1/17|17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|name == "thread_name"|-|pruner|1/0/0|
+trace1.pfw.gz|name == "thread_name"|-|batch|1/0/0|
+trace1.pfw.gz|name == "thread_name"|-|view|0/36|
+trace1.pfw.gz|name == "thread_name"|1050000..1150000|view|0/36|
+trace1.pfw.gz|name == "thread_name"|0..1020000|view|0/36|
+trace1.pfw.gz|name == "thread_name"|1300000..0|view|0/36|
+trace1.pfw.gz|resolved.fhash.path == "/data/b.dat"|-|pruner|1/1/36|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|resolved.fhash.path == "/data/b.dat"|-|batch|1/1/36|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|resolved.fhash.path == "/data/b.dat"|-|view|1/20|0,1,2,3,8,9,10,11,12,13,18,19,20,21,22,23
+trace1.pfw.gz|resolved.fhash.path == "/data/b.dat"|1050000..1150000|view|1/26|0,1,2,3,8,9,10,11,12,13
+trace1.pfw.gz|resolved.fhash.path == "/data/b.dat"|0..1020000|view|0/36|
+trace1.pfw.gz|resolved.fhash.path == "/data/b.dat"|1300000..0|view|1/30|18,19,20,21,22,23
+trace1.pfw.gz|resolved.fhash.path != "/data/a.dat"|-|pruner|1/1/36|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|resolved.fhash.path != "/data/a.dat"|-|batch|1/1/36|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|resolved.fhash.path != "/data/a.dat"|-|view|1/14|0,1,2,3,6,7,8,9,10,11,12,13,18,19,20,21,22,23,24,25,34,35
+trace1.pfw.gz|resolved.fhash.path != "/data/a.dat"|1050000..1150000|view|1/24|0,1,2,3,6,7,8,9,10,11,12,13
+trace1.pfw.gz|resolved.fhash.path != "/data/a.dat"|0..1020000|view|0/36|
+trace1.pfw.gz|resolved.fhash.path != "/data/a.dat"|1300000..0|view|1/26|18,19,20,21,22,23,24,25,34,35
+trace1.pfw.gz|resolved.hhash.name in ["node-2"]|-|pruner|1/1/36|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|resolved.hhash.name in ["node-2"]|-|batch|1/1/36|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|resolved.hhash.name in ["node-2"]|-|view|1/10|3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,21,22,23,26,27,28,30,31,32,33,34
+trace1.pfw.gz|resolved.hhash.name in ["node-2"]|1050000..1150000|view|1/22|3,4,5,6,8,9,10,11,12,13,14,15,16,17
+trace1.pfw.gz|resolved.hhash.name in ["node-2"]|0..1020000|view|0/36|
+trace1.pfw.gz|resolved.hhash.name in ["node-2"]|1300000..0|view|1/23|17,18,21,22,23,26,27,28,30,31,32,33,34
+trace1.pfw.gz|resolved.fhash.path like "%b.dat"|-|pruner|1/1/36|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|resolved.fhash.path like "%b.dat"|-|batch|1/1/36|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35
+trace1.pfw.gz|resolved.fhash.path like "%b.dat"|-|view|1/20|0,1,2,3,8,9,10,11,12,13,18,19,20,21,22,23
+trace1.pfw.gz|resolved.fhash.path like "%b.dat"|1050000..1150000|view|1/26|0,1,2,3,8,9,10,11,12,13
+trace1.pfw.gz|resolved.fhash.path like "%b.dat"|0..1020000|view|0/36|
+trace1.pfw.gz|resolved.fhash.path like "%b.dat"|1300000..0|view|1/30|18,19,20,21,22,23
+trace1.pfw.gz|resolved.fhash.path == "/data/a.dat" and name == "read"|-|pruner|1/1/36|18,19,20,21
+trace1.pfw.gz|resolved.fhash.path == "/data/a.dat" and name == "read"|-|batch|1/1/36|18,19,20,21
+trace1.pfw.gz|resolved.fhash.path == "/data/a.dat" and name == "read"|-|view|1/35|18
+trace1.pfw.gz|resolved.fhash.path == "/data/a.dat" and name == "read"|1050000..1150000|view|0/36|
+trace1.pfw.gz|resolved.fhash.path == "/data/a.dat" and name == "read"|0..1020000|view|0/36|
+trace1.pfw.gz|resolved.fhash.path == "/data/a.dat" and name == "read"|1300000..0|view|1/35|18
+trace2.pfw.gz|name == "read"|-|pruner|1/1/40|1,2,3,4,5,6,7,21,22,23
+trace2.pfw.gz|name == "read"|-|batch|1/1/40|1,2,3,4,5,6,7,21,22,23
+trace2.pfw.gz|name == "read"|-|view|1/30|1,2,3,4,5,6,7,21,22,23
+trace2.pfw.gz|name == "read"|1050000..1150000|view|1/33|1,2,3,4,5,6,7
+trace2.pfw.gz|name == "read"|0..1020000|view|0/40|
+trace2.pfw.gz|name == "read"|1300000..0|view|1/38|22,23
+trace2.pfw.gz|name == "absent"|-|pruner|1/0/0|
+trace2.pfw.gz|name == "absent"|-|batch|1/0/0|
+trace2.pfw.gz|name == "absent"|-|view|0/40|
+trace2.pfw.gz|name == "absent"|1050000..1150000|view|0/40|
+trace2.pfw.gz|name == "absent"|0..1020000|view|0/40|
+trace2.pfw.gz|name == "absent"|1300000..0|view|0/40|
+trace2.pfw.gz|name != "read"|-|pruner|1/1/40|0,1,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|name != "read"|-|batch|1/1/40|0,1,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|name != "read"|-|view|1/6|0,1,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|name != "read"|1050000..1150000|view|1/31|0,1,7,8,9,12,13,14,15
+trace2.pfw.gz|name != "read"|0..1020000|view|1/36|12,13,14,15
+trace2.pfw.gz|name != "read"|1300000..0|view|1/19|12,13,14,15,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|name in ["read", "write"]|-|pruner|1/1/40|1,2,3,4,5,6,7,21,22,23
+trace2.pfw.gz|name in ["read", "write"]|-|batch|1/1/40|1,2,3,4,5,6,7,21,22,23
+trace2.pfw.gz|name in ["read", "write"]|-|view|1/30|1,2,3,4,5,6,7,21,22,23
+trace2.pfw.gz|name in ["read", "write"]|1050000..1150000|view|1/33|1,2,3,4,5,6,7
+trace2.pfw.gz|name in ["read", "write"]|0..1020000|view|0/40|
+trace2.pfw.gz|name in ["read", "write"]|1300000..0|view|1/38|22,23
+trace2.pfw.gz|name not in ["read", "write", "open"]|-|pruner|1/1/40|0,1,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|name not in ["read", "write", "open"]|-|batch|1/1/40|0,1,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|name not in ["read", "write", "open"]|-|view|1/6|0,1,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|name not in ["read", "write", "open"]|1050000..1150000|view|1/31|0,1,7,8,9,12,13,14,15
+trace2.pfw.gz|name not in ["read", "write", "open"]|0..1020000|view|1/36|12,13,14,15
+trace2.pfw.gz|name not in ["read", "write", "open"]|1300000..0|view|1/19|12,13,14,15,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|cat == "COMPUTE"|-|pruner|1/1/40|5,6,7,34,35,36,37
+trace2.pfw.gz|cat == "COMPUTE"|-|batch|1/1/40|5,6,7,34,35,36,37
+trace2.pfw.gz|cat == "COMPUTE"|-|view|1/33|5,6,7,34,35,36,37
+trace2.pfw.gz|cat == "COMPUTE"|1050000..1150000|view|1/37|5,6,7
+trace2.pfw.gz|cat == "COMPUTE"|0..1020000|view|0/40|
+trace2.pfw.gz|cat == "COMPUTE"|1300000..0|view|1/36|34,35,36,37
+trace2.pfw.gz|cat != "POSIX"|-|pruner|1/1/40|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,29,30,31,32,33,34,35,36,37
+trace2.pfw.gz|cat != "POSIX"|-|batch|1/1/40|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,29,30,31,32,33,34,35,36,37
+trace2.pfw.gz|cat != "POSIX"|-|view|1/3|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,29,30,31,32,33,34,35,36,37
+trace2.pfw.gz|cat != "POSIX"|1050000..1150000|view|1/26|0,1,2,3,4,5,6,7,8,9,12,13,14,15
+trace2.pfw.gz|cat != "POSIX"|0..1020000|view|1/36|12,13,14,15
+trace2.pfw.gz|cat != "POSIX"|1300000..0|view|1/21|12,13,14,15,22,23,24,25,26,27,29,30,31,32,33,34,35,36,37
+trace2.pfw.gz|cat in ["AI", "STDIO"]|-|pruner|1/1/40|0,1,2,3,4,5,7,8,9,10,11,16,17,18,19,20,21,22,23,24,25,26,27,29,30,31,32,33,34
+trace2.pfw.gz|cat in ["AI", "STDIO"]|-|batch|1/1/40|0,1,2,3,4,5,7,8,9,10,11,16,17,18,19,20,21,22,23,24,25,26,27,29,30,31,32,33,34
+trace2.pfw.gz|cat in ["AI", "STDIO"]|-|view|1/11|0,1,2,3,4,5,7,8,9,10,11,16,17,18,19,20,21,22,23,24,25,26,27,29,30,31,32,33,34
+trace2.pfw.gz|cat in ["AI", "STDIO"]|1050000..1150000|view|1/31|0,1,2,3,4,5,7,8,9
+trace2.pfw.gz|cat in ["AI", "STDIO"]|0..1020000|view|0/40|
+trace2.pfw.gz|cat in ["AI", "STDIO"]|1300000..0|view|1/28|22,23,24,25,26,27,29,30,31,32,33,34
+trace2.pfw.gz|pid == 2|-|pruner|1/1/40|5,6,7,8,9,10,11,16,17,23,24,25,26,27,31,32,33,34
+trace2.pfw.gz|pid == 2|-|batch|1/1/40|5,6,7,8,9,10,11,16,17,23,24,25,26,27,31,32,33,34
+trace2.pfw.gz|pid == 2|-|view|1/22|5,6,7,8,9,10,11,16,17,23,24,25,26,27,31,32,33,34
+trace2.pfw.gz|pid == 2|1050000..1150000|view|1/35|5,6,7,8,9
+trace2.pfw.gz|pid == 2|0..1020000|view|0/40|
+trace2.pfw.gz|pid == 2|1300000..0|view|1/31|23,24,25,26,27,31,32,33,34
+trace2.pfw.gz|pid > 3|-|pruner|1/1/40|0,1,12,13,14,15,29,30,31,34,35,36,37
+trace2.pfw.gz|pid > 3|-|batch|1/1/40|0,1,12,13,14,15,29,30,31,34,35,36,37
+trace2.pfw.gz|pid > 3|-|view|1/27|0,1,12,13,14,15,29,30,31,34,35,36,37
+trace2.pfw.gz|pid > 3|1050000..1150000|view|1/34|0,1,12,13,14,15
+trace2.pfw.gz|pid > 3|0..1020000|view|1/36|12,13,14,15
+trace2.pfw.gz|pid > 3|1300000..0|view|1/29|12,13,14,15,29,30,31,34,35,36,37
+trace2.pfw.gz|dur >= 900|-|pruner|1/1/40|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|dur >= 900|-|batch|1/1/40|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|dur >= 900|-|view|1/0|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|dur >= 900|1050000..1150000|view|1/26|0,1,2,3,4,5,6,7,8,9,12,13,14,15
+trace2.pfw.gz|dur >= 900|0..1020000|view|1/36|12,13,14,15
+trace2.pfw.gz|dur >= 900|1300000..0|view|1/18|12,13,14,15,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|dur < 20|-|pruner|1/1/40|3,4,5,7,8,10,11,12,13,14,15,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,36,37,38,39
+trace2.pfw.gz|dur < 20|-|batch|1/1/40|3,4,5,7,8,10,11,12,13,14,15,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,36,37,38,39
+trace2.pfw.gz|dur < 20|-|view|1/9|3,4,5,7,8,10,11,12,13,14,15,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,36,37,38,39
+trace2.pfw.gz|dur < 20|1050000..1150000|view|1/31|3,4,5,7,8,12,13,14,15
+trace2.pfw.gz|dur < 20|0..1020000|view|1/36|12,13,14,15
+trace2.pfw.gz|dur < 20|1300000..0|view|1/19|12,13,14,15,22,23,24,25,26,27,28,29,30,31,32,33,34,36,37,38,39
+trace2.pfw.gz|args.size == 256|-|pruner|1/1/40|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|args.size == 256|-|batch|1/1/40|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|args.size == 256|-|view|1/0|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|args.size == 256|1050000..1150000|view|1/26|0,1,2,3,4,5,6,7,8,9,12,13,14,15
+trace2.pfw.gz|args.size == 256|0..1020000|view|1/36|12,13,14,15
+trace2.pfw.gz|args.size == 256|1300000..0|view|1/18|12,13,14,15,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|args.size > 8000|-|pruner|1/1/40|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|args.size > 8000|-|batch|1/1/40|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|args.size > 8000|-|view|1/0|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|args.size > 8000|1050000..1150000|view|1/26|0,1,2,3,4,5,6,7,8,9,12,13,14,15
+trace2.pfw.gz|args.size > 8000|0..1020000|view|1/36|12,13,14,15
+trace2.pfw.gz|args.size > 8000|1300000..0|view|1/18|12,13,14,15,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|ts >= 1200000|-|pruner|1/1/40|12,13,14,15,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|ts >= 1200000|-|batch|1/1/40|12,13,14,15,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|ts >= 1200000|-|view|1/18|12,13,14,15,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|ts >= 1200000|1050000..1150000|view|1/36|12,13,14,15
+trace2.pfw.gz|ts >= 1200000|0..1020000|view|1/36|12,13,14,15
+trace2.pfw.gz|ts >= 1200000|1300000..0|view|1/18|12,13,14,15,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|ts > 1100000 and ts < 1150000|-|pruner|1/1/40|0,1,2,3,4,5,6,7,8,9,12,13,14,15
+trace2.pfw.gz|ts > 1100000 and ts < 1150000|-|batch|1/1/40|0,1,2,3,4,5,6,7,8,9,12,13,14,15
+trace2.pfw.gz|ts > 1100000 and ts < 1150000|-|view|1/26|0,1,2,3,4,5,6,7,8,9,12,13,14,15
+trace2.pfw.gz|ts > 1100000 and ts < 1150000|1050000..1150000|view|1/26|0,1,2,3,4,5,6,7,8,9,12,13,14,15
+trace2.pfw.gz|ts > 1100000 and ts < 1150000|0..1020000|view|1/36|12,13,14,15
+trace2.pfw.gz|ts > 1100000 and ts < 1150000|1300000..0|view|1/36|12,13,14,15
+trace2.pfw.gz|name == "read" and pid == 1|-|pruner|1/1/40|1,2,3,4,5,21,22,23
+trace2.pfw.gz|name == "read" and pid == 1|-|batch|1/1/40|1,2,3,4,5,21,22,23
+trace2.pfw.gz|name == "read" and pid == 1|-|view|1/32|1,2,3,4,5,21,22,23
+trace2.pfw.gz|name == "read" and pid == 1|1050000..1150000|view|1/35|1,2,3,4,5
+trace2.pfw.gz|name == "read" and pid == 1|0..1020000|view|0/40|
+trace2.pfw.gz|name == "read" and pid == 1|1300000..0|view|1/38|22,23
+trace2.pfw.gz|name == "read" or cat == "COMPUTE"|-|pruner|1/1/40|1,2,3,4,5,6,7,21,22,23,34,35,36,37
+trace2.pfw.gz|name == "read" or cat == "COMPUTE"|-|batch|1/1/40|1,2,3,4,5,6,7,21,22,23,34,35,36,37
+trace2.pfw.gz|name == "read" or cat == "COMPUTE"|-|view|1/26|1,2,3,4,5,6,7,21,22,23,34,35,36,37
+trace2.pfw.gz|name == "read" or cat == "COMPUTE"|1050000..1150000|view|1/33|1,2,3,4,5,6,7
+trace2.pfw.gz|name == "read" or cat == "COMPUTE"|0..1020000|view|0/40|
+trace2.pfw.gz|name == "read" or cat == "COMPUTE"|1300000..0|view|1/34|22,23,34,35,36,37
+trace2.pfw.gz|not (dur > 25)|-|pruner|1/1/40|0,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|not (dur > 25)|-|batch|1/1/40|0,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|not (dur > 25)|-|view|1/3|0,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|not (dur > 25)|1050000..1150000|view|1/28|0,3,4,5,6,7,8,9,12,13,14,15
+trace2.pfw.gz|not (dur > 25)|0..1020000|view|1/36|12,13,14,15
+trace2.pfw.gz|not (dur > 25)|1300000..0|view|1/18|12,13,14,15,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|not (name == "read")|-|pruner|1/1/40|0,1,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|not (name == "read")|-|batch|1/1/40|0,1,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|not (name == "read")|-|view|1/6|0,1,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|not (name == "read")|1050000..1150000|view|1/31|0,1,7,8,9,12,13,14,15
+trace2.pfw.gz|not (name == "read")|0..1020000|view|1/36|12,13,14,15
+trace2.pfw.gz|not (name == "read")|1300000..0|view|1/19|12,13,14,15,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|not (cat in ["POSIX", "STDIO"])|-|pruner|1/1/40|0,1,2,3,4,5,6,7,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,29,30,31,34,35,36,37,39
+trace2.pfw.gz|not (cat in ["POSIX", "STDIO"])|-|batch|1/1/40|0,1,2,3,4,5,6,7,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,29,30,31,34,35,36,37,39
+trace2.pfw.gz|not (cat in ["POSIX", "STDIO"])|-|view|1/7|0,1,2,3,4,5,6,7,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,29,30,31,34,35,36,37,39
+trace2.pfw.gz|not (cat in ["POSIX", "STDIO"])|1050000..1150000|view|1/28|0,1,2,3,4,5,6,7,12,13,14,15
+trace2.pfw.gz|not (cat in ["POSIX", "STDIO"])|0..1020000|view|1/36|12,13,14,15
+trace2.pfw.gz|not (cat in ["POSIX", "STDIO"])|1300000..0|view|1/22|12,13,14,15,22,23,24,25,26,27,29,30,31,34,35,36,37,39
+trace2.pfw.gz|name like "re%"|-|pruner|1/1/40|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|name like "re%"|-|batch|1/1/40|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|name like "re%"|-|view|1/0|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|name like "re%"|1050000..1150000|view|1/26|0,1,2,3,4,5,6,7,8,9,12,13,14,15
+trace2.pfw.gz|name like "re%"|0..1020000|view|1/36|12,13,14,15
+trace2.pfw.gz|name like "re%"|1300000..0|view|1/18|12,13,14,15,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|fhash == "/data/b.dat"|-|pruner|1/0/0|
+trace2.pfw.gz|fhash == "/data/b.dat"|-|batch|1/0/0|
+trace2.pfw.gz|fhash == "/data/b.dat"|-|view|0/40|
+trace2.pfw.gz|fhash == "/data/b.dat"|1050000..1150000|view|0/40|
+trace2.pfw.gz|fhash == "/data/b.dat"|0..1020000|view|0/40|
+trace2.pfw.gz|fhash == "/data/b.dat"|1300000..0|view|0/40|
+trace2.pfw.gz|fhash == "92a3b4c5d6e7f809"|-|pruner|1/1/40|0,1,17,18,19,20,21,23,24,25,26,27
+trace2.pfw.gz|fhash == "92a3b4c5d6e7f809"|-|batch|1/1/40|0,1,17,18,19,20,21,23,24,25,26,27
+trace2.pfw.gz|fhash == "92a3b4c5d6e7f809"|-|view|1/28|0,1,17,18,19,20,21,23,24,25,26,27
+trace2.pfw.gz|fhash == "92a3b4c5d6e7f809"|1050000..1150000|view|1/38|0,1
+trace2.pfw.gz|fhash == "92a3b4c5d6e7f809"|0..1020000|view|0/40|
+trace2.pfw.gz|fhash == "92a3b4c5d6e7f809"|1300000..0|view|1/35|23,24,25,26,27
+trace2.pfw.gz|hhash == "node-2"|-|pruner|1/0/0|
+trace2.pfw.gz|hhash == "node-2"|-|batch|1/0/0|
+trace2.pfw.gz|hhash == "node-2"|-|view|0/40|
+trace2.pfw.gz|hhash == "node-2"|1050000..1150000|view|0/40|
+trace2.pfw.gz|hhash == "node-2"|0..1020000|view|0/40|
+trace2.pfw.gz|hhash == "node-2"|1300000..0|view|0/40|
+trace2.pfw.gz|hhash == "deadbeefdeadbeef" and name == "write"|-|pruner|1/0/0|
+trace2.pfw.gz|hhash == "deadbeefdeadbeef" and name == "write"|-|batch|1/0/0|
+trace2.pfw.gz|hhash == "deadbeefdeadbeef" and name == "write"|-|view|0/40|
+trace2.pfw.gz|hhash == "deadbeefdeadbeef" and name == "write"|1050000..1150000|view|0/40|
+trace2.pfw.gz|hhash == "deadbeefdeadbeef" and name == "write"|0..1020000|view|0/40|
+trace2.pfw.gz|hhash == "deadbeefdeadbeef" and name == "write"|1300000..0|view|0/40|
+trace2.pfw.gz|(name == "train" or name == "forward") and not (pid == 1)|-|pruner|1/1/40|10,11,16,17,34,35,36,37
+trace2.pfw.gz|(name == "train" or name == "forward") and not (pid == 1)|-|batch|1/1/40|10,11,16,17,34,35,36,37
+trace2.pfw.gz|(name == "train" or name == "forward") and not (pid == 1)|-|view|1/32|10,11,16,17,34,35,36,37
+trace2.pfw.gz|(name == "train" or name == "forward") and not (pid == 1)|1050000..1150000|view|0/40|
+trace2.pfw.gz|(name == "train" or name == "forward") and not (pid == 1)|0..1020000|view|0/40|
+trace2.pfw.gz|(name == "train" or name == "forward") and not (pid == 1)|1300000..0|view|1/36|34,35,36,37
+trace2.pfw.gz|name == "target_op"|-|pruner|1/0/0|
+trace2.pfw.gz|name == "target_op"|-|batch|1/0/0|
+trace2.pfw.gz|name == "target_op"|-|view|0/40|
+trace2.pfw.gz|name == "target_op"|1050000..1150000|view|0/40|
+trace2.pfw.gz|name == "target_op"|0..1020000|view|0/40|
+trace2.pfw.gz|name == "target_op"|1300000..0|view|0/40|
+trace2.pfw.gz|name == "absent_op"|-|pruner|1/0/0|
+trace2.pfw.gz|name == "absent_op"|-|batch|1/0/0|
+trace2.pfw.gz|name == "absent_op"|-|view|0/40|
+trace2.pfw.gz|name == "absent_op"|1050000..1150000|view|0/40|
+trace2.pfw.gz|name == "absent_op"|0..1020000|view|0/40|
+trace2.pfw.gz|name == "absent_op"|1300000..0|view|0/40|
+trace2.pfw.gz|name in ["target_op", "absent_op"]|-|pruner|1/0/0|
+trace2.pfw.gz|name in ["target_op", "absent_op"]|-|batch|1/0/0|
+trace2.pfw.gz|name in ["target_op", "absent_op"]|-|view|0/40|
+trace2.pfw.gz|name in ["target_op", "absent_op"]|1050000..1150000|view|0/40|
+trace2.pfw.gz|name in ["target_op", "absent_op"]|0..1020000|view|0/40|
+trace2.pfw.gz|name in ["target_op", "absent_op"]|1300000..0|view|0/40|
+trace2.pfw.gz|not (name == "target_op")|-|pruner|1/1/40|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|not (name == "target_op")|-|batch|1/1/40|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|not (name == "target_op")|-|view|1/0|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|not (name == "target_op")|1050000..1150000|view|1/26|0,1,2,3,4,5,6,7,8,9,12,13,14,15
+trace2.pfw.gz|not (name == "target_op")|0..1020000|view|1/36|12,13,14,15
+trace2.pfw.gz|not (name == "target_op")|1300000..0|view|1/18|12,13,14,15,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|ts > 1150000 and ts < 1400000|-|pruner|1/1/40|9,10,11,12,13,14,15,16,17,18,19,20,21,22
+trace2.pfw.gz|ts > 1150000 and ts < 1400000|-|batch|1/1/40|9,10,11,12,13,14,15,16,17,18,19,20,21,22
+trace2.pfw.gz|ts > 1150000 and ts < 1400000|-|view|1/26|9,10,11,12,13,14,15,16,17,18,19,20,21,22
+trace2.pfw.gz|ts > 1150000 and ts < 1400000|1050000..1150000|view|1/35|9,12,13,14,15
+trace2.pfw.gz|ts > 1150000 and ts < 1400000|0..1020000|view|1/36|12,13,14,15
+trace2.pfw.gz|ts > 1150000 and ts < 1400000|1300000..0|view|1/35|12,13,14,15,22
+trace2.pfw.gz|ts >= 1400000 and ts <= 1450000|-|pruner|1/1/40|12,13,14,15,22
+trace2.pfw.gz|ts >= 1400000 and ts <= 1450000|-|batch|1/1/40|12,13,14,15,22
+trace2.pfw.gz|ts >= 1400000 and ts <= 1450000|-|view|1/35|12,13,14,15,22
+trace2.pfw.gz|ts >= 1400000 and ts <= 1450000|1050000..1150000|view|1/36|12,13,14,15
+trace2.pfw.gz|ts >= 1400000 and ts <= 1450000|0..1020000|view|1/36|12,13,14,15
+trace2.pfw.gz|ts >= 1400000 and ts <= 1450000|1300000..0|view|1/35|12,13,14,15,22
+trace2.pfw.gz|not (cat == "COMPUTE")|-|pruner|1/1/40|0,1,2,3,4,5,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,37,38,39
+trace2.pfw.gz|not (cat == "COMPUTE")|-|batch|1/1/40|0,1,2,3,4,5,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,37,38,39
+trace2.pfw.gz|not (cat == "COMPUTE")|-|view|1/3|0,1,2,3,4,5,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,37,38,39
+trace2.pfw.gz|not (cat == "COMPUTE")|1050000..1150000|view|1/27|0,1,2,3,4,5,7,8,9,12,13,14,15
+trace2.pfw.gz|not (cat == "COMPUTE")|0..1020000|view|1/36|12,13,14,15
+trace2.pfw.gz|not (cat == "COMPUTE")|1300000..0|view|1/20|12,13,14,15,22,23,24,25,26,27,28,29,30,31,32,33,34,37,38,39
+trace2.pfw.gz|name == "thread_name"|-|pruner|1/0/0|
+trace2.pfw.gz|name == "thread_name"|-|batch|1/0/0|
+trace2.pfw.gz|name == "thread_name"|-|view|0/40|
+trace2.pfw.gz|name == "thread_name"|1050000..1150000|view|0/40|
+trace2.pfw.gz|name == "thread_name"|0..1020000|view|0/40|
+trace2.pfw.gz|name == "thread_name"|1300000..0|view|0/40|
+trace2.pfw.gz|resolved.fhash.path == "/data/b.dat"|-|pruner|1/1/40|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|resolved.fhash.path == "/data/b.dat"|-|batch|1/1/40|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|resolved.fhash.path == "/data/b.dat"|-|view|1/28|0,1,17,18,19,20,21,23,24,25,26,27
+trace2.pfw.gz|resolved.fhash.path == "/data/b.dat"|1050000..1150000|view|1/38|0,1
+trace2.pfw.gz|resolved.fhash.path == "/data/b.dat"|0..1020000|view|0/40|
+trace2.pfw.gz|resolved.fhash.path == "/data/b.dat"|1300000..0|view|1/35|23,24,25,26,27
+trace2.pfw.gz|resolved.fhash.path != "/data/a.dat"|-|pruner|1/1/40|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|resolved.fhash.path != "/data/a.dat"|-|batch|1/1/40|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|resolved.fhash.path != "/data/a.dat"|-|view|1/16|0,1,2,3,4,5,7,8,9,10,17,18,19,20,21,23,24,25,26,27,28,29,30,31
+trace2.pfw.gz|resolved.fhash.path != "/data/a.dat"|1050000..1150000|view|1/31|0,1,2,3,4,5,7,8,9
+trace2.pfw.gz|resolved.fhash.path != "/data/a.dat"|0..1020000|view|0/40|
+trace2.pfw.gz|resolved.fhash.path != "/data/a.dat"|1300000..0|view|1/31|23,24,25,26,27,28,29,30,31
+trace2.pfw.gz|resolved.hhash.name in ["node-2"]|-|pruner|1/1/40|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|resolved.hhash.name in ["node-2"]|-|batch|1/1/40|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|resolved.hhash.name in ["node-2"]|-|view|1/10|1,2,3,4,5,6,7,8,9,10,17,18,19,20,21,22,23,24,25,26,27,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|resolved.hhash.name in ["node-2"]|1050000..1150000|view|1/31|1,2,3,4,5,6,7,8,9
+trace2.pfw.gz|resolved.hhash.name in ["node-2"]|0..1020000|view|0/40|
+trace2.pfw.gz|resolved.hhash.name in ["node-2"]|1300000..0|view|1/25|22,23,24,25,26,27,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|resolved.fhash.path like "%b.dat"|-|pruner|1/1/40|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|resolved.fhash.path like "%b.dat"|-|batch|1/1/40|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39
+trace2.pfw.gz|resolved.fhash.path like "%b.dat"|-|view|1/28|0,1,17,18,19,20,21,23,24,25,26,27
+trace2.pfw.gz|resolved.fhash.path like "%b.dat"|1050000..1150000|view|1/38|0,1
+trace2.pfw.gz|resolved.fhash.path like "%b.dat"|0..1020000|view|0/40|
+trace2.pfw.gz|resolved.fhash.path like "%b.dat"|1300000..0|view|1/35|23,24,25,26,27
+trace2.pfw.gz|resolved.fhash.path == "/data/a.dat" and name == "read"|-|pruner|1/1/40|1,2,3,4,5,6,7,21,22,23
+trace2.pfw.gz|resolved.fhash.path == "/data/a.dat" and name == "read"|-|batch|1/1/40|1,2,3,4,5,6,7,21,22,23
+trace2.pfw.gz|resolved.fhash.path == "/data/a.dat" and name == "read"|-|view|1/34|5,6,7,21,22,23
+trace2.pfw.gz|resolved.fhash.path == "/data/a.dat" and name == "read"|1050000..1150000|view|1/37|5,6,7
+trace2.pfw.gz|resolved.fhash.path == "/data/a.dat" and name == "read"|0..1020000|view|0/40|
+trace2.pfw.gz|resolved.fhash.path == "/data/a.dat" and name == "read"|1300000..0|view|1/38|22,23
+trace3.pfw.gz|name == "read"|-|pruner|1/0/5|
+trace3.pfw.gz|name == "read"|-|batch|1/0/5|
+trace3.pfw.gz|name == "read"|-|view|0/5|
+trace3.pfw.gz|name == "read"|1050000..1150000|view|0/5|
+trace3.pfw.gz|name == "read"|0..1020000|view|0/5|
+trace3.pfw.gz|name == "read"|1300000..0|view|0/5|
+trace3.pfw.gz|name == "absent"|-|pruner|1/0/5|
+trace3.pfw.gz|name == "absent"|-|batch|1/0/5|
+trace3.pfw.gz|name == "absent"|-|view|0/5|
+trace3.pfw.gz|name == "absent"|1050000..1150000|view|0/5|
+trace3.pfw.gz|name == "absent"|0..1020000|view|0/5|
+trace3.pfw.gz|name == "absent"|1300000..0|view|0/5|
+trace3.pfw.gz|name != "read"|-|pruner|1/1/5|0,1,2,3,4
+trace3.pfw.gz|name != "read"|-|batch|1/1/5|0,1,2,3,4
+trace3.pfw.gz|name != "read"|-|view|1/0|0,1,2,3,4
+trace3.pfw.gz|name != "read"|1050000..1150000|view|0/5|
+trace3.pfw.gz|name != "read"|0..1020000|view|0/5|
+trace3.pfw.gz|name != "read"|1300000..0|view|1/2|2,3,4
+trace3.pfw.gz|name in ["read", "write"]|-|pruner|1/0/5|
+trace3.pfw.gz|name in ["read", "write"]|-|batch|1/0/5|
+trace3.pfw.gz|name in ["read", "write"]|-|view|0/5|
+trace3.pfw.gz|name in ["read", "write"]|1050000..1150000|view|0/5|
+trace3.pfw.gz|name in ["read", "write"]|0..1020000|view|0/5|
+trace3.pfw.gz|name in ["read", "write"]|1300000..0|view|0/5|
+trace3.pfw.gz|name not in ["read", "write", "open"]|-|pruner|1/1/5|0,1,2,3,4
+trace3.pfw.gz|name not in ["read", "write", "open"]|-|batch|1/1/5|0,1,2,3,4
+trace3.pfw.gz|name not in ["read", "write", "open"]|-|view|1/0|0,1,2,3,4
+trace3.pfw.gz|name not in ["read", "write", "open"]|1050000..1150000|view|0/5|
+trace3.pfw.gz|name not in ["read", "write", "open"]|0..1020000|view|0/5|
+trace3.pfw.gz|name not in ["read", "write", "open"]|1300000..0|view|1/2|2,3,4
+trace3.pfw.gz|cat == "COMPUTE"|-|pruner|1/1/5|0,1,3
+trace3.pfw.gz|cat == "COMPUTE"|-|batch|1/1/5|0,1,3
+trace3.pfw.gz|cat == "COMPUTE"|-|view|1/2|0,1,3
+trace3.pfw.gz|cat == "COMPUTE"|1050000..1150000|view|0/5|
+trace3.pfw.gz|cat == "COMPUTE"|0..1020000|view|0/5|
+trace3.pfw.gz|cat == "COMPUTE"|1300000..0|view|1/4|3
+trace3.pfw.gz|cat != "POSIX"|-|pruner|1/1/5|0,1,2,3,4
+trace3.pfw.gz|cat != "POSIX"|-|batch|1/1/5|0,1,2,3,4
+trace3.pfw.gz|cat != "POSIX"|-|view|1/0|0,1,2,3,4
+trace3.pfw.gz|cat != "POSIX"|1050000..1150000|view|0/5|
+trace3.pfw.gz|cat != "POSIX"|0..1020000|view|0/5|
+trace3.pfw.gz|cat != "POSIX"|1300000..0|view|1/2|2,3,4
+trace3.pfw.gz|cat in ["AI", "STDIO"]|-|pruner|1/1/5|0,1,2,3,4
+trace3.pfw.gz|cat in ["AI", "STDIO"]|-|batch|1/1/5|0,1,2,3,4
+trace3.pfw.gz|cat in ["AI", "STDIO"]|-|view|1/0|0,1,2,3,4
+trace3.pfw.gz|cat in ["AI", "STDIO"]|1050000..1150000|view|0/5|
+trace3.pfw.gz|cat in ["AI", "STDIO"]|0..1020000|view|0/5|
+trace3.pfw.gz|cat in ["AI", "STDIO"]|1300000..0|view|1/2|2,3,4
+trace3.pfw.gz|pid == 2|-|pruner|1/1/5|2,3,4
+trace3.pfw.gz|pid == 2|-|batch|1/1/5|2,3,4
+trace3.pfw.gz|pid == 2|-|view|1/2|2,3,4
+trace3.pfw.gz|pid == 2|1050000..1150000|view|0/5|
+trace3.pfw.gz|pid == 2|0..1020000|view|0/5|
+trace3.pfw.gz|pid == 2|1300000..0|view|1/2|2,3,4
+trace3.pfw.gz|pid > 3|-|pruner|1/1/5|0,1,2
+trace3.pfw.gz|pid > 3|-|batch|1/1/5|0,1,2
+trace3.pfw.gz|pid > 3|-|view|1/2|0,1,2
+trace3.pfw.gz|pid > 3|1050000..1150000|view|0/5|
+trace3.pfw.gz|pid > 3|0..1020000|view|0/5|
+trace3.pfw.gz|pid > 3|1300000..0|view|1/4|2
+trace3.pfw.gz|dur >= 900|-|pruner|1/1/5|0,1,2,3,4
+trace3.pfw.gz|dur >= 900|-|batch|1/1/5|0,1,2,3,4
+trace3.pfw.gz|dur >= 900|-|view|1/0|0,1,2,3,4
+trace3.pfw.gz|dur >= 900|1050000..1150000|view|0/5|
+trace3.pfw.gz|dur >= 900|0..1020000|view|0/5|
+trace3.pfw.gz|dur >= 900|1300000..0|view|1/2|2,3,4
+trace3.pfw.gz|dur < 20|-|pruner|1/1/5|0,1,2,3,4
+trace3.pfw.gz|dur < 20|-|batch|1/1/5|0,1,2,3,4
+trace3.pfw.gz|dur < 20|-|view|1/0|0,1,2,3,4
+trace3.pfw.gz|dur < 20|1050000..1150000|view|0/5|
+trace3.pfw.gz|dur < 20|0..1020000|view|0/5|
+trace3.pfw.gz|dur < 20|1300000..0|view|1/2|2,3,4
+trace3.pfw.gz|args.size == 256|-|pruner|1/1/5|0,1,2,3,4
+trace3.pfw.gz|args.size == 256|-|batch|1/1/5|0,1,2,3,4
+trace3.pfw.gz|args.size == 256|-|view|1/0|0,1,2,3,4
+trace3.pfw.gz|args.size == 256|1050000..1150000|view|0/5|
+trace3.pfw.gz|args.size == 256|0..1020000|view|0/5|
+trace3.pfw.gz|args.size == 256|1300000..0|view|1/2|2,3,4
+trace3.pfw.gz|args.size > 8000|-|pruner|1/1/5|0,1,2,3,4
+trace3.pfw.gz|args.size > 8000|-|batch|1/1/5|0,1,2,3,4
+trace3.pfw.gz|args.size > 8000|-|view|1/0|0,1,2,3,4
+trace3.pfw.gz|args.size > 8000|1050000..1150000|view|0/5|
+trace3.pfw.gz|args.size > 8000|0..1020000|view|0/5|
+trace3.pfw.gz|args.size > 8000|1300000..0|view|1/2|2,3,4
+trace3.pfw.gz|ts >= 1200000|-|pruner|1/1/5|1,2,3,4
+trace3.pfw.gz|ts >= 1200000|-|batch|1/1/5|1,2,3,4
+trace3.pfw.gz|ts >= 1200000|-|view|1/1|1,2,3,4
+trace3.pfw.gz|ts >= 1200000|1050000..1150000|view|0/5|
+trace3.pfw.gz|ts >= 1200000|0..1020000|view|0/5|
+trace3.pfw.gz|ts >= 1200000|1300000..0|view|1/2|2,3,4
+trace3.pfw.gz|ts > 1100000 and ts < 1150000|-|pruner|1/0/5|
+trace3.pfw.gz|ts > 1100000 and ts < 1150000|-|batch|1/0/5|
+trace3.pfw.gz|ts > 1100000 and ts < 1150000|-|view|0/5|
+trace3.pfw.gz|ts > 1100000 and ts < 1150000|1050000..1150000|view|0/5|
+trace3.pfw.gz|ts > 1100000 and ts < 1150000|0..1020000|view|0/5|
+trace3.pfw.gz|ts > 1100000 and ts < 1150000|1300000..0|view|0/5|
+trace3.pfw.gz|name == "read" and pid == 1|-|pruner|1/0/5|
+trace3.pfw.gz|name == "read" and pid == 1|-|batch|1/0/5|
+trace3.pfw.gz|name == "read" and pid == 1|-|view|0/5|
+trace3.pfw.gz|name == "read" and pid == 1|1050000..1150000|view|0/5|
+trace3.pfw.gz|name == "read" and pid == 1|0..1020000|view|0/5|
+trace3.pfw.gz|name == "read" and pid == 1|1300000..0|view|0/5|
+trace3.pfw.gz|name == "read" or cat == "COMPUTE"|-|pruner|1/1/5|0,1,3
+trace3.pfw.gz|name == "read" or cat == "COMPUTE"|-|batch|1/1/5|0,1,3
+trace3.pfw.gz|name == "read" or cat == "COMPUTE"|-|view|1/2|0,1,3
+trace3.pfw.gz|name == "read" or cat == "COMPUTE"|1050000..1150000|view|0/5|
+trace3.pfw.gz|name == "read" or cat == "COMPUTE"|0..1020000|view|0/5|
+trace3.pfw.gz|name == "read" or cat == "COMPUTE"|1300000..0|view|1/4|3
+trace3.pfw.gz|not (dur > 25)|-|pruner|1/1/5|0,1,2,3,4
+trace3.pfw.gz|not (dur > 25)|-|batch|1/1/5|0,1,2,3,4
+trace3.pfw.gz|not (dur > 25)|-|view|1/0|0,1,2,3,4
+trace3.pfw.gz|not (dur > 25)|1050000..1150000|view|0/5|
+trace3.pfw.gz|not (dur > 25)|0..1020000|view|0/5|
+trace3.pfw.gz|not (dur > 25)|1300000..0|view|1/2|2,3,4
+trace3.pfw.gz|not (name == "read")|-|pruner|1/1/5|0,1,2,3,4
+trace3.pfw.gz|not (name == "read")|-|batch|1/1/5|0,1,2,3,4
+trace3.pfw.gz|not (name == "read")|-|view|1/0|0,1,2,3,4
+trace3.pfw.gz|not (name == "read")|1050000..1150000|view|0/5|
+trace3.pfw.gz|not (name == "read")|0..1020000|view|0/5|
+trace3.pfw.gz|not (name == "read")|1300000..0|view|1/2|2,3,4
+trace3.pfw.gz|not (cat in ["POSIX", "STDIO"])|-|pruner|1/1/5|0,1,2,3,4
+trace3.pfw.gz|not (cat in ["POSIX", "STDIO"])|-|batch|1/1/5|0,1,2,3,4
+trace3.pfw.gz|not (cat in ["POSIX", "STDIO"])|-|view|1/0|0,1,2,3,4
+trace3.pfw.gz|not (cat in ["POSIX", "STDIO"])|1050000..1150000|view|0/5|
+trace3.pfw.gz|not (cat in ["POSIX", "STDIO"])|0..1020000|view|0/5|
+trace3.pfw.gz|not (cat in ["POSIX", "STDIO"])|1300000..0|view|1/2|2,3,4
+trace3.pfw.gz|name like "re%"|-|pruner|1/1/5|0,1,2,3,4
+trace3.pfw.gz|name like "re%"|-|batch|1/1/5|0,1,2,3,4
+trace3.pfw.gz|name like "re%"|-|view|1/0|0,1,2,3,4
+trace3.pfw.gz|name like "re%"|1050000..1150000|view|0/5|
+trace3.pfw.gz|name like "re%"|0..1020000|view|0/5|
+trace3.pfw.gz|name like "re%"|1300000..0|view|1/2|2,3,4
+trace3.pfw.gz|fhash == "/data/b.dat"|-|pruner|1/0/0|
+trace3.pfw.gz|fhash == "/data/b.dat"|-|batch|1/0/0|
+trace3.pfw.gz|fhash == "/data/b.dat"|-|view|0/5|
+trace3.pfw.gz|fhash == "/data/b.dat"|1050000..1150000|view|0/5|
+trace3.pfw.gz|fhash == "/data/b.dat"|0..1020000|view|0/5|
+trace3.pfw.gz|fhash == "/data/b.dat"|1300000..0|view|0/5|
+trace3.pfw.gz|fhash == "92a3b4c5d6e7f809"|-|pruner|1/1/5|1,2,3,4
+trace3.pfw.gz|fhash == "92a3b4c5d6e7f809"|-|batch|1/1/5|1,2,3,4
+trace3.pfw.gz|fhash == "92a3b4c5d6e7f809"|-|view|1/1|1,2,3,4
+trace3.pfw.gz|fhash == "92a3b4c5d6e7f809"|1050000..1150000|view|0/5|
+trace3.pfw.gz|fhash == "92a3b4c5d6e7f809"|0..1020000|view|0/5|
+trace3.pfw.gz|fhash == "92a3b4c5d6e7f809"|1300000..0|view|1/2|2,3,4
+trace3.pfw.gz|hhash == "node-2"|-|pruner|1/0/0|
+trace3.pfw.gz|hhash == "node-2"|-|batch|1/0/0|
+trace3.pfw.gz|hhash == "node-2"|-|view|0/5|
+trace3.pfw.gz|hhash == "node-2"|1050000..1150000|view|0/5|
+trace3.pfw.gz|hhash == "node-2"|0..1020000|view|0/5|
+trace3.pfw.gz|hhash == "node-2"|1300000..0|view|0/5|
+trace3.pfw.gz|hhash == "deadbeefdeadbeef" and name == "write"|-|pruner|1/0/5|
+trace3.pfw.gz|hhash == "deadbeefdeadbeef" and name == "write"|-|batch|1/0/5|
+trace3.pfw.gz|hhash == "deadbeefdeadbeef" and name == "write"|-|view|0/5|
+trace3.pfw.gz|hhash == "deadbeefdeadbeef" and name == "write"|1050000..1150000|view|0/5|
+trace3.pfw.gz|hhash == "deadbeefdeadbeef" and name == "write"|0..1020000|view|0/5|
+trace3.pfw.gz|hhash == "deadbeefdeadbeef" and name == "write"|1300000..0|view|0/5|
+trace3.pfw.gz|(name == "train" or name == "forward") and not (pid == 1)|-|pruner|1/0/5|
+trace3.pfw.gz|(name == "train" or name == "forward") and not (pid == 1)|-|batch|1/0/5|
+trace3.pfw.gz|(name == "train" or name == "forward") and not (pid == 1)|-|view|0/5|
+trace3.pfw.gz|(name == "train" or name == "forward") and not (pid == 1)|1050000..1150000|view|0/5|
+trace3.pfw.gz|(name == "train" or name == "forward") and not (pid == 1)|0..1020000|view|0/5|
+trace3.pfw.gz|(name == "train" or name == "forward") and not (pid == 1)|1300000..0|view|0/5|
+trace3.pfw.gz|name == "target_op"|-|pruner|1/1/5|0
+trace3.pfw.gz|name == "target_op"|-|batch|1/1/5|0
+trace3.pfw.gz|name == "target_op"|-|view|1/4|0
+trace3.pfw.gz|name == "target_op"|1050000..1150000|view|0/5|
+trace3.pfw.gz|name == "target_op"|0..1020000|view|0/5|
+trace3.pfw.gz|name == "target_op"|1300000..0|view|0/5|
+trace3.pfw.gz|name == "absent_op"|-|pruner|1/0/5|
+trace3.pfw.gz|name == "absent_op"|-|batch|1/0/5|
+trace3.pfw.gz|name == "absent_op"|-|view|0/5|
+trace3.pfw.gz|name == "absent_op"|1050000..1150000|view|0/5|
+trace3.pfw.gz|name == "absent_op"|0..1020000|view|0/5|
+trace3.pfw.gz|name == "absent_op"|1300000..0|view|0/5|
+trace3.pfw.gz|name in ["target_op", "absent_op"]|-|pruner|1/1/5|0
+trace3.pfw.gz|name in ["target_op", "absent_op"]|-|batch|1/1/5|0
+trace3.pfw.gz|name in ["target_op", "absent_op"]|-|view|1/4|0
+trace3.pfw.gz|name in ["target_op", "absent_op"]|1050000..1150000|view|0/5|
+trace3.pfw.gz|name in ["target_op", "absent_op"]|0..1020000|view|0/5|
+trace3.pfw.gz|name in ["target_op", "absent_op"]|1300000..0|view|0/5|
+trace3.pfw.gz|not (name == "target_op")|-|pruner|1/1/5|0,1,2,3,4
+trace3.pfw.gz|not (name == "target_op")|-|batch|1/1/5|0,1,2,3,4
+trace3.pfw.gz|not (name == "target_op")|-|view|1/0|0,1,2,3,4
+trace3.pfw.gz|not (name == "target_op")|1050000..1150000|view|0/5|
+trace3.pfw.gz|not (name == "target_op")|0..1020000|view|0/5|
+trace3.pfw.gz|not (name == "target_op")|1300000..0|view|1/2|2,3,4
+trace3.pfw.gz|ts > 1150000 and ts < 1400000|-|pruner|1/1/5|0,1,2
+trace3.pfw.gz|ts > 1150000 and ts < 1400000|-|batch|1/1/5|0,1,2
+trace3.pfw.gz|ts > 1150000 and ts < 1400000|-|view|1/2|0,1,2
+trace3.pfw.gz|ts > 1150000 and ts < 1400000|1050000..1150000|view|0/5|
+trace3.pfw.gz|ts > 1150000 and ts < 1400000|0..1020000|view|0/5|
+trace3.pfw.gz|ts > 1150000 and ts < 1400000|1300000..0|view|1/4|2
+trace3.pfw.gz|ts >= 1400000 and ts <= 1450000|-|pruner|1/1/5|2
+trace3.pfw.gz|ts >= 1400000 and ts <= 1450000|-|batch|1/1/5|2
+trace3.pfw.gz|ts >= 1400000 and ts <= 1450000|-|view|1/4|2
+trace3.pfw.gz|ts >= 1400000 and ts <= 1450000|1050000..1150000|view|0/5|
+trace3.pfw.gz|ts >= 1400000 and ts <= 1450000|0..1020000|view|0/5|
+trace3.pfw.gz|ts >= 1400000 and ts <= 1450000|1300000..0|view|1/4|2
+trace3.pfw.gz|not (cat == "COMPUTE")|-|pruner|1/1/5|0,1,2,3,4
+trace3.pfw.gz|not (cat == "COMPUTE")|-|batch|1/1/5|0,1,2,3,4
+trace3.pfw.gz|not (cat == "COMPUTE")|-|view|1/0|0,1,2,3,4
+trace3.pfw.gz|not (cat == "COMPUTE")|1050000..1150000|view|0/5|
+trace3.pfw.gz|not (cat == "COMPUTE")|0..1020000|view|0/5|
+trace3.pfw.gz|not (cat == "COMPUTE")|1300000..0|view|1/2|2,3,4
+trace3.pfw.gz|name == "thread_name"|-|pruner|1/0/5|
+trace3.pfw.gz|name == "thread_name"|-|batch|1/0/5|
+trace3.pfw.gz|name == "thread_name"|-|view|0/5|
+trace3.pfw.gz|name == "thread_name"|1050000..1150000|view|0/5|
+trace3.pfw.gz|name == "thread_name"|0..1020000|view|0/5|
+trace3.pfw.gz|name == "thread_name"|1300000..0|view|0/5|
+trace3.pfw.gz|resolved.fhash.path == "/data/b.dat"|-|pruner|1/1/5|0,1,2,3,4
+trace3.pfw.gz|resolved.fhash.path == "/data/b.dat"|-|batch|1/1/5|0,1,2,3,4
+trace3.pfw.gz|resolved.fhash.path == "/data/b.dat"|-|view|1/1|1,2,3,4
+trace3.pfw.gz|resolved.fhash.path == "/data/b.dat"|1050000..1150000|view|0/5|
+trace3.pfw.gz|resolved.fhash.path == "/data/b.dat"|0..1020000|view|0/5|
+trace3.pfw.gz|resolved.fhash.path == "/data/b.dat"|1300000..0|view|1/2|2,3,4
+trace3.pfw.gz|resolved.fhash.path != "/data/a.dat"|-|pruner|1/1/5|0,1,2,3,4
+trace3.pfw.gz|resolved.fhash.path != "/data/a.dat"|-|batch|1/1/5|0,1,2,3,4
+trace3.pfw.gz|resolved.fhash.path != "/data/a.dat"|-|view|1/0|0,1,2,3,4
+trace3.pfw.gz|resolved.fhash.path != "/data/a.dat"|1050000..1150000|view|0/5|
+trace3.pfw.gz|resolved.fhash.path != "/data/a.dat"|0..1020000|view|0/5|
+trace3.pfw.gz|resolved.fhash.path != "/data/a.dat"|1300000..0|view|1/2|2,3,4
+trace3.pfw.gz|resolved.hhash.name in ["node-2"]|-|pruner|1/1/5|0,1,2,3,4
+trace3.pfw.gz|resolved.hhash.name in ["node-2"]|-|batch|1/1/5|0,1,2,3,4
+trace3.pfw.gz|resolved.hhash.name in ["node-2"]|-|view|1/0|0,1,2,3,4
+trace3.pfw.gz|resolved.hhash.name in ["node-2"]|1050000..1150000|view|0/5|
+trace3.pfw.gz|resolved.hhash.name in ["node-2"]|0..1020000|view|0/5|
+trace3.pfw.gz|resolved.hhash.name in ["node-2"]|1300000..0|view|1/2|2,3,4
+trace3.pfw.gz|resolved.fhash.path like "%b.dat"|-|pruner|1/1/5|0,1,2,3,4
+trace3.pfw.gz|resolved.fhash.path like "%b.dat"|-|batch|1/1/5|0,1,2,3,4
+trace3.pfw.gz|resolved.fhash.path like "%b.dat"|-|view|1/1|1,2,3,4
+trace3.pfw.gz|resolved.fhash.path like "%b.dat"|1050000..1150000|view|0/5|
+trace3.pfw.gz|resolved.fhash.path like "%b.dat"|0..1020000|view|0/5|
+trace3.pfw.gz|resolved.fhash.path like "%b.dat"|1300000..0|view|1/2|2,3,4
+trace3.pfw.gz|resolved.fhash.path == "/data/a.dat" and name == "read"|-|pruner|1/0/5|
+trace3.pfw.gz|resolved.fhash.path == "/data/a.dat" and name == "read"|-|batch|1/0/5|
+trace3.pfw.gz|resolved.fhash.path == "/data/a.dat" and name == "read"|-|view|0/5|
+trace3.pfw.gz|resolved.fhash.path == "/data/a.dat" and name == "read"|1050000..1150000|view|0/5|
+trace3.pfw.gz|resolved.fhash.path == "/data/a.dat" and name == "read"|0..1020000|view|0/5|
+trace3.pfw.gz|resolved.fhash.path == "/data/a.dat" and name == "read"|1300000..0|view|0/5|

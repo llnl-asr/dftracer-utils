@@ -38,3 +38,18 @@
    ...
    obj:*/libz.so*
 }
+
+# --- RocksDB: a Version with no levels owns an empty files_ array ---------
+# VersionStorageInfo allocates `new std::vector<FileMetaData*>[num_levels]`;
+# for the placeholder versions a read-only open creates with zero levels the
+# block holds only the array cookie, so the one pointer to it points at its
+# end and Memcheck reports it as lost. The destructor frees it; the macOS
+# leaks tool, which follows such pointers, reports nothing.
+{
+   rocksdb-version-zero-level-files
+   Memcheck:Leak
+   match-leak-kinds: definite
+   fun:_Znam
+   fun:_ZN7rocksdb18VersionStorageInfoC*
+}
+}

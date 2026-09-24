@@ -30,9 +30,7 @@ namespace dftracer::utils {
 class StringIntern;
 }
 
-namespace dftracer::utils::trace::indexing {
-class BloomFilterCache;
-}
+namespace dftracer::utils::index::extensions {}
 
 namespace dftracer::utils::json {
 class JsonValue;
@@ -78,7 +76,11 @@ struct GroupKey {
         Field,
         /// A column the plan computes per event from other fields; `arg`
         /// names it. Its values keep their type.
-        Expr
+        Expr,
+        /// A `resolved.<key field>.<field>` column named by `arg`: grouped
+        /// on the key field and relabeled to the dictionary field after
+        /// aggregation, like FilePath.
+        Resolved
     };
     /// Value transform applied to the resolved group value, before the
     /// merge key is built. Coarsens the grain (many values fold to one), so
@@ -109,6 +111,9 @@ struct GroupKey {
     }
     static GroupKey field(std::string name) {
         return {Kind::Field, std::move(name)};
+    }
+    static GroupKey resolved(std::string name) {
+        return {Kind::Resolved, std::move(name)};
     }
 };
 
@@ -387,24 +392,17 @@ class ViewSession {
         Query predicate,
         std::function<void(P&, const json::JsonValue&, std::string_view)> f,
         std::function<P(P&&, P&&)> combine) {
-        auto out = std::make_shared<P>();
-        auto partials = std::make_shared<std::vector<std::shared_ptr<P>>>();
-        attach_fold(
-            std::move(predicate),
-            [f, partials]() {
-                auto p = std::make_shared<P>();
-                partials->push_back(p);
-                return [f, p](const json::JsonValue& jv, std::string_view raw) {
-                    f(*p, jv, raw);
-                };
-            },
-            [partials, out, combine = std::move(combine)]() {
-                P acc{};
-                for (const auto& p : *partials)
-                    acc = combine(std::move(acc), std::move(*p));
-                *out = std::move(acc);
-            });
-        return {out, executed_};
+        return fold_into<P>(std::move(predicate), std::move(f),
+                            std::move(combine));
+    }
+
+    /// fold() over the events the base view selects, as collect() does: its
+    /// filters and phase (data events unless phase() selects metadata).
+    template <class P>
+    Deferred<P> fold(
+        std::function<void(P&, const json::JsonValue&, std::string_view)> f,
+        std::function<P(P&&, P&&)> combine) {
+        return fold_into<P>(std::nullopt, std::move(f), std::move(combine));
     }
 
     /// fold() overload taking a unified field predicate (F("dur") > 1000).
@@ -485,11 +483,37 @@ class ViewSession {
                                    std::string dur = "dur",
                                    std::string name = "name");
 
+    template <class P>
+    Deferred<P> fold_into(
+        std::optional<Query> predicate,
+        std::function<void(P&, const json::JsonValue&, std::string_view)> f,
+        std::function<P(P&&, P&&)> combine) {
+        auto out = std::make_shared<P>();
+        auto partials = std::make_shared<std::vector<std::shared_ptr<P>>>();
+        attach_fold(
+            std::move(predicate),
+            [f = std::move(f), partials]() {
+                auto p = std::make_shared<P>();
+                partials->push_back(p);
+                return [f, p](const json::JsonValue& jv, std::string_view raw) {
+                    f(*p, jv, raw);
+                };
+            },
+            [partials, out, combine = std::move(combine)]() {
+                P acc{};
+                for (const auto& p : *partials)
+                    acc = combine(std::move(acc), std::move(*p));
+                *out = std::move(acc);
+            });
+        return {out, executed_};
+    }
+
     /// Type-erased seam behind fold(): attach one branch to the run. The engine
     /// (BranchHooks etc.) stays internal; defined in the .cpp. `make_consumer`
-    /// is called once per scan worker, serially, before the scan starts.
+    /// is called once per scan worker, serially, before the scan starts. With
+    /// no predicate the branch takes the base view's selection.
     void attach_fold(
-        Query predicate,
+        std::optional<Query> predicate,
         std::function<
             std::function<void(const json::JsonValue&, std::string_view)>()>
             make_consumer,
@@ -523,6 +547,25 @@ struct ColumnInfo {
     std::string name;  ///< Dotted leaf path (e.g. "hostname", "pos.x").
     std::string type;  ///< "int64", "float64", or "string".
 };
+
+/// One path of a View's schema tree, from the index.
+struct SchemaLeaf {
+    /// The JSON path as the records write it (`io.off`, `hosts.1`).
+    std::string path;
+    /// Observed type: "null", "bool", "int", "uint", "float", "string" or
+    /// "mixed"; empty when no file holds the path.
+    std::string type;
+    /// Records holding the path non-null, summed over the files; unset for a
+    /// json field at an object or array, which the index does not count.
+    std::optional<std::uint64_t> count;
+    /// The declared field's name and type; empty when undeclared.
+    std::string field;
+    std::string declared_type;
+};
+
+/// `leaves` as a JSON array of objects with path, type, count, field and
+/// declared_type (null when empty or unset).
+std::string schema_tree_json(const std::vector<SchemaLeaf>& leaves);
 
 /// Collects several plans together: record them with collect(), then
 /// execute() once. Plans over the same trace base share one scan, as
@@ -606,10 +649,10 @@ class View : public dataframe::LazyOps<View> {
     View();
 
     static View from_file(std::string file_path, std::string index_path = "");
-    static View from_files(std::vector<ViewFile> files,
-                           indexing::BloomFilterCache* bloom_cache = nullptr);
-    /// Scans `dir` recursively for .pfw.gz traces, sorted by path; each
-    /// file's index resolves under `index_path` (empty = beside the trace).
+    static View from_files(std::vector<ViewFile> files);
+    /// Scans `dir` recursively for .pfw.gz, .jsonl.gz and .ndjson.gz files,
+    /// sorted by path; each file's index resolves under `index_path` (empty
+    /// = beside the trace). The files must share one record_schema.
     static coro::CoroTask<View> from_directory(std::string dir,
                                                std::string index_path = "");
 
@@ -627,13 +670,20 @@ class View : public dataframe::LazyOps<View> {
     View filter(const FieldExpr& pred) const;
     View query(const std::string& dsl) const;
     View phase(Phase p) const;
+    /// Keep the data events that start in [begin, end) (raw ts). Busy,
+    /// concurrency, utilization and active instead take every event that
+    /// overlaps the window, clipped to it, and utilization divides by
+    /// end - begin. Metadata records are not windowed.
     View time_range(double begin, double end) const;
+    /// Key each event by the bucket of its start. Occupancy aggregates clip
+    /// an event to every bucket it overlaps instead, and utilization divides
+    /// by the bucket width.
     View time_bucket(std::uint64_t interval_us) const;
     View time_bucket(std::uint64_t interval_us, std::uint64_t origin_us) const;
     View time_bucket_min(std::uint64_t interval_us) const;
     /// Grid, in microseconds, that the occupancy aggregates (busy,
     /// concurrency, utilization, active) snap interval edges to; 0 is the
-    /// exact union. Honored only with a time_range.
+    /// exact union.
     View resolution(std::uint64_t cell_us) const;
     View time_scale(double ns_ratio) const;
     View group_by(std::vector<GroupKey> keys) const;
@@ -642,6 +692,10 @@ class View : public dataframe::LazyOps<View> {
     View agg_numeric_args() const;
     View agg_numeric_args(std::vector<AggSpec> reductions) const;
     View metadata(bool include) const;
+    /// Read the files as the registered record_schema `id` instead of their
+    /// recorded or detected one. Throws DFTUtilsException INVALID_ARGUMENT
+    /// for an unregistered id.
+    View record_schema(std::string id) const;
     View emit_all_metadata(bool v) const;
     View rollup_root(std::string dir) const;
     View views_root(std::string dir) const;
@@ -652,6 +706,10 @@ class View : public dataframe::LazyOps<View> {
     /// Index metadata only; no trace event is decoded.
     std::vector<std::string> columns() const;
     std::vector<ColumnInfo> column_info() const;
+    /// Every path the files hold, with types, counts and the record schema's
+    /// declared fields (count 0 when no file holds one), sorted by path, from
+    /// the index without scanning records.
+    std::vector<SchemaLeaf> schema_tree() const;
     TimeMetric time_metric() const;
     /// The spill budget set on this view, in bytes (0 = the default).
     std::uint64_t memory_budget_bytes() const;

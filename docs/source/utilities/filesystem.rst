@@ -15,8 +15,8 @@ input and return a ``coro::CoroTask<std::vector<FileEntry>>``, or can be
 called without a scope (they open their own on the current executor). A
 recursive scan fans out one child scan per subdirectory over the scope, so
 many directories are read concurrently on parallel filesystems such as
-Lustre. Index-artifact directories (``.dftindex``, ``.dftindex-views``,
-``.dftindex_staging``) are never descended into during a recursive scan,
+Lustre. Index-artifact directories (any name that starts with
+``.dftindex``, such as ``.dftindex-cache`` and ``.dftindex_staging``) are never descended into during a recursive scan,
 since they hold generated output, not source trace files.
 
 DirectoryScannerUtility

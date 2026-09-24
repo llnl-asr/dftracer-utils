@@ -35,10 +35,10 @@ class GzipLineByteStream : public GzipStream {
 
     void set_extend_to_line_boundary(bool v) { extend_to_line_boundary_ = v; }
 
-    void initialize(const std::string &gz_path, std::size_t start_bytes,
-                    std::size_t end_bytes,
-                    dftracer::utils::utilities::indexer::internal::Indexer
-                        &indexer) override {
+    void initialize(
+        const std::string &gz_path, std::size_t start_bytes,
+        std::size_t end_bytes,
+        dftracer::utils::index::gzip::CheckpointIndexer &indexer) override {
         GzipStream::initialize(gz_path, start_bytes, end_bytes, indexer);
         actual_start_bytes_ = start_bytes;
         current_position_ = start_bytes;

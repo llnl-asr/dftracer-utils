@@ -2,13 +2,13 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utils/string.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/fileio/indexed_file_reader_utility.h>
 #include <dftracer/utils/utilities/fileio/lines/streaming_line_reader.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
-#include <dftracer/utils/utilities/indexer/internal/helpers.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 
 #include <cinttypes>
 
@@ -40,9 +40,8 @@ MetadataCollectorUtility::operator()(
                 modified_input.index_path =
                     internal::determine_index_path(file_path, "");
             } else {
-                modified_input.index_path =
-                    dftracer::utils::utilities::indexer::internal::
-                        normalize_index_root(modified_input.index_path);
+                modified_input.index_path = dftracer::utils::index::store::
+                    internal::normalize_index_root(modified_input.index_path);
             }
             meta.index_path = modified_input.index_path;
             co_return co_await process_compressed(modified_input);
@@ -62,13 +61,13 @@ MetadataCollectorUtility::process_compressed(
     meta.index_path = input.index_path;
 
     try {
-        meta.format = dftracer::utils::utilities::indexer::internal::
-            IndexerFactory::detect_format(input.file_path);
+        meta.format = dftracer::utils::index::gzip::CheckpointIndexerFactory::
+            detect_format(input.file_path);
         meta.compressed_size = fs::file_size(input.file_path);
 
         meta.has_index = fs::exists(input.index_path);
 
-        std::shared_ptr<dftracer::utils::utilities::indexer::internal::Indexer>
+        std::shared_ptr<dftracer::utils::index::gzip::CheckpointIndexer>
             indexer;
         if (!meta.has_index || input.force_rebuild) {
             if (input.force_rebuild && meta.has_index) {
@@ -78,23 +77,26 @@ MetadataCollectorUtility::process_compressed(
             }
             DFTRACER_UTILS_LOG_DEBUG("Building index for: %s",
                                      input.file_path.c_str());
-            indexer = dftracer::utils::utilities::indexer::internal::
-                IndexerFactory::create(input.file_path, input.index_path,
-                                       input.checkpoint_size, true);
+            indexer =
+                dftracer::utils::index::gzip::CheckpointIndexerFactory::create(
+                    input.file_path, input.index_path, input.checkpoint_size,
+                    true);
             co_await indexer->build_async();
             meta.has_index = true;
         } else {
-            indexer = dftracer::utils::utilities::indexer::internal::
-                IndexerFactory::create(input.file_path, input.index_path,
-                                       input.checkpoint_size, false);
+            indexer =
+                dftracer::utils::index::gzip::CheckpointIndexerFactory::create(
+                    input.file_path, input.index_path, input.checkpoint_size,
+                    false);
             if (indexer->need_rebuild()) {
                 DFTRACER_UTILS_LOG_DEBUG("Index needs rebuild: %s",
                                          input.index_path.c_str());
                 meta.index_valid = false;
                 fs::remove_all(input.index_path);
-                indexer = dftracer::utils::utilities::indexer::internal::
-                    IndexerFactory::create(input.file_path, input.index_path,
-                                           input.checkpoint_size, true);
+                indexer =
+                    dftracer::utils::index::gzip::CheckpointIndexerFactory::
+                        create(input.file_path, input.index_path,
+                               input.checkpoint_size, true);
                 co_await indexer->build_async();
             }
         }

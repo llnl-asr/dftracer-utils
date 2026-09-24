@@ -137,3 +137,40 @@ TEST_CASE("evaluate - integer cross-type comparison") {
     // Negative query literal vs positive JSON value
     CHECK_FALSE(eval("pid == -1", R"({"pid":1234})"));
 }
+
+TEST_CASE("evaluate - any over array elements") {
+    const char* rec = R"({"tags":["a","b"],"sizes":[10,4096],"none":[]})";
+    CHECK(eval(R"(any(tags) == "a")", rec));
+    CHECK_FALSE(eval(R"(any(tags) == "c")", rec));
+    CHECK(eval(R"(any(tags) != "a")", rec));
+    CHECK_FALSE(eval(R"(not any(tags) == "a")", rec));
+    CHECK(eval("any(sizes) > 1000", rec));
+    CHECK_FALSE(eval("any(sizes) > 5000", rec));
+    CHECK(eval(R"(any(tags) in ["x", "b"])", rec));
+    CHECK(eval(R"(any(tags) not in ["a"])", rec));
+    CHECK(eval(R"(any(tags) like "b%")", rec));
+    CHECK_FALSE(eval(R"(any(none) == "a")", rec));
+    CHECK_FALSE(eval(R"(any(missing) == "a")", rec));
+    // A value that is not an array, and object elements, match nothing.
+    CHECK_FALSE(eval(R"(any(tags) == "a")", R"({"tags":"a"})"));
+    CHECK_FALSE(eval("any(items) == 1", R"({"items":[{"id":1}]})"));
+}
+
+TEST_CASE("evaluate - any over flattened positions in a value map") {
+    auto ast = parse(R"(any(tags) == "b")");
+    REQUIRE(ast.has_value());
+    ValueMap m;
+    m["tags.0"] = std::string("a");
+    m["tags.1"] = std::string("b");
+    m["tagsx.0"] = std::string("b");
+    CHECK(evaluate(**ast, m));
+    ValueMap other;
+    other["tagsx.0"] = std::string("b");
+    other["tags.name"] = std::string("b");
+    CHECK_FALSE(evaluate(**ast, other));
+    auto args = parse("any(args.sizes) > 100");
+    REQUIRE(args.has_value());
+    ValueMap bare;
+    bare["sizes.3"] = std::int64_t{4096};
+    CHECK(evaluate(**args, bare));
+}

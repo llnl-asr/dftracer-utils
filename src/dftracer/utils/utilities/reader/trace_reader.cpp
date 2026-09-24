@@ -1,15 +1,16 @@
 #include <dftracer/utils/core/common/archive_format.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/utils/string.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/index/plan/prefilter.h>
+#include <dftracer/utils/index/plan/prune.h>
+#include <dftracer/utils/index/plan/resolved_field_rewriter.h>
+#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/query/query.h>
-#include <dftracer/utils/trace/indexing/chunk_pruner_utility.h>
-#include <dftracer/utils/trace/indexing/resolved_field_rewriter.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
-#include <dftracer/utils/utilities/indexer/internal/helpers.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 #include <dftracer/utils/utilities/reader/error.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
@@ -31,15 +32,10 @@
 namespace dftracer::utils::utilities::reader {
 
 namespace dftu_internal = trace::internal;
-namespace indexing = trace::indexing;
-using indexer::internal::IndexerFactory;
+using dftracer::utils::index::gzip::CheckpointIndexerFactory;
 using json::JsonValue;
 using query::Query;
-using trace::indexing::ChunkPrunerInput;
-using trace::indexing::ChunkPrunerUtility;
 
-using internal::build_prefilter;
-using internal::LinePrefilter;
 using internal::ondemand_to_literal;
 using internal::read_chunks_indexed;
 using internal::strip_ndjson_bookends;
@@ -75,7 +71,7 @@ struct LineRange {
 coro::AsyncGenerator<Line> yield_lines_from_stream(
     std::unique_ptr<internal::ReaderStream> stream, std::size_t start_line_num,
     const Query* query, bool chunk_prune_only = false,
-    const LinePrefilter* prefilter = nullptr) {
+    const index::plan::Prefilter* prefilter = nullptr) {
     std::size_t line_num = start_line_num;
     while (!stream->done()) {
         auto chunk = co_await stream->read_async();
@@ -120,7 +116,7 @@ coro::AsyncGenerator<Line> yield_lines_from_stream(
 coro::AsyncGenerator<Line> yield_lines_from_ranges(
     std::shared_ptr<internal::Reader> reader, std::vector<LineRange> ranges,
     std::size_t buffer_size, Query query, bool chunk_prune_only = false,
-    LinePrefilter prefilter = {}) {
+    index::plan::Prefilter prefilter = {}) {
     for (const auto& range : ranges) {
         auto stream =
             reader->stream(internal::StreamConfig()
@@ -144,7 +140,7 @@ coro::AsyncGenerator<Line> yield_lines_from_ranges(
 // simdjson iterate_many over each chunk instead of parsing line by line.
 coro::AsyncGenerator<std::span<const char>> yield_chunks_from_stream(
     std::unique_ptr<internal::ReaderStream> stream,
-    const LinePrefilter* prefilter = nullptr) {
+    const index::plan::Prefilter* prefilter = nullptr) {
     while (!stream->done()) {
         auto chunk = co_await stream->read_async();
         if (chunk.empty()) break;
@@ -159,7 +155,7 @@ coro::AsyncGenerator<std::span<const char>> yield_chunks_from_stream(
 
 coro::AsyncGenerator<std::span<const char>> yield_chunks_from_ranges(
     std::shared_ptr<internal::Reader> reader, std::vector<LineRange> ranges,
-    std::size_t buffer_size, LinePrefilter prefilter = {}) {
+    std::size_t buffer_size, index::plan::Prefilter prefilter = {}) {
     for (const auto& range : ranges) {
         auto stream =
             reader->stream(internal::StreamConfig()
@@ -181,17 +177,18 @@ coro::AsyncGenerator<Line> read_lines_indexed(
     bool chunk_prune_only = false) {
     // Keep RocksDB alive for the generator's lifetime so per-method opens
     // in GzipIndexer reuse DBManager's cached handle.
-    std::optional<indexer::IndexDatabase> db_keep_alive;
+    std::optional<dftracer::utils::index::store::IndexDatabase> db_keep_alive;
     if (!index_path.empty()) {
         try {
             db_keep_alive.emplace(
                 index_path,
-                dftracer::utils::utilities::indexer::IndexOpenMode::ReadOnly);
+                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
         } catch (...) {
         }
     }
 
-    LinePrefilter prefilter = query ? build_prefilter(*query) : LinePrefilter{};
+    index::plan::Prefilter prefilter =
+        query ? index::plan::Prefilter(*query) : index::plan::Prefilter{};
     auto range_type = config.has_line_range() ? internal::RangeType::LINE_RANGE
                                               : internal::RangeType::BYTE_RANGE;
     std::size_t start =
@@ -212,20 +209,21 @@ coro::AsyncGenerator<Line> read_lines_indexed(
 
     if (query && !index_path.empty() &&
         range_type == internal::RangeType::BYTE_RANGE) {
-        ChunkPrunerInput pruner_input{index_path, file_path, *query, nullptr};
-        ChunkPrunerUtility pruner;
-        auto pruner_out = co_await pruner(pruner_input);
-        if (pruner_out.success && !pruner_out.file_may_match) {
-            co_return;
-        }
+        auto pruned = co_await dftracer::utils::index::plan::prune_file(
+            {.index_path = index_path,
+             .file_path = file_path,
+             .query = &*query,
+             .metadata = dftracer::utils::index::plan::MetadataUse::ALL});
+        if (!pruned->file_may_match) co_return;
 
-        if (pruner_out.success && !pruner_out.candidate_checkpoints.empty() &&
-            pruner_out.candidate_checkpoints.size() <
-                pruner_out.total_checkpoints) {
-            indexer::IndexDatabase idx_db(
+        if (!pruned->all_chunks &&
+            pruned->candidates.size() < pruned->total_chunks) {
+            dftracer::utils::index::store::IndexDatabase idx_db(
                 index_path,
-                dftracer::utils::utilities::indexer::IndexOpenMode::ReadOnly);
-            auto logical = indexer::internal::get_logical_path(file_path);
+                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
+            auto logical =
+                dftracer::utils::index::store::internal::get_logical_path(
+                    file_path);
             int fid = idx_db.get_file_info_id(logical);
 
             if (fid >= 0) {
@@ -234,7 +232,7 @@ coro::AsyncGenerator<Line> read_lines_indexed(
                 std::vector<LineRange> ranges;
                 std::uint64_t prev_idx = UINT64_MAX;
 
-                for (auto ckpt_idx : pruner_out.candidate_checkpoints) {
+                for (auto ckpt_idx : pruned->candidates) {
                     if (ckpt_idx >= spans.size()) continue;
                     const auto& ckpt = spans[ckpt_idx];
 
@@ -313,17 +311,18 @@ coro::AsyncGenerator<std::span<const char>> read_chunks_indexed(
     bool extend_to_line_boundary) {
     // Keep RocksDB alive for the generator's lifetime so per-method opens
     // in GzipIndexer reuse DBManager's cached handle.
-    std::optional<indexer::IndexDatabase> db_keep_alive;
+    std::optional<dftracer::utils::index::store::IndexDatabase> db_keep_alive;
     if (!index_path.empty()) {
         try {
             db_keep_alive.emplace(
                 index_path,
-                dftracer::utils::utilities::indexer::IndexOpenMode::ReadOnly);
+                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
         } catch (...) {
         }
     }
 
-    LinePrefilter prefilter = query ? build_prefilter(*query) : LinePrefilter{};
+    index::plan::Prefilter prefilter =
+        query ? index::plan::Prefilter(*query) : index::plan::Prefilter{};
     auto range_type = config.has_line_range() ? internal::RangeType::LINE_RANGE
                                               : internal::RangeType::BYTE_RANGE;
     std::size_t start =
@@ -343,20 +342,21 @@ coro::AsyncGenerator<std::span<const char>> read_chunks_indexed(
     }
 
     if (query && !index_path.empty() && !config.skip_pruning) {
-        ChunkPrunerInput pruner_input{index_path, file_path, *query, nullptr};
-        ChunkPrunerUtility pruner;
-        auto pruner_out = co_await pruner(pruner_input);
-        if (pruner_out.success && !pruner_out.file_may_match) {
-            co_return;
-        }
+        auto pruned = co_await dftracer::utils::index::plan::prune_file(
+            {.index_path = index_path,
+             .file_path = file_path,
+             .query = &*query,
+             .metadata = dftracer::utils::index::plan::MetadataUse::ALL});
+        if (!pruned->file_may_match) co_return;
 
-        if (pruner_out.success && !pruner_out.candidate_checkpoints.empty() &&
-            pruner_out.candidate_checkpoints.size() <
-                pruner_out.total_checkpoints) {
-            indexer::IndexDatabase idx_db(
+        if (!pruned->all_chunks &&
+            pruned->candidates.size() < pruned->total_chunks) {
+            dftracer::utils::index::store::IndexDatabase idx_db(
                 index_path,
-                dftracer::utils::utilities::indexer::IndexOpenMode::ReadOnly);
-            auto logical = indexer::internal::get_logical_path(file_path);
+                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
+            auto logical =
+                dftracer::utils::index::store::internal::get_logical_path(
+                    file_path);
             int fid = idx_db.get_file_info_id(logical);
 
             if (fid >= 0) {
@@ -364,7 +364,7 @@ coro::AsyncGenerator<std::span<const char>> read_chunks_indexed(
 
                 std::vector<LineRange> ranges;
                 std::uint64_t prev_idx = UINT64_MAX;
-                for (auto ckpt_idx : pruner_out.candidate_checkpoints) {
+                for (auto ckpt_idx : pruned->candidates) {
                     if (ckpt_idx >= spans.size()) continue;
                     const auto& ckpt = spans[ckpt_idx];
                     // Intersect with the caller's window (byte or line) so
@@ -429,7 +429,7 @@ TraceReader::TraceReader(TraceReaderConfig config)
 }
 
 void TraceReader::probe_index() {
-    format_ = IndexerFactory::detect_format(config_.file_path);
+    format_ = CheckpointIndexerFactory::detect_format(config_.file_path);
     index_path_ = dftu_internal::determine_index_path(config_.file_path,
                                                       config_.index_dir);
     has_index_ = format_ == ArchiveFormat::GZIP && fs::exists(index_path_);
@@ -439,11 +439,12 @@ void TraceReader::probe_index() {
     // rather than trusted on existence alone.
     if (has_index_) {
         try {
-            indexer::IndexDatabase db(
+            dftracer::utils::index::store::IndexDatabase db(
                 index_path_,
-                dftracer::utils::utilities::indexer::IndexOpenMode::ReadOnly);
+                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
             if (db.check_freshness(config_.file_path) !=
-                indexer::IndexDatabase::Freshness::Fresh) {
+                dftracer::utils::index::store::IndexDatabase::Freshness::
+                    Fresh) {
                 has_index_ = false;
             }
         } catch (...) {
@@ -506,8 +507,8 @@ std::size_t TraceReader::get_num_lines() {
 }
 
 std::shared_ptr<internal::Reader> TraceReader::create_indexed_reader() {
-    auto indexer = IndexerFactory::create(config_.file_path, index_path_,
-                                          config_.checkpoint_size, false);
+    auto indexer = CheckpointIndexerFactory::create(
+        config_.file_path, index_path_, config_.checkpoint_size, false);
     return internal::ReaderFactory::create(indexer);
 }
 
@@ -552,21 +553,14 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
         query = std::move(*parsed);
     }
 
-    // Resolve virtual fields (resolved.*/r.*) to concrete hash in-clauses via
-    // the index before either the pruner or the per-event evaluator sees the
-    // query, so both operate on plain fhash/hhash/shash predicates.
+    // Resolve `resolved.` columns to key in-clauses through the index
+    // dictionaries before the query drives pruning or per-event evaluation.
     if (query && has_index_ && !index_path_.empty() &&
-        indexing::has_resolved_fields(*query)) {
-        try {
-            indexer::IndexDatabase db(
-                index_path_,
-                dftracer::utils::utilities::indexer::IndexOpenMode::ReadOnly);
-            if (auto rewritten =
-                    indexing::rewrite_resolved_fields(*query, db)) {
-                query = std::move(*rewritten);
-            }
-        } catch (...) {
-        }
+        dftracer::utils::index::plan::has_resolved_fields(*query)) {
+        if (auto rewritten =
+                dftracer::utils::index::plan::rewrite_resolved_fields(
+                    *query, index_path_, config_.file_path))
+            query = std::move(*rewritten);
     }
 
     // chunk_prune_only path: dim_stats already proved every event with the
@@ -654,8 +648,9 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
                                     fields, *query, query_has_dotted, key,
                                     nk_r.value(), nv_r.value());
                             }
-                        } else if (query->references(key)) {
-                            fields[std::string(key)] = ondemand_to_literal(val);
+                        } else {
+                            internal::store_referenced(fields, *query, key, val,
+                                                       type);
                         }
                     }
                     if (!query->evaluate(fields)) continue;
@@ -691,15 +686,15 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
         if (query) {
             query::ValueMap fields;
             std::vector<std::string> nested_keys;
-            parser.for_each_field(
-                [&](std::string_view key, simdjson::ondemand::value val) {
-                    auto type = val.type().value_unsafe();
-                    if (type == simdjson::ondemand::json_type::object) {
-                        nested_keys.emplace_back(key);
-                    } else if (query->references(key)) {
-                        fields[std::string(key)] = ondemand_to_literal(val);
-                    }
-                });
+            parser.for_each_field([&](std::string_view key,
+                                      simdjson::ondemand::value val) {
+                auto type = val.type().value_unsafe();
+                if (type == simdjson::ondemand::json_type::object) {
+                    nested_keys.emplace_back(key);
+                } else {
+                    internal::store_referenced(fields, *query, key, val, type);
+                }
+            });
             for (auto& nk : nested_keys) {
                 parser.rewind();
                 parser.for_each_field(nk, [&](std::string_view key,
@@ -721,12 +716,13 @@ coro::AsyncGenerator<std::span<const char>> TraceReader::read_raw(
     if (has_index_) {
         // Keep RocksDB alive for the generator's lifetime so per-method
         // opens in GzipIndexer reuse DBManager's cached handle.
-        std::optional<indexer::IndexDatabase> db_keep_alive;
+        std::optional<dftracer::utils::index::store::IndexDatabase>
+            db_keep_alive;
         if (!index_path_.empty()) {
             try {
-                db_keep_alive.emplace(index_path_,
-                                      dftracer::utils::utilities::indexer::
-                                          IndexOpenMode::ReadOnly);
+                db_keep_alive.emplace(
+                    index_path_,
+                    dftracer::utils::index::store::IndexOpenMode::ReadOnly);
             } catch (...) {
             }
         }
@@ -753,13 +749,12 @@ coro::AsyncGenerator<std::span<const char>> TraceReader::read_raw(
             range_type == internal::RangeType::BYTE_RANGE) {
             auto parsed = Query::from_string(config.query);
             if (!parsed) throw query::QueryParseError(parsed.error());
-            ChunkPrunerInput pruner_input{index_path_, config_.file_path,
-                                          std::move(*parsed), nullptr};
-            ChunkPrunerUtility pruner;
-            auto pruner_out = co_await pruner(pruner_input);
-            if (pruner_out.success && !pruner_out.file_may_match) {
-                co_return;
-            }
+            auto pruned = co_await dftracer::utils::index::plan::prune_file(
+                {.index_path = index_path_,
+                 .file_path = config_.file_path,
+                 .query = &*parsed,
+                 .metadata = dftracer::utils::index::plan::MetadataUse::ALL});
+            if (!pruned->file_may_match) co_return;
         }
 
         auto stream = reader->stream(internal::StreamConfig()

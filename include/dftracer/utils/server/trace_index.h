@@ -4,11 +4,11 @@
 #include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/coro/async_mutex.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/server/viz_result_cache.h>
 #include <dftracer/utils/server/viz_summary.h>
-#include <dftracer/utils/trace/indexing/bloom_filter_cache.h>
 #include <dftracer/utils/trace/time_metric.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
 
 #include <atomic>
 #include <cstddef>
@@ -17,6 +17,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -48,8 +49,9 @@ class TraceIndex {
     /// Per-file chunk metadata read once from the immutable index: byte spans
     /// and per-chunk statistics, keyed by checkpoint index. Shared read-only.
     struct FileChunkMeta {
-        std::vector<utilities::indexer::ChunkSpan> spans;
-        std::vector<utilities::indexer::ChunkStatisticsResult> stats;
+        std::vector<dftracer::utils::index::gzip::ChunkSpan> spans;
+        std::vector<dftracer::utils::index::schemas::dft::ChunkStatisticsResult>
+            stats;
     };
 
     TraceIndex(const std::string& directory, const std::string& index_dir,
@@ -78,8 +80,13 @@ class TraceIndex {
     const std::string& index_dir() const { return index_dir_; }
     std::size_t max_concurrent() const { return max_concurrent_; }
 
-    using BloomCache = dftracer::utils::trace::indexing::BloomFilterCache;
-    BloomCache& bloom_cache() { return bloom_cache_; }
+    /// The record schema of the served files (a viewer reads one), from the
+    /// first file's index record or, without one, detected from the file;
+    /// dftracer before initialize() and for an empty directory.
+    const dftracer::utils::index::RecordSchema& record_schema() const {
+        return record_schema_ ? *record_schema_
+                              : dftracer::utils::index::get_schema("dftracer");
+    }
 
     /// Result cache for heavy viz endpoints. Immutable trace => never stale.
     VizResultCache& viz_cache() { return viz_cache_; }
@@ -117,12 +124,11 @@ class TraceIndex {
         viz_summary_state_.store(2, std::memory_order_release);
     }
 
-    /// Resolve a content hash (file/host/string) to its name via a point lookup
-    /// in the per-root index databases, which are opened once and kept. Empty
-    /// when no root knows the hash.
-    using HashType =
-        dftracer::utils::utilities::indexer::IndexDatabase::HashType;
-    std::string resolve_hash(HashType type, const std::string& hash);
+    /// `field` of row `key` of dictionary `dict`, by a point lookup in the
+    /// per-root index databases, which are opened once and kept. Empty when
+    /// no root knows the key.
+    std::string resolve(std::string_view dict, std::string_view field,
+                        const std::string& key);
 
     /// On-disk summary cache (index_dir/.dftviz_summary), keyed by a
     /// fingerprint of the current file set so a re-indexed trace invalidates
@@ -141,9 +147,9 @@ class TraceIndex {
     std::uint64_t global_min_ts_ = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t global_max_ts_ = 0;
     TimeMetric time_metric_ = TimeMetric::US;
+    const dftracer::utils::index::RecordSchema* record_schema_ = nullptr;
     std::size_t max_concurrent_;
     std::size_t checkpoint_size_;
-    BloomCache bloom_cache_;
     VizResultCache viz_cache_{VIZ_RESULT_CACHE_BYTES};
 
     std::mutex chunk_meta_mutex_;
@@ -154,7 +160,7 @@ class TraceIndex {
     std::unordered_map<std::string, std::string> hash_names_;
     std::unordered_map<
         std::string,
-        std::shared_ptr<dftracer::utils::utilities::indexer::IndexDatabase>>
+        std::shared_ptr<dftracer::utils::index::store::IndexDatabase>>
         hash_dbs_;
 
     coro::AsyncMutex viz_summary_mutex_;

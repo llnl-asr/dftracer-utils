@@ -3,8 +3,8 @@
 #include <dftracer/utils/core/coro/when_all.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_rechunker.h>
-#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <dftracer/utils/utilities/reader/internal/member_decode_cache.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
@@ -18,7 +18,7 @@
 #include <vector>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::indexer;
+using namespace dftracer::utils::index::build;
 namespace mdc = dftracer::utils::utilities::reader::internal;
 using dftracer::utils::utilities::reader::ReadConfig;
 using dftracer::utils::utilities::reader::TraceReader;
@@ -80,8 +80,8 @@ TEST_SUITE("member_cache_integration") {
                 auto config = std::make_shared<IndexBuildBatchConfig>();
                 config->file_paths = {gz};
                 config->index_dir = index_dir;
-                auto r = co_await IndexBatchBuilderUtility::process(
-                    &scope, std::move(config));
+                auto r =
+                    co_await BatchBuilder::process(&scope, std::move(config));
                 REQUIRE(r.indexed + r.skipped == 1);
                 co_return;
             });

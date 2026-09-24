@@ -168,7 +168,7 @@ The shard-set format
 ~~~~~~~~~~~~~~~~~~~~~
 
 A shard set is a directory holding a ``shards.json`` manifest
-(``IndexShardManifest``, ``dftracer/utils/trace/indexing/shard_manifest.h``):
+(written by ``IndexShardManifest``, which is internal to the index module):
 a ``schema_version`` plus a list of ``IndexShardEntry`` records, each naming
 one shard's ``path`` (relative to the manifest's directory), its closed
 ``file_id_min``/``file_id_max`` range, ``num_files``, and ``num_events``. Every

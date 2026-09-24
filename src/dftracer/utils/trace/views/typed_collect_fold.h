@@ -29,6 +29,7 @@ class TypedCollectFold : public Fold {
 
     bool accepts(const ScanShape&) const override { return true; }
     bool needs_args() const override { return false; }
+    bool wants_metadata() const override { return false; }
 
     std::unique_ptr<Fold> slice() const override {
         return std::make_unique<TypedCollectFold>(*intern_);

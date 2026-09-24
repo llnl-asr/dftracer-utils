@@ -56,6 +56,20 @@ TEST_SUITE("trace scan - lazy collect") {
             CHECK(bstr(subset, i, "cat") == "POSIX");
         CHECK(all_events.num_rows() == 50);
     }
+
+    TEST_CASE("sorting and reversing a filter that matches nothing") {
+        const auto& s = shared_trace();
+        const auto none = View::from_file(s.gz, s.idx)
+                              .metadata(false)
+                              .query(R"(cat == "NOPE")")
+                              .select({"name", "dur"});
+        CHECK(run(none.sort_by_multi({"dur", "name"},
+                                     std::vector<bool>{true, false})
+                      .slice(0, 10)
+                      .collect())
+                  .num_rows() == 0);
+        CHECK(run(none.lazy().reverse().collect()).num_rows() == 0);
+    }
 }
 
 // View: plan equality against the scan builders, source absorption and

@@ -14,6 +14,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // The scan Source: turn a plan into pruned, member-aligned candidate chunks and
@@ -54,7 +55,28 @@ struct ScanUnit {
     std::uint64_t checkpoint_idx = 0;
     std::size_t start_byte = 0;
     std::size_t end_byte = 0;
+    // The View query with resolved columns rewritten for this unit's index;
+    // null when there was nothing to rewrite.
+    std::shared_ptr<const query::Query> query;
 };
+
+// The record_schema every file of `plan` was indexed under, or is detected as
+// when unindexed. Throws INVALID_ARGUMENT when the files' record_schemas
+// differ.
+const dftracer::utils::index::RecordSchema& plan_record_schema(
+    const ViewPlan& plan);
+
+// Whether the plan's records are decoded by exact JSON path (a record_schema
+// other than dftracer's), so columns and fields are named by path.
+bool plan_by_path(const ViewPlan& plan);
+
+// The trace roles an operation reads. DURATION implies TIME.
+enum class TraceRole : std::uint8_t { TIME, DURATION };
+
+// Throws INVALID_ARGUMENT naming `op` when the files' record_schema binds no
+// path to `role` (a time role for TIME; time and duration for DURATION).
+void require_role(const ViewPlan& plan, std::string_view op,
+                  TraceRole role = TraceRole::TIME);
 
 // Fold the phase selector into the query: Events -> ph=="X", Counters ->
 // ph=="C", Any -> no constraint. ANDed with any user filter.
@@ -68,13 +90,16 @@ ViewDefinition make_vdef(const ViewPlan& plan, bool for_aggregation);
 
 bool is_cancelled(const ViewPlan& plan);
 
+// `q` applies unless the unit carries its rewritten query.
 ViewScannerInput make_scanner_input(const ScanUnit& u,
                                     const ViewDefinition& vdef,
                                     const std::optional<query::Query>& q);
 
 // Plan every file in parallel (metadata + prune) and flatten the surviving
 // candidates into a single work list; `skipped_out` gets the pruned-chunk
-// count.
+// count. Resolved columns are rewritten once per index before planning, and
+// each unit carries the rewritten query. Throws if an index cannot be read
+// for that rewrite.
 coro::CoroTask<std::vector<ScanUnit>> gather_units(const ViewPlan& plan,
                                                    const ViewDefinition& vdef,
                                                    std::uint64_t& skipped_out);

@@ -1,26 +1,26 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/trace/indexing/shard_manifest.h>
+#include <dftracer/utils/index/store/shard_manifest.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
 #include <string>
 
 using dftracer::utils::DFTUtilsException;
-using dftracer::utils::trace::IndexShardManifest;
-using dftracer::utils::trace::parse_manifest;
-using dftracer::utils::trace::read_shard_manifest;
-using dftracer::utils::trace::resolve_shard_set_root;
-using dftracer::utils::trace::SHARD_SET_DIRNAME;
-using dftracer::utils::trace::to_json;
-using dftracer::utils::trace::write_shard_manifest;
+using dftracer::utils::index::store::IndexShardManifest;
+using dftracer::utils::index::store::parse_manifest;
+using dftracer::utils::index::store::read_shard_manifest;
+using dftracer::utils::index::store::resolve_shard_set_root;
+using dftracer::utils::index::store::SHARD_SET_DIRNAME;
+using dftracer::utils::index::store::to_json;
+using dftracer::utils::index::store::write_shard_manifest;
 
 namespace {
 
 IndexShardManifest sample() {
     IndexShardManifest m;
-    m.schema_version = 8;
+    m.format_version = 8;
     m.shards.push_back({"shard-0000.dftindex", 0, 127, 128, 10482375});
     m.shards.push_back({"shard-0001.dftindex", 128, 200, 73, 512});
     return m;
@@ -35,7 +35,7 @@ TEST_SUITE("shard_manifest") {
         IndexShardManifest in = sample();
         IndexShardManifest out = parse_manifest(to_json(in));
 
-        CHECK(out.schema_version == in.schema_version);
+        CHECK(out.format_version == in.format_version);
         REQUIRE(out.shards.size() == in.shards.size());
         for (std::size_t i = 0; i < in.shards.size(); ++i) {
             CHECK(out.shards[i].path == in.shards[i].path);
@@ -48,9 +48,9 @@ TEST_SUITE("shard_manifest") {
 
     TEST_CASE("an empty manifest round-trips") {
         IndexShardManifest in;
-        in.schema_version = 8;
+        in.format_version = 8;
         IndexShardManifest out = parse_manifest(to_json(in));
-        CHECK(out.schema_version == 8);
+        CHECK(out.format_version == 8);
         CHECK(out.shards.empty());
     }
 
@@ -76,7 +76,7 @@ TEST_SUITE("shard_manifest") {
         write_shard_manifest(dir.path().string(), sample());
 
         IndexShardManifest second;
-        second.schema_version = 8;
+        second.format_version = 8;
         second.shards.push_back({"only.dftindex", 0, 0, 1, 1});
         write_shard_manifest(dir.path().string(), second);
 
@@ -88,7 +88,7 @@ TEST_SUITE("shard_manifest") {
 
     TEST_CASE("a path with quotes and control chars survives escaping") {
         IndexShardManifest in;
-        in.schema_version = 8;
+        in.format_version = 8;
         in.shards.push_back({"weird\"\\\n\tname.dftindex", 0, 0, 1, 1});
         IndexShardManifest out = parse_manifest(to_json(in));
         REQUIRE(out.shards.size() == 1);
@@ -118,7 +118,7 @@ TEST_SUITE("shard_manifest") {
     TEST_CASE("a shard entry missing its path throws") {
         CHECK_THROWS_AS(
             parse_manifest(
-                R"({"schema_version":8,"shards":[{"num_files":1}]})"),
+                R"({"format_version":8,"shards":[{"num_files":1}]})"),
             DFTUtilsException);
     }
 }

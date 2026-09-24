@@ -279,3 +279,40 @@ TEST_CASE("to_string round-trip - patterns") {
         CHECK(to_string(**result) == q);
     }
 }
+
+TEST_CASE("parse - any(path) with every field operator round-trips") {
+    for (const char* text :
+         {R"(any(tags) == "a")", R"(any(tags) != "a")", "any(sizes) > 10",
+          "any(sizes) <= 10", R"(any(tags) in ["a", "b"])",
+          R"(any(tags) not in ["a", "b"])", R"(any(tags) like "a%")",
+          R"(any(tags) ~ "^a")", R"("sub" in any(tags))",
+          R"((any(tags) == "a" and not (x == 1)))"}) {
+        auto ast = parse(text);
+        CAPTURE(text);
+        REQUIRE(ast.has_value());
+        CHECK(to_string(**ast) == text);
+    }
+    auto ast = parse(R"(any(args.tags) == "a")");
+    REQUIRE(ast.has_value());
+    const auto& cmp = std::get<CompareNode>((*ast)->data);
+    CHECK(cmp.field.any);
+    CHECK(cmp.field.path == "args.tags");
+}
+
+TEST_CASE("parse - a field named any still parses") {
+    auto ast = parse("any == 1");
+    REQUIRE(ast.has_value());
+    const auto& cmp = std::get<CompareNode>((*ast)->data);
+    CHECK_FALSE(cmp.field.any);
+    CHECK(cmp.field.path == "any");
+    CHECK_FALSE(parse("any( == 1").has_value());
+    CHECK_FALSE(parse("any(tags == 1").has_value());
+}
+
+TEST_CASE("field_node reads the any form") {
+    CHECK(field_node("any(tags)").any);
+    CHECK(field_node("any(tags)").path == "tags");
+    CHECK_FALSE(field_node("tags").any);
+    CHECK_FALSE(field_node("any()").any);
+    CHECK(field_text(field_node("any(a.b)")) == "any(a.b)");
+}

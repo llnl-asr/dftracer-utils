@@ -4,9 +4,9 @@
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/plugins/config.h>
 #include <dftracer/utils/plugins/plugins.h>
-#include <dftracer/utils/trace/indexing/resolve_and_build.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
@@ -293,8 +293,8 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
     // Normalize single-member inputs to multi-member gzip so each checkpoint is
     // a real member.
     if (!no_auto_index) {
-        auto norm = co_await indexing::normalize_members_for_ingest(
-            std::move(files), checkpoint_size);
+        auto norm = co_await dftracer::utils::index::build::
+            normalize_members_for_ingest(std::move(files), checkpoint_size);
         files = std::move(norm.files);
     }
 
@@ -322,8 +322,8 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
     auto task = make_task(
         [&](CoroScope& ctx) -> coro::CoroTask<void> {
             if (!no_auto_index)
-                co_await indexing::ensure_indexes_fresh(&ctx, "", files,
-                                                        index_dir);
+                co_await dftracer::utils::index::build::ensure_indexes_fresh(
+                    &ctx, "", files, index_dir);
             View view = View::from_files(view_files);
             auto run = co_await plugins->run(view);
             if (!run) {

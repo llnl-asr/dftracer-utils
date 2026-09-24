@@ -1,4 +1,10 @@
+#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
+#include <dftracer/utils/index/schemas/dft/agg/association_tracker.h>
+#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/index_database_sst_writer_context.h>
 #include <dftracer/utils/python/index_database.h>
+#include <dftracer/utils/python/py_agg_config.h>
 #include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_list_helpers.h>
 #include <dftracer/utils/python/py_method.h>
@@ -6,16 +12,13 @@
 #include <dftracer/utils/python/py_str_helpers.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/sst_distribution.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
-#include <dftracer/utils/utilities/indexer/index_database_sst_writer_context.h>
 
 #include <new>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
-using dftracer::utils::utilities::indexer::IndexDatabase;
-using dftracer::utils::utilities::indexer::SstArtifactRegistry;
+using dftracer::utils::index::store::IndexDatabase;
+using dftracer::utils::index::store::SstArtifactRegistry;
 
 static void IndexDatabase_dealloc(IndexDatabaseObject *self) {
     self->db.~shared_ptr<IndexDatabase>();
@@ -57,8 +60,8 @@ static PyObject *IndexDatabase_init_schema(IndexDatabaseObject *self,
     Py_RETURN_NONE;
 }
 
-static PyObject *IndexDatabase_register_files(IndexDatabaseObject *self,
-                                              PyObject *args, PyObject *kwds) {
+static PyObject *IndexDatabase_assign_file_ids(IndexDatabaseObject *self,
+                                               PyObject *args, PyObject *kwds) {
     static const char *kwlist[] = {"paths", NULL};
     PyObject *paths_obj;
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "O",
@@ -69,7 +72,8 @@ static PyObject *IndexDatabase_register_files(IndexDatabaseObject *self,
     if (!parse_str_list(paths_obj, "paths", paths)) return NULL;
 
     std::vector<int> ids;
-    if (!run_blocking_r([&] { return self->db->register_files(paths); }, ids)) {
+    if (!run_blocking_r([&] { return self->db->assign_file_ids(paths); },
+                        ids)) {
         return NULL;
     }
 
@@ -120,7 +124,7 @@ static PyObject *IndexDatabase_bulk_ingest(IndexDatabaseObject *self,
         return NULL;
     }
 
-    std::unordered_set<std::string> skip_cfs;
+    dftracer::utils::StringViewSet skip_cfs;
     if (skip_cfs_obj && skip_cfs_obj != Py_None) {
         PyObject *seq =
             PySequence_Fast(skip_cfs_obj, "skip_cfs must be an iterable");
@@ -143,51 +147,17 @@ static PyObject *IndexDatabase_bulk_ingest(IndexDatabaseObject *self,
     Py_RETURN_NONE;
 }
 
-static PyObject *IndexDatabase_write_agg_file_markers(IndexDatabaseObject *self,
-                                                      PyObject *args) {
-    PyObject *ids_obj;
-    if (!PyArg_ParseTuple(args, "O", &ids_obj)) return NULL;
-
-    PyObject *seq = PySequence_Fast(ids_obj, "file_ids must be an iterable");
-    if (!seq) return NULL;
-    Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
-    std::vector<int> file_ids;
-    file_ids.reserve(static_cast<std::size_t>(n));
-    for (Py_ssize_t i = 0; i < n; ++i) {
-        PyObject *item = PySequence_Fast_GET_ITEM(seq, i);
-        long v = PyLong_AsLong(item);
-        if (v == -1 && PyErr_Occurred()) {
-            Py_DECREF(seq);
-            return NULL;
-        }
-        file_ids.push_back(static_cast<int>(v));
-    }
-    Py_DECREF(seq);
-
-    if (!run_blocking([&] { self->db->write_agg_file_markers(file_ids); }))
-        return NULL;
-    Py_RETURN_NONE;
-}
-
-static PyObject *IndexDatabase_write_agg_global_config(
-    IndexDatabaseObject *self, PyObject *args, PyObject *kwds) {
-    static const char *kwlist[] = {"time_interval_us", "config_hash",
-                                   "group_by_file", NULL};
-    unsigned long long time_interval_us = 0;
-    unsigned int config_hash = 0;
-    int group_by_file = 1;
-    if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "K|Ip", const_cast<char **>(kwlist), &time_interval_us,
-            &config_hash, &group_by_file)) {
-        return NULL;
-    }
+static PyObject *IndexDatabase_write_agg_config(IndexDatabaseObject *self,
+                                                PyObject *args) {
+    PyObject *config_obj;
+    if (!PyArg_ParseTuple(args, "O", &config_obj)) return NULL;
+    const auto config = dftracer::utils::python::agg_config_from_py(config_obj);
     if (!run_blocking([&] {
-            self->db->write_agg_global_config(
-                static_cast<std::uint64_t>(time_interval_us),
-                static_cast<std::uint32_t>(config_hash), group_by_file != 0);
-        })) {
+            dftracer::utils::index::schemas::dft::agg::tier::write_config(
+                *self->db->db(), {config.time_interval_us, config.params_hash(),
+                                  config.group_by_file});
+        }))
         return NULL;
-    }
     Py_RETURN_NONE;
 }
 
@@ -219,14 +189,16 @@ static PyObject *IndexDatabase_write_aggregation_tracker(
         if (len > 0) blobs.emplace_back(buf, static_cast<std::size_t>(len));
     }
     Py_DECREF(seq);
-    if (!run_blocking([&] { self->db->write_aggregation_tracker(blobs); }))
+    if (!run_blocking([&] {
+            using dftracer::utils::index::schemas::dft::agg::AssociationTracker;
+            AssociationTracker unified;
+            for (const auto &b : blobs)
+                unified.merge(AssociationTracker::deserialize(b));
+            unified.finalize();
+            dftracer::utils::index::schemas::dft::agg::tier::write_tracker(
+                *self->db->db(), unified.serialize());
+        }))
         return NULL;
-    Py_RETURN_NONE;
-}
-
-static PyObject *IndexDatabase_rebuild_root_summaries(IndexDatabaseObject *self,
-                                                      PyObject * /*ignored*/) {
-    if (!run_blocking([&] { self->db->rebuild_root_summaries(); })) return NULL;
     Py_RETURN_NONE;
 }
 
@@ -259,12 +231,12 @@ static PyObject *IndexDatabase_find_stale_files(IndexDatabaseObject *self,
         Py_XDECREF(d);
         return NULL;
     }
-    PyObject *so = PyBool_FromLong(result.schema_outdated);
+    PyObject *so = PyBool_FromLong(result.format_outdated);
     PyObject *st = PyBool_FromLong(result.stale());
     PyDict_SetItemString(d, "changed", changed);
     PyDict_SetItemString(d, "added", added);
     PyDict_SetItemString(d, "removed", removed);
-    PyDict_SetItemString(d, "schema_outdated", so);
+    PyDict_SetItemString(d, "format_outdated", so);
     PyDict_SetItemString(d, "stale", st);
     Py_DECREF(changed);
     Py_DECREF(added);
@@ -276,17 +248,17 @@ static PyObject *IndexDatabase_find_stale_files(IndexDatabaseObject *self,
 
 static PyMethodDef IndexDatabase_methods[] = {
     {"init_schema", DFTU_PYCFUNCTION(IndexDatabase_init_schema), METH_NOARGS,
-     "Idempotently initialise the schema version key."},
-    {"register_files", DFTU_PYCFUNCTION(IndexDatabase_register_files),
+     "Idempotently write the format version and extension registry."},
+    {"assign_file_ids", DFTU_PYCFUNCTION(IndexDatabase_assign_file_ids),
      METH_VARARGS | METH_KEYWORDS,
-     "register_files(paths) -> list[int]\n"
-     "Register each path in the DEFAULT-CF file registry and return the "
-     "assigned file_ids. Idempotent for files with matching hash."},
+     "assign_file_ids(paths) -> list[int]\n"
+     "The file_id of each path: its registered id, or a newly reserved one. "
+     "The file record is written with the file's index data."},
     {"find_stale_files", DFTU_PYCFUNCTION(IndexDatabase_find_stale_files),
      METH_VARARGS | METH_KEYWORDS,
      "find_stale_files(paths) -> dict\n"
      "Stat-only (mtime + size) staleness check of the given trace paths "
-     "against the index. Returns {changed, added, removed, schema_outdated, "
+     "against the index. Returns {changed, added, removed, format_outdated, "
      "stale}."},
     {"reserve_file_id_range",
      DFTU_PYCFUNCTION(IndexDatabase_reserve_file_id_range), METH_VARARGS,
@@ -299,30 +271,16 @@ static PyMethodDef IndexDatabase_methods[] = {
      "skip_cfs is an optional iterable of CF names whose SSTs are left "
      "outside the unified DB (used by distributed builds to keep "
      "AGGREGATION/SYSTEM_METRICS SSTs addressable by manifest)."},
-    {"rebuild_root_summaries",
-     DFTU_PYCFUNCTION(IndexDatabase_rebuild_root_summaries), METH_NOARGS,
-     "Recompute ROOT_* summary column families from per-file CFs."},
-    {"write_agg_global_config",
-     DFTU_PYCFUNCTION(IndexDatabase_write_agg_global_config),
-     METH_VARARGS | METH_KEYWORDS,
-     "write_agg_global_config(time_interval_us, config_hash=0, "
-     "group_by_file=True) -> None\n"
-     "Write the AGG_GLOBAL_CONFIG_KEY marker into the AGGREGATION CF. "
-     "Required for `iter_arrow_dfanalyzer_all` on distributed builds "
-     "(which never materialise the key via worker SSTs) or "
-     "post-consolidate indices."},
-    {"write_agg_file_markers",
-     DFTU_PYCFUNCTION(IndexDatabase_write_agg_file_markers), METH_VARARGS,
-     "write_agg_file_markers(file_ids) -> None\n"
-     "Write per-file aggregation completion markers (\\xFF\\xFF + file_id) "
-     "into the AGGREGATION CF. Required after distributed_index otherwise "
-     "`ensure_indexed()` concludes aggregation is incomplete and re-runs "
-     "the entire build."},
+    {"write_agg_config", DFTU_PYCFUNCTION(IndexDatabase_write_agg_config),
+     METH_VARARGS,
+     "write_agg_config(aggregation_config) -> None\n"
+     "Record the aggregation config a distributed build aggregated its "
+     "files with. Each file's dftracer.agg entry comes with its SSTs."},
     {"write_aggregation_tracker",
      DFTU_PYCFUNCTION(IndexDatabase_write_aggregation_tracker), METH_VARARGS,
      "write_aggregation_tracker(blobs) -> None\n"
      "Merge a list of serialized AssociationTracker bytes and write the "
-     "result to the AGGREGATION CF under the `__tracker__` key."},
+     "result to the aggregation tier."},
     {NULL}};
 
 PyTypeObject IndexDatabaseType = {

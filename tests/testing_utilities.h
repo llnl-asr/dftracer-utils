@@ -77,6 +77,13 @@ typedef enum { TEST_FORMAT_GZIP = 0 } test_format_t;
 char* test_environment_create_test_gzip_file(test_environment_handle_t env);
 
 /**
+ * Create a dftracer trace (.gz) of `num_events` events and return the path
+ * Returns allocated string - caller must free
+ */
+char* test_environment_create_dft_gzip_file(test_environment_handle_t env,
+                                            int num_events);
+
+/**
  * Create a test file with specified format and return the path
  * Returns allocated string - caller must free
  */
@@ -168,9 +175,8 @@ bool compress_file_to_gzip_multimember(const std::string& input_file,
 
 /// Build the index for a single gzip trace via the batch pipeline, blocking.
 /// Returns true if indexed or already up to date. Empty `index_dir` writes
-/// next to the trace; a 0 argument means "default" for the sizing knobs.
+/// next to the trace; a 0 checkpoint size means the default.
 bool build_index(const std::string& gz, const std::string& index_dir = "",
-                 std::size_t sub_chunk_events = 0,
                  std::size_t checkpoint_size = 0);
 
 class TestEnvironment {

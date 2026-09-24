@@ -14,72 +14,25 @@ using query::Query;
 
 namespace {
 
-bool collect_and_eq_literals(const query::QueryNode& node,
-                             std::vector<std::string>& out) {
-    return std::visit(
-        [&out](const auto& n) -> bool {
-            using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, query::CompareNode>) {
-                if (n.op != query::CompareOp::EQ) return false;
-                std::string lit;
-                lit.reserve(n.field.path.size() + 16);
-                lit += '"';
-                lit += n.field.path;
-                lit += "\":";
-                const auto& val = n.value.value;
-                if (std::holds_alternative<std::string>(val)) {
-                    lit += '"';
-                    lit += std::get<std::string>(val);
-                    lit += '"';
-                } else if (std::holds_alternative<int64_t>(val)) {
-                    lit += std::to_string(std::get<int64_t>(val));
-                } else if (std::holds_alternative<uint64_t>(val)) {
-                    lit += std::to_string(std::get<uint64_t>(val));
-                } else if (std::holds_alternative<bool>(val)) {
-                    lit += std::get<bool>(val) ? "true" : "false";
-                } else {
-                    return false;  // double or other: skip pre-filter
-                }
-                out.push_back(std::move(lit));
-                return true;
-            } else if constexpr (std::is_same_v<T, query::AndNode>) {
-                return collect_and_eq_literals(*n.left, out) &&
-                       collect_and_eq_literals(*n.right, out);
-            }
-            return false;  // OrNode, NotNode, InNode, NotInNode, CompareNode
-                           // with non-EQ op: conservative skip
-        },
-        node.data);
-}
-
-// Top-level JSON keys in dftracer events. Anything else in the query DSL
-// (e.g. `epoch == 0`, `fhash == "..."`) refers to a field nested under
-// "args"; the same convention collect_query_fields relies on when it
-// folds nested object keys into the flat ValueMap.
-bool is_top_level_event_key(std::string_view k) {
-    return k == "id" || k == "name" || k == "cat" || k == "pid" || k == "tid" ||
-           k == "ts" || k == "dur" || k == "ph";
-}
-
-// Walk a CompareNode-with-EQ leaf into a probe. Returns false on
-// unsupported shapes (more than one '.' or a literal type the simdjson
-// get_X path can't compare directly).
+// Walk a CompareNode-with-EQ leaf into a probe. A bare key resolves as the
+// evaluator does, top level first and then under "args"; "args.<key>" reads
+// args only. Other dotted paths may name a nested object or a flat dotted
+// key, so they are left to the full evaluator (returns false).
 bool compile_eq_leaf(const query::CompareNode& n, CompiledEqProbe& out) {
     if (n.op != query::CompareOp::EQ) return false;
-    auto dot = n.field.path.find('.');
+    const std::string& path = n.field.path;
+    const auto dot = path.find('.');
     if (dot == std::string::npos) {
-        if (is_top_level_event_key(n.field.path)) {
-            out.top_key = n.field.path;
-            out.nested_key.clear();
-        } else {
-            // Bare arg-style key: foo -> args.foo.
-            out.top_key = "args";
-            out.nested_key = n.field.path;
-        }
+        out.top_key = path;
+        out.nested_key.clear();
+        out.args_fallback = true;
+    } else if (path.compare(0, dot, "args") == 0 &&
+               path.find('.', dot + 1) == std::string::npos) {
+        out.top_key = "args";
+        out.nested_key = path.substr(dot + 1);
+        out.args_fallback = false;
     } else {
-        if (n.field.path.find('.', dot + 1) != std::string::npos) return false;
-        out.top_key = n.field.path.substr(0, dot);
-        out.nested_key = n.field.path.substr(dot + 1);
+        return false;
     }
     return std::visit(
         [&out](auto&& v) -> bool {
@@ -176,7 +129,7 @@ std::optional<std::vector<CompiledEqProbe>> try_compile_eq_probes(
             using T = std::decay_t<decltype(n)>;
             if constexpr (std::is_same_v<T, CompareNode>) {
                 CompiledEqProbe p;
-                if (!compile_eq_leaf(n, p)) return std::nullopt;
+                if (n.field.any || !compile_eq_leaf(n, p)) return std::nullopt;
                 return std::vector<CompiledEqProbe>{std::move(p)};
             } else if constexpr (std::is_same_v<T, AndNode>) {
                 auto l = try_compile_eq_probes(*n.left);
@@ -196,43 +149,37 @@ std::optional<std::vector<CompiledEqProbe>> try_compile_eq_probes(
 // Evaluate compiled AND-of-EQ probes by directly probing simdjson fields.
 bool eval_compiled_eq(const std::vector<CompiledEqProbe>& probes,
                       simdjson::ondemand::document_reference doc) {
+    // The value of `key` in `obj`, if present and not null.
+    auto field =
+        [](auto&& obj,
+           const std::string& key) -> std::optional<simdjson::ondemand::value> {
+        auto r = obj.find_field_unordered(std::string_view(key));
+        if (r.error()) return std::nullopt;
+        simdjson::ondemand::value v = r.value_unsafe();
+        bool null = false;
+        if (v.is_null().get(null) != simdjson::SUCCESS || null)
+            return std::nullopt;
+        return v;
+    };
     for (const auto& p : probes) {
         doc.rewind();
-        auto top_r = doc.find_field_unordered(
-            std::string_view(p.top_key.data(), p.top_key.size()));
-        if (top_r.error()) return false;
-        auto top_v = top_r.value();
         if (p.nested_key.empty()) {
-            if (!probe_matches_value(p, top_v)) return false;
-        } else {
-            auto obj_r = top_v.get_object();
-            if (obj_r.error()) return false;
-            auto inner_r = obj_r.value().find_field_unordered(
-                std::string_view(p.nested_key.data(), p.nested_key.size()));
-            if (inner_r.error()) return false;
-            if (!probe_matches_value(p, inner_r.value())) return false;
+            if (auto v = field(doc, p.top_key)) {
+                if (!probe_matches_value(p, *v)) return false;
+                continue;
+            }
+            if (!p.args_fallback) return false;
+            doc.rewind();
         }
+        auto args = field(doc, "args");
+        if (!args) return false;
+        auto obj = args->get_object();
+        if (obj.error()) return false;
+        auto v = field(obj.value_unsafe(),
+                       p.nested_key.empty() ? p.top_key : p.nested_key);
+        if (!v || !probe_matches_value(p, *v)) return false;
     }
     return true;
-}
-
-LinePrefilter build_prefilter(const Query& q) {
-    // Short literals like `"pid":1000` or `"epoch":0` are common enough in
-    // practice that memmem on every line costs more than it saves on the
-    // parse side. Only keep literals long enough that rarity is plausible
-    // (hashes, filenames, host names).
-    constexpr std::size_t MIN_LITERAL_LEN = 16;
-
-    LinePrefilter pf;
-    std::vector<std::string> tmp;
-    if (collect_and_eq_literals(q.root(), tmp)) {
-        for (auto& lit : tmp) {
-            if (lit.size() >= MIN_LITERAL_LEN) {
-                pf.required.push_back(std::move(lit));
-            }
-        }
-    }
-    return pf;
 }
 
 }  // namespace dftracer::utils::utilities::reader::internal

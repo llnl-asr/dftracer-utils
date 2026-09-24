@@ -1,13 +1,13 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/hash/hex64.h>
-#include <dftracer/utils/trace/aggregators/aggregation_intern.h>
-#include <dftracer/utils/trace/aggregators/aggregation_key.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_key.h>
 #include <doctest/doctest.h>
 
 #include <memory>
 #include <unordered_map>
 
-using namespace dftracer::utils::trace::aggregators;
+using namespace dftracer::utils::index::schemas::dft::agg;
 
 static AggregationKey make_key(
     std::string_view cat = "cat1", std::string_view name = "name1",

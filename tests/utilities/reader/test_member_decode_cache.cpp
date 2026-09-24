@@ -108,6 +108,29 @@ TEST_SUITE("MemberDecodeCache") {
         CHECK(cache.stats().hits >= 1);
     }
 
+    TEST_CASE("members stay while the whole cache has room") {
+        // 20 members over 16 shards put two in some shard: 120 bytes, over a
+        // per-shard split of 1600 bytes (100) though the total (1200) fits.
+        MemberDecodeCache cache(/*capacity_bytes=*/1600);
+        std::atomic<int> calls{0};
+        auto pass = [&](std::uint64_t first, std::uint64_t last) {
+            run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+                for (std::uint64_t m = first; m < last; ++m)
+                    co_await cache.get_or_decode(
+                        5, m, counting_producer(calls, 0x22, 60));
+                co_return;
+            });
+        };
+        pass(0, 20);
+        pass(0, 20);
+        CHECK(calls.load() == 20);
+        CHECK(cache.stats().evictions == 0);
+
+        // 40 members (2400 bytes) keep at most 1600 bytes.
+        pass(20, 40);
+        CHECK(cache.stats().evictions >= 14);
+    }
+
     TEST_CASE("a small budget evicts under many members") {
         // Total budget far below the working set; spread across shards, some
         // shard fills and evicts. Each member is decoded once here (distinct

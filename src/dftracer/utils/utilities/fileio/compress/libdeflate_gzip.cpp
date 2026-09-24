@@ -1,6 +1,9 @@
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <libdeflate.h>
+#include <zlib.h>
 
+#include <algorithm>
+#include <climits>
 #include <cstddef>
 
 namespace dftracer::utils::utilities::fileio::compress {
@@ -146,6 +149,51 @@ std::optional<std::vector<std::uint8_t>> GzipMemberCompressor::compress_member(
     std::vector<std::uint8_t> out;
     if (!compress_member_into(out, data, len)) return std::nullopt;
     return out;
+}
+
+std::optional<std::size_t> decode_truncated_member(
+    const void* comp, std::size_t comp_len, std::vector<std::uint8_t>& out) {
+    z_stream zs{};
+    if (inflateInit2(&zs, 16 + MAX_WBITS) != Z_OK) return std::nullopt;
+    const auto* in = static_cast<const Bytef*>(comp);
+    std::size_t in_left = comp_len;
+    std::size_t produced = 0;
+    if (out.size() < (1u << 20)) out.resize(1u << 20);
+    bool complete = false;
+    bool ok = true;
+    while (true) {
+        if (zs.avail_in == 0 && in_left > 0) {
+            const std::size_t take = std::min<std::size_t>(in_left, UINT_MAX);
+            zs.next_in = const_cast<Bytef*>(in);
+            zs.avail_in = static_cast<uInt>(take);
+            in += take;
+            in_left -= take;
+        }
+        if (produced == out.size()) out.resize(out.size() * 2);
+        const std::size_t room =
+            std::min<std::size_t>(out.size() - produced, UINT_MAX);
+        zs.next_out = out.data() + produced;
+        zs.avail_out = static_cast<uInt>(room);
+        const int rc = inflate(&zs, Z_NO_FLUSH);
+        produced += room - zs.avail_out;
+        if (rc == Z_STREAM_END) {
+            complete = true;
+            break;
+        }
+        if (rc == Z_OK) continue;
+        if (rc == Z_BUF_ERROR) {
+            if (zs.avail_out == 0) continue;
+            if (zs.avail_in == 0 && in_left == 0) break;  // ran out: cut member
+        }
+        ok = false;  // Z_DATA_ERROR, Z_NEED_DICT, Z_MEM_ERROR
+        break;
+    }
+    inflateEnd(&zs);
+    if (!ok) return std::nullopt;
+    if (complete) return produced;
+    std::size_t keep = produced;
+    while (keep > 0 && out[keep - 1] != '\n') --keep;
+    return keep;
 }
 
 }  // namespace dftracer::utils::utilities::fileio::compress

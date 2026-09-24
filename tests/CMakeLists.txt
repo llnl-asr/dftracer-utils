@@ -52,6 +52,28 @@ add_test(NAME c_abi_guard
          COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target
                  c_abi_guard --config $<CONFIG>)
 
+add_executable(schema_class_bad_member EXCLUDE_FROM_ALL
+               index/schema_class_bad_member.cpp)
+target_link_libraries(schema_class_bad_member
+                      PRIVATE testing_utilities)
+add_test(NAME schema_class_bad_member
+         COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target
+                 schema_class_bad_member --config $<CONFIG>)
+# Both tests run a build in this build tree; two at once corrupt its log.
+set_tests_properties(
+  schema_class_bad_member
+  PROPERTIES PASS_REGULAR_EXPRESSION
+             "schema class members must be index::Field"
+             RESOURCE_LOCK build_tree)
+set_tests_properties(c_abi_guard PROPERTIES RESOURCE_LOCK build_tree)
+
+add_test(NAME index_layers
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_index_layers.cmake)
+add_test(NAME agg_families
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_agg_families.cmake)
+
 # ##############################################################################
 # Unit Tests
 # ##############################################################################
@@ -72,6 +94,7 @@ set(TEST_CPP_SOURCES
     core/test_filesystem_info.cpp
     core/test_memory_budget.cpp
     core/test_str_format.cpp
+    core/test_object_pool.cpp
     # Pipeline tests
     pipeline/test_pipeline.cpp
 
@@ -120,6 +143,19 @@ set(TEST_CPP_SOURCES
     server/test_cancel.cpp
     server/test_viz_stats_fastpath.cpp
     server/test_viz_aggregated.cpp
+    trace/genesis/test_genesis.cpp
+    index/test_indexer.cpp
+    index/test_agg_extension.cpp
+    index/test_prune_oracle.cpp
+    index/test_layout.cpp
+    index/test_kinds.cpp
+    index/test_catalog.cpp
+    index/test_build_memory.cpp
+    index/test_record_schema.cpp
+    index/test_schema_registry.cpp
+    index/test_schema_class.cpp
+    index/test_prefilter.cpp
+    index/test_prefilter_fuzz.cpp
     )
 
 foreach(test_file ${TEST_CPP_SOURCES})
@@ -139,7 +175,9 @@ foreach(test_file ${TEST_CPP_SOURCES})
   target_add_rpath(${target_name})
   
   # Pass CMAKE_BINARY_DIR to tests that need to execute binaries
-  target_compile_definitions(${target_name} PRIVATE CMAKE_BINARY_DIR="${CMAKE_BINARY_DIR}")
+  target_compile_definitions(
+    ${target_name} PRIVATE CMAKE_BINARY_DIR="${CMAKE_BINARY_DIR}"
+                           DFTRACER_UTILS_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
   # Set output directory to preserve folder structure in binaries
   get_filename_component(bin_dir ${bin_exec} DIRECTORY)
@@ -184,10 +222,17 @@ foreach(test_file ${TEST_CPP_SOURCES})
                                            RESOURCE_LOCK heavy_threading)
   endif()
 
+  # 300 random queries, each scanned four ways; about 100 s alone.
+  if(bin_exec STREQUAL "index/test_prefilter_fuzz")
+    set_tests_properties(${bin_exec} PROPERTIES TIMEOUT 300)
+  endif()
+
   # Robustness test generates large (128 MB) gzip files; coverage
   # instrumentation on macOS CI runners makes it significantly slower, and
-  # TSan more so (about 1200 s on an M4 Pro).
-  if(bin_exec STREQUAL "reader/test_reader_robustness")
+  # TSan more so (about 1200 s on an M4 Pro). The prune oracle reads its corpus
+  # once per query and time range (about 95 s alone under ASan).
+  if(bin_exec STREQUAL "reader/test_reader_robustness"
+     OR bin_exec STREQUAL "index/test_prune_oracle")
     set(robustness_timeout 600)
     if(DFTRACER_UTILS_COVERAGE)
       set(robustness_timeout 900)
@@ -200,13 +245,11 @@ foreach(test_file ${TEST_CPP_SOURCES})
 endforeach()
 
 # +++++++++++++++++++++++++++++++++++++++++
-# Test Reader C API
+# C API tests
 # +++++++++++++++++++++++++++++++++++++++++
 
 set(TEST_C_SOURCES
-    reader/test_reader.c
-    reader/test_reader_stream.c
-    # reader/test_reader_formats_c.c  # TODO: Add when ready
+    index/test_indexer_abi.c
     )
 
 foreach (test_file ${TEST_C_SOURCES})
@@ -290,6 +333,7 @@ set(TEST_BINARY_SOURCES
     binaries/test_dftracer_stats.cpp
     binaries/test_dftracer_index.cpp
     binaries/test_dftracer_gen_dlio_config.cpp
+    binaries/test_dftracer_genesis_gen_dist.cpp
     binaries/test_dftracer_view.cpp
     binaries/test_dftracer_replay.cpp
     binaries/test_dftracer_comparator.cpp
@@ -375,6 +419,9 @@ foreach(test_file ${TEST_BINARY_SOURCES})
   elseif(bin_exec STREQUAL "binaries/test_dftracer_gen_dlio_config")
     set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
       "DFTRACER_GEN_DLIO_CONFIG_PATH=$<TARGET_FILE:dftracer_gen_dlio_config>")
+  elseif(bin_exec STREQUAL "binaries/test_dftracer_genesis_gen_dist")
+    set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+      "DFTRACER_GENESIS_GEN_DIST_PATH=$<TARGET_FILE:dftracer_genesis_gen_dist>")
   elseif(bin_exec STREQUAL "binaries/test_dftracer_view")
     set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
       "DFTRACER_VIEW_PATH=$<TARGET_FILE:dftracer_view>")

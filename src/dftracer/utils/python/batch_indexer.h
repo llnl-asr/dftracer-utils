@@ -25,8 +25,12 @@ struct IndexerObject {
     PyObject* bloom_fields;
     double false_positive_rate;
     std::size_t expected_entries;
-    int auto_fields;
+    std::size_t path_budget;
     std::size_t auto_max_distinct;
+    // Pruning extensions to build (list of str), or None for the default.
+    PyObject* extensions;
+    std::uint64_t memory_budget;
+    PyObject* schema;  // str or nullptr (detect)
 
     // Aggregation config (stored for rebuild)
     double time_interval_ms;

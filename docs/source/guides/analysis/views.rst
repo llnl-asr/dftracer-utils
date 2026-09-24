@@ -10,7 +10,8 @@ Query traces with the View engine
    aggregate, export, or fold with your own logic - in a single pass over the
    data. ``View`` (C++, ``dftracer/utils/trace/views/view.h``) is the engine;
    ``TraceViewer`` (Python) is its wrapper. Trace inputs are gzip-compressed
-   ``.pfw.gz`` files; plain ``.pfw`` is not supported.
+   ``.pfw.gz`` files, or gzipped JSON lines of any other format (read by path,
+   see :doc:`../core/indexing`); plain ``.pfw`` is not supported.
 
 For the group-by/aggregate vocabulary in depth, see :doc:`aggregation`; this
 page covers building a view, its terminals, and the lower-level escape
@@ -36,7 +37,8 @@ lazy and return a new view; they do no I/O until a terminal runs.
          // One file, with an explicit index path (empty = sidecar convention).
          View v = View::from_file("trace.pfw.gz");
 
-         // Or scan a directory recursively for .pfw.gz files (a coroutine).
+         // Or scan a directory recursively for .pfw.gz, .jsonl.gz and
+         // .ndjson.gz files (a coroutine).
          View v = View::from_directory("traces/").get();
 
          // The unified F: filter() takes the expression directly (pushdown).
@@ -71,9 +73,12 @@ Row-shaping builders: ``.phase(p)`` restricts to one ``Phase`` value -
 ``Phase::Events`` (``ph="X"`` events), ``Phase::Counters`` (``ph="C"``
 counters), ``Phase::Aggregated`` (rollup records), ``Phase::Metadata``
 (``ph="M"``), or ``Phase::Any``; ``.time_range(begin,
-end)`` and ``.time_bucket(interval_us, origin)`` window and bucket by timestamp
-(``origin`` anchors the windows; Python's ``normalize_to="min"`` anchors on
-the first event's timestamp instead of ``0``);
+end)`` keeps the events that start in ``[begin, end)`` and
+``.time_bucket(interval_us, origin)`` keys each event by the bucket of its
+start (``origin`` anchors the windows; Python's ``normalize_to="min"`` anchors
+on the first event's timestamp instead of ``0``); the occupancy aggregates
+clip events to the window and buckets instead (see
+:doc:`aggregation`);
 ``.select({...})`` projects columns; ``.head(n)`` takes the first ``n`` rows
 and ``.slice(offset, len)`` pages through the rest; ``.sort_by(column,
 descending)`` / ``.topk(column, k)`` order the result. All return a new
@@ -148,13 +153,37 @@ only (no trace scan) and read the per-index metadata in parallel:
        std::printf("%s: %s\n", c.name.c_str(), c.type.c_str());
 
 The set is schemaless: the base axis fields (``pid`` / ``tid`` / ``ts`` /
-``dur``), every scalar leaf harvested at index build (top-level fields plus flat
-and nested args as dotted paths, e.g. ``pos.x``), and a ``resolved.*`` alias for
-each hash column present. Types fold across event names and files. The harvest
-happens in the one index-building pass (``BloomFold``, ``wants_schema()``), so
-it costs no extra scan. In Python, ``TraceViewer.column_info()`` returns the
+``dur``), every path in the index's path catalog (top-level fields plus flat
+and nested args as dotted paths, e.g. ``pos.x``), and the resolved columns of
+each dictionary key field present. Types fold every record of every file. The catalog
+is built in the one index-building pass, so the schema costs no extra scan. In Python, ``TraceViewer.column_info()`` returns the
 same set as a ``{name: type}`` dict; the ``columns`` and ``schema``
 properties describe the plan's output instead, as on any ``LazyFrame``.
+
+Nested args
+~~~~~~~~~~~
+
+A row query flattens nested object and array args into one column per scalar
+leaf, named ``args.`` plus the dotted path: ``{"dur": {"p99": 7000}}`` gives
+``args.dur.p99`` and ``{"hosts": ["a", "b"]}`` gives ``args.hosts.0`` and
+``args.hosts.1``. An event without a leaf reads null in that column. Once the
+trace is indexed, ``columns`` and ``schema`` list the same columns. A name
+without the ``args.`` prefix resolves to the args path in ``select``, as it
+does in ``filter``, so ``dur.p99`` and ``args.dur.p99`` read the same column,
+while a bare envelope field such as ``dur`` keeps the event's own value:
+
+.. code-block:: python
+
+   from dftracer.utils import TraceViewer, col
+
+   slow = (
+       TraceViewer("dist.pfw.gz")
+       .filter(col("dur.p99") > 1000)
+       .select("name", "dur", "dur.p99")   # -> name, dur, args.dur.p99
+       .collect()
+   )
+
+A long array arg yields one column per element.
 
 Export
 ------

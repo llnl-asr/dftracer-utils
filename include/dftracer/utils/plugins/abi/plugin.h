@@ -82,9 +82,9 @@ typedef struct dftu_plugin {
        what it reads is the projection that avoids them.
 
        Names are batch column names as on_batch sees them: "dur", "cat",
-       "fhash", an arg as "args.<key>", a virtual field as "resolved.fpath". A
-       column that is not listed is absent from the frame, so a lookup for it
-       returns NULL.
+       "fhash", an arg as "args.<key>", a resolved column as
+       "resolved.fhash.path". A column that is not listed is absent from the
+       frame, so a lookup for it returns NULL.
 
        Ignored for a plugin that registered states: they are handed the same
        frame, and what they read cannot be seen from the slice that declared

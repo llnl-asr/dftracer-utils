@@ -1,12 +1,13 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/trace/indexing/bloom_filter.h>
+#include <dftracer/utils/index/extensions/bloom_filter.h>
+#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/index_database_writer_context.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_planner_utility.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
-#include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
-#include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <doctest/doctest.h>
+#include <index_test_helpers.h>
 
 #include <string>
 
@@ -14,9 +15,9 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::views;
-using namespace dftracer::utils::trace::indexing;
-using dftracer::utils::utilities::indexer::IndexDatabase;
-using dftracer::utils::utilities::indexer::internal::get_logical_path;
+using namespace dftracer::utils::index::extensions;
+using dftracer::utils::index::store::IndexDatabase;
+using dftracer::utils::index::store::internal::get_logical_path;
 
 // Helper: create a .idx with 4 checkpoints
 // Checkpoint layout:
@@ -30,8 +31,8 @@ static void populate_test_idx(const std::string& index_path,
     auto writer = idx_db.begin_write();
     writer->init_schema();
 
-    int fid =
-        writer->get_or_create_file_info(get_logical_path(file_path), 40000);
+    int fid = dftu_utils_test::register_test_file(
+        *writer, get_logical_path(file_path), 40000);
 
     struct ChunkDims {
         std::vector<std::string> names;
@@ -55,9 +56,9 @@ static void populate_test_idx(const std::string& index_path,
             file_name_bloom.add(n);
         }
         auto name_blob = name_bloom.serialize();
-        writer->insert_chunk_bloom_filter(
-            fid, static_cast<std::uint64_t>(ckpt), "name", name_blob.data(),
-            static_cast<int>(name_blob.size()), name_bloom.num_entries());
+        dftu_utils_test::put_chunk_bloom(
+            *writer, fid, static_cast<std::uint64_t>(ckpt), "name", name_blob,
+            name_bloom.num_entries());
 
         BloomFilter cat_bloom(100, 0.01);
         for (const auto& c : chunks[ckpt].cats) {
@@ -65,23 +66,37 @@ static void populate_test_idx(const std::string& index_path,
             file_cat_bloom.add(c);
         }
         auto cat_blob = cat_bloom.serialize();
-        writer->insert_chunk_bloom_filter(
-            fid, static_cast<std::uint64_t>(ckpt), "cat", cat_blob.data(),
-            static_cast<int>(cat_blob.size()), cat_bloom.num_entries());
+        dftu_utils_test::put_chunk_bloom(
+            *writer, fid, static_cast<std::uint64_t>(ckpt), "cat", cat_blob,
+            cat_bloom.num_entries());
+
+        const auto m = static_cast<std::uint64_t>(ckpt);
+        dftu_utils_test::index_records::put_gzip_member(
+            *writer, fid,
+            dftracer::utils::index::gzip::GzipMemberRecord{
+                .member_idx = m,
+                .c_offset = m * 5000,
+                .c_size = 5000,
+                .uc_offset = m * 10000,
+                .uc_size = 10000,
+                .first_line_num = m * 10 + 1,
+                .last_line_num = m * 10 + 10,
+            });
     }
 
     auto name_blob = file_name_bloom.serialize();
-    writer->insert_file_bloom_filter(fid, "name", name_blob.data(),
-                                     static_cast<int>(name_blob.size()),
-                                     file_name_bloom.num_entries());
+    dftu_utils_test::put_file_bloom(*writer, fid, "name", name_blob,
+                                    file_name_bloom.num_entries());
 
     auto cat_blob = file_cat_bloom.serialize();
-    writer->insert_file_bloom_filter(fid, "cat", cat_blob.data(),
-                                     static_cast<int>(cat_blob.size()),
-                                     file_cat_bloom.num_entries());
+    dftu_utils_test::put_file_bloom(*writer, fid, "cat", cat_blob,
+                                    file_cat_bloom.num_entries());
 
-    writer->insert_index_dimension(fid, "name");
-    writer->insert_index_dimension(fid, "cat");
+    dftu_utils_test::index_records::put_path(
+        *writer, dftu_utils_test::IndexExtension::BLOOM, fid, "name");
+    dftu_utils_test::index_records::put_path(
+        *writer, dftu_utils_test::IndexExtension::BLOOM, fid, "cat");
+    dftu_utils_test::mark_built(*writer, fid);
     writer->commit();
 }
 
@@ -97,7 +112,7 @@ TEST_SUITE("ViewPlannerUtility") {
         populate_test_idx(index_path, file_path);
 
         ViewPlannerInput input;
-        input.with_view(ViewDefinition::io_view())
+        input.with_view(ViewDefinition::io_view().with_include_metadata(false))
             .with_file_path(file_path)
             .with_index_path(index_path)
             .with_uncompressed_size(40000)
@@ -133,7 +148,9 @@ TEST_SUITE("ViewPlannerUtility") {
         populate_test_idx(index_path, file_path);
 
         ViewPlannerInput input;
-        input.with_view(ViewDefinition::compute_view())
+        input
+            .with_view(
+                ViewDefinition::compute_view().with_include_metadata(false))
             .with_file_path(file_path)
             .with_index_path(index_path)
             .with_uncompressed_size(40000)
@@ -163,7 +180,9 @@ TEST_SUITE("ViewPlannerUtility") {
         populate_test_idx(index_path, file_path);
 
         ViewDefinition view;
-        view.with_name("nonexistent").with_query(R"(cat == "NONEXISTENT")");
+        view.with_name("nonexistent")
+            .with_query(R"(cat == "NONEXISTENT")")
+            .with_include_metadata(false);
 
         ViewPlannerInput input;
         input.with_view(view)
@@ -270,21 +289,22 @@ TEST_SUITE("ViewPlannerUtility") {
         {
             auto writer = idx_db.begin_write();
             writer->init_schema();
-            int fid = writer->get_or_create_file_info(
-                get_logical_path(file_path), 10000);
+            int fid = dftu_utils_test::register_test_file(
+                *writer, get_logical_path(file_path), 10000);
 
             BloomFilter fhash_bloom(100, 0.01);
             fhash_bloom.add("hash123");
             auto blob = fhash_bloom.serialize();
 
-            writer->insert_file_bloom_filter(fid, "fhash", blob.data(),
-                                             static_cast<int>(blob.size()),
+            dftu_utils_test::put_file_bloom(*writer, fid, "fhash", blob,
+                                            fhash_bloom.num_entries());
+            dftu_utils_test::put_chunk_bloom(*writer, fid, 0, "fhash", blob,
                                              fhash_bloom.num_entries());
-            writer->insert_chunk_bloom_filter(fid, 0, "fhash", blob.data(),
-                                              static_cast<int>(blob.size()),
-                                              fhash_bloom.num_entries());
-            writer->insert_index_dimension(fid, "fhash");
-            writer->insert_hash_table_entry(0, "hash123", "/data/file.h5");
+            dftu_utils_test::index_records::put_path(
+                *writer, dftu_utils_test::IndexExtension::BLOOM, fid, "fhash");
+            dftu_utils_test::index_records::put_dict_row(
+                *writer, "file", "hash123", {{"path", "/data/file.h5"}});
+            dftu_utils_test::mark_built(*writer, fid);
             writer->commit();
         }
 

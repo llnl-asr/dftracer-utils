@@ -1,9 +1,9 @@
 #include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/rocksdb/column_families.h>
-#include <dftracer/utils/core/rocksdb/database.h>
-#include <dftracer/utils/trace/aggregators/aggregation_metrics.h>
-#include <dftracer/utils/trace/aggregators/aggregation_serialization.h>
-#include <dftracer/utils/trace/aggregators/event_aggregator.h>
+#include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_metrics.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_serialization.h>
+#include <dftracer/utils/index/schemas/dft/agg/event_aggregator.h>
+#include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/utilities/dlio/trace_loader.h>
 #include <yaml-cpp/yaml.h>
 
@@ -21,17 +21,13 @@ namespace dftracer::utils::utilities::dlio {
 
 namespace {
 
-namespace agg = ::dftracer::utils::trace::aggregators;
-namespace rdb = ::dftracer::utils::rocksdb;
+namespace agg = dftracer::utils::index::schemas::dft::agg;
+namespace rdb = dftracer::utils::index::store;
 
 constexpr double US_TO_S = 1e-6;
 
 // AGGREGATION CF contains data keys (varint-encoded) and reserved system keys
 // prefixed with 0xFF{FD,FE,FF}. Filter those out.
-inline bool is_system_key(std::string_view key) {
-    return key.size() >= 2 && static_cast<std::uint8_t>(key[0]) == 0xFF;
-}
-
 inline bool matches(std::string_view a, std::string_view b) { return a == b; }
 
 struct ComponentAccumulator {
@@ -121,7 +117,7 @@ AggregatedTraces load_aggregated_traces(const std::string& db_path,
     // it (read-only) so RocksDB will let us iterate the CF. Without the merge
     // operator, NewIterator() returns "merge_operator_ must be set".
     auto db_handle =
-        agg::EventAggregator::open_read_only_with_merge_operator(db_path);
+        agg::tier::open(db_path, rdb::RocksDatabase::OpenMode::ReadOnly);
     if (!db_handle) {
         throw DFTUtilsException(ErrorCode::IO,
                                 "dlio: failed to open RocksDB at " + db_path);
@@ -130,21 +126,13 @@ AggregatedTraces load_aggregated_traces(const std::string& db_path,
 
     // The intern dictionary must be populated before any key parsing happens.
     auto intern_table = agg::intern_for_index(db_path);
-    agg::load_intern_dictionary(db, *intern_table);
+    agg::tier::load_dictionary(db, *intern_table);
     const auto& intern = intern_table->intern;
 
     AggregatedTraces out;
 
-    // Global config (time_interval_us) lives at key 0xFFFE in AGGREGATION CF.
-    {
-        std::string val;
-        const auto st = db.get(std::string_view(agg::AGG_GLOBAL_CONFIG_KEY, 2),
-                               &val, rdb::cf::AGGREGATION);
-        if (st.ok() && !val.empty()) {
-            const auto cfg = agg::deserialize_agg_global_config(val);
-            out.time_interval_us = cfg.time_interval_us;
-        }
-    }
+    if (auto cfg = agg::tier::read_config(db))
+        out.time_interval_us = cfg->time_interval_us;
 
     ComponentAccumulator acc_fetch_block;
     ComponentAccumulator acc_fetch_iter;
@@ -154,83 +142,68 @@ AggregatedTraces load_aggregated_traces(const std::string& db_path,
     std::unordered_set<std::uint64_t> pid_set;
     std::mt19937_64 rng(options.seed);
 
-    auto it = db.new_iterator(rdb::cf::AGGREGATION);
-    if (!it) {
-        throw DFTUtilsException(ErrorCode::IO,
-                                "dlio: failed to obtain AGGREGATION iterator");
-    }
+    agg::tier::for_each_row(
+        db, 0, agg::AGG_KEY_NUM_SHARDS,
+        [&](std::string_view key_sv, std::string_view val_sv) {
+            agg::AggKeyView kv;
+            if (!agg::parse_agg_key_view(key_sv, intern, kv)) return true;
 
-    for (it->SeekToFirst(); it->Valid(); it->Next()) {
-        const auto key_slice = it->key();
-        std::string_view key_sv(key_slice.data(), key_slice.size());
-        if (is_system_key(key_sv)) continue;
-
-        agg::AggKeyView kv;
-        if (!agg::parse_agg_key_view(key_sv, intern, kv)) continue;
-
-        ComponentAccumulator* target = nullptr;
-        if (matches(kv.cat, options.fetch_block.cat) &&
-            matches(kv.name, options.fetch_block.name)) {
-            target = &acc_fetch_block;
-        } else if (matches(kv.cat, options.fetch_iter.cat) &&
-                   matches(kv.name, options.fetch_iter.name)) {
-            target = &acc_fetch_iter;
-        } else if (matches(kv.cat, options.preprocess.cat) &&
-                   matches(kv.name, options.preprocess.name)) {
-            target = &acc_preprocess;
-        } else if (matches(kv.cat, options.item.cat) &&
-                   matches(kv.name, options.item.name)) {
-            target = &acc_getitem;
-        } else {
-            continue;
-        }
-
-        const auto val_slice = it->value();
-        std::string_view val_sv(val_slice.data(), val_slice.size());
-        auto metrics = agg::deserialize_agg_value(val_sv);
-        if (metrics.count == 0) continue;
-
-        out.any_data = true;
-        pid_set.insert(kv.pid);
-
-        // Synthesize per-call samples for this entry.
-        auto& bucket_vec =
-            target->per_pid_bucket_samples[kv.pid][kv.time_bucket];
-        synthesize_samples(metrics, options.max_samples_per_entry, rng,
-                           bucket_vec);
-
-        // Accumulate component-level state.
-        target->accumulated_time_s +=
-            static_cast<double>(metrics.duration.total()) * US_TO_S;
-        target->total_count += metrics.count;
-        apply_minmax(*target, static_cast<double>(metrics.duration.min()),
-                     static_cast<double>(metrics.duration.max()));
-
-        // Real per-entry (ts, te) interval for trace-side union time.
-        if (metrics.te > metrics.ts) {
-            target->boundaries.push_back(
-                {static_cast<std::int64_t>(metrics.ts), +1});
-            target->boundaries.push_back(
-                {static_cast<std::int64_t>(metrics.te), -1});
-        }
-
-        // Merge sketch when present.
-        if (metrics.duration.sketch) {
-            out.sketches_available = true;
-            if (!target->sketch) {
-                target->sketch =
-                    std::make_shared<DDSketch>(*metrics.duration.sketch);
+            ComponentAccumulator* target = nullptr;
+            if (matches(kv.cat, options.fetch_block.cat) &&
+                matches(kv.name, options.fetch_block.name)) {
+                target = &acc_fetch_block;
+            } else if (matches(kv.cat, options.fetch_iter.cat) &&
+                       matches(kv.name, options.fetch_iter.name)) {
+                target = &acc_fetch_iter;
+            } else if (matches(kv.cat, options.preprocess.cat) &&
+                       matches(kv.name, options.preprocess.name)) {
+                target = &acc_preprocess;
+            } else if (matches(kv.cat, options.item.cat) &&
+                       matches(kv.name, options.item.name)) {
+                target = &acc_getitem;
             } else {
-                target->sketch->merge(*metrics.duration.sketch);
+                return true;
             }
-        }
-    }
 
-    if (!it->status().ok()) {
-        throw DFTUtilsException(ErrorCode::IO,
-                                "dlio: iteration over AGGREGATION CF failed: " +
-                                    it->status().ToString());
-    }
+            auto metrics = agg::deserialize_agg_value(val_sv);
+            if (metrics.count == 0) return true;
+
+            out.any_data = true;
+            pid_set.insert(kv.pid);
+
+            // Synthesize per-call samples for this entry.
+            auto& bucket_vec =
+                target->per_pid_bucket_samples[kv.pid][kv.time_bucket];
+            synthesize_samples(metrics, options.max_samples_per_entry, rng,
+                               bucket_vec);
+
+            // Accumulate component-level state.
+            target->accumulated_time_s +=
+                static_cast<double>(metrics.duration.total()) * US_TO_S;
+            target->total_count += metrics.count;
+            apply_minmax(*target, static_cast<double>(metrics.duration.min()),
+                         static_cast<double>(metrics.duration.max()));
+
+            // Real per-entry (ts, te) interval for trace-side union time.
+            if (metrics.te > metrics.ts) {
+                target->boundaries.push_back(
+                    {static_cast<std::int64_t>(metrics.ts), +1});
+                target->boundaries.push_back(
+                    {static_cast<std::int64_t>(metrics.te), -1});
+            }
+
+            // Merge sketch when present.
+            if (metrics.duration.sketch) {
+                out.sketches_available = true;
+                if (!target->sketch) {
+                    target->sketch =
+                        std::make_shared<DDSketch>(*metrics.duration.sketch);
+                } else {
+                    target->sketch->merge(*metrics.duration.sketch);
+                }
+            }
+            return true;
+        });
 
     if (!out.any_data) {
         return out;

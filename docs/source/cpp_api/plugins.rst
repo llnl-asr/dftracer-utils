@@ -30,5 +30,4 @@ Composition among the plugin SDK types:
 .. mermaid:: /_generated/plugins.mmd
 
 .. include:: /cpp_api/_generated/plugins.rst.inc
-.. include:: /cpp_api/_generated/plugins.reflect.rst.inc
-.. include:: /cpp_api/_generated/plugins.scalar.rst.inc
+.. include:: /cpp_api/_generated/plugins.agg.rst.inc

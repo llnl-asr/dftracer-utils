@@ -4,6 +4,8 @@
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/query/query.h>
@@ -26,7 +28,6 @@
 #include <dftracer/utils/trace/views/view_planner_utility.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
 #include <simdjson.h>
 
 #include <algorithm>
@@ -37,6 +38,7 @@
 #include <limits>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -404,33 +406,29 @@ static std::string serve_density_from_summary(
         metric, &span_depth, nullptr);
 }
 
-// Canonicalize one group column: resolved.*/r.* aliases map to their hash
-// column and "args.x" to "x". Sets `rt` to the hash type when the canonical
-// column is a hash (so its values can be resolved to names for display).
+// A dictionary field that group values resolve through for display.
+struct DictField {
+    const dftracer::utils::index::Dictionary* dictionary;
+    std::string field;
+};
+
+// Canonicalize one group column: a resolved column maps to its key field and
+// "args.x" to "x". Sets `rt` to the dictionary field when the canonical column
+// holds dictionary keys (so its values can be resolved for display). Throws
+// DFTUtilsException INVALID_ARGUMENT for an unknown resolved column.
 static std::string canonicalize_group_col(
-    std::string col,
-    std::optional<utilities::indexer::IndexDatabase::HashType>& rt) {
-    using HashType = utilities::indexer::IndexDatabase::HashType;
+    std::string col, std::optional<DictField>& rt,
+    const dftracer::utils::index::RecordSchema& schema) {
     col = std::string(strip_args_prefix(col));
-    auto is = [&](std::string_view a) { return col == a; };
-    if (is("resolved.fpath") || is("r.fpath"))
-        col = "fhash";
-    else if (is("resolved.cwd") || is("r.cwd"))
-        col = "cwd";
-    else if (is("resolved.hostname") || is("r.hostname") ||
-             is("resolved.host") || is("r.host"))
-        col = "hhash";
-    else if (is("resolved.exec") || is("r.exec"))
-        col = "exec_hash";
-    else if (is("resolved.cmd") || is("r.cmd"))
-        col = "cmd_hash";
     rt = std::nullopt;
-    if (col == "fhash" || col == "cwd")
-        rt = HashType::FILE;
-    else if (col == "hhash")
-        rt = HashType::HOST;
-    else if (col == "shash" || col == "exec_hash" || col == "cmd_hash")
-        rt = HashType::STRING;
+    if (std::string_view(col).starts_with(
+            dftracer::utils::index::RESOLVED_PREFIX)) {
+        const auto rc = schema.resolved_column(col);
+        rt = DictField{rc.dictionary, rc.field};
+        return rc.key_field;
+    }
+    if (const auto* d = schema.dictionary_of(col))
+        rt = DictField{d, d->fields.front().first};
     return col;
 }
 
@@ -469,13 +467,12 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
             co_return HttpResponse::bad_request("Invalid group_by column");
     }
 
-    // Hash columns auto-resolve for display: group values stay raw hashes, and
-    // a group_names map (hash -> resolved name) rides along in the metadata.
-    // resolved.*/r.* aliases map to their hash columns. group_by may list
-    // several comma-separated columns; canonicalize each and record its hash
-    // type so the composite value's components resolve independently.
-    using HashType = utilities::indexer::IndexDatabase::HashType;
-    std::vector<std::optional<HashType>> resolve_types;
+    // Dictionary key columns auto-resolve for display: group values stay raw
+    // keys, and a group_names map (key -> value) rides along in the metadata.
+    // Resolved columns map to their key fields. group_by may list several
+    // comma-separated columns; canonicalize each and record its dictionary
+    // field so the composite value's components resolve independently.
+    std::vector<std::optional<DictField>> resolve_types;
     {
         std::string rebuilt;
         std::size_t start = 0;
@@ -484,8 +481,14 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
             std::string part(group_col.substr(
                 start, comma == std::string::npos ? group_col.size() - start
                                                   : comma - start));
-            std::optional<HashType> rt;
-            std::string canon = canonicalize_group_col(std::move(part), rt);
+            std::optional<DictField> rt;
+            std::string canon;
+            try {
+                canon = canonicalize_group_col(std::move(part), rt,
+                                               index.record_schema());
+            } catch (const DFTUtilsException& e) {
+                co_return HttpResponse::bad_request(e.what());
+            }
             if (!rebuilt.empty()) rebuilt.push_back(',');
             rebuilt += canon;
             resolve_types.push_back(rt);
@@ -619,7 +622,6 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
         }
         return std::move(x);
     };
-    std::size_t slots = std::max<std::size_t>(1, index.max_concurrent());
     const std::uint64_t scan_cap =
         limit > 0 ? static_cast<std::uint64_t>(limit) : 0;
     bool single_file = !params.get("file").empty();
@@ -632,8 +634,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
         ViewDefinition vd = build_viz_view(params, lo, hi, 0);
         views::View v =
             views::View::from_files(
-                to_view_files(select_viz_target_files(index, params, lo, hi)),
-                &index.bloom_cache())
+                to_view_files(select_viz_target_files(index, params, lo, hi)))
                 .phase(views::Phase::Events)
                 .metadata(false)
                 .cancel_when(cancel_pred);
@@ -745,58 +746,70 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
         }
     }
 
-    // An aggregate's ts is its window start, so one that opened before `begin`
-    // still covers the view but the in-window pass skips it (ts < begin). Scan
-    // back one window to recover these enclosing aggregates.
-    if (agg_interval > 0 && begin > 0) {
-        double asb = begin - agg_interval;
-        if (asb < 0) asb = 0;
-        if (asb < begin) {
-            dataframe::LazyResult<Acc> er =
-                capped(make_window_view(asb, begin).phase(views::Phase::Any))
-                    .branch<Acc>([&](views::ViewSession& s) {
-                        return s.fold<Acc>(
-                            query::parse_or_throw("ph == 3 or ph == \"A\""),
-                            [](Acc& acc, const auto& jv, std::string_view raw) {
-                                collect_aggregated(jv.element(), raw, acc.agg);
-                            },
-                            merge_acc);
-                    });
-            Acc eo = co_await er.collect();
-            for (auto& r : eo.agg) ag_out.agg.emplace_back(std::move(r));
-        }
-    }
-
-    // Pass 2 (enclosers): keep only events still open at `begin`
-    // (ts < begin <= ts + dur); these ancestor bars set containment depth.
-    if (scan_begin < begin) {
-        // Whole-run enclosers come from the summary below; excluding them here
-        // keeps them from being served twice. Everything shorter is caught
-        // here.
-        double skip_from = enc_summary != nullptr
-                               ? enc_threshold_native
-                               : std::numeric_limits<double>::infinity();
-        auto p2 =
-            co_await make_window_view(scan_begin, begin)
-                .map_batches<Acc>(
-                    [begin, skip_from](
-                        Acc& acc, const std::vector<std::string_view>& events) {
-                        for (auto ev : events) {
-                            double ts = 0, dur = 0;
-                            if (!parse_ts_dur(ev, ts, dur)) continue;
-                            if (dur > acc.max_dur) acc.max_dur = dur;
-                            if (ts < begin && ts + dur > begin &&
-                                dur < skip_from) {
-                                acc.big.emplace_back(ev);
-                                acc.big_dur.push_back(dur);
-                            }
+    // Two look-back reads before `begin`, fused into one scan over the union of
+    // their windows; each branch keeps only its own window.
+    // - An aggregate's ts is its window start, so one that opened before
+    //   `begin` still covers the view but the in-window pass skips it: look
+    //   back one aggregation window for these enclosing aggregates.
+    // - Enclosers: events still open at `begin` (ts < begin <= ts + dur) set
+    //   containment depth. Whole-run enclosers come from the summary below;
+    //   excluding them here keeps them from being served twice.
+    const double agg_lo = agg_interval > 0 && begin > 0
+                              ? std::max(0.0, begin - agg_interval)
+                              : begin;
+    const bool want_agg = agg_lo < begin;
+    const bool want_enc = scan_begin < begin;
+    if (want_agg || want_enc) {
+        const double enc_lo = want_enc ? scan_begin : begin;
+        const double skip_from = enc_summary != nullptr
+                                     ? enc_threshold_native
+                                     : std::numeric_limits<double>::infinity();
+        Acc agg_back, enc;
+        bool back_truncated = false;
+        auto back = [&](views::ViewSession& s) {
+            std::optional<views::Deferred<Acc>> agg_h, enc_h;
+            if (want_agg)
+                agg_h = s.fold<Acc>(
+                    query::parse_or_throw("ph == 3 or ph == \"A\""),
+                    [agg_lo](Acc& acc, const auto& jv, std::string_view raw) {
+                        double ts = 0, dur = 0;
+                        if (!parse_ts_dur(raw, ts, dur) || ts < agg_lo) return;
+                        collect_aggregated(jv.element(), raw, acc.agg);
+                    },
+                    merge_acc);
+            if (want_enc)
+                enc_h = s.fold<Acc>(
+                    query::parse_or_throw("ph == 1 or ph == \"X\""),
+                    [begin, enc_lo, skip_from](Acc& acc, const auto&,
+                                               std::string_view raw) {
+                        double ts = 0, dur = 0;
+                        if (!parse_ts_dur(raw, ts, dur) || ts < enc_lo) return;
+                        if (dur > acc.max_dur) acc.max_dur = dur;
+                        if (ts < begin && ts + dur > begin && dur < skip_from) {
+                            acc.big.emplace_back(raw);
+                            acc.big_dur.push_back(dur);
                         }
                     },
-                    merge_acc, slots, scan_cap);
-        truncated = truncated || p2.stats.truncated;
-        if (p2.value.max_dur > max_dur) max_dur = p2.value.max_dur;
-        for (auto d : p2.value.big_dur) big_dur.push_back(d);
-        for (auto& s : p2.value.big) big.emplace_back(std::move(s));
+                    merge_acc);
+            return std::function<void(const views::ExportStats&)>(
+                [&, agg_h, enc_h](const views::ExportStats& st) mutable {
+                    if (agg_h) agg_back = std::move(agg_h->get());
+                    if (enc_h) enc = std::move(enc_h->get());
+                    back_truncated = st.truncated;
+                });
+        };
+        dataframe::LazyFrame lb =
+            capped(make_window_view(std::min(agg_lo, enc_lo), begin)
+                       .phase(views::Phase::Any))
+                .branch(back);
+        co_await lb.collect();
+        for (auto& r : agg_back.agg) ag_out.agg.emplace_back(std::move(r));
+        if (want_enc) {
+            truncated = truncated || back_truncated;
+            if (enc.max_dur > max_dur) max_dur = enc.max_dur;
+            for (auto d : enc.big_dur) big_dur.push_back(d);
+            for (auto& ev : enc.big) big.emplace_back(std::move(ev));
+        }
     }
     // Enclosers wide enough to be listed in the summary, found without the
     // scan back toward the start of the trace that finding them live takes.
@@ -920,7 +933,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     if (any_resolve && !group_col.empty()) {
         // Split each composite group key into its per-column components and
         // collect the ones from hash columns; resolve each distinct hash once.
-        ankerl::unordered_dense::map<std::string, HashType> to_resolve;
+        ankerl::unordered_dense::map<std::string, DictField> to_resolve;
         auto collect = [&](std::string_view composite) {
             std::size_t start = 0, idx = 0;
             while (start <= composite.size() && idx < resolve_types.size()) {
@@ -942,8 +955,8 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
             auto g = extract_group_from_line(e, group_col);
             if (!g.empty()) collect(g);
         }
-        for (const auto& [hash, type] : to_resolve) {
-            auto name = index.resolve_hash(type, hash);
+        for (const auto& [hash, df] : to_resolve) {
+            auto name = index.resolve(df.dictionary->name, df.field, hash);
             if (!name.empty()) group_names.emplace(hash, std::move(name));
         }
     }

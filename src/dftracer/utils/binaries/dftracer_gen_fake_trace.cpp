@@ -3,20 +3,21 @@
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/rocksdb/db_manager.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/trace/indexing/chunk_indexer_utility.h>
-#include <dftracer/utils/trace/indexing/chunk_pruner_utility.h>
+#include <dftracer/utils/index/build/batch_builder.h>
+#include <dftracer/utils/index/build/chunk_indexer.h>
+#include <dftracer/utils/index/extensions/kinds/payloads.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer.h>
+#include <dftracer/utils/index/plan/chunk_pruner.h>
+#include <dftracer/utils/index/store/db_manager.h>
+#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/index_database_writer_context.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/fileio/streaming_file_writer_utility.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
-#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
-#include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
-#include <dftracer/utils/utilities/indexer/internal/helpers.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <dftracer/utils/utilities/trace_gen/fake_trace_writer.h>
 
 #include <cstdint>
@@ -28,11 +29,14 @@
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::trace;
-using namespace dftracer::utils::trace::indexing;
-using dftracer::utils::utilities::indexer::IndexBatchBuilderUtility;
-using dftracer::utils::utilities::indexer::IndexBuildBatchConfig;
-using dftracer::utils::utilities::indexer::IndexDatabase;
-using dftracer::utils::utilities::indexer::internal::get_logical_path;
+using namespace dftracer::utils::index::build;
+using namespace dftracer::utils::index::extensions;
+using namespace dftracer::utils::index::plan;
+using dftracer::utils::index::build::BatchBuilder;
+using dftracer::utils::index::build::IndexBuildBatchConfig;
+using dftracer::utils::index::store::IndexDatabase;
+using dftracer::utils::index::store::IndexExtension;
+using dftracer::utils::index::store::internal::get_logical_path;
 
 using trace_gen::emit_event;
 using trace_gen::emit_metadata;
@@ -80,16 +84,15 @@ static coro::CoroTask<int> run_verify(
         }
 
         auto index_path = internal::determine_index_path(abs_paths.front(), "");
-        dftracer::utils::rocksdb::RocksDBManager::instance().reset(index_path);
+        dftracer::utils::index::store::RocksDBManager::instance().reset(
+            index_path);
 
         auto batch_config = std::make_shared<IndexBuildBatchConfig>();
         batch_config->file_paths = std::move(abs_paths);
         batch_config->checkpoint_size = ckpt_size;
         batch_config->parallelism = file_paths.size();
-        batch_config->rebuild_root_summaries = true;
 
-        co_await IndexBatchBuilderUtility::process(&scope,
-                                                   std::move(batch_config));
+        co_await BatchBuilder::process(&scope, std::move(batch_config));
     }
 
     for (const auto& file_path : file_paths) {
@@ -117,13 +120,11 @@ static coro::CoroTask<int> run_verify(
             auto writer = idx_db.begin_write();
             writer->init_schema();
 
-            std::uint64_t file_hash_val = 0;
-            if (fs::exists(abs_path)) {
-                file_hash_val =
-                    static_cast<std::uint64_t>(fs::file_size(abs_path));
-            }
-            int fid = writer->get_or_create_file_info(
-                get_logical_path(abs_path), file_hash_val);
+            const int fid = writer->file_id_for(get_logical_path(abs_path));
+            namespace records = dftracer::utils::index::store::records;
+            namespace kinds = dftracer::utils::index::extensions::kinds;
+            records::clear_file(*writer, IndexExtension::BLOOM, fid);
+            records::clear_file(*writer, IndexExtension::STATS, fid);
 
             std::size_t file_size = metadata.uncompressed_size;
             std::size_t num_ckpts = metadata.num_checkpoints;
@@ -149,7 +150,6 @@ static coro::CoroTask<int> run_verify(
             }
 
             std::unordered_map<std::string, ScalableBloomFilter> file_blooms;
-            HashResolutions all_hr;
             std::size_t total_events = 0;
 
             for (const auto& chunk : chunks) {
@@ -162,15 +162,16 @@ static coro::CoroTask<int> run_verify(
                     .with_config(indexer_config)
                     .with_batch_size(4 * 1024 * 1024);
 
-                ChunkIndexerUtility idx_util;
+                ChunkIndexer idx_util;
                 auto output = co_await idx_util(ci);
                 total_events += output.events_processed;
 
                 for (auto& [dim, bloom] : output.bloom_filters) {
                     auto blob = bloom.serialize();
-                    writer->insert_chunk_bloom_filter(
-                        fid, output.checkpoint_idx, dim, blob.data(),
-                        static_cast<int>(blob.size()), bloom.num_entries());
+                    records::put_path_granule(
+                        *writer, IndexExtension::BLOOM, fid, dim,
+                        output.checkpoint_idx,
+                        kinds::encode_bloom(blob, bloom.num_entries()));
 
                     auto it = file_blooms.find(dim);
                     if (it == file_blooms.end()) {
@@ -180,25 +181,24 @@ static coro::CoroTask<int> run_verify(
                     }
                 }
 
-                writer->insert_chunk_statistics(fid, output.checkpoint_idx,
-                                                output.statistics);
-
-                for (auto& [dim, resolutions] : output.hash_resolutions) {
-                    for (auto& [h, resolved] : resolutions) {
-                        all_hr[dim][h] = resolved;
-                    }
-                }
+                records::put_chunk_statistics(
+                    *writer, fid, output.checkpoint_idx, output.statistics);
             }
 
             for (auto& [dim, bloom] : file_blooms) {
                 auto blob = bloom.serialize();
-                writer->insert_file_bloom_filter(fid, dim, blob.data(),
-                                                 static_cast<int>(blob.size()),
-                                                 bloom.num_entries());
+                records::put_path_file(
+                    *writer, IndexExtension::BLOOM, fid, dim,
+                    kinds::encode_bloom(blob, bloom.num_entries()));
             }
-            for (const auto& dim : all_dimensions) {
-                writer->insert_index_dimension(fid, dim);
-            }
+            for (const auto& dim : all_dimensions)
+                records::put_path(*writer, IndexExtension::BLOOM, fid, dim);
+            records::put_manifest(
+                *writer, fid, IndexExtension::BLOOM,
+                indexer_config.params_hash(IndexExtension::BLOOM));
+            records::put_manifest(
+                *writer, fid, IndexExtension::STATS,
+                indexer_config.params_hash(IndexExtension::STATS));
             writer->commit();
 
             std::string basename = fs::path(abs_path).filename().string();
@@ -252,7 +252,7 @@ static coro::CoroTask<int> run_verify(
 
                 ChunkPrunerInput pruner_input{idx_path_q, abs_path,
                                               std::move(*parsed), nullptr};
-                ChunkPrunerUtility pruner;
+                ChunkPruner pruner;
                 auto result = co_await pruner(pruner_input);
 
                 total_chunks += result.total_checkpoints;

@@ -1,8 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/fileio/file_process_types.h>
 #include <dftracer/utils/utilities/fileio/indexed_file_reader_utility.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -12,7 +12,7 @@
 #include <thread>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::indexer::internal;
+using namespace dftracer::utils::index::gzip;
 using namespace dftracer::utils::utilities::reader::internal;
 using namespace dftracer::utils::utilities::fileio;
 using namespace dftracer::utils::trace::internal;
@@ -60,7 +60,8 @@ TEST_SUITE("IndexedFileReader") {
             std::string db_root = determine_index_path(gz_path, "");
 
             // Create index first
-            auto indexer = IndexerFactory::create(gz_path, db_root, 1024, true);
+            auto indexer =
+                CheckpointIndexerFactory::create(gz_path, db_root, 1024, true);
             REQUIRE(indexer != nullptr);
             indexer->build();
             REQUIRE(fs::exists(db_root));
@@ -84,7 +85,8 @@ TEST_SUITE("IndexedFileReader") {
             std::string db_root = determine_index_path(gz_path, "");
 
             // Create index first
-            auto indexer = IndexerFactory::create(gz_path, db_root, 1024, true);
+            auto indexer =
+                CheckpointIndexerFactory::create(gz_path, db_root, 1024, true);
             REQUIRE(indexer != nullptr);
             indexer->build();
             REQUIRE(fs::exists(db_root));
@@ -235,8 +237,8 @@ TEST_SUITE("IndexedFileReader") {
             std::string db_root = determine_index_path(gz_path, "");
 
             // Create index
-            auto indexer =
-                IndexerFactory::create(gz_path, index_path, 1024, true);
+            auto indexer = CheckpointIndexerFactory::create(gz_path, index_path,
+                                                            1024, true);
             indexer->build();
             REQUIRE(fs::exists(db_root));
 
@@ -267,8 +269,8 @@ TEST_SUITE("IndexedFileReader") {
             std::string db_root = determine_index_path(gz_path, "");
 
             // Create index
-            auto indexer =
-                IndexerFactory::create(gz_path, index_path, 1024, true);
+            auto indexer = CheckpointIndexerFactory::create(gz_path, index_path,
+                                                            1024, true);
             indexer->build();
             // Process without modifying file
             IndexedFileReaderUtility reader_utility;

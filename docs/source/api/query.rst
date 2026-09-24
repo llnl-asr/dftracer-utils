@@ -35,7 +35,7 @@ value expressions and evaluates them in memory with ``.apply()`` (see
    q = F.name.like("%read%")                   # SQL LIKE
    q = F.name.regex("^p?read$")                 # ECMAScript regex
 
-   q = resolved("hostname") == "node01"         # virtual field, rewritten to a hash lookup
+   q = resolved("hhash.name") == "node01"       # dictionary field, rewritten to a key lookup
 
    query_string = str(q)                      # render to string
 

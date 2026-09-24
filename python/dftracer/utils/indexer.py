@@ -1,13 +1,15 @@
 """Indexer utilities for building and managing trace indexes."""
 
+import json
 import os
 from dataclasses import dataclass, field
-from typing import Dict, List, Literal, Optional, Set, Tuple, Union
+from typing import Dict, List, Optional, Sequence, Set, Tuple, Type, Union
 
 from ._units import coerce_bytes, coerce_duration
 from .dftracer_utils_ext import CheckpointIndexer as _NativeCheckpointIndexer
 from .dftracer_utils_ext import Indexer as _NativeIndexer
 from .runtime import Runtime
+from .schemas import RecordSchema, schema_id
 
 DEFAULT_CHECKPOINT_SIZE = 32 * 1024 * 1024  # 32MB
 
@@ -46,11 +48,14 @@ class BloomConfig:
             ``"args.size"`` or a nested ``"io.size"``). Each gets a bloom
             filter (equality filters) and min/max (range filters) per chunk.
             An existing index without one of these fields is rebuilt.
-        auto: Also index every other flat args key: a number gets a per-chunk
-            min/max, a string a per-chunk bloom while the chunk holds at most
-            ``auto_max_distinct`` of its values (else it keeps no bloom there).
-            On by default; an existing index built without it is rebuilt.
-        auto_max_distinct: The per-chunk distinct-value cap for ``auto``
+        path_budget: Also index each file's ``path_budget`` most frequent
+            other args paths: a number gets a per-chunk min/max, a string a
+            per-chunk bloom while the chunk holds at most ``auto_max_distinct``
+            of its values (else it keeps no bloom there). A path outside the
+            budget is still queryable but never skips a chunk. 0 indexes only
+            the fixed fields and ``fields``; an existing index built with
+            another budget is rebuilt.
+        auto_max_distinct: The per-chunk distinct-value cap for automatic
             string blooms.
         false_positive_rate: Bloom false-positive rate, in (0, 1).
         expected_entries: Expected distinct values per chunk, which sizes
@@ -58,7 +63,7 @@ class BloomConfig:
     """
 
     fields: List[str] = field(default_factory=list)
-    auto: bool = True
+    path_budget: int = 1024
     auto_max_distinct: int = 256
     false_positive_rate: float = 0.01
     expected_entries: int = 1024
@@ -75,6 +80,8 @@ class IndexStatus:
         index_path: Path to the .dftindex store.
         aggregation_interval_us: Time interval (us) of the cached aggregation
             tier, or 0 if none.
+        truncated: Ready files whose last gzip member was cut short; their
+            recovered tail is not checksum-verified.
     """
 
     total_files: int
@@ -82,6 +89,7 @@ class IndexStatus:
     needs_work: List[str] = field(default_factory=list)
     index_path: str = ""
     aggregation_interval_us: int = 0
+    truncated: List[str] = field(default_factory=list)
 
     @classmethod
     def _from_dict(cls, result: dict) -> "IndexStatus":
@@ -92,6 +100,7 @@ class IndexStatus:
             needs_work=result["needs_work"],
             index_path=result.get("index_path", ""),
             aggregation_interval_us=result.get("aggregation_interval_us", 0),
+            truncated=result.get("truncated", []),
         )
 
 
@@ -106,7 +115,8 @@ class Indexer:
     At least one of 'directory' or 'files' must be provided.
 
     Args:
-        directory: Directory containing trace files (.pfw/.pfw.gz).
+        directory: Directory containing trace files (.pfw, .pfw.gz, .jsonl.gz,
+            .ndjson.gz).
         files: List of specific file paths to index.
         index_dir: Directory for .dftindex stores (default: next to files).
         require_checkpoint: Build checkpoint tier (default True).
@@ -118,6 +128,16 @@ class Indexer:
         parallelism: Number of parallel workers (0 = all cores).
         force_rebuild: Force rebuild even if index exists.
         runtime: Runtime for executor parallelism (default: global runtime).
+        extensions: Pruning extensions the bloom tier builds, from
+            "zonemap", "bloom", "counts" and "postings" (default all four).
+        schema: Record schema of every trace, a registered id or a
+            :class:`dftracer.utils.schemas.RecordSchema` class; None detects
+            each file's from its first lines. A generic trace is indexed by
+            exact JSON path, so a filter on any field can skip chunks.
+        memory_budget: Bytes the build may hold at once, as for
+            ``TraceViewer.memory_budget`` (an int or a size such as "4GB");
+            0 is about a third of available memory. Past it, large files are
+            indexed fewer at a time and spill to disk.
 
     Example:
         >>> indexer = Indexer("/path/to/traces")
@@ -148,6 +168,9 @@ class Indexer:
         parallelism: int = 0,
         force_rebuild: bool = False,
         runtime: Optional[Runtime] = None,
+        extensions: Optional[Sequence[str]] = None,
+        memory_budget: Union[int, str] = 0,
+        schema: "Union[str, Type[RecordSchema], None]" = None,
     ):
         checkpoint_size = coerce_bytes(checkpoint_size, "checkpoint_size")
 
@@ -187,8 +210,11 @@ class Indexer:
             bloom_fields=bloom.fields,
             false_positive_rate=bloom.false_positive_rate,
             expected_entries=bloom.expected_entries,
-            auto_fields=bloom.auto,
+            path_budget=bloom.path_budget,
             auto_max_distinct=bloom.auto_max_distinct,
+            extensions=list(extensions) if extensions is not None else None,
+            memory_budget=coerce_bytes(memory_budget, "memory_budget"),
+            schema=schema_id(schema) if schema is not None else None,
         )
         self._aggregation_config = agg_config
         self._file_info_cache: Optional[FileInfo] = None
@@ -238,6 +264,52 @@ class Indexer:
         result = self._native.ensure_indexed()
         return IndexStatus._from_dict(result)
 
+    def manifest(self) -> List[dict]:
+        """The extensions built for each indexed file.
+
+        Returns:
+            One dict per file with ``path``, ``index_path`` and
+            ``extensions``: dicts with ``name``, ``version``, ``params_hash``
+            (16 hex digits), ``ready`` and ``current``.
+        """
+        return json.loads(self._native.manifest())
+
+    def explain(self, query: str) -> List[dict]:
+        """Why a query reads the chunks it reads, per file. Writes nothing.
+
+        Returns:
+            One dict per file with ``path``, ``indexed``, ``may_match``,
+            ``chunks``, ``read`` (the chunks a scan reads) and ``extensions``:
+            dicts with ``name``, ``file_ruled_out`` and ``removed`` (the
+            chunks that extension rules out alone).
+
+        Raises:
+            DFTUtilsValueError: The query does not parse.
+        """
+        return json.loads(self._native.explain(query))
+
+    def rebuild_extension(self, name: str) -> IndexStatus:
+        """Rewrite one tier extension of every file, leaving the others.
+
+        Args:
+            name: "zonemap", "bloom", "counts", "postings", "dft.stats",
+                "dft.metadata", or the name of an index extension that a
+                loaded :class:`~dftracer.utils.plugins.Plugins` set
+                registered.
+        """
+        return IndexStatus._from_dict(self._native.rebuild_extension(name))
+
+    def drop_extension(self, name: str) -> IndexStatus:
+        """Remove one tier extension from every indexed file.
+
+        The next build makes it again only when ``extensions`` names it, or
+        for a plugin extension while its plugin set is loaded.
+
+        Args:
+            name: As for :meth:`rebuild_extension`.
+        """
+        return IndexStatus._from_dict(self._native.drop_extension(name))
+
     def get_checkpoint_indexer(self, file_path: str) -> _NativeCheckpointIndexer:
         """Get a checkpoint indexer for a specific file.
 
@@ -252,26 +324,23 @@ class Indexer:
         """
         return self._native.get_checkpoint_indexer(file_path)
 
-    def get_hash_table(self, hash_type: Literal["file", "host", "string", "proc"]) -> dict:
-        """Query hash table mappings.
+    def get_dictionary(self, name: str, field: str) -> dict:
+        """Key -> `field` of every row of the index dictionary `name`.
 
-        Returns a dictionary mapping hash values to resolved names for the
-        given hash type. This is useful for resolving fhash/hhash values in
-        aggregated data.
+        The dftracer schema has the dictionaries ``file`` (field ``path``),
+        ``host`` (``name``) and ``string`` (``value``), keyed by the hashes
+        its events carry.
 
-        Args:
-            hash_type: One of 'file', 'host', 'string', or 'proc'.
-
-        Returns:
-            dict mapping hash values (str) to resolved names (str).
+        Raises:
+            ValueError: If `name` has no field `field`.
 
         Example:
             >>> indexer = Indexer("/path/to/traces")
             >>> indexer.ensure_indexed()
-            >>> file_names = indexer.get_hash_table("file")
-            >>> # file_names = {"abc123": "/path/to/data.h5", ...}
+            >>> paths = indexer.get_dictionary("file", "path")
+            >>> # paths = {"abc123": "/path/to/data.h5", ...}
         """
-        return self._native.get_hash_table(hash_type)
+        return self._native.get_dictionary(name, field)
 
     def query_file_pids(self, file_id: int) -> set:
         """Query PIDs observed in a specific file.

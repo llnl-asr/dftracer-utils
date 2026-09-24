@@ -7,7 +7,7 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
 #include <dftracer/utils/dataframe/series.h>
-#include <dftracer/utils/trace/aggregators/aggregator_utility.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregator.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_rechunker.h>
@@ -200,7 +200,7 @@ std::string cell(const df::Series& c, std::int64_t i) {
 // via the aggregator; returns the shard's .dftindex path.
 std::string build_aggregated_shard(dftu_utils_test::TestEnvironment& env,
                                    const std::string& tag, int num_events) {
-    namespace agg = dftracer::utils::trace::aggregators;
+    namespace agg = dftracer::utils::index::schemas::dft::agg;
     namespace internal = dftracer::utils::trace::internal;
     std::string dir = env.get_dir() + "/" + tag;
     fs::create_directories(dir);
@@ -216,7 +216,7 @@ std::string build_aggregated_shard(dftu_utils_test::TestEnvironment& env,
         rt.executor(),
         [&](dftracer::utils::CoroScope& ctx)
             -> dftracer::utils::coro::CoroTask<void> {
-            agg::AggregatorUtility u;
+            agg::Aggregator u;
             auto gen = u(ctx, input);
             while (auto batch = co_await gen.next()) (void)batch;
             co_return;
@@ -431,8 +431,8 @@ TEST_SUITE("DFTracerView") {
                                {"--stream", "--no-metadata", "--time-range",
                                 "0,1000200000", "-d", env.get_dir()},
                                cap, narrow) == 0);
-        // The window keeps only i=1,2; the unfiltered stream keeps them all.
-        CHECK(count_lines(narrow) == 2);
+        // [0, ts of i=2) keeps only i=1: the window excludes its end.
+        CHECK(count_lines(narrow) == 1);
         CHECK(count_lines(full) > count_lines(narrow));
     }
 

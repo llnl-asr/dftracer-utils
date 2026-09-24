@@ -29,14 +29,14 @@ class TestFindStaleFiles:
                 "changed",
                 "added",
                 "removed",
-                "schema_outdated",
+                "format_outdated",
                 "stale",
             }
             assert res["stale"] is False
             assert res["changed"] == []
             assert res["added"] == []
             assert res["removed"] == []
-            assert res["schema_outdated"] is False
+            assert res["format_outdated"] is False
 
     def test_detects_changed_file(self):
         with Environment(lines=20) as env:

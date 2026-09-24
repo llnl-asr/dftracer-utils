@@ -5,15 +5,14 @@
 
 #include <memory>
 
-namespace dftracer::utils::utilities::indexer {
+namespace dftracer::utils::index::store {
 class IndexDatabase;
 class SstArtifactRegistry;
-}  // namespace dftracer::utils::utilities::indexer
+}  // namespace dftracer::utils::index::store
 
 typedef struct {
-    PyObject_HEAD
-        std::shared_ptr<dftracer::utils::utilities::indexer::IndexDatabase>
-            db;
+    PyObject_HEAD std::shared_ptr<dftracer::utils::index::store::IndexDatabase>
+        db;
 } IndexDatabaseObject;
 
 extern PyTypeObject IndexDatabaseType;

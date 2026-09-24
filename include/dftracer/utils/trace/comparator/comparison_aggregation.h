@@ -3,9 +3,9 @@
 
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_output.h>
 #include <dftracer/utils/query/query.h>
-#include <dftracer/utils/trace/aggregators/aggregation_config.h>
-#include <dftracer/utils/trace/aggregators/aggregation_output.h>
 
 #include <cstddef>
 #include <optional>
@@ -19,9 +19,11 @@ namespace dftracer::utils::trace::comparator {
 /// ChunkAggregator workers, all sharing one intern table, then merge the chunk
 /// outputs. The single fan-out shared by dftracer_comparator and the Python
 /// ComparatorUtility so the two stay in lock step.
-coro::CoroTask<aggregators::EventAggregatorOutput> run_comparison_aggregation(
+coro::CoroTask<dftracer::utils::index::schemas::dft::agg::EventAggregatorOutput>
+run_comparison_aggregation(
     CoroScope& ctx, const std::vector<std::string>& input_files,
-    const aggregators::AggregationConfig& agg_config,
+    const dftracer::utils::index::schemas::dft::agg::AggregationConfig&
+        agg_config,
     const std::optional<query::Query>& query, const std::string& index_dir,
     std::size_t checkpoint_size, bool force_rebuild,
     std::size_t executor_threads);

@@ -49,10 +49,10 @@ def test_string_match_ops():
 
 
 def test_resolved_fields():
-    assert str(resolved("hostname") == "node01") == 'resolved.hostname == "node01"'
-    assert str(resolved("fpath").like("%/scratch/%")) == ('resolved.fpath like "%/scratch/%"')
-    with pytest.raises(ValueError):
-        resolved("not_a_field")
+    assert str(resolved("hhash.name") == "node01") == 'resolved.hhash.name == "node01"'
+    assert str(resolved("fhash.path").like("%/scratch/%")) == (
+        'resolved.fhash.path like "%/scratch/%"'
+    )
 
 
 def test_nested_field_path():
@@ -200,7 +200,9 @@ def test_unified_predicate_methods_serialize():
     assert str(F.cat.like("%io%")) == 'cat like "%io%"'
     assert str(F.cat.is_in(["POSIX", "STDIO"])) == 'cat in ["POSIX", "STDIO"]'
     assert str(F.cat.eq("io")) == 'cat == "io"'
-    assert str(resolved("fpath").like("%/scratch/%")) == 'resolved.fpath like "%/scratch/%"'
+    assert (
+        str(resolved("fhash.path").like("%/scratch/%")) == 'resolved.fhash.path like "%/scratch/%"'
+    )
     assert str((F.cat == "POSIX") & (F.dur > 1000)) == '(cat == "POSIX" and dur > 1000)'
 
 
@@ -304,7 +306,7 @@ def test_traceviewer_filter_unified_predicates(tmp_path):
     # filter accepts like/resolved predicates (built and pushed down).
     v = TraceViewer(str(tmp_path), index_path=idx).phase("events").filter(F.cat.like("POS%"))
     assert isinstance(v, TraceViewer)
-    v2 = TraceViewer(str(tmp_path), index_path=idx).filter(resolved("hostname") == "n01")
+    v2 = TraceViewer(str(tmp_path), index_path=idx).filter(resolved("hhash.name") == "n01")
     assert isinstance(v2, TraceViewer)
 
     # A non-pushable predicate filters the collected rows, not the index.
@@ -316,3 +318,28 @@ def test_traceviewer_filter_unified_predicates(tmp_path):
     expected = every[every["dur"] + every["ts"] > 1005]
     assert 0 < len(kept) < len(every)
     assert sorted(kept["ts"]) == sorted(expected["ts"])
+
+
+def test_any_renders_and_filters_array_elements(tmp_path):
+    import pyarrow as pa
+
+    import dftracer.utils as dftu
+    from dftracer.utils.query import F
+
+    assert str(Field("tags").any() == "a") == 'any(tags) == "a"'
+    assert str(F.sizes.any() > 10) == "any(sizes) > 10"
+    assert str(F.tags.any().is_in(["a", "b"])) == 'any(tags) in ["a", "b"]'
+    with pytest.raises(dftu.DFTUtilsValueError, match="any"):
+        (F.tags.any() == "a").apply(pa.table({"tags": [1]}))
+
+    path = tmp_path / "tags.ndjson.gz"
+    lines = [
+        '{"op":"read","tags":["a","b"],"sizes":[1,4096]}',
+        '{"op":"read","tags":["c"],"sizes":[2]}',
+        '{"op":"read"}',
+    ]
+    path.write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
+    tv = dftu.TraceViewer(str(path))
+    assert pa.table(tv.query('any(tags) == "a"').collect()).num_rows == 1
+    assert pa.table(tv.filter(F.sizes.any() > 100).collect()).num_rows == 1
+    assert pa.table(tv.query('not any(tags) == "a"').collect()).num_rows == 2

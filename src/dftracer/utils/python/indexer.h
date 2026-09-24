@@ -2,12 +2,14 @@
 #define DFTRACER_UTILS_PYTHON_INDEXER_H
 
 #include <Python.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 
 #include <cstdint>
+#include <memory>
 
 typedef struct {
-    PyObject_HEAD dftu_indexer_handle_t handle;
+    PyObject_HEAD std::shared_ptr<
+        dftracer::utils::index::gzip::CheckpointIndexer> *handle;
     PyObject *gz_path;
     PyObject *index_path;
     std::uint64_t checkpoint_size;

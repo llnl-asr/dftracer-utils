@@ -1,12 +1,16 @@
+#include <ankerl/unordered_dense.h>
 #include <dftracer/utils/core/common/memory_budget.h>
 #include <dftracer/utils/core/common/string_intern.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/index/cache/mv_store.h>
+#include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/time_metric.h>
 #include <dftracer/utils/trace/views/containment_fold.h>
-#include <dftracer/utils/trace/views/mv_store.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_executor.h>
@@ -15,12 +19,12 @@
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/trace/views/view_source.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <map>
 #include <memory>
 #include <string>
 #include <utility>
@@ -48,13 +52,57 @@ void strip_redundant_time_bucket(detail::ViewPlan& p) {
                            }),
             g.end());
 }
+// Resolved keys must name a column of the record_schema. Path-decoded records
+// carry every field under its path: a named field key groups on that path, and
+// the keys only dftracer events have are rejected.
+void check_keys(const detail::ViewPlan& p, std::vector<GroupKey>& keys) {
+    for (const auto& k : keys)
+        if (k.kind == GroupKey::Kind::Resolved)
+            detail::plan_record_schema(p).resolved_column(k.arg);
+    if (!detail::plan_by_path(p)) return;
+    for (auto& k : keys) {
+        switch (k.kind) {
+            case GroupKey::Kind::Name:
+                k.arg = "name";
+                break;
+            case GroupKey::Kind::Cat:
+                k.arg = "cat";
+                break;
+            case GroupKey::Kind::Pid:
+                k.arg = "pid";
+                break;
+            case GroupKey::Kind::Tid:
+                k.arg = "tid";
+                break;
+            case GroupKey::Kind::Arg:
+            case GroupKey::Kind::Field:
+            case GroupKey::Kind::Expr:
+            case GroupKey::Kind::Resolved:
+                break;
+            case GroupKey::Kind::Fhash:
+            case GroupKey::Kind::Hhash:
+            case GroupKey::Kind::IoCat:
+            case GroupKey::Kind::AccPat:
+            case GroupKey::Kind::FilePath:
+            case GroupKey::Kind::FileName:
+            case GroupKey::Kind::HostName:
+            case GroupKey::Kind::Rank:
+                throw DFTUtilsException::cat(ErrorCode::INVALID_ARGUMENT,
+                                             "group key ",
+                                             detail::group_col_name(k),
+                                             " needs dftracer events; schema ",
+                                             detail::plan_record_schema(p).id,
+                                             " records have paths only");
+        }
+        if (k.kind != GroupKey::Kind::Expr) k.kind = GroupKey::Kind::Field;
+    }
+}
+
 }  // namespace
 
-ScanPlan from_files(std::vector<ViewFile> files,
-                    indexing::BloomFilterCache* bloom_cache) {
+ScanPlan from_files(std::vector<ViewFile> files) {
     auto plan = std::make_shared<detail::ViewPlan>();
     plan->files = std::move(files);
-    plan->bloom_cache = bloom_cache;
     return plan;
 }
 
@@ -68,7 +116,8 @@ coro::CoroTask<ScanPlan> from_directory(std::string dir,
                                         std::string index_path) {
     utilities::filesystem::PatternDirectoryScannerUtility scanner;
     utilities::filesystem::PatternDirectoryScannerUtilityInput input(
-        std::move(dir), {".pfw.gz"}, /*recursive=*/true,
+        std::move(dir), {".pfw.gz", ".jsonl.gz", ".ndjson.gz"},
+        /*recursive=*/true,
         /*populate_size=*/false);
 
     std::vector<utilities::filesystem::FileEntry> entries;
@@ -124,21 +173,51 @@ std::vector<TraceConfig> config(const ScanPlan& plan_) {
 
 namespace {
 
-namespace idx = dftracer::utils::utilities::indexer;
-
-using ColTypeMap = dftracer::utils::StringViewMap<idx::ColumnType>;
+using ColTypeMap =
+    dftracer::utils::StringViewMap<dftracer::utils::index::store::ColumnType>;
 
 void fold_col_map(ColTypeMap& into, const ColTypeMap& from) {
     for (const auto& [name, t] : from) {
         auto [pos, inserted] = into.emplace(name, t);
-        if (!inserted) pos->second = idx::merge_column_type(pos->second, t);
+        if (!inserted)
+            pos->second = dftracer::utils::index::store::merge_column_type(
+                pos->second, t);
     }
+}
+
+// Path-decoded files: the union of each file's catalog paths as written.
+ColTypeMap harvest_path_types(const std::vector<ViewFile>& files) {
+    namespace st = dftracer::utils::index::store;
+    ColTypeMap merged;
+    ankerl::unordered_dense::map<std::string, std::optional<st::IndexDatabase>>
+        dbs;
+    for (const auto& f : files) {
+        if (f.index_path.empty()) continue;
+        try {
+            auto [it, fresh] = dbs.try_emplace(f.index_path);
+            if (fresh)
+                it->second.emplace(f.index_path, st::IndexOpenMode::ReadOnly);
+            if (!it->second) continue;
+            const int fid = it->second->get_file_info_id(
+                st::internal::get_logical_path(f.file_path));
+            if (fid < 0) continue;
+            ColTypeMap one;
+            for (auto& [path, t] : it->second->file_column_types(fid))
+                one.emplace(std::move(path), t);
+            fold_col_map(merged, one);
+        } catch (...) {
+            // A missing or unreadable index contributes nothing.
+        }
+    }
+    return merged;
 }
 
 // Union the harvested column types across the view's distinct index roots,
 // reading each index's metadata in parallel. Seeds the base axis fields and
-// appends resolved.* aliases for present hash columns.
-ColTypeMap harvest_column_types(const std::vector<ViewFile>& files) {
+// appends the resolved columns of present key fields.
+ColTypeMap harvest_column_types(
+    const std::vector<ViewFile>& files,
+    const dftracer::utils::index::RecordSchema& record_schema) {
     // Distinct index roots (many files often share one index).
     std::vector<std::string> roots;
     for (const auto& f : files) {
@@ -149,10 +228,10 @@ ColTypeMap harvest_column_types(const std::vector<ViewFile>& files) {
 
     ColTypeMap merged;
     // Base axis fields are always present and not harvested as columns.
-    merged.emplace("pid", idx::ColumnType::Int64);
-    merged.emplace("tid", idx::ColumnType::Int64);
-    merged.emplace("ts", idx::ColumnType::Int64);
-    merged.emplace("dur", idx::ColumnType::Int64);
+    merged.emplace("pid", dftracer::utils::index::store::ColumnType::Int64);
+    merged.emplace("tid", dftracer::utils::index::store::ColumnType::Int64);
+    merged.emplace("ts", dftracer::utils::index::store::ColumnType::Int64);
+    merged.emplace("dur", dftracer::utils::index::store::ColumnType::Int64);
 
     if (!roots.empty()) {
         const auto n = static_cast<std::int64_t>(roots.size());
@@ -162,9 +241,10 @@ ColTypeMap harvest_column_types(const std::vector<ViewFile>& files) {
                 ColTypeMap local;
                 for (std::int64_t i = begin; i < end; ++i) {
                     try {
-                        idx::IndexDatabase db(
+                        dftracer::utils::index::store::IndexDatabase db(
                             roots[static_cast<std::size_t>(i)],
-                            idx::IndexOpenMode::ReadOnly);
+                            dftracer::utils::index::store::IndexOpenMode::
+                                ReadOnly);
                         for (auto& [name, t] : db.query_all_column_types())
                             local.emplace(std::move(name), t);
                     } catch (...) {
@@ -180,18 +260,56 @@ ColTypeMap harvest_column_types(const std::vector<ViewFile>& files) {
         fold_col_map(merged, harvested);
     }
 
-    // resolved.* virtual columns, present when their hash column is.
-    if (merged.count("fhash"))
-        merged.emplace("resolved.fpath", idx::ColumnType::String);
-    if (merged.count("hhash"))
-        merged.emplace("resolved.hostname", idx::ColumnType::String);
+    // Resolved columns, present when their key field is.
+    for (const auto& name : record_schema.resolved_names())
+        if (const auto& key = record_schema.resolved_column(name).key_field;
+            merged.count(key) || merged.count("args." + key))
+            merged.emplace(name,
+                           dftracer::utils::index::store::ColumnType::String);
     return merged;
+}
+
+// Declared fields override the observed types of their paths; a json field,
+// which the catalog does not hold as a path, is always a string column.
+void overlay_declared(ColTypeMap& m,
+                      const dftracer::utils::index::RecordSchema& schema) {
+    namespace ix = dftracer::utils::index;
+    using CT = ix::store::ColumnType;
+    for (const auto& f : schema.fields) {
+        CT t = CT::String;
+        switch (f.type) {
+            case ix::FieldType::BOOL:
+            case ix::FieldType::INT:
+                t = CT::Int64;
+                break;
+            case ix::FieldType::FLOAT:
+                t = CT::Float64;
+                break;
+            case ix::FieldType::STRING:
+            case ix::FieldType::JSON:
+                t = CT::String;
+                break;
+        }
+        if (f.type == ix::FieldType::JSON)
+            m.insert_or_assign(f.path, t);
+        else if (auto it = m.find(f.path); it != m.end())
+            it->second = t;
+    }
+}
+
+ColTypeMap harvest_plan_types(const ScanPlan& plan_) {
+    if (!detail::plan_by_path(*plan_))
+        return harvest_column_types(plan_->files,
+                                    detail::plan_record_schema(*plan_));
+    ColTypeMap m = harvest_path_types(plan_->files);
+    overlay_declared(m, detail::plan_record_schema(*plan_));
+    return m;
 }
 
 }  // namespace
 
 std::vector<std::string> columns(const ScanPlan& plan_) {
-    ColTypeMap m = harvest_column_types(plan_->files);
+    ColTypeMap m = harvest_plan_types(plan_);
     std::vector<std::string> out;
     out.reserve(m.size());
     for (auto& [name, t] : m) out.push_back(name);
@@ -199,15 +317,90 @@ std::vector<std::string> columns(const ScanPlan& plan_) {
     return out;
 }
 
+namespace {
+
+const char* path_type_name(dftracer::utils::index::store::PathType t) {
+    using PT = dftracer::utils::index::store::PathType;
+    switch (t) {
+        case PT::NULL_VALUE:
+            return "null";
+        case PT::BOOL:
+            return "bool";
+        case PT::INT:
+            return "int";
+        case PT::UINT:
+            return "uint";
+        case PT::DOUBLE:
+            return "float";
+        case PT::STRING:
+            return "string";
+        case PT::MIXED:
+            return "mixed";
+    }
+    return "mixed";
+}
+
+}  // namespace
+
+std::vector<SchemaLeaf> schema_tree(const ScanPlan& plan_) {
+    namespace st = dftracer::utils::index::store;
+    std::map<std::string, st::PathStat> merged;
+    ankerl::unordered_dense::map<std::string, std::optional<st::IndexDatabase>>
+        dbs;
+    for (const auto& f : plan_->files) {
+        if (f.index_path.empty()) continue;
+        try {
+            auto [it, fresh] = dbs.try_emplace(f.index_path);
+            if (fresh)
+                it->second.emplace(f.index_path, st::IndexOpenMode::ReadOnly);
+            const int fid = it->second->get_file_info_id(
+                st::internal::get_logical_path(f.file_path));
+            if (fid < 0) continue;
+            for (auto& [path, stat] : it->second->catalog(fid)) {
+                auto [pos, inserted] = merged.try_emplace(path, stat);
+                if (inserted) continue;
+                pos->second.type = st::join(pos->second.type, stat.type);
+                pos->second.count += stat.count;
+            }
+        } catch (...) {
+            // A missing or unreadable index contributes nothing.
+        }
+    }
+    std::map<std::string, SchemaLeaf> leaves;
+    for (auto& [path, stat] : merged)
+        leaves[path] =
+            SchemaLeaf{path, path_type_name(stat.type), stat.count, {}, {}};
+    namespace ix = dftracer::utils::index;
+    const ix::RecordSchema& schema = detail::plan_record_schema(*plan_);
+    for (const auto& f : schema.fields) {
+        auto [pos, inserted] = leaves.try_emplace(f.path);
+        SchemaLeaf& leaf = pos->second;
+        if (inserted) {
+            leaf.path = f.path;
+            const std::string below = f.path + ".";
+            const bool has_leaves =
+                f.type == ix::FieldType::JSON &&
+                std::any_of(merged.begin(), merged.end(), [&](const auto& kv) {
+                    return kv.first.starts_with(below);
+                });
+            if (!has_leaves) leaf.count = 0;
+        }
+        leaf.field = f.name;
+        leaf.declared_type = std::string(ix::field_type_name(f.type));
+    }
+    std::vector<SchemaLeaf> out;
+    out.reserve(leaves.size());
+    for (auto& [path, leaf] : leaves) out.push_back(std::move(leaf));
+    return out;
+}
+
 std::vector<ColumnInfo> schema(const ScanPlan& plan_) {
-    ColTypeMap m = harvest_column_types(plan_->files);
+    ColTypeMap m = harvest_plan_types(plan_);
     std::vector<ColumnInfo> out;
     out.reserve(m.size());
-    for (auto& [name, t] : m) {
-        // A pre-v12 index stored no type; report it as a string.
-        const char* tn = idx::column_type_name(t);
-        out.push_back(ColumnInfo{name, tn[0] ? tn : "string"});
-    }
+    for (auto& [name, t] : m)
+        out.push_back(ColumnInfo{
+            name, dftracer::utils::index::store::column_type_name(t)});
     std::sort(out.begin(), out.end(),
               [](const ColumnInfo& a, const ColumnInfo& b) {
                   return a.name < b.name;
@@ -218,22 +411,22 @@ std::vector<ColumnInfo> schema(const ScanPlan& plan_) {
 std::unordered_map<std::string, dataframe::TypeId> column_types(
     const ScanPlan& plan_) {
     namespace df = dftracer::utils::dataframe;
-    ColTypeMap m = harvest_column_types(plan_->files);
+    ColTypeMap m = harvest_plan_types(plan_);
     std::unordered_map<std::string, df::TypeId> out;
     out.reserve(m.size());
     for (auto& [name, t] : m) {
         df::TypeId id = df::TypeId::Unknown;
         switch (t) {
-            case idx::ColumnType::Int64:
+            case dftracer::utils::index::store::ColumnType::Int64:
                 id = df::TypeId::Int64;
                 break;
-            case idx::ColumnType::Float64:
+            case dftracer::utils::index::store::ColumnType::Float64:
                 id = df::TypeId::Float64;
                 break;
-            case idx::ColumnType::String:
+            case dftracer::utils::index::store::ColumnType::String:
                 id = df::TypeId::String;
                 break;
-            case idx::ColumnType::Unknown:
+            case dftracer::utils::index::store::ColumnType::Unknown:
                 id = df::TypeId::Unknown;
                 break;
         }
@@ -271,13 +464,17 @@ ScanPlan phase(const ScanPlan& plan_, Phase p) {
 }
 
 ScanPlan time_range(const ScanPlan& plan_, double begin, double end) {
+    detail::require_role(*plan_, "time_range");
     auto next = clone(plan_);
+    next->timed = true;
     next->time_range = std::make_pair(begin, end);
     return next;
 }
 
 ScanPlan time_bucket(const ScanPlan& plan_, std::uint64_t interval_us) {
+    detail::require_role(*plan_, "time_bucket");
     auto next = clone(plan_);
+    next->timed = true;
     next->time_bucket_us = interval_us;
     strip_redundant_time_bucket(*next);
     return next;
@@ -285,7 +482,9 @@ ScanPlan time_bucket(const ScanPlan& plan_, std::uint64_t interval_us) {
 
 ScanPlan time_bucket(const ScanPlan& plan_, std::uint64_t interval_us,
                      std::uint64_t origin_us) {
+    detail::require_role(*plan_, "time_bucket");
     auto next = clone(plan_);
+    next->timed = true;
     next->time_bucket_us = interval_us;
     next->bucket_origin_us = origin_us;
     next->bucket_origin_min = false;
@@ -294,7 +493,9 @@ ScanPlan time_bucket(const ScanPlan& plan_, std::uint64_t interval_us,
 }
 
 ScanPlan time_bucket_min(const ScanPlan& plan_, std::uint64_t interval_us) {
+    detail::require_role(*plan_, "time_bucket");
     auto next = clone(plan_);
+    next->timed = true;
     next->time_bucket_us = interval_us;
     next->bucket_origin_min = true;
     strip_redundant_time_bucket(*next);
@@ -314,6 +515,7 @@ ScanPlan time_scale(const ScanPlan& plan_, double ns_ratio) {
 }
 
 ScanPlan group_by(const ScanPlan& plan_, std::vector<GroupKey> keys) {
+    check_keys(*plan_, keys);
     auto next = clone(plan_);
     next->group_by = std::move(keys);
     strip_redundant_time_bucket(*next);
@@ -321,7 +523,15 @@ ScanPlan group_by(const ScanPlan& plan_, std::vector<GroupKey> keys) {
 }
 
 ScanPlan agg(const ScanPlan& plan_, std::vector<AggSpec> specs) {
+    bool timed = plan_->timed;
+    for (const AggSpec& s : specs)
+        if (is_occupancy_op(s.op)) {
+            detail::require_role(*plan_, "an occupancy aggregate",
+                                 detail::TraceRole::DURATION);
+            timed = true;
+        }
     auto next = clone(plan_);
+    next->timed = timed;
     next->agg = std::move(specs);
     return next;
 }
@@ -508,6 +718,24 @@ ScanPlan metadata(const ScanPlan& plan_, bool include) {
     return next;
 }
 
+ScanPlan timed(const ScanPlan& plan_) {
+    auto next = clone(plan_);
+    next->timed = true;
+    return next;
+}
+
+ScanPlan record_schema(const ScanPlan& plan_, const std::string& id) {
+    const auto& p = dftracer::utils::index::get_schema(id);
+    auto next = clone(plan_);
+    // Registered record_schemas live until the process exits.
+    next->record_schema =
+        std::shared_ptr<const dftracer::utils::index::RecordSchema>(
+            std::shared_ptr<void>(), &p);
+    next->schema.reset();
+    next->resolver.reset();
+    return next;
+}
+
 ScanPlan cancel_when(const ScanPlan& plan_, std::function<bool()> pred) {
     auto next = clone(plan_);
     next->cancelled = std::move(pred);
@@ -589,12 +817,14 @@ dataframe::LazyFrame collect(const ScanPlan& plan_) {
     // resolve to that same column.
     if (!plan_->sort_col.empty())
         lf = lf.sort_by(row_query
-                            ? detail::canonical_row_column_name(plan_->sort_col)
+                            ? detail::canonical_row_column_name(
+                                  plan_->sort_col, detail::plan_by_path(*plan_))
                             : plan_->sort_col,
                         plan_->sort_desc);
     if (!plan_->topk_col.empty())
         lf = lf.topk(row_query
-                         ? detail::canonical_row_column_name(plan_->topk_col)
+                         ? detail::canonical_row_column_name(
+                               plan_->topk_col, detail::plan_by_path(*plan_))
                          : plan_->topk_col,
                      plan_->topk_k, plan_->topk_largest);
     if (plan_->offset || plan_->limit) {
@@ -679,16 +909,19 @@ coro::CoroTask<ExportStats> run(ScanPlan plan_, const ProgressFn* progress) {
 }
 
 std::string materialize_dir(const ScanPlan& plan_) {
-    return detail::materialize_view_dir(*plan_);
+    detail::plan_record_schema(*plan_);
+    return dftracer::utils::index::cache::materialize_view_dir(*plan_);
 }
 
 void register_materialized(const ScanPlan& plan_, const std::string& dir) {
-    detail::register_view(dir, *plan_);
+    detail::plan_record_schema(*plan_);
+    dftracer::utils::index::cache::register_view(dir, *plan_);
 }
 
 std::vector<std::string> mv_source(const ScanPlan& plan_) {
     std::vector<std::string> out;
-    if (auto mv = detail::find_subsuming_view(*plan_))
+    detail::plan_record_schema(*plan_);
+    if (auto mv = dftracer::utils::index::cache::find_subsuming_view(*plan_))
         for (const auto& f : *mv) out.push_back(f.file_path);
     return out;
 }

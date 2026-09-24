@@ -1,19 +1,21 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/index/build/index_fold_driver.h>
+#include <dftracer/utils/index/extensions/bloom_fold.h>
+#include <dftracer/utils/index/extensions/dict_fold.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer.h>
+#include <dftracer/utils/index/gzip/gzip_indexer.h>
+#include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/index_database_writer_context.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/views/aggfold.h>
-#include <dftracer/utils/trace/views/bloom_fold.h>
-#include <dftracer/utils/trace/views/dict_fold.h>
 #include <dftracer/utils/trace/views/fold.h>
-#include <dftracer/utils/trace/views/index_fold_driver.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_scan.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
-#include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
-#include <dftracer/utils/utilities/indexer/internal/gzip/gzip_indexer.h>
-#include <dftracer/utils/utilities/indexer/internal/helpers.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <doctest/doctest.h>
+#include <index_test_helpers.h>
 
 #include <array>
 #include <optional>
@@ -24,12 +26,13 @@
 #include "testing_runtime.h"
 
 using namespace dftracer::utils::trace::views::detail;
+using namespace dftracer::utils::index::build;
+using namespace dftracer::utils::index::extensions;
 using dftracer::utils::StringIntern;
 using dftu_utils_test::run_coro;
 namespace dataframe = dftracer::utils::dataframe;
 
-namespace idx = dftracer::utils::utilities::indexer;
-namespace gzi = dftracer::utils::utilities::indexer::internal::gzip;
+namespace gzi = dftracer::utils::index::gzip;
 
 namespace {
 
@@ -136,18 +139,22 @@ TEST_SUITE("RawGzipFuse") {
         StringIntern intern;
         gmoracle::OracleAggFold agg(pp, intern);
         BloomFold bloom(intern);
-        DictFold dict(intern);
+        DictFold dict(
+            intern,
+            dftracer::utils::index::get_schema("dftracer").dictionaries);
         std::array<Fold*, 3> folds{&agg, &bloom, &dict};
         IndexFoldDriver driver(intern, folds, gz, idx);
 
         gzi::GzipBuildArtifacts arts;
         run_coro(
             [&](CoroScope& scope) -> dftracer::utils::coro::CoroTask<void> {
-                idx::internal::Indexer::VisitorList vl;
+                dftracer::utils::index::gzip::CheckpointIndexer::VisitorList vl;
                 vl.emplace_back(driver);
                 auto a = co_await gzi::build_gzip_index_artifacts(
-                    gz, idx::internal::Indexer::DEFAULT_CHECKPOINT_SIZE, vl,
-                    &scope);
+                    gz,
+                    dftracer::utils::index::gzip::CheckpointIndexer::
+                        DEFAULT_CHECKPOINT_SIZE,
+                    vl, &scope);
                 REQUIRE(a.has_value());
                 arts = std::move(*a);
                 co_return;
@@ -158,25 +165,24 @@ TEST_SUITE("RawGzipFuse") {
         // Persist the index this one pass produced.
         int fid = -1;
         {
-            idx::IndexDatabase db(idx);
-            auto logical = idx::internal::get_logical_path(gz);
-            const auto hash = idx::internal::calculate_file_hash(gz);
+            dftracer::utils::index::store::IndexDatabase db(idx);
+            auto logical =
+                dftracer::utils::index::store::internal::get_logical_path(gz);
+            const auto hash =
+                dftracer::utils::index::store::internal::calculate_file_hash(
+                    gz);
             const auto mtime = static_cast<std::uint64_t>(
-                idx::internal::get_file_modification_time(gz));
-            const auto bytes = idx::internal::file_size_bytes(gz);
+                dftracer::utils::index::store::internal::
+                    get_file_modification_time(gz));
+            const auto bytes =
+                dftracer::utils::index::store::internal::file_size_bytes(gz);
             auto w = db.begin_write();
-            fid = w->get_or_create_file_info(
-                logical, hash,
-                idx::IndexFileEntryCapability::INDEXING_COMPLETE |
-                    idx::IndexFileEntryCapability::MEMBERS |
-                    idx::IndexFileEntryCapability::FILE_SUMMARY,
-                mtime, bytes);
-            for (const auto& m : arts.members) w->insert_gzip_member(fid, m);
-            w->insert_file_metadata(fid, arts.checkpoint_size, arts.total_lines,
-                                    arts.total_uc_size);
-            bloom.write_to_sink(*w, fid);
-            dict.write_to_sink(*w);
-            w->add_file_capability(fid, idx::IndexFileEntryCapability::BLOOM);
+            fid = dftu_utils_test::register_test_file(*w, logical, hash, mtime,
+                                                      bytes);
+            dftracer::utils::index::gzip::persist_gzip_index_artifacts(*w, fid,
+                                                                       arts);
+            bloom.write(*w, fid);
+            dict.write(*w, fid);
             w->commit();
         }
 
@@ -191,13 +197,15 @@ TEST_SUITE("RawGzipFuse") {
         // The index that same pass produced is complete: bloom, members, and
         // the hash dictionary harvested from the very metadata the agg
         // excluded.
-        idx::IndexDatabase rd(idx, idx::IndexOpenMode::ReadOnly);
-        int rid = rd.get_file_info_id(idx::internal::get_logical_path(gz));
+        dftracer::utils::index::store::IndexDatabase rd(
+            idx, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
+        int rid = rd.get_file_info_id(
+            dftracer::utils::index::store::internal::get_logical_path(gz));
         REQUIRE(rid >= 0);
-        CHECK(rd.has_bloom_data(rid));
+        CHECK(rd.pruning_tier_current(rid));
         CHECK(!arts.members.empty());
-        CHECK(!rd.query_chunk_bloom_filters(rid, "name").empty());
-        auto fh = rd.query_hash_table(idx::IndexDatabase::HashType::FILE);
+        CHECK(dftu_utils_test::bloom_chunks(rd, rid, "name") > 0);
+        auto fh = rd.dict_field("file", "path");
         CHECK(fh.count("fh1") == 1);  // metadata went into the dictionary
     }
 
@@ -232,10 +240,12 @@ TEST_SUITE("RawGzipFuse") {
         CHECK(boot.names == ref.names);            // same group + value columns
         CHECK(boot.num_rows() == ref.num_rows());  // same groups, no metadata
 
-        idx::IndexDatabase rd(boot_idx, idx::IndexOpenMode::ReadOnly);
-        int fid = rd.get_file_info_id(idx::internal::get_logical_path(gz));
+        dftracer::utils::index::store::IndexDatabase rd(
+            boot_idx, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
+        int fid = rd.get_file_info_id(
+            dftracer::utils::index::store::internal::get_logical_path(gz));
         REQUIRE(fid >= 0);
-        CHECK(rd.has_bloom_data(fid));  // built in that one collect pass
+        CHECK(rd.pruning_tier_current(fid));  // built in that one collect pass
     }
 
     // A full export of a first-touch file routes through run_export's
@@ -259,10 +269,12 @@ TEST_SUITE("RawGzipFuse") {
         CHECK(count_containing(lines, R"("name":"HH")") == 1);  // metadata
         CHECK(count_containing(lines, R"("ph":"X")") == 20);    // data events
 
-        idx::IndexDatabase rd(idx, idx::IndexOpenMode::ReadOnly);
-        int fid = rd.get_file_info_id(idx::internal::get_logical_path(gz));
+        dftracer::utils::index::store::IndexDatabase rd(
+            idx, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
+        int fid = rd.get_file_info_id(
+            dftracer::utils::index::store::internal::get_logical_path(gz));
         REQUIRE(fid >= 0);
-        CHECK(rd.has_bloom_data(fid));  // index built in the dump pass
+        CHECK(rd.pruning_tier_current(fid));  // index built in the dump pass
     }
 
     // A filtered first-touch aggregation whose predicate names only
@@ -298,10 +310,13 @@ TEST_SUITE("RawGzipFuse") {
         CHECK(got.num_rows() == ref.num_rows());  // filter applied: 1 group
         CHECK(rows_equal(got, ref));              // same counts
 
-        idx::IndexDatabase rd(fresh, idx::IndexOpenMode::ReadOnly);
-        int fid = rd.get_file_info_id(idx::internal::get_logical_path(gz));
+        dftracer::utils::index::store::IndexDatabase rd(
+            fresh, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
+        int fid = rd.get_file_info_id(
+            dftracer::utils::index::store::internal::get_logical_path(gz));
         REQUIRE(fid >= 0);
-        CHECK(rd.has_bloom_data(fid));  // built in the filtered bootstrap pass
+        CHECK(rd.pruning_tier_current(
+            fid));  // built in the filtered bootstrap pass
     }
 
     // A filter naming a non-POD field (an arg) is not bootstrap-evaluable, so

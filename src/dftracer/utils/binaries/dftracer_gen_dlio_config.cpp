@@ -3,7 +3,7 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utils/timer.h>
-#include <dftracer/utils/trace/aggregators/aggregation_runner.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_runner.h>
 #include <dftracer/utils/utilities/common/statistics/distributions.h>
 #include <dftracer/utils/utilities/common/statistics/mixture.h>
 #include <dftracer/utils/utilities/dlio/barrier_simulator.h>
@@ -23,7 +23,7 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
-namespace agg = dftracer::utils::trace::aggregators;
+namespace agg = dftracer::utils::index::schemas::dft::agg;
 namespace dlio = dftracer::utils::utilities::dlio;
 namespace stats = dftracer::utils::utilities::common::statistics;
 

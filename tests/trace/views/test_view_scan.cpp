@@ -1,6 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <limits>
 #include <map>
@@ -219,6 +221,23 @@ TEST_SUITE("View") {
         CHECK(sink.lines().size() == static_cast<std::size_t>(n));
     }
 
+    // A write that cannot open its output fails; the scan feeding it through
+    // a bounded channel must not wait forever on the stopped writer.
+    TEST_CASE("View - an indexed sink_trace to an unwritable path fails") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        std::string gz = create_multimember_trace(env, 3000, 512);
+        std::string idx = determine_index_path(gz, "");
+        TraceWriteOptions opts;
+        opts.output_path = env.get_dir() + "/no_such_dir/out.pfw.gz";
+        opts.member_size = 4096;
+        opts.num_workers = 4;
+        opts.build_index = true;
+        CHECK_THROWS_AS(
+            View::from_file(gz, idx).metadata(false).sink_trace(opts).get(),
+            DFTUtilsException);
+    }
+
     // The index built inline during sink_trace (build_index) must be
     // byte-for-byte equivalent, for reads and pruned queries, to one built
     // lazily by the standard indexer over the identical output bytes.
@@ -384,6 +403,97 @@ TEST_SUITE("View") {
         REQUIRE(arg_name.num_columns() == 1);
         CHECK(bhas(arg_name, "args.name"));
         CHECK_FALSE(bhas(arg_name, "name"));
+    }
+
+    TEST_CASE(
+        "View - nested args are columns and short names resolve to args") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        std::string pfw = env.get_dir() + "/nested.pfw";
+        {
+            std::ofstream ofs(pfw);
+            ofs << R"({"ph":"X","name":"hot","cat":"APP","pid":1,"tid":1,)"
+                   R"("ts":1000,"dur":42,"args":{"dur":{"p99":7000},)"
+                   R"("counters":{"X":{"p50":3}},"label":{"v":"A"},)"
+                   R"("cqe.raw_ns":5}})"
+                << "\n";
+            ofs << R"({"ph":"X","name":"cold","cat":"APP","pid":1,"tid":1,)"
+                   R"("ts":1010,"dur":20,"args":{"dur":{"p99":500},)"
+                   R"("counters":{"X":{"p50":3}},"label":{"v":"B"}}})"
+                << "\n";
+            ofs << R"({"ph":"X","name":"flat","cat":"APP","pid":1,"tid":1,)"
+                   R"("ts":2000,"dur":7,"args":{"run":1}})"
+                << "\n";
+        }
+        std::string gz = pfw + ".gz";
+        dftu_utils_test::compress_file_to_gzip(pfw, gz);
+        fs::remove(pfw);
+        std::string idx = determine_index_path(gz, "");
+        {
+            StringSink index_build;
+            View::from_file(gz, idx).sink_json(index_build).get();
+        }
+        View v = View::from_file(gz, idx).metadata(false);
+
+        dataframe::DataFrame all = v.collect().get();
+        REQUIRE(all.num_rows() == 3);
+        std::vector<std::string> collected = all.names;
+        std::vector<std::string> declared = v.lazy().schema();
+        std::sort(collected.begin(), collected.end());
+        std::sort(declared.begin(), declared.end());
+        auto joined = [](const std::vector<std::string>& xs) {
+            std::string out;
+            for (const auto& x : xs) out += x + ",";
+            return out;
+        };
+        CAPTURE(joined(collected));
+        CAPTURE(joined(declared));
+        CHECK(collected == declared);
+        for (const char* c : {"args.dur.p99", "args.counters.X.p50",
+                              "args.label.v", "args.cqe.raw_ns", "args.run"})
+            CHECK(std::binary_search(collected.begin(), collected.end(),
+                                     std::string(c)));
+        std::vector<std::string> index_cols = v.columns();
+        for (const std::string& c : collected) {
+            if (c.rfind("args.", 0) != 0) continue;
+            CAPTURE(c);
+            CHECK(std::find(index_cols.begin(), index_cols.end(),
+                            c.substr(5)) != index_cols.end());
+        }
+
+        dataframe::DataFrame sel =
+            v.select({"name", "dur", "dur.p99"}).collect().get();
+        REQUIRE(sel.names ==
+                std::vector<std::string>{"name", "dur", "args.dur.p99"});
+        std::map<std::string, std::pair<double, double>> by_name;
+        for (std::int64_t i = 0; i < sel.num_rows(); ++i)
+            if (bstr(sel, i, "name") != "flat")
+                by_name[bstr(sel, i, "name")] = {bnum(sel, i, "dur"),
+                                                 bnum(sel, i, "args.dur.p99")};
+        CHECK(by_name["hot"] == std::pair<double, double>{42, 7000});
+        CHECK(by_name["cold"] == std::pair<double, double>{20, 500});
+
+        dataframe::DataFrame grouped =
+            v.group_by({GroupKey::field("counters.X.p50")})
+                .agg({{AggOp::Count, "", "n"}})
+                .collect()
+                .get();
+        REQUIRE(grouped.num_rows() == 2);
+        std::map<std::string, double> counts;
+        for (std::int64_t i = 0; i < grouped.num_rows(); ++i)
+            counts[dataframe::cell_to_string(grouped.columns[0], i)] =
+                bnum(grouped, i, "n");
+        CHECK(counts["3"] == 2);
+
+        dataframe::DataFrame tree = test_view_common::run(
+            v.query(R"(name != "flat")")
+                .call_tree({"pid", "tid"}, "ts", "dur", "label.v")
+                .collect());
+        std::vector<std::string> labels;
+        for (std::int64_t i = 0; i < tree.num_rows(); ++i)
+            labels.push_back(bstr(tree, i, "name"));
+        std::sort(labels.begin(), labels.end());
+        CHECK(labels == std::vector<std::string>{"A", "B"});
     }
 
     TEST_CASE(

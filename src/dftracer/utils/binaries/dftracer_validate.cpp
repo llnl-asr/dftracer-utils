@@ -9,9 +9,9 @@
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/core/utils/string.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 #include <simdjson.h>
 
 #include <chrono>
@@ -24,9 +24,9 @@
 
 using namespace dftracer::utils;
 using dftracer::utils::json_trim_and_validate;
+using dftracer::utils::index::gzip::CheckpointIndexerFactory;
 using dftracer::utils::utilities::fileio::lines::sources::
     async_streaming_gz_lines;
-using dftracer::utils::utilities::indexer::internal::IndexerFactory;
 
 class ValidateArgParse : public cli::ArgParse {
    public:
@@ -79,7 +79,7 @@ coro::CoroTask<void> validate_file(std::string path, FileValResult* result) {
         // entry is absent from a shared root index resolves to zero bytes, so
         // validate would read no lines and still count the file as passing
         // without ever decompressing it.
-        if (IndexerFactory::detect_format(result->path) !=
+        if (CheckpointIndexerFactory::detect_format(result->path) !=
             ArchiveFormat::GZIP) {
             throw std::runtime_error(
                 "not a gzip trace (dftracer traces must be gzip-compressed)");
@@ -88,7 +88,9 @@ coro::CoroTask<void> validate_file(std::string path, FileValResult* result) {
         // on-demand API is lazy and would accept malformed lines it never
         // navigates into.
         simdjson::dom::parser parser;
-        auto gen = async_streaming_gz_lines(result->path);
+        // A cut trace is invalid here, not recovered.
+        auto gen = async_streaming_gz_lines(result->path, 0, 0,
+                                            /*recover_truncated=*/false);
         while (auto line_opt = co_await gen.next()) {
             const auto& line = *line_opt;
             const char* start = nullptr;

@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_GZIP_STREAM_H
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_GZIP_STREAM_H
 
-#include <dftracer/utils/utilities/indexer/internal/indexer.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/utilities/reader/error.h>
 #include <dftracer/utils/utilities/reader/internal/inflater.h>
 #include <dftracer/utils/utilities/reader/internal/streams/stream.h>
@@ -30,9 +30,9 @@ class GzipStream : public StreamBase {
 
     // Less frequently accessed members
     std::string current_gz_path_;
-    dftracer::utils::utilities::indexer::internal::Indexer *indexer_ = nullptr;
+    dftracer::utils::index::gzip::CheckpointIndexer *indexer_ = nullptr;
     std::size_t start_bytes_;
-    dftracer::utils::utilities::indexer::internal::GzipMemberRecord member_;
+    dftracer::utils::index::gzip::GzipMemberRecord member_;
 
     // Backing buffer and copy-based read cursor, shared by the copy-drain
     // read_async(char*, size_t) below. Derived classes fill buffer_ via their
@@ -132,8 +132,7 @@ class GzipStream : public StreamBase {
         }
         file_offset_ = 0;
         inflater_.reset();
-        member_ =
-            dftracer::utils::utilities::indexer::internal::GzipMemberRecord();
+        member_ = dftracer::utils::index::gzip::GzipMemberRecord();
         use_member_ = false;
         decompression_initialized_ = false;
     }
@@ -154,10 +153,10 @@ class GzipStream : public StreamBase {
     /// Records the request only. Opening and seeking happen on the first
     /// read, so a stream is built without blocking a caller who is going to
     /// await the data anyway.
-    void initialize(const std::string &gz_path, std::size_t start_bytes,
-                    std::size_t end_bytes,
-                    dftracer::utils::utilities::indexer::internal::Indexer
-                        &indexer) override {
+    void initialize(
+        const std::string &gz_path, std::size_t start_bytes,
+        std::size_t end_bytes,
+        dftracer::utils::index::gzip::CheckpointIndexer &indexer) override {
         if (is_active_) {
             reset();
         }

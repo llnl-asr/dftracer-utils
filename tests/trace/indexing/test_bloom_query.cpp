@@ -1,10 +1,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/trace/indexing/bloom_filter.h>
+#include <dftracer/utils/index/extensions/bloom_filter.h>
+#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/index_database_writer_context.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/indexing/bloom_query_utility.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
-#include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
-#include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <doctest/doctest.h>
 
 #include <string>
@@ -12,9 +12,9 @@
 #include "testing_utilities.h"
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::trace::indexing;
-using dftracer::utils::utilities::indexer::IndexDatabase;
-using dftracer::utils::utilities::indexer::internal::get_logical_path;
+using namespace dftracer::utils::index::extensions;
+using dftracer::utils::index::store::IndexDatabase;
+using dftracer::utils::index::store::internal::get_logical_path;
 
 // Helper to set up a .idx database with test data
 static void populate_test_idx(const std::string& index_path,

@@ -1,7 +1,6 @@
 #ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAM_H
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAM_H
 
-#ifdef __cplusplus
 #include <dftracer/utils/core/coro/task.h>
 
 #include <cstddef>
@@ -91,52 +90,5 @@ class ReaderStream {
 };
 
 }  // namespace dftracer::utils::utilities::reader::internal
-
-extern "C" {
-#endif
-
-// C API
-
-/**
- * @brief Opaque stream handle (C API).
- */
-typedef void* dftu_reader_stream_t;
-
-/**
- * @brief Read next chunk from stream into buffer.
- *
- * @param stream Stream handle
- * @param buffer Output buffer
- * @param buffer_size Maximum bytes to read
- * @return Number of bytes actually read (0 if finished)
- */
-size_t dftu_reader_stream_read(dftu_reader_stream_t stream, char* buffer,
-                               size_t buffer_size);
-
-/**
- * @brief Check if stream is done.
- *
- * @param stream Stream handle
- * @return 1 if done (no more data), 0 otherwise
- */
-int dftu_reader_stream_done(dftu_reader_stream_t stream);
-
-/**
- * @brief Reset stream to beginning.
- *
- * @param stream Stream handle
- */
-void dftu_reader_stream_reset(dftu_reader_stream_t stream);
-
-/**
- * @brief Destroy stream and free resources.
- *
- * @param stream Stream handle
- */
-void dftu_reader_stream_destroy(dftu_reader_stream_t stream);
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif  // DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAM_H

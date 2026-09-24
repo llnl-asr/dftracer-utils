@@ -440,13 +440,17 @@ class Parser {
                       std::string(current().text) + "'"));
         }
 
-        auto field = parse_field();
+        auto parsed_field = parse_field();
+        if (!parsed_field)
+            return dftracer::utils::unexpected(parsed_field.error());
+        FieldNode field = std::move(*parsed_field);
 
         // Check for "in" or "not in"
         if (current().kind == TokenKind::KW_IN) {
             advance();
             auto arr = parse_array();
             if (!arr) return dftracer::utils::unexpected(arr.error());
+            arr->set = make_in_set(*arr);
             return make_node(InNode{std::move(field), std::move(*arr)});
         }
         if (current().kind == TokenKind::KW_NOT) {
@@ -458,6 +462,7 @@ class Parser {
                     advance();  // consume "in"
                     auto arr = parse_array();
                     if (!arr) return dftracer::utils::unexpected(arr.error());
+                    arr->set = make_in_set(*arr);
                     return make_node(
                         NotInNode{std::move(field), std::move(*arr)});
                 }
@@ -505,9 +510,23 @@ class Parser {
         return make_node(CompareNode{std::move(field), *op, std::move(*val)});
     }
 
-    FieldNode parse_field() {
+    // A field: a path, or `any ( path )`.
+    dftracer::utils::expected<FieldNode, QueryError> parse_field() {
         auto& tok = advance();
-        return FieldNode{std::string(tok.text)};
+        if (tok.text != "any" || current().kind != TokenKind::LPAREN)
+            return FieldNode{std::string(tok.text)};
+        advance();  // "("
+        if (current().kind != TokenKind::IDENT)
+            return dftracer::utils::unexpected(
+                error("Expected a field name after 'any(', got '" +
+                      std::string(current().text) + "'"));
+        std::string path(advance().text);
+        if (current().kind != TokenKind::RPAREN)
+            return dftracer::utils::unexpected(
+                error("Expected ')' after 'any(" + path + "', got '" +
+                      std::string(current().text) + "'"));
+        advance();  // ")"
+        return FieldNode{std::move(path), true};
     }
 
     dftracer::utils::expected<QueryNodePtr, QueryError> parse_match(
@@ -564,6 +583,7 @@ class Parser {
                       std::string(current().text) + "'"));
         }
         auto field = parse_field();
+        if (!field) return dftracer::utils::unexpected(field.error());
 
         auto compiled = compile_pattern(MatchOp::ICONTAINS, literal);
         if (!compiled) {
@@ -573,7 +593,7 @@ class Parser {
                            "Invalid pattern: " + compiled.error()));
         }
         MatchNode node;
-        node.field = std::move(field);
+        node.field = std::move(*field);
         node.op = MatchOp::ICONTAINS;
         node.pattern = std::move(literal);
         node.negated = negated;

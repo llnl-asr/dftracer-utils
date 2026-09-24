@@ -3,12 +3,13 @@
 
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/field_stat.h>
+#include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_plan.h>
-#include <dftracer/utils/trace/views/view_resolver.h>
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -59,17 +60,23 @@ const AggSchema& ensure_schema(const ViewPlan& plan);
 
 // Lazily build (and cache on the plan) the index-backed name resolver; null
 // when the plan has no resolved-name group key.
-const GroupResolver* ensure_resolver(const ViewPlan& plan);
+const dftracer::utils::index::plan::GroupResolver* ensure_resolver(
+    const ViewPlan& plan);
 
 // Feed pid -> rank harvested from PR metadata into the plan's resolver so the
 // Rank group key relabels pid groups post-aggregation. Empties `ranks`.
 void apply_ranks(const ViewPlan& plan,
                  std::unordered_map<std::uint64_t, std::string>& ranks);
 
-// Resolve one group value from its stored hash to the name for `kind`
-// (FilePath/FileName/HostName); returns `hash` unchanged for other kinds.
-std::string resolve_group_value(const GroupResolver& r, GroupKey::Kind kind,
-                                const std::string& hash);
+// Resolve one group value from its stored key to the name for `gk`
+// (FilePath/FileName/HostName/Resolved/Rank); returns `key` unchanged for
+// other kinds.
+std::string resolve_group_value(
+    const dftracer::utils::index::plan::GroupResolver& r, const GroupKey& gk,
+    const std::string& key);
+
+// The key field a Resolved group key groups on.
+std::string_view resolved_key_field(const GroupKey& gk);
 
 // Apply `gk`'s value transform to an already-resolved group value. Coarsens
 // the grain, so both the scan and the tier must call it or the same query

@@ -125,7 +125,7 @@ TEST_SUITE("stats via View") {
         std::string idx = determine_index_path(gz, "");
 
         stats::ViewStats s = run_stats(stats::StatsView::from_file(gz, idx));
-        dftracer::utils::utilities::indexer::ChunkStatistics cs;
+        dftracer::utils::index::schemas::dft::ChunkStatistics cs;
         stats::fill_chunk_statistics(cs, s);
 
         CHECK(cs.total_events == 50);

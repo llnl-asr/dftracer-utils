@@ -60,6 +60,17 @@ class GzipMemberDecompressor {
     libdeflate_decompressor* d_;
 };
 
+/// Decode a gzip member that ends at end of file before its trailer (a trace
+/// cut while being written), which the libdeflate decoder cannot do. `comp`
+/// holds every byte from the member start to end of file; `out` is resized as
+/// needed. Returns the number of leading bytes of `out` to keep: all output
+/// when the member turns out complete, else the output up to and including its
+/// last '\n' (0 when no line is complete). nullopt when the deflate data is
+/// invalid rather than short, so corruption is never recovered. The kept bytes
+/// are not checksum-verified.
+std::optional<std::size_t> decode_truncated_member(
+    const void* comp, std::size_t comp_len, std::vector<std::uint8_t>& out);
+
 /// Compresses a whole buffer into one gzip member. Reusable, not thread-safe,
 /// move-only.
 class GzipMemberCompressor {

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -19,10 +20,29 @@ enum class CompareOp { EQ, NE, GT, LT, GE, LE };
 /// case-insensitive.
 enum class MatchOp { LIKE, ILIKE, REGEX, IREGEX, ICONTAINS };
 
-/// A field reference (e.g., "cat", "args.level").
+/// A field reference (e.g., "cat", "args.level"), or `any(path)`: the leaf
+/// holds when any scalar element of the array at `path` satisfies it.
 struct FieldNode {
     std::string path;  ///< Dotted path into JSON.
+    bool any = false;
 };
+
+/// The field that `text` names: `any(<path>)` or a plain path.
+inline FieldNode field_node(std::string_view text) {
+    constexpr std::string_view ANY_OPEN = "any(";
+    if (text.size() > ANY_OPEN.size() + 1 && text.starts_with(ANY_OPEN) &&
+        text.ends_with(')'))
+        return FieldNode{
+            std::string(text.substr(ANY_OPEN.size(),
+                                    text.size() - ANY_OPEN.size() - 1)),
+            true};
+    return FieldNode{std::string(text)};
+}
+
+/// The field as a query writes it.
+inline std::string field_text(const FieldNode& field) {
+    return field.any ? "any(" + field.path + ")" : field.path;
+}
 
 /// A typed literal value in a query expression.
 using LiteralValue = std::variant<std::string, int64_t, uint64_t, double, bool>;
@@ -32,9 +52,14 @@ struct LiteralNode {
     LiteralValue value;
 };
 
+/// The values of a long all-string list, for constant-time membership.
+struct InSet;
+
 /// An array of literal values (used by in/not-in).
 struct ArrayNode {
     std::vector<LiteralNode> elements;
+    /// Built by make_in_set; null for a short or mixed-type list.
+    std::shared_ptr<const InSet> set;
 };
 
 struct QueryNode;

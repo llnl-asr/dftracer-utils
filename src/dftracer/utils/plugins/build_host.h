@@ -71,6 +71,17 @@ class BuildHost {
 
     std::vector<std::string>& registered_nodes() { return registered_nodes_; }
 
+    /// The index extension names registered with
+    /// dftu_svc_index::register_extension; unregistered before dlclose, as the
+    /// providers are.
+    std::vector<std::string> take_registered_index_extensions() {
+        return std::move(registered_index_extensions_);
+    }
+
+    std::vector<std::string>& registered_index_extensions() {
+        return registered_index_extensions_;
+    }
+
    private:
     std::string plugin_name_;
     std::string denied_;
@@ -78,6 +89,7 @@ class BuildHost {
     std::vector<std::string> registered_ops_;
     std::vector<std::string> registered_providers_;
     std::vector<std::string> registered_nodes_;
+    std::vector<std::string> registered_index_extensions_;
     dftu_plugin_host host_{};
 };
 

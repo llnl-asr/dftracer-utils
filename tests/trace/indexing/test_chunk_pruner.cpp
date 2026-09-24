@@ -1,13 +1,14 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/trace/indexing/chunk_dimension_stats.h>
-#include <dftracer/utils/trace/indexing/chunk_pruner_utility.h>
-#include <dftracer/utils/trace/indexing/chunk_statistics.h>
-#include <dftracer/utils/trace/indexing/scalable_bloom_filter.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
-#include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
-#include <dftracer/utils/utilities/indexer/internal/helpers.h>
+#include <dftracer/utils/index/extensions/chunk_dimension_stats.h>
+#include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
+#include <dftracer/utils/index/plan/chunk_pruner.h>
+#include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
+#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/index_database_writer_context.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
 #include <doctest/doctest.h>
+#include <index_test_helpers.h>
 
 #include <span>
 #include <string>
@@ -15,10 +16,11 @@
 #include "testing_utilities.h"
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::trace::indexing;
+using namespace dftracer::utils::index::extensions;
+using namespace dftracer::utils::index::plan;
+using dftracer::utils::index::store::IndexDatabase;
+using dftracer::utils::index::store::internal::get_logical_path;
 using dftracer::utils::query::Query;
-using dftracer::utils::utilities::indexer::IndexDatabase;
-using dftracer::utils::utilities::indexer::internal::get_logical_path;
 
 static void populate_test_idx(const std::string& index_path,
                               const std::string& file_path) {
@@ -26,8 +28,8 @@ static void populate_test_idx(const std::string& index_path,
     auto writer = idx_db.begin_write();
     writer->init_schema();
 
-    int fid =
-        writer->get_or_create_file_info(get_logical_path(file_path), 12345);
+    int fid = dftu_utils_test::register_test_file(
+        *writer, get_logical_path(file_path), 12345);
 
     {
         ChunkDimensionStats cat_ds;
@@ -35,25 +37,28 @@ static void populate_test_idx(const std::string& index_path,
         cat_ds.value_type = "string";
         cat_ds.observe("POSIX");
         cat_ds.observe("POSIX");
-        writer->insert_chunk_dimension_stats(fid, 0, cat_ds);
+        dftu_utils_test::put_dimension_stats(*writer, fid, 0, cat_ds, 2);
 
         ChunkDimensionStats name_ds;
         name_ds.dimension = "name";
         name_ds.value_type = "string";
         name_ds.observe("read");
         name_ds.observe("read");
-        writer->insert_chunk_dimension_stats(fid, 0, name_ds);
+        dftu_utils_test::put_dimension_stats(*writer, fid, 0, name_ds, 2);
 
         ChunkDimensionStats dur_ds;
         dur_ds.dimension = "dur";
         dur_ds.value_type = "uint";
         dur_ds.observe("100");
         dur_ds.observe("200");
-        writer->insert_chunk_dimension_stats(fid, 0, dur_ds);
+        dftu_utils_test::put_dimension_stats(*writer, fid, 0, dur_ds, 2);
 
-        writer->insert_index_dimension(fid, "cat");
-        writer->insert_index_dimension(fid, "name");
-        writer->insert_index_dimension(fid, "dur");
+        dftu_utils_test::index_records::put_path(
+            *writer, dftu_utils_test::IndexExtension::BLOOM, fid, "cat");
+        dftu_utils_test::index_records::put_path(
+            *writer, dftu_utils_test::IndexExtension::BLOOM, fid, "name");
+        dftu_utils_test::index_records::put_path(
+            *writer, dftu_utils_test::IndexExtension::BLOOM, fid, "dur");
     }
 
     {
@@ -61,20 +66,22 @@ static void populate_test_idx(const std::string& index_path,
         cat_ds.dimension = "cat";
         cat_ds.value_type = "string";
         cat_ds.observe("STDIO");
-        writer->insert_chunk_dimension_stats(fid, 1, cat_ds);
+        cat_ds.observe("STDIO");
+        dftu_utils_test::put_dimension_stats(*writer, fid, 1, cat_ds, 2);
 
         ChunkDimensionStats name_ds;
         name_ds.dimension = "name";
         name_ds.value_type = "string";
         name_ds.observe("write");
-        writer->insert_chunk_dimension_stats(fid, 1, name_ds);
+        name_ds.observe("write");
+        dftu_utils_test::put_dimension_stats(*writer, fid, 1, name_ds, 2);
 
         ChunkDimensionStats dur_ds;
         dur_ds.dimension = "dur";
         dur_ds.value_type = "uint";
         dur_ds.observe("500");
         dur_ds.observe("600");
-        writer->insert_chunk_dimension_stats(fid, 1, dur_ds);
+        dftu_utils_test::put_dimension_stats(*writer, fid, 1, dur_ds, 2);
     }
 
     {
@@ -83,23 +90,43 @@ static void populate_test_idx(const std::string& index_path,
         cat_ds.value_type = "string";
         cat_ds.observe("POSIX");
         cat_ds.observe("MPI");
-        writer->insert_chunk_dimension_stats(fid, 2, cat_ds);
+        dftu_utils_test::put_dimension_stats(*writer, fid, 2, cat_ds, 2);
 
         ChunkDimensionStats name_ds;
         name_ds.dimension = "name";
         name_ds.value_type = "string";
         name_ds.observe("read");
         name_ds.observe("send");
-        writer->insert_chunk_dimension_stats(fid, 2, name_ds);
+        dftu_utils_test::put_dimension_stats(*writer, fid, 2, name_ds, 2);
 
         ChunkDimensionStats dur_ds;
         dur_ds.dimension = "dur";
         dur_ds.value_type = "uint";
         dur_ds.observe("50");
         dur_ds.observe("1000");
-        writer->insert_chunk_dimension_stats(fid, 2, dur_ds);
+        dftu_utils_test::put_dimension_stats(*writer, fid, 2, dur_ds, 2);
+    }
+    // Two data events per chunk, one line each, so the statistics describe
+    // every record and all-match proofs (NOT) are allowed.
+    for (std::uint64_t ckpt = 0; ckpt < 3; ++ckpt) {
+        dftracer::utils::index::schemas::dft::ChunkStatistics stats;
+        stats.total_events = 2;
+        dftu_utils_test::index_records::put_chunk_statistics(*writer, fid, ckpt,
+                                                             stats);
+        dftu_utils_test::index_records::put_gzip_member(
+            *writer, fid,
+            dftracer::utils::index::gzip::GzipMemberRecord{
+                .member_idx = ckpt,
+                .c_offset = ckpt * 100,
+                .c_size = 100,
+                .uc_offset = ckpt * 200,
+                .uc_size = 200,
+                .first_line_num = ckpt * 2 + 1,
+                .last_line_num = ckpt * 2 + 2,
+            });
     }
 
+    dftu_utils_test::mark_built(*writer, fid);
     writer->commit();
 }
 
@@ -118,8 +145,9 @@ static void add_name_file_bloom(const std::string& index_path,
     bloom.add("write");
     bloom.add("send");
     auto blob = bloom.serialize();
-    writer->insert_file_bloom_filter(
-        fid, "name", std::span<const unsigned char>(blob.data(), blob.size()),
+    dftu_utils_test::put_file_bloom(
+        *writer, fid, "name",
+        std::span<const unsigned char>(blob.data(), blob.size()),
         bloom.num_entries());
     writer->commit();
 }
@@ -132,11 +160,11 @@ static ChunkPrunerOutput run_pruner(const std::string& index_path,
 
     ChunkPrunerInput input{index_path, file_path, std::move(*q), nullptr};
 
-    ChunkPrunerUtility pruner;
+    ChunkPruner pruner;
     return pruner(input).get();
 }
 
-TEST_SUITE("ChunkPrunerUtility") {
+TEST_SUITE("ChunkPruner") {
     TEST_CASE("Pruner - equality match via dictionary") {
         std::string test_dir =
             dftu_utils_test::make_unique_test_path("test_pruner_eq").string();
@@ -271,6 +299,72 @@ TEST_SUITE("ChunkPrunerUtility") {
         CHECK(out.candidate_checkpoints.size() == 2);
         CHECK(out.candidate_checkpoints[0] == 0);
         CHECK(out.candidate_checkpoints[1] == 2);
+    }
+
+    TEST_CASE("Pruner - NOT keeps a chunk with records the stats missed") {
+        std::string test_dir =
+            dftu_utils_test::make_unique_test_path("test_pruner_not_meta")
+                .string();
+        fs::create_directories(test_dir);
+        std::string index_path = test_dir + "/test.pfw.gz.idx";
+        std::string file_path = "/fake/test.pfw.gz";
+        populate_test_idx(index_path, file_path);
+        {
+            // Chunk 1 holds a third line (a metadata record, say) that has no
+            // cat, so `not cat == "STDIO"` may match it.
+            IndexDatabase idx_db(index_path);
+            auto writer = idx_db.begin_write();
+            int fid = idx_db.get_file_info_id(get_logical_path(file_path));
+            dftu_utils_test::index_records::put_gzip_member(
+                *writer, fid,
+                dftracer::utils::index::gzip::GzipMemberRecord{
+                    .member_idx = 1,
+                    .c_offset = 100,
+                    .c_size = 100,
+                    .uc_offset = 200,
+                    .uc_size = 300,
+                    .first_line_num = 3,
+                    .last_line_num = 5,
+                });
+            writer->commit();
+        }
+        auto out = run_pruner(index_path, file_path, R"(not cat == "STDIO")");
+        CHECK(out.success);
+        CHECK(out.candidate_checkpoints == std::vector<std::uint64_t>{0, 1, 2});
+    }
+
+    TEST_CASE("Pruner - a member without statistics stays a candidate") {
+        std::string test_dir =
+            dftu_utils_test::make_unique_test_path("test_pruner_bare_member")
+                .string();
+        fs::create_directories(test_dir);
+        std::string index_path = test_dir + "/test.pfw.gz.idx";
+        std::string file_path = "/fake/test.pfw.gz";
+        populate_test_idx(index_path, file_path);
+        {
+            // Member 3 holds only metadata records, so the index has no
+            // statistics or bloom rows for it.
+            IndexDatabase idx_db(index_path);
+            auto writer = idx_db.begin_write();
+            int fid = idx_db.get_file_info_id(get_logical_path(file_path));
+            dftu_utils_test::index_records::put_gzip_member(
+                *writer, fid,
+                dftracer::utils::index::gzip::GzipMemberRecord{
+                    .member_idx = 3,
+                    .c_offset = 300,
+                    .c_size = 100,
+                    .uc_offset = 600,
+                    .uc_size = 200,
+                    .first_line_num = 7,
+                    .last_line_num = 8,
+                });
+            writer->commit();
+        }
+        auto neg = run_pruner(index_path, file_path, R"(not cat == "STDIO")");
+        CHECK(neg.total_checkpoints == 4);
+        CHECK(neg.candidate_checkpoints == std::vector<std::uint64_t>{0, 2, 3});
+        auto eq = run_pruner(index_path, file_path, R"(cat == "POSIX")");
+        CHECK(eq.candidate_checkpoints == std::vector<std::uint64_t>{0, 2, 3});
     }
 
     TEST_CASE("Pruner - NOT keeps a chunk holding both sides") {

@@ -331,4 +331,68 @@ TEST_SUITE("Fold") {
         CHECK_FALSE(e.has_dur);
         CHECK(e.args.empty());
     }
+
+    TEST_CASE("nested and array args flatten to dotted keys, bools to 0/1") {
+        StringIntern intern;
+        simdjson::dom::parser parser;
+        std::string line = padded(
+            R"({"ph":"X","name":"n","pid":1,"tid":1,"ts":1,"args":{"dur":{"p99":7000},"hosts":["a","b"],"ok":true,"no":false,"nil":null,"x":[{"y":1.5}]}})");
+        auto r = parser.parse(line.data(),
+                              line.size() - simdjson::SIMDJSON_PADDING, false);
+        REQUIRE_FALSE(r.error());
+        FoldEvent e = extract_fold_event(r.value_unsafe(), intern, true);
+
+        std::map<std::string, FoldEvent::ArgValue> got;
+        for (const auto& [k, v] : e.args)
+            CHECK(got.emplace(std::string(intern.resolve(k)), v).second);
+        CHECK(got.size() == 6);
+        CHECK(std::get<std::int64_t>(got.at("dur.p99")) == 7000);
+        CHECK(intern.resolve(std::get<std::uint32_t>(got.at("hosts.0"))) ==
+              "a");
+        CHECK(intern.resolve(std::get<std::uint32_t>(got.at("hosts.1"))) ==
+              "b");
+        CHECK(std::get<std::int64_t>(got.at("ok")) == 1);
+        CHECK(std::get<std::int64_t>(got.at("no")) == 0);
+        CHECK(std::get<double>(got.at("x.0.y")) == 1.5);
+
+        FoldEvent flat = extract_fold_event(r.value_unsafe(), intern, false);
+        CHECK(flat.args.empty());
+    }
+
+    TEST_CASE("an extra field without the args. prefix resolves under args") {
+        StringIntern intern;
+        simdjson::dom::parser parser;
+        std::string line = padded(
+            R"({"ph":"X","name":"n","pid":1,"tid":1,"ts":1,"dur":42,"args":{"dur":{"p99":7000},"type":"arg"}})");
+        auto r = parser.parse(line.data(),
+                              line.size() - simdjson::SIMDJSON_PADDING, false);
+        REQUIRE_FALSE(r.error());
+        const std::vector<std::string> extra = {"dur.p99", "type"};
+        FoldEvent e =
+            extract_fold_event(r.value_unsafe(), intern, false, &extra);
+
+        REQUIRE(e.args.size() == 1);
+        CHECK(intern.resolve(e.args[0].first) == "dur.p99");
+        CHECK(std::get<std::int64_t>(e.args[0].second) == 7000);
+        // A bare schema field never falls back to a same-named arg.
+        CHECK(e.top_fields.empty());
+    }
+
+    TEST_CASE("schema leaves list every array element") {
+        StringIntern intern;
+        simdjson::dom::parser parser;
+        std::string line = padded(
+            R"({"ph":"X","name":"n","pid":1,"tid":1,"ts":1,"args":{"hosts":["a","b","c"]}})");
+        auto r = parser.parse(line.data(),
+                              line.size() - simdjson::SIMDJSON_PADDING, false);
+        REQUIRE_FALSE(r.error());
+        FoldEvent e =
+            extract_fold_event(r.value_unsafe(), intern, false, nullptr, true);
+        std::vector<std::string> leaves;
+        for (const auto& [id, tag] : e.schema_leaves)
+            if (intern.resolve(id).rfind("args.hosts.", 0) == 0)
+                leaves.emplace_back(intern.resolve(id));
+        CHECK(leaves == std::vector<std::string>{"args.hosts.0", "args.hosts.1",
+                                                 "args.hosts.2"});
+    }
 }

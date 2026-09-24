@@ -83,7 +83,11 @@ export const GROUP_SEP = "\x1f";
 
 // Raw value of a single column ("" when missing/null/non-scalar). Dotted paths
 // walk nested objects; bare names fall back into args.
+const RESOLVED_PREFIX = "resolved.";
+
 function rawGroupValue(rec: Record<string, unknown>, col: string): string {
+  // A resolved column groups on its key field; the server resolves the key.
+  if (col.startsWith(RESOLVED_PREFIX)) col = col.slice(RESOLVED_PREFIX.length).split(".")[0];
   let v: unknown;
   if (col.includes(".")) {
     v = col
@@ -123,11 +127,11 @@ export function eventGroupValue(ev: TraceEvent, col: string): string {
 }
 
 const HASH_ALIAS: Record<string, string> = {
-  fhash: "resolved.fpath",
-  hhash: "resolved.hostname",
-  exec_hash: "resolved.exec",
-  cmd_hash: "resolved.cmd",
-  cwd: "resolved.cwd",
+  fhash: "resolved.fhash.path",
+  hhash: "resolved.hhash.name",
+  exec_hash: "resolved.exec_hash.value",
+  cmd_hash: "resolved.cmd_hash.value",
+  cwd: "resolved.cwd.path",
 };
 
 // Add a column and, for hash columns, its resolved.* alias.

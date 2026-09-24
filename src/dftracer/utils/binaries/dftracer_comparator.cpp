@@ -5,19 +5,19 @@
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/index/build/batch_builder.h>
+#include <dftracer/utils/index/build/resolve_and_build.h>
+#include <dftracer/utils/index/build/resolver.h>
+#include <dftracer/utils/index/gzip/checkpoint_indexer.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregators.h>
 #include <dftracer/utils/query/query.h>
-#include <dftracer/utils/trace/aggregators/aggregators.h>
 #include <dftracer/utils/trace/comparator/comparison_aggregation.h>
 #include <dftracer/utils/trace/comparator/comparison_config.h>
 #include <dftracer/utils/trace/comparator/comparison_result.h>
 #include <dftracer/utils/trace/comparator/comparison_utility.h>
 #include <dftracer/utils/trace/comparator/tree_table_formatter.h>
-#include <dftracer/utils/trace/indexing/index_resolver_utility.h>
-#include <dftracer/utils/trace/indexing/resolve_and_build.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
-#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <unistd.h>
 
 #include <chrono>
@@ -26,13 +26,13 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
-using namespace dftracer::utils::trace::aggregators;
+using namespace dftracer::utils::index::schemas::dft::agg;
 using namespace dftracer::utils::trace::comparator;
-using dftracer::utils::trace::indexing::ensure_index_fresh;
-using dftracer::utils::trace::indexing::IndexResolverUtility;
-using dftracer::utils::trace::indexing::ResolverInput;
-using dftracer::utils::utilities::indexer::IndexBatchBuilderUtility;
-using dftracer::utils::utilities::indexer::IndexBuildBatchConfig;
+using dftracer::utils::index::build::BatchBuilder;
+using dftracer::utils::index::build::ensure_index_fresh;
+using dftracer::utils::index::build::IndexBuildBatchConfig;
+using dftracer::utils::index::build::Resolver;
+using dftracer::utils::index::build::ResolverInput;
 
 class ComparatorArgParse : public cli::ArgParse {
    public:
@@ -267,8 +267,8 @@ static std::optional<ComparisonConfig> build_comparison_config(
     }
 
     if (config.checkpoint_size == 0) {
-        config.checkpoint_size =
-            indexer::internal::Indexer::DEFAULT_CHECKPOINT_SIZE;
+        config.checkpoint_size = dftracer::utils::index::gzip::
+            CheckpointIndexer::DEFAULT_CHECKPOINT_SIZE;
     }
     return config;
 }
@@ -365,7 +365,7 @@ static int run_comparator(const ComparatorArgParse* cli) {
                                         config.force_rebuild);
         }
 
-        IndexResolverUtility resolver;
+        Resolver resolver;
         ResolverInput resolve_input;
         resolve_input.index_dir = index_dir;
         resolve_input.require_checkpoints = !config.force_rebuild;
@@ -399,13 +399,11 @@ static int run_comparator(const ComparatorArgParse* cli) {
         batch_cfg->checkpoint_size = config.checkpoint_size;
         batch_cfg->parallelism = config.executor_threads;
         batch_cfg->force_rebuild = config.force_rebuild;
-        batch_cfg->rebuild_root_summaries = true;
 
         DFTRACER_UTILS_LOG_INFO("Indexing %zu of %zu files...",
                                 result.needs_checkpoint.size(),
                                 out_files.size());
-        co_await IndexBatchBuilderUtility::process(&scope,
-                                                   std::move(batch_cfg));
+        co_await BatchBuilder::process(&scope, std::move(batch_cfg));
     };
 
     // Shared state between tasks

@@ -411,7 +411,7 @@ dftracer_view
 - ``--recipe <path>`` - Custom view JSON file path
 - ``--save-recipe <path>`` - Save the constructed view to a JSON file
 - ``--query <query>`` - Query DSL filter (e.g., ``'cat == "POSIX" and dur > 1000'``)
-- ``--time-range <min,max>`` - Timestamp filter in microseconds (e.g., 1000000,2000000)
+- ``--time-range <min,max>`` - Keep events starting in ``[min, max)``, in microseconds (e.g., 1000000,2000000)
 - ``--min-duration <us>`` - Minimum event duration in microseconds
 - ``--max-duration <us>`` - Maximum event duration in microseconds
 - ``-o, --output <path>`` - Output file path (default: stdout)
@@ -440,11 +440,12 @@ dftracer_view
 - ``--time-bucket <us>`` - Aggregate into time buckets of N microseconds
 - ``--occ-cell <us>`` - Occupancy cell size (busy quantum) for
   ``busy``/``concurrency``/``utilization``; finer resolves overlap on short
-  events (honored with ``--time-range``, default 64 us)
+  events (default 0, the exact union)
 - ``--counters`` - Emit the aggregation as ``ph=C`` counter events
 - ``--phase <phase>`` - Select events by phase: ``events`` (ph=X),
   ``counters`` (ph=C), ``aggregated`` (rollup records), ``metadata`` (ph=M),
   ``any``
+- ``--schema <id>`` - Read records as this registered record schema instead of the one recorded for each file
 - ``--select <cols>`` - Project the result to these columns, comma-separated
 - ``--limit <n>`` - Cap the output to N rows/events (0 = unlimited)
 - ``--offset <n>`` - Skip the first N rows/events before applying ``--limit``
@@ -500,7 +501,9 @@ dftracer_index
 
 - ``-d, --directory <path>`` - Input directory containing .pfw.gz files (default: .)
 - ``--dimensions <dims>`` - Comma-separated args fields to index by name, nested ones included (e.g., level,mode,io.size)
-- ``--no-auto-dimensions`` - Index only the fixed fields and ``--dimensions``. By default every other flat args key is indexed too: numbers get a per-chunk min/max, strings a per-chunk bloom up to 256 distinct values
+- ``--schema <id>`` - Record schema of every trace: a registered id, such as ``dftracer`` or ``generic`` (default: detected per file from its first lines)
+- ``--memory-budget <bytes>`` - Bytes the build may hold at once; past it large files are indexed fewer at a time and spill to disk (default: 0 = about a third of available memory; accepts units such as 512MB)
+- ``--path-budget <n>`` - Also index each file's ``n`` most frequent other args paths: numbers get a per-chunk min/max, strings a per-chunk bloom up to 256 distinct values (default: 1024; 0 indexes only the fixed fields and ``--dimensions``)
 - ``-f, --force`` - Force index recreation even if already built
 - ``--checkpoint-size <bytes>`` - Checkpoint size for gzip indexing in bytes (default: 33554432 B / 32 MB)
 - ``--executor-threads <count>`` - Number of worker threads for parallel processing (default: number of CPU cores)
@@ -508,9 +511,6 @@ dftracer_index
 - ``--expected-entries <count>`` - Expected entries per chunk for bloom filter sizing (default: 1024)
 - ``--false-positive-rate <rate>`` - Bloom filter false positive rate (default: 0.01)
 - ``--read-batch-size <MB>`` - Batch read size in MB for stream processing (default: 4)
-- ``--rebuild-summaries`` - Rebuild ``ROOT_*`` aggregated summaries after ingest.
-  Off by default; ``ROOT_*`` CFs are only consumed by summary tools such as
-  ``dftracer_info``. Bloom-filter chunk-skipping queries do not require them.
 
 This binary also accepts the shared :ref:`cli-shared-flags` (Pipeline,
 Indexing).
@@ -525,8 +525,6 @@ Indexing).
     # Also index a nested args field by name, and force a rebuild
     dftracer_index -d ./traces --dimensions "io.size" --force
 
-    # Rebuild ROOT_* aggregated summaries after ingest
-    dftracer_index -d ./traces --rebuild-summaries
 
 dftracer_run
 ------------

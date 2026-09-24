@@ -106,3 +106,7 @@ wheelhouse/
 .gcc14_repro.sh
 .venv_docs/
 .hypothesis/
+
+openspec/
+.pi/
+.omp/

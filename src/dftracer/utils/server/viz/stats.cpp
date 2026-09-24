@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/query/query.h>
@@ -26,7 +27,6 @@
 #include <dftracer/utils/trace/views/view_planner_utility.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
 #include <simdjson.h>
 
 #include <algorithm>
@@ -307,8 +307,7 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
 
     const double cov_bw = end > begin ? (end - begin) / COVERAGE_BUCKETS : 0;
     std::size_t slots = std::max<std::size_t>(1, index.max_concurrent());
-    auto sv = views::View::from_files(to_view_files(target_files),
-                                      &index.bloom_cache())
+    auto sv = views::View::from_files(to_view_files(target_files))
                   .phase(views::Phase::Any)
                   .metadata(false)
                   .time_range(scan_begin, end);

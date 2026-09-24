@@ -1,8 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/trace/aggregators/aggregation_augmentation.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_augmentation.h>
 #include <doctest/doctest.h>
 
-using namespace dftracer::utils::trace::aggregators;
+using namespace dftracer::utils::index::schemas::dft::agg;
 
 namespace {
 

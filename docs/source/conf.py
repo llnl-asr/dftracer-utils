@@ -451,8 +451,30 @@ def _inject_copy_page(app, pagename, templatename, context, doctree):
     ) + context["body"]
 
 
+def _check_api_fragments(app):
+    """Warn when a curated page includes a fragment the generator no longer
+    writes, or a generated fragment is included by no page."""
+    import re
+
+    from sphinx.util import logging
+
+    manifest = _api_out / "_manifest.txt"
+    if not manifest.exists():
+        return
+    generated = set(manifest.read_text().split())
+    included = set()
+    for page in (_docs_dir / "source").rglob("*.rst"):
+        included |= set(re.findall(r"_generated/(\S+)\.rst\.inc", page.read_text()))
+    log = logging.getLogger(__name__)
+    for key in sorted(included - generated):
+        log.warning("C++ API fragment %s.rst.inc is included but not generated", key)
+    for key in sorted(generated - included):
+        log.warning("C++ API fragment %s.rst.inc is generated but included by no page", key)
+
+
 def setup(app):
     app.connect("doctree-resolved", _inject_mermaid_theme)
+    app.connect("builder-inited", _check_api_fragments)
 
     sys.path.insert(0, str(_docs_dir / "scripts"))
     try:

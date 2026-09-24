@@ -1,14 +1,15 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/rocksdb/database.h>
-#include <dftracer/utils/trace/aggregators/aggregation_serialization.h>
-#include <dftracer/utils/trace/aggregators/event_aggregator.h>
+#include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_serialization.h>
+#include <dftracer/utils/index/schemas/dft/agg/event_aggregator.h>
+#include <dftracer/utils/index/store/database.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
 #include <string>
 
-using namespace dftracer::utils::trace::aggregators;
+using namespace dftracer::utils::index::schemas::dft::agg;
 
 namespace {
 
@@ -93,34 +94,34 @@ TEST_SUITE("EventAggregator") {
         // They only resolve correctly if each index owns its own table.
         std::string key_a, key_b;
         {
-            auto db = EventAggregator::open_with_merge_operator(path_a);
-            EventAggregator agg(db, 0);
+            auto db =
+                tier::open(path_a, tier::RocksDatabase::OpenMode::ReadWrite);
+            EventAggregator agg(db);
             auto& intern = agg.intern();
             AggregationKey k;
             k.cat_id = intern.get_or_insert("POSIX");
             k.name_id = intern.get_or_insert("read");
-            key_a = serialize_agg_key(0, AggMapType::EVENT, k, intern);
-            auto batch = db->begin_batch();
-            flush_intern_dictionary(*db, batch, *agg.intern_table());
-            db->commit_batch(batch);
+            key_a = serialize_agg_key(AggMapType::EVENT, k, intern);
+            tier::flush_dictionary(*db, *agg.intern_table());
         }
         {
-            auto db = EventAggregator::open_with_merge_operator(path_b);
-            EventAggregator agg(db, 0);
+            auto db =
+                tier::open(path_b, tier::RocksDatabase::OpenMode::ReadWrite);
+            EventAggregator agg(db);
             auto& intern = agg.intern();
             AggregationKey k;
             k.cat_id = intern.get_or_insert("MPI");
             k.name_id = intern.get_or_insert("send");
-            key_b = serialize_agg_key(0, AggMapType::EVENT, k, intern);
-            auto batch = db->begin_batch();
-            flush_intern_dictionary(*db, batch, *agg.intern_table());
-            db->commit_batch(batch);
+            key_b = serialize_agg_key(AggMapType::EVENT, k, intern);
+            tier::flush_dictionary(*db, *agg.intern_table());
         }
 
-        auto db_a = EventAggregator::open_with_merge_operator(path_a);
-        EventAggregator agg_a(db_a, 0);
-        auto db_b = EventAggregator::open_with_merge_operator(path_b);
-        EventAggregator agg_b(db_b, 0);
+        auto db_a =
+            tier::open(path_a, tier::RocksDatabase::OpenMode::ReadWrite);
+        EventAggregator agg_a(db_a);
+        auto db_b =
+            tier::open(path_b, tier::RocksDatabase::OpenMode::ReadWrite);
+        EventAggregator agg_b(db_b);
 
         AggKeyView view_a, view_b;
         REQUIRE(parse_agg_key_view(key_a, agg_a.intern(), view_a));

@@ -1,13 +1,13 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/coro/coro.h>
-#include <dftracer/utils/core/rocksdb/database.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/trace/aggregators/aggregation_config.h>
-#include <dftracer/utils/trace/indexing/resolve_and_build.h>
+#include <dftracer/utils/index/build/resolve_and_build.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/index/store/database.h>
+#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
 #include <doctest/doctest.h>
 #include <testing_runtime.h>
 #include <testing_utilities.h>
@@ -16,10 +16,10 @@
 #include <string>
 
 using namespace dftracer::utils;
-using dftracer::utils::trace::aggregators::AggregationConfig;
-using dftracer::utils::trace::indexing::resolve_and_build_index;
-using dftracer::utils::trace::indexing::ResolveAndBuildInput;
-using dftracer::utils::utilities::indexer::IndexDatabase;
+using dftracer::utils::index::build::resolve_and_build_index;
+using dftracer::utils::index::build::ResolveAndBuildInput;
+using dftracer::utils::index::schemas::dft::agg::AggregationConfig;
+using dftracer::utils::index::store::IndexDatabase;
 using dftu_utils_test::run_coro;
 
 namespace {
@@ -35,7 +35,7 @@ void write_single_member(const std::string& path, const std::string& content) {
 }
 
 // A trace with one FH metadata entry (hash "f00d" -> a file path) plus data
-// events referencing it, so the file hash table has something to resolve.
+// events referencing it, so the file dictionary has something to resolve.
 std::string make_trace_with_fh(int n) {
     std::string s = "[\n";
     s +=
@@ -59,7 +59,7 @@ std::string make_trace_with_fh(int n) {
 
 TEST_SUITE("hash_table_aggregation") {
     // The aggregation-only build (no bloom) that dfanalyzer uses
-    // must still populate the file hash table, or fhash -> file_name never
+    // must still populate the file dictionary, or fhash -> file_name never
     // resolves.
     TEST_CASE("aggregation build populates the file hash table") {
         auto dir = dftu_utils_test::make_unique_test_path("hashagg");
@@ -87,11 +87,11 @@ TEST_SUITE("hash_table_aggregation") {
 
         IndexDatabase db(
             index_path,
-            ::dftracer::utils::utilities::indexer::IndexOpenMode::ReadOnly);
-        auto file_hashes = db.query_hash_table(IndexDatabase::HashType::FILE);
-        CHECK_FALSE(file_hashes.empty());
-        auto it = file_hashes.find("f00d");
-        REQUIRE(it != file_hashes.end());
+            ::dftracer::utils::index::store::IndexOpenMode::ReadOnly);
+        auto file_paths = db.dict_field("file", "path");
+        CHECK_FALSE(file_paths.empty());
+        auto it = file_paths.find("f00d");
+        REQUIRE(it != file_paths.end());
         CHECK(it->second == "/scratch/data/x.bin");
     }
 }

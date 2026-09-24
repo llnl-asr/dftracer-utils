@@ -40,13 +40,13 @@ after.
 **Cause**: this is expected, not a bug. A genuinely fresh file with no
 ``.dftindex`` yet triggers a one-pass bootstrap: the first aggregation query
 both answers itself and builds the full index (checkpoints, bloom filters,
-hash tables) as a byproduct. Every query after that reads the index instead of
+dictionaries) as a byproduct. Every query after that reads the index instead of
 re-scanning. See :ref:`indexing-first-touch` in :doc:`core/indexing` for
 exactly which query shapes trigger it.
 
 **Fix**: nothing needed for a one-off script. For a server or batch job where
 you want the first *user-facing* query to be fast, warm the index ahead of
-time with ``Indexer.ensure_indexed()`` / ``resolve_and_build_index`` /
+time with ``Indexer.ensure_indexed()`` (Python) / ``Indexer::build`` (C++) /
 ``dftracer_index`` - see :doc:`core/indexing`.
 
 Results look stale after re-running a trace or replacing files
@@ -110,18 +110,17 @@ field predicates (``F.dur > 1000``, ``F.cat.is_in([...])``,
 Query predicate parses but does not filter what you expect
 -----------------------------------------------------------------
 
-**Symptom**: a predicate on ``fpath``, ``hostname``, ``cwd``, or ``exec``
-never matches anything, even though you can see the value in the trace
-viewer.
+**Symptom**: a predicate on ``fhash``, ``hhash``, ``cwd``, or ``exec_hash``
+never matches a path or host name, even though you can see the value in the
+trace viewer.
 
 **Cause**: traces store hashes for host, file path, and command, not the
-literal string. Filtering the bare field name (``F.fpath == "..."``) compares
+literal string. Filtering the bare field name (``F.fhash == "..."``) compares
 against the hash, not the string you typed.
 
-**Fix**: use the resolved (virtual) field form - ``resolved("fpath")`` in
-both Python and C++ - which the engine rewrites into a hash lookup against
-the index automatically. See "Resolved (virtual) fields" in
-:doc:`core/query-dsl`.
+**Fix**: use the resolved column - ``resolved("fhash.path")`` in both Python
+and C++ - which the engine rewrites into a key lookup against the index
+dictionaries. See "Resolved columns" in :doc:`core/query-dsl`.
 
 See also
 --------

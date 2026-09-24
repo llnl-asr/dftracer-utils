@@ -4,9 +4,9 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
-#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <zlib.h>
 
 #include <cstdint>
@@ -26,8 +26,7 @@ size_t mb_to_b(double mb) { return static_cast<std::size_t>(mb * 1024 * 1024); }
 
 namespace dftu_utils_test {
 bool build_index(const std::string& gz, const std::string& index_dir,
-                 std::size_t sub_chunk_events, std::size_t checkpoint_size) {
-    namespace indexer = dftracer::utils::utilities::indexer;
+                 std::size_t checkpoint_size) {
     using dftracer::utils::CoroScope;
     using dftracer::utils::Runtime;
     bool ok = false;
@@ -35,14 +34,14 @@ bool build_index(const std::string& gz, const std::string& index_dir,
     auto task = dftracer::utils::run_coro_scope(
         rt.executor(),
         [&](CoroScope& scope) -> dftracer::utils::coro::CoroTask<void> {
-            auto config = std::make_shared<indexer::IndexBuildBatchConfig>();
+            auto config = std::make_shared<
+                dftracer::utils::index::build::IndexBuildBatchConfig>();
             config->file_paths = {gz};
             config->index_dir = index_dir;
             if (checkpoint_size > 0) config->checkpoint_size = checkpoint_size;
-            if (sub_chunk_events > 0)
-                config->bloom_config.sub_chunk_events = sub_chunk_events;
-            auto r = co_await indexer::IndexBatchBuilderUtility::process(
-                &scope, std::move(config));
+            auto r =
+                co_await dftracer::utils::index::build::BatchBuilder::process(
+                    &scope, std::move(config));
             ok = (r.indexed + r.skipped) >= 1 && r.failed == 0;
             co_return;
         });
@@ -420,6 +419,17 @@ char* test_make_unique_test_path(const char* name) {
     if (result) {
         std::memcpy(result, path.c_str(), path.length() + 1);
     }
+    return result;
+}
+
+char* test_environment_create_dft_gzip_file(test_environment_handle_t env,
+                                            int num_events) {
+    if (!env) return nullptr;
+    auto* cpp_env = reinterpret_cast<dftu_utils_test::TestEnvironment*>(env);
+    std::string gz_file = cpp_env->create_dft_test_gzip_file(num_events);
+    if (gz_file.empty()) return nullptr;
+    char* result = static_cast<char*>(malloc(gz_file.length() + 1));
+    if (result) strcpy(result, gz_file.c_str());
     return result;
 }
 

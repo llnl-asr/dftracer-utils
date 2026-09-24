@@ -3,6 +3,7 @@
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/memory_budget.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_serialization.h>
 #include <dftracer/utils/python/batch_indexer.h>
 #include <dftracer/utils/python/columnar_eval.h>
 #include <dftracer/utils/python/dataframe.h>
@@ -22,7 +23,6 @@
 #include <dftracer/utils/python/task_handle.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
 #include <dftracer/utils/python/trace_viewer.h>
-#include <dftracer/utils/trace/aggregators/aggregation_serialization.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/python/arrow_stream_capsule.h>
 #include <dftracer/utils/python/streaming_iterator.h>
@@ -137,7 +137,7 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     // space without hardcoding it (single source of truth).
     PyModule_AddIntConstant(
         m, "NUM_SHARDS",
-        dftracer::utils::trace::aggregators::AGG_KEY_NUM_SHARDS);
+        dftracer::utils::index::schemas::dft::agg::AGG_KEY_NUM_SHARDS);
     // Configure the C++ logger for the extension: picks up
     // DFTRACER_UTILS_LOG_LEVEL and auto color (on only when stderr is a TTY),
     // matching the CLI binaries. Without this the logger runs on bare defaults.

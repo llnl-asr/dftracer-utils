@@ -38,3 +38,4 @@ why, see :doc:`Concepts <../concepts/index>`.
    ../api/index
    ../cpp_api/index
    ../c_api/index
+   record-schema

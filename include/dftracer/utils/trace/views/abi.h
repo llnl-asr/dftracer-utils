@@ -55,6 +55,20 @@ DFTU_EXPORT void dftu_view_free(dftu_view* v);
 DFTU_EXPORT dftu_view* dftu_view_filter(const dftu_view* v,
                                         const dftu_query* q);
 
+/** Read the files as the registered record schema `id` instead of their
+ * recorded or detected one. NULL on an unregistered or NULL id. */
+DFTU_EXPORT dftu_view* dftu_view_record_schema(const dftu_view* v,
+                                               const char* id);
+
+/** The paths the files hold, from the index, as a JSON array of objects with
+ * path, type, count, field and declared_type (see View::schema_tree). The
+ * caller owns the string; free it with dftu_view_string_free. NULL on
+ * failure. */
+DFTU_EXPORT char* dftu_view_schema_tree(const dftu_view* v);
+
+/** Free a string from a dftu_view_* call; NULL is a no-op. */
+DFTU_EXPORT void dftu_view_string_free(char* s);
+
 /** Project the collected result to the `n` named columns. */
 DFTU_EXPORT dftu_view* dftu_view_select(const dftu_view* v,
                                         const char* const* cols, int32_t n);
@@ -73,8 +87,9 @@ DFTU_EXPORT dftu_view* dftu_view_sort_by(const dftu_view* v, const char* column,
 
 /** Kind of one dftu_group_key, mirroring View::GroupKey::Kind. Arg groups on
  * an args-map entry named by `arg`; Field resolves `arg` as a field by name,
- * top-level then args (unlike Arg, it also sees top-level fields); every
- * other kind ignores `arg`. */
+ * top-level then args (unlike Arg, it also sees top-level fields); Resolved
+ * groups on the `resolved.<key field>.<field>` column `arg`; every other kind
+ * ignores `arg`. */
 typedef enum {
     DFTU_GROUP_KEY_NAME = 0,
     DFTU_GROUP_KEY_CAT,
@@ -89,7 +104,8 @@ typedef enum {
     DFTU_GROUP_KEY_HOST_NAME,
     DFTU_GROUP_KEY_RANK,
     DFTU_GROUP_KEY_ARG,
-    DFTU_GROUP_KEY_FIELD
+    DFTU_GROUP_KEY_FIELD,
+    DFTU_GROUP_KEY_RESOLVED
 } dftu_group_key_kind;
 
 /** Value transform applied to the resolved group value before the merge key

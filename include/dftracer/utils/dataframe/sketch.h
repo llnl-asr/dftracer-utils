@@ -38,18 +38,22 @@ struct HistogramBin {
     std::uint64_t count;
 };
 
-class DDSketch {
+/// `BINS` bounds memory (4 bytes per bin) and the covered value range: at
+/// relative accuracy a, values within a ratio of ((1+a)/(1-a))^BINS keep that
+/// accuracy; smaller values collapse into the lowest bin.
+template <int BINS>
+class BasicDDSketch {
    public:
-    static constexpr int MAX_BINS = 128;
+    static constexpr int MAX_BINS = BINS;
 
-    explicit DDSketch(double relative_accuracy = 0.01);
+    explicit BasicDDSketch(double relative_accuracy = 0.01);
 
     void add(double value, double weight = 1.0);
     /// Add a value whose DDSketch bucket key was precomputed by
     /// `sketch_bucket_keys` (the SIMD bulk path). `key == INT32_MIN` marks an
     /// exact zero, matching the kernel's sentinel; `value` keeps min / max.
     void add_key(std::int32_t key, double value, std::uint32_t weight = 1);
-    void merge(const DDSketch& other);
+    void merge(const BasicDDSketch& other);
     double quantile(double q) const;
     void reset();
 
@@ -66,7 +70,7 @@ class DDSketch {
 
     std::vector<std::uint8_t> serialize() const;
     void serialize_into(std::vector<std::uint8_t>& buf) const;
-    static DDSketch deserialize(const std::uint8_t* data, std::size_t len);
+    static BasicDDSketch deserialize(const std::uint8_t* data, std::size_t len);
 
    private:
     double gamma_;
@@ -93,6 +97,8 @@ class DDSketch {
     double bin_upper_bound(int index) const;
     void collapse_to_fit(int new_max_key);
 };
+
+using DDSketch = BasicDDSketch<128>;
 
 /// Exact-zero sentinel produced by `sketch_bucket_keys` and consumed by
 /// `DDSketch::add_key`; a zero value has no logarithmic bucket.

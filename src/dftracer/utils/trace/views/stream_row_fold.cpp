@@ -45,7 +45,8 @@ void StreamRowFold::step(const FoldBatch& batch) {
         });
     if (events.empty()) return;
 
-    const ColumnSpec spec{select_, time_scale_, resolver_.get(), emit_dyn_};
+    const ColumnSpec spec{select_, time_scale_, resolver_.get(), emit_dyn_,
+                          by_path_};
     dataframe::Morsel m = events_to_morsel(events, intern_, spec);
 
     const std::uint64_t bytes = morsel_bytes(m);

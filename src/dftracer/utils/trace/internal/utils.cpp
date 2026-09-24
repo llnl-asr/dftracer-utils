@@ -1,7 +1,7 @@
 #include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/utilities/indexer/internal/helpers.h>
 
 #include <cctype>
 
@@ -14,7 +14,8 @@ std::string determine_index_path(const std::string& path,
                                              ? data_path
                                              : data_path.parent_path())
                                       : fs::path(index_dir);
-    return utilities::indexer::internal::normalize_index_root(root.string());
+    return dftracer::utils::index::store::internal::normalize_index_root(
+        root.string());
 }
 
 std::string_view to_lower_ascii(std::string_view s, std::string& storage) {

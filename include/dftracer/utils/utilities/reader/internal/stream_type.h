@@ -1,7 +1,6 @@
 #ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAM_TYPE_H
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAM_TYPE_H
 
-#ifdef __cplusplus
 namespace dftracer::utils::utilities::reader::internal {
 
 /**
@@ -24,33 +23,5 @@ enum class RangeType {
 };
 
 }  // namespace dftracer::utils::utilities::reader::internal
-
-extern "C" {
-#endif
-
-/**
- * @brief Type of stream (C API).
- */
-typedef enum {
-    DFTU_STREAM_TYPE_BYTES = 0, /** Raw bytes, no line awareness */
-    DFTU_STREAM_TYPE_LINE_BYTES =
-        1, /** Line-boundary-aligned bytes (one line at a time) */
-    DFTU_STREAM_TYPE_MULTI_LINES_BYTES =
-        2, /** Line-boundary-aligned bytes (multiple lines) */
-    DFTU_STREAM_TYPE_LINE = 3,       /** Single parsed line per read() */
-    DFTU_STREAM_TYPE_MULTI_LINES = 4 /** Multiple parsed lines per read() */
-} dftu_stream_type_t;
-
-/**
- * @brief Range type (C API).
- */
-typedef enum {
-    DFTU_RANGE_TYPE_BYTES = 0, /** start/end are byte offsets */
-    DFTU_RANGE_TYPE_LINES = 1  /** start/end are line numbers (1-based) */
-} dftu_range_type_t;
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif  // DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAM_TYPE_H

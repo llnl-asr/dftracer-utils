@@ -1,14 +1,15 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/index/plan/prefilter.h>
+#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json.h>
 #include <dftracer/utils/query/evaluator.h>
-#include <dftracer/utils/trace/indexing/resolved_field_rewriter.h>
 #include <dftracer/utils/trace/schema.h>
+#include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
 #include <dftracer/utils/utilities/fileio/file_process_types.h>
 #include <dftracer/utils/utilities/fileio/indexed_file_reader_utility.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
 #include <simdjson.h>
 
@@ -20,6 +21,59 @@
 namespace dftracer::utils::trace::views {
 
 using dftracer::utils::json::JsonValue;
+
+namespace {
+
+// Whether a data record at `ts` lasting `dur` is kept by the view's time
+// window; a record without a numeric ts is outside any window.
+bool in_window(bool has_ts, double ts, double dur, const ViewDefinition& view) {
+    if (!view.window) return true;
+    if (!has_ts) return false;
+    const auto [begin, end] = *view.window;
+    // A zero-duration event overlaps only where it starts.
+    if (!view.window_overlap || dur <= 0) return begin <= ts && ts < end;
+    return ts < end && ts + dur > begin;
+}
+
+// The window test for a schema's time field, in its unit.
+bool in_role_window(simdjson::dom::element root, const ViewDefinition& view) {
+    const JsonValue json(root);
+    const JsonValue t = json.at(view.time_path);
+    if (!t.is_number()) return false;
+    double dur = 0;
+    if (view.window_overlap && !view.duration_path.empty()) {
+        const JsonValue d = json.at(view.duration_path);
+        if (d.is_number()) dur = d.get<double>() * view.duration_factor;
+    }
+    return in_window(true, t.get<double>() * view.time_factor, dur, view);
+}
+
+bool in_window(simdjson::dom::element root, const ViewDefinition& view) {
+    if (!view.window) return true;
+    if (!view.time_path.empty()) return in_role_window(root, view);
+    double ts = 0, dur = 0;
+    const bool has_ts = root["ts"].get_double().get(ts) == simdjson::SUCCESS;
+    if (view.window_overlap &&
+        root["dur"].get_double().get(dur) != simdjson::SUCCESS)
+        dur = 0;
+    return in_window(has_ts, ts, dur, view);
+}
+
+// An owned event from a parsed record, with the view's decoder. A fold that
+// captures schema needs every leaf, so it gets no projection.
+detail::FoldEvent decode(simdjson::dom::element root,
+                         const ViewScannerInput& input, bool schema) {
+    if (input.view.by_path)
+        return detail::decode_record(
+            root, *input.fold_intern, schema,
+            schema || input.view.paths.empty() ? nullptr : &input.view.paths,
+            input.view.record_schema, &input.view.path_fields);
+    return detail::extract_fold_event(root, *input.fold_intern,
+                                      input.fold_needs_args,
+                                      input.fold_extra_fields, schema);
+}
+
+}  // namespace
 
 ViewScannerInput& ViewScannerInput::with_file_path(const std::string& path) {
     file_path = path;
@@ -107,18 +161,32 @@ static void collect_referenced_hashes_batch(
 // pay for on every event, so the no-query/no-metadata path can drop metadata
 // records cheaply. The padded buffer is required by On-Demand and reused across
 // calls.
-static RecordPhase event_phase(const char* data, std::size_t n) {
+// A record's phase, and with a window its ts and dur, read without a DOM.
+struct EventProbe {
+    RecordPhase phase = RecordPhase::UNKNOWN;
+    bool has_ts = false;
+    double ts = 0;
+    double dur = 0;
+};
+
+static EventProbe probe_event(const char* data, std::size_t n,
+                              const ViewDefinition& view) {
     thread_local simdjson::ondemand::parser parser;
     thread_local std::string padbuf;
     padbuf.assign(data, n);
     padbuf.resize(n + simdjson::SIMDJSON_PADDING);
+    EventProbe p;
     simdjson::ondemand::document doc;
-    if (parser.iterate(padbuf.data(), n, padbuf.size()).get(doc))
-        return RecordPhase::UNKNOWN;
+    if (parser.iterate(padbuf.data(), n, padbuf.size()).get(doc)) return p;
     auto f = doc.find_field_unordered("ph");
-    if (f.error()) return RecordPhase::UNKNOWN;
-    auto v = f.value_unsafe();
-    return read_phase(v);
+    if (!f.error()) p.phase = read_phase(f.value_unsafe());
+    if (!view.window) return p;
+    p.has_ts = doc.find_field_unordered("ts").get_double().get(p.ts) ==
+               simdjson::SUCCESS;
+    if (view.window_overlap && doc.find_field_unordered("dur").get_double().get(
+                                   p.dur) != simdjson::SUCCESS)
+        p.dur = 0;
+    return p;
 }
 
 coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
@@ -127,28 +195,16 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
     const std::optional<query::Query>* query_src =
         input.query ? &input.query : &input.view.query;
 
-    // Resolve virtual fields (resolved.*/r.*) to concrete hash in-clauses via
-    // the index before per-event evaluation. Holds the rewrite for its
-    // lifetime.
-    std::optional<query::Query> rewritten;
-    if (*query_src && !input.index_path.empty() &&
-        dftracer::utils::trace::indexing::has_resolved_fields(**query_src)) {
-        try {
-            utilities::indexer::IndexDatabase db(
-                input.index_path,
-                dftracer::utils::utilities::indexer::IndexOpenMode::ReadOnly);
-            if (auto rw =
-                    dftracer::utils::trace::indexing::rewrite_resolved_fields(
-                        **query_src, db)) {
-                rewritten = std::move(rw);
-                query_src = &rewritten;
-            }
-        } catch (...) {
-        }
-    }
-
     const auto& query = *query_src;
     bool use_query = query.has_value();
+
+    // Metadata lines bypass the query, so only a scan returning none may drop
+    // lines unparsed.
+    std::optional<index::plan::Prefilter> prefilter;
+    if (use_query && input.view.prefilter && !input.view.include_metadata)
+        prefilter.emplace(*query);
+    std::optional<index::plan::Prefilter::Gate> gate;
+    if (prefilter && !prefilter->empty()) gate.emplace(*prefilter);
 
     // Smart metadata buffering:
     // - Hash metadata (FH, HH, SH) -> buffer keyed by hash value
@@ -200,6 +256,11 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
         std::size_t bytes_read = chunk.size();
         std::size_t pos = 0;
 
+        // A schema's time field needs the parsed record for the window test.
+        const bool probe_lines =
+            !use_query && !input.view.include_metadata &&
+            input.fold_intern == nullptr &&
+            (!input.view.window || input.view.time_path.empty());
         while (pos < bytes_read) {
             const char* line_start = data + pos;
             const char* newline = static_cast<const char*>(
@@ -211,18 +272,28 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
             // decision is to drop "ph":"M" records and emit the rest, so a
             // targeted phase probe replaces the full DOM parse. Fold mode needs
             // the full parse to build the FoldEvent, so it skips this.
-            if (line_len > 0 && !use_query && !input.view.include_metadata &&
-                input.fold_intern == nullptr) {
+            if (line_len > 0 && probe_lines) {
                 const char* s = line_start;
                 const char* e = line_start + line_len;
                 while (s < e && (*s == ' ' || *s == '\t')) ++s;
-                if (s < e && *s == '{' &&
-                    event_phase(line_start, line_len) !=
-                        RecordPhase::METADATA) {
-                    batch.events_scanned++;
-                    batch.events.emplace_back(line_start, line_len);
-                    batch.events_matched++;
+                if (s < e && *s == '{') {
+                    const EventProbe p =
+                        probe_event(line_start, line_len, input.view);
+                    if (p.phase != RecordPhase::METADATA) {
+                        batch.events_scanned++;
+                        if (in_window(p.has_ts, p.ts, p.dur, input.view)) {
+                            batch.events.emplace_back(line_start, line_len);
+                            batch.events_matched++;
+                        }
+                    }
                 }
+                pos = (newline - data) + 1;
+                continue;
+            }
+
+            if (line_len > 0 && gate &&
+                !gate->may_match(std::string_view(line_start, line_len))) {
+                batch.events_scanned++;
                 pos = (newline - data) + 1;
                 continue;
             }
@@ -265,10 +336,7 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
                                 // dictionary/bloom fold, no re-parse
                                 // downstream.
                                 batch.fold_events.push_back(
-                                    detail::extract_fold_event(
-                                        root, *input.fold_intern,
-                                        input.fold_needs_args,
-                                        input.fold_extra_fields));
+                                    decode(root, input, false));
                                 batch.events_matched++;
                             } else {
                                 // Non-hash metadata: string_view into chunk
@@ -278,7 +346,8 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
                         } else if (phase != RecordPhase::METADATA) {
                             batch.events_scanned++;
                             bool event_match =
-                                !use_query || query->evaluate(json);
+                                in_window(root, input.view) &&
+                                (!use_query || query->evaluate(json));
                             if (event_match) {
                                 if (input.view.include_metadata) {
                                     collect_referenced_hashes_batch(
@@ -289,11 +358,8 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
                                     // Parse-once: extract the owned event here
                                     // so the fold consumer never re-parses.
                                     batch.fold_events.push_back(
-                                        detail::extract_fold_event(
-                                            root, *input.fold_intern,
-                                            input.fold_needs_args,
-                                            input.fold_extra_fields,
-                                            input.fold_capture_schema));
+                                        decode(root, input,
+                                               input.fold_capture_schema));
                                     if (input.fold_keep_raw)
                                         batch.events.emplace_back(line_start,
                                                                   line_len);

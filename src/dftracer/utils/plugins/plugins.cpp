@@ -1,5 +1,6 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/index/extensions/plugin_extension.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/build_host.h>
 #include <dftracer/utils/plugins/config.h>
@@ -58,6 +59,9 @@ struct Plugins::Impl {
         /* Node names registered via dftu_svc_nodes::register_node; same
            reason as the providers. */
         std::vector<std::string> registered_nodes;
+        /* Index extension names registered via
+           dftu_svc_index::register_extension; same reason as the providers. */
+        std::vector<std::string> registered_index_extensions;
     };
 
     ~Impl() {
@@ -72,6 +76,8 @@ struct Plugins::Impl {
                 ::dftu_provider_unregister(name.c_str());
             for (const std::string& name : p.registered_nodes)
                 ::dftu_node_unregister(name.c_str());
+            for (const std::string& name : p.registered_index_extensions)
+                index::extensions::unregister_plugin_extension(name);
             if (p.owned && p.plugin && p.plugin->destroy)
                 p.plugin->destroy(p.plugin->self);
             if (p.handle) dlclose(p.handle);
@@ -298,6 +304,8 @@ Result<Plugins::Impl::Loaded> load_plugin(const std::string& path,
             ::dftu_provider_unregister(name.c_str());
         for (const std::string& name : build_host.registered_nodes())
             ::dftu_node_unregister(name.c_str());
+        for (const std::string& name : build_host.registered_index_extensions())
+            index::extensions::unregister_plugin_extension(name);
     };
 
     // A factory that reached outside the registration surface built itself on
@@ -374,7 +382,8 @@ Result<Plugins::Impl::Loaded> load_plugin(const std::string& path,
                                  build_host.take_states(),
                                  build_host.take_registered_ops(),
                                  build_host.take_registered_providers(),
-                                 build_host.take_registered_nodes()};
+                                 build_host.take_registered_nodes(),
+                                 build_host.take_registered_index_extensions()};
 }
 
 // Kahn topological sort of `n` nodes over `from -> to` edges (from must precede
@@ -692,7 +701,8 @@ Result<Plugins> build_injected_plugins(std::vector<dftu_plugin*> plugins) {
     auto impl = std::make_unique<Plugins::Impl>();
     impl->plugins.reserve(plugins.size());
     for (dftu_plugin* pl : plugins)
-        impl->plugins.push_back({nullptr, pl, false, {}, {}, {}, {}, {}, {}});
+        impl->plugins.push_back(
+            {nullptr, pl, false, {}, {}, {}, {}, {}, {}, {}});
     auto ordered = settle_order(*impl);
     if (!ordered) return unexpected(std::move(ordered).error());
     settle_prune(*impl);

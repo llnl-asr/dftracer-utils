@@ -16,6 +16,10 @@
 // global) View aggregation runs through the dataframe engine's streaming
 // group_by. run_collect_via_engine itself is declared (as a friend of View) in
 // view.h; this header adds the finalize/prepare helpers.
+namespace dftracer::utils::index::plan {
+class GroupResolver;
+}  // namespace dftracer::utils::index::plan
+
 namespace dftracer::utils::trace::views::detail {
 
 /// Finalize a raw engine AggState (key layout [time_bucket?, group_by...] with
@@ -32,6 +36,10 @@ std::optional<dftracer::utils::dataframe::Schema> aggregated_output_schema(
 
 dftracer::utils::dataframe::DataFrame finalize_engine_result(
     const dftracer::utils::dataframe::AggState& state, const ViewPlan& plan);
+
+/// Whether an aggregation of `plan` reads every event overlapping its window
+/// (a windowed occupancy aggregate) rather than those starting in it.
+bool scans_by_overlap(const ViewPlan& plan);
 
 /// Scan `plan` through the engine group-by and return the mergeable partial
 /// (fine-grain, key layout [time_bucket?, group_by...]) before finalizing. The
@@ -61,8 +69,6 @@ struct EnginePrep {
     std::string dyn_prefix;
 };
 
-class GroupResolver;
-
 /// The one derivation of a ViewPlan's aggregation into engine terms, shared by
 /// prepare_engine_group (builds the LazyFrame via exprs) and
 /// build_agg_input_frame (builds the same columns from an event chunk in C++).
@@ -80,6 +86,7 @@ struct AggInputSpec {
     std::vector<Computed> computed;
     double base_time_scale = 1.0;  ///< time_scale passed to build_row_frame
     bool emit_dyn = false;         ///< append build_dyn_numeric_columns
+    bool by_path = false;          ///< columns named by path
 
     std::vector<std::string> group_key_names;  ///< final key column names
     std::vector<dftracer::utils::dataframe::GroupAgg> gaggs;
@@ -128,7 +135,7 @@ AggInputSpec make_agg_input_spec(const ViewPlan& plan);
 dftracer::utils::dataframe::DataFrame build_agg_input_frame(
     const std::vector<FoldEvent>& events,
     const dftracer::utils::StringIntern& intern, const AggInputSpec& spec,
-    const GroupResolver* resolver);
+    const dftracer::utils::index::plan::GroupResolver* resolver);
 
 /// The base trace field a group-agg value column name reduces over, inverting
 /// the scaled-column rename make_agg_input_spec applies (SCALED_{TS,DUR,TE} map

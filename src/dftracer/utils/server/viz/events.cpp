@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/query/query.h>
@@ -26,7 +27,6 @@
 #include <dftracer/utils/trace/views/view_planner_utility.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
 #include <simdjson.h>
 
 #include <algorithm>
@@ -212,9 +212,9 @@ coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
         std::vector<std::string> events;
     };
     views::View v =
-        views::View::from_files(to_view_files(target_files),
-                                &index.bloom_cache())
+        views::View::from_files(to_view_files(target_files))
             .phase(views::Phase::Events)
+            .metadata(false)
             .cancel_when([&req]() { return req.cancel_token.cancelled(); });
     if (view.query) v = v.filter(*view.query);
     if (!single_file) v = v.time_range(scan_begin, end);
@@ -244,6 +244,134 @@ coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
         truncated, index.native_to_us(index.global_min_timestamp_us()),
         index.time_metric());
     co_return HttpResponse::ok(body);
+}
+
+namespace {
+
+void append_cell(simdjson::builder::string_builder& b,
+                 const dataframe::Series& col, std::int64_t r,
+                 const TraceIndex& index, bool time) {
+    using dataframe::TypeId;
+    if (col.is_null(r)) {
+        b.append_raw("null");
+        return;
+    }
+    switch (col.type()) {
+        case TypeId::String:
+            b.escape_and_append_with_quotes(col.string_at(r));
+            return;
+        case TypeId::Int64: {
+            const auto v = col.data<std::int64_t>()[r];
+            b.append_raw(std::to_string(
+                time && v > 0 ? static_cast<std::int64_t>(index.native_to_us(
+                                    static_cast<std::uint64_t>(v)))
+                              : v));
+            return;
+        }
+        case TypeId::Uint64: {
+            const auto v = col.data<std::uint64_t>()[r];
+            b.append_raw(std::to_string(time ? index.native_to_us(v) : v));
+            return;
+        }
+        case TypeId::Float64:
+            b.append_raw(std::to_string(col.data<double>()[r]));
+            return;
+        default:
+            b.append_raw("null");
+    }
+}
+
+}  // namespace
+
+// Records written without a clock (ts 0, such as CUDA activity): events and
+// aggregated records the timeline cannot place. `count` covers every match;
+// `events` is the page at `offset`, longest first, with dur in us.
+coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
+                                                const QueryParams& params,
+                                                TraceIndex& index) {
+    const int limit = std::clamp(params.get_int("limit", 1000), 0, 10000);
+    const int offset = std::max(0, params.get_int("offset", 0));
+    std::string text = "ts == 0";
+    if (const auto user = params.get("query"); !user.empty()) {
+        if (!query::try_parse(user))
+            co_return HttpResponse::bad_request("Invalid query: " +
+                                                std::string(user));
+        text = "(ts == 0) and (" + std::string(user) + ")";
+    }
+
+    // Every match of a query, sorted once and cached as "<count>\n" plus one
+    // row object per line, so paging slices lines instead of rescanning.
+    const std::string cache_key = std::string("untimed\n") +
+                                  std::string(params.get("file")) + "\n" + text;
+    std::string all;
+    if (auto hit = index.viz_cache().get(cache_key)) {
+        all = std::move(*hit);
+    } else {
+        const std::vector<std::string> columns = {"name", "cat", "pid",
+                                                  "tid",  "dur", "ph"};
+        const auto rows =
+            co_await views::View::from_files(
+                to_view_files(collect_candidate_files(index, params)))
+                .phase(views::Phase::Any)
+                .metadata(false)
+                .filter(query::parse_or_throw(text))
+                .cancel_when([&req]() { return req.cancel_token.cancelled(); })
+                .select(columns)
+                .sort_by_multi({"dur", "pid", "tid", "name"},
+                               std::vector<bool>{true, false, false, false})
+                .collect();
+        auto& rb = scratch_json_builder();
+        rb.append_raw(std::to_string(rows.num_rows()));
+        for (std::int64_t r = 0; r < rows.num_rows(); ++r) {
+            rb.append_raw("\n");
+            rb.start_object();
+            for (std::size_t c = 0; c < rows.names.size(); ++c) {
+                if (c > 0) rb.append_comma();
+                rb.escape_and_append_with_quotes(rows.names[c]);
+                rb.append_colon();
+                append_cell(rb, rows.columns[c], r, index,
+                            rows.names[c] == "dur");
+            }
+            rb.end_object();
+        }
+        all = std::string(rb);
+        if (!req.cancel_token.cancelled())
+            index.viz_cache().put(cache_key, all);
+    }
+
+    const std::string_view text_rows(all);
+    const std::size_t head = text_rows.find('\n');
+    const std::uint64_t count = std::strtoull(all.c_str(), nullptr, 10);
+    // Rows [offset, offset + limit): skip `offset` lines, keep `limit`.
+    std::size_t pos = head == std::string_view::npos ? text_rows.size() : head;
+    for (int i = 0; i < offset && pos < text_rows.size(); ++i) {
+        const std::size_t nl = text_rows.find('\n', pos + 1);
+        pos = nl == std::string_view::npos ? text_rows.size() : nl;
+    }
+    std::size_t end = pos;
+    for (int i = 0; i < limit && end < text_rows.size(); ++i) {
+        const std::size_t nl = text_rows.find('\n', end + 1);
+        end = nl == std::string_view::npos ? text_rows.size() : nl;
+    }
+    std::string page;
+    if (end > pos) {
+        page.assign(text_rows.substr(pos + 1, end - pos - 1));
+        std::replace(page.begin(), page.end(), '\n', ',');
+    }
+
+    auto& b = scratch_json_builder();
+    b.start_object();
+    b.escape_and_append_with_quotes("events");
+    b.append_colon();
+    b.append_raw("[" + page + "]");
+    b.append_comma();
+    b.append_key_value("count", count);
+    b.append_comma();
+    b.append_key_value("offset", offset);
+    b.append_comma();
+    b.append_key_value("limit", limit);
+    b.end_object();
+    co_return HttpResponse::ok(std::string(b));
 }
 
 }  // namespace dftracer::utils::server

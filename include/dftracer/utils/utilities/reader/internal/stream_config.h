@@ -4,57 +4,6 @@
 #include <dftracer/utils/utilities/reader/internal/stream_type.h>
 #include <stddef.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-/**
- * @brief Stream configuration (C API).
- *
- * Configuration for creating streams with control over stream type,
- * range, and internal buffer size.
- *
- * Example (C):
- * @code
- * dftu_stream_config_t config = {
- *     .stream_type = DFTU_STREAM_TYPE_LINE,
- *     .range_type = DFTU_RANGE_TYPE_LINES,
- *     .start = 1,
- *     .end = 1000,
- *     .buffer_size = 512 * 1024 * 1024  // 512MB for large files
- * };
- * dftu_reader_stream_t stream = dftu_reader_stream(reader, &config);
- * @endcode
- */
-typedef struct {
-    /** Type of stream (BYTES, LINE, MULTI_LINES, etc.) */
-    dftu_stream_type_t stream_type;
-
-    /** How to interpret start/end (BYTES or LINES) */
-    dftu_range_type_t range_type;
-
-    /** Start of range (byte offset or line number based on range_type) */
-    size_t start;
-
-    /** End of range (byte offset or line number based on range_type) */
-    size_t end;
-
-    /**
-     * Internal buffer size in bytes (0 = use default).
-     *
-     * Buffer size guidelines:
-     * - Small files (<100MB): 1-4 MB
-     * - Medium files (100MB-10GB): 16-64 MB (default)
-     * - Large files (10GB-1TB): 128-512 MB
-     *
-     * Larger buffers improve I/O performance but use more memory.
-     */
-    size_t buffer_size;
-} dftu_stream_config_t;
-
-#ifdef __cplusplus
-}  // extern "C"
-
 #include <cstddef>
 
 namespace dftracer::utils::utilities::reader::internal {
@@ -187,23 +136,6 @@ class StreamConfig {
         return *this;
     }
 
-    // ========================================================================
-    // C API Conversion
-    // ========================================================================
-
-    /**
-     * @brief Create from C API config.
-     */
-    static StreamConfig from_c(const dftu_stream_config_t& c_config) {
-        // Use default buffer size if 0 or uninitialized
-        std::size_t buffer_size = c_config.buffer_size == 0
-                                      ? DEFAULT_BUFFER_SIZE
-                                      : c_config.buffer_size;
-        return StreamConfig{static_cast<StreamType>(c_config.stream_type),
-                            static_cast<RangeType>(c_config.range_type),
-                            c_config.start, c_config.end, buffer_size};
-    }
-
    private:
     /** Type of stream (BYTES, LINE, MULTI_LINES, etc.) */
     StreamType stream_type_ = StreamType::LINE;
@@ -228,7 +160,5 @@ class StreamConfig {
 };
 
 }  // namespace dftracer::utils::utilities::reader::internal
-
-#endif  // __cplusplus
 
 #endif  // DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAM_CONFIG_H

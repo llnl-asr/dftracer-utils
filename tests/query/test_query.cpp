@@ -259,3 +259,15 @@ TEST_CASE("Query::fields - no duplicates for repeated field") {
     CHECK(f.size() == 1);
     CHECK(f.count("pid") == 1);
 }
+
+TEST_CASE("Query copies own their field views and any paths") {
+    std::optional<Query> copy;
+    {
+        auto q = Query::from_string(R"(any(tags) == "a" and cat == "POSIX")");
+        REQUIRE(q.has_value());
+        copy.emplace(*q);
+    }
+    CHECK(copy->references("cat"));
+    CHECK(copy->references("tags"));
+    CHECK(copy->any_paths() == std::vector<std::string>{"tags"});
+}

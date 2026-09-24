@@ -700,12 +700,12 @@ def count_index_files(
     """Distinct data files in the index, skipping paths containing any of
     `ignored_patterns`.
 
-    Counts from the index's hash table rather than the read, so it stays exact
+    Counts from the index's file dictionary rather than the read, so it stays exact
     when the read is folded to a grain with no per-file rows. Callers that
     filter files out of the analysis must pass the same patterns here, or the
     count reports files the analysis never used.
     """
-    table = _open_readonly_indexer(files, index_path).get_hash_table("file")
+    table = _open_readonly_indexer(files, index_path).get_dictionary("file", "path")
     if not ignored_patterns:
         return len(table)
     return sum(1 for name in table.values() if not any(p in name for p in ignored_patterns))

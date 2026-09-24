@@ -1,11 +1,12 @@
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/core/common/string_arena.h>
+#include <dftracer/utils/index/plan/prefilter.h>
+#include <dftracer/utils/index/plan/resolved_field_rewriter.h>
+#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/query/query.h>
-#include <dftracer/utils/trace/indexing/resolved_field_rewriter.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/utilities/common/arrow/column_builder.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/trace_reader_prefilter.h>
 #include <dftracer/utils/utilities/reader/internal/trace_reader_shared.h>
@@ -19,11 +20,8 @@
 
 namespace dftracer::utils::utilities::reader {
 
-namespace indexing = trace::indexing;
-using internal::build_prefilter;
 using internal::CompiledEqProbe;
 using internal::eval_compiled_eq;
-using internal::LinePrefilter;
 using internal::ondemand_to_literal;
 using internal::read_chunks_indexed;
 using internal::strip_ndjson_bookends;
@@ -217,7 +215,7 @@ void collect_query_fields(simdjson::ondemand::document_reference doc,
 // pass the line-level prefilter. For queries with no useful prefilter, the
 // caller should skip this and feed the raw chunk directly.
 std::string collect_matching_lines(std::span<const char> chunk,
-                                   const LinePrefilter& prefilter) {
+                                   const index::plan::Prefilter& prefilter) {
     std::string out;
     out.reserve(chunk.size());
     const char* data = chunk.data();
@@ -268,8 +266,8 @@ void collect_query_fields(simdjson::ondemand::document_reference doc,
                 internal::store_referenced_nested(out, query, check_dotted, key,
                                                   nk_r.value(), nv_r.value());
             }
-        } else if (query.references(key)) {
-            out[std::string(key)] = ondemand_to_literal(val);
+        } else {
+            internal::store_referenced(out, query, key, val, type);
         }
     }
 }
@@ -285,20 +283,14 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
         query = std::move(*parsed);
     }
 
-    // Resolve virtual fields (resolved.*/r.*) to concrete hash in-clauses via
-    // the index before the query drives pruning or per-event evaluation.
+    // Resolve `resolved.` columns to key in-clauses through the index
+    // dictionaries before the query drives pruning or per-event evaluation.
     if (query && has_index_ && !index_path_.empty() &&
-        indexing::has_resolved_fields(*query)) {
-        try {
-            indexer::IndexDatabase db(
-                index_path_,
-                dftracer::utils::utilities::indexer::IndexOpenMode::ReadOnly);
-            if (auto rewritten =
-                    indexing::rewrite_resolved_fields(*query, db)) {
-                query = std::move(*rewritten);
-            }
-        } catch (...) {
-        }
+        dftracer::utils::index::plan::has_resolved_fields(*query)) {
+        if (auto rewritten =
+                dftracer::utils::index::plan::rewrite_resolved_fields(
+                    *query, index_path_, config_.file_path))
+            query = std::move(*rewritten);
     }
 
     // When chunk_prune_only is set, dim_stats already proved every event in
@@ -357,12 +349,12 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
 
     // Keep RocksDB alive for the generator's lifetime so per-method opens
     // in GzipIndexer reuse DBManager's cached handle.
-    std::optional<indexer::IndexDatabase> db_keep_alive;
+    std::optional<dftracer::utils::index::store::IndexDatabase> db_keep_alive;
     if (has_index_ && !index_path_.empty()) {
         try {
             db_keep_alive.emplace(
                 index_path_,
-                dftracer::utils::utilities::indexer::IndexOpenMode::ReadOnly);
+                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
         } catch (...) {
         }
     }
@@ -372,20 +364,10 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
         reader, index_path_, config_.file_path, config, query,
         /*extend_to_line_boundary=*/config.end_at_checkpoint);
 
-    LinePrefilter prefilter = (query && !config.chunk_prune_only)
-                                  ? build_prefilter(*query)
-                                  : LinePrefilter{};
+    index::plan::Prefilter prefilter = (query && !config.chunk_prune_only)
+                                           ? index::plan::Prefilter(*query)
+                                           : index::plan::Prefilter{};
     bool have_line_prefilter = !prefilter.empty();
-
-    // Sub-chunk skip: a single-member item whose excluded buckets hold no
-    // matching event. Disabled under a line prefilter, which drops lines
-    // before the loop and would desync the ordinal. Ordinals count data
-    // events (ph != "M") in file order, matching the indexer's buckets.
-    const bool sub_skip =
-        !config.sub_event_counts.empty() && !have_line_prefilter;
-    std::size_t sub_bucket = 0;
-    std::uint64_t sub_ordinal = 0;
-    std::uint64_t sub_bucket_end = sub_skip ? config.sub_event_counts[0] : 0;
 
     simdjson::ondemand::parser bulk_parser;
     RecordBatchBuilder builder;
@@ -452,32 +434,6 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
             auto doc_result = *it;
             if (doc_result.error()) continue;
             auto& doc = doc_result.value();
-
-            if (sub_skip) {
-                // Metadata (ph == "M") is not counted in sub-buckets; pass it
-                // through (it fails any ts/dur predicate anyway). Data events
-                // advance the ordinal and skip when their bucket is excluded.
-                bool is_meta = false;
-                auto ph = doc.find_field_unordered("ph");
-                if (!ph.error()) {
-                    auto pv = ph.value_unsafe();
-                    if (trace::read_phase(pv) == trace::RecordPhase::METADATA) {
-                        is_meta = true;
-                    }
-                }
-                doc.rewind();
-                if (!is_meta) {
-                    while (sub_ordinal >= sub_bucket_end &&
-                           sub_bucket + 1 < config.sub_event_counts.size()) {
-                        ++sub_bucket;
-                        sub_bucket_end += config.sub_event_counts[sub_bucket];
-                    }
-                    bool keep = sub_bucket >= config.sub_keep.size() ||
-                                config.sub_keep[sub_bucket] != 0;
-                    ++sub_ordinal;
-                    if (!keep) continue;
-                }
-            }
 
             if (query && !config.chunk_prune_only) {
                 if (use_compiled) {

@@ -41,6 +41,26 @@ export interface VizResponse {
   metadata: VizMetadata;
 }
 
+// One record written without a clock (ts 0); ph 1 is an event, 3 an
+// aggregated record.
+export interface UntimedRow {
+  name: string;
+  cat: string | null;
+  pid: number;
+  tid: number;
+  dur: number | null;
+  ph: number;
+}
+
+// Records the timeline cannot place: `count` covers every match, `events` is
+// the page at `offset`, longest first.
+export interface UntimedResponse {
+  events: UntimedRow[];
+  count: number;
+  offset: number;
+  limit: number;
+}
+
 // One aggregated block of sub-pixel events (Perfetto-style density LOD).
 export interface DensityBlock {
   group?: string; // group_by value; absent when grouping is off or value missing

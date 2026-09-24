@@ -25,7 +25,6 @@ layer that composes all below it.
    coro
    io
    task_graph
-   rocksdb
 
 .. toctree::
    :maxdepth: 1

@@ -57,7 +57,8 @@ class EngineAggFold : public Fold {
         for (const auto& gk : plan_->group_by)
             if (gk.kind == GroupKey::Kind::Arg ||
                 gk.kind == GroupKey::Kind::Field ||
-                gk.kind == GroupKey::Kind::Rank)
+                gk.kind == GroupKey::Kind::Rank ||
+                gk.kind == GroupKey::Kind::Resolved)
                 return true;
         for (const auto& spec : plan_->agg) {
             if (!arg_free_field(spec.field)) return true;
@@ -131,7 +132,7 @@ class EngineAggFold : public Fold {
     RecordPhase phase_target_;
     bool apply_query_ = false;
     bool want_ranks_ = false;
-    const GroupResolver* resolver_ = nullptr;
+    const dftracer::utils::index::plan::GroupResolver* resolver_ = nullptr;
     dftracer::utils::dataframe::AggStatePtr state_;
     std::unordered_map<std::uint64_t, std::string> ranks_;
     query::ValueMap qmap_;

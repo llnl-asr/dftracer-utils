@@ -1,7 +1,9 @@
 #include <dftracer/utils/core/common/field_ref.h>
+#include <dftracer/utils/json/canonical.h>
 #include <dftracer/utils/query/evaluator.h>
 #include <dftracer/utils/query/pattern.h>
 
+#include <algorithm>
 #include <cmath>
 #include <regex>
 #include <string>
@@ -19,9 +21,19 @@ std::optional<int> compare_value(const JsonValue& field,
         [&field](auto&& v) -> std::optional<int> {
             using T = std::decay_t<decltype(v)>;
             if constexpr (std::is_same_v<T, std::string>) {
-                if (!field.is_string()) return std::nullopt;
-                auto fv = field.get<std::string_view>();
-                std::string_view sv(v);
+                if (field.is_string()) {
+                    auto fv = field.get<std::string_view>();
+                    std::string_view sv(v);
+                    if (fv < sv) return -1;
+                    if (fv > sv) return 1;
+                    return 0;
+                }
+                // An object or array compares as canonical JSON text.
+                if (!field.is_object() && !field.is_array())
+                    return std::nullopt;
+                std::string fv;
+                json::append_canonical_json(fv, field.element());
+                const std::string sv = json::canonical_json_text(v);
                 if (fv < sv) return -1;
                 if (fv > sv) return 1;
                 return 0;
@@ -121,39 +133,61 @@ JsonValue resolve_field(const JsonValue& event, const FieldNode& field) {
 
 bool eval_node(const QueryNode& node, const JsonValue& event);
 
-bool eval_compare(const CompareNode& n, const JsonValue& event) {
-    auto fv = resolve_field(event, n.field);
-    if (fv.is_null()) return false;
-    return apply_compare(n.op, compare_value(fv, n.value));
+// Whether `holds` is true for the field's value or, for an any() field, for
+// a scalar element of the array at its path.
+template <class Holds>
+bool field_holds(const FieldNode& field, const JsonValue& event,
+                 Holds&& holds) {
+    const JsonValue fv = resolve_field(event, field);
+    if (!field.any) return !fv.is_null() && holds(fv);
+    if (!fv.is_array()) return false;
+    for (auto el : fv.element().get_array().value_unsafe()) {
+        const JsonValue ev(el);
+        if (ev.is_null() || ev.is_object() || ev.is_array()) continue;
+        if (holds(ev)) return true;
+    }
+    return false;
 }
 
-bool eval_in(const InNode& n, const JsonValue& event) {
-    auto fv = resolve_field(event, n.field);
-    if (fv.is_null()) return false;
-    for (auto& elem : n.values.elements) {
+bool eval_compare(const CompareNode& n, const JsonValue& event) {
+    return field_holds(n.field, event, [&](const JsonValue& fv) {
+        return apply_compare(n.op, compare_value(fv, n.value));
+    });
+}
+
+bool in_values(const ArrayNode& values, const JsonValue& fv) {
+    if (values.set) {
+        if (fv.is_string())
+            return values.set->values.contains(fv.get<std::string_view>());
+        if (!fv.is_object() && !fv.is_array()) return false;
+    }
+    for (auto& elem : values.elements) {
         auto cmp = compare_value(fv, elem);
         if (cmp && *cmp == 0) return true;
     }
     return false;
 }
 
+bool eval_in(const InNode& n, const JsonValue& event) {
+    return field_holds(n.field, event, [&](const JsonValue& fv) {
+        return in_values(n.values, fv);
+    });
+}
+
 bool eval_not_in(const NotInNode& n, const JsonValue& event) {
-    auto fv = resolve_field(event, n.field);
-    if (fv.is_null()) return false;
-    for (auto& elem : n.values.elements) {
-        auto cmp = compare_value(fv, elem);
-        if (cmp && *cmp == 0) return false;
-    }
-    return true;
+    return field_holds(n.field, event, [&](const JsonValue& fv) {
+        return !in_values(n.values, fv);
+    });
 }
 
 bool eval_match(const MatchNode& n, const JsonValue& event) {
     if (!n.compiled) return false;
-    auto fv = resolve_field(event, n.field);
-    if (!fv.is_string()) return false;
-    auto sv = fv.get<std::string_view>();
-    bool m = std::regex_search(sv.begin(), sv.end(), n.compiled->re);
-    return n.negated ? !m : m;
+    return field_holds(n.field, event, [&](const JsonValue& fv) {
+        if (!fv.is_string()) return false;
+        auto sv = fv.get<std::string_view>();
+        bool m = std::regex_search(sv.begin(), sv.end(), n.compiled->re);
+        return n.negated ? !m : m;
+    });
 }
 
 bool eval_node(const QueryNode& node, const JsonValue& event) {
@@ -213,42 +247,76 @@ std::optional<int> compare_literals(const LiteralValue& a,
         a, b);
 }
 
-bool eval_map_node(const QueryNode& node, const ValueMap& fields);
+// Whether `digits` is a non-empty run of decimal digits.
+bool is_position(std::string_view digits) {
+    return !digits.empty() &&
+           std::all_of(digits.begin(), digits.end(),
+                       [](char c) { return c >= '0' && c <= '9'; });
+}
+
+// Whether `key` is `<path>.<k>` for a position `k`.
+bool is_position_of(std::string_view key, std::string_view path) {
+    return key.size() > path.size() + 1 && key.starts_with(path) &&
+           key[path.size()] == '.' && is_position(key.substr(path.size() + 1));
+}
+
+// Whether `holds` is true for the field's value or, for an any() field, for
+// a value at one of its array positions (`<path>.<k>`, or without an "args."
+// prefix, as event args are keyed).
+template <class Holds>
+bool map_holds(const FieldNode& field, const ValueMap& fields, Holds&& holds) {
+    if (!field.any) {
+        auto it = fields.find(field.path);
+        return it != fields.end() && holds(it->second);
+    }
+    const std::string_view path = field.path;
+    const std::string_view bare =
+        path.starts_with("args.") ? path.substr(5) : path;
+    for (const auto& [key, value] : fields)
+        if ((is_position_of(key, path) || is_position_of(key, bare)) &&
+            holds(value))
+            return true;
+    return false;
+}
+
+bool in_literals(const ArrayNode& values, const LiteralValue& v) {
+    if (values.set) {
+        const auto* s = std::get_if<std::string>(&v);
+        return s && values.set->values.contains(*s);
+    }
+    for (const auto& elem : values.elements) {
+        auto cmp = compare_literals(v, elem.value);
+        if (cmp && *cmp == 0) return true;
+    }
+    return false;
+}
 
 bool eval_map_node(const QueryNode& node, const ValueMap& fields) {
     return std::visit(
         [&fields](auto&& n) -> bool {
             using T = std::decay_t<decltype(n)>;
             if constexpr (std::is_same_v<T, CompareNode>) {
-                auto it = fields.find(n.field.path);
-                if (it == fields.end()) return false;
-                auto cmp = compare_literals(it->second, n.value.value);
-                return apply_compare(n.op, cmp);
+                return map_holds(n.field, fields, [&](const LiteralValue& v) {
+                    return apply_compare(n.op,
+                                         compare_literals(v, n.value.value));
+                });
             } else if constexpr (std::is_same_v<T, InNode>) {
-                auto it = fields.find(n.field.path);
-                if (it == fields.end()) return false;
-                for (const auto& elem : n.values.elements) {
-                    auto cmp = compare_literals(it->second, elem.value);
-                    if (cmp && *cmp == 0) return true;
-                }
-                return false;
+                return map_holds(n.field, fields, [&](const LiteralValue& v) {
+                    return in_literals(n.values, v);
+                });
             } else if constexpr (std::is_same_v<T, NotInNode>) {
-                auto it = fields.find(n.field.path);
-                if (it == fields.end()) return false;
-                for (const auto& elem : n.values.elements) {
-                    auto cmp = compare_literals(it->second, elem.value);
-                    if (cmp && *cmp == 0) return false;
-                }
-                return true;
+                return map_holds(n.field, fields, [&](const LiteralValue& v) {
+                    return !in_literals(n.values, v);
+                });
             } else if constexpr (std::is_same_v<T, MatchNode>) {
                 if (!n.compiled) return false;
-                auto it = fields.find(n.field.path);
-                if (it == fields.end()) return false;
-                if (!std::holds_alternative<std::string>(it->second))
-                    return false;
-                const auto& s = std::get<std::string>(it->second);
-                bool m = std::regex_search(s.begin(), s.end(), n.compiled->re);
-                return n.negated ? !m : m;
+                return map_holds(n.field, fields, [&](const LiteralValue& v) {
+                    const auto* s = std::get_if<std::string>(&v);
+                    if (!s) return false;
+                    bool m =
+                        std::regex_search(s->begin(), s->end(), n.compiled->re);
+                    return n.negated ? !m : m;
+                });
             } else if constexpr (std::is_same_v<T, AndNode>) {
                 return eval_map_node(*n.left, fields) &&
                        eval_map_node(*n.right, fields);

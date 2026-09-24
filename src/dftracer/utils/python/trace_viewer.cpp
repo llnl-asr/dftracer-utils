@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
+#include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/python/dataframe.h>
 #include <dftracer/utils/python/lazyframe.h>
@@ -234,13 +235,14 @@ GroupKey parse_group_key(const std::string& s) {
         out = GroupKey::io_cat();
     else if (t == "acc_pat")
         out = GroupKey::acc_pat();
-    else if (t == "file_path" || t == "resolved.fpath" || t == "r.fpath")
+    else if (t == "file_path")
         out = GroupKey::file_path();
     else if (t == "file_name")
         out = GroupKey::file_name();
-    else if (t == "host_name" || t == "resolved.hostname" ||
-             t == "r.hostname" || t == "resolved.host" || t == "r.host")
+    else if (t == "host_name")
         out = GroupKey::host_name();
+    else if (t.starts_with(dftracer::utils::index::RESOLVED_PREFIX))
+        out = GroupKey::resolved(t);
     else if (t == "rank")
         out = GroupKey::rank();
     else if (t.rfind("arg:", 0) == 0)
@@ -597,6 +599,12 @@ PyObject* tv_metadata(PyObject* self, PyObject* arg) {
     return build(self, [&](const View& t) { return t.metadata(on != 0); });
 }
 
+PyObject* tv_record_schema(PyObject* self, PyObject* arg) {
+    const char* id = as_utf8(arg);
+    if (!id) return nullptr;
+    return build(self, [&](const View& t) { return t.record_schema(id); });
+}
+
 PyObject* tv_rollup_root(PyObject* self, PyObject* arg) {
     const char* dir = as_utf8(arg);
     if (!dir) return nullptr;
@@ -643,6 +651,15 @@ PyObject* tv_column_info(PyObject* self, PyObject*) {
         Py_DECREF(v);
     }
     return d;
+}
+
+PyObject* tv_schema_tree(PyObject* self, PyObject*) {
+    std::string json;
+    if (!run_blocking(
+            [&] { json = views::schema_tree_json(tv_of(self).schema_tree()); }))
+        return nullptr;
+    return PyUnicode_FromStringAndSize(json.data(),
+                                       static_cast<Py_ssize_t>(json.size()));
 }
 
 PyObject* tv_time_metric(PyObject* self, PyObject*) {
@@ -999,11 +1016,15 @@ PyMethodDef tv_methods[] = {
     {"agg_numeric_args", tv_agg_numeric_args, METH_VARARGS,
      "Aggregate every discovered numeric arg."},
     {"metadata", tv_metadata, METH_O, "Include metadata records."},
+    {"record_schema", tv_record_schema, METH_O,
+     "Read the files as the registered record schema `id`."},
     {"rollup_root", tv_rollup_root, METH_O, "Rollup root directory."},
     {"views_root", tv_views_root, METH_O, "Materialized-view root directory."},
     {"memory_budget", tv_memory_budget, METH_O, "Spill budget in bytes."},
     {"columns", tv_columns, METH_NOARGS,
      "Columns discoverable from the index (no scan)."},
+    {"schema_tree", tv_schema_tree, METH_NOARGS,
+     "The index's paths with types, counts and declared fields, as JSON."},
     {"column_info", tv_column_info, METH_NOARGS,
      "Index columns mapped to their type name (no scan)."},
     {"time_metric", tv_time_metric, METH_NOARGS, "The trace's time unit."},

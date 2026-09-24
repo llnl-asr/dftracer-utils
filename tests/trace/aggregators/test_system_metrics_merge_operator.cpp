@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/trace/aggregators/system_metrics.h>
-#include <dftracer/utils/trace/aggregators/system_metrics_merge_operator.h>
-#include <dftracer/utils/trace/aggregators/system_metrics_serialization.h>
+#include <dftracer/utils/index/schemas/dft/agg/system_metrics.h>
+#include <dftracer/utils/index/schemas/dft/agg/system_metrics_merge_operator.h>
+#include <dftracer/utils/index/schemas/dft/agg/system_metrics_serialization.h>
 #include <doctest/doctest.h>
 #include <rocksdb/slice.h>
 
@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-using namespace dftracer::utils::trace::aggregators;
+using namespace dftracer::utils::index::schemas::dft::agg;
 
 TEST_SUITE("SystemMetricsMergeOperator") {
     TEST_CASE("Name returns correct identifier") {

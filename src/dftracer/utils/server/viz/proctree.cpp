@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/query/query.h>
@@ -26,7 +27,6 @@
 #include <dftracer/utils/trace/views/view_planner_utility.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
 #include <simdjson.h>
 
 #include <algorithm>
@@ -238,8 +238,7 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
         auto files =
             select_viz_target_files(index, params, static_cast<double>(gmin),
                                     static_cast<double>(gmax));
-        co_await views::View::from_files(to_view_files(files),
-                                         &index.bloom_cache())
+        co_await views::View::from_files(to_view_files(files))
             .phase(views::Phase::Events)
             .cancel_when([&req]() { return req.cancel_token.cancelled(); })
             .for_each_batch(on_batch, slots);

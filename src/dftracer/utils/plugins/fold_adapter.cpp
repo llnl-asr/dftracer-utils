@@ -870,6 +870,8 @@ const void* host_get_service(void*, const char* ext_id) {
         return detail::providers_ext_vtable();
     if (std::strcmp(ext_id, DFTU_SVC_NODES) == 0)
         return detail::nodes_ext_vtable();
+    if (std::strcmp(ext_id, DFTU_SVC_INDEX) == 0)
+        return detail::index_ext_vtable();
     return nullptr;
 }
 

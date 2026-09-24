@@ -992,6 +992,74 @@ TEST_CASE("DFTracer Server - density surfaces ph=C counters as blocks") {
     CHECK(body.find("\"value\":") != std::string::npos);
 }
 
+// Events without a clock (ts 0, such as CUDA activity) must not pull the
+// timeline to 0; the server starts it at the first real start and lists them
+// on their own route.
+TEST_CASE(
+    "DFTracer Server - events with ts 0 keep the timeline and are listed") {
+    auto binary = find_server_binary();
+    if (binary.empty()) {
+        MESSAGE("dftracer_server binary not found, skipping.");
+        return;
+    }
+    if (!can_bind_local_tcp_socket()) {
+        MESSAGE("local TCP bind is unavailable in this environment, skipping.");
+        return;
+    }
+
+    dftu_utils_test::TestEnvironment env(1);
+    REQUIRE(env.is_valid());
+    std::string path = env.get_dir() + "/untimed.pfw.gz";
+    gzFile f = gzopen(path.c_str(), "wb");
+    REQUIRE(f != nullptr);
+    gzputs(f, "[\n");
+    for (int i = 0; i < 10; ++i) {
+        std::string ev =
+            "{\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":1,\"ts\":" +
+            std::to_string(5000 + i * 1000) +
+            ",\"dur\":10,\"ph\":\"X\",\"args\":{}}\n";
+        gzputs(f, ev.c_str());
+    }
+    for (int i = 0; i < 3; ++i)
+        gzputs(f,
+               "{\"name\":\"cudaLaunchKernel\",\"cat\":\"CUDA\",\"pid\":1,"
+               "\"tid\":2,\"ts\":0,\"dur\":7,\"ph\":\"X\",\"args\":{}}\n");
+    gzputs(f,
+           "{\"name\":\"kernel\",\"cat\":\"CUDA_KERNEL\",\"pid\":1,"
+           "\"tid\":2,\"ts\":0,\"dur\":9,\"ph\":3,\"args\":{}}\n");
+    gzputs(f, "]\n");
+    gzclose(f);
+
+    int port = pick_port();
+    ServerProcess server;
+    REQUIRE(server.start(binary, env.get_dir(), port));
+    REQUIRE(wait_for_http(port));
+
+    auto get = [&](const std::string& target) {
+        auto resp = http_request(port, "GET " + target +
+                                           " HTTP/1.1\r\nHost: localhost\r\n"
+                                           "Connection: close\r\n\r\n");
+        REQUIRE(!resp.empty());
+        CHECK(extract_status_code(resp) == 200);
+        return extract_body(resp);
+    };
+    CHECK(get("/api/info").find("\"min_timestamp_us\":5000") !=
+          std::string::npos);
+    auto all = get("/api/viz/untimed");
+    CHECK(all.find("\"count\":4") != std::string::npos);
+    CHECK(all.find("cudaLaunchKernel") != std::string::npos);
+    CHECK(all.find("\"ph\":3") != std::string::npos);
+    CHECK(all.find("\"read\"") == std::string::npos);
+    // Longest first: the aggregated kernel (dur 9) leads, so page 2 holds
+    // only the dur 7 events.
+    auto page = get("/api/viz/untimed?limit=2&offset=2");
+    CHECK(page.find("\"offset\":2") != std::string::npos);
+    CHECK(page.find("\"dur\":7") != std::string::npos);
+    CHECK(page.find("\"dur\":9") == std::string::npos);
+    CHECK(get("/api/viz/untimed?query=cat%20%3D%3D%20%22POSIX%22")
+              .find("\"count\":0") != std::string::npos);
+}
+
 // The viz summary is cached to disk so a restart skips the full rescan, and the
 // cache must invalidate when the source changes rather than serve stale data.
 TEST_CASE("DFTracer Server - viz summary cache persists and invalidates") {

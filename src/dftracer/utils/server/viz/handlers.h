@@ -52,6 +52,9 @@ coro::CoroTask<HttpResponse> handle_prov_graph(const HttpRequest& req,
 coro::CoroTask<HttpResponse> handle_viz_breaks(const HttpRequest& req,
                                                const QueryParams& params,
                                                TraceIndex& index);
+coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
+                                                const QueryParams& params,
+                                                TraceIndex& index);
 
 // Shared across the events and density endpoints: the summary is unfiltered, so
 // any server-side predicate forces a live scan (pid/tid select whole lanes and

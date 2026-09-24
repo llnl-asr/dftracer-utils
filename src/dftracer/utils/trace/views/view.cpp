@@ -6,13 +6,15 @@
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
+#include <dftracer/utils/index/cache/mv_store.h>
+#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/trace/comparator/compare_view.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/time_metric.h>
 #include <dftracer/utils/trace/views/containment_fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
-#include <dftracer/utils/trace/views/mv_store.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
@@ -22,7 +24,6 @@
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/trace/views/view_source.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
-#include <dftracer/utils/utilities/indexer/index_database.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -40,13 +41,17 @@ ViewSession::ViewSession(std::shared_ptr<const detail::ViewPlan> plan)
     : state_(detail::make_view_session_state(std::move(plan))) {}
 
 void ViewSession::attach_fold(
-    Query predicate,
+    std::optional<Query> predicate,
     std::function<
         std::function<void(const json::JsonValue&, std::string_view)>()>
         make_consumer,
     std::function<void()> finalize) {
-    detail::add_fold_branch(*state_, std::move(predicate),
-                            std::move(make_consumer), std::move(finalize));
+    if (predicate)
+        detail::add_fold_branch(*state_, std::move(*predicate),
+                                std::move(make_consumer), std::move(finalize));
+    else
+        detail::add_selection_fold_branch(*state_, std::move(make_consumer),
+                                          std::move(finalize));
 }
 
 void ViewSession::attach_fold_factory(
@@ -212,26 +217,36 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
     auto slots = std::make_shared<std::vector<std::shared_ptr<Slot>>>();
     auto select = std::make_shared<std::vector<std::string>>(bp.select);
     const double time_scale = bp.time_scale;
+    const bool by_path = detail::plan_by_path(bp);
+    const dftracer::utils::index::RecordSchema* record_schema =
+        by_path && !detail::plan_record_schema(bp).fields.empty()
+            ? &detail::plan_record_schema(bp)
+            : nullptr;
 
-    auto make_consumer = [slots]() {
+    auto make_consumer = [slots, by_path, record_schema]() {
         auto slot = std::make_shared<Slot>();
         slots->push_back(slot);
-        return [slot](const json::JsonValue& jv, std::string_view) {
-            detail::FoldEvent fe = detail::extract_fold_event(
-                jv.element(), slot->intern, /*needs_args=*/true);
+        return [slot, by_path, record_schema](const json::JsonValue& jv,
+                                              std::string_view) {
+            detail::FoldEvent fe =
+                by_path ? detail::decode_record(jv.element(), slot->intern,
+                                                /*capture_schema=*/false,
+                                                nullptr, record_schema)
+                        : detail::extract_fold_event(jv.element(), slot->intern,
+                                                     /*needs_args=*/true);
             if (fe.phase == RecordPhase::METADATA ||
                 fe.phase == RecordPhase::UNKNOWN)
                 return;
             slot->events.push_back(std::move(fe));
         };
     };
-    auto finalize = [slots, select, out, time_scale]() {
+    auto finalize = [slots, select, out, time_scale, by_path]() {
         std::vector<dataframe::DataFrame> frames;
         frames.reserve(slots->size());
         for (const auto& s : *slots) {
             if (s->events.empty()) continue;
-            frames.push_back(detail::build_row_frame(s->events, s->intern,
-                                                     *select, time_scale));
+            frames.push_back(detail::build_row_frame(
+                s->events, s->intern, *select, time_scale, nullptr, by_path));
         }
         if (frames.empty()) return;  // out stays an empty frame
         std::vector<const dataframe::DataFrame*> parts;
@@ -415,9 +430,8 @@ View View::from_file(std::string file_path, std::string index_path) {
     return View(scan::from_file(std::move(file_path), std::move(index_path)));
 }
 
-View View::from_files(std::vector<ViewFile> files,
-                      indexing::BloomFilterCache* bloom_cache) {
-    return View(scan::from_files(std::move(files), bloom_cache));
+View View::from_files(std::vector<ViewFile> files) {
+    return View(scan::from_files(std::move(files)));
 }
 
 coro::CoroTask<View> View::from_directory(std::string dir,
@@ -589,8 +603,10 @@ coro::CoroTask<ExportStats> run_sink_trace(scan::ScanPlan v,
 dataframe::LazyFrame View::call_tree(std::vector<std::string> partition,
                                      std::string ts, std::string dur,
                                      std::string name) const {
-    return terminal_plan(absorbed("call_tree", Need::Events),
-                         TraceOutput::CallTree,
+    scan::ScanPlan v = absorbed("call_tree", Need::Events);
+    detail::require_role(*v, "call_tree", detail::TraceRole::DURATION);
+    v = scan::timed(v);
+    return terminal_plan(v, TraceOutput::CallTree,
                          {std::move(partition),
                           std::move(ts),
                           std::move(dur),
@@ -602,8 +618,10 @@ dataframe::LazyFrame View::flamegraph(std::vector<std::string> partition,
                                       std::string ts, std::string dur,
                                       std::string name,
                                       std::vector<std::string> group) const {
-    return terminal_plan(absorbed("flamegraph", Need::Events),
-                         TraceOutput::Flamegraph,
+    scan::ScanPlan v = absorbed("flamegraph", Need::Events);
+    detail::require_role(*v, "flamegraph", detail::TraceRole::DURATION);
+    v = scan::timed(v);
+    return terminal_plan(v, TraceOutput::Flamegraph,
                          {std::move(partition), std::move(ts), std::move(dur),
                           std::move(name), std::move(group)});
 }
@@ -612,6 +630,8 @@ dataframe::LazyResult<ContainmentResult> View::containment(
     std::vector<std::string> partition, std::string ts, std::string dur,
     std::string name, std::vector<std::string> group) const {
     scan::ScanPlan v = absorbed("containment", Need::Events);
+    detail::require_role(*v, "containment", detail::TraceRole::DURATION);
+    v = scan::timed(v);
     ContainmentArgs tree{std::move(partition), std::move(ts), std::move(dur),
                          std::move(name), std::move(group)};
     return {{terminal_plan(v, TraceOutput::CallTree, tree),
@@ -625,9 +645,11 @@ dataframe::LazyResult<ContainmentResult> View::containment(
 dataframe::LazyResult<std::string> View::flamegraph_partial(
     std::vector<std::string> partition, std::string ts, std::string dur,
     std::string name, std::vector<std::string> group) const {
+    scan::ScanPlan v = absorbed("flamegraph_partial", Need::EventsHead);
+    detail::require_role(*v, "flamegraph", detail::TraceRole::DURATION);
+    v = scan::timed(v);
     return partial_result(
-        terminal_plan(absorbed("flamegraph_partial", Need::EventsHead),
-                      TraceOutput::FlamegraphPartial,
+        terminal_plan(v, TraceOutput::FlamegraphPartial,
                       {std::move(partition), std::move(ts), std::move(dur),
                        std::move(name), std::move(group)}));
 }
@@ -731,6 +753,40 @@ std::vector<std::string> View::columns() const { return scan::columns(plan_); }
 
 std::vector<ColumnInfo> View::column_info() const {
     return scan::schema(plan_);
+}
+
+std::vector<SchemaLeaf> View::schema_tree() const {
+    return scan::schema_tree(plan_);
+}
+
+std::string schema_tree_json(const std::vector<SchemaLeaf>& leaves) {
+    std::string out = "[";
+    auto text = [&](const std::string& s) {
+        if (s.empty()) {
+            out += "null";
+            return;
+        }
+        out += '"';
+        dftracer::utils::json::append_json_escaped(out, s);
+        out += '"';
+    };
+    for (std::size_t i = 0; i < leaves.size(); ++i) {
+        const SchemaLeaf& l = leaves[i];
+        if (i) out += ',';
+        out += "{\"path\":";
+        text(l.path);
+        out += ",\"type\":";
+        text(l.type);
+        out += ",\"count\":";
+        out += l.count ? std::to_string(*l.count) : "null";
+        out += ",\"field\":";
+        text(l.field);
+        out += ",\"declared_type\":";
+        text(l.declared_type);
+        out += '}';
+    }
+    out += ']';
+    return out;
 }
 
 TimeMetric View::time_metric() const { return scan::time_metric(plan_); }
@@ -910,6 +966,12 @@ View View::agg_numeric_args(std::vector<AggSpec> reductions) const {
 View View::metadata(bool include) const {
     return reshape("metadata", [&](const scan::ScanPlan& v) {
         return scan::metadata(v, include);
+    });
+}
+
+View View::record_schema(std::string id) const {
+    return reshape("record_schema", [&](const scan::ScanPlan& v) {
+        return scan::record_schema(v, id);
     });
 }
 

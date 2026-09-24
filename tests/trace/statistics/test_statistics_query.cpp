@@ -6,7 +6,6 @@
 #include <string>
 
 using namespace dftracer::utils::trace::statistics;
-using namespace dftracer::utils::trace::indexing;
 
 static TraceStatistics make_test_stats() {
     TraceStatistics ts;

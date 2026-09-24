@@ -22,7 +22,7 @@ How the indexer types relate:
 .. mermaid:: /_generated/py_indexer.mmd
 
 .. autoclass:: dftracer.utils.Indexer(directory: str = '', files: list[str] | None = None, index_dir: str = '', require_checkpoint: bool = True, require_bloom: bool = True, build_bloom: bool = True, require_aggregation: bool | AggregationConfig | None = None, checkpoint_size: int = 33554432, parallelism: int = 0, force_rebuild: bool = False, runtime: Runtime | None = None)
-   :members: resolve, build, ensure_indexed, get_checkpoint_indexer, get_hash_table, query_file_pids, query_all_file_pids, query_file_info
+   :members: resolve, build, ensure_indexed, get_checkpoint_indexer, get_dictionary, query_file_pids, query_all_file_pids, query_file_info
    :undoc-members:
    :show-inheritance:
 

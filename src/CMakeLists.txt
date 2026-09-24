@@ -1344,6 +1344,11 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
       list(APPEND _embed_deps ${DFTRACER_WEB_DIST})
     elseif(EXISTS ${DFTRACER_WEB_DIST})
       list(APPEND _embed_deps ${DFTRACER_WEB_DIST})
+    else()
+      # Reconfigure once web/dist appears, so a later `npm run build` replaces
+      # the placeholder without a manual cmake rerun.
+      set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+                                             ${DFTRACER_WEB_DIR})
     endif()
 
     add_custom_command(

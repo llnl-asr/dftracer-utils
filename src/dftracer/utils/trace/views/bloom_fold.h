@@ -12,6 +12,9 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
 namespace dftracer::utils::trace::views::detail {
 
@@ -24,9 +27,10 @@ namespace dftracer::utils::trace::views::detail {
 /// dense array; a whole-file read fills every checkpoint before finalize.
 class BloomFold : public Fold {
    public:
+    /// Indexes config.extra_dimensions besides the fixed dimensions: each is
+    /// an args key or a dotted path below args.
     explicit BloomFold(dftracer::utils::StringIntern& intern,
-                       visitors::BloomCore::ChunkIndexerConfig config = {})
-        : intern_(&intern), config_(std::move(config)) {}
+                       visitors::BloomCore::ChunkIndexerConfig config = {});
 
     /// A filtered read would build a pruner index that later reads cannot tell
     /// from a complete one.
@@ -34,6 +38,8 @@ class BloomFold : public Fold {
         return !shape.filtered;
     }
     bool needs_args() const override { return true; }
+    /// The nested extra dimensions, which args (flat keys only) lacks.
+    std::vector<std::string> extra_captures() const override;
     /// Enumerate every scalar leaf (nested included) so the harvested column
     /// set is schemaless: a nested-object arg surfaces as dotted leaf columns.
     bool wants_schema() const override { return true; }
@@ -76,9 +82,20 @@ class BloomFold : public Fold {
    private:
     using ChunkState = visitors::BloomCore::ChunkState;
 
+    // One auto-indexed args key within a chunk: its stats, and its string
+    // values (interned ids) while they number at most auto_max_distinct.
+    struct AutoField {
+        AutoField() { stats.value_type.clear(); }
+        visitors::BloomCore::ChunkDimensionStats stats;
+        std::unordered_set<std::uint32_t> values;
+        bool overflow = false;
+    };
+    using AutoChunk = std::unordered_map<std::uint32_t, AutoField>;
+
     struct FileState {
         std::string index_path;
         std::map<std::uint64_t, ChunkState> chunks;
+        std::map<std::uint64_t, AutoChunk> auto_chunks;
         dftracer::utils::StringViewMap<
             dftracer::utils::utilities::indexer::ColumnType>
             columns;
@@ -88,6 +105,18 @@ class BloomFold : public Fold {
 
     dftracer::utils::StringIntern* intern_;
     visitors::BloomCore::ChunkIndexerConfig config_;
+    // Interned args key (or captured path) of each extra dimension, in
+    // config_.extra_dimensions order.
+    std::vector<std::uint32_t> extra_keys_;
+    // Args keys auto_fields leaves alone: the extra dimensions and the
+    // command hash keys the fixed shash dimension already covers.
+    std::unordered_set<std::uint32_t> auto_skip_;
+
+    /// The file's chunks as a dense checkpoint vector with every extra and
+    /// auto dimension, and those dimension names in order. Consumes `fs`.
+    std::pair<std::vector<ChunkState>, std::vector<std::string>> dense_chunks(
+        FileState& fs);
+    void observe_auto(AutoChunk& chunk, const FoldEvent& e);
     std::unordered_map<std::string, FileState> files_;
 };
 

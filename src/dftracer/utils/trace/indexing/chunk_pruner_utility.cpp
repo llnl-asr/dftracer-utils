@@ -142,7 +142,7 @@ std::string literal_to_string(const query_ns::LiteralNode& lit) {
             else if constexpr (std::is_same_v<T, uint64_t>)
                 return std::to_string(v);
             else if constexpr (std::is_same_v<T, double>)
-                return std::to_string(v);
+                return canonical_number_text(v);
             else
                 return {};
         },
@@ -233,6 +233,12 @@ int compare_values(const std::string& a, const std::string& b,
     if (a < b) return -1;
     if (a > b) return 1;
     return 0;
+}
+
+bool is_fixed_dimension(const std::string& dim) {
+    return dim == "name" || dim == "cat" || dim == "pid" || dim == "tid" ||
+           dim == "pid_tid" || dim == "hhash" || dim == "fhash" ||
+           dim == "shash" || dim == "ts" || dim == "dur";
 }
 
 bool range_may_match(const ChunkMeta& meta, const std::string& dim,
@@ -475,6 +481,14 @@ std::set<std::uint64_t> eval_compare(const query_ns::CompareNode& n,
                 if (*dict) result.insert(ckpt);
                 continue;
             }
+            // An args dimension's min/max bounds equality too; a fixed one
+            // may compare values the query spells differently (hashes).
+            if (!is_fixed_dimension(n.field.path) &&
+                (!range_may_match(meta, n.field.path, query_ns::CompareOp::GE,
+                                  val_str) ||
+                 !range_may_match(meta, n.field.path, query_ns::CompareOp::LE,
+                                  val_str)))
+                continue;
             if (bloom_may_contain(ctx, n.field.path, ckpt, val_str))
                 result.insert(ckpt);
         } else if (n.op == query_ns::CompareOp::NE) {

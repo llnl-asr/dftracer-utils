@@ -248,6 +248,12 @@ which files need work and builds them (checkpoint + bloom tiers by default).
        status = indexer.ensure_indexed()
        print(status.ready, status.needs_work)
 
+   # Every flat args key is indexed by default; name nested ones too
+   from dftracer.utils import BloomConfig
+
+   with Indexer(files=["trace.pfw.gz"], require_bloom=BloomConfig(fields=["io.off"])) as indexer:
+       indexer.ensure_indexed()
+
    # Single-file checkpoint-level details (lines, max bytes, members)
    with Indexer(files=["trace.pfw.gz"]) as indexer:
        indexer.build()

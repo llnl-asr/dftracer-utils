@@ -41,6 +41,7 @@ struct ResolveGroupInput {
     bool require_bloom;
     bool require_aggregation;
     std::size_t checkpoint_size = 0;
+    std::vector<std::string> bloom_fields;
     std::optional<aggregators::AggregationConfig> aggregation_config;
 };
 
@@ -54,6 +55,14 @@ struct ResolveGroupOutput {
     std::uint64_t stored_time_interval_us = 0;
     bool stale_detected = false;
 };
+
+bool covers(const std::vector<std::string>& indexed,
+            const std::vector<std::string>& fields) {
+    for (const std::string& f : fields)
+        if (std::find(indexed.begin(), indexed.end(), f) == indexed.end())
+            return false;
+    return true;
+}
 
 ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
     ResolveGroupOutput result;
@@ -185,7 +194,9 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
                 }
             }
 
-            if (input.require_bloom && !has_bloom) {
+            if (input.require_bloom &&
+                (!has_bloom || !covers(db.query_index_dimensions(reg.file_id),
+                                       input.bloom_fields))) {
                 result.needs_bloom.push_back(FileWorkItem{
                     f.file_index, std::move(f.file_path), reg.file_id});
                 continue;
@@ -283,6 +294,7 @@ coro::CoroTask<ResolverResult> IndexResolverUtility::operator()(
             group_input.require_bloom = input.require_bloom;
             group_input.require_aggregation = input.require_aggregation;
             group_input.checkpoint_size = input.checkpoint_size;
+            group_input.bloom_fields = input.bloom_fields;
             group_input.aggregation_config = input.aggregation_config;
 
             futures.push_back(ctx.spawn(
@@ -304,6 +316,7 @@ coro::CoroTask<ResolverResult> IndexResolverUtility::operator()(
             group_input.require_bloom = input.require_bloom;
             group_input.require_aggregation = input.require_aggregation;
             group_input.checkpoint_size = input.checkpoint_size;
+            group_input.bloom_fields = input.bloom_fields;
             group_input.aggregation_config = input.aggregation_config;
 
             outputs.push_back(resolve_group_sync(std::move(group_input)));

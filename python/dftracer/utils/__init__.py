@@ -45,6 +45,7 @@ from .dftracer_utils_ext import (
 from .enums import AggOp, DType, GroupKey, Phase  # noqa: F401
 from .indexer import (  # noqa: F401
     AggregationConfig,
+    BloomConfig,
     Indexer,
     IndexStatus,
 )
@@ -124,6 +125,7 @@ except PackageNotFoundError:
 
 __all__ = [
     "AggregationConfig",
+    "BloomConfig",
     "CheckpointIndexer",
     "Expr",
     "Field",

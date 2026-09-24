@@ -13,6 +13,7 @@
 #include <dftracer/utils/python/py_list_helpers.h>
 #include <dftracer/utils/python/py_method.h>
 #include <dftracer/utils/python/py_runtime_mixin.h>
+#include <dftracer/utils/python/py_seq_helpers.h>
 #include <dftracer/utils/python/py_str_helpers.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
@@ -54,6 +55,7 @@ static void Indexer_dealloc(IndexerObject* self) {
     Py_XDECREF(self->index_dir);
     Py_XDECREF(self->group_keys);
     Py_XDECREF(self->custom_metric_fields);
+    Py_XDECREF(self->bloom_fields);
     Py_TYPE(self)->tp_free((PyObject*)self);
 }
 
@@ -68,6 +70,12 @@ static PyObject* Indexer_new(PyTypeObject* type, PyObject*, PyObject*) {
         self->require_bloom = 1;
         self->build_bloom = 1;
         self->require_aggregation = 0;
+        self->bloom_fields = nullptr;
+        self->false_positive_rate = ChunkIndexerConfig{}.false_positive_rate;
+        self->expected_entries =
+            ChunkIndexerConfig{}.expected_entries_per_chunk;
+        self->auto_fields = ChunkIndexerConfig{}.auto_fields ? 1 : 0;
+        self->auto_max_distinct = ChunkIndexerConfig{}.auto_max_distinct;
         self->time_interval_ms = 5000.0;
         self->group_keys = nullptr;
         self->custom_metric_fields = nullptr;
@@ -82,23 +90,18 @@ static PyObject* Indexer_new(PyTypeObject* type, PyObject*, PyObject*) {
 }
 
 static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
-    static const char* kwlist[] = {"directory",
-                                   "files",
-                                   "index_dir",
-                                   "require_checkpoint",
-                                   "require_bloom",
-                                   "build_bloom",
-                                   "require_aggregation",
-                                   "time_interval_ms",
-                                   "group_keys",
-                                   "custom_metric_fields",
-                                   "compute_percentiles",
-                                   "group_by_file",
-                                   "checkpoint_size",
-                                   "parallelism",
-                                   "force_rebuild",
-                                   "runtime",
-                                   nullptr};
+    static const char* kwlist[] = {
+        "directory",           "files",
+        "index_dir",           "require_checkpoint",
+        "require_bloom",       "build_bloom",
+        "require_aggregation", "time_interval_ms",
+        "group_keys",          "custom_metric_fields",
+        "compute_percentiles", "group_by_file",
+        "checkpoint_size",     "parallelism",
+        "force_rebuild",       "runtime",
+        "bloom_fields",        "false_positive_rate",
+        "expected_entries",    "auto_fields",
+        "auto_max_distinct",   nullptr};
 
     const char* directory = "";
     PyObject* files_obj = Py_None;
@@ -117,16 +120,51 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
     Py_ssize_t parallelism = 0;
     int force_rebuild = 0;
     PyObject* runtime_arg = nullptr;
+    PyObject* bloom_fields_obj = Py_None;
+    double false_positive_rate = self->false_positive_rate;
+    Py_ssize_t expected_entries =
+        static_cast<Py_ssize_t>(self->expected_entries);
+    int auto_fields = self->auto_fields;
+    Py_ssize_t auto_max_distinct =
+        static_cast<Py_ssize_t>(self->auto_max_distinct);
 
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "|sOsppppdOOppnnpO", const_cast<char**>(kwlist),
+            args, kwds, "|sOsppppdOOppnnpOOdnpn", const_cast<char**>(kwlist),
             &directory, &files_obj, &index_dir, &require_checkpoint,
             &require_bloom, &build_bloom, &require_aggregation,
             &time_interval_ms, &group_keys_obj, &custom_metrics_obj,
             &compute_percentiles, &group_by_file, &checkpoint_size,
-            &parallelism, &force_rebuild, &runtime_arg)) {
+            &parallelism, &force_rebuild, &runtime_arg, &bloom_fields_obj,
+            &false_positive_rate, &expected_entries, &auto_fields,
+            &auto_max_distinct)) {
         return -1;
     }
+    if (!(false_positive_rate > 0.0 && false_positive_rate < 1.0)) {
+        PyErr_SetString(PyExc_ValueError,
+                        "false_positive_rate must be in (0, 1)");
+        return -1;
+    }
+    if (expected_entries <= 0) {
+        PyErr_SetString(PyExc_ValueError, "expected_entries must be > 0");
+        return -1;
+    }
+    if (auto_max_distinct <= 0) {
+        PyErr_SetString(PyExc_ValueError, "auto_max_distinct must be > 0");
+        return -1;
+    }
+    self->auto_fields = auto_fields;
+    self->auto_max_distinct = static_cast<std::size_t>(auto_max_distinct);
+    if (bloom_fields_obj != Py_None) {
+        std::vector<std::string> check;
+        if (!dftracer::utils::python::parse_string_seq(
+                bloom_fields_obj, "bloom_fields must be a sequence of str",
+                check))
+            return -1;
+        Py_INCREF(bloom_fields_obj);
+        self->bloom_fields = bloom_fields_obj;
+    }
+    self->false_positive_rate = false_positive_rate;
+    self->expected_entries = static_cast<std::size_t>(expected_entries);
 
     // Validate: at least one of directory or files must be provided
     bool has_directory = directory && directory[0] != '\0';
@@ -198,6 +236,22 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
     return 0;
 }
 
+// The args fields the bloom tier covers, as the index names them. False with
+// a Python error set when bloom_fields holds a non-str.
+static bool requested_bloom_fields(IndexerObject* self,
+                                   std::vector<std::string>& out) {
+    if (!self->bloom_fields) {
+        out.clear();
+        return true;
+    }
+    out.clear();
+    if (!dftracer::utils::python::parse_string_seq(
+            self->bloom_fields, "bloom_fields must be a sequence of str", out))
+        return false;
+    for (std::string& f : out) f = extra_dimension_name(f);
+    return true;
+}
+
 static Runtime* get_batch_indexer_runtime(IndexerObject* self) {
     if (self->runtime_obj) {
         return ((RuntimeObject*)self->runtime_obj)->runtime.get();
@@ -254,6 +308,11 @@ static PyObject* Indexer_resolve(IndexerObject* self,
     input.require_aggregation = self->require_aggregation;
     input.checkpoint_size = self->checkpoint_size;
     input.aggregation_config = build_aggregation_config(self);
+    if (self->build_bloom) {
+        if (!requested_bloom_fields(self, input.bloom_fields)) return nullptr;
+        if (self->auto_fields)
+            input.bloom_fields.emplace_back(AUTO_FIELDS_MARKER);
+    }
 
     // Add files if provided
     if (self->files && PyList_Check(self->files)) {
@@ -357,6 +416,12 @@ static PyObject* Indexer_build(IndexerObject* self,
     input.build_bloom = self->build_bloom;
     input.require_aggregation = self->require_aggregation;
     input.aggregation_config = build_aggregation_config(self);
+    if (!requested_bloom_fields(self, input.bloom_config.extra_dimensions))
+        return nullptr;
+    input.bloom_config.false_positive_rate = self->false_positive_rate;
+    input.bloom_config.auto_fields = self->auto_fields != 0;
+    input.bloom_config.auto_max_distinct = self->auto_max_distinct;
+    input.bloom_config.expected_entries_per_chunk = self->expected_entries;
     input.checkpoint_size = self->checkpoint_size;
     input.parallelism = self->parallelism;
     input.force_rebuild = self->force_rebuild;

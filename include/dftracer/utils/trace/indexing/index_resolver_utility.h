@@ -44,6 +44,10 @@ struct ResolverInput {
     /// without `--force`. Zero means do not compare.
     std::size_t checkpoint_size = 0;
 
+    /// Args fields the bloom tier must cover; a file indexed without one of
+    /// them needs its bloom tier rebuilt. Checked only with require_bloom.
+    std::vector<std::string> bloom_fields;
+
     /// Full config for computing hash with stored time_interval
     std::optional<aggregators::AggregationConfig> aggregation_config;
 };

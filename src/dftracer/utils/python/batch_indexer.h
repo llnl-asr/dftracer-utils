@@ -20,6 +20,14 @@ struct IndexerObject {
     int build_bloom;
     int require_aggregation;
 
+    // Bloom tier: args fields indexed for chunk pruning (list, or None for
+    // the default set), false-positive rate and expected entries per chunk.
+    PyObject* bloom_fields;
+    double false_positive_rate;
+    std::size_t expected_entries;
+    int auto_fields;
+    std::size_t auto_max_distinct;
+
     // Aggregation config (stored for rebuild)
     double time_interval_ms;
     PyObject* group_keys;            // Python list or None

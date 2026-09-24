@@ -55,6 +55,33 @@ without worrying about redundant work.
          ) as ix:
              ix.ensure_indexed()  # one fused pass builds all three tiers
 
+      The bloom tier always covers ``name``, ``cat``, ``pid``, ``tid`` and the
+      file, host and command hashes. It also indexes every other flat args
+      key by default: a number gets a per-chunk min/max, which lets range and
+      equality filters (``size > 4096``, ``step == 500``) skip chunks, and a
+      string gets a per-chunk bloom filter while the chunk holds at most
+      ``auto_max_distinct`` (default 256) of its values. A string with more
+      values than that keeps no bloom in that chunk, so a filter on it still
+      reads the chunk unless its min/max rules the chunk out.
+
+      ``BloomConfig`` changes this. ``fields`` names args fields to index
+      in full (a bloom filter and min/max per chunk, no cap), including
+      nested ones (``"io.off"``), named as a filter names them (``"size"`` or
+      ``"args.size"``). ``auto=False`` indexes only the fixed fields and
+      ``fields``. An index built without a requested field, or without auto
+      when auto is on, is rebuilt once on the next ``ensure_indexed()``:
+
+      .. code-block:: python
+
+         from dftracer.utils import BloomConfig, Indexer
+
+         with Indexer("traces/", require_bloom=BloomConfig(fields=["io.off"])) as ix:
+             ix.ensure_indexed()
+
+      Each field costs index space and build time in proportion to its
+      distinct values per chunk, so index the fields you filter on, not every
+      arg.
+
    .. tab-item:: C++
 
       A plain ``View`` query builds the index itself the first time it touches
@@ -75,6 +102,8 @@ without worrying about redundant work.
          input.files = {"trace.pfw.gz"};
          input.require_checkpoints = true;
          input.require_bloom = true;
+         // Args fields indexed by name, besides the automatic ones.
+         input.bloom_config.extra_dimensions = {"io.off"};
 
          // scope is a CoroScope*, available inside a Runtime-driven coroutine
          // (see ../runtime/task-graphs); co_await the returned task there.
@@ -110,8 +139,12 @@ without worrying about redundant work.
          * - ``--checkpoint-size``
            - Checkpoint size for gzip indexing, in bytes
          * - ``--dimensions``
-           - Extra ``args.*`` fields to add to the bloom filter dimensions
-             (comma-separated, e.g. ``args.level,args.mode``)
+           - Args fields to index by name (bloom filter and min/max, no
+             cap), nested ones included, comma-separated, e.g.
+             ``io.off,mode``
+         * - ``--no-auto-dimensions``
+           - Index only the fixed fields and ``--dimensions``, not every other
+             flat args key
          * - ``--expected-entries``
            - Expected entries per chunk, for bloom filter sizing (default 1024)
          * - ``--false-positive-rate``

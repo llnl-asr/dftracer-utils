@@ -30,6 +30,7 @@ class IndexArgParse : public cli::ArgParse {
     cli::IndexingArgs indexing;
 
     std::string dimensions;
+    bool no_auto_dimensions = false;
     bool rebuild_summaries = false;
     std::size_t read_batch_size = 4;
     std::size_t expected_entries = 1024;
@@ -47,9 +48,17 @@ class IndexArgParse : public cli::ArgParse {
         parser()
             .add_argument("--dimensions")
             .help(
-                "Comma-separated extra dimensions to index from args "
-                "(e.g., args.level,args.mode,args.io.size)")
+                "Comma-separated args fields to index by name, nested ones "
+                "included (e.g., level,mode,io.size)")
             .default_value<std::string>("");
+
+        parser()
+            .add_argument("--no-auto-dimensions")
+            .help(
+                "Index only the fixed fields and --dimensions, not every other "
+                "flat args key (by default numbers get a per-chunk min/max and "
+                "strings a per-chunk bloom up to 256 distinct values)")
+            .flag();
 
         parser()
             .add_argument("--rebuild-summaries")
@@ -84,6 +93,7 @@ class IndexArgParse : public cli::ArgParse {
 
     void post_parse() override {
         dimensions = parser().get<std::string>("--dimensions");
+        no_auto_dimensions = parser().get<bool>("--no-auto-dimensions");
         rebuild_summaries = parser().get<bool>("--rebuild-summaries");
         read_batch_size =
             cli::get_bytes_arg(parser(), "--read-batch-size", 1024ull * 1024);
@@ -111,10 +121,10 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
 
     std::vector<std::string> user_dimensions = cli::split_csv(dimensions_str);
 
-    std::vector<std::string> extra_dimensions(
-        dftracer::utils::utilities::indexer::DEFAULT_EXTRA_DIMENSIONS.begin(),
-        dftracer::utils::utilities::indexer::DEFAULT_EXTRA_DIMENSIONS.end());
-    for (const auto& dim : user_dimensions) {
+    std::vector<std::string> extra_dimensions;
+    for (const auto& field : user_dimensions) {
+        const std::string dim =
+            dftracer::utils::trace::indexing::extra_dimension_name(field);
         if (std::find(extra_dimensions.begin(), extra_dimensions.end(), dim) ==
             extra_dimensions.end()) {
             extra_dimensions.push_back(dim);
@@ -123,6 +133,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
 
     ChunkIndexerConfig indexer_config;
     indexer_config.extra_dimensions = extra_dimensions;
+    indexer_config.auto_fields = !cli->no_auto_dimensions;
     indexer_config.expected_entries_per_chunk = expected_entries;
     indexer_config.false_positive_rate = false_positive_rate;
 

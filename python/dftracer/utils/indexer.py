@@ -37,6 +37,34 @@ class AggregationConfig:
 
 
 @dataclass
+class BloomConfig:
+    """Configuration for the bloom tier, which lets a filter skip chunks.
+
+    Attributes:
+        fields: Args fields to index by name besides name/cat/pid/tid and the
+            file, host and command hashes, named as in filters (``"size"``,
+            ``"args.size"`` or a nested ``"io.size"``). Each gets a bloom
+            filter (equality filters) and min/max (range filters) per chunk.
+            An existing index without one of these fields is rebuilt.
+        auto: Also index every other flat args key: a number gets a per-chunk
+            min/max, a string a per-chunk bloom while the chunk holds at most
+            ``auto_max_distinct`` of its values (else it keeps no bloom there).
+            On by default; an existing index built without it is rebuilt.
+        auto_max_distinct: The per-chunk distinct-value cap for ``auto``
+            string blooms.
+        false_positive_rate: Bloom false-positive rate, in (0, 1).
+        expected_entries: Expected distinct values per chunk, which sizes
+            each bloom filter.
+    """
+
+    fields: List[str] = field(default_factory=list)
+    auto: bool = True
+    auto_max_distinct: int = 256
+    false_positive_rate: float = 0.01
+    expected_entries: int = 1024
+
+
+@dataclass
 class IndexStatus:
     """Status of index resolution.
 
@@ -82,7 +110,8 @@ class Indexer:
         files: List of specific file paths to index.
         index_dir: Directory for .dftindex stores (default: next to files).
         require_checkpoint: Build checkpoint tier (default True).
-        require_bloom: Build bloom filter tier (default True).
+        require_bloom: Build the bloom tier: True for the defaults, or a
+            BloomConfig naming the args fields to index (default True).
         build_bloom: Build the bloom/stats/dimension tier (default True). Off
             for aggregation-only consumers that never read it.
         require_aggregation: Aggregation config or True for defaults (default None).
@@ -112,7 +141,7 @@ class Indexer:
         files: Optional[List[str]] = None,
         index_dir: str = "",
         require_checkpoint: bool = True,
-        require_bloom: bool = True,
+        require_bloom: Union[bool, BloomConfig] = True,
         build_bloom: bool = True,
         require_aggregation: Optional[Union[bool, AggregationConfig]] = None,
         checkpoint_size: Union[int, str] = DEFAULT_CHECKPOINT_SIZE,
@@ -130,6 +159,8 @@ class Indexer:
         else:
             agg_config = None
 
+        bloom = require_bloom if isinstance(require_bloom, BloomConfig) else BloomConfig()
+
         # Build native indexer
         native_runtime = runtime._native if runtime else None
         self._native = _NativeIndexer(
@@ -137,7 +168,7 @@ class Indexer:
             files=files,
             index_dir=index_dir,
             require_checkpoint=require_checkpoint,
-            require_bloom=require_bloom,
+            require_bloom=bool(require_bloom),
             build_bloom=build_bloom,
             require_aggregation=agg_config is not None,
             time_interval_ms=(
@@ -153,6 +184,11 @@ class Indexer:
             parallelism=parallelism,
             force_rebuild=force_rebuild,
             runtime=native_runtime,
+            bloom_fields=bloom.fields,
+            false_positive_rate=bloom.false_positive_rate,
+            expected_entries=bloom.expected_entries,
+            auto_fields=bloom.auto,
+            auto_max_distinct=bloom.auto_max_distinct,
         )
         self._aggregation_config = agg_config
         self._file_info_cache: Optional[FileInfo] = None

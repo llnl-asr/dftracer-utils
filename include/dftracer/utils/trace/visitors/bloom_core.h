@@ -65,6 +65,9 @@ class BloomCore {
         std::array<ChunkDimensionStats, FD_COUNT> fixed_dim_stats;
         std::vector<indexing::ScalableBloomFilter> extra_blooms;
         std::vector<ChunkDimensionStats> extra_dim_stats;
+        /// Nonzero where extra dimension `e` keeps no bloom for this chunk,
+        /// so a probe answers "may match"; the file then keeps none for it.
+        std::vector<std::uint8_t> extra_bloom_skip;
         ChunkStatistics statistics;
         HashResolutions hash_resolutions;
         std::size_t events_processed = 0;
@@ -97,6 +100,27 @@ class BloomCore {
                              std::uint64_t ts, std::uint64_t dur, bool has_dur,
                              std::string_view hhash, std::string_view fhash,
                              std::string_view shash);
+    /// One value of extra dimension `e` (init_chunk_state's extra_dims
+    /// order): its text joins the bloom and its value the min/max, kept in
+    /// the dimension's own type. Integers and doubles share "double"; a
+    /// dimension that also holds strings becomes "mixed" and keeps no
+    /// min/max, so a range filter never prunes on it.
+    static void observe_extra(ChunkState& chunk, std::size_t e,
+                              std::int64_t value);
+    static void observe_extra(ChunkState& chunk, std::size_t e, double value);
+    static void observe_extra(ChunkState& chunk, std::size_t e,
+                              std::string_view value);
+
+    /// observe_extra's min/max and type rule, without the bloom.
+    static void observe_value(ChunkDimensionStats& stats, std::int64_t value);
+    static void observe_value(ChunkDimensionStats& stats, double value);
+    static void observe_value(ChunkDimensionStats& stats,
+                              std::string_view value);
+
+    /// Merge another chunk slice's stats of one dimension into `dst`.
+    static void merge_dimension_stats(ChunkDimensionStats& dst,
+                                      ChunkDimensionStats& src);
+
     /// `record_name` is the metadata record type (HH/FH/SH); no-op for any
     /// other name or when hash_val/resolved is empty.
     static void observe_metadata(ChunkState& chunk,

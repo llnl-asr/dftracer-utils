@@ -103,6 +103,11 @@ class Indexer:
         parallelism: int = 0,
         force_rebuild: bool = False,
         runtime: Optional["Runtime"] = None,
+        bloom_fields: Optional[Sequence[str]] = None,
+        false_positive_rate: float = 0.01,
+        expected_entries: int = 1024,
+        auto_fields: bool = True,
+        auto_max_distinct: int = 256,
     ) -> None:
         """Create an indexer for trace files.
 
@@ -123,6 +128,13 @@ class Indexer:
             parallelism: Number of parallel indexers. 0 = auto.
             force_rebuild: If True, rebuild indices even if they exist.
             runtime: Runtime instance for thread pool control.
+            bloom_fields: Args fields the bloom tier indexes by name; a file
+                indexed without one is rebuilt.
+            false_positive_rate: Bloom false-positive rate, in (0, 1).
+            expected_entries: Expected distinct values per chunk.
+            auto_fields: Also index every other flat args key.
+            auto_max_distinct: Per-chunk distinct cap for an auto string
+                field's bloom.
         """
         ...
 

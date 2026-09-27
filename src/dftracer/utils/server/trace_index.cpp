@@ -9,7 +9,8 @@
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/index/extensions/kinds/time_bounds.h>
 #include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/plan/resolved_field_rewriter.h>
+#include <dftracer/utils/index/plan/rowsets.h>
+#include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/index_database.h>
@@ -22,7 +23,9 @@
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 
+#include <algorithm>
 #include <cinttypes>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -35,10 +38,35 @@ namespace dftracer::utils::server {
 
 namespace {
 
-// The file's time bounds for the timeline. Events without a clock sit at
-// ts 0, so the start is the first start above 0 when the file has one.
+// The file's time bounds for the timeline, in microseconds. A path schema's
+// span from its time role's zonemap to the latest time plus the longest
+// duration. Events without a clock sit at ts 0, so a dftracer file starts at
+// its first start above 0 when it has one.
 dftracer::utils::index::gzip::TimeBounds timeline_bounds(
-    const dftracer::utils::index::store::IndexDatabase& db, int fid) {
+    const dftracer::utils::index::store::IndexDatabase& db, int fid,
+    const dftracer::utils::index::RecordSchema& schema) {
+    namespace ix = dftracer::utils::index;
+    if (schema.decoder == ix::Decoder::PATH) {
+        ix::gzip::TimeBounds bounds;
+        const auto& roles = schema.roles;
+        if (roles.time.empty()) return bounds;
+        const auto time =
+            ix::extensions::kinds::file_value_range(db, fid, roles.time);
+        if (!time) return bounds;
+        const double time_us = ix::micros_per(roles.time_unit);
+        double end = time->second * time_us;
+        if (!roles.duration.empty())
+            if (const auto dur = ix::extensions::kinds::file_value_range(
+                    db, fid, roles.duration);
+                dur && dur->second > 0)
+                end += dur->second * ix::micros_per(roles.duration_unit);
+        bounds.valid = true;
+        bounds.min_timestamp_us = static_cast<std::uint64_t>(
+            std::llround(std::max(0.0, time->first * time_us)));
+        bounds.max_timestamp_us =
+            static_cast<std::uint64_t>(std::llround(std::max(0.0, end)));
+        return bounds;
+    }
     auto bounds =
         dftracer::utils::index::extensions::kinds::file_time_bounds(db, fid);
     if (!bounds.valid || bounds.min_timestamp_us != 0) return bounds;
@@ -61,7 +89,7 @@ namespace {
 // Bump VERSION when the on-disk layout below changes; the loader then ignores
 // the stale cache.
 constexpr std::uint32_t VIZ_SUMMARY_MAGIC = 0x315A5644;  // "DVZ1"
-constexpr std::uint32_t VIZ_SUMMARY_FORMAT_VERSION = 9;
+constexpr std::uint32_t VIZ_SUMMARY_FORMAT_VERSION = 10;
 
 struct BufWriter {
     std::string b;
@@ -255,6 +283,7 @@ void serialize_summary(BufWriter& w, const VizSummary& s) {
         w.dbl(p.io_busy);
         w.str(p.hhash);
         w.str(p.rank);
+        w.str(p.label);
     }
 
     w.u64(s.forks.size());
@@ -369,7 +398,7 @@ bool deserialize_summary(BufReader& r, VizSummary& s) {
     }
 
     std::uint64_t nprocs = r.u64();
-    if (!r.fits(nprocs, 8 * 5 + 8 * 2)) return false;
+    if (!r.fits(nprocs, 8 * 5 + 8 * 3)) return false;
     s.procs.resize(nprocs);
     for (auto& p : s.procs) {
         p.pid = r.i64();
@@ -380,6 +409,7 @@ bool deserialize_summary(BufReader& r, VizSummary& s) {
         p.io_busy = r.dbl();
         p.hhash = r.str();
         p.rank = r.str();
+        p.label = r.str();
     }
 
     std::uint64_t nforks = r.u64();
@@ -440,7 +470,7 @@ TraceIndex::TraceIndex(const std::string& directory,
 coro::CoroTask<void> TraceIndex::initialize() {
     PatternDirectoryScannerUtility scanner;
     PatternDirectoryScannerUtilityInput scan_input{
-        directory_, {".pfw", ".pfw.gz"}, false};
+        directory_, trace_file_patterns(), false};
     auto entries = co_await scanner(scan_input);
 
     files_.clear();
@@ -452,6 +482,9 @@ coro::CoroTask<void> TraceIndex::initialize() {
 
     std::vector<std::size_t> needs_build;
     std::vector<std::size_t> large_files;
+    std::vector<const dftracer::utils::index::RecordSchema*> file_schemas(
+        entries.size(), nullptr);
+    record_schema_ = nullptr;
 
     // The reuse decision below is existence-only, so a changed .pfw would be
     // served from a stale index. Drop any (shared) index root whose sources
@@ -528,13 +561,14 @@ coro::CoroTask<void> TraceIndex::initialize() {
         auto* large_files_ptr = &large_files;
         auto* global_min_ts_ptr = &global_min_ts_;
         auto* global_max_ts_ptr = &global_max_ts_;
+        auto* schemas_ptr = &file_schemas;
         std::string index_dir = index_dir_;
         std::size_t max_concurrent = max_concurrent_;
         std::size_t checkpoint_size = checkpoint_size_;
 
         auto init_task = make_task(
             [files_ptr, needs_build_ptr, large_files_ptr, global_min_ts_ptr,
-             global_max_ts_ptr, index_dir, max_concurrent,
+             global_max_ts_ptr, schemas_ptr, index_dir, max_concurrent,
              checkpoint_size](CoroScope& ctx) -> coro::CoroTask<void> {
                 if (!needs_build_ptr->empty()) {
                     DFTRACER_UTILS_LOG_INFO(
@@ -599,6 +633,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
                         coro::make_channel<std::size_t>(max_concurrent * 2);
 
                     co_await ctx.scope([&meta_chan, files_ptr, large_files_ptr,
+                                        schemas_ptr,
                                         max_concurrent](CoroScope& scope)
                                            -> coro::CoroTask<void> {
                         scope.spawn(
@@ -612,8 +647,8 @@ coro::CoroTask<void> TraceIndex::initialize() {
                             });
 
                         for (std::size_t w = 0; w < max_concurrent; ++w) {
-                            scope.spawn([ch = meta_chan->consumer(),
-                                         files_ptr](CoroScope&)
+                            scope.spawn([ch = meta_chan->consumer(), files_ptr,
+                                         schemas_ptr](CoroScope&)
                                             -> coro::CoroTask<void> {
                                 while (auto fi_opt = co_await ch.receive()) {
                                     std::size_t fi = *fi_opt;
@@ -631,8 +666,20 @@ coro::CoroTask<void> TraceIndex::initialize() {
                                             int fid = idx_db.get_file_info_id(
                                                 logical);
                                             if (fid >= 0) {
+                                                namespace ix =
+                                                    dftracer::utils::index;
+                                                ix::load_index_schemas(
+                                                    info->index_path);
+                                                const auto* schema =
+                                                    ix::plan::recorded_schema(
+                                                        idx_db, info->path);
+                                                if (!schema)
+                                                    schema =
+                                                        &ix::detect_file_schema(
+                                                            info->path);
+                                                (*schemas_ptr)[fi] = schema;
                                                 auto bounds = timeline_bounds(
-                                                    idx_db, fid);
+                                                    idx_db, fid, *schema);
                                                 if (bounds.valid) {
                                                     info->min_timestamp_us =
                                                         bounds.min_timestamp_us;
@@ -714,21 +761,26 @@ coro::CoroTask<void> TraceIndex::initialize() {
         }
     }
 
+    // A viewer reads one record schema, voted by the files that hold
+    // records; files of another are reported, and a request that reads them
+    // fails with the View's error.
     if (!files_.empty()) {
-        const FileInfo& f = files_.front();
         try {
-            dftracer::utils::index::load_index_schemas(f.index_path);
-            const dftracer::utils::index::RecordSchema* recorded = nullptr;
-            if (fs::exists(f.index_path)) {
-                dftracer::utils::index::store::IndexDatabase db(
-                    f.index_path,
-                    dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-                recorded =
-                    dftracer::utils::index::plan::recorded_schema(db, f.path);
-            }
+            std::vector<dftracer::utils::index::plan::RowSetFile> sources;
+            sources.reserve(files_.size());
+            for (const FileInfo& f : files_)
+                sources.push_back({f.path, f.index_path});
             record_schema_ =
-                recorded ? recorded
-                         : &dftracer::utils::index::detect_file_schema(f.path);
+                &dftracer::utils::index::plan::files_schema(sources);
+            for (std::size_t i = 0; i < files_.size(); ++i) {
+                const auto* schema = file_schemas[i];
+                if (schema && schema->id != record_schema_->id)
+                    DFTRACER_UTILS_LOG_WARN(
+                        "TraceIndex: %s has record schema %s, not %s; a "
+                        "viewer serves files of one record schema",
+                        files_[i].path.c_str(), schema->id.c_str(),
+                        record_schema_->id.c_str());
+            }
         } catch (const std::exception& e) {
             DFTRACER_UTILS_LOG_WARN(
                 "TraceIndex: failed to resolve the record schema: %s",
@@ -750,60 +802,27 @@ coro::CoroTask<void> TraceIndex::initialize() {
     load_persisted_viz_summary();
 }
 
-// Looks up single keys and keeps each root's database open, rather than
-// caching whole dictionaries per request.
-std::string TraceIndex::resolve(std::string_view dict, std::string_view field,
-                                const std::string& key) {
-    if (key.empty()) return {};
-    // Memoized across requests, misses included: the viewer re-asks for the
-    // same keys on every zoom.
-    std::string memo_key;
-    memo_key.reserve(dict.size() + field.size() + key.size() + 2);
-    memo_key.append(dict).push_back('\0');
-    memo_key.append(field).push_back('\0');
-    memo_key.append(key);
-    {
-        std::lock_guard<std::mutex> lk(hash_db_mutex_);
-        auto it = hash_names_.find(memo_key);
-        if (it != hash_names_.end()) return it->second;
+std::string TraceIndex::resolve(std::string_view rowset, std::string_view key,
+                                std::string_view value, const std::string& k) {
+    if (k.empty()) return {};
+    std::string column(rowset);
+    column.append(1, '\0').append(key).append(1, '\0').append(value);
+    std::lock_guard<std::mutex> lk(rowset_mutex_);
+    auto it = rowset_columns_.find(column);
+    if (it == rowset_columns_.end()) {
+        std::vector<dftracer::utils::index::plan::RowSetFile> files;
+        for (const auto& f : files_) files.push_back({f.path, f.index_path});
+        dftracer::utils::index::plan::GroupResolver r(
+            files,
+            {{"v", std::string(rowset), std::string(key), std::string(value)}});
+        std::unordered_map<std::string, std::string> values;
+        if (const auto* c = r.column("v"))
+            for (const auto& [kk, vv] : *c) values.emplace(kk, vv);
+        it =
+            rowset_columns_.emplace(std::move(column), std::move(values)).first;
     }
-    std::string resolved;
-    for (const auto& f : files_) {
-        if (f.index_path.empty()) continue;
-        std::shared_ptr<dftracer::utils::index::store::IndexDatabase> db;
-        {
-            std::lock_guard<std::mutex> lk(hash_db_mutex_);
-            auto it = hash_dbs_.find(f.index_path);
-            if (it != hash_dbs_.end()) {
-                db = it->second;
-            } else {
-                try {
-                    db = std::make_shared<
-                        dftracer::utils::index::store::IndexDatabase>(
-                        f.index_path,
-                        dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-                } catch (const std::exception&) {
-                    db = nullptr;
-                }
-                hash_dbs_.emplace(f.index_path, db);
-            }
-        }
-        if (!db) continue;
-        try {
-            auto name = db->dict_value(dict, key, field);
-            if (name && !name->empty()) {
-                resolved = std::move(*name);
-                break;
-            }
-        } catch (const std::exception&) {
-            continue;
-        }
-    }
-    {
-        std::lock_guard<std::mutex> lk(hash_db_mutex_);
-        hash_names_.emplace(std::move(memo_key), resolved);
-    }
-    return resolved;
+    const auto hit = it->second.find(k);
+    return hit == it->second.end() ? std::string() : hit->second;
 }
 
 std::string TraceIndex::viz_summary_cache_path() const {
@@ -825,6 +844,8 @@ std::string TraceIndex::viz_summary_fingerprint() const {
     mix(&ver, sizeof ver);
     int tm = static_cast<int>(time_metric_);
     mix(&tm, sizeof tm);
+    const std::uint64_t schema = record_schema().params_hash();
+    mix(&schema, sizeof schema);
     mix(&global_min_ts_, sizeof global_min_ts_);
     mix(&global_max_ts_, sizeof global_max_ts_);
     for (const auto& f : files_) {

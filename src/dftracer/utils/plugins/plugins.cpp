@@ -34,7 +34,7 @@ namespace {
 using View = trace::views::View;
 using ExportStats = trace::views::ExportStats;
 using Fold = trace::views::detail::Fold;
-using Query = query::Query;
+using Query = duql::Query;
 }  // namespace
 
 struct Plugins::Impl {
@@ -265,8 +265,8 @@ void expose_dataframe_abi() {
             0 ||
         !info.dli_fname)
         return;
-    if (void* h = dlopen(info.dli_fname, RTLD_NOW | RTLD_GLOBAL | RTLD_NOLOAD))
-        (void)h;  // the handle stays open: the library was loaded already
+    // Promotes the loaded library to RTLD_GLOBAL; the handle is never closed.
+    dlopen(info.dli_fname, RTLD_NOW | RTLD_GLOBAL | RTLD_NOLOAD);
 }
 
 Result<Plugins::Impl::Loaded> load_plugin(const std::string& path,
@@ -349,13 +349,13 @@ Result<Plugins::Impl::Loaded> load_plugin(const std::string& path,
                           "plugin '" + path + "' config: " + bad);
     }
 
-    // A plan_query that does not parse used to be logged and dropped, which
+    // A plan_duql that does not parse used to be logged and dropped, which
     // silently cost two things: plugin_union_prune_query gave up, so the whole
     // SET lost its index prune, and PluginFold ran with no filter, folding the
     // plugin over events its own predicate excluded. The second is a wrong
     // answer, not a lost optimisation, so a broken predicate fails the load.
     if (const char* pq =
-            plugin->plan_query ? plugin->plan_query(plugin->self) : nullptr;
+            plugin->plan_duql ? plugin->plan_duql(plugin->self) : nullptr;
         pq != nullptr && *pq != '\0') {
         // Copied before the teardown below: the string belongs to the plugin
         // (the C++ SDK backs it with the holder's `plan` member), so destroy()
@@ -369,7 +369,7 @@ Result<Plugins::Impl::Loaded> load_plugin(const std::string& path,
             dlclose(handle);
             return make_error(
                 ErrorCode::INVALID_ARGUMENT,
-                "plugin '" + path + "' plan_query '" + plan +
+                "plugin '" + path + "' plan_duql '" + plan +
                     "' does not parse: " + parsed.error().message);
         }
     }
@@ -497,8 +497,8 @@ void settle_prune(Plugins::Impl& impl) {
     std::vector<const char*> plan_queries;
     plan_queries.reserve(impl.plugins.size());
     for (const auto& p : impl.plugins)
-        plan_queries.push_back(p.plugin->plan_query
-                                   ? p.plugin->plan_query(p.plugin->self)
+        plan_queries.push_back(p.plugin->plan_duql
+                                   ? p.plugin->plan_duql(p.plugin->self)
                                    : nullptr);
     impl.prune = detail::plugin_union_prune_query(plan_queries);
 }
@@ -509,7 +509,7 @@ namespace detail {
 
 std::optional<Query> plugin_union_prune_query(
     const std::vector<const char*>& plan_queries) {
-    namespace q = query;
+    namespace q = duql;
     if (plan_queries.empty()) return std::nullopt;
     std::vector<std::string> distinct;
     for (const char* s : plan_queries) {
@@ -517,7 +517,7 @@ std::optional<Query> plugin_union_prune_query(
         std::string_view sv{s};
         if (!q::try_parse(sv)) {
             DFTRACER_UTILS_LOG_DEBUG(
-                "Plugin plan_query '%s' failed to parse; scanning all", s);
+                "Plugin plan_duql '%s' failed to parse; scanning all", s);
             return std::nullopt;
         }
         if (std::find(distinct.begin(), distinct.end(), sv) == distinct.end())
@@ -602,7 +602,7 @@ std::vector<Plugins::PluginInfo> Plugins::describe() const {
         PluginInfo info;
         info.path = p.path;
         info.abi_version = p.plugin->abi_version;
-        info.has_plan_query = p.plugin->plan_query != nullptr;
+        info.has_plan_duql = p.plugin->plan_duql != nullptr;
         info.provides = name_list(p.plugin->provides, p.plugin->self);
         info.consumes = name_list(p.plugin->consumes, p.plugin->self);
         info.reads = name_list(p.plugin->reads, p.plugin->self);

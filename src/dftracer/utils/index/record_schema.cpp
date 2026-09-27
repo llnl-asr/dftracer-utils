@@ -1,7 +1,12 @@
 #include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/utils/string.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/index/source.h>
 #include <dftracer/utils/json/json_escape.h>
+#include <dftracer/utils/json/json_value.h>
+#include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 #include <simdjson.h>
 #include <yaml-cpp/yaml.h>
@@ -17,54 +22,60 @@
 #include <shared_mutex>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 
 namespace dftracer::utils::index {
 
 namespace {
 
-bool has_path(simdjson::dom::element root, std::string_view path) {
-    simdjson::dom::element cur = root;
-    while (!path.empty()) {
-        const auto dot = path.find('.');
-        const auto key = path.substr(0, dot);
-        simdjson::dom::object obj;
-        if (cur.get_object().get(obj) != simdjson::SUCCESS) return false;
-        if (obj.at_key(key).get(cur) != simdjson::SUCCESS) return false;
-        path = dot == std::string_view::npos ? std::string_view{}
-                                             : path.substr(dot + 1);
-    }
-    return true;
-}
+constexpr std::size_t CHUNK = 64 * 1024;
+// Detection stops starting new lines past this many bytes of text.
+constexpr std::size_t MAX_TEXT = 16u * 1024 * 1024;
+// A longer line ends detection; no sample record is this large.
+constexpr std::size_t MAX_RECORD = 256u * 1024 * 1024;
 
-// Up to `max_lines` lines from the start of a gzip or plain file.
-std::vector<std::string> head_lines(const std::string& path,
-                                    std::size_t max_lines) {
+// Feeds `emit` the lines from the start of a gzip or plain file, the last one
+// without its newline too, until it returns false or MAX_TEXT bytes were
+// read.
+template <typename Emit>
+void for_each_head_line(const std::string& path, Emit&& emit) {
     std::ifstream in(path, std::ios::binary);
     if (!in)
         throw DFTUtilsException::cat(ErrorCode::IO,
                                      "cannot read trace for schema "
                                      "detection: ",
                                      path);
-    constexpr std::size_t CHUNK = 64 * 1024;
-    constexpr std::size_t MAX_TEXT = 16u * 1024 * 1024;
-    std::string text;
     std::vector<char> comp(CHUNK);
     in.read(comp.data(), 2);
     const bool gz = in.gcount() == 2 &&
                     static_cast<unsigned char>(comp[0]) == 0x1f &&
                     static_cast<unsigned char>(comp[1]) == 0x8b;
     in.seekg(0);
-    std::size_t newlines = 0;
-    auto append = [&](const char* data, std::size_t n) {
+    std::string text;
+    std::size_t consumed = 0;
+    bool done = false;
+    auto feed = [&](const char* data, std::size_t n) {
+        // The text held from before has no newline.
+        const std::size_t from = text.size();
         text.append(data, n);
-        for (std::size_t i = 0; i < n; ++i) newlines += data[i] == '\n';
-    };
-    auto enough = [&] {
-        return newlines >= max_lines || text.size() >= MAX_TEXT;
+        std::size_t pos = 0;
+        for (;;) {
+            const auto nl = text.find('\n', std::max(pos, from));
+            if (nl == std::string::npos) break;
+            consumed += nl + 1 - pos;
+            if (!emit(std::string_view(text).substr(pos, nl - pos)) ||
+                consumed >= MAX_TEXT) {
+                done = true;
+                return;
+            }
+            pos = nl + 1;
+        }
+        text.erase(0, pos);
+        if (text.size() > MAX_RECORD) done = true;
     };
     if (!gz) {
-        while (!enough() && in.read(comp.data(), CHUNK).gcount() > 0)
-            append(comp.data(), static_cast<std::size_t>(in.gcount()));
+        while (!done && in.read(comp.data(), CHUNK).gcount() > 0)
+            feed(comp.data(), static_cast<std::size_t>(in.gcount()));
     } else {
         z_stream zs{};
         // Concatenated members decode as one stream (inflateReset at each
@@ -73,85 +84,177 @@ std::vector<std::string> head_lines(const std::string& path,
             throw DFTUtilsException::cat(ErrorCode::IO,
                                          "cannot inflate trace: ", path);
         std::vector<char> out(CHUNK);
-        int rc = Z_OK;
-        while (!enough()) {
-            if (zs.avail_in == 0) {
+        bool eof = false;
+        while (!done) {
+            if (zs.avail_in == 0 && !eof) {
                 in.read(comp.data(), CHUNK);
                 const auto got = in.gcount();
-                if (got <= 0) break;
+                eof = got <= 0;
                 zs.next_in = reinterpret_cast<Bytef*>(comp.data());
-                zs.avail_in = static_cast<uInt>(got);
+                zs.avail_in = eof ? 0 : static_cast<uInt>(got);
             }
             zs.next_out = reinterpret_cast<Bytef*>(out.data());
             zs.avail_out = static_cast<uInt>(out.size());
-            rc = inflate(&zs, Z_NO_FLUSH);
-            append(out.data(), out.size() - zs.avail_out);
+            const int rc = inflate(&zs, Z_NO_FLUSH);
+            const std::size_t got = out.size() - zs.avail_out;
+            feed(out.data(), got);
             if (rc == Z_STREAM_END) {
-                if (inflateReset(&zs) != Z_OK) break;
-            } else if (rc != Z_OK && rc != Z_BUF_ERROR) {
+                if ((eof && zs.avail_in == 0) || inflateReset(&zs) != Z_OK)
+                    break;
+            } else if ((rc != Z_OK && rc != Z_BUF_ERROR) ||
+                       (eof && zs.avail_in == 0 && got == 0)) {
                 break;
             }
         }
         inflateEnd(&zs);
     }
-    std::vector<std::string> lines;
-    std::size_t pos = 0;
-    while (pos < text.size() && lines.size() < max_lines) {
-        auto nl = text.find('\n', pos);
-        if (nl == std::string::npos) break;
-        lines.emplace_back(text, pos, nl - pos);
-        pos = nl + 1;
-    }
-    return lines;
+    if (!done && !text.empty()) emit(std::string_view(text));
 }
+
+// Scores the registered schemas on lines fed one at a time. A schema judges
+// only the records its `data` row set does not leave out, so metadata lines
+// neither match nor miss it.
+class Detector {
+   public:
+    Detector() : candidates_(registered_schemas()) {
+        judged_.assign(candidates_.size(), 0);
+        hits_.assign(candidates_.size(), 0);
+        cond_of_.assign(candidates_.size(), NONE);
+        for (std::size_t i = 0; i < candidates_.size(); ++i) {
+            const RecordSchema* s = candidates_[i];
+            if (s->data.empty()) continue;
+            auto same =
+                std::find_if(conds_.begin(), conds_.end(), [&](const Cond& c) {
+                    return c.text == s->data &&
+                           c.args_fallback == s->args_fallback;
+                });
+            if (same == conds_.end()) {
+                conds_.push_back({s->data, s->args_fallback,
+                                  duql::parse_or_throw(s->data), 0});
+                same = std::prev(conds_.end());
+            }
+            cond_of_[i] = static_cast<std::size_t>(same - conds_.begin());
+        }
+        truth_.resize(conds_.size());
+    }
+
+    // Whether more lines are wanted.
+    bool add(std::string_view line) {
+        const char* start = nullptr;
+        std::size_t length = 0;
+        if (!json_trim_and_validate_with_comma(line.data(), line.size(), start,
+                                               length))
+            return true;
+        simdjson::dom::element root;
+        if (parser_.parse(start, length).get(root) != simdjson::SUCCESS ||
+            !root.is_object())
+            return true;
+        ++out_.objects;
+        const json::JsonValue record(root);
+        bool metadata = false;
+        for (std::size_t k = 0; k < conds_.size(); ++k) {
+            truth_[k] = duql::evaluate_truth(conds_[k].query.root(), record,
+                                             conds_[k].args_fallback);
+            if (truth_[k] == duql::Truth::NO) {
+                metadata = true;
+                ++conds_[k].left_out;
+            }
+        }
+        out_.records += !metadata;
+        for (std::size_t i = 0; i < candidates_.size(); ++i) {
+            if (cond_of_[i] != NONE && truth_[cond_of_[i]] == duql::Truth::NO)
+                continue;
+            ++judged_[i];
+            hits_[i] += matches(*candidates_[i], record);
+        }
+        return out_.records < SCHEMA_SAMPLE_LINES;
+    }
+
+    SchemaDetection finish() {
+        const RecordSchema* best = nullptr;
+        double best_share = 0;
+        for (std::size_t i = 0; i < candidates_.size(); ++i) {
+            const RecordSchema* c = candidates_[i];
+            const double share = judged_[i]
+                                     ? static_cast<double>(hits_[i]) /
+                                           static_cast<double>(judged_[i])
+                                     : 0.0;
+            out_.scores.push_back({c, share});
+            if (c->fields.empty() || judged_[i] == 0 ||
+                static_cast<double>(hits_[i]) <
+                    SCHEMA_MATCH_SHARE * static_cast<double>(judged_[i]))
+                continue;
+            if (!best || more_specific(*c, share, *best, best_share)) {
+                best = c;
+                best_share = share;
+            }
+        }
+        if (!best && out_.records == 0) best = metadata_owner();
+        out_.chosen = best ? best : &get_schema("generic");
+        return std::move(out_);
+    }
+
+   private:
+    static constexpr std::size_t NONE = static_cast<std::size_t>(-1);
+
+    struct Cond {
+        std::string text;
+        bool args_fallback = false;
+        duql::Query query;
+        std::size_t left_out = 0;
+    };
+
+    // Every required path present; for a schema whose fields are all
+    // optional, any declared path present.
+    static bool matches(const RecordSchema& s, const json::JsonValue& record) {
+        if (s.require.empty())
+            return std::any_of(
+                s.fields.begin(), s.fields.end(),
+                [&](const FieldSpec& f) { return record.at(f.path).exists(); });
+        return std::all_of(
+            s.require.begin(), s.require.end(),
+            [&](const std::string& path) { return record.at(path).exists(); });
+    }
+
+    // More required paths, then a user schema over a built-in, then the
+    // higher share, then the lower id.
+    static bool more_specific(const RecordSchema& a, double a_share,
+                              const RecordSchema& b, double b_share) {
+        if (a.require.size() != b.require.size())
+            return a.require.size() > b.require.size();
+        if (a.builtin != b.builtin) return !a.builtin;
+        if (a_share != b_share) return a_share > b_share;
+        return a.id < b.id;
+    }
+
+    // With only metadata sampled, the least specific schema whose `data`
+    // row set leaves out every object: no record says which child it is.
+    const RecordSchema* metadata_owner() const {
+        const RecordSchema* best = nullptr;
+        for (std::size_t i = 0; i < candidates_.size(); ++i) {
+            const RecordSchema* c = candidates_[i];
+            if (cond_of_[i] == NONE || out_.objects == 0 ||
+                conds_[cond_of_[i]].left_out != out_.objects)
+                continue;
+            if (!best || c->require.size() < best->require.size() ||
+                (c->require.size() == best->require.size() && c->builtin &&
+                 !best->builtin))
+                best = c;
+        }
+        return best;
+    }
+
+    std::vector<const RecordSchema*> candidates_;
+    std::vector<Cond> conds_;
+    std::vector<std::size_t> cond_of_;
+    std::vector<duql::Truth> truth_;
+    std::vector<std::size_t> judged_;
+    std::vector<std::size_t> hits_;
+    dftracer::utils::json::RecordParser parser_;
+    SchemaDetection out_;
+};
 
 }  // namespace
-
-bool Dictionary::has_field(std::string_view field) const {
-    for (const auto& f : fields)
-        if (f.first == field) return true;
-    return false;
-}
-
-const Dictionary* RecordSchema::dictionary_of(
-    std::string_view key_field) const {
-    for (const auto& d : dictionaries)
-        for (const auto& k : d.keys_in)
-            if (k == key_field) return &d;
-    return nullptr;
-}
-
-std::vector<std::string> RecordSchema::resolved_names() const {
-    std::vector<std::string> out;
-    for (const auto& d : dictionaries)
-        for (const auto& k : d.keys_in)
-            for (const auto& [field, path] : d.fields)
-                out.push_back(std::string(RESOLVED_PREFIX) + k + "." + field);
-    return out;
-}
-
-ResolvedColumn RecordSchema::resolved_column(std::string_view name) const {
-    if (name.starts_with(RESOLVED_PREFIX)) {
-        const std::string_view rest = name.substr(RESOLVED_PREFIX.size());
-        const std::size_t dot = rest.find('.');
-        if (dot != std::string_view::npos) {
-            const std::string_view key = rest.substr(0, dot);
-            const std::string_view field = rest.substr(dot + 1);
-            const Dictionary* d = dictionary_of(key);
-            if (d && d->has_field(field))
-                return {std::string(key), d, std::string(field)};
-        }
-    }
-    std::string names;
-    for (const auto& n : resolved_names()) {
-        if (!names.empty()) names += ", ";
-        names += n;
-    }
-    throw DFTUtilsException::cat(
-        ErrorCode::INVALID_ARGUMENT, "unknown resolved column ",
-        std::string(name), " for schema ", id,
-        "; available: ", names.empty() ? std::string("none") : names);
-}
 
 double micros_per(TimeUnit unit) {
     switch (unit) {
@@ -175,24 +278,6 @@ const FieldSpec* RecordSchema::field_at(std::string_view path) const {
                                                            : nullptr;
 }
 
-namespace {
-
-void hash_dictionaries(const std::vector<Dictionary>& dictionaries,
-                       auto&& text) {
-    for (const auto& d : dictionaries) {
-        text(d.name);
-        text(d.rows);
-        text(d.key);
-        for (const auto& [name, path] : d.fields) {
-            text(name);
-            text(path);
-        }
-        for (const auto& k : d.keys_in) text(k);
-    }
-}
-
-}  // namespace
-
 std::uint64_t RecordSchema::params_hash() const {
     utilities::hash::HasherUtility hasher;
     auto text = [&](std::string_view s) {
@@ -202,13 +287,16 @@ std::uint64_t RecordSchema::params_hash() const {
     if (builtin) {
         // The layout the built-ins' indexes were recorded with.
         text(id);
-        for (const auto& r : require) text(r);
+        // Role paths are hashed below, so requiring one keeps the hash.
+        for (const auto& r : require)
+            if (r != roles.time && r != roles.duration && r != roles.entity)
+                text(r);
         hasher.update(std::uint8_t{1});
         for (const auto* r :
              {&roles.time, &roles.duration, &roles.entity, &roles.phase})
             text(*r);
         hasher.update(static_cast<std::uint8_t>(decoder));
-        hash_dictionaries(dictionaries, text);
+        if (!source.empty()) text(source);
         return hasher.get_hash().value;
     }
     hasher.update(std::uint8_t{3});
@@ -231,7 +319,7 @@ std::uint64_t RecordSchema::params_hash() const {
         hasher.update(static_cast<std::uint8_t>(f->always_index));
     }
     text(roles.phase);
-    hash_dictionaries(dictionaries, text);
+    if (!source.empty()) text(source);
     hasher.update(static_cast<std::uint8_t>(path_budget.has_value()));
     hasher.update(path_budget.value_or(0));
     return hasher.get_hash().value;
@@ -272,9 +360,19 @@ void derive(RecordSchema& s) {
             case Role::DURATION:
                 s.roles.duration = f.path;
                 s.roles.duration_unit = f.unit.value_or(TimeUnit::US);
+                if (s.decoder == Decoder::PATH) add(s.always_index, f.path);
                 break;
             case Role::ENTITY:
                 s.roles.entity = f.path;
+                if (s.decoder == Decoder::PATH) add(s.always_index, f.path);
+                break;
+            case Role::LANE:
+                s.roles.lane = f.path;
+                if (s.decoder == Decoder::PATH) add(s.always_index, f.path);
+                break;
+            case Role::NAME:
+                s.roles.name = f.path;
+                if (s.decoder == Decoder::PATH) add(s.always_index, f.path);
                 break;
         }
     }
@@ -299,20 +397,23 @@ std::vector<RecordSchema> builtins() {
     dft.builtin = true;
     dft.fields = {
         builtin_field("ph", FieldType::STRING, false, Role::NONE),
-        builtin_field("name", FieldType::STRING, false, Role::NONE),
-        builtin_field("ts", FieldType::INT, true, Role::TIME),
+        builtin_field("name", FieldType::STRING, false, Role::NAME),
+        builtin_field("ts", FieldType::INT, false, Role::TIME),
         builtin_field("dur", FieldType::INT, true, Role::DURATION),
         builtin_field("pid", FieldType::INT, true, Role::ENTITY),
+        builtin_field("tid", FieldType::INT, true, Role::LANE),
     };
     dft.roles.phase = "ph";
-    dft.dictionaries = {
-        {"file", "FH", "args.value", {{"path", "args.name"}}, {"fhash", "cwd"}},
-        {"host", "HH", "args.value", {{"name", "args.name"}}, {"hhash"}},
-        {"string",
-         "SH",
-         "args.value",
-         {{"value", "args.name"}},
-         {"exec_hash", "cmd_hash"}}};
+    dft.source = merge_source({},
+                              R"(data = where ph not in ["M", 4];
+files = where ph in ["M", 4] and name == "FH" | select fhash = args.value, path = args.name | distinct;
+hosts = where ph in ["M", 4] and name == "HH" | select hhash = args.value, name = args.name | distinct;
+strings = where ph in ["M", 4] and name == "SH" | select shash = args.value, value = args.name | distinct;
+ranks = where ph in ["M", 4] and name == "PR" and args.name == "rank" | select pid, rank = args.value | distinct;
+def args_fallback = true)",
+                              "dftracer");
+    dft.data = data_condition(dft);
+    dft.args_fallback = source_args_fallback(dft);
     derive(dft);
 
     RecordSchema generic;
@@ -332,11 +433,16 @@ std::vector<RecordSchema> builtins() {
         f.path = std::string("args.") + name;
         genesis.fields.push_back(std::move(f));
     }
-    Dictionary run{"run", "RUN", "args.run", {}, {"run"}};
+    std::string runs =
+        "runs = where ph in [\"M\", 4] and name == \"RUN\" | select run = "
+        "args.run";
     for (const char* key : {"app", "system", "unique_input", "nodes", "ppn",
                             "papi_set", "method", "sketch_accuracy", "leaf"})
-        run.fields.emplace_back(key, std::string("args.") + key);
-    genesis.dictionaries.push_back(std::move(run));
+        runs += std::string(", ") + key + " = args." + key;
+    runs += " | distinct";
+    genesis.source = merge_source(dft.source, runs, "genesis");
+    genesis.data = data_condition(genesis);
+    genesis.args_fallback = source_args_fallback(genesis);
     derive(genesis);
     return {std::move(dft), std::move(generic), std::move(genesis)};
 }
@@ -363,6 +469,11 @@ class Registry {
     const RecordSchema* find(std::string_view id) const {
         std::shared_lock lock(mu_);
         return find_locked(id);
+    }
+
+    std::size_t size() const {
+        std::shared_lock lock(mu_);
+        return entries_.size();
     }
 
     std::vector<const RecordSchema*> all() const {
@@ -412,6 +523,10 @@ std::string_view role_name(Role role) {
             return "duration";
         case Role::ENTITY:
             return "entity";
+        case Role::LANE:
+            return "lane";
+        case Role::NAME:
+            return "name";
     }
     return "none";
 }
@@ -438,12 +553,28 @@ const RecordSchema& Registry::add(const SchemaSpec& spec,
         if (f.unit && !timed)
             spec_error(source, where + ".unit needs the time or duration role");
         if (timed) {
-            if (f.type != FieldType::INT && f.type != FieldType::FLOAT)
-                spec_error(source, where + " has the " +
-                                       std::string(role_name(f.role)) +
-                                       " role and must be int or float");
+            // A string time is ISO-8601 text.
+            const bool iso =
+                f.role == Role::TIME && f.type == FieldType::STRING;
+            if (f.type != FieldType::INT && f.type != FieldType::FLOAT && !iso)
+                spec_error(source,
+                           where + " has the " +
+                               std::string(role_name(f.role)) +
+                               (f.role == Role::TIME
+                                    ? " role and must be int, float or string"
+                                    : " role and must be int or float"));
+            if (iso && f.unit)
+                spec_error(source, where +
+                                       ".unit does not apply to an "
+                                       "ISO-8601 string time");
             f.unit = f.unit.value_or(TimeUnit::US);
         }
+        if ((f.role == Role::ENTITY || f.role == Role::LANE ||
+             f.role == Role::NAME) &&
+            f.type != FieldType::INT && f.type != FieldType::STRING)
+            spec_error(source, where + " has the " +
+                                   std::string(role_name(f.role)) +
+                                   " role and must be int or string");
         if (f.type == FieldType::JSON && s.decoder != Decoder::PATH)
             spec_error(source, where +
                                    " is json, which needs a schema that "
@@ -470,16 +601,12 @@ const RecordSchema& Registry::add(const SchemaSpec& spec,
                                        " role");
         }
     if (spec.path_budget) s.path_budget = spec.path_budget;
-    for (const auto& d : spec.dictionaries) {
-        auto same =
-            std::find_if(s.dictionaries.begin(), s.dictionaries.end(),
-                         [&](const Dictionary& x) { return x.name == d.name; });
-        if (same != s.dictionaries.end())
-            *same = d;
-        else
-            s.dictionaries.push_back(d);
-    }
+    s.source =
+        merge_source(s.source, spec.source, source + ", schema " + spec.id);
+    s.data = data_condition(s);
+    s.args_fallback = source_args_fallback(s);
     derive(s);
+    check_source(s, source);
 
     if (const Entry* e = entry_locked(s.id)) {
         if (e->schema->params_hash() == s.params_hash()) return *e->schema;
@@ -516,14 +643,6 @@ bool flag_of(const YAML::Node& n, const std::string& key,
     }
 }
 
-std::vector<std::string> list_of(const YAML::Node& n, const std::string& key,
-                                 const std::string& source) {
-    if (!n.IsSequence()) spec_error(source, key + " must be a list of strings");
-    std::vector<std::string> out;
-    for (const auto& e : n) out.push_back(text_of(e, key, source));
-    return out;
-}
-
 template <typename E, std::size_t N>
 E choice_of(const YAML::Node& n, const std::string& key,
             const std::array<std::pair<const char*, E>, N>& names,
@@ -546,10 +665,12 @@ constexpr std::array<std::pair<const char*, FieldType>, 5> TYPE_NAMES = {{
     {"string", FieldType::STRING},
     {"json", FieldType::JSON},
 }};
-constexpr std::array<std::pair<const char*, Role>, 3> ROLE_NAMES = {{
+constexpr std::array<std::pair<const char*, Role>, 5> ROLE_NAMES = {{
     {"time", Role::TIME},
     {"duration", Role::DURATION},
     {"entity", Role::ENTITY},
+    {"lane", Role::LANE},
+    {"name", Role::NAME},
 }};
 constexpr std::array<std::pair<const char*, TimeUnit>, 4> UNIT_NAMES = {{
     {"ns", TimeUnit::NS},
@@ -559,7 +680,7 @@ constexpr std::array<std::pair<const char*, TimeUnit>, 4> UNIT_NAMES = {{
 }};
 
 SchemaSpec parse_spec(const YAML::Node& spec, const std::string& source) {
-    check_keys(spec, {"id", "extends", "fields", "index", "dictionaries"}, "",
+    check_keys(spec, {"id", "extends", "fields", "index", "source"}, "",
                source);
     SchemaSpec out;
     if (!spec["id"]) spec_error(source, "missing id");
@@ -605,34 +726,7 @@ SchemaSpec parse_spec(const YAML::Node& spec, const std::string& source) {
             }
         }
     }
-    if (const auto ds = spec["dictionaries"]) {
-        if (!ds.IsSequence()) spec_error(source, "dictionaries must be a list");
-        for (const auto& dn : ds) {
-            check_keys(dn, {"name", "rows", "key", "fields", "keys_in"},
-                       "dictionaries.", source);
-            Dictionary d;
-            for (auto [key, slot] :
-                 {std::pair{"name", &d.name}, std::pair{"rows", &d.rows},
-                  std::pair{"key", &d.key}}) {
-                if (!dn[key])
-                    spec_error(source, std::string("dictionaries.") + key +
-                                           " is required");
-                *slot = text_of(dn[key], std::string("dictionaries.") + key,
-                                source);
-            }
-            if (!dn["fields"] || !dn["fields"].IsMap())
-                spec_error(source,
-                           "dictionaries.fields must map field names to paths");
-            for (const auto& f : dn["fields"])
-                d.fields.emplace_back(
-                    text_of(f.first, "dictionaries.fields", source),
-                    text_of(f.second, "dictionaries.fields", source));
-            if (dn["keys_in"])
-                d.keys_in =
-                    list_of(dn["keys_in"], "dictionaries.keys_in", source);
-            out.dictionaries.push_back(std::move(d));
-        }
-    }
+    if (spec["source"]) out.source = text_of(spec["source"], "source", source);
     return out;
 }
 
@@ -799,10 +893,8 @@ std::string schemas_json() {
         list(s->require);
         out += ",\"path_budget\":";
         out += s->path_budget ? std::to_string(*s->path_budget) : "null";
-        out += ",\"dictionaries\":";
-        std::vector<std::string> names;
-        for (const auto& d : s->dictionaries) names.push_back(d.name);
-        list(names);
+        out += ",\"source\":";
+        quoted(s->source);
         out += '}';
     }
     out += ']';
@@ -815,62 +907,47 @@ void load_index_schemas(const std::string& index_path) {
 }
 
 SchemaDetection explain_schema(std::span<const std::string_view> lines) {
-    const auto candidates = registered_schemas();
-    simdjson::dom::parser parser;
-    std::vector<std::size_t> hits(candidates.size(), 0);
-    SchemaDetection out;
-    for (auto line : lines) {
-        simdjson::dom::element root;
-        if (parser.parse(simdjson::padded_string(line)).get(root) !=
-                simdjson::SUCCESS ||
-            !root.is_object())
-            continue;
-        ++out.objects;
-        for (std::size_t i = 0; i < candidates.size(); ++i) {
-            bool all = true;
-            for (const auto& path : candidates[i]->require)
-                if (!has_path(root, path)) {
-                    all = false;
-                    break;
-                }
-            hits[i] += all;
-        }
-    }
-    const RecordSchema* best = &get_schema("generic");
-    std::size_t best_hits = 0;
-    for (std::size_t i = 0; i < candidates.size(); ++i) {
-        const RecordSchema* c = candidates[i];
-        out.scores.push_back({c, out.objects
-                                     ? static_cast<double>(hits[i]) /
-                                           static_cast<double>(out.objects)
-                                     : 0.0});
-        if (out.objects == 0 || c->require.empty()) continue;
-        if (static_cast<double>(hits[i]) <
-            SCHEMA_MATCH_SHARE * static_cast<double>(out.objects))
-            continue;
-        const bool better = c->require.size() != best->require.size()
-                                ? c->require.size() > best->require.size()
-                                : (hits[i] != best_hits ? hits[i] > best_hits
-                                                        : c->id < best->id);
-        if (better) {
-            best = c;
-            best_hits = hits[i];
-        }
-    }
-    out.chosen = best;
-    return out;
+    Detector d;
+    for (auto line : lines) d.add(line);
+    return d.finish();
 }
 
 SchemaDetection explain_file_schema(const std::string& file_path) {
-    const auto lines = head_lines(file_path, SCHEMA_SAMPLE_LINES);
-    std::vector<std::string_view> views(lines.begin(), lines.end());
-    return explain_schema(views);
+    struct Cached {
+        fs::file_time_type mtime;
+        std::uintmax_t size = 0;
+        std::size_t schemas = 0;
+        SchemaDetection detection;
+    };
+    static std::mutex mu;
+    static std::unordered_map<std::string, Cached> cache;
+    std::error_code ec;
+    const auto mtime = fs::last_write_time(file_path, ec);
+    const auto size = ec ? 0 : fs::file_size(file_path, ec);
+    const std::size_t schemas = registry().size();
+    if (!ec) {
+        std::lock_guard lock(mu);
+        const auto it = cache.find(file_path);
+        if (it != cache.end() && it->second.mtime == mtime &&
+            it->second.size == size && it->second.schemas == schemas)
+            return it->second.detection;
+    }
+    Detector d;
+    for_each_head_line(file_path,
+                       [&](std::string_view line) { return d.add(line); });
+    SchemaDetection out = d.finish();
+    if (!ec) {
+        std::lock_guard lock(mu);
+        cache.insert_or_assign(file_path, Cached{mtime, size, schemas, out});
+    }
+    return out;
 }
 
 std::string to_json(const SchemaDetection& d) {
     std::string out = "{\"chosen\":\"";
     json::append_json_escaped(out, d.chosen ? d.chosen->id : "");
-    out += "\",\"objects\":" + std::to_string(d.objects) + ",\"scores\":[";
+    out += "\",\"objects\":" + std::to_string(d.objects) +
+           ",\"records\":" + std::to_string(d.records) + ",\"scores\":[";
     for (std::size_t i = 0; i < d.scores.size(); ++i) {
         const auto& s = d.scores[i];
         if (i) out += ',';
@@ -889,6 +966,59 @@ const RecordSchema& detect_schema(std::span<const std::string_view> lines) {
 
 const RecordSchema& detect_file_schema(const std::string& file_path) {
     return *explain_file_schema(file_path).chosen;
+}
+
+std::optional<std::int64_t> iso8601_micros(std::string_view s) {
+    auto digits = [&](std::size_t at, std::size_t n) -> std::optional<int> {
+        if (at + n > s.size()) return std::nullopt;
+        int v = 0;
+        for (std::size_t i = at; i < at + n; ++i) {
+            if (s[i] < '0' || s[i] > '9') return std::nullopt;
+            v = v * 10 + (s[i] - '0');
+        }
+        return v;
+    };
+    const auto y = digits(0, 4), mo = digits(5, 2), dd = digits(8, 2);
+    if (!y || !mo || !dd || s.size() < 19 || s[4] != '-' || s[7] != '-' ||
+        (s[10] != 'T' && s[10] != ' ') || s[13] != ':' || s[16] != ':')
+        return std::nullopt;
+    const auto hh = digits(11, 2), mi = digits(14, 2), ss = digits(17, 2);
+    if (!hh || !mi || !ss || *mo < 1 || *mo > 12 || *dd < 1 || *dd > 31)
+        return std::nullopt;
+    std::size_t at = 19;
+    std::int64_t frac = 0;
+    if (at < s.size() && s[at] == '.') {
+        std::int64_t scale = 100000;
+        for (++at; at < s.size() && s[at] >= '0' && s[at] <= '9'; ++at) {
+            frac += (s[at] - '0') * scale;
+            scale /= 10;
+        }
+    }
+    std::int64_t offset = 0;
+    if (at < s.size() && (s[at] == 'Z' || s[at] == 'z')) {
+        ++at;
+    } else if (at < s.size() && (s[at] == '+' || s[at] == '-')) {
+        const auto oh = digits(at + 1, 2);
+        const bool colon = at + 3 < s.size() && s[at + 3] == ':';
+        const auto om = digits(at + (colon ? 4 : 3), 2);
+        if (!oh || !om) return std::nullopt;
+        offset = (s[at] == '-' ? -1 : 1) * (*oh * 3600 + *om * 60);
+        at += colon ? 6 : 5;
+    }
+    if (at != s.size()) return std::nullopt;
+    // Days from 1970-01-01 of a civil date (Howard Hinnant, public domain).
+    const int yy = *y - (*mo <= 2);
+    const int era = (yy >= 0 ? yy : yy - 399) / 400;
+    const unsigned yoe = static_cast<unsigned>(yy - era * 400);
+    const unsigned doy =
+        (153 * static_cast<unsigned>(*mo + (*mo > 2 ? -3 : 9)) + 2) / 5 +
+        static_cast<unsigned>(*dd) - 1;
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    const std::int64_t days =
+        static_cast<std::int64_t>(era) * 146097 + doe - 719468;
+    const std::int64_t secs =
+        days * 86400 + *hh * 3600 + *mi * 60 + *ss - offset;
+    return secs * 1000000 + frac;
 }
 
 }  // namespace dftracer::utils::index

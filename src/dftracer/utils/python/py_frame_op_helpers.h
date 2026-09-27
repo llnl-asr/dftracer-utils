@@ -58,18 +58,27 @@ inline bool window_func_from_str(const char* name, dftu_window_func* out) {
 
 /// Parse the sequence of 9-tuples the Python wrapper normalizes a window()
 /// call into: (func, value_col|None, offset, name, time_col|None, threshold,
-/// counter, frame_preceding, frame_following). Returns false with a Python
-/// error set.
+/// counter, frame_preceding, frame_following, end_col|None, span). Returns
+/// false with a Python error set.
 inline bool parse_window_specs(PyObject* seq, WindowSpecs& out) {
     PyObject* fast = PySequence_Fast(seq, "window: specs must be a sequence");
     if (!fast) return false;
     const Py_ssize_t n = PySequence_Fast_GET_SIZE(fast);
+    // A name the spec holds, or nullptr for None; false on a Python error.
+    auto name_of = [&](PyObject* o, const char*& to) {
+        to = nullptr;
+        if (o == Py_None) return true;
+        const char* c = PyUnicode_AsUTF8(o);
+        if (!c) return false;
+        to = out.names.emplace_back(c).c_str();
+        return true;
+    };
     for (Py_ssize_t i = 0; i < n; ++i) {
         PyObject* t = PySequence_Fast_GET_ITEM(fast, i);
         if (!PyTuple_Check(t)) {
             Py_DECREF(fast);
             PyErr_SetString(PyExc_TypeError,
-                            "window: each spec must be a 9-tuple");
+                            "window: each spec must be an 11-tuple");
             return false;
         }
         const char* func = nullptr;
@@ -81,39 +90,42 @@ inline bool parse_window_specs(PyObject* seq, WindowSpecs& out) {
         int counter = 0;
         Py_ssize_t frame_pre = 0;
         Py_ssize_t frame_post = 0;
-        if (!PyArg_ParseTuple(t, "sOnsOdpnn", &func, &value_obj, &offset, &name,
-                              &time_obj, &threshold, &counter, &frame_pre,
-                              &frame_post)) {
-            Py_DECREF(fast);
-            return false;
-        }
+        PyObject* end_obj = nullptr;
+        double span = 0.0;
         dftu_window_spec s{};
-        if (!window_func_from_str(func, &s.func)) {
+        const char* time = nullptr;
+        const char* end = nullptr;
+        if (!PyArg_ParseTuple(t, "sOnsOdpnnOd", &func, &value_obj, &offset,
+                              &name, &time_obj, &threshold, &counter,
+                              &frame_pre, &frame_post, &end_obj, &span) ||
+            !window_func_from_str(func, &s.func) ||
+            !name_of(value_obj, s.value) || !name_of(time_obj, time) ||
+            !name_of(end_obj, end)) {
             Py_DECREF(fast);
             return false;
-        }
-        if (value_obj != Py_None) {
-            const char* vc = PyUnicode_AsUTF8(value_obj);
-            if (!vc) {
-                Py_DECREF(fast);
-                return false;
-            }
-            s.value = out.names.emplace_back(vc).c_str();
-        }
-        if (time_obj != Py_None) {
-            const char* tc = PyUnicode_AsUTF8(time_obj);
-            if (!tc) {
-                Py_DECREF(fast);
-                return false;
-            }
-            s.time = out.names.emplace_back(tc).c_str();
         }
         s.out = out.names.emplace_back(name).c_str();
-        s.offset = static_cast<std::int64_t>(offset);
-        s.threshold = threshold;
-        s.counter = counter;
-        s.preceding = static_cast<std::int64_t>(frame_pre);
-        s.following = static_cast<std::int64_t>(frame_post);
+        switch (s.func) {
+            case DFTU_WINDOW_FRAME_SUM:
+            case DFTU_WINDOW_FRAME_MIN:
+            case DFTU_WINDOW_FRAME_MAX:
+            case DFTU_WINDOW_FRAME_COUNT:
+            case DFTU_WINDOW_FRAME_MEAN:
+                s.param.frame = {static_cast<std::int64_t>(offset),
+                                 static_cast<std::int64_t>(frame_pre),
+                                 static_cast<std::int64_t>(frame_post)};
+                break;
+            case DFTU_WINDOW_RATE:
+                s.param.rate.time = time;
+                s.param.rate.counter = counter;
+                break;
+            case DFTU_WINDOW_SESSIONIZE:
+                s.param.session = {time, end, threshold, span};
+                break;
+            default:
+                s.param.offset = static_cast<std::int64_t>(offset);
+                break;
+        }
         out.specs.push_back(s);
     }
     Py_DECREF(fast);

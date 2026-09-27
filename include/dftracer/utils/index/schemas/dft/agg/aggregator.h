@@ -4,9 +4,9 @@
 #include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/coro/async_generator.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregator_types.h>
-#include <dftracer/utils/query/query.h>
 
 #include <cstddef>
 #include <optional>
@@ -17,7 +17,7 @@ namespace dftracer::utils::index::schemas::dft::agg {
 struct AggregatorInput {
     std::string directory;
     AggregationConfig config;
-    std::optional<query::Query> query;
+    std::optional<duql::Query> query;
     std::size_t checkpoint_size = constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     std::string index_dir;
     bool force_rebuild = false;

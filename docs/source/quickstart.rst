@@ -41,7 +41,7 @@ when one exists.
    )
 
 See :doc:`api/trace_viewer` for the full builder, aggregation specs, and
-``collect_typed``; :doc:`api/query` for the filter DSL; and :doc:`guides/index`
+``collect_typed``; :doc:`api/duql` for the duql filter builder; and :doc:`guides/index`
 for task-oriented recipes. The rest of this page covers ``Runtime``,
 ``Indexer``, and Dask.
 
@@ -217,7 +217,7 @@ exception derives ``DFTUtilsError``, which derives the built-in ``RuntimeError``
        DFTUtilsIOError,      # bad I/O / missing file
        DFTUtilsNotFoundError,
        DFTUtilsParseError,
-       DFTUtilsQueryError,
+       DFTUtilsDuqlError,
    )
 
    try:
@@ -230,7 +230,7 @@ exception derives ``DFTUtilsError``, which derives the built-in ``RuntimeError``
 
 The full set is ``DFTUtilsError`` (base) plus ``DFTUtilsValueError``,
 ``DFTUtilsNotFoundError``, ``DFTUtilsIOError``, ``DFTUtilsParseError``,
-``DFTUtilsCompressionError``, ``DFTUtilsQueryError``, ``DFTUtilsReaderError``,
+``DFTUtilsCompressionError``, ``DFTUtilsDuqlError``, ``DFTUtilsReaderError``,
 ``DFTUtilsIndexerError``, ``DFTUtilsPipelineError``, and
 ``DFTUtilsAggregationError``. See :doc:`cpp_api/runtime` for the
 underlying C++ model.
@@ -387,7 +387,7 @@ caller and freed with its ``_free`` call.
 
    #include <dftracer/utils/dataframe/abi.h>
    #include <dftracer/utils/index/abi.h>
-   #include <dftracer/utils/query/abi.h>
+   #include <dftracer/utils/duql/abi.h>
    #include <dftracer/utils/trace/views/abi.h>
    #include <inttypes.h>
    #include <stdio.h>
@@ -411,7 +411,7 @@ caller and freed with its ``_free`` call.
        dftu_indexer_free(indexer);
 
        /* Count the read events. */
-       dftu_query* q = dftu_query_parse("name == \"read\"");
+       dftu_duql* q = dftu_duql_parse("name == \"read\"");
        dftu_view* all = dftu_view_from_files(paths, NULL, 1);
        dftu_view* reads = dftu_view_filter(all, q);
        dftu_dataframe* df = dftu_view_collect(reads, NULL);
@@ -420,7 +420,7 @@ caller and freed with its ``_free`` call.
        dftu_dataframe_free(df);
        dftu_view_free(reads);
        dftu_view_free(all);
-       dftu_query_free(q);
+       dftu_duql_free(q);
        return 0;
    }
 

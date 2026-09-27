@@ -278,6 +278,7 @@ static dftu_series* gather_varwidth_w(const dftu_series& base, const Idx* idx,
 
     auto* result = new dftu_series();
     result->type = base.type;
+    result->json = base.json;
     result->encoding = Encoding::Flat;
     result->length = n;
     offsets_of<Off>(*result) =

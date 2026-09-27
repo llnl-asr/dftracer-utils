@@ -92,9 +92,8 @@ coro::AsyncGenerator<Trace> ReplayEngine::stream_traces(
 }
 
 coro::CoroTask<void> ReplayEngine::run_pipelined(
-    dftracer::utils::CoroScope& scope, const std::vector<std::string>& files,
+    dftracer::utils::CoroScope&, const std::vector<std::string>& files,
     ReplayResult& result, std::size_t channel_capacity) {
-    (void)scope;
     coro::Channel<Trace> ch_instance(channel_capacity);
     auto* channel = &ch_instance;
 
@@ -680,8 +679,8 @@ ReplayResult ReplayEngine::replay_with_call_tree(
                 .push_back(i);
         std::vector<std::int64_t> level(static_cast<std::size_t>(n), 0);
         std::vector<std::int64_t> parent(static_cast<std::size_t>(n), -1);
-        for (auto& [key, lane] : lane_map) {
-            (void)key;
+        for (auto& kv : lane_map) {
+            auto& lane = kv.second;
             std::stable_sort(lane.begin(), lane.end(),
                              [&](std::int64_t a, std::int64_t b) {
                                  if (start(a) != start(b))

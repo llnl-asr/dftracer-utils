@@ -35,7 +35,7 @@
       :link: guides/index
       :link-type: doc
 
-      Task-oriented how-tos: columnar ops, the query DSL, fan-out/fan-in,
+      Task-oriented how-tos: columnar ops, duql filters, fan-out/fan-in,
       channels, plugin authoring.
 
    .. grid-item-card:: :octicon:`code` Reference

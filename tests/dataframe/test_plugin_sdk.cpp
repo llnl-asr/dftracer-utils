@@ -143,7 +143,6 @@ class RangeSource {
         if (j.how != DFTU_JOIN_INNER || j.left_on.size() != 1 ||
             j.left_on[0] != "id" || j.right_on[0] != "id")
             return std::nullopt;
-        (void)j.other;
         ++c_->joins_absorbed;
         return std::nullopt;
     }

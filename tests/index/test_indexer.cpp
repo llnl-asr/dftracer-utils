@@ -488,10 +488,8 @@ TEST_SUITE("Truncated") {
         Indexer::open({cut}, with_runtime(rt)).build();
         CHECK(count_lines(cut).get() == ref.lines);  // indexed
 
-        auto df = dftracer::utils::trace::views::View::from_file(cut)
-                      .metadata(false)
-                      .collect()
-                      .get();
+        auto df =
+            dftracer::utils::trace::views::View::from_file(cut).collect().get();
         CHECK(static_cast<std::size_t>(df.num_rows()) == ref.events);
         rt.shutdown();
     }

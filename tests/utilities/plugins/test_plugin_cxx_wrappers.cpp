@@ -65,9 +65,8 @@ FoldEvent evt(StringIntern& intern, std::uint64_t pid, std::uint64_t dur,
 // zero-key scalar form, a pid-keyed pair of reductions, a two-key
 // (pid, name) count, and a per-pid name set. All through Host::agg + the
 // agg:: factories, so no case names a raw DFTU_AGG_* code.
-::dftu_task* wrappers_columns(void* slice, const dftu_dataframe* df,
+::dftu_task* wrappers_columns(void*, const dftu_dataframe* df,
                               const dftu_plugin_host* host) {
-    (void)slice;
     Host h{host};
     if (const auto a = h.agg("wrap_scalar", {},
                              {agg::count("n"), agg::sum("dur", "sum_dur")}))
@@ -88,7 +87,7 @@ FoldEvent evt(StringIntern& intern, std::uint64_t pid, std::uint64_t dur,
 dftu_plugin make_wrappers_plugin() {
     dftu_plugin p{};
     p.abi_version = DFTRACER_PLUGIN_ABI_VERSION;
-    p.plan_query = [](void*) -> const char* { return nullptr; };
+    p.plan_duql = [](void*) -> const char* { return nullptr; };
     p.make_slice = [](void*) -> void* {
         static int sentinel;
         return &sentinel;

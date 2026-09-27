@@ -33,6 +33,8 @@ bool dimension_value_less(std::string_view a, std::string_view b,
 struct ChunkDimensionStats {
     std::string dimension;  ///< Dimension name (e.g., "cat", "name").
     std::uint64_t distinct_count = 0;  ///< Number of unique values.
+    /// Observations, so records that carry the dimension.
+    std::uint64_t present = 0;
     std::string
         min_value;  ///< Minimum value (numeric-aware for uint/int/double).
     std::string max_value;  ///< Maximum value.
@@ -50,6 +52,7 @@ struct ChunkDimensionStats {
     ChunkDimensionStats(const ChunkDimensionStats& other)
         : dimension(other.dimension),
           distinct_count(other.distinct_count),
+          present(other.present),
           min_value(other.min_value),
           max_value(other.max_value),
           value_type(other.value_type),
@@ -57,6 +60,7 @@ struct ChunkDimensionStats {
     ChunkDimensionStats(ChunkDimensionStats&& other) noexcept
         : dimension(std::move(other.dimension)),
           distinct_count(other.distinct_count),
+          present(other.present),
           min_value(std::move(other.min_value)),
           max_value(std::move(other.max_value)),
           value_type(std::move(other.value_type)),
@@ -68,6 +72,7 @@ struct ChunkDimensionStats {
         if (this != &other) {
             dimension = other.dimension;
             distinct_count = other.distinct_count;
+            present = other.present;
             min_value = other.min_value;
             max_value = other.max_value;
             value_type = other.value_type;
@@ -81,6 +86,7 @@ struct ChunkDimensionStats {
         if (this != &other) {
             dimension = std::move(other.dimension);
             distinct_count = other.distinct_count;
+            present = other.present;
             min_value = std::move(other.min_value);
             max_value = std::move(other.max_value);
             value_type = std::move(other.value_type);

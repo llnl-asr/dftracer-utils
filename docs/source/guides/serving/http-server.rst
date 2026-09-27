@@ -104,8 +104,8 @@ Fetch metadata for one file, and resolve content hashes back to names:
 
    curl 'http://127.0.0.1:8080/api/files/info?file=trace-0.pfw.gz'
 
-   # type defaults to "file"; also host, string, proc. Comma-separate hashes.
-   curl 'http://127.0.0.1:8080/api/resolve?type=file&hash=314c1a1cdb22a136'
+   # Row set, key column, value column; comma-separate the keys.
+   curl 'http://127.0.0.1:8080/api/rowset?name=files&key=fhash&value=path&keys=314c1a1cdb22a136'
    # {"names":{"314c1a1cdb22a136":"/data/train/img_0.npz"}}
 
 Data routes
@@ -128,9 +128,11 @@ Data routes
      - ``/api/files/info``
      - Metadata for one file. Param: ``file`` (required).
    * - GET
-     - ``/api/resolve``
-     - Resolve hashes to names. Params: ``hash`` (required, comma-separated),
-       ``type`` (default ``file``; ``file``/``host``/``string``/``proc``).
+     - ``/api/rowset``
+     - Values of a source row set by key. Params (all required): ``name``
+       (row set, such as ``files``), ``key`` (key column, such as
+       ``fhash``), ``value`` (value column, such as ``path``) and ``keys``
+       (comma-separated). Returns ``{"names":{"<key>":"<value>"}}``.
    * - POST
      - ``/api/cancel``
      - Cancel an in-flight request. Param: ``id`` (the request's
@@ -153,7 +155,7 @@ the whole trace.
      - Description and extra params
    * - ``/api/viz/events``
      - Time-windowed, LOD-aggregated events for rendering. Extra: ``pid``,
-       ``cat``, ``query`` (a DSL predicate, e.g. ``dur >= 1000``).
+       ``cat``, ``duql`` (a duql predicate, e.g. ``dur >= 1000``).
    * - ``/api/viz/density``
      - Sub-pixel events bucketed into density blocks. Extra: ``width``
        (default ``1920``); ``summary`` defaults to ``2`` here.
@@ -173,7 +175,7 @@ the whole trace.
        to ``pid`` to keep processes separate).
    * - ``/api/viz/histogram``
      - Duration distribution: percentiles and log-spaced buckets. Extra:
-       ``query``.
+       ``duql``.
    * - ``/api/viz/layers``
      - Operation-name to category map. No params.
 
@@ -198,7 +200,7 @@ See also
 --------
 
 - :doc:`../../trace-viewer` - the web UI the server hosts.
-- :doc:`../core/query-dsl` - the predicate language accepted by the ``query``
+- :doc:`../core/duql` - the predicate language accepted by the ``duql``
   viz params.
 - :doc:`../../cli` - ``dftracer_view --call-tree`` / ``--flamegraph`` build
   containment trees offline instead of over HTTP.

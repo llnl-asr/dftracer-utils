@@ -116,6 +116,9 @@ class LazyOps {
     LazyFrame sample(std::int64_t n, std::uint64_t seed = 0) const {
         return lf().sample(n, seed);
     }
+    LazyFrame head_by(std::vector<std::string> keys, std::int64_t n) const {
+        return lf().head_by(std::move(keys), n);
+    }
     LazyFrame is_duplicated() const { return lf().is_duplicated(); }
     LazyFrame is_unique() const { return lf().is_unique(); }
     LazyFrame group_by_dynamic(std::string time_col, std::int64_t every,

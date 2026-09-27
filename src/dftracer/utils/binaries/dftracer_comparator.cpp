@@ -5,12 +5,12 @@
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregators.h>
-#include <dftracer/utils/query/query.h>
 #include <dftracer/utils/trace/comparator/comparison_aggregation.h>
 #include <dftracer/utils/trace/comparator/comparison_config.h>
 #include <dftracer/utils/trace/comparator/comparison_result.h>
@@ -38,7 +38,7 @@ class ComparatorArgParse : public cli::ArgParse {
    public:
     cli::PipelineArgs pipeline;
     cli::IndexingArgs indexing;
-    cli::QueryArgs query_args{"Query filter (default: all events)"};
+    cli::DuqlArgs duql_args{"duql filter (default: all events)"};
 
     std::string config_path;
     std::string preset;
@@ -56,7 +56,7 @@ class ComparatorArgParse : public cli::ArgParse {
     explicit ComparatorArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
         indexing.with_index_dir = false;
         indexing.force_help = "Force index rebuild";
-        schema(pipeline, indexing, query_args);
+        schema(pipeline, indexing, duql_args);
     }
 
    protected:
@@ -155,7 +155,7 @@ void flatten_nodes(const ComparisonNode& node,
 
 struct AggSpec {
     AggregationConfig agg_cfg;
-    std::optional<query::Query> query;
+    std::optional<duql::Query> query;
     const ComparisonNode* visitor;
 };
 
@@ -194,7 +194,7 @@ static std::optional<ComparisonConfig> build_comparison_config(
     const auto& preset = cli->preset;
     const auto& baseline_path = cli->baseline;
     const auto& variant_path = cli->variant;
-    const auto& query_str = cli->query_args.query;
+    const auto& duql_str = cli->duql_args.duql;
     const auto& group_by_str = cli->group_by;
     auto format = cli->format;
     auto no_color = cli->no_color;
@@ -226,18 +226,18 @@ static std::optional<ComparisonConfig> build_comparison_config(
             return std::nullopt;
         }
         config = std::move(*parsed);
-        // AND the user query into every top-level node so --query narrows
+        // AND the user query into every top-level node so --duql narrows
         // the preset without replacing its structure.
-        if (!query_str.empty()) {
+        if (!duql_str.empty()) {
             for (auto& n : config.nodes) {
                 n.query = n.query.empty()
-                              ? query_str
-                              : "(" + n.query + ") AND (" + query_str + ")";
+                              ? duql_str
+                              : "(" + n.query + ") AND (" + duql_str + ")";
             }
         }
     } else if (!baseline_path.empty() && !variant_path.empty()) {
         config = ComparisonConfig::from_cli(baseline_path, variant_path,
-                                            query_str, group_by_str);
+                                            duql_str, group_by_str);
     } else {
         DFTRACER_UTILS_LOG_ERROR(
             "Must specify --config, --preset, or both --baseline and "
@@ -289,8 +289,7 @@ static std::optional<std::vector<NodeAggPlan>> build_agg_plans(
         for (const auto* visitor : visitors) {
             AggSpec spec;
             if (!visitor->composed_query.empty()) {
-                auto result =
-                    query::Query::from_string(visitor->composed_query);
+                auto result = duql::Query::from_string(visitor->composed_query);
                 if (!result) {
                     DFTRACER_UTILS_LOG_ERROR("Invalid query for node '%s': %s",
                                              visitor->name.c_str(),

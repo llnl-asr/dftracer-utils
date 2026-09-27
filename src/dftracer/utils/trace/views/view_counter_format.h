@@ -6,6 +6,7 @@
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -14,11 +15,14 @@
 namespace dftracer::utils::trace::views::detail {
 
 // One aggregate group -> one ph="C" counter event JSON line. `keys` aligns to
-// `group_cols`, `values` to `value_cols`.
+// `group_cols` (nullopt for a null key), `values` to `value_cols`. The group
+// columns `entity_col` and `lane_col` give pid and tid, as index::entity_id.
 std::string counter_line(const std::vector<std::string>& group_cols,
-                         const std::vector<std::string>& keys,
+                         const std::vector<std::optional<std::string>>& keys,
                          const std::vector<std::string>& value_cols,
-                         const std::vector<double>& values);
+                         const std::vector<double>& values,
+                         const std::string& entity_col,
+                         const std::string& lane_col);
 
 // Emit ph="C" counter events from a merged engine AggState (the distributed
 // counter-partial merge). Byte-matches emit_group_counter: finalizes the state,

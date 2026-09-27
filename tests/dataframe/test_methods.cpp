@@ -5,7 +5,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/sketch.h>
-#include <dftracer/utils/query/query.h>
+#include <dftracer/utils/duql/query.h>
 #include <doctest/doctest.h>
 
 #include <cmath>
@@ -1163,7 +1163,7 @@ TEST_CASE("DataFrame mask from a compiled query") {
         Series::strings({"POSIX", "STDIO", "POSIX", "MPI", "POSIX"}));
     df.columns.push_back(i64({10, 20, 30, 40, 50}));
 
-    auto q = dftracer::utils::query::parse_or_throw("cat == \"POSIX\"");
+    auto q = dftracer::utils::duql::parse_or_throw("cat == \"POSIX\"");
     Series m = df.mask(q);
     REQUIRE(m.length() == 5);
     const std::uint8_t* bits = m.data<std::uint8_t>();
@@ -1182,13 +1182,22 @@ TEST_CASE("DataFrame mask from a compiled query") {
     CHECK(dur[2] == 50);
 }
 
+TEST_CASE("DataFrame mask on a missing column selects no row") {
+    DataFrame df;
+    df.names = {"cat"};
+    df.columns.push_back(Series::strings({"POSIX", "STDIO"}));
+    Series m = df.mask(dftracer::utils::duql::parse_or_throw("dur > 5"));
+    REQUIRE(m.length() == 2);
+    CHECK(m.null_count() == 2);
+    CHECK(df.filter(m).num_rows() == 0);
+}
+
 TEST_CASE("DataFrame mask throws when a predicate cannot be lowered") {
     DataFrame df;
     df.names = {"cat"};
     df.columns.push_back(Series::strings({"POSIX", "STDIO"}));
-    // References a column absent from the frame; no columnar lowering exists.
-    auto q = dftracer::utils::query::parse_or_throw("dur > 5");
-    CHECK_THROWS_AS((void)df.mask(q), std::runtime_error);
+    auto q = dftracer::utils::duql::parse_or_throw("any(cat) == \"P\"");
+    CHECK_THROWS_AS(df.mask(q), std::runtime_error);
 }
 
 TEST_CASE("Bool column take / filter / reverse gather bits, not bytes") {

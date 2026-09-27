@@ -11,6 +11,7 @@ from typing import (
     Iterator,
     List,
     Literal,
+    Mapping,
     Optional,
     Sequence,
     Tuple,
@@ -24,6 +25,10 @@ if TYPE_CHECKING:
     import pyarrow as pa  # ty: ignore[unresolved-import]
 
 _T = TypeVar("_T")
+
+# The suffixes directory discovery lists as traces: .pfw, .jsonl and
+# .ndjson, plain or gzip.
+TRACE_FILE_PATTERNS: Tuple[str, ...]
 
 # A run() map result value: emitted bytes, or an eager/streamed pyarrow object.
 _RunResultValue = Union[bytes, "pa.Table", "pa.RecordBatchReader"]
@@ -41,7 +46,7 @@ class DFTUtilsNotFoundError(DFTUtilsError): ...
 class DFTUtilsIOError(DFTUtilsError): ...
 class DFTUtilsParseError(DFTUtilsError): ...
 class DFTUtilsCompressionError(DFTUtilsError): ...
-class DFTUtilsQueryError(DFTUtilsError): ...
+class DFTUtilsDuqlError(DFTUtilsError): ...
 class DFTUtilsReaderError(DFTUtilsError): ...
 class DFTUtilsIndexerError(DFTUtilsError): ...
 class DFTUtilsPipelineError(DFTUtilsError): ...
@@ -175,7 +180,7 @@ class Indexer:
         """The manifest of every indexed file, as a JSON string."""
         ...
 
-    def explain(self, query: str) -> str:
+    def explain(self, duql: str) -> str:
         """Per file, the chunks the query reads and what each pruning
         extension rules out alone, as a JSON string."""
         ...
@@ -199,11 +204,11 @@ class Indexer:
         """
         ...
 
-    def get_dictionary(self, name: str, field: str) -> Dict[str, str]:
-        """Key -> `field` of every row of the index dictionary `name`.
+    def rowset(self, name: str) -> "_DataFrame":
+        """The rows the index build stored for row set `name`.
 
         Raises:
-            ValueError: If `name` has no field `field`.
+            ValueError: If an index holds no rows for `name`.
         """
         ...
 
@@ -380,90 +385,6 @@ def get_default_runtime() -> Runtime: ...
 def peek_default_runtime() -> Optional[Runtime]: ...
 def set_default_runtime(runtime: Optional[Runtime]) -> None: ...
 
-class ComparatorUtility:
-    def __init__(self, runtime: Optional["Runtime"] = None) -> None: ...
-    def compare(
-        self,
-        baseline: str,
-        variant: str,
-        query: str = "",
-        group_by: str = "",
-        format: Literal["table", "json"] = "table",
-        time_interval_ms: float = 5000.0,
-        threshold: float = 0.0,
-        executor_threads: int = 0,
-        index_dir: str = "",
-        force_rebuild: bool = False,
-        config: str = "",
-    ) -> object: ...
-    def __call__(
-        self,
-        baseline: str,
-        variant: str,
-        query: str = "",
-        group_by: str = "",
-        format: Literal["table", "json"] = "table",
-        time_interval_ms: float = 5000.0,
-        threshold: float = 0.0,
-        executor_threads: int = 0,
-        index_dir: str = "",
-        force_rebuild: bool = False,
-        config: str = "",
-    ) -> object: ...
-    def compare_json(
-        self,
-        baseline: str,
-        variant: str,
-        query: str = "",
-        group_by: str = "",
-        format: Literal["table", "json"] = "table",
-        time_interval_ms: float = 5000.0,
-        threshold: float = 0.0,
-        executor_threads: int = 0,
-        index_dir: str = "",
-        force_rebuild: bool = False,
-        config: str = "",
-    ) -> str: ...
-    def compare_table(
-        self,
-        baseline: str,
-        variant: str,
-        query: str = "",
-        group_by: str = "",
-        format: Literal["table", "json"] = "table",
-        time_interval_ms: float = 5000.0,
-        threshold: float = 0.0,
-        executor_threads: int = 0,
-        index_dir: str = "",
-        force_rebuild: bool = False,
-        config: str = "",
-    ) -> str: ...
-
-def read_arrow_files_parallel(
-    paths: List[str],
-    runtime: Optional[object] = None,
-) -> Dict[str, object]:
-    """Read multiple Arrow IPC files in parallel using the Runtime.
-
-    Args:
-        paths: List of file paths to read.
-        runtime: Optional Runtime object. Uses default if not provided.
-
-    Returns:
-        dict with:
-            - file_results: List of per-file results, each with:
-                - path: File path
-                - success: True if read succeeded
-                - error: Error message if failed, else None
-                - total_rows: Number of rows in file
-                - batches: List of ArrowBatch objects
-            - total_rows: Total rows across all files
-            - total_batches: Total batches across all files
-            - files_read: Number of files read successfully
-            - files_failed: Number of files that failed
-    """
-    ...
-
 class IndexDatabase:
     """Handle to a .dftindex RocksDB store.
 
@@ -573,6 +494,8 @@ class _Series:
     def time_unit(self) -> int: ...
     @property
     def timezone(self) -> str: ...
+    @property
+    def is_json(self) -> bool: ...
     def add(self, other: "_Series") -> "_Series": ...
     def sub(self, other: "_Series") -> "_Series": ...
     def mul(self, other: "_Series") -> "_Series": ...
@@ -814,6 +737,7 @@ class _LazyFrame:
     def concat(self, *others: "_LazyFrame") -> "_LazyFrame": ...
     def drop_duplicates(self, subset: "str | Sequence[str] | None" = None) -> "_LazyFrame": ...
     def sample(self, n: int, seed: int = 0) -> "_LazyFrame": ...
+    def head_by(self, keys: "str | Sequence[str]", n: int) -> "_LazyFrame": ...
     def is_duplicated(self) -> "_LazyFrame": ...
     def is_unique(self) -> "_LazyFrame": ...
     def group_by_dynamic(
@@ -1013,6 +937,9 @@ def merge_flamegraph_partials(partials: Sequence[bytes]) -> _DataFrame:
     _TraceViewer.flamegraph_partial plan) into the node DataFrame. No scan."""
     ...
 
+def duql_load_path(path: str, /) -> None:
+    """Load the macros of a ``.duql`` file or of a directory of them."""
+
 def plugin_results(plugins: "Plugins") -> Dict[str, object]:
     """``{name: result}`` of the last run of ``plugins``, as a
     _TraceViewer.plugins plan left them."""
@@ -1082,7 +1009,13 @@ class _TraceViewer:
         """This scan with ``plan`` (a _LazyFrame over it) as its plan."""
         ...
     def filter(self, dsl: object) -> "_TraceViewer":
-        """Keep events matching a query-DSL predicate (``str(dsl)``)."""
+        """Keep events matching a duql predicate (``str(dsl)``)."""
+        ...
+    def duql(self, text: str, params: Mapping[str, Union[bool, int, float, str]]) -> "_TraceViewer":
+        """The duql pipeline ``text`` over this view, ``params`` bound."""
+        ...
+    def explain_duql(self, text: str, params: Mapping[str, Union[bool, int, float, str]]) -> str:
+        """The plan duql() builds, one step per line."""
         ...
     def select(self, names: Sequence[str]) -> "_TraceViewer":
         """Fields the scan reads (raw events), or a projection of the plan. A
@@ -1106,7 +1039,7 @@ class _TraceViewer:
     def group_by(self, *keys: str) -> "_TraceViewer": ...
     def agg(self, *specs: str) -> "_TraceViewer": ...
     def agg_numeric_args(self, *reductions: str) -> "_TraceViewer": ...
-    def metadata(self, include: bool, /) -> "_TraceViewer": ...
+    def all(self) -> "_TraceViewer": ...
     def record_schema(self, id: str, /) -> "_TraceViewer": ...
     def rollup_root(self, path: str, /) -> "_TraceViewer": ...
     def views_root(self, path: str, /) -> "_TraceViewer": ...

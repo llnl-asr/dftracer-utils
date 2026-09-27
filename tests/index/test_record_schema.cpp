@@ -71,9 +71,10 @@ index::IndexerOptions options(const std::string& dir, std::string schema = "") {
 
 TEST_SUITE("Schemas") {
     TEST_CASE("the built-in hashes are the ones existing indexes hold") {
-        // A change here marks every existing index stale.
+        // A change here marks every existing index stale. dftracer's covers
+        // its source, whose row sets an older index does not hold.
         CHECK(index::get_schema("dftracer").params_hash() ==
-              18021131772592900613ULL);
+              3999216331681324496ULL);
         CHECK(index::get_schema("generic").params_hash() ==
               7825305221053757732ULL);
     }

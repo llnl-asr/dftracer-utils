@@ -29,6 +29,7 @@ DataType Series::data_type() const {
     dt.decimal_precision = dftu_series_decimal_precision(handle_);
     dt.decimal_scale = dftu_series_decimal_scale(handle_);
     dt.fixed_size = dftu_series_fixed_size(handle_);
+    dt.json = dftu_series_is_json(handle_) != 0;
     const std::int64_t n = num_children();
     for (std::int64_t i = 0; i < n; ++i) {
         Series c = child(i);

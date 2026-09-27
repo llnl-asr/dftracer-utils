@@ -121,8 +121,10 @@ inline bool agg_uses_raw_value(AggOp op) {
 /// `value_type`: Sum/Min/Max/First/Last widen through the same
 /// integer/unsigned/float domain agg_finalize keys on (Int64/Uint64/Float64),
 /// String columns pass First/Last through unchanged, and every other op's
-/// type is fixed regardless of `value_type`. Never guesses: every AggOp is
-/// covered, so schema code built on this can never disagree with collect().
+/// type is fixed regardless of `value_type`. An Unknown `value_type` gives
+/// Unknown for the widening ops: collect() settles it from the data. Never
+/// guesses: every AggOp is covered, so schema code built on this can never
+/// disagree with collect().
 DataType agg_output_type(AggOp op, TypeId value_type);
 
 /// One aggregate: `op` over the value column at index `value_col` in the values
@@ -191,6 +193,12 @@ void agg_accumulate(AggState& state, const std::vector<const Series*>& keys,
 void agg_accumulate(AggState& state, const Series& key,
                     const std::vector<const Series*>& values,
                     std::int64_t begin = 0, std::int64_t end = -1);
+
+/// Number rows of the batches that later agg_accumulate calls fold from
+/// `base` (row 0 of a batch is row `base`), so First/Last and the group order
+/// compare rows across batches. Set it to the batch's global row offset before
+/// folding each batch of a multi-batch input; it defaults to 0.
+void agg_set_row_base(AggState& state, std::int64_t base);
 
 /// Combine `other` into `into` (associative; for spill + distributed merge).
 void agg_merge(AggState& into, const AggState& other);

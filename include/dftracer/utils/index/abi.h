@@ -77,11 +77,11 @@ DFTU_RESULT_DECL(dftu_indexer_string_result, char*);
 /** The defaults of IndexerOptions: checkpoints and bloom on and required. */
 DFTU_EXPORT void dftu_indexer_options_init(dftu_indexer_options* out);
 
-/** Open `n` trace files or directories (a directory contributes the .pfw,
- * .pfw.gz, .jsonl.gz and .ndjson.gz files directly inside it). `options` NULL =
- * defaults; it is copied, so it and its strings may be freed after the call. On
- * success the caller owns the indexer; free it with dftu_indexer_free. Writes
- * nothing. */
+/** Open `n` trace files or directories (a directory contributes the trace
+ * files, .pfw, .jsonl and .ndjson, plain or gzip, directly inside it).
+ * `options` NULL = defaults; it is copied, so it and its strings may be freed
+ * after the call. On success the caller owns the indexer; free it with
+ * dftu_indexer_free. Writes nothing. */
 DFTU_EXPORT DFTU_RESULT_MUST_CHECK dftu_indexer_open_result dftu_indexer_open(
     const char* const* paths, uint64_t n, const dftu_indexer_options* options);
 
@@ -150,9 +150,9 @@ DFTU_EXPORT DFTU_RESULT_MUST_CHECK dftu_indexer_string_result
 dftu_schema_detect(const char* path);
 
 /** Why the trace at `path` gets its schema: a JSON object with the chosen id,
- * the sampled object count and every registered schema's required path count
- * and share (see dftracer::utils::index::to_json); ownership and errors as
- * dftu_schema_register. */
+ * the sampled object and record counts and every registered schema's required
+ * path count and share (see dftracer::utils::index::to_json); ownership and
+ * errors as dftu_schema_register. */
 DFTU_EXPORT DFTU_RESULT_MUST_CHECK dftu_indexer_string_result
 dftu_schema_explain(const char* path);
 

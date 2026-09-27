@@ -46,7 +46,7 @@ REQUIRED_PATTERNS = (
     "dftracer/include/dftracer/utils/core/abi.h",
     "dftracer/include/dftracer/utils/core/coro/abi.h",
     "dftracer/include/dftracer/utils/dataframe/abi.h",
-    "dftracer/include/dftracer/utils/query/abi.h",
+    "dftracer/include/dftracer/utils/duql/abi.h",
     "dftracer/include/dftracer/utils/index/store/index_database.h",
     "dftracer/include/dftracer/utils/index/indexer.h",
     "dftracer/include/dftracer/utils/index/abi.h",

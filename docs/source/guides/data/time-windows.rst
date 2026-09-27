@@ -139,7 +139,11 @@ Supported spec shapes:
   (``running_prod`` is Float64)
 - ``("delta", value_col, out)``
 - ``("rate", value_col, time_col, out[, counter])``
-- ``("sessionize", time_col, threshold, out)``
+- ``("sessionize", time_col, gap, out[, end_col[, span]])``: the 1-based
+  session of each row. A row starts a new session when its time is more than
+  ``gap`` after the latest end of its session so far (``end_col``, else the
+  time), or more than ``span`` after the session's first time; a null time
+  is a null session.
 - ``("frame_sum"|"frame_min"|"frame_max"|"frame_count"|"frame_mean", value_col, preceding, following, out[, min_periods])``
   (a bound of ``None`` means that side of the ROWS frame runs to the partition edge;
   the output is null while the frame holds fewer than ``min_periods`` present values)

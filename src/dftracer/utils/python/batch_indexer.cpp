@@ -7,6 +7,7 @@
 #include <dftracer/utils/core/coro/when_all.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
@@ -21,6 +22,7 @@
 #include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/python/batch_indexer.h>
+#include <dftracer/utils/python/dataframe.h>
 #include <dftracer/utils/python/indexer.h>
 #include <dftracer/utils/python/py_dict_helpers.h>
 #include <dftracer/utils/python/py_errors.h>
@@ -31,7 +33,6 @@
 #include <dftracer/utils/python/py_str_helpers.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
-#include <dftracer/utils/query/query.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
 #include <algorithm>
@@ -618,52 +619,15 @@ static std::optional<std::string> resolve_index_path(IndexerObject* self) {
     return result;
 }
 
-static PyObject* Indexer_get_dictionary(IndexerObject* self, PyObject* args) {
+static PyObject* Indexer_rowset(IndexerObject* self, PyObject* args) {
     const char* name = nullptr;
-    const char* field = nullptr;
-    if (!PyArg_ParseTuple(args, "ss", &name, &field)) return nullptr;
-
-    bool known = false;
-    for (const auto* p : dftracer::utils::index::registered_schemas())
-        for (const auto& d : p->dictionaries)
-            known = known || (d.name == name && d.has_field(field));
-    if (!known) {
-        PyErr_Format(PyExc_ValueError, "unknown dictionary field %s.%s", name,
-                     field);
+    if (!PyArg_ParseTuple(args, "s", &name)) return nullptr;
+    dftracer::utils::dataframe::DataFrame frame;
+    if (!with_indexer(self, [&](dftracer::utils::index::Indexer ix) {
+            frame = ix.rowset(name);
+        }))
         return nullptr;
-    }
-
-    auto idx_opt = resolve_index_path(self);
-    if (!idx_opt) return nullptr;
-    std::string index_path = std::move(*idx_opt);
-
-    dftracer::utils::StringViewMap<std::string> values;
-    if (!run_blocking_r(
-            [&] {
-                dftracer::utils::index::store::IndexDatabase db(
-                    index_path,
-                    dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-                return db.dict_field(name, field);
-            },
-            values)) {
-        return nullptr;
-    }
-
-    PyObject* dict = PyDict_New();
-    if (!dict) return nullptr;
-    for (const auto& [k, v] : values) {
-        PyObject* key = PyUnicode_FromStringAndSize(k.data(), k.size());
-        PyObject* val = PyUnicode_FromStringAndSize(v.data(), v.size());
-        if (!key || !val || PyDict_SetItem(dict, key, val) < 0) {
-            Py_XDECREF(key);
-            Py_XDECREF(val);
-            Py_DECREF(dict);
-            return nullptr;
-        }
-        Py_DECREF(key);
-        Py_DECREF(val);
-    }
-    return dict;
+    return dftracer::utils::python::wrap_dataframe(std::move(frame));
 }
 
 static PyObject* Indexer_query_file_pids(IndexerObject* self, PyObject* args) {
@@ -848,11 +812,11 @@ static PyMethodDef Indexer_methods[] = {
      "drop_extension(name)\n"
      "--\n\n"
      "Remove one tier extension from every file; returns the status dict.\n"},
-    {"get_dictionary", DFTU_PYCFUNCTION(Indexer_get_dictionary), METH_VARARGS,
-     "get_dictionary(name, field)\n"
+    {"rowset", DFTU_PYCFUNCTION(Indexer_rowset), METH_VARARGS,
+     "rowset(name)\n"
      "--\n\n"
-     "Key -> `field` of every row of dictionary `name` (for example\n"
-     "'file', 'path'). Raises ValueError for an unknown dictionary field.\n"},
+     "The rows the index build stored for row set `name` of the source\n"
+     "(for example 'files'), as a DataFrame.\n"},
     {"query_file_pids", DFTU_PYCFUNCTION(Indexer_query_file_pids), METH_VARARGS,
      "query_file_pids(file_id)\n"
      "--\n\n"
@@ -906,7 +870,7 @@ PyTypeObject IndexerType = {
     "--\n\n"
     "Indexer with tiered index building.\n\n"
     "At least one of 'directory' or 'files' must be provided.\n"
-    "- directory: scan for .pfw/.pfw.gz/.jsonl.gz/.ndjson.gz files\n"
+    "- directory: scan for .pfw/.jsonl/.ndjson/.json files, plain or gzip\n"
     "- files: list of specific file paths\n\n"
     "Supports:\n"
     "- Tier 1: Checkpoints (require_checkpoint)\n"

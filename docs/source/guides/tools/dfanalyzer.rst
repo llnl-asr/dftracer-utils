@@ -93,7 +93,7 @@ delegated to ``DaskTraceViewer.collect_typed`` instead of running locally:
        index_path,
        time_granularity=1.0,
        time_resolution=1e6,
-       query="dur >= 1000",   # optional query-DSL predicate
+       duql="dur >= 1000",   # optional duql predicate
        client=client,
    )
 

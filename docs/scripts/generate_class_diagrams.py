@@ -163,7 +163,7 @@ COMPONENT_GROUPS = [
     ),
     ("task_graph", ["dftracer::utils::task_graph::"], "Task Graph"),
     ("io", ["dftracer::utils::io::"], "I/O Backends"),
-    ("query", ["dftracer::utils::query::"], "Query DSL"),
+    ("duql", ["dftracer::utils::duql::"], "duql"),
     (
         "dataframe",
         ["dftracer::utils::dataframe::"],
@@ -362,7 +362,7 @@ def generate_collaboration(
 ARCHITECTURE_MMD = """graph BT
     utilities["dftracer_utils_utilities<br/><i>readers, index, aggregation,<br/>comparison, statistics, plugins, dlio, replay</i>"]
     dataframe["dftracer_utils_dataframe<br/><i>Series/DataFrame, Highway SIMD kernels,<br/>Arrow bridge, columnar query execution</i>"]
-    query["dftracer_utils_query<br/><i>predicate IR, string codec, evaluator</i>"]
+    query["dftracer_utils_duql<br/><i>predicate IR, string codec, evaluator</i>"]
     json["dftracer_utils_json<br/><i>simdjson-backed parsing</i>"]
     core["dftracer_utils_core<br/><i>coroutines, tasks, task graph, io backend,<br/>pipelines, primitives</i>"]
 

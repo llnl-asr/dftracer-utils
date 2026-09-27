@@ -13,6 +13,9 @@ namespace dftracer::utils::dataframe {
 
 namespace {
 
+// Set in a FieldStat's domain byte when a nonzero ecarry follows it.
+constexpr std::uint8_t HAS_ECARRY = 0x80;
+
 template <class T>
 void put(std::string& s, T v) {
     s.append(reinterpret_cast<const char*>(&v), sizeof(T));
@@ -23,7 +26,9 @@ void put(std::string& s, const FieldStat& f) {
     put(s, f.sum);
     put(s, f.min);
     put(s, f.max);
-    put(s, static_cast<std::uint8_t>(f.domain));
+    put(s, static_cast<std::uint8_t>(static_cast<std::uint8_t>(f.domain) |
+                                     (f.ecarry ? HAS_ECARRY : 0)));
+    if (f.ecarry) put(s, f.ecarry);
     put(s, f.esum);
     put(s, f.emin);
     put(s, f.emax);
@@ -64,9 +69,11 @@ struct Reader {
         f.sum = get<double>();
         f.min = get<double>();
         f.max = get<double>();
-        const std::uint8_t d = get<std::uint8_t>();
+        const std::uint8_t b = get<std::uint8_t>();
+        const std::uint8_t d = b & static_cast<std::uint8_t>(~HAS_ECARRY);
         if (d > static_cast<std::uint8_t>(FieldStatDomain::F64)) truncated();
         f.domain = static_cast<FieldStatDomain>(d);
+        if (b & HAS_ECARRY) f.ecarry = get<std::int64_t>();
         f.esum = get<std::int64_t>();
         f.emin = get<std::int64_t>();
         f.emax = get<std::int64_t>();

@@ -97,6 +97,9 @@ option(DFTRACER_UTILS_ENABLE_TSAN "Enable ThreadSanitizer" OFF)
 option(DFTRACER_UTILS_VALGRIND_MODE
        "Build for Valgrind (disables io_uring; bug #428364 in Valgrind <3.23.0)"
        OFF)
+if(DFTRACER_UTILS_VALGRIND_MODE)
+  add_compile_definitions(DFTRACER_UTILS_VALGRIND_MODE=1)
+endif()
 option(DFTRACER_UTILS_ENABLE_MPI "Enable MPI support for call tree" OFF)
 option(
   DFTRACER_USE_ZLIB_NG

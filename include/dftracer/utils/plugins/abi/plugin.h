@@ -35,14 +35,14 @@ typedef struct dftu_plugin {
     void* self; /**< read-only config, shared across slices */
 
     /** Coarse filter this plugin's own predicate is a subset of, or NULL to
-       match all; a DSL string (query::Query::from_string), typically rendered
+       match all; a DSL string (duql::Query::from_string), typically rendered
        from an Expr built with the query builder (F/Field). The host unions
-       every loaded plugin's plan_query into the weakest predicate that still
+       every loaded plugin's plan_duql into the weakest predicate that still
        selects every event any plugin keeps, and pushes that union into the
        shared scan's index prune (Plugins::prune / View::filter) - narrowing
        one plugin's own predicate here would starve the others of events they
        are entitled to, since the scan is shared. */
-    const char* (*plan_query)(void* self);
+    const char* (*plan_duql)(void* self);
     void* (*make_slice)(void* self);
     /** N rows in scan order = N events, one dftu_dataframe per batch. Must be
        synchronous (return NULL); `df` is owned by the host and valid only for
@@ -82,9 +82,8 @@ typedef struct dftu_plugin {
        what it reads is the projection that avoids them.
 
        Names are batch column names as on_batch sees them: "dur", "cat",
-       "fhash", an arg as "args.<key>", a resolved column as
-       "resolved.fhash.path". A column that is not listed is absent from the
-       frame, so a lookup for it returns NULL.
+       "fhash", an arg as "args.<key>". A column that is not listed is absent
+       from the frame, so a lookup for it returns NULL.
 
        Ignored for a plugin that registered states: they are handed the same
        frame, and what they read cannot be seen from the slice that declared
@@ -111,7 +110,7 @@ typedef struct dftu_plugin {
        (a transform that also accumulates does so inside the call, on the
        frame it was given). The batch it receives is the whole one, `reads`
        is ignored for a transform; a later plugin still gets its own `reads`
-       projection, by name, of the rewritten frame, and its plan_query is
+       projection, by name, of the rewritten frame, and its plan_duql is
        re-applied to the rewritten rows. Order it with provides / consumes:
        a plugin that must see the rewritten batch consumes a name this one
        provides. Synchronous; the frame is valid only for the call. */
@@ -132,7 +131,7 @@ typedef struct dftu_plugin {
    die when the factory returns; only log() is safe to keep using, and only
    for the duration of the call.
 
-   The returned descriptor is still pure data: plan_query, provides and consumes
+   The returned descriptor is still pure data: plan_duql, provides and consumes
    are read after every factory has run, so registering here does not reorder
    the fold or change the prune. */
 typedef dftu_plugin* (*dftu_plugin_factory)(dftu_plugin_host* h,

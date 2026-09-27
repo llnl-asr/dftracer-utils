@@ -30,6 +30,8 @@ struct TimeRole {};
 template <TimeUnit UNIT = TimeUnit::US>
 struct DurationRole {};
 struct EntityRole {};
+struct LaneRole {};
+struct NameRole {};
 
 /// A json field's value: canonical JSON text.
 struct Json {
@@ -106,6 +108,14 @@ template <FieldType TYPE>
 void set_option(index::FieldSpec& f, EntityRole*) {
     f.role = Role::ENTITY;
 }
+template <FieldType TYPE>
+void set_option(index::FieldSpec& f, LaneRole*) {
+    f.role = Role::LANE;
+}
+template <FieldType TYPE>
+void set_option(index::FieldSpec& f, NameRole*) {
+    f.role = Role::NAME;
+}
 template <FieldType TYPE, TimeUnit UNIT>
 void set_option(index::FieldSpec& f, TimeRole<UNIT>*) {
     static_assert(NUMERIC<TYPE>,
@@ -178,9 +188,10 @@ void record_fields(std::vector<index::FieldSpec>& out,
 }  // namespace detail
 
 /// The spec of schema class `T`: an aggregate whose members are all
-/// index::Field, with a `static constexpr std::string_view id` and
-/// optionally `using extends =` another schema class (schemas::Generic when
-/// absent). A member of another type does not compile.
+/// index::Field, with a `static constexpr std::string_view id`, optionally
+/// `using extends =` another schema class (schemas::Generic when absent)
+/// and optionally a `static constexpr std::string_view SOURCE` holding its
+/// duql source members. A member of another type does not compile.
 template <typename T>
 SchemaSpec schema_spec() {
     static_assert(std::is_aggregate_v<T>, "a schema class is an aggregate");
@@ -188,6 +199,7 @@ SchemaSpec schema_spec() {
     spec.id = std::string(T::id);
     if constexpr (requires { typename T::extends; })
         spec.extends = std::string(T::extends::id);
+    if constexpr (requires { T::SOURCE; }) spec.source = std::string(T::SOURCE);
     detail::record_fields<T>(
         spec.fields, std::make_index_sequence<detail::member_count<T>()>{});
     return spec;

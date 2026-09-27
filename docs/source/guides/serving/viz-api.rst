@@ -46,8 +46,8 @@ Trace Event JSON for rendering a timeline.
      - Keep only events in this category.
    * - ``file``
      - Scan only this one indexed file (by path), instead of every file.
-   * - ``query``
-     - A :doc:`../core/query-dsl` predicate, e.g. ``dur >= 1000``, ANDed onto
+   * - ``duql``
+     - A :doc:`../core/duql` predicate, e.g. ``dur >= 1000``, ANDed onto
        the other filters.
    * - ``lanes``
      - A JSON array of ``{"field": ..., "value": ...}`` objects (or one such
@@ -71,8 +71,8 @@ Trace Event JSON for rendering a timeline.
      - ``1`` (default) sends/receives timestamps relative to the trace's
        global minimum; ``0`` uses absolute timestamps.
 
-``lanes`` and ``filters`` both compile down to the same query-DSL predicate
-that ``query`` accepts; pass whichever shape is convenient for your client -
+``lanes`` and ``filters`` both compile down to the same duql predicate
+that ``duql`` accepts; pass whichever shape is convenient for your client -
 they combine with AND.
 
 Other visualization routes
@@ -89,7 +89,7 @@ Other visualization routes
        track. Extra: ``width`` (default ``1920``, sets the fold cutoff),
        ``group_by`` (comma-separated column names to key blocks by, e.g.
        ``pid,tid``). ``summary`` defaults to ``2`` here (vs. ``1`` for
-       ``/events``). Same ``query``/``lanes``/``filters``/``file``/
+       ``/events``). Same ``duql``/``lanes``/``filters``/``file``/
        ``ts_normalize`` as ``/events``.
    * - ``/api/viz/breaks``
      - Globally-idle time gaps and multi-run detection, for drawing "run"
@@ -98,7 +98,7 @@ Other visualization routes
    * - ``/api/viz/counters``
      - Read/write bytes and I/O op counts per time bucket (``ph="C"``
        events). Extra: ``buckets`` (target bucket count, default ``800``,
-       clamped to ``[16, 4000]``), ``query``.
+       clamped to ``[16, 4000]``), ``duql``.
    * - ``/api/viz/proctree``
      - Inferred process/fork hierarchy with host, rank, and I/O per process.
        Param: ``file`` (limit to one trace file), ``ts_normalize``. No time
@@ -110,7 +110,7 @@ Other visualization routes
      - Per-name (or per-``group``) aggregation over ``[begin, end]`` - count,
        total/avg/min/max duration, and wall-time coverage. Extra: ``group``
        (``name`` default, or ``cat``/``pid``/``fhash``/``file``), plus the
-       same ``query``/``lanes``/``filters``/``file``/``pid``/``tid`` filters
+       same ``duql``/``lanes``/``filters``/``file``/``pid``/``tid`` filters
        as ``/events``.
    * - ``/api/viz/calltree``
      - A merged flamegraph tree built from ts/dur containment across the
@@ -119,7 +119,7 @@ Other visualization routes
    * - ``/api/viz/histogram``
      - The duration distribution of matching events: percentiles (p50/p90/
        p95/p99) and a log-spaced bucket histogram. Extra: ``buckets``
-       (bucket count, default ``40``, clamped to ``[4, 200]``), ``query``.
+       (bucket count, default ``40``, clamped to ``[4, 200]``), ``duql``.
    * - ``/api/viz/layers``
      - The whole-trace operation-name to category map, plus declared vs.
        I/O-touched file counts. No params.
@@ -166,6 +166,6 @@ See also
 
 - :doc:`http-server` - starting the server, the shared ``/api/*`` data
   routes, and request cancellation.
-- :doc:`../core/query-dsl` - the predicate language accepted by ``query``,
+- :doc:`../core/duql` - the predicate language accepted by ``duql``,
   and what ``lanes``/``filters`` compile into.
 - :doc:`../../trace-viewer` - the bundled web UI built on these routes.

@@ -118,7 +118,7 @@ run_cpp() {
   # workers / spawn handoff threads in tight loops and livelock under it (they
   # exist for the tsan/asan presets, which cover their threading). Their memory
   # paths are still exercised by the other pipeline tests that do run here.
-  local default_exclude="test_reader_robustness|test_blocking_handoff|test_dynamic_workers"
+  local default_exclude="test_reader_robustness|test_blocking_handoff|test_dynamic_workers|test_view_duql_joins"
   local exclude_pat="${VALGRIND_CTEST_EXCLUDE:-$default_exclude}"
 
   local selector

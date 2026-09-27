@@ -1,6 +1,7 @@
 #include <dftracer/utils/core/common/to_chars.h>
 #include <dftracer/utils/json/canonical.h>
 #include <dftracer/utils/json/json_escape.h>
+#include <dftracer/utils/json/record_parser.h>
 
 #include <algorithm>
 #include <vector>
@@ -13,8 +14,8 @@ void append_canonical_json(std::string& out, simdjson::dom::element v) {
         case T::OBJECT: {
             std::vector<std::pair<std::string_view, simdjson::dom::element>>
                 members;
-            for (auto kv : v.get_object().value_unsafe())
-                members.emplace_back(kv.key, kv.value);
+            const simdjson::dom::object obj = v.get_object().value_unsafe();
+            for (auto kv : obj) members.emplace_back(kv.key, kv.value);
             std::stable_sort(
                 members.begin(), members.end(),
                 [](const auto& a, const auto& b) { return a.first < b.first; });
@@ -32,7 +33,8 @@ void append_canonical_json(std::string& out, simdjson::dom::element v) {
         case T::ARRAY: {
             out += '[';
             bool first = true;
-            for (auto el : v.get_array().value_unsafe()) {
+            const simdjson::dom::array arr = v.get_array().value_unsafe();
+            for (auto el : arr) {
                 if (!first) out += ',';
                 first = false;
                 append_canonical_json(out, el);
@@ -71,7 +73,7 @@ void append_canonical_json(std::string& out, simdjson::dom::element v) {
 }
 
 std::string canonical_json_text(std::string_view text) {
-    thread_local simdjson::dom::parser parser;
+    thread_local dftracer::utils::json::RecordParser parser;
     simdjson::dom::element root;
     if (parser.parse(simdjson::padded_string(text)).get(root) !=
         simdjson::SUCCESS)

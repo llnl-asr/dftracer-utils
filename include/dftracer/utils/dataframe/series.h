@@ -330,6 +330,15 @@ class Series {
     /// bump, no data copy).
     Series share() const noexcept { return Series{dftu_series_share(handle_)}; }
 
+    /// Whether this is a JSON column: String values of canonical JSON text.
+    bool is_json() const noexcept { return dftu_series_is_json(handle_) != 0; }
+
+    /// This String column as a JSON column, sharing its buffers; the caller
+    /// asserts each value is canonical JSON text. Invalid for another type.
+    Series as_json() const noexcept {
+        return Series{dftu_series_mark_json(handle_)};
+    }
+
     /// A view of the FLAT rows [offset, offset+len); invalid unless FLAT and
     /// fixed-width. Zero-copy for the values; a null bitmap is shared when the
     /// offset is byte-aligned and re-packed to bit 0 otherwise.
@@ -506,9 +515,9 @@ class Series {
     Series str_contains(std::string_view needle) const;
     Series str_starts_with(std::string_view prefix) const;
     Series str_ends_with(std::string_view suffix) const;
-    /// Bool mask: the whole string matches the ECMAScript regex `pattern`.
+    /// Bool mask: the whole string matches the duql regex `pattern`.
     Series str_matches(std::string_view pattern) const;
-    /// Bool mask: the ECMAScript regex `pattern` matches anywhere in the
+    /// Bool mask: the duql regex `pattern` matches anywhere in the
     /// string.
     Series str_search(std::string_view pattern) const;
     /// Bool mask: the string matches the SQL LIKE / glob `pattern` (`%` any

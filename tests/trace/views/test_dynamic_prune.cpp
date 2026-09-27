@@ -9,9 +9,9 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/scalar.h>
+#include <dftracer/utils/duql/builder.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
-#include <dftracer/utils/query/builder.h>
-#include <dftracer/utils/query/query.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
@@ -30,7 +30,7 @@
 
 using namespace dftracer::utils::trace::views::detail;
 using dftracer::utils::StringIntern;
-namespace q = dftracer::utils::query;
+namespace q = dftracer::utils::duql;
 namespace scan = dftracer::utils::trace::views::detail::scan;
 using scan::ScanPlan;
 
@@ -82,7 +82,7 @@ std::vector<std::string> matching_names(const NameCollectorFold& f,
 // existing col-vs-scalar translator (translate_leaf) only handles numeric
 // comparisons, so a string-equality predicate is not representable via
 // dataframe::Expr today; `name` stays only for the fold-level test, which
-// builds its query::Query directly and so is not subject to that limit.
+// builds its duql::Query directly and so is not subject to that limit.
 // `per_name` events for each of three names, one pid per name. The tests that
 // narrow a scan already in flight pass a larger count: the prune can only skip
 // what the producer has not claimed yet, and the producer runs ahead by a
@@ -158,7 +158,7 @@ TEST_SUITE("Dynamic filter pushdown") {
                                              /*checkpoint_size=*/256));
         const std::string idx = determine_index_path(gz, idx_dir);
 
-        ScanPlan plan_ptr = scan::metadata(scan::from_file(gz, idx), false);
+        ScanPlan plan_ptr = scan::from_file(gz, idx);
         const ViewPlan& plan = *plan_ptr;
         ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
 
@@ -235,7 +235,7 @@ TEST_SUITE("Dynamic filter pushdown") {
                                              /*checkpoint_size=*/256));
         const std::string idx = determine_index_path(gz, idx_dir);
 
-        ScanPlan plan_ptr = scan::metadata(scan::from_file(gz, idx), false);
+        ScanPlan plan_ptr = scan::from_file(gz, idx);
         ViewSource src(plan_ptr);
         // A pushed projection fixes every morsel's columns to exactly this
         // list, in this order (see ScanRequest::projection); the unselected
@@ -353,7 +353,7 @@ TEST_SUITE("Dynamic filter pushdown") {
         REQUIRE(dftu_utils_test::build_index(gz, idx_dir,
                                              /*checkpoint_size=*/256));
         const std::string idx = determine_index_path(gz, idx_dir);
-        ScanPlan plan_ptr = scan::metadata(scan::from_file(gz, idx), false);
+        ScanPlan plan_ptr = scan::from_file(gz, idx);
 
         // The build side: one key, pid 3, the last of the three groups, in
         // the scan's own key type.

@@ -24,7 +24,7 @@ Core: the descriptor, the host and the values
 
 ``dftu_plugin`` is the fold a plugin fills (``make_slice`` / ``on_batch`` or
 ``transform`` / ``merge`` / ``on_finalize``, plus the optional ``reads``,
-``plan_query``, ``provides`` / ``consumes``, ``config_keys``, ``bytes`` /
+``plan_duql``, ``provides`` / ``consumes``, ``config_keys``, ``bytes`` /
 ``reclaim``); ``dftu_plugin_host`` is what the host lends back;
 ``dftu_value`` is the config tree.
 
@@ -103,10 +103,10 @@ files, output writers, trace files and Arrow IPC.
 .. doxygenfile:: dftracer/utils/plugins/abi/arrow.h
    :project: dftracer-utils
 
-``dftu.svc.query`` and ``dftu.svc.sketch``: the query DSL against events, and
+``dftu.svc.duql`` and ``dftu.svc.sketch``: duql filters against events, and
 quantile sketches.
 
-.. doxygenfile:: dftracer/utils/plugins/abi/query.h
+.. doxygenfile:: dftracer/utils/plugins/abi/duql.h
    :project: dftracer-utils
 
 .. doxygenfile:: dftracer/utils/plugins/abi/sketch.h

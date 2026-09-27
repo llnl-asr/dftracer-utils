@@ -12,6 +12,7 @@
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/event.h>
+#include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
@@ -161,6 +162,44 @@ TEST_SUITE("IndexBuilder") {
 
         CHECK(result.success);
         CHECK(fs::exists(result.index_path));
+    }
+
+    TEST_CASE("Files under different index roots each build into their own") {
+        std::vector<std::string> files;
+        for (const char* name : {"a", "b"}) {
+            auto dir = make_unique_test_path(name);
+            fs::create_directories(dir);
+            const std::string path = (dir / "t.pfw.gz").string();
+            const std::string text = dftu_lines(0, 20);
+            dftracer::utils::utilities::fileio::compress::GzipMemberCompressor
+                comp;
+            auto member = comp.compress_member(text.data(), text.size());
+            REQUIRE(member.has_value());
+            std::ofstream(path, std::ios::binary)
+                .write(reinterpret_cast<const char*>(member->data()),
+                       static_cast<std::streamsize>(member->size()));
+            files.push_back(path);
+        }
+        IndexBuildBatchResult r;
+        run_coro([&](CoroScope& scope) -> coro::CoroTask<void> {
+            auto cfg = std::make_shared<IndexBuildBatchConfig>();
+            cfg->file_paths = files;
+            r = co_await BatchBuilder::process(&scope, std::move(cfg));
+            co_return;
+        });
+        CHECK(r.indexed == 2);
+        REQUIRE(r.results.size() == 2);
+        for (std::size_t i = 0; i < files.size(); ++i) {
+            CAPTURE(files[i]);
+            const std::string idx =
+                dftracer::utils::trace::internal::determine_index_path(files[i],
+                                                                       "");
+            CHECK(r.results[i].index_path == idx);
+            IndexDatabase db(idx, IndexOpenMode::ReadOnly);
+            CHECK(db.get_file_info_id(
+                      dftracer::utils::index::store::internal::get_logical_path(
+                          files[i])) >= 0);
+        }
     }
 
     TEST_CASE("Build with bloom") {

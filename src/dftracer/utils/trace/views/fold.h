@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_FOLD_H
 
 #include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/core/coro/async_semaphore.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/trace/views/coverage.h>
@@ -85,6 +86,10 @@ class Fold {
     /// path pays nothing.
     virtual bool wants_schema() const { return false; }
 
+    /// Whether the fold reads fields it cannot name up front, so a
+    /// path-decoded scan decodes every path for it. ORed across folds.
+    virtual bool reads_every_field() const { return false; }
+
     /// Whether the fold reads metadata (`ph="M"`) records. ORed across folds;
     /// when none does, the scan neither emits them nor reads chunks for them.
     virtual bool wants_metadata() const { return true; }
@@ -101,6 +106,8 @@ class Fold {
     virtual void step(const FoldBatch& batch) = 0;
     virtual void seal_unit(const ScanUnit& unit) = 0;
     virtual void drop_unit(const ScanUnit& unit) = 0;
+    /// A unit the scan passes over unread (covered or pruned mid-scan).
+    virtual void skip_unit(const ScanUnit&) {}
     virtual void merge(Fold& slice) = 0;
 
     /// `covered` bounds what a fold may claim. Returns false to persist
@@ -154,13 +161,14 @@ class DynamicPrune {
 /// ids through it. Units `covered` already accounts for are skipped.
 /// `dyn_prune` (optional), when non-null, is polled per unit so a cursor's
 /// narrow() call mid-scan can still take effect on units not yet claimed.
-coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
-                                 const ViewDefinition& vdef,
-                                 std::span<Fold* const> folds,
-                                 dftracer::utils::StringIntern& intern,
-                                 const CoverageSet* covered = nullptr,
-                                 std::uint64_t limit = 0,
-                                 DynamicPrune* dyn_prune = nullptr);
+/// `gate` (optional) holds one permit per unit a worker may claim; its owner
+/// returns a permit as each unit's output is consumed, which bounds how far
+/// claims run ahead of the oldest open unit.
+coro::CoroTask<ExportStats> fuse(
+    const ViewPlan& plan, const ViewDefinition& vdef,
+    std::span<Fold* const> folds, dftracer::utils::StringIntern& intern,
+    const CoverageSet* covered = nullptr, std::uint64_t limit = 0,
+    DynamicPrune* dyn_prune = nullptr, coro::CoroSemaphore* gate = nullptr);
 
 /// Fields the scanner must capture into each event's args for this plan: the
 /// non-scalar Field group keys and nested agg fields the POD does not natively

@@ -13,6 +13,7 @@
 
 #include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/arrow_bridge.h>
+#include <dftracer/utils/dataframe/internal/ipc.h>
 
 #include <cstdint>
 #include <string>
@@ -49,6 +50,39 @@ DataFrame DataFrame::from_arrow(const ArrowSchema* schema,
     return dftracer::utils::dataframe::dataframe_from_arrow(
         schema, const_cast<ArrowArray*>(array));
 }
+
+#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
+std::optional<DataFrame> frame_from_ipc(std::string_view bytes) {
+    ArrowBuffer buf;
+    ArrowBufferInit(&buf);
+    if (ArrowBufferAppend(&buf, bytes.data(),
+                          static_cast<std::int64_t>(bytes.size())) !=
+        NANOARROW_OK) {
+        ArrowBufferReset(&buf);
+        return std::nullopt;
+    }
+    ArrowIpcInputStream in;
+    if (ArrowIpcInputStreamInitBuffer(&in, &buf) != NANOARROW_OK) {
+        ArrowBufferReset(&buf);
+        return std::nullopt;
+    }
+    ArrowArrayStream stream;
+    if (ArrowIpcArrayStreamReaderInit(&stream, &in, nullptr) != NANOARROW_OK) {
+        in.release(&in);
+        return std::nullopt;
+    }
+    std::optional<DataFrame> out;
+    ArrowSchema schema;
+    if (stream.get_schema(&stream, &schema) == 0) {
+        ArrowArray array;
+        if (stream.get_next(&stream, &array) == 0 && array.release)
+            out = DataFrame::from_arrow(&schema, &array);
+        schema.release(&schema);
+    }
+    stream.release(&stream);
+    return out;
+}
+#endif
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 std::vector<std::uint8_t> DataFrame::to_ipc() const {

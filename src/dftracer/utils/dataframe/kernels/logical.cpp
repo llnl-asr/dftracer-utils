@@ -2,6 +2,7 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/kernels/logical.h>
 
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 
@@ -81,6 +82,45 @@ void mask_tail(std::uint8_t* bits, std::int64_t length) {
             static_cast<std::uint8_t>((1u << static_cast<unsigned>(rem)) - 1);
 }
 
+// Store `valid` as out's validity, or drop it when every row is valid.
+void set_validity(dftu_series* out,
+                  std::shared_ptr<dftracer::utils::dataframe::Buffer> valid,
+                  std::size_t bytes) {
+    mask_tail(valid->data(), out->length);
+    std::int64_t set = 0;
+    const std::uint8_t* pv = valid->data();
+    for (std::size_t i = 0; i < bytes; ++i) set += std::popcount(pv[i]);
+    out->null_count = out->length - set;
+    if (out->null_count != 0) out->validity = std::move(valid);
+}
+
+// Kleene AND/OR: a row is known when either side decides it (a valid NO for
+// AND, a valid YES for OR) or both are valid. A null row stores data 0, so a
+// selection over data bits alone never keeps it.
+void kleene(const dftu_series* a, const dftu_series* b, bool is_and,
+            dftu_series* out, std::size_t bytes) {
+    using dftracer::utils::dataframe::Buffer;
+    const std::uint8_t* pa = a->data->data();
+    const std::uint8_t* pb = b->data->data();
+    const std::uint8_t* va = a->validity ? a->validity->data() : nullptr;
+    const std::uint8_t* vb = b->validity ? b->validity->data() : nullptr;
+    std::shared_ptr<Buffer> valid = Buffer::allocate(bytes);
+    std::uint8_t* po = out->data->data();
+    std::uint8_t* pv = valid->data();
+    for (std::size_t i = 0; i < bytes; ++i) {
+        const std::uint8_t ma = va ? va[i] : 0xFF;
+        const std::uint8_t mb = vb ? vb[i] : 0xFF;
+        const unsigned ta = pa[i] & ma, fa = ~pa[i] & ma;
+        const unsigned tb = pb[i] & mb, fb = ~pb[i] & mb;
+        const unsigned t = is_and ? ta & tb : ta | tb;
+        const unsigned f = is_and ? fa | fb : fa & fb;
+        po[i] = static_cast<std::uint8_t>(t);
+        pv[i] = static_cast<std::uint8_t>(t | f);
+    }
+    mask_tail(po, out->length);
+    set_validity(out, std::move(valid), bytes);
+}
+
 }  // namespace
 
 dftu_series* dftu_series_logical(const dftu_series* a, const dftu_series* b,
@@ -109,6 +149,10 @@ dftu_series* dftu_series_logical(const dftu_series* a, const dftu_series* b,
     std::size_t bytes = buffer_bytes(TypeId::Bool, a->length);
     out->data = Buffer::allocate(bytes);
 
+    if (a->validity || b->validity) {
+        kleene(a, b, op == static_cast<int32_t>(LogicalOp::And), out, bytes);
+        return out;
+    }
     const std::uint8_t* pa = a->data->data();
     const std::uint8_t* pb = b->data->data();
     std::uint8_t* po = out->data->data();
@@ -144,6 +188,13 @@ dftu_series* dftu_series_logical_not(const dftu_series* a) {
     const std::uint8_t* pa = a->data->data();
     std::uint8_t* po = out->data->data();
     HWY_DYNAMIC_DISPATCH(NotBytes)(pa, po, bytes);
+    if (a->validity) {
+        const std::uint8_t* va = a->validity->data();
+        for (std::size_t i = 0; i < bytes; ++i)
+            po[i] = static_cast<std::uint8_t>(po[i] & va[i]);
+        out->validity = a->validity;
+        out->null_count = a->null_count;
+    }
     mask_tail(po, a->length);
     return out;
 }

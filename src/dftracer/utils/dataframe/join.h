@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_DATAFRAME_JOIN_H
 
 #include <ankerl/unordered_dense.h>
+#include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/types.h>
 
@@ -19,11 +20,14 @@ bool valid_join_how(JoinHow how) noexcept;
 
 /// Which right columns a join emits, and under what names: every right column
 /// except a key sharing its left key's name, suffixed where it collides with a
-/// left name. Empty for Semi / Anti. Throws std::invalid_argument on an uneven
-/// key list.
+/// left name. Empty for Semi / Anti. Lookup keeps every right column but the
+/// keys, unsuffixed; `fills` holds the left column each fills, or -1 when it
+/// is appended. Nest keeps every right column, inside its one list column.
+/// Throws std::invalid_argument on an uneven key list.
 struct JoinRightLayout {
     std::vector<std::size_t> keep;
     std::vector<std::string> names;
+    std::vector<std::int64_t> fills;
 };
 JoinRightLayout join_right_layout(const std::vector<std::string>& left_names,
                                   const std::vector<std::string>& right_names,
@@ -68,7 +72,9 @@ class HashJoin {
         const std::vector<std::string>& left_names) const;
 
     /// Join one left chunk. Throws std::out_of_range if a left key is absent;
-    /// std::invalid_argument if a key pair's types differ.
+    /// std::invalid_argument if a key pair's types differ (not for Lookup or
+    /// Nest), or for a Lookup key whose right rows differ or a filled left
+    /// cell that holds a value.
     DataFrame probe(const DataFrame& left);
 
     /// The unmatched right rows of a Right / Outer join: a left column is
@@ -85,6 +91,21 @@ class HashJoin {
    private:
     std::vector<std::int64_t> left_key_indices(
         const std::vector<std::string>& left_names) const;
+    /// Lookup and Nest: the probe, rows matched by value.
+    DataFrame probe_values(const DataFrame& left,
+                           const std::vector<std::int64_t>& key_idx);
+    /// The first right row of each group of equal keys, per left row, -1
+    /// when none; by the typed index when every key pair shares an exact
+    /// type, else by value keys.
+    std::vector<std::int64_t> heads(const std::vector<Series>& left_keys,
+                                    bool typed);
+    /// The rows of the group whose first row is `head`.
+    void members(std::int64_t head, bool typed,
+                 std::vector<std::int64_t>& out) const;
+    void build_value_index();
+    /// Lookup: per first row of a group of equal keys, -1, or a value column
+    /// in which some row of the group differs from the first.
+    std::vector<std::int64_t> conflicts(bool typed) const;
     /// The key position whose right key shares the name of left column `li`,
     /// or -1.
     std::int64_t shared_key_of(const std::vector<std::string>& left_names,
@@ -106,6 +127,11 @@ class HashJoin {
     std::vector<std::int64_t> direct_;
     std::uint64_t direct_base_ = 0;
     std::vector<std::int64_t> next_;
+    // Lookup and Nest by value: the rows of each value key, in order.
+    StringViewMap<std::vector<std::int64_t>> by_value_;
+    bool value_index_ = false;
+    std::vector<std::int64_t> typed_conflicts_;
+    std::vector<std::int64_t> value_conflicts_;
     std::unique_ptr<std::atomic<std::uint8_t>[]> right_matched_;
     std::size_t right_matched_n_ = 0;
     bool flushed_ = false;

@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_DATAFRAME_MASK_H
 
 #include <dftracer/utils/dataframe/dataframe.h>
-#include <dftracer/utils/query/ast.h>
+#include <dftracer/utils/duql/ast.h>
 
 // The post-materialization predicate backend: evaluate a query AST against an
 // in-memory columnar batch as a SIMD boolean mask. One of the query language's
@@ -12,16 +12,16 @@
 // engine.
 namespace dftracer::utils::dataframe {
 
-/// Evaluate `node` over `batch`, returning a bit-packed Bool mask column
-/// (length
-/// == batch row count). Lowers the columnar subset to dataframe kernels:
-/// numeric compares, string ==/!=, in / not-in (as OR-of-equals), and
-/// and/or/not. Throws DFTUtilsException{query::QueryErrc::Unsupported} for
-/// predicates with no columnar lowering (pattern match, ordered string compare,
-/// a field absent from the batch) - the caller should use the scan-time
-/// evaluator for those.
+/// Evaluate `node` over `batch`, returning a Bool mask column of length
+/// batch row count under three-valued logic: a missing column, a null cell or
+/// a type mismatch is UNKNOWN (null), and and/or/not are Kleene. An UNKNOWN
+/// row stores data 0, so a filter by the mask keeps only TRUE rows. An
+/// expression leaf is evaluated row by row. Throws
+/// DFTUtilsException{duql::DuqlErrc::Unsupported} for pattern match, any(),
+/// ordered comparison on a string or bool column, and an expression on a
+/// column that is not bool, integer, float or string.
 dftracer::utils::dataframe::Series evaluate_mask(
-    const dftracer::utils::query::QueryNode& node,
+    const dftracer::utils::duql::QueryNode& node,
     const dftracer::utils::dataframe::DataFrame& batch);
 
 }  // namespace dftracer::utils::dataframe

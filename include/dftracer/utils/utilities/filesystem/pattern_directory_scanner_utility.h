@@ -7,9 +7,26 @@
 
 #include <algorithm>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace dftracer::utils::utilities::filesystem {
+
+/// The suffixes directory discovery lists as traces: JSON records, one per
+/// line, in .pfw, .jsonl or .ndjson files, plain or gzip. A .json file is
+/// not listed, since directories hold other JSON such as summaries.
+inline const std::vector<std::string>& trace_file_patterns() {
+    static const std::vector<std::string> PATTERNS = {
+        ".pfw", ".pfw.gz", ".jsonl", ".jsonl.gz", ".ndjson", ".ndjson.gz"};
+    return PATTERNS;
+}
+
+/// Whether `path` ends in one of trace_file_patterns().
+inline bool is_trace_file(std::string_view path) {
+    const auto& patterns = trace_file_patterns();
+    return std::any_of(patterns.begin(), patterns.end(),
+                       [&](const std::string& p) { return path.ends_with(p); });
+}
 
 /**
  * @brief Input for pattern-based directory scanning.

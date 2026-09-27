@@ -3,6 +3,7 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_logic.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_map.h>
 #include <dftracer/utils/json/json_value.h>
+#include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/trace/comparator/comparison_aggregation.h>
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -45,7 +46,7 @@ run_comparison_aggregation(
     CoroScope& /*ctx*/, const std::vector<std::string>& input_files,
     const dftracer::utils::index::schemas::dft::agg::AggregationConfig&
         agg_config,
-    const std::optional<query::Query>& query, const std::string& index_dir,
+    const std::optional<duql::Query>& query, const std::string& index_dir,
     std::size_t checkpoint_size, bool /*force_rebuild*/,
     std::size_t executor_threads) {
     std::vector<views::ViewFile> files;
@@ -71,7 +72,7 @@ run_comparison_aggregation(
     // Mirrors ChunkAggregator's per-event core so results merge identically.
     auto fold = [&config, &intern](Tiers& acc,
                                    const std::vector<std::string_view>& lines) {
-        simdjson::dom::parser parser;
+        dftracer::utils::json::RecordParser parser;
         for (std::string_view line : lines) {
             auto result = parser.parse(line.data(), line.size());
             if (result.error()) continue;

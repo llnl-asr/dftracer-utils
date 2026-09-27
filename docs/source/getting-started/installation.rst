@@ -52,7 +52,7 @@ The build produces five layered component libraries, each as shared and static:
 - ``dftracer_utils_core`` - the async runtime (coroutines, tasks, I/O backend,
   pipelines, RocksDB wrappers, common primitives).
 - ``dftracer_utils_json`` - JSON parsing (simdjson-backed).
-- ``dftracer_utils_query`` - the query DSL (predicate IR, string codec, evaluator).
+- ``dftracer_utils_duql`` - the duql filter language (predicate IR, string codec, evaluator).
 - ``dftracer_utils_dataframe`` - the columnar SIMD engine (``Series`` /
   ``DataFrame``, Highway kernels, the Arrow bridge, query execution / masking).
 - ``dftracer_utils_utilities`` - the domain layer (trace readers, indexer,
@@ -236,7 +236,7 @@ The exported targets are ``dftracer::utils`` (the default alias: shared, falling
 back to static), ``dftracer_utils::shared``, and ``dftracer_utils::static``.
 Linking any of them pulls in all five component libraries and their include
 directories transitively, so no manual ``-I`` / ``-l`` is needed. The stable C ABI (``dftu_dataframe_*``,
-``dftu_query_*``, and the plugin ``abi.h``) ships in the same libraries - a C
+``dftu_duql_*``, and the plugin ``abi.h``) ships in the same libraries - a C
 consumer links the same target and includes the C headers.
 
 For non-CMake build systems, a pkg-config file is installed for each library

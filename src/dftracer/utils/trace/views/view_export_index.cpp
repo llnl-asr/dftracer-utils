@@ -6,12 +6,13 @@
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/index/build/batch_builder.h>
+#include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
-#include <dftracer/utils/index/extensions/dict_fold.h>
 #include <dftracer/utils/index/gzip/gzip_member_record.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/coverage.h>
 #include <dftracer/utils/trace/views/fold.h>
@@ -89,17 +90,18 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
                                  MAX_PRODUCERS));
 
     // Index folds key their state per file_path, so one fold set spans all
-    // parts; finalize (after the members are committed) writes bloom + dict.
+    // parts; finalize (after the members are committed) writes the bloom.
     const std::string index_path = trace::internal::determine_index_path(
         opts.output_path, opts.index_path);
+    const auto& schema = plan_record_schema(plan);
     dftracer::utils::StringIntern intern;
-    dftracer::utils::index::extensions::DictFold dict(
-        intern, plan_record_schema(plan).dictionaries);
-    dftracer::utils::index::extensions::BloomFold bloom(intern);
-    std::array<Fold*, 2> folds{&dict, &bloom};
+    dftracer::utils::index::extensions::BloomFold bloom(
+        intern, dftracer::utils::index::build::for_schema({}, schema));
+    std::array<Fold*, 1> folds{&bloom};
 
     std::vector<PartData> parts;
     std::atomic<std::uint64_t> matched{0}, scanned{0}, units_done{0};
+    std::atomic<std::uint64_t> invalid{0}, unconverted{0};
     bool ok = true;
     // Set when the consumer fails, so producers stop scanning.
     std::atomic<bool> failed{false};
@@ -116,7 +118,7 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
                 cmp::GzipMemberCompressor comp(opts.level);
                 std::string buf;
                 std::vector<std::uint8_t> scratch;
-                simdjson::dom::parser parser;
+                dftracer::utils::json::RecordParser parser;
                 std::string parse_buf;
                 std::vector<FoldEvent> fold_events;
 
@@ -173,9 +175,16 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
                         if (doc.error()) continue;
                         // BloomFold is always in the set, so harvest the
                         // schemaless column leaves in this parse-once pass.
-                        fold_events.push_back(extract_fold_event(
-                            doc.value_unsafe(), intern, /*needs_args=*/true,
-                            /*extra_fields=*/nullptr, /*capture_schema=*/true));
+                        fold_events.push_back(
+                            vdef.by_path
+                                ? decode_record(doc.value_unsafe(), intern,
+                                                /*capture_schema=*/true,
+                                                nullptr, vdef.record_schema,
+                                                nullptr, INDEX_MAX_CHILDREN)
+                                : extract_fold_event(doc.value_unsafe(), intern,
+                                                     /*needs_args=*/true,
+                                                     /*extra_fields=*/nullptr,
+                                                     /*capture_schema=*/true));
                     }
                     ScanUnit unit;
                     unit.file_path = cur_path;
@@ -284,6 +293,12 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
                                     scanned.fetch_add(
                                         b->events_scanned,
                                         std::memory_order_relaxed);
+                                    invalid.fetch_add(
+                                        b->lines_invalid,
+                                        std::memory_order_relaxed);
+                                    unconverted.fetch_add(
+                                        b->values_unconverted,
+                                        std::memory_order_relaxed);
                                     if (b->events.empty()) continue;
                                     batch.clear();
                                     for (const auto& ev : b->events) {
@@ -351,6 +366,7 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
             records::put_file_metadata(*w, fid, member_size, part.total_lines,
                                        part.total_uc, false);
             records::put_manifest(*w, fid, IndexExtension::MEMBERS, 0);
+            records::put_profile(*w, fid, schema.id, schema.params_hash());
         }
         w->commit();
     } catch (const std::exception& e) {
@@ -360,7 +376,7 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
     }
 
     // Members are committed, so the folds' finalize can open the index, resolve
-    // each file, and write the bloom + hash dictionary as a second transaction.
+    // each file, and write the bloom as a second transaction.
     CoverageSet whole_file;
     for (const auto& part : parts) whole_file.add_file(part.path);
     for (auto* f : folds) co_await f->finalize(whole_file);
@@ -370,6 +386,8 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
     st.chunks_scanned = units.size();
     st.events_matched = matched.load(std::memory_order_relaxed);
     st.events_scanned = scanned.load(std::memory_order_relaxed);
+    st.lines_invalid = invalid.load(std::memory_order_relaxed);
+    st.values_unconverted = unconverted.load(std::memory_order_relaxed);
     co_return st;
 }
 

@@ -57,10 +57,23 @@ The main view is a Perfetto-style timeline:
 Pan with drag or two-finger swipe; zoom with pinch or ctrl/cmd+wheel; ``W/A/S/D``
 also navigate. Drag on the ruler to measure a range.
 
+Traces of any JSON shape
+------------------------
+
+A file read through a path record schema shows each record as a slice: its
+time and duration roles place it (a record without a duration is an instant),
+its entity and lane roles pick the lane, and its label field names it (the
+name role, else the field named ``name``, else the schema's first string field
+without a role). A record
+without a time is listed under **No time**. Lanes group by host only when the
+schema's source defines a ``hosts`` row set keyed by the entity field. The
+inspector's ``args`` hold the record's own fields, and the query box and the
+selection filters name those fields.
+
 Query, search, and detail
 --------------------------
 
-- **Query box**: filter with the full DSL, e.g. ``dur >= 1000 and cat ==
+- **Query box**: filter with a duql predicate, e.g. ``dur >= 1000 and cat ==
   "POSIX"``. Invalid queries surface the server's error.
 - **Find** highlights matching slices and steps between them.
 - Hover a slice for a tooltip (name, category, duration, pid/tid, args); click

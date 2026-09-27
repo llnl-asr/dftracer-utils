@@ -42,14 +42,38 @@ struct FoldEvent {
     bool by_path = false;
 
     /// A metric (double for reals, int64 for exact integers so values above
-    /// 2^53 survive) or an interned string id (group dimensions), keyed by the
-    /// interned arg-name id.
-    using ArgValue = std::variant<double, std::int64_t, std::uint32_t>;
+    /// 2^53 survive, uint64 only above int64's range) or an interned string
+    /// id (group dimensions), keyed by the interned arg-name id.
+    /// Declared-field values that did not convert and read as null.
+    std::uint16_t unconverted = 0;
+    using ArgValue =
+        std::variant<double, std::int64_t, std::uint32_t, std::uint64_t>;
     std::vector<std::pair<std::uint32_t, ArgValue>> args;
     /// Top-level values for schema fields the POD does not carry as a scalar
     /// (type/ph/id), kept apart from `args` so a same-named args key cannot
     /// shadow the real top-level field. Same encoding as `args`.
     std::vector<std::pair<std::uint32_t, ArgValue>> top_fields;
+
+    /// What `args` and `top_fields` leave out or widen, for filters: a JSON
+    /// null, a bool (also stored there as 0/1), an empty array or object, or
+    /// an array or object whose `args` entry is its canonical JSON text (a
+    /// declared json field).
+    enum class Special : std::uint8_t {
+        NULL_VALUE,
+        FALSE_VALUE,
+        TRUE_VALUE,
+        EMPTY_ARRAY,
+        EMPTY_OBJECT,
+        JSON_ARRAY,
+        JSON_OBJECT,
+    };
+    struct SpecialValue {
+        std::uint32_t key;
+        Special kind;
+        /// Keyed like `top_fields` rather than `args`.
+        bool top = false;
+    };
+    std::vector<SpecialValue> specials;
 
     /// Every scalar or null leaf of the record, arbitrarily nested, as
     /// (interned exact path id -> index::store::PathType): "args.io.off",
@@ -86,13 +110,16 @@ inline simdjson::dom::element resolve_json_path(simdjson::dom::element root,
 }
 
 /// Append `v` under `key_id` when it is a scalar: a string interned, an integer
-/// exact as int64 (a uint64 above INT64_MAX as double), a bool as 0/1. Nulls,
-/// objects and arrays append nothing.
+/// exact as int64 (a uint64 above INT64_MAX as double), a bool as 0/1. A null,
+/// a bool and an empty array or object also go to `specials`; a non-empty
+/// array or object appends nothing.
 inline void append_scalar_arg(
     std::vector<std::pair<std::uint32_t, FoldEvent::ArgValue>>& into,
-    std::uint32_t key_id, simdjson::dom::element v,
-    dftracer::utils::StringIntern& intern) {
+    std::vector<FoldEvent::SpecialValue>& specials, std::uint32_t key_id,
+    simdjson::dom::element v, dftracer::utils::StringIntern& intern,
+    bool top = false) {
     using T = simdjson::dom::element_type;
+    using S = FoldEvent::Special;
     switch (v.type()) {
         case T::STRING:
             into.emplace_back(
@@ -107,20 +134,43 @@ inline void append_scalar_arg(
                          std::numeric_limits<std::int64_t>::max()))
                 into.emplace_back(key_id, static_cast<std::int64_t>(u));
             else
-                into.emplace_back(key_id, static_cast<double>(u));
+                into.emplace_back(key_id, u);
             break;
         }
         case T::DOUBLE:
             into.emplace_back(key_id, v.get_double().value_unsafe());
             break;
-        case T::BOOL:
-            into.emplace_back(
-                key_id, static_cast<std::int64_t>(v.get_bool().value_unsafe()));
+        case T::BOOL: {
+            const bool b = v.get_bool().value_unsafe();
+            into.emplace_back(key_id, static_cast<std::int64_t>(b));
+            specials.push_back(
+                {key_id, b ? S::TRUE_VALUE : S::FALSE_VALUE, top});
             break;
-        default:
+        }
+        case T::NULL_VALUE:
+            specials.push_back({key_id, S::NULL_VALUE, top});
+            break;
+        case T::ARRAY:
+            if (v.get_array().value_unsafe().size() == 0)
+                specials.push_back({key_id, S::EMPTY_ARRAY, top});
+            break;
+        case T::OBJECT:
+            if (v.get_object().value_unsafe().size() == 0)
+                specials.push_back({key_id, S::EMPTY_OBJECT, top});
+            break;
+        case T::BIGINT:
+            // Wider than 64 bits: kept exact as its digits.
+            into.emplace_back(
+                key_id, intern.get_or_insert(v.get_bigint().value_unsafe()));
             break;
     }
 }
+
+/// Flatten the array or object `v` into `ev.args` under `path` the way
+/// dftracer args are flattened (`path.0`, `path.key`).
+void flatten_container(FoldEvent& ev, std::string path,
+                       simdjson::dom::element v,
+                       dftracer::utils::StringIntern& intern);
 
 /// Capture a field the POD does not natively carry (top-level type/ph/id, or a
 /// nested a.b/a[0]), JSON type preserved. A name that misses at the event root
@@ -144,7 +194,12 @@ inline void capture_extra_field(FoldEvent& ev, simdjson::dom::element root,
     auto& into = schema_field ? ev.top_fields : ev.args;
     for (const auto& [k, existing] : into)
         if (k == key_id) return;
-    append_scalar_arg(into, key_id, v, intern);
+    for (const auto& s : ev.specials)
+        if (s.key == key_id && s.top == schema_field) return;
+    if (!schema_field && (v.is_array() || v.is_object()))
+        flatten_container(ev, name, v, intern);
+    else
+        append_scalar_arg(into, ev.specials, key_id, v, intern, schema_field);
 }
 
 /// Enumerate every scalar or null leaf of `root` (arbitrarily nested) into
@@ -158,15 +213,22 @@ void capture_schema_leaves(FoldEvent& ev, simdjson::dom::element root,
 /// with `capture_schema`, every leaf in `schema_leaves`. With `paths` (sorted,
 /// borrowed), only those leaves. With `record_schema`, a declared field's
 /// value is converted to its type (null when it does not convert) and role
-/// fields set ts, dur and pid in microseconds; otherwise the fixed fields are
+/// fields set ts, dur, pid, tid and name; otherwise the fixed fields are
 /// unset. `path_fields`, aligned with `paths`, gives the declared field at
-/// each path so no lookup runs per leaf.
+/// each path so no lookup runs per leaf. With `max_children`, an array or
+/// object below the root with more children is one leaf: its canonical JSON
+/// text at its path.
 FoldEvent decode_record(
     simdjson::dom::element root, dftracer::utils::StringIntern& intern,
     bool capture_schema = true, const std::vector<std::string>* paths = nullptr,
     const dftracer::utils::index::RecordSchema* record_schema = nullptr,
     const std::vector<const dftracer::utils::index::FieldSpec*>* path_fields =
-        nullptr);
+        nullptr,
+    std::size_t max_children = 0);
+
+/// The max_children an index build decodes with, so a record of huge arrays
+/// or maps adds a bounded number of catalog paths and zone keys.
+inline constexpr std::size_t INDEX_MAX_CHILDREN = 256;
 
 /// Build an owned event from already-parsed scalars + the args element, for
 /// callers (like the index parse) that have run DFTracerEvent::parse_scalars

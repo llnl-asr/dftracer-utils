@@ -1,5 +1,6 @@
 #include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
+#include <dftracer/utils/json/record_parser.h>
 #include <simdjson.h>
 
 #include <algorithm>
@@ -222,7 +223,7 @@ StringViewMap<std::string> ChunkStatistics::parse_string_map_json(
     const std::string& json) {
     StringViewMap<std::string> result;
 
-    simdjson::dom::parser parser;
+    dftracer::utils::json::RecordParser parser;
     auto parse_result = parser.parse(json.data(), json.size());
     if (parse_result.error()) return result;
 
@@ -330,7 +331,7 @@ StringViewMap<double> ChunkStatistics::parse_double_map_json(
     const std::string& json) {
     StringViewMap<double> result;
 
-    simdjson::dom::parser parser;
+    dftracer::utils::json::RecordParser parser;
     auto parse_result = parser.parse(json.data(), json.size());
     if (parse_result.error()) return result;
 
@@ -363,7 +364,7 @@ StringViewMap<utilities::common::statistics::Log2Histogram>
 ChunkStatistics::parse_histogram_map_json(const std::string& json) {
     StringViewMap<utilities::common::statistics::Log2Histogram> result;
 
-    simdjson::dom::parser parser;
+    dftracer::utils::json::RecordParser parser;
     auto parse_result = parser.parse(json.data(), json.size());
     if (parse_result.error()) return result;
 

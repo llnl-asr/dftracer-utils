@@ -50,7 +50,7 @@ struct FileValResult {
     std::string error;  // set when the file could not be read at all
 };
 
-// Explicit --files plus a recursive .pfw/.pfw.gz scan of the directory. The
+// Explicit --files plus a recursive trace file scan of the directory. The
 // scanner is spawned on the scope so its recursive walk fans out per
 // subdirectory (parallel readdir); sizes are not needed here.
 coro::CoroTask<std::vector<std::string>> collect_files(
@@ -167,7 +167,7 @@ static coro::CoroTask<int> run_validate(const ValidateArgParse* cli) {
 
     if (results.empty()) {
         DFTRACER_UTILS_LOG_ERROR(
-            "%s", "No .pfw or .pfw.gz files to validate (pass -d or --files)");
+            "%s", "No trace files to validate (pass -d or --files)");
         co_return 1;
     }
 

@@ -74,9 +74,7 @@ class Cursor {
     /// answer from data it already holds. Returns false when it cannot, and
     /// the caller must await next() instead. A true return with `out` unset
     /// is end of stream, exactly as next() reports it.
-    virtual bool try_next(std::int64_t max_rows, std::optional<Morsel>& out) {
-        (void)max_rows;
-        (void)out;
+    virtual bool try_next(std::int64_t, std::optional<Morsel>&) {
         return false;
     }
     /// Output column names, when they are only known after producing (a
@@ -97,10 +95,7 @@ class Cursor {
     /// cursor does, never the result. The return value reports whether the
     /// cursor did anything with it, for diagnostics only. Modelled on Velox's
     /// canAddDynamicFilter/addDynamicFilter.
-    virtual coro::CoroTask<bool> narrow(const Expr& predicate) {
-        (void)predicate;
-        co_return false;
-    }
+    virtual coro::CoroTask<bool> narrow(const Expr&) { co_return false; }
 
     /// The bytes this cursor holds resident beyond one in-flight morsel: a
     /// build table, a spool, a cache. The driver sums it over the chain
@@ -113,8 +108,7 @@ class Cursor {
     /// cursor may free less, or nothing, and the result it produces must not
     /// change. The driver calls it when the chain's resident total runs past
     /// the budget, largest holder first. Modelled on Velox's reclaim.
-    virtual coro::CoroTask<std::uint64_t> reclaim(std::uint64_t want) {
-        (void)want;
+    virtual coro::CoroTask<std::uint64_t> reclaim(std::uint64_t) {
         co_return 0;
     }
     /// Enrol this cursor in a plan's reclaim registry: the set of stages the
@@ -260,49 +254,36 @@ class Source {
     /// whole-column, matching the eager path instead of paying the morsel tax.
     virtual const DataFrame* as_frame() const { return nullptr; }
 
-    virtual std::optional<SourceApplication> apply_filter(
-        const Expr& predicate) const {
-        (void)predicate;
+    virtual std::optional<SourceApplication> apply_filter(const Expr&) const {
         return std::nullopt;
     }
     virtual std::optional<SourceApplication> apply_projection(
-        const std::vector<NamedExpr>& exprs) const {
-        (void)exprs;
+        const std::vector<NamedExpr>&) const {
         return std::nullopt;
     }
     virtual std::optional<SourceApplication> apply_aggregation(
-        const AggregateSpec& spec) const {
-        (void)spec;
+        const AggregateSpec&) const {
         return std::nullopt;
     }
-    virtual std::optional<SourceApplication> apply_sort(
-        const SortSpec& spec) const {
-        (void)spec;
+    virtual std::optional<SourceApplication> apply_sort(const SortSpec&) const {
         return std::nullopt;
     }
     /// The first `k` rows of apply_sort(spec). Exact means no more than `k`
     /// rows come back, already in order.
-    virtual std::optional<SourceApplication> apply_topn(const SortSpec& spec,
-                                                        std::int64_t k) const {
-        (void)spec;
-        (void)k;
+    virtual std::optional<SourceApplication> apply_topn(const SortSpec&,
+                                                        std::int64_t) const {
         return std::nullopt;
     }
     /// Rows [offset, offset + n) in source order.
-    virtual std::optional<SourceApplication> apply_limit(std::int64_t offset,
-                                                         std::int64_t n) const {
-        (void)offset;
-        (void)n;
+    virtual std::optional<SourceApplication> apply_limit(std::int64_t,
+                                                         std::int64_t) const {
         return std::nullopt;
     }
     /// The last `n` rows in source order.
-    virtual std::optional<SourceApplication> apply_tail(std::int64_t n) const {
-        (void)n;
+    virtual std::optional<SourceApplication> apply_tail(std::int64_t) const {
         return std::nullopt;
     }
-    virtual std::optional<SourceApplication> apply_join(
-        const JoinSpec& spec) const {
-        (void)spec;
+    virtual std::optional<SourceApplication> apply_join(const JoinSpec&) const {
         return std::nullopt;
     }
 
@@ -326,10 +307,7 @@ class Source {
     /// std::nullopt (the default) means the source only batches through
     /// collect_batch().
     virtual std::optional<std::vector<std::unique_ptr<Cursor>>> open_batch(
-        std::vector<std::shared_ptr<const Source>> members,
-        std::uint64_t memory_budget) const {
-        (void)members;
-        (void)memory_budget;
+        std::vector<std::shared_ptr<const Source>>, std::uint64_t) const {
         return std::nullopt;
     }
 
@@ -472,6 +450,13 @@ class LazyFrame {
     /// A deterministic n-row sample (mix64 min-hash). Streaming: bounded to n
     /// rows regardless of input size.
     LazyFrame sample(std::int64_t n, std::uint64_t seed = 0) const;
+    /// For each distinct `keys` tuple, the first `n` rows with that key, in
+    /// input order. A null key value is its own key, and equal numbers are one
+    /// key whatever their numeric type. Empty `keys` is head(n); n <= 0 keeps
+    /// no rows. Streams input and output; holds one counter per distinct key.
+    /// Throws std::out_of_range for a key the schema lacks, when the schema
+    /// is known.
+    LazyFrame head_by(std::vector<std::string> keys, std::int64_t n) const;
     /// One Bool column: true where the whole row is duplicated. Two-pass
     /// (count, then per-row mask in input order); state is the count map.
     LazyFrame is_duplicated() const;
@@ -491,10 +476,11 @@ class LazyFrame {
     /// Hash join with `other` on `left_on[i]` = `right_on[i]`, as
     /// DataFrame::join. `other` is collected in full when this plan runs (the
     /// build side, bounded by the right row count); this plan streams through
-    /// it morsel by morsel, so Inner / Left / Semi / Anti / Cross hold no
-    /// left state and Right / Outer add one match bit per right row. An
-    /// optimizer barrier: no filter or projection moves across it. An absent
-    /// key or a key type mismatch is reported at collect().
+    /// it morsel by morsel, so Inner / Left / Semi / Anti / Cross / Lookup /
+    /// Nest hold no left state and Right / Outer add one match bit per right
+    /// row. An optimizer barrier: no filter or projection moves across it.
+    /// An absent key, a key type mismatch or a Lookup conflict is reported at
+    /// collect().
     LazyFrame join(LazyFrame other, std::vector<std::string> left_on,
                    std::vector<std::string> right_on,
                    JoinHow how = JoinHow::Inner,
@@ -524,7 +510,7 @@ class LazyFrame {
     /// op's contract (a window keeps its input and appends its specs), else
     /// data-dependent (schema() empty until collect()). Throws
     /// std::invalid_argument if no such op is registered, it is not a
-    /// table -> table op, an operand has no owned form (EXPR / QUERY / LAZY)
+    /// table -> table op, an operand has no owned form (EXPR / DUQL / LAZY)
     /// or `others` does not match the op's frame operands.
     LazyFrame frame_op(std::string name, OpArgs args,
                        std::vector<LazyFrame> others = {},

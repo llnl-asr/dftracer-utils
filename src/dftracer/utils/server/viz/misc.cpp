@@ -4,10 +4,10 @@
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
-#include <dftracer/utils/query/query.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
 #include <dftracer/utils/server/json_builder.h>
@@ -18,6 +18,7 @@
 #include <dftracer/utils/server/viz/density.h>
 #include <dftracer/utils/server/viz/handlers.h>
 #include <dftracer/utils/server/viz/internal.h>
+#include <dftracer/utils/server/viz/record_event.h>
 #include <dftracer/utils/server/viz/scan.h>
 #include <dftracer/utils/server/viz/summary_build.h>
 #include <dftracer/utils/server/viz_api.h>
@@ -95,16 +96,18 @@ coro::CoroTask<HttpResponse> handle_viz_columns(const HttpRequest& /*req*/,
     all_files.reserve(index.files().size());
     for (const auto& f : index.files()) all_files.push_back(&f);
     views::View v = views::View::from_files(to_view_files(all_files));
-    // This endpoint offers groupable columns; the pid/tid/ts/dur axis fields
-    // are timeline lanes, not group options, so drop them from
-    // View::column_info().
+    // This endpoint offers groupable columns; the time and duration axis
+    // fields, and dftracer's pid/tid lanes, are not group options, so drop
+    // them from View::column_info(). A path schema's entity stays groupable.
+    const TraceFields fields(index.record_schema());
+    auto axis = [&fields](const std::string& name) {
+        return name == fields.time || name == fields.duration ||
+               (!fields.by_path &&
+                (name == fields.entity || name == fields.lane));
+    };
     std::vector<views::ColumnInfo> schema;
-    for (auto& c : v.column_info()) {
-        if (c.name == "pid" || c.name == "tid" || c.name == "ts" ||
-            c.name == "dur")
-            continue;
-        schema.push_back(std::move(c));
-    }
+    for (auto& c : v.column_info())
+        if (!axis(c.name)) schema.push_back(std::move(c));
 
     auto& b = scratch_json_builder();
     b.start_object();

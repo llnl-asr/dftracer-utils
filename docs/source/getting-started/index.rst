@@ -30,7 +30,7 @@ Next
 When the quickstart runs, start the graded :doc:`../tutorials/index`:
 
 - :doc:`../tutorials/first-analysis` - your first end-to-end analysis.
-- :doc:`../tutorials/analysis-in-depth` - derived columns, the query DSL, and
+- :doc:`../tutorials/analysis-in-depth` - derived columns, duql filters, and
   DataFrame/Series operations.
 - :doc:`../tutorials/extending-the-engine` - author a plugin over the fused scan.
 

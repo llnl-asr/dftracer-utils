@@ -8,17 +8,18 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
-#include <dftracer/utils/index/plan/resolved_field_rewriter.h>
+#include <dftracer/utils/index/plan/rowsets.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
-#include <dftracer/utils/query/query.h>
 #include <dftracer/utils/trace/internal/utils.h>
+#include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
@@ -170,11 +171,12 @@ const std::vector<std::string> QUERIES = {
     R"(ts >= 1400000 and ts <= 1450000)",
     R"(not (cat == "COMPUTE"))",
     R"(name == "thread_name")",
-    R"(resolved.fhash.path == "/data/b.dat")",
-    R"(resolved.fhash.path != "/data/a.dat")",
-    R"(resolved.hhash.name in ["node-2"])",
-    R"(resolved.fhash.path like "%b.dat")",
-    R"(resolved.fhash.path == "/data/a.dat" and name == "read")",
+    // The key sets an arrow into the files and hosts row sets pushes into
+    // the scan, as `fhash -> files.path == "/data/b.dat"` does.
+    R"(fhash in ["92a3b4c5d6e7f809"])",
+    R"(fhash in ["92a3b4c5d6e7f809", "a0b1c2d3e4f50617"])",
+    R"(hhash in ["deadbeefdeadbeef"])",
+    R"(fhash in ["1a2b3c4d5e6f7081"] and name == "read")",
 };
 
 using TimeRange = std::optional<std::pair<double, double>>;
@@ -231,7 +233,7 @@ std::vector<std::string> run_oracle(const Corpus& c) {
         const auto uc = db.query_file_metadata_batch({fid})[fid].max_bytes;
 
         for (const auto& text : QUERIES) {
-            const auto q = query::parse_or_throw(text);
+            const auto q = duql::parse_or_throw(text);
             const std::string key = base + "|" + text + "|";
 
             plan::ChunkPruner pruner;
@@ -258,7 +260,6 @@ std::vector<std::string> run_oracle(const Corpus& c) {
                 vp.files.push_back({trace, index_path, uc, members, 0});
                 vp.query = q;
                 vp.time_range = tr;
-                vp.include_metadata = false;
                 const auto vdef = trace::views::detail::make_vdef(vp, false);
                 std::uint64_t skipped = 0;
                 auto units =
@@ -301,8 +302,7 @@ std::uint64_t count_view(const std::string& trace,
                          const std::string& text) {
     trace::views::detail::ViewPlan vp;
     vp.files.push_back({trace, index_path, 0, 0, 0});
-    vp.query = query::parse_or_throw(text);
-    vp.include_metadata = false;
+    vp.query = duql::parse_or_throw(text);
     const auto vdef = trace::views::detail::make_vdef(vp, false);
     return trace::views::detail::for_each_scanned_batch(
                vp, vdef, 1, 0,
@@ -311,27 +311,22 @@ std::uint64_t count_view(const std::string& trace,
         .events_matched;
 }
 
-// The View scan without pruning: the whole file as one unit, with the query
-// rewritten as gather_units rewrites it.
+// The View scan without pruning: the whole file as one unit.
 std::uint64_t count_view_unpruned(const std::string& trace,
                                   const std::string& index_path,
                                   const std::string& text) {
     trace::views::detail::ViewPlan vp;
-    vp.query = query::parse_or_throw(text);
-    vp.include_metadata = false;
+    vp.query = duql::parse_or_throw(text);
     const auto vdef = trace::views::detail::make_vdef(vp, false);
     store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
     const auto spans = db.query_chunk_spans(
         db.get_file_info_id(store::internal::get_logical_path(trace)));
     REQUIRE_FALSE(spans.empty());
-    std::shared_ptr<const query::Query> q;
-    if (auto rw = plan::rewrite_resolved_fields(*vdef.query, db,
-                                                index::get_schema("dftracer")))
-        q = std::make_shared<const query::Query>(std::move(*rw));
+    std::shared_ptr<const duql::Query> q;
     const trace::views::detail::ScanUnit u{
         trace, index_path, trace::views::detail::checkpoint_size_or_default(0),
         0,     0,          spans.back().uc_offset + spans.back().uc_size,
-        q};
+        0,     q};
     auto run = [&]() -> coro::CoroTask<std::uint64_t> {
         const auto sin =
             trace::views::detail::make_scanner_input(u, vdef, vdef.query);
@@ -383,23 +378,6 @@ TEST_CASE("pruning never drops a matching event") {
     }
 }
 
-TEST_CASE("an unreadable index fails a resolved-field scan") {
-    dftu_utils_test::TestEnvironment env{10};
-    const auto trace = write_trace(env.get_dir(), 1, 50);
-    const auto bogus = env.get_dir() + "/bogus.dftindex";
-    fs::create_directories(bogus);
-
-    trace::views::detail::ViewPlan vp;
-    vp.files.push_back({trace, bogus, 0, 0, 0});
-    vp.query = query::parse_or_throw(R"(resolved.fhash.path == "/data/a.dat")");
-    const auto vdef = trace::views::detail::make_vdef(vp, false);
-    std::uint64_t skipped = 0;
-    CHECK_THROWS_WITH_AS(
-        trace::views::detail::gather_units(vp, vdef, skipped).get(),
-        doctest::Contains("resolving fields failed for index"),
-        DFTUtilsException);
-}
-
 namespace {
 
 std::vector<std::uint64_t> view_chunks(const std::string& trace,
@@ -412,8 +390,7 @@ std::vector<std::uint64_t> view_chunks(const std::string& trace,
     vp.files.push_back({trace, index_path,
                         db.query_file_metadata_batch({fid})[fid].max_bytes,
                         db.query_gzip_members(fid).size(), 0});
-    vp.query = query::parse_or_throw(text);
-    vp.include_metadata = false;
+    vp.query = duql::parse_or_throw(text);
     const auto vdef = trace::views::detail::make_vdef(vp, false);
     std::uint64_t skipped = 0;
     std::vector<std::uint64_t> out;
@@ -485,7 +462,7 @@ TEST_CASE("one extension is rebuilt or dropped without the others") {
     const auto expected_rows = rows(corpus);
     auto ix = index::Indexer::open(corpus.traces, corpus_options(corpus));
     const auto before = manifest_of(ix, trace);
-    for (const char* name : {"core.members", "core.dict", "zonemap", "bloom",
+    for (const char* name : {"core.members", "core.rowset", "zonemap", "bloom",
                              "counts", "postings", "dft.stats"}) {
         CAPTURE(name);
         REQUIRE(before.count(name));
@@ -525,7 +502,7 @@ TEST_CASE("one extension is rebuilt or dropped without the others") {
     CHECK_FALSE(after.count("counts"));
     CHECK(rows(corpus) == expected_rows);
 
-    for (const char* bad : {"core.members", "core.dict", "nope"}) {
+    for (const char* bad : {"core.members", "core.rowset", "nope"}) {
         CAPTURE(bad);
         try {
             ix.drop_extension(bad);
@@ -570,7 +547,7 @@ TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
     CHECK(a == b);
 }
 
-TEST_CASE("a name two traces hash differently resolves to both hashes") {
+TEST_CASE("a name two traces hash differently is an arrow to both hashes") {
     dftu_utils_test::TestEnvironment env{10};
     const auto index_dir = env.get_dir() + "/idx";
     std::vector<std::string> traces;
@@ -597,14 +574,18 @@ TEST_CASE("a name two traces hash differently resolves to both hashes") {
     index::Indexer::open(traces, opts).build();
     const auto index_path =
         trace::internal::determine_index_path(traces[0], index_dir);
-    {
-        store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
-        CHECK(db.dict_keys("file", "path", "/x") ==
-              std::vector<std::string>{"aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"});
-    }
+    const auto rows = index::plan::stored_rowset(
+        {{traces[0], index_path}, {traces[1], index_path}}, "files");
+    REQUIRE(rows);
+    CHECK(rows->num_rows() == 2);
     for (const auto& trace : traces) {
         CAPTURE(trace);
-        CHECK(count_view(trace, index_path, R"(resolved.fhash.path == "/x")") ==
-              20);
+        const auto v = trace::views::View::from_file(trace, index_path);
+        const auto f =
+            dftracer::utils::default_runtime()
+                .submit(
+                    v.duql(R"(where fhash -> files.path == "/x")").collect())
+                .get();
+        CHECK(f.num_rows() == 20);
     }
 }

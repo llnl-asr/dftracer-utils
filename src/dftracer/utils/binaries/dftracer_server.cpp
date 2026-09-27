@@ -197,17 +197,15 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
     auto server_task = make_task(
         [&](CoroScope& ctx) -> coro::CoroTask<void> {
             auto* router_ptr = &router;
-            auto* index_ptr = &trace_index;
 #ifndef DFTRACER_UTILS_VALGRIND_MODE
             // Eager prewarm is a full pass over every file (gzip decompress +
             // scan). Skip it under Valgrind - the summary still builds lazily
             // on the first viz request, so the instrumented server test does
             // not pay this cost up front and blow its time budget.
+            auto* index_ptr = &trace_index;
             ctx.spawn([index_ptr](CoroScope&) -> coro::CoroTask<void> {
                 co_await prewarm_viz_summary(*index_ptr);
             });
-#else
-            (void)index_ptr;
 #endif
             co_await listener.accept_loop(
                 ctx,

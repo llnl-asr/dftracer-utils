@@ -47,7 +47,7 @@ ColumnType merge_column_type(ColumnType a, ColumnType b) {
     if ((a == ColumnType::Int64 && b == ColumnType::Float64) ||
         (a == ColumnType::Float64 && b == ColumnType::Int64))
         return ColumnType::Float64;
-    return ColumnType::String;
+    return ColumnType::Json;
 }
 
 const char* column_type_name(ColumnType t) {
@@ -58,6 +58,8 @@ const char* column_type_name(ColumnType t) {
             return "float64";
         case ColumnType::String:
             return "string";
+        case ColumnType::Json:
+            return "json";
         case ColumnType::Unknown:
             return "";
     }
@@ -662,8 +664,11 @@ std::optional<ColumnType> schema_type(std::uint8_t seen) {
     auto has = [seen](PathType t) {
         return (seen >> static_cast<unsigned>(t)) & 1U;
     };
-    if (has(PathType::STRING) || has(PathType::MIXED))
-        return ColumnType::String;
+    const bool other = has(PathType::UINT) || has(PathType::DOUBLE) ||
+                       has(PathType::BOOL) || has(PathType::INT);
+    if (has(PathType::MIXED) || (has(PathType::STRING) && other))
+        return ColumnType::Json;
+    if (has(PathType::STRING)) return ColumnType::String;
     if (has(PathType::UINT) || has(PathType::DOUBLE))
         return ColumnType::Float64;
     if (has(PathType::BOOL) || has(PathType::INT)) return ColumnType::Int64;
@@ -900,14 +905,6 @@ std::uint64_t get_metadata_field(const rocks::RocksDatabase& db, int file_id,
     return layout::read_u64(std::string_view(*body).substr(idx * 8));
 }
 
-// [dict][0x00], the head of `dict`'s keys of `kind`.
-std::string dict_prefix(std::uint8_t kind, std::string_view dict) {
-    auto key = layout::file_prefix(Ext::DICT, kind, layout::INDEX_WIDE);
-    key.append(dict);
-    key.push_back('\0');
-    return key;
-}
-
 }  // namespace
 
 std::uint64_t IndexDatabase::get_checkpoint_size(int file_id) const {
@@ -922,66 +919,14 @@ std::uint64_t IndexDatabase::get_max_bytes(int file_id) const {
     return get_metadata_field(*impl_->db_, file_id, 2);
 }
 
-std::optional<IndexDatabase::DictRow> IndexDatabase::dict_row(
-    std::string_view dict, std::string_view key) const {
-    if (key.empty()) return std::nullopt;
-    auto k = dict_prefix(layout::dict_kind::ROW, dict);
-    k.append(key);
-    auto body = get(*impl_->db_, Ext::DICT, layout::dict_kind::ROW, k);
+std::optional<std::string> IndexDatabase::rowset(int file_id,
+                                                 std::string_view name) const {
+    if (!extension_current(file_id, Ext::ROWSET)) return std::nullopt;
+    auto body = get(*impl_->db_, Ext::ROWSET, layout::rowset_kind::FRAME,
+                    layout::path_prefix(Ext::ROWSET, layout::rowset_kind::FRAME,
+                                        fid(file_id), name));
     if (!body) return std::nullopt;
-    return layout::decode_dict_row(*body);
-}
-
-std::optional<std::string> IndexDatabase::dict_value(
-    std::string_view dict, std::string_view key, std::string_view field) const {
-    auto row = dict_row(dict, key);
-    if (!row) return std::nullopt;
-    for (auto& [name, value] : *row)
-        if (name == field) return std::move(value);
-    return std::nullopt;
-}
-
-std::vector<std::string> IndexDatabase::dict_keys(
-    std::string_view dict, std::string_view field,
-    std::string_view value) const {
-    auto prefix = dict_prefix(layout::dict_kind::VALUE, dict);
-    prefix.append(field);
-    prefix.push_back('\0');
-    prefix.append(value);
-    prefix.push_back('\0');
-    std::vector<std::string> out;
-    scan_keys(*impl_->db_, Ext::DICT, layout::dict_kind::VALUE, prefix,
-              [&](std::string_view k) {
-                  if (k.size() > prefix.size())
-                      out.emplace_back(k.substr(prefix.size()));
-              });
-    return out;
-}
-
-StringViewMap<std::string> IndexDatabase::dict_field(
-    std::string_view dict, std::string_view field) const {
-    StringViewMap<std::string> out;
-    const auto prefix = dict_prefix(layout::dict_kind::ROW, dict);
-    scan(*impl_->db_, Ext::DICT, layout::dict_kind::ROW, prefix,
-         [&](std::string_view k, std::string_view body) {
-             auto row = layout::decode_dict_row(body);
-             if (!row) return;
-             for (auto& [name, value] : *row)
-                 if (name == field) {
-                     out.emplace(std::string(k.substr(prefix.size())),
-                                 std::move(value));
-                     break;
-                 }
-         });
-    return out;
-}
-
-std::uint64_t IndexDatabase::dict_count(std::string_view dict) const {
-    std::uint64_t n = 0;
-    scan_keys(*impl_->db_, Ext::DICT, layout::dict_kind::ROW,
-              dict_prefix(layout::dict_kind::ROW, dict),
-              [&](std::string_view) { ++n; });
-    return n;
+    return std::string(*body);
 }
 
 }  // namespace dftracer::utils::index::store

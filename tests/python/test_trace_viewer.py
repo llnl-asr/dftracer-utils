@@ -127,7 +127,7 @@ class TestTraceViewer:
             filtered = (
                 TraceViewer(gz)
                 .phase("metadata")
-                .query(Field("args.name") == "time_metric")
+                .filter(Field("args.name") == "time_metric")
                 .collect()
                 .to_arrow()
             )
@@ -138,7 +138,7 @@ class TestTraceViewer:
             none = (
                 TraceViewer(gz)
                 .phase("metadata")
-                .query(Field("args.name") == "nope")
+                .filter(Field("args.name") == "nope")
                 .collect()
                 .to_arrow()
             )
@@ -252,9 +252,9 @@ class TestTraceViewer:
             assert count("aggregated") == 4  # ph="A" folded events, newly selectable
             assert count("metadata") == 2  # ph="M" metadata, aggregated only when selected
 
-    def test_collect_resolves_resolved_fields_per_event(self):
-        # resolved.<key>.<field> columns resolve their key field through the
-        # index dictionaries, as per-event columns and as group keys.
+    def test_arrows_resolve_hashes_through_row_sets(self):
+        # An arrow reads a hash field's row in a row set of the source, as a
+        # per-event column and as a group key.
         with Environment(lines=1) as env:
             rows = [
                 {
@@ -304,60 +304,35 @@ class TestTraceViewer:
                 }
                 for i in range(3)
             ]
-            gz = _make_trace(env, "resolved.pfw.gz", rows)
+            gz = _make_trace(env, "arrows.pfw.gz", rows)
 
-            d = (
-                TraceViewer(gz)
-                .phase("events")
-                .query('name == "read"')
-                .select("name", "resolved.fhash.path", "resolved.hhash.name")
-                .collect()
-                .to_arrow()
-                .to_pydict()
-            )
-            assert d["resolved.fhash.path"] == ["/data/f.dat"] * 3
-            assert d["resolved.hhash.name"] == ["node01"] * 3
+            def rows_of(text):
+                return TraceViewer(gz).duql(text).collect().to_arrow().to_pydict()
 
-            # group_by on the resolved alias resolves the same value.
-            gf = (
-                TraceViewer(gz)
-                .phase("events")
-                .query('name == "read"')
-                .group_by("resolved.fhash.path")
-                .agg("count")
-                .collect()
-                .to_arrow()
-                .to_pydict()
+            d = rows_of(
+                'where name == "read" | derive path = fhash -> files.path,'
+                " host = hhash -> hosts.name | select name, path, host"
             )
-            assert gf["resolved.fhash.path"] == ["/data/f.dat"]
-            gh = (
-                TraceViewer(gz)
-                .phase("events")
-                .query('name == "read"')
-                .group_by("resolved.hhash.name")
-                .agg("count")
-                .collect()
-                .to_arrow()
-                .to_pydict()
-            )
-            assert gh["resolved.hhash.name"] == ["node01"]
+            assert d["path"] == ["/data/f.dat"] * 3
+            assert d["host"] == ["node01"] * 3
 
-            # A key field outside fhash/hhash: the start event's executable.
-            ge = (
-                TraceViewer(gz)
-                .phase("events")
-                .query('resolved.exec_hash.value like "%laghos%"')
-                .group_by("resolved.exec_hash.value")
-                .agg("count")
-                .collect()
-                .to_arrow()
-                .to_pydict()
+            gf = rows_of(
+                'where name == "read" | derive path = fhash -> files.path'
+                " | group path { count = count() }"
             )
-            assert ge["resolved.exec_hash.value"] == ["/opt/laghos"]
+            assert gf["path"] == ["/data/f.dat"]
+            assert gf["count"] == [3]
+
+            ge = rows_of(
+                'where exec_hash -> strings(shash).value like "%laghos%"'
+                " | derive exe = exec_hash -> strings(shash).value"
+                " | group exe { count = count() }"
+            )
+            assert ge["exe"] == ["/opt/laghos"]
             assert ge["count"] == [1]
 
-            with pytest.raises(dftu_utils.DFTUtilsValueError, match="resolved.fhash.path"):
-                TraceViewer(gz).query('resolved.fpath == "/data/f.dat"').collect()
+            with pytest.raises(dftu_utils.DFTUtilsValueError, match="arrow"):
+                TraceViewer(gz).duql('where resolved.fhash.path == "/data/f.dat"').collect()
 
     def test_collect_resolves_fhash_hhash_per_event(self):
         # fhash/hhash are parsed into dedicated fields (not generic args); the
@@ -456,7 +431,7 @@ class TestTraceViewer:
             sel = TraceViewer(gz).select("name", "ts", "ret").collect().to_arrow().to_pydict()
             assert set(sel) == {"name", "ts", "args.ret"}
 
-            # filter narrows the event rows (query DSL still resolves the bare
+            # filter narrows the event rows (duql still resolves the bare
             # arg name).
             assert TraceViewer(gz).filter("ret > 102").collect().height == 2
 
@@ -1183,7 +1158,7 @@ class TestTraceViewer:
             by_type = counts("type", "type")
             assert by_type == {"mpi": 10}
             # The param is still reachable through the explicit args path.
-            assert counts("args.type", "args.type") == {"1": 1, "2": 1, "3": 1, "4": 1, "": 6}
+            assert counts("args.type", "args.type") == {"1": 1, "2": 1, "3": 1, "4": 1, None: 6}
 
     def test_occupancy_invariants_and_cell_knob(self):
         with Environment(lines=1) as env:
@@ -1295,10 +1270,9 @@ class TestTraceViewerSchema:
                 "tags.1",  # nested object + every array element
                 "fhash",
                 "hhash",  # lifted hashes
-                "resolved.fhash.path",
-                "resolved.hhash.name",  # dictionary columns
             ]:
                 assert c in cols, c
+            assert not any(c.startswith("resolved.") for c in cols)
 
     def test_schema_reports_types(self):
         with Environment() as env:
@@ -1312,7 +1286,6 @@ class TestTraceViewerSchema:
             assert sch["tags.0"] == "string"
             assert sch["tags.1"] == "string"
             assert sch["size"] == "float64"  # int in read, float in write
-            assert sch["resolved.fhash.path"] == "string"
 
 
 class TestTraceViewerNestedArgs:

@@ -136,7 +136,7 @@ std::string write_and_index(const std::string& dir, const std::string& name,
     fs::remove(pfw);
     std::string idx = determine_index_path(gz, "");
     StringSink sink;
-    View::from_file(gz, idx).metadata(false).sink_json(sink).get();
+    View::from_file(gz, idx).sink_json(sink).get();
     return gz;
 }
 
@@ -150,16 +150,16 @@ TEST_SUITE("View C ABI") {
 
         dftu_view* v = dftu_view_from_files(paths, idxs, 1);
         REQUIRE(v != nullptr);
-        dftu_query* q = dftu_query_cmp_str("cat", DFTU_QCMP_EQ, "POSIX");
+        dftu_duql* q = dftu_duql_cmp_str("cat", DFTU_DUQL_CMP_EQ, "POSIX");
         REQUIRE(q != nullptr);
         dftu_view* filtered = dftu_view_filter(v, q);
         REQUIRE(filtered != nullptr);
-        dftu_query_free(q);
+        dftu_duql_free(q);
 
         dftu_dataframe* df = dftu_view_collect(filtered, nullptr);
         REQUIRE(df != nullptr);
 
-        View cpp_view = View::from_file(s.gz, s.idx).query(R"(cat == "POSIX")");
+        View cpp_view = View::from_file(s.gz, s.idx).duql(R"(cat == "POSIX")");
         DataFrame cpp_df = run(cpp_view.collect());
 
         CHECK(dftu_dataframe_num_rows(df) == cpp_df.num_rows());
@@ -174,12 +174,195 @@ TEST_SUITE("View C ABI") {
         dftu_view_free(v);
     }
 
+    TEST_CASE("dftu_view_duql runs a pipeline with parameters") {
+        const auto& s = shared_trace();
+        const char* paths[1] = {s.gz.c_str()};
+        const char* idxs[1] = {s.idx.c_str()};
+        dftu_view* v = dftu_view_from_files(paths, idxs, 1);
+        REQUIRE(v != nullptr);
+        const char* text = "where dur > $min | sort ts | take $n | select ts";
+        const char* names[2] = {"min", "n"};
+        const char* values[2] = {"30", "3"};
+
+        char* error = nullptr;
+        dftu_lazyframe* lf = dftu_view_duql(v, text, names, values, 2, &error);
+        REQUIRE(lf != nullptr);
+        CHECK(error == nullptr);
+        dftu_dataframe* df = dftu_lazyframe_collect(lf, 0);
+        REQUIRE(df != nullptr);
+
+        duql::Params p;
+        p.emplace("min", duql::LiteralValue{std::uint64_t{30}});
+        p.emplace("n", duql::LiteralValue{std::uint64_t{3}});
+        const DataFrame want =
+            run(View::from_file(s.gz, s.idx).duql(text, p).collect());
+        REQUIRE(dftu_dataframe_num_rows(df) == 3);
+        for (std::int64_t i = 0; i < 3; ++i)
+            CHECK(abi_num(df, i, "ts") == bnum(want, i, "ts"));
+
+        char* plan = dftu_view_explain_duql(v, text, names, values, 2, nullptr);
+        REQUIRE(plan != nullptr);
+        CHECK(std::string(plan).find("head 3") != std::string::npos);
+        dftu_view_string_free(plan);
+
+        const char* bad[1] = {"n"};
+        const char* bad_value[1] = {"three"};
+        CHECK(dftu_view_duql(v, text, bad, bad_value, 1, &error) == nullptr);
+        REQUIRE(error != nullptr);
+        CHECK(std::string(error).find("$n") != std::string::npos);
+        dftu_view_string_free(error);
+
+        dftu_dataframe_free(df);
+        dftu_lazyframe_free(lf);
+        dftu_view_free(v);
+    }
+
+    TEST_CASE("dftu_view_duql runs a semi-join, an arrow and a lookup") {
+        const auto& s = shared_trace();
+        const char* paths[1] = {s.gz.c_str()};
+        const char* idxs[1] = {s.idx.c_str()};
+        dftu_view* v = dftu_view_from_files(paths, idxs, 1);
+        REQUIRE(v != nullptr);
+        struct Case {
+            const char* text;
+            std::int64_t rows;
+        };
+        const Case cases[] = {
+            {"where name in (from data | where cat == \"STDIO\" | select "
+             "name)",
+             20},
+            {"let cats = where dur == 10 | select name, c = cat; where name "
+             "-> cats.c == \"POSIX\"",
+             30},
+            {"let cats = where dur == 10 | select name, c = cat; lookup cats "
+             "on name | where c == \"POSIX\" | select name, c",
+             30},
+        };
+        for (const auto& c : cases) {
+            CAPTURE(c.text);
+            char* error = nullptr;
+            dftu_lazyframe* lf =
+                dftu_view_duql(v, c.text, nullptr, nullptr, 0, &error);
+            REQUIRE(lf != nullptr);
+            CHECK(error == nullptr);
+            dftu_dataframe* df = dftu_lazyframe_collect(lf, 0);
+            REQUIRE(df != nullptr);
+            const DataFrame want =
+                run(View::from_file(s.gz, s.idx).duql(c.text).collect());
+            CHECK(dftu_dataframe_num_rows(df) == c.rows);
+            CHECK(want.num_rows() == c.rows);
+            dftu_dataframe_free(df);
+            dftu_lazyframe_free(lf);
+        }
+        char* plan = dftu_view_explain_duql(v, cases[1].text, nullptr, nullptr,
+                                            0, nullptr);
+        REQUIRE(plan != nullptr);
+        CHECK(std::string(plan).find("name in (keys of cats) (pushed)") !=
+              std::string::npos);
+        dftu_view_string_free(plan);
+        dftu_view_free(v);
+    }
+
+    TEST_CASE("dftu_view_duql runs a group with a parameter") {
+        const auto& s = shared_trace();
+        const char* paths[1] = {s.gz.c_str()};
+        const char* idxs[1] = {s.idx.c_str()};
+        dftu_view* v = dftu_view_from_files(paths, idxs, 1);
+        REQUIRE(v != nullptr);
+        const char* text =
+            "where dur > $min | group name { n = count(), t = sum(dur) }";
+        const char* names[1] = {"min"};
+        const char* values[1] = {"30"};
+        char* error = nullptr;
+        dftu_lazyframe* lf = dftu_view_duql(v, text, names, values, 1, &error);
+        REQUIRE(lf != nullptr);
+        dftu_dataframe* df = dftu_lazyframe_collect(lf, 0);
+        REQUIRE(df != nullptr);
+
+        duql::Params p;
+        p.emplace("min", duql::LiteralValue{std::uint64_t{30}});
+        const DataFrame want =
+            run(View::from_file(s.gz, s.idx).duql(text, p).collect());
+        REQUIRE(dftu_dataframe_num_rows(df) == want.num_rows());
+        REQUIRE(want.num_rows() == 2);
+        for (std::int64_t i = 0; i < want.num_rows(); ++i) {
+            CHECK(abi_num(df, i, "n") == bnum(want, i, "n"));
+            CHECK(abi_num(df, i, "t") == bnum(want, i, "t"));
+        }
+        CHECK(abi_num(df, 0, "n") == 9);
+
+        dftu_dataframe_free(df);
+        dftu_lazyframe_free(lf);
+        dftu_view_free(v);
+    }
+
+    TEST_CASE("dftu_view_duql runs window and expand") {
+        const auto& s = shared_trace();
+        const char* paths[1] = {s.gz.c_str()};
+        const char* idxs[1] = {s.idx.c_str()};
+        dftu_view* v = dftu_view_from_files(paths, idxs, 1);
+        REQUIRE(v != nullptr);
+        const char* text =
+            "window name sort -dur { r = row_number(), g = dur - lag(dur) }"
+            " | select dur, r, g";
+        char* error = nullptr;
+        dftu_lazyframe* lf =
+            dftu_view_duql(v, text, nullptr, nullptr, 0, &error);
+        REQUIRE(lf != nullptr);
+        dftu_dataframe* df = dftu_lazyframe_collect(lf, 0);
+        REQUIRE(df != nullptr);
+        const DataFrame want =
+            run(View::from_file(s.gz, s.idx).duql(text).collect());
+        REQUIRE(dftu_dataframe_num_rows(df) == want.num_rows());
+        REQUIRE(want.num_rows() == 50);
+        for (std::int64_t i = 0; i < want.num_rows(); ++i) {
+            CHECK(abi_num(df, i, "dur") == bnum(want, i, "dur"));
+            CHECK(abi_num(df, i, "r") == bnum(want, i, "r"));
+        }
+        dftu_dataframe_free(df);
+        dftu_lazyframe_free(lf);
+        dftu_view_free(v);
+
+        TestEnvironment env;
+        const std::string pfw = env.get_dir() + "/hosts.pfw";
+        {
+            std::ofstream o(pfw);
+            o << R"({"ph":"X","name":"op","cat":"io","pid":1,"tid":1,"ts":1,)"
+                 R"("dur":1,"args":{"hosts":[4,5]}})"
+              << "\n"
+              << R"({"ph":"X","name":"op","cat":"io","pid":1,"tid":1,"ts":2,)"
+                 R"("dur":1,"args":{"hosts":[6]}})"
+              << "\n";
+        }
+        const std::string gz = pfw + ".gz";
+        dftu_utils_test::compress_file_to_gzip(pfw, gz);
+        const std::string idx = determine_index_path(gz, "");
+        const char* p2[1] = {gz.c_str()};
+        const char* i2[1] = {idx.c_str()};
+        dftu_view* w = dftu_view_from_files(p2, i2, 1);
+        REQUIRE(w != nullptr);
+        dftu_lazyframe* e =
+            dftu_view_duql(w, "expand hosts with_index k | select ts, hosts, k",
+                           nullptr, nullptr, 0, &error);
+        REQUIRE(e != nullptr);
+        dftu_dataframe* ef = dftu_lazyframe_collect(e, 0);
+        REQUIRE(ef != nullptr);
+        REQUIRE(dftu_dataframe_num_rows(ef) == 3);
+        CHECK(abi_num(ef, 0, "hosts") == 4);
+        CHECK(abi_num(ef, 1, "hosts") == 5);
+        CHECK(abi_num(ef, 1, "k") == 1);
+        CHECK(abi_num(ef, 2, "ts") == 2);
+        dftu_dataframe_free(ef);
+        dftu_lazyframe_free(e);
+        dftu_view_free(w);
+    }
+
     TEST_CASE("group_by + agg via the C ABI matches the C++ equivalent") {
         TestEnvironment env(50);
         std::string gz = write_group_trace(env);
         std::string idx = determine_index_path(gz, "");
         StringSink sink;
-        View::from_file(gz, idx).metadata(false).sink_json(sink).get();
+        View::from_file(gz, idx).sink_json(sink).get();
 
         const char* paths[1] = {gz.c_str()};
         const char* idxs[1] = {idx.c_str()};
@@ -289,10 +472,7 @@ TEST_SUITE("View C ABI") {
             std::string am_gz = write_argmax_trace(env);
             std::string am_idx = determine_index_path(am_gz, "");
             StringSink am_sink;
-            View::from_file(am_gz, am_idx)
-                .metadata(false)
-                .sink_json(am_sink)
-                .get();
+            View::from_file(am_gz, am_idx).sink_json(am_sink).get();
             const char* am_paths[1] = {am_gz.c_str()};
             const char* am_idxs[1] = {am_idx.c_str()};
 
@@ -337,10 +517,7 @@ TEST_SUITE("View C ABI") {
             std::string am_gz = write_argmax_trace(env);
             std::string am_idx = determine_index_path(am_gz, "");
             StringSink am_sink;
-            View::from_file(am_gz, am_idx)
-                .metadata(false)
-                .sink_json(am_sink)
-                .get();
+            View::from_file(am_gz, am_idx).sink_json(am_sink).get();
             const char* am_paths[1] = {am_gz.c_str()};
             const char* am_idxs[1] = {am_idx.c_str()};
 
@@ -379,10 +556,7 @@ TEST_SUITE("View C ABI") {
             std::string am_gz = write_argmax_trace(env);
             std::string am_idx = determine_index_path(am_gz, "");
             StringSink am_sink;
-            View::from_file(am_gz, am_idx)
-                .metadata(false)
-                .sink_json(am_sink)
-                .get();
+            View::from_file(am_gz, am_idx).sink_json(am_sink).get();
             const char* am_paths[1] = {am_gz.c_str()};
             const char* am_idxs[1] = {am_idx.c_str()};
 
@@ -429,10 +603,10 @@ TEST_SUITE("View C ABI") {
         dftu_view* base = dftu_view_from_files(paths, idxs, 1);
         REQUIRE(base != nullptr);
 
-        dftu_query* q = dftu_query_cmp_str("cat", DFTU_QCMP_EQ, "POSIX");
+        dftu_duql* q = dftu_duql_cmp_str("cat", DFTU_DUQL_CMP_EQ, "POSIX");
         REQUIRE(q != nullptr);
         dftu_view* posix_only = dftu_view_filter(base, q);
-        dftu_query_free(q);
+        dftu_duql_free(q);
         REQUIRE(posix_only != nullptr);
 
         dftu_view* limited = dftu_view_limit(base, 5);
@@ -463,10 +637,10 @@ TEST_SUITE("View C ABI") {
         const char* idxs[1] = {s.idx.c_str()};
         dftu_view* v = dftu_view_from_files(paths, idxs, 1);
         REQUIRE(v != nullptr);
-        dftu_query* q = dftu_query_cmp_str("cat", DFTU_QCMP_EQ, "POSIX");
+        dftu_duql* q = dftu_duql_cmp_str("cat", DFTU_DUQL_CMP_EQ, "POSIX");
         REQUIRE(q != nullptr);
         dftu_view* posix_only = dftu_view_filter(v, q);
-        dftu_query_free(q);
+        dftu_duql_free(q);
         REQUIRE(posix_only != nullptr);
 
         dftu_lazyframe* lf = dftu_view_lazy(posix_only);
@@ -494,7 +668,7 @@ TEST_SUITE("View C ABI") {
         REQUIRE(via_lazy != nullptr);
 
         View cpp_view = View::from_file(s.gz, s.idx)
-                            .query(R"(cat == "POSIX")")
+                            .duql(R"(cat == "POSIX")")
                             .sort_by("ts", false)
                             .head(5);
         DataFrame via_eager = run(cpp_view.collect());

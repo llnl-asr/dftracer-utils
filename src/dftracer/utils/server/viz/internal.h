@@ -6,6 +6,7 @@
 
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/json/json_value.h>
+#include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/server/trace_index.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <simdjson.h>
@@ -65,7 +66,7 @@ inline bool parse_event_scalars(simdjson::dom::element root,
 // Parse `event` then extract its scalars. Uses a thread-local parser, so the
 // borrowed name/cat are valid only until the next parse on this thread.
 inline bool parse_event_scalars(std::string_view event, EventScalars& out) {
-    thread_local simdjson::dom::parser parser;
+    thread_local dftracer::utils::json::RecordParser parser;
     thread_local std::string buf;
     buf.assign(event);
     auto res = parser.parse(buf);

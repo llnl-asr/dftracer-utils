@@ -115,6 +115,28 @@ bool valid_window_func(dftu_window_func f) {
 
 }  // namespace
 
+WindowColumn window_column(const dftu_window_spec& s) {
+    WindowColumn c;
+    c.func = static_cast<WindowFunc>(s.func);
+    if (s.value) c.value = std::string(s.value);
+    c.out = s.out ? s.out : "";
+    if (is_frame_func(c.func)) {
+        c.params.frame = {s.param.frame.min_count, s.param.frame.preceding,
+                          s.param.frame.following, WindowFrameMode::ROWS};
+    } else if (is_offset_func(c.func)) {
+        c.params.offset = s.param.offset;
+    } else if (c.func == WindowFunc::RATE) {
+        if (s.param.rate.time) c.time = std::string(s.param.rate.time);
+        c.params.rate = {0, s.param.rate.counter != 0};
+    } else if (c.func == WindowFunc::SESSIONIZE) {
+        if (s.param.session.time) c.time = std::string(s.param.session.time);
+        if (s.param.session.end) c.end = std::string(s.param.session.end);
+        c.params.session = {0, 0, c.end.has_value(), s.param.session.gap,
+                            s.param.session.span};
+    }
+    return c;
+}
+
 DataFrame window(const DataFrame& df,
                  const std::vector<std::string>& partition_by,
                  const std::vector<std::string>& order_by,
@@ -127,13 +149,16 @@ DataFrame window(const DataFrame& df,
         WindowSpec s;
         s.func = c.func;
         s.value_col = c.value ? col_index(df, *c.value, "window") : 0;
-        s.time_col = c.time ? col_index(df, *c.time, "window") : 0;
-        s.offset = c.offset;
         s.name = c.out;
-        s.threshold = c.threshold;
-        s.counter = c.counter;
-        s.frame_preceding = c.preceding;
-        s.frame_following = c.following;
+        s.params = c.params;
+        const std::uint32_t time_col =
+            c.time ? col_index(df, *c.time, "window") : 0;
+        if (c.func == WindowFunc::RATE) s.params.rate.time_col = time_col;
+        if (c.func == WindowFunc::SESSIONIZE) {
+            s.params.session.time_col = time_col;
+            if (c.end)
+                s.params.session.end_col = col_index(df, *c.end, "window");
+        }
         specv.push_back(std::move(s));
     }
     dataframe::OwnedArrow in = df.to_arrow();
@@ -246,17 +271,7 @@ dftu_dataframe* dftu_dataframe_window(
         for (int32_t i = 0; i < n_specs; ++i) {
             const dftu_window_spec& s = specs[i];
             if (!arr::valid_window_func(s.func) || !s.out) return nullptr;
-            arr::WindowColumn c;
-            c.func = static_cast<arr::WindowFunc>(s.func);
-            if (s.value) c.value = std::string(s.value);
-            if (s.time) c.time = std::string(s.time);
-            c.out = s.out;
-            c.offset = s.offset;
-            c.threshold = s.threshold;
-            c.counter = s.counter != 0;
-            c.preceding = s.preceding;
-            c.following = s.following;
-            cols.push_back(std::move(c));
+            cols.push_back(arr::window_column(s));
         }
         return dataframe_handle_wrap(arr::window(
             dataframe_handle_view(df), arr::names_of(partition_by, n_part),

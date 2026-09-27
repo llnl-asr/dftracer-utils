@@ -177,3 +177,28 @@ def test_is_null_expr_lazy_and_eager():
     assert _dict(df.filter(col("k").notna()))["v"] == [1.0, 3.0, 4.0]
     out = df.lazy().with_column("m", col("k").is_null()).collect()
     assert _dict(out)["m"] == [False, True, False, False]
+
+
+def test_head_by_keeps_first_n_rows_per_key_in_input_order():
+    from dftracer.utils import Runtime
+
+    df = _df(
+        {
+            "k": [1, 2, 1, None, 1, 2, None, 3],
+            "j": [0, 0, 1, 0, 0, 1, 0, 0],
+            "v": list(range(8)),
+        }
+    )
+    assert _dict(df.lazy().head_by("k", 2).collect())["v"] == [0, 1, 2, 3, 5, 6, 7]
+    assert _dict(df.lazy().head_by(["k", "j"], 1).collect())["v"] == [0, 1, 2, 3, 5, 7]
+    assert _dict(df.lazy().head_by("k", 0).collect()).get("v", []) == []
+    with pytest.raises(ValueError, match="no column named nope"):
+        df.lazy().head_by("nope", 1)
+
+    big = _df({"k": [i % 7 for i in range(20000)], "v": list(range(20000))})
+    want = _dict(big.lazy().head_by("k", 3).collect(1000))
+    assert want["v"] == list(range(21))
+    for threads in (1, 2, 8):
+        with Runtime(threads=threads) as rt:
+            lf = LazyFrame(big.lazy()._native, rt)
+            assert _dict(lf.head_by("k", 3).collect(1000)) == want

@@ -1,7 +1,8 @@
 #include <dftracer/utils/core/common/to_chars.h>
+#include <dftracer/utils/duql/ast.h>
+#include <dftracer/utils/duql/pattern_engine.h>
 #include <dftracer/utils/index/plan/condition.h>
 #include <dftracer/utils/index/plan/prefilter.h>
-#include <dftracer/utils/query/ast.h>
 
 #include <charconv>
 #include <cmath>
@@ -37,12 +38,10 @@ bool safe(std::string_view v) {
     return true;
 }
 
-std::optional<std::string> needle(const query::LiteralNode& lit) {
+std::optional<std::string> needle(const duql::LiteralNode& lit) {
     std::string out;
     if (const auto* s = std::get_if<std::string>(&lit.value)) {
-        // An object or array literal compares as canonical JSON, not bytes.
-        if (!safe(*s) || s->starts_with('[') || s->starts_with('{'))
-            return std::nullopt;
+        if (!safe(*s)) return std::nullopt;
         out = "\"" + *s + "\"";
     } else if (const auto* i = std::get_if<std::int64_t>(&lit.value)) {
         out = std::to_string(*i);
@@ -57,16 +56,16 @@ std::optional<std::string> needle(const query::LiteralNode& lit) {
 
 // The clauses a line matching `node` must satisfy; empty when nothing can be
 // required of its bytes.
-Clauses clauses_of(const query::QueryNode& node) {
+Clauses clauses_of(const duql::QueryNode& node) {
     return std::visit(
         [](auto&& n) -> Clauses {
             using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, query::CompareNode>) {
-                if (n.op != query::CompareOp::EQ) return {};
+            if constexpr (std::is_same_v<T, duql::CompareNode>) {
+                if (n.op != duql::CompareOp::EQ) return {};
                 auto s = needle(n.value);
                 if (!s) return {};
                 return {{std::move(*s)}};
-            } else if constexpr (std::is_same_v<T, query::InNode>) {
+            } else if constexpr (std::is_same_v<T, duql::InNode>) {
                 if (n.values.elements.size() > SEMI_JOIN_CAP) return {};
                 std::vector<std::string> any;
                 for (const auto& e : n.values.elements) {
@@ -76,13 +75,25 @@ Clauses clauses_of(const query::QueryNode& node) {
                 }
                 if (any.empty()) return {};
                 return {std::move(any)};
-            } else if constexpr (std::is_same_v<T, query::AndNode>) {
+            } else if constexpr (std::is_same_v<T, duql::MatchNode>) {
+                // A case-sensitive pattern's required literals sit in the
+                // value's bytes unless JSON escaping hides them.
+                if (n.negated || !n.compiled ||
+                    (n.op != duql::MatchOp::LIKE &&
+                     n.op != duql::MatchOp::REGEX))
+                    return {};
+                Clauses out;
+                for (const auto& lit : duql::required_literals(*n.compiled))
+                    if (lit.size() >= MIN_NEEDLE && safe(lit))
+                        out.push_back({lit});
+                return out;
+            } else if constexpr (std::is_same_v<T, duql::AndNode>) {
                 Clauses out = clauses_of(*n.left);
                 Clauses right = clauses_of(*n.right);
                 out.insert(out.end(), std::make_move_iterator(right.begin()),
                            std::make_move_iterator(right.end()));
                 return out;
-            } else if constexpr (std::is_same_v<T, query::OrNode>) {
+            } else if constexpr (std::is_same_v<T, duql::OrNode>) {
                 // (a1 and a2) or (b1 and b2) holds each ai-or-bj clause.
                 const Clauses l = clauses_of(*n.left);
                 const Clauses r = clauses_of(*n.right);
@@ -117,16 +128,16 @@ bool plain_key(std::string_view k) {
 
 // The ranges a line matching `node` must satisfy: numeric order leaves
 // joined by `and`.
-void ranges_of(const query::QueryNode& node,
+void ranges_of(const duql::QueryNode& node,
                std::vector<Prefilter::Range>& out) {
-    if (const auto* a = std::get_if<query::AndNode>(&node.data)) {
+    if (const auto* a = std::get_if<duql::AndNode>(&node.data)) {
         ranges_of(*a->left, out);
         ranges_of(*a->right, out);
         return;
     }
-    const auto* n = std::get_if<query::CompareNode>(&node.data);
+    const auto* n = std::get_if<duql::CompareNode>(&node.data);
     // An any() key is followed by an array, not the number a range reads.
-    if (!n || n->field.any || n->op == query::CompareOp::NE) return;
+    if (!n || n->field.any || n->op == duql::CompareOp::NE) return;
     const std::string& path = n->field.path;
     const std::string_view key =
         std::string_view(path).substr(path.rfind('.') + 1);
@@ -145,10 +156,10 @@ void ranges_of(const query::QueryNode& node,
     }
     // A number equals the bound when it is at both ends of [bound, bound].
     std::vector<Prefilter::Bound> bounds{bound};
-    if (n->op == query::CompareOp::EQ) {
-        bounds[0].op = query::CompareOp::GE;
+    if (n->op == duql::CompareOp::EQ) {
+        bounds[0].op = duql::CompareOp::GE;
         bounds.push_back(bounds[0]);
-        bounds[1].op = query::CompareOp::LE;
+        bounds[1].op = duql::CompareOp::LE;
     }
     for (auto& r : out)
         if (r.path == path) {
@@ -161,15 +172,15 @@ void ranges_of(const query::QueryNode& node,
     out.push_back({path, std::string(key) + "\"", std::move(bounds), pivot});
 }
 
-bool holds(query::CompareOp op, int cmp) {
+bool holds(duql::CompareOp op, int cmp) {
     switch (op) {
-        case query::CompareOp::GT:
+        case duql::CompareOp::GT:
             return cmp > 0;
-        case query::CompareOp::GE:
+        case duql::CompareOp::GE:
             return cmp >= 0;
-        case query::CompareOp::LT:
+        case duql::CompareOp::LT:
             return cmp < 0;
-        case query::CompareOp::LE:
+        case duql::CompareOp::LE:
             return cmp <= 0;
         default:
             return true;
@@ -284,7 +295,7 @@ bool contains(std::string_view line, const std::string& n, std::size_t p) {
 
 }  // namespace
 
-Prefilter::Prefilter(const query::Query& q) : clauses_(clauses_of(q.root())) {
+Prefilter::Prefilter(const duql::Query& q) : clauses_(clauses_of(q.root())) {
     ranges_of(q.root(), ranges_);
     pivots_.reserve(clauses_.size());
     for (const auto& clause : clauses_) {

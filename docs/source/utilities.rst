@@ -86,7 +86,7 @@ Advanced indexing utilities for fast trace queries:
 
 - **Bloom filter cache**: Thread-safe bounded cache for deserialized bloom filters with file-level and chunk-level keys
 - **Chunk statistics**: Per-chunk aggregates including event counts, timestamp ranges, and duration distributions
-- **Chunk pruning**: ``ChunkPruner`` evaluates a compiled ``query::Query`` against a file's bloom filters and chunk statistics to return the candidate checkpoint list, without decompressing chunks that cannot match
+- **Chunk pruning**: ``ChunkPruner`` evaluates a compiled ``duql::Query`` against a file's bloom filters and chunk statistics to return the candidate checkpoint list, without decompressing chunks that cannot match
 
 Views
 -----
@@ -95,6 +95,6 @@ Query views on DFTracer traces run the compiled query against the index
 before touching event data:
 
 - **ChunkPruner** (``index/plan/chunk_pruner.h``) - takes an index path, file path, and ``Query``, and returns the subset of checkpoints that may match plus a ``file_may_match`` short-circuit
-- The reader's query DSL (see :doc:`/utilities/reader`) compiles AND-of-EQ predicates that ``ChunkPruner`` evaluates against bloom filters and chunk statistics
+- The reader's duql filter (see :doc:`/utilities/reader`) compiles AND-of-EQ predicates that ``ChunkPruner`` evaluates against bloom filters and chunk statistics
 
 See :doc:`cpp_api/utilities` for the full generated C++ reference.

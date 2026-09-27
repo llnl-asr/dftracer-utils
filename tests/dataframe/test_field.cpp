@@ -3,7 +3,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/field.h>
 #include <dftracer/utils/dataframe/series.h>
-#include <dftracer/utils/query/query.h>
+#include <dftracer/utils/duql/query.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
@@ -14,7 +14,6 @@ using dftracer::utils::dataframe::DataFrame;
 using dftracer::utils::dataframe::Series;
 using dftracer::utils::dataframe::field::F;
 using dftracer::utils::dataframe::field::FieldExpr;
-using dftracer::utils::dataframe::field::resolved;
 
 namespace {
 
@@ -40,18 +39,18 @@ int bit_at(const Series& mask, int i) {
 
 TEST_SUITE("unified field F") {
     TEST_CASE("comparison serializes to a pushable query") {
-        auto q = (F("dur") > 1000).to_query();
+        auto q = (F("dur") > 1000).to_duql();
         CHECK(q.to_string() == "dur > 1000");
 
-        auto q2 = ((F("cat") == "io") && (F("dur") >= 100)).to_query();
+        auto q2 = ((F("cat") == "io") && (F("dur") >= 100)).to_duql();
         CHECK(q2.references("cat"));
         CHECK(q2.references("dur"));
     }
 
     TEST_CASE("string-match and membership push down") {
-        CHECK((F("name").like("read%")).to_query().references("name"));
+        CHECK((F("name").like("read%")).to_duql().references("name"));
         CHECK((F("cat").in(std::vector<std::string>{"io", "net"}))
-                  .to_query()
+                  .to_duql()
                   .references("cat"));
     }
 
@@ -88,10 +87,10 @@ TEST_SUITE("unified field F") {
         CHECK(v[3] == 5);
     }
 
-    TEST_CASE("non-pushable predicate raises on to_query but applies") {
+    TEST_CASE("non-pushable predicate raises on to_duql but applies") {
         DataFrame df = make_frame();
         FieldExpr non_pushable = (F("a") + F("b")) > 3;
-        CHECK_THROWS_AS(non_pushable.to_query(), DFTUtilsException);
+        CHECK_THROWS_AS(non_pushable.to_duql(), DFTUtilsException);
 
         Series mask = non_pushable.apply(df);  // (a+b) > 3 -> all true
         REQUIRE(mask.length() == 4);
@@ -107,10 +106,5 @@ TEST_SUITE("unified field F") {
     TEST_CASE("missing column raises on apply") {
         DataFrame df = make_frame();
         CHECK_THROWS_AS(F("missing").apply(df), DFTUtilsException);
-    }
-
-    TEST_CASE("resolved field targets resolved.<name>") {
-        auto q = (resolved("hostname") == "node1").to_query();
-        CHECK(q.references("resolved.hostname"));
     }
 }

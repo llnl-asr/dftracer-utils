@@ -10,8 +10,11 @@ typed fields, as a class::
         upstream: str = field(always_index=True)
         tags: Optional[Json]
 
+A class may set ``source``: duql row sets and macros, such as
+``source = "errors = where status >= 500"``, which ``from errors`` reads.
+
 or as a YAML or JSON spec (``id``, ``extends``, ``fields``,
-``index.path_budget``, ``dictionaries``) registered here, loaded from
+``index.path_budget``, ``source``) registered here, loaded from
 ``$DFTRACER_SCHEMA_PATH``, or placed in ``<index_dir>/schemas/`` next to an
 index. Registered schemas last for the process.
 """
@@ -23,7 +26,7 @@ import os
 import sys
 import types
 import typing
-from typing import Any, ClassVar, Dict, List, NewType, Optional, Type, Union
+from typing import Any, ClassVar, Dict, FrozenSet, List, NewType, Optional, Type, Union
 
 from . import dftracer_utils_ext as _ext
 from .dftracer_utils_ext import DFTUtilsValueError
@@ -52,7 +55,7 @@ Json = NewType("Json", str)
 JSON text (no whitespace, keys sorted); filters compare it as that text."""
 
 _TYPES: Dict[Any, str] = {bool: "bool", int: "int", float: "float", str: "string", Json: "json"}
-_ROLES = ("time", "duration", "entity")
+_ROLES = ("time", "duration", "entity", "lane", "name")
 _UNITS = ("ns", "us", "ms", "s")
 
 
@@ -76,9 +79,10 @@ def field(
     always_index: bool = False,
 ) -> Any:
     """Options of a schema class field: the JSON ``path`` (the attribute name
-    when None), a ``role`` ("time", "duration" or "entity"), the ``unit`` of a
-    time or duration ("ns", "us", "ms" or "s"; microseconds when None), and
-    ``always_index`` to index the field even past the path budget."""
+    when None), a ``role`` ("time", "duration", "entity", "lane" or "name"),
+    the ``unit`` of a time or duration ("ns", "us", "ms" or "s"; microseconds
+    when None), and ``always_index`` to index the field even past the path
+    budget."""
     return _Field(path, role, unit, always_index)
 
 
@@ -150,9 +154,13 @@ def _spec(cls: Type[RecordSchema], schema_id_: str) -> Dict[str, Any]:
         RecordSchema,
     )
     cls._paths = {**parent._paths, **paths}
+    cls._json = parent._json | {n for n, e in fields.items() if e["type"] == "json"}
     spec: Dict[str, Any] = {"id": schema_id_, "extends": parent.id or "generic"}
     if fields:
         spec["fields"] = fields
+    own_source = cls.__dict__.get("source")
+    if isinstance(own_source, str) and own_source:
+        spec["source"] = own_source
     return spec
 
 
@@ -167,7 +175,11 @@ class RecordSchema:
     attribute per field, from keywords, ``None`` when absent."""
 
     id: ClassVar[str] = ""
+    #: duql row sets and macros of the schema's source; a subclass's members
+    #: replace the parent's of the same name.
+    source: ClassVar[str] = ""
     _paths: ClassVar[Dict[str, str]] = {}
+    _json: ClassVar[FrozenSet[str]] = frozenset()
 
     def __init__(self, **values: Any) -> None:
         paths = type(self)._paths
@@ -247,7 +259,9 @@ def detect(path: Union[str, "os.PathLike[str]"]) -> str:
 
 def explain(path: Union[str, "os.PathLike[str]"]) -> Dict[str, Any]:
     """Why the trace at ``path`` gets its schema: ``chosen`` (the id),
-    ``objects`` (sampled JSON objects) and ``scores``, each with ``id``,
-    ``required`` (required path count) and ``share`` (of the objects holding
-    every required path)."""
+    ``objects`` (sampled JSON objects), ``records`` (objects no schema's
+    ``data`` row set leaves out; 0 for an empty or metadata-only file) and
+    ``scores``, each with ``id``, ``required`` (required path count) and
+    ``share`` (of the objects the schema judges, those its ``data`` keeps,
+    that match it)."""
     return json.loads(_ext._schema_explain(os.fspath(path)))

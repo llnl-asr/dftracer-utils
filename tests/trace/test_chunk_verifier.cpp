@@ -119,8 +119,7 @@ TEST_SUITE("ChunkVerifier") {
 
         SUBCASE("Detect mismatched chunks") {
             auto input_hasher =
-                [](const std::vector<TestMetadata>& metadata) -> std::uint64_t {
-                (void)metadata;
+                [](const std::vector<TestMetadata>&) -> std::uint64_t {
                 return 12345;
             };
 
@@ -128,8 +127,7 @@ TEST_SUITE("ChunkVerifier") {
                 -> std::vector<TestEvent> { return chunk.data; };
 
             auto event_hasher =
-                [](const std::vector<TestEvent>& events) -> std::uint64_t {
-                (void)events;
+                [](const std::vector<TestEvent>&) -> std::uint64_t {
                 return 67890;
             };
 
@@ -154,8 +152,7 @@ TEST_SUITE("ChunkVerifier") {
     TEST_CASE("ChunkVerifier - Parallel Processing") {
         SUBCASE("Process multiple chunks in parallel") {
             auto input_hasher =
-                [](const std::vector<TestMetadata>& metadata) -> std::uint64_t {
-                (void)metadata;
+                [](const std::vector<TestMetadata>&) -> std::uint64_t {
                 return 435;  // Expected sum of all event values
             };
 
@@ -245,9 +242,8 @@ TEST_SUITE("ChunkVerifier") {
             };
 
             auto event_collector =
-                [](CoroScope& ctx,
+                [](CoroScope&,
                    const TestChunk& chunk) -> std::vector<TestEvent> {
-                (void)ctx;
                 printf("Collecting from chunk %zu\n", chunk.id);
                 return chunk.data;
             };

@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_PLUGINS_PLUGINS_INTERNAL_H
 #define DFTRACER_UTILS_PLUGINS_PLUGINS_INTERNAL_H
 
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/plugins/plugins.h>
-#include <dftracer/utils/query/query.h>
 
 #include <cstddef>
 #include <optional>
@@ -16,14 +16,14 @@ namespace dftracer::utils::plugins {
 
 namespace detail {
 
-/// Union of the loaded plugins' plan_query strings for coarse index pruning:
+/// Union of the loaded plugins' plan_duql strings for coarse index pruning:
 /// the weakest predicate that still selects every event any plugin's own filter
 /// keeps, so per-fold results are unchanged and only chunks/members no plugin
 /// wants are skipped. `plan_queries` is one entry per plugin (nullptr/empty =
 /// that plugin declared none). nullopt means match all (prune nothing): a
 /// plugin wants every event, or a query failed to parse. Identical strings are
 /// deduplicated so the union never repeats a term.
-std::optional<query::Query> plugin_union_prune_query(
+std::optional<duql::Query> plugin_union_prune_query(
     const std::vector<const char*>& plan_queries);
 
 }  // namespace detail

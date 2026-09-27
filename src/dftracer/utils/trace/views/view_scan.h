@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_SCAN_H
 
 #include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/query/query.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
@@ -30,9 +30,8 @@ class Fold;
 /// attach, so it is a coverage fact, not a requirement.
 struct ScanShape {
     bool filtered = false;
+    /// Metadata records reach the folds.
     bool include_metadata = false;
-    /// Metadata emitted as encountered rather than when first referenced.
-    bool emit_all_metadata = false;
 };
 
 std::size_t checkpoint_size_or_default(std::size_t s);
@@ -55,13 +54,16 @@ struct ScanUnit {
     std::uint64_t checkpoint_idx = 0;
     std::size_t start_byte = 0;
     std::size_t end_byte = 0;
+    // Place in the scan's unit list: file order, then checkpoint order.
+    std::size_t seq = 0;
     // The View query with resolved columns rewritten for this unit's index;
     // null when there was nothing to rewrite.
-    std::shared_ptr<const query::Query> query;
+    std::shared_ptr<const duql::Query> query;
 };
 
 // The record_schema every file of `plan` was indexed under, or is detected as
-// when unindexed. Throws INVALID_ARGUMENT when the files' record_schemas
+// when unindexed; a file without records (empty, or only metadata) takes no
+// vote. Throws INVALID_ARGUMENT when the record_schemas of files with records
 // differ.
 const dftracer::utils::index::RecordSchema& plan_record_schema(
     const ViewPlan& plan);
@@ -79,8 +81,14 @@ void require_role(const ViewPlan& plan, std::string_view op,
                   TraceRole role = TraceRole::TIME);
 
 // Fold the phase selector into the query: Events -> ph=="X", Counters ->
-// ph=="C", Any -> no constraint. ANDed with any user filter.
-std::optional<query::Query> effective_query(const ViewPlan& plan);
+// ph=="C", Any -> no constraint. ANDed with any user filter and, for a plan
+// with a build step, the key sets that step gives, which runs it: call it
+// only when executing the plan.
+std::optional<duql::Query> effective_query(const ViewPlan& plan);
+
+// Whether `plan`'s rows include metadata records: phase("metadata") or
+// duql's `all`.
+bool metadata_rows(const ViewPlan& plan);
 
 // Build the scanner's ViewDefinition from a plan. `for_aggregation` drops
 // ph="M" metadata (aggregation ignores it); otherwise metadata follows the
@@ -93,7 +101,7 @@ bool is_cancelled(const ViewPlan& plan);
 // `q` applies unless the unit carries its rewritten query.
 ViewScannerInput make_scanner_input(const ScanUnit& u,
                                     const ViewDefinition& vdef,
-                                    const std::optional<query::Query>& q);
+                                    const std::optional<duql::Query>& q);
 
 // Plan every file in parallel (metadata + prune) and flatten the surviving
 // candidates into a single work list; `skipped_out` gets the pruned-chunk

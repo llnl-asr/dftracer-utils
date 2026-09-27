@@ -684,6 +684,20 @@ PyObject* LazyFrame_sample(PyObject* self, PyObject* args, PyObject* kwds) {
     return run_lazy_op([&] { return b->lf.sample(n, seed); });
 }
 
+PyObject* LazyFrame_head_by(PyObject* self, PyObject* args, PyObject* kwds) {
+    LazyFrameObject* b = as_lazyframe(self);
+    if (!b) return nullptr;
+    PyObject* keys_obj = nullptr;
+    long long n = 0;
+    static const char* kw[] = {"keys", "n", nullptr};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "OL", const_cast<char**>(kw),
+                                     &keys_obj, &n))
+        return nullptr;
+    std::vector<std::string> keys;
+    if (!strings_from_str_or_seq(keys_obj, keys)) return nullptr;
+    return run_lazy_op([&] { return b->lf.head_by(std::move(keys), n); });
+}
+
 PyObject* LazyFrame_is_duplicated(PyObject* self, PyObject*) {
     LazyFrameObject* b = as_lazyframe(self);
     if (!b) return nullptr;
@@ -997,6 +1011,10 @@ PyMethodDef LazyFrame_methods[] = {
      "drop_duplicates(subset=None) -> alias of unique."},
     {"sample", DFTU_PYCFUNCTION(LazyFrame_sample), METH_VARARGS | METH_KEYWORDS,
      "sample(n, seed=0) -> LazyFrame deterministic n-row sample."},
+    {"head_by", DFTU_PYCFUNCTION(LazyFrame_head_by),
+     METH_VARARGS | METH_KEYWORDS,
+     "head_by(keys, n) -> LazyFrame of the first n rows of each key, in "
+     "input order."},
     {"is_duplicated", LazyFrame_is_duplicated, METH_NOARGS,
      "is_duplicated() -> LazyFrame Bool column, true where the row repeats."},
     {"is_unique", LazyFrame_is_unique, METH_NOARGS,

@@ -37,9 +37,9 @@ dftracer::utils::coro::CoroTask<void> scan_chunk_lines(Stream& stream,
             const char* newline = static_cast<const char*>(
                 std::memchr(line_start, '\n', bytes_read - pos));
 
-            if (!newline) {
-                break;
-            }
+            // Chunks end on a line boundary; bytes after the last newline
+            // are the file's last line, which has none.
+            if (!newline) newline = data + bytes_read;
 
             const std::size_t line_len =
                 static_cast<std::size_t>(newline - line_start);

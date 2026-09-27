@@ -89,6 +89,9 @@ DFTU_LAZY_OP(unnest, dftu_lazyframe_unnest, LAZY, LAZY, STR, I32, NONE, NONE, NO
 /* lazy + key subset. */
 DFTU_LAZY_OP(unique_by, dftu_lazyframe_unique_by, LAZY, LAZY, STRLIST, NONE, NONE, NONE, NONE, NONE)
 
+/* lazy + key list + per-key row count. */
+DFTU_LAZY_OP(head_by, dftu_lazyframe_head_by, LAZY, LAZY, STRLIST, I64, NONE, NONE, NONE, NONE)
+
 /* lazy + aggregate code (dftu_agg_op). */
 DFTU_LAZY_OP(reduce, dftu_lazyframe_reduce, LAZY, LAZY, I32, NONE, NONE, NONE, NONE, NONE)
 

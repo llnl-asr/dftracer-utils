@@ -414,7 +414,7 @@ TEST_CASE("agg_deserialize survives mutated and truncated blobs") {
         try {
             auto back = df::agg_deserialize(m);
             if (back) {
-                (void)df::agg_finalize(*back, "k");
+                df::agg_finalize(*back, "k");
                 ++decoded;
             } else {
                 ++refused;

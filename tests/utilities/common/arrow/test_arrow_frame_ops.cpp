@@ -84,7 +84,7 @@ TEST_SUITE("arrow frame ops") {
         specs[1].out = "cum";
         specs[2].func = arr::WindowFunc::LAG;
         specs[2].value = "dur";
-        specs[2].offset = 1;
+        specs[2].params.offset = 1;
         specs[2].out = "prev";
         DataFrame out = arr::window(make_events(), {"pid"}, {"ts"}, specs);
         CHECK(out.names == std::vector<std::string>{"pid", "ts", "dur", "rn",

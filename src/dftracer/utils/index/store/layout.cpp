@@ -8,11 +8,9 @@ namespace dftracer::utils::index::store::layout {
 
 namespace {
 
-constexpr std::array<KindSpec, 23> KINDS = {{
+constexpr std::array<KindSpec, 22> KINDS = {{
     {Ext::MEMBERS, members::MEMBER, Family::MEMBERS},
     {Ext::MEMBERS, members::METADATA, Family::REGISTRY},
-    {Ext::DICT, dict_kind::ROW, Family::BLOB},
-    {Ext::DICT, dict_kind::VALUE, Family::BLOB},
     {Ext::ZONEMAP, path_kind::PATHS, Family::REGISTRY},
     {Ext::ZONEMAP, path_kind::DATA, Family::GRANULE},
     {Ext::BLOOM, path_kind::PATHS, Family::REGISTRY},
@@ -32,6 +30,7 @@ constexpr std::array<KindSpec, 23> KINDS = {{
     {Ext::PLUGIN, path_kind::PATHS, Family::REGISTRY},
     {Ext::PLUGIN, path_kind::DATA, Family::BLOB},
     {Ext::PLUGIN, path_kind::FILE, Family::BLOB},
+    {Ext::ROWSET, rowset_kind::FRAME, Family::BLOB},
 }};
 
 constexpr std::uint8_t PAYLOAD_VERSION = 1;
@@ -70,8 +69,6 @@ std::string_view ext_name(Ext ext) {
             return "host";
         case Ext::MEMBERS:
             return "core.members";
-        case Ext::DICT:
-            return "core.dict";
         case Ext::ZONEMAP:
             return "zonemap";
         case Ext::BLOOM:
@@ -92,6 +89,8 @@ std::string_view ext_name(Ext ext) {
             return "plugin";
         case Ext::AGG:
             return "dftracer.agg";
+        case Ext::ROWSET:
+            return "core.rowset";
     }
     return "";
 }
@@ -257,7 +256,7 @@ std::string encode_path_stat(const PathStat& stat) {
 std::optional<PathStat> decode_path_stat(std::string_view body) {
     if (body.size() != 10) return std::nullopt;
     const auto type = static_cast<std::uint8_t>(body[0]);
-    if (type > static_cast<std::uint8_t>(PathType::MIXED)) return std::nullopt;
+    if (type > static_cast<std::uint8_t>(PathType::ARRAY)) return std::nullopt;
     return PathStat{static_cast<PathType>(type),
                     static_cast<std::uint8_t>(body[1]),
                     read_u64(body.substr(2))};
@@ -368,54 +367,19 @@ bool read_list(std::string_view& in,
 
 }  // namespace
 
-std::string encode_dict_row(
-    const std::vector<std::pair<std::string, std::string>>& fields) {
-    std::string body;
-    append_u32(body, static_cast<std::uint32_t>(fields.size()));
-    for (const auto& [name, value] : fields)
-        for (const auto* s : {&name, &value}) {
-            append_u32(body, static_cast<std::uint32_t>(s->size()));
-            body.append(*s);
-        }
-    return body;
-}
-
-std::optional<std::vector<std::pair<std::string, std::string>>> decode_dict_row(
-    std::string_view body) {
-    auto take = [&](std::string& out) {
-        if (body.size() < 4) return false;
-        const std::uint32_t n = read_u32(body);
-        body.remove_prefix(4);
-        if (body.size() < n) return false;
-        out.assign(body.substr(0, n));
-        body.remove_prefix(n);
-        return true;
-    };
-    if (body.size() < 4) return std::nullopt;
-    const std::uint32_t count = read_u32(body);
-    body.remove_prefix(4);
-    std::vector<std::pair<std::string, std::string>> fields(count);
-    for (auto& [name, value] : fields)
-        if (!take(name) || !take(value)) return std::nullopt;
-    if (!body.empty()) return std::nullopt;
-    return fields;
-}
-
 std::string encode_chunk_metadata(const ChunkMetadata& metadata) {
     std::string body;
     append_u64(body, metadata.records);
-    append_u64(body, metadata.context);
     append_list(body, metadata.names);
     append_list(body, metadata.paths);
     return body;
 }
 
 std::optional<ChunkMetadata> decode_chunk_metadata(std::string_view body) {
-    if (body.size() < 16) return std::nullopt;
+    if (body.size() < 8) return std::nullopt;
     ChunkMetadata m;
     m.records = read_u64(body);
-    m.context = read_u64(body.substr(8));
-    body.remove_prefix(16);
+    body.remove_prefix(8);
     if (!read_list(body, m.names) || !read_list(body, m.paths) || !body.empty())
         return std::nullopt;
     return m;

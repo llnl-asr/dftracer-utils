@@ -49,25 +49,94 @@ enum class WindowFrameMode { ROWS, RANGE };
 inline constexpr std::int64_t WINDOW_UNBOUNDED =
     (std::numeric_limits<std::int64_t>::max)();
 
-/// One appended output column: `func` over `value_col`/`time_col`, with
-/// `offset` (LAG/LEAD shift, NTILE bucket count, NTH_VALUE 1-based k, or the
-/// FRAME_SUM/MIN/MAX/MEAN minimum present count below which the output is
-/// null; 0 = none),
-/// `threshold` (SESSIONIZE gap), `counter` (RATE reset correction), and
-/// `frame_preceding`/ `frame_following` (FRAME_* bounds; WINDOW_UNBOUNDED =
-/// unbounded that side).
+/// The parameters only some window functions read; `func` of the owning
+/// WindowSpec names the member that is set, and only that one may be read.
+union WindowParams {
+    /// LAG/LEAD shift, NTILE bucket count, NTH_VALUE 1-based k.
+    std::int64_t offset;
+    /// FRAME_*: the present count below which the output is null (0 = none)
+    /// and the bounds (WINDOW_UNBOUNDED = unbounded that side).
+    struct Frame {
+        std::int64_t min_count;
+        std::int64_t preceding;
+        std::int64_t following;
+        WindowFrameMode mode;
+    } frame;
+    /// RATE: the time column and the counter-reset correction.
+    struct Rate {
+        std::uint32_t time_col;
+        bool counter;
+    } rate;
+    /// SESSIONIZE: the time column, the row-end column (used when `has_end`),
+    /// the gap and the longest session (0 = no limit), in the time's unit.
+    struct Session {
+        std::uint32_t time_col;
+        std::uint32_t end_col;
+        bool has_end;
+        double gap;
+        double span;
+    } session;
+};
+
+/// One appended output column: `func` over `value_col`, with the
+/// parameters its function reads.
 struct WindowSpec {
     WindowFunc func;
-    std::uint32_t value_col;
-    std::int64_t offset;
+    std::uint32_t value_col = 0;
     std::string name;
-    std::uint32_t time_col = 0;
-    double threshold = 0.0;
-    bool counter = false;
-    std::int64_t frame_preceding = 0;
-    std::int64_t frame_following = 0;
-    WindowFrameMode frame_mode = WindowFrameMode::ROWS;
+    WindowParams params{};
 };
+
+/// Whether `f` is a FRAME_* function (reads WindowParams::frame).
+constexpr bool is_frame_func(WindowFunc f) {
+    return f == WindowFunc::FRAME_SUM || f == WindowFunc::FRAME_MIN ||
+           f == WindowFunc::FRAME_MAX || f == WindowFunc::FRAME_COUNT ||
+           f == WindowFunc::FRAME_MEAN;
+}
+
+/// Whether `f` reads WindowParams::offset.
+constexpr bool is_offset_func(WindowFunc f) {
+    return f == WindowFunc::LAG || f == WindowFunc::LEAD ||
+           f == WindowFunc::NTILE || f == WindowFunc::NTH_VALUE;
+}
+
+/// A spec of a function that reads no parameters, or reads
+/// WindowParams::offset (`offset` is ignored by the others). Use frame_spec,
+/// rate_spec or session_spec for the functions with their own parameters.
+inline WindowSpec window_spec(WindowFunc func, std::uint32_t value_col,
+                              std::string name, std::int64_t offset = 0) {
+    WindowSpec s{func, value_col, std::move(name), {}};
+    if (is_offset_func(func)) s.params.offset = offset;
+    return s;
+}
+
+/// A FRAME_* spec.
+inline WindowSpec frame_spec(WindowFunc func, std::uint32_t value_col,
+                             std::string name, std::int64_t preceding,
+                             std::int64_t following, std::int64_t min_count = 0,
+                             WindowFrameMode mode = WindowFrameMode::ROWS) {
+    WindowSpec s{func, value_col, std::move(name), {}};
+    s.params.frame = {min_count, preceding, following, mode};
+    return s;
+}
+
+/// A RATE spec.
+inline WindowSpec rate_spec(std::uint32_t value_col, std::uint32_t time_col,
+                            std::string name, bool counter = false) {
+    WindowSpec s{WindowFunc::RATE, value_col, std::move(name), {}};
+    s.params.rate = {time_col, counter};
+    return s;
+}
+
+/// A SESSIONIZE spec; `end_col` of UINT32_MAX means each row ends at its time.
+inline WindowSpec session_spec(
+    std::uint32_t time_col, std::string name, double gap, double span = 0.0,
+    std::uint32_t end_col = (std::numeric_limits<std::uint32_t>::max)()) {
+    WindowSpec s{WindowFunc::SESSIONIZE, 0, std::move(name), {}};
+    const bool has_end = end_col != (std::numeric_limits<std::uint32_t>::max)();
+    s.params.session = {time_col, has_end ? end_col : 0, has_end, gap, span};
+    return s;
+}
 
 /// SQL window functions over one materialized batch, PARTITION BY
 /// `partition_cols` and ORDER BY `order_cols` (either count may be 0). Output

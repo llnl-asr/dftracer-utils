@@ -210,7 +210,7 @@ TEST_CASE("TraceIndex - directory and index_dir accessors") {
     CHECK(index.files().empty());
 }
 
-TEST_CASE("TraceIndex - genesis output resolves run keys") {
+TEST_CASE("TraceIndex - genesis output resolves run keys through runs") {
     dftu_utils_test::TestEnvironment env(10);
     REQUIRE(env.is_valid());
     std::string text =
@@ -235,8 +235,8 @@ TEST_CASE("TraceIndex - genesis output resolves run keys") {
             TraceIndex index(env.get_dir(), env.get_dir());
             co_await index.initialize();
             schema = index.record_schema().id;
-            app = index.resolve("run", "app", "ab");
-            nodes = index.resolve("run", "nodes", "ab");
+            app = index.resolve("runs", "run", "app", "ab");
+            nodes = index.resolve("runs", "run", "nodes", "ab");
             co_return;
         },
         "TraceIndexGenesis");

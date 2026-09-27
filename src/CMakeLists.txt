@@ -27,6 +27,7 @@ if(DFTRACER_UTILS_ENABLE_ARROW)
   need_nanoarrow()
 endif()
 need_highway()
+need_pcre2()
 
 # ##############################################################################
 # Libraries
@@ -45,6 +46,7 @@ set(DFTRACER_UTILS_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/filesystem_info.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/scratch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/memory_budget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/base64.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/env.cpp
     # Utilities
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/utils/timer.cpp
@@ -155,11 +157,11 @@ set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/abi.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/indexer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/record_schema.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/source.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/bloom_filter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/bloom_fold.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/chunk_dimension_stats.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/dict_fold.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/dictionary_rows.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/rowset_fold.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/kinds/payloads.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/plugin_extension.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/kinds/time_bounds.cpp
@@ -195,8 +197,10 @@ set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/plan/file_index_data.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/plan/prefilter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/plan/prune.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/plan/resolved_field_rewriter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/plan/rowsets.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/plan/view_resolver.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/cache/lookup_store.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/cache/lru.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/cache/mv_store.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/cache/rollup_store.cpp
 )
@@ -222,6 +226,7 @@ list(APPEND DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/provenance/provenance_graph.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_source.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_plan_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_duql.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_aggregate.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_agg_engine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_scan.cpp
@@ -524,28 +529,26 @@ set(DFTRACER_UTILS_VEC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/logical.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/reduce.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/string_ops.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/substr_simd.cpp
 )
 
 # Highway per-target dispatch functions (N_SSE2 etc.) live in the named
 # HWY_NAMESPACE for HWY_EXPORT and are referenced only within their own TU, so
 # they legitimately have no forward declaration.
 set_source_files_properties(
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/arithmetic.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/cast_simd.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/compare_simd.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/elementwise.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/field_stat.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/filter_simd.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/logical.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/moments.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/predicate.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/prims.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/reduce_simd.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/sketch_keys.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/stats_simd.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/substr_simd.cpp
-  PROPERTIES COMPILE_OPTIONS -Wno-missing-declarations)
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/arithmetic.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/cast_simd.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/compare_simd.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/elementwise.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/field_stat.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/filter_simd.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/logical.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/moments.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/predicate.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/prims.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/reduce_simd.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/sketch_keys.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/stats_simd.cpp
+    PROPERTIES COMPILE_OPTIONS -Wno-missing-declarations)
 
 # The columnar engine (DFTRACER_UTILS_VEC_SOURCES) is built as part of the
 # single dftracer_utils_dataframe target below, not its own library.
@@ -612,25 +615,38 @@ endforeach()
 # Query Library (predicate IR + string codec + evaluator)
 # +++++++++++++++++++++++++++++++++++++++++
 
-set(DFTRACER_UTILS_QUERY_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/query/ast.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/query/parser.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/query/evaluator.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/query/query.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/query/subsumption.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/query/abi.cpp)
+set(DFTRACER_UTILS_DUQL_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/ast.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/parser.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/syntax/lexer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/lower.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/lookup_key.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/macros.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/syntax/parser.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/syntax/printer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/evaluator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/query.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/subsumption.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/substr_simd.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/pattern.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/abi.cpp)
+
+# Highway per-target dispatch functions are referenced only within their TU.
+set_source_files_properties(
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/substr_simd.cpp
+    PROPERTIES COMPILE_OPTIONS -Wno-missing-declarations)
 
 create_library(
   NAME
-  dftracer_utils_query
+    dftracer_utils_duql
   NAMESPACE
-  dftracer_utils_query
+    dftracer_utils_duql
   SOURCES
-  ${DFTRACER_UTILS_QUERY_SOURCES}
+    ${DFTRACER_UTILS_DUQL_SOURCES}
   VERSION
   ${PROJECT_VERSION}
   DESCRIPTION
-  "DFTracer utils query library (predicate IR, string parser, evaluator)"
+    "DFTracer utils duql library (predicate IR, string parser, evaluator)"
   URL
   "https://github.com/llnl-asr/dftracer-utils"
   BUILD_SHARED
@@ -657,16 +673,21 @@ create_library(
   dftracer_utils_json)
 
 foreach(variant shared static)
-  if(TARGET dftracer_utils_query_${variant})
-    target_set_warnings(dftracer_utils_query_${variant})
+  if(TARGET dftracer_utils_duql_${variant})
+    target_set_warnings(dftracer_utils_duql_${variant})
+    target_link_libraries(dftracer_utils_duql_${variant}
+                          PRIVATE $<BUILD_INTERFACE:pcre2-8-static>
+                                  $<BUILD_INTERFACE:hwy>)
+    target_compile_definitions(dftracer_utils_duql_${variant}
+                               PRIVATE PCRE2_CODE_UNIT_WIDTH=8 PCRE2_STATIC)
     string(TOUPPER ${variant} VARIANT_UPPER)
-    link_simdjson(dftracer_utils_query_${variant} ${VARIANT_UPPER})
-    add_stdfs_if_needed(dftracer_utils_query_${variant})
+    link_simdjson(dftracer_utils_duql_${variant} ${VARIANT_UPPER})
+    add_stdfs_if_needed(dftracer_utils_duql_${variant})
     if(DFTRACER_UTILS_ENABLE_PCH)
-      use_precompiled_header(dftracer_utils_query_${variant})
+      use_precompiled_header(dftracer_utils_duql_${variant})
     endif()
     if(COVERAGE_LINK_OPTIONS)
-      target_link_libraries(dftracer_utils_query_${variant}
+      target_link_libraries(dftracer_utils_duql_${variant}
                             PRIVATE ${COVERAGE_LINK_OPTIONS})
     endif()
   endif()
@@ -684,6 +705,10 @@ set(DFTRACER_UTILS_DATAFRAME_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/provider_registry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/node_registry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/mask.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/vectorize.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/lookup.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/overlap.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/group_fold.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/plan.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/mask_abi.cpp)
 
@@ -705,11 +730,11 @@ create_library(
   BUILD_STATIC
   ${DFTRACER_UTILS_BUILD_STATIC}
   SHARED_LINK_LIBRARIES
-  dftracer_utils_core::shared
-  dftracer_utils_query::shared
+    dftracer_utils_core::shared
+    dftracer_utils_duql::shared
   STATIC_LINK_LIBRARIES
-  dftracer_utils_core::static
-  dftracer_utils_query::static
+    dftracer_utils_core::static
+    dftracer_utils_duql::static
   PUBLIC_INCLUDE_DIRS
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -718,10 +743,9 @@ create_library(
   PRIVATE_COMPILE_OPTIONS
   ${COVERAGE_COMPILE_OPTIONS}
   PKG_CONFIG_REQUIRES
-  "dftracer_utils_core dftracer_utils_query"
+    "dftracer_utils_core dftracer_utils_duql"
   FIND_DEPENDENCIES
-  dftracer_utils_core
-  dftracer_utils_query)
+    dftracer_utils_core dftracer_utils_duql)
 
 foreach(variant shared static)
   if(TARGET dftracer_utils_dataframe_${variant})
@@ -780,15 +804,15 @@ create_library(
   BUILD_STATIC
   ${DFTRACER_UTILS_BUILD_STATIC}
   SHARED_LINK_LIBRARIES
-  dftracer_utils_core::shared
-  dftracer_utils_dataframe::shared
-  dftracer_utils_json::shared
-  dftracer_utils_query::shared
+    dftracer_utils_core::shared
+    dftracer_utils_dataframe::shared
+    dftracer_utils_json::shared
+    dftracer_utils_duql::shared
   STATIC_LINK_LIBRARIES
-  dftracer_utils_core::static
-  dftracer_utils_dataframe::static
-  dftracer_utils_json::static
-  dftracer_utils_query::static
+    dftracer_utils_core::static
+    dftracer_utils_dataframe::static
+    dftracer_utils_json::static
+    dftracer_utils_duql::static
   PUBLIC_INCLUDE_DIRS
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -1493,7 +1517,9 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/member_cache_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/dataframe_parallel_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/view_api_bench.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/index_bench.cpp)
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/index_bench.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/duql_eval_bench.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/duql_mask_bench.cpp)
 
   foreach(bench ${DFTRACER_BENCHMARKS})
     get_filename_component(bench_name ${bench} NAME_WE)

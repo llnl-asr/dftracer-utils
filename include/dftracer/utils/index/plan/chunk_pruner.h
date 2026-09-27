@@ -3,8 +3,8 @@
 
 #include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/query/query.h>
 
 #include <cstdint>
 #include <string>
@@ -12,7 +12,7 @@
 
 namespace dftracer::utils::index::plan {
 
-using query::Query;
+using duql::Query;
 
 /// Input for chunk pruning: index path, file path, query, optional cache.
 ///

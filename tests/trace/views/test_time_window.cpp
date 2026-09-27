@@ -142,7 +142,7 @@ TEST_SUITE("TimeWindow") {
         CHECK(agg_in(gz, 1200, 1500, AggOp::Count, "") == 3);
         CHECK(view_of(gz)
                   .time_range(1200, 1500)
-                  .query(R"(name == "read")")
+                  .duql(R"(name == "read")")
                   .collect()
                   .get()
                   .num_rows() == 3);
@@ -157,7 +157,7 @@ TEST_SUITE("TimeWindow") {
         StringSink sink;
         view_of(gz)
             .time_range(4000, 6000)
-            .emit_all_metadata(true)
+            .phase(Phase::Any)
             .sink_json(sink)
             .get();
         const auto& lines = sink.lines();
@@ -235,7 +235,6 @@ TEST_SUITE("TimeWindow") {
         }
         const auto stats =
             run(view_of(gz)
-                    .metadata(false)
                     .time_range(11000000, 12000000)
                     .map_batches<int>(
                         [](int&, const std::vector<std::string_view>&) {},

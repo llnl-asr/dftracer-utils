@@ -1,3 +1,4 @@
+#include <dftracer/utils/json/record_parser.h>
 #ifndef DFTRACER_UTILS_JSON_JSON_DOC_GUARD_H
 #define DFTRACER_UTILS_JSON_JSON_DOC_GUARD_H
 
@@ -10,7 +11,7 @@ namespace dftracer::utils::json {
 /// RAII guard that owns a simdjson DOM parser and document.
 /// With simdjson, the parser manages document lifetime internally.
 struct JsonDocGuard {
-    simdjson::dom::parser parser;
+    dftracer::utils::json::RecordParser parser;
     bool valid = false;
 
     JsonDocGuard() = default;

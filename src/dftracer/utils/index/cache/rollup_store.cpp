@@ -5,6 +5,7 @@
 #include <dftracer/utils/core/env.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>  // expr_canonical
+#include <dftracer/utils/index/cache/lru.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/store/column_families.h>
@@ -14,7 +15,6 @@
 #include <dftracer/utils/utilities/common/serialization/binary_codec.h>
 
 #include <algorithm>
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -45,82 +45,17 @@ std::uint64_t get_be64(std::string_view b) {
 // rest_signature.
 // Part of every rollup key: a rollup persisted under another identity is never
 // matched (it is recomputed instead).
-constexpr std::string_view ROLLUP_FORMAT = "1";
+constexpr std::string_view ROLLUP_FORMAT = "2";
 
 constexpr std::uint64_t DEFAULT_CACHE_MAX_BYTES = std::uint64_t{2} << 30;
-constexpr std::size_t USAGE_BYTES = 16;
 
-std::string usage_key(std::uint64_t sig) {
-    std::string key;
-    key.push_back('\x02');
-    put_be64(key, sig);
-    return key;
-}
-
-std::string usage_value(std::uint64_t bytes, std::uint64_t last_used) {
-    std::string v;
-    put_be64(v, bytes);
-    put_be64(v, last_used);
-    return v;
-}
-
-std::uint64_t now_micros() {
-    return static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::system_clock::now().time_since_epoch())
-            .count());
-}
-
-void check(const ::rocksdb::Status& st, const char* what) {
-    if (!st.ok())
-        throw DFTUtilsException(ErrorCode::IO,
-                                std::string(what) + ": " + st.ToString());
-}
-
-// Removes the least recently used rollups until the store holds at most
-// cache_max_bytes(); `keep` goes only when it alone is over the budget.
-void evict(rdb::RocksDatabase& db, std::uint64_t keep) {
-    struct Entry {
-        std::uint64_t sig, bytes, last_used;
-    };
-    std::vector<Entry> entries;
-    std::uint64_t total = 0;
-    const char tag = '\x02';
-    auto it = db.new_iterator(rdb::cf::ROLLUP);
-    for (it->Seek(std::string_view(&tag, 1)); it->Valid(); it->Next()) {
-        const std::string_view k(it->key().data(), it->key().size());
-        if (k.empty() || k[0] != tag) break;
-        const std::string_view v(it->value().data(), it->value().size());
-        if (k.size() != 9 || v.size() != USAGE_BYTES) continue;
-        entries.push_back({get_be64(k.substr(1)), get_be64(v.substr(0, 8)),
-                           get_be64(v.substr(8))});
-        total += entries.back().bytes;
-    }
-    check(it->status(), "rollup usage scan");
-    const std::uint64_t budget = cache_max_bytes();
-    if (total <= budget) return;
-    std::sort(entries.begin(), entries.end(),
-              [](const Entry& a, const Entry& b) {
-                  return a.last_used < b.last_used;
-              });
-    auto batch = db.begin_batch();
-    auto drop = [&](const Entry& e) {
-        const std::string rows = rollup_row_key(e.sig, "");
-        std::string rows_end = rollup_row_key(e.sig + 1, "");
-        if (e.sig == UINT64_MAX) rows_end = std::string(1, '\x02');
-        db.delete_range(batch, rdb::cf::ROLLUP, rows, rows_end);
-        db.del(batch, rdb::cf::ROLLUP, rollup_desc_key(e.sig));
-        db.del(batch, rdb::cf::ROLLUP, usage_key(e.sig));
-        total -= e.bytes;
-    };
-    for (const auto& e : entries) {
-        if (total <= budget) break;
-        if (e.sig != keep) drop(e);
-    }
-    if (total > budget)
-        for (const auto& e : entries)
-            if (e.sig == keep) drop(e);
-    check(db.commit_batch(batch), "rollup eviction");
+void drop_rollup(rdb::RocksDatabase& db, rdb::RocksDatabase::Batch& batch,
+                 std::uint64_t sig) {
+    const std::string rows = rollup_row_key(sig, "");
+    std::string rows_end = rollup_row_key(sig + 1, "");
+    if (sig == UINT64_MAX) rows_end = std::string(1, '\x02');
+    db.delete_range(batch, rdb::cf::ROLLUP, rows, rows_end);
+    db.del(batch, rdb::cf::ROLLUP, rollup_desc_key(sig));
 }
 
 // Everything that decides a group key's values: a transform coarsens them, so
@@ -250,15 +185,27 @@ void persist_rollup(rdb::RocksDatabase& db, std::uint64_t sig,
                     const std::vector<trace::views::GroupKey>& group_by,
                     const dataframe::AggState& state) {
     const std::int64_t ng = dataframe::agg_num_groups(state);
+    // agg_group_key renders a null key as "", so the finalized key columns
+    // tell a null key apart from an empty one.
+    const dataframe::DataFrame finalized =
+        dataframe::agg_finalize(state, std::vector<std::string>{});
     auto batch = db.begin_batch();
     std::uint64_t bytes = 0;
     std::string row_key;
     for (std::int64_t g = 0; g < ng; ++g) {
-        // Row key = the group's composite key (unit-separated), a stable
-        // identity so a re-persist of the same group overwrites in place.
+        // Row key = the group's composite key, each part tagged null or
+        // value, a stable identity so a re-persist of the same group
+        // overwrites in place.
         row_key.clear();
-        for (const auto& part : dataframe::agg_group_key(state, g)) {
-            row_key += part;
+        const std::vector<std::string> parts =
+            dataframe::agg_group_key(state, g);
+        for (std::size_t k = 0; k < parts.size(); ++k) {
+            if (finalized.columns[k].is_null(g)) {
+                row_key.push_back('\x00');
+            } else {
+                row_key.push_back('\x01');
+                row_key += parts[k];
+            }
             row_key += trace::views::detail::GROUP_SEP;
         }
         const std::string key = rollup_row_key(sig, row_key);
@@ -280,10 +227,12 @@ void persist_rollup(rdb::RocksDatabase& db, std::uint64_t sig,
     }
     bytes += 9 + desc.size() + 9 + USAGE_BYTES;
     db.put(batch, rdb::cf::ROLLUP, rollup_desc_key(sig), desc);
-    db.put(batch, rdb::cf::ROLLUP, usage_key(sig),
-           usage_value(bytes, now_micros()));
-    check(db.commit_batch(batch), "rollup persist");
-    evict(db, sig);
+    put_usage(db, batch, rdb::cf::ROLLUP, sig, bytes);
+    check_status(db.commit_batch(batch), "rollup persist");
+    evict_lru(db, rdb::cf::ROLLUP, sig,
+              [&db](rdb::RocksDatabase::Batch& b, std::uint64_t s) {
+                  drop_rollup(db, b, s);
+              });
 }
 
 bool rollup_exists(const rdb::RocksDatabase& db, std::uint64_t sig) {
@@ -401,17 +350,7 @@ std::optional<dataframe::DataFrame> find_subsuming_rollup(
     if (!have_best) return std::nullopt;
     auto fine = read_rollup(db, best_sig);
     if (!fine) return std::nullopt;
-    if (!db.is_read_only()) {
-        std::string usage;
-        if (db.get(usage_key(best_sig), &usage, rdb::cf::ROLLUP).ok() &&
-            usage.size() == USAGE_BYTES)
-            check(db.put(usage_key(best_sig),
-                         usage_value(
-                             get_be64(std::string_view(usage).substr(0, 8)),
-                             now_micros()),
-                         rdb::cf::ROLLUP),
-                  "rollup usage");
-    }
+    touch_usage(db, rdb::cf::ROLLUP, best_sig);
 
     // Map the query's grouping onto the stored state's key columns. The state
     // key layout is [time_bucket?, best_gb...]; keep the query's keys in query
@@ -448,6 +387,8 @@ std::string cache_dir(const trace::views::detail::ViewPlan& plan) {
     // rollup.
     for (const auto& gk : plan.group_by)
         if (gk.kind == trace::views::GroupKey::Kind::Rank) return {};
+    // A lookup's rows are not part of the plan's identity.
+    if (plan.build_step) return {};
     if (plan.files.empty()) return {};
     const std::string& p = plan.files.front().index_path;
     if (p.empty()) return {};
@@ -463,6 +404,7 @@ std::string rollup_cache_path(const trace::views::detail::ViewPlan& plan) {
         if (gk.kind == trace::views::GroupKey::Kind::Rank) return {};
     // A caller-set root anchors a cross-file rollup (dask sets it for a
     // multi-file query, whose per-file index paths differ).
+    if (plan.build_step) return {};
     if (!plan.rollup_root.empty()) return plan.rollup_root;
     const std::string dir = cache_dir(plan);
     return dir.empty() ? dir : (fs::path(dir) / "rollups").string();

@@ -25,6 +25,8 @@ df.window(
         ("rate", "bytes", "ts", "bw"),
         ("rate", "bytes", "ts", "bw", True),
         ("sessionize", "ts", 15.0, "sess"),
+        ("sessionize", "ts", 15.0, "sess", "end"),
+        ("sessionize", "ts", 15.0, "sess", None, 60.0),
         ("frame_sum", "dur", 1, 1, "fs"),
         ("frame_max", "dur", None, 0, "peak"),
         ("ntile", 4, "q"),

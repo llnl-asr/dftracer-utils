@@ -1,10 +1,12 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dataframe/internal/ipc.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
-#include <dftracer/utils/index/extensions/dict_fold.h>
+#include <dftracer/utils/index/extensions/rowset_fold.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 #include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/index/source.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -74,8 +76,23 @@ std::string padded(std::string s) {
     return s;
 }
 
-std::vector<dftracer::utils::index::Dictionary> dftracer_dictionaries() {
-    return dftracer::utils::index::get_schema("dftracer").dictionaries;
+std::vector<dftracer::utils::index::IndexedRowSet> dftracer_rowsets() {
+    return dftracer::utils::index::indexed_rowsets(
+        dftracer::utils::index::get_schema("dftracer"));
+}
+
+// The path the stored `files` row set of `fid` gives for `fhash`, or "".
+std::string stored_path(const dftracer::utils::index::store::IndexDatabase& db,
+                        int fid, std::string_view fhash) {
+    const auto bytes = db.rowset(fid, "files");
+    if (!bytes) return {};
+    const auto f = dftracer::utils::dataframe::frame_from_ipc(*bytes);
+    if (!f) return {};
+    const auto keys = f->column("fhash").materialize();
+    const auto paths = f->column("path").materialize();
+    for (std::int64_t r = 0; r < f->num_rows(); ++r)
+        if (keys.string_at(r) == fhash) return std::string(paths.string_at(r));
+    return {};
 }
 
 std::vector<FoldEvent> events_of(const std::vector<std::string>& lines,
@@ -148,10 +165,7 @@ TEST_SUITE("BloomFold") {
         std::string index_path = determine_index_path(gz, "");
         {
             StringSink s;
-            View::from_file(gz, index_path)
-                .emit_all_metadata(true)
-                .sink_json(s)
-                .get();
+            View::from_file(gz, index_path).sink_json(s).get();
         }
 
         dftracer::utils::index::store::IndexDatabase db(
@@ -192,7 +206,7 @@ TEST_SUITE("BloomFold") {
             // so the index starts without a bloom for the fold to establish.
             StringSink s;
             View::from_file(gz, index_path)
-                .query(R"(cat == "POSIX")")
+                .duql(R"(cat == "POSIX")")
                 .sink_json(s)
                 .get();
             dftracer::utils::index::store::IndexDatabase db(
@@ -258,7 +272,7 @@ TEST_SUITE("BloomFold") {
         {
             StringSink s;
             View::from_file(gz, index_path)
-                .query(R"(cat == "POSIX")")
+                .duql(R"(cat == "POSIX")")
                 .sink_json(s)
                 .get();
         }
@@ -276,7 +290,7 @@ TEST_SUITE("BloomFold") {
         StringIntern intern;
         auto events = events_of(lines, intern);
         BloomFold bloom(intern);
-        DictFold dict(intern, dftracer_dictionaries());
+        RowSetFold dict(intern, dftracer_rowsets());
         FoldBatch fb{std::span<const FoldEvent>(events), unit};
         bloom.step(fb);
         dict.step(fb);
@@ -300,9 +314,7 @@ TEST_SUITE("BloomFold") {
         CHECK(file_bloom_contains(rd, fid, "name", "read"));
         CHECK(file_bloom_contains(rd, fid, "name", "write"));
         CHECK(file_bloom_contains(rd, fid, "fhash", "fh1"));
-        auto file_hashes = rd.dict_field("file", "path");
-        REQUIRE(file_hashes.count("fh1") == 1);
-        CHECK(file_hashes.at("fh1") == "/data/a.bin");
+        CHECK(stored_path(rd, fid, "fh1") == "/data/a.bin");
     }
 
     // IndexFoldDriver parses member plaintext into the folds. Feeding it split
@@ -316,7 +328,7 @@ TEST_SUITE("BloomFold") {
         {
             StringSink s;
             View::from_file(gz, index_path)
-                .query(R"(cat == "POSIX")")
+                .duql(R"(cat == "POSIX")")
                 .sink_json(s)
                 .get();
         }
@@ -332,7 +344,7 @@ TEST_SUITE("BloomFold") {
 
         StringIntern intern;
         BloomFold bloom(intern);
-        DictFold dict(intern, dftracer_dictionaries());
+        RowSetFold dict(intern, dftracer_rowsets());
         std::array<Fold*, 2> fp{&bloom, &dict};
         IndexFoldDriver drv(intern, fp, gz, index_path);
         // Split mid-way (lands inside the "read" line) to force reassembly.
@@ -356,14 +368,12 @@ TEST_SUITE("BloomFold") {
         dftracer::utils::index::store::IndexDatabase rd(
             index_path, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
         // All three events survived the seam: both names, both cats, the fhash,
-        // and the FH dictionary entry.
+        // and the FH row of the files row set.
         CHECK(file_bloom_contains(rd, fid, "name", "read"));
         CHECK(file_bloom_contains(rd, fid, "name", "write"));
         CHECK(file_bloom_contains(rd, fid, "cat", "STDIO"));
         CHECK(file_bloom_contains(rd, fid, "fhash", "fh1"));
-        auto file_hashes = rd.dict_field("file", "path");
-        REQUIRE(file_hashes.count("fh1") == 1);
-        CHECK(file_hashes.at("fh1") == "/data/a.bin");
+        CHECK(stored_path(rd, fid, "fh1") == "/data/a.bin");
     }
 
     // Schemaless column harvest: nested-object and array args surface as dotted
@@ -394,10 +404,7 @@ TEST_SUITE("BloomFold") {
         std::string index_path = determine_index_path(gz, "");
         {
             StringSink s;
-            View::from_file(gz, index_path)
-                .emit_all_metadata(true)
-                .sink_json(s)
-                .get();
+            View::from_file(gz, index_path).sink_json(s).get();
         }
 
         View v = View::from_file(gz, index_path);
@@ -421,11 +428,10 @@ TEST_SUITE("BloomFold") {
         CHECK(has("pos.y"));
         CHECK(has("tags.0"));
         CHECK(has("tags.1"));
-        // Lifted hashes and their resolved columns.
+        // Lifted hashes; their names are arrows into the row sets.
         CHECK(has("fhash"));
         CHECK(has("hhash"));
-        CHECK(has("resolved.fhash.path"));
-        CHECK(has("resolved.hhash.name"));
+        CHECK_FALSE(has("resolved.fhash.path"));
 
         std::unordered_map<std::string, std::string> ty;
         for (const auto& ci : v.column_info()) ty[ci.name] = ci.type;
@@ -438,7 +444,6 @@ TEST_SUITE("BloomFold") {
         // size is int (1024) in one event and float (2.5) in another; the fold
         // widens it to float64.
         CHECK(ty["size"] == "float64");
-        CHECK(ty["resolved.fhash.path"] == "string");
     }
 }
 

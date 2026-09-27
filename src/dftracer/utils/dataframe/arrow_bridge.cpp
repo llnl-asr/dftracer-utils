@@ -401,6 +401,22 @@ void export_array(const dftu_series& col, ArrowArray* array) {
 
 void build_schema(const dftu_series& col, ArrowSchema* schema);
 
+constexpr std::string_view JSON_EXTENSION = "arrow.json";
+
+// Marks `schema` as the canonical `arrow.json` extension over utf8.
+void set_json_extension(ArrowSchema* schema) {
+    ArrowBuffer meta;
+    ArrowMetadataBuilderInit(&meta, nullptr);
+    ArrowMetadataBuilderAppend(
+        &meta, ArrowCharView("ARROW:extension:name"),
+        ArrowStringView{JSON_EXTENSION.data(),
+                        static_cast<std::int64_t>(JSON_EXTENSION.size())});
+    ArrowMetadataBuilderAppend(&meta, ArrowCharView("ARROW:extension:metadata"),
+                               ArrowCharView(""));
+    ArrowSchemaSetMetadata(schema, reinterpret_cast<const char*>(meta.data));
+    ArrowBufferReset(&meta);
+}
+
 // Sets `schema`'s format (and recurses into children) for `col`'s type,
 // WITHOUT calling ArrowSchemaInit/InitFromType: `schema` may already be
 // initialized and named (a List/LargeList/FixedSizeList "item" child, or a
@@ -447,6 +463,7 @@ void set_type_in_place(const dftu_series& col, ArrowSchema* schema) {
                                     col.fixed_size);
     } else {
         ArrowSchemaSetType(schema, to_arrow_type(col.type));
+        if (col.json) set_json_extension(schema);
     }
 }
 
@@ -797,7 +814,15 @@ Series import_any(const ArrowSchema* schema, const ArrowArray* arr,
         // layout) and just tag the result Map.
         return import_list_like(TypeId::Map, schema, arr, owner);
     }
-    return import_flat(schema, arr, owner);
+    Series out = import_flat(schema, arr, owner);
+    if (view.extension_name.data != nullptr &&
+        std::string_view(
+            view.extension_name.data,
+            static_cast<std::size_t>(view.extension_name.size_bytes)) ==
+            JSON_EXTENSION &&
+        out.type() == TypeId::String)
+        return out.as_json();
+    return out;
 }
 
 // Move `array` into a shared owner that runs its release once the last wrapped

@@ -33,16 +33,6 @@ ViewDefinition& ViewDefinition::with_query(Query q) {
     return *this;
 }
 
-ViewDefinition& ViewDefinition::with_include_metadata(bool v) {
-    include_metadata = v;
-    return *this;
-}
-
-ViewDefinition& ViewDefinition::with_emit_all_metadata(bool v) {
-    emit_all_metadata = v;
-    return *this;
-}
-
 std::string ViewDefinition::to_json() const {
     std::ostringstream out;
     out << "{\n";
@@ -50,12 +40,11 @@ std::string ViewDefinition::to_json() const {
     out << "  \"description\": \"" << escape_json_string(description) << "\"";
 
     if (query) {
-        out << ",\n  \"query\": \"" << escape_json_string(query->source())
+        out << ",\n  \"duql\": \"" << escape_json_string(query->source())
             << "\"";
     }
 
-    out << ",\n  \"include_metadata\": "
-        << (include_metadata ? "true" : "false") << "\n";
+    out << ",\n  \"all\": " << (metadata_records ? "true" : "false") << "\n";
     out << "}";
     return out.str();
 }
@@ -86,16 +75,17 @@ ViewDefinition ViewDefinition::from_json(const std::string& json) {
             std::string(desc_result.value_unsafe().get_string().value());
     }
 
-    auto query_result = root["query"];
+    auto query_result = root["duql"];
     if (!query_result.error() && query_result.value_unsafe().is_string()) {
         view_def.with_query(
             std::string(query_result.value_unsafe().get_string().value()));
     }
 
-    auto meta_result = root["include_metadata"];
-    if (!meta_result.error() && meta_result.value_unsafe().is_bool()) {
-        view_def.include_metadata =
-            meta_result.value_unsafe().get_bool().value();
+    auto all_result = root["all"];
+    if (!all_result.error() && all_result.value_unsafe().is_bool()) {
+        view_def.metadata_records =
+            all_result.value_unsafe().get_bool().value();
+        view_def.include_metadata = view_def.metadata_records;
     }
 
     return view_def;

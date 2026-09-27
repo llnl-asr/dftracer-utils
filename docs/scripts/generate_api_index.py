@@ -58,7 +58,7 @@ TITLE_OVERRIDES: dict[str, str] = {
     "": "Runtime classes",
     "dataframe": "DataFrame and Series",
     "dataframe.field": "Field builder",
-    "query": "Query builder",
+    "duql": "duql builder",
     "plugins": "Plugin SDK",
     "plugins.reflect": "Reflection",
     "plugins.scalar": "Scalars",

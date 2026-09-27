@@ -57,8 +57,7 @@ class PodAccessor {
     bool arg_is_number(std::string_view k) const {
         if (k == "hhash" || k == "fhash") return false;
         const auto* v = find(k);
-        return v && (std::holds_alternative<double>(*v) ||
-                     std::holds_alternative<std::int64_t>(*v));
+        return v && !std::holds_alternative<std::uint32_t>(*v);
     }
     std::uint64_t arg_uint(std::string_view k) const {
         if (k == "hhash" || k == "fhash") return 0;
@@ -67,6 +66,7 @@ class PodAccessor {
             if (const auto* d = std::get_if<double>(v)) return clamp_uint(*d);
             if (const auto* i = std::get_if<std::int64_t>(v))
                 return *i < 0 ? 0 : static_cast<std::uint64_t>(*i);
+            if (const auto* u = std::get_if<std::uint64_t>(v)) return *u;
         }
         return 0;
     }
@@ -77,6 +77,8 @@ class PodAccessor {
             if (const auto* d = std::get_if<double>(v)) return *d;
             if (const auto* i = std::get_if<std::int64_t>(v))
                 return static_cast<double>(*i);
+            if (const auto* u = std::get_if<std::uint64_t>(v))
+                return static_cast<double>(*u);
         }
         return 0.0;
     }
@@ -98,6 +100,8 @@ class PodAccessor {
             else if (const auto* i = std::get_if<std::int64_t>(&val))
                 fn(resolve(kid), *i < 0 ? 0 : static_cast<std::uint64_t>(*i),
                    static_cast<double>(*i));
+            else if (const auto* u = std::get_if<std::uint64_t>(&val))
+                fn(resolve(kid), *u, static_cast<double>(*u));
         }
     }
 

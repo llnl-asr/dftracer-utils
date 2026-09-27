@@ -199,21 +199,18 @@ TEST_SUITE("expr string ops") {
         Series ints = Series::flat_i64(v.data(), 2);
         std::vector<const Series*> in{&ints};
         CHECK_THROWS_AS(
-            (void)eval(expr_str_pred(StrPredOp::Contains, expr_col(0), "x"),
-                       in),
+            eval(expr_str_pred(StrPredOp::Contains, expr_col(0), "x"), in),
             std::invalid_argument);
+        CHECK_THROWS_AS(eval(expr_str_map(StrMapOp::Upper, expr_col(0)), in),
+                        std::invalid_argument);
         CHECK_THROWS_AS(
-            (void)eval(expr_str_map(StrMapOp::Upper, expr_col(0)), in),
-            std::invalid_argument);
-        CHECK_THROWS_AS(
-            (void)eval(expr_is_in(expr_col(0), Series::strings({"a"})), in),
+            eval(expr_is_in(expr_col(0), Series::strings({"a"})), in),
             std::invalid_argument);
         Series s = names();
         std::vector<const Series*> sin{&s};
         std::vector<std::int64_t> set{1};
         CHECK_THROWS_AS(
-            (void)eval(expr_is_in(expr_col(0), Series::flat_i64(set.data(), 1)),
-                       sin),
+            eval(expr_is_in(expr_col(0), Series::flat_i64(set.data(), 1)), sin),
             std::invalid_argument);
         CHECK(infer_type(expr_str_len(expr_col(0), false),
                          {dftracer::utils::dataframe::scalar(TypeId::Unknown)})
@@ -307,9 +304,9 @@ TEST_SUITE("expr string ops") {
             sin2);
         CHECK(strs(ws) ==
               std::vector<std::string>{"read", "b", "c", "d", "readv"});
-        CHECK_THROWS_AS((void)eval(expr_select(expr_col(0), expr_col(0),
-                                               expr_lit(std::int64_t{0})),
-                                   in),
+        CHECK_THROWS_AS(eval(expr_select(expr_col(0), expr_col(0),
+                                         expr_lit(std::int64_t{0})),
+                             in),
                         std::invalid_argument);  // non-Bool condition
 
         dftu_expr* c = dftu_expr_col(0);

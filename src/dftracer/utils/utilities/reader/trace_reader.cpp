@@ -1,14 +1,14 @@
 #include <dftracer/utils/core/common/archive_format.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/utils/string.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/index/plan/prefilter.h>
 #include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/index/plan/resolved_field_rewriter.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/json/json_value.h>
-#include <dftracer/utils/query/query.h>
+#include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/utilities/reader/error.h>
@@ -33,16 +33,15 @@ namespace dftracer::utils::utilities::reader {
 
 namespace dftu_internal = trace::internal;
 using dftracer::utils::index::gzip::CheckpointIndexerFactory;
+using duql::Query;
 using json::JsonValue;
-using query::Query;
 
-using internal::ondemand_to_literal;
 using internal::read_chunks_indexed;
 using internal::strip_ndjson_bookends;
 
 namespace {
 
-thread_local simdjson::dom::parser tl_parser;
+thread_local dftracer::utils::json::RecordParser tl_parser;
 
 /// Traces must be gzip. A bare .pfw is rejected rather than read, so a file
 /// that was never compressed fails at the reader instead of silently taking
@@ -476,7 +475,7 @@ coro::CoroTask<trace::TimeMetric> TraceReader::read_time_metric(
     ReadConfig probe;
     probe.end_line = max_lines;
     auto gen = read_lines(probe);
-    simdjson::dom::parser parser;
+    dftracer::utils::json::RecordParser parser;
     TimeMetric metric = TimeMetric::US;
     while (auto line_opt = co_await gen.next()) {
         const char* start = nullptr;
@@ -529,7 +528,7 @@ coro::AsyncGenerator<Line> TraceReader::read_lines(ReadConfig config) {
     std::optional<Query> query;
     if (!config.query.empty()) {
         auto parsed = Query::from_string(config.query);
-        if (!parsed) throw query::QueryParseError(parsed.error());
+        if (!parsed) throw duql::DuqlParseError(parsed.error());
         query = std::move(*parsed);
     }
 
@@ -549,18 +548,8 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
     std::optional<Query> query;
     if (!config.query.empty()) {
         auto parsed = Query::from_string(config.query);
-        if (!parsed) throw query::QueryParseError(parsed.error());
+        if (!parsed) throw duql::DuqlParseError(parsed.error());
         query = std::move(*parsed);
-    }
-
-    // Resolve `resolved.` columns to key in-clauses through the index
-    // dictionaries before the query drives pruning or per-event evaluation.
-    if (query && has_index_ && !index_path_.empty() &&
-        dftracer::utils::index::plan::has_resolved_fields(*query)) {
-        if (auto rewritten =
-                dftracer::utils::index::plan::rewrite_resolved_fields(
-                    *query, index_path_, config_.file_path))
-            query = std::move(*rewritten);
     }
 
     // chunk_prune_only path: dim_stats already proved every event with the
@@ -588,6 +577,9 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
 
         simdjson::ondemand::parser bulk_parser;
         json::JsonParser yield_parser;
+        // An expression may read a whole object or array, which the field map
+        // cannot hold, so it runs on the record's DOM.
+        dftracer::utils::json::RecordParser expr_parser;
 
         while (auto chunk_opt = co_await chunk_gen.next()) {
             auto chunk = *chunk_opt;
@@ -620,8 +612,14 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
                     }
                     if (!all_present) continue;
                     doc.rewind();
+                } else if (query && query->has_expressions()) {
+                    simdjson::dom::element record;
+                    if (expr_parser.parse(src.data(), src.size()).get(record) !=
+                            simdjson::SUCCESS ||
+                        !query->evaluate(json::JsonValue(record)))
+                        continue;
                 } else if (query) {
-                    query::ValueMap fields;
+                    duql::ValueMap fields;
                     auto obj = doc.get_object();
                     if (obj.error()) continue;
                     for (auto field : obj.value()) {
@@ -674,6 +672,7 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
     auto line_gen = read_lines(config);
 
     json::JsonParser parser;
+    dftracer::utils::json::RecordParser expr_parser;
 
     while (auto opt = co_await line_gen.next()) {
         const char* trimmed;
@@ -683,8 +682,14 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
             continue;
         if (!parser.parse(std::string_view(trimmed, trimmed_len))) continue;
 
-        if (query) {
-            query::ValueMap fields;
+        if (query && query->has_expressions()) {
+            simdjson::dom::element record;
+            if (expr_parser.parse(trimmed, trimmed_len).get(record) !=
+                    simdjson::SUCCESS ||
+                !query->evaluate(json::JsonValue(record)))
+                continue;
+        } else if (query) {
+            duql::ValueMap fields;
             std::vector<std::string> nested_keys;
             parser.for_each_field([&](std::string_view key,
                                       simdjson::ondemand::value val) {
@@ -748,7 +753,7 @@ coro::AsyncGenerator<std::span<const char>> TraceReader::read_raw(
         if (!config.query.empty() && !index_path_.empty() &&
             range_type == internal::RangeType::BYTE_RANGE) {
             auto parsed = Query::from_string(config.query);
-            if (!parsed) throw query::QueryParseError(parsed.error());
+            if (!parsed) throw duql::DuqlParseError(parsed.error());
             auto pruned = co_await dftracer::utils::index::plan::prune_file(
                 {.index_path = index_path_,
                  .file_path = config_.file_path,

@@ -20,6 +20,8 @@
 #include <dftracer/utils/dataframe/kernels/kernels.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/plan.h>
+#include <dftracer/utils/duql/errc.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/python/columnar_eval.h>
 #include <dftracer/utils/python/lazyframe.h>
 #include <dftracer/utils/python/py_agg_helpers.h>
@@ -29,8 +31,6 @@
 #include <dftracer/utils/python/py_scalar_helpers.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/series.h>
-#include <dftracer/utils/query/errc.h>
-#include <dftracer/utils/query/query.h>
 
 #include <cstdint>
 #include <cstring>
@@ -182,7 +182,7 @@ PyObject* DataFrame_filter(PyObject* self, PyObject* mask) {
 // descending=False, limit=None) -> DataFrame: a query plan over this batch -
 // filter by the DSL predicate (a SIMD mask, pandas.query-style), group_by/aggs,
 // project `select`, sort by `order_by`, cap at `limit`. Raises
-// DFTUtilsQueryError on a parse error or a predicate with no columnar lowering
+// DFTUtilsDuqlError on a parse error or a predicate with no columnar lowering
 // (regex/like/ordered-string/absent field).
 PyObject* DataFrame_query(PyObject* self, PyObject* args, PyObject* kwds) {
     DataFrameObject* b = as_dataframe(self);
@@ -201,17 +201,17 @@ PyObject* DataFrame_query(PyObject* self, PyObject* args, PyObject* kwds) {
             &aggs_obj, &select_obj, &order_by, &descending, &limit_obj))
         return nullptr;
 
-    namespace query = dftracer::utils::query;
+    namespace duql = dftracer::utils::duql;
     namespace dataframe = dftracer::utils::dataframe;
     try {
         DataFrame bat = to_dataframe(b);
         dataframe::QueryPlan plan;
-        std::optional<query::Query> q;  // keep root() alive across execute
+        std::optional<duql::Query> q;  // keep root() alive across execute
         if (dsl && *dsl) {
-            auto parsed = query::Query::from_string(dsl);
+            auto parsed = duql::Query::from_string(dsl);
             if (!parsed)
                 throw dftracer::utils::DFTUtilsException(
-                    dftracer::utils::make_error(query::QueryErrc::Parse,
+                    dftracer::utils::make_error(duql::DuqlErrc::Parse,
                                                 parsed.error().format()));
             q.emplace(std::move(*parsed));
             plan.where = &q->root();
@@ -939,19 +939,8 @@ PyObject* DataFrame_window(PyObject* self, PyObject* args, PyObject* kwds) {
         return nullptr;
     std::vector<arr::WindowColumn> specv;
     specv.reserve(parsed.specs.size());
-    for (const dftu_window_spec& w : parsed.specs) {
-        arr::WindowColumn c;
-        c.func = static_cast<arr::WindowFunc>(w.func);
-        if (w.value) c.value = std::string(w.value);
-        if (w.time) c.time = std::string(w.time);
-        c.out = w.out;
-        c.offset = w.offset;
-        c.threshold = w.threshold;
-        c.counter = w.counter != 0;
-        c.preceding = w.preceding;
-        c.following = w.following;
-        specv.push_back(std::move(c));
-    }
+    for (const dftu_window_spec& w : parsed.specs)
+        specv.push_back(arr::window_column(w));
     return run_batch_op(
         [&] { return arr::window(to_dataframe(b), pcols, ocols, specv); });
 }
@@ -1511,6 +1500,41 @@ PyGetSetDef DataFrame_getset[] = {
 PyMappingMethods DataFrame_as_mapping = {};
 PySequenceMethods DataFrame_as_sequence = {};
 
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
+// Whether field `i` of `obj`'s schema carries the `arrow.json` extension in
+// its metadata. A pyarrow without the registered extension type (before 18)
+// keeps the name only there, and an Array's own export has no field metadata.
+bool field_is_json(PyObject* obj, Py_ssize_t i) {
+    PyObject* schema = PyObject_GetAttrString(obj, "schema");
+    if (!schema) {
+        PyErr_Clear();
+        return false;
+    }
+    PyObject* field = PyObject_CallMethod(schema, "field", "n", i);
+    Py_DECREF(schema);
+    if (!field) {
+        PyErr_Clear();
+        return false;
+    }
+    PyObject* md = PyObject_GetAttrString(field, "metadata");
+    Py_DECREF(field);
+    if (!md) {
+        PyErr_Clear();
+        return false;
+    }
+    bool json = false;
+    if (PyDict_Check(md)) {
+        // pyarrow keys the metadata dict by bytes.
+        PyObject* key = PyBytes_FromString("ARROW:extension:name");
+        PyObject* name = key ? PyDict_GetItem(md, key) : nullptr;
+        json = name && PyBytes_Check(name) &&
+               std::strcmp(PyBytes_AsString(name), "arrow.json") == 0;
+        Py_XDECREF(key);
+    }
+    Py_DECREF(md);
+    return json;
+}
+
 // vec_batch_from_arrow(table) -> DataFrame: import each column of a pyarrow
 // Table (or RecordBatch) into vec. Used to reconstruct a pickled DataFrame and
 // to lift Arrow into the native format.
@@ -1540,6 +1564,10 @@ PyObject* vec_batch_from_arrow(PyObject* /*self*/, PyObject* obj) {
             arr ? dftracer::utils::python::column_from_arrow(arr) : Series{};
         Py_XDECREF(arr);
         Py_XDECREF(ca);
+        if (col.valid() && !col.is_json() &&
+            col.type() == dftracer::utils::dataframe::TypeId::String &&
+            field_is_json(obj, i))
+            col = col.as_json();
         if (!col.valid()) {
             Py_XDECREF(nm);
             Py_DECREF(names);

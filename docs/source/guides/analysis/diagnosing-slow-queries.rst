@@ -31,7 +31,7 @@ process start (full list: :doc:`../../environment`):
 .. code-block:: console
 
    $ DFTRACER_UTILS_MONITOR=tree DFTRACER_UTILS_LOG_LEVEL=debug \
-       dftracer_view -d traces/ --query 'cat == "POSIX"'
+       dftracer_view -d traces/ --duql 'cat == "POSIX"'
 
 From Python, ``Runtime.get_progress()`` returns a live snapshot (per-worker
 state and per-task durations) you can poll while a run is in flight, without
@@ -51,11 +51,11 @@ served from the index.
   first query, build it explicitly rather than relying on the bootstrap - see
   :doc:`../core/indexing`.
 - Confirm the predicate you filter on is one the index can prune with:
-  indexed fields (``cat``, ``name``, ``pid``, ``ts``, ``dur``, and the
-  resolved fields) are pushed down at scan time so whole chunks are skipped
+  indexed fields (``cat``, ``name``, ``pid``, ``ts``, ``dur`` and arrows into
+  row sets such as ``fhash -> files.path``) are pushed down at scan time so whole chunks are skipped
   unread; anything else falls back to a SIMD mask over every scanned batch,
   which is correct but does not skip I/O. See "How it runs" in
-  :doc:`../core/query-dsl` and the pruning mechanics in
+  :doc:`../core/duql` and the pruning mechanics in
   :doc:`../../concepts/indexing-and-pushdown`.
 - If the directory's files were replaced or appended to after the index was
   built, a plain query reads the (now stale) index as-is rather than

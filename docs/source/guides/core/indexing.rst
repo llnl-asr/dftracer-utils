@@ -179,8 +179,9 @@ You do not have to index before you query a file that has never been indexed.
 The first aggregation query against a genuinely fresh file - no ``.dftindex``
 for it yet, and a plan without a time range - takes a one-pass "bootstrap"
 that both answers the query and builds the full index (members, bloom
-filters, dictionaries) as a byproduct, so the query never pays for a separate
-eager build:
+filters, stored row sets) as a byproduct, so the query never pays for a separate
+eager build. This holds for any record schema, a path schema included; the
+index records the schema the file was decoded with:
 
 .. tab-set::
 
@@ -231,6 +232,13 @@ be replaced. Until the next build, queries the tier cannot answer exactly read
 the traces instead. An index directory is cheap to rebuild, so this needs no
 action from you beyond letting the next build run.
 
+The tier builds for files of any record schema. For a path schema it answers
+the group keys ``name``, ``pid`` and ``tid`` (its name, entity and lane roles)
+and aggregates of its duration and time fields, when each role
+field is required, the name is a ``string``, the others are ``int``, times are
+in ``us`` and the source has no ``data`` row set. Any other query reads the
+traces.
+
 Inspect, rebuild or drop one extension
 --------------------------------------
 
@@ -238,7 +246,8 @@ The pruning data is split into extensions: ``zonemap`` (value ranges),
 ``bloom``, ``counts`` (value counts), ``postings`` (name to chunks) and
 ``dft.stats`` (statistics) and ``dft.metadata`` (metadata records per
 chunk), next to ``core.members`` (gzip members), ``core.catalog`` (the path
-catalog) and ``core.dict`` (dictionaries). ``extensions`` chooses which of the
+catalog) and ``core.rowset`` (the stored row sets of the record schema's
+source). ``extensions`` chooses which of the
 first four a build makes; the default is all four. Use the manifest to see what each file
 has, ``explain`` to see why a filter reads the chunks it reads, and
 ``rebuild_extension`` or ``drop_extension`` to act on one extension without
@@ -293,11 +302,10 @@ rebuilding the rest.
       marks one whose build failed or that an older version wrote.
 
 ``explain`` reports, per file, the chunks the query reads for its data events
-(the chunks a View row or aggregation scan reads; an export also reads the
-chunks holding thread and process names) and, for each pruning extension, the chunks it would rule
+(the chunks a View row or aggregation scan reads) and, for each pruning extension, the chunks it would rule
 out if it were the only one. It writes nothing. A dropped extension is built
 again by the next build only while ``extensions`` names it. ``core.members``,
-``core.dict`` and ``dftracer.agg`` (the aggregation tier, rebuilt by a build
+``core.rowset`` and ``dftracer.agg`` (the aggregation tier, rebuilt by a build
 with ``require_aggregation``) cannot be rebuilt or dropped alone.
 
 Index traces that are not dftracer traces
@@ -345,17 +353,23 @@ every aggregate read them:
 .. code-block:: python
 
    tv = dft.TraceViewer("requests.ndjson.gz")
-   tv.query('op == "read" and io.off > 4096').select("op", "lat").collect()
+   tv.duql('op == "read" and io.off > 4096').select("op", "lat").collect()
    tv.group_by("op").agg("count", "sum:lat").collect()
 
 The ``generic`` schema binds no time or duration field, so ``time_range``,
 ``time_bucket``, the occupancy aggregates (``busy`` and the others) and
 ``call_tree``/``flamegraph`` raise an error on generic records, and so do
-the dftracer-only group keys (``io_cat``, ``rank``, hash and resolved
-keys). Declare your format as a record schema to use them. A viewer reads
+the dftracer-only group keys ``io_cat`` and ``acc_pat``. The keys ``fhash``
+and ``hhash`` group on the fields of those names; ``file_path``,
+``file_name``, ``host_name`` and ``rank`` relabel them (``rank`` the entity
+role) through the source's ``files`` (``fhash``, ``path``), ``hosts``
+(``hhash``, ``name``) and ``ranks`` (``pid``, ``rank``) row sets, and raise
+an error naming the row set when the schema's source defines none. Declare
+your format as a record schema to use them. A viewer reads
 files of one schema: mixing dftracer traces and generic files in one viewer
-raises an error naming both. A directory viewer finds ``.jsonl.gz`` and
-``.ndjson.gz`` files next to ``.pfw.gz`` traces, and so does the indexer.
+raises an error naming both; an empty file, or one of metadata only, takes
+no vote. A directory viewer finds ``.jsonl`` and ``.ndjson``
+files next to ``.pfw`` traces, plain or gzip, and so does the indexer.
 
 .. _describe-your-own-record-format:
 
@@ -438,7 +452,7 @@ as usual:
        print(ix.explain('upstream == "u2"'))   # reads the u2 chunks only
 
    tv = dft.TraceViewer("access.ndjson.gz")
-   tv.query("""tags == '["api", "v1"]'""").group_by("status").agg("count").collect()
+   tv.duql("""tags == '["api", "v1"]'""").group_by("status").agg("count").collect()
    tv.time_range(1_700_000_000_000_000, 1_700_000_001_000_000).collect()
    tv.time_bucket(1_000_000).agg("count").collect()
 
@@ -453,7 +467,7 @@ object or array as canonical JSON text (no spaces, keys sorted), so
 ``'["api", "v1"]'`` matches however the records space it. Index evidence
 covers the leaves under a ``json`` field (``tags.0``), not the whole value;
 ``any(tags) == "v1"`` filters by element and skips chunks through that
-evidence (see :doc:`query-dsl`).
+evidence (see :doc:`duql`).
 
 ``schemas.explain(path)`` shows each schema's detection share for a file,
 and ``TraceViewer.schema_tree()`` shows the paths the index holds with their
@@ -478,7 +492,7 @@ after the viewer's filters and time window:
 
       .. code-block:: python
 
-         for log in dft.TraceViewer("access.ndjson.gz").query("status >= 500").rows(AccessLog):
+         for log in dft.TraceViewer("access.ndjson.gz").duql("status >= 500").rows(AccessLog):
              print(log.upstream, log.request_time)
 
       ``rows`` collects the fields first, so use ``collect()`` for bulk
@@ -494,7 +508,7 @@ after the viewer's filters and time window:
 
          std::vector<AccessLog> logs =
              co_await tv::rows<AccessLog>(
-                 tv::View::from_file("access.ndjson.gz").query("status >= 500"));
+                 tv::View::from_file("access.ndjson.gz").duql("status >= 500"));
          for (const AccessLog& log : logs)
              std::printf("%s %f\n", log.upstream->c_str(), *log.request_time);
 
@@ -567,7 +581,7 @@ See also
 
 - :doc:`../../concepts/indexing-and-pushdown` for what the index holds and how
   pushdown uses it.
-- :doc:`query-dsl` for the predicates that get pushed down.
+- :doc:`duql` for the predicates that get pushed down.
 - :doc:`../../cpp_api/indexer` for the generated C++ indexer API reference.
 - :doc:`../../trace-viewer` and :doc:`../data/dataframe` for reading the
   trace once it is indexed.

@@ -102,7 +102,7 @@ TEST_SUITE("TypedRows") {
         const auto gz = write_access(
             env, R"({"op":7,"lat":"n/a","io":{"off":1.5},"hosts":"h"})"
                  "\n");
-        auto got = run(rows<Access>(view_of(gz).query("lat == \"n/a\"")));
+        auto got = run(rows<Access>(view_of(gz).duql("lat == \"n/a\"")));
         REQUIRE(got.size() == 1);
         CHECK(got[0].op->empty());
         CHECK(*got[0].lat == 0);
@@ -113,8 +113,7 @@ TEST_SUITE("TypedRows") {
     TEST_CASE("filters apply") {
         TestEnvironment env(10);
         const auto gz = write_access(env, "");
-        const auto got =
-            run(rows<Access>(view_of(gz).query(R"(op == "read")")));
+        const auto got = run(rows<Access>(view_of(gz).duql(R"(op == "read")")));
         CHECK(got.size() == RECORDS / 2);
         CHECK(std::all_of(got.begin(), got.end(),
                           [](const Access& r) { return *r.op == "read"; }));

@@ -12,7 +12,7 @@ throughout; Arrow appears only when the caller asks for it via
 ``.to_arrow()`` / ``.to_pandas()``.
 
 This is the value-expression half of the DSL. The same ``F`` also builds row
-filter predicates (the :doc:`query` half); one unified :class:`Expr` covers
+filter predicates (the :doc:`duql` half); one unified :class:`Expr` covers
 both, and the two compose - see :func:`~dftracer.utils.where`.
 
 .. code-block:: python
@@ -42,12 +42,12 @@ How the value-expression DSL types relate:
 
 ``F`` is attribute sugar for ``col``: ``F.dur`` is ``col("dur")``, for any
 column name that is a valid Python identifier. It is the single unified builder
-exported from ``dftracer.utils`` (and re-exported from ``dftracer.utils.query``):
+exported from ``dftracer.utils`` (and re-exported from ``dftracer.utils.duql``):
 the same field leaf builds value expressions here and filter predicates in
-:doc:`query`.
+:doc:`duql`.
 
 .. autoclass:: dftracer.utils.Expr
-   :members: apply, to_query
+   :members: apply, to_duql
 
 Arithmetic (``+ - * /``, with scalar broadcast), comparisons (``> >= < <=
 == !=``), and the logical combinators (``& | ~``) are all operator overloads
@@ -89,7 +89,7 @@ Row filtering
 .. autofunction:: dftracer.utils.where
 
 ``where`` accepts either a ``ColumnExpr`` predicate (evaluated on the engine
-to a boolean mask) or a query DSL string (see :doc:`query`), and keeps the
+to a boolean mask) or a duql string (see :doc:`duql`), and keeps the
 matching rows of a native ``DataFrame`` or a ``pyarrow.Table``.
 
 Group-by aggregation

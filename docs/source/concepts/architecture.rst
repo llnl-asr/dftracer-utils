@@ -20,7 +20,7 @@ static variant (``src/CMakeLists.txt``), aggregated behind
   maps, the error type). It knows nothing about traces.
 - ``dftracer_utils_json`` is the simdjson-backed JSON layer: parsing and
   the JSON value type.
-- ``dftracer_utils_query`` is the query DSL: the predicate IR, the string
+- ``dftracer_utils_duql`` is the duql filter language: the predicate IR, the string
   codec, and the evaluator.
 - ``dftracer_utils_dataframe`` is the columnar SIMD engine: ``Series`` /
   ``DataFrame``, the Highway kernels, and the Arrow bridge.
@@ -40,7 +40,7 @@ active.
    graph TB
        Core["dftracer_utils_core<br/>runtime, coro, io, pipeline"]
        Json["dftracer_utils_json<br/>simdjson-backed parsing"]
-       Query["dftracer_utils_query<br/>predicate IR, evaluator"]
+       Query["dftracer_utils_duql<br/>predicate IR, evaluator"]
        DF["dftracer_utils_dataframe<br/>Series/DataFrame, SIMD kernels"]
        Util["dftracer_utils_utilities<br/>trace, indexer, plugins"]
        Json --> Core
@@ -55,12 +55,12 @@ active.
 The domain logic itself is grouped by what it does rather than by a shared
 base class: readers and the fused scan under ``trace/``, the index under
 ``index/`` (in layers: ``store`` for RocksDB storage, ``gzip`` for
-checkpoints, ``extensions`` for blooms, dimension stats and dictionaries,
+checkpoints, ``extensions`` for blooms, dimension stats and stored row sets,
 ``schemas/dft`` for the dftracer-specific statistics and aggregation,
 then ``build``, ``plan`` for pruning and ``cache`` for rollups; a CTest check
 keeps each layer from including a higher one), comparison under
 ``trace/comparator``, the columnar engine under
-``dataframe/``, the query DSL under ``query/``, and the plugin C ABI under
+``dataframe/``, the duql filter language under ``duql/``, and the plugin C ABI under
 ``plugins/``. See :doc:`fused-scan`, :doc:`indexing-and-pushdown`, and
 :doc:`dataframe-model` for each of those in turn.
 

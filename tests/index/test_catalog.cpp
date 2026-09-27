@@ -183,6 +183,30 @@ TEST_SUITE("PathCatalog") {
         CHECK(listed);
     }
 
+    TEST_CASE("an empty array or object is listed and is not a column") {
+        dftu_utils_test::TestEnvironment env(10);
+        const std::string body = "[\n" +
+                                 event(0, "read", R"({"tags":[],"opts":{}})") +
+                                 event(1, "read", R"({"n":1})") + "]\n";
+        const auto trace = dftu_utils_test::write_gz_trace(
+            env.get_dir() + "/empty.pfw.gz", body);
+        const auto idx = env.get_dir() + "/idx";
+        const auto st = index::Indexer::open({trace}, options(idx)).build();
+        const auto cat = catalog_of(trace, st.index_path);
+        REQUIRE(cat.count("args.tags"));
+        REQUIRE(cat.count("args.opts"));
+        CHECK(cat.at("args.tags").type == PathType::ARRAY);
+        CHECK(cat.at("args.opts").type == PathType::OBJECT);
+        CHECK(cat.at("args.tags").count == 1);
+        CHECK(cat.at("args.opts").count == 1);
+        store::IndexDatabase db(st.index_path, store::IndexOpenMode::ReadOnly);
+        std::map<std::string, ColumnType> cols;
+        for (auto& [name, t] : db.query_all_column_types()) cols[name] = t;
+        CHECK_FALSE(cols.count("tags"));
+        CHECK_FALSE(cols.count("opts"));
+        CHECK(cols.count("n"));
+    }
+
     TEST_CASE("the schema folds every record of the catalog") {
         dftu_utils_test::TestEnvironment env(10);
         const auto trace = write_fixture(env.get_dir());
@@ -197,7 +221,7 @@ TEST_SUITE("PathCatalog") {
         CHECK(cols.at("big") == ColumnType::Float64);
         CHECK(cols.at("io.off") == ColumnType::Int64);
         CHECK(cols.at("hosts.1") == ColumnType::String);
-        CHECK(cols.at("mix") == ColumnType::String);
+        CHECK(cols.at("mix") == ColumnType::Json);
         CHECK(cols.at("retry") == ColumnType::Int64);
         CHECK(cols.at("type") == ColumnType::String);
         CHECK_FALSE(cols.count("nul"));

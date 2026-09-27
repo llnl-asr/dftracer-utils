@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/little_endian.h>
+#include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/index/extensions/chunk_dimension_stats.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 
@@ -10,24 +11,16 @@ namespace dftracer::utils::index::extensions {
 
 bool dimension_value_less(std::string_view a, std::string_view b,
                           std::string_view value_type) {
-    if (value_type == "uint") {
-        std::uint64_t x = 0, y = 0;
-        std::from_chars(a.data(), a.data() + a.size(), x);
-        std::from_chars(b.data(), b.data() + b.size(), y);
-        return x < y;
+    if (value_type == "uint" || value_type == "int" || value_type == "double") {
+        const auto x = duql::parse_number(a);
+        const auto y = duql::parse_number(b);
+        if (x && y) return duql::compare_numbers(*x, *y).value_or(0) < 0;
     }
-    if (value_type == "int") {
-        std::int64_t x = 0, y = 0;
-        std::from_chars(a.data(), a.data() + a.size(), x);
-        std::from_chars(b.data(), b.data() + b.size(), y);
-        return x < y;
-    }
-    if (value_type == "double")
-        return std::stod(std::string(a)) < std::stod(std::string(b));
     return a < b;
 }
 
 void ChunkDimensionStats::observe(std::string_view value) {
+    ++present;
     if (last_key_ != nullptr && *last_key_ == value) {
         ++*last_counter_;
         return;
@@ -83,6 +76,7 @@ void ChunkDimensionStats::observe(std::string_view value) {
 }
 
 void ChunkDimensionStats::observe_range_only(std::uint64_t value) {
+    ++present;
     distinct_count++;
     auto str = std::to_string(value);
     if (min_value.empty()) {

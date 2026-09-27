@@ -7,13 +7,14 @@
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/duql/pipeline.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
-#include <dftracer/utils/query/query.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -91,7 +92,7 @@ class ViewArgParse : public cli::ArgParse {
     cli::FilesArgs files_args;
     cli::PipelineArgs pipeline;
     cli::IndexingArgs indexing;
-    cli::QueryArgs query_args;
+    cli::DuqlArgs duql_args;
 
     std::string preset;
     std::string recipe;
@@ -100,8 +101,7 @@ class ViewArgParse : public cli::ArgParse {
     double min_duration = 0.0;
     double max_duration = 0.0;
     std::string output;
-    bool stream = false;
-    bool no_metadata = false;
+    bool all = false;
     bool no_auto_index = false;
     std::string group_by;
     std::string agg;
@@ -119,6 +119,8 @@ class ViewArgParse : public cli::ArgParse {
     std::uint64_t limit = 0;
     std::uint64_t offset = 0;
     std::string select;
+    std::vector<std::string> params;
+    bool explain = false;
     double time_scale = 0.0;
     std::uint64_t memory_budget = 0;
     bool no_spill = false;
@@ -130,7 +132,10 @@ class ViewArgParse : public cli::ArgParse {
         indexing.with_force = false;
         indexing.index_dir_help =
             "Directory where .dftindex stores are created";
-        schema(directory, files_args, pipeline, indexing, query_args);
+        duql_args.help =
+            "duql filter or pipeline (e.g., 'cat == \"POSIX\" | derive ms = "
+            "dur / 1000 | sort -ms | take 5')";
+        schema(directory, files_args, pipeline, indexing, duql_args);
     }
 
    protected:
@@ -177,13 +182,10 @@ class ViewArgParse : public cli::ArgParse {
             .default_value<std::string>("");
 
         parser()
-            .add_argument("--stream")
-            .help("Stream matching events to stdout as NDJSON")
-            .flag();
-
-        parser()
-            .add_argument("--no-metadata")
-            .help("Exclude metadata events (ph=M) from output")
+            .add_argument("--all")
+            .help(
+                "Read every record, metadata (ph=M) included, instead of the "
+                "source's data")
             .flag();
 
         parser()
@@ -295,6 +297,19 @@ class ViewArgParse : public cli::ArgParse {
             .default_value<std::string>("");
 
         parser()
+            .add_argument("--param")
+            .help(
+                "Bind a --duql parameter: name=value, the value a duql "
+                "literal such as 5, 1.5, \"read\" or true (repeatable)")
+            .append()
+            .default_value(std::vector<std::string>{});
+
+        parser()
+            .add_argument("--explain")
+            .help("Print the plan of --duql and exit without scanning")
+            .flag();
+
+        parser()
             .add_argument("--time-scale")
             .help(
                 "Scale timestamps/durations by this ns-per-unit ratio "
@@ -344,8 +359,7 @@ class ViewArgParse : public cli::ArgParse {
         min_duration = cli::get_duration_arg(parser(), "--min-duration", 1e6);
         max_duration = cli::get_duration_arg(parser(), "--max-duration", 1e6);
         output = parser().get<std::string>("--output");
-        stream = parser().get<bool>("--stream");
-        no_metadata = parser().get<bool>("--no-metadata");
+        all = parser().get<bool>("--all");
         no_auto_index = parser().get<bool>("--no-auto-index");
         group_by = parser().get<std::string>("--group-by");
         agg = parser().get<std::string>("--agg");
@@ -365,6 +379,8 @@ class ViewArgParse : public cli::ArgParse {
         limit = parser().get<std::uint64_t>("--limit");
         offset = parser().get<std::uint64_t>("--offset");
         select = parser().get<std::string>("--select");
+        params = parser().get<std::vector<std::string>>("--param");
+        explain = parser().get<bool>("--explain");
         time_scale = parser().get<double>("--time-scale");
         memory_budget = cli::get_bytes_arg(parser(), "--memory-budget");
         no_spill = parser().get<bool>("--no-spill");
@@ -451,8 +467,6 @@ static bool parse_group_by(const std::string& spec,
             out.push_back(GroupKey::host_name());
         else if (tok == "rank")
             out.push_back(GroupKey::rank());
-        else if (tok.starts_with(dftracer::utils::index::RESOLVED_PREFIX))
-            out.push_back(GroupKey::resolved(tok));
         else if (tok.rfind("arg:", 0) == 0)
             out.push_back(GroupKey::of_arg(tok.substr(4)));
         else
@@ -579,11 +593,9 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     const auto& time_range_str = cli->time_range;
     const auto min_duration = cli->min_duration;
     const auto max_duration = cli->max_duration;
-    const auto stream_mode = cli->stream;
-    const auto no_metadata = cli->no_metadata;
     const auto no_auto_index = cli->no_auto_index;
     const auto checkpoint_size = cli->indexing.checkpoint_size;
-    const auto& query_str = cli->query_args.query;
+    const auto& duql_str = cli->duql_args.duql;
 
     ViewDefinition view;
 
@@ -616,16 +628,34 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         view.description = "Custom inline view";
     }
 
-    using query::Query;
+    using duql::Query;
     std::optional<Query> query;
-    if (!query_str.empty()) {
-        auto result = Query::from_string(query_str);
-        if (!result) {
-            DFTRACER_UTILS_LOG_ERROR("Invalid --query: %s",
-                                     result.error().format().c_str());
+    duql::Params duql_params;
+    for (const auto& kv : cli->params) {
+        const auto eq = kv.find('=');
+        if (eq == std::string::npos || eq == 0) {
+            DFTRACER_UTILS_LOG_ERROR("Invalid --param '%s': use name=value",
+                                     kv.c_str());
             co_return 1;
         }
-        query = std::move(*result);
+        auto value = duql::parse_literal(std::string_view(kv).substr(eq + 1));
+        if (!value) {
+            DFTRACER_UTILS_LOG_ERROR("Invalid --param '%s': %s", kv.c_str(),
+                                     value.error().message.c_str());
+            co_return 1;
+        }
+        duql_params.insert_or_assign(kv.substr(0, eq), std::move(*value));
+    }
+    if (cli->explain && duql_str.empty()) {
+        DFTRACER_UTILS_LOG_ERROR("%s", "--explain needs --duql.");
+        co_return 1;
+    }
+    if (!duql_str.empty() && !save_recipe.empty()) {
+        DFTRACER_UTILS_LOG_ERROR(
+            "%s",
+            "--save-recipe does not store --duql; write the filter "
+            "into the recipe instead.");
+        co_return 1;
     }
 
     std::optional<std::pair<double, double>> time_range;
@@ -655,20 +685,16 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
             extra +=
                 "dur <= " + std::to_string(static_cast<uint64_t>(max_duration));
         }
-        if (query) {
-            std::string combined = "(" + query->source() + ") and " + extra;
-            query = query::parse_or_throw(combined);
-        } else {
-            query = query::parse_or_throw(extra);
-        }
+        query = duql::parse_or_throw(extra);
     }
 
     if (query) {
         view.with_query(std::move(*query));
     }
 
-    if (no_metadata) {
-        view.with_include_metadata(false);
+    if (cli->all) {
+        view.include_metadata = true;
+        view.metadata_records = true;
     }
 
     std::vector<GroupKey> group_keys;
@@ -693,9 +719,8 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     // Event export to a file -> compressed, indexed trace via the parallel
     // writer. Aggregate/counter/containment tables and stdout keep their own
     // paths.
-    const bool write_trace = !aggregate && !counters && !typed_mode &&
-                             !mv_mode && !ct_mode && !fg_mode &&
-                             !cli->output.empty();
+    bool write_trace = !aggregate && !counters && !typed_mode && !mv_mode &&
+                       !ct_mode && !fg_mode && !cli->output.empty();
 
     if (mv_mode && !aggregate) {
         DFTRACER_UTILS_LOG_ERROR(
@@ -724,11 +749,11 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         }
     }
 
-    if (!view.query && !time_range && !aggregate && !merge && !typed_mode &&
-        !mv_mode && !ct_mode && !fg_mode) {
+    if (!view.query && duql_str.empty() && !time_range && !aggregate &&
+        !merge && !typed_mode && !mv_mode && !ct_mode && !fg_mode) {
         DFTRACER_UTILS_LOG_ERROR(
             "%s",
-            "Nothing to do. Use --preset, --recipe, --query, --time-range, "
+            "Nothing to do. Use --preset, --recipe, --duql, --time-range, "
             "--merge, --call-tree, --flamegraph, or --group-by/--agg.");
         co_return 1;
     }
@@ -772,15 +797,17 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
 
         PatternDirectoryScannerUtility scanner;
         PatternDirectoryScannerUtilityInput scan_input{
-            directory, {".pfw.gz"}, false};
+            directory, trace_file_patterns(), /*rec=*/true,
+            /*with_size=*/false};
         auto matched = co_await scanner(scan_input);
 
         for (const auto& entry : matched) {
             files.push_back(entry.path.string());
         }
+        std::sort(files.begin(), files.end());
 
         if (files.empty()) {
-            DFTRACER_UTILS_LOG_ERROR("No .pfw.gz files found in: %s",
+            DFTRACER_UTILS_LOG_ERROR("No trace files found in: %s",
                                      directory.c_str());
             co_return 1;
         }
@@ -803,6 +830,66 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         files = std::move(norm.files);
         auto_split = std::move(norm.split);
     }
+
+    // One View over every file; the executor plans and scans them in parallel.
+    std::vector<ViewFile> view_files;
+    view_files.reserve(files.size());
+    for (const auto& file_path : files) {
+        ViewFile vf;
+        vf.file_path = file_path;
+        vf.index_path = internal::determine_index_path(file_path, index_dir);
+        vf.checkpoint_size = checkpoint_size;
+        view_files.push_back(std::move(vf));
+    }
+
+    // Stages after the scan give a table, not events; --explain prints the
+    // plan without scanning.
+    bool duql_rows = false;
+    if (!duql_str.empty()) {
+        // duql types fields from the index catalog, so a missing index is
+        // built before the query compiles. A distributed aggregation builds
+        // its shards' indexes itself.
+        if (!no_auto_index && !aggregate && !counters && !fg_mode)
+            co_await dftracer::utils::run_coro_scope(
+                [&](CoroScope& scope) -> coro::CoroTask<void> {
+                    co_await dftracer::utils::index::build::
+                        ensure_indexes_fresh(&scope, "", files, index_dir);
+                });
+        std::string plan;
+        try {
+            View probe = View::from_files(view_files);
+            if (!cli->record_schema.empty())
+                probe = probe.record_schema(cli->record_schema);
+            plan = probe.explain_duql(duql_str, duql_params);
+        } catch (const std::exception& e) {
+            DFTRACER_UTILS_LOG_ERROR("Invalid --duql: %s", e.what());
+            co_return 1;
+        }
+        if (cli->explain) {
+            std::fputs(plan.c_str(), stdout);
+            co_return 0;
+        }
+        // Sides only feed the scan filter; their lines are indented or
+        // start with "side " or "reads ".
+        for (std::size_t at = 0; at < plan.size();) {
+            const std::string_view line(plan.data() + at,
+                                        plan.find('\n', at) - at);
+            if (!line.starts_with("scan ") && !line.starts_with("side ") &&
+                !line.starts_with("reads ") && !line.starts_with(" "))
+                duql_rows = true;
+            at += line.size() + 1;
+        }
+    }
+    if (duql_rows && (aggregate || counters || typed_mode || mv_mode ||
+                      ct_mode || fg_mode || merge)) {
+        DFTRACER_UTILS_LOG_ERROR(
+            "%s",
+            "--duql stages after the scan do not combine with "
+            "aggregation, counters, typed, materialize, call-tree, "
+            "flamegraph or merge output.");
+        co_return 1;
+    }
+    write_trace = write_trace && !duql_rows;
 
     std::vector<std::string> files_needing_index;
     for (const auto& file_path : files) {
@@ -831,8 +918,6 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                      files_needing_index.size());
     }
 
-    (void)stream_mode;  // events always stream to the sink now
-
     // Trace output is always compressed; ensure the .gz extension.
     std::string final_output = output_path;
     if (write_trace && !final_output.empty()) {
@@ -859,17 +944,6 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     FileSink sink(out_target);
     bool verify_failed = false;
 
-    // One View over every file; the executor plans and scans them in parallel.
-    std::vector<ViewFile> view_files;
-    view_files.reserve(files.size());
-    for (const auto& file_path : files) {
-        ViewFile vf;
-        vf.file_path = file_path;
-        vf.index_path = internal::determine_index_path(file_path, index_dir);
-        vf.checkpoint_size = checkpoint_size;
-        view_files.push_back(std::move(vf));
-    }
-
     auto pipeline_config =
         cli::build_pipeline_config("DFTracer View", cli->pipeline);
     Pipeline pipeline(pipeline_config);
@@ -883,7 +957,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
             v = v.record_schema(cli->record_schema);
         if (view.query) v = v.filter(*view.query);
         v = v.phase(view_phase);
-        v = v.metadata(view.include_metadata);
+        if (view.metadata_records) v = v.all();
         if (time_range) v = v.time_range(time_range->first, time_range->second);
         if (cli->time_scale > 0) v = v.time_scale(cli->time_scale);
         if (time_bucket > 0) v = v.time_bucket(time_bucket);
@@ -893,6 +967,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         else if (cli->memory_budget > 0)
             v = v.memory_budget(cli->memory_budget);
         // else: leave the plan default (0), which resolves to auto (~1/3 RAM).
+        if (!duql_str.empty()) v = v.duql(duql_str, duql_params);
         if (!group_keys.empty()) v = v.group_by(group_keys);
         if (!agg_specs.empty()) v = v.agg(agg_specs);
         if (cli->agg_numeric_args) v = v.agg_numeric_args();
@@ -1104,7 +1179,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
             // never fires. Only the plain export / collect paths bootstrap.
             const bool will_bootstrap =
                 (aggregate && base.collect_would_bootstrap()) ||
-                (!counters && !aggregate && !write_trace &&
+                (!counters && !aggregate && !write_trace && !duql_rows &&
                  v.export_would_bootstrap());
             if (!no_auto_index && !will_bootstrap) {
                 co_await dftracer::utils::index::build::ensure_indexes_fresh(
@@ -1132,6 +1207,10 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
             } else if (counters) {
                 stats = co_await base.sink_counters(sink);
             } else if (aggregate) {
+                dataframe::DataFrame table = co_await v.collect();
+                print_table(out_target, table);
+                stats.events_matched = table.num_rows();
+            } else if (duql_rows) {
                 dataframe::DataFrame table = co_await v.collect();
                 print_table(out_target, table);
                 stats.events_matched = table.num_rows();
@@ -1179,6 +1258,13 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                  (unsigned long long)stats.chunks_skipped,
                  (unsigned long long)stats.events_matched,
                  (unsigned long long)stats.events_scanned);
+    if (stats.lines_invalid > 0 || stats.values_unconverted > 0)
+        std::fprintf(stderr,
+                     "Skipped %llu line(s) that are not JSON objects; %llu "
+                     "value(s) did not convert to their declared type and "
+                     "read as null\n",
+                     (unsigned long long)stats.lines_invalid,
+                     (unsigned long long)stats.values_unconverted);
 
     if (!auto_split.empty()) {
         std::fprintf(

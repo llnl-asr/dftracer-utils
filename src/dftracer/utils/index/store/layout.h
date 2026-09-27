@@ -80,12 +80,11 @@ namespace catalog_kind {
 inline constexpr std::uint8_t PATH = 0;
 }  // namespace catalog_kind
 
-/// Dictionaries, index-wide: ROW [dict][0x00][key] -> encode_dict_row, and
-/// VALUE [dict][0x00][field][0x00][value][0x00][key] -> empty.
-namespace dict_kind {
-inline constexpr std::uint8_t ROW = 0;
-inline constexpr std::uint8_t VALUE = 1;
-}  // namespace dict_kind
+/// Row sets: one FRAME record per file and row set, keyed [name], holding
+/// the rows as an Arrow IPC frame.
+namespace rowset_kind {
+inline constexpr std::uint8_t FRAME = 0;
+}  // namespace rowset_kind
 
 /// file_id of data that belongs to the whole index rather than one file.
 inline constexpr std::uint32_t INDEX_WIDE = 0xFFFFFFFFU;
@@ -144,17 +143,10 @@ struct ManifestEntry {
     ExtStatus status = ExtStatus::READY;
 };
 
-/// A catalog record: {type u8, seen u8, count u64}.
-/// A dictionary row: {count u32, then per field {name, value}, each a u32
-/// length and bytes}.
-std::string encode_dict_row(
-    const std::vector<std::pair<std::string, std::string>>& fields);
-std::optional<std::vector<std::pair<std::string, std::string>>> decode_dict_row(
-    std::string_view body);
-
 std::string encode_chunk_metadata(const ChunkMetadata& metadata);
 std::optional<ChunkMetadata> decode_chunk_metadata(std::string_view body);
 
+/// A catalog record: {type u8, seen u8, count u64}.
 std::string encode_path_stat(const PathStat& stat);
 std::optional<PathStat> decode_path_stat(std::string_view body);
 

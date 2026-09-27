@@ -249,7 +249,7 @@ give the plugin a ``transform`` in place of ``on_batch``:
 The rewrite may drop rows, add rows, and add, drop or change columns. A
 transform sees the whole batch (its ``reads`` is ignored); a plugin after it
 gets its own ``reads`` projection of the rewritten frame, by name, and its
-``plan_query`` is applied again to the rewritten rows. A plugin before it in
+``plan_duql`` is applied again to the rewritten rows. A plugin before it in
 fold order still sees the scan as it was. Order it the same way as a port:
 a plugin that must see the rewrite ``consumes`` a name the transform
 ``provides``. Two transforms chain, each seeing the previous one's output.

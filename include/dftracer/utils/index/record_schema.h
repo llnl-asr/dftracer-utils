@@ -1,6 +1,9 @@
 #ifndef DFTRACER_UTILS_INDEX_RECORD_SCHEMA_H
 #define DFTRACER_UTILS_INDEX_RECORD_SCHEMA_H
 
+#include <dftracer/utils/core/common/hash/fnv1a.h>
+
+#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -22,8 +25,9 @@ enum class Decoder : std::uint8_t { DFTRACER = 0, PATH = 1 };
 /// any value, an object or array included, as canonical JSON text.
 enum class FieldType : std::uint8_t { BOOL, INT, FLOAT, STRING, JSON };
 
-/// The trace role a field plays.
-enum class Role : std::uint8_t { NONE, TIME, DURATION, ENTITY };
+/// The trace role a field plays. ENTITY is the process a record belongs to
+/// (dftracer pid), LANE the thread within it (tid) and NAME the event's name.
+enum class Role : std::uint8_t { NONE, TIME, DURATION, ENTITY, LANE, NAME };
 
 /// The unit of a time or duration field.
 enum class TimeUnit : std::uint8_t { NS, US, MS, S };
@@ -40,6 +44,24 @@ inline std::optional<std::int64_t> whole_int64(double d) {
     return static_cast<std::int64_t>(d);
 }
 
+/// Microseconds since the Unix epoch of an ISO-8601 time such as
+/// "2024-01-02T03:04:05.123456Z" or "2024-01-02 03:04:05+02:00"; nullopt when
+/// `text` is not one.
+std::optional<std::int64_t> iso8601_micros(std::string_view text);
+
+/// The integer id a trace lane shows for an entity or lane value written as
+/// `text`: the integer itself, else a stable non-negative 31-bit hash of the
+/// text, exact as a JavaScript number.
+inline std::int64_t entity_id(std::string_view text) {
+    std::int64_t v = 0;
+    const char* end = text.data() + text.size();
+    if (auto [ptr, ec] = std::from_chars(text.data(), end, v);
+        ec == std::errc() && ptr == end && !text.empty())
+        return v;
+    return static_cast<std::int64_t>(dftracer::utils::hash::fnv1a_hash(text) &
+                                     0x7FFFFFFFULL);
+}
+
 /// "bool", "int", "float", "string" or "json".
 std::string_view field_type_name(FieldType type);
 
@@ -51,7 +73,8 @@ struct FieldSpec {
     /// The JSON path, as the records write it; empty means `name`.
     std::string path;
     FieldType type = FieldType::STRING;
-    /// An optional field is not needed for detection.
+    /// An optional field is not needed for detection; a schema whose fields
+    /// are all optional is detected by any of them.
     bool optional = false;
     Role role = Role::NONE;
     /// Only for the TIME and DURATION roles; microseconds when unset.
@@ -69,44 +92,22 @@ struct Roles {
     std::string time;
     std::string duration;
     std::string entity;
+    std::string lane;
+    std::string name;
     std::string phase;
     TimeUnit time_unit = TimeUnit::US;
     TimeUnit duration_unit = TimeUnit::US;
 };
 
-/// Rows of the records named `rows`, each keyed by the value at `key` and
-/// holding `fields` (field name -> path in the record). Data records hold
-/// keys in the fields `keys_in`, and `resolved.<key field>.<field>` reads a
-/// row's field through them.
-struct Dictionary {
-    std::string name;
-    std::string rows;
-    std::string key;
-    std::vector<std::pair<std::string, std::string>> fields;
-    std::vector<std::string> keys_in;
-
-    bool has_field(std::string_view field) const;
-};
-
-/// Prefix of the columns a schema's dictionaries resolve.
-inline constexpr std::string_view RESOLVED_PREFIX = "resolved.";
-
-/// `resolved.<key_field>.<field>`: `field` of the `dictionary` row whose key
-/// the data field `key_field` holds.
-struct ResolvedColumn {
-    std::string key_field;
-    const Dictionary* dictionary = nullptr;
-    std::string field;
-};
-
-/// What register_schema resolves into a RecordSchema: fields, dictionaries
-/// (by name) and the path budget override the parent's.
+/// What register_schema resolves into a RecordSchema: fields and source
+/// members (by name) and the path budget override the parent's.
 struct SchemaSpec {
     std::string id;
     std::string extends = "generic";
     std::vector<FieldSpec> fields;
     std::optional<std::size_t> path_budget;
-    std::vector<Dictionary> dictionaries;
+    /// duql source members (`name = pipeline`, `def ...`), `;` separated.
+    std::string source;
 };
 
 /// A record format: how to detect it, decode it and read its roles.
@@ -115,7 +116,16 @@ struct RecordSchema {
     Decoder decoder = Decoder::PATH;
     /// Resolved fields, the parent's first, each with its path set.
     std::vector<FieldSpec> fields;
-    std::vector<Dictionary> dictionaries;
+    /// The duql source: row sets (`name = pipeline`) and macros, as canonical
+    /// text with the parent's members first. `data` is what a query with no
+    /// `from` reads; empty reads every record.
+    std::string source;
+    /// The condition of the source's `data` row set, as canonical text;
+    /// empty when `data` reads every record.
+    std::string data;
+    /// The source defines `args_fallback = true`: a bare name its records
+    /// lack reads the field of that name under `args`.
+    bool args_fallback = false;
     /// The path budget for files of this schema; the build's when unset.
     std::optional<std::size_t> path_budget;
     /// Paths of the required fields; more paths make a more specific schema.
@@ -133,16 +143,6 @@ struct RecordSchema {
 
     /// The field at `path`, or null.
     const FieldSpec* field_at(std::string_view path) const;
-
-    /// The dictionary whose keys the data field `key_field` holds, or null.
-    const Dictionary* dictionary_of(std::string_view key_field) const;
-
-    /// Parses a `resolved.` column name. Throws DFTUtilsException
-    /// INVALID_ARGUMENT, listing resolved_names(), when it names no field of a
-    /// dictionary through one of its key fields.
-    ResolvedColumn resolved_column(std::string_view name) const;
-    /// Every `resolved.` column name the schema accepts.
-    std::vector<std::string> resolved_names() const;
 
     /// Hash of the definition, recorded with each file indexed under it.
     std::uint64_t params_hash() const;
@@ -172,7 +172,7 @@ const RecordSchema& register_schema(const SchemaSpec& spec,
 
 /// Registers the schema the YAML or JSON spec `text` describes. Keys: id,
 /// extends, fields (name -> type, path, optional, role, unit, always_index),
-/// index.path_budget and dictionaries (name, rows, key, fields, keys_in).
+/// index.path_budget and source (duql source members).
 /// Throws as the SchemaSpec overload, and for an unknown key or a value of
 /// the wrong type.
 const RecordSchema& register_schema(std::string_view text,
@@ -185,23 +185,25 @@ void load_schemas(const std::string& path);
 
 /// The registered schemas as a JSON array of objects with id, decoder
 /// ("dftracer" or "path"), fields, require, path_budget (null when unset) and
-/// dictionaries (their names), in registration order.
+/// source (its text), in registration order.
 std::string schemas_json();
 
 /// load_schemas on `<index_dir>/schemas` for the index at `index_path`
 /// (`<index_dir>/.dftindex`), when that directory exists.
 void load_index_schemas(const std::string& index_path);
 
-/// Share of sampled records a schema must match to be chosen.
+/// Share of the records a schema judges that it must match to be chosen.
 inline constexpr double SCHEMA_MATCH_SHARE = 0.9;
-/// Records sampled from the start of a file.
+/// Records (objects no schema's `data` row set leaves out) sampled from the
+/// start of a file; metadata lines before them are read past, up to 16 MiB of
+/// text.
 inline constexpr std::size_t SCHEMA_SAMPLE_LINES = 1000;
 
 /// One schema's detection score.
 struct SchemaScore {
     const RecordSchema* schema = nullptr;
-    /// Share of the sampled JSON objects holding every required path; 0 when
-    /// no line is an object.
+    /// Share of the objects the schema judges (those its `data` row set does
+    /// not leave out) that match it; 0 when it judges none.
     double share = 0;
 };
 
@@ -210,23 +212,34 @@ struct SchemaScore {
 struct SchemaDetection {
     std::vector<SchemaScore> scores;
     const RecordSchema* chosen = nullptr;
+    /// JSON objects sampled.
     std::size_t objects = 0;
+    /// Objects no schema's `data` row set leaves out. A file with none (empty,
+    /// or only metadata) takes no vote on the schema of a View of many files.
+    std::size_t records = 0;
 };
 
-/// Scores every registered schema on `lines`. The chosen schema is the one
-/// with the most required paths (inherited ones included) that at least
-/// SCHEMA_MATCH_SHARE of the JSON objects satisfy, the higher share and then
-/// the lower id breaking a tie; "generic" when none does or no line is an
-/// object. A schema requiring nothing is never chosen.
+/// Scores every registered schema on `lines`; whitespace and a trailing comma
+/// (JSON array traces) around a line are ignored. A schema judges the objects
+/// its `data` row set does not leave out; an object matches when it holds
+/// every required path or, for a schema whose fields are all optional, any
+/// declared path. Paths resolve as json::JsonValue::at. The chosen schema is
+/// one that at least SCHEMA_MATCH_SHARE of the objects it judges match,
+/// preferring more required paths, then a user schema over a built-in, then
+/// the higher share, then the lower id. With only metadata sampled it is the
+/// schema with the fewest required paths whose `data` leaves out every
+/// object. Otherwise "generic"; a schema declaring no field is never chosen.
 SchemaDetection explain_schema(std::span<const std::string_view> lines);
 
-/// explain_schema over up to SCHEMA_SAMPLE_LINES lines from the start of
-/// `file_path` (gzip or plain). Throws DFTUtilsException IO when the file
-/// cannot be read.
+/// explain_schema over the lines at the start of `file_path` (gzip or
+/// plain), up to SCHEMA_SAMPLE_LINES records; the last line needs no
+/// newline. Cached per process by path, modification time, size and the
+/// registered schemas. Throws DFTUtilsException IO when the file cannot be
+/// read.
 SchemaDetection explain_file_schema(const std::string& file_path);
 
-/// `d` as a JSON object: chosen (id), objects, and scores, each with id,
-/// required (the count of required paths) and share.
+/// `d` as a JSON object: chosen (id), objects, records, and scores, each with
+/// id, required (the count of required paths) and share.
 std::string to_json(const SchemaDetection& d);
 
 /// explain_schema(lines).chosen.

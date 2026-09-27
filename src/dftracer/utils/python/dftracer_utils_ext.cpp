@@ -23,6 +23,7 @@
 #include <dftracer/utils/python/task_handle.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
 #include <dftracer/utils/python/trace_viewer.h>
+#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/python/arrow_stream_capsule.h>
 #include <dftracer/utils/python/streaming_iterator.h>
@@ -138,6 +139,26 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     PyModule_AddIntConstant(
         m, "NUM_SHARDS",
         dftracer::utils::index::schemas::dft::agg::AGG_KEY_NUM_SHARDS);
+    {
+        const auto& patterns =
+            dftracer::utils::utilities::filesystem::trace_file_patterns();
+        PyObject* t = PyTuple_New(static_cast<Py_ssize_t>(patterns.size()));
+        if (!t) return NULL;
+        for (std::size_t i = 0; i < patterns.size(); ++i) {
+            PyObject* s = PyUnicode_FromStringAndSize(
+                patterns[i].data(),
+                static_cast<Py_ssize_t>(patterns[i].size()));
+            if (!s) {
+                Py_DECREF(t);
+                return NULL;
+            }
+            PyTuple_SET_ITEM(t, static_cast<Py_ssize_t>(i), s);
+        }
+        if (PyModule_AddObject(m, "TRACE_FILE_PATTERNS", t) < 0) {
+            Py_DECREF(t);
+            return NULL;
+        }
+    }
     // Configure the C++ logger for the extension: picks up
     // DFTRACER_UTILS_LOG_LEVEL and auto color (on only when stderr is a TTY),
     // matching the CLI binaries. Without this the logger runs on bare defaults.

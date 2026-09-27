@@ -14,6 +14,7 @@
 #include <dftracer/utils/plugins/abi/compose.h>
 #include <dftracer/utils/plugins/abi/core.h>
 #include <dftracer/utils/plugins/abi/coro.h>
+#include <dftracer/utils/plugins/abi/duql.h>
 #include <dftracer/utils/plugins/abi/index.h>
 #include <dftracer/utils/plugins/abi/io.h>
 #include <dftracer/utils/plugins/abi/nodes.h>
@@ -21,7 +22,6 @@
 #include <dftracer/utils/plugins/abi/plugin.h>
 #include <dftracer/utils/plugins/abi/ports.h>
 #include <dftracer/utils/plugins/abi/providers.h>
-#include <dftracer/utils/plugins/abi/query.h>
 #include <dftracer/utils/plugins/abi/result.h>
 #include <dftracer/utils/plugins/abi/sketch.h>
 #include <dftracer/utils/plugins/abi/trace.h>

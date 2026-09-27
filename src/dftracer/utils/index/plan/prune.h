@@ -3,8 +3,8 @@
 
 #include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/query/query.h>
 
 #include <cstdint>
 #include <optional>
@@ -18,8 +18,8 @@ namespace dftracer::utils::index::plan {
 enum class MetadataUse : std::uint8_t {
     /// None: prune for the data events alone.
     NONE,
-    /// Context records (all but FH/HH/SH): also read every chunk holding one.
-    CONTEXT,
+    /// Metadata records bypass the query: also read every chunk holding one.
+    EVERY,
     /// The query selects metadata records only: read the chunks whose
     /// records may match it; data evidence and the time range do not apply.
     RECORDS,
@@ -32,7 +32,7 @@ struct PruneRequest {
     std::string index_path;
     std::string file_path;
     /// Borrowed; nullptr skips query pruning.
-    const query::Query* query = nullptr;
+    const duql::Query* query = nullptr;
     /// Borrowed open index at `index_path`; opened per call when null.
     index::store::IndexDatabase* db = nullptr;
     /// {begin, end} in microseconds; 0 leaves that side open.

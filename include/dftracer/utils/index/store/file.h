@@ -28,9 +28,6 @@ enum class IndexExtension : std::uint16_t {
     HOST = 0,
     /// Gzip members and file metadata.
     MEMBERS = 1,
-    /// Index-wide schema dictionaries: rows by key, and a reverse entry per
-    /// field value.
-    DICT = 3,
     /// Per chunk and path: value range, type, record counts.
     ZONEMAP = 4,
     /// Per chunk and path, and per file: a bloom of the path's values.
@@ -46,7 +43,7 @@ enum class IndexExtension : std::uint16_t {
     CATALOG = 9,
     /// Per file: the id of the schema its records were decoded with.
     PROFILE = 10,
-    /// Per chunk: how many metadata records, and context records among them.
+    /// Per chunk: how many metadata records, with their names and paths.
     METADATA = 11,
     /// Plugin extensions (plugins/abi/index.h), each keyed by its name, with
     /// one manifest entry per name.
@@ -55,10 +52,15 @@ enum class IndexExtension : std::uint16_t {
     /// and system_metrics families without a file id, and this extension's
     /// manifest entry marks a file's rows as merged into them.
     AGG = 13,
+    /// Per file and row set: the rows of each row set of the schema's source
+    /// that the build evaluates, as an Arrow IPC frame keyed by its name.
+    ROWSET = 14,
 };
 
 /// The type of a JSON path. A number is INT when it fits in int64 and UINT
-/// only when it does not. MIXED is a join of incompatible types.
+/// only when it does not. MIXED is a join of incompatible types. OBJECT and
+/// ARRAY mark an empty object or array, recorded so a path that holds one is
+/// known to exist.
 enum class PathType : std::uint8_t {
     NULL_VALUE = 0,
     BOOL = 1,
@@ -67,6 +69,8 @@ enum class PathType : std::uint8_t {
     DOUBLE = 4,
     STRING = 5,
     MIXED = 6,
+    OBJECT = 7,
+    ARRAY = 8,
 };
 
 /// The least type both `a` and `b` promote to: NULL_VALUE yields to the
@@ -87,7 +91,8 @@ constexpr PathType join(PathType a, PathType b) {
 /// One path of a file's catalog.
 struct PathStat {
     PathType type = PathType::NULL_VALUE;
-    /// Bit (1 << PathType) for every base type seen.
+    /// Bit (1 << PathType) for every scalar type seen, MIXED included; an
+    /// empty object or array sets none.
     std::uint8_t seen = 0;
     /// Records in which the path is present and not null.
     std::uint64_t count = 0;
@@ -97,7 +102,6 @@ struct PathStat {
 /// than the FH, HH and SH hash definitions: thread and process names, PR, CM.
 struct ChunkMetadata {
     std::uint64_t records = 0;
-    std::uint64_t context = 0;
     /// The records' distinct names and field paths ("pid", "args.name"),
     /// sorted; nullopt when there were more than METADATA_VALUES_CAP.
     std::optional<std::vector<std::string>> names = std::vector<std::string>{};
@@ -139,10 +143,10 @@ inline constexpr ExtensionMask PRUNING_EXTENSIONS = {
 
 /// Every extension a build writes, in manifest order.
 inline constexpr IndexExtension ALL_EXTENSIONS[] = {
-    IndexExtension::MEMBERS,  IndexExtension::DICT,    IndexExtension::ZONEMAP,
-    IndexExtension::BLOOM,    IndexExtension::COUNTS,  IndexExtension::POSTINGS,
-    IndexExtension::STATS,    IndexExtension::CATALOG, IndexExtension::PROFILE,
-    IndexExtension::METADATA, IndexExtension::AGG};
+    IndexExtension::MEMBERS, IndexExtension::ZONEMAP,  IndexExtension::BLOOM,
+    IndexExtension::COUNTS,  IndexExtension::POSTINGS, IndexExtension::STATS,
+    IndexExtension::CATALOG, IndexExtension::PROFILE,  IndexExtension::METADATA,
+    IndexExtension::AGG,     IndexExtension::ROWSET};
 
 /// The extension's name, such as "zonemap" or "core.members".
 std::string_view extension_name(IndexExtension ext);

@@ -72,9 +72,9 @@ typedef struct dftu_task dftu_task;
 #endif
 typedef struct dftu_writer dftu_writer; /**< parallel output; host-owned */
 /** compiled filter; scan-lifetime */
-#ifndef DFTU_TYPEDEF_DFTU_QUERY
-#define DFTU_TYPEDEF_DFTU_QUERY
-typedef struct dftu_query dftu_query;
+#ifndef DFTU_TYPEDEF_DFTU_DUQL
+#define DFTU_TYPEDEF_DFTU_DUQL
+typedef struct dftu_duql dftu_duql;
 #endif
 typedef struct dftu_sketch
     dftu_sketch;                /**< quantile accumulator; plugin-owned */

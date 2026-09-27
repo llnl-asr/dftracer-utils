@@ -40,6 +40,7 @@ from .dask import (
     register_auto_thread_plugin,
     resolve_local_staging,
 )
+from .dftracer_utils_ext import TRACE_FILE_PATTERNS
 from .indexer import AggregationConfig, _open_readonly_indexer
 
 if TYPE_CHECKING:
@@ -71,8 +72,6 @@ __all__ = [
     "resolve_trace_inputs",
     "view_typed_frames",
 ]
-
-_TRACE_SUFFIXES = (".pfw.gz",)
 
 
 def _capsule_to_pandas(table):
@@ -247,7 +246,7 @@ def view_typed_frames(
     index_path: str,
     time_granularity: float = 1.0,
     time_resolution: float = 1e6,
-    query: Optional[str] = None,
+    duql: Optional[str] = None,
     client: "Optional[Client]" = None,
     group_keys: Optional[Tuple[str, ...]] = None,
 ) -> TypedFrames:
@@ -277,8 +276,8 @@ def view_typed_frames(
         from .dask import DaskTraceViewer
 
         tv = DaskTraceViewer(files, index_path or "", client=client)
-    if query:
-        tv = tv.filter(query)
+    if duql:
+        tv = tv.filter(duql)
     typed = tv.group_by(*keys).time_bucket(bucket_us).agg(*_TYPED_AGGS).collect_typed()
 
     reg_pd, agg_pd = _capsule_to_pandas(typed["regular"]), _capsule_to_pandas(typed["aggregated"])
@@ -330,7 +329,7 @@ def _typed_read_to_ipc(
     index_path: str,
     time_granularity: float,
     time_resolution: float,
-    query: Optional[str] = None,
+    duql: Optional[str] = None,
     shard_begin: int = 0,
     shard_end: int = 0,
     group_keys: Optional[Tuple[str, ...]] = None,
@@ -349,8 +348,8 @@ def _typed_read_to_ipc(
 
     bucket_us = int(time_granularity * time_resolution)
     tv: "TraceViewer" = TraceViewer(files, index_path=index_path or None)
-    if query:
-        tv = tv.filter(query)
+    if duql:
+        tv = tv.filter(duql)
     typed = (
         tv.group_by(*(group_keys or _TYPED_GROUP_KEYS))
         .time_bucket(bucket_us)
@@ -475,7 +474,7 @@ def resolve_trace_inputs(
     """
     if not os.path.isdir(trace_path):
         matched = glob.glob(trace_path) if "*" in trace_path else [trace_path]
-        files = [f for f in matched if f.endswith(_TRACE_SUFFIXES)]
+        files = [f for f in matched if f.endswith(TRACE_FILE_PATTERNS)]
         return "", files
 
     manifest_path = os.path.join(trace_path, "manifest.json")
@@ -503,7 +502,7 @@ def resolve_trace_inputs(
     files: List[str] = []
     for g in selected:
         subdir = os.path.join(trace_path, group_map[g])
-        for suffix in _TRACE_SUFFIXES:
+        for suffix in TRACE_FILE_PATTERNS:
             files.extend(glob.glob(os.path.join(subdir, "*" + suffix)))
     return "", files
 
@@ -700,12 +699,13 @@ def count_index_files(
     """Distinct data files in the index, skipping paths containing any of
     `ignored_patterns`.
 
-    Counts from the index's file dictionary rather than the read, so it stays exact
+    Counts from the index's ``files`` row set rather than the read, so it stays exact
     when the read is folded to a grain with no per-file rows. Callers that
     filter files out of the analysis must pass the same patterns here, or the
     count reports files the analysis never used.
     """
-    table = _open_readonly_indexer(files, index_path).get_dictionary("file", "path")
+    rows = _open_readonly_indexer(files, index_path).rowset("files").to_dict()
+    table = {str(k): str(v) for k, v in zip(rows["fhash"], rows["path"])}
     if not ignored_patterns:
         return len(table)
     return sum(1 for name in table.values() if not any(p in name for p in ignored_patterns))

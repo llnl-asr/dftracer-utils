@@ -801,7 +801,7 @@ void build_node_json(std::ostringstream& out, const NodeResult& node);
 void build_node_json(std::ostringstream& out, const NodeResult& node) {
     out << "{";
     out << "\"name\":\"" << escape_json_string(node.name) << "\",";
-    out << "\"query\":\"" << escape_json_string(node.composed_query) << "\",";
+    out << "\"duql\":\"" << escape_json_string(node.composed_query) << "\",";
 
     out << "\"summary\":{\"metrics\":";
     build_metrics_arr(out, node.summary.metrics);

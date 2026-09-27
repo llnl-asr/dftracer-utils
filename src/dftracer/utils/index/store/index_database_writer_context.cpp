@@ -66,7 +66,7 @@ void IndexDatabaseWriterContext::init_schema() {
         put(layout::Family::REGISTRY, layout::format_key(),
             layout::with_header(layout::Ext::HOST, layout::host::FORMAT, body));
         for (auto ext :
-             {layout::Ext::MEMBERS, layout::Ext::DICT, layout::Ext::ZONEMAP,
+             {layout::Ext::MEMBERS, layout::Ext::ROWSET, layout::Ext::ZONEMAP,
               layout::Ext::BLOOM, layout::Ext::COUNTS, layout::Ext::POSTINGS,
               layout::Ext::STATS}) {
             std::string id;

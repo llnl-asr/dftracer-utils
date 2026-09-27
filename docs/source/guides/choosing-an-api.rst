@@ -45,7 +45,7 @@ Decision table
      - :doc:`../plugins`, :doc:`plugins/inter-plugin-comms`
    * - Call the engine from a C program, or from another language via its C
        FFI, with no C++ in your own translation unit
-     - the C ABI (``dftu_query``, ``dftu_series``/``dftu_dataframe``,
+     - the C ABI (``dftu_duql``, ``dftu_series``/``dftu_dataframe``,
        ``dftu_plugin``)
      - :doc:`core/c-abi`
    * - Serve query results over HTTP, or open the interactive timeline UI
@@ -76,8 +76,8 @@ surface can do, the underlying engine can do from the other language too
 (with C++ exposing a few extra low-level escape hatches, like the
 ``map_batches`` custom fold, that have no Python binding).
 
-**Plugin vs query DSL** is about where the logic runs. The query DSL and
-``group_by``/``agg`` vocabulary (:doc:`core/query-dsl`, :doc:`analysis/aggregation`)
+**Plugin vs duql** is about where the logic runs. The duql filter language and
+``group_by``/``agg`` vocabulary (:doc:`core/duql`, :doc:`analysis/aggregation`)
 cover filtering and the built-in aggregate ops without writing any new code.
 Reach for a plugin only when the built-in vocabulary cannot express what you
 need - custom per-event state, a join across two of your own maps, or an

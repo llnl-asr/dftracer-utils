@@ -49,7 +49,7 @@ TEST_SUITE("ViewJoin") {
                         .group_by({GroupKey::cat()})
                         .agg({{AggOp::Count, "", "n"}});
         auto right = View::from_file(gz, idx)
-                         .query(R"(cat == "POSIX")")
+                         .duql(R"(cat == "POSIX")")
                          .group_by({GroupKey::cat()})
                          .agg({{AggOp::Sum, "dur", "s"}});
 

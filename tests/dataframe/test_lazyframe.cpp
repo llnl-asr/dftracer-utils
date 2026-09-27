@@ -11,6 +11,7 @@
 #include <doctest/doctest.h>
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -302,6 +303,11 @@ TEST_SUITE("lazyframe") {
         CHECK(s.num_rows() == 3);
         CHECK(s.column("a").data<std::int64_t>()[0] == 3);
         CHECK(s.column("a").data<std::int64_t>()[2] == 5);
+
+        DataFrame open = run(
+            base.slice(4, std::numeric_limits<std::int64_t>::max()).collect(2));
+        CHECK(open.num_rows() == 2);
+        CHECK(open.column("a").data<std::int64_t>()[0] == 5);
 
         DataFrame t = run(base.tail(2).collect(2));  // a=5,6
         CHECK(t.num_rows() == 2);

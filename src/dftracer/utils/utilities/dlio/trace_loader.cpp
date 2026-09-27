@@ -99,8 +99,8 @@ std::vector<std::vector<double>> flatten_per_rank(
             out.emplace_back();
             continue;
         }
-        for (const auto& [bucket, samples] : it->second) {
-            (void)bucket;
+        for (const auto& bucket_kv : it->second) {
+            const auto& samples = bucket_kv.second;
             rank_samples.insert(rank_samples.end(), samples.begin(),
                                 samples.end());
         }
@@ -239,10 +239,9 @@ AggregatedTraces load_aggregated_traces(const std::string& db_path,
         out.computation_times.insert(out.computation_times.end(), r.begin(),
                                      r.end());
     }
-    for (const auto& [pid, buckets] : acc_preprocess.per_pid_bucket_samples) {
-        (void)pid;
-        for (const auto& [bucket, samples] : buckets) {
-            (void)bucket;
+    for (const auto& pid_kv : acc_preprocess.per_pid_bucket_samples) {
+        for (const auto& bucket_kv : pid_kv.second) {
+            const auto& samples = bucket_kv.second;
             out.preprocess_times.insert(out.preprocess_times.end(),
                                         samples.begin(), samples.end());
         }
@@ -293,14 +292,12 @@ AggregatedTraces load_aggregated_traces(const std::string& db_path,
         std::uint64_t count = 0;
         auto pit = acc_fetch_block.per_pid_bucket_samples.find(pid);
         if (pit != acc_fetch_block.per_pid_bucket_samples.end()) {
-            for (const auto& [bucket, samples] : pit->second) {
-                (void)bucket;
-                count += samples.size();
+            for (const auto& bucket_kv : pit->second) {
+                count += bucket_kv.second.size();
             }
             // Wall clock per rank = sum of sample durations as an upper bound.
-            for (const auto& [bucket, samples] : pit->second) {
-                (void)bucket;
-                for (double s : samples) wall_us += s / US_TO_S;
+            for (const auto& bucket_kv : pit->second) {
+                for (double s : bucket_kv.second) wall_us += s / US_TO_S;
             }
         }
         const double wall_s = wall_us * US_TO_S;

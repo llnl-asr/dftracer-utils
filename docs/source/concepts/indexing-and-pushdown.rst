@@ -54,12 +54,23 @@ the index keeps evidence for the leaves below it, which is what a membership
 filter needs, rather than for the whole value, which a filter rarely
 compares.
 
-Each file's schema is detected before it is indexed, from up to 1000 lines
-at its start: of the registered schemas that require at least one field,
-the most specific one that at least 90 percent of those records satisfy
-wins, ``generic`` otherwise. The choice is recorded with the file
-(``core.profile``), so a directory can mix formats and detection runs once
-per file. Asking for another schema rebuilds the file.
+Each file's schema is detected before it is indexed, from up to 1000
+records at its start; metadata lines before them are read past, up to
+16 MiB of text. A schema judges the records its ``data`` row set keeps, so
+dftracer metadata and genesis ``RUN`` lines neither match nor miss it. A
+record matches when it holds every required field, or, for a schema whose
+fields are all optional, any declared field; paths resolve as queries read
+them (a flat dotted key, an array index). Of the schemas at least 90
+percent of their records match, the one with the most required fields
+wins, then a user schema over a built-in, then the higher share, and
+``generic`` when none does. dftracer requires ``ph``, ``name`` and ``ts``,
+so Chrome trace events read as dftracer while a log that only has ``ph``
+and ``name`` is generic. A file of metadata only is dftracer. The choice
+is recorded with the file (``core.profile``), so a directory can mix
+formats; without an index, detection is cached per file by path, size and
+modification time. A View of many files takes the schema of the files with
+records: an empty file, or one of metadata only, takes no vote. Asking for
+another schema rebuilds the file.
 
 A generic file's index holds the path catalog and automatic zone maps,
 blooms and value counts for its most frequent paths, top-level or nested
@@ -134,9 +145,10 @@ recorded time bounds lie wholly outside it.
 The query and time evidence describe data events only, so metadata
 (``ph="M"``) records take their own path through ``dft.metadata``, which
 counts each chunk's metadata records and its context records (thread and
-process names, ``PR``, ``CM``). A scan that returns metadata, such as an
-export, also reads every chunk that holds a context record, so the output
-names every thread and process however narrow the filter. A
+process names, ``PR``, ``CM``). A default View reads its source's ``data``,
+which for dftracer traces leaves the metadata records out. A scan of every
+record (``View::all()``) also reads every chunk that holds a metadata record.
+A
 ``phase("metadata")`` query, and a ``TraceReader`` query, which matches
 metadata lines as well as events, judge metadata by the record names and
 fields ``dft.metadata`` keeps per chunk: ``name == "rename"`` reads no chunk
@@ -184,29 +196,30 @@ that survived every prune.
        Time --> Candidates["Candidate chunks"]
        Candidates --> Scan["Fused scan<br/>(actual decompress + evaluate)"]
 
-Resolved fields: querying by name without an index scan
---------------------------------------------------------------
+Row sets: querying by name without an index scan
+------------------------------------------------
 
 Trace events reference files, hosts, and executables by an interned hash
 (``fhash``, ``hhash``, ``cwd``, ``exec_hash``, ``cmd_hash``), not by the
 human-readable string. Writing a predicate directly against the hash is
 unusable for a person; writing it against a live string comparison at scan
 time would mean decoding every candidate row before it can even be tested.
-The dftracer schema instead declares dictionaries (``file``, ``host``, ``string``;
-the ``genesis`` schema adds ``run``, built from its ``RUN`` lines)
-that the index stores in ``core.dict``, each row keyed by a hash with a
-reverse entry per field value. The resolved-field rewriter
-(``resolved_field_rewriter.h``) rewrites a predicate on
-``resolved.fhash.path`` (and the other ``resolved.<key field>.<field>``
-columns) into a concrete ``fhash in [...]`` clause before the query ever
-reaches the pruner or the scan: a semi-join of the events with the
-dictionary. A View does this once per index, and the chunk choice and the
-per-event evaluation then use the same rewritten query; if the index cannot
-be read for the rewrite, the scan fails. An exact match reads the reverse
-entries; any other predicate (``!=``, ``like``, a regex) is evaluated on
-every dictionary row once and keeps the keys whose value matches. Either way,
-the pruner and the per-event evaluator downstream see an ordinary key-valued
-``in`` list and need no special case for "this field is actually a name."
+The dftracer record schema instead has a duql source that declares row sets
+over its metadata records (``files``, ``hosts``, ``strings``, ``ranks``; the
+``genesis`` schema adds ``runs``, built from its ``RUN`` lines). A row set
+that is a ``where`` plus a plain ``select`` is evaluated while the index is
+built and stored per file as an Arrow frame in ``core.rowset``, so reading
+it later decodes no trace.
+
+An arrow such as ``fhash -> files.path like "%/scratch/%"`` at the top of the
+leading ``where`` is a semi-join of the events with the row set. Before the
+main scan the View reads the row set (from the index, or by running it as a
+lookup side when the index holds no rows for it), keeps the keys whose value
+matches, and adds ``fhash in {keys}`` to the scan filter. The pruner and the
+per-event evaluator downstream see an ordinary key-valued ``in`` list and need
+no special case for "this field is actually a name." This is the same
+key-set pushdown that any row set gets, so a user schema's row sets prune the
+same way.
 
 A key list longer than 4096 prunes nothing: probing that many values per
 chunk costs more than the scan it could save. The per-event test of a long
@@ -218,5 +231,5 @@ See also
 
 - :doc:`fused-scan` for what happens to the chunks that survive pruning.
 - :doc:`architecture` for where indexing sits in the overall query path.
-- :doc:`../guides/core/query-dsl` for the predicate syntax itself.
+- :doc:`../guides/core/duql` for the predicate syntax itself.
 - :doc:`../cpp_api/indexer` for the generated indexer API reference.

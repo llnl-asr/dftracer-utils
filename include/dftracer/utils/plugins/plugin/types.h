@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_PLUGINS_PLUGIN_TYPES_H
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_TYPES_H
 
+#include <dftracer/utils/duql/builder.h>
 #include <dftracer/utils/plugins/abi.h>
-#include <dftracer/utils/query/builder.h>
 
 #include <cstdint>
 #include <string_view>
@@ -11,11 +11,10 @@
 namespace dftracer::utils::plugins {
 
 // Re-export the query builder so a plugin writes `F("dur") > 1000` with only
-// this header and no query:: qualifier.
-using dftracer::utils::query::Expr;
-using dftracer::utils::query::F;
-using dftracer::utils::query::Field;
-using dftracer::utils::query::resolved;
+// this header and no duql:: qualifier.
+using dftracer::utils::duql::Expr;
+using dftracer::utils::duql::F;
+using dftracer::utils::duql::Field;
 
 /// Scoped mirror of dftu_phase for Event::phase; each enumerator is its ABI
 /// constant, so static_cast<dftu_phase> recovers the raw value.

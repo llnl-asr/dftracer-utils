@@ -185,6 +185,33 @@ def test_window_rank_dense_rank_sessionize():
     assert _col(out, "sess") == [1, 1, 1, 2]
 
 
+def test_sessionize_end_span_and_null_time():
+    df = _df(
+        {
+            "k": [1, 1, 1, 1, 1, 2, 2],
+            "ts": [0, 150, 300, 350, 480, 0, None],
+            "end": [120, 155, 310, 360, 490, 5, None],
+        }
+    )
+    specs = [
+        ("sessionize", "ts", 50, "by_end", "end"),
+        ("sessionize", "ts", 50, "by_start"),
+        ("sessionize", "ts", 500, "capped", None, 200),
+    ]
+    out = df.window(partition_by=["k"], order_by=["ts"], specs=specs)
+    lazy = df.lazy().window(partition_by=["k"], order_by=["ts"], specs=specs).collect()
+    for name in ("by_end", "by_start", "capped"):
+        assert _col(lazy, name) == _col(out, name)
+    rows = sorted(
+        zip(_col(out, "k"), _col(out, "ts"), _col(out, "by_end"), _col(out, "capped")),
+        key=lambda r: (r[0], r[1] is None, r[1] or 0),
+    )
+    assert [r[2] for r in rows] == [1, 1, 2, 2, 3, 1, None]
+    assert [r[3] for r in rows] == [1, 1, 2, 2, 2, 1, None]
+    with pytest.raises(Exception):
+        df.window(partition_by=["k"], order_by=["ts"], specs=[("sessionize", "ts", -1, "s")])
+
+
 def test_gap_fill_modes():
     df = _df({"pid": [1, 1, 1], "ts": [0, 10, 30], "v": [100, 110, 130]})
 
@@ -329,6 +356,20 @@ def test_lazy_join_matches_eager():
     assert "join left [k] = [k]" in left.lazy().join(right.lazy(), "k", "left").explain()
     with pytest.raises(ValueError):
         left.lazy().join(right.lazy(), "nope").columns
+
+
+def test_lookup_and_nest_joins():
+    left = _df({"k": [1, 2, 3, 1]})
+    right = _df({"k": [1.0, 2.0, 2.0], "a": ["x", "y", "y"]})
+    eager = left.join(right, "k", "lookup")
+    assert _dict(eager) == {"k": [1, 2, 3, 1], "a": ["x", "y", None, "x"]}
+    plan = left.lazy().join(right.lazy(), "k", "lookup")
+    assert _dict(plan.collect(morsel_rows=1)) == _dict(eager)
+    with pytest.raises(ValueError, match="key 2"):
+        left.join(_df({"k": [2, 2], "a": ["y", "z"]}), "k", "lookup")
+    nested = left.join(right, "k", "nest", suffix="m")
+    assert nested.columns == ["k", "m"]
+    assert [len(v) for v in _dict(nested)["m"]] == [1, 2, 0, 1]
 
 
 def test_lazy_concat_and_union_match_eager():

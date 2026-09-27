@@ -4,10 +4,10 @@
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
-#include <dftracer/utils/query/query.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
 #include <dftracer/utils/server/json_builder.h>
@@ -18,6 +18,7 @@
 #include <dftracer/utils/server/viz/density.h>
 #include <dftracer/utils/server/viz/handlers.h>
 #include <dftracer/utils/server/viz/internal.h>
+#include <dftracer/utils/server/viz/record_event.h>
 #include <dftracer/utils/server/viz/scan.h>
 #include <dftracer/utils/server/viz/summary_build.h>
 #include <dftracer/utils/server/viz_api.h>
@@ -119,7 +120,7 @@ coro::CoroTask<HttpResponse> handle_viz_counters(const HttpRequest& req,
     if (buckets < 16) buckets = 16;
     if (buckets > 4000) buckets = 4000;
 
-    auto win = parse_viz_window(params, index);
+    auto win = parse_viz_window(params, index, req.path);
     if (!win) co_return std::move(win.error());
     double begin = win->begin;
     double end = win->end;
@@ -135,7 +136,8 @@ coro::CoroTask<HttpResponse> handle_viz_counters(const HttpRequest& req,
         co_return HttpResponse::ok(std::move(*hit));
 
     // Zoomed-out, unfiltered counter tracks come from the activity summary.
-    if (viz_summary_eligible(params)) {
+    const TraceFields fields(index.record_schema());
+    if (viz_summary_eligible(params, fields)) {
         const VizSummary* s = co_await ensure_viz_summary(index);
         if (s != nullptr && s->t_end > s->t_begin) {
             if (const VizSummary::Level* level = s->level_for(bucket_us)) {
@@ -146,7 +148,7 @@ coro::CoroTask<HttpResponse> handle_viz_counters(const HttpRequest& req,
         }
     }
 
-    ViewDefinition view = build_viz_view(params, begin, end, 0);
+    ViewDefinition view = build_viz_view(params, begin, end, 0, fields);
     // No cap: only zoomed-in or filtered counter queries reach the live path.
     int limit = params.get_int("limit", 0);
     if (limit < 0) limit = 0;
@@ -162,16 +164,17 @@ coro::CoroTask<HttpResponse> handle_viz_counters(const HttpRequest& req,
         views::View::from_files(
             to_view_files(select_viz_target_files(index, params, begin, end)))
             .phase(views::Phase::Events)
-            .metadata(false)
             .cancel_when([&req]() { return req.cancel_token.cancelled(); });
     if (view.query) v = v.filter(*view.query);
-    if (!single_file) v = v.time_range(begin, end);
+    if (!single_file || fields.by_path) v = v.time_range(begin, end);
 
     auto r = co_await v.map_batches<CounterAcc>(
-        [begin, bucket_us, nb](CounterAcc& acc,
-                               const std::vector<std::string_view>& events) {
+        [begin, bucket_us, nb, &fields](
+            CounterAcc& acc, const std::vector<std::string_view>& events) {
             if (acc.ops.empty()) acc.init(nb);
-            for (auto ev : events) fold_counter(ev, begin, bucket_us, nb, acc);
+            fields.for_each_event(events, [&](std::string_view ev) {
+                fold_counter(ev, begin, bucket_us, nb, acc);
+            });
         },
         [](CounterAcc&& x, CounterAcc&& y) {
             if (y.ops.empty()) return std::move(x);

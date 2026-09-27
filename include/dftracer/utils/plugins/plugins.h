@@ -80,8 +80,8 @@ class Plugins {
     struct PluginInfo {
         std::string path;  ///< the shared-library path given to Builder::add
         std::uint32_t abi_version = 0;
-        bool has_plan_query =
-            false;         ///< true if the plugin declares a plan_query
+        bool has_plan_duql =
+            false;         ///< true if the plugin declares a plan_duql
         std::vector<std::string> provides;
         std::vector<std::string> consumes;
         /// One entry per op the plugin's factory added to the host op
@@ -123,7 +123,7 @@ class Plugins {
     explicit Plugins(std::unique_ptr<Impl> impl);
     friend struct PluginsInternalAccess;
 
-    /// `view` narrowed by the union of the plugins' plan_query filters (the
+    /// `view` narrowed by the union of the plugins' plan_duql filters (the
     /// weakest predicate that still selects every event any plugin keeps), or
     /// unchanged when no prune applies. Only run() calls this: it owns the
     /// scan it runs, so it can narrow directly rather than offering the

@@ -118,6 +118,49 @@ TEST_SUITE("dataframe concat") {
         CHECK(str_col(out, "s") == std::vector<S>{"x", "y", "z", "y", "w"});
     }
 
+    TEST_CASE("list and struct columns concatenate with their nulls") {
+        // a: [[1, 2], null]; b: [[], [3]]
+        auto part = [](std::vector<std::int32_t> offs,
+                       std::vector<std::int64_t> vals,
+                       std::vector<std::int64_t> rows) {
+            DataFrame df;
+            df.names = {"l"};
+            df.columns.push_back(Series::list(offs, i64s(vals)).take(rows));
+            return df;
+        };
+        DataFrame a = part({0, 2, 2}, {1, 2}, {0, -1});
+        DataFrame b = part({0, 0, 1}, {3}, {0, 1});
+        DataFrame out = dftracer::utils::dataframe::concat({&a, &b});
+        const Series& l = out.columns.front();
+        REQUIRE(l.type() == TypeId::List);
+        REQUIRE(l.length() == 4);
+        CHECK(l.is_null(1));
+        CHECK_FALSE(l.is_null(2));
+        const Series flat = l.materialize();
+        const std::int32_t* off = flat.offsets();
+        CHECK(std::vector<std::int32_t>(off, off + 5) ==
+              std::vector<std::int32_t>{0, 2, 2, 2, 3});
+        CHECK(flat.child(0).data<std::int64_t>()[2] == 3);
+
+        DataFrame s1;
+        s1.names = {"s"};
+        {
+            std::vector<Series> f;
+            f.push_back(i64s({1, 2}));
+            s1.columns.push_back(Series::structs({"x"}, std::move(f)));
+        }
+        DataFrame s2;
+        s2.names = {"s"};
+        {
+            std::vector<Series> f;
+            f.push_back(i64s({3}));
+            s2.columns.push_back(Series::structs({"x"}, std::move(f)));
+        }
+        DataFrame st = dftracer::utils::dataframe::concat({&s1, &s2});
+        REQUIRE(st.columns.front().type() == TypeId::Struct);
+        CHECK(st.columns.front().child(0).data<std::int64_t>()[2] == 3);
+    }
+
     TEST_CASE("lazy parity with eager under one and many morsels") {
         DataFrame a = make_a();
         DataFrame b = make_b();
@@ -242,7 +285,7 @@ TEST_SUITE("dataframe concat") {
         char* text = dftu_lazyframe_explain(lc);
         REQUIRE(text);
         CHECK(std::string(text).find("concat") != std::string::npos);
-        dftu_query_string_free(text);
+        dftu_duql_string_free(text);
         dftu_dataframe* collected = dftu_lazyframe_collect(lc, 0);
         REQUIRE(collected);
         CHECK(dftu_dataframe_num_rows(collected) == 5);

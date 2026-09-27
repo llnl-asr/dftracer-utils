@@ -16,7 +16,7 @@ extern PyObject *g_dft_not_found_error;    // DFTUtilsNotFoundError
 extern PyObject *g_dft_io_error;           // DFTUtilsIOError
 extern PyObject *g_dft_parse_error;        // DFTUtilsParseError
 extern PyObject *g_dft_compression_error;  // DFTUtilsCompressionError
-extern PyObject *g_dft_query_error;        // DFTUtilsQueryError
+extern PyObject *g_dft_duql_error;         // DFTUtilsDuqlError
 extern PyObject *g_dft_reader_error;       // DFTUtilsReaderError
 extern PyObject *g_dft_indexer_error;      // DFTUtilsIndexerError
 extern PyObject *g_dft_pipeline_error;     // DFTUtilsPipelineError
@@ -29,7 +29,7 @@ int init_py_errors(PyObject *m);
 // Map a coarse ErrorCode to its Python exception type (borrowed reference).
 // Falls back to the DFTUtilsError base for UNKNOWN/INTERNAL.
 PyObject *py_error_type_for(dftracer::utils::ErrorCode code);
-/// Domain-aware: maps a domain error (e.g. the query domain) to its Python
+/// Domain-aware: maps a domain error (e.g. the duql domain) to its Python
 /// type, falling back to the portable-condition map.
 PyObject *py_error_type_for(const dftracer::utils::DFTUtilsException &e);
 

@@ -416,10 +416,12 @@ bool fast_open(AggState& st, const std::vector<PlainKey>& k,
     return true;
 }
 
-// One cell into a light accumulator, in the cell's domain.
-__attribute__((always_inline)) inline void light_add(AggState::LightStat& l,
-                                                     FieldStatDomain domain,
-                                                     std::uint64_t bits) {
+// One cell into a light accumulator, in the cell's domain. Returns the wrap of
+// an integer sum (+1 up, -1 down, 0 none) for AggState::light_carry.
+__attribute__((always_inline)) inline int light_add(AggState::LightStat& l,
+                                                    FieldStatDomain domain,
+                                                    std::uint64_t bits) {
+    int wrap = 0;
     switch (domain) {
         case FieldStatDomain::F64: {
             const double x = std::bit_cast<double>(bits);
@@ -440,8 +442,11 @@ __attribute__((always_inline)) inline void light_add(AggState::LightStat& l,
                 l.sum = bits;
                 l.lo = l.hi = bits;
             } else {
-                l.sum = std::bit_cast<std::uint64_t>(
-                    std::bit_cast<std::int64_t>(l.sum) + x);
+                std::int64_t s = 0;
+                if (__builtin_add_overflow(std::bit_cast<std::int64_t>(l.sum),
+                                           x, &s)) [[unlikely]]
+                    wrap = x < 0 ? -1 : 1;
+                l.sum = std::bit_cast<std::uint64_t>(s);
                 if (x < std::bit_cast<std::int64_t>(l.lo)) l.lo = bits;
                 if (x > std::bit_cast<std::int64_t>(l.hi)) l.hi = bits;
             }
@@ -452,13 +457,21 @@ __attribute__((always_inline)) inline void light_add(AggState::LightStat& l,
                 l.sum = bits;
                 l.lo = l.hi = bits;
             } else {
-                l.sum += bits;
+                if (__builtin_add_overflow(l.sum, bits, &l.sum)) [[unlikely]]
+                    wrap = 1;
                 if (bits < l.lo) l.lo = bits;
                 if (bits > l.hi) l.hi = bits;
             }
             break;
     }
     ++l.n;
+    return wrap;
+}
+
+// Out of line so the per-row loops that call it stay small enough to inline.
+__attribute__((noinline, cold)) void add_carry(AggState& st, std::size_t slot,
+                                               int wrap) {
+    st.light_carry[slot] += wrap;
 }
 
 // find_or_add_group over a row's key words.
@@ -630,7 +643,7 @@ bool accumulate_plain(AggState& st, const std::vector<const Series*>& keys,
     auto add_row = [&]<bool Moments, bool Nulls>(std::int64_t g,
                                                  std::int64_t i) {
         if (static_cast<std::size_t>(g) == st.group_first_row.size())
-            st.group_first_row.push_back(i);
+            st.group_first_row.push_back(st.row_base + i);
         st.counts[static_cast<std::size_t>(g)]++;
         if constexpr (!Moments) {
             if (st.light_on) {
@@ -639,7 +652,10 @@ bool accumulate_plain(AggState& st, const std::vector<const Series*>& keys,
                 for (std::size_t fj = 0; fj < nf; ++fj) {
                     const Plain8& c = v[fj];
                     if (Nulls && c.is_null(i)) continue;
-                    light_add(ls[fj], c.domain, c.bits(i));
+                    if (const int wr = light_add(ls[fj], c.domain, c.bits(i)))
+                        [[unlikely]]
+                        add_carry(st, static_cast<std::size_t>(g) * nf + fj,
+                                  wr);
                 }
                 return;
             }
@@ -991,8 +1007,9 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
 
     for (std::int64_t i = begin; i < end; ++i) {
         std::int64_t g = st.group_of(keys, i);
+        const std::int64_t row = st.row_base + i;
         if (static_cast<std::size_t>(g) == st.group_first_row.size())
-            st.group_first_row.push_back(i);
+            st.group_first_row.push_back(row);
         st.counts[static_cast<std::size_t>(g)]++;
         const std::size_t base = static_cast<std::size_t>(g) * st.nf;
         for (std::size_t fj = 0; fj < st.nf; ++fj) {
@@ -1012,16 +1029,16 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
             }
             if (st.has_fl) {
                 const std::size_t sl = base + fj;
-                if (st.fl_first_idx[sl] < 0 || i < st.fl_first_idx[sl]) {
-                    st.fl_first_idx[sl] = i;
+                if (st.fl_first_idx[sl] < 0 || row < st.fl_first_idx[sl]) {
+                    st.fl_first_idx[sl] = row;
                     if (st.field_is_str[fj])
                         st.fl_first_s[sl] = std::string(vc->string_at(i));
                     else
                         st.fl_first[sl] =
                             read_bits(*vc, i, st.field_domain[fj]);
                 }
-                if (i > st.fl_last_idx[sl]) {
-                    st.fl_last_idx[sl] = i;
+                if (row > st.fl_last_idx[sl]) {
+                    st.fl_last_idx[sl] = row;
                     if (st.field_is_str[fj])
                         st.fl_last_s[sl] = std::string(vc->string_at(i));
                     else
@@ -1220,6 +1237,8 @@ void agg_accumulate(AggState& st, const Series& key,
     agg_accumulate(st, keys, values, begin, end);
 }
 
+void agg_set_row_base(AggState& st, std::int64_t base) { st.row_base = base; }
+
 void agg_merge(AggState& into, const AggState& other) {
     std::vector<std::int64_t> order(static_cast<std::size_t>(other.ngroups()));
     std::iota(order.begin(), order.end(), 0);
@@ -1372,7 +1391,9 @@ void agg_accumulate_packed(AggState& st, const std::vector<const Series*>& keys,
             AggState::LightStat* ls = st.light.data() + gi * nf;
             for (std::size_t fj = 0; fj < nf; ++fj) {
                 if ((mask >> fj) & 1) continue;
-                light_add(ls[fj], v[fj].domain, vals[fj]);
+                if (const int wr = light_add(ls[fj], v[fj].domain, vals[fj]))
+                    [[unlikely]]
+                    add_carry(st, gi * nf + fj, wr);
             }
         }
     }

@@ -460,11 +460,10 @@ char* test_environment_get_index_path(test_environment_handle_t env,
 }
 
 char* test_environment_create_test_file_with_format(
-    test_environment_handle_t env, test_format_t format) {
+    test_environment_handle_t env, test_format_t) {
     if (!env) return nullptr;
     auto* cpp_env = reinterpret_cast<dftu_utils_test::TestEnvironment*>(env);
 
-    (void)format;
     dftu_utils_test::Format cpp_format = dftu_utils_test::Format::GZIP;
 
     try {

@@ -85,7 +85,7 @@ whole span, which drops every sub-millisecond event in a demo this small:
 The response's ``metadata.count`` is 500 (every event in the window);
 ``ts`` is normalized to start at 0 (``ts_normalized:true``), and
 ``metadata.global_min_timestamp_us`` (1000) is the value that was subtracted.
-Narrow it with ``cat`` or a ``query`` DSL predicate:
+Narrow it with ``cat`` or a ``duql`` predicate:
 
 .. code-block:: console
 
@@ -94,7 +94,7 @@ Narrow it with ``cat`` or a ``query`` DSL predicate:
    {'begin': 0.0, 'end': 1600.0, 'count': 250, 'limit': 0, 'truncated': False,
     'ts_normalized': True, 'global_min_timestamp_us': 1000}
 
-   $ curl -s 'http://127.0.0.1:8099/api/viz/events?begin=0&end=1600&summary=1&query=dur%20%3E%3D%20400' \
+   $ curl -s 'http://127.0.0.1:8099/api/viz/events?begin=0&end=1600&summary=1&duql=dur%20%3E%3D%20400' \
        | python3 -c 'import json,sys; print(json.load(sys.stdin)["metadata"]["count"])'
    110
 
@@ -120,13 +120,13 @@ What you learned
   ``/api/files`` need no parameters.
 - ``/api/viz/events`` and ``/api/viz/stats`` take a required ``begin``/``end``
   microsecond window and a ``summary`` level-of-detail knob, and accept
-  ``cat``/``query`` filters.
+  ``cat``/``duql`` filters.
 
 See also
 ----------
 
 - :doc:`../guides/serving/http-server` - every flag, the access token, and the
-  full data-route table (``/api/files/info``, ``/api/resolve``,
+  full data-route table (``/api/files/info``, ``/api/rowset``,
   ``/api/cancel``).
 - :doc:`../guides/serving/viz-api` - every ``/api/viz/*`` route, its extra
   parameters, and the level-of-detail model behind ``summary``.

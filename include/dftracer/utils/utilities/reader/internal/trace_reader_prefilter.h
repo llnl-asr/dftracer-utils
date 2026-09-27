@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_TRACE_READER_PREFILTER_H
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_TRACE_READER_PREFILTER_H
 
-#include <dftracer/utils/query/query.h>
+#include <dftracer/utils/duql/query.h>
 #include <simdjson.h>
 
 #include <cstdint>
@@ -43,7 +43,7 @@ struct CompiledEqProbe {
 };
 
 std::optional<std::vector<CompiledEqProbe>> try_compile_eq_probes(
-    const query::QueryNode& node);
+    const duql::QueryNode& node);
 
 bool eval_compiled_eq(const std::vector<CompiledEqProbe>& probes,
                       simdjson::ondemand::document_reference doc);

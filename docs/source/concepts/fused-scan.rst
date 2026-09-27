@@ -149,5 +149,5 @@ See also
 - :doc:`indexing-and-pushdown` for what happens before the scan starts.
 - :doc:`dataframe-model` for the result type a fold produces.
 - :doc:`../plugins` for authoring a plugin that rides this scan.
-- :doc:`../guides/core/query-dsl` for the predicate language used to filter
+- :doc:`../guides/core/duql` for the predicate language used to filter
   a ``View``.

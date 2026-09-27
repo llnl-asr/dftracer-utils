@@ -3,7 +3,7 @@
 
 class TestUtilityImports:
     def test_import_query_field(self):
-        from dftracer.utils.query import Expr, Field
+        from dftracer.utils.duql import Expr, Field
 
         cat = Field("cat")
         q = cat == "POSIX"

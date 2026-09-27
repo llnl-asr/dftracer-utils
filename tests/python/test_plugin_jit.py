@@ -30,7 +30,7 @@ pa = pytest.importorskip("pyarrow")
 
 
 @pytest.mark.skipif(not HAS_CXX, reason="no C++ compiler available for the jit backend")
-def test_jit_plan_query_narrows_scan(tmp_path):
+def test_jit_plan_duql_narrows_scan(tmp_path):
     posix_dir = tmp_path / "posix"
     stdio_dir = tmp_path / "stdio"
     posix_dir.mkdir()
@@ -42,7 +42,7 @@ def test_jit_plan_query_narrows_scan(tmp_path):
 
     @jit.plugin
     class Pruned:
-        plan_query = 'cat == "POSIX"'
+        plan_duql = 'cat == "POSIX"'
         hits = jit.map(key=(jit.i64,), value=jit.count())
 
         @jit.each_event

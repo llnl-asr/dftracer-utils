@@ -13,5 +13,5 @@ versions. Each page documents one header group from the source through Doxygen.
 
    dataframe
    indexer
-   query
+   duql
    plugins

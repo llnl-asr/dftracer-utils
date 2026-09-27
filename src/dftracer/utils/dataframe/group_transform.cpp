@@ -35,13 +35,11 @@ dftu_window_spec spec(dftu_window_func func, const char* value, const char* out,
     dftu_window_spec s{};
     s.func = func;
     s.value = value;
-    s.time = nullptr;
     s.out = out;
-    s.offset = offset;
-    s.threshold = 0.0;
-    s.counter = 0;
-    s.preceding = DFTU_WINDOW_UNBOUNDED;
-    s.following = DFTU_WINDOW_UNBOUNDED;
+    if (func >= DFTU_WINDOW_FRAME_SUM && func <= DFTU_WINDOW_FRAME_MEAN)
+        s.param.frame = {offset, DFTU_WINDOW_UNBOUNDED, DFTU_WINDOW_UNBOUNDED};
+    else
+        s.param.offset = offset;
     return s;
 }
 
@@ -214,8 +212,8 @@ LazyFrame rolling(const LazyFrame& plan, const std::vector<std::string>& keys,
         plan, keys, value_columns(plan, keys, Agg::Sum),
         [func, n](const char* c, const char* o) {
             dftu_window_spec s = spec(func, c, o, n);
-            s.preceding = n - 1;
-            s.following = 0;
+            s.param.frame.preceding = n - 1;
+            s.param.frame.following = 0;
             return s;
         },
         [](const LazyFrame& p, const std::string&, const std::string& o) {

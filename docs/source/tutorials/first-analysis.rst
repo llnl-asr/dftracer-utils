@@ -177,7 +177,7 @@ the same predicate reads almost identically in Python and C++. Keep only the
    .. tab-item:: Python
 
       Compose the predicate with Python operators and pass its string form to
-      ``query``:
+      ``duql``:
 
       .. code-block:: python
 
@@ -185,7 +185,7 @@ the same predicate reads almost identically in Python and C++. Keep only the
 
          df = (
              TraceViewer("trace.pfw.gz")
-             .query(str(Field("cat") == "POSIX"))
+             .duql(str(Field("cat") == "POSIX"))
              .group_by("cat")
              .agg("count", "mean:dur")
              .collect()
@@ -201,25 +201,25 @@ the same predicate reads almost identically in Python and C++. Keep only the
 
    .. tab-item:: C++
 
-      The C++ ``Field`` builder (namespace ``dftracer::utils::query``, header
-      ``query/builder.h``) mirrors the Python one. ``Field("cat") == "POSIX"``
-      returns an ``Expr``; ``.to_string()`` serializes it to the DSL string that
-      ``View::query`` takes.
+      The C++ ``Field`` builder (namespace ``dftracer::utils::duql``, header
+      ``duql/builder.h``) mirrors the Python one. ``Field("cat") == "POSIX"``
+      returns an ``Expr``; ``.to_string()`` serializes it to the duql string that
+      ``View::duql`` takes.
 
       .. code-block:: cpp
 
-         #include <dftracer/utils/query/builder.h>
+         #include <dftracer/utils/duql/builder.h>
          #include <dftracer/utils/trace/views/view.h>
 
          #include <cstdint>
          #include <cstdio>
 
          using namespace dftracer::utils::trace::views;
-         using dftracer::utils::query::Field;
+         using dftracer::utils::duql::Field;
 
          int main() {
              auto df = View::from_file("trace.pfw.gz")
-                           .query((Field("cat") == "POSIX").to_string())
+                           .duql((Field("cat") == "POSIX").to_string())
                            .group_by({GroupKey::cat()})
                            .agg({AggSpec(AggOp::Count),
                                  AggSpec(AggOp::Mean, "dur")})
@@ -247,7 +247,7 @@ the same predicate reads almost identically in Python and C++. Keep only the
 -----------------------
 
 In practice a run produces many traces in a directory tree. Point at the
-**directory** and the reader scans the tree for ``.pfw.gz`` traces in parallel.
+**directory** and the reader scans the tree for trace files in parallel.
 Do not glob and pass a file list yourself; the built-in scanner is faster and
 recursive. Put your trace in a folder and read the folder:
 

@@ -15,21 +15,21 @@ why, see :doc:`Concepts <../concepts/index>`.
       :link-type: doc
 
       The ``dftracer.utils`` package: the DataFrame engine, TraceViewer, the
-      query and columnar DSLs, the JIT, and the indexer.
+      duql and columnar builders, the JIT, and the indexer.
 
    .. grid-item-card:: :octicon:`cpu` C++ API
       :link: ../cpp_api/index
       :link-type: doc
 
       The C++20 engine: the runtime, DataFrame ``Series``/``DataFrame``, the
-      query builder, the trace layer, and the plugin SDK.
+      duql builder, the trace layer, and the plugin SDK.
 
    .. grid-item-card:: :octicon:`file-binary` C API Reference
       :link: ../c_api/index
       :link-type: doc
 
       The stable ``dftu_`` C ABI for C consumers, FFI, and hand-written
-      plugins: the DataFrame, query, and plugin interfaces.
+      plugins: the DataFrame, duql, and plugin interfaces.
 
 .. toctree::
    :hidden:
@@ -38,4 +38,5 @@ why, see :doc:`Concepts <../concepts/index>`.
    ../api/index
    ../cpp_api/index
    ../c_api/index
+   duql
    record-schema

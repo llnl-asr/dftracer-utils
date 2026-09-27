@@ -102,11 +102,9 @@ void put_profile(IndexWrite& w, int file_id, std::string_view profile_id,
 void put_catalog_path(IndexWrite& w, int file_id, std::string_view path,
                       const PathStat& stat);
 
-/// Index-wide dictionary row `key` of `dict`, with a reverse entry per field
-/// value.
-void put_dict_row(
-    IndexWrite& w, std::string_view dict, std::string_view key,
-    const std::vector<std::pair<std::string, std::string>>& fields);
+/// The rows of row set `name` of the file, as an Arrow IPC frame.
+void put_rowset(IndexWrite& w, int file_id, std::string_view name,
+                std::string_view frame);
 
 }  // namespace records
 

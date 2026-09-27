@@ -132,7 +132,7 @@ def test_session_attach_handle_read_before_execute_triggers_it(tmp_path):
 
 @jit.plugin
 class _SessionCountsPosix:
-    plan_query = 'cat == "POSIX"'
+    plan_duql = 'cat == "POSIX"'
     hits = jit.map(key=(jit.i64,), value=jit.count())
 
     @jit.each_event

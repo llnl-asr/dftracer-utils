@@ -5,6 +5,7 @@
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/index/cache/mv_store.h>
 #include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/index/source.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/json/parser.h>
@@ -13,6 +14,7 @@
 #include <dftracer/utils/trace/views/containment_fold.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
+#include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_executor.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
@@ -52,49 +54,86 @@ void strip_redundant_time_bucket(detail::ViewPlan& p) {
                            }),
             g.end());
 }
-// Resolved keys must name a column of the record_schema. Path-decoded records
-// carry every field under its path: a named field key groups on that path, and
-// the keys only dftracer events have are rejected.
+// Whether `schema`'s source indexes row set `rowset` with columns `key` and
+// `value`.
+bool has_rowset(const dftracer::utils::index::RecordSchema& schema,
+                const std::string& rowset, const std::string& key,
+                const std::string& value) {
+    for (const auto& r : dftracer::utils::index::indexed_rowsets(schema)) {
+        if (r.name != rowset) continue;
+        auto has = [&](const std::string& c) {
+            return std::any_of(r.columns.begin(), r.columns.end(),
+                               [&](const auto& col) { return col.first == c; });
+        };
+        return has(key) && has(value);
+    }
+    return false;
+}
+
+// Path-decoded records carry every field under its path: a named field key
+// groups on that path, name/pid/tid on the name/entity/lane role (else the
+// like-named field), file and host keys on the `fhash` and `hhash` fields,
+// rank on the entity role, and the keys only dftracer events have are
+// rejected. A key relabeled through a row set needs the source to define it.
 void check_keys(const detail::ViewPlan& p, std::vector<GroupKey>& keys) {
-    for (const auto& k : keys)
-        if (k.kind == GroupKey::Kind::Resolved)
-            detail::plan_record_schema(p).resolved_column(k.arg);
     if (!detail::plan_by_path(p)) return;
+    const auto& schema = detail::plan_record_schema(p);
+    const auto& roles = schema.roles;
+    auto role = [](const std::string& path, const char* field) {
+        return path.empty() ? std::string(field) : path;
+    };
     for (auto& k : keys) {
+        bool field = true;
         switch (k.kind) {
             case GroupKey::Kind::Name:
-                k.arg = "name";
+                k.arg = role(roles.name, "name");
                 break;
             case GroupKey::Kind::Cat:
                 k.arg = "cat";
                 break;
             case GroupKey::Kind::Pid:
-                k.arg = "pid";
+                k.arg = role(roles.entity, "pid");
                 break;
             case GroupKey::Kind::Tid:
-                k.arg = "tid";
+                k.arg = role(roles.lane, "tid");
                 break;
             case GroupKey::Kind::Arg:
             case GroupKey::Kind::Field:
+                break;
             case GroupKey::Kind::Expr:
-            case GroupKey::Kind::Resolved:
+                field = false;
                 break;
             case GroupKey::Kind::Fhash:
-            case GroupKey::Kind::Hhash:
-            case GroupKey::Kind::IoCat:
-            case GroupKey::Kind::AccPat:
             case GroupKey::Kind::FilePath:
             case GroupKey::Kind::FileName:
+                k.arg = "fhash";
+                field = false;
+                break;
+            case GroupKey::Kind::Hhash:
             case GroupKey::Kind::HostName:
+                k.arg = "hhash";
+                field = false;
+                break;
             case GroupKey::Kind::Rank:
-                throw DFTUtilsException::cat(ErrorCode::INVALID_ARGUMENT,
-                                             "group key ",
-                                             detail::group_col_name(k),
-                                             " needs dftracer events; schema ",
-                                             detail::plan_record_schema(p).id,
-                                             " records have paths only");
+                k.arg = role(roles.entity, "pid");
+                field = false;
+                break;
+            case GroupKey::Kind::IoCat:
+            case GroupKey::Kind::AccPat:
+                throw DFTUtilsException::cat(
+                    ErrorCode::INVALID_ARGUMENT, "group key ",
+                    detail::group_col_name(k),
+                    " needs dftracer events; schema ", schema.id,
+                    " records have paths only");
         }
-        if (k.kind != GroupKey::Kind::Expr) k.kind = GroupKey::Kind::Field;
+        if (auto c = detail::resolver_column(k.kind);
+            c && !has_rowset(schema, c->rowset, c->key, c->value))
+            throw DFTUtilsException::cat(
+                ErrorCode::INVALID_ARGUMENT, "group key ",
+                detail::group_col_name(k), " needs row set ", c->rowset, " (",
+                c->key, ", ", c->value, "); schema ", schema.id,
+                " defines none");
+        if (field) k.kind = GroupKey::Kind::Field;
     }
 }
 
@@ -116,7 +155,7 @@ coro::CoroTask<ScanPlan> from_directory(std::string dir,
                                         std::string index_path) {
     utilities::filesystem::PatternDirectoryScannerUtility scanner;
     utilities::filesystem::PatternDirectoryScannerUtilityInput input(
-        std::move(dir), {".pfw.gz", ".jsonl.gz", ".ndjson.gz"},
+        std::move(dir), utilities::filesystem::trace_file_patterns(),
         /*recursive=*/true,
         /*populate_size=*/false);
 
@@ -153,9 +192,8 @@ std::vector<TraceConfig> config(const ScanPlan& plan_) {
             std::string buf;
             void write(std::string_view d) override { buf.append(d); }
         } sink;
-        export_json(metadata(query(from_file(f.file_path, f.index_path),
-                                   R"(name == "end")"),
-                             false),
+        export_json(filter(from_file(f.file_path, f.index_path),
+                           duql::parse_or_throw(R"(name == "end")")),
                     sink)
             .get();
         std::size_t pos = 0;
@@ -213,11 +251,8 @@ ColTypeMap harvest_path_types(const std::vector<ViewFile>& files) {
 }
 
 // Union the harvested column types across the view's distinct index roots,
-// reading each index's metadata in parallel. Seeds the base axis fields and
-// appends the resolved columns of present key fields.
-ColTypeMap harvest_column_types(
-    const std::vector<ViewFile>& files,
-    const dftracer::utils::index::RecordSchema& record_schema) {
+// reading each index's metadata in parallel. Seeds the base axis fields.
+ColTypeMap harvest_column_types(const std::vector<ViewFile>& files) {
     // Distinct index roots (many files often share one index).
     std::vector<std::string> roots;
     for (const auto& f : files) {
@@ -259,18 +294,11 @@ ColTypeMap harvest_column_types(
             });
         fold_col_map(merged, harvested);
     }
-
-    // Resolved columns, present when their key field is.
-    for (const auto& name : record_schema.resolved_names())
-        if (const auto& key = record_schema.resolved_column(name).key_field;
-            merged.count(key) || merged.count("args." + key))
-            merged.emplace(name,
-                           dftracer::utils::index::store::ColumnType::String);
     return merged;
 }
 
-// Declared fields override the observed types of their paths; a json field,
-// which the catalog does not hold as a path, is always a string column.
+// Declared fields override the observed types of their paths and are columns
+// even before an index has seen them; an ISO-8601 time is its microseconds.
 void overlay_declared(ColTypeMap& m,
                       const dftracer::utils::index::RecordSchema& schema) {
     namespace ix = dftracer::utils::index;
@@ -286,21 +314,19 @@ void overlay_declared(ColTypeMap& m,
                 t = CT::Float64;
                 break;
             case ix::FieldType::STRING:
+                t = f.role == ix::Role::TIME ? CT::Int64 : CT::String;
+                break;
             case ix::FieldType::JSON:
-                t = CT::String;
+                t = CT::Json;
                 break;
         }
-        if (f.type == ix::FieldType::JSON)
-            m.insert_or_assign(f.path, t);
-        else if (auto it = m.find(f.path); it != m.end())
-            it->second = t;
+        m.insert_or_assign(f.path, t);
     }
 }
 
 ColTypeMap harvest_plan_types(const ScanPlan& plan_) {
     if (!detail::plan_by_path(*plan_))
-        return harvest_column_types(plan_->files,
-                                    detail::plan_record_schema(*plan_));
+        return harvest_column_types(plan_->files);
     ColTypeMap m = harvest_path_types(plan_->files);
     overlay_declared(m, detail::plan_record_schema(*plan_));
     return m;
@@ -336,6 +362,10 @@ const char* path_type_name(dftracer::utils::index::store::PathType t) {
             return "string";
         case PT::MIXED:
             return "mixed";
+        case PT::OBJECT:
+            return "object";
+        case PT::ARRAY:
+            return "array";
     }
     return "mixed";
 }
@@ -353,6 +383,8 @@ std::vector<SchemaLeaf> schema_tree(const ScanPlan& plan_) {
             auto [it, fresh] = dbs.try_emplace(f.index_path);
             if (fresh)
                 it->second.emplace(f.index_path, st::IndexOpenMode::ReadOnly);
+            // An index that failed to open stays empty for the other files.
+            if (!it->second) continue;
             const int fid = it->second->get_file_info_id(
                 st::internal::get_logical_path(f.file_path));
             if (fid < 0) continue;
@@ -368,8 +400,10 @@ std::vector<SchemaLeaf> schema_tree(const ScanPlan& plan_) {
     }
     std::map<std::string, SchemaLeaf> leaves;
     for (auto& [path, stat] : merged)
-        leaves[path] =
-            SchemaLeaf{path, path_type_name(stat.type), stat.count, {}, {}};
+        if (stat.type != st::PathType::OBJECT &&
+            stat.type != st::PathType::ARRAY)
+            leaves[path] =
+                SchemaLeaf{path, path_type_name(stat.type), stat.count, {}, {}};
     namespace ix = dftracer::utils::index;
     const ix::RecordSchema& schema = detail::plan_record_schema(*plan_);
     for (const auto& f : schema.fields) {
@@ -408,29 +442,59 @@ std::vector<ColumnInfo> schema(const ScanPlan& plan_) {
     return out;
 }
 
-std::unordered_map<std::string, dataframe::TypeId> column_types(
+std::shared_ptr<const detail::JsonColumns> json_columns(
+    const detail::ViewPlan& plan) {
+    using CT = dftracer::utils::index::store::ColumnType;
+    const bool by_path = detail::plan_by_path(plan);
+    const auto& schema = detail::plan_record_schema(plan);
+    ColTypeMap m = by_path ? harvest_path_types(plan.files)
+                           : harvest_column_types(plan.files);
+    if (by_path) overlay_declared(m, schema);
+    auto out = std::make_shared<detail::JsonColumns>();
+    for (const auto& [name, t] : m) {
+        if (t != CT::Json) continue;
+        const auto* field = schema.field_at(name);
+        const bool text =
+            field && field->type == dftracer::utils::index::FieldType::JSON;
+        // A dftracer catalog names args bare, so a top-level field of the
+        // same name merges in; only the args column is JSON.
+        if (by_path)
+            out->emplace(name, text);
+        else
+            out->emplace(std::string(dftracer::utils::ARGS_PREFIX) + name,
+                         text);
+    }
+    if (out->empty()) return nullptr;
+    return out;
+}
+
+std::unordered_map<std::string, dataframe::DataType> column_types(
     const ScanPlan& plan_) {
     namespace df = dftracer::utils::dataframe;
+    using CT = dftracer::utils::index::store::ColumnType;
     ColTypeMap m = harvest_plan_types(plan_);
-    std::unordered_map<std::string, df::TypeId> out;
+    std::unordered_map<std::string, df::DataType> out;
     out.reserve(m.size());
     for (auto& [name, t] : m) {
-        df::TypeId id = df::TypeId::Unknown;
+        df::DataType type = df::scalar(df::TypeId::Unknown);
         switch (t) {
-            case dftracer::utils::index::store::ColumnType::Int64:
-                id = df::TypeId::Int64;
+            case CT::Int64:
+                type.id = df::TypeId::Int64;
                 break;
-            case dftracer::utils::index::store::ColumnType::Float64:
-                id = df::TypeId::Float64;
+            case CT::Float64:
+                type.id = df::TypeId::Float64;
                 break;
-            case dftracer::utils::index::store::ColumnType::String:
-                id = df::TypeId::String;
+            case CT::String:
+                type.id = df::TypeId::String;
                 break;
-            case dftracer::utils::index::store::ColumnType::Unknown:
-                id = df::TypeId::Unknown;
+            case CT::Json:
+                type.id = df::TypeId::String;
+                type.json = true;
+                break;
+            case CT::Unknown:
                 break;
         }
-        out.emplace(name, id);
+        out.emplace(name, std::move(type));
     }
     return out;
 }
@@ -443,18 +507,11 @@ TimeMetric time_metric(const ScanPlan& plan_) {
 ScanPlan filter(const ScanPlan& plan_, Query q) {
     auto next = clone(plan_);
     if (next->query) {
-        // AND the two predicates by combining their source strings.
-        std::string combined =
-            "(" + next->query->source() + ") and (" + q.source() + ")";
-        next->query = query::parse_or_throw(combined);
+        next->query = duql::conjoin(*next->query, q);
     } else {
         next->query = std::move(q);
     }
     return next;
-}
-
-ScanPlan query(const ScanPlan& plan_, const std::string& dsl) {
-    return filter(plan_, query::parse_or_throw(dsl));
 }
 
 ScanPlan phase(const ScanPlan& plan_, Phase p) {
@@ -509,6 +566,12 @@ ScanPlan occ_cell(const ScanPlan& plan_, std::uint64_t cell_us) {
 }
 
 ScanPlan time_scale(const ScanPlan& plan_, double ns_ratio) {
+    if (ns_ratio != 1.0 && detail::plan_by_path(*plan_))
+        throw DFTUtilsException::cat(
+            ErrorCode::INVALID_ARGUMENT,
+            "time_scale scales dftracer ts and dur; schema ",
+            detail::plan_record_schema(*plan_).id,
+            " gives its time units on its time and duration fields");
     auto next = clone(plan_);
     next->time_scale = ns_ratio;
     return next;
@@ -712,9 +775,9 @@ ScanPlan materialize(const ScanPlan& plan_, std::uint64_t checkpoint_size,
     return next;
 }
 
-ScanPlan metadata(const ScanPlan& plan_, bool include) {
+ScanPlan all(const ScanPlan& plan_) {
     auto next = clone(plan_);
-    next->include_metadata = include;
+    next->all_records = true;
     return next;
 }
 
@@ -742,6 +805,12 @@ ScanPlan cancel_when(const ScanPlan& plan_, std::function<bool()> pred) {
     return next;
 }
 
+ScanPlan ordered(const ScanPlan& plan_) {
+    auto next = clone(plan_);
+    next->ordered = true;
+    return next;
+}
+
 ScanPlan rollup_root(const ScanPlan& plan_, std::string dir) {
     auto next = clone(plan_);
     next->rollup_root = std::move(dir);
@@ -751,12 +820,6 @@ ScanPlan rollup_root(const ScanPlan& plan_, std::string dir) {
 ScanPlan views_root(const ScanPlan& plan_, std::string dir) {
     auto next = clone(plan_);
     next->views_root = std::move(dir);
-    return next;
-}
-
-ScanPlan emit_all_metadata(const ScanPlan& plan_, bool v) {
-    auto next = clone(plan_);
-    next->emit_all_metadata = v;
     return next;
 }
 
@@ -900,8 +963,10 @@ dataframe::DataFrame merge_flamegraph_partials(
 coro::CoroTask<ExportStats> run_folds(ScanPlan plan_,
                                       std::span<detail::Fold* const> folds,
                                       dftracer::utils::StringIntern& intern,
-                                      detail::DynamicPrune* dyn_prune) {
-    co_return co_await detail::run_folds(*plan_, folds, intern, dyn_prune);
+                                      detail::DynamicPrune* dyn_prune,
+                                      coro::CoroSemaphore* gate) {
+    co_return co_await detail::run_folds(*plan_, folds, intern, dyn_prune,
+                                         gate);
 }
 
 coro::CoroTask<ExportStats> run(ScanPlan plan_, const ProgressFn* progress) {

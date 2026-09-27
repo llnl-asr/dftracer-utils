@@ -1,0 +1,142 @@
+// duql grammar for Lark's LALR(1) generator. Checked by
+// scripts/check_duql_grammar.py.
+
+start: pragma? decl* pipeline?
+
+pragma: "duql" INT
+
+decl: "let" NAME "=" pipeline ";"                    -> let_decl
+    | "def" NAME params? "=" expr ";"                -> def_decl
+    | "source" NAME "{" [member (";" member)* ";"?] "}" -> source_decl
+
+params: "(" [NAME ("," NAME)*] ")"
+
+member: NAME "=" pipeline                           -> member_rowset
+      | "def" NAME params? "=" expr                 -> member_def
+
+?pipeline: from_pipeline
+         | stage ("|" stage)*                         -> stage_pipeline
+         | expr ("|" stage)*                          -> filter_pipeline
+
+from_pipeline: "from" src ("," src)* ("|" stage)*
+
+src: STRING | NAME | PARAM
+
+// Stages. Stage names are contextual: the contextual lexer offers them
+// only where a stage may start.
+stage: "where" expr                                   -> where
+     | "derive" asg ("," asg)*                        -> derive
+     | "select" item ("," item)*                      -> select
+     | "drop" path ("," path)*                        -> drop
+     | "rename" NAME "=" path ("," NAME "=" path)*    -> rename
+     | "distinct" [expr ("," expr)*]                  -> distinct
+     | "group" item ("," item)* block                 -> group
+     | "agg" block                                    -> agg
+     | "window" [item ("," item)*] ["sort" keys] block -> window
+     | "pivot" add_expr ["in" list] block             -> pivot
+     | "unpivot" path ("," path)* "as" NAME "," NAME  -> unpivot
+     | "sort" keys                                    -> sort
+     | "take" (INT | PARAM) ["by" expr ("," expr)* ["sort" keys]] -> take
+     | "skip" (INT | PARAM)                                    -> skip
+     | "sample" (INT | number "%") ["seed" INT]       -> sample
+     | "expand" path ["as" NAME] ["with_index" NAME] ["keep_empty"] -> expand
+     | "lookup" NAME "on" join_key ("," join_key)* [lookup_tail] -> lookup
+     | "union" "(" from_pipeline ")"                  -> union
+     | "call" dotted "(" [arg ("," arg)*] ")"         -> call_stage
+     | "time_range" expr ".." expr ["overlap"]        -> time_range
+     | "call_tree"                                    -> call_tree
+     | "bucket" expr ["fill"]                         -> bucket
+     | "session" [item ("," item)*] "gap" expr ["max" expr] ["as" NAME] -> session
+
+block: "{" [asg ("," asg)*] "}"
+asg: NAME "=" expr
+item: expr ["as" NAME] | NAME "=" expr
+keys: sort_key ("," sort_key)*
+// A leading "-" is always the direction: the undirected key cannot start
+// with a unary minus.
+sort_key: ("-" expr | or_ns) ["nulls" ("first" | "last")]
+?or_ns: and_ns ("or" and_expr)*
+?and_ns: not_ns ("and" not_expr)*
+?not_ns: NOT cmp_expr | cmp_ns
+?cmp_ns: add_ns
+       | add_ns cmp_op add_expr
+       | add_ns [NOT] "in" (list | subquery | path | call)
+       | add_ns [NOT] "between" add_expr "and" add_expr
+       | add_ns [NOT] ("like" | "ilike") STRING ["escape" STRING]
+       | add_ns "is" [NOT] (NULL | MISSING)
+?add_ns: mul_ns (("+" | "-") mul_expr)*
+?mul_ns: coalesce (("*" | "/" | "//" | "%") unary)*
+join_key: add_expr ["==" add_expr]
+lookup_tail: "into" NAME
+           | "overlap" ["into" NAME]
+           | "asof" join_key ["backward" | "forward" | "nearest"] ["within" (INT | PARAM)]
+
+// Expressions.
+?expr: or_expr
+?or_expr: and_expr ("or" and_expr)*
+?and_expr: not_expr ("and" not_expr)*
+?not_expr: NOT cmp_expr | cmp_expr
+?cmp_expr: add_expr
+         | add_expr cmp_op add_expr                              -> compare
+         | add_expr [NOT] "in" (list | subquery | path | call)          -> in_expr
+         | add_expr [NOT] "between" add_expr "and" add_expr      -> between
+         | add_expr [NOT] ("like" | "ilike") STRING ["escape" STRING]       -> like
+         | add_expr "is" [NOT] (NULL | MISSING)                  -> is_expr
+?add_expr: mul_expr (("+" | "-") mul_expr)*
+?mul_expr: unary (("*" | "/" | "//" | "%") unary)*
+?unary: "-" coalesce -> neg
+      | coalesce
+?coalesce: postfix ("??" postfix)*
+?postfix: primary
+        | postfix "->" NAME ["(" path ")"] "." path   -> arrow
+?primary: literal
+        | PARAM
+        | path
+        | call
+        | "(" expr ")"
+        | tuple
+        | list
+        | subquery
+
+subquery: "(" from_pipeline ")"
+tuple: "(" expr "," expr ("," expr)* ")"
+list: "[" [expr ("," expr)*] "]"
+call: dotted "(" [arg ("," arg)*] ")"
+arg: expr | NAME "=" expr
+
+// A path whose leading keys are plain names shares its prefix with a
+// dotted call name; the parser reduces only when it sees "(" or not.
+path: dotted
+    | dotted path_tail path_step*
+    | QKEY path_step*
+    | "." [pkey path_step*]
+    | "^" "." pkey path_step*
+dotted: NAME | dotted "." NAME
+path_tail: "." (QKEY | INT | FLOAT) | "[" index "]"
+path_step: "." pkey | "[" index "]"
+?pkey: NAME | QKEY | INT | FLOAT
+index: ["-"] INT
+
+?literal: number | STRING | DURATION | TRUE | FALSE | NULL
+?number: INT | FLOAT
+
+!cmp_op: "==" | "!=" | "<" | "<=" | ">" | ">=" | "~" | "~*" | "!~" | "!~*"
+NOT: "not"
+NULL: "null"
+MISSING: "missing"
+TRUE: "true"
+FALSE: "false"
+
+// Reserved in expressions: never a NAME. Backticks quote such a key.
+NAME: /(?!(and|or|not|in|like|ilike|between|is|escape|null|true|false|missing)\b)[A-Za-z_][A-Za-z0-9_]*/
+QKEY: /`[^`]+`/
+PARAM: /\$[A-Za-z_][A-Za-z0-9_]*/
+DURATION.2: /[0-9]+(\.[0-9]+)?(ns|us|ms|s|m|h)(?![A-Za-z0-9_])/
+FLOAT: /[0-9]+\.[0-9]+([eE][+-]?[0-9]+)?|[0-9]+[eE][+-]?[0-9]+/
+INT: /[0-9]+/
+STRING: /"(\\.|[^"\\])*"|'(\\.|[^'\\])*'/
+
+COMMENT: /#[^\n]*/
+%import common.WS
+%ignore WS
+%ignore COMMENT

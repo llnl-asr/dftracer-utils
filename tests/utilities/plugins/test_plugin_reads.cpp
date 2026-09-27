@@ -5,6 +5,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/plugins/config.h>
 #include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -108,4 +109,45 @@ TEST_CASE(
           "args.v,args.w,args.x,args.y,args.z,cat,dur,name,ph,pid,tid,ts");
     CHECK(result_text(run, "reads_probe.has_args_x") == "1");
     CHECK(result_text(run, "reads_probe.args_x_sum") == "190.000000");
+}
+
+TEST_CASE("a path-decoded file hands the plugin its own columns") {
+    auto set = Plugins::builder()
+                   .add(READS_PROJECTION_PLUGIN_PATH,
+                        config_of(R"({"declare_reads": false})"))
+                   .build();
+    REQUIRE(set.has_value());
+
+    dftu_utils_test::TestEnvironment env(0);
+    REQUIRE(env.is_valid());
+    const std::string plain = env.get_dir() + "/generic.jsonl";
+    {
+        std::ofstream ofs(plain);
+        for (int i = 0; i < NUM_EVENTS; ++i)
+            ofs << R"({"x":)" << i << R"(,"k":"a"})" << "\n";
+    }
+    const std::string gz = plain + ".gz";
+    dftu_utils_test::compress_file_to_gzip(plain, gz);
+    fs::remove(plain);
+    dftracer::utils::index::Indexer::open({gz}).build();
+    using dftracer::utils::trace::internal::determine_index_path;
+    View view = View::from_files({ViewFile{gz, determine_index_path(gz, "")}});
+    PluginRun run = run_set(*set, view, "reads-projection");
+
+    CHECK(result_text(run, "reads_probe.columns") == "k,x");
+    CHECK(result_text(run, "reads_probe.args_x_sum") == "190.000000");
+
+    // A projection of the View decodes only its paths for the scan; the
+    // plugin still reads every field.
+    auto narrowed = Plugins::builder()
+                        .add(READS_PROJECTION_PLUGIN_PATH,
+                             config_of(R"({"declare_reads": false})"))
+                        .build();
+    REQUIRE(narrowed.has_value());
+    PluginRun projected =
+        run_set(*narrowed,
+                View::from_files({ViewFile{gz, determine_index_path(gz, "")}})
+                    .select({"k"}),
+                "reads-projection");
+    CHECK(result_text(projected, "reads_probe.args_x_sum") == "190.000000");
 }

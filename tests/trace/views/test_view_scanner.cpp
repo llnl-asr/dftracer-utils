@@ -2,13 +2,15 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/coro/async_generator.h>
 #include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/query/query.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
+#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <fstream>
 #include <limits>
@@ -19,7 +21,7 @@ using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
 using namespace dftracer::utils::trace::views;
 using namespace dftu_utils_test;
-using dftracer::utils::query::Query;
+using dftracer::utils::duql::Query;
 
 static std::string create_pfw_gz(TestEnvironment& env, int n) {
     std::string pfw = env.get_dir() + "/trace.pfw";
@@ -86,7 +88,62 @@ static CollectedViewOutput collect_view_output(ViewScannerUtility& reader,
     return collect_view_coro(&reader, std::move(input)).get();
 }
 
+// A two-member trace whose first member ends inside a line: the newline that
+// ends it opens the second member, and the file's last line has none.
+static std::string write_newline_split_trace(TestEnvironment& env,
+                                             std::size_t& first_len) {
+    auto line = [](int i) {
+        return R"({"name":"read","cat":"POSIX","ph":"X","pid":1,"tid":1,"ts":)" +
+               std::to_string(1000 + i) + R"(,"dur":1,"args":{}})";
+    };
+    std::string first, second;
+    for (int i = 0; i < 10; ++i) first += (i ? "\n" : "") + line(i);
+    for (int i = 10; i < 20; ++i) second += "\n" + line(i);
+    first_len = first.size();
+    const std::string gz = env.get_dir() + "/split_line.pfw.gz";
+    std::ofstream out(gz, std::ios::binary);
+    for (const auto* text : {&first, &second}) {
+        dftracer::utils::utilities::fileio::compress::GzipMemberCompressor comp;
+        auto member = comp.compress_member(text->data(), text->size());
+        REQUIRE(member.has_value());
+        out.write(reinterpret_cast<const char*>(member->data()),
+                  static_cast<std::streamsize>(member->size()));
+    }
+    return gz;
+}
+
 TEST_SUITE("ViewScanner") {
+    TEST_CASE("ViewScanner - a line ending at a member end is read once") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        std::size_t first_len = 0;
+        const std::string gz = write_newline_split_trace(env, first_len);
+        auto scan = [&](std::size_t begin, std::size_t end) {
+            ViewScannerInput input;
+            input.with_file_path(gz)
+                .with_index_path(determine_index_path(gz, ""))
+                .with_checkpoint_size(1024)
+                .with_batch_size(128)
+                .with_byte_range(begin, end);
+            ViewScannerUtility reader;
+            return collect_view_output(reader, input).events;
+        };
+        auto events = scan(0, first_len);
+        const auto rest =
+            scan(first_len, std::numeric_limits<std::size_t>::max());
+        events.insert(events.end(), rest.begin(), rest.end());
+        std::vector<std::string> ts;
+        for (const auto& e : events) {
+            const auto at = e.find("\"ts\":");
+            REQUIRE(at != std::string::npos);
+            ts.push_back(e.substr(at + 5, 4));
+        }
+        std::sort(ts.begin(), ts.end());
+        std::vector<std::string> want;
+        for (int i = 0; i < 20; ++i) want.push_back(std::to_string(1000 + i));
+        CHECK(ts == want);
+    }
+
     TEST_CASE("ViewScanner - No query matches all events") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
@@ -98,7 +155,6 @@ TEST_SUITE("ViewScanner") {
             .with_index_path(db_root)
             .with_checkpoint_size(1024)
             .with_byte_range(0, std::numeric_limits<std::size_t>::max());
-        input.view.with_include_metadata(false);
 
         ViewScannerUtility reader;
         auto output = collect_view_output(reader, input);
@@ -119,7 +175,6 @@ TEST_SUITE("ViewScanner") {
             .with_index_path(db_root)
             .with_checkpoint_size(1024)
             .with_byte_range(0, std::numeric_limits<std::size_t>::max());
-        input.view.with_include_metadata(false);
 
         auto q = Query::from_string(R"(cat == "POSIX")");
         REQUIRE(q.has_value());
@@ -143,7 +198,6 @@ TEST_SUITE("ViewScanner") {
             .with_index_path(db_root)
             .with_checkpoint_size(1024)
             .with_byte_range(0, std::numeric_limits<std::size_t>::max());
-        input.view.with_include_metadata(false);
 
         auto q = Query::from_string(R"(cat == "NONEXISTENT")");
         REQUIRE(q.has_value());
@@ -156,7 +210,8 @@ TEST_SUITE("ViewScanner") {
     }
 
     TEST_CASE(
-        "ViewScanner - re-emits SH/FH referenced by exec_hash/cmd_hash/cwd") {
+        "ViewScanner - include_metadata returns every metadata record past "
+        "the query") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_metadata_pfw_gz(env);
@@ -167,7 +222,7 @@ TEST_SUITE("ViewScanner") {
             .with_index_path(db_root)
             .with_checkpoint_size(1024)
             .with_byte_range(0, std::numeric_limits<std::size_t>::max());
-        input.view.with_include_metadata(true);
+        input.view.include_metadata = true;
 
         auto q = Query::from_string(R"(name == "start")");
         REQUIRE(q.has_value());
@@ -181,13 +236,10 @@ TEST_SUITE("ViewScanner") {
                 if (e.find(needle) != std::string::npos) return true;
             return false;
         };
-        // The start event points at SH via exec_hash/cmd_hash and FH via cwd;
-        // all three must be flushed despite the non-standard field names.
         CHECK(has(R"("value":"EX01")"));
         CHECK(has(R"("value":"CM01")"));
         CHECK(has(R"("value":"CW01")"));
-        // Metadata nothing references is still pruned.
-        CHECK_FALSE(has(R"("value":"UNUSED01")"));
+        CHECK(has(R"("value":"UNUSED01")"));
         CHECK(has(R"("name":"start")"));
     }
 }

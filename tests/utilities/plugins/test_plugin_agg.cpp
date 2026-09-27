@@ -61,9 +61,8 @@ FoldEvent evt(StringIntern& intern, const char* cat, const char* name,
 // keyed by "cat" with sum(dur), p50(dur) and set_union(name), and folds each
 // batch's columns into it. The host merges and finalizes it to a native
 // dataframe named "by_cat".
-::dftu_task* agg_on_batch(void* slice, const dftu_dataframe* df,
+::dftu_task* agg_on_batch(void*, const dftu_dataframe* df,
                           const dftu_plugin_host* host) {
-    (void)slice;
     const auto* agg = static_cast<const dftu_svc_agg*>(
         host->get_service(host->h, DFTU_SVC_AGG));
     if (!agg) return nullptr;
@@ -80,9 +79,8 @@ FoldEvent evt(StringIntern& intern, const char* cat, const char* name,
 
 // Same accumulator, built through the agg:: factories + Host::agg instead of
 // raw dftu_agg_col structs, proving each factory produces the same wire spec.
-::dftu_task* agg_factory_on_batch(void* slice, const dftu_dataframe* df,
+::dftu_task* agg_factory_on_batch(void*, const dftu_dataframe* df,
                                   const dftu_plugin_host* host) {
-    (void)slice;
     Host h(host);
     const auto acc =
         h.agg("by_cat_factory", {"cat"},
@@ -94,7 +92,7 @@ FoldEvent evt(StringIntern& intern, const char* cat, const char* name,
 dftu_plugin make_agg_factory_plugin() {
     dftu_plugin p{};
     p.abi_version = DFTRACER_PLUGIN_ABI_VERSION;
-    p.plan_query = [](void*) -> const char* { return nullptr; };
+    p.plan_duql = [](void*) -> const char* { return nullptr; };
     p.make_slice = [](void*) -> void* {
         static int sentinel;
         return &sentinel;
@@ -112,7 +110,7 @@ dftu_plugin make_agg_factory_plugin() {
 dftu_plugin make_agg_plugin() {
     dftu_plugin p{};
     p.abi_version = DFTRACER_PLUGIN_ABI_VERSION;
-    p.plan_query = [](void*) -> const char* { return nullptr; };
+    p.plan_duql = [](void*) -> const char* { return nullptr; };
     // This plugin holds no per-slice state (the accumulator lives in the host's
     // PluginFold), so a non-null sentinel is all PluginFold::step needs - no
     // per-slice allocation.
@@ -270,7 +268,7 @@ dftu_plugin make_columns_plugin(
     ::dftu_task* (*on_final)(void*, const dftu_plugin_host*) = no_finalize) {
     dftu_plugin p{};
     p.abi_version = DFTRACER_PLUGIN_ABI_VERSION;
-    p.plan_query = [](void*) -> const char* { return nullptr; };
+    p.plan_duql = [](void*) -> const char* { return nullptr; };
     p.make_slice = [](void*) -> void* {
         static int sentinel;
         return &sentinel;
@@ -295,9 +293,8 @@ void run_slices(PluginFold& master,
 }
 
 // A keyed accumulator with two key columns and six aggregates.
-::dftu_task* multi_key_columns(void* slice, const dftu_dataframe* df,
+::dftu_task* multi_key_columns(void*, const dftu_dataframe* df,
                                const dftu_plugin_host* host) {
-    (void)slice;
     Host h(host);
     const auto acc =
         h.agg("by_cat_pid", {"cat", "pid"},
@@ -309,9 +306,8 @@ void run_slices(PluginFold& master,
 }
 
 // Zero key columns: the scalar-handle case, one whole-scan row.
-::dftu_task* scalar_columns(void* slice, const dftu_dataframe* df,
+::dftu_task* scalar_columns(void*, const dftu_dataframe* df,
                             const dftu_plugin_host* host) {
-    (void)slice;
     Host h(host);
     const auto acc =
         h.agg("whole_scan", {},
@@ -324,9 +320,8 @@ void run_slices(PluginFold& master,
 // Every op appended after DFTU_AGG_COUNT_VALID, built as raw dftu_agg_col
 // structs so the test binds the DFTU_AGG_* codes themselves. The two ARGMIN
 // specs share the `dur` ordering column, so they must resolve to one row.
-::dftu_task* appended_ops_columns(void* slice, const dftu_dataframe* df,
+::dftu_task* appended_ops_columns(void*, const dftu_dataframe* df,
                                   const dftu_plugin_host* host) {
-    (void)slice;
     const auto* ext = static_cast<const dftu_svc_agg*>(
         host->get_service(host->h, DFTU_SVC_AGG));
     if (!ext) return nullptr;
@@ -360,8 +355,7 @@ std::int64_t g_seen_rows = -1;
 double g_seen_sum = -1.0;
 bool g_unknown_is_null = false;
 
-::dftu_task* read_other_agg(void* slice, const dftu_plugin_host* host) {
-    (void)slice;
+::dftu_task* read_other_agg(void*, const dftu_plugin_host* host) {
     Host h(host);
     const OwnedDataFrame other = h.agg_result("whole_scan");
     if (other.handle) {

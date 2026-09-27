@@ -25,7 +25,7 @@ enum class ErrorCode {
     IO,                ///< filesystem / I/O failure
     PARSE,             ///< parse / decode failure (JSON, format, ...)
     COMPRESSION,       ///< (de)compression failure / corrupt compressed data
-    QUERY,             ///< query DSL error
+    DUQL,              ///< duql error
     READER,            ///< reader subsystem
     INDEXER,           ///< indexer subsystem
     PIPELINE,          ///< pipeline / executor
@@ -48,8 +48,8 @@ inline const char* error_code_name(ErrorCode code) noexcept {
             return "PARSE";
         case ErrorCode::COMPRESSION:
             return "COMPRESSION";
-        case ErrorCode::QUERY:
-            return "QUERY";
+        case ErrorCode::DUQL:
+            return "DUQL";
         case ErrorCode::READER:
             return "READER";
         case ErrorCode::INDEXER:
@@ -140,7 +140,7 @@ constexpr Condition condition_of(ErrorCode c) noexcept {
             return Condition::Parse;
         case ErrorCode::COMPRESSION:
             return Condition::Compression;
-        case ErrorCode::QUERY:
+        case ErrorCode::DUQL:
             return Condition::InvalidArgument;
         case ErrorCode::READER:
         case ErrorCode::INDEXER:

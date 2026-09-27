@@ -645,7 +645,7 @@ TEST_SUITE("source_hooks_c_abi") {
         LazyFrame lf = c_frame(fx).group_by(
             std::vector<std::string>{"id"},
             {{Agg::Count, "", "n"}, {Agg::Sum, "val", "s"}});
-        (void)lf.explain();
+        lf.explain();
         CHECK(fx.key_names == std::vector<std::string>{"id"});
         CHECK(fx.agg_ops == std::vector<std::string>{"count", "sum"});
         CHECK(fx.agg_has_input == std::vector<bool>{false, true});
@@ -654,7 +654,7 @@ TEST_SUITE("source_hooks_c_abi") {
     TEST_CASE("tail marshals its row count") {
         ApplyFixture fx;
         fx.answer = DFTU_APPLY_NO_CHANGE;
-        (void)c_frame(fx).tail(3).explain();
+        c_frame(fx).tail(3).explain();
         REQUIRE(fx.requests.size() == 1);
         CHECK(fx.requests[0].kind == DFTU_APPLY_TAIL);
         CHECK(fx.requests[0].u.tail.n == 3);

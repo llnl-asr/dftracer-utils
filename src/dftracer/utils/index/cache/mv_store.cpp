@@ -1,11 +1,11 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/hash/fnv1a.h>
+#include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/duql/subsumption.h>
 #include <dftracer/utils/index/cache/mv_store.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/json_escape.h>
-#include <dftracer/utils/query/query.h>
-#include <dftracer/utils/query/subsumption.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <fcntl.h>
@@ -25,7 +25,6 @@
 namespace dftracer::utils::index::cache {
 
 namespace json = json;
-namespace query = query;
 
 namespace {
 
@@ -375,9 +374,9 @@ bool manifest_matches(const Manifest& m,
 
     if (m.query.empty()) return true;  // MV keeps every row
     if (!plan.query) return false;     // query keeps every row, MV does not
-    auto mv_q = query::try_parse(m.query);
+    auto mv_q = duql::try_parse(m.query);
     if (!mv_q) return false;
-    return query::query_subsumes(mv_q->root(), plan.query->root());
+    return duql::query_subsumes(mv_q->root(), plan.query->root());
 }
 
 // True if any base file the manifest was built from is now gone or changed, so
@@ -394,7 +393,7 @@ bool manifest_is_stale(const Manifest& m) {
 
 std::string views_root(const trace::views::detail::ViewPlan& plan) {
     // A view's identity needs the record schema; without it there is no cache.
-    if (!plan.record_schema) return {};
+    if (!plan.record_schema || plan.build_step) return {};
     if (!plan.views_root.empty()) return plan.views_root;
     const std::string dir = cache_dir(plan);
     if (dir.empty()) return {};
@@ -403,7 +402,7 @@ std::string views_root(const trace::views::detail::ViewPlan& plan) {
 
 std::string view_slug(const trace::views::detail::ViewPlan& plan) {
     const std::string canonical =
-        plan.query ? query::to_string(plan.query->root()) : "all";
+        plan.query ? duql::to_string(plan.query->root()) : "all";
     return sanitize_predicate(canonical) + phase_tag(plan) + window_tag(plan) +
            "-" + hex8(identity_hash(plan));
 }

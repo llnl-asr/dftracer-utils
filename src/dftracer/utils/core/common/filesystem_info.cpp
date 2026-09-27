@@ -115,7 +115,7 @@ std::string unescape_mount_field(const std::string& in) {
 }  // namespace
 
 FilesystemKind filesystem_kind(const std::string& path) noexcept {
-    const std::string target = probe_path(path);
+    [[maybe_unused]] const std::string target = probe_path(path);
 #if defined(__linux__)
     struct statfs st{};
     if (::statfs(target.c_str(), &st) != 0) return FilesystemKind::UNKNOWN;
@@ -126,7 +126,6 @@ FilesystemKind filesystem_kind(const std::string& path) noexcept {
     if (::statfs(target.c_str(), &st) != 0) return FilesystemKind::UNKNOWN;
     return classify_fstype_name(st.f_fstypename);
 #else
-    (void)target;
     return FilesystemKind::UNKNOWN;
 #endif
 }
@@ -169,7 +168,7 @@ std::vector<MountInfo> list_mounts() noexcept {
     return mounts;
 }
 
-StripeInfo lustre_stripe(const std::string& path) noexcept {
+StripeInfo lustre_stripe([[maybe_unused]] const std::string& path) noexcept {
     StripeInfo info;
 #ifdef DFTRACER_UTILS_HAVE_LUSTREAPI
     const std::string probe = probe_path(path);
@@ -185,8 +184,6 @@ StripeInfo lustre_stripe(const std::string& path) noexcept {
         info.count = static_cast<std::size_t>(lum->lmm_stripe_count);
     }
     std::free(raw);
-#else
-    (void)path;
 #endif
     return info;
 }

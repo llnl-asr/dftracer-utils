@@ -537,6 +537,12 @@ class LazyFrame:
         """A deterministic ``n``-row sample."""
         return self._like(self._native.sample(n, seed))
 
+    def head_by(self, keys: "str | Sequence[str]", n: int) -> "LazyFrame":
+        """For each distinct ``keys`` tuple, the first ``n`` rows with that
+        key, in input order. A null key is its own key; equal numbers are one
+        key. Streams, holding one counter per distinct key."""
+        return self._like(self._native.head_by(keys, n))
+
     def is_duplicated(self) -> "LazyFrame":
         """One Bool column: true where the whole row is duplicated."""
         return self._like(self._native.is_duplicated())

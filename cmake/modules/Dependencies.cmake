@@ -1874,6 +1874,42 @@ function(need_highway)
 endfunction()
 
 # ==============================================================================
+# PCRE2 (8-bit, JIT); the regex engine behind duql patterns
+# ==============================================================================
+
+function(need_pcre2)
+  if(NOT pcre2_ADDED AND NOT TARGET pcre2-8-static)
+    cpmaddpackage(
+      NAME
+      pcre2
+      GITHUB_REPOSITORY
+      PCRE2Project/pcre2
+      VERSION
+      10.48
+      GIT_TAG
+      pcre2-10.48
+      OPTIONS
+      "BUILD_SHARED_LIBS OFF"
+      "BUILD_STATIC_LIBS ON"
+      "PCRE2_STATIC_PIC ON"
+      "PCRE2_BUILD_PCRE2_8 ON"
+      "PCRE2_BUILD_PCRE2_16 OFF"
+      "PCRE2_BUILD_PCRE2_32 OFF"
+      "PCRE2_SUPPORT_JIT ON"
+      "PCRE2_SUPPORT_UNICODE ON"
+      "PCRE2_BUILD_PCRE2GREP OFF"
+      "PCRE2_BUILD_TESTS OFF"
+      "PCRE2_SUPPORT_LIBBZ2 OFF"
+      "PCRE2_SUPPORT_LIBZ OFF"
+      "PCRE2_SUPPORT_LIBEDIT OFF"
+      "PCRE2_SUPPORT_LIBREADLINE OFF")
+    if(pcre2_ADDED)
+      dftracer_utils_ok("Added PCRE2 ${pcre2_VERSION} via CPM")
+    endif()
+  endif()
+endfunction()
+
+# ==============================================================================
 # Boost.Math (standalone, header-only); for statistical distributions
 # ==============================================================================
 

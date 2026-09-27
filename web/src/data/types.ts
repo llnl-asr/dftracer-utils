@@ -41,12 +41,13 @@ export interface VizResponse {
   metadata: VizMetadata;
 }
 
-// One record written without a clock (ts 0); ph 1 is an event, 3 an
-// aggregated record.
+// One record written without a clock (ts 0, or a path schema's record without
+// a time); ph 1 is an event, 3 an aggregated record. A path schema's pid is
+// its entity value.
 export interface UntimedRow {
   name: string;
   cat: string | null;
-  pid: number;
+  pid: number | string;
   tid: number;
   dur: number | null;
   ph: number;
@@ -100,8 +101,25 @@ export interface VizCounters {
   ops: number[];
 }
 
+// The served files' record schema: dftracer's decoder, or a path schema whose
+// fields name its time, duration, entity and lane roles and its label ("" when
+// it has none).
+export interface TraceSchema {
+  id: string;
+  decoder: "dftracer" | "path";
+  fields: {
+    time: string;
+    duration: string;
+    entity: string;
+    lane: string;
+    label: string;
+    entity_name: string;
+  };
+}
+
 export interface InfoResponse {
   file_count: number;
+  schema?: TraceSchema;
   // Omitted by the server when the index has no valid time bounds.
   time_range?: {
     min_timestamp_us: number;
@@ -114,7 +132,7 @@ export interface VizQuery {
   begin: number;
   end: number;
   summary: number;
-  query?: string;
+  duql?: string;
   limit?: number;
   lookback?: number; // scan back this far to catch events that overlap the window
   width?: number; // canvas width in px; sets the server's 1px fold cutoff
@@ -132,6 +150,7 @@ export interface ProcTreeNode {
   io_ops?: number; // count of I/O (POSIX/STDIO/IO) operations
   io_busy?: number; // I/O busy time in us
   rank?: string; // MPI/process rank from "PR" metadata, if present
+  label?: string; // a path schema's text entity value (pid hashes it)
 }
 
 // One node of the merged call tree (GET /api/viz/calltree). `total` is

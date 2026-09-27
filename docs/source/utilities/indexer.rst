@@ -26,8 +26,9 @@ to extensions, each with a manifest entry per file:
 - ``dft.metadata`` - per chunk, the number of metadata (``ph="M"``) records
   and of context records (thread and process names, ``PR``, ``CM``), built
   with the pruning extensions
-- ``core.dict`` - the index-wide dictionaries of the file's record schema (for
-  dftracer: ``file``, ``host`` and ``string``)
+- ``core.rowset`` - the rows of each row set of the file's record schema
+  source that the build evaluates, one Arrow IPC frame per row set (for
+  dftracer: ``files``, ``hosts``, ``strings`` and ``ranks``)
 
 A file's data and its manifest entries are written in one atomic write, so an
 interrupted build leaves the file unindexed rather than half indexed. The

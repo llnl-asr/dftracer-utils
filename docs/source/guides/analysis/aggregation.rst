@@ -150,11 +150,12 @@ composite. Also available: ``GroupKey::io_cat()`` / ``::acc_pat()`` /
 ``::file_name()``.
 
 ``rank`` groups on ``pid`` and relabels each group to its MPI rank, read from
-the ``PR`` metadata record the trace writes per process (``{"name": "PR",
-"pid": P, "args": {"name": "rank", "value": N}}``). The pid -> rank map is
-harvested during the scan and applied post-aggregation, the same way
-``host_name`` resolves a host hash; a pid with no ``PR`` record resolves to the
-empty string. Rank is never persisted to the index, so a rank query always
+the ``ranks`` row set of the dftracer source, which holds the ``PR`` metadata
+record the trace writes per process (``{"name": "PR", "pid": P, "args":
+{"name": "rank", "value": N}}``). The map is applied post-aggregation, the same
+way ``host_name`` reads a host hash from ``hosts`` and ``file_path`` reads a
+file hash from ``files``; a pid with no ``PR`` record resolves to the empty
+string. Rank is never persisted to the index, so a rank query always
 scans rather than serving from a rollup.
 
 The table is named shorthand, not a fixed allowlist. Grouping is schemaless:
@@ -167,7 +168,7 @@ dot-numeric forms both index an array). An arg key whose name itself contains
 dots (e.g. ``"cqe.raw_ns"``) is a single flat member, not a nested object, and
 resolves by that flat name whether written bare or prefixed
 (``"args.cqe.raw_ns"``). The same path syntax works for an aggregate field
-(``mean:args.n.v``) and in the :doc:`../core/query-dsl`.
+(``mean:args.n.v``) and in the :doc:`../core/duql`.
 
 A bare name resolves to the top-level schema field when there is one
 (``name``, ``cat``, ``pid``, ``tid``, ``ts``, ``dur``, ``ph``, ``id``,
@@ -467,5 +468,5 @@ See also
 
 - :doc:`statistics` for distributions, percentiles, and sketches.
 - :doc:`../data/time-windows` for the time-bucket window model.
-- :doc:`../core/query-dsl` for the filter you push down before aggregating.
+- :doc:`../core/duql` for the filter you push down before aggregating.
 - :doc:`../../trace-viewer` for the full viewer walkthrough.

@@ -4,10 +4,11 @@
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
-#include <dftracer/utils/query/query.h>
+#include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
 #include <dftracer/utils/server/json_builder.h>
@@ -18,6 +19,7 @@
 #include <dftracer/utils/server/viz/density.h>
 #include <dftracer/utils/server/viz/handlers.h>
 #include <dftracer/utils/server/viz/internal.h>
+#include <dftracer/utils/server/viz/record_event.h>
 #include <dftracer/utils/server/viz/scan.h>
 #include <dftracer/utils/server/viz/summary_build.h>
 #include <dftracer/utils/server/viz_api.h>
@@ -190,7 +192,7 @@ static const std::vector<VizSummary::GroupRow>& summary_group_rows(
 // live scan is needed. Any predicate or sub-range forces the live path.
 static bool viz_stats_summary_eligible(const QueryParams& p, double begin_abs,
                                        double end_abs, TraceIndex& index) {
-    if (!p.get("query").empty() || !p.get("cat").empty() ||
+    if (!p.get("duql").empty() || !p.get("cat").empty() ||
         !p.get("lanes").empty() || !p.get("filters").empty() ||
         !p.get("file").empty() || !p.get("pid").empty() ||
         !p.get("tid").empty())
@@ -214,7 +216,7 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
             "Missing required parameters: begin, end");
     }
 
-    auto win = parse_viz_window(params, index);
+    auto win = parse_viz_window(params, index, req.path);
     if (!win) co_return std::move(win.error());
     double begin = win->begin;
     double end = win->end;
@@ -265,7 +267,8 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
     // query carries only the user's field filters (a wide-open ts range keeps
     // build_viz_view's own ts clause a no-op) - otherwise it would reject the
     // enclosers, whose ts precedes `begin`.
-    ViewDefinition view = build_viz_view(params, 0.0, 4e18, 0);
+    const TraceFields fields(index.record_schema());
+    ViewDefinition view = build_viz_view(params, 0.0, 4e18, 0, fields);
     std::vector<const TraceIndex::FileInfo*> target_files =
         select_viz_target_files(index, params, begin, end);
 
@@ -287,10 +290,10 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
     double scan_begin = begin - enc_threshold_native;
     if (scan_begin < 0) scan_begin = 0;
 
-    const char* gcol = group == GroupBy::Cat     ? "cat"
-                       : group == GroupBy::Pid   ? "pid"
-                       : group == GroupBy::Fhash ? "fhash"
-                                                 : "name";
+    const std::string gcol = group == GroupBy::Cat     ? "cat"
+                             : group == GroupBy::Pid   ? fields.entity
+                             : group == GroupBy::Fhash ? "fhash"
+                                                       : "name";
 
     using StatMap = ankerl::unordered_dense::map<std::string, StatAgg>;
     auto merge_stats = [](StatMap&& a, StatMap&& b) {
@@ -308,17 +311,15 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
     const double cov_bw = end > begin ? (end - begin) / COVERAGE_BUCKETS : 0;
     std::size_t slots = std::max<std::size_t>(1, index.max_concurrent());
     auto sv = views::View::from_files(to_view_files(target_files))
-                  .phase(views::Phase::Any)
-                  .metadata(false)
                   .time_range(scan_begin, end);
     if (view.query) sv = sv.filter(*view.query);
 
     auto scan = co_await sv.map_batches<StatMap>(
-        [begin, end, scan_begin, interval_native, gcol, cov_bw](
+        [begin, end, scan_begin, interval_native, &gcol, cov_bw, &fields](
             StatMap& acc, const std::vector<std::string_view>& events) {
-            thread_local simdjson::dom::parser parser;
+            thread_local dftracer::utils::json::RecordParser parser;
             thread_local std::string buf;
-            for (auto ev : events) {
+            fields.for_each_event(events, [&](std::string_view ev) {
                 // simdjson's SIMD stages read up to SIMDJSON_PADDING bytes past
                 // the JSON; a bare std::string leaves those uninitialised.
                 // Zero- pad the reused buffer and parse only the event's
@@ -328,16 +329,16 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
                 buf.resize(len + simdjson::SIMDJSON_PADDING);
                 auto res = parser.parse(buf.data(), len,
                                         /*realloc_if_needed=*/false);
-                if (res.error()) continue;
+                if (res.error()) return;
                 auto root = res.value_unsafe();
-                if (!root.is_object()) continue;
+                if (!root.is_object()) return;
                 auto tr = root["ts"];
-                if (tr.error()) continue;
+                if (tr.error()) return;
                 double ts = json_number(tr.value_unsafe());
                 // Events opening before the scan-back window are the whole-run
                 // enclosers served from long_events below; skip here to not
                 // double-count (chunk pruning still reads their chunk).
-                if (ts < scan_begin) continue;
+                if (ts < scan_begin) return;
                 bool is_agg = false;
                 auto phr = root["ph"];
                 if (!phr.error()) {
@@ -350,10 +351,10 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
                 }
                 std::string key = extract_group_value(root, gcol);
                 if (is_agg) {
-                    if (interval_native <= 0) continue;
+                    if (interval_native <= 0) return;
                     double lo = std::max(begin, ts);
                     double hi = std::min(end, ts + interval_native);
-                    if (hi <= lo) continue;
+                    if (hi <= lo) return;
                     double f = (hi - lo) / interval_native;
                     double cnt = 1, sum = 0, dmin = 0, dmax = 0;
                     auto args = root["args"];
@@ -377,16 +378,17 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
                     a.mark(lo, hi, begin, cov_bw);
                 } else {
                     auto dr = root["dur"];
-                    if (dr.error()) continue;
+                    if (dr.error()) return;
                     double dur = json_number(dr.value_unsafe());
                     double lo = std::max(begin, ts);
                     double hi = std::min(end, ts + dur);
-                    if (hi <= lo) continue;
+                    // An instant counts at its time.
+                    if (hi < lo || (hi == lo && dur > 0)) return;
                     auto& a = acc[key];
                     a.add(1.0, hi - lo, dur, dur);
                     a.mark(lo, hi, begin, cov_bw);
                 }
-            }
+            });
         },
         merge_stats, slots, 0);
     StatMap byKey = std::move(scan.value);
@@ -394,7 +396,7 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
     // Whole-run enclosers that opened before the scan-back window. The scan's
     // query filter did not see these, so re-apply it per event.
     if (s) {
-        simdjson::dom::parser lp;
+        dftracer::utils::json::RecordParser lp;
         for (const auto& sp : s->long_events) {
             double sb = static_cast<double>(sp.begin);
             if (sb >= scan_begin) continue;  // already covered by the scan
@@ -404,7 +406,10 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
             auto pr = lp.parse(simdjson::padded_string(sp.json));
             if (pr.error() || !pr.value_unsafe().is_object()) continue;
             auto root = pr.value_unsafe();
-            if (view.query && !view.query->evaluate(json::JsonValue(root)))
+            // A path record's own fields are the event's args.
+            if (view.query &&
+                !view.query->evaluate(json::JsonValue(
+                    fields.by_path ? root["args"].value_unsafe() : root)))
                 continue;
             double dur = static_cast<double>(sp.end - sp.begin);
             auto& a = byKey[extract_group_value(root, gcol)];

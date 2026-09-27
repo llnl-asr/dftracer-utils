@@ -58,8 +58,10 @@ enum class ConcatHow : std::int32_t {
                    ///< throws std::invalid_argument on a mismatch.
     Diagonal = 1   ///< Union the parts' columns: a column absent from a part
                    ///< is null-filled, and a column whose type differs across
-                   ///< parts is promoted (mixed numeric -> Float64). A
-                   ///< numeric/String or Bool/other-type clash throws.
+                   ///< parts is promoted: mixed numbers to Float64, any
+                   ///< other scalar clash (text with a number or bool, or a
+                   ///< JSON part) to a JSON column. A nested/scalar clash
+                   ///< throws.
 };
 
 /// Vertically concatenate batches into one DataFrame. `how` picks strict
@@ -69,8 +71,14 @@ enum class ConcatHow : std::int32_t {
 DataFrame concat(const std::vector<const DataFrame*>& parts,
                  ConcatHow how = ConcatHow::Vertical);
 
-/// Vertically concatenate columns of the same type into one FLAT column.
+/// Vertically concatenate columns of the same type into one FLAT column. A
+/// JSON part makes the result JSON, other parts converted by to_json_series.
 Series concat_columns(const std::vector<const Series*>& parts);
+
+/// `s` as a JSON column: text quoted and escaped, numbers and bools as their
+/// JSON text; a null, NaN or infinity is null. A JSON column is shared as is.
+/// Nested columns are not supported and give nulls.
+Series to_json_series(const Series& s);
 
 /// Group the rows of `b` by the values of column `key` (first-seen order) and
 /// compute each aggregate. Re-aggregation over a materialized batch (e.g.

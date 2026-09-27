@@ -124,11 +124,12 @@ class TraceIndex {
         viz_summary_state_.store(2, std::memory_order_release);
     }
 
-    /// `field` of row `key` of dictionary `dict`, by a point lookup in the
-    /// per-root index databases, which are opened once and kept. Empty when
-    /// no root knows the key.
-    std::string resolve(std::string_view dict, std::string_view field,
-                        const std::string& key);
+    /// Column `value` of the row of row set `rowset` whose column `key` is
+    /// `k`, read from the row sets the index build stored; each column pair
+    /// loads once and stays. Empty when no row matches or no index holds
+    /// the row set.
+    std::string resolve(std::string_view rowset, std::string_view key,
+                        std::string_view value, const std::string& k);
 
     /// On-disk summary cache (index_dir/.dftviz_summary), keyed by a
     /// fingerprint of the current file set so a re-indexed trace invalidates
@@ -156,12 +157,10 @@ class TraceIndex {
     std::unordered_map<std::string, std::shared_ptr<const FileChunkMeta>>
         chunk_meta_;
 
-    std::mutex hash_db_mutex_;
-    std::unordered_map<std::string, std::string> hash_names_;
-    std::unordered_map<
-        std::string,
-        std::shared_ptr<dftracer::utils::index::store::IndexDatabase>>
-        hash_dbs_;
+    std::mutex rowset_mutex_;
+    std::unordered_map<std::string,
+                       std::unordered_map<std::string, std::string>>
+        rowset_columns_;
 
     coro::AsyncMutex viz_summary_mutex_;
     std::unique_ptr<VizSummary> viz_summary_;

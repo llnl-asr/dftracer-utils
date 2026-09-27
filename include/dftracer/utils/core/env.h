@@ -16,10 +16,9 @@ class Env {
 };
 
 template <typename T>
-std::optional<T> Env::get(std::string_view name) {
+std::optional<T> Env::get(std::string_view) {
     static_assert(sizeof(T) == 0,
                   "Env::get<T>() requires an explicit specialization");
-    (void)name;
     return std::nullopt;
 }
 

@@ -50,7 +50,7 @@ enum class OpTok : std::int32_t {
     AggList = DFTU_TOK_AGGLIST,
     U64 = DFTU_TOK_U64,
     I64List = DFTU_TOK_I64LIST,
-    Query = DFTU_TOK_QUERY,
+    Duql = DFTU_TOK_DUQL,
     WinList = DFTU_TOK_WINLIST,
 };
 static_assert(static_cast<int>(OpTok::None) == DFTU_TOK_NONE);
@@ -77,7 +77,7 @@ static_assert(static_cast<int>(OpTok::Expr) == DFTU_TOK_EXPR);
 static_assert(static_cast<int>(OpTok::AggList) == DFTU_TOK_AGGLIST);
 static_assert(static_cast<int>(OpTok::U64) == DFTU_TOK_U64);
 static_assert(static_cast<int>(OpTok::I64List) == DFTU_TOK_I64LIST);
-static_assert(static_cast<int>(OpTok::Query) == DFTU_TOK_QUERY);
+static_assert(static_cast<int>(OpTok::Duql) == DFTU_TOK_DUQL);
 static_assert(static_cast<int>(OpTok::WinList) == DFTU_TOK_WINLIST);
 
 /// Value wrapper over a packed dftu_op_sig.
@@ -205,8 +205,8 @@ class OpArgs {
         return *this;
     }
     /// Borrows `q`: `q` must outlive the dftu_op_run* call this is passed to.
-    OpArgs& query(std::uint32_t i, const dftu_query* q) noexcept {
-        arg_.args[i].query = q;
+    OpArgs& duql(std::uint32_t i, const dftu_duql* q) noexcept {
+        arg_.args[i].duql = q;
         return *this;
     }
     OpArgs& lazy(std::uint32_t i, const dftu_lazyframe* v) noexcept {

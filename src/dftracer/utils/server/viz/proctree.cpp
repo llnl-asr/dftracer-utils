@@ -4,10 +4,11 @@
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
-#include <dftracer/utils/query/query.h>
+#include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
 #include <dftracer/utils/server/json_builder.h>
@@ -18,6 +19,7 @@
 #include <dftracer/utils/server/viz/density.h>
 #include <dftracer/utils/server/viz/handlers.h>
 #include <dftracer/utils/server/viz/internal.h>
+#include <dftracer/utils/server/viz/record_event.h>
 #include <dftracer/utils/server/viz/scan.h>
 #include <dftracer/utils/server/viz/summary_build.h>
 #include <dftracer/utils/server/viz_api.h>
@@ -54,8 +56,9 @@ using dftracer::utils::json::json_number;
 // register_tm_clones, which contain "fork"/"clone" but don't spawn.
 
 // One process in the proctree response. `host` borrows the hostname table;
-// `rank` is null when the trace carries no "PR" metadata for the pid, and the
-// key is then omitted.
+// `rank` is null when the trace carries no "PR" metadata for the pid, and
+// `label` null unless the pid hashes a path schema's entity value; each key is
+// then omitted.
 struct ProcNode {
     std::int64_t pid;
     std::int64_t parent;
@@ -66,6 +69,7 @@ struct ProcNode {
     std::uint64_t io_ops;
     double io_busy;
     const std::string* rank;
+    const std::string* label;
 };
 
 template <typename builder_type>
@@ -90,6 +94,10 @@ void tag_invoke(simdjson::serialize_tag, builder_type& b, const ProcNode& n) {
         b.append_comma();
         b.append_key_value("rank", *n.rank);
     }
+    if (n.label) {
+        b.append_comma();
+        b.append_key_value("label", *n.label);
+    }
     b.end_object();
 }
 
@@ -97,6 +105,9 @@ void tag_invoke(simdjson::serialize_tag, builder_type& b, const ProcNode& n) {
 // the fork/clone in the parent but not the child pid, so link each process to
 // the nearest preceding clone in another process (child start follows the clone
 // by microseconds). Respects ?file= for per-node trees on multi-node traces.
+// A path schema has one root per entity value, its host and rank from the
+// source's `hosts` (name) and `ranks` (rank) row sets keyed by the entity
+// field.
 coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
                                                  const QueryParams& params,
                                                  TraceIndex& index) {
@@ -125,22 +136,33 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
         ankerl::unordered_dense::map<std::int64_t, std::string> pid_hhash;
         // pid -> rank, from "PR" metadata (args.name == "rank").
         ankerl::unordered_dense::map<std::int64_t, std::string> rank;
+        // pid -> entity value, for a path schema's text entities.
+        ankerl::unordered_dense::map<std::int64_t, std::string> label;
         dftracer::utils::StringViewMap<std::string> hh;
     };
     std::size_t slots = std::max<std::size_t>(1, index.max_concurrent());
     std::vector<Acc> accs(slots);
-    auto on_batch = [&accs](std::size_t w,
-                            const std::vector<std::string_view>& events) {
-        thread_local simdjson::dom::parser parser;
+    const TraceFields fields(index.record_schema());
+    auto on_batch = [&accs, &fields](
+                        std::size_t w,
+                        const std::vector<std::string_view>& events) {
+        thread_local dftracer::utils::json::RecordParser parser;
         thread_local std::string buf;
         Acc& acc = accs[w];
-        for (auto ev : events) {
+        fields.for_each_event(events, [&](std::string_view ev) {
             buf.assign(ev);
             auto res = parser.parse(buf);
-            if (res.error()) continue;
+            if (res.error()) return;
             auto root = res.value_unsafe();
             EventScalars s;
-            if (!parse_event_scalars(root, s)) continue;
+            if (!parse_event_scalars(root, s)) return;
+            if (fields.by_path && s.has_pid && !acc.label.contains(s.pid)) {
+                const auto v =
+                    find_path(root["args"].value_unsafe(), fields.entity);
+                if (v && v->is_string())
+                    acc.label.emplace(
+                        s.pid, std::string(v->get_string().value_unsafe()));
+            }
 
             // HH metadata (hhash -> hostname) carries no ts.
             if (s.name == "HH") {
@@ -154,7 +176,7 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
                             std::string(v.get_string().value_unsafe()),
                             std::string(n.get_string().value_unsafe()));
                 }
-                continue;
+                return;
             }
             // PR metadata (pid -> rank) also carries no ts.
             if (s.name == "PR") {
@@ -168,9 +190,9 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
                         acc.rank.emplace(
                             s.pid, std::string(av.get_string().value_unsafe()));
                 }
-                continue;
+                return;
             }
-            if (!s.has_pid || !s.has_ts) continue;
+            if (!s.has_pid || !s.has_ts) return;
             const std::int64_t pid = s.pid;
             const auto ts = static_cast<std::uint64_t>(s.ts);
             auto it = acc.first_ts.find(pid);
@@ -212,7 +234,7 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
 
             if (!s.name.empty() && is_fork_syscall(s.name))
                 acc.forks.emplace_back(ts, pid, child > 0 ? child : -1);
-        }
+        });
     };
 
     // The per-process totals are exact and whole-trace, so the summary answers
@@ -230,6 +252,7 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
             if (p.io_busy != 0) acc.io_busy.emplace(p.pid, p.io_busy);
             if (!p.hhash.empty()) acc.pid_hhash.emplace(p.pid, p.hhash);
             if (!p.rank.empty()) acc.rank.emplace(p.pid, p.rank);
+            if (!p.label.empty()) acc.label.emplace(p.pid, p.label);
         }
         for (const auto& f : summary->forks)
             acc.forks.emplace_back(f.ts, f.pid, f.child);
@@ -280,7 +303,9 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
     ankerl::unordered_dense::map<std::int64_t, std::uint64_t> io_ops;
     ankerl::unordered_dense::map<std::int64_t, double> io_busy;
     ankerl::unordered_dense::map<std::int64_t, std::string> rank;
+    ankerl::unordered_dense::map<std::int64_t, std::string> label;
     for (auto& a : accs) {
+        for (auto& kv : a.label) label.emplace(kv.first, kv.second);
         for (auto& kv : a.hh) hh.emplace(kv.first, kv.second);
         for (auto& kv : a.pid_hhash) pid_hhash.emplace(kv.first, kv.second);
         for (auto& kv : a.bytes) bytes[kv.first] += kv.second;
@@ -300,6 +325,18 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
     std::vector<bool> used(inf_forks.size(), false);
     std::vector<ProcNode> nodes;
     nodes.reserve(procs.size());
+    std::vector<std::string> path_hosts;
+    path_hosts.reserve(procs.size());
+    auto entity_key = [&label](std::int64_t pid) {
+        auto it = label.find(pid);
+        return it != label.end() ? it->second : std::to_string(pid);
+    };
+    if (fields.by_path && !fields.entity_name.empty())
+        for (const auto& [fts, pid] : procs)
+            if (auto r = index.resolve("ranks", fields.entity_name, "rank",
+                                       entity_key(pid));
+                !r.empty())
+                rank.insert_or_assign(pid, std::move(r));
     const double proc_dur_us =
         dftracer::utils::trace::time_metric_us_scale(index.time_metric());
     for (auto& [fts, pid] : procs) {
@@ -338,13 +375,18 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
         auto bp = bytes.find(pid);
         auto op = io_ops.find(pid);
         auto ib = io_busy.find(pid);
+        auto lb = label.find(pid);
+        if (fields.by_path && !fields.entity_name.empty())
+            host = path_hosts.emplace_back(index.resolve(
+                "hosts", fields.entity_name, "name", entity_key(pid)));
         auto rk = rank.find(pid);
         nodes.push_back({pid, parent, index.native_to_us(spawn_ts),
                          index.native_to_us(fts > base ? fts - base : 0), host,
                          bp != bytes.end() ? bp->second : 0,
                          op != io_ops.end() ? op->second : 0,
                          (ib != io_busy.end() ? ib->second : 0.0) * proc_dur_us,
-                         rk != rank.end() ? &rk->second : nullptr});
+                         rk != rank.end() ? &rk->second : nullptr,
+                         lb != label.end() ? &lb->second : nullptr});
     }
 
     auto& sb = scratch_json_builder();

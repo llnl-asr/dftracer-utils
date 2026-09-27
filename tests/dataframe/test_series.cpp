@@ -1736,7 +1736,6 @@ TEST_SUITE("vec") {
 
     TEST_CASE("D1 windowed stats: rolling_var/std/median/quantile") {
         std::vector<std::int64_t> wv{1, 2, 3, 4, 5};
-        Series src = Series::flat_i64(wv.data(), 5);
         // window 3 over 1..5: windows {1,2,3},{2,3,4},{3,4,5} each var 1.0.
         Series rv = dv::rolling_var(Series::flat_i64(wv.data(), 5), 3);
         REQUIRE(rv.type() == TypeId::Float64);
@@ -1753,7 +1752,6 @@ TEST_SUITE("vec") {
         Series rq =
             dv::rolling_quantile(Series::flat_i64(wv.data(), 5), 3, 1.0);
         CHECK(rq.data<double>()[2] == doctest::Approx(3.0));  // window max
-        (void)src;
     }
 
     TEST_CASE("D1 ewm_mean / ewm_std") {
@@ -2025,24 +2023,34 @@ TEST_SUITE("vec") {
         CHECK(m.columns[mi].data<double>()[2] == doctest::Approx(30.5));
     }
 
-    TEST_CASE("concat diagonal unifies a String/numeric clash on String") {
+    TEST_CASE("concat diagonal makes a String/numeric clash a JSON column") {
         // A scalar column that is String in one part and numeric in another
-        // (build_row_frame infers an arg column's type per batch) unifies on
-        // String with numbers stringified, instead of aborting the concat.
+        // (build_row_frame infers an arg column's type per batch) keeps each
+        // value's JSON type, so the text "1" and the number 1 stay apart.
         DataFrame a;
         a.names = {"v"};
-        a.columns.push_back(Series::strings({"s"}));
+        a.columns.push_back(Series::strings({"1"}));
         DataFrame b;
         b.names = {"v"};
         std::vector<std::int64_t> bn{1};
         b.columns.push_back(Series::flat_i64(bn.data(), 1));
-        DataFrame m = dv::concat({&a, &b}, dv::ConcatHow::Diagonal);
+        DataFrame c;
+        c.names = {"v"};
+        std::vector<double> cn{2.5};
+        c.columns.push_back(Series::flat_f64(cn.data(), 1));
+        DataFrame m = dv::concat({&a, &b, &c}, dv::ConcatHow::Diagonal);
         REQUIRE(m.columns.size() == 1);
         CHECK(m.columns[0].type() ==
               dftracer::utils::dataframe::TypeId::String);
-        REQUIRE(m.num_rows() == 2);
-        CHECK(m.columns[0].string_at(0) == "s");
+        CHECK(m.columns[0].is_json());
+        CHECK(m.columns[0].data_type().json);
+        REQUIRE(m.num_rows() == 3);
+        CHECK(m.columns[0].string_at(0) == "\"1\"");
         CHECK(m.columns[0].string_at(1) == "1");
+        CHECK(m.columns[0].string_at(2) == "2.5");
+        // Row ops keep the JSON mark.
+        CHECK(m.columns[0].take(std::vector<std::int64_t>{2, 0}).is_json());
+        CHECK_FALSE(Series::strings({"x"}).is_json());
     }
 
     TEST_CASE("concat diagonal throws on a nested/scalar type clash") {

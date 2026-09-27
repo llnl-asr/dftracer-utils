@@ -2529,7 +2529,7 @@ def _emit(
     maps: Dict[str, _MapDecl],
     body: List[str],
     fields_used: builtins.set[str],
-    plan_query: str | None,
+    plan_duql: str | None,
     str_literals: List[str],
     arg_keys: List[str],
     arg_helpers: builtins.set[str],
@@ -2549,7 +2549,7 @@ def _emit(
         kt.dft == "DFTU_T_STR" for decl in maps.values() for kt in decl.key_types
     ) or any(m.elem == "str" for decl in maps.values() for m in decl.values)
     needs_bitmap = any(decl.is_product for decl in maps.values())
-    plan_query_field = "plan_query" if plan_query is not None else "NULL"
+    plan_duql_field = "plan_duql" if plan_duql is not None else "NULL"
     out: List[str] = [
         "#include <dftracer/utils/plugins/abi.h>",
         "#include <dftracer/utils/plugins/prims.h>",
@@ -2609,11 +2609,11 @@ def _emit(
             for cn, is_f in cfgs.items()
         ]
     )
-    if plan_query is not None:
+    if plan_duql is not None:
         out += [
-            "static const char* plan_query(void* self) {",
+            "static const char* plan_duql(void* self) {",
             "    (void)self;",
-            f"    return {_c_str_literal(plan_query)};",
+            f"    return {_c_str_literal(plan_duql)};",
             "}",
             "",
         ]
@@ -2729,7 +2729,7 @@ def _emit(
             cfg_reads,
             "    g_plugin.abi_version = DFTRACER_PLUGIN_ABI_VERSION;",
             "    g_plugin.self = NULL;",
-            f"    g_plugin.plan_query = {plan_query_field};",
+            f"    g_plugin.plan_duql = {plan_duql_field};",
             "    g_plugin.make_slice = make_slice;",
             "    g_plugin.on_batch = on_batch;",
             "    g_plugin.merge = merge;",
@@ -2811,9 +2811,9 @@ def _build_plugin(cls: type, package: "JitPackage | None" = None) -> type:
             )
     if len(each) != 1:
         raise JitError("@jit.plugin needs exactly one @jit.each_event method")
-    plan_query = getattr(cls, "plan_query", None)
-    if plan_query is not None and not isinstance(plan_query, str):
-        raise JitError("@jit.plugin plan_query must be a query DSL string")
+    plan_duql = getattr(cls, "plan_duql", None)
+    if plan_duql is not None and not isinstance(plan_duql, str):
+        raise JitError("@jit.plugin plan_duql must be a query DSL string")
     # {name: is_f64} for config fields, read into a body-visible static.
     config_f64 = {n: c.dft in ("DFTU_T_F64", "DFTU_T_F32") for n, c in configs.items()}
     op_defs: List[str] = []
@@ -2846,7 +2846,7 @@ def _build_plugin(cls: type, package: "JitPackage | None" = None) -> type:
         maps,
         body,
         fields_used,
-        plan_query,
+        plan_duql,
         str_literals,
         arg_keys,
         arg_helpers,
@@ -3042,9 +3042,9 @@ def _compile_vfold(
 
 def _emit_vfold(
     ops: List[Dict[str, object]],
-    plan_query: str | None,
+    plan_duql: str | None,
 ) -> str:
-    plan_query_field = "plan_query" if plan_query is not None else "NULL"
+    plan_duql_field = "plan_duql" if plan_duql is not None else "NULL"
     out: List[str] = [
         "#include <dftracer/utils/plugins/abi.h>",
         "#include <dftracer/utils/dataframe/abi.h>",
@@ -3053,11 +3053,11 @@ def _emit_vfold(
         "#include <stdlib.h>",
         "",
     ]
-    if plan_query is not None:
+    if plan_duql is not None:
         out += [
-            "static const char* plan_query(void* self) {",
+            "static const char* plan_duql(void* self) {",
             "    (void)self;",
-            f"    return {_c_str_literal(plan_query)};",
+            f"    return {_c_str_literal(plan_duql)};",
             "}",
             "",
         ]
@@ -3123,7 +3123,7 @@ def _emit_vfold(
         "    (void)config;",
         "    g_plugin.abi_version = DFTRACER_PLUGIN_ABI_VERSION;",
         "    g_plugin.self = NULL;",
-        f"    g_plugin.plan_query = {plan_query_field};",
+        f"    g_plugin.plan_duql = {plan_duql_field};",
         "    g_plugin.make_slice = make_slice;",
         "    g_plugin.merge = merge;",
         "    g_plugin.on_finalize = on_finalize;",
@@ -3162,14 +3162,14 @@ def _build_vfold(cls: type) -> type:
         raise JitError("@jit.vfold needs an accumulator (jit.sum()/min()/max()) or a jit.map")
     if len(batch) != 1:
         raise JitError("@jit.vfold needs exactly one @jit.each_batch method")
-    plan_query = getattr(cls, "plan_query", None)
-    if plan_query is not None and not isinstance(plan_query, str):
-        raise JitError("@jit.vfold plan_query must be a query DSL string")
+    plan_duql = getattr(cls, "plan_duql", None)
+    if plan_duql is not None and not isinstance(plan_duql, str):
+        raise JitError("@jit.vfold plan_duql must be a query DSL string")
     # Every batch's dyn arg columns are resolved unconditionally now (no
     # needs() negotiation), so the field set from _compile_vfold is only used
     # for its own validation, not to gate what on_batch resolves.
     ops, _fields = _compile_vfold(batch[0].fn, accums, maps)
-    source = _emit_vfold(ops, plan_query)
+    source = _emit_vfold(ops, plan_duql)
     setattr(cls, "_jit_plugin", JitPlugin(cls.__name__, source, {}))
     return cls
 

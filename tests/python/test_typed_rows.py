@@ -44,7 +44,7 @@ def test_rows_yield_schema_instances(tmp_path):
 
 def test_rows_follow_filters(tmp_path):
     tv = dftu.TraceViewer(_access(tmp_path / "a.ndjson.gz"), record_schema=RowsAccess)
-    rows = list(tv.query('op == "read"').rows(RowsAccess))
+    rows = list(tv.duql('op == "read"').rows(RowsAccess))
     assert len(rows) == 150
     assert {r.op for r in rows} == {"read"}
 

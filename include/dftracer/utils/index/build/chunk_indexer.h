@@ -76,7 +76,7 @@ struct ChunkIndexerConfig {
                 break;
             case store::IndexExtension::HOST:
             case store::IndexExtension::MEMBERS:
-            case store::IndexExtension::DICT:
+            case store::IndexExtension::ROWSET:
             case store::IndexExtension::POSTINGS:
             case store::IndexExtension::STATS:
             case store::IndexExtension::CATALOG:

@@ -3,6 +3,7 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utils/string.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/trace/event_collector_utility.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
@@ -19,7 +20,7 @@ class EventIdCollector : public utilities::reader::internal::LineProcessor {
    public:
     std::vector<EventId>& events;
     bool trim_commas;
-    simdjson::dom::parser parser;
+    dftracer::utils::json::RecordParser parser;
 
     explicit EventIdCollector(std::vector<EventId>& event_list,
                               bool should_trim_commas = false)

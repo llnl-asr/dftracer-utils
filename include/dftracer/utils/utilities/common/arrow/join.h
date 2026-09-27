@@ -41,7 +41,9 @@ enum class AsofDirection { BACKWARD, FORWARD, NEAREST };
 /// share a numeric Arrow storage type; `left_equi_cols`/`right_equi_cols` are
 /// n_equi positionally-paired partition columns (n_equi 0 = global). Direction:
 /// BACKWARD matches the largest ts <= left.ts, FORWARD the smallest ts >=
-/// left.ts, NEAREST the closest |left.ts - right.ts| (tie -> BACKWARD). With
+/// left.ts, NEAREST the closest |left.ts - right.ts| (tie -> BACKWARD). Among
+/// right rows with equal ts, BACKWARD and NEAREST take the last in row order
+/// and FORWARD the first, as pandas merge_asof does. With
 /// `allow_exact` false, an equal ts is excluded, making BACKWARD strictly < and
 /// FORWARD strictly > (NEAREST is unaffected). With
 /// `has_tol`, a match past |left.ts - right.ts| <= `tol` (ts native units) is

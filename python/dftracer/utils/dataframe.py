@@ -84,7 +84,11 @@ RunSpec = Tuple[
 DeltaSpec = Tuple[Literal["delta"], str, str]
 RateSpec = Tuple[Literal["rate"], str, str, str]
 RateCounterSpec = Tuple[Literal["rate"], str, str, str, bool]
-SessSpec = Tuple[Literal["sessionize"], str, float, str]
+SessSpec = Union[
+    Tuple[Literal["sessionize"], str, float, str],
+    Tuple[Literal["sessionize"], str, float, str, Optional[str]],
+    Tuple[Literal["sessionize"], str, float, str, Optional[str], float],
+]
 FrameSpec = Tuple[
     Literal["frame_sum", "frame_min", "frame_max", "frame_count", "frame_mean"],
     str,
@@ -119,7 +123,9 @@ WindowSpec = Union[
 ]
 
 
-JoinHow = Literal["inner", "left", "right", "outer", "full", "semi", "anti", "cross"]
+JoinHow = Literal[
+    "inner", "left", "right", "outer", "full", "semi", "anti", "cross", "lookup", "nest"
+]
 PivotAgg = Literal[
     "first", "last", "sum", "min", "max", "mean", "count", "var", "std", "skew", "kurt"
 ]
@@ -174,8 +180,9 @@ def _nulls_first_keys(
 
 
 def _norm_window_spec(spec: Sequence[Any]) -> Tuple[object, ...]:
-    # Normalize to the fixed 9-tuple the native kernel reads: (func, value|None,
-    # offset, name, time|None, threshold, counter, frame_pre, frame_post).
+    # Normalize to the fixed 11-tuple the native kernel reads: (func,
+    # value|None, offset, name, time|None, threshold, counter, frame_pre,
+    # frame_post, end|None, span).
     if not isinstance(spec, (tuple, list)) or not spec:
         raise ValueError(f"window: bad spec {spec!r}")
     func = spec[0]
@@ -187,6 +194,8 @@ def _norm_window_spec(spec: Sequence[Any]) -> Tuple[object, ...]:
     counter = False
     pre = 0
     post = 0
+    end: Optional[str] = None
+    span = 0.0
     if func in _WINDOW_NULLARY:
         _window_arity(spec, 2)
         name = spec[1]
@@ -202,8 +211,11 @@ def _norm_window_spec(spec: Sequence[Any]) -> Tuple[object, ...]:
         value, time, name = spec[1], spec[2], spec[3]
         counter = bool(spec[4]) if len(spec) == 5 else False
     elif func == "sessionize":
-        _window_arity(spec, 4)
+        if len(spec) not in (4, 5, 6):
+            raise ValueError(f"window: 'sessionize' spec expects 4 to 6 elements: {spec!r}")
         time, threshold, name = spec[1], float(spec[2]), spec[3]
+        end = spec[4] if len(spec) > 4 else None
+        span = float(spec[5]) if len(spec) > 5 else 0.0
     elif func in _WINDOW_FRAME:
         if len(spec) not in (5, 6):
             raise ValueError(f"window: {func!r} spec expects 5 or 6 elements: {spec!r}")
@@ -219,7 +231,7 @@ def _norm_window_spec(spec: Sequence[Any]) -> Tuple[object, ...]:
         raise ValueError(f"window: unknown function {func!r}")
     if not isinstance(name, str):
         raise ValueError(f"window: output name must be a str: {spec!r}")
-    return (func, value, offset, name, time, threshold, counter, pre, post)
+    return (func, value, offset, name, time, threshold, counter, pre, post, end, span)
 
 
 class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"]):
@@ -634,7 +646,11 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
           value_col, out)`` (``running_prod`` is Float64)
         - ``("delta", value_col, out)``
         - ``("rate", value_col, time_col, out[, counter])``
-        - ``("sessionize", time_col, threshold, out)``
+        - ``("sessionize", time_col, gap, out[, end_col[, span]])``: the
+          1-based session of each row; a row starts a new session when its
+          time is more than ``gap`` after the latest end of the session so
+          far (``end_col``, else the time), or more than ``span`` after the
+          session's first time; a null time is a null session
         - ``("frame_sum"|"frame_min"|"frame_max"|"frame_count"|"frame_mean",
           value_col, preceding, following, out[, min_periods])`` (a bound of
           ``None`` is unbounded; the output is null while the frame holds fewer
@@ -696,12 +712,21 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         names, or an int count of the leading columns); ``left_on`` /
         ``right_on`` name each side's keys instead when they differ. A null key
         never matches. ``how`` is ``"inner"``, ``"left"``, ``"right"``,
-        ``"outer"`` (alias ``"full"``), ``"semi"``, ``"anti"`` or ``"cross"``
-        (no keys). Output is this frame's columns, then ``other``'s except a
-        key sharing its left key's name; any other colliding name gets
-        ``suffix``. Matched rows keep this frame's order; right / outer append
-        the unmatched right rows. Semi / anti emit this frame's columns only.
-        See :meth:`merge` for the pandas argument order."""
+        ``"outer"`` (alias ``"full"``), ``"semi"``, ``"anti"``, ``"cross"``
+        (no keys), ``"lookup"`` or ``"nest"``. Output is this frame's columns,
+        then ``other``'s except a key sharing its left key's name; any other
+        colliding name gets ``suffix``. Matched rows keep this frame's order;
+        right / outer append the unmatched right rows. Semi / anti emit this
+        frame's columns only.
+
+        ``"lookup"`` keeps each row of this frame once and adds ``other``'s
+        columns but its keys, from the matching row (null when none); rows of
+        ``other`` sharing a key must hold equal values, and a column named
+        like one of this frame's fills it, which must be null there.
+        ``"nest"`` adds one list column named ``suffix`` holding every
+        matching row of ``other`` as a struct. Both compare keys by value
+        (``1 == 1.0``, ``"4" != 4``). See :meth:`merge` for the pandas
+        argument order."""
         if isinstance(on, bool):
             raise TypeError("join: 'on' must be a key name/list or an int count")
         if isinstance(on, int):

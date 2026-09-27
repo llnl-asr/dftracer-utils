@@ -100,7 +100,8 @@ coro::CoroTask<std::string> run_flamegraph_partial(
 coro::CoroTask<ExportStats> run_folds(const ViewPlan& plan,
                                       std::span<Fold* const> folds,
                                       dftracer::utils::StringIntern& intern,
-                                      DynamicPrune* dyn_prune = nullptr);
+                                      DynamicPrune* dyn_prune = nullptr,
+                                      coro::CoroSemaphore* gate = nullptr);
 
 // Build-only terminal: materialize the filtered-trace MV (row query) or the
 // rollup (aggregation) and return scan stats. A no-op when the MV already
@@ -171,7 +172,7 @@ struct AggBranch {
     std::shared_ptr<std::string> partial_out;
     // A predicated collect (no branch plan): the per-event filter overlaid onto
     // the base plan, applied by the branch's engine fold (apply_query).
-    std::optional<query::Query> query;
+    std::optional<duql::Query> query;
 };
 
 // One branch of a fused session: a predicate selecting events, a per-event
@@ -187,20 +188,23 @@ using BranchConsumer =
     std::function<void(const json::JsonValue&, std::string_view)>;
 
 struct BranchHooks {
-    std::optional<query::Query> predicate;  // nullopt = match all
+    std::optional<duql::Query> predicate;  // nullopt = match all
     std::function<BranchConsumer()> make_consumer;
     std::function<void()> finalize;
     std::optional<AggBranch> agg;
+    bool wants_metadata = false;  // the consumer reads metadata records as rows
 };
 
 void add_fold_branch(ViewSessionState& state, Query predicate,
                      std::function<BranchConsumer()> make_consumer,
-                     std::function<void()> finalize);
+                     std::function<void()> finalize,
+                     bool wants_metadata = false);
 
 // Match-all fold branch (no per-branch predicate): consume every scanned event.
 void add_fold_branch(ViewSessionState& state,
                      std::function<BranchConsumer()> make_consumer,
-                     std::function<void()> finalize);
+                     std::function<void()> finalize,
+                     bool wants_metadata = false);
 
 // Fold branch over the events the session's base plan selects (its query and
 // phase), as collect_events reads them.
@@ -231,7 +235,7 @@ void add_stream_branch(
 
 /// Offer `q` as a narrowing of the session's shared scan. execute() applies it
 /// only when no other branch is registered; see ViewSessionState.
-void propose_base_prune(ViewSessionState& state, query::Query q);
+void propose_base_prune(ViewSessionState& state, duql::Query q);
 
 // Attach an externally-built Fold to the session's shared scan: `make`
 // constructs it with the scan's intern, `finalize` runs after the merge.

@@ -20,7 +20,9 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <fstream>
 #include <functional>
+#include <limits>
 #include <map>
 #include <utility>
 
@@ -128,7 +130,8 @@ void build_tier_index(const std::string& gz) {
     rt.run_blocking("build-tier", [&](CoroScope& ctx) -> coro::CoroTask<void> {
         aggregators::Aggregator agg;
         auto gen = agg(ctx, input);
-        while (auto batch = co_await gen.next()) (void)batch;
+        while (co_await gen.next()) {
+        }
         co_return;
     });
 }
@@ -405,6 +408,45 @@ TEST_SUITE("View") {
                                            bnum(by_spec, i, "mean_dur"),
                                            bnum(by_spec, i, "count")};
         CHECK(em == sm);
+    }
+
+    TEST_CASE("View - an integer sum that overflows is null") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        const std::string pfw = env.get_dir() + "/overflow.pfw";
+        {
+            std::ofstream ofs(pfw);
+            auto event = [&](const char* name, int ts, std::uint64_t dur) {
+                ofs << R"({"ph":"X","name":")" << name
+                    << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" << ts
+                    << R"(,"dur":)" << dur << R"(,"args":{}})" << "\n";
+            };
+            const std::uint64_t big = std::numeric_limits<std::int64_t>::max();
+            for (int i = 0; i < 3; ++i) event("big", 1000 + i, big);
+            event("ok", 2000, 5);
+            event("ok", 2001, 7);
+        }
+        const std::string gz = pfw + ".gz";
+        dftu_utils_test::compress_file_to_gzip(pfw, gz);
+        fs::remove(pfw);
+        const std::string idx = determine_index_path(gz, "");
+        auto out = View::from_file(gz, idx)
+                       .group_by({GroupKey::name()})
+                       .agg({{AggOp::Sum, "dur", "t"}})
+                       .collect()
+                       .get();
+        REQUIRE(out.num_rows() == 2);
+        const dataframe::Series t = out.column("t").materialize();
+        CHECK(t.type() == dataframe::TypeId::Uint64);
+        for (std::int64_t i = 0; i < out.num_rows(); ++i) {
+            CAPTURE(bstr(out, i, "name"));
+            if (bstr(out, i, "name") == "big") {
+                CHECK(t.is_null(i));
+            } else {
+                REQUIRE_FALSE(t.is_null(i));
+                CHECK(bnum(out, i, "t") == 12);
+            }
+        }
     }
 
     TEST_CASE("View - F.any wildcard aggregates numeric args (mean)") {
@@ -800,10 +842,9 @@ TEST_SUITE("View") {
         std::string gz = create_mixed_trace(env, 30, 20);
         std::string idx = determine_index_path(gz, "");
         StringSink sink;
-        View::from_file(gz, idx).metadata(false).sink_json(sink).get();
-        scan::ScanPlan base =
-            scan::rollup_root(scan::metadata(scan::from_file(gz, idx), false),
-                              env.get_dir() + "/rollups");
+        View::from_file(gz, idx).sink_json(sink).get();
+        scan::ScanPlan base = scan::rollup_root(scan::from_file(gz, idx),
+                                                env.get_dir() + "/rollups");
 
         GroupKey bucketed = GroupKey::name();
         bucketed.transform = GroupKey::Transform::Bucket;
@@ -866,9 +907,9 @@ TEST_SUITE("View") {
         // path where the materialize hook lives, independent of tier state.
         auto make = [&]() {
             return scan::agg(
-                scan::group_by(
-                    scan::query(scan::from_file(gz, idx), "dur >= 0"),
-                    {GroupKey::cat()}),
+                scan::group_by(scan::filter(scan::from_file(gz, idx),
+                                            duql::parse_or_throw("dur >= 0")),
+                               {GroupKey::cat()}),
                 {{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
         };
 
@@ -930,7 +971,7 @@ TEST_SUITE("View") {
         };
         auto make = [&]() {
             return View::from_file(gz, idx)
-                .query("dur >= 0")
+                .duql("dur >= 0")
                 .group_by({GroupKey::cat()})
                 .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
         };
@@ -988,13 +1029,13 @@ TEST_SUITE("View") {
         // so the coarser is the finer rolled up over `name`.
         auto fine = [&]() {
             return View::from_file(gz, idx)
-                .query("dur >= 0")
+                .duql("dur >= 0")
                 .group_by({GroupKey::cat(), GroupKey::name()})
                 .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
         };
         auto coarse = [&]() {
             return View::from_file(gz, idx)
-                .query("dur >= 0")
+                .duql("dur >= 0")
                 .group_by({GroupKey::cat()})
                 .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
         };
@@ -1043,7 +1084,7 @@ TEST_SUITE("View") {
         // multiple of 100, so the coarse view is the fine one re-bucketed.
         auto at_bucket = [&](std::uint64_t b) {
             return View::from_file(gz, idx)
-                .query("dur >= 0")
+                .duql("dur >= 0")
                 .time_bucket(b)
                 .group_by({GroupKey::cat()})
                 .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
@@ -1474,7 +1515,6 @@ TEST_SUITE("View") {
         };
         auto res =
             View::from_file(gz, idx)
-                .metadata(false)
                 .map_batches<Acc>(
                     [&](Acc& a, const std::vector<std::string_view>& evs) {
                         for (auto e : evs) {
@@ -1516,7 +1556,6 @@ TEST_SUITE("View") {
             std::size_t n = 0;
         };
         auto res = View::from_file(gz, idx)
-                       .metadata(false)
                        .map_batches<Cnt>(
                            [](Cnt& c, const std::vector<std::string_view>& e) {
                                c.n += e.size();
@@ -1552,34 +1591,31 @@ TEST_SUITE("View") {
         Deferred<dataframe::DataFrame> posix;
         ExportStats stats;
         dataframe::LazyFrame plan =
-            View::from_file(gz, idx).metadata(false).branch(
-                [&](ViewSession& run) {
-                    // custom fold: small events (dur < 25), reusing the parsed
-                    // event.
-                    small = run.fold<Small>(
-                        Query::from_string("dur < 25").value(),
-                        [](Small& s, const json::JsonValue& jv,
-                           std::string_view) {
-                            ++s.n;
-                            s.sum += jv["dur"].get<double>(0);
-                        },
-                        [](Small&& a, Small&& b) {
-                            a.n += b.n;
-                            a.sum += b.sum;
-                            return std::move(a);
-                        });
-                    // raw passthrough: big events (dur >= 25).
-                    big_stats = run.export_json(
-                        Query::from_string("dur >= 25").value(), big);
-                    // built-in agg: POSIX count/sum over the same scan.
-                    posix = run.collect(
-                        Query::from_string(R"(cat == "POSIX")").value(),
-                        {GroupKey::cat()},
-                        {{AggOp::Count, "", "n"},
-                         {AggOp::Sum, "dur", "sum_dur"}});
-                    return std::function<void(const ExportStats&)>(
-                        [&stats](const ExportStats& st) { stats = st; });
-                });
+            View::from_file(gz, idx).branch([&](ViewSession& run) {
+                // custom fold: small events (dur < 25), reusing the parsed
+                // event.
+                small = run.fold<Small>(
+                    Query::from_string("dur < 25").value(),
+                    [](Small& s, const json::JsonValue& jv, std::string_view) {
+                        ++s.n;
+                        s.sum += jv["dur"].get<double>(0);
+                    },
+                    [](Small&& a, Small&& b) {
+                        a.n += b.n;
+                        a.sum += b.sum;
+                        return std::move(a);
+                    });
+                // raw passthrough: big events (dur >= 25).
+                big_stats = run.export_json(
+                    Query::from_string("dur >= 25").value(), big);
+                // built-in agg: POSIX count/sum over the same scan.
+                posix = run.collect(
+                    Query::from_string(R"(cat == "POSIX")").value(),
+                    {GroupKey::cat()},
+                    {{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "sum_dur"}});
+                return std::function<void(const ExportStats&)>(
+                    [&stats](const ExportStats& st) { stats = st; });
+            });
         plan.collect().get();
 
         // small: POSIX 10..24 (15) + STDIO 20..24 (5) = 20; sum 255 + 110.
@@ -1614,21 +1650,13 @@ TEST_SUITE("View") {
 
         // Events: the 10 ph=X reads, no counters.
         StringSink ev;
-        View::from_file(gz, idx)
-            .phase(Phase::Events)
-            .metadata(false)
-            .sink_json(ev)
-            .get();
+        View::from_file(gz, idx).phase(Phase::Events).sink_json(ev).get();
         CHECK(ev.lines().size() == 10);
         CHECK(count_containing(ev.lines(), R"("ph":"C")") == 0);
 
         // Counters: the 2 ph=C events only.
         StringSink ct;
-        View::from_file(gz, idx)
-            .phase(Phase::Counters)
-            .metadata(false)
-            .sink_json(ct)
-            .get();
+        View::from_file(gz, idx).phase(Phase::Counters).sink_json(ct).get();
         CHECK(ct.lines().size() == 2);
         CHECK(count_containing(ct.lines(), "cpu") == 2);
     }
@@ -1666,7 +1694,6 @@ TEST_SUITE("View") {
         StringSink reread;
         View::from_file(out, out_idx)
             .phase(Phase::Counters)
-            .metadata(false)
             .sink_json(reread)
             .get();
         CHECK(reread.lines().size() == lines.size());

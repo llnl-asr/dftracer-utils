@@ -204,8 +204,8 @@ void at_exit_render() {
     // children nest instead of orphaning into roots.
     r.shards.for_each_shard([&](ShardData& s) {
         all.insert(all.end(), s.done.begin(), s.done.end());
-        for (const auto& [handle, l] : s.live) {
-            (void)handle;
+        for (const auto& entry : s.live) {
+            const auto& l = entry.second;
             const long long us =
                 std::chrono::duration_cast<std::chrono::microseconds>(now -
                                                                       l.start)

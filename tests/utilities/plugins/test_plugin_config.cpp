@@ -53,7 +53,7 @@ TEST_CASE("a declared config is accepted and reported by describe()") {
     // The C++ SDK reads `query` off every config, so it is declared too and a
     // caller passing one is not told it is unknown.
     CHECK(std::any_of(keys.begin(), keys.end(), [](const std::string& k) {
-        return has_substr(k, "query (string)");
+        return has_substr(k, "duql (string)");
     }));
 }
 
@@ -76,19 +76,19 @@ TEST_CASE("a declared key of the wrong kind fails the load") {
 }
 
 TEST_CASE("a `query` key is accepted alongside the declared ones") {
-    auto set = load(config_of(R"({"label": "rows", "query": "dur > 0"})"));
+    auto set = load(config_of(R"({"label": "rows", "duql": "dur > 0"})"));
     INFO((set.has_value() ? std::string{} : set.error().message));
     CHECK(set.has_value());
 }
 
 TEST_CASE("an unparseable `query` fails the load") {
-    // `query` becomes the plugin's plan_query. A predicate that does not parse
+    // `query` becomes the plugin's plan_duql. A predicate that does not parse
     // used to be logged and dropped, which cost the whole SET its index prune
     // and let this plugin fold over events its own predicate excluded. Both
     // are silent wrong answers, so the load fails instead.
-    auto set = load(config_of(R"({"label": "rows", "query": "cat =="})"));
+    auto set = load(config_of(R"({"label": "rows", "duql": "cat =="})"));
     REQUIRE(!set.has_value());
-    CHECK(has_substr(set.error().message, "plan_query"));
+    CHECK(has_substr(set.error().message, "plan_duql"));
     CHECK(has_substr(set.error().message, "does not parse"));
 }
 

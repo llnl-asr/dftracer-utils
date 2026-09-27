@@ -42,7 +42,7 @@ bool ComparisonConfig::parse_node(simdjson::dom::element val,
     }
     node.name = std::string(name_result.value_unsafe().get_string().value());
 
-    auto query_result = val["query"];
+    auto query_result = val["duql"];
     if (!query_result.error() && query_result.value_unsafe().is_string()) {
         node.query =
             std::string(query_result.value_unsafe().get_string().value());

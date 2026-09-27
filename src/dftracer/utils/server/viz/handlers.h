@@ -12,6 +12,7 @@ namespace dftracer::utils::server {
 
 class QueryParams;
 class TraceIndex;
+struct TraceFields;
 
 // Client viewport width (px) bounds, shared by the events and density endpoints
 // to size the ~1px sub-pixel fold cutoff.
@@ -59,10 +60,11 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
 // Shared across the events and density endpoints: the summary is unfiltered, so
 // any server-side predicate forces a live scan (pid/tid select whole lanes and
 // stay eligible); append_app_spans injects the summary's cached app spans.
-bool viz_summary_eligible(const QueryParams& params);
+bool viz_summary_eligible(const QueryParams& params, const TraceFields& fields);
 coro::CoroTask<void> append_app_spans(std::vector<std::string>& out,
                                       TraceIndex& index, double begin,
-                                      double end, const QueryParams& params);
+                                      double end, const QueryParams& params,
+                                      const TraceFields& fields);
 
 }  // namespace dftracer::utils::server
 

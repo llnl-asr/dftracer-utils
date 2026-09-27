@@ -246,7 +246,7 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
         for (const auto& s : *slots) {
             if (s->events.empty()) continue;
             frames.push_back(detail::build_row_frame(
-                s->events, s->intern, *select, time_scale, nullptr, by_path));
+                s->events, s->intern, *select, time_scale, by_path));
         }
         if (frames.empty()) return;  // out stays an empty frame
         std::vector<const dataframe::DataFrame*> parts;
@@ -282,42 +282,54 @@ void ViewSession::add_containment_branch(
     auto intern = std::make_shared<dftracer::utils::StringIntern>();
     auto spec =
         std::make_shared<detail::ContainmentSpec>(detail::make_containment_spec(
-            *intern, partition, ts, dur, name, group));
+            *intern, partition, ts, dur, name, group,
+            detail::plan_by_path(bp) ? &detail::plan_record_schema(bp)
+                                     : nullptr,
+            bp.time_scale));
     auto bufs = std::make_shared<
         std::vector<std::shared_ptr<std::vector<detail::ContainmentRow>>>>();
-    const double time_scale = bp.time_scale;
+    const bool by_path = detail::plan_by_path(bp);
+    const dftracer::utils::index::RecordSchema* record_schema =
+        by_path && !detail::plan_record_schema(bp).fields.empty()
+            ? &detail::plan_record_schema(bp)
+            : nullptr;
 
     // One shared intern across workers keeps lane ids consistent, so the
     // per-worker rows concatenate without a re-key.
-    auto make_consumer = [intern, spec, bufs]() {
+    auto make_consumer = [intern, spec, bufs, by_path, record_schema]() {
         auto rows = std::make_shared<std::vector<detail::ContainmentRow>>();
         bufs->push_back(rows);
-        return
-            [intern, spec, rows](const json::JsonValue& jv, std::string_view) {
-                detail::FoldEvent fe = detail::extract_fold_event(
-                    jv.element(), *intern, spec->needs_args,
-                    &spec->nested_captures);
-                detail::ContainmentRow r;
-                if (detail::containment_row(fe, *spec, *intern, r))
-                    rows->push_back(r);
-            };
+        return [intern, spec, rows, by_path, record_schema](
+                   const json::JsonValue& jv, std::string_view) {
+            detail::FoldEvent fe =
+                by_path ? detail::decode_record(jv.element(), *intern,
+                                                /*capture_schema=*/false,
+                                                nullptr, record_schema)
+                        : detail::extract_fold_event(jv.element(), *intern,
+                                                     spec->needs_args,
+                                                     &spec->nested_captures);
+            detail::ContainmentRow r;
+            if (detail::containment_row(fe, *spec, *intern, r))
+                rows->push_back(r);
+        };
     };
-    auto finalize = [intern, bufs, out_ct, out_fg, out_partial, time_scale]() {
+    auto finalize = [intern, spec, bufs, out_ct, out_fg, out_partial]() {
+        const detail::TimeOut& time_out = spec->out;
         std::vector<detail::ContainmentRow> all;
         for (const auto& rows : *bufs)
             all.insert(all.end(), rows->begin(), rows->end());
         if (out_partial)
-            *out_partial = detail::flamegraph_partial(all, *intern, time_scale);
+            *out_partial = detail::flamegraph_partial(all, *intern, time_out);
         if (out_ct && out_fg) {
-            auto pr = detail::build_containment_both(all, *intern, time_scale);
+            auto pr = detail::build_containment_both(all, *intern, time_out);
             *out_ct = std::move(pr.first);
             *out_fg = std::move(pr.second);
         } else if (out_ct) {
             *out_ct = detail::build_call_tree(all, detail::sorted_lanes(all),
-                                              *intern, time_scale);
+                                              *intern, time_out);
         } else if (out_fg) {
             *out_fg = detail::build_flamegraph(all, detail::sorted_lanes(all),
-                                               *intern, time_scale);
+                                               *intern, time_out);
         }
     };
 
@@ -882,13 +894,8 @@ View View::filter(Query q) const {
 
 View View::filter(const FieldExpr& pred) const {
     return reshape("filter", [&](const scan::ScanPlan& v) {
-        return scan::filter(v, pred.to_query());
+        return scan::filter(v, pred.to_duql());
     });
-}
-
-View View::query(const std::string& dsl) const {
-    return reshape(
-        "query", [&](const scan::ScanPlan& v) { return scan::query(v, dsl); });
 }
 
 View View::phase(Phase p) const {
@@ -963,21 +970,14 @@ View View::agg_numeric_args(std::vector<AggSpec> reductions) const {
     });
 }
 
-View View::metadata(bool include) const {
-    return reshape("metadata", [&](const scan::ScanPlan& v) {
-        return scan::metadata(v, include);
-    });
+View View::all() const {
+    return reshape("all",
+                   [&](const scan::ScanPlan& v) { return scan::all(v); });
 }
 
 View View::record_schema(std::string id) const {
     return reshape("record_schema", [&](const scan::ScanPlan& v) {
         return scan::record_schema(v, id);
-    });
-}
-
-View View::emit_all_metadata(bool v) const {
-    return reshape("emit_all_metadata", [&](const scan::ScanPlan& base) {
-        return scan::emit_all_metadata(base, v);
     });
 }
 

@@ -145,10 +145,8 @@ struct Fixture {
                                          cp_b.member_idx);
         }
 
-        records::put_dict_row(w, "file", "fh_1",
-                              {{"path", "/path/to/trace.pfw.gz"}});
-        records::put_dict_row(w, "host", "hh_1", {{"name", "host-1"}});
-        records::put_dict_row(w, "string", "sh_1", {{"value", "some-string"}});
+        records::put_rowset(w, file_id, "files", "files-frame");
+        records::put_rowset(w, file_id, "hosts", "hosts-frame");
 
         // One merge per key: the SST emitter combines same-key operands, so
         // each SST stays key-unique either way.
@@ -162,7 +160,7 @@ struct Fixture {
         records::put_manifest(w, file_id, IndexExtension::MEMBERS, 0);
         for (auto ext : {IndexExtension::ZONEMAP, IndexExtension::BLOOM,
                          IndexExtension::COUNTS, IndexExtension::POSTINGS,
-                         IndexExtension::STATS})
+                         IndexExtension::STATS, IndexExtension::ROWSET})
             records::put_manifest(w, file_id, ext, 42);
     }
 };
@@ -208,9 +206,8 @@ void check_readable(const IndexDatabase& db, int file_id) {
     CHECK_FALSE(db.has_posting(file_id, "name", value_hash("open")));
     CHECK(db.posting_granules(file_id, "name", value_hash("write")) ==
           std::vector<std::uint64_t>{1});
-    CHECK(db.dict_value("host", "hh_1", "name") == "host-1");
-    CHECK(db.dict_keys("file", "path", "/path/to/trace.pfw.gz") ==
-          std::vector<std::string>{"fh_1"});
+    CHECK(db.rowset(file_id, "hosts") == "hosts-frame");
+    CHECK(db.rowset(file_id, "files") == "files-frame");
 }
 
 }  // namespace

@@ -157,6 +157,9 @@ struct DataType {
     std::int32_t decimal_scale = 0;
     /// FixedSizeBinary (byte width), FixedSizeList (element count).
     std::int32_t fixed_size = 0;
+    /// String only: each value is canonical JSON text, so a number, a string
+    /// and a bool keep their JSON types (`3` and `"3"` differ).
+    bool json = false;
 
     bool operator==(const DataType& other) const;
     bool operator!=(const DataType& other) const { return !(*this == other); }
@@ -180,7 +183,7 @@ inline bool DataType::operator==(const DataType& other) const {
            time_unit == other.time_unit && timezone == other.timezone &&
            decimal_precision == other.decimal_precision &&
            decimal_scale == other.decimal_scale &&
-           fixed_size == other.fixed_size;
+           fixed_size == other.fixed_size && json == other.json;
 }
 
 /// A scalar DataType with no nested fields.
@@ -634,7 +637,7 @@ enum class RollingOp : std::int32_t {
 
 /// Mirrors dftu_str_pred_op: a string predicate against one literal pattern,
 /// yielding Bool. Like is SQL LIKE (`%` / `_`, `\\` escapes); Matches is a
-/// whole-string ECMAScript regex match, Search the same regex anywhere in the
+/// whole-string duql regex match, Search the same regex anywhere in the
 /// string.
 enum class StrPredOp : std::int32_t {
     Contains = 0,
@@ -658,6 +661,9 @@ enum class StrMapOp : std::int32_t {
 /// Left/Right also keep the unmatched rows of that side (the other side
 /// null-filled); Outer keeps both; Semi/Anti keep the left rows with / without
 /// a match, left columns only; Cross pairs every left row with every right row.
+/// Lookup keeps every left row once and adds the right row's non-key columns
+/// (see dftu_join_how); Nest keeps every left row once with a list of its
+/// matching right rows.
 enum class JoinHow : std::int32_t {
     Inner = 0,
     Left = 1,
@@ -666,6 +672,8 @@ enum class JoinHow : std::int32_t {
     Semi = 4,
     Anti = 5,
     Cross = 6,
+    Lookup = 7,
+    Nest = 8,
 };
 
 /// Mirrors the dftu_series_prim op codes: a unary numeric primitive over a FLAT

@@ -12,6 +12,7 @@ counterpart.
 from __future__ import annotations
 
 import builtins
+import json
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -1170,8 +1171,18 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
     def len(self) -> int:
         return self._native.length
 
+    @property
+    def is_json(self) -> bool:
+        """Whether each value is JSON text: a field whose records mix numbers,
+        text or bools, or a declared ``json`` field. :meth:`to_list` parses
+        it."""
+        return bool(self._native.is_json)
+
     def to_list(self) -> List[object]:
-        return self.to_arrow().to_pylist()
+        values = self.to_arrow().to_pylist()
+        if self._native.is_json:
+            return [None if v is None else json.loads(v) for v in values]
+        return values
 
     def tolist(self) -> List[object]:
         return self.to_list()

@@ -37,7 +37,7 @@ _ASCII = {
 _SUMMARY = (
     "Reading, indexing, aggregating, and analyzing DFTracer trace files "
     "(.pfw / .pfw.gz): a coroutine-based C++20 engine with a native columnar "
-    "SIMD DataFrame, a query DSL, and a plugin SDK, exposed through Python "
+    "SIMD DataFrame, the duql query language, and a plugin SDK, exposed through Python "
     "bindings (import as `dftracer.utils`) and `dftracer_*` CLI binaries."
 )
 

@@ -76,7 +76,8 @@ coro::CoroTask<Result<ViewPlannerOutput>> ViewPlannerUtility::operator()(
                 // scan returns lives in chunks of its own.
                 const auto metadata =
                     input.view.filter_metadata    ? plan::MetadataUse::RECORDS
-                    : input.view.include_metadata ? plan::MetadataUse::CONTEXT
+                    : input.view.metadata_records ? plan::MetadataUse::ALL
+                    : input.view.include_metadata ? plan::MetadataUse::EVERY
                                                   : plan::MetadataUse::NONE;
                 auto pruned = co_await plan::prune_file(plan::PruneRequest{
                     input.index_path, input.file_path,

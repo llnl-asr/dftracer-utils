@@ -6,7 +6,10 @@
 #include <dftracer/utils/trace/views/view_plan.h>
 
 #include <algorithm>
+#include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -17,23 +20,31 @@ namespace dftracer::utils::trace::views {
 
 namespace {
 
+// A null key cell is nullopt, so it joins other null keys but never "".
+using Key = std::vector<std::optional<std::string>>;
+
 struct KeyHash {
-    std::size_t operator()(const std::vector<std::string>& k) const {
+    std::size_t operator()(const Key& k) const {
         std::size_t h = dftracer::utils::hash::FNV1A_OFFSET_BASIS_LEGACY;
-        for (const std::string& s : k) {
-            std::size_t sh = std::hash<std::string>{}(s);
+        for (const std::optional<std::string>& s : k) {
+            std::size_t sh = std::hash<std::optional<std::string>>{}(s);
             h ^= sh + dftracer::utils::hash::GOLDEN_RATIO + (h << 6) + (h >> 2);
         }
         return h;
     }
 };
 
-std::vector<std::string> key_of(const dataframe::DataFrame& b,
-                                std::int64_t n_key, std::int64_t row) {
-    std::vector<std::string> k;
+Key key_of(const dataframe::DataFrame& b, std::int64_t n_key,
+           std::int64_t row) {
+    Key k;
     k.reserve(static_cast<std::size_t>(n_key));
-    for (std::int64_t i = 0; i < n_key; ++i)
-        k.emplace_back(b.columns[static_cast<std::size_t>(i)].string_at(row));
+    for (std::int64_t i = 0; i < n_key; ++i) {
+        const dataframe::Series& c = b.columns[static_cast<std::size_t>(i)];
+        if (c.is_null(row))
+            k.emplace_back();
+        else
+            k.emplace_back(std::string(c.string_at(row)));
+    }
     return k;
 }
 
@@ -68,14 +79,14 @@ dataframe::DataFrame join_batches(const dataframe::DataFrame& left,
     const bool want_right_only =
         type == JoinType::RIGHT || type == JoinType::FULL;
 
-    std::unordered_map<std::vector<std::string>, std::int64_t, KeyHash> ridx;
+    std::unordered_map<Key, std::int64_t, KeyHash> ridx;
     ridx.reserve(static_cast<std::size_t>(right.num_rows()));
     for (std::int64_t r = 0; r < right.num_rows(); ++r)
         ridx.emplace(key_of(right, n_key, r), r);
-    std::unordered_set<std::vector<std::string>, KeyHash> matched;
+    std::unordered_set<Key, KeyHash> matched;
 
     struct Row {
-        std::vector<std::string> key;
+        Key key;
         std::int64_t li;
         std::int64_t ri;
     };
@@ -102,21 +113,24 @@ dataframe::DataFrame join_batches(const dataframe::DataFrame& left,
     std::vector<std::int64_t> li, ri;
     li.reserve(rows.size());
     ri.reserve(rows.size());
-    std::vector<std::vector<std::string>> okeys(
-        static_cast<std::size_t>(n_key));
     for (const Row& row : rows) {
         li.push_back(row.li);
         ri.push_back(row.ri);
-        for (std::int64_t k = 0; k < n_key; ++k)
-            okeys[static_cast<std::size_t>(k)].push_back(
-                row.key[static_cast<std::size_t>(k)]);
     }
 
     dataframe::DataFrame out;
+    std::vector<std::string_view> vals(rows.size());
+    std::vector<std::uint8_t> vbits((rows.size() + 7) / 8);
     for (std::int64_t k = 0; k < n_key; ++k) {
+        std::fill(vbits.begin(), vbits.end(), std::uint8_t{0});
+        for (std::size_t r = 0; r < rows.size(); ++r) {
+            const auto& cell = rows[r].key[static_cast<std::size_t>(k)];
+            vals[r] = cell ? std::string_view(*cell) : std::string_view();
+            if (cell) vbits[r >> 3] |= static_cast<std::uint8_t>(1u << (r & 7));
+        }
         out.names.push_back(left.names[static_cast<std::size_t>(k)]);
-        out.columns.push_back(
-            dataframe::Series::strings(okeys[static_cast<std::size_t>(k)]));
+        out.columns.push_back(dataframe::Series::strings(
+            std::span<const std::string_view>(vals), vbits.data()));
     }
     for (std::size_t j = static_cast<std::size_t>(n_key);
          j < left.columns.size(); ++j) {

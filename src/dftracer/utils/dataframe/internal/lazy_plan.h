@@ -38,6 +38,23 @@ LazyFrame optimize_plan(const LazyFrame& lf);
 // scalar arguments) hash by identity, so two equivalent plans may differ.
 std::uint64_t plan_fingerprint(const LazyFrame& lf);
 
+// The C++ callbacks of one run of a tap: `rows` on each morsel (its columns
+// under their names), `end` once when the input is drained. Either may throw,
+// which fails the run.
+struct TapRun {
+    std::function<void(const DataFrame&)> rows;
+    std::function<void()> end;
+};
+
+// A tap: `open` gives the callbacks of each run of the plan. A tap is an
+// optimizer barrier.
+struct Tap {
+    std::function<TapRun()> open;
+};
+
+// `lf` with every morsel shown to `tap` and passed on unchanged.
+LazyFrame tap(const LazyFrame& lf, std::shared_ptr<const Tap> tap);
+
 // The plan's leaf source.
 const std::shared_ptr<const Source>& plan_source(const LazyFrame& lf);
 

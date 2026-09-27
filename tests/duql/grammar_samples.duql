@@ -1,0 +1,194 @@
+cat == "POSIX" and dur >= 1000
+---
+name like "%Send%"
+---
+name ilike "%send%" escape "\\"
+---
+"io" in cat
+---
+"io" not in cat
+---
+a ~* "x"
+---
+a !~ "^x" or b ~ "y"
+---
+not a == 1
+---
+any(tags) == "y"
+---
+x is null or y is not missing
+---
+ts between 1s and 5s and dur > 250ms
+---
+x in [1, 2, 3] and y not in ['a', 'b']
+---
+5-3 == 2 and -x < 10us and a // 2 % 3 == 1.5 * 2 / 4
+---
+(a ?? b) + 1 > 5ns
+---
+args.`cpu.idle_pct` > 0.5 and hosts[0].name == $host and a[-1] == 1
+---
+`from` == 1 and counters.`cpu.idle_pct`.p50 > 2
+---
+x not in (from runs | select run)
+---
+x in (from "a.pfw.gz", $f, runs | where y > 1)
+---
+run in (from runs | where app == "laghos" | select run)
+---
+run -> runs.app == "laghos"
+---
+run -> runs(id).app == "laghos"
+---
+run -> runs.system -> systems.cpu == "a64fx"
+---
+(run, host) -> hosts.name != "h1"
+---
+myplug.entropy(args.data, n = 5) > 0.5
+---
+any(hosts, .ok) and all(tags, . != 'x') and ^.id == 1
+---
+where x > 1 | derive y = x * 2, z = y + 1
+---
+from "a.pfw.gz", 'b.pfw.gz' | select name, dur as d, t = ts // 1000
+---
+from all | drop args.x, pid | rename p = pid, t = tid
+---
+distinct | distinct name, cat
+---
+group name, cat { n = count(), total = sum(dur), p = quantile(dur, 0.99) }
+---
+agg { n = count(), busy = busy() }
+---
+window name sort ts { r = row_number(), prev = lag(dur, 1) }
+---
+window { r = running_sum(dur) }
+---
+pivot cat in ["POSIX", "STDIO"] { n = count() }
+---
+pivot cat { t = sum(dur) }
+---
+unpivot read_bytes, write_bytes as kind, bytes
+---
+sort -dur, name nulls first, ts nulls last, - -x, a - b
+---
+take 10 | take 5 by name sort -dur | skip 3
+---
+sample 100 seed 7 | sample 12.5 % | sample 5 %
+---
+expand hosts as h with_index i keep_empty | where .ok and ^.id == 1
+---
+lookup runs on run | lookup hosts on (run, host) into hs | expand hs keep_empty
+---
+lookup runs on run == id, (a, b) == (c, d), -x == y + 1 into r
+---
+lookup s on pid asof ts == t | lookup s on pid asof ts forward within 5 | lookup s on (a, b) == (c, d) asof ts nearest within $w
+---
+lookup s on pid overlap | lookup s on (a, b) == (c, d) overlap into m
+---
+union (from runs | select run)
+---
+call myplug.table(x, n = 5) | call_tree
+---
+time_range 1s .. 5s overlap | bucket 100ms fill
+---
+time_range $start..$end | bucket 1m
+---
+duql 1
+let runs = where type == "run";
+where run -> runs.app == "laghos"
+---
+def ms(x) = x / 1000;
+def big = dur > 1s;
+where ms(dur) > 5 and big()
+---
+# genesis source
+source genesis {
+    data = where type != "run";
+    runs = where type == "run"
+}
+---
+source dftracer {
+    data    = where ph != "M";
+    files   = where ph == "M" and name == "FH" | select id = args.value, path = args.name;
+    hosts   = where ph == "M" and name == "HH" | select id = args.value, name = args.name;
+    strings = where ph == "M" and name == "SH" | select id = args.value, value = args.name;
+    def ms(x) = x / 1000;
+    def args_fallback = true
+}
+where ms(dur) > 1   # trailing comment
+---
+source s { data = where x > 1; def f(a, b) = a + b; }
+f(1, 2) > 0
+---
+source empty {}
+---
+# a comment-only query is the empty query
+---
+"sub" in any(tags) and "x" not in any(a.b)
+---
+tags.0 > 5 and a.0.5 == 1
+---
+exists(args.retry) and coalesce(a, b, 0) >= 1 and len(tags) == 2
+---
+case(x < 1, "a", x < 2, "b", "c") == if(ok, json(o), lower(trim(s)))
+---
+x between a + 1 and b * 2 and not (x // 2 in [a, 1])
+---
+session pid, tid gap 100us max 10ms as burst | group pid, tid, burst { n = count() }
+### invalid
+where a ==
+---
+sort
+---
+source s { a = where x b = where y }
+---
+source s { a = where x, b = where y }
+---
+x in 5
+---
+like == 1
+---
+a ~
+---
+group k { n }
+---
+(a, )
+---
+from
+---
+| take 5
+---
+x == "unterminated
+---
+`` == 1
+---
+pivot k in [1] in [2] { n = count() }
+---
+lookup runs on a == b == c
+---
+lookup s on pid asof ts into m
+---
+lookup s on pid overlap into
+---
+lookup s on pid overlap forward
+---
+lookup s on pid asof ts within -1
+---
+lookup s on pid asof ts within 1.5
+---
+lookup s on pid asof
+---
+lookup s asof ts
+---
+sort - nulls first
+---
+x == 1ms2
+---
+f (x) == 1 extra
+---
+take -5
+---
+a[1.5] == 1
+---
+session pid gap

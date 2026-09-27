@@ -324,9 +324,11 @@ Strings
 Also on both sides: ``str_ends_with``, ``str_find``, ``str_len_bytes``,
 ``str_len_chars``, ``str_replace`` / ``str_replace_all``, ``str_lstrip`` /
 ``str_rstrip``, ``str_pad_start`` / ``str_pad_end``, ``str_zfill``.
-``str_like`` follows SQL LIKE / glob rules (``%`` any run, ``_`` one char,
-``\`` escapes a literal ``%``/``_``/``\``); ``str_matches`` takes an ECMAScript
-regex matched against the whole string.
+``str_like`` follows SQL LIKE rules (``%`` any run, newlines included, ``_``
+one UTF-8 character, ``\`` escapes a literal ``%``/``_``/``\``);
+``str_matches`` takes a duql regex matched against the whole string, and
+``str_search`` the same regex anywhere in it. See :doc:`/reference/duql` for
+the regex dialect and the match limit.
 
 Derived columns via F expressions
 ------------------------------------
@@ -347,7 +349,7 @@ it with ``.apply()`` - no wrapper class needed, and the result is a plain
 Expressions combine with ``+ - * /``, comparisons (``>`` ``>=`` ``<`` ``<=``
 ``==`` ``!=``, building a boolean-column predicate), and ``& | ~`` to combine
 predicates. This is the same ``F`` used to build row-filter predicates for
-``TraceViewer.filter()`` (see :doc:`../core/query-dsl`); a numeric comparison
+``TraceViewer.filter()`` (see :doc:`../core/duql`); a numeric comparison
 evaluates here to a mask, while string-match and membership predicates are
 filter-only. Evaluate several expressions in one pass with shared
 sub-expressions computed once:

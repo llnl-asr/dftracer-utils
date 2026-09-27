@@ -195,9 +195,7 @@ TEST_CASE("when_all - Exception propagation from one task") {
                         [](CoroScope&) -> CoroTask<int> { co_return 7; });
 
                     try {
-                        auto result =
-                            co_await when_all(std::move(f1), std::move(f2));
-                        (void)result;
+                        co_await when_all(std::move(f1), std::move(f2));
                     } catch (const std::runtime_error& e) {
                         caught_ptr->store(std::string(e.what()) == "boom",
                                           std::memory_order_relaxed);

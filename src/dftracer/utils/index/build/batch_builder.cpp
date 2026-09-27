@@ -11,16 +11,18 @@
 #include <dftracer/utils/index/build/index_batch_writer.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
-#include <dftracer/utils/index/extensions/dict_fold.h>
+#include <dftracer/utils/index/extensions/rowset_fold.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/index/source.h>
 #include <dftracer/utils/index/store/error.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <optional>
@@ -51,7 +53,7 @@ struct ParsedBloomJob {
     // already-resolved chunk/dictionary state, so the folds outlive it.
     std::unique_ptr<dftracer::utils::StringIntern> intern;
     std::unique_ptr<index::extensions::BloomFold> bloom_fold;
-    std::unique_ptr<index::extensions::DictFold> dict_fold;
+    std::unique_ptr<index::extensions::RowSetFold> rowset_fold;
     std::unique_ptr<index::schemas::dft::agg::AggregationFold> agg_fold;
     std::unique_ptr<index::extensions::PluginBuilders> plugin_builders;
     std::optional<index::schemas::dft::agg::AggFoldOutput> agg_output;
@@ -242,20 +244,19 @@ static coro::CoroTask<void> parse_and_emit_worker(
                     fold_ptrs.push_back(job.bloom_fold.get());
                 }
                 if (!tier_only) {
-                    job.dict_fold =
-                        std::make_unique<index::extensions::DictFold>(
-                            *job.intern, schema.dictionaries);
-                    fold_ptrs.push_back(job.dict_fold.get());
+                    job.rowset_fold =
+                        std::make_unique<index::extensions::RowSetFold>(
+                            *job.intern, index::indexed_rowsets(schema));
+                    fold_ptrs.push_back(job.rowset_fold.get());
                 }
-                if (agg_fold_factory_ptr && *agg_fold_factory_ptr &&
-                    schema.decoder == index::Decoder::DFTRACER) {
+                if (agg_fold_factory_ptr && *agg_fold_factory_ptr) {
                     job.agg_fold =
                         (*agg_fold_factory_ptr)(*job.intern, pf.file_id);
                     fold_ptrs.push_back(job.agg_fold.get());
                 }
                 driver.emplace(*job.intern, fold_ptrs, pf.file_path,
                                pf.index_path);
-                driver->set_decoder(schema.decoder);
+                driver->set_record_schema(schema);
                 // A slice sees part of the chunks, and a file payload built
                 // from them could rule out the whole file.
                 if (build_bloom && pf.slice.members == nullptr) {
@@ -383,7 +384,7 @@ static coro::CoroTask<void> parse_and_emit_worker(
         send_job.artifacts = std::move(job.artifacts);
         send_job.intern = std::move(job.intern);
         send_job.bloom_fold = std::move(job.bloom_fold);
-        send_job.dict_fold = std::move(job.dict_fold);
+        send_job.rowset_fold = std::move(job.rowset_fold);
         send_job.agg_fold = std::move(job.agg_fold);
         send_job.plugin_builders = std::move(job.plugin_builders);
         send_job.success = true;
@@ -780,7 +781,61 @@ coro::CoroTask<IndexBuildBatchResult> BatchBuilder::process(
     if (!config_ptr || config_ptr->file_paths.empty()) {
         co_return IndexBuildBatchResult{};
     }
-    co_return co_await run_batch_write_pipeline(scope, std::move(config_ptr));
+    // The pipeline writes one index; files whose indexes live in different
+    // roots build one root at a time, each into its own. A sink routes the
+    // writes itself.
+    const IndexBuildBatchConfig& config = *config_ptr;
+    std::vector<std::string> roots;
+    std::vector<std::size_t> root_of(config.file_paths.size());
+    if (!config.sink_factory)
+        for (std::size_t i = 0; i < config.file_paths.size(); ++i) {
+            const std::string root =
+                determine_index_path(config.file_paths[i], config.index_dir);
+            auto it = std::find(roots.begin(), roots.end(), root);
+            root_of[i] = static_cast<std::size_t>(it - roots.begin());
+            if (it == roots.end()) roots.push_back(root);
+        }
+    if (roots.size() <= 1)
+        co_return co_await run_batch_write_pipeline(scope,
+                                                    std::move(config_ptr));
+
+    IndexBuildBatchResult out;
+    out.results.resize(config.file_paths.size());
+    for (std::size_t r = 0; r < roots.size(); ++r) {
+        auto part = std::make_shared<IndexBuildBatchConfig>(config);
+        part->file_paths.clear();
+        part->file_slices.clear();
+        part->preassigned_file_ids.clear();
+        std::vector<std::size_t> at;
+        for (std::size_t i = 0; i < config.file_paths.size(); ++i) {
+            if (root_of[i] != r) continue;
+            at.push_back(i);
+            part->file_paths.push_back(config.file_paths[i]);
+            if (!config.file_slices.empty())
+                part->file_slices.push_back(config.file_slices[i]);
+            if (!config.preassigned_file_ids.empty())
+                part->preassigned_file_ids.push_back(
+                    config.preassigned_file_ids[i]);
+        }
+        auto got = co_await run_batch_write_pipeline(scope, std::move(part));
+        for (std::size_t k = 0; k < at.size() && k < got.results.size(); ++k)
+            out.results[at[k]] = std::move(got.results[k]);
+        out.indexed += got.indexed;
+        out.skipped += got.skipped;
+        out.failed += got.failed;
+        out.total_events += got.total_events;
+        auto& m = out.metrics;
+        m.parse_ns += got.metrics.parse_ns;
+        m.write_ns += got.metrics.write_ns;
+        m.files_enqueued += got.metrics.files_enqueued;
+        m.files_parsed += got.metrics.files_parsed;
+        m.files_written += got.metrics.files_written;
+        m.max_files_in_flight =
+            std::max(m.max_files_in_flight, got.metrics.max_files_in_flight);
+        m.files_spilled += got.metrics.files_spilled;
+        for (auto& a : got.agg_outputs) out.agg_outputs.push_back(std::move(a));
+    }
+    co_return out;
 }
 
 }  // namespace dftracer::utils::index::build

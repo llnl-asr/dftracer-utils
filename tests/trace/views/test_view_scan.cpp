@@ -1,5 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
+#include <dftracer/utils/index/indexer.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -13,9 +14,9 @@ TEST_SUITE("View") {
     TEST_CASE(
         "View - builder ops return independent views (lazy, no shared state)") {
         const auto& s = shared_trace();
-        View base = View::from_file(s.gz, s.idx).metadata(false);
-        View posix = base.query(R"(cat == "POSIX")");
-        View stdio = base.query(R"(cat == "STDIO")");
+        View base = View::from_file(s.gz, s.idx);
+        View posix = base.duql(R"(cat == "POSIX")");
+        View stdio = base.duql(R"(cat == "STDIO")");
 
         // Deriving posix/stdio must not mutate base or each other.
         StringSink s_base, s_posix, s_stdio;
@@ -32,8 +33,7 @@ TEST_SUITE("View") {
         const auto& s = shared_trace();
         StringSink sink;
         auto stats = View::from_file(s.gz, s.idx)
-                         .metadata(false)
-                         .query(R"(cat == "POSIX")")
+                         .duql(R"(cat == "POSIX")")
                          .sink_json(sink)
                          .get();
 
@@ -49,9 +49,8 @@ TEST_SUITE("View") {
         const auto& s = shared_trace();
         StringSink sink;
         View::from_file(s.gz, s.idx)
-            .metadata(false)
-            .query(R"(cat == "POSIX")")
-            .query(R"(name == "read")")
+            .duql(R"(cat == "POSIX")")
+            .duql(R"(name == "read")")
             .sink_json(sink)
             .get();
 
@@ -61,8 +60,7 @@ TEST_SUITE("View") {
     TEST_CASE("View - no filter streams all events") {
         const auto& s = shared_trace();
         StringSink sink;
-        auto stats =
-            View::from_file(s.gz, s.idx).metadata(false).sink_json(sink).get();
+        auto stats = View::from_file(s.gz, s.idx).sink_json(sink).get();
 
         CHECK(sink.lines().size() == 50);
         CHECK(stats.events_matched == 50);
@@ -71,11 +69,8 @@ TEST_SUITE("View") {
     TEST_CASE("View - head caps exported events") {
         const auto& s = shared_trace();
         StringSink sink;
-        auto stats = View::from_file(s.gz, s.idx)
-                         .metadata(false)
-                         .head(10)
-                         .sink_json(sink)
-                         .get();
+        auto stats =
+            View::from_file(s.gz, s.idx).head(10).sink_json(sink).get();
 
         CHECK(sink.lines().size() == 10);
         CHECK(stats.truncated);
@@ -107,8 +102,7 @@ TEST_SUITE("View") {
     TEST_CASE("View - a completed scan covers every chunk it read") {
         const auto& s = shared_trace();
         StringSink sink;
-        auto stats =
-            View::from_file(s.gz, s.idx).metadata(false).sink_json(sink).get();
+        auto stats = View::from_file(s.gz, s.idx).sink_json(sink).get();
 
         CHECK(stats.chunks_scanned > 0);
         CHECK(stats.chunks_covered == stats.chunks_scanned);
@@ -119,11 +113,8 @@ TEST_SUITE("View") {
     TEST_CASE("View - a head does not retract coverage of a drained chunk") {
         const auto& s = shared_trace();
         StringSink sink;
-        auto stats = View::from_file(s.gz, s.idx)
-                         .metadata(false)
-                         .head(10)
-                         .sink_json(sink)
-                         .get();
+        auto stats =
+            View::from_file(s.gz, s.idx).head(10).sink_json(sink).get();
 
         CHECK(stats.truncated);
         CHECK(stats.chunks_covered == stats.chunks_scanned);
@@ -144,7 +135,6 @@ TEST_SUITE("View") {
         SUBCASE("cancelled before the first batch") {
             StringSink sink;
             auto stats = View::from_file(gz, idx)
-                             .metadata(false)
                              .cancel_when([] { return true; })
                              .sink_json(sink)
                              .get();
@@ -163,7 +153,6 @@ TEST_SUITE("View") {
 
             auto stats =
                 View::from_file(gz, idx)
-                    .metadata(false)
                     .cancel_when([&] { return sink.events.load() > 0; })
                     .sink_json(sink)
                     .get();
@@ -185,10 +174,10 @@ TEST_SUITE("View") {
         const int n = 60;  // ~10 members at 512 bytes
         std::string gz = create_multimember_trace(env, n, 512);
         std::string idx = determine_index_path(gz, "");
+        dftracer::utils::index::Indexer::open({gz}).build();
 
         StringSink sink;
-        auto stats =
-            View::from_file(gz, idx).metadata(false).sink_json(sink).get();
+        auto stats = View::from_file(gz, idx).sink_json(sink).get();
 
         CHECK(stats.events_matched == static_cast<std::uint64_t>(n));
         CHECK(sink.lines().size() == static_cast<std::size_t>(n));
@@ -209,14 +198,12 @@ TEST_SUITE("View") {
         opts.member_size = 4096;  // small members -> many boundaries
         opts.num_workers = 4;
         opts.compress = true;
-        auto stats =
-            View::from_file(gz, idx).metadata(false).sink_trace(opts).get();
+        auto stats = View::from_file(gz, idx).sink_trace(opts).get();
         CHECK(stats.events_matched == static_cast<std::uint64_t>(n));
 
         std::string oidx = determine_index_path(out, "");
         StringSink sink;
-        auto rstats =
-            View::from_file(out, oidx).metadata(false).sink_json(sink).get();
+        auto rstats = View::from_file(out, oidx).sink_json(sink).get();
         CHECK(rstats.events_matched == static_cast<std::uint64_t>(n));
         CHECK(sink.lines().size() == static_cast<std::size_t>(n));
     }
@@ -233,9 +220,8 @@ TEST_SUITE("View") {
         opts.member_size = 4096;
         opts.num_workers = 4;
         opts.build_index = true;
-        CHECK_THROWS_AS(
-            View::from_file(gz, idx).metadata(false).sink_trace(opts).get(),
-            DFTUtilsException);
+        CHECK_THROWS_AS(View::from_file(gz, idx).sink_trace(opts).get(),
+                        DFTUtilsException);
     }
 
     // The index built inline during sink_trace (build_index) must be
@@ -258,8 +244,7 @@ TEST_SUITE("View") {
         opts.num_workers = 4;
         opts.compress = true;
         opts.build_index = true;
-        auto st =
-            View::from_file(gz, idx).metadata(false).sink_trace(opts).get();
+        auto st = View::from_file(gz, idx).sink_trace(opts).get();
         REQUIRE(fs::exists(outAgz));
         const std::string idxA = determine_index_path(outAgz, "");
         // The write built the index, not a separate pass.
@@ -276,8 +261,8 @@ TEST_SUITE("View") {
         auto run = [](const std::string& f, const std::string& ix,
                       const char* q) {
             StringSink s;
-            View v = View::from_file(f, ix).metadata(false);
-            if (q != nullptr) v = v.query(q);
+            View v = View::from_file(f, ix);
+            if (q != nullptr) v = v.duql(q);
             v.sink_json(s).get();
             auto ls = s.lines();
             std::sort(ls.begin(), ls.end());
@@ -328,8 +313,7 @@ TEST_SUITE("View") {
 
     TEST_CASE("View - collect with no group_by returns the matching events") {
         const auto& s = shared_trace();  // 30 POSIX + 20 STDIO = 50 events
-        auto table =
-            View::from_file(s.gz, s.idx).metadata(false).collect().get();
+        auto table = View::from_file(s.gz, s.idx).collect().get();
         REQUIRE(table.num_rows() == 50);
         // Every event row carries the top-level columns.
         for (const char* c : {"name", "cat", "pid", "tid", "ts", "dur", "ph"})
@@ -339,8 +323,7 @@ TEST_SUITE("View") {
 
         // A filter narrows the event rows; select projects columns.
         auto posix = View::from_file(s.gz, s.idx)
-                         .metadata(false)
-                         .query(R"(cat == "POSIX")")
+                         .duql(R"(cat == "POSIX")")
                          .select({"name", "dur"})
                          .collect()
                          .get();
@@ -374,8 +357,7 @@ TEST_SUITE("View") {
         std::string idx = determine_index_path(gz, "");
 
         // Empty select: every column, including both "name" and "args.name".
-        dataframe::DataFrame all =
-            View::from_file(gz, idx).metadata(false).collect().get();
+        dataframe::DataFrame all = View::from_file(gz, idx).collect().get();
         REQUIRE(bhas(all, "name"));
         REQUIRE(bhas(all, "args.name"));
         std::map<std::string, std::string> top_by_arg;
@@ -386,20 +368,14 @@ TEST_SUITE("View") {
 
         // A bare "name" select still resolves to the top-level field; the arg
         // is only reachable via its "args." prefix.
-        dataframe::DataFrame bare_name = View::from_file(gz, idx)
-                                             .metadata(false)
-                                             .select({"name"})
-                                             .collect()
-                                             .get();
+        dataframe::DataFrame bare_name =
+            View::from_file(gz, idx).select({"name"}).collect().get();
         REQUIRE(bare_name.num_columns() == 1);
         CHECK(bhas(bare_name, "name"));
         CHECK_FALSE(bhas(bare_name, "args.name"));
 
-        dataframe::DataFrame arg_name = View::from_file(gz, idx)
-                                            .metadata(false)
-                                            .select({"args.name"})
-                                            .collect()
-                                            .get();
+        dataframe::DataFrame arg_name =
+            View::from_file(gz, idx).select({"args.name"}).collect().get();
         REQUIRE(arg_name.num_columns() == 1);
         CHECK(bhas(arg_name, "args.name"));
         CHECK_FALSE(bhas(arg_name, "name"));
@@ -433,7 +409,7 @@ TEST_SUITE("View") {
             StringSink index_build;
             View::from_file(gz, idx).sink_json(index_build).get();
         }
-        View v = View::from_file(gz, idx).metadata(false);
+        View v = View::from_file(gz, idx);
 
         dataframe::DataFrame all = v.collect().get();
         REQUIRE(all.num_rows() == 3);
@@ -486,7 +462,7 @@ TEST_SUITE("View") {
         CHECK(counts["3"] == 2);
 
         dataframe::DataFrame tree = test_view_common::run(
-            v.query(R"(name != "flat")")
+            v.duql(R"(name != "flat")")
                 .call_tree({"pid", "tid"}, "ts", "dur", "label.v")
                 .collect());
         std::vector<std::string> labels;
@@ -588,7 +564,6 @@ TEST_SUITE("View") {
         // has several chances to surface.
         for (int rep = 0; rep < 8; ++rep) {
             dataframe::DataFrame rows = View::from_file(gz, idx)
-                                            .metadata(false)
                                             .select({"name", "cycles"})
                                             .collect()
                                             .get();

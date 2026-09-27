@@ -27,8 +27,8 @@ first.
       :link: analysis-in-depth
       :link-type: doc
 
-      **Intermediate.** Go beyond one query: derived columns, the query DSL with
-      resolved fields, DataFrame and Series operations, and exporting. You build
+      **Intermediate.** Go beyond one query: derived columns, duql filters,
+      DataFrame and Series operations, and exporting. You build
       a small real analysis end to end.
 
    .. grid-item-card:: 3. Extending the engine

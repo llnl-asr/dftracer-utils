@@ -1,0 +1,402 @@
+{"q": "cat == \"POSIX\"", "ok": true, "tree": "cat == \"POSIX\""}
+{"q": "resolved.run.unique_input == \"x\"", "ok": true, "tree": "resolved.run.unique_input == \"x\""}
+{"q": "resolved.run.unique_input == \"y\"", "ok": true, "tree": "resolved.run.unique_input == \"y\""}
+{"q": "resolved.run.nodes == 1", "ok": true, "tree": "resolved.run.nodes == 1"}
+{"q": "resolved.run.papi_set == \"set1\"", "ok": true, "tree": "resolved.run.papi_set == \"set1\""}
+{"q": "detailed", "ok": true, "tree": "detailed"}
+{"q": "cat == \"POSIX\" and name in [\"pread\", \"pwrite\"]", "ok": true, "tree": "(cat == \"POSIX\" and name in [\"pread\", \"pwrite\"])"}
+{"q": "ts >= 0", "ok": true, "tree": "ts >= 0"}
+{"q": "name == \"read\"", "ok": true, "tree": "name == \"read\""}
+{"q": "dur > 1000", "ok": true, "tree": "dur > 1000"}
+{"q": "dur > 100 and cat == \"io\"", "ok": true, "tree": "(dur > 100 and cat == \"io\")"}
+{"q": "x in [2, 4]", "ok": true, "tree": "x in [2, 4]"}
+{"q": "name ~ \"^p\"", "ok": true, "tree": "name ~ \"^p\""}
+{"q": "dur > 60", "ok": true, "tree": "dur > 60"}
+{"q": "dur >= 100 and cat == \"io\"", "ok": true, "tree": "(dur >= 100 and cat == \"io\")"}
+{"q": "cat ~ \"^i\"", "ok": true, "tree": "cat ~ \"^i\""}
+{"q": "dur > 5", "ok": true, "tree": "dur > 5"}
+{"q": "a > 1", "ok": true, "tree": "a > 1"}
+{"q": "b == 105", "ok": true, "tree": "b == 105"}
+{"q": "b > 100", "ok": true, "tree": "b > 100"}
+{"q": "a == 5", "ok": true, "tree": "a == 5"}
+{"q": "name == \"absent\"", "ok": true, "tree": "name == \"absent\""}
+{"q": "name ==", "ok": false}
+{"q": "cat == \"a\"", "ok": true, "tree": "cat == \"a\""}
+{"q": "cat in [\"b\"]", "ok": true, "tree": "cat in [\"b\"]"}
+{"q": "dur > 35", "ok": true, "tree": "dur > 35"}
+{"q": "not (cat == \"a\")", "ok": true, "tree": "not (cat == \"a\")"}
+{"q": "not (dur < 25)", "ok": true, "tree": "not (dur < 25)"}
+{"q": "args.other == \"z\"", "ok": true, "tree": "args.other == \"z\""}
+{"q": "pid == 1234", "ok": true, "tree": "pid == 1234"}
+{"q": "cat in [\"POSIX\", \"STDIO\"]", "ok": true, "tree": "cat in [\"POSIX\", \"STDIO\"]"}
+{"q": "args.io.op == \"seek\"", "ok": true, "tree": "args.io.op == \"seek\""}
+{"q": "name == \"read\" and cat == \"POSIX\"", "ok": true, "tree": "(name == \"read\" and cat == \"POSIX\")"}
+{"q": "name == \"read\" or name == \"write\"", "ok": true, "tree": "(name == \"read\" or name == \"write\")"}
+{"q": "(name == \"read\" and cat == \"POSIX\") or pid == 1234", "ok": true, "tree": "((name == \"read\" and cat == \"POSIX\") or pid == 1234)"}
+{"q": "name != \"read\"", "ok": true, "tree": "name != \"read\""}
+{"q": "dur != 100", "ok": true, "tree": "dur != 100"}
+{"q": "not (name == \"read\")", "ok": true, "tree": "not (name == \"read\")"}
+{"q": "name like \"%rea%\"", "ok": true, "tree": "name like \"%rea%\""}
+{"q": "name not in [\"read\"]", "ok": true, "tree": "name not in [\"read\"]"}
+{"q": "fpath == \"/tmp/x\"", "ok": true, "tree": "fpath == \"/tmp/x\""}
+{"q": "name == \"a\\\"b\"", "ok": true, "tree": "name == \"a\\\"b\""}
+{"q": "name == \"read\" or dur > 5", "ok": true, "tree": "(name == \"read\" or dur > 5)"}
+{"q": "tags.0 > 5", "ok": true, "tree": "tags.0 > 5"}
+{"q": "not (dur > 5)", "ok": true, "tree": "not (dur > 5)"}
+{"q": "name == \"read\" and dur > 100", "ok": true, "tree": "(name == \"read\" and dur > 100)"}
+{"q": "name == \"read\" and pid in [1234, 5678]", "ok": true, "tree": "(name == \"read\" and pid in [1234, 5678])"}
+{"q": "ts >= 100 and ts < 200 and dur > 5", "ok": true, "tree": "((ts >= 100 and ts < 200) and dur > 5)"}
+{"q": "args.ts >= 5 and ts <= 3", "ok": true, "tree": "(args.ts >= 5 and ts <= 3)"}
+{"q": "ts == 0", "ok": true, "tree": "ts == 0"}
+{"q": "dur == 1.5", "ok": true, "tree": "dur == 1.5"}
+{"q": "ts < 9007199254740993", "ok": true, "tree": "ts < 9007199254740993"}
+{"q": "ts < 10", "ok": true, "tree": "ts < 10"}
+{"q": "name in [\"read\", \"write\"]", "ok": true, "tree": "name in [\"read\", \"write\"]"}
+{"q": "name not in [\"read\", \"write\", \"open\"]", "ok": true, "tree": "name not in [\"read\", \"write\", \"open\"]"}
+{"q": "cat == \"COMPUTE\"", "ok": true, "tree": "cat == \"COMPUTE\""}
+{"q": "cat != \"POSIX\"", "ok": true, "tree": "cat != \"POSIX\""}
+{"q": "cat in [\"AI\", \"STDIO\"]", "ok": true, "tree": "cat in [\"AI\", \"STDIO\"]"}
+{"q": "pid == 2", "ok": true, "tree": "pid == 2"}
+{"q": "pid > 3", "ok": true, "tree": "pid > 3"}
+{"q": "dur >= 900", "ok": true, "tree": "dur >= 900"}
+{"q": "dur < 20", "ok": true, "tree": "dur < 20"}
+{"q": "args.size == 256", "ok": true, "tree": "args.size == 256"}
+{"q": "args.size > 8000", "ok": true, "tree": "args.size > 8000"}
+{"q": "ts >= 1200000", "ok": true, "tree": "ts >= 1200000"}
+{"q": "ts > 1100000 and ts < 1150000", "ok": true, "tree": "(ts > 1100000 and ts < 1150000)"}
+{"q": "name == \"read\" and pid == 1", "ok": true, "tree": "(name == \"read\" and pid == 1)"}
+{"q": "name == \"read\" or cat == \"COMPUTE\"", "ok": true, "tree": "(name == \"read\" or cat == \"COMPUTE\")"}
+{"q": "not (dur > 25)", "ok": true, "tree": "not (dur > 25)"}
+{"q": "not (cat in [\"POSIX\", \"STDIO\"])", "ok": true, "tree": "not (cat in [\"POSIX\", \"STDIO\"])"}
+{"q": "name like \"re%\"", "ok": true, "tree": "name like \"re%\""}
+{"q": "fhash == \"/data/b.dat\"", "ok": true, "tree": "fhash == \"/data/b.dat\""}
+{"q": "fhash == \"92a3b4c5d6e7f809\"", "ok": true, "tree": "fhash == \"92a3b4c5d6e7f809\""}
+{"q": "hhash == \"node-2\"", "ok": true, "tree": "hhash == \"node-2\""}
+{"q": "hhash == \"deadbeefdeadbeef\" and name == \"write\"", "ok": true, "tree": "(hhash == \"deadbeefdeadbeef\" and name == \"write\")"}
+{"q": "(name == \"train\" or name == \"forward\") and not (pid == 1)", "ok": true, "tree": "((name == \"train\" or name == \"forward\") and not (pid == 1))"}
+{"q": "name == \"target_op\"", "ok": true, "tree": "name == \"target_op\""}
+{"q": "name == \"absent_op\"", "ok": true, "tree": "name == \"absent_op\""}
+{"q": "name in [\"target_op\", \"absent_op\"]", "ok": true, "tree": "name in [\"target_op\", \"absent_op\"]"}
+{"q": "not (name == \"target_op\")", "ok": true, "tree": "not (name == \"target_op\")"}
+{"q": "ts > 1150000 and ts < 1400000", "ok": true, "tree": "(ts > 1150000 and ts < 1400000)"}
+{"q": "ts >= 1400000 and ts <= 1450000", "ok": true, "tree": "(ts >= 1400000 and ts <= 1450000)"}
+{"q": "not (cat == \"COMPUTE\")", "ok": true, "tree": "not (cat == \"COMPUTE\")"}
+{"q": "name == \"thread_name\"", "ok": true, "tree": "name == \"thread_name\""}
+{"q": "resolved.fhash.path == \"/data/b.dat\"", "ok": true, "tree": "resolved.fhash.path == \"/data/b.dat\""}
+{"q": "resolved.fhash.path != \"/data/a.dat\"", "ok": true, "tree": "resolved.fhash.path != \"/data/a.dat\""}
+{"q": "resolved.hhash.name in [\"node-2\"]", "ok": true, "tree": "resolved.hhash.name in [\"node-2\"]"}
+{"q": "resolved.fhash.path like \"%b.dat\"", "ok": true, "tree": "resolved.fhash.path like \"%b.dat\""}
+{"q": "resolved.fhash.path == \"/data/a.dat\" and name == \"read\"", "ok": true, "tree": "(resolved.fhash.path == \"/data/a.dat\" and name == \"read\")"}
+{"q": "resolved.fhash.path == \"/data/a.dat\"", "ok": true, "tree": "resolved.fhash.path == \"/data/a.dat\""}
+{"q": "resolved.fhash.path == \"/x\"", "ok": true, "tree": "resolved.fhash.path == \"/x\""}
+{"q": "op == \"read\"", "ok": true, "tree": "op == \"read\""}
+{"q": "io.off > 3500", "ok": true, "tree": "io.off > 3500"}
+{"q": "host == \"n1\" and op == \"close\"", "ok": true, "tree": "(host == \"n1\" and op == \"close\")"}
+{"q": "lat < 2", "ok": true, "tree": "lat < 2"}
+{"q": "upstream == \"u3\"", "ok": true, "tree": "upstream == \"u3\""}
+{"q": "status == 404", "ok": true, "tree": "status == 404"}
+{"q": "dur > 100 and cat == 'io'", "ok": true, "tree": "(dur > 100 and cat == \"io\")"}
+{"q": "cat in ['io', 'net']", "ok": true, "tree": "cat in [\"io\", \"net\"]"}
+{"q": "dur >= 150", "ok": true, "tree": "dur >= 150"}
+{"q": "cat ~ '^i'", "ok": true, "tree": "cat ~ \"^i\""}
+{"q": "cat == \"STDIO\"", "ok": true, "tree": "cat == \"STDIO\""}
+{"q": "cat == \"posix\"", "ok": true, "tree": "cat == \"posix\""}
+{"q": "pid == 1", "ok": true, "tree": "pid == 1"}
+{"q": "invalid ==", "ok": false}
+{"q": "pid == 10 or pid == 20", "ok": true, "tree": "(pid == 10 or pid == 20)"}
+{"q": "pid == 999999", "ok": true, "tree": "pid == 999999"}
+{"q": "ts >= 0 and pid == 1", "ok": true, "tree": "(ts >= 0 and pid == 1)"}
+{"q": "cat == \"c\" and ts < 500000", "ok": true, "tree": "(cat == \"c\" and ts < 500000)"}
+{"q": "cat == \"c\" and ts < 1000000", "ok": true, "tree": "(cat == \"c\" and ts < 1000000)"}
+{"q": "cat == \"c\" and ts >= 100000", "ok": true, "tree": "(cat == \"c\" and ts >= 100000)"}
+{"q": "cat == \"c\" and ts < 100000", "ok": true, "tree": "(cat == \"c\" and ts < 100000)"}
+{"q": "cat == \"c\"", "ok": true, "tree": "cat == \"c\""}
+{"q": "size == 201", "ok": true, "tree": "size == 201"}
+{"q": "size == 201.0", "ok": true, "tree": "size == 201"}
+{"q": "size > 250", "ok": true, "tree": "size > 250"}
+{"q": "mode == \"m2\"", "ok": true, "tree": "mode == \"m2\""}
+{"q": "io.off == 3", "ok": true, "tree": "io.off == 3"}
+{"q": "size == 999", "ok": true, "tree": "size == 999"}
+{"q": "size ==", "ok": false}
+{"q": "dur <= 5", "ok": true, "tree": "dur <= 5"}
+{"q": "ok == true", "ok": true, "tree": "ok == true"}
+{"q": "(cat == \"POSIX\" and dur > 1000)", "ok": true, "tree": "(cat == \"POSIX\" and dur > 1000)"}
+{"q": "(cat == \"POSIX\" or cat == \"STDIO\")", "ok": true, "tree": "(cat == \"POSIX\" or cat == \"STDIO\")"}
+{"q": "not (cat == \"POSIX\")", "ok": true, "tree": "not (cat == \"POSIX\")"}
+{"q": "cat not in [\"MPI\"]", "ok": true, "tree": "cat not in [\"MPI\"]"}
+{"q": "name like \"%read%\"", "ok": true, "tree": "name like \"%read%\""}
+{"q": "name ilike \"READ\"", "ok": true, "tree": "name ilike \"READ\""}
+{"q": "name ~ \"^p?read$\"", "ok": true, "tree": "name ~ \"^p?read$\""}
+{"q": "name ~* \"READ\"", "ok": true, "tree": "name ~* \"READ\""}
+{"q": "args.file like \"%tmp%\"", "ok": true, "tree": "args.file like \"%tmp%\""}
+{"q": "args.file like \"%a\\%b\\_c%\"", "ok": true, "tree": "args.file like \"%a\\%b\\_c%\""}
+{"q": "\"tmp\" in args.file", "ok": true, "tree": "\"tmp\" in args.file"}
+{"q": "name like \"pre%\"", "ok": true, "tree": "name like \"pre%\""}
+{"q": "name like \"%64\"", "ok": true, "tree": "name like \"%64\""}
+{"q": "resolved.hhash.name == \"node01\"", "ok": true, "tree": "resolved.hhash.name == \"node01\""}
+{"q": "resolved.fhash.path like \"%/scratch/%\"", "ok": true, "tree": "resolved.fhash.path like \"%/scratch/%\""}
+{"q": "args.level == \"DEBUG\"", "ok": true, "tree": "args.level == \"DEBUG\""}
+{"q": "cqe.raw_ns > 100", "ok": true, "tree": "cqe.raw_ns > 100"}
+{"q": "args.cqe.raw_ns > 100", "ok": true, "tree": "args.cqe.raw_ns > 100"}
+{"q": "dur > 4", "ok": true, "tree": "dur > 4"}
+{"q": "cat like \"%io%\"", "ok": true, "tree": "cat like \"%io%\""}
+{"q": "cat == \"io\"", "ok": true, "tree": "cat == \"io\""}
+{"q": "cat in [\"POSIX\"]", "ok": true, "tree": "cat in [\"POSIX\"]"}
+{"q": "dur > 0", "ok": true, "tree": "dur > 0"}
+{"q": "any(tags) == \"a\"", "ok": true, "tree": "any(tags) == \"a\""}
+{"q": "any(sizes) > 10", "ok": true, "tree": "any(sizes) > 10"}
+{"q": "any(tags) in [\"a\", \"b\"]", "ok": true, "tree": "any(tags) in [\"a\", \"b\"]"}
+{"q": "not any(tags) == \"a\"", "ok": true, "tree": "not (any(tags) == \"a\")"}
+{"q": "tags == '{\"a\": 2, \"b\": 1}'", "ok": true, "tree": "tags == '{\"a\": 2, \"b\": 1}'"}
+{"q": "upstream == \"u2\"", "ok": true, "tree": "upstream == \"u2\""}
+{"q": "resolved.exec_hash.value like \"%laghos%\"", "ok": true, "tree": "resolved.exec_hash.value like \"%laghos%\""}
+{"q": "resolved.fpath == \"/data/f.dat\"", "ok": true, "tree": "resolved.fpath == \"/data/f.dat\""}
+{"q": "ret > 102", "ok": true, "tree": "ret > 102"}
+{"q": "name != \"B\"", "ok": true, "tree": "name != \"B\""}
+{"q": "dur.p99 > 1000", "ok": true, "tree": "dur.p99 > 1000"}
+{"q": "dur > 1", "ok": true, "tree": "dur > 1"}
+{"q": "cat == \"APP\"", "ok": true, "tree": "cat == \"APP\""}
+{"q": "cat == \"POSIX\" and dur > 100", "ok": true, "tree": "(cat == \"POSIX\" and dur > 100)"}
+{"q": "pid in [1, 2, 3]", "ok": true, "tree": "pid in [1, 2, 3]"}
+{"q": "dur > 50", "ok": true, "tree": "dur > 50"}
+{"q": "off < -5", "ok": true, "tree": "off < -5"}
+{"q": "ratio == 1.5", "ok": true, "tree": "ratio == 1.5"}
+{"q": "cat == \"POSIX\" and dur > 50", "ok": true, "tree": "(cat == \"POSIX\" and dur > 50)"}
+{"q": "not (cat == \"STDIO\" or cat == \"MPI\")", "ok": true, "tree": "not ((cat == \"STDIO\" or cat == \"MPI\"))"}
+{"q": "name like \"MPI_%\"", "ok": true, "tree": "name like \"MPI_%\""}
+{"q": "pid not in [1, 2, 3]", "ok": true, "tree": "pid not in [1, 2, 3]"}
+{"q": "any(sizes) > 100", "ok": true, "tree": "any(sizes) > 100"}
+{"q": "cat != \"STDIO\"", "ok": true, "tree": "cat != \"STDIO\""}
+{"q": "dur > 200", "ok": true, "tree": "dur > 200"}
+{"q": "dur >= 100", "ok": true, "tree": "dur >= 100"}
+{"q": "dur < 200", "ok": true, "tree": "dur < 200"}
+{"q": "dur <= 100", "ok": true, "tree": "dur <= 100"}
+{"q": "dur == 100", "ok": true, "tree": "dur == 100"}
+{"q": "score > 3.0", "ok": true, "tree": "score > 3"}
+{"q": "score > 4.0", "ok": true, "tree": "score > 4"}
+{"q": "active == true", "ok": true, "tree": "active == true"}
+{"q": "active == false", "ok": true, "tree": "active == false"}
+{"q": "args.level == \"INFO\"", "ok": true, "tree": "args.level == \"INFO\""}
+{"q": "cqe.raw_ns == 42", "ok": true, "tree": "cqe.raw_ns == 42"}
+{"q": "args.cqe.raw_ns == 42", "ok": true, "tree": "args.cqe.raw_ns == 42"}
+{"q": "mlx5.op == \"SEND\"", "ok": true, "tree": "mlx5.op == \"SEND\""}
+{"q": "args.mlx5.op == \"SEND\"", "ok": true, "tree": "args.mlx5.op == \"SEND\""}
+{"q": "cqe.raw_ns == 7", "ok": true, "tree": "cqe.raw_ns == 7"}
+{"q": "a.b == 5", "ok": true, "tree": "a.b == 5"}
+{"q": "missing == \"x\"", "ok": true, "tree": "missing == \"x\""}
+{"q": "missing > 0", "ok": true, "tree": "missing > 0"}
+{"q": "cat > 100", "ok": true, "tree": "cat > 100"}
+{"q": "dur == \"hello\"", "ok": true, "tree": "dur == \"hello\""}
+{"q": "cat not in [\"POSIX\", \"STDIO\"]", "ok": true, "tree": "cat not in [\"POSIX\", \"STDIO\"]"}
+{"q": "cat == \"POSIX\" and dur > 200", "ok": true, "tree": "(cat == \"POSIX\" and dur > 200)"}
+{"q": "cat == \"POSIX\" or cat == \"STDIO\"", "ok": true, "tree": "(cat == \"POSIX\" or cat == \"STDIO\")"}
+{"q": "not cat == \"POSIX\"", "ok": true, "tree": "not (cat == \"POSIX\")"}
+{"q": "(cat == \"POSIX\" and dur > 100) or name == \"write\"", "ok": true, "tree": "((cat == \"POSIX\" and dur > 100) or name == \"write\")"}
+{"q": "(cat == \"STDIO\" and dur > 100) or name == \"write\"", "ok": true, "tree": "((cat == \"STDIO\" and dur > 100) or name == \"write\")"}
+{"q": "pid == -1", "ok": true, "tree": "pid == -1"}
+{"q": "any(tags) == \"c\"", "ok": true, "tree": "any(tags) == \"c\""}
+{"q": "any(tags) != \"a\"", "ok": true, "tree": "any(tags) != \"a\""}
+{"q": "any(sizes) > 1000", "ok": true, "tree": "any(sizes) > 1000"}
+{"q": "any(sizes) > 5000", "ok": true, "tree": "any(sizes) > 5000"}
+{"q": "any(tags) in [\"x\", \"b\"]", "ok": true, "tree": "any(tags) in [\"x\", \"b\"]"}
+{"q": "any(tags) not in [\"a\"]", "ok": true, "tree": "any(tags) not in [\"a\"]"}
+{"q": "any(tags) like \"b%\"", "ok": true, "tree": "any(tags) like \"b%\""}
+{"q": "any(none) == \"a\"", "ok": true, "tree": "any(none) == \"a\""}
+{"q": "any(missing) == \"a\"", "ok": true, "tree": "any(missing) == \"a\""}
+{"q": "any(items) == 1", "ok": true, "tree": "any(items) == 1"}
+{"q": "any(tags) == \"b\"", "ok": true, "tree": "any(tags) == \"b\""}
+{"q": "any(args.sizes) > 100", "ok": true, "tree": "any(args.sizes) > 100"}
+{"q": "a == 1 and b != 2 and c > 3 and d < 4 and e >= 5 and f <= 6", "ok": true, "tree": "(((((a == 1 and b != 2) and c > 3) and d < 4) and e >= 5) and f <= 6)"}
+{"q": "a == 1 and b == 2", "ok": true, "tree": "(a == 1 and b == 2)"}
+{"q": "a == 1 AND b == 2", "ok": true, "tree": "(a == 1 and b == 2)"}
+{"q": "a == 1 And b == 2 Or c == 3", "ok": true, "tree": "((a == 1 and b == 2) or c == 3)"}
+{"q": "x NOT IN [1, 2]", "ok": true, "tree": "x not in [1, 2]"}
+{"q": "x == TRUE and y == False", "ok": true, "tree": "(x == true and y == false)"}
+{"q": "x == -42", "ok": true, "tree": "x == -42"}
+{"q": "x > 3.14", "ok": true, "tree": "x > 3.14"}
+{"q": "x > 1e10", "ok": true, "tree": "x > 1e+10"}
+{"q": "name == \"hello world\"", "ok": true, "tree": "name == \"hello world\""}
+{"q": "name == 'hello'", "ok": true, "tree": "name == \"hello\""}
+{"q": "args.tags[0] == \"x\"", "ok": true, "tree": "args.tags[0] == \"x\""}
+{"q": "x in [1, 2]", "ok": true, "tree": "x in [1, 2]"}
+{"q": "name == \"hello", "ok": false}
+{"q": "cat == \"POSIX\" and dur > 1000", "ok": true, "tree": "(cat == \"POSIX\" and dur > 1000)"}
+{"q": "cat not in [\"POSIX\"]", "ok": true, "tree": "cat not in [\"POSIX\"]"}
+{"q": "a == 1 or b == 2 and c == 3", "ok": true, "tree": "(a == 1 or (b == 2 and c == 3))"}
+{"q": "(a == 1 or b == 2) and c == 3", "ok": true, "tree": "((a == 1 or b == 2) and c == 3)"}
+{"q": "a == 1 AND b == 2 OR c == 3", "ok": true, "tree": "((a == 1 and b == 2) or c == 3)"}
+{"q": "cat ==", "ok": false}
+{"q": "name ~ 'a' or name ~* 'b' or name !~ 'c'", "ok": true, "tree": "((name ~ \"a\" or name ~* \"b\") or name !~ \"c\")"}
+{"q": "name LIKE '%x%' and name ILIKE '%y%'", "ok": true, "tree": "(name like \"%x%\" and name ilike \"%y%\")"}
+{"q": "name like \"%Send%\"", "ok": true, "tree": "name like \"%Send%\""}
+{"q": "name ilike \"%send%\"", "ok": true, "tree": "name ilike \"%send%\""}
+{"q": "name ~ \"Send\"", "ok": true, "tree": "name ~ \"Send\""}
+{"q": "name ~* \"send\"", "ok": true, "tree": "name ~* \"send\""}
+{"q": "name !~ \"Send\"", "ok": true, "tree": "name !~ \"Send\""}
+{"q": "name not like \"%x%\"", "ok": true, "tree": "name not like \"%x%\""}
+{"q": "'send' in name", "ok": true, "tree": "\"send\" in name"}
+{"q": "'send' not in name", "ok": true, "tree": "\"send\" not in name"}
+{"q": "name in [\"a\", \"b\"]", "ok": true, "tree": "name in [\"a\", \"b\"]"}
+{"q": "name ~ \"(unclosed\"", "ok": false}
+{"q": "name ilike \"%s%\"", "ok": true, "tree": "name ilike \"%s%\""}
+{"q": "name ~* \"s\"", "ok": true, "tree": "name ~* \"s\""}
+{"q": "\"send\" in name", "ok": true, "tree": "\"send\" in name"}
+{"q": "\"send\" not in name", "ok": true, "tree": "\"send\" not in name"}
+{"q": "any(sizes) <= 10", "ok": true, "tree": "any(sizes) <= 10"}
+{"q": "any(tags) not in [\"a\", \"b\"]", "ok": true, "tree": "any(tags) not in [\"a\", \"b\"]"}
+{"q": "any(tags) like \"a%\"", "ok": true, "tree": "any(tags) like \"a%\""}
+{"q": "any(tags) ~ \"^a\"", "ok": true, "tree": "any(tags) ~ \"^a\""}
+{"q": "\"sub\" in any(tags)", "ok": true, "tree": "\"sub\" in any(tags)"}
+{"q": "(any(tags) == \"a\" and not (x == 1))", "ok": true, "tree": "(any(tags) == \"a\" and not (x == 1))"}
+{"q": "any(args.tags) == \"a\"", "ok": true, "tree": "any(args.tags) == \"a\""}
+{"q": "any == 1", "ok": true, "tree": "any == 1"}
+{"q": "any( == 1", "ok": false}
+{"q": "any(tags == 1", "ok": false}
+{"q": "cat == \"POSIX\" AND dur > 50", "ok": true, "tree": "(cat == \"POSIX\" and dur > 50)"}
+{"q": "cat NOT IN [\"STDIO\", \"MPI\"]", "ok": true, "tree": "cat not in [\"STDIO\", \"MPI\"]"}
+{"q": "fhash == \"abc\"", "ok": true, "tree": "fhash == \"abc\""}
+{"q": "ret == 64", "ok": true, "tree": "ret == 64"}
+{"q": "args.ret == 64", "ok": true, "tree": "args.ret == 64"}
+{"q": "fhash == \"zzz\"", "ok": true, "tree": "fhash == \"zzz\""}
+{"q": "'beef' in fhash", "ok": true, "tree": "\"beef\" in fhash"}
+{"q": "name ilike \"mpi_%\"", "ok": true, "tree": "name ilike \"mpi_%\""}
+{"q": "name ~ \"MPI_(Send|Recv)\"", "ok": true, "tree": "name ~ \"MPI_(Send|Recv)\""}
+{"q": "name ~* \"send|recv\"", "ok": true, "tree": "name ~* \"send|recv\""}
+{"q": "name !~ \"Init\"", "ok": true, "tree": "name !~ \"Init\""}
+{"q": "'send' in name or 'recv' in name", "ok": true, "tree": "(\"send\" in name or \"recv\" in name)"}
+{"q": "'init' not in name", "ok": true, "tree": "\"init\" not in name"}
+{"q": "name ~ \"x\"", "ok": true, "tree": "name ~ \"x\""}
+{"q": "'send' in name and cat == \"MPI\"", "ok": true, "tree": "(\"send\" in name and cat == \"MPI\")"}
+{"q": "pid == 1 or tid == 2", "ok": true, "tree": "(pid == 1 or tid == 2)"}
+{"q": "not cat == \"STDIO\"", "ok": true, "tree": "not (cat == \"STDIO\")"}
+{"q": "pid == 1 and dur > 50", "ok": true, "tree": "(pid == 1 and dur > 50)"}
+{"q": "pid == 1 or pid == 2", "ok": true, "tree": "(pid == 1 or pid == 2)"}
+{"q": "any(tags) == \"a\" and cat == \"POSIX\"", "ok": true, "tree": "(any(tags) == \"a\" and cat == \"POSIX\")"}
+{"q": "dur > 100", "ok": true, "tree": "dur > 100"}
+{"q": "cat == \"io\" and (name == \"read\" or name == \"write\")", "ok": true, "tree": "(cat == \"io\" and (name == \"read\" or name == \"write\"))"}
+{"q": "ts > 0", "ok": true, "tree": "ts > 0"}
+{"q": "ts > 5", "ok": true, "tree": "ts > 5"}
+{"q": "dur >= 0", "ok": true, "tree": "dur >= 0"}
+{"q": "dur < 1000", "ok": true, "tree": "dur < 1000"}
+{"q": "dur < 500", "ok": true, "tree": "dur < 500"}
+{"q": "ts >= 100 and ts <= 1000", "ok": true, "tree": "(ts >= 100 and ts <= 1000)"}
+{"q": "ts >= 200 and ts <= 500", "ok": true, "tree": "(ts >= 200 and ts <= 500)"}
+{"q": "dur < 100", "ok": true, "tree": "dur < 100"}
+{"q": "pid in [1, 2, 7]", "ok": true, "tree": "pid in [1, 2, 7]"}
+{"q": "pid in [1, 7]", "ok": true, "tree": "pid in [1, 7]"}
+{"q": "pid in [1, 2]", "ok": true, "tree": "pid in [1, 2]"}
+{"q": "pid in [1, 3]", "ok": true, "tree": "pid in [1, 3]"}
+{"q": "dur >= 50", "ok": true, "tree": "dur >= 50"}
+{"q": "dur >= 50 and dur <= 200", "ok": true, "tree": "(dur >= 50 and dur <= 200)"}
+{"q": "dur in [100, 150]", "ok": true, "tree": "dur in [100, 150]"}
+{"q": "dur == 10", "ok": true, "tree": "dur == 10"}
+{"q": "dur in [100, 500]", "ok": true, "tree": "dur in [100, 500]"}
+{"q": "(name == \"read\" or name == \"write\") and dur > 100", "ok": true, "tree": "((name == \"read\" or name == \"write\") and dur > 100)"}
+{"q": "name == \"read\" or name == \"write\" or name == \"open\"", "ok": true, "tree": "((name == \"read\" or name == \"write\") or name == \"open\")"}
+{"q": "name == \"read\" or name == \"close\"", "ok": true, "tree": "(name == \"read\" or name == \"close\")"}
+{"q": "dur < 10 or dur > 100", "ok": true, "tree": "(dur < 10 or dur > 100)"}
+{"q": "dur < 5 or dur > 200", "ok": true, "tree": "(dur < 5 or dur > 200)"}
+{"q": "name in [\"read\", \"write\", \"open\"]", "ok": true, "tree": "name in [\"read\", \"write\", \"open\"]"}
+{"q": "name in [\"read\", \"close\"]", "ok": true, "tree": "name in [\"read\", \"close\"]"}
+{"q": "name == \"read\" or pid == 1", "ok": true, "tree": "(name == \"read\" or pid == 1)"}
+{"q": "name == \"write\"", "ok": true, "tree": "name == \"write\""}
+{"q": "not (name == \"posix\")", "ok": true, "tree": "not (name == \"posix\")"}
+{"q": "name like \"%read%\" and dur > 100", "ok": true, "tree": "(name like \"%read%\" and dur > 100)"}
+{"q": "name like \"%write%\"", "ok": true, "tree": "name like \"%write%\""}
+{"q": "sizes > 50", "ok": true, "tree": "sizes > 50"}
+{"q": "any(sizes) > 50", "ok": true, "tree": "any(sizes) > 50"}
+{"q": "sizes > 100", "ok": true, "tree": "sizes > 100"}
+{"q": "any(sizes) > 50 and any(sizes) < 60", "ok": true, "tree": "(any(sizes) > 50 and any(sizes) < 60)"}
+{"q": "any(sizes) > 55 and any(sizes) < 58", "ok": true, "tree": "(any(sizes) > 55 and any(sizes) < 58)"}
+{"q": "cat == \"HDF5\"", "ok": true, "tree": "cat == \"HDF5\""}
+{"q": "cat == \"POSIX\" and name == \"read\"", "ok": true, "tree": "(cat == \"POSIX\" and name == \"read\")"}
+{"q": "cat == \"POSIX\" and name == \"send\"", "ok": true, "tree": "(cat == \"POSIX\" and name == \"send\")"}
+{"q": "cat == \"STDIO\" or name == \"send\"", "ok": true, "tree": "(cat == \"STDIO\" or name == \"send\")"}
+{"q": "not dur > 300", "ok": true, "tree": "not (dur > 300)"}
+{"q": "dur > \"500\"", "ok": true, "tree": "dur > \"500\""}
+{"q": "cat == \"POSIX\" AND name == \"send\"", "ok": true, "tree": "(cat == \"POSIX\" and name == \"send\")"}
+{"q": "name == \"absent\" OR name == \"read\"", "ok": true, "tree": "(name == \"absent\" or name == \"read\")"}
+{"q": "name == \"read\" AND name == \"absent\"", "ok": true, "tree": "(name == \"read\" and name == \"absent\")"}
+{"q": "resolved.fhash.path ~ \"train\"", "ok": true, "tree": "resolved.fhash.path ~ \"train\""}
+{"q": "cat == \"POSIX\" and dur > 10", "ok": true, "tree": "(cat == \"POSIX\" and dur > 10)"}
+{"q": "resolved.fpath == \"/var/log/run.txt\"", "ok": true, "tree": "resolved.fpath == \"/var/log/run.txt\""}
+{"q": "resolved.fhash.path == \"/scratch/data/train.h5\"", "ok": true, "tree": "resolved.fhash.path == \"/scratch/data/train.h5\""}
+{"q": "resolved.fhash.path != \"/var/log/run.txt\"", "ok": true, "tree": "resolved.fhash.path != \"/var/log/run.txt\""}
+{"q": "resolved.fhash.path ~ \"/scratch/.*\\.h5\"", "ok": true, "tree": "resolved.fhash.path ~ \"/scratch/.*\\.h5\""}
+{"q": "'TRAIN' in resolved.fhash.path", "ok": true, "tree": "\"TRAIN\" in resolved.fhash.path"}
+{"q": "resolved.fhash.path like \"/scratch/%\"", "ok": true, "tree": "resolved.fhash.path like \"/scratch/%\""}
+{"q": "resolved.fhash.path !~ \"\\.h5\"", "ok": true, "tree": "resolved.fhash.path !~ \"\\.h5\""}
+{"q": "resolved.hhash.name ilike \"NODE%\"", "ok": true, "tree": "resolved.hhash.name ilike \"NODE%\""}
+{"q": "resolved.fhash.path ~ \"nonexistent\"", "ok": true, "tree": "resolved.fhash.path ~ \"nonexistent\""}
+{"q": "'scratch' in resolved.fhash.path", "ok": true, "tree": "\"scratch\" in resolved.fhash.path"}
+{"q": "cat == \"POSIX\" and 'train' in resolved.fhash.path", "ok": true, "tree": "(cat == \"POSIX\" and \"train\" in resolved.fhash.path)"}
+{"q": "resolved.fhash.path == \"/scratch/data/shared.h5\"", "ok": true, "tree": "resolved.fhash.path == \"/scratch/data/shared.h5\""}
+{"q": "any(tags) == \"t7\"", "ok": true, "tree": "any(tags) == \"t7\""}
+{"q": "not any(tags) == \"t7\"", "ok": true, "tree": "not (any(tags) == \"t7\")"}
+{"q": "any(sizes) >= 2990", "ok": true, "tree": "any(sizes) >= 2990"}
+{"q": "any(tags) == \"absent\"", "ok": true, "tree": "any(tags) == \"absent\""}
+{"q": "any(tags) == \"t3\"", "ok": true, "tree": "any(tags) == \"t3\""}
+{"q": "any(tags) in [\"t1\", \"t2\"]", "ok": true, "tree": "any(tags) in [\"t1\", \"t2\"]"}
+{"q": "any(sizes) < 1", "ok": true, "tree": "any(sizes) < 1"}
+{"q": "any(tags) != \"t0\"", "ok": true, "tree": "any(tags) != \"t0\""}
+{"q": "any(tags) == \"rare\"", "ok": true, "tree": "any(tags) == \"rare\""}
+{"q": "dur >= 4500", "ok": true, "tree": "dur >= 4500"}
+{"q": "tid == 7", "ok": true, "tree": "tid == 7"}
+{"q": "dur <= 49", "ok": true, "tree": "dur <= 49"}
+{"q": "io.off > 12000000", "ok": true, "tree": "io.off > 12000000"}
+{"q": "args.name == \"time_metric\"", "ok": true, "tree": "args.name == \"time_metric\""}
+{"q": "args.name == \"nope\"", "ok": true, "tree": "args.name == \"nope\""}
+{"q": "name == \"open\"", "ok": true, "tree": "name == \"open\""}
+{"q": "args.name == \"t37\"", "ok": true, "tree": "args.name == \"t37\""}
+{"q": "ph == \"M\"", "ok": true, "tree": "ph == \"M\""}
+{"q": "name == \"FH\"", "ok": true, "tree": "name == \"FH\""}
+{"q": "dur >= 1", "ok": true, "tree": "dur >= 1"}
+{"q": "dur >= 2", "ok": true, "tree": "dur >= 2"}
+{"q": "fhash == \"fh1\"", "ok": true, "tree": "fhash == \"fh1\""}
+{"q": "resolved.fhash.path == \"/data/f10\"", "ok": true, "tree": "resolved.fhash.path == \"/data/f10\""}
+{"q": "resolved.fhash.path like \"/data/f%\"", "ok": true, "tree": "resolved.fhash.path like \"/data/f%\""}
+{"q": "fhash like \"k%\"", "ok": true, "tree": "fhash like \"k%\""}
+{"q": "resolved.fpath == \"/data/f10\"", "ok": true, "tree": "resolved.fpath == \"/data/f10\""}
+{"q": "tags == '[\"a\", \"b\"]'", "ok": true, "tree": "tags == '[\"a\", \"b\"]'"}
+{"q": "tags == \"[1, 2]\"", "ok": true, "tree": "tags == \"[1, 2]\""}
+{"q": "tags != \"[1,2]\"", "ok": true, "tree": "tags != \"[1,2]\""}
+{"q": "lat == \"n/a\"", "ok": true, "tree": "lat == \"n/a\""}
+{"q": "dur < 25", "ok": true, "tree": "dur < 25"}
+{"q": "dur >= 25", "ok": true, "tree": "dur >= 25"}
+{"q": "cat in [\"POSIX\", \"STDIO\"] and dur >= 10", "ok": true, "tree": "(cat in [\"POSIX\", \"STDIO\"] and dur >= 10)"}
+{"q": "cat == \"NOPE\"", "ok": true, "tree": "cat == \"NOPE\""}
+{"q": "dur > 25", "ok": true, "tree": "dur > 25"}
+{"q": "fname == \"/a\"", "ok": true, "tree": "fname == \"/a\""}
+{"q": "fname == \"/b\"", "ok": true, "tree": "fname == \"/b\""}
+{"q": "(name == \"read\") and (dur > 20)", "ok": true, "tree": "(name == \"read\" and dur > 20)"}
+{"q": "name == \"fwrite\"", "ok": true, "tree": "name == \"fwrite\""}
+{"q": "cat == \"NONEXISTENT\"", "ok": true, "tree": "cat == \"NONEXISTENT\""}
+{"q": "ts >= 0 and ts <= 100000", "ok": true, "tree": "(ts >= 0 and ts <= 100000)"}
+{"q": "name == \"does_not_exist\"", "ok": true, "tree": "name == \"does_not_exist\""}
+{"q": "name != \"flat\"", "ok": true, "tree": "name != \"flat\""}
+{"q": "name == \"start\"", "ok": true, "tree": "name == \"start\""}
+{"q": "fhash == \"fhAAA\"", "ok": true, "tree": "fhash == \"fhAAA\""}
+{"q": "hhash == \"hhZ\"", "ok": true, "tree": "hhash == \"hhZ\""}
+{"q": "v > 2990", "ok": true, "tree": "v > 2990"}
+{"q": "v > 5000", "ok": true, "tree": "v > 5000"}
+{"q": "ret >= 100000", "ok": true, "tree": "ret >= 100000"}
+{"q": "args.ret >= 100000", "ok": true, "tree": "args.ret >= 100000"}
+{"q": "dur > 1000000", "ok": true, "tree": "dur > 1000000"}
+{"q": "dur >= 1000 and cat == \"POSIX\"", "ok": true, "tree": "(dur >= 1000 and cat == \"POSIX\")"}
+{"q": "cat == \"POSIX\" and name in [\"read\", \"write\"]", "ok": true, "tree": "(cat == \"POSIX\" and name in [\"read\", \"write\"])"}
+{"q": "cat == \"POSIX\" OR cat == \"STDIO\"", "ok": true, "tree": "(cat == \"POSIX\" or cat == \"STDIO\")"}
+{"q": "cat == \"POSIX\" AND name == \"write\"", "ok": true, "tree": "(cat == \"POSIX\" and name == \"write\")"}
+{"q": "hhash == \"abc123\"", "ok": true, "tree": "hhash == \"abc123\""}
+{"q": "pid == 1234 and ts >= 1000000 and ts < 2000000", "ok": true, "tree": "((pid == 1234 and ts >= 1000000) and ts < 2000000)"}
+{"q": "rank == 0", "ok": true, "tree": "rank == 0"}
+{"q": "rank == 1", "ok": true, "tree": "rank == 1"}
+{"q": "cat == \"POSIX\" and dur >= 1000", "ok": true, "tree": "(cat == \"POSIX\" and dur >= 1000)"}
+{"q": "op == \"read\" and io.off > 4096", "ok": true, "tree": "(op == \"read\" and io.off > 4096)"}
+{"q": "tags == '[\"api\", \"v1\"]'", "ok": true, "tree": "tags == '[\"api\", \"v1\"]'"}
+{"q": "status >= 500", "ok": true, "tree": "status >= 500"}
+{"q": "dur >= 1000", "ok": true, "tree": "dur >= 1000"}
+{"q": "resolved.run.app == \"laghos\"", "ok": true, "tree": "resolved.run.app == \"laghos\""}
+{"q": "name == 'RUN'", "ok": true, "tree": "name == \"RUN\""}
+{"q": "name == 'read'", "ok": true, "tree": "name == \"read\""}
+{"q": "cat == 'POSIX'", "ok": true, "tree": "cat == \"POSIX\""}
+{"q": "dur > 400", "ok": true, "tree": "dur > 400"}

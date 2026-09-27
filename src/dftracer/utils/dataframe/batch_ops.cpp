@@ -1,5 +1,6 @@
 #include <dftracer/utils/core/common/hash/fnv1a.h>       // string cell hashing
 #include <dftracer/utils/core/common/hash/splitmix64.h>  // row/cell hashing
+#include <dftracer/utils/core/common/to_chars.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
@@ -14,12 +15,15 @@
 #include <dftracer/utils/dataframe/kernels/group_by.h>
 #include <dftracer/utils/dataframe/kernels/sort.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/json/json_escape.h>
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <map>
+#include <numeric>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -172,15 +176,69 @@ DataFrame topk(const DataFrame& b, const std::string& name, std::int64_t k,
     return take(b, ind);
 }
 
+Series concat_columns(const std::vector<const Series*>& parts);
+
+// A List or Struct concat: offsets rebased and children concatenated, then
+// the null rows gathered as nulls.
+Series concat_nested(const std::vector<Series>& mats, std::int64_t total,
+                     bool any_null) {
+    Series out;
+    if (mats.front().type() == TypeId::List) {
+        std::vector<std::int32_t> offs{0};
+        std::vector<Series> kids;
+        for (const Series& m : mats) {
+            const std::int32_t* o = m.offsets();
+            for (std::int64_t i = 0; i < m.length(); ++i)
+                offs.push_back(offs.back() + (o[i + 1] - o[i]));
+            const Series child = m.child(0);
+            const std::int64_t len = o[m.length()] - o[0];
+            if (o[0] == 0 && len == child.length()) {
+                kids.push_back(child.share());
+            } else {
+                std::vector<std::int64_t> rows(static_cast<std::size_t>(len));
+                std::iota(rows.begin(), rows.end(), std::int64_t{o[0]});
+                kids.push_back(child.take(rows));
+            }
+        }
+        std::vector<const Series*> ptrs;
+        for (const Series& k : kids) ptrs.push_back(&k);
+        out = Series::list(offs, concat_columns(ptrs));
+    } else {
+        std::vector<std::string> names;
+        std::vector<Series> fields;
+        for (std::int64_t f = 0; f < mats.front().num_children(); ++f) {
+            names.push_back(mats.front().field_name(f));
+            std::vector<Series> kids;
+            for (const Series& m : mats) kids.push_back(m.child(f));
+            std::vector<const Series*> ptrs;
+            for (const Series& k : kids) ptrs.push_back(&k);
+            fields.push_back(concat_columns(ptrs));
+        }
+        out = Series::structs(std::move(names), std::move(fields));
+    }
+    if (!any_null) return out;
+    std::vector<std::int64_t> idx;
+    idx.reserve(static_cast<std::size_t>(total));
+    for (const Series& m : mats)
+        for (std::int64_t i = 0; i < m.length(); ++i)
+            idx.push_back(m.is_null(i) ? -1
+                                       : static_cast<std::int64_t>(idx.size()));
+    return out.take(idx);
+}
+
 Series concat_columns(const std::vector<const Series*>& parts) {
     if (parts.empty()) return Series{};
     // Materialize each part to FLAT so the value buffers are contiguous; concat
     // is a merge, so it copies (a single-buffer column can't alias many
     // inputs).
+    // A JSON part makes the whole column JSON, its text parts quoted.
+    const bool json = std::any_of(parts.begin(), parts.end(),
+                                  [](const Series* p) { return p->is_json(); });
     std::vector<Series> mats;
     mats.reserve(parts.size());
     for (const Series* p : parts)
-        mats.emplace_back(p->encoding() == Encoding::Flat
+        mats.emplace_back(json ? to_json_series(*p)
+                          : p->encoding() == Encoding::Flat
                               ? p->share()
                               : Series{dftu_series_materialize(p->handle())});
 
@@ -195,7 +253,8 @@ Series concat_columns(const std::vector<const Series*>& parts) {
         // FixedSizeBinary also refuses here: dftu_series_new_flat below has no
         // fixed_size parameter to record on the result, so it cannot build one
         // even when the width itself is known.
-        if (t != TypeId::String && t != TypeId::Bool && !byte_width(t))
+        if (t != TypeId::String && t != TypeId::Bool && t != TypeId::List &&
+            t != TypeId::Struct && !byte_width(t))
             throw std::invalid_argument(std::string("concat: column type '") +
                                         type_name(t) + "' is unsupported");
         total += m.length();
@@ -240,6 +299,8 @@ Series concat_columns(const std::vector<const Series*>& parts) {
             copy_bits(validity.data(), i, h->validity->data(), true);
         }
     }
+    if (t == TypeId::List || t == TypeId::Struct)
+        return concat_nested(mats, total, any_null);
     const std::uint8_t* vptr = any_null ? validity.data() : nullptr;
 
     if (t == TypeId::String) {
@@ -253,9 +314,11 @@ Series concat_columns(const std::vector<const Series*>& parts) {
                     static_cast<std::int32_t>(data.size());
                 ++r;
             }
-        return Series{
+        Series out{
             dftu_series_new_string(static_cast<dftu_dtype>(TypeId::String),
                                    offs.data(), data.data(), total, vptr)};
+        if (json) return out.as_json();
+        return out;
     }
 
     // The value buffer is built in place, one part per task, and adopted by
@@ -459,9 +522,9 @@ std::string scalar_cell_to_string(const Series& s, std::int64_t i) {
         case TypeId::Uint64:
             return std::to_string(s.data<std::uint64_t>()[i]);
         case TypeId::Float32:
-            return std::to_string(s.data<float>()[i]);
+            return dftracer::utils::float_text(s.data<float>()[i]);
         case TypeId::Float64:
-            return std::to_string(s.data<double>()[i]);
+            return dftracer::utils::double_text(s.data<double>()[i]);
         case TypeId::String:
         case TypeId::Binary:
             return std::string(s.string_at(i));
@@ -516,24 +579,79 @@ Series to_string_series(const Series& s) {
                            any_null ? vbits.data() : nullptr);
 }
 
+}  // namespace
+
+Series to_json_series(const Series& s) {
+    if (s.is_json()) return s.share();
+    const Series flat = s.encoding() == Encoding::Flat
+                            ? s.share()
+                            : Series{dftu_series_materialize(s.handle())};
+    const TypeId t = flat.type();
+    const std::int64_t n = flat.length();
+    const bool scalar = t == TypeId::String || t == TypeId::Bool ||
+                        (t >= TypeId::Int8 && t <= TypeId::Float64) ||
+                        t == TypeId::Float16;
+    if (!scalar) return Series::nulls(TypeId::String, n).as_json();
+    std::vector<std::string> owned(static_cast<std::size_t>(n));
+    std::vector<std::string_view> vals(static_cast<std::size_t>(n));
+    std::vector<std::uint8_t> vbits(static_cast<std::size_t>((n + 7) / 8), 0);
+    bool any_null = false;
+    for (std::int64_t i = 0; i < n; ++i) {
+        std::string& cell = owned[static_cast<std::size_t>(i)];
+        bool valid = !flat.is_null(i);
+        if (valid && t == TypeId::String) {
+            cell += '"';
+            json::append_json_escaped(cell, flat.string_at(i));
+            cell += '"';
+        } else if (valid) {
+            const bool real = t == TypeId::Float64 || t == TypeId::Float32;
+            // NaN and infinities have no JSON form.
+            if (real && !std::isfinite(
+                            t == TypeId::Float64
+                                ? flat.data<double>()[i]
+                                : static_cast<double>(flat.data<float>()[i])))
+                valid = false;
+            else
+                cell = scalar_cell_to_string(flat, i);
+        }
+        if (!valid) {
+            any_null = true;
+            continue;
+        }
+        vals[static_cast<std::size_t>(i)] = cell;
+        vbits[static_cast<std::size_t>(i >> 3)] |=
+            static_cast<std::uint8_t>(1u << (i & 7));
+    }
+    return Series::strings(std::span<const std::string_view>(vals),
+                           any_null ? vbits.data() : nullptr)
+        .as_json();
+}
+
+namespace {
+
 bool is_numeric_type(TypeId t) {
     return t != TypeId::String && t != TypeId::Binary && t != TypeId::Bool &&
            t != TypeId::List && t != TypeId::Struct;
 }
 
 // The type the same-named column takes across parts. Same type stays; a mix of
-// numeric types widens to Float64; a scalar String/number clash unifies on
-// String; any other clash (nested vs scalar) has no common type and throws.
-TypeId promote_type(TypeId a, TypeId b, const std::string& name) {
-    if (a == b) return a;
-    if (is_numeric_type(a) && is_numeric_type(b)) return TypeId::Float64;
-    // A scalar arg whose value is a string in one part and a number in another
-    // (build_row_frame infers a column's type per batch) unifies on String,
-    // numbers stringified, rather than aborting the whole concat.
-    const bool a_scalar = a != TypeId::List && a != TypeId::Struct;
-    const bool b_scalar = b != TypeId::List && b != TypeId::Struct;
-    if ((a == TypeId::String && b_scalar) || (b == TypeId::String && a_scalar))
-        return TypeId::String;
+// numeric types widens to Float64; a scalar clash of text with a number or
+// bool, or with a JSON part, is JSON, so each value keeps its JSON type (a
+// row frame's column type is inferred per batch); a nested/scalar clash has no
+// common type and throws.
+struct ColumnKind {
+    TypeId type;
+    bool json;
+};
+
+ColumnKind promote_type(ColumnKind a, ColumnKind b, const std::string& name) {
+    if (a.type == b.type && a.json == b.json) return a;
+    const bool a_scalar = a.type != TypeId::List && a.type != TypeId::Struct;
+    const bool b_scalar = b.type != TypeId::List && b.type != TypeId::Struct;
+    if (!a.json && !b.json && is_numeric_type(a.type) &&
+        is_numeric_type(b.type))
+        return {TypeId::Float64, false};
+    if (a_scalar && b_scalar) return {TypeId::String, true};
     throw std::invalid_argument("concat(diagonal): column '" + name +
                                 "' has incompatible types across parts");
 }
@@ -541,12 +659,12 @@ TypeId promote_type(TypeId a, TypeId b, const std::string& name) {
 DataFrame concat_diagonal(const std::vector<const DataFrame*>& parts) {
     // Column order = first appearance; track each column's promoted type.
     std::vector<std::string> names;
-    std::vector<TypeId> types;
+    std::vector<ColumnKind> types;
     std::unordered_map<std::string, std::size_t> idx;
     for (const DataFrame* p : parts)
         for (std::size_t c = 0; c < p->names.size(); ++c) {
             const std::string& nm = p->names[c];
-            const TypeId t = p->columns[c].type();
+            const ColumnKind t{p->columns[c].type(), p->columns[c].is_json()};
             auto it = idx.find(nm);
             if (it == idx.end()) {
                 idx.emplace(nm, names.size());
@@ -561,7 +679,8 @@ DataFrame concat_diagonal(const std::vector<const DataFrame*>& parts) {
     out.names = names;
     out.columns.reserve(names.size());
     for (std::size_t c = 0; c < names.size(); ++c) {
-        const TypeId target = types[c];
+        const ColumnKind kind = types[c];
+        const TypeId target = kind.type;
         // Hold cast/null-filled parts alive while concat_columns reads them.
         std::vector<Series> owned;
         owned.reserve(parts.size());
@@ -575,10 +694,13 @@ DataFrame concat_diagonal(const std::vector<const DataFrame*>& parts) {
                     break;
                 }
             if (at < 0) {
-                owned.push_back(Series::nulls(target, p->num_rows()));
+                Series nulls = Series::nulls(target, p->num_rows());
+                owned.push_back(kind.json ? nulls.as_json() : std::move(nulls));
             } else {
                 const Series& src = p->columns[static_cast<std::size_t>(at)];
-                if (src.type() == target)
+                if (kind.json)
+                    owned.push_back(to_json_series(src));
+                else if (src.type() == target)
                     owned.push_back(src.share());
                 else if (target == TypeId::String)
                     owned.push_back(to_string_series(src));

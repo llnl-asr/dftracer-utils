@@ -1,4 +1,4 @@
-:description: Reference for the dftracer_* command-line tools and their shared pipeline, indexing, and query flags for working with trace files.
+:description: Reference for the dftracer_* command-line tools and their shared pipeline, indexing, and duql flags for working with trace files.
 
 Command-Line Tools
 ==================
@@ -46,10 +46,12 @@ repeated in each tool's section.
   size their output gzip members to match. See :ref:`multi-member-gzip`.
 - ``-f, --force`` - Force index recreation
 
-**Query** (``QueryArgs``)
+**duql** (``DuqlArgs``)
 
-- ``--query <query>`` - Query DSL filter
+- ``--duql <duql>`` - duql filter
   (e.g., ``'cat == "POSIX" and dur > 1000'``)
+- ``--duql-path PATH`` - Load the ``.duql`` macro file or directory PATH
+  (repeatable), after ``$DFTRACER_DUQL_PATH``
 
 **Watchdog** (``WatchdogArgs``)
 
@@ -70,7 +72,8 @@ repeated in each tool's section.
 **Inputs** (``DirectoryArgs`` / ``FilesArgs``)
 
 - ``-d, --directory <path>`` - Directory containing trace files
-- ``--files <files...>`` - Trace files (``.pfw.gz``)
+- ``--files <files...>`` - Trace files (``.pfw``, ``.jsonl``, ``.ndjson``
+  or ``.json``, plain or gzip)
 
 **Logging**
 
@@ -162,7 +165,7 @@ dftracer_split
 **Options:**
 
 - ``-n, --app-name <name>`` - Application name for output files (default: app)
-- ``-d, --directory <path>`` - Input directory containing .pfw.gz files (default: .)
+- ``-d, --directory <path>`` - Input directory containing trace files (``.pfw``, ``.jsonl`` or ``.ndjson``, plain or gzip) (default: .)
 - ``-o, --output <dir>`` - Output directory for split files (default: ./split)
 - ``-s, --chunk-size <MB>`` - Output file size in MB, approximate **compressed** on-disk size (default: 4)
 - ``-f, --force`` - Override existing files and force index recreation
@@ -361,13 +364,14 @@ dftracer_stats
 
 **Options:**
 
-- ``-d, --directory <path>`` - Directory containing .pfw.gz files (default: .)
+- ``-d, --directory <path>`` - Directory containing trace files (``.pfw``, ``.jsonl`` or ``.ndjson``, plain or gzip) (default: .)
 - ``--files <files...>`` - Explicit list of trace files
 - ``--index-dir <path>`` - Directory to store index files (default: system temp directory)
 - ``--report <type>`` - Report type: summary, categories, names, pid_tids, time_range, duration, top-names, top-categories, detailed (default: summary)
 - ``--top-n <count>`` - Number of results for top-N queries (0=show all, default: 0)
 - ``--top-n-pid-tid <count>`` - Max PID:TID pairs to display (0=show all, default: 10)
-- ``--query <query>`` - Query DSL filter (e.g., ``'cat == "POSIX" and dur > 1000'``)
+- ``--duql <duql>`` - duql filter (e.g., ``'cat == "POSIX" and dur > 1000'``)
+- ``--duql-path PATH`` - Load the ``.duql`` macro file or directory PATH (repeatable), after ``$DFTRACER_DUQL_PATH``
 - ``--group-by <dims...>`` - Group-by dimensions: name, cat, pid, tid, fhash, hhash, pid_tid (default: name for detailed)
 - ``--filter-names <names...>`` - Filter by event names
 - ``--filter-cats <cats...>`` - Filter by event categories
@@ -390,7 +394,7 @@ dftracer_stats
     dftracer_stats -d ./traces --report detailed --group-by name --top-n 20
 
     # Filter to POSIX operations only
-    dftracer_stats -d ./traces --report duration --query 'cat == "POSIX"'
+    dftracer_stats -d ./traces --report duration --duql 'cat == "POSIX"'
 
 dftracer_view
 -------------
@@ -406,17 +410,19 @@ dftracer_view
 **Options:**
 
 - ``--files <files...>`` - Trace files to process (.pfw.gz)
-- ``-d, --directory <path>`` - Directory containing trace files
+- ``-d, --directory <path>`` - Directory scanned recursively for trace files (``.pfw``, ``.jsonl`` or ``.ndjson``, plain or gzip)
 - ``--preset <name>`` - Predefined view: io, compute, dlio
 - ``--recipe <path>`` - Custom view JSON file path
 - ``--save-recipe <path>`` - Save the constructed view to a JSON file
-- ``--query <query>`` - Query DSL filter (e.g., ``'cat == "POSIX" and dur > 1000'``)
+- ``--duql <duql>`` - duql filter or pipeline (e.g., ``'cat == "POSIX" | derive ms = dur / 1000 | sort -ms | take 5'``). A pipeline with stages after the scan prints a table and does not combine with aggregation, counters, typed, materialize, call-tree, flamegraph or merge output, nor with ``--save-recipe``
+- ``--param <name=value>`` - Bind a ``--duql`` parameter; the value is a duql literal such as ``5``, ``1.5``, ``'"read"'`` or ``true`` (repeatable)
+- ``--explain`` - Print the plan of ``--duql`` and exit without scanning
 - ``--time-range <min,max>`` - Keep events starting in ``[min, max)``, in microseconds (e.g., 1000000,2000000)
 - ``--min-duration <us>`` - Minimum event duration in microseconds
 - ``--max-duration <us>`` - Maximum event duration in microseconds
 - ``-o, --output <path>`` - Output file path (default: stdout)
-- ``--stream`` - Stream matching events to stdout as NDJSON
-- ``--no-metadata`` - Exclude metadata events (ph=M) from output
+- ``--all`` - Read every record, metadata (ph=M) included, instead of the source's ``data``
+- ``--duql-path PATH`` - Load the ``.duql`` macro file or directory PATH (repeatable), after ``$DFTRACER_DUQL_PATH``
 - ``--index-dir <path>`` - Directory where ``.dftindex`` stores are created
 - ``--no-auto-index`` - Disable automatic index building for files missing ``.dftindex``
 - ``--checkpoint-size <bytes>`` - Checkpoint size for auto-indexing in bytes (default: 33554432 B / 32 MB)
@@ -480,11 +486,11 @@ dftracer_view
     # Extract I/O operations
     dftracer_view --preset io -d ./traces -o io_events.pfw
 
-    # Custom query: POSIX read/write operations
-    dftracer_view -d ./traces --query 'cat == "POSIX" and name in ["read", "write"]' -o posix_rw.pfw
+    # Custom duql filter: POSIX read/write operations
+    dftracer_view -d ./traces --duql 'cat == "POSIX" and name in ["read", "write"]' -o posix_rw.pfw
 
-    # Time-filtered view with output streaming
-    dftracer_view -d ./traces --time-range 1000000,5000000 --stream
+    # Time-filtered view, printed to stdout as NDJSON
+    dftracer_view -d ./traces --time-range 1000000,5000000
 
 dftracer_index
 --------------
@@ -499,7 +505,7 @@ dftracer_index
 
 **Options:**
 
-- ``-d, --directory <path>`` - Input directory containing .pfw.gz files (default: .)
+- ``-d, --directory <path>`` - Input directory containing trace files (``.pfw``, ``.jsonl`` or ``.ndjson``, plain or gzip) (default: .)
 - ``--dimensions <dims>`` - Comma-separated args fields to index by name, nested ones included (e.g., level,mode,io.size)
 - ``--schema <id>`` - Record schema of every trace: a registered id, such as ``dftracer`` or ``generic`` (default: detected per file from its first lines)
 - ``--memory-budget <bytes>`` - Bytes the build may hold at once; past it large files are indexed fewer at a time and spill to disk (default: 0 = about a third of available memory; accepts units such as 512MB)
@@ -799,7 +805,8 @@ dftracer_comparator
 - ``--variant <path>`` - Variant trace file or directory [required unless ``--config``]
 - ``--config <path>`` - JSON config file for hierarchical comparison (replaces ``--baseline``/``--variant``)
 - ``--preset <name>`` - Built-in comparison preset (see **Presets** below). Requires ``--baseline`` and ``--variant``
-- ``--query <query>`` - Query DSL filter. With ``--preset``, ANDed into every top-level node query to narrow results without replacing the preset structure (default: ``'cat == "POSIX" OR cat == "STDIO"'`` for plain mode)
+- ``--duql <duql>`` - duql filter. With ``--preset``, ANDed into every top-level node query to narrow results without replacing the preset structure (default: ``'cat == "POSIX" OR cat == "STDIO"'`` for plain mode)
+- ``--duql-path PATH`` - Load the ``.duql`` macro file or directory PATH (repeatable), after ``$DFTRACER_DUQL_PATH``
 - ``--group-by <keys>`` - Comma-separated group keys (default: cat,name)
 - ``--format <fmt>`` - Output format: ``table`` (default) or ``json``
 - ``-t, --time-interval <ms>`` - Time interval in milliseconds for bucketing (default: 5000)
@@ -827,14 +834,14 @@ dftracer_comparator
 
     # Filter to specific operations
     dftracer_comparator --baseline a.pfw.gz --variant b.pfw.gz \
-        --query 'cat == "POSIX" AND name == "write"'
+        --duql 'cat == "POSIX" AND name == "write"'
 
     # DLIO preset - full hierarchical coverage of all DLIO annotation categories
     dftracer_comparator --preset dlio --baseline ./run_v1 --variant ./run_v2
 
     # DLIO preset narrowed to a single host, with compact output
     dftracer_comparator --preset dlio --baseline ./run_v1 --variant ./run_v2 \
-        --query 'hhash == "abc123"' --compact
+        --duql 'hhash == "abc123"' --compact
 
     # Hierarchical comparison via JSON config
     dftracer_comparator --config compare.json
@@ -896,10 +903,10 @@ and ``--variant``.
         "nodes": [
             {
                 "name": "POSIX I/O",
-                "query": "cat == \"POSIX\"",
+                "duql": "cat == \"POSIX\"",
                 "children": [
-                    {"name": "reads", "query": "name == \"read\""},
-                    {"name": "writes", "query": "name == \"write\""}
+                    {"name": "reads", "duql": "name == \"read\""},
+                    {"name": "writes", "duql": "name == \"write\""}
                 ]
             }
         ]

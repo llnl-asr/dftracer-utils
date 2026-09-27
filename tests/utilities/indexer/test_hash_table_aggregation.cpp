@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
+#include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/index/store/index_database.h>
@@ -85,13 +86,8 @@ TEST_SUITE("hash_table_aggregation") {
         });
         REQUIRE_FALSE(index_path.empty());
 
-        IndexDatabase db(
-            index_path,
-            ::dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-        auto file_paths = db.dict_field("file", "path");
-        CHECK_FALSE(file_paths.empty());
-        auto it = file_paths.find("f00d");
-        REQUIRE(it != file_paths.end());
-        CHECK(it->second == "/scratch/data/x.bin");
+        const ::dftracer::utils::index::plan::GroupResolver files(
+            {{gz, index_path}}, {{"path", "files", "fhash", "path"}});
+        CHECK(files.value("path", "f00d") == "/scratch/data/x.bin");
     }
 }

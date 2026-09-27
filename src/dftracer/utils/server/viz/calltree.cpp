@@ -4,10 +4,10 @@
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
-#include <dftracer/utils/query/query.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
 #include <dftracer/utils/server/json_builder.h>
@@ -18,6 +18,7 @@
 #include <dftracer/utils/server/viz/density.h>
 #include <dftracer/utils/server/viz/handlers.h>
 #include <dftracer/utils/server/viz/internal.h>
+#include <dftracer/utils/server/viz/record_event.h>
 #include <dftracer/utils/server/viz/scan.h>
 #include <dftracer/utils/server/viz/summary_build.h>
 #include <dftracer/utils/server/viz_api.h>
@@ -114,15 +115,15 @@ coro::CoroTask<HttpResponse> handle_viz_calltree(const HttpRequest& req,
         co_return HttpResponse::bad_request(
             "Missing required parameters: begin, end");
 
-    auto win = parse_viz_window(params, index);
+    auto win = parse_viz_window(params, index, req.path);
     if (!win) co_return std::move(win.error());
     double begin = win->begin;
     double end = win->end;
 
-    ViewDefinition view = build_viz_view(params, begin, end, 0);
+    const TraceFields fields(index.record_schema());
+    ViewDefinition view = build_viz_view(params, begin, end, 0, fields);
     // The flame tree keys on ts/dur containment and ignores ph=M metadata, so
     // drop it at the reader to engage the no-metadata fast path.
-    view.with_include_metadata(false);
     int limit = params.get_int("limit", 0);
     if (limit < 0) limit = 0;
 
@@ -134,6 +135,8 @@ coro::CoroTask<HttpResponse> handle_viz_calltree(const HttpRequest& req,
     // ?group=pid, ?group=cat, ?group=host,pid, ... (empty folds every lane
     // together). Any field works, not just pid.
     std::vector<std::string> group = parse_group_param(params);
+    for (auto& g : group)
+        if (g == "pid") g = fields.entity;
     const std::int64_t cap =
         limit > 0 ? limit : std::numeric_limits<std::int64_t>::max();
 
@@ -152,17 +155,22 @@ coro::CoroTask<HttpResponse> handle_viz_calltree(const HttpRequest& req,
     views::View v =
         views::View::from_files(to_view_files(target_files))
             .phase(views::Phase::Events)
-            .metadata(false)
             .cancel_when([&req]() { return req.cancel_token.cancelled(); });
     if (view.query) v = v.filter(*view.query);
-    if (!single_file) v = v.time_range(begin, end);
+    if (!single_file || fields.by_path) v = v.time_range(begin, end);
     if (limit > 0) v = v.head(static_cast<std::int64_t>(cap));
 
     // Hoist the fold arguments to named locals: as co_await full-expression
     // temporaries these vectors/strings would be lifetime-extended into the
     // coroutine frame, which the compiler mishandles.
-    std::vector<std::string> partition{"pid", "tid"};
-    std::string ts_field{"ts"}, dur_field{"dur"}, name_field{"name"};
+    std::vector<std::string> partition;
+    for (const auto* f : {&fields.entity, &fields.lane})
+        if (!f->empty()) partition.push_back(*f);
+    std::string ts_field = fields.time, dur_field = fields.duration,
+                name_field = fields.label;
+    if (ts_field.empty() || dur_field.empty())
+        co_return HttpResponse::ok(
+            R"({"truncated":false,"tree":{"name":"all","total":0,"self":0,"count":0,"children":[]}})");
     dataframe::LazyResult<std::string> partial =
         v.flamegraph_partial(partition, ts_field, dur_field, name_field, group);
     std::string blob = co_await partial.collect();

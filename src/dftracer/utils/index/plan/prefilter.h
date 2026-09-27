@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_PLAN_PREFILTER_H
 #define DFTRACER_UTILS_INDEX_PLAN_PREFILTER_H
 
-#include <dftracer/utils/query/query.h>
+#include <dftracer/utils/duql/query.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -26,7 +26,7 @@ class Prefilter {
    public:
     /// No clauses: every line may match.
     Prefilter() = default;
-    explicit Prefilter(const query::Query& q);
+    explicit Prefilter(const duql::Query& q);
 
     bool empty() const { return clauses_.empty() && ranges_.empty(); }
     bool may_match(std::string_view line) const;
@@ -53,7 +53,7 @@ class Prefilter {
 
     /// `op` a bound, for one number.
     struct Bound {
-        query::CompareOp op;
+        duql::CompareOp op;
         bool integral = true;
         std::int64_t ibound = 0;
         double dbound = 0;

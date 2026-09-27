@@ -143,6 +143,7 @@ set(TEST_CPP_SOURCES
     server/test_cancel.cpp
     server/test_viz_stats_fastpath.cpp
     server/test_viz_aggregated.cpp
+    server/test_viz_schema.cpp
     trace/genesis/test_genesis.cpp
     index/test_indexer.cpp
     index/test_agg_extension.cpp
@@ -304,7 +305,7 @@ add_subdirectory(trace)
 # Query Library Tests
 # +++++++++++++++++++++++++++++++++++++++++
 
-add_subdirectory(query)
+add_subdirectory(duql)
 
 # +++++++++++++++++++++++++++++++++++++++++
 # DataFrame Library Tests

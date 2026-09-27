@@ -55,9 +55,8 @@ constexpr std::uint64_t TINY_BUDGET = 4096;
 // One key column (the per-event name, so the key cardinality is the event
 // count) and a spread of ops: FieldStat-derived, sketch-derived, and a
 // String-repr op, all of which have to survive a serialize/merge round trip.
-::dftu_task* spill_columns(void* slice, const dftu_dataframe* df,
+::dftu_task* spill_columns(void*, const dftu_dataframe* df,
                            const dftu_plugin_host* host) {
-    (void)slice;
     Host h(host);
     const auto acc =
         h.agg(ACC_NAME, {"name"},
@@ -71,9 +70,8 @@ constexpr std::uint64_t TINY_BUDGET = 4096;
 // A nested-output op (list<string>) alongside a flat one: drain cannot
 // vertically concat a List column, so this exercises the single-finalize path
 // through the same spilled runs.
-::dftu_task* spill_nested_columns(void* slice, const dftu_dataframe* df,
+::dftu_task* spill_nested_columns(void*, const dftu_dataframe* df,
                                   const dftu_plugin_host* host) {
-    (void)slice;
     const auto* ext = static_cast<const dftu_svc_agg*>(
         host->get_service(host->h, DFTU_SVC_AGG));
     if (!ext) return nullptr;
@@ -91,7 +89,7 @@ dftu_plugin make_plugin(::dftu_task* (*on_columns)(void*, const dftu_dataframe*,
                                                    const dftu_plugin_host*)) {
     dftu_plugin p{};
     p.abi_version = DFTRACER_PLUGIN_ABI_VERSION;
-    p.plan_query = [](void*) -> const char* { return nullptr; };
+    p.plan_duql = [](void*) -> const char* { return nullptr; };
     p.make_slice = [](void*) -> void* {
         static int sentinel;
         return &sentinel;

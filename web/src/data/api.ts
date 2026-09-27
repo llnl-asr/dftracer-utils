@@ -46,12 +46,16 @@ function newRequestId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
-export function fetchResolve(
-  hashes: string[],
-  type: "file" | "host" = "file",
+/** Column `value` of the rows of source row set `name` whose column `key` is
+ * one of `keys`, by key. */
+export function fetchRowset(
+  name: string,
+  key: string,
+  value: string,
+  keys: string[],
 ): Promise<{ names: Record<string, string> }> {
-  const params = new URLSearchParams({ hash: hashes.join(","), type });
-  return getJson<{ names: Record<string, string> }>(`/api/resolve?${params.toString()}`);
+  const params = new URLSearchParams({ name, key, value, keys: keys.join(",") });
+  return getJson<{ names: Record<string, string> }>(`/api/rowset?${params.toString()}`);
 }
 
 export function cancelRequest(id: string): void {
@@ -110,7 +114,7 @@ export function fetchViz(q: VizQuery, signal?: AbortSignal): Promise<VizResponse
     end: String(Math.ceil(q.end)),
     summary: String(q.summary),
   });
-  if (q.query && q.query.trim()) params.set("query", q.query.trim());
+  if (q.duql && q.duql.trim()) params.set("duql", q.duql.trim());
   if (q.limit && q.limit > 0) params.set("limit", String(q.limit));
   return getJson<VizResponse>(`/api/viz/events?${withFile(params).toString()}`, signal);
 }
@@ -118,12 +122,12 @@ export function fetchViz(q: VizQuery, signal?: AbortSignal): Promise<VizResponse
 export const UNTIMED_PAGE = 200;
 
 export function fetchUntimed(
-  query: string,
+  duql: string,
   offset: number,
   signal?: AbortSignal,
 ): Promise<UntimedResponse> {
   const params = new URLSearchParams({ limit: String(UNTIMED_PAGE), offset: String(offset) });
-  if (query.trim()) params.set("query", query.trim());
+  if (duql.trim()) params.set("duql", duql.trim());
   return getJson<UntimedResponse>(`/api/viz/untimed?${withFile(params).toString()}`, signal);
 }
 
@@ -133,7 +137,7 @@ export function fetchVizDensity(q: VizQuery, signal?: AbortSignal): Promise<VizD
     end: String(Math.ceil(q.end)),
     summary: String(q.summary),
   });
-  if (q.query && q.query.trim()) params.set("query", q.query.trim());
+  if (q.duql && q.duql.trim()) params.set("duql", q.duql.trim());
   if (q.limit && q.limit > 0) params.set("limit", String(q.limit));
   if (q.lookback && q.lookback > 0) params.set("lookback", String(Math.ceil(q.lookback)));
   if (q.width && q.width > 0) params.set("width", String(Math.round(q.width)));
@@ -154,7 +158,7 @@ export function fetchVizBreaks(signal?: AbortSignal): Promise<VizBreaks> {
 export function fetchVizCounters(
   begin: number,
   end: number,
-  query: string,
+  duql: string,
   buckets: number,
   signal?: AbortSignal,
 ): Promise<VizCounters> {
@@ -163,14 +167,14 @@ export function fetchVizCounters(
     end: String(Math.ceil(end)),
     buckets: String(buckets),
   });
-  if (query && query.trim()) params.set("query", query.trim());
+  if (duql && duql.trim()) params.set("duql", duql.trim());
   return getJson<VizCounters>(`/api/viz/counters?${withFile(params).toString()}`, signal);
 }
 
 export function fetchCallTree(
   begin: number,
   end: number,
-  query: string,
+  duql: string,
   byProcess: boolean,
   signal?: AbortSignal,
 ): Promise<CallTreeResponse> {
@@ -178,7 +182,7 @@ export function fetchCallTree(
     begin: String(Math.floor(begin)),
     end: String(Math.ceil(end)),
   });
-  if (query && query.trim()) params.set("query", query.trim());
+  if (duql && duql.trim()) params.set("duql", duql.trim());
   if (byProcess) params.set("group", "pid");
   return getJson<CallTreeResponse>(`/api/viz/calltree?${withFile(params).toString()}`, signal);
 }
@@ -186,21 +190,21 @@ export function fetchCallTree(
 export function fetchHistogram(
   begin: number,
   end: number,
-  query: string,
+  duql: string,
   signal?: AbortSignal,
 ): Promise<HistogramResponse> {
   const params = new URLSearchParams({
     begin: String(Math.floor(begin)),
     end: String(Math.ceil(end)),
   });
-  if (query && query.trim()) params.set("query", query.trim());
+  if (duql && duql.trim()) params.set("duql", duql.trim());
   return getJson<HistogramResponse>(`/api/viz/histogram?${withFile(params).toString()}`, signal);
 }
 
 export function fetchVizStats(
   t0: number,
   t1: number,
-  query: string,
+  duql: string,
   group?: string,
   signal?: AbortSignal,
 ): Promise<SelectionStats> {
@@ -208,7 +212,7 @@ export function fetchVizStats(
     begin: String(Math.floor(t0)),
     end: String(Math.ceil(t1)),
   });
-  if (query && query.trim()) params.set("query", query.trim());
+  if (duql && duql.trim()) params.set("duql", duql.trim());
   if (group) params.set("group", group);
   return getJson<SelectionStats>(`/api/viz/stats?${withFile(params).toString()}`, signal);
 }

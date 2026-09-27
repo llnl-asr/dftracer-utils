@@ -48,7 +48,7 @@ The annotations span the whole public surface, not just the entry points:
   build a typed ``Expr``; ``apply`` is typed ``-> Series`` and ``eval_many``
   ``-> List[Series]``, so a lazy expression graph is checked before it is
   evaluated on the engine.
-- **The query DSL.** The fluent ``Field`` builder is typed, so a predicate
+- **duql.** The fluent ``Field`` builder is typed, so a predicate
   assembled in Python is checked before it is serialized and run as a mask.
 - **Enumerations.** The op selectors and kinds that cross the boundary
   (``Phase``, ``GroupKey``, ``AggOp``) are Python enums that mirror the C enum
@@ -69,7 +69,7 @@ Three pieces cover the package, checked by one tool:
   ``dftracer_utils_ext.pyi`` declares the signatures the rest of the package and
   its callers see.
 - **Inline annotations on the wrappers.** The pure-Python layer (such as
-  ``series.py``, ``dataframe.py``, ``columnar.py``, ``query.py`` and
+  ``series.py``, ``dataframe.py``, ``columnar.py``, ``duql.py`` and
   ``runtime.py``) is annotated in place, so the wrapper source is both the
   implementation and its own type declaration.
 

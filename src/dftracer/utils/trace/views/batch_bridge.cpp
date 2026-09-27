@@ -1,3 +1,4 @@
+#include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/trace/views/batch_bridge.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 
@@ -10,8 +11,18 @@ namespace {
 dataframe::DataFrame base_frame(const std::vector<FoldEvent>& events,
                                 const dftracer::utils::StringIntern& intern,
                                 const ColumnSpec& spec) {
-    return build_row_frame(events, intern, spec.select, spec.time_scale,
-                           spec.resolver, spec.by_path);
+    dataframe::DataFrame f = build_row_frame(events, intern, spec.select,
+                                             spec.time_scale, spec.by_path);
+    if (spec.json)
+        for (std::size_t i = 0; i < f.names.size(); ++i) {
+            const auto it = spec.json->find(f.names[i]);
+            dataframe::Series& c = f.columns[i];
+            if (it == spec.json->end() || c.is_json()) continue;
+            c = it->second && c.type() == dataframe::TypeId::String
+                    ? c.as_json()
+                    : dataframe::to_json_series(c);
+        }
+    return f;
 }
 
 }  // namespace

@@ -17,6 +17,10 @@
 // injected backend, see parallel.h). The whole compiler lives here in C++ so
 // every consumer (the Python DSL, plugins, the distributed engine) gets the
 // same fusion and CSE; language frontends only build the DAG.
+namespace dftracer::utils::duql {
+struct CompiledPattern;
+}
+
 namespace dftracer::utils::dataframe {
 
 struct ExprNode;
@@ -135,6 +139,101 @@ Expr expr_cmp(CmpOp cmp, const Expr& a, Scalar rhs);
 Expr expr_logical(LogicalOp op, const Expr& a, const Expr& b);
 Expr expr_not(const Expr& a);
 Expr expr_cast(TypeId type, const Expr& a);
+
+// ---- duql semantics -------------------------------------------------------
+// The nodes below give duql's meaning to column expressions: a result that
+// duql calls unknown (a null operand, a zero divisor, an int64 overflow, a
+// NaN, a value that does not parse) is a null cell, never an error or a
+// wrapped value. Numbers compare exactly across integer and double columns.
+
+/// Literals of the other scalar types. A null literal has type `type`.
+Expr expr_lit_str(std::string_view value);
+Expr expr_lit_bool(bool value);
+Expr expr_lit_null(TypeId type);
+
+/// duql arithmetic codes for expr_arith.
+enum class ArithOp {
+    Add = 0,       ///< Integers stay Int64; a result outside int64 is null.
+    Sub = 1,
+    Mul = 2,
+    Div = 3,       ///< Always Float64; a zero divisor is null.
+    FloorDiv = 4,  ///< Floor of the quotient; Int64 for integers.
+    Mod = 5,       ///< Remainder with the sign of the divisor.
+};
+
+/// Checked arithmetic over two numeric expressions (Int64, Uint64, Float64
+/// and narrower); any Float64 operand makes the result Float64. A null
+/// operand, a zero divisor, an integer overflow or a NaN gives null. Throws
+/// at compile time for a non-numeric operand.
+Expr expr_arith(ArithOp op, const Expr& a, const Expr& b);
+
+/// Unary minus with the same checks (negating INT64_MIN is null).
+Expr expr_neg(const Expr& a);
+
+/// `a <cmp> b` for two expressions of one domain (numeric, String or Bool),
+/// Bool; null where either side is null. Integers and doubles compare exactly
+/// (2^53 + 1 is not equal to 2^53.0). Throws at compile time for two
+/// domains that do not compare.
+Expr expr_cmp_expr(CmpOp cmp, const Expr& a, const Expr& b);
+
+/// The first operand that is not null in each row; operands are promoted to
+/// one type as arithmetic promotes them (numeric) or must share it.
+Expr expr_coalesce(const std::vector<Expr>& args);
+
+/// The least (`least` true) or greatest operand per row; null when any
+/// operand is null. Numeric operands compare exactly; String operands
+/// compare bytewise.
+Expr expr_extreme(const std::vector<Expr>& args, bool least);
+
+/// String concatenation of String operands; null when any is null.
+Expr expr_concat(const std::vector<Expr>& args);
+
+/// Round to `digits` decimals, half away from zero; an integer operand with
+/// `digits` >= 0 is returned unchanged.
+Expr expr_round(const Expr& a, std::int64_t digits);
+
+/// NaN (and, for log, a non-positive input) as null: `log` of a value that is
+/// not positive, and `pow`, give null instead of NaN.
+Expr expr_log(const Expr& a);
+Expr expr_pow(const Expr& a, const Expr& b);
+
+/// The UTF-8 substring of `len` characters from character `start` (0-based);
+/// `len` < 0 means to the end. A negative `start` gives null.
+Expr expr_str_substr(const Expr& a, std::int64_t start, std::int64_t len);
+
+/// Bool: whether a compiled duql pattern matches each row of a String or
+/// Binary expression; null for a null row and for a match that reaches the
+/// pattern's work limit. The node shares `p`. A compiled pattern keeps no
+/// source text, so the node's persisted identity (expr_canonical) is unique
+/// to it and never equals another tree's. Throws at compile time for a null
+/// `p`.
+Expr expr_str_pattern(const Expr& a,
+                      std::shared_ptr<const duql::CompiledPattern> p);
+
+/// String: capture `group` (0 = the whole match) of the first match of a
+/// compiled duql regex in each row; null when nothing matches, the group
+/// takes no part, the match reaches the work limit, or the row is null.
+/// Identity as for expr_str_pattern. Throws at compile time for a null `p`
+/// or a group the regex does not have.
+Expr expr_str_extract(const Expr& a,
+                      std::shared_ptr<const duql::CompiledPattern> p,
+                      std::int64_t group);
+
+/// duql conversions: `int(x)` (String parses as an integer or a number,
+/// Float64 truncates, Bool is 0/1; out of range or unparseable is null),
+/// `float(x)`, `string(x)` (numbers in shortest round-trip form, Bool as
+/// true/false), and `json(x)` (canonical JSON text of a scalar; null as the
+/// text "null").
+enum class ConvertOp { Int = 0, Float = 1, String = 2, Json = 3 };
+Expr expr_convert(ConvertOp op, const Expr& a);
+
+/// List columns: element count, the element at `index` (negative counts from
+/// the end; out of range is null), the sum of numeric elements (null when an
+/// element is not numeric), and whether an element equals `value`.
+Expr expr_list_len(const Expr& a);
+Expr expr_list_get(const Expr& a, std::int64_t index);
+Expr expr_list_sum(const Expr& a);
+Expr expr_list_contains(const Expr& a, Scalar value);
 
 /// Short aliases: reference input column `index`, or a literal.
 inline Expr col(std::int32_t index) { return expr_col(index); }

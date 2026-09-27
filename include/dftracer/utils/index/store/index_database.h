@@ -33,14 +33,18 @@ enum class ColumnType : std::uint8_t {
     Int64 = 1,
     Float64 = 2,
     String = 3,
+    /// Text in some records and numbers or bools in others: a JSON column.
+    Json = 4,
 };
 
 /// Fold two observations of the same column's type into one: an Unknown yields
-/// to the other, Int64 and Float64 widen to Float64, and any mix with String
-/// widens to String. Commutative and associative, so it merges across files.
+/// to the other, Int64 and Float64 widen to Float64, and a mix of String with a
+/// number, or anything with Json, is Json. Commutative and associative, so it
+/// merges across files.
 ColumnType merge_column_type(ColumnType a, ColumnType b);
 
-/// Canonical lowercase name for a ColumnType ("int64"/"float64"/"string");
+/// Canonical lowercase name for a ColumnType ("int64"/"float64"/"string"/
+/// "json");
 /// empty string for Unknown.
 const char* column_type_name(ColumnType t);
 
@@ -229,26 +233,9 @@ class IndexDatabase {
                                  ankerl::unordered_dense::set<std::uint64_t>>
     query_all_file_pids() const;
 
-    /// A dictionary row: (field name, value) pairs.
-    using DictRow = std::vector<std::pair<std::string, std::string>>;
-
-    /// Row `key` of dictionary `dict`; nullopt when the index has none.
-    std::optional<DictRow> dict_row(std::string_view dict,
-                                    std::string_view key) const;
-    /// The value of `field` in row `key` of `dict`.
-    std::optional<std::string> dict_value(std::string_view dict,
-                                          std::string_view key,
-                                          std::string_view field) const;
-    /// Keys of the rows of `dict` whose `field` is `value`, sorted: traces
-    /// may key one value differently.
-    std::vector<std::string> dict_keys(std::string_view dict,
-                                       std::string_view field,
-                                       std::string_view value) const;
-    /// `field` of every row of `dict`, by key. Reads the whole dictionary.
-    StringViewMap<std::string> dict_field(std::string_view dict,
-                                          std::string_view field) const;
-    /// Rows of `dict`, counted without materializing them.
-    std::uint64_t dict_count(std::string_view dict) const;
+    /// The rows of row set `name` the build stored for `file_id`, as an
+    /// Arrow IPC frame; nullopt when the file's row sets are not current.
+    std::optional<std::string> rowset(int file_id, std::string_view name) const;
 
     std::unique_ptr<IndexDatabaseWriterContext> begin_write();
 

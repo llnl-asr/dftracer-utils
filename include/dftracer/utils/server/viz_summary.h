@@ -137,6 +137,9 @@ struct VizSummary {
         double io_busy = 0;          ///< native
         std::string hhash;
         std::string rank;
+        /// A path schema's entity value when it is not a number (the pid is
+        /// then a hash of it); empty otherwise.
+        std::string label;
     };
     std::vector<ProcRow> procs;
 

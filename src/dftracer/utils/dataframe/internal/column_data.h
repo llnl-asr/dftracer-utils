@@ -49,6 +49,8 @@ struct dftu_series {
     std::int32_t decimal_scale = 0;
     /// FixedSizeBinary (byte width) or FixedSizeList (element count) only.
     std::int32_t fixed_size = 0;
+    /// String only: each value is canonical JSON text.
+    bool json = false;
 };
 
 namespace dftracer {
@@ -56,10 +58,10 @@ namespace utils {
 namespace dataframe {
 
 /// Copies type and every type parameter (time_unit, timezone,
-/// decimal_precision, decimal_scale, fixed_size) from src into out, leaving
-/// out's data/length/encoding untouched. Use for any op whose result column
-/// derives its type from a single source column (gather, slice, sort, unique,
-/// reverse, fill_null, drop_nulls, dictionary_encode, ...).
+/// decimal_precision, decimal_scale, fixed_size, json) from src into out,
+/// leaving out's data/length/encoding untouched. Use for any op whose result
+/// column derives its type from a single source column (gather, slice, sort,
+/// unique, reverse, fill_null, drop_nulls, dictionary_encode, ...).
 inline void adopt_type_from(dftu_series& out, const dftu_series& src) {
     out.type = src.type;
     out.time_unit = src.time_unit;
@@ -67,6 +69,7 @@ inline void adopt_type_from(dftu_series& out, const dftu_series& src) {
     out.decimal_precision = src.decimal_precision;
     out.decimal_scale = src.decimal_scale;
     out.fixed_size = src.fixed_size;
+    out.json = src.json;
 }
 
 /// Same as adopt_type_from, but sets out.type to an explicit TypeId while

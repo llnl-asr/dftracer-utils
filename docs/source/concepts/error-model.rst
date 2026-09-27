@@ -30,7 +30,7 @@ An ``Error`` (``core/common/error.h``) carries three things:
   The hash is the identity used for matching and for the C ABI; the name
   rides along only because a hash cannot be printed back.
 - ``code`` is that subsystem's own enum value, meaningful only paired
-  with its domain - the query library's ``QueryErrc::Pattern`` and some other
+  with its domain - the duql library's ``DuqlErrc::Pattern`` and some other
   subsystem's code ``1`` are unrelated even if their integer values collide.
 - ``condition`` is a ``Condition``, a small, closed, cross-domain enum
   (``Unknown``, ``Internal``, ``InvalidArgument``, ``NotFound``, ``Io``,
@@ -43,31 +43,31 @@ functions for its error enum:
 
 .. code-block:: cpp
 
-   enum class QueryErrc : std::int32_t { Parse, Pattern, Unsupported };
+   enum class DuqlErrc : std::int32_t { Parse, Pattern, Unsupported };
 
-   constexpr ErrorDomain error_domain(QueryErrc) noexcept {
+   constexpr ErrorDomain error_domain(DuqlErrc) noexcept {
        return ERROR_DOMAIN;  // this subsystem's domain, defined once
    }
-   constexpr Condition error_condition(QueryErrc e) noexcept {
+   constexpr Condition error_condition(DuqlErrc e) noexcept {
        switch (e) {
-           case QueryErrc::Parse:       return Condition::Parse;
-           case QueryErrc::Pattern:     return Condition::InvalidArgument;
-           case QueryErrc::Unsupported: return Condition::Unsupported;
+           case DuqlErrc::Parse:       return Condition::Parse;
+           case DuqlErrc::Pattern:     return Condition::InvalidArgument;
+           case DuqlErrc::Unsupported: return Condition::Unsupported;
        }
    }
 
-``make_error(QueryErrc::Pattern, "...")`` then deduces both the domain and
+``make_error(DuqlErrc::Pattern, "...")`` then deduces both the domain and
 the condition from the enum type alone (the ``ErrorEnum`` concept checks that
 both functions exist), so a code from one subsystem cannot accidentally be
 attached to another subsystem's domain, and the association is checked at
 compile time rather than by convention. This is the pattern each subsystem
-that wants its own error codes follows - see ``query/errc.h`` for the
-query library's domain as a worked example.
+that wants its own error codes follows - see ``duql/errc.h`` for the
+duql library's domain as a worked example.
 
 .. mermaid::
 
    graph LR
-       Enum["Subsystem enum<br/>(e.g. QueryErrc)"] --> Domain["error_domain(e)<br/>-> ErrorDomain"]
+       Enum["Subsystem enum<br/>(e.g. DuqlErrc)"] --> Domain["error_domain(e)<br/>-> ErrorDomain"]
        Enum --> Cond["error_condition(e)<br/>-> Condition"]
        Domain --> Error["Error{domain, code, condition, message}"]
        Cond --> Error

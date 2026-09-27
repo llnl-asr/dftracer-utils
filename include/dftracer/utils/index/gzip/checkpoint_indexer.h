@@ -36,7 +36,7 @@ class CheckpointIndexer {
     using VisitorList =
         std::vector<std::reference_wrapper<index::build::IndexVisitor>>;
 
-    virtual void set_visitors(VisitorList visitors) { (void)visitors; }
+    virtual void set_visitors(VisitorList) {}
 
     // Metadata accessors
     virtual const std::string &get_index_path() const = 0;

@@ -23,7 +23,7 @@ set(RANK_cache 4)
 # Modules below the index; the trace format headers move into the dftracer
 # decoder in stage 5. plugins/abi/ is the plugin C ABI: declarations only.
 set(BASE_PREFIXES
-    core/ json/ dataframe/ plugins/abi/ query/ utilities/common/ utilities/fileio/
+    core/ json/ dataframe/ plugins/abi/ duql/ utilities/common/ utilities/fileio/
     utilities/filesystem/ utilities/hash/ trace/args_map.h trace/event.h
     trace/internal/ trace/parse_inflated.h trace/schema.h)
 
@@ -35,9 +35,8 @@ set(ALLOWED
   "index/extensions/bloom_fold.cpp|index/build/index_write_lock.h"
   "index/extensions/bloom_fold.h|index/schemas/dft/bloom_core.h"
   "index/extensions/bloom_fold.h|trace/views/fold.h"
-  "index/extensions/dict_fold.h|trace/views/fold.h"
-  "index/extensions/dictionary_rows.cpp|index/build/index_write_lock.h"
-  "index/extensions/dictionary_rows.h|trace/views/coverage.h"
+  "index/extensions/rowset_fold.cpp|trace/views/event_source.h"
+  "index/extensions/rowset_fold.h|trace/views/fold.h"
   "index/gzip/gzip_indexer.cpp|index/build/index_visitor.h"
   "index/gzip/gzip_indexer.h|index/build/index_visitor.h"
   "index/gzip/checkpoint_indexer.h|index/build/index_visitor.h"
@@ -55,6 +54,7 @@ set(ALLOWED
   "index/store/types.h|index/gzip/member.h"
   "index/store/types.h|index/schemas/dft/statistics.h"
   # stage 10 moves the aggregation tier and cache onto extensions
+  "index/cache/lookup_store.cpp|trace/views/view_plan.h"
   "index/cache/mv_store.cpp|trace/views/view_plan.h"
   "index/cache/mv_store.h|trace/views/view.h"
   "index/cache/rollup_store.cpp|trace/views/view_agg_engine.h"
@@ -68,6 +68,7 @@ set(ALLOWED
   "index/schemas/dft/agg/aggregator.cpp|index/build/resolver.h"
   "index/schemas/dft/agg/view_agg_tier.cpp|trace/views/view_agg_engine.h"
   "index/schemas/dft/agg/view_agg_tier.cpp|trace/views/view_plan.h"
+  "index/schemas/dft/agg/view_agg_tier.cpp|trace/views/view_scan.h"
   "index/schemas/dft/agg/view_agg_tier.h|trace/views/view_aggregate.h"
 )
 

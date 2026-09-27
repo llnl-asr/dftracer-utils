@@ -268,14 +268,12 @@ TEST_SUITE("dataframe join") {
     TEST_CASE("refusals name the problem") {
         DataFrame l = make_left();
         DataFrame r = make_right();
-        CHECK_THROWS_AS((void)l.join(r, {"nope"}), std::out_of_range);
-        CHECK_THROWS_AS((void)l.join(r, {"k"}, {"nope"}), std::out_of_range);
-        CHECK_THROWS_AS((void)l.join(r, {}), std::invalid_argument);
-        CHECK_THROWS_AS((void)l.join(r, {"k"}, {"k", "name"}),
-                        std::invalid_argument);
-        CHECK_THROWS_AS((void)l.join(r, {"k"}, {"name"}),
-                        std::invalid_argument);
-        CHECK_THROWS_AS((void)l.join(r, {"k"}, static_cast<JoinHow>(99)),
+        CHECK_THROWS_AS(l.join(r, {"nope"}), std::out_of_range);
+        CHECK_THROWS_AS(l.join(r, {"k"}, {"nope"}), std::out_of_range);
+        CHECK_THROWS_AS(l.join(r, {}), std::invalid_argument);
+        CHECK_THROWS_AS(l.join(r, {"k"}, {"k", "name"}), std::invalid_argument);
+        CHECK_THROWS_AS(l.join(r, {"k"}, {"name"}), std::invalid_argument);
+        CHECK_THROWS_AS(l.join(r, {"k"}, static_cast<JoinHow>(99)),
                         std::invalid_argument);
     }
 
@@ -387,6 +385,102 @@ TEST_SUITE("dataframe join") {
                         std::invalid_argument);
     }
 
+    TEST_CASE(
+        "lookup: each left row once, keys by value, fills and conflicts") {
+        // left: k = [1, 2, 3, 1, null] (Int64), a = null or `a`
+        auto left = [](const std::vector<std::string>& a = {}) {
+            DataFrame df;
+            df.names = {"k", "a"};
+            df.columns.push_back(i64s({1, 2, 3, 1, 0}, {0x0f}));
+            df.columns.push_back(a.empty() ? Series::nulls(TypeId::String, 5)
+                                           : Series::strings(a));
+            return df;
+        };
+        // right: k = [1.0, 2.0, 2.0] (Float64), a, b = [7, 8, 8]
+        auto right = [](const std::vector<std::string>& a) {
+            DataFrame df;
+            df.names = {"k", "a", "b"};
+            const double rk[] = {1.0, 2.0, 2.0};
+            df.columns.push_back(Series::flat_f64(rk, 3));
+            df.columns.push_back(Series::strings(a));
+            df.columns.push_back(i64s({7, 8, 8}));
+            return df;
+        };
+        const std::vector<std::string> xyy{"x", "y", "y"};
+
+        DataFrame out = left().join(right(xyy), {"k"}, {"k"}, JoinHow::Lookup);
+        CHECK(out.names == std::vector<std::string>{"k", "a", "b"});
+        CHECK(i64_col(out, "k") == std::vector<I>{1, 2, 3, 1, NI});
+        CHECK(str_col(out, "a") == std::vector<S>{"x", "y", NS, "x", NS});
+        CHECK(i64_col(out, "b") == std::vector<I>{7, 8, NI, 7, NI});
+
+        LazyFrame ll =
+            LazyFrame::scan(std::make_shared<InMemorySource>(left()));
+        LazyFrame rl =
+            LazyFrame::scan(std::make_shared<InMemorySource>(right(xyy)));
+        for (std::int64_t morsel : {0, 1, 2})
+            check_same(run(ll.join(rl, {"k"}, JoinHow::Lookup).collect(morsel)),
+                       out);
+        CHECK(ll.join(rl, {"k"}, JoinHow::Lookup).schema() == out.names);
+
+        try {
+            (void)left().join(right({"x", "y", "z"}), {"k"}, {"k"},
+                              JoinHow::Lookup);
+            FAIL("no conflict error");
+        } catch (const std::invalid_argument& e) {
+            const std::string what = e.what();
+            CHECK(what.find("key 2") != std::string::npos);
+            CHECK(what.find("'a'") != std::string::npos);
+        }
+        CHECK_THROWS_WITH_AS(
+            (void)left({"p", "q", "r", "s", "t"})
+                .join(right(xyy), {"k"}, {"k"}, JoinHow::Lookup),
+            doctest::Contains("fills 'a'"), std::invalid_argument);
+
+        // Strings never equal numbers.
+        DataFrame text;
+        text.names = {"k"};
+        text.columns.push_back(Series::strings({"1", "2"}));
+        DataFrame none = text.join(right(xyy), {"k"}, {"k"}, JoinHow::Lookup);
+        CHECK(str_col(none, "a") == std::vector<S>{NS, NS});
+    }
+
+    TEST_CASE("nest: every match as a list of structs, empty when none") {
+        auto keys = [] {
+            DataFrame df;
+            df.names = {"k"};
+            df.columns.push_back(i64s({2, 5, 0}, {0x03}));
+            return df;
+        };
+        DataFrame left = keys();
+        DataFrame out =
+            left.join(make_right(), {"k"}, {"k"}, JoinHow::Nest, "m");
+        CHECK(out.names == std::vector<std::string>{"k", "m"});
+        const Series m = out.column("m").materialize();
+        REQUIRE(m.type() == TypeId::List);
+        const std::int32_t* off = m.offsets();
+        CHECK(off[1] - off[0] == 2);
+        CHECK(off[2] - off[1] == 0);
+        CHECK(off[3] - off[2] == 0);
+        CHECK_FALSE(m.is_null(1));
+        const Series rows = m.child(0);
+        REQUIRE(rows.type() == TypeId::Struct);
+        CHECK(rows.field_name(1) == "name");
+        CHECK(std::string(rows.child(1).materialize().string_at(0)) == "b");
+        CHECK(std::string(rows.child(1).materialize().string_at(1)) == "bb");
+        CHECK_THROWS_AS(
+            (void)left.join(make_right(), {"k"}, {"k"}, JoinHow::Nest, ""),
+            std::invalid_argument);
+        LazyFrame ll =
+            LazyFrame::scan(std::make_shared<InMemorySource>(keys()));
+        LazyFrame rl =
+            LazyFrame::scan(std::make_shared<InMemorySource>(make_right()));
+        const DataFrame lazy =
+            run(ll.join(rl, {"k"}, JoinHow::Nest, "m").collect(1));
+        CHECK(lazy.names == out.names);
+        CHECK(lazy.num_rows() == 3);
+    }
+
     TEST_CASE("C ABI: eager and lazy join agree with the C++ call") {
         DataFrame l = make_left();
         DataFrame r = make_right();
@@ -416,7 +510,7 @@ TEST_SUITE("dataframe join") {
         CHECK(dftu_dataframe_join(lh, rh, on, on, 0, DFTU_JOIN_LEFT, nullptr) ==
               nullptr);
         CHECK(dftu_dataframe_join(lh, rh, on, on, 1,
-                                  static_cast<dftu_join_how>(7),
+                                  static_cast<dftu_join_how>(9),
                                   nullptr) == nullptr);
         const char* bad[] = {"nope"};
         CHECK(dftu_dataframe_join(lh, rh, bad, on, 1, DFTU_JOIN_LEFT,

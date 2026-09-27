@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_VIEW_DEFINITION_H
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_DEFINITION_H
 
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/query/query.h>
 
 #include <optional>
 #include <string>
@@ -10,23 +10,22 @@
 
 namespace dftracer::utils::trace::views {
 
-using dftracer::utils::query::Query;
+using dftracer::utils::duql::Query;
 
 /// Named view definition with optional query filter.
 struct ViewDefinition {
-    std::string name;              ///< View name.
-    std::string description;       ///< Human-readable description.
-    std::optional<Query> query;    ///< Event filter (nullopt = match all).
-    bool include_metadata = true;  ///< Include ph=M metadata events.
-    /// Emit hash metadata (FH/HH/SH) immediately instead of buffering it for
-    /// reference-driven flushing. Consumers that aggregate all metadata (the
-    /// activity-summary build) need this, since traces whose data events carry
-    /// no hash args would otherwise never see it.
-    bool emit_all_metadata = false;
-    /// Apply `query` to ph=M metadata records too. Off by default so metadata
-    /// bypasses the event query and survives for hash/rank harvesting; set only
-    /// for an explicit phase("metadata") query.
+    std::string name;            ///< View name.
+    std::string description;     ///< Human-readable description.
+    std::optional<Query> query;  ///< Event filter (nullopt = match all).
+    /// Return ph=M metadata records; they bypass `query` unless one of the
+    /// two flags below is set.
+    bool include_metadata = false;
+    /// The scan returns metadata records alone (phase("metadata")), filtered
+    /// by `query`.
     bool filter_metadata = false;
+    /// Metadata records are rows the query filters, as data events are
+    /// (`all`). The recipe key "all" sets this and `include_metadata`.
+    bool metadata_records = false;
     /// Keep data records by time: those with begin <= ts < end, or, with
     /// `window_overlap`, those whose [ts, ts + dur) overlaps [begin, end).
     /// Metadata records are not windowed. nullopt keeps every record.
@@ -50,6 +49,9 @@ struct ViewDefinition {
     std::string duration_path;
     double time_factor = 1;
     double duration_factor = 1;
+    /// A bare name a record lacks reads the field of that name under `args`
+    /// (the record schema's `args_fallback`).
+    bool args_fallback = true;
     /// Drop lines that lack the query's byte needles before parsing them
     /// (index::plan::Prefilter). Results are the same either way.
     bool prefilter = true;
@@ -59,8 +61,6 @@ struct ViewDefinition {
     /// Set query from a DSL string. Silently ignored if parse fails.
     ViewDefinition& with_query(const std::string& query_str);
     ViewDefinition& with_query(Query q);
-    ViewDefinition& with_include_metadata(bool v);
-    ViewDefinition& with_emit_all_metadata(bool v);
 
     std::string to_json() const;
     static ViewDefinition from_json(const std::string& json);

@@ -63,7 +63,7 @@ utilities/plugins/test_plugin_public_config	23.6
 utilities/plugins/test_plugin_order	23.1
 utilities/plugins/test_plugin_transform	22.8
 pipeline/test_pipeline	21.4
-trace/views/test_dict_fold	20.3
+trace/views/test_rowset_fold	20.3
 utilities/reader/test_member_cache_integration	20.0
 trace/views/test_metadata_query	19.8
 trace/views/test_fold	19.2
@@ -77,7 +77,6 @@ utilities/indexer/test_hash_table_aggregation	13.6
 trace/views/test_pipeline_plan	13.6
 trace/test_event_collector	13.2
 trace/views/test_compare_view	13.0
-trace/indexing/test_resolved_field_rewriter	12.0
 utilities/plugins/test_plugin_agg_spill	11.1
 trace/views/test_rollup_store	10.2
 utilities/indexer/test_sst_ingest_spike	10.1

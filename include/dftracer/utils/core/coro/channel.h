@@ -525,10 +525,9 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
     }
 
     void mark_item_consumed() {
-        const std::size_t prev =
+        [[maybe_unused]] const std::size_t prev =
             pending_items_.fetch_sub(1, std::memory_order_acq_rel);
         assert(prev > 0 && "Channel pending_items underflow");
-        (void)prev;
     }
 
     void release_slot_if_bounded_locked() {

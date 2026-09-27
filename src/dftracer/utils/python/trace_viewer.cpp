@@ -4,6 +4,8 @@
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
+#include <dftracer/utils/duql/macros.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/python/dataframe.h>
@@ -18,7 +20,6 @@
 #include <dftracer/utils/python/py_str_helpers.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/trace_viewer.h>
-#include <dftracer/utils/query/query.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/time_metric.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -86,6 +87,10 @@ PyObject* stats_dict(const ExportStats& s) {
                      static_cast<long long>(s.events_matched)) < 0 ||
         dict_set_i64(d, "events_scanned",
                      static_cast<long long>(s.events_scanned)) < 0 ||
+        dict_set_i64(d, "lines_invalid",
+                     static_cast<long long>(s.lines_invalid)) < 0 ||
+        dict_set_i64(d, "values_unconverted",
+                     static_cast<long long>(s.values_unconverted)) < 0 ||
         dict_set_i64(d, "chunks_scanned",
                      static_cast<long long>(s.chunks_scanned)) < 0 ||
         dict_set_i64(d, "chunks_skipped",
@@ -241,8 +246,6 @@ GroupKey parse_group_key(const std::string& s) {
         out = GroupKey::file_name();
     else if (t == "host_name")
         out = GroupKey::host_name();
-    else if (t.starts_with(dftracer::utils::index::RESOLVED_PREFIX))
-        out = GroupKey::resolved(t);
     else if (t == "rank")
         out = GroupKey::rank();
     else if (t.rfind("arg:", 0) == 0)
@@ -435,15 +438,89 @@ PyObject* tv_filter(PyObject* self, PyObject* arg) {
         Py_DECREF(s);
         return nullptr;
     }
-    auto parsed = dftracer::utils::query::Query::from_string(dsl);
+    auto parsed = dftracer::utils::duql::Query::from_string(dsl);
     Py_DECREF(s);
     if (!parsed) {
-        PyErr_Format(PyExc_ValueError, "invalid filter query: %s",
+        PyErr_Format(PyExc_ValueError, "invalid duql filter: %s",
                      parsed.error().message.c_str());
         return nullptr;
     }
     return build(self, [&](const View& t) {
         return t.filter(std::move(parsed.value()));
+    });
+}
+
+// A duql parameter from a Python bool, int, float or str.
+bool duql_param(PyObject* v, dftracer::utils::duql::LiteralValue& out) {
+    if (PyBool_Check(v)) {
+        out = v == Py_True;
+    } else if (PyLong_Check(v)) {
+        int overflow = 0;
+        const long long i = PyLong_AsLongLongAndOverflow(v, &overflow);
+        if (overflow > 0) {
+            const unsigned long long u = PyLong_AsUnsignedLongLong(v);
+            if (PyErr_Occurred()) return false;
+            out = static_cast<std::uint64_t>(u);
+        } else if (overflow < 0 || (i == -1 && PyErr_Occurred())) {
+            PyErr_SetString(PyExc_OverflowError,
+                            "a duql integer parameter must fit in 64 bits");
+            return false;
+        } else if (i < 0) {
+            out = static_cast<std::int64_t>(i);
+        } else {
+            out = static_cast<std::uint64_t>(i);
+        }
+    } else if (PyFloat_Check(v)) {
+        out = PyFloat_AsDouble(v);
+    } else if (PyUnicode_Check(v)) {
+        const char* s = PyUnicode_AsUTF8(v);
+        if (!s) return false;
+        out = std::string(s);
+    } else {
+        PyErr_Format(PyExc_TypeError,
+                     "a duql parameter must be bool, int, float or str, not %s",
+                     Py_TYPE(v)->tp_name);
+        return false;
+    }
+    return true;
+}
+
+// (text, params dict) -> the text and bound parameters, or false with a
+// Python error set.
+bool duql_args(PyObject* args, const char*& text,
+               dftracer::utils::duql::Params& params) {
+    PyObject* dict = nullptr;
+    if (!PyArg_ParseTuple(args, "s|O!", &text, &PyDict_Type, &dict))
+        return false;
+    if (!dict) return true;
+    PyObject* key = nullptr;
+    PyObject* value = nullptr;
+    Py_ssize_t pos = 0;
+    while (PyDict_Next(dict, &pos, &key, &value)) {
+        const char* name = PyUnicode_AsUTF8(key);
+        if (!name) return false;
+        dftracer::utils::duql::LiteralValue lit;
+        if (!duql_param(value, lit)) return false;
+        params.insert_or_assign(name, std::move(lit));
+    }
+    return true;
+}
+
+PyObject* tv_duql(PyObject* self, PyObject* args) {
+    const char* text = nullptr;
+    dftracer::utils::duql::Params params;
+    if (!duql_args(args, text, params)) return nullptr;
+    return build(self, [&](const View& t) { return t.duql(text, params); });
+}
+
+PyObject* tv_explain_duql(PyObject* self, PyObject* args) {
+    const char* text = nullptr;
+    dftracer::utils::duql::Params params;
+    if (!duql_args(args, text, params)) return nullptr;
+    return guarded([&] {
+        const std::string plan = tv_of(self).explain_duql(text, params);
+        return PyUnicode_FromStringAndSize(
+            plan.data(), static_cast<Py_ssize_t>(plan.size()));
     });
 }
 
@@ -593,10 +670,8 @@ PyObject* tv_agg_numeric_args(PyObject* self, PyObject* args) {
     });
 }
 
-PyObject* tv_metadata(PyObject* self, PyObject* arg) {
-    const int on = PyObject_IsTrue(arg);
-    if (on < 0) return nullptr;
-    return build(self, [&](const View& t) { return t.metadata(on != 0); });
+PyObject* tv_all(PyObject* self, PyObject*) {
+    return build(self, [](const View& t) { return t.all(); });
 }
 
 PyObject* tv_record_schema(PyObject* self, PyObject* arg) {
@@ -994,8 +1069,11 @@ PyMethodDef tv_methods[] = {
     {"lazy", tv_lazy, METH_NOARGS, "The plan as a _LazyFrame."},
     {"with_lazy", tv_with_lazy, METH_O,
      "This scan with `plan` (a _LazyFrame over it) as its plan."},
-    {"filter", tv_filter, METH_O,
-     "Keep events matching a query-DSL predicate."},
+    {"filter", tv_filter, METH_O, "Keep events matching a duql predicate."},
+    {"duql", tv_duql, METH_VARARGS,
+     "duql(text, params) -> the duql pipeline over this view."},
+    {"explain_duql", tv_explain_duql, METH_VARARGS,
+     "explain_duql(text, params) -> the pipeline's plan, one step per line."},
     {"select", tv_select, METH_O,
      "Fields the scan reads (raw events), or a projection of the plan."},
     {"phase", tv_phase, METH_O,
@@ -1015,7 +1093,8 @@ PyMethodDef tv_methods[] = {
     {"agg", tv_agg, METH_VARARGS, "Trace aggregate specs."},
     {"agg_numeric_args", tv_agg_numeric_args, METH_VARARGS,
      "Aggregate every discovered numeric arg."},
-    {"metadata", tv_metadata, METH_O, "Include metadata records."},
+    {"all", tv_all, METH_NOARGS,
+     "Read every record, metadata included, instead of the source's data."},
     {"record_schema", tv_record_schema, METH_O,
      "Read the files as the registered record schema `id`."},
     {"rollup_root", tv_rollup_root, METH_O, "Rollup root directory."},
@@ -1069,11 +1148,22 @@ PyMethodDef tv_methods[] = {
      "Plan folding a Plugins set over the scan."},
     {nullptr, nullptr, 0, nullptr}};
 
+PyObject* duql_load_path_py(PyObject*, PyObject* arg) {
+    const char* path = as_utf8(arg);
+    if (!path) return nullptr;
+    return guarded([&]() -> PyObject* {
+        dftracer::utils::duql::load_macros(path);
+        Py_RETURN_NONE;
+    });
+}
+
 PyMethodDef module_methods[] = {
     {"merge_flamegraph_partials", merge_flamegraph_partials_py, METH_O,
      "merge_flamegraph_partials(partials) -> node DataFrame (no scan)."},
     {"plugin_results", plugin_results_py, METH_O,
      "plugin_results(plugins) -> {name: result} of its last run."},
+    {"duql_load_path", duql_load_path_py, METH_O,
+     "duql_load_path(path): load the macros of a .duql file or directory."},
     {nullptr, nullptr, 0, nullptr}};
 
 }  // namespace

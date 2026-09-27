@@ -1,5 +1,5 @@
+#include <dftracer/utils/duql/errc.h>
 #include <dftracer/utils/python/py_errors.h>
-#include <dftracer/utils/query/errc.h>
 
 #include <stdexcept>
 #include <string>
@@ -12,7 +12,7 @@ PyObject *g_dft_not_found_error = nullptr;
 PyObject *g_dft_io_error = nullptr;
 PyObject *g_dft_parse_error = nullptr;
 PyObject *g_dft_compression_error = nullptr;
-PyObject *g_dft_query_error = nullptr;
+PyObject *g_dft_duql_error = nullptr;
 PyObject *g_dft_reader_error = nullptr;
 PyObject *g_dft_indexer_error = nullptr;
 PyObject *g_dft_pipeline_error = nullptr;
@@ -57,7 +57,7 @@ int init_py_errors(PyObject *m) {
     if (add_exc(m, "DFTUtilsCompressionError", g_dft_error,
                 &g_dft_compression_error) < 0)
         return -1;
-    if (add_exc(m, "DFTUtilsQueryError", g_dft_error, &g_dft_query_error) < 0)
+    if (add_exc(m, "DFTUtilsDuqlError", g_dft_error, &g_dft_duql_error) < 0)
         return -1;
     if (add_exc(m, "DFTUtilsReaderError", g_dft_error, &g_dft_reader_error) < 0)
         return -1;
@@ -85,8 +85,8 @@ PyObject *py_error_type_for(ErrorCode code) {
             return g_dft_parse_error;
         case ErrorCode::COMPRESSION:
             return g_dft_compression_error;
-        case ErrorCode::QUERY:
-            return g_dft_query_error;
+        case ErrorCode::DUQL:
+            return g_dft_duql_error;
         case ErrorCode::READER:
             return g_dft_reader_error;
         case ErrorCode::INDEXER:
@@ -104,8 +104,8 @@ PyObject *py_error_type_for(ErrorCode code) {
 
 PyObject *py_error_type_for(const dftracer::utils::DFTUtilsException &e) {
     // Domain-specific types take precedence over the portable-condition map.
-    if (e.domain() == dftracer::utils::query::ERROR_DOMAIN.id)
-        return g_dft_query_error;
+    if (e.domain() == dftracer::utils::duql::ERROR_DOMAIN.id)
+        return g_dft_duql_error;
     return py_error_type_for(e.code());
 }
 

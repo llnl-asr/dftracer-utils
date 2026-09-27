@@ -33,6 +33,8 @@ struct GranuleCounts {
 struct FileIndexData {
     const IndexDatabase* db = nullptr;
     int fid = -1;
+    /// The file was indexed by path, so no field is a dftracer fixed field.
+    bool by_path = false;
     std::uint64_t total_chunks = 0;
     std::set<std::uint64_t> all_chunks;
     /// Lines per chunk from the member table: a chunk whose lines are not all

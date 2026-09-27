@@ -190,7 +190,7 @@ template <class Slice>
 struct Holder {
     dftu_plugin vt{};
     Config config;
-    std::string plan; /**< backs plan_query's const char* */
+    std::string plan; /**< backs plan_duql's const char* */
 };
 
 template <class Slice>
@@ -328,15 +328,15 @@ concept DeclaresConfigKeys = requires {
 };
 
 // The declared keys copied into a NULL-name-terminated array with static
-// storage, plus the "query" key every Slice built here reads (make_plugin
-// takes plan_query from it), so declaring keys does not make a caller's
+// storage, plus the "duql" key every Slice built here reads (make_plugin
+// takes plan_duql from it), so declaring keys does not make a caller's
 // `query` an unknown one.
 template <class Slice>
 const dftu_config_key* config_key_thunk(void*) {
     static const std::vector<dftu_config_key> keys = [] {
         std::vector<dftu_config_key> v;
         for (const dftu_config_key& k : Slice::config_keys()) v.push_back(k);
-        v.push_back({"query", DFTU_VAL_STR, 0,
+        v.push_back({"duql", DFTU_VAL_STR, 0,
                      "coarse DSL predicate the scan is pruned by"});
         v.push_back({nullptr, DFTU_CONFIG_ANY, 0, nullptr});
         return v;
@@ -364,13 +364,13 @@ template <class Slice>
 dftu_plugin* make_plugin(const dftu_value* config) {
     auto* hd = new detail::Holder<Slice>();
     hd->config = Config(config);
-    hd->plan = std::string(hd->config.get("query"));
+    hd->plan = std::string(hd->config.get("duql"));
 
     dftu_plugin& vt = hd->vt;
     vt.abi_version = DFTRACER_PLUGIN_ABI_VERSION;
     vt.self = hd;
 
-    vt.plan_query = [](void* self) -> const char* {
+    vt.plan_duql = [](void* self) -> const char* {
         auto* h = detail::holder_of<Slice>(self);
         return h->plan.empty() ? nullptr : h->plan.c_str();
     };

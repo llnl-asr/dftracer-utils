@@ -206,7 +206,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     // Discover input files
     filesystem::PatternDirectoryScannerUtility scanner;
     filesystem::PatternDirectoryScannerUtilityInput scan_input{
-        log_dir, {".pfw", ".pfw.gz", ".jsonl.gz", ".ndjson.gz"}, false};
+        log_dir, filesystem::trace_file_patterns(), false};
     auto matched_entries = co_await scanner(scan_input);
 
     std::vector<std::string> input_files;

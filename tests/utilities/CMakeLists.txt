@@ -400,7 +400,7 @@ endforeach()
 set(cabi_target utilities_plugins_test_plugin_c_abi)
 set(cabi_sources plugins/test_plugin_c_abi.cpp
                  plugins/compose_abi_c_consumer.c
-                 plugins/query_abi_c_consumer.c
+                 plugins/duql_abi_c_consumer.c
                  plugins/sketch_abi_c_consumer.c
                  plugins/ops_abi_c_consumer.c
                  plugins/trace_abi_c_consumer.c

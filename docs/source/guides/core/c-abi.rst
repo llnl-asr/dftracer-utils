@@ -11,7 +11,7 @@ translation unit.
 
 Two headers cover the pieces most programs need:
 
-- ``dftracer/utils/query/abi.h`` - parse and build query predicates.
+- ``dftracer/utils/duql/abi.h`` - parse and build query predicates.
 - ``dftracer/utils/dataframe/abi.h`` - build, inspect, and operate on columns
   (``dftu_series``) and frames (``dftu_dataframe``), including evaluating a
   query as a mask.
@@ -28,35 +28,35 @@ even on error, and a "borrows" argument is never freed by the callee.
 Parse a query
 -------------
 
-``dftu_query_parse`` compiles the same DSL string the Python and C++ builders
-produce (see :doc:`query-dsl`) into an opaque ``dftu_query*``. You can also
+``dftu_duql_parse`` compiles the same duql string the Python and C++ builders
+produce (see :doc:`duql`) into an opaque ``dftu_duql*``. You can also
 build one from typed pieces without a string, which avoids escaping and
 sidesteps a parse error at runtime:
 
 .. code-block:: c
 
-   #include <dftracer/utils/query/abi.h>
+   #include <dftracer/utils/duql/abi.h>
 
-   /* From DSL text: */
-   dftu_query* q1 = dftu_query_parse("cat == \"POSIX\" and dur > 1000");
+   /* From duql text: */
+   dftu_duql* q1 = dftu_duql_parse("cat == \"POSIX\" and dur > 1000");
 
    /* Or from typed builders (structurally equivalent): */
-   dftu_query* a = dftu_query_cmp_str("cat", DFTU_QCMP_EQ, "POSIX");
-   dftu_query* b = dftu_query_cmp_i64("dur", DFTU_QCMP_GT, 1000);
-   dftu_query* q2 = dftu_query_and(a, b);   /* consumes a and b */
+   dftu_duql* a = dftu_duql_cmp_str("cat", DFTU_DUQL_CMP_EQ, "POSIX");
+   dftu_duql* b = dftu_duql_cmp_i64("dur", DFTU_DUQL_CMP_GT, 1000);
+   dftu_duql* q2 = dftu_duql_and(a, b);   /* consumes a and b */
 
-   dftu_query_free(q1);
-   dftu_query_free(q2);
+   dftu_duql_free(q1);
+   dftu_duql_free(q2);
 
-``dftu_query_and``/``dftu_query_or``/``dftu_query_not`` **consume** their
+``dftu_duql_and``/``dftu_duql_or``/``dftu_duql_not`` **consume** their
 argument handles: do not free or reuse ``a``/``b`` after passing them in, and
 a ``NULL`` argument frees the other side and yields ``NULL``. The comparison
-ops are ``DFTU_QCMP_EQ``/``NE``/``GT``/``LT``/``GE``/``LE``; pattern matching
-goes through ``dftu_query_match`` with ``DFTU_QMATCH_LIKE``/``ILIKE``/``REGEX``/
-``IREGEX``/``ICONTAINS``. ``dftu_query_in_i64``/``dftu_query_in_str`` (and their
+ops are ``DFTU_DUQL_CMP_EQ``/``NE``/``GT``/``LT``/``GE``/``LE``; pattern matching
+goes through ``dftu_duql_match`` with ``DFTU_DUQL_MATCH_LIKE``/``ILIKE``/``REGEX``/
+``IREGEX``/``ICONTAINS``. ``dftu_duql_in_i64``/``dftu_duql_in_str`` (and their
 ``not_in`` counterparts) build a membership test over an array of values.
-``dftu_query_to_string`` serializes a built query back to the canonical DSL
-string (free the result with ``dftu_query_string_free``).
+``dftu_duql_to_string`` serializes a built query back to the canonical duql
+string (free the result with ``dftu_duql_string_free``).
 
 Build columns
 -------------
@@ -189,7 +189,7 @@ Free every owned handle exactly once, and only handles you still own (a
 
 .. code-block:: c
 
-   dftu_query_free(q2);
+   dftu_duql_free(q2);
 
 Link a C program
 -----------------
@@ -211,7 +211,7 @@ See :doc:`../../getting-started/installation` for the full build, install, and
 See also
 --------
 
-- :doc:`query-dsl` for the predicate language ``dftu_query_parse`` compiles.
+- :doc:`duql` for the predicate language ``dftu_duql_parse`` compiles.
 - :doc:`../data/dataframe` and :doc:`../data/series` for the C++/Python
   surface the same engine exposes.
 - :doc:`../../plugins` for the plugin C ABI (``dftracer/utils/plugins/abi.h``),

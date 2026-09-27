@@ -589,7 +589,7 @@ class DaskTraceViewer:
     def filter(self, dsl: str) -> "DaskTraceViewer":
         return self._clone(replace(self._plan, filters=self._plan.filters + (dsl,)))
 
-    def query(self, dsl: str) -> "DaskTraceViewer":
+    def duql(self, dsl: str) -> "DaskTraceViewer":
         return self.filter(dsl)
 
     def phase(self, phase: PhaseArg) -> "DaskTraceViewer":
@@ -1141,6 +1141,7 @@ def distributed_index(
     import logging as _logging
     import time as _time
 
+    from .dftracer_utils_ext import TRACE_FILE_PATTERNS
     from .dftracer_utils_ext import (
         IndexDatabase as _IndexDatabase,
     )
@@ -1167,7 +1168,7 @@ def distributed_index(
         if not directory:
             raise ValueError("either directory or files is required")
         _log.info("distributed_index: scan_files(%s)", directory)
-        entries = _scan_files(directory, [".pfw", ".pfw.gz"], True, None)
+        entries = _scan_files(directory, list(TRACE_FILE_PATTERNS), True, None)
     else:
         _log.info("distributed_index: sizing %d pre-listed files", len(files))
         entries = [(p, os.path.getsize(p)) for p in files]

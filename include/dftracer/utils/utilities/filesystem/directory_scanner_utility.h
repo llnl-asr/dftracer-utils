@@ -23,9 +23,11 @@ namespace dftracer::utils::utilities::filesystem {
 ///   `normalize_members_for_ingest` and by the `dftracer_split` CLI. A
 ///   recursive scan re-run after a split would otherwise pick up both the
 ///   original trace and its split copy.
+/// - `schemas/`: record schema specs (`*.json`, `*.yaml`) beside an index.
 inline bool is_excluded_scan_dir(const fs::path& p) {
     const std::string name = p.filename().string();
-    return name.rfind(".dftindex", 0) == 0 || name == "split";
+    return name.rfind(".dftindex", 0) == 0 || name == "split" ||
+           name == "schemas";
 }
 
 struct DirectoryScannerUtilityInput {

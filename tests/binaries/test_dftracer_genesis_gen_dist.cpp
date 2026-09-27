@@ -174,7 +174,7 @@ TEST_CASE("records carry the run id and resolve run keys through the index") {
     auto rows = [&](const std::string& q) {
         return View::from_file(out, index_path)
             .metadata(false)
-            .query(q)
+            .duql(q)
             .collect()
             .get()
             .num_rows();

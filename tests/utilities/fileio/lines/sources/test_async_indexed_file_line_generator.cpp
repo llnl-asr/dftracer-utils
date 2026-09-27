@@ -225,7 +225,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             // Exception is thrown inside the coroutine body,
             // which executes on the first co_await gen.next()
             auto task = [](AsyncGenerator<Line> g) -> CoroTask<void> {
-                (void)co_await g.next();
+                co_await g.next();
                 co_return;
             }(std::move(gen));
 

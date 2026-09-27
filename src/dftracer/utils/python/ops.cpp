@@ -195,7 +195,7 @@ PyObject* op_run(PyObject*, PyObject* args) {
             case DFTU_TOK_EXPR:
             case DFTU_TOK_AGGLIST:
             case DFTU_TOK_WINLIST:
-            case DFTU_TOK_QUERY:
+            case DFTU_TOK_DUQL:
                 PyErr_Format(PyExc_NotImplementedError,
                              "op '%s' takes a frame/plan/list/expr/query "
                              "operand not yet runnable via ops.run",

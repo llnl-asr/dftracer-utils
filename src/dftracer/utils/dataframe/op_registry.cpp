@@ -157,7 +157,7 @@ const char* tok_name(dftu_op_tok t) {
             return "agglist";
         case DFTU_TOK_U64:
             return "u64";
-        case DFTU_TOK_QUERY:
+        case DFTU_TOK_DUQL:
             return "query";
         case DFTU_TOK_WINLIST:
             return "winlist";
@@ -373,10 +373,10 @@ dftu_series* dftu_op_run(const dftu_op_desc* op, const dftu_series* const* in,
             if (!g[0].frame) return nullptr;
             return as_op<DFTU_OP_SIG(SERIES, FRAME, NONE, NONE)>(op->fn)(
                 g[0].frame);
-        case DFTU_OP_SIG(SERIES, FRAME, QUERY, NONE):
-            if (!g[0].frame || !g[1].query) return nullptr;
-            return as_op<DFTU_OP_SIG(SERIES, FRAME, QUERY, NONE)>(op->fn)(
-                g[0].frame, g[1].query);
+        case DFTU_OP_SIG(SERIES, FRAME, DUQL, NONE):
+            if (!g[0].frame || !g[1].duql) return nullptr;
+            return as_op<DFTU_OP_SIG(SERIES, FRAME, DUQL, NONE)>(op->fn)(
+                g[0].frame, g[1].duql);
         case DFTU_OP_SIG(SERIES, FRAME, STRLIST, I64):
             if (!g[0].frame) return nullptr;
             return as_op<DFTU_OP_SIG(SERIES, FRAME, STRLIST, I64)>(op->fn)(
@@ -643,6 +643,9 @@ dftu_lazyframe* dftu_op_run_lazy(const dftu_op_desc* op,
         case DFTU_OP_SIG(LAZY, LAZY, STRLIST, I32):
             return as_op<DFTU_OP_SIG(LAZY, LAZY, STRLIST, I32)>(op->fn)(
                 lf, g[1].list.items, g[1].list.n, g[2].i32);
+        case DFTU_OP_SIG(LAZY, LAZY, STRLIST, I64):
+            return as_op<DFTU_OP_SIG(LAZY, LAZY, STRLIST, I64)>(op->fn)(
+                lf, g[1].list.items, g[1].list.n, g[2].i64);
         case DFTU_OP_SIG(LAZY, LAZY, I32, NONE):
             return as_op<DFTU_OP_SIG(LAZY, LAZY, I32, NONE)>(op->fn)(lf,
                                                                      g[1].i32);

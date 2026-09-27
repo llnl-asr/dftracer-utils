@@ -1,5 +1,6 @@
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/json.h>
-#include <dftracer/utils/query/query.h>
+#include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/trace/args_map.h>
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -126,7 +127,7 @@ coro::CoroTask<DetailedStatistics> DetailStatsView::collect(
     auto fold = [group_by, &name_filter, &cat_filter](
                     DetailedStatistics& acc,
                     const std::vector<std::string_view>& lines) {
-        simdjson::dom::parser parser;
+        dftracer::utils::json::RecordParser parser;
         std::string group_key_buf;
         group_key_buf.reserve(128);
         for (std::string_view line : lines) {

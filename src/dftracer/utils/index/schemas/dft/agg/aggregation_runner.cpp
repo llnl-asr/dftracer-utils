@@ -275,13 +275,11 @@ coro::CoroTask<Result<AggregationRunResult>> run_aggregation(
                 input.output_format == AggregationConfig::FORMAT_ARROW) {
                 using namespace ::dftracer::utils::utilities::common::arrow;
 
-                std::unique_ptr<AssociationTracker> global_tracker;
                 {
                     ::dftracer::utils::ScopedTimer _bt(stages,
                                                        "build_global_tracker");
-                    global_tracker = merger->build_global_tracker();
+                    merger->build_global_tracker();
                 }
-                (void)global_tracker;
 
                 EventAggregator::ObservedColumns obs;
                 {

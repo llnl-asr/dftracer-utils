@@ -141,7 +141,7 @@ TEST_SUITE("DFTracerComparator") {
         std::string output = env.get_dir() + "/cmp_output.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", f, "--variant", f, "--no-color",
-                                 "--query", R"(cat == "POSIX")"},
+                                 "--duql", R"(cat == "POSIX")"},
                                 output);
         CHECK(rc == 0);
 
@@ -171,7 +171,7 @@ TEST_SUITE("DFTracerComparator") {
         std::string output = env.get_dir() + "/cmp_diff.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", baseline, "--variant", variant,
-                                 "--no-color", "--query", R"(cat == "POSIX")"},
+                                 "--no-color", "--duql", R"(cat == "POSIX")"},
                                 output);
         CHECK(rc == 0);
 
@@ -213,7 +213,7 @@ TEST_SUITE("DFTracerComparator") {
         std::string output = env.get_dir() + "/cmp_dir.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", base_dir, "--variant", var_dir,
-                                 "--no-color", "--query", R"(cat == "POSIX")"},
+                                 "--no-color", "--duql", R"(cat == "POSIX")"},
                                 output);
         CHECK(rc == 0);
 
@@ -239,7 +239,7 @@ TEST_SUITE("DFTracerComparator") {
         std::string output = env.get_dir() + "/cmp_json.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", f, "--variant", f, "--format",
-                                 "json", "--query", R"(cat == "POSIX")"},
+                                 "json", "--duql", R"(cat == "POSIX")"},
                                 output);
         CHECK(rc == 0);
 
@@ -271,7 +271,7 @@ TEST_SUITE("DFTracerComparator") {
         auto node0 = nodes_arr.at(0);
         REQUIRE(node0.is_object());
         CHECK(node0["name"].is_string());
-        CHECK(node0["query"].is_string());
+        CHECK(node0["duql"].is_string());
 
         // Summary
         auto summary = node0["summary"];
@@ -334,7 +334,7 @@ TEST_SUITE("DFTracerComparator") {
         std::string output = env.get_dir() + "/cmp_json_zero.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", f, "--variant", f, "--format",
-                                 "json", "--query", R"(cat == "POSIX")"},
+                                 "json", "--duql", R"(cat == "POSIX")"},
                                 output);
         CHECK(rc == 0);
 
@@ -374,7 +374,7 @@ TEST_SUITE("DFTracerComparator") {
         std::string output = env.get_dir() + "/cmp_interval.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", f, "--variant", f, "--no-color",
-                                 "-t", "1000", "--query", R"(cat == "POSIX")"},
+                                 "-t", "1000", "--duql", R"(cat == "POSIX")"},
                                 output);
         CHECK(rc == 0);
     }

@@ -206,9 +206,8 @@ def test_series_surface_matches_pandas():
     s = Series([3, 1, None, 3, 2])
     p = s.to_pandas()
     assert s.between(1, 2).to_list() == [False, True, None, False, True]
-    # SQL: FALSE AND NULL is FALSE, so the open forms say False at a null.
-    assert s.between(1, 3, "neither").to_list() == [False, False, False, False, True]
-    assert s.between(1, 3, "left").to_list() == [False, True, False, False, True]
+    assert s.between(1, 3, "neither").to_list() == [False, False, None, False, True]
+    assert s.between(1, 3, "left").to_list() == [False, True, None, False, True]
     with pytest.raises(ValueError):
         s.between(1, 2, "sideways")
     assert s.drop_duplicates().to_list() == [1, 2, 3]  # unique: sorted, nulls out

@@ -144,8 +144,8 @@ TEST_CASE("QueryParams - multiple values for same key returns first") {
 // ============================================================================
 
 TEST_CASE("QueryParams - canonical_key is order-independent") {
-    auto a = QueryParams::parse("begin=1&end=2&query=x");
-    auto b = QueryParams::parse("query=x&end=2&begin=1");
+    auto a = QueryParams::parse("begin=1&end=2&duql=x");
+    auto b = QueryParams::parse("duql=x&end=2&begin=1");
 
     CHECK(a.canonical_key() == b.canonical_key());
 }

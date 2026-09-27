@@ -4,7 +4,7 @@
 #include <dftracer/utils/core/common/abi.h>
 #include <dftracer/utils/core/common/export.h>
 #include <dftracer/utils/core/coro/abi.h>
-#include <dftracer/utils/query/abi.h>
+#include <dftracer/utils/duql/abi.h>
 #include <stdint.h>
 
 /*
@@ -201,6 +201,15 @@ DFTU_EXPORT int32_t dftu_series_decimal_scale(const dftu_series* col);
  * of a FixedSizeList column; 0 for any other type. */
 DFTU_EXPORT int32_t dftu_series_fixed_size(const dftu_series* col);
 
+/** 1 when `col` is a String column whose values are canonical JSON text (a
+ * JSON column), else 0 (also for NULL). */
+DFTU_EXPORT int32_t dftu_series_is_json(const dftu_series* col);
+
+/** A new owned JSON column sharing the String column `col`'s buffers; the
+ * caller asserts each value is canonical JSON text. NULL when `col` is NULL
+ * or not a String column. */
+DFTU_EXPORT dftu_series* dftu_series_mark_json(const dftu_series* col);
+
 /** A new owned column sharing `col`'s buffers zero-copy (a reference-count
  * bump, no data copy). NULL if `col` is NULL. Underpins projection/rename frame
  * ops.
@@ -328,7 +337,10 @@ typedef enum {
 DFTU_EXPORT dftu_series* dftu_series_prim(const dftu_series* v,
                                           dftu_prim_op op);
 
-/** Boolean ops on bit-packed Bool columns for dftu_series_logical. */
+/** Boolean ops on bit-packed Bool columns for dftu_series_logical. A null
+ * row follows Kleene logic: AND is false when either side is false, OR is
+ * true when either side is true, NOT keeps it null, and any other null input
+ * gives a null row. */
 typedef enum { DFTU_LOGICAL_AND = 0, DFTU_LOGICAL_OR = 1 } dftu_logical_op;
 DFTU_EXPORT dftu_series* dftu_series_logical(const dftu_series* a,
                                              const dftu_series* b,
@@ -355,31 +367,34 @@ DFTU_EXPORT dftu_series* dftu_series_str_starts_with(const dftu_series* v,
 DFTU_EXPORT dftu_series* dftu_series_str_ends_with(const dftu_series* v,
                                                    const char* suffix,
                                                    int32_t suffix_len);
-/** The capture `group` (0 = the whole match) of the first ECMAScript regex
- * `pattern` match in each row, as a String column; null where the row is null
- * or does not match (pandas `str.extract`). NULL if the pattern fails to
- * compile or `group` is negative. */
+/* The regex kernels below take a pattern in the duql regex dialect (the
+ * common subset of RE2, PCRE2 and Vectorscan: no backreferences, lookaround,
+ * atomic or possessive groups, recursion or callouts), match strings as
+ * UTF-8, and bound each match by a work limit: a row that reaches it is null.
+ * A pattern outside the dialect fails to compile. */
+
+/** The capture `group` (0 = the whole match) of the first `pattern` match in
+ * each row, as a String column; null where the row is null or does not
+ * match (pandas `str.extract`). NULL if the pattern fails to compile or
+ * `group` is negative or past the pattern's groups. */
 DFTU_EXPORT dftu_series* dftu_series_str_extract(const dftu_series* v,
                                                  const char* pattern,
                                                  int32_t pattern_len,
                                                  int64_t group);
-/** True where the WHOLE string matches the ECMAScript regex `pattern` (the
- * regex entry point; std::regex). NULL if the pattern fails to compile. */
+/** True where the WHOLE string matches the regex `pattern`. NULL if the
+ * pattern fails to compile. */
 DFTU_EXPORT dftu_series* dftu_series_str_matches(const dftu_series* v,
                                                  const char* pattern,
                                                  int32_t pattern_len);
-/** True where the ECMAScript regex `pattern` matches ANYWHERE in the string
- * (std::regex_search; the query DSL's `~` semantics). NULL if the pattern
- * fails to compile. */
+/** True where the regex `pattern` matches ANYWHERE in the string (duql's `~`).
+ * NULL if the pattern fails to compile. */
 DFTU_EXPORT dftu_series* dftu_series_str_search(const dftu_series* v,
                                                 const char* pattern,
                                                 int32_t pattern_len);
-/** True where the string matches the SQL LIKE / glob `pattern`: `%` matches any
- * run (including empty), `_` matches exactly one character, `\` escapes a
- * literal `%`/`_`/`\`; other bytes are literal. A Bool column carrying v's
- * validity. Affix patterns (`text%`, `%text`, `%text%`, exact) take a fast
- * equality / affix / SIMD-substring route; interior wildcards use a per-row
- * two-pointer matcher. */
+/** True where the whole string matches the SQL LIKE `pattern`: `%` matches any
+ * run (empty and newlines included), `_` exactly one UTF-8 character, and
+ * `\` before `%`, `_` or `\` makes it literal; any other `\` sequence makes
+ * the pattern fail (NULL). A Bool column carrying v's validity. */
 DFTU_EXPORT dftu_series* dftu_series_str_like(const dftu_series* v,
                                               const char* pattern,
                                               int32_t pattern_len);
@@ -519,9 +534,10 @@ DFTU_EXPORT dftu_series* dftu_series_str_center(const dftu_series* v,
  * null where either is. */
 DFTU_EXPORT dftu_series* dftu_series_str_cat(const dftu_series* a,
                                              const dftu_series* b);
-/** Every non-overlapping match of the regex `pattern` per row, as a
- * List<String> (an empty list where nothing matches; a null row stays null).
- * NULL for a pattern that does not compile. */
+/** Every non-overlapping match of the duql regex `pattern` per row, as a
+ * List<String> (an empty list where nothing matches; a null row, or one that
+ * reaches the match work limit, is null). NULL for a pattern that does not
+ * compile. */
 DFTU_EXPORT dftu_series* dftu_series_str_findall(const dftu_series* v,
                                                  const char* pattern,
                                                  int32_t pattern_len);
@@ -897,7 +913,7 @@ DFTU_EXPORT dftu_scalar dftu_series_dot(const dftu_series* v,
  * length), or NULL if the predicate has no columnar lowering (pattern match,
  * ordered string compare, a referenced field absent from the batch) - the
  * caller should fall back to the scan-time evaluator - or on error. */
-DFTU_EXPORT dftu_series* dftu_dataframe_mask(const dftu_query* q,
+DFTU_EXPORT dftu_series* dftu_dataframe_mask(const dftu_duql* q,
                                              const dftu_series* const* columns,
                                              const char* const* names,
                                              int32_t n);
@@ -1090,7 +1106,7 @@ DFTU_EXPORT dftu_series* dftu_dataframe_partition_id(const dftu_dataframe* df,
  * counterpart to dftu_dataframe_mask). Returns an owned column, or NULL if the
  * predicate has no columnar lowering or on error. */
 DFTU_EXPORT dftu_series* dftu_dataframe_mask_frame(const dftu_dataframe* df,
-                                                   const dftu_query* q);
+                                                   const dftu_duql* q);
 
 /** The distinct values of `v` and their counts, as a frame with columns `value`
  * (v's type) and `count` (Int64), most-frequent first. Caller owns the frame
@@ -1190,7 +1206,17 @@ DFTU_EXPORT dftu_dataframe* dftu_dataframe_union(const dftu_dataframe* a,
 /** Which rows a join keeps. INNER keeps matched pairs; LEFT / RIGHT also keep
  * that side's unmatched rows with the other side null-filled; OUTER keeps
  * both; SEMI / ANTI keep the left rows with / without a match (left columns
- * only); CROSS pairs every left row with every right row (no keys). */
+ * only); CROSS pairs every left row with every right row (no keys).
+ *
+ * LOOKUP keeps every left row once, in order, and adds each right column but
+ * the keys, from the matching right row, null when none. Right rows that
+ * share a key must hold equal values, else the join fails naming the key and
+ * the column. A right column named like a left column fills it: a left row
+ * that holds a value there fails the join. NEST keeps every left row once and
+ * adds one list column, named by `suffix`, of every matching right row as a
+ * struct of all its columns, empty when none. Both compare keys by value:
+ * integers equal floats of the same value, strings by their bytes, other
+ * types never across; key pairs need not share a type. */
 typedef enum {
     DFTU_JOIN_INNER = 0,
     DFTU_JOIN_LEFT = 1,
@@ -1198,17 +1224,19 @@ typedef enum {
     DFTU_JOIN_OUTER = 3,
     DFTU_JOIN_SEMI = 4,
     DFTU_JOIN_ANTI = 5,
-    DFTU_JOIN_CROSS = 6
+    DFTU_JOIN_CROSS = 6,
+    DFTU_JOIN_LOOKUP = 7,
+    DFTU_JOIN_NEST = 8
 } dftu_join_how;
 
 /** Hash join `df` (left) with `other` (right) on the `n` key pairs
  * `left_on[i]` = `right_on[i]`, compared exactly (a null key never matches,
- * and each pair must share a type). Output columns: every left column, then
- * every right column except a key whose name equals its left key (that column
- * is emitted once, coalesced for OUTER); another right column whose name
- * collides with a left column gets `suffix` appended (NULL = "_right").
- * Matched rows keep left order, then a right-preserving join appends the
- * unmatched right rows. CROSS ignores the keys. NULL if a key column is
+ * and each pair must share a type, except for LOOKUP and NEST). Output columns:
+ * every left column, then every right column except a key whose name equals its
+ * left key (that column is emitted once, coalesced for OUTER); another right
+ * column whose name collides with a left column gets `suffix` appended (NULL =
+ * "_right"). Matched rows keep left order, then a right-preserving join appends
+ * the unmatched right rows. CROSS ignores the keys. NULL if a key column is
  * absent, a key pair's types differ, `n` is 0 for a keyed join, or `how` is
  * not a dftu_join_how. */
 DFTU_EXPORT dftu_dataframe* dftu_dataframe_join(const dftu_dataframe* df,
@@ -1284,6 +1312,46 @@ DFTU_EXPORT dftu_expr* dftu_expr_select(const dftu_expr* cond,
 /** The Bool mask of the rows where `a` is null (`null` nonzero) or present
  * (`null` zero). NULL if `a` is NULL. */
 DFTU_EXPORT dftu_expr* dftu_expr_is_null(const dftu_expr* a, int32_t null);
+
+/* duql semantics (see expr.h): an unknown result is a null cell. Each builder
+ * returns NULL when a handle it needs is NULL. The n-ary builders borrow
+ * `args[0..n)` for the call and return NULL when `n` <= 0. */
+
+/** A String literal; `value` is copied. */
+DFTU_EXPORT dftu_expr* dftu_expr_lit_str(const char* value, int32_t len);
+DFTU_EXPORT dftu_expr* dftu_expr_lit_bool(int32_t value);
+/** A null literal of dftu_dtype `type`. */
+DFTU_EXPORT dftu_expr* dftu_expr_lit_null(int32_t type);
+/** Checked arithmetic; `op` is 0 add, 1 sub, 2 mul, 3 div, 4 floor div,
+ * 5 mod. */
+DFTU_EXPORT dftu_expr* dftu_expr_arith(int32_t op, const dftu_expr* a,
+                                       const dftu_expr* b);
+DFTU_EXPORT dftu_expr* dftu_expr_neg(const dftu_expr* a);
+/** `a <cmp> b` (cmp is a dftu_cmp_op), exact across integers and doubles. */
+DFTU_EXPORT dftu_expr* dftu_expr_cmp_expr(int32_t cmp, const dftu_expr* a,
+                                          const dftu_expr* b);
+DFTU_EXPORT dftu_expr* dftu_expr_coalesce(const dftu_expr* const* args,
+                                          int32_t n);
+/** The least (`least` nonzero) or greatest operand per row. */
+DFTU_EXPORT dftu_expr* dftu_expr_extreme(const dftu_expr* const* args,
+                                         int32_t n, int32_t least);
+DFTU_EXPORT dftu_expr* dftu_expr_concat(const dftu_expr* const* args,
+                                        int32_t n);
+DFTU_EXPORT dftu_expr* dftu_expr_round(const dftu_expr* a, int64_t digits);
+DFTU_EXPORT dftu_expr* dftu_expr_log(const dftu_expr* a);
+DFTU_EXPORT dftu_expr* dftu_expr_pow(const dftu_expr* a, const dftu_expr* b);
+/** `len` UTF-8 characters from character `start`; `len` < 0 to the end. */
+DFTU_EXPORT dftu_expr* dftu_expr_str_substr(const dftu_expr* a, int64_t start,
+                                            int64_t len);
+/** `op` is 0 int, 1 float, 2 string, 3 json. */
+DFTU_EXPORT dftu_expr* dftu_expr_convert(int32_t op, const dftu_expr* a);
+DFTU_EXPORT dftu_expr* dftu_expr_list_len(const dftu_expr* a);
+/** The element at `index`, from the end when negative. */
+DFTU_EXPORT dftu_expr* dftu_expr_list_get(const dftu_expr* a, int64_t index);
+DFTU_EXPORT dftu_expr* dftu_expr_list_sum(const dftu_expr* a);
+/** Whether an element equals `value`; a string `value` is copied. */
+DFTU_EXPORT dftu_expr* dftu_expr_list_contains(const dftu_expr* a,
+                                               dftu_scalar value);
 DFTU_EXPORT void dftu_expr_free(dftu_expr* e);
 
 /* Inspecting a borrowed expression, for a source translating a pushed-down
@@ -1344,11 +1412,11 @@ DFTU_EXPORT void dftu_lazyframe_free(dftu_lazyframe* lf);
 
 /** Output column names without running the query, joined by '\n' into a new
  * malloc'd C string (empty for a plan ending in a data-dependent op). The
- * caller frees it with dftu_query_string_free. NULL on error. */
+ * caller frees it with dftu_duql_string_free. NULL on error. */
 DFTU_EXPORT char* dftu_lazyframe_schema(const dftu_lazyframe* lf);
 
 /** The optimized plan as text (one op per line), for introspection. A new
- * malloc'd C string the caller frees with dftu_query_string_free. NULL on
+ * malloc'd C string the caller frees with dftu_duql_string_free. NULL on
  * error. */
 DFTU_EXPORT char* dftu_lazyframe_explain(const dftu_lazyframe* lf);
 
@@ -1402,6 +1470,15 @@ DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_unique_by(const dftu_lazyframe* lf,
 /** Alias of dftu_lazyframe_unique. */
 DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_drop_duplicates(
     const dftu_lazyframe* lf);
+
+/** For each distinct tuple of the `n_keys` columns named by `keys`, the first
+ * `n` rows with that key, in input order (LazyFrame::head_by). `keys` is
+ * borrowed and may be NULL when `n_keys` is 0. Returns a new owned plan (free
+ * with dftu_lazyframe_free); NULL if `lf` is NULL, `n_keys` is negative, a
+ * key is NULL or the plan's schema lacks a name. */
+DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_head_by(const dftu_lazyframe* lf,
+                                                   const char* const* keys,
+                                                   int32_t n_keys, int64_t n);
 
 /** Replace column names positionally with the `n` `names`, keeping column
  * order. `n` must match the frame's column count; a mismatch surfaces as a
@@ -1620,25 +1697,40 @@ typedef enum {
 #define DFTU_WINDOW_UNBOUNDED INT64_MAX
 
 /** One appended window column: `func` over `value` (a column name, or NULL
- * when the function takes none) into `out`. `offset` is the LAG/LEAD shift,
- * the NTILE bucket count, the NTH_VALUE 1-based k or the FRAME_SUM / MIN /
- * MAX / MEAN minimum present count below which the output is null (0 =
- * none); FILL_FORWARD is the nearest present value at or before the row in
- * the partition; RUNNING_PROD the Float64 product of the present values so
- * far; `time` and `threshold`
- * feed RATE and SESSIONIZE, `counter` (nonzero) the RATE reset correction;
- * `preceding`/`following` bound a FRAME_* function in rows
- * (DFTU_WINDOW_UNBOUNDED = no bound). */
+ * when the function takes none) into `out`. FILL_FORWARD is the nearest
+ * present value at or before the row in the partition; RUNNING_PROD the
+ * Float64 product of the present values so far. `param` holds what only some
+ * functions read, and `func` names the member that is set:
+ * - `offset`: the LAG/LEAD shift, NTILE bucket count or NTH_VALUE 1-based k.
+ * - `frame` (FRAME_*): the present count below which the output is null (0 =
+ *   none) and the row bounds (DFTU_WINDOW_UNBOUNDED = no bound).
+ * - `rate` (RATE): the time column and, when `counter` is nonzero, the
+ *   counter-reset correction.
+ * - `session` (SESSIONIZE): the time column, the row-end column (NULL = each
+ *   row ends at its time), the gap and the longest session measured from its
+ *   first time (0 = no limit), both in the time's unit and not negative. */
 typedef struct dftu_window_spec {
     dftu_window_func func;
     const char* value;
-    const char* time;
     const char* out;
-    int64_t offset;
-    double threshold;
-    int32_t counter;
-    int64_t preceding;
-    int64_t following;
+    union {
+        int64_t offset;
+        struct {
+            int64_t min_count;
+            int64_t preceding;
+            int64_t following;
+        } frame;
+        struct {
+            const char* time;
+            int32_t counter;
+        } rate;
+        struct {
+            const char* time;
+            const char* end;
+            double gap;
+            double span;
+        } session;
+    } param;
 } dftu_window_spec;
 
 /** How a generated gap-fill row fills its value columns; mirrors the
@@ -2035,8 +2127,8 @@ typedef enum {
                          and cannot collide with a signed-shaped op */
     DFTU_TOK_I64LIST, /**< a (const int64_t*, int32 count) int64-list operand
                          (e.g. LazyFrame::take's row indices) */
-    DFTU_TOK_QUERY,   /**< a const dftu_query* operand (a compiled predicate),
-                         borrowed for the call */
+    DFTU_TOK_DUQL,    /**< a const dftu_duql* operand (a compiled predicate),
+                          borrowed for the call */
     DFTU_TOK_WINLIST  /**< a (const dftu_window_spec*, int32 count) window-spec
                          list operand */
 } dftu_op_tok;
@@ -2159,7 +2251,7 @@ DFTU_EXPORT int dftu_op_unregister(const char* name);
 /** One operand slot. Only the union member the operand's token names is read:
  * SCALAR->scalar, I64->i64, F64->f64, CHAR->ch, an enum token (CMP/PRIM/
  * LOGICAL/DTYPE/REDUCE/I32/RANK/ROLLING)->i32, STR->str, STRLIST->list,
- * I32LIST->i32list, I64LIST->i64list, QUERY->query, and a frame op's SERIES
+ * I32LIST->i32list, I64LIST->i64list, DUQL->duql, and a frame op's SERIES
  * operand (a mask/column)->series. A SERIES/FRAME operand that is the primary
  * operand of a column/frame/lazy op is passed in the runner's in[]/frames[]
  * array, not here; a FRAME operand of a non-frame op (e.g. a SERIES-return op
@@ -2195,7 +2287,7 @@ typedef union dftu_op_val {
         int32_t n;
     } agglist;
     const dftu_dataframe* frame;
-    const dftu_query* query;
+    const dftu_duql* duql;
     struct {
         const dftu_window_spec* items;
         int32_t n;
@@ -2342,7 +2434,7 @@ DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_op(const dftu_lazyframe* lf,
  * contract; NULL / 0 leaves them data-dependent, known only at collect.
  * `others` are borrowed (the plan holds copies). NULL if a handle or `name`
  * is NULL, no such op is registered, it is not a table -> table op, an
- * operand has no owned form (EXPR / QUERY / LAZY), or `n` does not match the
+ * operand has no owned form (EXPR / DUQL / LAZY), or `n` does not match the
  * op's frame operands. */
 DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_frame_op(
     const dftu_lazyframe* lf, const char* name,

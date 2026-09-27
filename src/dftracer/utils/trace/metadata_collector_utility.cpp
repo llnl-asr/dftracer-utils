@@ -49,6 +49,7 @@ MetadataCollectorUtility::operator()(
     } catch (const std::exception& e) {
         DFTRACER_UTILS_LOG_ERROR("Failed to collect metadata for %s: %s",
                                  input.file_path.c_str(), e.what());
+        meta.error_message = e.what();
         co_return meta;
     }
 }

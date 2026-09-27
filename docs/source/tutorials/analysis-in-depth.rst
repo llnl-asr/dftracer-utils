@@ -126,7 +126,7 @@ duration is at least 100 microseconds.
 
    .. tab-item:: Python
 
-      The Python DSL composes with ``&`` (and), ``|`` (or), and ``~`` (not):
+      The Python builder composes with ``&`` (and), ``|`` (or), and ``~`` (not):
 
       .. code-block:: python
 
@@ -136,7 +136,7 @@ duration is at least 100 microseconds.
 
          df = (
              TraceViewer("app.pfw.gz")
-             .query(str(q))
+             .duql(str(q))
              .group_by("name")
              .agg("count", "sum:dur", "mean:dur")
              .sort_by("name")
@@ -153,35 +153,35 @@ duration is at least 100 microseconds.
           0    read    100    10000     100.0
           1   write    100    20000     200.0
 
-      The DSL also has **resolved** columns for path-like metadata the
-      index stores by hash - for example
-      ``resolved("fhash.path").like("%/scratch/%")`` or
-      ``resolved("hhash.name") == "node01"``. Those need traces that carry the
-      matching metadata, so they are not part of this lesson's path; see the
-      :doc:`../guides/core/query-dsl` guide for the full operator list.
+      duql also reads names that a trace stores by hash through row sets
+      of the record schema's source - for example
+      ``fhash -> files.path like "%/scratch/%"`` or
+      ``hhash -> hosts.name == "node01"`` in ``TraceViewer.duql``. Those
+      need traces that carry the matching metadata, so they are not part of
+      this lesson's path; see the :doc:`../guides/core/duql` guide.
 
    .. tab-item:: C++
 
       The C++ ``Field`` builder composes with ``&&``, ``||``, and ``!`` (the
       C++ operators) and has the same matchers. ``.to_string()`` hands the built
-      expression to ``View::query``.
+      expression to ``View::duql``.
 
       .. code-block:: cpp
 
-         #include <dftracer/utils/query/builder.h>
+         #include <dftracer/utils/duql/builder.h>
          #include <dftracer/utils/trace/views/view.h>
 
          #include <cstdint>
          #include <cstdio>
 
          using namespace dftracer::utils::trace::views;
-         using dftracer::utils::query::Field;
+         using dftracer::utils::duql::Field;
 
          int main() {
              auto q = Field("name").like("%r%") && (Field("dur") >= 100);
 
              auto df = View::from_file("app.pfw.gz")
-                           .query(q.to_string())
+                           .duql(q.to_string())
                            .group_by({GroupKey::name()})
                            .agg({AggSpec(AggOp::Count),
                                  AggSpec(AggOp::Sum, "dur"),
@@ -212,8 +212,9 @@ duration is at least 100 microseconds.
          read    100    10000    100.0
          write   100    20000    200.0
 
-      ``resolved("name")`` builds the same resolved-hash fields as the Python
-      helper; see :doc:`../guides/core/query-dsl`.
+      For names stored by hash, write an arrow such as
+      ``fhash -> files.path`` in ``View::duql``; see
+      :doc:`../guides/core/duql`.
 
 4. Derive a column yourself
 ---------------------------

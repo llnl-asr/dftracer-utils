@@ -247,7 +247,7 @@ static coro::CoroTask<int> run_verify(
                     }
                 }
 
-                auto parsed = query::Query::from_string(query_dsl);
+                auto parsed = duql::Query::from_string(query_dsl);
                 if (!parsed) continue;
 
                 ChunkPrunerInput pruner_input{idx_path_q, abs_path,

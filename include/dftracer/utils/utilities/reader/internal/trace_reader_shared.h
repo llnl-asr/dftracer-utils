@@ -2,7 +2,8 @@
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_TRACE_READER_SHARED_H
 
 #include <dftracer/utils/core/coro/async_generator.h>
-#include <dftracer/utils/query/query.h>
+#include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/json/canonical.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <simdjson.h>
@@ -14,6 +15,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace dftracer::utils::utilities::reader::internal {
 
@@ -41,9 +43,11 @@ inline std::string_view strip_ndjson_bookends(std::string_view bytes) {
     return std::string_view(s, static_cast<std::size_t>(e - s));
 }
 
-inline query::LiteralValue ondemand_to_literal(simdjson::ondemand::value val) {
-    auto type = val.type().value_unsafe();
-    switch (type) {
+// A field's value for the evaluator: JSON null as a null cell, an object or
+// array as its canonical JSON text.
+inline std::optional<duql::Cell> ondemand_to_cell(
+    simdjson::ondemand::value val) {
+    switch (val.type().value_unsafe()) {
         case simdjson::ondemand::json_type::string: {
             auto r = val.get_string();
             if (!r.error()) return std::string(r.value_unsafe());
@@ -64,21 +68,33 @@ inline query::LiteralValue ondemand_to_literal(simdjson::ondemand::value val) {
             if (!r.error()) return r.value_unsafe();
             break;
         }
+        case simdjson::ondemand::json_type::null:
+            return duql::Cell::null();
+        case simdjson::ondemand::json_type::object:
+        case simdjson::ondemand::json_type::array: {
+            const bool array = val.type().value_unsafe() ==
+                               simdjson::ondemand::json_type::array;
+            auto raw = val.raw_json();
+            if (!raw.error())
+                return duql::Cell::json(
+                    json::canonical_json_text(raw.value_unsafe()), array);
+            break;
+        }
         default:
             break;
     }
-    return std::string{};
+    return std::nullopt;
 }
 
 // Whether the query reads `key` as any(key).
-inline bool query_reads_any(const query::Query& query, std::string_view key) {
+inline bool query_reads_any(const duql::Query& query, std::string_view key) {
     const auto& paths = query.any_paths();
     return std::binary_search(paths.begin(), paths.end(), key);
 }
 
 // Stores the scalar elements of the array `val` under `<key>.<k>`, the keys
 // the evaluator reads for any(key).
-inline void store_positions(query::ValueMap& fields, std::string_view key,
+inline void store_positions(duql::ValueMap& fields, std::string_view key,
                             simdjson::ondemand::value val) {
     auto arr = val.get_array();
     if (arr.error()) return;
@@ -93,8 +109,9 @@ inline void store_positions(query::ValueMap& fields, std::string_view key,
             case simdjson::ondemand::json_type::string:
             case simdjson::ondemand::json_type::number:
             case simdjson::ondemand::json_type::boolean:
-                fields[std::string(key) + "." + std::to_string(pos)] =
-                    ondemand_to_literal(v);
+                if (auto cell = ondemand_to_cell(v))
+                    fields[std::string(key) + "." + std::to_string(pos)] =
+                        std::move(*cell);
                 break;
             default:
                 break;
@@ -103,8 +120,9 @@ inline void store_positions(query::ValueMap& fields, std::string_view key,
 }
 
 // Stores field `key` of a record for the query: an array read as any(key)
-// by its positions, any other referenced field as one value.
-inline void store_referenced(query::ValueMap& fields, const query::Query& query,
+// by its positions, any other referenced field as one value (a null as a
+// null cell, so an args value of the same name cannot stand in for it).
+inline void store_referenced(duql::ValueMap& fields, const duql::Query& query,
                              std::string_view key,
                              simdjson::ondemand::value val,
                              simdjson::ondemand::json_type type) {
@@ -112,13 +130,14 @@ inline void store_referenced(query::ValueMap& fields, const query::Query& query,
         query_reads_any(query, key)) {
         store_positions(fields, key, val);
     } else if (query.references(key)) {
-        fields[std::string(key)] = ondemand_to_literal(val);
+        if (auto cell = ondemand_to_cell(val))
+            fields[std::string(key)] = std::move(*cell);
     }
 }
 
 // True if the query references any dotted (nested) field, e.g. "args.ret".
 // Cheap; compute once per read to gate the dotted-key work below.
-inline bool query_references_dotted(const query::Query& query) {
+inline bool query_references_dotted(const duql::Query& query) {
     for (const auto& f : query.fields()) {
         if (f.find('.') != std::string_view::npos) return true;
     }
@@ -129,12 +148,12 @@ inline bool query_references_dotted(const query::Query& query) {
 // references: the bare child key (`ret`, the canonical form) and/or the dotted
 // path (`args.ret`). `check_dotted` should be query_references_dotted(query),
 // hoisted out of the per-event loop. Consumes `val` exactly once.
-inline void store_referenced_nested(query::ValueMap& fields,
-                                    const query::Query& query,
-                                    bool check_dotted, std::string_view parent,
+inline void store_referenced_nested(duql::ValueMap& fields,
+                                    const duql::Query& query, bool check_dotted,
+                                    std::string_view parent,
                                     std::string_view child,
                                     simdjson::ondemand::value val) {
-    bool want_bare = query.references(child);
+    const bool want_bare = query.references(child);
     std::string dotted;
     bool want_dotted = false;
     if (check_dotted) {
@@ -152,17 +171,18 @@ inline void store_referenced_nested(query::ValueMap& fields,
             store_positions(fields, child, val);
         return;
     }
-    auto lit = ondemand_to_literal(val);
+    auto cell = ondemand_to_cell(val);
+    if (!cell) return;
     // A top-level field of the same name wins, as the evaluator resolves it.
-    if (want_bare) fields.try_emplace(std::string(child), lit);
-    if (want_dotted) fields[std::move(dotted)] = std::move(lit);
+    if (want_bare) fields.try_emplace(std::string(child), *cell);
+    if (want_dotted) fields[std::move(dotted)] = std::move(*cell);
 }
 
 // Chunk generator with index-driven pruning. Defined in trace_reader.cpp;
 // shared by read_json (core) and read_arrow (Arrow export).
 coro::AsyncGenerator<std::span<const char>> read_chunks_indexed(
     std::shared_ptr<Reader> reader, std::string index_path,
-    std::string file_path, ReadConfig config, std::optional<query::Query> query,
+    std::string file_path, ReadConfig config, std::optional<duql::Query> query,
     bool extend_to_line_boundary = false);
 
 }  // namespace dftracer::utils::utilities::reader::internal

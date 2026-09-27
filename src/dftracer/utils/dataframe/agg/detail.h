@@ -287,12 +287,17 @@ class AggState {
         std::uint64_t hi = 0;
     };
     std::vector<LightStat> light;
+    // Net wraps of an integer light sum by `light` index (FieldStat::ecarry),
+    // present only once that sum wraps.
+    ankerl::unordered_dense::map<std::size_t, std::int64_t> light_carry;
     bool light_on = false;
     // Per group, the least row index that fed it, kept by the accumulate
     // loops and the merge (a group that came in any other way, a
     // deserialize, has none: the vector is then shorter than the groups
     // and the order is not restored).
     std::vector<std::int64_t> group_first_row;
+    // Row index of row 0 of the batch being accumulated (agg_set_row_base).
+    std::int64_t row_base = 0;
     std::vector<FieldStat> fstats;  // groups * nf
 
     // First/Last state, allocated (groups * nf) only when `has_fl`. First/Last
@@ -795,6 +800,8 @@ class AggState {
                     break;
             }
         }
+        for (const auto& [i, carry] : light_carry) fstats[i].ecarry = carry;
+        light_carry.clear();
         light.clear();
         light.shrink_to_fit();
     }
@@ -814,7 +821,7 @@ class AggState {
                                   : static_cast<std::size_t>(get_int(k));
             dftracer::utils::hash_combine(h, cv);
         }
-        auto [it, fresh] =
+        [[maybe_unused]] auto [it, fresh] =
             key_buckets.try_emplace(static_cast<std::uint64_t>(h), -1);
         std::int64_t last = -1;
         for (std::int64_t g = it->second; g >= 0;
@@ -850,7 +857,6 @@ class AggState {
             it->second = g;
         else
             next_in_bucket[static_cast<std::size_t>(last)] = g;
-        (void)fresh;
         grow_group();
         return g;
     }

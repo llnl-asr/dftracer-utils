@@ -615,20 +615,21 @@ DataFrame agg_finalize(const AggState& st_in,
             };
             // A group with no present value has no minimum or maximum: null,
             // not the accumulator's seed. Its sum is 0, as SQL and pandas
-            // report it.
+            // report it. An integer sum that overflowed its type is null.
             std::vector<std::uint8_t> valid;
             const std::uint8_t* validity = nullptr;
-            if (sp.op != AggOp::Sum) {
+            if (sp.op != AggOp::Sum || dom != FieldStatDomain::F64) {
                 valid.assign(static_cast<std::size_t>((ng + 7) / 8), 0);
-                bool any_empty = false;
+                bool any_null = false;
                 for (std::int64_t g = 0; g < ng; ++g) {
-                    if (fs_at(g).n > 0)
+                    const FieldStat& f = fs_at(g);
+                    if (sp.op == AggOp::Sum ? f.esum_fits() : f.n > 0)
                         valid[static_cast<std::size_t>(g >> 3)] |=
                             static_cast<std::uint8_t>(1u << (g & 7));
                     else
-                        any_empty = true;
+                        any_null = true;
                 }
-                if (any_empty) validity = valid.data();
+                if (any_null) validity = valid.data();
             }
             if (dom == FieldStatDomain::U64) {
                 std::vector<std::uint64_t> v(static_cast<std::size_t>(ng));
@@ -738,6 +739,17 @@ DataFrame agg_finalize(const AggState& st_in,
                                : d.op == AggOp::Min ? f.emin
                                                     : f.emax;
                     };
+                    std::vector<std::uint8_t> valid(
+                        static_cast<std::size_t>((ng + 7) / 8), 0xFF);
+                    const std::uint8_t* validity = nullptr;
+                    if (d.op == AggOp::Sum)
+                        for (std::int64_t g = 0; g < ng; ++g)
+                            if (const FieldStat* f = fs_of(g);
+                                f && !f->esum_fits()) {
+                                valid[static_cast<std::size_t>(g >> 3)] &=
+                                    static_cast<std::uint8_t>(~(1u << (g & 7)));
+                                validity = valid.data();
+                            }
                     if (dom == FieldStatDomain::U64) {
                         std::vector<std::uint64_t> v(
                             static_cast<std::size_t>(ng), 0);
@@ -745,15 +757,16 @@ DataFrame agg_finalize(const AggState& st_in,
                             if (const FieldStat* f = fs_of(g))
                                 v[static_cast<std::size_t>(g)] =
                                     std::bit_cast<std::uint64_t>(exact(*f));
-                        out.columns.push_back(
-                            Series::flat(TypeId::Uint64, v.data(), ng));
+                        out.columns.push_back(Series::flat(
+                            TypeId::Uint64, v.data(), ng, validity));
                     } else {
                         std::vector<std::int64_t> v(
                             static_cast<std::size_t>(ng), 0);
                         for (std::int64_t g = 0; g < ng; ++g)
                             if (const FieldStat* f = fs_of(g))
                                 v[static_cast<std::size_t>(g)] = exact(*f);
-                        out.columns.push_back(Series::flat_i64(v.data(), ng));
+                        out.columns.push_back(
+                            Series::flat_i64(v.data(), ng, validity));
                     }
                 } else {
                     std::vector<double> v(static_cast<std::size_t>(ng), 0.0);

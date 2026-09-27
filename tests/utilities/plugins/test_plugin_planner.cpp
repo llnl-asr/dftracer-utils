@@ -1,4 +1,4 @@
-// Planner level 1: the plugin set feeds the UNION of every plugin's plan_query
+// Planner level 1: the plugin set feeds the UNION of every plugin's plan_duql
 // into the scan's index prune. Covers the union-query construction (dedup, bail
 // on a no-query or unparseable plugin, single-vs-multi) and the end-to-end
 // property that pruning skips files no plugin wants without changing any
@@ -38,7 +38,7 @@ namespace {
 std::vector<const char*> qs(std::vector<const char*> v) { return v; }
 
 // A plugin that counts the events its own filter keeps. on_batch sees events
-// already filtered by plan_query, so its count is invariant to host pruning;
+// already filtered by plan_duql, so its count is invariant to host pruning;
 // on_finalize (once, on the merged master slice) publishes the total.
 struct CountState {
     const char* query = nullptr;
@@ -49,7 +49,7 @@ struct CountSlice {
     std::uint64_t n = 0;
 };
 
-const char* count_plan_query(void* self) {
+const char* count_plan_duql(void* self) {
     return static_cast<CountState*>(self)->query;
 }
 void* count_make_slice(void* self) {
@@ -80,7 +80,7 @@ dftu_plugin make_count_plugin(CountState* st) {
     dftu_plugin p{};
     p.abi_version = DFTRACER_PLUGIN_ABI_VERSION;
     p.self = st;
-    p.plan_query = count_plan_query;
+    p.plan_duql = count_plan_duql;
     p.make_slice = count_make_slice;
     p.on_batch = count_on_batch;
     p.merge = count_merge;
@@ -149,11 +149,11 @@ TEST_SUITE("PluginPlannerUnion") {
         // The parenthesized union must parse to a disjunction that keeps events
         // either side selects.
         CHECK(u->references("cat"));
-        dftracer::utils::query::ValueMap posix;
+        dftracer::utils::duql::ValueMap posix;
         posix["cat"] = std::string("POSIX");
-        dftracer::utils::query::ValueMap stdio;
+        dftracer::utils::duql::ValueMap stdio;
         stdio["cat"] = std::string("STDIO");
-        dftracer::utils::query::ValueMap other;
+        dftracer::utils::duql::ValueMap other;
         other["cat"] = std::string("OTHER");
         CHECK(u->evaluate(posix));
         CHECK(u->evaluate(stdio));
@@ -167,14 +167,14 @@ TEST_SUITE("PluginPlannerUnion") {
         CHECK(u->source() == std::string(q));
     }
 
-    TEST_CASE("a plugin without a plan_query disables the prune") {
+    TEST_CASE("a plugin without a plan_duql disables the prune") {
         CHECK_FALSE(plugin_union_prune_query(qs({R"(cat == "STDIO")", nullptr}))
                         .has_value());
         CHECK_FALSE(plugin_union_prune_query(qs({R"(cat == "STDIO")", ""}))
                         .has_value());
     }
 
-    TEST_CASE("an unparseable plan_query disables the prune") {
+    TEST_CASE("an unparseable plan_duql disables the prune") {
         CHECK_FALSE(
             plugin_union_prune_query(qs({R"(cat == "STDIO")", "cat =="}))
                 .has_value());
@@ -201,7 +201,7 @@ TEST_SUITE("PluginPlannerScan") {
         dftu_plugin a = make_count_plugin(&p_a), b = make_count_plugin(&p_b);
         ExportStats pruned = run_host({&a, &b}, files);
 
-        // Baseline: a plugin with no plan_query forces a full scan (no prune).
+        // Baseline: a plugin with no plan_duql forces a full scan (no prune).
         CountState q_a{stdio_q}, q_all{nullptr};
         dftu_plugin c = make_count_plugin(&q_a), d = make_count_plugin(&q_all);
         ExportStats full = run_host({&c, &d}, files);
@@ -317,12 +317,11 @@ TEST_SUITE("PluginAttachHandle") {
 
         View base = View::from_files(files);
         ExportStats scan{};
-        PluginRun run;
         auto plugin_branch = [&](ViewSession& s) {
             Deferred<PluginRun> h = set->attach(s);
             return std::function<void(const ExportStats&)>(
                 [&, h](const ExportStats& stats) mutable {
-                    run = std::move(h.get());
+                    h.get();
                     scan = stats;
                 });
         };
@@ -344,10 +343,9 @@ TEST_SUITE("PluginAttachHandle") {
         // so asserting through the handle would pass whether or not the
         // prune ran.
         CHECK(scan.chunks_skipped > 0);
-        (void)run;
     }
 
-    // The regression that matters: a plugin with a narrow plan_query must not
+    // The regression that matters: a plugin with a narrow plan_duql must not
     // starve a co-scanning collect() branch of events it is entitled to.
     TEST_CASE(
         "attach co-scanning with a collect branch never narrows the "
@@ -366,12 +364,11 @@ TEST_SUITE("PluginAttachHandle") {
 
         View base = View::from_files(files);
         ExportStats scan{};
-        PluginRun run;
         auto plugin_branch = [&](ViewSession& s) {
             Deferred<PluginRun> h = set->attach(s);
             return std::function<void(const ExportStats&)>(
                 [&, h](const ExportStats& stats) mutable {
-                    run = std::move(h.get());
+                    h.get();
                     scan = stats;
                 });
         };
@@ -388,11 +385,9 @@ TEST_SUITE("PluginAttachHandle") {
         Runtime rt(4);
         auto task = dftracer::utils::run_coro_scope(
             rt.executor(), [&](CoroScope&) -> coro::CoroTask<void> {
-                auto [ignored, agg] =
+                all = std::get<1>(
                     co_await dftracer::utils::dataframe::collect_all(
-                        plugin_plan, all_plan);
-                (void)ignored;
-                all = std::move(agg);
+                        plugin_plan, all_plan));
                 co_return;
             });
         rt.submit(std::move(task), "plugin-attach-coscan").wait();
@@ -405,6 +400,5 @@ TEST_SUITE("PluginAttachHandle") {
         CHECK(scan.chunks_skipped == 0);
         REQUIRE(all.num_rows() == 1);
         CHECK(col_sum(all, "n") == 2 * N);
-        (void)run;
     }
 }

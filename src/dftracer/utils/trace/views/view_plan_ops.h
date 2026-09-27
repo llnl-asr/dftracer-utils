@@ -2,6 +2,8 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_PLAN_OPS_H
 
 #include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/core/coro/async_semaphore.h>
+#include <dftracer/utils/trace/views/batch_bridge.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 
@@ -32,11 +34,15 @@ std::vector<TraceConfig> config(const ScanPlan& plan_);
 std::vector<std::string> columns(const ScanPlan& plan_);
 std::vector<ColumnInfo> schema(const ScanPlan& plan_);
 std::vector<SchemaLeaf> schema_tree(const ScanPlan& plan_);
-std::unordered_map<std::string, dataframe::TypeId> column_types(
+/// Each column's type from the index; a column of mixed JSON types is a JSON
+/// String (DataType::json).
+std::unordered_map<std::string, dataframe::DataType> column_types(
     const ScanPlan& plan_);
+/// The columns `plan_` gives as JSON (see detail::JsonColumns); null when none.
+std::shared_ptr<const detail::JsonColumns> json_columns(
+    const detail::ViewPlan& plan);
 TimeMetric time_metric(const ScanPlan& plan_);
 ScanPlan filter(const ScanPlan& plan_, Query q);
-ScanPlan query(const ScanPlan& plan_, const std::string& dsl);
 ScanPlan phase(const ScanPlan& plan_, Phase p);
 ScanPlan time_range(const ScanPlan& plan_, double begin, double end);
 ScanPlan time_bucket(const ScanPlan& plan_, std::uint64_t interval_us);
@@ -62,14 +68,14 @@ ScanPlan topk(const ScanPlan& plan_, std::string column, std::int64_t k,
               bool largest = true);
 ScanPlan materialize(const ScanPlan& plan_, std::uint64_t checkpoint_size,
                      std::uint64_t part_size);
-ScanPlan metadata(const ScanPlan& plan_, bool include);
+ScanPlan all(const ScanPlan& plan_);
 /// The plan read by a trace operation: records without a time are skipped.
 ScanPlan timed(const ScanPlan& plan_);
 ScanPlan record_schema(const ScanPlan& plan_, const std::string& id);
 ScanPlan cancel_when(const ScanPlan& plan_, std::function<bool()> pred);
+ScanPlan ordered(const ScanPlan& plan_);
 ScanPlan rollup_root(const ScanPlan& plan_, std::string dir);
 ScanPlan views_root(const ScanPlan& plan_, std::string dir);
-ScanPlan emit_all_metadata(const ScanPlan& plan_, bool v);
 coro::CoroTask<ExportStats> for_each_batch(
     ScanPlan plan_,
     std::function<void(std::size_t, const std::vector<std::string_view>&)>
@@ -99,10 +105,11 @@ coro::CoroTask<std::string> flamegraph_partial(
     std::string dur, std::string name, std::vector<std::string> group);
 dataframe::DataFrame merge_flamegraph_partials(
     const std::vector<std::string_view>& partials);
-coro::CoroTask<ExportStats> run_folds(
-    ScanPlan plan_, std::span<detail::Fold* const> folds,
-    dftracer::utils::StringIntern& intern,
-    detail::DynamicPrune* dyn_prune = nullptr);
+coro::CoroTask<ExportStats> run_folds(ScanPlan plan_,
+                                      std::span<detail::Fold* const> folds,
+                                      dftracer::utils::StringIntern& intern,
+                                      detail::DynamicPrune* dyn_prune = nullptr,
+                                      coro::CoroSemaphore* gate = nullptr);
 coro::CoroTask<ExportStats> run(ScanPlan plan_,
                                 const ProgressFn* progress = nullptr);
 std::string materialize_dir(const ScanPlan& plan_);

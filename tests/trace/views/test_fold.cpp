@@ -188,11 +188,8 @@ TEST_SUITE("Fold") {
         CHECK(cf.sealed_units >= 1);
     }
 
-    // Step 2 of lazy indexing: the scanner in fold mode must deliver metadata
-    // events (ph="M") to the fold under emit_all_metadata, so a dictionary fold
-    // can harvest the hash table without re-parsing.
     TEST_CASE(
-        "fuse delivers metadata events to a fold under emit_all_metadata") {
+        "fuse delivers metadata events to a fold under include_metadata") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         // One FH and one HH metadata record, then data events.
@@ -265,7 +262,6 @@ TEST_SUITE("Fold") {
         plan.files.push_back(f);
         ViewDefinition vdef;
         vdef.include_metadata = true;
-        vdef.emit_all_metadata = true;
 
         StringIntern intern;
         DictProbe probe(intern);

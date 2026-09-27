@@ -110,28 +110,28 @@ class Host {
     }
 
     /// Valid for the whole scan; null on parse error. Do not free.
-    dftu_query* query_compile(std::string_view src) const {
-        const dftu_svc_query* e = ext(DFTU_SVC_QUERY, query_ext_);
-        return e && e->query_compile
-                   ? e->query_compile(h_->h, src.data(),
-                                      static_cast<std::uint32_t>(src.size()))
+    dftu_duql* duql_compile(std::string_view src) const {
+        const dftu_svc_duql* e = ext(DFTU_SVC_DUQL, query_ext_);
+        return e && e->duql_compile
+                   ? e->duql_compile(h_->h, src.data(),
+                                     static_cast<std::uint32_t>(src.size()))
                    : nullptr;
     }
 
     /// Compile a predicate built with `F`/`Field`, e.g.
-    /// `h.query_compile(F("dur") > 1000)`. Rendered to a DSL string and parsed
+    /// `h.duql_compile(F("dur") > 1000)`. Rendered to a DSL string and parsed
     /// host-side, so the plugin links nothing from the query library.
-    dftu_query* query_compile(const Expr& e) const {
-        return query_compile(e.to_string());
+    dftu_duql* duql_compile(const Expr& e) const {
+        return duql_compile(e.to_string());
     }
-    bool query_matches(const dftu_query* q, const dftu_dataframe* df,
-                       std::int64_t row) const {
-        const dftu_svc_query* qe = ext(DFTU_SVC_QUERY, query_ext_);
-        return q && qe && qe->query_matches &&
-               qe->query_matches(h_->h, q, df, row) != 0;
+    bool duql_matches(const dftu_duql* q, const dftu_dataframe* df,
+                      std::int64_t row) const {
+        const dftu_svc_duql* qe = ext(DFTU_SVC_DUQL, query_ext_);
+        return q && qe && qe->duql_matches &&
+               qe->duql_matches(h_->h, q, df, row) != 0;
     }
     /// Compile and wrap as a non-owning Query bound to this host; see
-    /// query_compile for lifetime.
+    /// duql_compile for lifetime.
     class Query compile(std::string_view src) const;
     /// compile() for a predicate built with `F`/`Field`.
     class Query compile(const Expr& e) const;
@@ -415,7 +415,7 @@ class Host {
 
     const dftu_plugin_host* h_;
     mutable const dftu_svc_coro* coro_ext_ = nullptr;
-    mutable const dftu_svc_query* query_ext_ = nullptr;
+    mutable const dftu_svc_duql* query_ext_ = nullptr;
     mutable const dftu_svc_writer* writer_ext_ = nullptr;
     mutable const dftu_svc_sketch* sketch_ext_ = nullptr;
     mutable const dftu_svc_arrow* arrow_ext_ = nullptr;
@@ -953,7 +953,7 @@ inline int Host::trace_read(const char* path, Fn&& fn) const {
         const_cast<void*>(static_cast<const void*>(std::addressof(fn))));
 }
 
-/// Non-owning view over a compiled dftu_query (see Host::compile). Host-owned
+/// Non-owning view over a compiled dftu_duql (see Host::compile). Host-owned
 /// and valid for the scan; the plugin never frees it.
 class Query {
    public:
@@ -962,26 +962,26 @@ class Query {
     explicit operator bool() const noexcept { return q_ != nullptr; }
 
     bool matches(const dftu_dataframe* df, std::int64_t row) const {
-        return host_.query_matches(q_, df, row);
+        return host_.duql_matches(q_, df, row);
     }
     bool matches(const Event& e) const { return matches(e.frame(), e.row()); }
 
     /// Borrowed handle; the host retains ownership. Null if unsupported.
-    dftu_query* raw() const noexcept { return q_; }
+    dftu_duql* raw() const noexcept { return q_; }
 
    private:
     friend class Host;
-    Query(Host host, dftu_query* q) noexcept : host_(host), q_(q) {}
+    Query(Host host, dftu_duql* q) noexcept : host_(host), q_(q) {}
 
     Host host_{nullptr};
-    dftu_query* q_ = nullptr;
+    dftu_duql* q_ = nullptr;
 };
 
 inline Query Host::compile(std::string_view src) const {
-    return Query{*this, query_compile(src)};
+    return Query{*this, duql_compile(src)};
 }
 inline Query Host::compile(const Expr& e) const {
-    return Query{*this, query_compile(e)};
+    return Query{*this, duql_compile(e)};
 }
 
 /// Move-only RAII owner of a host trace writer (see Host::trace_writer):

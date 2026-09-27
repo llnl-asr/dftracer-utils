@@ -14,6 +14,8 @@
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
+#include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/fold_adapter/ext.h>
 #include <dftracer/utils/plugins/fold_adapter/state.h>
@@ -54,7 +56,7 @@ namespace dftracer::utils::plugins {
 
 namespace {
 
-using query::Query;
+using duql::Query;
 using trace::RecordPhase;
 namespace parallel = utilities::fileio::parallel;
 
@@ -659,8 +661,9 @@ void serialize_row(std::string& out, const dftu_dataframe* df,
     out += "}\n";
 }
 
-int host_arrow_write_ipc(void*, ::ArrowArray* a, ::ArrowSchema* s,
-                         const char* path) {
+int host_arrow_write_ipc(void*, [[maybe_unused]] ::ArrowArray* a,
+                         [[maybe_unused]] ::ArrowSchema* s,
+                         [[maybe_unused]] const char* path) {
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
     if (!a || !s || !path || !a->release || !s->release) return -1;
     namespace arr = utilities::common::arrow;
@@ -687,17 +690,15 @@ int host_arrow_write_ipc(void*, ::ArrowArray* a, ::ArrowSchema* s,
         return -1;
     }
 #else
-    (void)a;
-    (void)s;
-    (void)path;
     return -1;
 #endif
 }
 
 // Read the first record batch of an IPC file into out/out_schema; the caller
 // must release both.
-int host_arrow_read_ipc(void*, const char* path, ::ArrowArray* out,
-                        ::ArrowSchema* out_schema) {
+int host_arrow_read_ipc(void*, [[maybe_unused]] const char* path,
+                        [[maybe_unused]] ::ArrowArray* out,
+                        [[maybe_unused]] ::ArrowSchema* out_schema) {
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
     if (!path || !out || !out_schema) return -1;
     namespace arr = utilities::common::arrow;
@@ -716,9 +717,6 @@ int host_arrow_read_ipc(void*, const char* path, ::ArrowArray* out,
         return -1;
     }
 #else
-    (void)path;
-    (void)out;
-    (void)out_schema;
     return -1;
 #endif
 }
@@ -764,8 +762,13 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
         std::string p(path);
         dftracer::utils::default_runtime().run_blocking(
             "dft-plugin-trace-read", [&](CoroScope&) -> coro::CoroTask<void> {
-                simdjson::dom::parser parser;
+                dftracer::utils::json::RecordParser parser;
                 std::vector<views::detail::FoldEvent> batch_events;
+                namespace ix = dftracer::utils::index;
+                const ix::RecordSchema& schema = ix::detect_file_schema(p);
+                const bool by_path = schema.decoder == ix::Decoder::PATH;
+                const ix::RecordSchema* declared =
+                    schema.fields.empty() ? nullptr : &schema;
                 views::View v = views::View::from_file(p);
                 co_await v.for_each_batch(
                     [&](std::size_t,
@@ -777,13 +780,18 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
                             simdjson::dom::element root;
                             if (parser.parse(ps).get(root)) continue;
                             batch_events.push_back(
-                                views::detail::extract_fold_event(
-                                    root, intern, /*needs_args=*/true));
+                                by_path ? views::detail::decode_record(
+                                              root, intern,
+                                              /*capture_schema=*/false, nullptr,
+                                              declared)
+                                        : views::detail::extract_fold_event(
+                                              root, intern,
+                                              /*needs_args=*/true));
                         }
                         if (batch_events.empty()) return;
                         dataframe::DataFrame df =
                             views::detail::build_row_frame(batch_events, intern,
-                                                           {}, 1.0, nullptr);
+                                                           {}, 1.0, by_path);
                         std::vector<dftu_series*> handles;
                         handles.reserve(df.columns.size());
                         std::vector<const char*> names;
@@ -809,11 +817,11 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
 const dftu_svc_trace g_trace = {host_trace_open_write, host_trace_write,
                                 host_trace_close, host_trace_read};
 
-dftu_query* host_query_compile(void* h, const char* src, std::uint32_t len) {
+dftu_duql* host_query_compile(void* h, const char* src, std::uint32_t len) {
     return static_cast<PluginFold*>(h)->compile_query(src, len);
 }
 
-int host_query_matches(void* h, const dftu_query* q, const dftu_dataframe* df,
+int host_query_matches(void* h, const dftu_duql* q, const dftu_dataframe* df,
                        std::int64_t row) {
     if (!q || !df) return 0;
     try {
@@ -844,7 +852,7 @@ const dftu_svc_ports g_ports = {host_port_key, host_port_publish,
 const dftu_svc_coro g_coro = {host_spawn, host_when_all, host_when_any,
                               host_then,  host_drive,    host_run_blocking};
 
-const dftu_svc_query g_query = {host_query_compile, host_query_matches};
+const dftu_svc_duql g_query = {host_query_compile, host_query_matches};
 
 const dftu_svc_compose g_compose = {
     host_compose_make,     host_compose_then, host_compose_when_all,
@@ -855,7 +863,7 @@ const void* host_get_service(void*, const char* ext_id) {
     if (!ext_id) return nullptr;
     if (std::strcmp(ext_id, DFTU_SVC_IO) == 0) return &g_io;
     if (std::strcmp(ext_id, DFTU_SVC_CORO) == 0) return &g_coro;
-    if (std::strcmp(ext_id, DFTU_SVC_QUERY) == 0) return &g_query;
+    if (std::strcmp(ext_id, DFTU_SVC_DUQL) == 0) return &g_query;
     if (std::strcmp(ext_id, DFTU_SVC_COMPOSE) == 0) return &g_compose;
     if (std::strcmp(ext_id, DFTU_SVC_WRITER) == 0) return &g_writer;
     if (std::strcmp(ext_id, DFTU_SVC_SKETCH) == 0) return &g_sketch;
@@ -1200,7 +1208,7 @@ PluginFold::PluginFold(const dftu_plugin* plugin,
 
     // An invalid filter is logged and left unset rather than aborting.
     const char* q =
-        plugin_->plan_query ? plugin_->plan_query(plugin_->self) : nullptr;
+        plugin_->plan_duql ? plugin_->plan_duql(plugin_->self) : nullptr;
     if (q && *q) {
         auto r = Query::from_string(q);
         if (r)
@@ -1225,7 +1233,7 @@ PluginFold::~PluginFold() {
     if (slice_) plugin_->destroy_slice(slice_);
 }
 
-::dftu_query* PluginFold::compile_query(const char* src, std::uint32_t len) {
+::dftu_duql* PluginFold::compile_query(const char* src, std::uint32_t len) {
     if (!src) return nullptr;
     auto r = Query::from_string(std::string_view{src, len});
     if (!r) return nullptr;
@@ -1234,64 +1242,38 @@ PluginFold::~PluginFold() {
     } catch (...) {
         return nullptr;
     }
-    return reinterpret_cast<::dftu_query*>(&compiled_queries_.back());
+    return reinterpret_cast<::dftu_duql*>(&compiled_queries_.back());
 }
-
-namespace {
-// One-shot column lookup for dftu_svc_query::query_matches: this is called at
-// most a few times per fold (a plugin testing an ad hoc predicate), not in the
-// hot per-row loop, so resolving by name per call is fine here (contrast
-// plugins::Batch, which caches columns once per batch for the on_batch loop).
-std::string_view df_str_field(const dftu_dataframe* df, const char* name,
-                              std::int64_t row) {
-    dftu_series* c = dftu_dataframe_column(df, name);
-    if (!c) return {};
-    std::string_view out;
-    if (dftu_series_type(c) == DFTU_TYPE_STRING &&
-        !dftu_series_is_null(c, row)) {
-        const auto* off = dftu_series_offsets(c);
-        const char* base = static_cast<const char*>(dftu_series_data(c));
-        if (off && base)
-            out = {base + off[row],
-                   static_cast<std::size_t>(off[row + 1] - off[row])};
-    }
-    dftu_series_free(c);
-    return out;
-}
-}  // namespace
 
 int PluginFold::match_query(const Query& q, const dftu_dataframe* df,
                             std::int64_t row) {
     match_qmap_.clear();
     for (std::string_view f : q.fields()) {
-        if (f == "cat" || f == "name" || f == "fhash" || f == "hhash") {
-            std::string s(df_str_field(df, std::string(f).c_str(), row));
-            if (!s.empty()) match_qmap_[f] = std::move(s);
-        } else if (f == "pid" || f == "tid" || f == "ts" || f == "dur") {
-            dftu_series* c = dftu_dataframe_column(df, std::string(f).c_str());
-            if (c) {
-                if (dftu_series_type(c) == DFTU_TYPE_UINT64 &&
-                    !dftu_series_is_null(c, row))
-                    match_qmap_[f] =
-                        static_cast<double>(static_cast<const std::uint64_t*>(
-                            dftu_series_data(c))[row]);
-                dftu_series_free(c);
-            }
-        } else {
-            std::string key(strip_args_prefix(f));
-            std::string col = std::string("args.") + key;
-            dftu_series* c = dftu_dataframe_column(df, col.c_str());
-            if (c) {
-                if (dftu_series_is_null(c, row)) {
-                    // no value for this row
-                } else if (dftu_series_type(c) == DFTU_TYPE_FLOAT64) {
+        // A path-decoded frame names each column by its path.
+        dftu_series* c = dftu_dataframe_column(df, std::string(f).c_str());
+        const bool top = f == "cat" || f == "name" || f == "fhash" ||
+                         f == "hhash" || f == "pid" || f == "tid" ||
+                         f == "ts" || f == "dur";
+        if (!c && !top)
+            c = dftu_dataframe_column(
+                df, (std::string("args.") + std::string(strip_args_prefix(f)))
+                        .c_str());
+        if (!c) continue;
+        if (!dftu_series_is_null(c, row)) {
+            switch (dftu_series_type(c)) {
+                case DFTU_TYPE_UINT64:
+                    match_qmap_[f] = static_cast<const std::uint64_t*>(
+                        dftu_series_data(c))[row];
+                    break;
+                case DFTU_TYPE_INT64:
+                    match_qmap_[f] = static_cast<const std::int64_t*>(
+                        dftu_series_data(c))[row];
+                    break;
+                case DFTU_TYPE_FLOAT64:
                     match_qmap_[f] =
                         static_cast<const double*>(dftu_series_data(c))[row];
-                } else if (dftu_series_type(c) == DFTU_TYPE_INT64) {
-                    match_qmap_[f] =
-                        static_cast<double>(static_cast<const std::int64_t*>(
-                            dftu_series_data(c))[row]);
-                } else if (dftu_series_type(c) == DFTU_TYPE_STRING) {
+                    break;
+                case DFTU_TYPE_STRING: {
                     const auto* off = dftu_series_offsets(c);
                     const char* base =
                         static_cast<const char*>(dftu_series_data(c));
@@ -1299,31 +1281,21 @@ int PluginFold::match_query(const Query& q, const dftu_dataframe* df,
                         match_qmap_[f] = std::string(
                             base + off[row],
                             static_cast<std::size_t>(off[row + 1] - off[row]));
+                    break;
                 }
-                dftu_series_free(c);
+                default:
+                    break;
             }
         }
+        dftu_series_free(c);
     }
     return q.evaluate(match_qmap_) ? 1 : 0;
 }
 
-// Field coverage must match match_query() so plan_query and query_matches
-// agree.
+// The same field reads as the scan's pod_matches, so plan_duql and
+// duql_matches agree with it.
 bool PluginFold::passes_query(const FoldEvent& ev) {
-    trace::views::detail::PodSource src(ev, *intern_);
-    qmap_.clear();
-    for (std::string_view f : query_->fields()) {
-        if (f == "cat" || f == "name" || f == "fhash" || f == "hhash") {
-            std::string s = src.value(f);
-            if (!s.empty()) qmap_[f] = std::move(s);
-        } else if (auto n = src.number(f)) {
-            qmap_[f] = *n;
-        } else {
-            std::string s = src.value(f);
-            if (!s.empty()) qmap_[f] = std::move(s);
-        }
-    }
-    return query_->evaluate(qmap_);
+    return trace::views::detail::pod_matches(*query_, ev, *intern_, qmap_);
 }
 
 // Materialize the (query-passing, non-metadata) events of this batch into a
@@ -1363,7 +1335,7 @@ void PluginFold::step(const FoldBatch& batch) {
         // An empty projection is build_row_frame's "every column", which for
         // a batch with many arg keys is a Series per key.
         df = views::build_row_frame(col_scratch_, *intern_, projection, 1.0,
-                                    nullptr);
+                                    col_scratch_.front().by_path);
     }
     if (df.num_rows() == 0) return;
 
@@ -1408,7 +1380,7 @@ void PluginFold::step(const FoldBatch& batch) {
 
 // The batch a transform earlier in this step rewrote, cut down to this
 // plugin's projection (by name; a column the rewrite dropped is absent, as
-// reads documents) and to its plan_query, which the events path applied per
+// reads documents) and to its plan_duql, which the events path applied per
 // event and here runs as a frame mask. A query the frame cannot evaluate
 // (a field the rewrite removed, a pattern match) is reported once and the
 // rows pass unfiltered rather than being dropped.

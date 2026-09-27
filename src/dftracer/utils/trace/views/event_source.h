@@ -4,7 +4,7 @@
 #include <dftracer/utils/core/common/string_intern.h>
 #include <dftracer/utils/core/common/to_chars.h>
 #include <dftracer/utils/dataframe/field_stat.h>
-#include <dftracer/utils/query/query.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <simdjson.h>
@@ -182,7 +182,7 @@ class DomSource {
         }
         double d;
         if (e.get_double().get(d) == simdjson::SUCCESS) {
-            out.append(std::to_string(d));
+            out.append(dftracer::utils::double_text(d));
             return;
         }
         bool b;
@@ -232,6 +232,8 @@ class PodSource {
                     return FieldNum::of(*d);
                 if (const auto* i = std::get_if<std::int64_t>(v))
                     return FieldNum::of(*i);
+                if (const auto* u = std::get_if<std::uint64_t>(v))
+                    return FieldNum::of(*u);
             }
             return std::nullopt;
         }
@@ -247,51 +249,72 @@ class PodSource {
             if (const auto* d = std::get_if<double>(v)) return FieldNum::of(*d);
             if (const auto* i = std::get_if<std::int64_t>(v))
                 return FieldNum::of(*i);
+            if (const auto* u = std::get_if<std::uint64_t>(v))
+                return FieldNum::of(*u);
         }
         return std::nullopt;
     }
 
-    void append_value(std::string& out, std::string_view field) const {
-        if (ev_.by_path) {
-            if (const auto* v = find_arg_by(field)) append_arg_value(out, *v);
-        } else if (field == "cat") {
-            append_id(out, ev_.cat_id);
-        } else if (field == "name") {
-            append_id(out, ev_.name_id);
-        } else if (field == "pid") {
-            append_u64(out, ev_.pid);
-        } else if (field == "tid") {
-            append_u64(out, ev_.tid);
-        } else if (field == "ts") {
-            append_u64(out, ev_.ts);
-        } else if (field == "dur") {
-            if (ev_.has_dur) append_u64(out, ev_.dur);
-        } else if (is_schema_field(field)) {
-            // ph/id/type: the top-level value only, never a same-named arg.
-            if (const auto* v = find_top(field)) append_arg_value(out, *v);
-        } else {
-            append_arg(out, field);
-        }
+    /// Appends the text of `field`; false when the event lacks it.
+    bool append_value(std::string& out, std::string_view field) const {
+        if (ev_.by_path) return append_found(out, find_arg_by(field));
+        if (field == "cat") return append_id(out, ev_.cat_id);
+        if (field == "name") return append_id(out, ev_.name_id);
+        if (field == "pid") return append_u64(out, ev_.pid);
+        if (field == "tid") return append_u64(out, ev_.tid);
+        if (field == "ts") return append_u64(out, ev_.ts);
+        if (field == "dur") return ev_.has_dur && append_u64(out, ev_.dur);
+        // ph/id/type: the top-level value only, never a same-named arg.
+        if (is_schema_field(field)) return append_found(out, find_top(field));
+        return append_arg(out, field);
     }
 
-    void append_arg(std::string& out, std::string_view key) const {
-        if (ev_.by_path) {
-            if (const auto* v = find_arg_by(key)) append_arg_value(out, *v);
-            return;
-        }
+    /// Appends the text of arg `key`; false when the event lacks it.
+    bool append_arg(std::string& out, std::string_view key) const {
+        if (ev_.by_path) return append_found(out, find_arg_by(key));
         const std::string_view bare = strip_args_prefix(key);
-        if (bare == "fhash")
-            append_id(out, ev_.fhash_id);
-        else if (bare == "hhash")
-            append_id(out, ev_.hhash_id);
-        else if (const auto* v = find_arg(key))
-            append_arg_value(out, *v);
+        if (bare == "fhash") return append_id(out, ev_.fhash_id);
+        if (bare == "hhash") return append_id(out, ev_.hhash_id);
+        return append_found(out, find_arg(key));
     }
 
     std::string value(std::string_view field) const {
         std::string s;
         append_value(s, field);
         return s;
+    }
+
+    /// Whether the event holds `field`, found the way append_value finds it.
+    bool has(std::string_view field) const {
+        constexpr auto NO_ID = dftracer::utils::StringIntern::NO_ID;
+        if (ev_.by_path) return find_arg_by(field) != nullptr;
+        if (field == "cat") return ev_.cat_id != NO_ID;
+        if (field == "name") return ev_.name_id != NO_ID;
+        if (field == "pid" || field == "tid" || field == "ts") return true;
+        if (field == "dur") return ev_.has_dur;
+        if (is_schema_field(field)) return find_top(field) != nullptr;
+        const std::string_view bare = strip_args_prefix(field);
+        if (bare == "fhash") return ev_.fhash_id != NO_ID;
+        if (bare == "hhash") return ev_.hhash_id != NO_ID;
+        return find_arg(field) != nullptr;
+    }
+
+    /// The null, bool or empty container the event holds at `field`, found the
+    /// way append_value finds a field.
+    const FoldEvent::Special* special(std::string_view field) const {
+        if (ev_.specials.empty()) return nullptr;
+        const auto find = [this](std::string_view f,
+                                 bool top) -> const FoldEvent::Special* {
+            const std::uint32_t id = this->intern_lookup(f);
+            for (const auto& s : ev_.specials)
+                if (s.key == id && s.top == top) return &s.kind;
+            return nullptr;
+        };
+        if (ev_.by_path) return find(field, false);
+        if (is_schema_field(field)) return find(field, true);
+        if (const auto* v = find(field, false)) return v;
+        const std::string_view bare = strip_args_prefix(field);
+        return bare == field ? nullptr : find(bare, false);
     }
 
     template <class F>
@@ -301,6 +324,8 @@ class PodSource {
                 fn(intern_.resolve(key_id), *d);
             else if (const auto* i = std::get_if<std::int64_t>(&v))
                 fn(intern_.resolve(key_id), static_cast<double>(*i));
+            else if (const auto* u = std::get_if<std::uint64_t>(&v))
+                fn(intern_.resolve(key_id), static_cast<double>(*u));
         }
     }
 
@@ -310,6 +335,8 @@ class PodSource {
             if (const auto* d = std::get_if<double>(v)) return *d;
             if (const auto* i = std::get_if<std::int64_t>(v))
                 return static_cast<double>(*i);
+            if (const auto* u = std::get_if<std::uint64_t>(v))
+                return static_cast<double>(*u);
         }
         return std::nullopt;
     }
@@ -347,6 +374,8 @@ class PodSource {
             out.append(intern_.resolve(*id));
         else if (const auto* i = std::get_if<std::int64_t>(&v))
             append_i64(out, *i);
+        else if (const auto* u = std::get_if<std::uint64_t>(&v))
+            append_u64(out, *u);
         else
             append_number(out, std::get<double>(v));
     }
@@ -358,15 +387,23 @@ class PodSource {
             .get_or_insert(field);
     }
 
-    void append_id(std::string& out, std::uint32_t id) const {
-        if (id != dftracer::utils::StringIntern::NO_ID)
-            out.append(intern_.resolve(id));
+    bool append_found(std::string& out, const FoldEvent::ArgValue* v) const {
+        if (!v) return false;
+        append_arg_value(out, *v);
+        return true;
     }
 
-    static void append_u64(std::string& out, std::uint64_t v) {
+    bool append_id(std::string& out, std::uint32_t id) const {
+        if (id == dftracer::utils::StringIntern::NO_ID) return false;
+        out.append(intern_.resolve(id));
+        return true;
+    }
+
+    static bool append_u64(std::string& out, std::uint64_t v) {
         char buf[24];
         char* p = to_chars_u64(buf, buf + sizeof(buf), v);
         out.append(buf, static_cast<std::size_t>(p - buf));
+        return true;
     }
 
     static void append_i64(std::string& out, std::int64_t v) {
@@ -384,7 +421,7 @@ class PodSource {
             char* p = to_chars_i64(buf, buf + sizeof(buf), i);
             out.append(buf, static_cast<std::size_t>(p - buf));
         } else {
-            out.append(std::to_string(d));
+            out.append(dftracer::utils::double_text(d));
         }
     }
 
@@ -392,20 +429,71 @@ class PodSource {
     const dftracer::utils::StringIntern& intern_;
 };
 
+/// The array or object at `path` rebuilt from the event's flattened keys
+/// (`path.0`, `path.key`), or nullopt when none lies under it.
+std::optional<duql::Cell> container_cell(
+    const FoldEvent& ev, const dftracer::utils::StringIntern& intern,
+    std::string_view path);
+
+inline duql::Cell special_cell(FoldEvent::Special s) {
+    switch (s) {
+        case FoldEvent::Special::NULL_VALUE:
+            return duql::Cell::null();
+        case FoldEvent::Special::FALSE_VALUE:
+            return false;
+        case FoldEvent::Special::TRUE_VALUE:
+            return true;
+        case FoldEvent::Special::EMPTY_ARRAY:
+            return duql::Cell::json("[]", true);
+        case FoldEvent::Special::EMPTY_OBJECT:
+            return duql::Cell::json("{}", false);
+        case FoldEvent::Special::JSON_ARRAY:
+        case FoldEvent::Special::JSON_OBJECT:
+            break;
+    }
+    return duql::Cell::null();
+}
+
 /// Evaluate `q` on a parsed event: a field reads as a number when the event
-/// holds one, else as its string, and an absent field is left out (which
-/// evaluates false, as on the JSON path). `scratch` is reused across calls.
-inline bool pod_matches(const query::Query& q, const FoldEvent& ev,
+/// holds one, else as its string (an empty string included), and a null, a
+/// bool or an array or object as itself; an absent field is left out, so it
+/// is missing, as on the JSON path. `scratch` is reused across calls.
+inline bool pod_matches(const duql::Query& q, const FoldEvent& ev,
                         const dftracer::utils::StringIntern& intern,
-                        query::ValueMap& scratch) {
+                        duql::ValueMap& scratch) {
+    using dftracer::utils::dataframe::FieldStatDomain;
     PodSource src(ev, intern);
     scratch.clear();
     for (std::string_view f : q.fields()) {
-        if (std::optional<double> n = src.number(f)) {
-            scratch[f] = *n;
+        if (const auto* sp = src.special(f)) {
+            if (*sp == FoldEvent::Special::JSON_ARRAY ||
+                *sp == FoldEvent::Special::JSON_OBJECT)
+                scratch[f] = duql::Cell::json(
+                    src.value(f), *sp == FoldEvent::Special::JSON_ARRAY);
+            else
+                scratch[f] = special_cell(*sp);
+            continue;
+        }
+        if (!src.has(f)) {
+            if (q.has_expressions())
+                if (auto c = container_cell(ev, intern, f))
+                    scratch[f] = std::move(*c);
+            continue;
+        }
+        if (const auto n = src.number_typed(f)) {
+            switch (n->domain) {
+                case FieldStatDomain::I64:
+                    scratch[f] = n->i;
+                    break;
+                case FieldStatDomain::U64:
+                    scratch[f] = n->u;
+                    break;
+                case FieldStatDomain::F64:
+                    scratch[f] = n->d;
+                    break;
+            }
         } else {
-            std::string v = src.value(f);
-            if (!v.empty()) scratch[f] = std::move(v);
+            scratch[f] = src.value(f);
         }
     }
     // An any() field reads the flattened positions `<path>.<k>`; a dftracer
@@ -420,13 +508,24 @@ inline bool pod_matches(const query::Query& q, const FoldEvent& ev,
             if (name.size() <= bare.size() || !name.starts_with(bare) ||
                 name[bare.size()] != '.')
                 continue;
-            const auto* slot = std::get_if<std::uint32_t>(&value);
-            query::LiteralValue lit =
-                slot ? query::LiteralValue(std::string(intern.resolve(*slot)))
-                : std::holds_alternative<std::int64_t>(value)
-                    ? query::LiteralValue(std::get<std::int64_t>(value))
-                    : query::LiteralValue(std::get<double>(value));
+            duql::LiteralValue lit = std::visit(
+                [&](auto x) -> duql::LiteralValue {
+                    if constexpr (std::is_same_v<decltype(x), std::uint32_t>)
+                        return std::string(intern.resolve(x));
+                    else
+                        return x;
+                },
+                value);
             scratch[name] = std::move(lit);
+        }
+        for (const auto& s : ev.specials) {
+            if (s.top || s.kind == FoldEvent::Special::JSON_ARRAY ||
+                s.kind == FoldEvent::Special::JSON_OBJECT)
+                continue;
+            const std::string_view name = intern.resolve(s.key);
+            if (name.size() > bare.size() && name.starts_with(bare) &&
+                name[bare.size()] == '.')
+                scratch[name] = special_cell(s.kind);
         }
     }
     return q.evaluate(scratch);

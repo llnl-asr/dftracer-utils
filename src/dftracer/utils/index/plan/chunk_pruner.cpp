@@ -2,6 +2,7 @@
 #include <dftracer/utils/index/plan/chunk_pruner.h>
 #include <dftracer/utils/index/plan/condition.h>
 #include <dftracer/utils/index/plan/file_index_data.h>
+#include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 
@@ -19,6 +20,12 @@ using index::store::internal::get_logical_path;
 
 namespace {
 
+bool indexed_by_path(const IndexDatabase& db, int fid) {
+    const auto id = db.file_schema(fid);
+    const RecordSchema* schema = id ? find_schema(*id) : nullptr;
+    return schema && schema->decoder == Decoder::PATH;
+}
+
 // Chunk i is gzip member i; every member is a candidate until a Condition
 // rules it out, whether or not the index holds data for it.
 void load_chunks(FileIndexData& ctx) {
@@ -33,7 +40,7 @@ void load_chunks(FileIndexData& ctx) {
     }
 }
 
-namespace q = dftracer::utils::query;
+namespace q = dftracer::utils::duql;
 
 // Array positions an any() leaf is expanded over, per file; wider arrays keep
 // the leaf as is, which prunes nothing, to bound the work per chunk.
@@ -75,7 +82,8 @@ Positions any_positions(const IndexDatabase& db, int fid, const Query& query) {
 }
 
 template <class Leaf>
-q::QueryNodePtr expand_leaf(const Leaf& leaf, const Positions& positions) {
+q::QueryNodePtr expand_field_leaf(const Leaf& leaf,
+                                  const Positions& positions) {
     if (!leaf.field.any) return q::make_node(Leaf(leaf));
     const auto& paths = positions.at(leaf.field.path);
     if (paths.size() > MAX_ANY_POSITIONS) return q::make_node(Leaf(leaf));
@@ -90,6 +98,15 @@ q::QueryNodePtr expand_leaf(const Leaf& leaf, const Positions& positions) {
     for (std::size_t i = 1; i < paths.size(); ++i)
         out = q::make_node(q::OrNode{std::move(out), at(paths[i])});
     return out;
+}
+
+template <class Leaf>
+q::QueryNodePtr expand_leaf(const Leaf& leaf, const Positions& positions) {
+    if constexpr (std::is_same_v<Leaf, q::ExprLeaf>) {
+        return q::make_node(Leaf(leaf));
+    } else {
+        return expand_field_leaf(leaf, positions);
+    }
 }
 
 q::QueryNodePtr expand(const q::QueryNode& node, const Positions& positions) {
@@ -117,9 +134,8 @@ q::QueryNodePtr expand(const q::QueryNode& node, const Positions& positions) {
 std::optional<Query> expand_any(const IndexDatabase& db, int fid,
                                 const Query& query) {
     if (query.any_paths().empty()) return std::nullopt;
-    const q::QueryNodePtr root =
-        expand(query.root(), any_positions(db, fid, query));
-    return q::parse_or_throw(q::to_string(*root));
+    q::QueryNodePtr root = expand(query.root(), any_positions(db, fid, query));
+    return q::Query::from_node(std::move(root));
 }
 
 ChunkPrunerOutput prune_file_chunks(const IndexDatabase& db,
@@ -138,6 +154,7 @@ ChunkPrunerOutput prune_file_chunks(const IndexDatabase& db,
         FileIndexData ctx;
         ctx.db = &db;
         ctx.fid = fid;
+        ctx.by_path = indexed_by_path(db, fid);
         auto conds = make_query_conditions(ctx);
         if (!file_may_match(query.root(), conds)) {
             out.file_may_match = false;
@@ -194,6 +211,7 @@ ChunkExplanation explain_file_chunks(const IndexDatabase& db,
     FileIndexData ctx;
     ctx.db = &db;
     ctx.fid = fid;
+    ctx.by_path = indexed_by_path(db, fid);
     auto conds = make_query_conditions(ctx);
     load_chunks(ctx);
     out.total_chunks = ctx.total_chunks;

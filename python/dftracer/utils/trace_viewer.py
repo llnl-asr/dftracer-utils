@@ -173,20 +173,29 @@ class TraceViewer(LazyFrame):
 
     # -- absorbed LazyFrame ops ----------------------------------------------------
     def filter(self, predicate: object) -> "TraceViewer":
-        """Keep events matching ``predicate``: a query-DSL string, or an
+        """Keep events matching ``predicate``: a duql string, or an
         expression. An expression filters events, pushed to the index, while
         it is a plain field predicate and nothing but filters came before it;
         otherwise it filters this plan's rows."""
         if isinstance(predicate, Expr):
             if self._tv.filters_events():
                 try:
-                    return self._trace(self._tv.filter(predicate.to_query()))
+                    return self._trace(self._tv.filter(predicate.to_duql()))
                 except TypeError:
                     pass
             return self._absorbed(LazyFrame.filter(self, predicate))
         return self._trace(self._tv.filter(predicate))
 
-    query = filter
+    def duql(self, text: str, **params: Union[bool, int, float, str]) -> "TraceViewer":
+        """Run the duql pipeline ``text`` with ``params`` bound to its
+        ``$name`` parameters (bool, int, float or str). Leading ``where``
+        stages filter events in the scan; later stages run on its columns."""
+        return self._trace(self._tv.duql(text, params))
+
+    def explain_duql(self, text: str, **params: Union[bool, int, float, str]) -> str:
+        """The plan :meth:`duql` builds, one step per line, without
+        scanning."""
+        return self._tv.explain_duql(text, params)
 
     def select(self, *items: object) -> "TraceViewer":
         """Project to ``items``, as :meth:`LazyFrame.select`. Names on raw
@@ -265,8 +274,10 @@ class TraceViewer(LazyFrame):
     def time_scale(self, ns_ratio: float) -> "TraceViewer":
         return self._trace(self._tv.time_scale(ns_ratio))
 
-    def metadata(self, include: bool) -> "TraceViewer":
-        return self._trace(self._tv.metadata(include))
+    def all(self) -> "TraceViewer":
+        """Read every record, metadata included, instead of the record
+        schema's ``data`` row set."""
+        return self._trace(self._tv.all())
 
     def rollup_root(self, path: str) -> "TraceViewer":
         return self._trace(self._tv.rollup_root(path))
@@ -313,6 +324,11 @@ class TraceViewer(LazyFrame):
         paths = cls._paths
         frame = self.select(*dict.fromkeys(paths.values())).collect()
         data = frame.to_dict()
+        # A Json field is its JSON text, not the parsed value.
+        for name in cls._json:
+            path = paths[name]
+            if path in data:
+                data[path] = frame[path].to_arrow().to_pylist()
         columns = {name: data.get(path) for name, path in paths.items()}
         for i in range(len(frame)):
             yield cls(

@@ -150,10 +150,12 @@ class GzipLineByteStream : public GzipStream {
         std::size_t available_buffer_space = buffer_.size();
 
         if (partial_size > 0) {
-            if (partial_size > buffer_.size()) {
-                throw ReaderError(
-                    ReaderError::READ_ERROR,
-                    "Partial line buffer exceeds available buffer space");
+            // A line that fills the buffer can never complete in it.
+            if (partial_size >= buffer_.size()) {
+                throw ReaderError(ReaderError::READ_ERROR,
+                                  "a line is longer than the read buffer (" +
+                                      std::to_string(buffer_.size()) +
+                                      " bytes)");
             }
             std::memcpy(buffer_.data(), partial_line_buffer_.data(),
                         partial_size);
@@ -228,8 +230,12 @@ class GzipLineByteStream : public GzipStream {
             co_return {};
         }
 
-        // Read line-aligned data into buffer_
-        valid_bytes_ = co_await read_line_aligned_data();
+        // A read that ends inside a line returns nothing yet; an empty span
+        // ends the stream, so read on until a line completes or the range
+        // ends.
+        do {
+            valid_bytes_ = co_await read_line_aligned_data();
+        } while (valid_bytes_ == 0 && !is_finished_);
 
         if (valid_bytes_ == 0) {
             co_return {};

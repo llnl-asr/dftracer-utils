@@ -3,9 +3,9 @@
 
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_output.h>
-#include <dftracer/utils/query/query.h>
 
 #include <cstddef>
 #include <optional>
@@ -24,7 +24,7 @@ run_comparison_aggregation(
     CoroScope& ctx, const std::vector<std::string>& input_files,
     const dftracer::utils::index::schemas::dft::agg::AggregationConfig&
         agg_config,
-    const std::optional<query::Query>& query, const std::string& index_dir,
+    const std::optional<duql::Query>& query, const std::string& index_dir,
     std::size_t checkpoint_size, bool force_rebuild,
     std::size_t executor_threads);
 

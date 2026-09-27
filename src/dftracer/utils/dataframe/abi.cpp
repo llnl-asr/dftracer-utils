@@ -256,6 +256,17 @@ int32_t dftu_series_fixed_size(const dftu_series* col) {
     return col ? col->fixed_size : 0;
 }
 
+int32_t dftu_series_is_json(const dftu_series* col) {
+    return col && col->json ? 1 : 0;
+}
+
+dftu_series* dftu_series_mark_json(const dftu_series* col) {
+    if (!col || col->type != TypeId::String) return nullptr;
+    auto* out = new dftu_series(*col);
+    out->json = true;
+    return out;
+}
+
 dftu_series* dftu_series_share(const dftu_series* col) {
     if (!col) return nullptr;
     // Copy the handle struct; its buffer/child shared_ptr members bump their

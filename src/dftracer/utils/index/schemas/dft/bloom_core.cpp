@@ -71,17 +71,12 @@ void put_dimension(index::store::IndexWrite& w, int file_id,
     const bool zones = config.extensions.has(IndexExtension::ZONEMAP);
     const bool counts = config.extensions.has(IndexExtension::COUNTS);
     if (!zones && !counts) return;
+    // dftracer's ts and dur are on every data event; other dimensions count.
     const bool always_present =
-        ds.dimension == DIM_TS || ds.dimension == DIM_DUR;
+        config.fixed_dimensions &&
+        (ds.dimension == DIM_TS || ds.dimension == DIM_DUR);
     const auto compressed = ds.compress_value_counts(config.value_counts_cap);
-    std::optional<std::uint64_t> present;
-    if (always_present) {
-        present = observed;
-    } else if (compressed && ds.value_counts) {
-        std::uint64_t carried = 0;
-        for (const auto& [value, count] : *ds.value_counts) carried += count;
-        present = carried;
-    }
+    const std::uint64_t present = always_present ? observed : ds.present;
     if (zones && (!ds.min_value.empty() || !ds.max_value.empty())) {
         kinds::Zone zone;
         zone.value_type = ds.value_type;
@@ -260,13 +255,14 @@ std::string join_value_types(const std::string& a, const std::string& b) {
     if (a.empty() || a == b) return b;
     if (b.empty()) return a;
     if (a == "mixed" || b == "mixed") return "mixed";
-    const bool num_a = a == "int" || a == "double";
-    const bool num_b = b == "int" || b == "double";
+    const bool num_a = a == "int" || a == "uint" || a == "double";
+    const bool num_b = b == "int" || b == "uint" || b == "double";
     return num_a && num_b ? "double" : "mixed";
 }
 
 void observe_stats(index::extensions::ChunkDimensionStats& ds,
                    const std::string& text, const char* type) {
+    ++ds.present;
     if (ds.value_type == "mixed") return;
     const std::string joined = join_value_types(ds.value_type, type);
     if (joined != ds.value_type) ds.value_type = joined;
@@ -293,6 +289,10 @@ void BloomCore::observe_value(ChunkDimensionStats& stats, std::int64_t value) {
     observe_stats(stats, std::to_string(value), "int");
 }
 
+void BloomCore::observe_value(ChunkDimensionStats& stats, std::uint64_t value) {
+    observe_stats(stats, std::to_string(value), "uint");
+}
+
 void BloomCore::observe_value(ChunkDimensionStats& stats, double value) {
     observe_stats(stats, index::extensions::canonical_number_text(value),
                   "double");
@@ -308,6 +308,13 @@ void BloomCore::observe_extra(ChunkState& chunk, std::size_t e,
     const std::string text = std::to_string(value);
     chunk.extra_blooms[e].add(text);
     observe_stats(chunk.extra_dim_stats[e], text, "int");
+}
+
+void BloomCore::observe_extra(ChunkState& chunk, std::size_t e,
+                              std::uint64_t value) {
+    const std::string text = std::to_string(value);
+    chunk.extra_blooms[e].add(text);
+    observe_stats(chunk.extra_dim_stats[e], text, "uint");
 }
 
 void BloomCore::observe_extra(ChunkState& chunk, std::size_t e, double value) {
@@ -359,8 +366,6 @@ void BloomCore::observe_metadata_path(ChunkState& chunk,
 void BloomCore::observe_metadata(ChunkState& chunk,
                                  std::string_view record_name) {
     ++chunk.metadata.records;
-    if (record_name != "HH" && record_name != "FH" && record_name != "SH")
-        ++chunk.metadata.context;
     index::store::add_metadata_value(chunk.metadata.names, record_name);
 }
 
@@ -419,6 +424,7 @@ void BloomCore::observe_data(ChunkState& chunk, PidTidCache& cache,
 
 void BloomCore::merge_dimension_stats(ChunkDimensionStats& dst,
                                       ChunkDimensionStats& src) {
+    dst.present += src.present;
     if (src.value_counts) {
         if (!dst.value_counts) dst.value_counts.emplace();
         for (const auto& [k, v] : *src.value_counts) {
@@ -477,7 +483,6 @@ void BloomCore::merge_chunk_state(ChunkState& dst, ChunkState& src) {
     dst.statistics.merge_from(src.statistics);
 
     dst.metadata.records += src.metadata.records;
-    dst.metadata.context += src.metadata.context;
     for (auto list : {&index::store::ChunkMetadata::names,
                       &index::store::ChunkMetadata::paths}) {
         auto& into = dst.metadata.*list;

@@ -19,17 +19,19 @@
 namespace dftracer::utils::utilities::common::arrow {
 
 /// One window column by column NAME, the DataFrame-level form of WindowSpec.
+/// `time` names the RATE and SESSIONIZE time column and `end` the SESSIONIZE
+/// row-end column; window() sets the column indices in `params` from them.
 struct WindowColumn {
     WindowFunc func;
     std::optional<std::string> value;
     std::optional<std::string> time;
+    std::optional<std::string> end;
     std::string out;
-    std::int64_t offset = 0;
-    double threshold = 0.0;
-    bool counter = false;
-    std::int64_t preceding = 0;
-    std::int64_t following = 0;
+    WindowParams params{};
 };
+
+/// The WindowColumn a C ABI window spec names; its strings are copied.
+WindowColumn window_column(const dftu_window_spec& s);
 
 /// SQL window functions over `df` (the contract of window() in window.h): every
 /// input column, then one column per spec, in (partition, order) sorted order.

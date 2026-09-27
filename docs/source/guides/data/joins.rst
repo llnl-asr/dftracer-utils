@@ -1,4 +1,4 @@
-:description: Hash-join two frames on one or more key columns: inner, left, right, outer, semi, anti and cross joins, eager or lazy, from C++, C and Python.
+:description: Hash-join two frames on one or more key columns: inner, left, right, outer, semi, anti, cross, lookup and nest joins, eager or lazy, from C++, C and Python.
 
 Join frames
 ===========
@@ -18,6 +18,21 @@ right rows at the end. ``semi`` / ``anti`` return the left frame's columns only,
 one row per left row with / without a match. ``cross`` pairs every left row with
 every right row and takes no keys.
 
+``lookup`` and ``nest`` keep every left row exactly once, in order, which suits
+attaching a small reference table to a large stream:
+
+- ``lookup`` adds the right frame's columns, except its keys, from the matching
+  right row, null when none. Right rows that share a key must hold equal
+  values, else the join fails naming the key and the column. A right column
+  named like a left column fills it, and a left row that already holds a value
+  there fails the join.
+- ``nest`` adds one list column, named by ``suffix``, holding every matching
+  right row as a struct of all its columns, empty when none.
+
+Both compare keys by value rather than exactly: integers equal floats of the
+same value (``1 == 1.0``), strings compare by their bytes and never equal a
+number (``"1" != 1``), and the key pair need not share a type.
+
 Join two DataFrames
 -------------------
 
@@ -35,8 +50,8 @@ Join two DataFrames
          DataFrame lj = left.join(right, {"pid", "tid"}, JoinHow::Left);
          DataFrame keyed = left.join(right, {"k"}, {"rk"}, JoinHow::Outer, "_r");
 
-      ``JoinHow`` is ``Inner``, ``Left``, ``Right``, ``Outer``, ``Semi``, ``Anti``
-      or ``Cross``. An absent key throws ``std::out_of_range``; an empty or
+      ``JoinHow`` is ``Inner``, ``Left``, ``Right``, ``Outer``, ``Semi``, ``Anti``,
+      ``Cross``, ``Lookup`` or ``Nest``. An absent key throws ``std::out_of_range``; an empty or
       uneven key list, or a key type mismatch, throws ``std::invalid_argument``.
 
    .. tab-item:: Python
@@ -50,7 +65,8 @@ Join two DataFrames
 
       ``on`` is the shared key column name(s), or an int count of this frame's
       leading columns. ``how`` is ``inner`` / ``left`` / ``right`` / ``outer``
-      (``full`` is an alias) / ``semi`` / ``anti`` / ``cross``. ``merge`` is the
+      (``full`` is an alias) / ``semi`` / ``anti`` / ``cross`` / ``lookup`` /
+      ``nest``. ``merge`` is the
       pandas spelling of the same call (``right`` first, then ``how``); only the
       right side's colliding columns are suffixed. A missing key column raises
       ``KeyError``.
@@ -74,8 +90,9 @@ Join lazily
 ``LazyFrame::join`` takes another ``LazyFrame`` as the right side. When the plan
 runs, the right plan is collected in full (the hash build side, bounded by the
 right row count) and the left plan streams through it morsel by morsel: inner,
-left, semi, anti and cross hold no left state, and right / outer add one match
-bit per right row. The join is an optimizer barrier: no filter or projection
+left, semi, anti, cross, lookup and nest hold no left state, and right / outer
+add one match bit per right row. When both plans read the same trace files, one
+pass over the files feeds both sides. The join is an optimizer barrier: no filter or projection
 moves across it.
 
 Once the build side is in hand, an inner, right or semi join narrows the

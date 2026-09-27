@@ -49,7 +49,7 @@ Overview
   every fixed column once per batch, so a string field is a zero-copy
   ``string_view`` into the frame's own buffer with nothing copied on the hot
   path.
-- **Services are optional extension groups**: aggregation, async I/O, the query DSL,
+- **Services are optional extension groups**: aggregation, async I/O, duql filters,
   Arrow, writers, sketches, and inter-plugin channels are fetched by id; a
   missing group degrades gracefully to a null/no-op.
 
@@ -97,8 +97,8 @@ Each stage maps one-to-one between the SDK and the ABI:
    * - ``static ... reads()``
      - ``reads``
      - queried before the scan (section 2)
-   * - config ``"query"`` key
-     - ``plan_query``
+   * - config ``"duql"`` key
+     - ``plan_duql``
      - queried before the scan (section 3)
    * - ``transform``
      - ``transform``
@@ -167,7 +167,7 @@ message, never called into. Rebuild the plugin against the host you run.
          #include <dftracer/utils/plugins/abi.h>
          #include <stdlib.h>
 
-         static const char* plan_query(void* self) { (void)self; return NULL; }
+         static const char* plan_duql(void* self) { (void)self; return NULL; }
          static void* make_slice(void* self) { (void)self; return calloc(1, 1); }
          static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
                                    const dftu_plugin_host* host) {
@@ -186,7 +186,7 @@ message, never called into. Rebuild the plugin against the host you run.
              (void)h; (void)config;
              g_plugin.abi_version   = DFTRACER_PLUGIN_ABI_VERSION;
              g_plugin.self          = NULL;
-             g_plugin.plan_query    = plan_query;
+             g_plugin.plan_duql    = plan_duql;
              g_plugin.make_slice    = make_slice;
              g_plugin.on_batch      = on_batch;
              g_plugin.merge         = merge;
@@ -206,7 +206,7 @@ columns even for a plugin that only reads ``dur``. A plugin that declares
 ``reads`` gets only those columns; every other column is simply absent from the
 frame, so a lookup for it returns NULL. Names are batch column names as
 ``on_batch`` sees them: ``"dur"``, ``"cat"``, ``"fhash"``, an arg as
-``"args.<key>"``, a resolved column as ``"resolved.fhash.path"``. A plugin that
+``"args.<key>"``. A plugin that
 registers a state (section 6) is exempt - its state is handed the same frame
 regardless, so it always keeps every column.
 
@@ -242,11 +242,11 @@ regardless, so it always keeps every column.
 
          /* g_plugin.reads = reads; */
 
-3. Coarse predicate pushdown (plan_query)
+3. Coarse predicate pushdown (plan_duql)
 -----------------------------------------
 
 A plugin can narrow the shared scan to the chunks that can possibly match, using
-the same query DSL the analytics use (see :doc:`guides/core/query-dsl`). The
+the same duql filter language the analytics use (see :doc:`guides/core/duql`). The
 host uses the returned predicate to prune index chunks before the fold ever sees
 them; it is a coarse filter, so a plugin still checks per event if it needs
 exactness. Returning nothing scans everything.
@@ -255,23 +255,23 @@ exactness. Returning nothing scans everything.
 
    .. tab-item:: C++ (SDK)
 
-      ``make_plugin`` reads the pushdown predicate from the plugin's ``"query"``
-      config value, so set it with ``--parg query=...`` (section 4) or a config
+      ``make_plugin`` reads the pushdown predicate from the plugin's ``"duql"``
+      config value, so set it with ``--parg duql=...`` (section 4) or a config
       file. There is no separate ``Slice`` method for it.
 
       .. code-block:: bash
 
-         dftracer_run --plugin ./p.so --parg query='cat == "POSIX"' \
+         dftracer_run --plugin ./p.so --parg duql='cat == "POSIX"' \
                       --files trace.pfw.gz
 
    .. tab-item:: C (raw ABI)
 
-      Implement ``plan_query`` to return any DSL string (scan-lifetime storage),
+      Implement ``plan_duql`` to return any duql string (scan-lifetime storage),
       or NULL for no filter.
 
       .. code-block:: c
 
-         static const char* plan_query(void* self) {
+         static const char* plan_duql(void* self) {
              (void)self;
              return "cat == \"POSIX\"";
          }
@@ -842,33 +842,33 @@ A host utility is reached as a named op instead
 See :doc:`guides/plugins/compose-ops` for composing reusable typed ops inside a
 plugin.
 
-10. Query DSL against events (DFTU_SVC_QUERY)
----------------------------------------------
+10. duql filters against events (DFTU_SVC_DUQL)
+-----------------------------------------------
 
 Beyond coarse pushdown (section 3), a plugin can compile a query once and test
-it against individual events. The compiled ``dftu_query`` is valid for the whole
+it against individual events. The compiled ``dftu_duql`` is valid for the whole
 scan; do not free it.
 
 .. tab-set::
 
    .. tab-item:: C++ (SDK)
 
-      ``query_compile`` accepts either a raw DSL string or an expression built
+      ``duql_compile`` accepts either a raw duql string or an expression built
       with the ergonomic ``F`` / ``Field`` builder. The SDK re-exports the
       builder into ``dftracer::utils::plugins``, so ``plugin.h`` is the only include and no
-      ``query::`` qualifier is needed; the host parses the rendered string, so
-      the plugin still links nothing from the query library.
+      ``duql::`` qualifier is needed; the host parses the rendered string, so
+      the plugin still links nothing from the duql library.
 
       .. code-block:: cpp
 
          struct Filtered {
-             dftu_query* q_ = nullptr;
+             dftu_duql* q_ = nullptr;
              explicit Filtered(const Config&) {}
              void step(const Batch& b, Host h) {
-                 if (!q_) q_ = h.query_compile(F("dur") > 1000);
-                 // Equivalent: h.query_compile("dur > 1000");
+                 if (!q_) q_ = h.duql_compile(F("dur") > 1000);
+                 // Equivalent: h.duql_compile("dur > 1000");
                  for (std::int64_t row = 0; row < b.size(); ++row)
-                     if (h.query_matches(q_, b.raw(), row)) { /* ... */ }
+                     if (h.duql_matches(q_, b.raw(), row)) { /* ... */ }
              }
              void merge(Filtered&) {}
              void finalize(Host) {}
@@ -878,10 +878,10 @@ scan; do not free it.
 
       .. code-block:: c
 
-         const dftu_svc_query* Q =
-             (const dftu_svc_query*)host->get_service(host->h, DFTU_SVC_QUERY);
-         dftu_query* q = Q->query_compile(host->h, "dur > 1000", 10);
-         if (Q->query_matches(host->h, q, df, row)) { /* ... */ }
+         const dftu_svc_duql* Q =
+             (const dftu_svc_duql*)host->get_service(host->h, DFTU_SVC_DUQL);
+         dftu_duql* q = Q->duql_compile(host->h, "dur > 1000", 10);
+         if (Q->duql_matches(host->h, q, df, row)) { /* ... */ }
 
 11. Arrow interchange (DFTU_SVC_ARROW)
 --------------------------------------
@@ -1027,7 +1027,7 @@ shared scan must stay wide enough for every branch):
    using dftracer::utils::plugins::Plugins;
 
    auto set = Plugins::builder()
-                  .add("./name_edges.so", R"({"query": "cat == \"POSIX\""})")
+                  .add("./name_edges.so", R"({"duql": "cat == \"POSIX\""})")
                   .add("./dur_stats.so")
                   .build();                      // Result<Plugins>: a bad path,
    if (!set) throw std::runtime_error(set.error().message);   // ABI or graph fault
@@ -1281,9 +1281,9 @@ that covers it:
    * - typed compose ops (``dftracer::utils::plugins::make_op`` / ``run``)
      - ``DFTU_SVC_COMPOSE``
      - :doc:`guides/plugins/compose-ops`
-   * - ``Host::query_compile`` / ``query_matches``
-     - ``DFTU_SVC_QUERY``
-     - `10. Query DSL against events (DFTU_SVC_QUERY)`_
+   * - ``Host::duql_compile`` / ``duql_matches``
+     - ``DFTU_SVC_DUQL``
+     - `10. duql filters against events (DFTU_SVC_DUQL)`_
    * - ``Host::arrow_read_ipc`` / ``arrow_write_ipc``
      - ``DFTU_SVC_ARROW``
      - `11. Arrow interchange (DFTU_SVC_ARROW)`_

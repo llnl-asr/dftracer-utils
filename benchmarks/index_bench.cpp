@@ -21,9 +21,9 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
-#include <dftracer/utils/query/query.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <simdjson.h>
@@ -236,7 +236,7 @@ View open_view(const std::string& input, const std::string& index_dir) {
     View v = fs::is_regular_file(input)
                  ? View::from_file(input, index_dir)
                  : run(View::from_directory(input, index_dir));
-    return v.metadata(false);
+    return v;
 }
 
 Result measure(const Options& opt, const std::string& input,
@@ -294,19 +294,19 @@ Result measure(const Options& opt, const std::string& input,
     if (!qs.args.empty()) r.queries["args"] = qs.args;
 
     for (const auto& [key, text] : r.queries) {
-        const auto parsed = query::parse_or_throw(text);
+        const auto parsed = duql::parse_or_throw(text);
         dftracer::utils::index::plan::ChunkPrunerBatchInput in;
         in.index_path = index_path;
         for (const auto& f : files) in.items.push_back({f, parsed});
         dftracer::utils::index::plan::ChunkPruner pruner;
         Samples per_file;
-        for (double s : timed([&] { (void)pruner.process_batch(in); },
-                              opt.warmups, opt.runs))
+        for (double s :
+             timed([&] { pruner.process_batch(in); }, opt.warmups, opt.runs))
             per_file.push_back(s * 1e6 / static_cast<double>(files.size()));
         r.prune_us_per_file[key] = std::move(per_file);
         r.query_s[key] = timed(
             [&] {
-                run(view.query(text).agg({{AggOp::Count, "", "n"}}).collect());
+                run(view.duql(text).agg({{AggOp::Count, "", "n"}}).collect());
             },
             opt.warmups, opt.runs);
     }
@@ -318,7 +318,7 @@ Result measure(const Options& opt, const std::string& input,
         },
         opt.warmups, opt.runs);
     r.query_s["flamegraph"] =
-        timed([&] { run(view.query(qs.cat).flamegraph().collect()); },
+        timed([&] { run(view.duql(qs.cat).flamegraph().collect()); },
               opt.warmups, opt.runs);
     r.peak_rss = peak_rss_bytes();
     return r;

@@ -1,4 +1,4 @@
-// Drives the C consumers (compose_abi_c_consumer.c, query_abi_c_consumer.c):
+// Drives the C consumers (compose_abi_c_consumer.c, duql_abi_c_consumer.c):
 // the host is built here in C++, but every ABI call happens in a C translation
 // unit through the raw vtables, so this proves the plugin C ABIs work
 // end-to-end from real C, not just from C++.
@@ -88,7 +88,7 @@ dftu_series* string_column(const std::vector<std::string>& vals) {
                                   nullptr);
 }
 
-// A [cat, name] string-column frame; only the columns dftu_svc_query's tests
+// A [cat, name] string-column frame; only the columns dftu_svc_duql's tests
 // need.
 TestFrame cat_name_frame(const std::vector<std::string>& cats,
                          const std::vector<std::string>& names) {
@@ -184,7 +184,7 @@ TEST_CASE("C ABI: dftu_svc_compose type-checks a pipe from C") {
     CHECK(dftu_test_compose_typecheck(&fx.host()) == 1);
 }
 
-TEST_CASE("C ABI: dftu_svc_query compile + match from C") {
+TEST_CASE("C ABI: dftu_svc_duql compile + match from C") {
     HostFixture fx;
     dftu_plugin_host& host = fx.host();
 

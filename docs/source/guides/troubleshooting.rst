@@ -1,4 +1,4 @@
-:description: Match a symptom to its cause and fix: empty scans, missing .pfw.gz files, and other common problems, each linked to the guide that explains it.
+:description: Match a symptom to its cause and fix: empty scans, missing trace files, and other common problems, each linked to the guide that explains it.
 
 Troubleshoot common problems
 =============================
@@ -10,25 +10,25 @@ Troubleshoot common problems
    through the whole guide tree. Each entry is symptom, then cause, then fix, with
    a link to the guide that covers the mechanism in depth.
 
-A query returns nothing, or "No .pfw.gz files found"
--------------------------------------------------------
+A query returns nothing, "No trace files found" or "Not a gzip trace"
+----------------------------------------------------------------------
 
 **Symptom**: ``TraceViewer("traces/")`` (or ``dftracer_view -d traces/``)
-collects an empty result, or the CLI logs ``No .pfw.gz files found in:
-<dir>``.
+collects an empty result, the CLI logs ``No trace files found in: <dir>``,
+or a query fails with ``Not a gzip trace``.
 
-**Cause**: a directory scan only looks for gzip-compressed ``.pfw.gz`` files,
-recursively. Plain, uncompressed ``.pfw`` files in the same tree are not
-picked up - the engine's directory scanner is gzip-only by design (see
-:doc:`analysis/views` and :doc:`data/dataframe`, both of which state this).
-The other common cause is a typo'd or relative path resolved from the wrong
-working directory.
+**Cause**: a directory scan lists ``.pfw``, ``.jsonl`` and ``.ndjson``
+files, plain or gzip; other names, ``.json`` included, are not trace
+files (pass a ``.json`` trace with ``--files``). An index
+reads gzip only, so a View or an ``Indexer`` fails on a plain file rather
+than reading it as empty. ``dftracer_view``, ``dftracer_run`` and
+``dftracer_index`` write a gzip copy of a plain file under ``split/`` and
+read that. The other common cause is a typo'd or relative path resolved
+from the wrong working directory.
 
-**Fix**: compress stray ``.pfw`` files (``dftracer_pgzip``, see
-:doc:`io/compression`) or point at the directory that already holds the
-``.pfw.gz`` output, and confirm the path with ``ls`` before re-running. Some
-CLI tools accept ``--files`` to pass explicit paths instead of a directory scan
-if you need to bypass the extension filter for a one-off file.
+**Fix**: compress plain files (``dftracer_pgzip``, see
+:doc:`io/compression`) or read them through the CLI tools, and confirm the
+path with ``ls`` before re-running.
 
 The first query is slow, but a later one on the same data is fast
 ------------------------------------------------------------------------
@@ -40,7 +40,7 @@ after.
 **Cause**: this is expected, not a bug. A genuinely fresh file with no
 ``.dftindex`` yet triggers a one-pass bootstrap: the first aggregation query
 both answers itself and builds the full index (checkpoints, bloom filters,
-dictionaries) as a byproduct. Every query after that reads the index instead of
+stored row sets) as a byproduct. Every query after that reads the index instead of
 re-scanning. See :ref:`indexing-first-touch` in :doc:`core/indexing` for
 exactly which query shapes trigger it.
 
@@ -94,7 +94,7 @@ A non-pushable predicate is not pushed to the index
 arithmetic or the numeric primitives into the comparison) returns the right
 rows but reads every chunk, with no index pruning.
 
-**Cause**: ``filter()`` / ``.query()`` push a predicate down to the index only
+**Cause**: ``filter()`` / ``.duql()`` push a predicate down to the index only
 when it is a pure predicate over field names and nothing but filters came
 before it. An expression with a value op inside the comparison (``F.a + F.b``,
 ``F.dur.ilog2()``) has no index form, so the ``TraceViewer`` applies it as a
@@ -104,8 +104,9 @@ plan filter over the scanned rows instead.
 and filter on that first (``viewer.filter(F.dur > 1000).filter((F.a + F.b) >
 3)``); the plain part prunes chunks and the rest filters the survivors. Plain
 field predicates (``F.dur > 1000``, ``F.cat.is_in([...])``,
-``F.name.like("%read%")``, ``resolved(...)``) push down normally. See
-:doc:`core/query-dsl`.
+``F.name.like("%read%")``, an arrow such as ``fhash -> files.path == "/x"``
+in ``.duql()``) push down normally. See
+:doc:`core/duql`.
 
 Query predicate parses but does not filter what you expect
 -----------------------------------------------------------------
@@ -118,9 +119,11 @@ trace viewer.
 literal string. Filtering the bare field name (``F.fhash == "..."``) compares
 against the hash, not the string you typed.
 
-**Fix**: use the resolved column - ``resolved("fhash.path")`` in both Python
-and C++ - which the engine rewrites into a key lookup against the index
-dictionaries. See "Resolved columns" in :doc:`core/query-dsl`.
+**Fix**: read the string through a row set of the source with an arrow, such
+as ``.duql('where fhash -> files.path == "/data/a"')`` or
+``hhash -> hosts.name``. The engine turns it into a key filter on the scan.
+A ``resolved.fhash.path`` name is removed and fails with an error that names
+the arrow. See "Read names through row sets" in :doc:`core/duql`.
 
 See also
 --------

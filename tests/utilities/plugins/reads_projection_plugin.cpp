@@ -46,7 +46,9 @@ struct ColumnProbe {
             columns += names[i];
         }
 
-        if (dftu_series* xcol = dftu_dataframe_column(df, "args.x")) {
+        dftu_series* xcol = dftu_dataframe_column(df, "args.x");
+        if (!xcol) xcol = dftu_dataframe_column(df, "x");
+        if (xcol) {
             has_args_x = true;
             if (dftu_series_type(xcol) == DFTU_TYPE_INT64) {
                 const auto* data =

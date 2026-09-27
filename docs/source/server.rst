@@ -109,7 +109,15 @@ Get detailed metadata for a specific file.
 GET /api/info
 ++++++++++++++++
 
-Get global metadata about all trace files (time bounds, file listing).
+Get global metadata about all trace files (time bounds, file listing) and
+their record schema. ``schema.fields`` names the fields that play each trace
+role: dftracer's ``ts``, ``dur``, ``pid``, ``tid`` and ``name``, or a path
+schema's time, duration, entity and lane roles and its label (the name
+role, else the field named ``name``, else its first string field without a
+role). An empty name is a role
+the schema does not bind. For a path schema the bounds come from the time
+role's zone map, converted to microseconds, and end at the latest time plus the
+longest duration.
 
 **Response:**
 
@@ -117,6 +125,12 @@ Get global metadata about all trace files (time bounds, file listing).
 
     {
         "file_count": 3,
+        "schema": {
+            "id": "dftracer",
+            "decoder": "dftracer",
+            "fields": {"time": "ts", "duration": "dur", "entity": "pid",
+                       "lane": "tid", "label": "name", "entity_name": "pid"}
+        },
         "time_range": {
             "min_timestamp_us": 1000000,
             "max_timestamp_us": 10000000
@@ -139,18 +153,25 @@ Get global metadata about all trace files (time bounds, file listing).
         ]
     }
 
-GET /api/resolve
-++++++++++++++++++
+GET /api/rowset
++++++++++++++++
 
-Resolve dictionary keys (file/host/string hashes) to their values.
+Look up values in a row set of the files' record schema source, by key: the
+column ``value`` of the rows whose column ``key`` is one of ``keys``. A key
+with no row is absent from the reply. For dftracer traces the row sets are
+``files`` (``fhash``, ``path``), ``hosts`` (``hhash``, ``name``), ``strings``
+(``shash``, ``value``) and ``ranks`` (``pid``, ``rank``).
 
 **Query Parameters:**
 
-- ``hash`` (string) - One key, or several separated by commas [required]
-- ``type`` (string) - the dictionary: ``file`` (default), ``host``, or
-  ``string``
-- ``field`` (string) - the dictionary field: ``path``, ``name`` or ``value``;
-  the dictionary's own field by default
+- ``name`` (string) - the row set, such as ``files`` [required]
+- ``key`` (string) - the key column, such as ``fhash`` [required]
+- ``value`` (string) - the value column, such as ``path`` [required]
+- ``keys`` (string) - one key, or several separated by commas [required]
+
+.. code-block:: bash
+
+    curl "http://localhost:8080/api/rowset?name=files&key=fhash&value=path&keys=314c1a1cdb22a136"
 
 **Response:**
 
@@ -207,7 +228,7 @@ Query events optimized for visualization with time-range windowing, lane groupin
 - ``cat`` (string) - Category filter
 - ``lanes`` (JSON) - Lane filtering as URL-encoded JSON (see below)
 - ``filters`` (JSON) - Complex filtering as URL-encoded JSON array (see below)
-- ``query`` (string) - A raw query DSL predicate, ANDed with the other filters
+- ``duql`` (string) - A raw duql predicate, ANDed with the other filters
 
 **Response:**
 
@@ -292,7 +313,7 @@ them in the "no time" tab.
 
 **Query Parameters:**
 
-- ``query`` (string) - DSL predicate, as for ``/api/viz/events``
+- ``duql`` (string) - duql predicate, as for ``/api/viz/events``
 - ``offset`` (integer) - First record of the page (default: 0)
 - ``limit`` (integer) - Records per page, at most 10000 (default: 1000)
 
@@ -334,9 +355,10 @@ zoomed-out views still show where activity is. Returns full-size events (with
 ``begin``/``end``/``summary`` parameters as ``/api/viz/events``.
 
 Optional ``group_by=<column>`` splits blocks by an event column (a top-level
-field, an ``args`` key, or a resolved column such as ``resolved.fhash.path``).
-Each block gains a ``group`` value; dictionary key columns keep the raw key and
-the response metadata carries a ``group_names`` map (key to value). Events
+field or an ``args`` key). Each block gains a ``group`` value. A hash column
+(``fhash``, ``cwd``, ``hhash``, ``exec_hash``, ``cmd_hash``) keeps the raw key,
+and the response metadata carries a ``group_names`` map (key to value) read
+from the ``files``, ``hosts`` or ``strings`` row set. Events
 missing the column, or a column that does not exist, group under ``(none)`` on
 the client - they are never dropped.
 
@@ -431,6 +453,12 @@ process) with parent links, spawn/first timestamps, resolved ``host``, ``rank``
 Drives lane ordering and grouping in the viewer. Respects ``?file=`` for
 per-node trees on multi-node traces.
 
+For a path record schema each entity value is a root node. A text entity's
+``pid`` is a stable 31-bit hash of it and ``label`` holds the value. ``host``
+comes from the source's ``hosts`` row set and ``rank`` from its ``ranks`` row
+set, each keyed by a column named as the entity field, with the columns
+``name`` and ``rank``; without them both are empty.
+
 .. code-block:: bash
 
     curl "http://localhost:8080/api/viz/proctree"
@@ -504,15 +532,15 @@ ANDed together:
       ]
 
   Supported operators: ``=``, ``>=``, ``<=``, ``>``, ``<``.
-- ``query`` - a raw query DSL predicate, e.g. ``dur >= 1000 and cat ==
-  "POSIX"``, spliced in verbatim. This is what the timeline's query box sends.
+- ``duql`` - a raw duql predicate, e.g. ``dur >= 1000 and cat ==
+  "POSIX"``, spliced in verbatim. This is what the timeline's duql box sends.
 
 .. code-block:: bash
 
     curl "http://localhost:8080/api/viz/events?begin=0&end=2000000&summary=1&cat=POSIX"
-    curl "http://localhost:8080/api/viz/events?begin=0&end=2000000&summary=1&query=dur%20%3E%3D%201000"
+    curl "http://localhost:8080/api/viz/events?begin=0&end=2000000&summary=1&duql=dur%20%3E%3D%201000"
 
-Use ``GET /api/resolve`` to turn an interned hash (``fhash``, ``hhash``, a
+Use ``GET /api/rowset`` to turn an interned hash (``fhash``, ``hhash``, a
 file or host id from a response) back into its string.
 
 Indexing
@@ -575,7 +603,7 @@ request timeout (``with_global_timeout(0)``). Cancel a slow request early with
 **Query Optimization:**
 
 - Use narrow time ranges in ``/api/viz/events`` queries.
-- Apply filters (``cat``, ``pid``, ``tid``, ``query``) to reduce the number of events scanned.
+- Apply filters (``cat``, ``pid``, ``tid``, ``duql``) to reduce the number of events scanned.
 - Use ``limit`` for pagination on ``/api/viz/events``.
 - Use higher ``summary`` levels in visualization queries to aggregate short-duration events.
 - Consider ``lanes`` filtering for visualization queries to reduce network overhead.

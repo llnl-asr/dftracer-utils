@@ -171,7 +171,7 @@ inline void emit_metric_stats_from_bytes(BinaryReader& r,
     auto total = r.varint();
     auto min = r.varint();
     auto max = r.varint();
-    (void)r.f64();  // mean
+    r.skip(8);  // mean
     auto m2 = r.f64();
     if (fmt == METRIC_FMT_FULL_WITH_SKETCH) {
         r.skip_blob();

@@ -14,7 +14,7 @@ namespace {
 // features) on first use by writing unsynchronized globals. Resolve them once,
 // under a function-local static, so concurrent codecs only read them.
 void resolve_dispatch() {
-    static const bool RESOLVED = [] {
+    [[maybe_unused]] static const bool RESOLVED = [] {
         static const unsigned char EMPTY_BLOCK[] = {0x03, 0x00};
         unsigned char byte = 0;
         libdeflate_crc32(0, &byte, 0);
@@ -27,7 +27,6 @@ void resolve_dispatch() {
         }
         return true;
     }();
-    (void)RESOLVED;
 }
 
 }  // namespace

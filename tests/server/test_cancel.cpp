@@ -52,8 +52,8 @@ TEST_SUITE("CancelToken") {
 
     TEST_CASE("remove unregisters and size tracks in-flight") {
         CancelRegistry reg;
-        (void)reg.create("a");
-        (void)reg.create("b");
+        reg.create("a");
+        reg.create("b");
         CHECK(reg.size() == 2);
         reg.remove("a");
         CHECK(reg.size() == 1);

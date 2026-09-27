@@ -20,9 +20,9 @@ vs ``View`` vs a plugin vs the C ABI yet - this page assumes the
 -----------------------------------
 
 A ``TraceViewer``/``View`` accepts a directory, a single file, or a list of
-files. A directory is scanned recursively for ``.pfw.gz`` files only - plain
-``.pfw`` is not picked up (see :doc:`troubleshooting` if that scan turns up
-empty).
+files. A directory is scanned recursively for ``.pfw``, ``.jsonl``
+and ``.ndjson`` files; a plain (not gzip) one is an error, since
+an index reads gzip only (see :doc:`troubleshooting`).
 
 .. tab-set::
 
@@ -81,7 +81,7 @@ Full detail, including the bootstrap and staleness rules: :doc:`core/indexing`.
 3. Filter and aggregate
 --------------------------
 
-Build a predicate with the query DSL and roll matching events up with
+Build a predicate in duql and roll matching events up with
 ``group_by``/``agg``. The predicate is pushed down to the index at scan time,
 so only candidate chunks are decompressed.
 
@@ -102,7 +102,7 @@ so only candidate chunks are decompressed.
 
       .. code-block:: cpp
 
-         using namespace dftracer::utils::query;   // for Field
+         using namespace dftracer::utils::duql;   // for Field
 
          auto df = view.filter((Field("cat") == "POSIX" && Field("dur") >= 1000).build().value())
                         .group_by({GroupKey::name()})
@@ -112,7 +112,7 @@ so only candidate chunks are decompressed.
                         .collect()
                         .get();
 
-Full detail: :doc:`core/query-dsl` (predicates), :doc:`analysis/aggregation`
+Full detail: :doc:`core/duql` (predicates), :doc:`analysis/aggregation`
 (group-by/agg vocabulary).
 
 4. Derive columns

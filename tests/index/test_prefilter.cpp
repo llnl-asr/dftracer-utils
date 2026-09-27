@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/plan/prefilter.h>
-#include <dftracer/utils/query/query.h>
 #include <doctest/doctest.h>
 
 #include <string>
@@ -12,7 +12,7 @@ using Clauses = std::vector<std::vector<std::string>>;
 namespace {
 
 Prefilter of(const char* q) {
-    return Prefilter(dftracer::utils::query::parse_or_throw(q));
+    return Prefilter(dftracer::utils::duql::parse_or_throw(q));
 }
 
 }  // namespace
@@ -39,7 +39,9 @@ TEST_SUITE("Prefilter") {
     TEST_CASE("leaves that cannot require bytes add nothing") {
         for (const char* q :
              {R"(name != "read")", "dur != 100", R"(not (name == "read"))",
-              R"(name like "%rea%")", R"(name not in ["read"])",
+              R"(name ilike "%rea%")", R"(name !~ "cuda")",
+              R"q(name ~ "(cuda|hip)")q", R"(name ~* "cuda")",
+              R"(name like "a%b")", R"(name not in ["read"])",
               R"(fpath == "/tmp/x")", R"(name == "a\"b")",
               R"(name == "read" or dur > 5)", "tags.0 > 5",
               R"(not (dur > 5))"}) {
@@ -49,6 +51,17 @@ TEST_SUITE("Prefilter") {
         // One side of an and still requires its needle.
         CHECK(of(R"(name == "read" and dur > 100)").clauses() ==
               Clauses{{"\"read\""}});
+    }
+
+    TEST_CASE("case-sensitive patterns require their literals") {
+        CHECK(of(R"(name like "%rea%")").clauses() == Clauses{{"rea"}});
+        CHECK(of(R"(name ~ "cuda.*Memcpy")").clauses() ==
+              Clauses{{"Memcpy"}, {"cuda"}});
+        CHECK(of(R"q(name ~ "^MPI_(Send|Recv)$")q").clauses() ==
+              Clauses{{"MPI_"}});
+        const auto p = of(R"(name ~ "cuda.*Memcpy")");
+        CHECK(p.may_match(R"({"name":"cudaMemcpyAsync"})"));
+        CHECK_FALSE(p.may_match(R"({"name":"cudaMalloc"})"));
     }
 
     TEST_CASE("lines pass on needles, whatever the spacing") {
@@ -109,7 +122,7 @@ TEST_SUITE("Prefilter") {
 
         Prefilter::Gate selective(p);
         for (std::size_t i = 0; i < Prefilter::CHECK_WINDOW; ++i)
-            (void)selective.may_match(R"({"name":"write"})");
+            selective.may_match(R"({"name":"write"})");
         CHECK_FALSE(selective.may_match(R"({"name":"write"})"));
     }
 }

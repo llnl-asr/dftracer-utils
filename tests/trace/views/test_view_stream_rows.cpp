@@ -74,7 +74,7 @@ TEST_SUITE("trace scan - streaming row query") {
         TestEnvironment env(200);
         std::string gz = create_mixed_arg_trace(env);
         std::string idx = determine_index_path(gz, "");
-        scan::ScanPlan v = scan::metadata(scan::from_file(gz, idx), false);
+        scan::ScanPlan v = scan::from_file(gz, idx);
 
         dataframe::DataFrame via_lazy = run(scan::collect(v).collect());
         dataframe::DataFrame via_eager = run(scan::collect_frame(v));
@@ -93,7 +93,7 @@ TEST_SUITE("trace scan - streaming row query") {
         TestEnvironment env(200);
         std::string gz = create_mixed_arg_trace(env);
         std::string idx = determine_index_path(gz, "");
-        scan::ScanPlan v = scan::metadata(scan::from_file(gz, idx), false);
+        scan::ScanPlan v = scan::from_file(gz, idx);
 
         auto drain = [](const scan::ScanPlan& view) {
             return dftracer::utils::default_runtime()
@@ -124,8 +124,7 @@ TEST_SUITE("trace scan - streaming row query") {
     TEST_CASE("collect() falls back to buffered collect_frame() with select") {
         const auto& s = shared_trace();
         scan::ScanPlan v =
-            scan::select(scan::metadata(scan::from_file(s.gz, s.idx), false),
-                         {"cat", "name"});
+            scan::select(scan::from_file(s.gz, s.idx), {"cat", "name"});
 
         dataframe::DataFrame via_lazy = run(scan::collect(v).collect());
         dataframe::DataFrame via_eager = run(scan::collect_frame(v));
@@ -139,8 +138,7 @@ TEST_SUITE("trace scan - streaming row query") {
         "scan::stream() bounds a buffered select-plan into multiple chunks") {
         const auto& s = shared_trace();  // 50 rows
         scan::ScanPlan v =
-            scan::select(scan::metadata(scan::from_file(s.gz, s.idx), false),
-                         {"cat", "name"});
+            scan::select(scan::from_file(s.gz, s.idx), {"cat", "name"});
 
         auto [chunks, rows] =
             dftracer::utils::default_runtime()
@@ -167,12 +165,11 @@ TEST_SUITE("trace scan - streaming row query") {
         "scan::stream() with select+sort+limit streams multiple bounded "
         "chunks matching collect()") {
         const auto& s = shared_trace();  // 50 rows
-        scan::ScanPlan v = scan::limit(
-            scan::sort_by(scan::select(scan::metadata(
-                                           scan::from_file(s.gz, s.idx), false),
-                                       {"cat", "name", "dur"}),
-                          "dur", /*descending=*/true),
-            20);
+        scan::ScanPlan v =
+            scan::limit(scan::sort_by(scan::select(scan::from_file(s.gz, s.idx),
+                                                   {"cat", "name", "dur"}),
+                                      "dur", /*descending=*/true),
+                        20);
 
         auto [chunks, rows] =
             dftracer::utils::default_runtime()
@@ -228,7 +225,7 @@ TEST_SUITE("trace scan - streaming row query") {
     TEST_CASE("ViewSource pushdown: col filter -> Query (Exact), matches") {
         namespace df = dftracer::utils::dataframe;
         const auto& s = shared_trace();
-        scan::ScanPlan v = scan::metadata(scan::from_file(s.gz, s.idx), false);
+        scan::ScanPlan v = scan::from_file(s.gz, s.idx);
         auto src = std::make_shared<ViewSource>(v);
 
         const std::vector<std::string> names = src->names();
@@ -263,7 +260,7 @@ TEST_SUITE("trace scan - streaming row query") {
     TEST_CASE("ViewSource pushdown: non-translatable filter falls back (No)") {
         namespace df = dftracer::utils::dataframe;
         const auto& s = shared_trace();
-        scan::ScanPlan v = scan::metadata(scan::from_file(s.gz, s.idx), false);
+        scan::ScanPlan v = scan::from_file(s.gz, s.idx);
         auto src = std::make_shared<ViewSource>(v);
 
         const std::vector<std::string> names = src->names();
@@ -296,7 +293,7 @@ TEST_SUITE("trace scan - streaming row query") {
     TEST_CASE("ViewSource pushdown: string predicates and is_in") {
         namespace df = dftracer::utils::dataframe;
         const auto& s = shared_trace();  // 30 "read" + 20 "fwrite"
-        scan::ScanPlan v = scan::metadata(scan::from_file(s.gz, s.idx), false);
+        scan::ScanPlan v = scan::from_file(s.gz, s.idx);
         auto src = std::make_shared<ViewSource>(v);
 
         const std::vector<std::string> names = src->names();
@@ -374,7 +371,7 @@ TEST_SUITE("trace scan - streaming row query") {
     TEST_CASE("ViewSource pushdown: AND/OR/NOT of col filters") {
         namespace df = dftracer::utils::dataframe;
         const auto& s = shared_trace();
-        scan::ScanPlan v = scan::metadata(scan::from_file(s.gz, s.idx), false);
+        scan::ScanPlan v = scan::from_file(s.gz, s.idx);
         auto src = std::make_shared<ViewSource>(v);
 
         const std::vector<std::string> names = src->names();
@@ -491,7 +488,7 @@ TEST_SUITE("trace scan - streaming row query") {
         "ViewSource pushdown: projection harvests only selected columns") {
         namespace df = dftracer::utils::dataframe;
         const auto& s = shared_trace();
-        scan::ScanPlan v = scan::metadata(scan::from_file(s.gz, s.idx), false);
+        scan::ScanPlan v = scan::from_file(s.gz, s.idx);
         auto src = std::make_shared<ViewSource>(v);
 
         df::DataFrame proj =
@@ -509,7 +506,7 @@ TEST_SUITE("trace scan - streaming row query") {
     TEST_CASE("ViewSource head(10) early-stops the scan (cancellation)") {
         namespace df = dftracer::utils::dataframe;
         const auto& s = shared_trace();  // 50 events
-        scan::ScanPlan v = scan::metadata(scan::from_file(s.gz, s.idx), false);
+        scan::ScanPlan v = scan::from_file(s.gz, s.idx);
         auto src = std::make_shared<ViewSource>(v);
 
         df::DataFrame h = run(df::LazyFrame::scan(src).head(10).collect());
@@ -521,9 +518,8 @@ TEST_SUITE("trace scan - streaming row query") {
         "for a statically-known select") {
         namespace df = dftracer::utils::dataframe;
         const auto& s = shared_trace();
-        scan::ScanPlan v =
-            scan::select(scan::metadata(scan::from_file(s.gz, s.idx), false),
-                         {"name", "cat", "pid", "ts", "dur"});
+        scan::ScanPlan v = scan::select(scan::from_file(s.gz, s.idx),
+                                        {"name", "cat", "pid", "ts", "dur"});
         auto src = std::make_shared<ViewSource>(v);
 
         df::Schema schema = src->schema();
@@ -547,8 +543,7 @@ TEST_SUITE("trace scan - streaming row query") {
         std::string gz = create_mixed_arg_trace(env);
         std::string idx = determine_index_path(gz, "");
         scan::ScanPlan v =
-            scan::select(scan::metadata(scan::from_file(gz, idx), false),
-                         {"name", "args.x"});
+            scan::select(scan::from_file(gz, idx), {"name", "args.x"});
         auto src = std::make_shared<ViewSource>(v);
 
         df::Schema schema = src->schema();
@@ -622,14 +617,11 @@ TEST_SUITE("trace scan - streaming row query") {
         // than data-dependent.
         {
             StringSink sink;
-            scan::export_json(
-                scan::emit_all_metadata(scan::from_file(gz, idx), true), sink)
-                .get();
+            scan::export_json(scan::from_file(gz, idx), sink).get();
         }
 
         scan::ScanPlan v =
-            scan::select(scan::metadata(scan::from_file(gz, idx), false),
-                         {"name", "args.x"});
+            scan::select(scan::from_file(gz, idx), {"name", "args.x"});
         auto src = std::make_shared<ViewSource>(v);
 
         df::Schema schema = src->schema();

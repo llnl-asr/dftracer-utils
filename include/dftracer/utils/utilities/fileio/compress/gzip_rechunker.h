@@ -76,10 +76,11 @@ inline coro::CoroTask<bool> gzip_needs_rechunk(int fd, std::uint64_t file_size,
     co_return result;
 }
 
-/// Decodes `in_path` (single huge member or otherwise) with zlib in bounded
-/// memory and writes an equivalent multi-member gzip to `out_path`: identical
-/// uncompressed bytes, re-framed into libdeflate members of about
-/// `member_size` uncompressed bytes cut at newline boundaries.
+/// Decodes `in_path` (single huge member or otherwise; plain text is read as
+/// is) with zlib in bounded memory and writes an equivalent multi-member gzip
+/// to `out_path`: identical uncompressed bytes, re-framed into libdeflate
+/// members of about `member_size` uncompressed bytes cut at newline
+/// boundaries.
 inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
                                                     const std::string& out_path,
                                                     std::size_t member_size,
@@ -99,6 +100,9 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
         throw DFTUtilsException(ErrorCode::IO, "Cannot stat file: " + in_path);
     }
     const auto file_size = static_cast<std::uint64_t>(st.st_size);
+    unsigned char magic[2] = {0, 0};
+    const bool plain = co_await io::pread(in_fd.get(), magic, 2, 0) != 2 ||
+                       magic[0] != 0x1f || magic[1] != 0x8b;
 
     ssize_t out_fd_res =
         co_await io::open(out_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -109,7 +113,7 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
     ScopedFd out_fd(static_cast<int>(out_fd_res));
 
     z_stream zs{};
-    if (inflateInit2(&zs, 15 + 16) != Z_OK) {
+    if (!plain && inflateInit2(&zs, 15 + 16) != Z_OK) {
         throw DFTUtilsException(ErrorCode::COMPRESSION,
                                 "inflateInit2 failed for " + in_path);
     }
@@ -143,7 +147,8 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
 
     bool ok = true;
     while (ok) {
-        if (zs.avail_in == 0) {
+        int rc = Z_OK;
+        if (plain) {
             if (off >= file_size) break;
             const std::size_t want = static_cast<std::size_t>(
                 std::min<std::uint64_t>(in.size(), file_size - off));
@@ -151,27 +156,40 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
                                                  static_cast<off_t>(off));
             if (n <= 0) break;
             off += static_cast<std::uint64_t>(n);
-            zs.next_in = in.data();
-            zs.avail_in = static_cast<uInt>(n);
-        }
+            member.insert(member.end(), in.data(), in.data() + n);
+        } else {
+            if (zs.avail_in == 0) {
+                if (off >= file_size) break;
+                const std::size_t want = static_cast<std::size_t>(
+                    std::min<std::uint64_t>(in.size(), file_size - off));
+                const ssize_t n = co_await io::pread(
+                    in_fd.get(), in.data(), want, static_cast<off_t>(off));
+                if (n <= 0) break;
+                off += static_cast<std::uint64_t>(n);
+                zs.next_in = in.data();
+                zs.avail_in = static_cast<uInt>(n);
+            }
 
-        zs.next_out = out.data();
-        zs.avail_out = static_cast<uInt>(out.size());
-        int rc = inflate(&zs, Z_NO_FLUSH);
-        const std::size_t got = out.size() - zs.avail_out;
-        member.insert(member.end(), out.data(), out.data() + got);
+            zs.next_out = out.data();
+            zs.avail_out = static_cast<uInt>(out.size());
+            rc = inflate(&zs, Z_NO_FLUSH);
+            const std::size_t got = out.size() - zs.avail_out;
+            member.insert(member.end(), out.data(), out.data() + got);
+        }
 
         // Close a member just before a newline once big enough, so the next
         // member begins with that '\n'. The reader's boundary-aware byte range
         // drops bytes up to the first newline of a non-initial member, so a
         // member must lead with the separator (as ChunkWriter emits) or its
         // first event would be dropped on read.
-        if (member.size() >= member_size) {
+        while (member.size() >= member_size) {
             std::size_t nl = member_size;
             while (nl < member.size() && member[nl] != '\n') ++nl;
-            if (nl < member.size()) co_await emit(nl);
+            if (nl == member.size()) break;
+            co_await emit(nl);
         }
 
+        if (plain) continue;
         if (rc == Z_STREAM_END) {
             if (zs.total_in >= file_size && zs.avail_in == 0) break;
             if (inflateReset2(&zs, 15 + 16) != Z_OK) {
@@ -183,7 +201,7 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
         }
     }
 
-    inflateEnd(&zs);
+    if (!plain) inflateEnd(&zs);
     if (!ok) {
         throw DFTUtilsException(ErrorCode::COMPRESSION,
                                 "decompression failed for " + in_path);
@@ -193,28 +211,33 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
 
 /// If `path`'s first gzip member exceeds `member_size` uncompressed (a single
 /// huge member), rechunk it to ~member_size members at `<dir>/<basename>` and
-/// return that path; else return `path` unchanged. Non-destructive; a split
-/// copy newer than the source is reused. `did_split` = true when a split copy
-/// is returned. `member_size` 0 = default checkpoint size.
+/// return that path; a plain (not gzip) file with content becomes
+/// `<dir>/<basename>.gz` the same way. Else return `path` unchanged.
+/// Non-destructive; a split copy newer than the source is reused. `did_split`
+/// = true when a split copy is returned. `member_size` 0 = default checkpoint
+/// size.
 inline coro::CoroTask<std::string> rechunk_to_dir_if_needed(
     std::string path, std::string dir, std::size_t member_size,
     bool& did_split) {
     did_split = false;
-    if (!path.ends_with(".gz")) co_return path;
-
     ssize_t fd = co_await io::open(path.c_str(), O_RDONLY);
     if (fd < 0) co_return path;
     ScopedFd sfd(static_cast<int>(fd));
     struct stat st;
     if (::fstat(sfd.get(), &st) != 0) co_return path;
     const auto fsize = static_cast<std::uint64_t>(st.st_size);
+    if (fsize == 0) co_return path;
+    unsigned char magic[2] = {0, 0};
+    const bool plain = co_await io::pread(sfd.get(), magic, 2, 0) != 2 ||
+                       magic[0] != 0x1f || magic[1] != 0x8b;
     const std::size_t cap = member_size ? member_size : RECHUNK_MEMBER_CAP;
-    const bool needs = co_await gzip_needs_rechunk(sfd.get(), fsize, cap);
+    const bool needs =
+        plain || co_await gzip_needs_rechunk(sfd.get(), fsize, cap);
     sfd.reset();
     if (!needs) co_return path;
 
-    const std::string split_path =
-        dir + "/" + fs::path(path).filename().string();
+    std::string split_path = dir + "/" + fs::path(path).filename().string();
+    if (plain && !split_path.ends_with(".gz")) split_path += ".gz";
     did_split = true;
     struct stat sst;
     const bool fresh =

@@ -63,12 +63,12 @@ TEST_SUITE("GenericView") {
         CHECK(streamed.num_rows() == RECORDS);
         CHECK(names_of(streamed) == paths);
 
-        CHECK(view_of(gz).query(R"(op == "read")").collect().get().num_rows() ==
+        CHECK(view_of(gz).duql(R"(op == "read")").collect().get().num_rows() ==
               RECORDS / 3);
         std::int64_t deep = 0;
         for (int i = 0; i < RECORDS; ++i) deep += i * 4096 > 12000000 ? 1 : 0;
         CHECK(
-            view_of(gz).query("io.off > 12000000").collect().get().num_rows() ==
+            view_of(gz).duql("io.off > 12000000").collect().get().num_rows() ==
             deep);
 
         std::set<std::string> schema;
@@ -142,15 +142,15 @@ TEST_SUITE("GenericView") {
             }
             FAIL("no error");
         };
-        fails_with([&] { (void)view_of(gz).time_bucket(100); },
+        fails_with([&] { view_of(gz).time_bucket(100); },
                    "time_bucket needs a time role; schema generic");
-        fails_with([&] { (void)view_of(gz).time_range(0, 100); },
+        fails_with([&] { view_of(gz).time_range(0, 100); },
                    "time_range needs a time role");
-        fails_with([&] { (void)view_of(gz).call_tree(); },
+        fails_with([&] { view_of(gz).call_tree(); },
                    "call_tree needs a time role");
-        fails_with([&] { (void)view_of(gz).agg({{AggOp::Busy, "", "b"}}); },
+        fails_with([&] { view_of(gz).agg({{AggOp::Busy, "", "b"}}); },
                    "occupancy aggregate needs a time role");
-        fails_with([&] { (void)view_of(gz).group_by({GroupKey::io_cat()}); },
+        fails_with([&] { view_of(gz).group_by({GroupKey::io_cat()}); },
                    "group key io_cat needs dftracer events");
     }
 
@@ -162,7 +162,7 @@ TEST_SUITE("GenericView") {
         View v = View::from_files({{gz, determine_index_path(gz, "")},
                                    {dft, determine_index_path(dft, "")}});
         try {
-            (void)v.collect().get();
+            v.collect().get();
             FAIL("no error");
         } catch (const std::exception& e) {
             const std::string what = e.what();
@@ -177,5 +177,50 @@ TEST_SUITE("GenericView") {
         write_ndjson(env, "d");
         View v = run(View::from_directory(env.get_dir()));
         CHECK(v.collect().get().num_rows() == RECORDS);
+    }
+
+    TEST_CASE("files without records take no vote") {
+        TestEnvironment env(10);
+        const auto dft = create_mixed_trace(env, 5, 5);
+        const auto dir = fs::path(dft).parent_path();
+        std::ofstream(dir / "rank_1.pfw.gz");
+        {
+            const auto meta = (dir / "rank_2.pfw").string();
+            std::ofstream(meta)
+                << R"({"name":"HH","cat":"dftracer","pid":2,"tid":2,)"
+                   R"("ph":"M","args":{"name":"host","value":"h1"}})"
+                << "\n";
+            REQUIRE(dftu_utils_test::compress_file_to_gzip(meta, meta + ".gz"));
+            fs::remove(meta);
+        }
+        // Unindexed, then indexed with each file's own detection.
+        auto rows = [&] {
+            return run(View::from_directory(dir.string()))
+                .collect()
+                .get()
+                .num_rows();
+        };
+        CHECK(rows() == 10);
+        dftracer::utils::index::Indexer::open({dir.string()}).build();
+        CHECK(rows() == 10);
+
+        TestEnvironment empty_env(10);
+        std::ofstream(empty_env.get_dir() + "/a.pfw.gz");
+        std::ofstream(empty_env.get_dir() + "/b.pfw.gz");
+        View empty = run(View::from_directory(empty_env.get_dir()));
+        CHECK(empty.collect().get().num_rows() == 0);
+    }
+
+    TEST_CASE("from_directory reads plain files as an error, not as empty") {
+        TestEnvironment env(10);
+        std::ofstream(env.get_dir() + "/plain.jsonl") << R"({"k":1})" << "\n";
+        try {
+            run(View::from_directory(env.get_dir())).collect().get();
+            FAIL("no error");
+        } catch (const std::exception& e) {
+            CAPTURE(e.what());
+            CHECK(std::string(e.what()).find("Not a gzip trace") !=
+                  std::string::npos);
+        }
     }
 }

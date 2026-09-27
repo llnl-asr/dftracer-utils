@@ -197,6 +197,12 @@ PyObject* Series_get_timezone(PyObject* self, void*) {
     return PyUnicode_FromString(dftu_series_timezone(a->handle()));
 }
 
+PyObject* Series_get_is_json(PyObject* self, void*) {
+    Series* a = as_series(self);
+    if (!a) return nullptr;
+    return PyBool_FromLong(dftu_series_is_json(a->handle()));
+}
+
 PyMethodDef Series_methods[] = {
     {"add", Series_add, METH_O, "Elementwise a + b."},
     {"sub", Series_sub, METH_O, "Elementwise a - b."},
@@ -398,9 +404,9 @@ PyMethodDef Series_methods[] = {
      "(% any run, _ one char, backslash escapes a literal %/_/backslash)."},
     {"str_matches", Series_str_matches, METH_O,
      "str_matches(pattern) -> Bool Series where the whole string matches the "
-     "ECMAScript regex."},
+     "duql regex."},
     {"str_search", Series_str_search, METH_O,
-     "str_search(pattern) -> Bool Series where the ECMAScript regex matches "
+     "str_search(pattern) -> Bool Series where the duql regex matches "
      "anywhere in the string."},
     {"str_len_bytes", Series_str_len_bytes, METH_NOARGS,
      "str_len_bytes() -> Int64 Series of per-row byte length."},
@@ -509,6 +515,9 @@ PyGetSetDef Series_getset[] = {
      nullptr},
     {"timezone", Series_get_timezone, nullptr,
      "Zone name of a Timestamp column; '' for a naive one or another type.",
+     nullptr},
+    {"is_json", Series_get_is_json, nullptr,
+     "Whether this String column holds canonical JSON text per value.",
      nullptr},
     {nullptr, nullptr, nullptr, nullptr, nullptr}};
 

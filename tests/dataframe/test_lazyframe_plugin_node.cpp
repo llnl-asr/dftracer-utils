@@ -106,9 +106,7 @@ void src_destroy(void*) {}
 
 // The Timestamp column carries a timezone (a parameterized type) so a node
 // declaring it via dftu_schema_copy_field must preserve it, not just the id.
-void src_schema_types(void* self, dftu_schema* out) {
-    auto* s = static_cast<IntSource*>(self);
-    (void)s;
+void src_schema_types(void*, dftu_schema* out) {
     dftu_schema_add_field(out, "val", DFTU_TYPE_INT64, 0, DFTU_TIME_UNIT_MICRO,
                           nullptr, 0, 0, 0);
     dftu_schema_add_field(out, "ts", DFTU_TYPE_TIMESTAMP, 1,
@@ -852,9 +850,6 @@ TEST_SUITE("lazyframe plugin node") {
             const dftu_cursor_vt* in_vt;
             bool done = false;
         };
-
-        static const dftu_cursor_vt* count_vt_holder = nullptr;
-        (void)count_vt_holder;
 
         struct Impl {
             static CoroTask<void> drain_and_count(CountState* st,

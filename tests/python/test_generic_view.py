@@ -33,7 +33,7 @@ def test_rows_are_named_by_path(trace):
 
 
 def test_filters_and_groups_read_paths(trace):
-    rows = pa.table(dftu.TraceViewer(trace).query('op == "read"').collect())
+    rows = pa.table(dftu.TraceViewer(trace).duql('op == "read"').collect())
     assert rows.num_rows == RECORDS // 3
 
     t = pa.table(dftu.TraceViewer(trace).group_by("op").agg("count", "sum:lat").collect())

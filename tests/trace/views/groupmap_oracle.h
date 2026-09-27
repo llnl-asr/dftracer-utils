@@ -39,6 +39,7 @@
 #include <limits>
 #include <map>
 #include <set>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -85,6 +86,9 @@ struct AggAccum {
 
 using GroupMap = ankerl::unordered_dense::map<std::string, AggAccum>;
 
+// The key text of a missing or JSON-null Arg/Field value: a null output cell.
+inline constexpr std::string_view NULL_KEY{"\0", 1};
+
 template <class Src>
 void append_group_dim(std::string& out, const Src& src, const GroupKey& gk) {
     switch (gk.kind) {
@@ -104,11 +108,15 @@ void append_group_dim(std::string& out, const Src& src, const GroupKey& gk) {
             src.append_value(out, "tid");
             break;
         case GroupKey::Kind::Fhash:
+            if (!src.append_arg(out, "fhash")) out += NULL_KEY;
+            break;
         case GroupKey::Kind::FilePath:
         case GroupKey::Kind::FileName:
             src.append_arg(out, "fhash");
             break;
         case GroupKey::Kind::Hhash:
+            if (!src.append_arg(out, "hhash")) out += NULL_KEY;
+            break;
         case GroupKey::Kind::HostName:
             src.append_arg(out, "hhash");
             break;
@@ -128,15 +136,13 @@ void append_group_dim(std::string& out, const Src& src, const GroupKey& gk) {
             src.append_value(out, "pid");
             break;
         case GroupKey::Kind::Arg:
-            src.append_arg(out, gk.arg);
+            if (!src.append_arg(out, gk.arg)) out += NULL_KEY;
             break;
         case GroupKey::Kind::Field:
-            src.append_value(out, gk.arg);
+            if (!src.append_value(out, gk.arg)) out += NULL_KEY;
             break;
         case GroupKey::Kind::Expr:
-        case GroupKey::Kind::Resolved:
-            // The oracle predates computed and resolved keys; no parity case
-            // uses one.
+            // The oracle predates computed keys; no parity case uses one.
             break;
     }
 }
@@ -346,8 +352,8 @@ inline void resolve_group_keys(GroupMap& map, const ViewPlan& plan,
     const std::size_t off = plan.time_bucket_us > 0 ? 1 : 0;
     GroupMap out;
     std::string newkey;
-    for (auto& [k, accum] : map) {
-        (void)k;
+    for (auto& entry : map) {
+        auto& accum = entry.second;
         for (std::size_t j = 0; j < plan.group_by.size(); ++j) {
             const std::size_t idx = off + j;
             if (idx >= accum.keys.size()) continue;
@@ -562,9 +568,8 @@ inline dataframe::DataFrame to_batch(const GroupMap& map,
     std::vector<DynCol> dyn_cols;
     if (plan.auto_numeric_metrics) {
         std::set<std::string> names;
-        for (const auto& [k, a] : map) {
-            (void)k;
-            for (const auto& [name, m] : a.dyn) names.insert(name);
+        for (const auto& entry : map) {
+            for (const auto& [name, m] : entry.second.dyn) names.insert(name);
         }
         if (plan.numeric_arg_aggs.empty()) {
             for (const auto& n : names) {
@@ -603,8 +608,8 @@ inline dataframe::DataFrame to_batch(const GroupMap& map,
     std::vector<HistBuild> hvals(hist_cols.size());
 
     const AggSchema& sch = detail::ensure_schema(plan);
-    for (const auto& [k, a] : map) {
-        (void)k;
+    for (const auto& entry : map) {
+        const auto& a = entry.second;
         for (std::size_t i = 0; i < group_cols.size(); ++i)
             gk[i].push_back(a.keys[i]);
         std::size_t vc = 0, ti = 0, hi = 0;
@@ -652,7 +657,15 @@ inline dataframe::DataFrame to_batch(const GroupMap& map,
     const std::int64_t nrows = static_cast<std::int64_t>(ng);
     for (std::size_t i = 0; i < group_cols.size(); ++i) {
         batch.names.push_back(group_cols[i]);
-        batch.columns.push_back(dataframe::Series::strings(gk[i]));
+        std::vector<std::string_view> views(gk[i].begin(), gk[i].end());
+        std::vector<std::uint8_t> vbits((views.size() + 7) / 8, 0);
+        for (std::size_t r = 0; r < views.size(); ++r)
+            if (views[r] == NULL_KEY)
+                views[r] = {};
+            else
+                vbits[r >> 3] |= static_cast<std::uint8_t>(1u << (r & 7));
+        batch.columns.push_back(dataframe::Series::strings(
+            std::span<const std::string_view>(views), vbits.data()));
     }
     auto build_value_column = [&](const std::vector<FieldNum>& cells) {
         FieldStatDomain dom =
@@ -718,6 +731,28 @@ inline bool plan_wants_names(const ViewPlan& plan) {
                        });
 }
 
+// pid -> rank from a PR metadata event ({"name":"PR","pid":P,
+// "args":{"name":"rank","value":"N"}}); others are ignored.
+inline void harvest_pr_rank(
+    const detail::FoldEvent& ev, const dftracer::utils::StringIntern& intern,
+    std::unordered_map<std::uint64_t, std::string>& ranks) {
+    if (ev.name_id == dftracer::utils::StringIntern::NO_ID ||
+        intern.resolve(ev.name_id) != "PR")
+        return;
+    std::string_view rank;
+    bool is_rank = false;
+    for (const auto& [kid, v] : ev.args) {
+        const auto* sid = std::get_if<std::uint32_t>(&v);
+        if (!sid) continue;
+        const std::string_view key = intern.resolve(kid);
+        if (key == "name")
+            is_rank = intern.resolve(*sid) == "rank";
+        else if (key == "value")
+            rank = intern.resolve(*sid);
+    }
+    if (is_rank && !rank.empty()) ranks[ev.pid] = std::string(rank);
+}
+
 class OracleAggFold : public detail::Fold {
    public:
     OracleAggFold(const ViewPlan& plan, const StringIntern& intern)
@@ -738,7 +773,7 @@ class OracleAggFold : public detail::Fold {
     void step(const detail::FoldBatch& batch) override {
         for (const auto& ev : batch.events) {
             if (ev.phase == RecordPhase::METADATA) {
-                if (want_ranks_) detail::harvest_pr_rank(ev, *intern_, ranks_);
+                if (want_ranks_) harvest_pr_rank(ev, *intern_, ranks_);
                 if (want_names_) harvest_name(ev);
                 if (phase_target_ != RecordPhase::METADATA) continue;
             }
@@ -845,7 +880,6 @@ inline dataframe::DataFrame groupmap_oracle(const detail::scan::ScanPlan& v) {
             plan.group_by.begin(), plan.group_by.end(),
             [](const GroupKey& g) { return g.kind == GroupKey::Kind::Rank; })) {
         vdef.include_metadata = true;
-        vdef.emit_all_metadata = true;
         vdef.filter_metadata = false;
     }
     static dftracer::utils::Runtime rt;

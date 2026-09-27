@@ -83,7 +83,7 @@ TEST_SUITE("SchemaView") {
         for (const auto& c : view_of(gz).column_info()) types[c.name] = c.type;
         CHECK(types["status"] == "int64");
         CHECK(types["took"] == "float64");
-        CHECK(types["tags"] == "string");
+        CHECK(types["tags"] == "json");
 
         const auto df = view_of(gz).select({"status"}).collect().get();
         REQUIRE(df.num_rows() == RECORDS);
@@ -91,7 +91,7 @@ TEST_SUITE("SchemaView") {
         CHECK(df.columns[0].null_count() == (RECORDS + 10) / 11);
     }
 
-    TEST_CASE("a json field reads and compares as canonical text") {
+    TEST_CASE("a json field reads as canonical text and compares by json()") {
         register_log_schema();
         TestEnvironment env(10);
         const auto gz = write_log(env);
@@ -101,11 +101,14 @@ TEST_SUITE("SchemaView") {
         for (std::int64_t i = 0; i < 4; ++i)
             texts.insert(std::string(df.columns[0].string_at(i)));
         CHECK(texts == std::set<std::string>{R"(["a","b"])", "[1,2]"});
-        // Spacing, and 2.0 against 2, do not change the value.
-        CHECK(rows(view_of(gz).query(R"(tags == '["a", "b"]')")) ==
+        CHECK(rows(view_of(gz).duql(R"(json(tags) == '["a","b"]')")) ==
               RECORDS / 2);
-        CHECK(rows(view_of(gz).query(R"(tags == "[1, 2]")")) == RECORDS / 2);
-        CHECK(rows(view_of(gz).query(R"(tags != "[1,2]")")) == RECORDS / 2);
+        CHECK(rows(view_of(gz).duql(R"(json(tags) == "[1,2]")")) ==
+              RECORDS / 2);
+        CHECK(rows(view_of(gz).duql(R"(json(tags) != "[1,2]")")) ==
+              RECORDS / 2);
+        CHECK(rows(view_of(gz).duql(R"(tags == "[1,2]")")) == 0);
+        CHECK(rows(view_of(gz).duql("len(tags) == 2")) == RECORDS);
     }
 
     TEST_CASE("time operations read the schema's roles") {
@@ -168,11 +171,13 @@ TEST_SUITE("SchemaView") {
         const auto& pid = tree.columns[tree.column_index("pid")];
         for (const std::int64_t v : pid.values<std::int64_t>()) lanes.insert(v);
         CHECK(lanes.size() == 3);
-        std::int64_t max_dur = 0;
+        // Times come back in the role units: took is in seconds.
+        double max_dur = 0;
         const auto& dur = tree.columns[tree.column_index("dur")];
-        for (const std::int64_t v : dur.values<std::int64_t>())
+        REQUIRE(dur.type() == dftracer::utils::dataframe::TypeId::Float64);
+        for (const double v : dur.values<double>())
             max_dur = std::max(max_dur, v);
-        CHECK(max_dur == 3000000);
+        CHECK(max_dur == 3.0);
     }
 
     TEST_CASE("the schema tree shows observed paths and declared fields") {

@@ -431,61 +431,28 @@ class TestDirectoryIndexer:
 class TestIndexerDfanalyzerAPIs:
     """Test cases for dfanalyzer integration APIs (hash tables, PIDs)"""
 
-    def test_get_dictionary_file(self):
-        """get_dictionary returns the file dictionary's path by key"""
-        with Environment() as env:
-            gz_file = env.create_dft_trace_file()
+    def _indexed(self, env):
+        gz_file = env.create_dft_trace_file_with_pid("t.pfw.gz", 7)
+        indexer = dftu_utils.Indexer(files=[gz_file], require_bloom=True)
+        indexer.ensure_indexed()
+        return indexer
 
-            with dftu_utils.Indexer(
-                files=[gz_file],
-                require_bloom=True,
-            ) as indexer:
-                indexer.ensure_indexed()
+    def test_rowset_files_hosts_strings(self):
+        """rowset() returns the rows the build stored for each lookup row set"""
+        with Environment() as env, self._indexed(env) as indexer:
+            files = indexer.rowset("files").to_dict()
+            assert set(files) == {"fhash", "path"}
+            assert files["path"] == ["/data/file7.dat"]
+            hosts = indexer.rowset("hosts").to_dict()
+            assert set(hosts) == {"hhash", "name"}
+            assert hosts["name"] == ["host7"]
+            assert set(indexer.rowset("strings").to_dict()) == {"shash", "value"}
 
-                file_hashes = indexer.get_dictionary("file", "path")
-                assert isinstance(file_hashes, dict)
-
-    def test_get_dictionary_host(self):
-        """get_dictionary returns the host dictionary's name by key"""
-        with Environment() as env:
-            gz_file = env.create_dft_trace_file()
-
-            with dftu_utils.Indexer(
-                files=[gz_file],
-                require_bloom=True,
-            ) as indexer:
-                indexer.ensure_indexed()
-
-                host_hashes = indexer.get_dictionary("host", "name")
-                assert isinstance(host_hashes, dict)
-
-    def test_get_dictionary_string(self):
-        """get_dictionary returns the string dictionary's value by key"""
-        with Environment() as env:
-            gz_file = env.create_dft_trace_file()
-
-            with dftu_utils.Indexer(
-                files=[gz_file],
-                require_bloom=True,
-            ) as indexer:
-                indexer.ensure_indexed()
-
-                string_hashes = indexer.get_dictionary("string", "value")
-                assert isinstance(string_hashes, dict)
-
-    def test_get_dictionary_unknown_field(self):
-        """get_dictionary rejects a field the dictionary does not have"""
-        with Environment() as env:
-            gz_file = env.create_dft_trace_file()
-
-            with dftu_utils.Indexer(
-                files=[gz_file],
-                require_bloom=True,
-            ) as indexer:
-                indexer.ensure_indexed()
-
-                with pytest.raises(ValueError, match="unknown dictionary field"):
-                    indexer.get_dictionary("file", "name")
+    def test_rowset_unknown_name(self):
+        """rowset() rejects a name the index stores no rows for"""
+        with Environment() as env, self._indexed(env) as indexer:
+            with pytest.raises(dftu_utils.DFTUtilsValueError, match="no rows for row set 'nope'"):
+                indexer.rowset("nope")
 
     def test_query_file_pids(self):
         """Test query_file_pids returns set of PIDs for a file"""
@@ -556,10 +523,10 @@ class TestIndexerDfanalyzerAPIs:
                 assert isinstance(all_pids, dict)
 
     @pytest.mark.valgrind
-    def test_integration_dictionaries_and_pids(self):
-        """Integration test: hash tables and PIDs work together"""
+    def test_integration_rowsets_and_pids(self):
+        """Integration test: row sets and PIDs work together"""
         with Environment() as env:
-            gz_file = env.create_dft_trace_file()
+            gz_file = env.create_dft_trace_file_with_pid("t.pfw.gz", 7)
 
             with dftu_utils.Indexer(
                 files=[gz_file],
@@ -567,16 +534,9 @@ class TestIndexerDfanalyzerAPIs:
             ) as indexer:
                 indexer.ensure_indexed()
 
-                # Get hash tables
-                file_hashes = indexer.get_dictionary("file", "path")
-                host_hashes = indexer.get_dictionary("host", "name")
-
-                # Get PIDs
+                files = indexer.rowset("files").to_dict()
                 all_pids = indexer.query_all_file_pids()
-
-                # Both should be populated for a valid DFT trace
-                assert isinstance(file_hashes, dict)
-                assert isinstance(host_hashes, dict)
+                assert files["path"]
                 assert isinstance(all_pids, dict)
 
 
@@ -1034,7 +994,7 @@ class TestExtensions:
         names = {e["name"] for e in entry["extensions"]}
         assert names == {
             "core.members",
-            "core.dict",
+            "core.rowset",
             "zonemap",
             "bloom",
             "counts",

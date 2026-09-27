@@ -62,7 +62,8 @@ void build_shard_index(const std::string& gz) {
             -> dftracer::utils::coro::CoroTask<void> {
             aggregators::Aggregator agg;
             auto gen = agg(ctx, input);
-            while (auto batch = co_await gen.next()) (void)batch;
+            while (co_await gen.next()) {
+            }
             co_return;
         },
         "sharded-view-test");

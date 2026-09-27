@@ -1,6 +1,7 @@
 #include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/core/common/to_chars.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
@@ -13,6 +14,7 @@
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_executor.h>
+#include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/trace/views/view_source.h>
 
@@ -183,7 +185,7 @@ dataframe::GroupAgg to_group_agg(const AggSpec& spec, bool by_path) {
 
 // The final group-key column must be a String (group keys are text), but
 // agg_finalize keeps a non-string key's native type (Int64/Uint64/Float64).
-// Render it back to the decimal text form.
+// Render it back to the decimal text form, keeping null keys null.
 dataframe::Series key_column_to_string(const dataframe::Series& col) {
     using dataframe::TypeId;
     const std::int64_t n = col.length();
@@ -206,7 +208,8 @@ dataframe::Series key_column_to_string(const dataframe::Series& col) {
         case TypeId::Float64: {
             const double* d = col.data<double>();
             for (std::int64_t i = 0; i < n; ++i)
-                vals[static_cast<std::size_t>(i)] = std::to_string(d[i]);
+                vals[static_cast<std::size_t>(i)] =
+                    dftracer::utils::double_text(d[i]);
             break;
         }
         default:
@@ -214,25 +217,53 @@ dataframe::Series key_column_to_string(const dataframe::Series& col) {
                 ErrorCode::INTERNAL,
                 "agg engine: unexpected group-key column type");
     }
-    return dataframe::Series::strings(vals);
+    if (col.null_count() == 0) return dataframe::Series::strings(vals);
+    std::vector<std::string_view> views(vals.begin(), vals.end());
+    std::vector<std::uint8_t> vbits((static_cast<std::size_t>(n) + 7) / 8, 0);
+    for (std::int64_t i = 0; i < n; ++i)
+        if (!col.is_null(i))
+            vbits[static_cast<std::size_t>(i) >> 3] |=
+                static_cast<std::uint8_t>(1u << (i & 7));
+    return dataframe::Series::strings(std::span<const std::string_view>(views),
+                                      vbits.data());
 }
 
 // Keys whose group column is an opaque identifier the post-aggregation re-key
-// pass relabels to a human-readable name: fhash/hhash for resolved-name keys,
-// pid for Rank (the PR-metadata rank map keys on pid).
+// pass relabels to a human-readable name: fhash/hhash for file and host keys,
+// pid for Rank (the `ranks` row set keys on pid).
 bool key_is_resolved(GroupKey::Kind kind) {
     return kind == GroupKey::Kind::FilePath ||
            kind == GroupKey::Kind::FileName ||
-           kind == GroupKey::Kind::HostName || kind == GroupKey::Kind::Rank ||
-           kind == GroupKey::Kind::Resolved;
+           kind == GroupKey::Kind::HostName || kind == GroupKey::Kind::Rank;
 }
 
 // The raw scan/group-by field a key groups on: fhash/hhash for a resolved
 // name key (the fold groups on the hash, a bijection, and relabels to the
 // resolved name only after aggregation), pid for Rank (the rank map keys on
-// pid, matching agg_fold.h's append_group_dim), a group-key-string sentinel for
+// pid, matching agg_fold.h's append_group_dim; a path plan's entity role
+// instead), a group-key-string sentinel for
 // an Arg/Field key (rendered like the engine agg path, then relabeled to
 // group_col_name after aggregation), else the key's own column.
+// Which group keys of a path-decoded `plan` read a field of mixed JSON types;
+// each keys on the value's JSON text and gives a JSON key column.
+std::vector<char> json_keys(const ViewPlan& plan) {
+    std::vector<char> out(plan.group_by.size(), 0);
+    if (!plan_by_path(plan)) return out;
+    const auto plain_field = [](const GroupKey& gk) {
+        return (gk.kind == GroupKey::Kind::Field ||
+                gk.kind == GroupKey::Kind::Arg) &&
+               gk.transform == GroupKey::Transform::None;
+    };
+    if (std::none_of(plan.group_by.begin(), plan.group_by.end(), plain_field))
+        return out;
+    const auto json = scan::json_columns(plan);
+    if (!json) return out;
+    for (std::size_t j = 0; j < plan.group_by.size(); ++j)
+        out[j] = plain_field(plan.group_by[j]) &&
+                 json->count(plan.group_by[j].arg) != 0;
+    return out;
+}
+
 std::string key_group_field(const GroupKey& gk) {
     switch (gk.kind) {
         case GroupKey::Kind::FilePath:
@@ -241,21 +272,22 @@ std::string key_group_field(const GroupKey& gk) {
         case GroupKey::Kind::HostName:
             return "hhash";
         case GroupKey::Kind::Rank:
-            return "pid";
+            return gk.arg.empty() ? std::string("pid") : gk.arg;
         case GroupKey::Kind::Arg:
             return std::string(AGG_KEY_ARG_PREFIX) + gk.arg;
         case GroupKey::Kind::Field:
             return std::string(AGG_KEY_FIELD_PREFIX) + gk.arg;
-        case GroupKey::Kind::Resolved: {
-            const std::string_view key = resolved_key_field(gk);
-            if (key == "fhash" || key == "hhash") return std::string(key);
-            return std::string(AGG_KEY_FIELD_PREFIX) + std::string(key);
-        }
         case GroupKey::Kind::Expr:
             return gk.arg;
         default:
             return group_col_name(gk);
     }
+}
+
+// Whether `gk` groups on a sentinel key column, whose null (a missing or
+// JSON-null value) is its own group and stays null in the output.
+bool key_is_nullable(const GroupKey& gk) {
+    return gk.kind == GroupKey::Kind::Arg || gk.kind == GroupKey::Kind::Field;
 }
 
 // Resolve one already-stringified hash group-key column to its resolved name,
@@ -266,16 +298,28 @@ dataframe::Series resolve_key_column(
     const dftracer::utils::index::plan::GroupResolver& resolver,
     const GroupKey& gk) {
     const std::int64_t n = hashes.length();
+    const bool nullable = key_is_nullable(gk) && hashes.null_count() > 0;
     std::vector<std::string> vals(static_cast<std::size_t>(n));
-    for (std::int64_t i = 0; i < n; ++i)
+    std::vector<std::uint8_t> vbits(
+        nullable ? (static_cast<std::size_t>(n) + 7) / 8 : 0, 0);
+    for (std::int64_t i = 0; i < n; ++i) {
+        if (nullable) {
+            if (hashes.is_null(i)) continue;
+            vbits[static_cast<std::size_t>(i) >> 3] |=
+                static_cast<std::uint8_t>(1u << (i & 7));
+        }
         vals[static_cast<std::size_t>(i)] =
             resolve_group_value(resolver, gk, std::string(hashes.string_at(i)));
-    return dataframe::Series::strings(vals);
+    }
+    if (!nullable) return dataframe::Series::strings(vals);
+    std::vector<std::string_view> views(vals.begin(), vals.end());
+    return dataframe::Series::strings(std::span<const std::string_view>(views),
+                                      vbits.data());
 }
 
-// One raw group-key column cell rendered exactly as the engine agg path builds
-// its key: a String cell verbatim, an integer cell as decimal, a null cell as
-// the empty string (append_arg emits nothing for a missing value).
+// One raw group-key column cell rendered as the engine agg path builds its
+// key: a String cell verbatim, an integer cell as decimal, a null cell as the
+// empty string (the caller keeps a nullable key's null cell null).
 std::string cell_to_key_string(const dataframe::Series& col, std::int64_t r) {
     using dataframe::TypeId;
     if (col.is_null(r)) return std::string();
@@ -308,40 +352,6 @@ std::string transform_key_base(
             ch = static_cast<char>(::tolower(static_cast<unsigned char>(ch)));
     return raw;
 }
-
-// Harvests only the pid -> rank map from PR metadata records, with no group
-// aggregation. The map is byte-identical to the one the engine agg path would
-// surface (harvest_pr_rank over the same records).
-class RankHarvestFold : public Fold {
-   public:
-    explicit RankHarvestFold(const dftracer::utils::StringIntern& intern)
-        : intern_(&intern) {}
-    bool accepts(const ScanShape&) const override { return true; }
-    bool needs_args() const override { return true; }  // PR args carry the rank
-    std::unique_ptr<Fold> slice() const override {
-        return std::make_unique<RankHarvestFold>(*intern_);
-    }
-    void step(const FoldBatch& batch) override {
-        for (const auto& ev : batch.events)
-            if (ev.phase == RecordPhase::METADATA)
-                harvest_pr_rank(ev, *intern_, ranks_);
-    }
-    void seal_unit(const ScanUnit&) override {}
-    void drop_unit(const ScanUnit&) override {}
-    void merge(Fold& other) override {
-        auto& o = static_cast<RankHarvestFold&>(other);
-        for (auto& [p, r] : o.ranks_) ranks_.emplace(p, std::move(r));
-        o.ranks_.clear();
-    }
-    coro::CoroTask<bool> finalize(const CoverageSet&) override {
-        co_return true;
-    }
-    std::unordered_map<std::uint64_t, std::string>& ranks() { return ranks_; }
-
-   private:
-    const dftracer::utils::StringIntern* intern_;
-    std::unordered_map<std::uint64_t, std::string> ranks_;
-};
 
 dataframe::AggOp to_dyn_op(AggOp op) {
     switch (op) {
@@ -394,35 +404,6 @@ std::vector<dataframe::AggDynSpec> build_dyn_specs(const ViewPlan& plan) {
     for (const AggSpec& r : plan.numeric_arg_aggs)
         out.push_back({to_dyn_op(r.op), r.q, dyn_col_name(r, std::string())});
     return out;
-}
-
-// Rank is a query-time side channel: pid -> rank lives in PR metadata records,
-// not the event columns the engine streams. The rank group_by makes make_vdef
-// keep the PR metadata; a RankHarvestFold reads the map, fed to the resolver
-// the post-aggregation re-key reads.
-coro::CoroTask<void> harvest_ranks(const ViewPlan& plan) {
-    ViewPlan hp = plan;
-    hp.group_by.assign(1, GroupKey::rank());
-    hp.agg.clear();
-    hp.numeric_arg_aggs.clear();
-    hp.auto_numeric_metrics = false;
-    hp.time_bucket_us = 0;
-    hp.bucket_origin_us = 0;
-    hp.bucket_origin_min = false;
-    hp.materialize = false;
-    hp.sort_col.clear();
-    hp.topk_col.clear();
-    hp.offset = 0;
-    hp.limit = 0;
-    hp.select.clear();
-    hp.schema.reset();
-    ensure_schema(hp);
-    ViewDefinition vdef = make_vdef(hp, /*for_aggregation=*/true);
-    dftracer::utils::StringIntern intern;
-    RankHarvestFold rf(intern);
-    std::array<Fold*, 1> folds{&rf};
-    co_await fuse(hp, vdef, folds, intern);
-    apply_ranks(plan, rf.ranks());
 }
 
 // The shared engine-aggregation tail (dyn reorder/fixes, key rendering,
@@ -488,9 +469,13 @@ dataframe::DataFrame finalize_engine_frame(
             k == GroupKey::Kind::Field || k == GroupKey::Kind::Expr)
             r.names[off + j] = key_names[j];
     }
+    const std::vector<char> json = json_keys(plan);
     for (std::size_t i = 0; i < off + ng; ++i)
-        if (i < off || plan.group_by[i - off].kind != GroupKey::Kind::Expr)
+        if (i < off || plan.group_by[i - off].kind != GroupKey::Kind::Expr) {
             r.columns[i] = key_column_to_string(r.columns[i]);
+            if (i >= off && json[i - off])
+                r.columns[i] = r.columns[i].as_json();
+        }
 
     const bool occ_cell_col =
         std::any_of(plan.agg.begin(), plan.agg.end(), [](const AggSpec& s) {
@@ -655,8 +640,11 @@ AggInputSpec make_agg_input_spec(const ViewPlan& plan) {
 
     std::vector<std::string> key_fields;
     key_fields.reserve(plan.group_by.size());
-    for (const GroupKey& gk : plan.group_by)
-        key_fields.push_back(key_group_field(gk));
+    const std::vector<char> json = json_keys(plan);
+    for (std::size_t j = 0; j < plan.group_by.size(); ++j)
+        key_fields.push_back(json[j] ? std::string(AGG_KEY_JSON_PREFIX) +
+                                           plan.group_by[j].arg
+                                     : key_group_field(plan.group_by[j]));
 
     // A scaled value field (ts/dur/te) routes through a hidden pre-scaled
     // column when time_scale is non-identity and the raw scan is read unscaled.
@@ -899,13 +887,28 @@ static void append_transform_columns(
     for (const AggInputSpec::Transform& t : transforms) {
         const dataframe::Series& src = frame.columns[static_cast<std::size_t>(
             frame.column_index(t.src_col))];
+        const bool nullable = key_is_nullable(t.gk) && src.null_count() > 0;
         std::vector<std::string> vals(static_cast<std::size_t>(n));
-        for (std::int64_t r = 0; r < n; ++r)
+        std::vector<std::uint8_t> vbits(
+            nullable ? (static_cast<std::size_t>(n) + 7) / 8 : 0, 0);
+        for (std::int64_t r = 0; r < n; ++r) {
+            if (nullable) {
+                if (src.is_null(r)) continue;
+                vbits[static_cast<std::size_t>(r) >> 3] |=
+                    static_cast<std::uint8_t>(1u << (r & 7));
+            }
             vals[static_cast<std::size_t>(r)] = apply_group_transform(
                 t.gk,
                 transform_key_base(t.gk, cell_to_key_string(src, r), resolver));
+        }
         frame.names.push_back(t.out_col);
-        frame.columns.push_back(dataframe::Series::strings(vals));
+        if (!nullable) {
+            frame.columns.push_back(dataframe::Series::strings(vals));
+            continue;
+        }
+        std::vector<std::string_view> views(vals.begin(), vals.end());
+        frame.columns.push_back(dataframe::Series::strings(
+            std::span<const std::string_view>(views), vbits.data()));
     }
 }
 
@@ -915,8 +918,8 @@ dataframe::DataFrame build_agg_input_frame(
     const dftracer::utils::index::plan::GroupResolver* resolver) {
     dataframe::DataFrame f =
         events_to_frame(events, intern,
-                        ColumnSpec{spec.select, spec.base_time_scale, nullptr,
-                                   spec.emit_dyn, spec.by_path});
+                        ColumnSpec{spec.select, spec.base_time_scale,
+                                   spec.emit_dyn, spec.by_path, nullptr});
     const std::int64_t n = f.num_rows();
 
     append_transform_columns(f, spec.transforms, resolver);
@@ -1023,13 +1026,6 @@ dataframe::DataFrame build_agg_input_frame(
 }
 
 coro::CoroTask<EnginePrep> prepare_engine_group(const ViewPlan& plan) {
-    // A Rank key groups on pid and relabels to the PR-metadata rank; harvest
-    // that map into the resolver before the scan.
-    if (std::any_of(
-            plan.group_by.begin(), plan.group_by.end(),
-            [](const GroupKey& gk) { return gk.kind == GroupKey::Kind::Rank; }))
-        co_await harvest_ranks(plan);
-
     AggInputSpec spec = make_agg_input_spec(plan);
 
     auto next = std::make_shared<ViewPlan>(plan);

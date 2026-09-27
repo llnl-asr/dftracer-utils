@@ -84,8 +84,8 @@ DFTU_OP_FN(DFTU_OP_SIG(SERIES, SERIES, I64LIST, NONE),
 // A frame-shaped SERIES-return op: the frame is not the primary operand of a
 // FRAME-kind op, so it rides args[0].frame rather than an in[]/frames[] array.
 DFTU_OP_FN(DFTU_OP_SIG(SERIES, FRAME, NONE, NONE), dftu_series* (*)(CDF))
-DFTU_OP_FN(DFTU_OP_SIG(SERIES, FRAME, QUERY, NONE),
-           dftu_series* (*)(CDF, const dftu_query*))
+DFTU_OP_FN(DFTU_OP_SIG(SERIES, FRAME, DUQL, NONE),
+           dftu_series* (*)(CDF, const dftu_duql*))
 DFTU_OP_FN(DFTU_OP_SIG(SERIES, FRAME, STRLIST, I64),
            dftu_series* (*)(CDF, const char* const*, int32_t, int64_t))
 
@@ -192,6 +192,8 @@ DFTU_OP_FN(DFTU_OP_SIG(LAZY, LAZY, STR, I32), LF (*)(CLF, const char*, int32_t))
 DFTU_OP_FN(DFTU_OP_SIG(LAZY, LAZY, SERIES, NONE), LF (*)(CLF, CS))
 DFTU_OP_FN(DFTU_OP_SIG(LAZY, LAZY, STRLIST, I32),
            LF (*)(CLF, const char* const*, int32_t, int32_t))
+DFTU_OP_FN(DFTU_OP_SIG(LAZY, LAZY, STRLIST, I64),
+           LF (*)(CLF, const char* const*, int32_t, int64_t))
 DFTU_OP_FN(DFTU_OP_SIG(LAZY, LAZY, I32, NONE), LF (*)(CLF, int32_t))
 DFTU_OP_FN(DFTU_OP_SIG6(LAZY, LAZY, STR, I64, I32, NONE),
            LF (*)(CLF, const char*, int64_t, int32_t))

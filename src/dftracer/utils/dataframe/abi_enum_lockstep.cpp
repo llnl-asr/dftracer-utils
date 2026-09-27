@@ -54,6 +54,8 @@ static_assert(code(JoinHow::Outer) == DFTU_JOIN_OUTER);
 static_assert(code(JoinHow::Semi) == DFTU_JOIN_SEMI);
 static_assert(code(JoinHow::Anti) == DFTU_JOIN_ANTI);
 static_assert(code(JoinHow::Cross) == DFTU_JOIN_CROSS);
+static_assert(code(JoinHow::Lookup) == DFTU_JOIN_LOOKUP);
+static_assert(code(JoinHow::Nest) == DFTU_JOIN_NEST);
 
 static_assert(code(PrimOp::Ilog2) == DFTU_PRIM_ILOG2);
 static_assert(code(PrimOp::BitWidth) == DFTU_PRIM_BIT_WIDTH);

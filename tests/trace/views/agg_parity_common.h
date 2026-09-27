@@ -136,10 +136,12 @@ inline void frames_equal(const dataframe::DataFrame& a,
     for (std::size_t i = 0; i < ar.size(); ++i)
         for (const auto& name : a.names) {
             const auto c = static_cast<std::size_t>(bcol(a, name));
-            if (a.columns[c].type() == dataframe::TypeId::String)
+            if (a.columns[c].type() == dataframe::TypeId::String) {
+                CHECK(a.columns[c].is_null(ar[i].second) ==
+                      b.columns[c].is_null(br[i].second));
                 CHECK(bstr(a, ar[i].second, name) ==
                       bstr(b, br[i].second, name));
-            else
+            } else
                 CHECK(bnum(a, ar[i].second, name) ==
                       doctest::Approx(bnum(b, br[i].second, name)));
         }
@@ -204,9 +206,10 @@ inline void check_match(const dataframe::DataFrame& a0,
     for (std::int64_t r = 0; r < a.num_rows(); ++r)
         for (const auto& name : a.names) {
             const auto c = static_cast<std::size_t>(bcol(a, name));
-            if (a.columns[c].type() == dataframe::TypeId::String)
+            if (a.columns[c].type() == dataframe::TypeId::String) {
+                CHECK(a.columns[c].is_null(r) == b.columns[c].is_null(r));
                 CHECK(bstr(a, r, name) == bstr(b, r, name));
-            else
+            } else
                 CHECK(bnum(a, r, name) == doctest::Approx(bnum(b, r, name)));
         }
 }
@@ -238,10 +241,12 @@ inline void check_match_multi(const dataframe::DataFrame& a0,
     for (std::size_t i = 0; i < ar.size(); ++i)
         for (const auto& name : a0.names) {
             const auto c = static_cast<std::size_t>(bcol(a0, name));
-            if (a0.columns[c].type() == dataframe::TypeId::String)
+            if (a0.columns[c].type() == dataframe::TypeId::String) {
+                CHECK(a0.columns[c].is_null(ar[i].second) ==
+                      b0.columns[c].is_null(br[i].second));
                 CHECK(bstr(a0, ar[i].second, name) ==
                       bstr(b0, br[i].second, name));
-            else
+            } else
                 CHECK(bnum(a0, ar[i].second, name) ==
                       doctest::Approx(bnum(b0, br[i].second, name)));
         }

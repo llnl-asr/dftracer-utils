@@ -91,7 +91,8 @@ TEST_SUITE("SchemaRegistry") {
         CHECK(s.roles.time_unit == ix::TimeUnit::MS);
         CHECK(s.roles.duration == "request_time");
         CHECK(s.roles.duration_unit == ix::TimeUnit::S);
-        CHECK(s.always_index == std::vector<std::string>{"ts_ms", "upstream"});
+        CHECK(s.always_index ==
+              std::vector<std::string>{"request_time", "ts_ms", "upstream"});
         REQUIRE(s.field_at("meta.host") != nullptr);
         CHECK(s.field_at("meta.host")->name == "host");
         CHECK(s.path_budget == 8);
@@ -118,24 +119,29 @@ TEST_SUITE("SchemaRegistry") {
         CHECK_FALSE(s.path_budget);
     }
 
-    TEST_CASE("extending dftracer keeps its decoder, roles and dictionaries") {
+    TEST_CASE("extending dftracer keeps its decoder, roles and source") {
         const auto& s = ix::register_schema(
             "id: ext_dft\nextends: dftracer\n"
             "fields: {step: {type: int, path: args.step}}\n"
-            "dictionaries:\n"
-            "  - {name: host, rows: HH, key: args.value,\n"
-            "     fields: {name: args.name, fqdn: args.fqdn}, keys_in: "
-            "[hhash]}\n",
+            "source: |\n"
+            "  hosts = where name == \"HH\" | select hhash = args.value, "
+            "fqdn = args.fqdn;\n"
+            "  steps = where step > 0\n",
             "ext_dft.yaml");
         const auto& dft = ix::get_schema("dftracer");
         CHECK(s.decoder == ix::Decoder::DFTRACER);
-        CHECK(s.require == std::vector<std::string>{"ph", "name", "args.step"});
+        CHECK(s.require ==
+              std::vector<std::string>{"ph", "name", "ts", "args.step"});
         CHECK(s.roles.time == dft.roles.time);
         CHECK(s.roles.phase == "ph");
         CHECK(s.always_index.empty());
-        REQUIRE(s.dictionaries.size() == dft.dictionaries.size());
-        CHECK(s.dictionary_of("hhash")->has_field("fqdn"));
-        CHECK(s.dictionary_of("fhash")->has_field("path"));
+        // The child's hosts replaces the parent's in place; files stays.
+        CHECK(mentions(s.source, "hosts = where name == \"HH\""));
+        CHECK(mentions(s.source, "fqdn = args.fqdn"));
+        CHECK(mentions(s.source, "files = "));
+        CHECK(s.source.find("files = ") < s.source.find("hosts = "));
+        CHECK(mentions(s.source, "steps = where step > 0"));
+        CHECK(s.params_hash() != dft.params_hash());
     }
 
     TEST_CASE("a child field of the same name replaces the parent's") {
@@ -171,8 +177,10 @@ TEST_SUITE("SchemaRegistry") {
                "fields.x.colour");
         reject("id: bad_b\nfields: {x: {type: int, unit: ms}}\n",
                "fields.x.unit");
-        reject("id: bad_b\nfields: {x: {type: string, role: time}}\n",
+        reject("id: bad_b\nfields: {x: {type: string, role: duration}}\n",
                "fields.x");
+        reject("id: bad_b\nfields: {x: {type: string, role: time, unit: ms}}\n",
+               "ISO-8601");
         reject("id: bad_b\nfields: {x: {type: int, role: clock}}\n",
                "fields.x.role");
         reject("id: bad_b\nfields: {x: {type: int, optional: maybe}}\n",
@@ -186,10 +194,9 @@ TEST_SUITE("SchemaRegistry") {
         reject("id: bad_c\nextends: nope\n", "unknown extends nope");
         reject("id: bad_d\nextends: bad_d\n", "extends itself");
         reject("id: bad_e\nindex: {path_budget: many}\n", "index.path_budget");
-        reject(
-            "id: bad_g\ndictionaries:\n  - {name: d, rows: R, key: k, "
-            "fields: {[a]: b}}\n",
-            "dictionaries.fields");
+        reject("id: bad_g\ndictionaries:\n  - {name: d, rows: R, key: k}\n",
+               "unknown key dictionaries");
+        reject("id: bad_h\nsource: \"a = where x >\"\n", "bad_h");
         reject("id: [unclosed\n", "bad.yaml");
         reject("id: generic\n", "cannot be redefined");
         CHECK(ix::find_schema("bad_a") == nullptr);
@@ -220,7 +227,7 @@ TEST_SUITE("SchemaRegistry") {
     TEST_CASE("the built-ins are declared with fields") {
         const auto& dft = ix::get_schema("dftracer");
         CHECK(dft.builtin);
-        CHECK(dft.require == std::vector<std::string>{"ph", "name"});
+        CHECK(dft.require == std::vector<std::string>{"ph", "name", "ts"});
         CHECK(dft.roles.time == "ts");
         CHECK(dft.roles.duration == "dur");
         CHECK(dft.roles.entity == "pid");
@@ -231,21 +238,18 @@ TEST_SUITE("SchemaRegistry") {
         CHECK(generic.require.empty());
     }
 
-    TEST_CASE("the genesis built-in extends dftracer with a run dictionary") {
+    TEST_CASE("the genesis built-in extends dftracer with a runs row set") {
         const auto& g = ix::get_schema("genesis");
         CHECK(g.builtin);
         CHECK(g.decoder == ix::Decoder::DFTRACER);
-        CHECK(g.require == std::vector<std::string>{"ph", "name", "args.run",
-                                                    "args.path", "args.depth",
-                                                    "args.count"});
-        const auto* run = g.dictionary_of("run");
-        REQUIRE(run != nullptr);
-        CHECK(run->rows == "RUN");
-        CHECK(run->key == "args.run");
-        CHECK(run->has_field("papi_set"));
-        CHECK(run->has_field("nodes"));
-        CHECK(g.dictionary_of("fhash") != nullptr);
-        CHECK(g.resolved_column("resolved.run.app").field == "app");
+        CHECK(g.require == std::vector<std::string>{
+                               "ph", "name", "ts", "args.run", "args.path",
+                               "args.depth", "args.count"});
+        CHECK(mentions(g.source,
+                       "runs = where ph in [\"M\", 4] and name == "
+                       "\"RUN\""));
+        CHECK(mentions(g.source, "papi_set = args.papi_set"));
+        CHECK(mentions(g.source, "files = "));
 
         std::vector<std::string_view> lines = {
             R"({"id":0,"name":"RUN","cat":"genesis","pid":0,"tid":0,"ph":4,)"
@@ -350,5 +354,228 @@ TEST_SUITE("SchemaRegistry") {
               count_rows(gz, index_dir, "status == 404", true));
         // A second build finds the file current.
         CHECK(indexer.build().indexed == 0);
+    }
+}
+
+TEST_SUITE("SchemaDetection") {
+    static std::string dft_event(int i) {
+        return R"({"id":)" + std::to_string(i) +
+               R"(,"name":"read","cat":"POSIX","pid":1,"tid":2,"ts":)" +
+               std::to_string(100 + i) +
+               R"(,"dur":5,"ph":"X","args":{"fhash":"f1","ret":4096}})";
+    }
+
+    static std::string hash_line(const char* kind, int i) {
+        return R"({"id":)" + std::to_string(i) + R"(,"name":")" + kind +
+               R"(","cat":"dftracer","pid":1,"tid":2,"ph":"M","args":)"
+               R"({"name":"/p/)" +
+               std::to_string(i) + R"(","value":"h)" + std::to_string(i) +
+               "\"}}";
+    }
+
+    static std::string genesis_record(int i) {
+        return R"({"name":"f)" + std::to_string(i) +
+               R"(","cat":"POSIX","pid":0,"tid":0,"ts":)" + std::to_string(i) +
+               R"(,"ph":3,"args":{"run":"r1","path":"main;f","depth":1,)"
+               R"("count":2,"dur":{"n":2}}})";
+    }
+
+    const std::string RUN_LINE =
+        R"({"name":"RUN","cat":"dftracer","pid":0,"tid":0,"ts":0,"ph":4,)"
+        R"("args":{"run":"r1","app":"laghos","nodes":1}})";
+
+    // `text` as `name` under a fresh directory, gzip when `gz`.
+    static std::string write_file(dftu_utils_test::TestEnvironment & env,
+                                  const std::string& name,
+                                  const std::string& text, bool gz) {
+        const auto plain = env.get_dir() + "/" + name;
+        std::ofstream(plain, std::ios::binary) << text;
+        if (!gz) return plain;
+        const auto out = plain + ".gz";
+        REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, out));
+        fs::remove(plain);
+        return out;
+    }
+
+    static std::string chosen(const std::vector<std::string>& lines) {
+        std::vector<std::string_view> views(lines.begin(), lines.end());
+        return ix::detect_schema(views).id;
+    }
+
+    TEST_CASE("a corpus of JSON shapes is classified") {
+        std::vector<std::string> dft = {"["};
+        for (int i = 0; i < 20; ++i) dft.push_back(dft_event(i));
+        CHECK(chosen(dft) == "dftracer");
+
+        std::vector<std::string> meta_head;
+        for (int i = 0; i < 300; ++i)
+            meta_head.push_back(hash_line(i % 2 ? "FH" : "SH", i));
+        for (int i = 0; i < 10; ++i) meta_head.push_back(dft_event(i));
+        CHECK(chosen(meta_head) == "dftracer");
+
+        std::vector<std::string> run_first = {RUN_LINE};
+        for (int i = 0; i < 5; ++i) run_first.push_back(genesis_record(i));
+        CHECK(chosen(run_first) == "genesis");
+
+        // Chrome trace events in the JSON array format: the dftracer decoder
+        // reads them.
+        std::vector<std::string> chrome = {"["};
+        for (int i = 0; i < 10; ++i)
+            chrome.push_back(R"({"name":"MessageLoop","cat":"toplevel","ph":)"
+                             R"("X","ts":)" +
+                             std::to_string(i * 10) +
+                             R"(,"dur":4,"pid":7,"tid":9,"args":{}},)");
+        chrome.push_back("]");
+        CHECK(chosen(chrome) == "dftracer");
+
+        // `ph` and `name` without a timestamp are not a trace.
+        std::vector<std::string> ph_log;
+        for (int i = 0; i < 10; ++i)
+            ph_log.push_back(R"({"ph":"7.)" + std::to_string(i) +
+                             R"(","name":"tank)" + std::to_string(i) +
+                             R"(","site":"b"})");
+        CHECK(chosen(ph_log) == "generic");
+
+        std::vector<std::string> web;
+        for (int i = 0; i < 10; ++i)
+            web.push_back(R"({"remote_addr":"10.0.0.1","time_local":"t)" +
+                          std::to_string(i) +
+                          R"(","request":"GET /a HTTP/1.1","status":200,)"
+                          R"("body_bytes_sent":)" +
+                          std::to_string(i * 100) + "}");
+        CHECK(chosen(web) == "generic");
+
+        std::vector<std::string> otel;
+        for (int i = 0; i < 10; ++i)
+            otel.push_back(
+                R"({"traceId":"a1","spanId":"s)" + std::to_string(i) +
+                R"(","name":"GET /users","kind":2,"startTimeUnixNano":)" +
+                std::to_string(1000 + i) + R"(,"endTimeUnixNano":)" +
+                std::to_string(2000 + i) +
+                R"(,"attributes":[{"key":"http.method","value":)"
+                R"({"stringValue":"GET"}}],"status":{"code":0}})");
+        CHECK(chosen(otel) == "generic");
+
+        std::vector<std::string> gh;
+        for (int i = 0; i < 10; ++i)
+            gh.push_back(R"({"id":")" + std::to_string(i) +
+                         R"(","type":"PushEvent","actor":{"login":"u"},)"
+                         R"("repo":{"name":"o/r"},"payload":{"size":1},)"
+                         R"("public":true,"created_at":"2024-01-01T00:00:0)" +
+                         std::to_string(i) + "Z\"}");
+        CHECK(chosen(gh) == "generic");
+
+        const auto none = ix::explain_schema({});
+        CHECK(none.chosen->id == "generic");
+        CHECK(none.objects == 0);
+        CHECK(none.records == 0);
+    }
+
+    TEST_CASE("user schemas: paths, ties and optional fields") {
+        // Paths resolve as JsonValue::at: an array index and a flat dotted
+        // key.
+        ix::register_schema(
+            "id: det_otel\n"
+            "fields:\n"
+            "  trace_id: {type: string, path: traceId}\n"
+            "  start: {type: int, path: startTimeUnixNano, role: time, "
+            "unit: ns}\n"
+            "  attr: {type: string, path: attributes.0.key}\n"
+            "  method: {type: string, path: http.method}\n",
+            "det_otel.yaml");
+        std::vector<std::string> otel;
+        for (int i = 0; i < 10; ++i)
+            otel.push_back(
+                R"({"traceId":"a","startTimeUnixNano":)" + std::to_string(i) +
+                R"(,"attributes":[{"key":"k"}],"http.method":"GET"})");
+        CHECK(chosen(otel) == "det_otel");
+        otel.push_back(R"({"traceId":"a","startTimeUnixNano":1})");
+        otel.push_back(R"({"traceId":"a","startTimeUnixNano":1})");
+        CHECK(chosen(otel) == "generic");
+
+        // As specific as dftracer: the user schema wins.
+        ix::register_schema(
+            "id: det_tie\n"
+            "fields: {ph: {type: string}, name: {type: string},\n"
+            "  zz_tie: {type: int}}\n",
+            "det_tie.yaml");
+        std::vector<std::string> tie;
+        for (int i = 0; i < 5; ++i)
+            tie.push_back(R"({"ph":"X","name":"n","ts":1,"zz_tie":)" +
+                          std::to_string(i) + "}");
+        CHECK(chosen(tie) == "det_tie");
+
+        // Only optional fields: chosen by any declared path, never over a
+        // schema with required paths.
+        ix::register_schema(
+            "id: det_gh\n"
+            "fields:\n"
+            "  kind: {type: string, path: gh_type, optional: true}\n"
+            "  login: {type: string, path: gh_actor.login, optional: true}\n",
+            "det_gh.yaml");
+        std::vector<std::string> gh;
+        for (int i = 0; i < 10; ++i)
+            gh.push_back(i % 2 ? R"({"gh_type":"PushEvent","id":1})"
+                               : R"({"gh_actor":{"login":"u"},"id":2})");
+        CHECK(chosen(gh) == "det_gh");
+        std::vector<std::string> dft;
+        for (int i = 0; i < 10; ++i)
+            dft.push_back(dft_event(i).insert(1, R"("gh_type":"x",)"));
+        CHECK(chosen(dft) == "dftracer");
+    }
+
+    TEST_CASE("files: edges of the sample") {
+        dftu_utils_test::TestEnvironment env(1);
+
+        const auto empty = write_file(env, "empty.pfw", "", false);
+        auto d = ix::explain_file_schema(empty);
+        CHECK(d.chosen->id == "generic");
+        CHECK(d.objects == 0);
+        CHECK(d.records == 0);
+        CHECK(
+            ix::detect_file_schema(write_file(env, "bracket.pfw", "[\n", true))
+                .id == "generic");
+
+        // One line, no trailing newline, plain and gzip.
+        CHECK(ix::detect_file_schema(
+                  write_file(env, "one.pfw", dft_event(1), false))
+                  .id == "dftracer");
+        CHECK(ix::detect_file_schema(
+                  write_file(env, "one_gz.pfw", dft_event(1), true))
+                  .id == "dftracer");
+
+        // A first record past the 16 MiB text cap is read whole.
+        std::string big = R"({"id":0,"name":"read","cat":"POSIX","pid":1,)"
+                          R"("tid":2,"ts":1,"dur":5,"ph":"X","args":{"blob":")";
+        big.append(17u * 1024 * 1024, 'x');
+        big += "\"}}\n" + dft_event(2) + "\n";
+        CHECK(
+            ix::detect_file_schema(write_file(env, "big.pfw", big, true)).id ==
+            "dftracer");
+
+        // Genesis behind 1500 hash metadata lines, past the sample count.
+        std::string gen;
+        for (int i = 0; i < 1500; ++i) gen += hash_line("FH", i) + "\n";
+        gen += RUN_LINE + "\n";
+        for (int i = 0; i < 20; ++i) gen += genesis_record(i) + "\n";
+        d = ix::explain_file_schema(write_file(env, "gen.pfw", gen, true));
+        CHECK(d.chosen->id == "genesis");
+        CHECK(d.records == 20);
+
+        // Only metadata: dftracer, with no records to vote with.
+        std::string meta;
+        for (int i = 0; i < 10; ++i) meta += hash_line("HH", i) + "\n";
+        d = ix::explain_file_schema(write_file(env, "meta.pfw", meta, true));
+        CHECK(d.chosen->id == "dftracer");
+        CHECK(d.records == 0);
+    }
+
+    TEST_CASE("file detection is cached until the file changes") {
+        dftu_utils_test::TestEnvironment env(1);
+        const auto path = env.get_dir() + "/c.ndjson";
+        std::ofstream(path) << R"({"k":1})" << "\n";
+        CHECK(ix::detect_file_schema(path).id == "generic");
+        std::ofstream(path) << dft_event(1) << "\n" << dft_event(2) << "\n";
+        CHECK(ix::detect_file_schema(path).id == "dftracer");
     }
 }

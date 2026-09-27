@@ -3,7 +3,7 @@
 
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
-#include <dftracer/utils/query/ast.h>
+#include <dftracer/utils/duql/ast.h>
 
 #include <cstdint>
 #include <string>
@@ -18,7 +18,7 @@ namespace dftracer::utils::dataframe {
 /// WHERE + GROUP BY/agg + SELECT + ORDER BY + LIMIT over a batch, applied in
 /// that order. Absent stages are skipped.
 struct QueryPlan {
-    const dftracer::utils::query::QueryNode* where =
+    const dftracer::utils::duql::QueryNode* where =
         nullptr;           ///< predicate (borrowed); null = all rows
     std::string group_by;  ///< group key column; empty = no grouping
     std::vector<dftracer::utils::dataframe::GroupAgg> aggs;  ///< aggregates
@@ -30,7 +30,7 @@ struct QueryPlan {
 
 /// Execute `plan` over `input`, returning a new batch. The predicate is
 /// evaluated as a SIMD mask (see mask.h) - a predicate with no columnar
-/// lowering throws DFTUtilsException{query::QueryErrc::Unsupported}. Columns
+/// lowering throws DFTUtilsException{duql::DuqlErrc::Unsupported}. Columns
 /// are shared zero-copy where a stage does not gather.
 dftracer::utils::dataframe::DataFrame execute(
     const QueryPlan& plan, const dftracer::utils::dataframe::DataFrame& input);

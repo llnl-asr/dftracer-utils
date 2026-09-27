@@ -5,21 +5,28 @@
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/dataframe/agg.h>
+#include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
 #include <dftracer/utils/index/cache/mv_store.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
-#include <dftracer/utils/index/extensions/dict_fold.h>
 #include <dftracer/utils/index/extensions/kinds/time_bounds.h>
+#include <dftracer/utils/index/extensions/rowset_fold.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/index/schemas/dft/agg/view_agg_tier.h>
+#include <dftracer/utils/index/source.h>
 #include <dftracer/utils/index/store/column_families.h>
 #include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/json/canonical.h>
+#include <dftracer/utils/json/json_escape.h>
+#include <dftracer/utils/json/json_value.h>
+#include <dftracer/utils/json/record_parser.h>
+#include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/containment_fold.h>
 #include <dftracer/utils/trace/views/coverage.h>
 #include <dftracer/utils/trace/views/engine_agg_fold.h>
@@ -69,10 +76,7 @@ namespace dftracer::utils::trace::views::detail {
 
 // Every file is a clean first touch: it has an index path that does not exist
 // yet, so a bootstrap can build it (and there is nothing to read instead).
-// A bootstrap builds a dftracer index, so path-decoded files leave it to the
-// Indexer.
 static bool all_files_fresh(const ViewPlan& plan) {
-    if (plan_by_path(plan)) return false;
     for (const auto& f : plan.files)
         if (f.index_path.empty() || fs::exists(f.index_path)) return false;
     return true;
@@ -80,41 +84,44 @@ static bool all_files_fresh(const ViewPlan& plan) {
 
 bool export_bootstrap_eligible(const ViewPlan& plan) {
     if (plan.query || plan.time_range || plan.offset || plan.limit ||
-        plan.phase != Phase::Any || !plan.include_metadata ||
-        !plan.select.empty() || plan.files.empty())
+        plan.phase != Phase::Any || !plan.select.empty() ||
+        plan.files.empty() || plan.cancelled)
+        return false;
+    // The pass writes every line, or every line but the metadata records.
+    const std::string& data = plan_record_schema(plan).data;
+    if (!plan.all_records && !data.empty() &&
+        data != dftracer::utils::index::NO_METADATA)
         return false;
     return all_files_fresh(plan);
 }
 
-// Project one NDJSON event to the selected bare-name fields (found at top level
-// or nested in `args`), emitted flat as a JSON object - the raw-event form of
-// project_columns. `parser` is caller-owned: a thread_local parser is unsafe
-// here because the export emit runs on pooled coroutine threads.
+// Project one NDJSON event to the selected paths, emitted flat as a JSON
+// object keyed by path - the raw-event form of project_columns. A path the
+// record lacks reads it under `args` when `args_fallback`. `parser` is
+// caller-owned: a thread_local parser is unsafe here because the export emit
+// runs on pooled coroutine threads.
 static std::string project_event(simdjson::dom::parser& parser,
                                  std::string_view ev,
-                                 const std::vector<std::string>& select) {
+                                 const std::vector<std::string>& select,
+                                 bool args_fallback) {
     simdjson::padded_string padded(ev);
     simdjson::dom::element doc;
     if (parser.parse(padded).get(doc) || !doc.is_object())
         return std::string(ev);
-    simdjson::dom::object args;
-    const bool has_args = !doc["args"].get(args);
-
+    const json::JsonValue root(doc);
     std::string out = "{";
     bool first = true;
     for (const auto& name : select) {
-        simdjson::dom::element val;
-        bool found = !doc[name].get(val);
-        if (!found && has_args) found = !args[name].get(val);
-        if (!found) continue;
-        std::ostringstream os;
-        os << val;
+        json::JsonValue val = root.at(name);
+        if (!val.exists() && args_fallback && !has_args_prefix(name))
+            val = root.at("args." + name);
+        if (!val.exists()) continue;
         if (!first) out += ',';
         first = false;
         out += '"';
-        out += name;
+        json::append_json_escaped(out, name);
         out += "\":";
-        out += os.str();
+        json::append_canonical_json(out, val.raw());
     }
     out += '}';
     return out;
@@ -132,12 +139,13 @@ bool collect_bootstrap_eligible(const ViewPlan& plan) {
 namespace {
 
 // Write the index a bootstrap pass produced, in one write: members from the
-// artifacts, bloom + hash from the folds, each with its manifest entry.
+// artifacts, bloom and row sets from the folds, each with its manifest entry.
 void persist_bootstrap_index(
     const std::string& index_path, const std::string& file_path,
     const dftracer::utils::index::gzip::GzipBuildArtifacts& arts,
+    const dftracer::utils::index::RecordSchema& schema,
     dftracer::utils::index::extensions::BloomFold& bloom,
-    dftracer::utils::index::extensions::DictFold& dict) {
+    dftracer::utils::index::extensions::RowSetFold& rowsets) {
     dftracer::utils::index::store::IndexDatabase db(index_path);
     auto logical =
         dftracer::utils::index::store::internal::get_logical_path(file_path);
@@ -153,35 +161,68 @@ void persist_bootstrap_index(
     dftracer::utils::index::store::records::put_file_record(
         *w, logical, {static_cast<std::uint32_t>(fid), mtime, hash, bytes});
     dftracer::utils::index::gzip::persist_gzip_index_artifacts(*w, fid, arts);
+    dftracer::utils::index::store::records::put_profile(*w, fid, schema.id,
+                                                        schema.params_hash());
     bloom.write(*w, fid);
-    dict.write(*w, fid);
+    rowsets.write(*w, fid);
     w->commit();
 }
 
 // An IndexVisitor that streams a member's plaintext lines straight to the
-// export sink. Carries the partial last line across on_chunk calls so an event
-// straddling an inflate boundary is written whole.
+// export sink, without the metadata records when `drop_metadata`. Carries the
+// partial last line across on_chunk calls so an event straddling an inflate
+// boundary is written whole.
 class SinkWriterVisitor : public dftracer::utils::index::build::IndexVisitor {
    public:
-    explicit SinkWriterVisitor(ExportSink& sink) : sink_(&sink) {}
+    SinkWriterVisitor(ExportSink& sink, bool drop_metadata)
+        : sink_(&sink), drop_metadata_(drop_metadata) {}
     void begin(std::size_t) override {}
     coro::CoroTask<void> on_checkpoint(std::size_t) override { co_return; }
     coro::CoroTask<void> on_chunk(const char* data, std::size_t len,
                                   std::size_t) override {
         buf_.append(data, len);
         const std::size_t last_nl = buf_.rfind('\n');
-        if (last_nl != std::string::npos) {
+        if (last_nl == std::string::npos) co_return;
+        if (!drop_metadata_) {
             sink_->write(std::string_view(buf_.data(), last_nl + 1));
-            buf_.erase(0, last_nl + 1);
+        } else {
+            kept_.clear();
+            std::size_t pos = 0;
+            while (pos <= last_nl) {
+                const std::size_t nl = buf_.find('\n', pos);
+                const std::string_view line(buf_.data() + pos, nl - pos);
+                if (phase_of(line) != trace::RecordPhase::METADATA) {
+                    kept_.append(line);
+                    kept_.push_back('\n');
+                }
+                pos = nl + 1;
+            }
+            if (!kept_.empty()) sink_->write(kept_);
         }
+        buf_.erase(0, last_nl + 1);
         co_return;
     }
     void finalize(dftracer::utils::index::store::IndexDatabaseWriterContext&,
                   int) override {}
 
    private:
+    trace::RecordPhase phase_of(std::string_view line) {
+        pad_.assign(line);
+        pad_.resize(line.size() + simdjson::SIMDJSON_PADDING);
+        simdjson::ondemand::document doc;
+        if (parser_.iterate(pad_.data(), line.size(), pad_.size()).get(doc))
+            return trace::RecordPhase::UNKNOWN;
+        auto f = doc.find_field_unordered("ph");
+        if (f.error()) return trace::RecordPhase::UNKNOWN;
+        return trace::read_phase(f.value_unsafe());
+    }
+
     ExportSink* sink_;
+    bool drop_metadata_;
     std::string buf_;
+    std::string kept_;
+    std::string pad_;
+    simdjson::ondemand::parser parser_;
 };
 
 // First-touch full export: for an unindexed, unfiltered whole-trace dump, one
@@ -196,13 +237,19 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
 
     for (const auto& f : plan.files) {
         dftracer::utils::StringIntern intern;
-        dftracer::utils::index::extensions::BloomFold bloom(intern);
-        dftracer::utils::index::extensions::DictFold dict(
-            intern, plan_record_schema(plan).dictionaries);
-        std::array<Fold*, 2> folds{&bloom, &dict};
+        const auto& schema = plan_record_schema(plan);
+        dftracer::utils::index::extensions::BloomFold bloom(
+            intern, dftracer::utils::index::build::for_schema({}, schema));
+        dftracer::utils::index::extensions::RowSetFold rowsets(
+            intern, dftracer::utils::index::indexed_rowsets(schema));
+        std::array<Fold*, 2> folds{&bloom, &rowsets};
         dftracer::utils::index::build::IndexFoldDriver driver(
             intern, folds, f.file_path, f.index_path);
-        SinkWriterVisitor writer(sink);
+        driver.set_record_schema(schema);
+        // Path-decoded records have no phase: every one is data.
+        SinkWriterVisitor writer(sink, !plan.all_records &&
+                                           !schema.data.empty() &&
+                                           !plan_by_path(plan));
 
         gzi::GzipBuildArtifacts arts;
         bool ok = false;
@@ -224,7 +271,8 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
             });
         if (!ok) co_return false;
         driver.seal();
-        persist_bootstrap_index(f.index_path, f.file_path, arts, bloom, dict);
+        persist_bootstrap_index(f.index_path, f.file_path, arts, schema, bloom,
+                                rowsets);
     }
     co_return true;
 }
@@ -274,7 +322,7 @@ coro::CoroTask<ExportStats> run_export(const ViewPlan& base_plan,
     // Stream matched events; --select projects each one to the chosen fields
     // (SQL-style), otherwise they are written verbatim. The scan driver owns
     // the gather + fan-out. The projection parser is used under sink_mtx.
-    simdjson::dom::parser proj_parser;
+    dftracer::utils::json::RecordParser proj_parser;
     ExportStats stats = co_await for_each_scanned_batch(
         plan, vdef, /*num_slots=*/0, cap,
         [&](std::size_t, const std::vector<std::string_view>& events) {
@@ -285,7 +333,8 @@ coro::CoroTask<ExportStats> run_export(const ViewPlan& base_plan,
                 if (plan.select.empty()) {
                     sink.write(ev);
                 } else {
-                    sink.write(project_event(proj_parser, ev, plan.select));
+                    sink.write(project_event(proj_parser, ev, plan.select,
+                                             vdef.args_fallback));
                 }
                 sink.write("\n");
                 ++written;
@@ -322,8 +371,7 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
     const std::size_t member_size = cw.sizing.flush_threshold;
     auto writer = std::move(cw.writer);
 
-    std::vector<std::uint64_t> matched_v(num_workers, 0);
-    std::vector<std::uint64_t> scanned_v(num_workers, 0);
+    std::vector<ScanCounts> counts_v(num_workers);
     bool ok = true;
 
     // One scope owns the writer's internal packer (padded layout) plus the
@@ -374,8 +422,7 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
                         auto gen = scanner(sin);
                         while (auto b = co_await gen.next()) {
                             if (is_cancelled(plan)) co_return;
-                            matched_v[w] += b->events_matched;
-                            scanned_v[w] += b->events_scanned;
+                            counts_v[w].add(*b);
                             for (const auto& ev : b->events) {
                                 buf.append(ev);
                                 buf.push_back('\n');
@@ -417,18 +464,18 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
     ExportStats st;
     st.chunks_skipped = skipped;
     st.chunks_scanned = units.size();
-    for (auto m : matched_v) st.events_matched += m;
-    for (auto s : scanned_v) st.events_scanned += s;
+    for (const auto& c : counts_v) c.add_to(st);
     co_return st;
 }
 
 coro::CoroTask<ExportStats> run_folds(const ViewPlan& plan,
                                       std::span<Fold* const> folds,
                                       dftracer::utils::StringIntern& intern,
-                                      DynamicPrune* dyn_prune) {
+                                      DynamicPrune* dyn_prune,
+                                      coro::CoroSemaphore* gate) {
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
     co_return co_await fuse(plan, vdef, folds, intern, /*covered=*/nullptr,
-                            /*limit=*/0, dyn_prune);
+                            /*limit=*/0, dyn_prune, gate);
 }
 
 namespace {
@@ -446,16 +493,15 @@ coro::CoroTask<bool> try_collect_bootstrap(const ViewPlan& plan,
     // is POD-evaluable; otherwise defer to the scan, which filters properly.
     if (!collect_bootstrap_eligible(plan)) co_return false;
 
-    // A transform on a resolved group key must resolve the key to its value
-    // before transforming, but the dictionaries are still being built during
+    // A transform on a file, host or rank key must resolve the key to its
+    // value before transforming, but the row sets are still being built during
     // this pass. Build the index in this pass, then re-aggregate through the
-    // normal engine scan (which reads the now-complete dictionaries).
+    // normal engine scan (which reads the now-complete row sets).
     const bool resolved_transform = std::any_of(
         plan.group_by.begin(), plan.group_by.end(), [](const GroupKey& g) {
             return g.transform != GroupKey::Transform::None &&
                    (g.kind == GroupKey::Kind::FilePath ||
                     g.kind == GroupKey::Kind::FileName ||
-                    g.kind == GroupKey::Kind::Resolved ||
                     g.kind == GroupKey::Kind::HostName ||
                     g.kind == GroupKey::Kind::Rank);
         });
@@ -463,13 +509,16 @@ coro::CoroTask<bool> try_collect_bootstrap(const ViewPlan& plan,
     for (const auto& f : plan.files) {
         dftracer::utils::StringIntern intern;
         EngineAggFold agg(plan, intern, /*apply_query=*/true);
-        dftracer::utils::index::extensions::BloomFold bloom(intern);
-        dftracer::utils::index::extensions::DictFold dict(
-            intern, plan_record_schema(plan).dictionaries);
-        std::array<Fold*, 3> folds{&agg, &bloom, &dict};
+        const auto& schema = plan_record_schema(plan);
+        dftracer::utils::index::extensions::BloomFold bloom(
+            intern, dftracer::utils::index::build::for_schema({}, schema));
+        dftracer::utils::index::extensions::RowSetFold rowsets(
+            intern, dftracer::utils::index::indexed_rowsets(schema));
+        std::array<Fold*, 3> folds{&agg, &bloom, &rowsets};
         dftracer::utils::index::build::IndexFoldDriver driver(
             intern, folds, f.file_path, f.index_path,
             extra_capture_fields(plan));
+        driver.set_record_schema(schema);
 
         gzi::GzipBuildArtifacts arts;
         bool ok = false;
@@ -490,16 +539,16 @@ coro::CoroTask<bool> try_collect_bootstrap(const ViewPlan& plan,
             });
         if (!ok) co_return false;
         driver.seal();
-        persist_bootstrap_index(f.index_path, f.file_path, arts, bloom, dict);
+        persist_bootstrap_index(f.index_path, f.file_path, arts, schema, bloom,
+                                rowsets);
         if (resolved_transform) continue;  // index only; re-scan below
         if (!merged)
             merged = dataframe::agg_deserialize(
                 dataframe::agg_serialize(agg.state()));
         else
             dataframe::agg_merge(*merged, agg.state());
-        apply_ranks(plan, agg.ranks());
     }
-    // The index now carries the dictionaries; a normal engine scan resolves
+    // The index now carries the row sets; a normal engine scan resolves
     // the transformed key correctly. Reset the resolver the per-file folds
     // cached before they existed so the re-scan rebuilds it from the fresh
     // index.
@@ -651,7 +700,10 @@ coro::CoroTask<bool> try_serve_aggregate_no_scan(const ViewPlan& plan,
 // missing/locked index leaves the origin at 0 (absolute).
 ViewPlan resolve_bucket_origin(const ViewPlan& plan) {
     if (!plan.bucket_origin_min || plan.time_bucket_us == 0) return plan;
+    namespace ix = dftracer::utils::index;
     std::uint64_t global_min = std::numeric_limits<std::uint64_t>::max();
+    const bool by_path = plan_by_path(plan);
+    const ix::Roles& roles = plan_record_schema(plan).roles;
     for (const auto& f : plan.files) {
         if (f.index_path.empty() || !fs::exists(f.index_path)) continue;
         try {
@@ -662,6 +714,16 @@ ViewPlan resolve_bucket_origin(const ViewPlan& plan) {
                 dftracer::utils::index::store::internal::get_logical_path(
                     f.file_path));
             if (fid < 0) continue;
+            if (by_path) {
+                const auto r = ix::extensions::kinds::file_value_range(
+                    db, fid, roles.time);
+                if (r && r->first >= 0)
+                    global_min = std::min(
+                        global_min,
+                        static_cast<std::uint64_t>(std::llround(
+                            r->first * ix::micros_per(roles.time_unit))));
+                continue;
+            }
             const auto b =
                 dftracer::utils::index::extensions::kinds::file_time_bounds(
                     db, fid);
@@ -715,20 +777,9 @@ bool is_row_query(const ViewPlan& plan) {
 coro::CoroTask<dataframe::DataFrame> run_collect_rows(const ViewPlan& plan) {
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
     dftracer::utils::StringIntern intern;
-    // Resolved select columns read the index dictionaries; build the
-    // resolver once (shared across parallel slices) only when asked for.
-    std::shared_ptr<const dftracer::utils::index::plan::GroupResolver> resolver;
-    if (auto resolved = select_resolved(plan.select); !resolved.empty()) {
-        std::vector<std::string> index_paths;
-        index_paths.reserve(plan.files.size());
-        for (const auto& f : plan.files) index_paths.push_back(f.index_path);
-        resolver =
-            std::make_shared<const dftracer::utils::index::plan::GroupResolver>(
-                index_paths, plan_record_schema(plan), resolved);
-    }
     const bool by_path = plan_by_path(plan);
-    NativeRowFold fold(intern, plan.select, plan.time_scale, resolver,
-                       plan.phase == Phase::Metadata, by_path);
+    NativeRowFold fold(intern, plan.select, plan.time_scale,
+                       metadata_rows(plan), by_path);
     std::array<Fold*, 1> folds{&fold};
     co_await execute(lower_fused_folds(plan, vdef, folds), intern);
     dataframe::DataFrame b = fold.build();
@@ -759,9 +810,10 @@ coro::CoroTask<R> run_containment_terminal(
     std::vector<std::string> group, R (ContainmentFold::*build)() const) {
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
     dftracer::utils::StringIntern intern;
-    ContainmentFold fold(intern, std::move(partition), std::move(ts_field),
-                         std::move(dur_field), std::move(name_field),
-                         plan.time_scale, std::move(group));
+    ContainmentFold fold(
+        intern, std::move(partition), std::move(ts_field), std::move(dur_field),
+        std::move(name_field), plan.time_scale, std::move(group),
+        plan_by_path(plan) ? &plan_record_schema(plan) : nullptr);
     std::array<Fold*, 1> folds{&fold};
     co_await fuse(plan, vdef, folds, intern);
     co_return (fold.*build)();
@@ -933,7 +985,7 @@ struct ViewSessionState {
     /// execute() only when no other branch exists. The scan feeds every
     /// branch, so narrowing it for one would starve the rest; whether that
     /// holds is knowable only here, after every branch has been added.
-    std::optional<query::Query> proposed_prune;
+    std::optional<duql::Query> proposed_prune;
 };
 
 std::shared_ptr<ViewSessionState> make_view_session_state(
@@ -943,7 +995,7 @@ std::shared_ptr<ViewSessionState> make_view_session_state(
     return st;
 }
 
-void propose_base_prune(ViewSessionState& state, query::Query q) {
+void propose_base_prune(ViewSessionState& state, duql::Query q) {
     state.proposed_prune = std::move(q);
 }
 
@@ -1124,7 +1176,7 @@ class BranchDriverFold : public Fold {
    private:
     std::shared_ptr<std::vector<const BranchHooks*>> branches_;
     std::vector<BranchConsumer> consumers_;
-    simdjson::dom::parser parser_;
+    dftracer::utils::json::RecordParser parser_;
     std::string buf_;
 };
 
@@ -1215,9 +1267,8 @@ coro::CoroTask<ExportStats> run_session(
     // there is nobody to starve, and the index can skip whole chunks.
     if (state->branches.empty() && state->proposed_prune) {
         if (scan_plan.query) {
-            scan_plan.query = query::parse_or_throw(
-                "(" + scan_plan.query->source() + ") and (" +
-                state->proposed_prune->source() + ")");
+            scan_plan.query =
+                duql::conjoin(*scan_plan.query, *state->proposed_prune);
         } else {
             scan_plan.query = *state->proposed_prune;
         }
@@ -1226,21 +1277,6 @@ coro::CoroTask<ExportStats> run_session(
     if (auto mv = dftracer::utils::index::cache::find_subsuming_view(plan))
         scan_plan.files = std::move(*mv);
     ViewDefinition avdef = make_vdef(scan_plan, /*for_aggregation=*/true);
-    // A Rank group key harvests the PR metadata during the scan, but make_vdef
-    // dropped metadata for the base plan; if any branch wants Rank the fused
-    // scan must keep it.
-    const bool any_wants_rank =
-        std::any_of(agg_b.begin(), agg_b.end(), [](const ScanBranch* sb) {
-            return std::any_of(sb->agg_plan->group_by.begin(),
-                               sb->agg_plan->group_by.end(),
-                               [](const GroupKey& g) {
-                                   return g.kind == GroupKey::Kind::Rank;
-                               });
-        });
-    if (any_wants_rank) {
-        avdef.include_metadata = true;
-        avdef.emit_all_metadata = true;
-    }
     // Streamed morsels hold the intern their ids resolve through, and outlive
     // this scan in their consumers' hands.
     auto intern_owner = std::make_shared<dftracer::utils::StringIntern>();
@@ -1249,12 +1285,12 @@ coro::CoroTask<ExportStats> run_session(
     std::vector<std::unique_ptr<StreamRowFold>> streams;
     streams.reserve(state->stream_branches.size());
     for (const StreamBranch& sb : state->stream_branches) {
-        const bool keep_metadata = sb.plan->phase == Phase::Metadata;
+        const bool keep_metadata = metadata_rows(*sb.plan);
         if (keep_metadata) avdef.include_metadata = true;
         streams.push_back(std::make_unique<StreamRowFold>(
             sb.channel, sb.budget, intern_owner, sb.plan->select,
-            sb.plan->time_scale, nullptr, keep_metadata, false, sb.plan,
-            sb.dropped, plan_by_path(*sb.plan)));
+            sb.plan->time_scale, keep_metadata, false, sb.plan, sb.dropped,
+            plan_by_path(*sb.plan)));
     }
 
     std::vector<std::unique_ptr<EngineAggFold>> aggs;
@@ -1272,16 +1308,11 @@ coro::CoroTask<ExportStats> run_session(
     }
 
     // Externally-built folds (plugins), constructed with the shared intern so
-    // ids agree and per-worker slices merge. A plugin needs metadata (its own
-    // hash lookups), so keep it on the shared scan.
+    // ids agree and per-worker slices merge.
     std::vector<std::unique_ptr<Fold>> factory_folds;
     factory_folds.reserve(state->fold_factories.size());
     for (auto& ff : state->fold_factories)
         if (auto f = ff.make(intern)) factory_folds.push_back(std::move(f));
-    if (has_factories) {
-        avdef.include_metadata = true;
-        avdef.emit_all_metadata = true;
-    }
 
     std::vector<Fold*> fold_ptrs;
     fold_ptrs.reserve(aggs.size() + factory_folds.size() + 1);
@@ -1307,7 +1338,6 @@ coro::CoroTask<ExportStats> run_session(
                 encode_agg_partial(aggs[i]->state());
             continue;
         }
-        apply_ranks(*agg_b[i]->agg_plan, aggs[i]->ranks());
         *agg_b[i]->br->agg->out = apply_agg_post_ops(
             finalize_engine_result(aggs[i]->state(), *agg_b[i]->agg_plan),
             *agg_b[i]->agg_plan);
@@ -1331,7 +1361,6 @@ coro::CoroTask<ExportStats> run_export_counters(const ViewPlan& plan,
     EngineAggFold agg(plan, intern);
     std::array<Fold*, 1> folds{&agg};
     ExportStats stats = co_await fuse(plan, vdef, folds, intern);
-    apply_ranks(plan, agg.ranks());
     emit_counters_from_state(agg.state(), plan, sink);
     co_return stats;
 }

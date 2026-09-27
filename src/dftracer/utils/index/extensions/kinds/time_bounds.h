@@ -5,6 +5,8 @@
 #include <dftracer/utils/index/store/index_database.h>
 
 #include <cstdint>
+#include <optional>
+#include <string_view>
 #include <utility>
 
 namespace dftracer::utils::index::extensions::kinds {
@@ -32,6 +34,12 @@ ankerl::unordered_dense::set<std::uint64_t> chunks_without_starts(
 /// The union of chunk_time_bounds; `valid` is false when there is none.
 index::gzip::TimeBounds file_time_bounds(const index::store::IndexDatabase& db,
                                          int file_id);
+
+/// [min, max] over the file of the numeric zonemap of `path`, in the path's
+/// own unit; nullopt when the zonemap is not current or holds no numeric
+/// bounds for the path.
+std::optional<std::pair<double, double>> file_value_range(
+    const index::store::IndexDatabase& db, int file_id, std::string_view path);
 
 }  // namespace dftracer::utils::index::extensions::kinds
 

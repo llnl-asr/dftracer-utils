@@ -970,10 +970,10 @@ def test_group_by_multi_key_matches_pandas():
 
 
 def test_query_string_filter():
-    # A query DSL string filters a VecBatch via the SIMD mask backend
+    # A duql string filters a VecBatch via the SIMD mask backend
     # (pandas.query-style), and where() routes strings through it.
     from dftracer.utils.columnar import where
-    from dftracer.utils.dftracer_utils_ext import DFTUtilsQueryError
+    from dftracer.utils.dftracer_utils_ext import DFTUtilsDuqlError
 
     tbl = pa.table(
         {
@@ -994,9 +994,12 @@ def test_query_string_filter():
     wr = where(tbl, "dur >= 150").to_pydict()
     assert wr["dur"] == [150, 200, 300]
 
+    # Patterns run on the columns.
+    assert batch.query("cat ~ '^i'").to_arrow().to_pydict()["dur"] == [50, 200, 80]
+
     # A predicate with no columnar lowering raises the typed query error.
-    with pytest.raises(DFTUtilsQueryError):
-        batch.query("cat ~ '^i'")  # regex
+    with pytest.raises(DFTUtilsDuqlError):
+        batch.query("any(cat) == 'io'")
 
     # Query plan: where + select + order by + limit in one call.
     plan = (
@@ -1462,7 +1465,7 @@ def test_columnar_expr_apply_direct_no_wrapper():
 
 
 def test_query_F_shorthand_and_callable():
-    from dftracer.utils.query import F, Field
+    from dftracer.utils.duql import F, Field
 
     assert str(F.dur > 100) == str(Field("dur") > 100)
     assert str(F("args.level") == 3) == str(Field("args.level") == 3)

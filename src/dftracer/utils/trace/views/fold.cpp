@@ -1,21 +1,28 @@
 #include <dftracer/utils/core/common/memory_budget.h>
 #include <dftracer/utils/core/common/platform_compat.h>
+#include <dftracer/utils/core/common/to_chars.h>
 #include <dftracer/utils/core/coro/async_semaphore.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/index/store/file.h>
 #include <dftracer/utils/json/canonical.h>
+#include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/trace/views/event_source.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 
@@ -72,6 +79,10 @@ std::uint8_t leaf_type_tag(simdjson::dom::element v) {
         t = PathType::DOUBLE;
     else if (v.is_bool())
         t = PathType::BOOL;
+    else if (v.is_array())
+        t = PathType::ARRAY;
+    else if (v.is_object())
+        t = PathType::OBJECT;
     return static_cast<std::uint8_t>(t);
 }
 
@@ -82,7 +93,7 @@ std::uint8_t leaf_type_tag(simdjson::dom::element v) {
 void enumerate_leaves(std::string& path, simdjson::dom::element v,
                       dftracer::utils::StringIntern& intern, FoldEvent& ev) {
     simdjson::dom::object obj;
-    if (v.get_object().get(obj) == simdjson::SUCCESS) {
+    if (v.get_object().get(obj) == simdjson::SUCCESS && obj.size() > 0) {
         for (auto kv : obj) {
             const std::size_t base = path.size();
             if (base) path.push_back('.');
@@ -93,7 +104,7 @@ void enumerate_leaves(std::string& path, simdjson::dom::element v,
         return;
     }
     simdjson::dom::array arr;
-    if (v.get_array().get(arr) == simdjson::SUCCESS) {
+    if (v.get_array().get(arr) == simdjson::SUCCESS && arr.size() > 0) {
         std::size_t i = 0;
         for (auto el : arr) {
             const std::size_t base = path.size();
@@ -114,7 +125,7 @@ void enumerate_leaves(std::string& path, simdjson::dom::element v,
 void flatten_nested_arg(std::string& path, simdjson::dom::element v,
                         dftracer::utils::StringIntern& intern, FoldEvent& ev) {
     simdjson::dom::object obj;
-    if (v.get_object().get(obj) == simdjson::SUCCESS) {
+    if (v.get_object().get(obj) == simdjson::SUCCESS && obj.size() > 0) {
         for (auto kv : obj) {
             const std::size_t base = path.size();
             path.push_back('.');
@@ -125,7 +136,7 @@ void flatten_nested_arg(std::string& path, simdjson::dom::element v,
         return;
     }
     simdjson::dom::array arr;
-    if (v.get_array().get(arr) == simdjson::SUCCESS) {
+    if (v.get_array().get(arr) == simdjson::SUCCESS && arr.size() > 0) {
         std::size_t i = 0;
         for (auto el : arr) {
             const std::size_t base = path.size();
@@ -136,10 +147,176 @@ void flatten_nested_arg(std::string& path, simdjson::dom::element v,
         }
         return;
     }
-    append_scalar_arg(ev.args, intern.get_or_insert(path), v, intern);
+    append_scalar_arg(ev.args, ev.specials, intern.get_or_insert(path), v,
+                      intern);
 }
 
 }  // namespace
+
+void flatten_container(FoldEvent& ev, std::string path,
+                       simdjson::dom::element v,
+                       dftracer::utils::StringIntern& intern) {
+    flatten_nested_arg(path, v, intern, ev);
+}
+
+namespace {
+
+// A value rebuilt from flattened keys: a leaf's JSON text, or members.
+struct JsonNode {
+    std::map<std::string, JsonNode, std::less<>> kids;
+    std::string leaf;
+    bool is_leaf = false;
+};
+
+void insert_leaf(JsonNode& root, std::string_view rel, std::string text) {
+    JsonNode* n = &root;
+    std::size_t start = 0;
+    for (;;) {
+        const std::size_t dot = rel.find('.', start);
+        auto it = n->kids.find(rel.substr(start, dot - start));
+        if (it == n->kids.end())
+            it = n->kids
+                     .emplace(std::string(rel.substr(start, dot - start)),
+                              JsonNode{})
+                     .first;
+        n = &it->second;
+        if (dot == std::string_view::npos) break;
+        start = dot + 1;
+    }
+    n->is_leaf = true;
+    n->leaf = std::move(text);
+}
+
+// Members keyed 0..n-1 form an array, anything else an object.
+void put_node(std::string& out, const JsonNode& n) {
+    if (n.is_leaf) {
+        out += n.leaf;
+        return;
+    }
+    std::vector<const JsonNode*> items(n.kids.size(), nullptr);
+    bool array = true;
+    for (const auto& [k, kid] : n.kids) {
+        std::size_t at = 0;
+        const auto r = std::from_chars(k.data(), k.data() + k.size(), at);
+        if (r.ec != std::errc{} || r.ptr != k.data() + k.size() ||
+            at >= items.size()) {
+            array = false;
+            break;
+        }
+        items[at] = &kid;
+    }
+    if (array) {
+        out += '[';
+        for (std::size_t i = 0; i < items.size(); ++i) {
+            if (i) out += ',';
+            put_node(out, *items[i]);
+        }
+        out += ']';
+        return;
+    }
+    out += '{';
+    bool first = true;
+    for (const auto& [k, kid] : n.kids) {
+        if (!first) out += ',';
+        first = false;
+        out += '"';
+        dftracer::utils::json::append_json_escaped(out, k);
+        out += "\":";
+        put_node(out, kid);
+    }
+    out += '}';
+}
+
+std::string arg_json(const FoldEvent::ArgValue& v,
+                     const dftracer::utils::StringIntern& intern) {
+    std::string out;
+    if (const auto* id = std::get_if<std::uint32_t>(&v)) {
+        out += '"';
+        dftracer::utils::json::append_json_escaped(out, intern.resolve(*id));
+        out += '"';
+    } else if (const auto* i = std::get_if<std::int64_t>(&v)) {
+        out = std::to_string(*i);
+    } else if (const auto* u = std::get_if<std::uint64_t>(&v)) {
+        out = std::to_string(*u);
+    } else {
+        out = double_text(std::get<double>(v));
+    }
+    return out;
+}
+
+std::string_view special_json(FoldEvent::Special s) {
+    switch (s) {
+        case FoldEvent::Special::NULL_VALUE:
+            return "null";
+        case FoldEvent::Special::FALSE_VALUE:
+            return "false";
+        case FoldEvent::Special::TRUE_VALUE:
+            return "true";
+        case FoldEvent::Special::EMPTY_ARRAY:
+            return "[]";
+        case FoldEvent::Special::EMPTY_OBJECT:
+            return "{}";
+        case FoldEvent::Special::JSON_ARRAY:
+        case FoldEvent::Special::JSON_OBJECT:
+            break;
+    }
+    return "null";
+}
+
+// The canonical JSON text a declared json field holds in `args`.
+std::string_view json_text(const FoldEvent& ev,
+                           const dftracer::utils::StringIntern& intern,
+                           std::uint32_t id) {
+    for (const auto& [k, v] : ev.args)
+        if (k == id)
+            if (const auto* text = std::get_if<std::uint32_t>(&v))
+                return intern.resolve(*text);
+    return "null";
+}
+
+bool is_json_text(FoldEvent::Special s) {
+    return s == FoldEvent::Special::JSON_ARRAY ||
+           s == FoldEvent::Special::JSON_OBJECT;
+}
+
+}  // namespace
+
+std::optional<duql::Cell> container_cell(
+    const FoldEvent& ev, const dftracer::utils::StringIntern& intern,
+    std::string_view path) {
+    const std::string_view bare = strip_args_prefix(path);
+    const std::array<std::string_view, 2> prefixes{path, bare};
+    const std::size_t tries = bare != path && !ev.by_path ? 2 : 1;
+    for (std::size_t t = 0; t < tries; ++t) {
+        const std::string_view prefix = prefixes[t];
+        auto rel = [&](std::uint32_t id) -> std::optional<std::string_view> {
+            const std::string_view name = intern.resolve(id);
+            if (name.size() <= prefix.size() || !name.starts_with(prefix) ||
+                name[prefix.size()] != '.')
+                return std::nullopt;
+            return name.substr(prefix.size() + 1);
+        };
+        JsonNode root;
+        for (const auto& [id, v] : ev.args)
+            if (const auto r = rel(id))
+                insert_leaf(root, *r, arg_json(v, intern));
+        for (const auto& s : ev.specials)
+            if (!s.top)
+                if (const auto r = rel(s.key))
+                    insert_leaf(root, *r,
+                                std::string(is_json_text(s.kind)
+                                                ? json_text(ev, intern, s.key)
+                                                : special_json(s.kind)));
+        if (!root.kids.empty()) {
+            std::string text;
+            put_node(text, root);
+            const bool array = text.front() == '[';
+            return duql::Cell::json(
+                dftracer::utils::json::canonical_json_text(text), array);
+        }
+    }
+    return std::nullopt;
+}
 
 void FoldPortBus::publish(std::uint64_t key, const void* data,
                           std::uint32_t len) {
@@ -200,8 +377,8 @@ FoldEvent build_fold_event(const DFTracerEvent& scalars,
                     break;
                 }
                 default:
-                    append_scalar_arg(ev.args, intern.get_or_insert(key), v,
-                                      intern);
+                    append_scalar_arg(ev.args, ev.specials,
+                                      intern.get_or_insert(key), v, intern);
             }
         }
     }
@@ -244,6 +421,7 @@ struct LeafDecode {
     const std::vector<const dftracer::utils::index::FieldSpec*>* path_fields;
     // Whether a json field can be decoded, so objects and arrays are checked.
     bool json;
+    std::size_t max_children;
 
     // The declared field at `path`, found at `pos` in `paths` when set.
     const dftracer::utils::index::FieldSpec* field(const std::string& path,
@@ -261,10 +439,13 @@ std::optional<std::size_t> position(const std::vector<std::string>& paths,
     return static_cast<std::size_t>(it - paths.begin());
 }
 
-// A declared field's value as its type: integers stay integers, whole
-// doubles become integers, numbers become doubles for a float field, and
-// strings stay strings; any other value is left out, so it reads as null.
-// Role fields also set the event's time, duration or lane in microseconds.
+// A declared field's value as its type: integers stay integers, whole doubles
+// and integer text become integers, numbers and number text become doubles
+// for a float field, and any scalar becomes its JSON text for a string field.
+// A value that does not convert is left out, so the column keeps its declared
+// type and the value reads as null. Role fields also set the event's time and
+// duration in microseconds, its pid (entity), tid (lane) and name; a time may
+// also be ISO-8601 text.
 void bind_field(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
                 simdjson::dom::element v, LeafDecode& d) {
     namespace ix = dftracer::utils::index;
@@ -272,20 +453,63 @@ void bind_field(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
     const T type = v.type();
     const bool numeric =
         type == T::INT64 || type == T::UINT64 || type == T::DOUBLE;
-    double num = 0;
+    std::optional<double> num;
     if (numeric) num = v.get_double().value_unsafe();
+    std::optional<duql::Number> text_num;
+    if (type == T::STRING)
+        text_num = duql::parse_number(v.get_string().value_unsafe());
+    auto keep = [&] {
+        append_scalar_arg(d.ev.args, d.ev.specials, id, v, d.intern);
+    };
+    // A null in the record is null in every type.
+    auto unconverted = [&] {
+        if (type != T::NULL_VALUE) ++d.ev.unconverted;
+    };
+    // False when `n` is not a whole number.
+    auto as_int = [&](const duql::Number& n) {
+        if (const auto* i = std::get_if<std::int64_t>(&n))
+            d.ev.args.emplace_back(id, *i);
+        else if (const auto* u = std::get_if<std::uint64_t>(&n))
+            d.ev.args.emplace_back(id, *u);
+        else if (auto whole = ix::whole_int64(std::get<double>(n)))
+            d.ev.args.emplace_back(id, *whole);
+        else
+            return false;
+        return true;
+    };
+    // An ISO-8601 time is its microseconds once decoded.
+    if (f.role == ix::Role::TIME && f.type == ix::FieldType::STRING &&
+        type == T::STRING) {
+        if (const auto us = ix::iso8601_micros(v.get_string().value_unsafe())) {
+            d.ev.args.emplace_back(id, *us);
+            if (*us >= 0) d.ev.ts = static_cast<std::uint64_t>(*us);
+        }
+        return;
+    }
     switch (f.type) {
         case ix::FieldType::STRING:
-            if (type != T::STRING) return;
-            append_scalar_arg(d.ev.args, id, v, d.intern);
+            if (type == T::STRING || type == T::NULL_VALUE) {
+                keep();
+            } else {
+                std::string text;
+                dftracer::utils::json::append_canonical_json(text, v);
+                d.ev.args.emplace_back(id, d.intern.get_or_insert(text));
+            }
             break;
         case ix::FieldType::BOOL:
-            if (type != T::BOOL) return;
-            append_scalar_arg(d.ev.args, id, v, d.intern);
+            if (type != T::BOOL) return unconverted();
+            keep();
             break;
         case ix::FieldType::FLOAT:
-            if (!numeric) return;
-            d.ev.args.emplace_back(id, num);
+            if (numeric) {
+                d.ev.args.emplace_back(id, *num);
+            } else if (text_num) {
+                num = std::visit([](auto x) { return static_cast<double>(x); },
+                                 *text_num);
+                d.ev.args.emplace_back(id, *num);
+            } else {
+                return unconverted();
+            }
             break;
         case ix::FieldType::JSON: {
             std::string text;
@@ -294,39 +518,58 @@ void bind_field(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
             return;
         }
         case ix::FieldType::INT:
-            if (!numeric) return;
-            if (type != T::DOUBLE) {
-                append_scalar_arg(d.ev.args, id, v, d.intern);
+            if (type == T::INT64 || type == T::UINT64) {
+                keep();
+            } else if (const auto n = type == T::DOUBLE
+                                          ? std::optional<duql::Number>(*num)
+                                          : text_num;
+                       n && as_int(*n)) {
+                num = std::visit([](auto x) { return static_cast<double>(x); },
+                                 *n);
             } else {
-                const auto whole = ix::whole_int64(num);
-                if (!whole) return;
-                d.ev.args.emplace_back(id, *whole);
+                return unconverted();
             }
             break;
     }
-    const double micros =
-        ix::micros_per(f.unit.value_or(ix::TimeUnit::US)) * num;
+    if (!num && text_num)
+        num = std::visit([](auto x) { return static_cast<double>(x); },
+                         *text_num);
+    std::optional<double> micros;
+    if (num) micros = ix::micros_per(f.unit.value_or(ix::TimeUnit::US)) * *num;
     switch (f.role) {
         case ix::Role::NONE:
             break;
         case ix::Role::TIME:
-            if (micros >= 0)
-                d.ev.ts = static_cast<std::uint64_t>(std::llround(micros));
+            if (micros && *micros >= 0)
+                d.ev.ts = static_cast<std::uint64_t>(std::llround(*micros));
             break;
         case ix::Role::DURATION:
-            if (micros >= 0) {
-                d.ev.dur = static_cast<std::uint64_t>(std::llround(micros));
+            if (micros && *micros >= 0) {
+                d.ev.dur = static_cast<std::uint64_t>(std::llround(*micros));
                 d.ev.has_dur = true;
             }
             break;
-        case ix::Role::ENTITY: {
+        case ix::Role::ENTITY:
+        case ix::Role::LANE: {
+            if (d.ev.args.empty() || d.ev.args.back().first != id) break;
             const auto& value = d.ev.args.back().second;
+            std::uint64_t lane = 0;
             if (const auto* i = std::get_if<std::int64_t>(&value))
-                d.ev.pid = static_cast<std::uint64_t>(*i);
+                lane = static_cast<std::uint64_t>(*i);
+            else if (const auto* u = std::get_if<std::uint64_t>(&value))
+                lane = *u;
             else if (const auto* sid = std::get_if<std::uint32_t>(&value))
-                d.ev.pid = *sid;
+                lane = static_cast<std::uint64_t>(
+                    ix::entity_id(d.intern.resolve(*sid)));
+            (f.role == ix::Role::ENTITY ? d.ev.pid : d.ev.tid) = lane;
             break;
         }
+        case ix::Role::NAME:
+            if (!d.ev.args.empty() && d.ev.args.back().first == id)
+                if (const auto* sid =
+                        std::get_if<std::uint32_t>(&d.ev.args.back().second))
+                    d.ev.name_id = *sid;
+            break;
     }
 }
 
@@ -353,17 +596,60 @@ void capture_json(const std::string& path, simdjson::dom::element v,
     if (d.paths) --d.left;
     std::string text;
     dftracer::utils::json::append_canonical_json(text, v);
-    d.ev.args.emplace_back(d.intern.get_or_insert(path),
-                           d.intern.get_or_insert(text));
+    const std::uint32_t id = d.intern.get_or_insert(path);
+    d.ev.args.emplace_back(id, d.intern.get_or_insert(text));
+    d.ev.specials.push_back({id, v.is_array()
+                                     ? FoldEvent::Special::JSON_ARRAY
+                                     : FoldEvent::Special::JSON_OBJECT});
+}
+
+// An array or object past max_children: one leaf of its canonical text.
+void collapse(const std::string& path, simdjson::dom::element v,
+              LeafDecode& d) {
+    const std::uint32_t id = d.intern.get_or_insert(path);
+    // A declared json field already holds its text.
+    if (!d.ev.args.empty() && d.ev.args.back().first == id) return;
+    if (d.schema) d.ev.schema_leaves.emplace_back(id, leaf_type_tag(v));
+    std::string text;
+    dftracer::utils::json::append_canonical_json(text, v);
+    d.ev.args.emplace_back(id, d.intern.get_or_insert(text));
+    d.ev.specials.push_back({id, v.is_array()
+                                     ? FoldEvent::Special::JSON_ARRAY
+                                     : FoldEvent::Special::JSON_OBJECT});
+}
+
+// An empty array or object at a decoded path, for filters.
+void note_empty(const std::string& path, simdjson::dom::element v,
+                LeafDecode& d) {
+    if (path.empty() || (d.paths && !position(*d.paths, path))) return;
+    const std::uint32_t id = d.intern.get_or_insert(path);
+    if (d.schema) d.ev.schema_leaves.emplace_back(id, leaf_type_tag(v));
+    d.ev.specials.push_back({id, v.is_array()
+                                     ? FoldEvent::Special::EMPTY_ARRAY
+                                     : FoldEvent::Special::EMPTY_OBJECT});
 }
 
 void decode_leaves(std::string& path, simdjson::dom::element v, LeafDecode& d) {
     if (d.paths && d.left == 0) return;
     if (d.json && !path.empty() && (v.is_object() || v.is_array()))
         capture_json(path, v, d);
+    // A listed path that holds an array or object: a filter reads all of it.
+    if (d.paths && !path.empty() && (v.is_object() || v.is_array()) &&
+        position(*d.paths, path)) {
+        const auto* paths = std::exchange(d.paths, nullptr);
+        const auto* fields = std::exchange(d.path_fields, nullptr);
+        decode_leaves(path, v, d);
+        d.paths = paths;
+        d.path_fields = fields;
+        --d.left;
+        return;
+    }
     simdjson::dom::object obj;
     if (v.get_object().get(obj) == simdjson::SUCCESS) {
+        if (obj.size() == 0) return note_empty(path, v, d);
         if (d.paths && !path.empty() && !wanted_below(*d.paths, path)) return;
+        if (d.max_children && !path.empty() && obj.size() > d.max_children)
+            return collapse(path, v, d);
         for (auto kv : obj) {
             const std::size_t base = path.size();
             if (base) path.push_back('.');
@@ -376,7 +662,10 @@ void decode_leaves(std::string& path, simdjson::dom::element v, LeafDecode& d) {
     }
     simdjson::dom::array arr;
     if (v.get_array().get(arr) == simdjson::SUCCESS) {
+        if (arr.size() == 0) return note_empty(path, v, d);
         if (d.paths && !path.empty() && !wanted_below(*d.paths, path)) return;
+        if (d.max_children && !path.empty() && arr.size() > d.max_children)
+            return collapse(path, v, d);
         std::size_t i = 0;
         for (auto el : arr) {
             const std::size_t base = path.size();
@@ -398,13 +687,16 @@ void decode_leaves(std::string& path, simdjson::dom::element v, LeafDecode& d) {
     }
     const std::uint32_t id = d.intern.get_or_insert(path);
     if (d.schema) d.ev.schema_leaves.emplace_back(id, leaf_type_tag(v));
-    if (v.is_null()) return;
+    if (v.is_null()) {
+        d.ev.specials.push_back({id, FoldEvent::Special::NULL_VALUE});
+        return;
+    }
     if (d.record_schema)
         if (const auto* f = d.field(path, pos)) {
             bind_field(*f, id, v, d);
             return;
         }
-    append_scalar_arg(d.ev.args, id, v, d.intern);
+    append_scalar_arg(d.ev.args, d.ev.specials, id, v, d.intern);
 }
 
 }  // namespace
@@ -413,7 +705,8 @@ FoldEvent decode_record(
     simdjson::dom::element root, dftracer::utils::StringIntern& intern,
     bool capture_schema, const std::vector<std::string>* paths,
     const dftracer::utils::index::RecordSchema* record_schema,
-    const std::vector<const dftracer::utils::index::FieldSpec*>* path_fields) {
+    const std::vector<const dftracer::utils::index::FieldSpec*>* path_fields,
+    std::size_t max_children) {
     namespace ix = dftracer::utils::index;
     FoldEvent ev;
     ev.phase = RecordPhase::COMPLETE;
@@ -432,7 +725,8 @@ FoldEvent decode_record(
                  paths ? paths->size() : 0,
                  record_schema,
                  fields,
-                 json};
+                 json,
+                 max_children};
     std::string path;
     decode_leaves(path, root, d);
     return ev;
@@ -472,10 +766,6 @@ std::vector<std::string> extra_capture_fields(const ViewPlan& plan) {
     for (const auto& gk : plan.group_by)
         if (gk.kind == GroupKey::Kind::Field && !is_pod_scalar(gk.arg))
             add(gk.arg);
-        else if (gk.kind == GroupKey::Kind::Resolved) {
-            const std::string_view key = resolved_key_field(gk);
-            if (key != "fhash" && key != "hhash") add(std::string(key));
-        }
     for (const auto& c : plan.computed)
         for (const auto& in : c.inputs)
             if (is_nested_path(in)) add(in);
@@ -503,8 +793,7 @@ struct FuseWorkerCtx {
     dftracer::utils::StringIntern& intern;
     const CoverageSet* covered;
     coro::CoroSemaphore& budget_sem;
-    std::vector<std::uint64_t>& matched_v;
-    std::vector<std::uint64_t>& scanned_v;
+    std::vector<ScanCounts>& counts_v;
     std::vector<CoverageSet>& covered_v;
     const std::vector<std::string>& extra_fields;
     bool any_needs_args;
@@ -512,7 +801,19 @@ struct FuseWorkerCtx {
     bool any_wants_fold_event;
     bool any_wants_schema;
     DynamicPrune* dyn_prune;
+    coro::CoroSemaphore* gate;
 };
+
+// Runs `hook` on every slice, awaiting the task each one leaves.
+template <class Hook>
+coro::CoroTask<void> for_slices(std::vector<std::unique_ptr<Fold>>& slices,
+                                Hook hook) {
+    for (auto& s : slices) {
+        hook(*s);
+        if (auto* t = s->take_pending())
+            co_await *reinterpret_cast<coro::CoroTask<void>*>(t);
+    }
+}
 
 // One fuse worker: drains the shared unit queue, decodes each unit, and pushes
 // its batches into worker w's fold slices. Named (not a capturing-lambda
@@ -528,18 +829,24 @@ coro::CoroTask<void> fuse_worker(FuseWorkerCtx ctx, std::size_t w) {
     for (;;) {
         if (is_cancelled(ctx.plan)) break;
         if (ctx.produced.load(std::memory_order_relaxed) >= ctx.cap) break;
+        if (ctx.gate) co_await ctx.gate->acquire(1);
         std::size_t i = ctx.next_unit.fetch_add(1, std::memory_order_relaxed);
-        if (i >= ctx.units.size()) break;
-        // A materialized aggregate already answered this chunk.
-        if (ctx.covered && ctx.covered->covers(ctx.units[i].file_path,
-                                               ctx.units[i].checkpoint_idx))
-            continue;
-        // A narrow() call mid-scan ruled this chunk out after gather_units
-        // already listed it as a candidate.
-        if (ctx.dyn_prune &&
-            ctx.dyn_prune->is_excluded(ctx.units[i].file_path,
-                                       ctx.units[i].checkpoint_idx)) {
-            ctx.dyn_prune->record_skip();
+        if (i >= ctx.units.size()) {
+            if (ctx.gate) ctx.gate->release(1);
+            break;
+        }
+        const ScanUnit& unit = ctx.units[i];
+        // A materialized aggregate already answered this chunk, or a narrow()
+        // call mid-scan ruled it out after gather_units listed it.
+        const bool covered =
+            ctx.covered &&
+            ctx.covered->covers(unit.file_path, unit.checkpoint_idx);
+        const bool pruned =
+            !covered && ctx.dyn_prune &&
+            ctx.dyn_prune->is_excluded(unit.file_path, unit.checkpoint_idx);
+        if (pruned) ctx.dyn_prune->record_skip();
+        if (covered || pruned) {
+            co_await for_slices(slices, [&](Fold& s) { s.skip_unit(unit); });
             continue;
         }
 
@@ -572,8 +879,7 @@ coro::CoroTask<void> fuse_worker(FuseWorkerCtx ctx, std::size_t w) {
                 complete = false;
                 break;
             }
-            ctx.matched_v[w] += b->events_matched;
-            ctx.scanned_v[w] += b->events_scanned;
+            ctx.counts_v[w].add(*b);
             if (b->fold_events.empty() && b->events.empty()) continue;
             ctx.produced.fetch_add(b->fold_events.size() + b->events.size(),
                                    std::memory_order_relaxed);
@@ -590,10 +896,10 @@ coro::CoroTask<void> fuse_worker(FuseWorkerCtx ctx, std::size_t w) {
             }
         }
         if (!complete) {
-            for (auto& s : slices) s->drop_unit(ctx.units[i]);
+            co_await for_slices(slices, [&](Fold& s) { s.drop_unit(unit); });
             break;
         }
-        for (auto& s : slices) s->seal_unit(ctx.units[i]);
+        co_await for_slices(slices, [&](Fold& s) { s.seal_unit(unit); });
         pending.mark_complete(ctx.units[i].file_path,
                               ctx.units[i].checkpoint_idx);
         pending.seal();
@@ -608,16 +914,23 @@ coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
                                  std::span<Fold* const> folds,
                                  dftracer::utils::StringIntern& intern,
                                  const CoverageSet* covered,
-                                 std::uint64_t limit, DynamicPrune* dyn_prune) {
+                                 std::uint64_t limit, DynamicPrune* dyn_prune,
+                                 coro::CoroSemaphore* gate) {
     // Folds that all drop metadata records need no chunk read for them.
     ViewDefinition vdef = vdef_in;
     if (std::none_of(folds.begin(), folds.end(),
                      [](const Fold* f) { return f->wants_metadata(); })) {
         vdef.include_metadata = false;
-        vdef.emit_all_metadata = false;
+    }
+    if (vdef.by_path &&
+        std::any_of(folds.begin(), folds.end(),
+                    [](const Fold* f) { return f->reads_every_field(); })) {
+        vdef.paths.clear();
+        vdef.path_fields.clear();
     }
     std::uint64_t skipped = 0;
     auto units = co_await gather_units(plan, vdef, skipped);
+    for (std::size_t i = 0; i < units.size(); ++i) units[i].seq = i;
     const std::uint64_t cap =
         limit > 0 ? limit : std::numeric_limits<std::uint64_t>::max();
     std::atomic<std::uint64_t> produced{0};
@@ -666,7 +979,7 @@ coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
     // full, so a generous budget never throttles.
     coro::CoroSemaphore budget_sem(compute_memory_budget(plan.memory_budget));
     std::atomic<std::size_t> next_unit{0};
-    std::vector<std::uint64_t> matched_v(nworkers, 0), scanned_v(nworkers, 0);
+    std::vector<ScanCounts> counts_v(nworkers);
     std::vector<CoverageSet> covered_v(nworkers);
     // Per-worker slice of every fold, owned here so a slice outlives the
     // coroutine that filled it; merged into the shared folds after the join.
@@ -684,15 +997,15 @@ coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
                       intern,
                       covered,
                       budget_sem,
-                      matched_v,
-                      scanned_v,
+                      counts_v,
                       covered_v,
                       extra_fields,
                       any_needs_args,
                       any_wants_raw,
                       any_wants_fold_event,
                       any_wants_schema,
-                      dyn_prune};
+                      dyn_prune,
+                      gate};
     co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
         for (std::size_t w = 0; w < nworkers; ++w)
             scope.spawn([&ctx, w](CoroScope&) -> coro::CoroTask<void> {
@@ -728,8 +1041,7 @@ coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
 
     for (auto* f : folds) co_await f->finalize(scanned);
 
-    for (auto m : matched_v) st.events_matched += m;
-    for (auto s : scanned_v) st.events_scanned += s;
+    for (const auto& c : counts_v) c.add_to(st);
     st.truncated = produced.load(std::memory_order_relaxed) >= cap;
     co_return st;
 }

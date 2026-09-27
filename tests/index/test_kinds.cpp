@@ -58,7 +58,7 @@ std::string build_index(const std::string& dir, const std::string& trace) {
 std::vector<std::uint64_t> prune(const std::string& index,
                                  const std::string& trace,
                                  const std::string& text) {
-    auto q = query::Query::from_string(text);
+    auto q = duql::Query::from_string(text);
     REQUIRE(q.has_value());
     index::plan::ChunkPruner pruner;
     auto out = pruner({index, trace, std::move(*q)}).get();

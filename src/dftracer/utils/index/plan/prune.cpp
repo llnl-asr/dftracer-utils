@@ -150,9 +150,9 @@ coro::CoroTask<Result<PruneResult>> prune_file(PruneRequest request) {
     }
     if (!meta) co_return PruneResult{};
 
-    if (request.metadata == MetadataUse::CONTEXT) {
+    if (request.metadata == MetadataUse::EVERY) {
         for (const auto& [chunk, m] : *meta)
-            if (m.context > 0) result.candidates.push_back(chunk);
+            if (m.records > 0) result.candidates.push_back(chunk);
     } else {
         ChunkSet with_records;
         for (const auto& [chunk, m] : *meta)

@@ -5,6 +5,7 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 
 #include <cstddef>
@@ -142,8 +143,8 @@ std::string to_json(const std::vector<FileExplain>& explain);
 class Indexer {
    public:
     /// `paths` holds trace files and directories; a directory contributes the
-    /// .pfw, .pfw.gz, .jsonl.gz and .ndjson.gz files directly inside it. Reads
-    /// nothing else and writes nothing.
+    /// trace files (.pfw, .jsonl and .ndjson, plain or gzip) directly
+    /// inside it. Reads nothing else and writes nothing.
     static Indexer open(std::vector<std::string> paths,
                         IndexerOptions options = {});
 
@@ -185,6 +186,12 @@ class Indexer {
     std::vector<FileExplain> explain(std::string query) const;
     IndexStatus rebuild_extension(std::string extension);
     IndexStatus drop_extension(std::string extension);
+    /// The rows the build stored for row set `name` of the files' source,
+    /// every indexed file's in open order. Throws DFTUtilsException
+    /// INVALID_ARGUMENT when a file's index holds no rows for it (a row set
+    /// the build does not evaluate, or an index built before it); read such
+    /// a row set with View::duql("from <name>").
+    dataframe::DataFrame rowset(std::string name) const;
 
     /// The expanded trace list, in open order.
     const std::vector<std::string>& paths() const;

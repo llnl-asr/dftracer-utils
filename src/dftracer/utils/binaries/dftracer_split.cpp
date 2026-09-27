@@ -148,15 +148,14 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
     for (const auto& entry : fs::directory_iterator(log_dir)) {
         if (entry.is_regular_file()) {
             std::string path = entry.path().string();
-            if (path.ends_with(".pfw.gz") || path.ends_with(".pfw")) {
+            if (utilities::filesystem::is_trace_file(path)) {
                 input_files.push_back(path);
             }
         }
     }
 
     if (input_files.empty()) {
-        DFTRACER_UTILS_LOG_ERROR("No .pfw or .pfw.gz files found in %s",
-                                 log_dir.c_str());
+        DFTRACER_UTILS_LOG_ERROR("No trace files found in %s", log_dir.c_str());
         co_return 1;
     }
 

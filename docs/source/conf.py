@@ -33,7 +33,7 @@ _xml_dir = _docs_dir / "doxygen" / "xml"
 
 def _name_files_by_path(xml_dir: Path) -> None:
     # Breathe 5 matches a doxygenfile path against the index name, which
-    # Doxygen writes as the bare file name, so "dftracer/utils/query/abi.h"
+    # Doxygen writes as the bare file name, so "dftracer/utils/duql/abi.h"
     # would never match. Name each file compound by its location path.
     index = xml_dir / "index.xml"
     if not index.exists():

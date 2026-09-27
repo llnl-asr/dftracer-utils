@@ -26,7 +26,7 @@ Spec keys
    * - ``extends``
      - string
      - A registered schema to start from (default ``generic``). The new
-       schema keeps its parent's decoder and fields.
+       schema keeps its parent's decoder, fields and source.
    * - ``fields``
      - mapping
      - Field name to field settings (below). A field with the name of a
@@ -35,27 +35,14 @@ Spec keys
      - count
      - How many of each file's most frequent other paths are indexed;
        replaces the parent's and the build's default.
-   * - ``dictionaries``
-     - list of mappings
-     - Lookup rows; each one replaces the parent's dictionary of the same
-       ``name``. Built only for schemas that extend ``dftracer``.
-   * - ``dictionaries[].name``
+   * - ``source``
      - string
-     - Required. The dictionary name.
-   * - ``dictionaries[].rows``
-     - string
-     - Required. The ``name`` of the metadata records (``ph: M``) that hold
-       the rows.
-   * - ``dictionaries[].key``
-     - string
-     - Required. The path of a row's key.
-   * - ``dictionaries[].fields``
-     - mapping
-     - Required. Field name to path in the row record.
-   * - ``dictionaries[].keys_in``
-     - list of strings
-     - Data fields that hold keys; ``resolved.<field>.<name>`` reads a row's
-       field through them.
+     - duql text: the row sets (``name = pipeline``) and macros
+       (``def name(a) = expr``) of the schema's source, separated by
+       ``;``, and the flag ``def args_fallback = true``. A member with the
+       name of a parent member replaces it; the others are kept. A source
+       that does not compile rejects the spec. See
+       :ref:`duql-sources`.
 
 Field settings
 --------------
@@ -86,18 +73,24 @@ Field settings
        records hold every required path. A schema with no required field is
        used only when named.
    * - ``role``
-     - ``time``, ``duration``, ``entity``
+     - ``time``, ``duration``, ``entity``, ``lane``, ``name``
      - The trace role the field plays; at most one field per role. Time and
-       duration fields are ``int`` or ``float``. The entity is the default
-       lane of ``call_tree`` and ``flamegraph``.
+       duration fields are ``int`` or ``float``; a ``string`` time holds
+       ISO-8601 text and reads as microseconds since the epoch. Entity (the
+       process, dftracer ``pid``), lane (the thread, ``tid``) and name fields
+       are ``int`` or ``string``; a text entity or lane reads as a stable
+       31-bit id. ``call_tree``, ``flamegraph`` and the group keys ``pid``,
+       ``tid`` and ``name`` read these roles, and the group key ``rank`` the
+       entity role.
    * - ``unit``
      - ``ns``, ``us``, ``ms``, ``s``
-     - The unit of a time or duration field (``us`` when absent); values
-       convert to microseconds.
+     - The unit of a numeric time or duration field (``us`` when absent).
+       Times a query writes or reads are in these units.
    * - ``always_index``
      - ``true``, ``false``
-     - Index the field even past the path budget. The time field of a
-       path-decoded schema is always indexed.
+     - Index the field even past the path budget. The time, duration,
+       entity, lane and name fields of a path-decoded schema are always
+       indexed.
 
 Classes
 -------
@@ -126,10 +119,14 @@ Classes
      - the ``"path"`` template argument
    * - ``role``, ``unit``
      - ``field(role=..., unit=...)``
-     - ``TimeRole<TimeUnit::MS>``, ``DurationRole<...>``, ``EntityRole``
+     - ``TimeRole<TimeUnit::MS>``, ``DurationRole<...>``, ``EntityRole``,
+       ``LaneRole``, ``NameRole``
    * - ``always_index``
      - ``field(always_index=True)``
      - ``AlwaysIndex``
+   * - ``source``
+     - class attribute ``source = "..."``
+     - ``static constexpr std::string_view SOURCE = "...";``
    * - registration
      - when the class is defined
      - ``index::register_schema<A>(source)``
@@ -139,6 +136,28 @@ Classes
      - ``trace::views::rows<A>(view)`` in
        ``dftracer/utils/trace/views/typed_rows.h``; ``decode_row<A>`` for
        one parsed record
+
+Built-in schemas
+----------------
+
+``dftracer`` reads DFTracer traces; its source declares ``data`` (every
+record but the ``ph: M`` metadata records), the row sets ``files``,
+``hosts``, ``strings`` and ``ranks``, and ``args_fallback``. ``genesis``
+extends ``dftracer`` with the row set ``runs``. ``generic`` has no fields
+and no source: ``data`` is every record and a bare name never reads
+``args.<name>``. The source text is in :ref:`duql-sources`.
+
+A spec that adds a row set:
+
+.. code-block:: yaml
+
+   id: nginx
+   fields:
+     status: {type: int}
+     request_time: {type: float, role: duration, unit: s}
+   source: |
+     slow = where request_time > 1;
+     def failed(s) = s >= 500
 
 Loading and identity
 --------------------

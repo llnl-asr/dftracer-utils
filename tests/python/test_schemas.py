@@ -86,7 +86,7 @@ def test_a_class_registers_the_same_schema_as_a_spec():
         request_time: float = field(role="duration", unit="s")
         host: Optional[str] = field(path="meta.host")
         upstream: str = field(always_index=True)
-        service: str
+        service: str = field(role="name")
 
     assert PyClassNginx.id == "py_class_nginx"
     got = next(s for s in schemas.list() if s["id"] == "py_class_nginx")
@@ -96,6 +96,7 @@ def test_a_class_registers_the_same_schema_as_a_spec():
     assert by_name["request_time"]["role"] == "duration"
     assert by_name["request_time"]["unit"] == "s"
     assert by_name["upstream"]["always_index"]
+    assert by_name["service"]["role"] == "name"
     # The equivalent YAML spec is the same definition.
     schemas.register(
         "id: py_class_nginx\n"
@@ -104,8 +105,22 @@ def test_a_class_registers_the_same_schema_as_a_spec():
         "  host: {type: string, path: meta.host, optional: true}\n"
         "  request_time: {type: float, role: duration, unit: s}\n"
         "  status: {type: int}\n"
-        "  service: {type: string}\n"
+        "  service: {type: string, role: name}\n"
     )
+
+
+def test_a_class_source_row_set_runs_from(tmp_path):
+    class PyWeb(RecordSchema, id="py_web"):
+        status: int
+        source = "errors = where status >= 500"
+
+    path = str(tmp_path / "web.ndjson.gz")
+    with gzip.open(path, "wt") as f:
+        for status in (200, 503, 404, 500):
+            f.write(json.dumps({"status": status}) + "\n")
+    tv = dftu.TraceViewer(path, record_schema=PyWeb)
+    got = tv.duql("from errors | select status").collect().to_arrow().to_pydict()
+    assert sorted(got["status"]) == [500, 503]
 
 
 def test_a_json_field_reads_canonical_text(tmp_path):
@@ -123,13 +138,33 @@ def test_a_json_field_reads_canonical_text(tmp_path):
     tv = dftu.TraceViewer(str(path), record_schema=PyTagged)
     tags = pa.table(tv.select("tags").collect()).column("tags").to_pylist()
     assert tags == ['["a","b"]', '{"a":2,"b":1}', None]
-    assert pa.table(tv.query('tags == \'{"a": 2, "b": 1}\'').collect()).num_rows == 1
+    assert pa.table(tv.duql('json(tags) == \'{"a":2,"b":1}\'').collect()).num_rows == 1
+    assert pa.table(tv.duql('tags == \'{"a":2,"b":1}\'').collect()).num_rows == 0
     got = next(s for s in schemas.list() if s["id"] == "py_tagged")
     assert [f["type"] for f in got["fields"]] == ["string", "json"]
     with pytest.raises(dftu.DFTUtilsValueError, match="json"):
 
         class PyDftJson(schemas.DFTracer, id="py_dft_json"):
             blob: Json = field(path="args.blob")
+
+
+def test_a_field_of_mixed_types_is_a_json_column(tmp_path):
+    path = tmp_path / "mixed.ndjson.gz"
+    lines = [json.dumps({"k": i, "retry": [0, 1, 2.5, "3", 3][i % 5]}) for i in range(10)]
+    path.write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
+    tv = dftu.TraceViewer(str(path))
+    retry = tv.duql("sort k | take 5 | select retry").collect()["retry"]
+    assert retry.is_json
+    assert retry.to_list() == [0, 1, 2.5, "3", 3]
+    arrow = retry.to_arrow()
+    assert arrow.to_pylist() == ["0", "1", "2.5", '"3"', "3"]
+    field = pa.table(tv.duql("sort k | take 5 | select retry").collect()).schema.field("retry")
+    assert (field.metadata or {}).get(b"ARROW:extension:name") == b"arrow.json" or str(
+        field.type
+    ).startswith("extension<arrow.json")
+    back = dftu.DataFrame.from_arrow(pa.table(tv.duql("select retry").collect()))["retry"]
+    assert back.is_json
+    assert not tv.duql("select k").collect()["k"].is_json
 
 
 def test_schema_tree_nests_paths(tmp_path):
@@ -163,8 +198,8 @@ def test_a_class_extends_by_inheritance():
 
     got = {s["id"]: s for s in schemas.list()}
     assert got["py_my_dft"]["decoder"] == "dftracer"
-    assert got["py_my_dft"]["require"] == ["ph", "name", "args.step"]
-    assert got["py_my_dft_child"]["require"] == ["ph", "name", "args.step"]
+    assert got["py_my_dft"]["require"] == ["ph", "name", "ts", "args.step"]
+    assert got["py_my_dft_child"]["require"] == ["ph", "name", "ts", "args.step"]
     assert PyChild.id == "py_my_dft_child"
 
 
@@ -208,6 +243,7 @@ def test_load_a_directory_detect_and_explain(tmp_path):
     assert schemas.detect(trace) == "py_dir_nginx"
     why = schemas.explain(trace)
     assert why["chosen"] == "py_dir_nginx"
+    assert why["records"] == why["objects"] > 0
     score = next(s for s in why["scores"] if s["id"] == "py_dir_nginx")
     assert score["required"] == 3 and score["share"] == 1.0
 
@@ -230,7 +266,7 @@ def test_schemas_next_to_the_index_are_used(tmp_path):
         explained = ix.explain('upstream == "u2"')[0]
     assert len(explained["read"]) < explained["chunks"]
     viewer = dftu.TraceViewer(trace, index_path=str(index_dir / ".dftindex"))
-    rows = pa.table(viewer.query('upstream == "u2"').collect())
+    rows = pa.table(viewer.duql('upstream == "u2"').collect())
     assert rows.num_rows == 300
 
 

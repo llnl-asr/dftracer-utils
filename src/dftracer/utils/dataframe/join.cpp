@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/join.h>
 #include <dftracer/utils/dataframe/kernels/filter.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/duql/vectorize.h>
 
 #include <algorithm>
 #include <atomic>
@@ -36,6 +37,23 @@ bool keeps_unmatched_right(JoinHow how) {
 
 bool left_only(JoinHow how) {
     return how == JoinHow::Semi || how == JoinHow::Anti;
+}
+
+bool by_value(JoinHow how) {
+    return how == JoinHow::Lookup || how == JoinHow::Nest;
+}
+
+bool is_float(TypeId t) {
+    return t == TypeId::Float16 || t == TypeId::Float32 || t == TypeId::Float64;
+}
+
+// The value key of row `r` over `keys`; false when a part has none.
+bool value_key(std::string& out, const std::vector<Series>& keys,
+               std::int64_t r) {
+    out.clear();
+    for (const Series& k : keys)
+        if (!duql::append_cell_key(out, k, r)) return false;
+    return true;
 }
 
 Series flat(const Series& c) {
@@ -217,6 +235,8 @@ bool valid_join_how(JoinHow how) noexcept {
         case JoinHow::Semi:
         case JoinHow::Anti:
         case JoinHow::Cross:
+        case JoinHow::Lookup:
+        case JoinHow::Nest:
             return true;
     }
     return false;
@@ -229,7 +249,7 @@ HashJoin::HashJoin(DataFrame right, std::vector<std::string> left_on,
       left_on_(std::move(left_on)),
       right_on_(std::move(right_on)),
       how_(how),
-      suffix_(suffix.empty() ? DEFAULT_SUFFIX : std::move(suffix)) {
+      suffix_(suffix.empty() ? DEFAULT_SUFFIX : suffix) {
     if (!valid_join_how(how_))
         throw std::invalid_argument("join: unknown join kind " +
                                     std::to_string(static_cast<int>(how_)));
@@ -243,6 +263,9 @@ HashJoin::HashJoin(DataFrame right, std::vector<std::string> left_on,
             throw std::invalid_argument(
                 "join: left_on and right_on differ in length");
     }
+    if (how_ == JoinHow::Nest && suffix.empty())
+        throw std::invalid_argument(
+            "join: a nest join names its list column with `suffix`");
     right_keys_.reserve(right_on_.size());
     for (const std::string& k : right_on_) {
         const std::int64_t ri = index_of(right_.names, k);
@@ -293,21 +316,24 @@ HashJoin::HashJoin(DataFrame right, std::vector<std::string> left_on,
                 if (slot >= 0) next_[static_cast<std::size_t>(i)] = slot;
                 slot = i;
             }
-            return;
         }
     }
 
-    first_.reserve(static_cast<std::size_t>(n));
-    // Insert back to front so each chain lists its rows in ascending order.
-    for (std::int64_t i = n - 1; i >= 0; --i) {
-        if (null_row[static_cast<std::size_t>(i)]) continue;
-        auto [it, inserted] =
-            first_.try_emplace(hashes[static_cast<std::size_t>(i)], i);
-        if (!inserted) {
-            next_[static_cast<std::size_t>(i)] = it->second;
-            it->second = i;
+    if (direct_.empty()) {
+        first_.reserve(static_cast<std::size_t>(n));
+        // Insert back to front so each chain lists its rows in ascending
+        // order.
+        for (std::int64_t i = n - 1; i >= 0; --i) {
+            if (null_row[static_cast<std::size_t>(i)]) continue;
+            auto [it, inserted] =
+                first_.try_emplace(hashes[static_cast<std::size_t>(i)], i);
+            if (!inserted) {
+                next_[static_cast<std::size_t>(i)] = it->second;
+                it->second = i;
+            }
         }
     }
+    if (how_ == JoinHow::Lookup) typed_conflicts_ = conflicts(true);
 }
 
 std::vector<std::int64_t> HashJoin::left_key_indices(
@@ -346,6 +372,25 @@ JoinRightLayout join_right_layout(const std::vector<std::string>& left_names,
             "join: left_on and right_on differ in length");
     JoinRightLayout out;
     if (left_only(how)) return out;
+    if (how == JoinHow::Nest) {
+        for (std::size_t ri = 0; ri < right_names.size(); ++ri) {
+            out.keep.push_back(ri);
+            out.names.push_back(right_names[ri]);
+            out.fills.push_back(-1);
+        }
+        return out;
+    }
+    if (how == JoinHow::Lookup) {
+        for (std::size_t ri = 0; ri < right_names.size(); ++ri) {
+            if (std::find(right_on.begin(), right_on.end(), right_names[ri]) !=
+                right_on.end())
+                continue;
+            out.keep.push_back(ri);
+            out.names.push_back(right_names[ri]);
+            out.fills.push_back(index_of(left_names, right_names[ri]));
+        }
+        return out;
+    }
     const std::string& sfx = suffix.empty() ? DEFAULT_SUFFIX : suffix;
     for (std::size_t ri = 0; ri < right_names.size(); ++ri) {
         const std::string& name = right_names[ri];
@@ -356,6 +401,7 @@ JoinRightLayout join_right_layout(const std::vector<std::string>& left_names,
         out.keep.push_back(ri);
         out.names.push_back(index_of(left_names, name) >= 0 ? name + sfx
                                                             : name);
+        out.fills.push_back(-1);
     }
     return out;
 }
@@ -373,9 +419,17 @@ std::vector<std::string> join_out_names(
         if (index_of(right_names, k) < 0)
             throw std::out_of_range("join: no right column named " + k);
     std::vector<std::string> out = left_names;
+    if (how == JoinHow::Nest) {
+        if (suffix.empty())
+            throw std::invalid_argument(
+                "join: a nest join names its list column with `suffix`");
+        out.push_back(suffix);
+        return out;
+    }
     JoinRightLayout layout = join_right_layout(left_names, right_names, left_on,
                                                right_on, how, suffix);
-    out.insert(out.end(), layout.names.begin(), layout.names.end());
+    for (std::size_t i = 0; i < layout.names.size(); ++i)
+        if (layout.fills[i] < 0) out.push_back(layout.names[i]);
     return out;
 }
 
@@ -390,20 +444,33 @@ std::vector<Field> join_out_fields(const std::vector<Field>& left,
     std::vector<std::string> right_names;
     right_names.reserve(right.size());
     for (const Field& f : right) right_names.push_back(f.name);
-    (void)join_out_names(left_names, right_names, left_on, right_on, how,
-                         suffix);
+    join_out_names(left_names, right_names, left_on, right_on, how, suffix);
     std::vector<Field> out;
     out.reserve(left.size() + right.size());
     for (const Field& f : left) out.push_back(Field{f.name, f.type, true});
+    if (how == JoinHow::Nest) {
+        std::vector<Field> members;
+        for (const Field& f : right)
+            members.push_back(Field{f.name, f.type, true});
+        out.push_back(
+            Field{suffix, list_of(struct_of(std::move(members))), true});
+        return out;
+    }
     JoinRightLayout layout = join_right_layout(left_names, right_names, left_on,
                                                right_on, how, suffix);
-    for (std::size_t i = 0; i < layout.keep.size(); ++i)
-        out.push_back(Field{layout.names[i], right[layout.keep[i]].type, true});
+    for (std::size_t i = 0; i < layout.keep.size(); ++i) {
+        const Field f{layout.names[i], right[layout.keep[i]].type, true};
+        if (layout.fills[i] >= 0)
+            out[static_cast<std::size_t>(layout.fills[i])] = f;
+        else
+            out.push_back(f);
+    }
     return out;
 }
 
 DataFrame HashJoin::probe(const DataFrame& left) {
     const std::vector<std::int64_t> key_idx = left_key_indices(left.names);
+    if (by_value(how_)) return probe_values(left, key_idx);
     std::vector<Series> left_keys;
     left_keys.reserve(key_idx.size());
     for (std::size_t p = 0; p < key_idx.size(); ++p) {
@@ -610,6 +677,178 @@ DataFrame HashJoin::probe(const DataFrame& left) {
     std::vector<std::int64_t> right_idx;
     probe_into(left_idx, right_idx);
     return emit(left_idx, right_idx);
+}
+
+void HashJoin::build_value_index() {
+    if (value_index_) return;
+    const std::int64_t n = right_.num_rows();
+    std::string key;
+    for (std::int64_t r = 0; r < n; ++r)
+        if (value_key(key, right_keys_, r)) by_value_[key].push_back(r);
+    if (how_ == JoinHow::Lookup) value_conflicts_ = conflicts(false);
+    value_index_ = true;
+}
+
+std::vector<std::int64_t> HashJoin::conflicts(bool typed) const {
+    const std::int64_t n = right_.num_rows();
+    std::vector<std::int64_t> out(static_cast<std::size_t>(n), -1);
+    std::vector<std::size_t> values;
+    for (std::size_t c = 0; c < right_.columns.size(); ++c)
+        if (std::find(right_on_.begin(), right_on_.end(), right_.names[c]) ==
+            right_on_.end())
+            values.push_back(c);
+    auto check = [&](std::int64_t head, std::int64_t r) {
+        std::int64_t& slot = out[static_cast<std::size_t>(head)];
+        if (slot >= 0) return;
+        for (const std::size_t c : values)
+            if (!duql::same_cell(right_.columns[c], head, right_.columns[c],
+                                 r)) {
+                slot = static_cast<std::int64_t>(c);
+                return;
+            }
+    };
+    if (!typed) {
+        for (const auto& [key, rows] : by_value_)
+            for (std::size_t i = 1; i < rows.size(); ++i)
+                check(rows.front(), rows[i]);
+        return out;
+    }
+    const std::vector<KeyView> views = key_views(right_keys_);
+    for (std::int64_t r = 0; r < n; ++r) {
+        if (any_null(views, r)) continue;
+        std::int64_t head = -1;
+        const std::uint64_t h = row_hash(views, r);
+        if (!direct_.empty()) {
+            head = direct_[static_cast<std::size_t>(h - direct_base_)];
+        } else if (auto it = first_.find(h); it != first_.end()) {
+            head = it->second;
+        }
+        while (head >= 0 && !rows_equal(views, r, views, head))
+            head = next_[static_cast<std::size_t>(head)];
+        if (head >= 0 && head != r) check(head, r);
+    }
+    return out;
+}
+
+std::vector<std::int64_t> HashJoin::heads(const std::vector<Series>& left_keys,
+                                          bool typed) {
+    const std::int64_t n = left_keys.empty() ? 0 : left_keys.front().length();
+    std::vector<std::int64_t> out(static_cast<std::size_t>(n), -1);
+    constexpr std::int64_t GRAIN = std::int64_t{1} << 15;
+    if (!typed) {
+        build_value_index();
+        parallel_for(n, GRAIN, [&](std::int64_t b, std::int64_t e) {
+            std::string key;
+            for (std::int64_t i = b; i < e; ++i)
+                if (value_key(key, left_keys, i))
+                    if (auto it = by_value_.find(key); it != by_value_.end())
+                        out[static_cast<std::size_t>(i)] = it->second.front();
+        });
+        return out;
+    }
+    const std::vector<KeyView> lviews = key_views(left_keys);
+    const std::vector<KeyView> rviews = key_views(right_keys_);
+    parallel_for(n, GRAIN, [&](std::int64_t b, std::int64_t e) {
+        for (std::int64_t i = b; i < e; ++i) {
+            if (any_null(lviews, i)) continue;
+            const std::uint64_t h = row_hash(lviews, i);
+            std::int64_t r = -1;
+            if (!direct_.empty()) {
+                const std::uint64_t at = h - direct_base_;
+                if (at < direct_.size())
+                    r = direct_[static_cast<std::size_t>(at)];
+            } else if (auto it = first_.find(h); it != first_.end()) {
+                r = it->second;
+            }
+            while (r >= 0 && !rows_equal(lviews, i, rviews, r))
+                r = next_[static_cast<std::size_t>(r)];
+            out[static_cast<std::size_t>(i)] = r;
+        }
+    });
+    return out;
+}
+
+void HashJoin::members(std::int64_t head, bool typed,
+                       std::vector<std::int64_t>& out) const {
+    if (!typed) {
+        std::string key;
+        value_key(key, right_keys_, head);
+        const auto& rows = by_value_.find(key)->second;
+        out.insert(out.end(), rows.begin(), rows.end());
+        return;
+    }
+    const std::vector<KeyView> views = key_views(right_keys_);
+    for (std::int64_t r = head; r >= 0; r = next_[static_cast<std::size_t>(r)])
+        if (rows_equal(views, head, views, r)) out.push_back(r);
+}
+
+DataFrame HashJoin::probe_values(const DataFrame& left,
+                                 const std::vector<std::int64_t>& key_idx) {
+    std::vector<Series> left_keys;
+    bool typed = true;
+    for (std::size_t p = 0; p < key_idx.size(); ++p) {
+        const Series& lc = left.columns[static_cast<std::size_t>(key_idx[p])];
+        const Series& rc = right_keys_[p];
+        typed = typed && lc.type() == rc.type() && !is_float(lc.type()) &&
+                is_orderable_type(lc.type());
+        left_keys.push_back(flat(lc));
+    }
+    const std::int64_t n = left.num_rows();
+    const std::vector<std::int64_t> hs = heads(left_keys, typed);
+
+    DataFrame out;
+    out.names = left.names;
+    for (const Series& c : left.columns) out.columns.push_back(c.share());
+    if (how_ == JoinHow::Nest) {
+        std::vector<std::int32_t> offsets{0};
+        std::vector<std::int64_t> rows;
+        for (std::int64_t i = 0; i < n; ++i) {
+            if (hs[static_cast<std::size_t>(i)] >= 0)
+                members(hs[static_cast<std::size_t>(i)], typed, rows);
+            offsets.push_back(static_cast<std::int32_t>(rows.size()));
+        }
+        std::vector<Series> parts;
+        for (const Series& c : right_.columns) parts.push_back(c.take(rows));
+        out.names.push_back(suffix_);
+        out.columns.push_back(Series::list(
+            offsets, Series::structs(right_.names, std::move(parts))));
+        return out;
+    }
+
+    const std::vector<std::int64_t>& conf =
+        typed ? typed_conflicts_ : value_conflicts_;
+    for (std::int64_t i = 0; i < n; ++i) {
+        const std::int64_t h = hs[static_cast<std::size_t>(i)];
+        if (h < 0 || conf[static_cast<std::size_t>(h)] < 0) continue;
+        std::string key;
+        value_key(key, right_keys_, h);
+        std::string on;
+        for (const std::string& k : right_on_)
+            on += (on.empty() ? "" : ", ") + k;
+        throw std::invalid_argument(
+            "join: lookup key " + duql::key_text(key) + " of '" + on +
+            "' has right rows with different values of '" +
+            right_.names[static_cast<std::size_t>(
+                conf[static_cast<std::size_t>(h)])] +
+            "'");
+    }
+    const JoinRightLayout layout = join_right_layout(
+        left.names, right_.names, left_on_, right_on_, how_, suffix_);
+    for (std::size_t k = 0; k < layout.keep.size(); ++k) {
+        Series values = right_.columns[layout.keep[k]].take(hs);
+        const std::int64_t at = layout.fills[k];
+        if (at < 0) {
+            out.names.push_back(layout.names[k]);
+            out.columns.push_back(std::move(values));
+            continue;
+        }
+        if (out.columns[static_cast<std::size_t>(at)].null_count() != n)
+            throw std::invalid_argument("join: lookup fills '" +
+                                        layout.names[k] +
+                                        "', which some left rows already hold");
+        out.columns[static_cast<std::size_t>(at)] = std::move(values);
+    }
+    return out;
 }
 
 DataFrame HashJoin::flush(const std::vector<std::string>& left_names,

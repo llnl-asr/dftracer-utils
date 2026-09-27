@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_PLAN_H
 
 #include <dftracer/utils/dataframe/expr.h>
-#include <dftracer/utils/query/query.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/trace/views/view.h>
 
 #include <cstdint>
@@ -41,18 +41,26 @@ struct ComputedColumn {
     std::vector<std::string> inputs;
 };
 
+/// See ViewPlan::build_step. `run` takes the query the scan would use and
+/// gives the one to use with the lookups' key sets. It is thread-safe and
+/// runs the sides once; a call after a failed one runs them again.
+struct BuildStep {
+    std::function<std::optional<duql::Query>(std::optional<duql::Query>)> run;
+};
+
 /// The logical plan a `View` carries. The ops form a linear pipeline, so a flat
 /// struct captures it; each builder copies and mutates one field.
 struct ViewPlan {
     std::vector<ViewFile> files;
 
-    std::optional<query::Query> query;
+    std::optional<duql::Query> query;
     std::optional<std::pair<double, double>> time_range;
     // Default spans all phases so a naive View sees every event; callers that
     // want only ph="X" events (or only ph="C") say so with .phase().
     Phase phase = Phase::Any;
-    bool include_metadata = true;
-    bool emit_all_metadata = false;  // harvest every hash-metadata record
+    /// Metadata records are records like any other: kept, emitted, filtered
+    /// and aggregated (duql's `all`).
+    bool all_records = false;
 
     std::uint64_t time_bucket_us = 0;
     /// Bucket alignment origin (in the post-time_scale unit): bucket i spans
@@ -106,6 +114,9 @@ struct ViewPlan {
     /// is scan-order, so a stable page needs a deterministic sort first.
     std::uint64_t limit = 0;
     std::uint64_t offset = 0;
+    /// A streamed row scan hands out rows in file order, then checkpoint
+    /// order, instead of the order workers finish them.
+    bool ordered = false;
 
     /// Post-aggregation ordering of collect()'s result rows, applied before
     /// offset/limit with the vec sort kernels: `sort_col` sorts by that column
@@ -154,6 +165,13 @@ struct ViewPlan {
     /// pass.
     mutable std::shared_ptr<const dftracer::utils::index::plan::GroupResolver>
         resolver;
+
+    /// The first step of executing a plan that reads duql lookups, shared by
+    /// every copy of the plan: it runs the row sets the lookups read, binds
+    /// the lookups to their rows and puts their key sets in the scan filter.
+    /// Nothing runs when the plan is built; effective_query runs it when a
+    /// terminal executes the plan.
+    std::shared_ptr<const BuildStep> build_step;
 
     /// The files' record_schema, memoized by plan_record_schema.
     mutable std::shared_ptr<const dftracer::utils::index::RecordSchema>

@@ -4,10 +4,10 @@
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
-#include <dftracer/utils/query/query.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
 #include <dftracer/utils/server/json_builder.h>
@@ -18,6 +18,7 @@
 #include <dftracer/utils/server/viz/density.h>
 #include <dftracer/utils/server/viz/handlers.h>
 #include <dftracer/utils/server/viz/internal.h>
+#include <dftracer/utils/server/viz/record_event.h>
 #include <dftracer/utils/server/viz/scan.h>
 #include <dftracer/utils/server/viz/summary_build.h>
 #include <dftracer/utils/server/viz_api.h>
@@ -30,6 +31,7 @@
 #include <simdjson.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -40,7 +42,6 @@
 #include <string>
 #include <string_view>
 #include <tuple>
-#include <unordered_set>
 #include <vector>
 
 namespace dftracer::utils::server {
@@ -48,9 +49,6 @@ namespace dftracer::utils::server {
 using namespace dftracer::utils::trace;
 using namespace dftracer::utils::trace::views;
 using dftracer::utils::json::json_number;
-
-static const std::unordered_set<std::string> HASH_METADATA_NAMES = {"FH", "HH",
-                                                                    "SH"};
 
 // Rewrite the unsigned integer value of `key` (e.g. "\"dur\":") in `json` to
 
@@ -115,7 +113,7 @@ coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
     int summary = params.get_int("summary", 1);
     if (summary < 1) summary = 1;
 
-    auto win = parse_viz_window(params, index);
+    auto win = parse_viz_window(params, index, req.path);
     if (!win) co_return std::move(win.error());
     double begin = win->begin;
     double end = win->end;
@@ -147,7 +145,9 @@ coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
     double scan_begin = begin - lookback;
     if (scan_begin < 0) scan_begin = 0;
 
-    ViewDefinition view = build_viz_view(params, scan_begin, end, min_dur);
+    const TraceFields fields(index.record_schema());
+    ViewDefinition view =
+        build_viz_view(params, scan_begin, end, min_dur, fields);
 
     // Optional limit: 0 (default) means no limit.
     int limit = params.get_int("limit", 0);
@@ -157,7 +157,7 @@ coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
     // is at least the summary's long-event threshold, the events that survive
     // are exactly a subset of the summary's cached long_events. Serve them from
     // memory instead of scanning every file (minutes for a large trace).
-    if (min_dur > 0 && viz_summary_eligible(params)) {
+    if (min_dur > 0 && viz_summary_eligible(params, fields)) {
         const VizSummary* s = co_await ensure_viz_summary(index);
         if (s != nullptr && s->long_threshold_us > 0 &&
             min_dur >= s->long_threshold_us) {
@@ -194,7 +194,8 @@ coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
             std::vector<std::string> collected;
             collected.reserve(hits.size());
             for (const auto* ev : hits) collected.push_back(ev->json);
-            co_await append_app_spans(collected, index, begin, end, params);
+            co_await append_app_spans(collected, index, begin, end, params,
+                                      fields);
             std::string body = build_viz_events_body(
                 collected, global_min, original_begin, original_end, limit,
                 false, index.native_to_us(index.global_min_timestamp_us()),
@@ -214,14 +215,15 @@ coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
     views::View v =
         views::View::from_files(to_view_files(target_files))
             .phase(views::Phase::Events)
-            .metadata(false)
             .cancel_when([&req]() { return req.cancel_token.cancelled(); });
     if (view.query) v = v.filter(*view.query);
-    if (!single_file) v = v.time_range(scan_begin, end);
+    if (!single_file || fields.by_path) v = v.time_range(scan_begin, end);
     auto scan = co_await v.map_batches<EvAcc>(
-        [](EvAcc& a, const std::vector<std::string_view>& events) {
+        [&fields](EvAcc& a, const std::vector<std::string_view>& events) {
             a.events.reserve(a.events.size() + events.size());
-            for (auto ev : events) a.events.emplace_back(ev);
+            fields.for_each_event(events, [&a](std::string_view ev) {
+                a.events.emplace_back(ev);
+            });
         },
         [](EvAcc&& x, EvAcc&& y) {
             x.events.reserve(x.events.size() + y.events.size());
@@ -237,7 +239,8 @@ coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
         truncated = true;
     }
 
-    co_await append_app_spans(collected_events, index, begin, end, params);
+    co_await append_app_spans(collected_events, index, begin, end, params,
+                              fields);
 
     std::string body = build_viz_events_body(
         collected_events, global_min, original_begin, original_end, limit,
@@ -248,12 +251,25 @@ coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
 
 namespace {
 
+// A cell as JSON. A `time` cell is a duration: native units scaled to us, or
+// `scale` microseconds per unit for a path schema's duration field.
 void append_cell(simdjson::builder::string_builder& b,
                  const dataframe::Series& col, std::int64_t r,
-                 const TraceIndex& index, bool time) {
+                 const TraceIndex& index, bool time, double scale) {
     using dataframe::TypeId;
     if (col.is_null(r)) {
         b.append_raw("null");
+        return;
+    }
+    if (time && scale != 1 &&
+        (col.type() == TypeId::Int64 || col.type() == TypeId::Uint64 ||
+         col.type() == TypeId::Float64)) {
+        const double v = col.type() == TypeId::Int64
+                             ? static_cast<double>(col.data<std::int64_t>()[r])
+                         : col.type() == TypeId::Uint64
+                             ? static_cast<double>(col.data<std::uint64_t>()[r])
+                             : col.data<double>()[r];
+        b.append_raw(std::to_string(std::llround(v * scale)));
         return;
     }
     switch (col.type()) {
@@ -283,42 +299,66 @@ void append_cell(simdjson::builder::string_builder& b,
 
 }  // namespace
 
-// Records written without a clock (ts 0, such as CUDA activity): events and
-// aggregated records the timeline cannot place. `count` covers every match;
-// `events` is the page at `offset`, longest first, with dur in us.
+// Records written without a clock (ts 0, such as CUDA activity, or a path
+// schema's records without a time): events and aggregated records the
+// timeline cannot place. `count` covers every match; `events` is the page at
+// `offset`, longest first, with dur in us.
 coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
                                                 const QueryParams& params,
                                                 TraceIndex& index) {
     const int limit = std::clamp(params.get_int("limit", 1000), 0, 10000);
     const int offset = std::max(0, params.get_int("offset", 0));
-    std::string text = "ts == 0";
-    if (const auto user = params.get("query"); !user.empty()) {
-        if (!query::try_parse(user))
-            co_return HttpResponse::bad_request("Invalid query: " +
-                                                std::string(user));
-        text = "(ts == 0) and (" + std::string(user) + ")";
+    const TraceFields fields(index.record_schema());
+    if (fields.by_path && fields.time.empty())
+        co_return HttpResponse::ok(
+            R"({"events":[],"count":0,"offset":0,"limit":0})");
+    std::string text =
+        fields.by_path ? fields.time + " is missing" : std::string("ts == 0");
+    if (const auto user = params.get("duql"); !user.empty()) {
+        if (auto refused = refuse_duql(user, req.path))
+            co_return std::move(*refused);
+        text = "(" + text + ") and (" + std::string(user) + ")";
     }
 
     // Every match of a query, sorted once and cached as "<count>\n" plus one
-    // row object per line, so paging slices lines instead of rescanning.
+    // row object per line, so paging slices lines instead of rescanning. A
+    // path schema's rows name its label, entity and duration fields as the
+    // trace fields they play.
     const std::string cache_key = std::string("untimed\n") +
                                   std::string(params.get("file")) + "\n" + text;
     std::string all;
     if (auto hit = index.viz_cache().get(cache_key)) {
         all = std::move(*hit);
     } else {
-        const std::vector<std::string> columns = {"name", "cat", "pid",
-                                                  "tid",  "dur", "ph"};
+        std::vector<std::string> columns;
+        std::vector<std::string> names;
+        auto add = [&](const std::string& field, const char* name) {
+            if (field.empty()) return;
+            columns.push_back(field);
+            names.emplace_back(name);
+        };
+        add(fields.label, "name");
+        if (!fields.by_path) add("cat", "cat");
+        add(fields.entity, "pid");
+        add(fields.lane, "tid");
+        add(fields.duration, "dur");
+        if (!fields.by_path) add("ph", "ph");
+        std::vector<std::string> order;
+        std::vector<bool> descending;
+        for (const char* key : {"dur", "pid", "tid", "name"})
+            for (std::size_t c = 0; c < names.size(); ++c)
+                if (names[c] == key) {
+                    order.push_back(columns[c]);
+                    descending.push_back(names[c] == "dur");
+                }
         const auto rows =
             co_await views::View::from_files(
                 to_view_files(collect_candidate_files(index, params)))
                 .phase(views::Phase::Any)
-                .metadata(false)
-                .filter(query::parse_or_throw(text))
+                .filter(duql::parse_or_throw(text))
                 .cancel_when([&req]() { return req.cancel_token.cancelled(); })
                 .select(columns)
-                .sort_by_multi({"dur", "pid", "tid", "name"},
-                               std::vector<bool>{true, false, false, false})
+                .sort_by_multi(order, descending)
                 .collect();
         auto& rb = scratch_json_builder();
         rb.append_raw(std::to_string(rows.num_rows()));
@@ -327,10 +367,20 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
             rb.start_object();
             for (std::size_t c = 0; c < rows.names.size(); ++c) {
                 if (c > 0) rb.append_comma();
-                rb.escape_and_append_with_quotes(rows.names[c]);
+                const auto at =
+                    std::find(columns.begin(), columns.end(), rows.names[c]);
+                const std::string& name =
+                    at == columns.end()
+                        ? rows.names[c]
+                        : names[static_cast<std::size_t>(at - columns.begin())];
+                rb.escape_and_append_with_quotes(name);
                 rb.append_colon();
-                append_cell(rb, rows.columns[c], r, index,
-                            rows.names[c] == "dur");
+                append_cell(rb, rows.columns[c], r, index, name == "dur",
+                            fields.by_path ? fields.duration_us : 1);
+            }
+            if (fields.by_path) {
+                if (fields.lane.empty()) rb.append_raw(R"(,"tid":0)");
+                rb.append_raw(R"(,"cat":null,"ph":1)");
             }
             rb.end_object();
         }

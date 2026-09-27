@@ -237,8 +237,8 @@ static int describe_plugins(const PluginArgs& plugin_args) {
     for (const auto& info : plugins->describe()) {
         std::fprintf(stderr, "plugin: %s\n", info.path.c_str());
         std::fprintf(stderr, "  abi_version: %u\n", info.abi_version);
-        std::fprintf(stderr, "  plan_query: %s\n",
-                     info.has_plan_query ? "yes" : "no");
+        std::fprintf(stderr, "  plan_duql: %s\n",
+                     info.has_plan_duql ? "yes" : "no");
         std::fprintf(stderr, "  provides: %s\n",
                      join_or_none(info.provides).c_str());
         std::fprintf(stderr, "  consumes: %s\n",
@@ -277,7 +277,7 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
     if (!directory.empty()) {
         PatternDirectoryScannerUtility scanner;
         PatternDirectoryScannerUtilityInput scan_input{
-            directory, {".pfw", ".pfw.gz"}, false};
+            directory, trace_file_patterns(), false};
         auto matched = co_await scanner(scan_input);
         for (const auto& entry : matched) files.push_back(entry.path.string());
     } else {
@@ -285,8 +285,8 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
     }
 
     if (files.empty()) {
-        DFTRACER_UTILS_LOG_ERROR(
-            "%s", "No .pfw or .pfw.gz files found. Use -d or --files.");
+        DFTRACER_UTILS_LOG_ERROR("%s",
+                                 "No trace files found. Use -d or --files.");
         co_return 1;
     }
 

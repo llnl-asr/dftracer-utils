@@ -8,7 +8,9 @@
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/core/common/hash/constants.h>
 #include <dftracer/utils/index/schemas/dft/agg/reserved_args.h>
+#include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/server/viz/internal.h>
+#include <dftracer/utils/server/viz/record_event.h>
 #include <simdjson.h>
 
 #include <cmath>
@@ -82,48 +84,16 @@ using DensityMap =
 static constexpr char GROUP_SEP = '\x1f';
 
 // Value of `col` in the event for group_by, as a display string. Dotted paths
-// walk nested objects; bare names fall back into "args" (the canonical home of
-// domain fields). Anything missing or non-scalar yields "" so events are never
-// dropped - the client renders those under "(none)".
+// walk nested objects; a path the event lacks is looked up under "args" (the
+// canonical home of domain fields, and a path record's own fields). Anything
+// missing or non-scalar yields "" so events are never dropped - the client
+// renders those under "(none)".
 inline std::string extract_one_group_value(simdjson::dom::element root,
                                            std::string_view col) {
-    auto scalar = [](simdjson::dom::element el) -> std::string {
-        if (el.is_string()) return std::string(el.get_string().value_unsafe());
-        if (el.is_int64()) return std::to_string(el.get_int64().value_unsafe());
-        if (el.is_uint64())
-            return std::to_string(el.get_uint64().value_unsafe());
-        if (el.is_double())
-            return std::to_string(el.get_double().value_unsafe());
-        if (el.is_bool())
-            return el.get_bool().value_unsafe() ? "true" : "false";
-        return "";
-    };
-    auto walk = [&](std::string_view path,
-                    simdjson::dom::element& out) -> bool {
-        simdjson::dom::element cur = root;
-        std::size_t start = 0;
-        while (start <= path.size()) {
-            auto dot = path.find('.', start);
-            auto key = path.substr(start, dot == std::string_view::npos
-                                              ? path.size() - start
-                                              : dot - start);
-            if (!key.empty()) {
-                auto next = cur[key];
-                if (next.error()) return false;
-                cur = next.value_unsafe();
-            }
-            if (dot == std::string_view::npos) break;
-            start = dot + 1;
-        }
-        out = cur;
-        return true;
-    };
-    simdjson::dom::element v;
-    if (walk(col, v)) return scalar(v);
-    if (col.find('.') == std::string_view::npos) {
-        auto nested = root["args"][col];
-        if (!nested.error()) return scalar(nested.value_unsafe());
-    }
+    if (auto v = find_path(root, col)) return scalar_text(*v);
+    auto args = root["args"];
+    if (args.error()) return "";
+    if (auto v = find_path(args.value_unsafe(), col)) return scalar_text(*v);
     return "";
 }
 
@@ -154,7 +124,7 @@ inline std::string extract_group_value(simdjson::dom::element root,
 
 inline std::string extract_group_from_line(std::string_view event,
                                            std::string_view col) {
-    thread_local simdjson::dom::parser parser;
+    thread_local dftracer::utils::json::RecordParser parser;
     thread_local std::string buf;
     buf.assign(event);
     auto res = parser.parse(buf);
@@ -227,7 +197,7 @@ inline void fold_overflow_events(const std::vector<std::string>& big,
                                  const std::vector<std::uint32_t>& overflow,
                                  double threshold, double begin,
                                  DensityMap& dens, std::string_view group_col) {
-    simdjson::dom::parser parser;
+    dftracer::utils::json::RecordParser parser;
     for (std::uint32_t i : overflow) {
         auto res = parser.parse(big[i]);
         if (res.error()) continue;
@@ -244,7 +214,7 @@ inline void fold_overflow_events(const std::vector<std::string>& big,
 static constexpr std::size_t MAX_UNREFERENCED_HASH_RECORDS = 500;
 
 inline void drop_unreferenced_hash_records(std::vector<std::string>& big) {
-    thread_local simdjson::dom::parser parser;
+    thread_local dftracer::utils::json::RecordParser parser;
     thread_local std::string buf;
     ankerl::unordered_dense::set<std::string> referenced;
     std::vector<bool> is_decl(big.size(), false);
@@ -471,7 +441,7 @@ struct CounterAcc {
 
 inline void fold_counter(std::string_view event, double begin, double bucket_us,
                          std::size_t buckets, CounterAcc& acc) {
-    thread_local simdjson::dom::parser parser;
+    thread_local dftracer::utils::json::RecordParser parser;
     thread_local std::string buf;
     buf.assign(event);
     auto res = parser.parse(buf);

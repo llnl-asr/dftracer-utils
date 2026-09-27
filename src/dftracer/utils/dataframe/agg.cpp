@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/to_chars.h>
 #include <dftracer/utils/dataframe/agg/detail.h>
 
 #include <bit>
@@ -30,7 +31,8 @@ std::vector<std::string> agg_group_key(const AggState& st, std::int64_t g) {
         if (kd == FieldStatDomain::U64)
             out.push_back(std::to_string(std::bit_cast<std::uint64_t>(bits)));
         else if (kd == FieldStatDomain::F64)
-            out.push_back(std::to_string(std::bit_cast<double>(bits)));
+            out.push_back(
+                dftracer::utils::double_text(std::bit_cast<double>(bits)));
         else
             out.push_back(std::to_string(bits));
     }
@@ -106,6 +108,7 @@ std::size_t agg_approx_bytes(const AggState& st) {
 
 DataType agg_output_type(AggOp op, TypeId value_type) {
     auto widened = [&] {
+        if (value_type == TypeId::Unknown) return scalar(TypeId::Unknown);
         switch (col_domain(value_type)) {
             case FieldStatDomain::U64:
                 return scalar(TypeId::Uint64);

@@ -124,12 +124,16 @@ TEST_SUITE("expr infer_type") {
         CHECK(infer_type(expr_lower(col(0)), {unk}).id == TypeId::Unknown);
     }
 
+    TEST_CASE("a constant is a column of its type") {
+        CHECK(infer_type(lit(std::int64_t{1}), {scalar(TypeId::Int64)}).id ==
+              TypeId::Int64);
+        CHECK(infer_type(lit(2.5), {scalar(TypeId::Int64)}).id ==
+              TypeId::Float64);
+    }
+
     TEST_CASE("malformed expressions throw, matching eval()'s contract") {
         CHECK_THROWS_AS(infer_type(col(5), {scalar(TypeId::Int64)}),
                         std::invalid_argument);
-        CHECK_THROWS_AS(
-            infer_type(lit(std::int64_t{1}), {scalar(TypeId::Int64)}),
-            std::invalid_argument);
         CHECK_THROWS_AS(infer_type(expr_lower(col(0)), {scalar(TypeId::Int64)}),
                         std::invalid_argument);
     }

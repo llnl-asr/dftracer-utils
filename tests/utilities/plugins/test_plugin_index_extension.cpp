@@ -117,7 +117,7 @@ TEST_CASE("a plugin extension builds, prunes and survives being absent") {
         CHECK_FALSE(ix.explain("v > 5000").at(0).may_match);
 
         NullSink sink;
-        const auto stats = view_of(gz).query(q).sink_json(sink).get();
+        const auto stats = view_of(gz).duql(q).sink_json(sink).get();
         CHECK(stats.events_matched == 9);
         CHECK(stats.chunks_skipped == chunks - 1);
     }
@@ -126,7 +126,7 @@ TEST_CASE("a plugin extension builds, prunes and survives being absent") {
     const auto ex = ix.explain(q).at(0);
     CHECK(pruned(ex) == nullptr);
     CHECK(ex.read.size() == chunks);
-    CHECK(view_of(gz).query(q).collect().get().num_rows() == 9);
+    CHECK(view_of(gz).duql(q).collect().get().num_rows() == 9);
     CHECK(ix.status().needs_work.empty());
 }
 

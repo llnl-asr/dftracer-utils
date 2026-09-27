@@ -8,7 +8,10 @@
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/series.h>
 
+#include <cmath>
 #include <cstring>
+#include <limits>
+#include <type_traits>
 
 namespace dftracer::utils::dataframe {
 namespace {
@@ -47,6 +50,226 @@ void compare_impl(const void* data, std::int64_t length, std::int32_t op,
     }
 }
 
+// An integer as sign and magnitude, so int64 and uint64 bounds mix exactly.
+struct Wide {
+    bool neg = false;
+    std::uint64_t mag = 0;
+};
+
+int wide_cmp(Wide a, Wide b) {
+    if (a.neg != b.neg) return a.neg ? -1 : 1;
+    if (a.mag == b.mag) return 0;
+    return (a.mag < b.mag) != a.neg ? -1 : 1;
+}
+
+Wide wide_of(std::int64_t v) {
+    return v < 0 ? Wide{true, std::uint64_t{0} - static_cast<std::uint64_t>(v)}
+                 : Wide{false, static_cast<std::uint64_t>(v)};
+}
+
+dftu_scalar wide_scalar(Wide w) {
+    dftu_scalar s{};
+    if (w.neg) {
+        s.kind = DFTU_SCALAR_TAG_I64;
+        s.value.i = static_cast<std::int64_t>(std::uint64_t{0} - w.mag);
+    } else {
+        s.kind = DFTU_SCALAR_TAG_U64;
+        s.value.u = w.mag;
+    }
+    return s;
+}
+
+dftu_scalar f64_scalar(double d) {
+    dftu_scalar s{};
+    s.kind = DFTU_SCALAR_TAG_F64;
+    s.value.d = d;
+    return s;
+}
+
+bool integer_bounds(TypeId t, Wide& lo, Wide& hi) {
+    int bits = 0;
+    bool is_signed = true;
+    switch (t) {
+        case TypeId::Int8:
+            bits = 8;
+            break;
+        case TypeId::Int16:
+            bits = 16;
+            break;
+        case TypeId::Int32:
+            bits = 32;
+            break;
+        case TypeId::Int64:
+            bits = 64;
+            break;
+        case TypeId::Uint8:
+            bits = 8;
+            is_signed = false;
+            break;
+        case TypeId::Uint16:
+            bits = 16;
+            is_signed = false;
+            break;
+        case TypeId::Uint32:
+            bits = 32;
+            is_signed = false;
+            break;
+        case TypeId::Uint64:
+            bits = 64;
+            is_signed = false;
+            break;
+        default:
+            return false;
+    }
+    if (is_signed) {
+        const std::uint64_t half = std::uint64_t{1} << (bits - 1);
+        lo = {true, half};
+        hi = {false, half - 1};
+    } else {
+        lo = {false, 0};
+        hi = {false,
+              bits == 64 ? ~std::uint64_t{0} : (std::uint64_t{1} << bits) - 1};
+    }
+    return true;
+}
+
+// Every row satisfies `op` (`all`) or none does, as an op over the column's
+// own range.
+void constant_result(bool all, Wide hi, std::int32_t& op, dftu_scalar& rhs) {
+    op = static_cast<std::int32_t>(all ? CmpOp::Le : CmpOp::Gt);
+    rhs = wide_scalar(hi);
+}
+
+// Rewrites `x <op> rhs` over an integer column into an equivalent op against
+// a value of the column's range, so converting rhs to the column type never
+// rounds, truncates or wraps.
+void exact_integer_rhs(TypeId t, std::int32_t& op, dftu_scalar& rhs) {
+    Wide lo, hi;
+    if (!integer_bounds(t, lo, hi)) return;
+    const auto cmp = static_cast<CmpOp>(op);
+    Wide w;
+    bool frac = false;
+    if (rhs.kind == DFTU_SCALAR_TAG_I64) {
+        w = wide_of(rhs.value.i);
+    } else if (rhs.kind == DFTU_SCALAR_TAG_U64) {
+        w = {false, rhs.value.u};
+    } else if (rhs.kind == DFTU_SCALAR_TAG_F64) {
+        const double d = rhs.value.d;
+        if (std::isnan(d))
+            return constant_result(cmp == CmpOp::Ne, hi, op, rhs);
+        if (d >= 18446744073709551616.0) {
+            w = {false, ~std::uint64_t{0}};
+            frac = true;
+        } else if (d < -9223372036854775808.0) {
+            w = {true, ~std::uint64_t{0}};
+        } else {
+            const double f = std::floor(d);
+            w = f < 0 ? Wide{true, static_cast<std::uint64_t>(-f)}
+                      : Wide{false, static_cast<std::uint64_t>(f)};
+            frac = d != f;
+        }
+    } else {
+        return;
+    }
+    const bool below = wide_cmp(w, lo) < 0;
+    const bool above = frac ? wide_cmp(w, hi) >= 0 : wide_cmp(w, hi) > 0;
+    if (below || above) {
+        const bool all = cmp == CmpOp::Ne ||
+                         (below && (cmp == CmpOp::Gt || cmp == CmpOp::Ge)) ||
+                         (above && (cmp == CmpOp::Lt || cmp == CmpOp::Le));
+        return constant_result(all, hi, op, rhs);
+    }
+    rhs = wide_scalar(w);
+    if (!frac) return;
+    switch (cmp) {
+        case CmpOp::Lt:
+        case CmpOp::Le:
+            op = static_cast<std::int32_t>(CmpOp::Le);
+            break;
+        case CmpOp::Gt:
+        case CmpOp::Ge:
+            op = static_cast<std::int32_t>(CmpOp::Gt);
+            break;
+        case CmpOp::Eq:
+        case CmpOp::Ne:
+            constant_result(cmp == CmpOp::Ne, hi, op, rhs);
+            break;
+    }
+}
+
+// -1/0/1 for an integer against a double that is not NaN, exactly.
+int int_vs_double(Wide k, double d) {
+    if (d >= 18446744073709551616.0) return -1;
+    if (d < -18446744073709551616.0) return 1;
+    const double f = std::floor(d);
+    const Wide fw = f < 0 ? Wide{true, static_cast<std::uint64_t>(-f)}
+                          : Wide{false, static_cast<std::uint64_t>(f)};
+    const int c = wide_cmp(k, fw);
+    if (c != 0) return c;
+    return d > f ? -1 : 0;
+}
+
+// Rewrites `x <op> rhs` over a Float32/Float64 column so rhs is a value of
+// the column type: an integer past the type's exact range or a double
+// between two floats becomes an op against its representable neighbour.
+template <class F>
+void exact_float_rhs(std::int32_t& op, dftu_scalar& rhs) {
+    constexpr F INF = std::numeric_limits<F>::infinity();
+    F near;
+    int c;  // rhs against `near`
+    if (rhs.kind == DFTU_SCALAR_TAG_I64 || rhs.kind == DFTU_SCALAR_TAG_U64) {
+        const Wide k = rhs.kind == DFTU_SCALAR_TAG_I64
+                           ? wide_of(rhs.value.i)
+                           : Wide{false, rhs.value.u};
+        near = rhs.kind == DFTU_SCALAR_TAG_I64 ? static_cast<F>(rhs.value.i)
+                                               : static_cast<F>(rhs.value.u);
+        c = int_vs_double(k, static_cast<double>(near));
+    } else if (rhs.kind == DFTU_SCALAR_TAG_F64) {
+        const double d = rhs.value.d;
+        if (std::is_same_v<F, double> || std::isnan(d) || std::isinf(d)) return;
+        constexpr double MAX =
+            static_cast<double>(std::numeric_limits<F>::max());
+        near = d > MAX    ? std::numeric_limits<F>::max()
+               : d < -MAX ? -std::numeric_limits<F>::max()
+                          : static_cast<F>(d);
+        const double nd = static_cast<double>(near);
+        c = d < nd ? -1 : (d > nd ? 1 : 0);
+    } else {
+        return;
+    }
+    if (c == 0) {
+        rhs = f64_scalar(static_cast<double>(near));
+        return;
+    }
+    const F lower = c > 0 ? near : std::nextafter(near, -INF);
+    const F upper = c > 0 ? std::nextafter(near, INF) : near;
+    switch (static_cast<CmpOp>(op)) {
+        case CmpOp::Lt:
+        case CmpOp::Le:
+            op = static_cast<std::int32_t>(CmpOp::Le);
+            rhs = f64_scalar(static_cast<double>(lower));
+            break;
+        case CmpOp::Gt:
+        case CmpOp::Ge:
+            op = static_cast<std::int32_t>(CmpOp::Ge);
+            rhs = f64_scalar(static_cast<double>(upper));
+            break;
+        case CmpOp::Eq:
+            op = static_cast<std::int32_t>(CmpOp::Lt);
+            rhs = f64_scalar(-std::numeric_limits<double>::infinity());
+            break;
+        case CmpOp::Ne:
+            rhs = f64_scalar(std::numeric_limits<double>::quiet_NaN());
+            break;
+    }
+}
+
+void exact_rhs(TypeId phys, std::int32_t& op, dftu_scalar& rhs) {
+    if (phys == TypeId::Float64) return exact_float_rhs<double>(op, rhs);
+    if (phys == TypeId::Float32) return exact_float_rhs<float>(op, rhs);
+    exact_integer_rhs(phys, op, rhs);
+}
+
 }  // namespace
 }  // namespace dftracer::utils::dataframe
 
@@ -81,6 +304,9 @@ dftu_series* dftu_series_compare(const dftu_series* v, dftu_cmp_op op,
     if (op < static_cast<int32_t>(CmpOp::Gt) ||
         op > static_cast<int32_t>(CmpOp::Ne))
         return nullptr;
+    std::int32_t exact_op = op;
+    dftracer::utils::dataframe::exact_rhs(phys, exact_op, rhs);
+    op = static_cast<dftu_cmp_op>(exact_op);
 
     auto* out = new dftu_series();
     out->type = TypeId::Bool;

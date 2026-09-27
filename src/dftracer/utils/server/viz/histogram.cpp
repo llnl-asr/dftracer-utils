@@ -4,10 +4,10 @@
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
-#include <dftracer/utils/query/query.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
 #include <dftracer/utils/server/json_builder.h>
@@ -18,6 +18,7 @@
 #include <dftracer/utils/server/viz/density.h>
 #include <dftracer/utils/server/viz/handlers.h>
 #include <dftracer/utils/server/viz/internal.h>
+#include <dftracer/utils/server/viz/record_event.h>
 #include <dftracer/utils/server/viz/scan.h>
 #include <dftracer/utils/server/viz/summary_build.h>
 #include <dftracer/utils/server/viz_api.h>
@@ -78,13 +79,13 @@ coro::CoroTask<HttpResponse> handle_viz_histogram(const HttpRequest& req,
         co_return HttpResponse::bad_request(
             "Missing required parameters: begin, end");
 
-    auto win = parse_viz_window(params, index);
+    auto win = parse_viz_window(params, index, req.path);
     if (!win) co_return std::move(win.error());
     double begin = win->begin;
     double end = win->end;
 
-    ViewDefinition view = build_viz_view(params, begin, end, 0);
-    view.with_include_metadata(false);  // aggregate only; skip ph=M records
+    const TraceFields fields(index.record_schema());
+    ViewDefinition view = build_viz_view(params, begin, end, 0, fields);
     int limit = params.get_int("limit", 0);
     if (limit < 0) limit = 0;
     int nbuckets = params.get_int("buckets", 40);
@@ -106,17 +107,16 @@ coro::CoroTask<HttpResponse> handle_viz_histogram(const HttpRequest& req,
     views::View dv =
         views::View::from_files(to_view_files(target_files))
             .phase(views::Phase::Events)
-            .metadata(false)
             .cancel_when([&req]() { return req.cancel_token.cancelled(); });
     if (view.query) dv = dv.filter(*view.query);
-    if (!single_file) dv = dv.time_range(begin, end);
+    if (!single_file || fields.by_path) dv = dv.time_range(begin, end);
     auto scan = co_await dv.map_batches<DurAcc>(
-        [](DurAcc& a, const std::vector<std::string_view>& events) {
-            for (auto e : events) {
+        [&fields](DurAcc& a, const std::vector<std::string_view>& events) {
+            fields.for_each_event(events, [&a](std::string_view e) {
                 EventScalars s;
                 if (parse_event_scalars(e, s) && s.has_dur)
                     a.durs.push_back(s.dur);
-            }
+            });
         },
         [](DurAcc&& x, DurAcc&& y) {
             x.durs.reserve(x.durs.size() + y.durs.size());

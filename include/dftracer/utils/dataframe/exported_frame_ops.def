@@ -55,7 +55,7 @@ DFTU_FRAME_OP(value_counts, dftu_series_value_counts, FRAME, SERIES, NONE, NONE,
  * FRAME-kind op, so it rides args[0].frame rather than frames[]). */
 DFTU_FRAME_OP(is_duplicated, dftu_dataframe_is_duplicated, SERIES, FRAME, NONE, NONE, NONE, NONE, NONE, NONE)
 DFTU_FRAME_OP(is_unique, dftu_dataframe_is_unique, SERIES, FRAME, NONE, NONE, NONE, NONE, NONE, NONE)
-DFTU_FRAME_OP(mask, dftu_dataframe_mask_frame, SERIES, FRAME, QUERY, NONE, NONE, NONE, NONE, NONE)
+DFTU_FRAME_OP(mask, dftu_dataframe_mask_frame, SERIES, FRAME, DUQL, NONE, NONE, NONE, NONE, NONE)
 
 /* table + int64-index list / sampling / dynamic windowed aggregation. */
 DFTU_FRAME_OP(take, dftu_dataframe_take_i32, FRAME, FRAME, I64LIST, NONE, NONE, NONE, NONE, NONE)

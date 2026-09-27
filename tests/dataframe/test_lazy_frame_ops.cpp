@@ -12,7 +12,9 @@
 #include <dftracer/utils/dataframe/op.h>
 #include <doctest/doctest.h>
 
+#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -394,6 +396,119 @@ TEST_SUITE("lazy frame ops") {
         dftu_dataframe_free(h);
     }
 
+    TEST_CASE("an Int64 sum that overflows is null, in Int64") {
+        using dftracer::utils::dataframe::Agg;
+        using dftracer::utils::dataframe::GroupAgg;
+        constexpr std::int64_t BIG = std::numeric_limits<std::int64_t>::max();
+        // Group x overflows upward and y downward; z wraps and wraps back, so
+        // its sum fits.
+        const std::int64_t v[7] = {BIG, 1, -BIG, -2, BIG, 1, -1};
+        auto frame = [&] {
+            DataFrame df;
+            df.names = {"k", "v"};
+            df.columns.push_back(
+                Series::strings({"x", "x", "y", "y", "z", "z", "z"}));
+            df.columns.push_back(Series::flat_i64(v, 7));
+            return df;
+        };
+        const std::vector<I> want{NI, NI, BIG};
+        DataFrame eager = frame().group_by({"k"}).sum();
+        CHECK(eager.column("v").type() == TypeId::Int64);
+        CHECK(i64_col(eager, "v") == want);
+        const std::vector<GroupAgg> aggs{GroupAgg{Agg::Sum, "v", "s"},
+                                         GroupAgg{Agg::Max, "v", "m"}};
+        for (std::int64_t morsel : std::vector<std::int64_t>{0, 1, 2}) {
+            DataFrame out =
+                run(scan(frame())
+                        .group_by(std::vector<std::string>{"k"}, aggs)
+                        .sort_by("k")
+                        .collect(morsel));
+            CHECK(out.column("s").type() == TypeId::Int64);
+            CHECK(i64_col(out, "s") == want);
+            CHECK(i64_col(out, "m") == std::vector<I>{BIG, -2, BIG});
+        }
+        DataFrame spilled =
+            run(scan(frame())
+                    .memory_budget(1)
+                    .group_by(std::vector<std::string>{"k"}, aggs)
+                    .sort_by("k")
+                    .collect(1));
+        CHECK(i64_col(spilled, "s") == want);
+    }
+
+    TEST_CASE("head_by: first n rows per key, in input order") {
+        // k = [a, b, a, null, a, b, null, c], v = 0..7
+        const std::int64_t kv[8] = {1, 2, 1, 0, 1, 2, 0, 3};
+        const std::uint8_t kvalid[1] = {0xB7};
+        auto frame = [&] {
+            DataFrame df;
+            df.names = {"k", "j", "v"};
+            df.columns.push_back(Series::flat_i64(kv, 8, kvalid));
+            df.columns.push_back(i64s({0, 0, 1, 0, 0, 1, 0, 0}));
+            df.columns.push_back(i64s({0, 1, 2, 3, 4, 5, 6, 7}));
+            return df;
+        };
+        CHECK(scan(frame()).head_by({"k"}, 2).explain().find("head_by [k] 2") !=
+              std::string::npos);
+        for (std::int64_t morsel : std::vector<std::int64_t>{0, 1, 3}) {
+            CAPTURE(morsel);
+            DataFrame two =
+                run(scan(frame()).head_by({"k"}, 2).collect(morsel));
+            CHECK(i64_col(two, "v") == std::vector<I>{0, 1, 2, 3, 5, 6, 7});
+            CHECK(i64_col(two, "k") == std::vector<I>{1, 2, 1, NI, 2, NI, 3});
+            DataFrame one =
+                run(scan(frame()).head_by({"k"}, 1).collect(morsel));
+            CHECK(i64_col(one, "v") == std::vector<I>{0, 1, 3, 7});
+            DataFrame multi =
+                run(scan(frame()).head_by({"k", "j"}, 1).collect(morsel));
+            CHECK(i64_col(multi, "v") == std::vector<I>{0, 1, 2, 3, 5, 7});
+            CHECK(run(scan(frame()).head_by({"k"}, 0).collect(morsel))
+                      .num_rows() == 0);
+            CHECK(i64_col(run(scan(frame()).head_by({}, 3).collect(morsel)),
+                          "v") == std::vector<I>{0, 1, 2});
+        }
+        CHECK_THROWS_AS(scan(frame()).head_by({"nope"}, 1), std::out_of_range);
+
+        // Equal numbers are one key: 0.0 and -0.0, and every NaN.
+        const double fv[5] = {0.0, -0.0, std::nan(""), -std::nan(""), 1.5};
+        DataFrame fdf;
+        fdf.names = {"f", "v"};
+        fdf.columns.push_back(Series::flat_f64(fv, 5));
+        fdf.columns.push_back(i64s({0, 1, 2, 3, 4}));
+        CHECK(i64_col(run(scan(std::move(fdf)).head_by({"f"}, 1).collect(1)),
+                      "v") == std::vector<I>{0, 2, 4});
+
+        dftu_dataframe* h = to_abi(frame());
+        REQUIRE(h);
+        dftu_lazyframe* lh = dftu_dataframe_lazy(h);
+        const char* keys[1] = {"k"};
+        dftu_lazyframe* lazy = dftu_lazyframe_head_by(lh, keys, 1, 2);
+        REQUIRE(lazy);
+        dftu_dataframe* lazy_out = dftu_lazyframe_collect(lazy, 0);
+        REQUIRE(lazy_out);
+        CHECK(dftu_dataframe_num_rows(lazy_out) == 7);
+        CHECK(dftu_lazyframe_head_by(nullptr, keys, 1, 2) == nullptr);
+        CHECK(dftu_lazyframe_head_by(lh, nullptr, 1, 2) == nullptr);
+        const char* bad[1] = {"nope"};
+        CHECK(dftu_lazyframe_head_by(lh, bad, 1, 2) == nullptr);
+        const dftu_lazyframe* in1[1] = {lh};
+        OpArgs arg;
+        arg.strlist(1, keys, 1);
+        arg.i64(2, 1);
+        dftu_lazyframe* via_op =
+            dftu_op_run_lazy(dftu_op_find("dftu.lazy.head_by"), in1, 1, arg);
+        REQUIRE(via_op);
+        dftu_dataframe* op_out = dftu_lazyframe_collect(via_op, 0);
+        REQUIRE(op_out);
+        CHECK(dftu_dataframe_num_rows(op_out) == 4);
+        dftu_dataframe_free(op_out);
+        dftu_lazyframe_free(via_op);
+        dftu_dataframe_free(lazy_out);
+        dftu_lazyframe_free(lazy);
+        dftu_lazyframe_free(lh);
+        dftu_dataframe_free(h);
+    }
+
     TEST_CASE("C ABI and registry rows") {
         dftu_dataframe* b = to_abi(make_base());
         dftu_dataframe* v = to_abi(make_variant());
@@ -432,7 +547,7 @@ TEST_SUITE("lazy frame ops") {
         REQUIRE(fo);
         char* fo_plan = dftu_lazyframe_explain(fo);
         REQUIRE(fo_plan);
-        dftu_query_string_free(fo_plan);
+        dftu_duql_string_free(fo_plan);
         // With the names given, a later op resolves them before collect.
         dftu_lazyframe* sorted = dftu_lazyframe_sort_by(fo, "n", 0);
         REQUIRE(sorted);

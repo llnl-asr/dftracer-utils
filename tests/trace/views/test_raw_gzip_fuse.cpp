@@ -3,10 +3,11 @@
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
-#include <dftracer/utils/index/extensions/dict_fold.h>
+#include <dftracer/utils/index/extensions/rowset_fold.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/index/source.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -49,7 +50,7 @@ ViewPlan count_plan(const std::string& gz, const std::string& idx) {
 }
 
 // FH/HH metadata (ph=M, cat "dftracer") plus data events (ph=X, POSIX/STDIO).
-// The metadata must land in the dictionary but NOT in a cat aggregation.
+// The metadata must land in the row sets but NOT in a cat aggregation.
 std::string create_meta_trace(TestEnvironment& env) {
     std::string pfw = env.get_dir() + "/mt.pfw";
     {
@@ -104,7 +105,7 @@ TEST_SUITE("RawGzipFuse") {
     // builds the full index (members + bloom + hash), with no prior index.
     // build_gzip_index_artifacts walks the members and decompresses once;
     // IndexFoldDriver fans that single parse to AggFold (the query) and
-    // BloomFold + DictFold (the index).
+    // BloomFold + RowSetFold (the index).
     TEST_CASE("one raw-gzip pass fuses aggregation with the index build") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
@@ -139,9 +140,9 @@ TEST_SUITE("RawGzipFuse") {
         StringIntern intern;
         gmoracle::OracleAggFold agg(pp, intern);
         BloomFold bloom(intern);
-        DictFold dict(
-            intern,
-            dftracer::utils::index::get_schema("dftracer").dictionaries);
+        RowSetFold dict(intern,
+                        dftracer::utils::index::indexed_rowsets(
+                            dftracer::utils::index::get_schema("dftracer")));
         std::array<Fold*, 3> folds{&agg, &bloom, &dict};
         IndexFoldDriver driver(intern, folds, gz, idx);
 
@@ -195,8 +196,7 @@ TEST_SUITE("RawGzipFuse") {
         CHECK(proto.count("dftracer") == 0);  // metadata kept out of the agg
 
         // The index that same pass produced is complete: bloom, members, and
-        // the hash dictionary harvested from the very metadata the agg
-        // excluded.
+        // the row sets harvested from the very metadata the agg excluded.
         dftracer::utils::index::store::IndexDatabase rd(
             idx, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
         int rid = rd.get_file_info_id(
@@ -205,8 +205,7 @@ TEST_SUITE("RawGzipFuse") {
         CHECK(rd.pruning_tier_current(rid));
         CHECK(!arts.members.empty());
         CHECK(dftu_utils_test::bloom_chunks(rd, rid, "name") > 0);
-        auto fh = rd.dict_field("file", "path");
-        CHECK(fh.count("fh1") == 1);  // metadata went into the dictionary
+        CHECK(rd.rowset(rid, "files").has_value());
     }
 
     // End to end through the public View API: a collect on a file with no index
@@ -253,7 +252,7 @@ TEST_SUITE("RawGzipFuse") {
     // verbatim (both ph="M" metadata records and all data events, unlike the
     // indexed scanner which reconstructs only FH metadata) AND leaves a
     // complete bloom index behind.
-    TEST_CASE("View.sink_json on a first-touch file bootstraps every line") {
+    TEST_CASE("View.sink_json on a first-touch file bootstraps the data") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_meta_trace(env);  // 2 metadata + 20 data events
@@ -264,10 +263,15 @@ TEST_SUITE("RawGzipFuse") {
         View::from_file(gz, idx).sink_json(boot).get();  // bootstrap path
 
         auto lines = boot.lines();
-        CHECK(lines.size() == 22);
-        CHECK(count_containing(lines, R"("name":"FH")") == 1);  // metadata
-        CHECK(count_containing(lines, R"("name":"HH")") == 1);  // metadata
-        CHECK(count_containing(lines, R"("ph":"X")") == 20);    // data events
+        CHECK(lines.size() == 20);
+        CHECK(count_containing(lines, R"("ph":"M")") == 0);
+        CHECK(count_containing(lines, R"("ph":"X")") == 20);
+
+        StringSink all;
+        View::from_file(gz, idx).phase(Phase::Any).sink_json(all).get();
+        CHECK(all.lines().size() == 22);
+        CHECK(count_containing(all.lines(), R"("name":"FH")") == 1);
+        CHECK(count_containing(all.lines(), R"("name":"HH")") == 1);
 
         dftracer::utils::index::store::IndexDatabase rd(
             idx, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
@@ -292,7 +296,7 @@ TEST_SUITE("RawGzipFuse") {
             View::from_file(gz, ref_idx).sink_json(s).get();
         }
         auto ref = View::from_file(gz, ref_idx)
-                       .query(R"(cat == "POSIX")")
+                       .duql(R"(cat == "POSIX")")
                        .group_by({GroupKey::cat()})
                        .agg({{AggOp::Count, "", "n"}})
                        .collect()
@@ -302,7 +306,7 @@ TEST_SUITE("RawGzipFuse") {
         std::string fresh = determine_index_path(gz, env.get_dir() + "/ff");
         REQUIRE_FALSE(fs::exists(fresh));
         auto got = View::from_file(gz, fresh)
-                       .query(R"(cat == "POSIX")")
+                       .duql(R"(cat == "POSIX")")
                        .group_by({GroupKey::cat()})
                        .agg({{AggOp::Count, "", "n"}})
                        .collect()
@@ -332,7 +336,7 @@ TEST_SUITE("RawGzipFuse") {
             View::from_file(gz, ref_idx).sink_json(s).get();
         }
         auto ref = View::from_file(gz, ref_idx)
-                       .query(R"(fhash == "fh1")")
+                       .duql(R"(fhash == "fh1")")
                        .group_by({GroupKey::cat()})
                        .agg({{AggOp::Count, "", "n"}})
                        .collect()
@@ -340,7 +344,7 @@ TEST_SUITE("RawGzipFuse") {
 
         std::string fresh = determine_index_path(gz, env.get_dir() + "/nf");
         auto got = View::from_file(gz, fresh)
-                       .query(R"(fhash == "fh1")")
+                       .duql(R"(fhash == "fh1")")
                        .group_by({GroupKey::cat()})
                        .agg({{AggOp::Count, "", "n"}})
                        .collect()

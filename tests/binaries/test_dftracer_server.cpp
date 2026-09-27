@@ -1056,7 +1056,7 @@ TEST_CASE(
     CHECK(page.find("\"offset\":2") != std::string::npos);
     CHECK(page.find("\"dur\":7") != std::string::npos);
     CHECK(page.find("\"dur\":9") == std::string::npos);
-    CHECK(get("/api/viz/untimed?query=cat%20%3D%3D%20%22POSIX%22")
+    CHECK(get("/api/viz/untimed?duql=cat%20%3D%3D%20%22POSIX%22")
               .find("\"count\":0") != std::string::npos);
 }
 

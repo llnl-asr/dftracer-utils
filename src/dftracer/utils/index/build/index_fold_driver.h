@@ -5,6 +5,7 @@
 #include <dftracer/utils/index/build/index_visitor.h>
 #include <dftracer/utils/index/extensions/plugin_extension.h>
 #include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/trace/parse_inflated.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
@@ -46,8 +47,12 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         }
     }
 
-    /// Decode records with `decoder` rather than as dftracer events.
-    void set_decoder(index::Decoder decoder) { decoder_ = decoder; }
+    /// Decode records as `schema` says: by path with its declared fields, or
+    /// as dftracer events. `schema` is registered, so it outlives the driver.
+    void set_record_schema(const index::RecordSchema& schema) {
+        decoder_ = schema.decoder;
+        record_schema_ = schema.fields.empty() ? nullptr : &schema;
+    }
 
     /// Also hand each chunk's record lines to `builders`, which must outlive
     /// the parse.
@@ -83,8 +88,9 @@ class IndexFoldDriver : public index::build::IndexVisitor {
                     if (!root.is_object()) return;
                     ++line_number_;
                     if (builders_) lines_.push_back(line);
-                    batch_.push_back(
-                        trace::views::detail::decode_record(root, *intern_));
+                    batch_.push_back(trace::views::detail::decode_record(
+                        root, *intern_, true, nullptr, record_schema_, nullptr,
+                        trace::views::detail::INDEX_MAX_CHILDREN));
                 });
         } else {
             truncated = trace::parse_buffer(
@@ -137,9 +143,10 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     dftracer::utils::StringIntern* intern_;
     std::vector<trace::views::detail::Fold*> folds_;
     index::Decoder decoder_ = index::Decoder::DFTRACER;
+    const index::RecordSchema* record_schema_ = nullptr;
     bool needs_args_ = false;
     bool capture_schema_ = false;
-    simdjson::dom::parser parser_;
+    dftracer::utils::json::RecordParser parser_;
     std::string partial_;
     std::size_t line_number_ = 0;
     std::string file_path_;

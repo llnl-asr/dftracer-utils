@@ -190,7 +190,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             auto gen = async_indexed_file_bytes(nullptr, 0, 100);
 
             auto task = [](AsyncGenerator<Line> g) -> CoroTask<void> {
-                (void)co_await g.next();
+                co_await g.next();
                 co_return;
             }(std::move(gen));
 
@@ -213,7 +213,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             auto gen = async_indexed_file_bytes(reader, 100, 100);
 
             auto task = [](AsyncGenerator<Line> g) -> CoroTask<void> {
-                (void)co_await g.next();
+                co_await g.next();
                 co_return;
             }(std::move(gen));
 

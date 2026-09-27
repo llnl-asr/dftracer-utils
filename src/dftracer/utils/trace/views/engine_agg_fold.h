@@ -4,7 +4,7 @@
 #include <dftracer/utils/core/common/string_intern.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
-#include <dftracer/utils/query/query.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/trace/views/aggfold.h>
 #include <dftracer/utils/trace/views/batch_bridge.h>
 #include <dftracer/utils/trace/views/event_source.h>
@@ -13,6 +13,7 @@
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_plan.h>
+#include <dftracer/utils/trace/views/view_scan.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -38,11 +39,8 @@ class EngineAggFold : public Fold {
           spec_(make_agg_input_spec(plan)),
           lowered_(dftracer::utils::dataframe::lower_group_aggs(spec_.gaggs)),
           phase_target_(agg_phase_target(plan)),
+          keep_metadata_(metadata_rows(plan)),
           apply_query_(apply_query && plan.query.has_value()),
-          want_ranks_(std::any_of(plan.group_by.begin(), plan.group_by.end(),
-                                  [](const GroupKey& g) {
-                                      return g.kind == GroupKey::Kind::Rank;
-                                  })),
           resolver_(spec_.transform_wants_resolver ? ensure_resolver(plan)
                                                    : nullptr),
           state_(dftracer::utils::dataframe::agg_new(lowered_.specs,
@@ -56,9 +54,7 @@ class EngineAggFold : public Fold {
             return true;
         for (const auto& gk : plan_->group_by)
             if (gk.kind == GroupKey::Kind::Arg ||
-                gk.kind == GroupKey::Kind::Field ||
-                gk.kind == GroupKey::Kind::Rank ||
-                gk.kind == GroupKey::Kind::Resolved)
+                gk.kind == GroupKey::Kind::Field)
                 return true;
         for (const auto& spec : plan_->agg) {
             if (!arg_free_field(spec.field)) return true;
@@ -80,10 +76,9 @@ class EngineAggFold : public Fold {
     void step(const FoldBatch& batch) override {
         std::vector<FoldEvent> keep =
             select_events(batch, [&](const FoldEvent& ev) {
-                if (ev.phase == RecordPhase::METADATA) {
-                    if (want_ranks_) harvest_pr_rank(ev, *intern_, ranks_);
-                    if (phase_target_ != RecordPhase::METADATA) return false;
-                }
+                if (ev.phase == RecordPhase::METADATA && !keep_metadata_ &&
+                    phase_target_ != RecordPhase::METADATA)
+                    return false;
                 if (phase_target_ != RecordPhase::UNKNOWN &&
                     ev.phase != phase_target_)
                     return false;
@@ -104,16 +99,11 @@ class EngineAggFold : public Fold {
     void merge(Fold& other) override {
         auto& o = static_cast<EngineAggFold&>(other);
         dftracer::utils::dataframe::agg_merge(*state_, *o.state_);
-        for (auto& [p, r] : o.ranks_) ranks_.emplace(p, std::move(r));
-        o.ranks_.clear();
     }
 
     coro::CoroTask<bool> finalize(const CoverageSet&) override {
         co_return true;
     }
-
-    /// pid -> rank harvested from PR metadata; empty without a Rank key.
-    std::unordered_map<std::uint64_t, std::string>& ranks() { return ranks_; }
 
     /// The merged partial; the caller finalizes, serializes, or merges it.
     dftracer::utils::dataframe::AggState& state() { return *state_; }
@@ -130,12 +120,11 @@ class EngineAggFold : public Fold {
     AggInputSpec spec_;
     dftracer::utils::dataframe::LoweredGroupAggs lowered_;
     RecordPhase phase_target_;
+    bool keep_metadata_;
     bool apply_query_ = false;
-    bool want_ranks_ = false;
     const dftracer::utils::index::plan::GroupResolver* resolver_ = nullptr;
     dftracer::utils::dataframe::AggStatePtr state_;
-    std::unordered_map<std::uint64_t, std::string> ranks_;
-    query::ValueMap qmap_;
+    duql::ValueMap qmap_;
 };
 
 }  // namespace dftracer::utils::trace::views::detail

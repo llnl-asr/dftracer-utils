@@ -4,10 +4,10 @@
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
-#include <dftracer/utils/query/query.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
 #include <dftracer/utils/server/json_builder.h>
@@ -125,7 +125,7 @@ void register_viz_api(Router& router, TraceIndex& index) {
             "Records written without a clock (ts 0), which the timeline "
             "cannot place; paged, longest first.",
             "Visualization",
-            {{"query", "DSL predicate, e.g. cat == \"CUDA_KERNEL\"", false, ""},
+            {{"duql", "duql predicate, e.g. cat == \"CUDA_KERNEL\"", false, ""},
              {"offset", "First record of the page", false, "0"},
              {"limit", "Records per page, at most 10000", false, "1000"}},
             R"({"events":[],"count":0,"offset":0,"limit":1000})"});
@@ -139,7 +139,7 @@ void register_viz_api(Router& router, TraceIndex& index) {
                   SUMMARY,
                   {"pid", "Filter by process id", false, ""},
                   {"cat", "Filter by category", false, ""},
-                  {"query", "DSL predicate, e.g. dur >= 1000", false, ""}},
+                  {"duql", "duql predicate, e.g. dur >= 1000", false, ""}},
                  R"({"events":[],"metadata":{"begin":0,"end":1000000,)"
                  R"("count":42,"truncated":false,"ts_normalized":true}})"});
 
@@ -183,7 +183,7 @@ void register_viz_api(Router& router, TraceIndex& index) {
                  {BEGIN,
                   END,
                   SUMMARY,
-                  {"query", "DSL predicate to narrow to one op", false, ""}},
+                  {"duql", "duql predicate to narrow to one op", false, ""}},
                  R"({"min":10,"max":900,"p50":150,"p99":880,"buckets":[]})"});
 
     router.get(

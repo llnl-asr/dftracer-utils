@@ -75,7 +75,7 @@ or ``detailed`` (per-operation duration and I/O distributions, grouped by
 ``--filter-names`` / ``--filter-cats`` restrict which events are scanned,
 ``--json`` switches to machine-readable output, and ``--no-auto-index``
 refuses to build a missing index instead of doing it implicitly. It shares the
-directory/files, ``--index-dir``, ``--query``, and executor-thread flags
+directory/files, ``--index-dir``, ``--duql``, and executor-thread flags
 common to the other CLI tools; run ``dftracer_stats --help`` for the full list.
 
 Whole-trace summary

@@ -3,13 +3,16 @@
 import json
 import os
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Set, Tuple, Type, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Set, Tuple, Type, Union
 
 from ._units import coerce_bytes, coerce_duration
 from .dftracer_utils_ext import CheckpointIndexer as _NativeCheckpointIndexer
 from .dftracer_utils_ext import Indexer as _NativeIndexer
 from .runtime import Runtime
 from .schemas import RecordSchema, schema_id
+
+if TYPE_CHECKING:
+    from .dataframe import DataFrame
 
 DEFAULT_CHECKPOINT_SIZE = 32 * 1024 * 1024  # 32MB
 
@@ -115,8 +118,8 @@ class Indexer:
     At least one of 'directory' or 'files' must be provided.
 
     Args:
-        directory: Directory containing trace files (.pfw, .pfw.gz, .jsonl.gz,
-            .ndjson.gz).
+        directory: Directory containing trace files (.pfw, .jsonl
+            and .ndjson, plain or gzip).
         files: List of specific file paths to index.
         index_dir: Directory for .dftindex stores (default: next to files).
         require_checkpoint: Build checkpoint tier (default True).
@@ -274,7 +277,7 @@ class Indexer:
         """
         return json.loads(self._native.manifest())
 
-    def explain(self, query: str) -> List[dict]:
+    def explain(self, duql: str) -> List[dict]:
         """Why a query reads the chunks it reads, per file. Writes nothing.
 
         Returns:
@@ -284,9 +287,9 @@ class Indexer:
             chunks that extension rules out alone).
 
         Raises:
-            DFTUtilsValueError: The query does not parse.
+            DFTUtilsValueError: The duql text does not parse.
         """
-        return json.loads(self._native.explain(query))
+        return json.loads(self._native.explain(duql))
 
     def rebuild_extension(self, name: str) -> IndexStatus:
         """Rewrite one tier extension of every file, leaving the others.
@@ -324,23 +327,28 @@ class Indexer:
         """
         return self._native.get_checkpoint_indexer(file_path)
 
-    def get_dictionary(self, name: str, field: str) -> dict:
-        """Key -> `field` of every row of the index dictionary `name`.
+    def rowset(self, name: str) -> "DataFrame":
+        """The rows the index build stored for row set `name` of the files'
+        source, every indexed file's in order.
 
-        The dftracer schema has the dictionaries ``file`` (field ``path``),
-        ``host`` (``name``) and ``string`` (``value``), keyed by the hashes
-        its events carry.
+        The dftracer source stores ``files`` (``fhash``, ``path``), ``hosts``
+        (``hhash``, ``name``), ``strings`` (``shash``, ``value``) and
+        ``ranks`` (``pid``, ``rank``).
 
         Raises:
-            ValueError: If `name` has no field `field`.
+            DFTUtilsValueError: If an index holds no rows for `name` (a row set the
+                build does not evaluate, or an index built before it); read
+                it with ``TraceViewer.duql("from <name>")``.
 
         Example:
             >>> indexer = Indexer("/path/to/traces")
             >>> indexer.ensure_indexed()
-            >>> paths = indexer.get_dictionary("file", "path")
-            >>> # paths = {"abc123": "/path/to/data.h5", ...}
+            >>> files = indexer.rowset("files").to_dict()
+            >>> # files = {"fhash": ["abc123", ...], "path": ["/data.h5", ...]}
         """
-        return self._native.get_dictionary(name, field)
+        from .dataframe import DataFrame
+
+        return DataFrame(self._native.rowset(name))
 
     def query_file_pids(self, file_id: int) -> set:
         """Query PIDs observed in a specific file.

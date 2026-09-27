@@ -204,30 +204,12 @@ void put_catalog_path(IndexWrite& w, int file_id, std::string_view path,
               layout::encode_path_stat(stat));
 }
 
-void put_dict_row(
-    IndexWrite& w, std::string_view dict, std::string_view key,
-    const std::vector<std::pair<std::string, std::string>>& fields) {
-    auto row = layout::file_prefix(Ext::DICT, layout::dict_kind::ROW,
-                                   layout::INDEX_WIDE);
-    row.append(dict);
-    row.push_back('\0');
-    row.append(key);
-    put_value(w, Ext::DICT, layout::dict_kind::ROW, row,
-              layout::encode_dict_row(fields));
-    // Keyed by value and key: traces may hash one name differently, and a
-    // value must resolve to every key it has.
-    for (const auto& [field, value] : fields) {
-        auto rev = layout::file_prefix(Ext::DICT, layout::dict_kind::VALUE,
-                                       layout::INDEX_WIDE);
-        rev.append(dict);
-        rev.push_back('\0');
-        rev.append(field);
-        rev.push_back('\0');
-        rev.append(value);
-        rev.push_back('\0');
-        rev.append(key);
-        put_value(w, Ext::DICT, layout::dict_kind::VALUE, rev, {});
-    }
+void put_rowset(IndexWrite& w, int file_id, std::string_view name,
+                std::string_view frame) {
+    put_value(w, Ext::ROWSET, layout::rowset_kind::FRAME,
+              layout::path_prefix(Ext::ROWSET, layout::rowset_kind::FRAME,
+                                  fid(file_id), name),
+              frame);
 }
 
 }  // namespace dftracer::utils::index::store::records

@@ -187,7 +187,7 @@ The predicate here matches the raw JSON field, not a group key, so its case
 sensitivity is unaffected by the lowercasing ``group_by({GroupKey::cat()})``
 does in step 2: ``F("cat") == "POSIX"`` only matches events whose ``cat`` field
 is literally ``"POSIX"``. ``fold`` accepts the ``F`` predicate directly (it
-derives the pushdown ``Query`` via ``.to_query()``); a predicate that mixes in
+derives the pushdown ``Query`` via ``.to_duql()``); a predicate that mixes in
 value ops is not pushable and throws. Reading the ``Deferred<P>`` the callback
 returns (via ``get()``/``*``/``->``) before the branch's scan has run throws -
 ``posix_dur_sum_plan.collect()`` is what runs that scan and resolves it, so the

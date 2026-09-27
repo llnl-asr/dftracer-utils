@@ -106,8 +106,11 @@ TEST_SUITE("IndexDatabase") {
             dftu_utils_test::index_records::put_path(
                 *writer, dftu_utils_test::IndexExtension::BLOOM, file_id,
                 "name");
-            dftu_utils_test::index_records::put_dict_row(
-                *writer, "file", "hashA", {{"path", "resolvedA"}});
+            dftu_utils_test::index_records::put_rowset(*writer, file_id,
+                                                       "files", "frame");
+            dftu_utils_test::index_records::put_manifest(
+                *writer, file_id,
+                dftracer::utils::index::store::IndexExtension::ROWSET, 0);
             dftu_utils_test::mark_built(*writer, file_id);
             writer->commit();
         }
@@ -115,7 +118,7 @@ TEST_SUITE("IndexDatabase") {
         CHECK(db.extension_current(
             file_id, dftracer::utils::index::store::IndexExtension::BLOOM));
         CHECK(dftu_utils_test::has_file_bloom(db, file_id, "name"));
-        CHECK(db.dict_value("file", "hashA", "path").has_value());
+        CHECK(db.rowset(file_id, "files") == "frame");
 
         int rebuilt_id;
         {
@@ -133,7 +136,7 @@ TEST_SUITE("IndexDatabase") {
             file_id, dftracer::utils::index::store::IndexExtension::BLOOM));
         CHECK_FALSE(dftu_utils_test::has_file_bloom(db, file_id, "name"));
         CHECK(dftu_utils_test::bloom_chunks(db, file_id, "name") == 0);
-        CHECK(db.dict_value("file", "hashA", "path").has_value());
+        CHECK(db.rowset(file_id, "files") == "frame");
     }
 
     TEST_CASE("writer context batches multiple files and all are readable") {

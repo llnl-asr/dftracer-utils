@@ -91,8 +91,8 @@ void check_metadata_variant(bool numeric_ph) {
 
     // The query filter applies to metadata rows (both collect paths).
     ScanPlan filtered =
-        scan::query(scan::phase(scan::from_file(gz, idx), Phase::Metadata),
-                    "args.name == \"time_metric\"");
+        scan::filter(scan::phase(scan::from_file(gz, idx), Phase::Metadata),
+                     duql::parse_or_throw("args.name == \"time_metric\""));
     dataframe::LazyFrame filtered_lazy = scan::collect(filtered);
     dataframe::DataFrame f_lazy = run(filtered_lazy.collect());
     dataframe::DataFrame f_eager = run(scan::collect_frame(filtered));
@@ -102,8 +102,8 @@ void check_metadata_variant(bool numeric_ph) {
 
     // A non-matching metadata filter returns nothing (the filter really runs).
     ScanPlan no_match =
-        scan::query(scan::phase(scan::from_file(gz, idx), Phase::Metadata),
-                    "args.name == \"nope\"");
+        scan::filter(scan::phase(scan::from_file(gz, idx), Phase::Metadata),
+                     duql::parse_or_throw("args.name == \"nope\""));
     dataframe::LazyFrame no_match_lazy = scan::collect(no_match);
     CHECK(run(no_match_lazy.collect()).num_rows() == 0);
     CHECK(run(scan::collect_frame(no_match)).num_rows() == 0);
@@ -167,7 +167,7 @@ std::string create_threaded_trace(TestEnvironment& env) {
 }  // namespace
 
 TEST_SUITE("View - metadata under pruning") {
-    TEST_CASE("the index counts metadata and context records per chunk") {
+    TEST_CASE("the index counts metadata records per chunk") {
         TestEnvironment env(200);
         const std::string gz = create_threaded_trace(env);
         dftracer::utils::index::store::IndexDatabase db(
@@ -177,30 +177,32 @@ TEST_SUITE("View - metadata under pruning") {
             dftracer::utils::index::store::internal::get_logical_path(gz));
         auto counts = db.chunk_metadata(fid);
         REQUIRE(counts.has_value());
-        std::uint64_t records = 0, context = 0, with_context = 0;
+        std::uint64_t records = 0, with_records = 0;
         for (const auto& [chunk, m] : *counts) {
             records += m.records;
-            context += m.context;
-            with_context += m.context > 0 ? 1 : 0;
+            with_records += m.records > 0 ? 1 : 0;
         }
         CHECK(records == 44);
-        CHECK(context == 40);
-        CHECK(with_context > 1);
-        CHECK(with_context < counts->size());
+        CHECK(with_records > 1);
+        CHECK(with_records < counts->size());
     }
 
-    TEST_CASE("a pruned export keeps every thread_name record") {
+    TEST_CASE("metadata records are rows only under all") {
         TestEnvironment env(200);
         const std::string gz = create_threaded_trace(env);
         const std::string idx = determine_index_path(gz, "");
-        StringSink full;
-        View::from_file(gz, idx).sink_json(full).get();
+        StringSink data;
+        View::from_file(gz, idx).sink_json(data).get();
+        CHECK(count_containing(data.lines(), "thread_name") == 0);
+        StringSink every;
+        View::from_file(gz, idx).phase(Phase::Any).sink_json(every).get();
+        CHECK(count_containing(every.lines(), "thread_name") == 40);
         StringSink pruned;
         View::from_file(gz, idx)
-            .query(R"(name == "open")")
+            .phase(Phase::Any)
+            .duql(R"(name in ["open", "thread_name"])")
             .sink_json(pruned)
             .get();
-        CHECK(count_containing(full.lines(), "thread_name") == 40);
         CHECK(count_containing(pruned.lines(), "thread_name") == 40);
         CHECK(count_containing(pruned.lines(), R"("name":"open")") == 50);
     }
@@ -210,12 +212,12 @@ TEST_SUITE("View - metadata under pruning") {
         const std::string gz = create_threaded_trace(env);
         const std::string idx = determine_index_path(gz, "");
         ScanPlan q =
-            scan::query(scan::phase(scan::from_file(gz, idx), Phase::Metadata),
-                        R"(args.name == "t37")");
+            scan::filter(scan::phase(scan::from_file(gz, idx), Phase::Metadata),
+                         duql::parse_or_throw(R"(args.name == "t37")"));
         CHECK(run(scan::collect_frame(q)).num_rows() == 1);
         ScanPlan all =
-            scan::query(scan::phase(scan::from_file(gz, idx), Phase::Metadata),
-                        R"(name == "thread_name")");
+            scan::filter(scan::phase(scan::from_file(gz, idx), Phase::Metadata),
+                         duql::parse_or_throw(R"(name == "thread_name")"));
         CHECK(run(scan::collect_frame(all)).num_rows() == 40);
     }
 
@@ -257,12 +259,13 @@ TEST_SUITE("View - metadata under pruning") {
                     .has_value());
         }
         ScanPlan all =
-            scan::query(scan::phase(scan::from_file(gz, idx), Phase::Metadata),
-                        R"(name == "thread_name")");
+            scan::filter(scan::phase(scan::from_file(gz, idx), Phase::Metadata),
+                         duql::parse_or_throw(R"(name == "thread_name")"));
         CHECK(run(scan::collect_frame(all)).num_rows() == 40);
         StringSink pruned;
         View::from_file(gz, idx)
-            .query(R"(name == "open")")
+            .phase(Phase::Any)
+            .duql(R"(name in ["open", "thread_name"])")
             .sink_json(pruned)
             .get();
         CHECK(count_containing(pruned.lines(), "thread_name") == 40);
@@ -302,7 +305,7 @@ TEST_SUITE("View - metadata under pruning") {
         const std::string gz = create_threaded_trace(env);
         namespace ip = dftracer::utils::index::plan;
         auto chunks = [&](const std::string& text, ip::MetadataUse use) {
-            const auto q = dftracer::utils::query::parse_or_throw(text);
+            const auto q = dftracer::utils::duql::parse_or_throw(text);
             auto out =
                 ip::prune_file({.index_path = determine_index_path(gz, ""),
                                 .file_path = gz,

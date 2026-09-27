@@ -76,11 +76,9 @@ inline std::string decimal_to_exact_string(const std::uint8_t* bytes,
 
 }  // namespace detail
 
-/// True for a TypeId with a per-row scalar value `append_cell_json` can
-/// render. Nested types (List, LargeList, FixedSizeList, Struct, Map) have no
-/// such value; no collect()/collect_typed() path builds one of those for a
-/// CLI-facing column, so the caller filters them out before reaching
-/// `append_cell_json`, which renders them as `null` as a defensive fallback.
+/// True for a TypeId `append_cell_json` can render: scalars, List and
+/// LargeList as JSON arrays, Struct as a JSON object. FixedSizeList and Map
+/// have no rendering and are left out.
 inline bool cli_emittable(dataframe::TypeId t) {
     switch (t) {
         case dataframe::TypeId::Unknown:
@@ -109,10 +107,10 @@ inline bool cli_emittable(dataframe::TypeId t) {
         case dataframe::TypeId::FixedSizeBinary:
         case dataframe::TypeId::LargeString:
         case dataframe::TypeId::LargeBinary:
-            return true;
         case dataframe::TypeId::List:
         case dataframe::TypeId::Struct:
         case dataframe::TypeId::LargeList:
+            return true;
         case dataframe::TypeId::FixedSizeList:
         case dataframe::TypeId::Map:
             return false;
@@ -120,10 +118,10 @@ inline bool cli_emittable(dataframe::TypeId t) {
     return false;
 }
 
-/// Append one Batch cell as a JSON value: strings quoted and escaped,
-/// numerics bare, decimals quoted (exact, see decimal_to_exact_string), dates
-/// and durations as their raw underlying integer, nested types as `null`
-/// (see cli_emittable).
+/// Append one Batch cell as a JSON value: null cells as `null`, strings
+/// quoted and escaped, numerics bare, decimals quoted (exact, see
+/// decimal_to_exact_string), dates and durations as their raw underlying
+/// integer, lists as arrays and structs as objects (see cli_emittable).
 ///
 /// Every TypeId has an explicit case, so -Wswitch flags a type added to the
 /// engine without an entry here rather than letting it fall through to a
@@ -131,12 +129,21 @@ inline bool cli_emittable(dataframe::TypeId t) {
 inline void append_cell_json(std::string& s, const dataframe::Series& c,
                              std::int64_t i) {
     using dataframe::TypeId;
+    if (c.is_null(i)) {
+        s += "null";
+        return;
+    }
     switch (c.type()) {
         case TypeId::String:
         case TypeId::Binary:
         case TypeId::LargeString:
         case TypeId::LargeBinary:
         case TypeId::FixedSizeBinary: {
+            // A JSON column holds each value's JSON text.
+            if (c.is_json()) {
+                s += dataframe::read_bytes(c, i);
+                break;
+            }
             s += '"';
             json::append_json_escaped(s, dataframe::read_bytes(c, i));
             s += '"';
@@ -201,9 +208,34 @@ inline void append_cell_json(std::string& s, const dataframe::Series& c,
             s += '"';
             break;
         case TypeId::List:
-        case TypeId::LargeList:
+        case TypeId::LargeList: {
+            const dataframe::Series values = c.child(0);
+            const std::int64_t lo =
+                c.type() == TypeId::List ? c.offsets()[i] : c.offsets64()[i];
+            const std::int64_t hi = c.type() == TypeId::List
+                                        ? c.offsets()[i + 1]
+                                        : c.offsets64()[i + 1];
+            s += '[';
+            for (std::int64_t k = lo; k < hi; ++k) {
+                if (k > lo) s += ',';
+                append_cell_json(s, values, k);
+            }
+            s += ']';
+            break;
+        }
+        case TypeId::Struct: {
+            s += '{';
+            for (std::int64_t f = 0; f < c.num_children(); ++f) {
+                if (f > 0) s += ',';
+                s += '"';
+                json::append_json_escaped(s, c.field_name(f));
+                s += "\":";
+                append_cell_json(s, c.child(f), i);
+            }
+            s += '}';
+            break;
+        }
         case TypeId::FixedSizeList:
-        case TypeId::Struct:
         case TypeId::Map:
         case TypeId::Unknown:
             s += "null";

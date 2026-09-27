@@ -34,7 +34,7 @@ exposes:
   borrows the parser until the next ``next()`` call.
 - **Arrow streaming** (``read_arrow``): yields native
   ``ArrowExportResult`` record batches sized at ``batch_size`` rows.
-- **Query filtering**: an optional ``query`` DSL string is compiled into
+- **Query filtering**: an optional ``query`` duql string is compiled into
   AND-of-EQ probes when possible. The compiled probes evaluate directly
   against simdjson fields, with a uniform-match shortcut when every
   candidate chunk fully matches the predicate (no per-event re-evaluation).
@@ -202,7 +202,7 @@ the scan and returns an Arrow-backed :class:`~dftracer.utils.DataFrame`.
 
    viewer = TraceViewer("trace.pfw.gz")
 
-   # Filter with the query DSL and collect to a DataFrame
+   # Filter with duql and collect to a DataFrame
    df = viewer.filter("cat == 'POSIX'").collect()
    print(df)
 

@@ -3,13 +3,13 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/json/json_value.h>
-#include <dftracer/utils/query/query.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
@@ -240,7 +240,7 @@ struct SharedIndexedTrace {
         gz = create_mixed_trace(env, 30, 20);
         idx = determine_index_path(gz, "");
         StringSink sink;
-        View::from_file(gz, idx).metadata(false).sink_json(sink).get();
+        View::from_file(gz, idx).sink_json(sink).get();
     }
 };
 

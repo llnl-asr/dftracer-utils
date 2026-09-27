@@ -118,11 +118,11 @@ namespace dftu_utils_test {
 
 enum class Format { GZIP = 0 };
 
-inline std::size_t valgrind_scale(std::size_t n, std::size_t divisor = 10) {
+inline std::size_t valgrind_scale(std::size_t n,
+                                  [[maybe_unused]] std::size_t divisor = 10) {
 #ifdef DFTRACER_UTILS_VALGRIND_MODE
     return std::max(std::size_t(10), n / divisor);
 #else
-    (void)divisor;
     return n;
 #endif
 }

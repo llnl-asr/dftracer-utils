@@ -1,44 +1,56 @@
 #include <dftracer/utils/index/plan/view_resolver.h>
-#include <dftracer/utils/index/store/index_database.h>
 
 namespace dftracer::utils::index::plan {
 
+namespace {
+
+namespace df = dftracer::utils::dataframe;
+
+std::string cell_text(const df::Series& s, std::int64_t r) {
+    switch (s.type()) {
+        case df::TypeId::String:
+            return std::string(s.string_at(r));
+        case df::TypeId::Int64:
+            return std::to_string(s.data<std::int64_t>()[r]);
+        case df::TypeId::Uint64:
+            return std::to_string(s.data<std::uint64_t>()[r]);
+        case df::TypeId::Float64:
+            return std::to_string(s.data<double>()[r]);
+        default:
+            return {};
+    }
+}
+
+}  // namespace
+
 const std::string GroupResolver::EMPTY;
 
-GroupResolver::GroupResolver(const std::vector<std::string>& index_paths,
-                             const RecordSchema& schema,
-                             const std::vector<std::string>& resolved) {
-    for (const auto& name : resolved) {
-        if (column(name)) continue;
-        const ResolvedColumn rc = schema.resolved_column(name);
-        std::size_t t = 0;
-        while (t < tables_.size() &&
-               (tables_[t].dictionary != rc.dictionary->name ||
-                tables_[t].field != rc.field))
-            ++t;
-        if (t == tables_.size())
-            tables_.push_back({rc.dictionary->name, rc.field, {}});
-        columns_.emplace_back(name, t);
-    }
-    if (tables_.empty()) return;
-    for (const auto& path : index_paths) {
-        if (path.empty()) continue;
-        try {
-            index::store::IndexDatabase db(
-                path, index::store::IndexOpenMode::ReadOnly);
-            for (auto& t : tables_)
-                for (auto& [k, v] : db.dict_field(t.dictionary, t.field))
-                    t.values.emplace(k, std::move(v));
-        } catch (const std::exception&) {
-            // Unreadable index: its keys just resolve to "".
+GroupResolver::GroupResolver(const std::vector<RowSetFile>& files,
+                             const std::vector<Column>& columns) {
+    for (const auto& c : columns) {
+        if (column(c.name)) continue;
+        StringViewMap<std::string> values;
+        if (auto f = stored_rowset(files, c.rowset)) {
+            const auto k = f->column_index(c.key);
+            const auto v = f->column_index(c.value);
+            if (k >= 0 && v >= 0) {
+                const df::Series keys =
+                    f->columns[static_cast<std::size_t>(k)].materialize();
+                const df::Series vals =
+                    f->columns[static_cast<std::size_t>(v)].materialize();
+                for (std::int64_t r = 0; r < f->num_rows(); ++r)
+                    if (!keys.is_null(r) && !vals.is_null(r))
+                        values.emplace(cell_text(keys, r), cell_text(vals, r));
+            }
         }
+        columns_.emplace_back(c.name, std::move(values));
     }
 }
 
 const StringViewMap<std::string>* GroupResolver::column(
     std::string_view name) const {
-    for (const auto& [n, t] : columns_)
-        if (n == name) return &tables_[t].values;
+    for (const auto& [n, values] : columns_)
+        if (n == name) return &values;
     return nullptr;
 }
 
@@ -48,11 +60,6 @@ const std::string& GroupResolver::value(std::string_view name,
     if (!c) return EMPTY;
     auto it = c->find(key);
     return it != c->end() ? it->second : EMPTY;
-}
-
-const std::string& GroupResolver::rank(const std::string& pid) const {
-    auto it = rank_.find(pid);
-    return it != rank_.end() ? it->second : EMPTY;
 }
 
 }  // namespace dftracer::utils::index::plan

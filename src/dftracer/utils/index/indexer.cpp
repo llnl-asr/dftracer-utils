@@ -1,13 +1,14 @@
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/build/index_write_lock.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/extensions/plugin_extension.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
-#include <dftracer/utils/index/plan/resolved_field_rewriter.h>
+#include <dftracer/utils/index/plan/rowsets.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/store/index_database.h>
@@ -15,7 +16,6 @@
 #include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/json/json_escape.h>
-#include <dftracer/utils/query/query.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
@@ -177,8 +177,7 @@ Indexer Indexer::open(std::vector<std::string> paths, IndexerOptions options) {
                 matched = co_await scanner(
                     scope,
                     utilities::filesystem::PatternDirectoryScannerUtilityInput{
-                        p,
-                        {".pfw", ".pfw.gz", ".jsonl.gz", ".ndjson.gz"},
+                        p, utilities::filesystem::trace_file_patterns(),
                         false});
             });
         for (const auto& e : matched) impl->paths.push_back(e.path.string());
@@ -323,12 +322,11 @@ coro::CoroTask<std::vector<FileManifest>> Indexer::manifest(CoroScope&) const {
 
 coro::CoroTask<std::vector<FileExplain>> Indexer::explain(
     CoroScope&, std::string query) const {
-    auto parsed = query::Query::from_string(query);
+    auto parsed = duql::Query::from_string(query);
     if (!parsed)
         throw DFTUtilsException::cat(
             ErrorCode::INVALID_ARGUMENT,
             "Indexer::explain: ", parsed.error().format());
-    const bool resolved = plan::has_resolved_fields(*parsed);
     std::vector<FileExplain> out;
     for (const auto& [index_path, traces] : impl_->by_index()) {
         if (!fs::exists(index_path)) {
@@ -340,14 +338,7 @@ coro::CoroTask<std::vector<FileExplain>> Indexer::explain(
             continue;
         }
         store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
-        std::optional<query::Query> rewritten;
-        if (resolved) {
-            const std::string& first = *traces.front();
-            const RecordSchema* p = plan::recorded_schema(db, first);
-            rewritten = plan::rewrite_resolved_fields(
-                *parsed, db, p ? *p : detect_file_schema(first));
-        }
-        const query::Query& q = rewritten ? *rewritten : *parsed;
+        const duql::Query& q = *parsed;
         for (const auto* p : traces) {
             auto e = plan::explain_file_chunks(db, *p, q);
             FileExplain f{*p,
@@ -441,6 +432,19 @@ IndexStatus Indexer::rebuild_extension(std::string extension) {
                                  [this, &extension](CoroScope& s) {
                                      return rebuild_extension(s, extension);
                                  });
+}
+
+dataframe::DataFrame Indexer::rowset(std::string name) const {
+    std::vector<plan::RowSetFile> files;
+    for (const auto& f : this->files()) files.push_back({f.path, f.index_path});
+    auto frame = plan::stored_rowset(files, name);
+    if (!frame)
+        throw DFTUtilsException::cat(ErrorCode::INVALID_ARGUMENT,
+                                     "Indexer::rowset: the index holds no "
+                                     "rows for row set '",
+                                     name, "'; read it with View::duql(\"from ",
+                                     name, "\")");
+    return std::move(*frame);
 }
 
 IndexStatus Indexer::drop_extension(std::string extension) {

@@ -45,12 +45,21 @@ void StreamRowFold::step(const FoldBatch& batch) {
         });
     if (events.empty()) return;
 
-    const ColumnSpec spec{select_, time_scale_, resolver_.get(), emit_dyn_,
-                          by_path_};
+    const ColumnSpec spec{select_, time_scale_, emit_dyn_, by_path_, json_};
     dataframe::Morsel m = events_to_morsel(events, intern_, spec);
+    if (ordered_) m.batch_index = static_cast<std::int64_t>(batch.unit.seq);
 
     const std::uint64_t bytes = morsel_bytes(m);
     pending_task_.emplace(send(std::move(m), bytes));
+    pending_ = reinterpret_cast<::dftu_task*>(&*pending_task_);
+}
+
+void StreamRowFold::end_unit(const ScanUnit& unit) {
+    if (!ordered_ || (dropped_ && dropped_->load(std::memory_order_relaxed)))
+        return;
+    dataframe::Morsel end;
+    end.batch_index = static_cast<std::int64_t>(unit.seq);
+    pending_task_.emplace(send(std::move(end), 0));
     pending_ = reinterpret_cast<::dftu_task*>(&*pending_task_);
 }
 

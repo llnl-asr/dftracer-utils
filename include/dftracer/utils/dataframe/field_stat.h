@@ -84,6 +84,13 @@ struct FieldStat {
     double sumsq = 0;
     double m3 = 0;
     double m4 = 0;
+    /// Net wraps of `esum`: the exact sum is esum + ecarry * 2^64, so it fits
+    /// its domain only while ecarry is 0, whatever the order of adds and
+    /// merges. Touched only when an add wraps.
+    std::int64_t ecarry = 0;
+
+    /// The exact integer sum fits its domain (int64 or uint64).
+    bool esum_fits() const { return ecarry == 0; }
 
     void add(const FieldNum& v) {
         switch (v.domain) {
@@ -130,7 +137,7 @@ struct FieldStat {
             domain = FieldStatDomain::I64;
             esum = emin = emax = x;
         } else if (domain == FieldStatDomain::I64) {
-            esum += x;
+            add_i64(x);
             if (x < emin) emin = x;
             if (x > emax) emax = x;
         } else {
@@ -149,8 +156,7 @@ struct FieldStat {
             domain = FieldStatDomain::U64;
             esum = emin = emax = std::bit_cast<std::int64_t>(x);
         } else if (domain == FieldStatDomain::U64) {
-            esum = std::bit_cast<std::int64_t>(
-                std::bit_cast<std::uint64_t>(esum) + x);
+            add_u64(x);
             if (x < std::bit_cast<std::uint64_t>(emin))
                 emin = std::bit_cast<std::int64_t>(x);
             if (x > std::bit_cast<std::uint64_t>(emax))
@@ -167,7 +173,7 @@ struct FieldStat {
             domain = FieldStatDomain::I64;
             esum = emin = emax = x;
         } else if (domain == FieldStatDomain::I64) {
-            esum += x;
+            add_i64(x);
             if (x < emin) emin = x;
             if (x > emax) emax = x;
         } else {
@@ -182,8 +188,7 @@ struct FieldStat {
             domain = FieldStatDomain::U64;
             esum = emin = emax = std::bit_cast<std::int64_t>(x);
         } else if (domain == FieldStatDomain::U64) {
-            esum = std::bit_cast<std::int64_t>(
-                std::bit_cast<std::uint64_t>(esum) + x);
+            add_u64(x);
             if (x < std::bit_cast<std::uint64_t>(emin))
                 emin = std::bit_cast<std::int64_t>(x);
             if (x > std::bit_cast<std::uint64_t>(emax))
@@ -191,6 +196,17 @@ struct FieldStat {
         } else {
             domain = FieldStatDomain::F64;  // mixed with I64/F64
         }
+    }
+
+    void add_i64(std::int64_t x) {
+        if (__builtin_add_overflow(esum, x, &esum)) [[unlikely]]
+            ecarry += x < 0 ? -1 : 1;
+    }
+    void add_u64(std::uint64_t x) {
+        std::uint64_t s = std::bit_cast<std::uint64_t>(esum);
+        if (__builtin_add_overflow(s, x, &s)) [[unlikely]]
+            ++ecarry;
+        esum = std::bit_cast<std::int64_t>(s);
     }
 
     void merge(const FieldStat& o) {
@@ -212,13 +228,13 @@ struct FieldStat {
         if (domain != o.domain || domain == FieldStatDomain::F64) {
             domain = FieldStatDomain::F64;
         } else if (domain == FieldStatDomain::I64) {
-            esum += o.esum;
+            ecarry += o.ecarry;
+            add_i64(o.esum);
             if (o.emin < emin) emin = o.emin;
             if (o.emax > emax) emax = o.emax;
         } else {  // U64
-            esum = std::bit_cast<std::int64_t>(
-                std::bit_cast<std::uint64_t>(esum) +
-                std::bit_cast<std::uint64_t>(o.esum));
+            ecarry += o.ecarry;
+            add_u64(std::bit_cast<std::uint64_t>(o.esum));
             if (std::bit_cast<std::uint64_t>(o.emin) <
                 std::bit_cast<std::uint64_t>(emin))
                 emin = o.emin;

@@ -2,17 +2,19 @@
 #include <dftracer/utils/core/common/hash/hex64.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
-#include <dftracer/utils/dataframe/internal/substr_simd.h>
 #include <dftracer/utils/dataframe/internal/varwidth_offsets.h>
 #include <dftracer/utils/dataframe/kernels/string_ops.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/duql/pattern_engine.h>
+#include <dftracer/utils/duql/substr_simd.h>
 
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 #include <optional>
-#include <regex>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 // Highway static dispatch (baseline target): only the two
@@ -22,7 +24,8 @@
 #include <hwy/highway.h>
 namespace hn = hwy::HWY_NAMESPACE;
 
-using dftracer::utils::dataframe::substr_find;
+namespace duql = dftracer::utils::duql;
+using duql::detail::substr_find;
 
 namespace dftracer::utils::dataframe {
 
@@ -459,65 +462,110 @@ std::string zfill(std::string_view s, std::int64_t width) {
     return std::string(pad_n, '0') + std::string(s);
 }
 
-// ---- LIKE / glob matching ------------------------------------------------
+// The strings whose regex match reached its work limit; their rows turn null.
+class LimitedRows {
+   public:
+    void add(std::string_view s) {
+        std::lock_guard<std::mutex> lock(mu_);
+        rows_.emplace(s);
+    }
 
-// One classified pattern token: a literal byte, `%` (any run), or `_` (any one
-// character). `\` escapes the following byte to a literal in the source
-// pattern; the classification is done once, then reused for every row.
-enum class GlobKind : std::uint8_t { Literal, AnyRun, AnyOne };
-struct GlobToken {
-    GlobKind kind;
-    char ch;  // valid when kind == Literal
+    // `out` with every row of `v` whose string is listed made null.
+    dftu_series* apply(dftu_series* out, const dftu_series* v) const {
+        if (!out || rows_.empty()) return out;
+        dftu_series* ok = string_predicate(v, [this](std::string_view s) {
+            return !rows_.contains(std::string(s));
+        });
+        if (!ok) return out;
+        const std::size_t bytes = buffer_bytes(TypeId::Bool, v->length);
+        auto valid = Buffer::allocate(bytes);
+        for (std::size_t k = 0; k < bytes; ++k) {
+            const std::uint8_t have =
+                v->validity ? v->validity->data()[k] : std::uint8_t{0xFF};
+            valid->data()[k] =
+                static_cast<std::uint8_t>(ok->data->data()[k] & have);
+        }
+        std::int64_t nulls = 0;
+        for (std::int64_t i = 0; i < v->length; ++i)
+            if (!((valid->data()[i >> 3] >> (i & 7)) & 1)) ++nulls;
+        delete ok;
+        out->validity = std::move(valid);
+        out->null_count = nulls;
+        return out;
+    }
+
+   private:
+    std::mutex mu_;
+    std::unordered_set<std::string> rows_;
 };
 
-std::vector<GlobToken> classify_like(std::string_view pattern) {
-    std::vector<GlobToken> toks;
-    toks.reserve(pattern.size());
-    for (std::size_t i = 0; i < pattern.size(); ++i) {
-        char c = pattern[i];
-        if (c == '\\' && i + 1 < pattern.size()) {
-            toks.push_back({GlobKind::Literal, pattern[++i]});
-        } else if (c == '%') {
-            toks.push_back({GlobKind::AnyRun, 0});
-        } else if (c == '_') {
-            toks.push_back({GlobKind::AnyOne, 0});
-        } else {
-            toks.push_back({GlobKind::Literal, c});
+// Bool mask of `p` over `v`; a row whose match reached the work limit is null.
+dftu_series* pattern_predicate(const dftu_series* v,
+                               const duql::CompiledPattern& p) {
+    // A literal pattern runs inline, with no call per row.
+    if (const auto t = duql::literal_test(p); t && !t->icase) {
+        const std::string_view lit = t->text;
+        switch (t->op) {
+            case duql::LiteralTest::Op::EQUALS:
+                return string_predicate(
+                    v, [lit](std::string_view s) { return s == lit; });
+            case duql::LiteralTest::Op::STARTS_WITH:
+                return string_predicate(v, [lit](std::string_view s) {
+                    return s.starts_with(lit);
+                });
+            case duql::LiteralTest::Op::ENDS_WITH:
+                return string_predicate(
+                    v, [lit](std::string_view s) { return s.ends_with(lit); });
+            case duql::LiteralTest::Op::CONTAINS:
+                return string_predicate(v, [lit](std::string_view s) {
+                    return substr_find(
+                               s.data(), static_cast<std::int64_t>(s.size()),
+                               lit.data(),
+                               static_cast<std::int64_t>(lit.size())) >= 0;
+                });
         }
     }
-    return toks;
+    // Case-sensitive globs run inline too; SEGMENTS search long strings.
+    if (!p.icase && p.kind == duql::detail::Kind::GLOB)
+        return string_predicate(v, [toks = p.glob](std::string_view s) {
+            return duql::detail::glob_match_t<false, true>(toks, s);
+        });
+    if (!p.icase && p.kind == duql::detail::Kind::SEGMENTS)
+        return string_predicate(v, [&p, toks = p.glob](std::string_view s) {
+            return s.size() < duql::detail::SIMD_MIN_HAY
+                       ? duql::detail::glob_match_t<false, false>(toks, s)
+                       : duql::detail::segments_match(p, s);
+        });
+    LimitedRows limited;
+    dftu_series* out = string_predicate(v, [&](std::string_view s) {
+        const auto r = duql::match(p, s);
+        if (r == duql::MatchResult::LIMIT) limited.add(s);
+        return r == duql::MatchResult::YES;
+    });
+    return limited.apply(out, v);
 }
 
-// Classic two-pointer wildcard match (no backtracking blowup): `%` == `*`
-// (matches any run, including empty), `_` == `?` (matches exactly one byte).
-bool glob_match(const std::vector<GlobToken>& toks, std::string_view s) {
-    std::size_t si = 0, pi = 0;
-    std::size_t star = std::string_view::npos;  // last AnyRun token index
-    std::size_t star_si = 0;                    // s position when star seen
-    const std::size_t n = s.size();
-    const std::size_t m = toks.size();
-    while (si < n) {
-        if (pi < m && toks[pi].kind == GlobKind::AnyOne) {
-            ++si;
-            ++pi;
-        } else if (pi < m && toks[pi].kind == GlobKind::Literal &&
-                   toks[pi].ch == s[si]) {
-            ++si;
-            ++pi;
-        } else if (pi < m && toks[pi].kind == GlobKind::AnyRun) {
-            star = pi;
-            star_si = si;
-            ++pi;
-        } else if (star != std::string_view::npos) {
-            pi = star + 1;
-            ++star_si;
-            si = star_si;
-        } else {
-            return false;
-        }
-    }
-    while (pi < m && toks[pi].kind == GlobKind::AnyRun) ++pi;
-    return pi == m;
+}  // namespace
+
+namespace dftracer::utils::dataframe {
+
+Series str_pattern(const Series& v, const duql::CompiledPattern& p) {
+    if (!v.valid()) return {};
+    if (v.encoding() != Encoding::Flat && v.encoding() != Encoding::Dictionary)
+        return str_pattern(v.materialize(), p);
+    return Series{pattern_predicate(v.handle(), p)};
+}
+
+}  // namespace dftracer::utils::dataframe
+
+namespace {
+
+duql::PatternPtr compiled(duql::PatternResult r) {
+    return r ? std::move(*r) : nullptr;
+}
+
+std::string_view pattern_text(const char* pattern, int32_t len) {
+    return {pattern, static_cast<std::size_t>(len)};
 }
 
 }  // namespace
@@ -568,16 +616,10 @@ dftu_series* dftu_series_str_matches(const dftu_series* v, const char* pattern,
     DFTU_FLAT_OPERAND(v, flat_v,
                       dftu_series_str_matches(flat_v, pattern, pattern_len));
 
-    std::regex re;
-    try {
-        re.assign(std::string(pattern, static_cast<std::size_t>(pattern_len)),
-                  std::regex::ECMAScript);
-    } catch (const std::regex_error&) {
-        return nullptr;
-    }
-    return string_predicate(v, [&re](std::string_view s) {
-        return std::regex_match(s.begin(), s.end(), re);
-    });
+    const auto p = compiled(duql::compile_regex(
+        pattern_text(pattern, pattern_len), false, /*whole=*/true));
+    if (!p) return nullptr;
+    return pattern_predicate(v, *p);
 }
 
 namespace {
@@ -585,8 +627,8 @@ namespace {
 // The capture `group` of the first `re` match in each row, null where the row
 // is null or does not match: a String column with its own validity.
 template <class Off>
-dftu_series* str_extract_w(const dftu_series* v, const std::regex& re,
-                           std::size_t group) {
+dftu_series* str_extract_w(const dftu_series* v,
+                           const duql::CompiledPattern& re, std::size_t group) {
     RowReader<Off> r(v);
     if (!r.ok()) return nullptr;
     const std::size_t n = static_cast<std::size_t>(v->length);
@@ -598,10 +640,9 @@ dftu_series* str_extract_w(const dftu_series* v, const std::regex& re,
         bool hit = false;
         if (!r.is_null(static_cast<std::int64_t>(i))) {
             const std::string_view s = r.at(static_cast<std::int64_t>(i));
-            std::match_results<std::string_view::const_iterator> m;
-            if (std::regex_search(s.begin(), s.end(), m, re) &&
-                group < m.size() && m[group].matched) {
-                data.append(m[group].first, m[group].second);
+            std::string_view m;
+            if (duql::extract(re, s, group, m) == duql::MatchResult::YES) {
+                data.append(m);
                 hit = true;
             }
         }
@@ -624,16 +665,14 @@ dftu_series* dftu_series_str_extract(const dftu_series* v, const char* pattern,
     DFTU_FLAT_OPERAND(
         v, flat_v,
         dftu_series_str_extract(flat_v, pattern, pattern_len, group));
-    std::regex re;
-    try {
-        re.assign(std::string(pattern, static_cast<std::size_t>(pattern_len)),
-                  std::regex::ECMAScript);
-    } catch (const std::regex_error&) {
-        return nullptr;
-    }
+    const auto re = compiled(
+        duql::compile_regex(pattern_text(pattern, pattern_len), false));
+    if (!re) return nullptr;
     const auto g = static_cast<std::size_t>(group);
-    return is_wide_offset_type(v->type) ? str_extract_w<std::int64_t>(v, re, g)
-                                        : str_extract_w<std::int32_t>(v, re, g);
+    if (g > duql::capture_count(*re)) return nullptr;
+    return is_wide_offset_type(v->type)
+               ? str_extract_w<std::int64_t>(v, *re, g)
+               : str_extract_w<std::int32_t>(v, *re, g);
 }
 
 dftu_series* dftu_series_str_search(const dftu_series* v, const char* pattern,
@@ -641,16 +680,10 @@ dftu_series* dftu_series_str_search(const dftu_series* v, const char* pattern,
     DFTU_FLAT_OPERAND(v, flat_v,
                       dftu_series_str_search(flat_v, pattern, pattern_len));
 
-    std::regex re;
-    try {
-        re.assign(std::string(pattern, static_cast<std::size_t>(pattern_len)),
-                  std::regex::ECMAScript);
-    } catch (const std::regex_error&) {
-        return nullptr;
-    }
-    return string_predicate(v, [&re](std::string_view s) {
-        return std::regex_search(s.begin(), s.end(), re);
-    });
+    const auto p = compiled(
+        duql::compile_regex(pattern_text(pattern, pattern_len), false));
+    if (!p) return nullptr;
+    return pattern_predicate(v, *p);
 }
 
 dftu_series* dftu_series_str_like(const dftu_series* v, const char* pattern,
@@ -658,58 +691,10 @@ dftu_series* dftu_series_str_like(const dftu_series* v, const char* pattern,
     DFTU_FLAT_OPERAND(v, flat_v,
                       dftu_series_str_like(flat_v, pattern, pattern_len));
 
-    std::string_view pat(pattern, static_cast<std::size_t>(pattern_len));
-    std::vector<GlobToken> toks = classify_like(pat);
-
-    // Classify once, then dispatch to the cheapest matcher. A run of AnyRun/
-    // AnyOne only through the affixes hits equality / affix / substring; any
-    // interior wildcard falls to the general two-pointer glob.
-    std::size_t n_run = 0, n_one = 0;
-    for (const GlobToken& t : toks) {
-        if (t.kind == GlobKind::AnyRun) ++n_run;
-        if (t.kind == GlobKind::AnyOne) ++n_one;
-    }
-
-    auto literal_of = [&](std::size_t begin, std::size_t end) {
-        std::string out;
-        for (std::size_t i = begin; i < end; ++i) out.push_back(toks[i].ch);
-        return out;
-    };
-
-    if (n_one == 0 && n_run == 0) {
-        std::string lit = literal_of(0, toks.size());
-        return string_predicate(v,
-                                [lit](std::string_view s) { return s == lit; });
-    }
-    if (n_one == 0 && n_run == 1) {
-        const bool lead =
-            !toks.empty() && toks.front().kind == GlobKind::AnyRun;
-        const bool trail =
-            !toks.empty() && toks.back().kind == GlobKind::AnyRun;
-        if (trail && !lead) {  // "text%" -> starts_with
-            std::string pre = literal_of(0, toks.size() - 1);
-            return string_predicate(
-                v, [pre](std::string_view s) { return s.starts_with(pre); });
-        }
-        if (lead && !trail) {  // "%text" -> ends_with
-            std::string suf = literal_of(1, toks.size());
-            return string_predicate(
-                v, [suf](std::string_view s) { return s.ends_with(suf); });
-        }
-    }
-    if (n_one == 0 && n_run == 2 && toks.size() >= 2 &&
-        toks.front().kind == GlobKind::AnyRun &&
-        toks.back().kind == GlobKind::AnyRun) {  // "%text%" -> contains
-        std::string mid = literal_of(1, toks.size() - 1);
-        return string_predicate(v, [mid](std::string_view s) {
-            return substr_find(s.data(), static_cast<std::int64_t>(s.size()),
-                               mid.data(),
-                               static_cast<std::int64_t>(mid.size())) >= 0;
-        });
-    }
-    return string_predicate(v, [toks = std::move(toks)](std::string_view s) {
-        return glob_match(toks, s);
-    });
+    const auto p = compiled(
+        duql::compile_like(pattern_text(pattern, pattern_len), false, '\\'));
+    if (!p) return nullptr;
+    return pattern_predicate(v, *p);
 }
 
 dftu_series* dftu_series_str_len_bytes(const dftu_series* v) {
@@ -1429,20 +1414,17 @@ dftu_series* dftu_series_str_findall(const dftu_series* v, const char* pattern,
     if (!v || !is_string_kind(v->type)) return nullptr;
     DFTU_FLAT_OPERAND(v, flat_v,
                       dftu_series_str_findall(flat_v, pattern, pattern_len));
-    std::regex re;
-    try {
-        re = std::regex(
-            std::string(pattern, static_cast<std::size_t>(pattern_len)));
-    } catch (const std::regex_error&) {
-        return nullptr;
-    }
-    return list_transform(
-        v, [&re](std::string_view row, std::vector<std::string>& parts) {
-            const std::string text(row);
-            for (auto it = std::sregex_iterator(text.begin(), text.end(), re);
-                 it != std::sregex_iterator(); ++it)
-                parts.emplace_back(it->str());
+    const auto re = compiled(
+        duql::compile_regex(pattern_text(pattern, pattern_len), false));
+    if (!re) return nullptr;
+    LimitedRows limited;
+    dftu_series* out = list_transform(
+        v, [&](std::string_view row, std::vector<std::string>& parts) {
+            const auto r = duql::findall(
+                *re, row, [&](std::string_view m) { parts.emplace_back(m); });
+            if (r == duql::MatchResult::LIMIT) limited.add(row);
         });
+    return limited.apply(out, v);
 }
 
 dftu_series* dftu_series_str_partition(const dftu_series* v, const char* sep,

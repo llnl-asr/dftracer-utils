@@ -2,11 +2,11 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
-#include <dftracer/utils/query/query.h>
 #include <dftracer/utils/server/cursor.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
@@ -14,6 +14,7 @@
 #include <dftracer/utils/server/router.h>
 #include <dftracer/utils/server/trace_api.h>
 #include <dftracer/utils/server/trace_index.h>
+#include <dftracer/utils/server/viz/record_event.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/statistics/statistics_query_utility.h>
 #include <dftracer/utils/trace/views/view_definition.h>
@@ -22,6 +23,7 @@
 #include <simdjson.h>
 
 #include <cstddef>
+#include <iterator>
 #include <limits>
 #include <string>
 #include <unordered_set>
@@ -32,10 +34,6 @@ using namespace dftracer::utils::trace;
 
 using namespace dftracer::utils::trace::statistics;
 using namespace dftracer::utils::trace::views;
-
-// Hash metadata types that need smart filtering (FH, HH, SH).
-static const std::unordered_set<std::string> HASH_METADATA_NAMES = {"FH", "HH",
-                                                                    "SH"};
 
 // --- GET /api/files ---
 static coro::CoroTask<HttpResponse> handle_files(const HttpRequest& /*req*/,
@@ -122,6 +120,31 @@ static coro::CoroTask<HttpResponse> handle_info(const HttpRequest& /*req*/,
     b.append_key_value("file_count",
                        static_cast<std::int64_t>(index.file_count()));
 
+    // The trace fields the viewer's filters name: dftracer's own, or the
+    // record schema's roles and label; empty when the schema binds none.
+    const TraceFields fields(index.record_schema());
+    b.append_comma();
+    b.escape_and_append_with_quotes("schema");
+    b.append_colon();
+    b.start_object();
+    b.append_key_value("id", std::string_view(index.record_schema().id));
+    b.append_comma();
+    b.append_key_value("decoder", fields.by_path ? "path" : "dftracer");
+    b.append_comma();
+    b.escape_and_append_with_quotes("fields");
+    b.append_colon();
+    b.start_object();
+    const std::pair<const char*, const std::string*> named[] = {
+        {"time", &fields.time},     {"duration", &fields.duration},
+        {"entity", &fields.entity}, {"lane", &fields.lane},
+        {"label", &fields.label},   {"entity_name", &fields.entity_name}};
+    for (std::size_t i = 0; i < std::size(named); ++i) {
+        if (i > 0) b.append_comma();
+        b.append_key_value(named[i].first, std::string_view(*named[i].second));
+    }
+    b.end_object();
+    b.end_object();
+
     if (has_time_range) {
         b.append_comma();
         b.escape_and_append_with_quotes("time_range");
@@ -206,24 +229,17 @@ void register_trace_api(Router& router, TraceIndex& index) {
                  R"("global_max_timestamp_us":6999732})"});
 
     router.get(
-        "/api/resolve",
+        "/api/rowset",
         [index_ptr](const HttpRequest& /*req*/,
                     const QueryParams& params) -> coro::CoroTask<HttpResponse> {
-            std::string hashes(params.get("hash"));
-            if (hashes.empty())
-                co_return HttpResponse::bad_request("Missing parameter: hash");
-            std::string dict(params.get("type"));
-            if (dict.empty()) dict = "file";
-            const dftracer::utils::index::Dictionary* d = nullptr;
-            for (const auto& c : index_ptr->record_schema().dictionaries)
-                if (c.name == dict) d = &c;
-            if (!d)
-                co_return HttpResponse::bad_request("Invalid type: " + dict);
-            std::string field(params.get("field"));
-            if (field.empty()) field = d->fields.front().first;
-            if (!d->has_field(field))
-                co_return HttpResponse::bad_request("Invalid field: " + field);
-
+            const std::string name(params.get("name"));
+            const std::string key(params.get("key"));
+            const std::string value(params.get("value"));
+            const std::string keys(params.get("keys"));
+            if (name.empty() || key.empty() || value.empty() || keys.empty())
+                co_return HttpResponse::bad_request(
+                    "Missing parameter: name, key, value and keys are "
+                    "required");
             auto& b = scratch_json_builder();
             b.start_object();
             b.escape_and_append_with_quotes("names");
@@ -231,37 +247,34 @@ void register_trace_api(Router& router, TraceIndex& index) {
             b.start_object();
             bool first = true;
             std::size_t start = 0;
-            // Comma-separated so one click can resolve its file and host at
-            // once; unknown hashes are simply absent from the reply.
-            while (start <= hashes.size()) {
-                auto end = hashes.find(',', start);
-                if (end == std::string::npos) end = hashes.size();
-                std::string one = hashes.substr(start, end - start);
+            // Comma-separated so one click can resolve several keys at once;
+            // a key with no row is absent from the reply.
+            while (start <= keys.size()) {
+                auto end = keys.find(',', start);
+                if (end == std::string::npos) end = keys.size();
+                std::string one = keys.substr(start, end - start);
                 start = end + 1;
                 if (one.empty()) continue;
-                auto name = index_ptr->resolve(dict, field, one);
-                if (name.empty()) continue;
+                auto found = index_ptr->resolve(name, key, value, one);
+                if (found.empty()) continue;
                 if (!first) b.append_comma();
                 first = false;
                 b.escape_and_append_with_quotes(one);
                 b.append_colon();
-                b.escape_and_append_with_quotes(name);
+                b.escape_and_append_with_quotes(found);
             }
             b.end_object();
             b.end_object();
             co_return HttpResponse::ok(std::string(b));
         },
-        RouteDoc{
-            "Resolve dictionary keys (file/host/string) to their values.",
-            "Control",
-            {{"hash", "Key, or several separated by commas", true, ""},
-             {"type", "Dictionary: file (default), host or string", false,
-              "file"},
-             {"field",
-              "Dictionary field: path, name or value (the dictionary's own "
-              "by default)",
-              false, ""}},
-            R"({"names":{"314c1a1cdb22a136":"/data/train/img_0.npz"}})"});
+        RouteDoc{"Values of a source row set, by key: column `value` of the "
+                 "rows whose column `key` is one of `keys`.",
+                 "Control",
+                 {{"name", "Row set, such as files or hosts", true, ""},
+                  {"key", "Key column, such as fhash", true, ""},
+                  {"value", "Value column, such as path", true, ""},
+                  {"keys", "Key, or several separated by commas", true, ""}},
+                 R"({"names":{"314c1a1cdb22a136":"/data/train/img_0.npz"}})"});
 
     router.post(
         "/api/cancel",

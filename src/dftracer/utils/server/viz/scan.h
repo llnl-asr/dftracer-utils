@@ -7,19 +7,25 @@
 
 #include <dftracer/utils/core/common/expected.h>
 #include <dftracer/utils/core/common/to_chars.h>
-#include <dftracer/utils/query/query.h>
+#include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/duql/syntax/parser.h>
+#include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
 #include <dftracer/utils/server/trace_index.h>
+#include <dftracer/utils/server/viz/record_event.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <simdjson.h>
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace dftracer::utils::server {
@@ -50,7 +56,7 @@ inline bool rewrite_uint_field(std::string& json, std::string_view key,
 inline std::string normalize_event_ts(const std::string& event_json,
                                       std::uint64_t offset,
                                       TraceIndex::TimeMetric metric) {
-    thread_local simdjson::dom::parser tl_parser;
+    thread_local dftracer::utils::json::RecordParser tl_parser;
     auto result = tl_parser.parse(event_json);
     if (result.error()) return event_json;
 
@@ -109,20 +115,41 @@ struct VizWindow {
     bool normalize;
 };
 
-/// Parse begin/end, validate the optional DSL query, then apply timestamp
+/// Parse begin/end, validate the optional duql filter, then apply timestamp
 /// normalization and native-unit conversion so begin/end are absolute native
 /// timestamps for the scan. Returns a bad_request response when the query is
 /// malformed. Callers keep their own required-parameter checks and any
 /// per-handler extras (summary/lookback/min_dur/group_by).
+// A bad request when `query` is not a duql filter; an endpoint takes no
+// pipeline stage.
+inline std::optional<HttpResponse> refuse_duql(std::string_view query,
+                                               std::string_view endpoint) {
+    if (query.empty() || duql::try_parse(query)) return std::nullopt;
+    if (auto tree = duql::syntax::parse(query); tree && tree->pipeline) {
+        const auto& stages = tree->pipeline->stages;
+        for (std::size_t i = 0; i < stages.size(); ++i) {
+            if (i == 0 &&
+                std::holds_alternative<duql::syntax::Where>(stages[i].node))
+                continue;
+            std::string_view word = query.substr(stages[i].span.offset);
+            word = word.substr(0, word.find_first_of(" \t\r\n("));
+            return HttpResponse::bad_request(
+                "endpoint " + std::string(endpoint) +
+                " takes a filter; stages such as '" + std::string(word) +
+                "' are not supported here");
+        }
+    }
+    return HttpResponse::bad_request("Invalid duql: " + std::string(query));
+}
+
 inline dftracer::utils::expected<VizWindow, HttpResponse> parse_viz_window(
-    const QueryParams& params, TraceIndex& index) {
+    const QueryParams& params, TraceIndex& index, std::string_view endpoint) {
     double begin = params.get_double("begin", 0);
     double end = params.get_double("end", 0);
 
-    auto query = params.get("query");
-    if (!query.empty() && !query::try_parse(query).has_value())
-        return dftracer::utils::unexpected(
-            HttpResponse::bad_request("Invalid query: " + std::string(query)));
+    auto query = params.get("duql");
+    if (auto refused = refuse_duql(query, endpoint))
+        return dftracer::utils::unexpected(std::move(*refused));
 
     auto ts_norm_param = params.get("ts_normalize");
     bool normalize = ts_norm_param.empty() || ts_norm_param != "0";
@@ -164,9 +191,11 @@ inline std::string extract_json_value(simdjson::dom::element val) {
 inline void append_lane_clause(std::string& dsl, const char* field,
                                const std::string& val) {
     if (!dsl.empty()) dsl += " and ";
+    const std::size_t digits = !val.empty() && val[0] == '-' ? 1 : 0;
     bool numeric =
-        !val.empty() && std::all_of(val.begin(), val.end(),
-                                    [](char c) { return std::isdigit(c); });
+        val.size() > digits &&
+        std::all_of(val.begin() + static_cast<std::ptrdiff_t>(digits),
+                    val.end(), [](char c) { return std::isdigit(c); });
     if (numeric) {
         dsl += std::string(field) + " == " + val;
     } else {
@@ -177,7 +206,7 @@ inline void append_lane_clause(std::string& dsl, const char* field,
 inline void apply_lanes(std::string& dsl, std::string_view lanes_str) {
     if (lanes_str.empty()) return;
 
-    thread_local simdjson::dom::parser tl_parser;
+    thread_local dftracer::utils::json::RecordParser tl_parser;
     auto result = tl_parser.parse(lanes_str.data(), lanes_str.size());
     if (result.error()) return;
 
@@ -218,10 +247,11 @@ inline void apply_lanes(std::string& dsl, std::string_view lanes_str) {
     }
 }
 
-inline void apply_filters(std::string& dsl, std::string_view filters_str) {
+inline void apply_filters(std::string& dsl, std::string_view filters_str,
+                          const TraceFields& fields) {
     if (filters_str.empty()) return;
 
-    thread_local simdjson::dom::parser tl_parser;
+    thread_local dftracer::utils::json::RecordParser tl_parser;
     auto result = tl_parser.parse(filters_str.data(), filters_str.size());
     if (result.error()) return;
 
@@ -252,9 +282,20 @@ inline void apply_filters(std::string& dsl, std::string_view filters_str) {
 
         std::string op_str(op);
         std::string field_str(field);
-        if (field_str == "begin") field_str = "ts";
-        if (field_str == "end") field_str = "ts";
-        if (field_str == "duration") field_str = "dur";
+        // Time bounds arrive in microseconds; a path schema's time and
+        // duration fields hold their own unit.
+        double us = 1;
+        if (field_str == "begin" || field_str == "end") {
+            field_str = fields.time;
+            us = fields.time_us;
+        } else if (field_str == "duration") {
+            field_str = fields.duration;
+            us = fields.duration_us;
+        }
+        if (field_str.empty()) continue;
+        if (us != 1 && !val.empty() &&
+            (std::isdigit(static_cast<unsigned char>(val[0])) || val[0] == '-'))
+            val = std::to_string(std::strtod(val.c_str(), nullptr) / us);
 
         std::string query_op;
         if (op_str == "=")
@@ -283,8 +324,11 @@ inline void apply_filters(std::string& dsl, std::string_view filters_str) {
 // --- GET /api/viz/events ---
 // Build the query view (time range + lane/filter/pid/tid/cat predicates) for a
 // viz request from the parsed parameters.
+// A path schema's records carry their time in their own unit, so a caller
+// windows them with View::time_range instead of the ts clause here.
 inline ViewDefinition build_viz_view(const QueryParams& params, double begin,
-                                     double end, double min_dur) {
+                                     double end, double min_dur,
+                                     const TraceFields& fields) {
     ViewDefinition view;
     view.name = "viz_query";
     view.description = "Visualization query";
@@ -299,47 +343,51 @@ inline ViewDefinition build_viz_view(const QueryParams& params, double begin,
     auto append_u64 = [&](std::uint64_t v) {
         dsl.append(numbuf, to_chars_u64(numbuf, numbuf + sizeof(numbuf), v));
     };
+    auto conjoin = [&dsl]() {
+        if (!dsl.empty()) dsl += " and ";
+    };
 
-    dsl += "ts >= ";
-    append_u64(static_cast<std::uint64_t>(begin));
-    dsl += " and ts <= ";
-    append_u64(static_cast<std::uint64_t>(end));
-    if (min_dur > 0) {
-        dsl += " and dur >= ";
-        append_u64(static_cast<std::uint64_t>(min_dur));
+    if (!fields.by_path) {
+        dsl += "ts >= ";
+        append_u64(static_cast<std::uint64_t>(begin));
+        dsl += " and ts <= ";
+        append_u64(static_cast<std::uint64_t>(end));
+        if (min_dur > 0) {
+            dsl += " and dur >= ";
+            append_u64(static_cast<std::uint64_t>(min_dur));
+        }
+    } else if (min_dur > 0 && !fields.duration.empty()) {
+        dsl += fields.duration;
+        dsl += " >= ";
+        dsl += std::to_string(min_dur / fields.duration_us);
     }
 
     apply_lanes(dsl, params.get("lanes"));
-    apply_filters(dsl, params.get("filters"));
+    apply_filters(dsl, params.get("filters"), fields);
 
-    auto pid = params.get("pid");
-    if (!pid.empty()) {
-        dsl += " and pid == ";
-        dsl += pid;
-    }
-
-    auto tid = params.get("tid");
-    if (!tid.empty()) {
-        dsl += " and tid == ";
-        dsl += tid;
-    }
+    if (auto pid = params.get("pid"); !pid.empty() && !fields.entity.empty())
+        append_lane_clause(dsl, fields.entity.c_str(), std::string(pid));
+    if (auto tid = params.get("tid"); !tid.empty() && !fields.lane.empty())
+        append_lane_clause(dsl, fields.lane.c_str(), std::string(tid));
 
     auto cat = params.get("cat");
     if (!cat.empty()) {
-        dsl += " and cat == \"";
+        conjoin();
+        dsl += "cat == \"";
         dsl += cat;
         dsl += '"';
     }
 
-    // Raw DSL from the front-end query box, already validated by the caller.
-    auto query = params.get("query");
+    // Raw duql from the front-end filter box, already validated by the caller.
+    auto query = params.get("duql");
     if (!query.empty()) {
-        dsl += " and (";
+        conjoin();
+        dsl += '(';
         dsl += query;
         dsl += ')';
     }
 
-    view.with_query(dsl);
+    if (!dsl.empty()) view.with_query(dsl);
     return view;
 }
 

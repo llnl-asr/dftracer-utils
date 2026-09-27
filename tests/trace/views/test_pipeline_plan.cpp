@@ -38,15 +38,16 @@ TEST_SUITE("Pipeline plan") {
         std::string gz = test_view_common::create_mixed_trace(env, 30, 20);
         std::string idx = determine_index_path(gz, "");
 
-        ScanPlan base = scan::metadata(scan::from_file(gz, idx), false);
+        ScanPlan base = scan::from_file(gz, idx);
         dataframe::DataFrame all = run(scan::collect_frame(base));
         REQUIRE(all.num_rows() == 50);
         CHECK(bhas(all, "cat"));
         CHECK(bhas(all, "name"));
         CHECK(bhas(all, "dur"));
 
-        ScanPlan sorted =
-            scan::sort_by(scan::query(base, R"(cat == "POSIX")"), "dur", true);
+        ScanPlan sorted = scan::sort_by(
+            scan::filter(base, duql::parse_or_throw(R"(cat == "POSIX")")),
+            "dur", true);
         ScanPlan posix_plan = scan::limit(scan::offset(sorted, 2), 10);
         dataframe::DataFrame posix = run(scan::collect_frame(posix_plan));
         REQUIRE(posix.num_rows() == 10);

@@ -64,7 +64,8 @@ BloomFold::BloomFold(dftracer::utils::StringIntern& intern,
 void BloomFold::observe_path(index::store::PathStat& stat, std::uint8_t tag) {
     const auto t = static_cast<index::store::PathType>(tag);
     stat.type = index::store::join(stat.type, t);
-    stat.seen |= static_cast<std::uint8_t>(1U << tag);
+    if (t <= index::store::PathType::MIXED)
+        stat.seen |= static_cast<std::uint8_t>(1U << tag);
     if (t != index::store::PathType::NULL_VALUE) ++stat.count;
 }
 
@@ -83,6 +84,8 @@ void BloomFold::observe_auto(AutoChunk& chunk,
         AutoField& f = chunk[k];
         if (const auto* i = std::get_if<std::int64_t>(&v)) {
             BV::observe_value(f.stats, *i);
+        } else if (const auto* u = std::get_if<std::uint64_t>(&v)) {
+            BV::observe_value(f.stats, *u);
         } else if (const auto* d = std::get_if<double>(&v)) {
             BV::observe_value(f.stats, *d);
         } else {
@@ -434,6 +437,8 @@ void BloomFold::step(const trace::views::detail::FoldBatch& batch) {
                 if (k != extra_keys_[x]) continue;
                 if (const auto* i = std::get_if<std::int64_t>(&v))
                     BV::observe_extra(chunk, x, *i);
+                else if (const auto* u = std::get_if<std::uint64_t>(&v))
+                    BV::observe_extra(chunk, x, *u);
                 else if (const auto* d = std::get_if<double>(&v))
                     BV::observe_extra(chunk, x, *d);
                 else

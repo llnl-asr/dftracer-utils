@@ -2,7 +2,7 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/op.h>
-#include <dftracer/utils/query/abi.h>
+#include <dftracer/utils/duql/abi.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
@@ -546,10 +546,10 @@ TEST_SUITE("op_registry") {
         REQUIRE(mask.has_value());
         CHECK(mask->sig().kind() == OpKind::Series);
         CHECK(mask->sig().arity() == 0);
-        dftu_query* q = dftu_query_parse("a > 1");
+        dftu_duql* q = dftu_duql_parse("a > 1");
         REQUIRE(q != nullptr);
         OpArgs maskArg;
-        maskArg.frame(0, df).query(1, q);
+        maskArg.frame(0, df).duql(1, q);
         dftu_series* m =
             dftu_op_run(dftu_op_find("dftu.frame.mask"), nullptr, 0, maskArg);
         dftu_series* mDirect = dftu_dataframe_mask_frame(df, q);
@@ -559,7 +559,7 @@ TEST_SUITE("op_registry") {
             CHECK(bit_of(m, i) == bit_of(mDirect, i));
         dftu_series_free(m);
         dftu_series_free(mDirect);
-        dftu_query_free(q);
+        dftu_duql_free(q);
 
         dftu_dataframe_free(df);
     }

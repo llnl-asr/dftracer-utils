@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/json.h>
-#include <dftracer/utils/query/query.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
@@ -17,7 +17,7 @@
 
 namespace views = dftracer::utils::trace::views;
 namespace reader = dftracer::utils::utilities::reader;
-using dftracer::utils::query::Query;
+using dftracer::utils::duql::Query;
 
 namespace {
 
@@ -26,6 +26,38 @@ const std::vector<std::string> NAMES = {
 const std::vector<std::string> CATS = {"POSIX", "STDIO", "MPI"};
 const std::vector<std::int64_t> PIDS = {100, 1234, 98765};
 const std::vector<std::string> OPS = {"rd", "wr", "seek"};
+
+// Optional args that are null, a bool, an empty or one-element array, or
+// absent.
+std::string extra_args(std::mt19937& rng, const char* c, const char* s) {
+    std::string out;
+    switch (rng() % 4) {
+        case 0:
+            out += std::string(s) + "\"retry\"" + c + "null";
+            break;
+        case 1:
+            out += std::string(s) + "\"retry\"" + c + std::to_string(rng() % 3);
+            break;
+        default:
+            break;
+    }
+    switch (rng() % 4) {
+        case 0:
+            out += std::string(s) + "\"tags\"" + c + "[]";
+            break;
+        case 1:
+            out += std::string(s) + "\"tags\"" + c + "[\"x\"]";
+            break;
+        case 2:
+            out += std::string(s) + "\"tags\"" + c + "null";
+            break;
+        default:
+            break;
+    }
+    if (rng() % 2)
+        out += std::string(s) + "\"ok\"" + c + (rng() % 2 ? "true" : "false");
+    return out;
+}
 
 // Data events and metadata records, half of them in spaced JSON, with file
 // names holding '/' (never a needle).
@@ -52,7 +84,8 @@ std::vector<std::string> make_lines(std::mt19937& rng, int n) {
                 "\"args\"" + c + "{\"size\"" + c +
                 std::to_string(rng() % 5000) + s + "\"fname\"" + c +
                 "\"/data/file_" + std::to_string(rng() % 4) + "\"" + s +
-                "\"op\"" + c + "\"" + pick(OPS) + "\"}}";
+                "\"op\"" + c + "\"" + pick(OPS) + "\"" + extra_args(rng, c, s) +
+                "}}";
         }
         out.push_back(std::move(l));
     }
@@ -61,7 +94,37 @@ std::vector<std::string> make_lines(std::mt19937& rng, int n) {
 
 std::string random_leaf(std::mt19937& rng) {
     auto pick = [&](const auto& v) { return v[rng() % v.size()]; };
-    switch (rng() % 13) {
+    switch (rng() % 27) {
+        case 22:
+            return "name ~ \"MPI_.*reduce\"";
+        case 23:
+            return "name ~ \"^(read|write)$\"";
+        case 24:
+            return "args.fname like \"%file_" + std::to_string(rng() % 4) +
+                   "\"";
+        case 25:
+            return "name ilike \"%READ%\"";
+        case 26:
+            return "name !~ \"open\"";
+        case 13:
+            return "args.size * 2 > " + std::to_string(rng() % 10000);
+        case 14:
+            return "exists(args.retry)";
+        case 15:
+            return "args.retry is null";
+        case 16:
+            return "len(args.tags) == 0";
+        case 17:
+            return "exists(args.tags)";
+        case 18:
+            return "args.ok == true";
+        case 19:
+            return "(args.retry ?? 0) >= 1";
+        case 20:
+            return "exists(args.nothing)";
+        case 21:
+            return "dur between " + std::to_string(rng() % 50) + " and " +
+                   std::to_string(50 + rng() % 50);
         case 0:
             return "name == \"" + pick(NAMES) + "\"";
         case 1:
@@ -113,7 +176,6 @@ std::uint64_t view_count(const std::string& gz, const Query& q,
     vp.files.push_back(
         {gz, dftracer::utils::trace::internal::determine_index_path(gz, "")});
     vp.query = q;
-    vp.include_metadata = false;
     auto vdef = views::detail::make_vdef(vp, false);
     vdef.prefilter = prefilter;
     return views::detail::for_each_scanned_batch(
@@ -175,7 +237,7 @@ TEST_CASE("the pre-filter never drops a match") {
     for (int i = 0; i < 300; ++i) {
         const std::string text = random_query(rng, 3);
         CAPTURE(text);
-        const Query q = dftracer::utils::query::parse_or_throw(text);
+        const Query q = dftracer::utils::duql::parse_or_throw(text);
         std::uint64_t data = 0, all = 0;
         for (std::size_t k = 0; k < lines.size(); ++k) {
             auto root = parser.parse(padded[k]).value();
@@ -249,7 +311,7 @@ TEST_CASE("the pre-filter never drops a match on generic records") {
         const std::string text =
             rng() % 2 ? leaf() : "(" + leaf() + ") and (" + leaf() + ")";
         CAPTURE(text);
-        const Query q = dftracer::utils::query::parse_or_throw(text);
+        const Query q = dftracer::utils::duql::parse_or_throw(text);
         std::uint64_t all = 0;
         for (auto& p : padded)
             all += q.evaluate(dftracer::utils::json::JsonValue(

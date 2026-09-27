@@ -1,8 +1,11 @@
 #include <dftracer/utils/core/common/field_ref.h>
+#include <dftracer/utils/core/common/to_chars.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
-#include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/index/schemas/dft/agg/reserved_args.h>
+#include <dftracer/utils/json/canonical.h>
+#include <dftracer/utils/json/json_escape.h>
+#include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/agg_fold.h>
 #include <dftracer/utils/trace/views/event_source.h>
@@ -12,8 +15,10 @@
 #include <charconv>
 #include <cstdint>
 #include <deque>
+#include <limits>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -58,6 +63,11 @@ bool is_agg_key_field(std::string_view sel, std::string_view& field,
         arg_only = false;
         return true;
     }
+    if (sel.starts_with(AGG_KEY_JSON_PREFIX)) {
+        field = sel.substr(AGG_KEY_JSON_PREFIX.size());
+        arg_only = false;
+        return true;
+    }
     return false;
 }
 
@@ -81,6 +91,19 @@ bool is_derived_agg_field(std::string_view sel, std::string_view& name) {
 
 constexpr std::string_view WINDOW_PREFIX = "__win:";
 constexpr std::string_view CLIP_PREFIX = "__clip:";
+constexpr std::string_view LIST_PREFIX = "__list:";
+
+// "__list:<spec>:<path>", as list_token writes it.
+bool parse_list_sel(std::string_view sel, std::string_view& spec,
+                    std::string_view& path) {
+    if (!sel.starts_with(LIST_PREFIX)) return false;
+    const std::string_view s = sel.substr(LIST_PREFIX.size());
+    const std::size_t colon = s.find(':');
+    if (colon == std::string_view::npos) return false;
+    spec = s.substr(0, colon);
+    path = s.substr(colon + 1);
+    return true;
+}
 
 struct WindowSel {
     std::uint64_t lo = 0;
@@ -123,6 +146,250 @@ std::vector<std::uint8_t> validity_of(const std::vector<bool>& present) {
     for (std::size_t i = 0; i < present.size(); ++i)
         if (present[i]) v[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
     return v;
+}
+
+// One array element or struct field value.
+struct Scalar {
+    enum class K : std::uint8_t { NUL, BOOL, INT, DBL, STR, JSON };
+    K k = K::NUL;
+    std::int64_t i = 0;
+    double d = 0;
+    std::string s;
+};
+
+Scalar scalar_of(simdjson::dom::element e) {
+    using T = simdjson::dom::element_type;
+    Scalar out;
+    switch (e.type()) {
+        case T::BOOL:
+            out.k = Scalar::K::BOOL;
+            out.i = e.get_bool().value_unsafe() ? 1 : 0;
+            break;
+        case T::INT64:
+            out.k = Scalar::K::INT;
+            out.i = e.get_int64().value_unsafe();
+            break;
+        case T::UINT64: {
+            const std::uint64_t u = e.get_uint64().value_unsafe();
+            if (u <= static_cast<std::uint64_t>(
+                         std::numeric_limits<std::int64_t>::max())) {
+                out.k = Scalar::K::INT;
+                out.i = static_cast<std::int64_t>(u);
+            } else {
+                out.k = Scalar::K::DBL;
+                out.d = static_cast<double>(u);
+            }
+            break;
+        }
+        case T::DOUBLE:
+            out.k = Scalar::K::DBL;
+            out.d = e.get_double().value_unsafe();
+            break;
+        case T::STRING:
+            out.k = Scalar::K::STR;
+            out.s = e.get_string().value_unsafe();
+            break;
+        case T::ARRAY:
+        case T::OBJECT:
+            out.k = Scalar::K::JSON;
+            dftracer::utils::json::append_canonical_json(out.s, e);
+            break;
+        case T::BIGINT:
+            out.k = Scalar::K::STR;
+            out.s = e.get_bigint().value_unsafe();
+            break;
+        default:
+            break;
+    }
+    return out;
+}
+
+// The letter the values share: i, f, s, b, or j when they mix.
+char infer_kind(const std::vector<Scalar>& vals) {
+    bool i = false, d = false, s = false, b = false, j = false;
+    for (const Scalar& v : vals) {
+        i |= v.k == Scalar::K::INT;
+        d |= v.k == Scalar::K::DBL;
+        s |= v.k == Scalar::K::STR;
+        b |= v.k == Scalar::K::BOOL;
+        j |= v.k == Scalar::K::JSON;
+    }
+    if (j ||
+        static_cast<int>(i || d) + static_cast<int>(s) + static_cast<int>(b) >
+            1)
+        return 'j';
+    if (d) return 'f';
+    if (i) return 'i';
+    if (b) return 'b';
+    return 's';
+}
+
+df::Series column_of(const std::vector<Scalar>& vals, char kind) {
+    const auto n = static_cast<std::int64_t>(vals.size());
+    std::vector<bool> present(vals.size(), false);
+    if (kind == 'i' || kind == 'f') {
+        std::vector<std::int64_t> is(vals.size(), 0);
+        std::vector<double> ds(vals.size(), 0);
+        for (std::size_t r = 0; r < vals.size(); ++r) {
+            const Scalar& v = vals[r];
+            if (v.k == Scalar::K::INT) {
+                is[r] = v.i;
+                ds[r] = static_cast<double>(v.i);
+                present[r] = true;
+            } else if (v.k == Scalar::K::DBL && kind == 'f') {
+                ds[r] = v.d;
+                present[r] = true;
+            }
+        }
+        auto vbits = validity_of(present);
+        const std::uint8_t* valid = vbits.empty() ? nullptr : vbits.data();
+        return kind == 'i' ? df::Series::flat_i64(is.data(), n, valid)
+                           : df::Series::flat_f64(ds.data(), n, valid);
+    }
+    if (kind == 'b') {
+        std::vector<std::uint8_t> bits((vals.size() + 7) / 8, 0);
+        for (std::size_t r = 0; r < vals.size(); ++r) {
+            if (vals[r].k != Scalar::K::BOOL) continue;
+            present[r] = true;
+            if (vals[r].i)
+                bits[r >> 3] |= static_cast<std::uint8_t>(1u << (r & 7));
+        }
+        auto vbits = validity_of(present);
+        return df::Series::flat(df::TypeId::Bool, bits.data(), n,
+                                vbits.empty() ? nullptr : vbits.data());
+    }
+    std::deque<std::string> owned;
+    std::vector<std::string_view> text(vals.size());
+    for (std::size_t r = 0; r < vals.size(); ++r) {
+        const Scalar& v = vals[r];
+        if (v.k == Scalar::K::NUL || (kind == 's' && v.k != Scalar::K::STR))
+            continue;
+        present[r] = true;
+        if (v.k == Scalar::K::STR && kind == 's') {
+            text[r] = v.s;
+            continue;
+        }
+        std::string& t = owned.emplace_back();
+        switch (v.k) {
+            case Scalar::K::STR:
+                t += '"';
+                dftracer::utils::json::append_json_escaped(t, v.s);
+                t += '"';
+                break;
+            case Scalar::K::BOOL:
+                t = v.i ? "true" : "false";
+                break;
+            case Scalar::K::INT:
+                t = std::to_string(v.i);
+                break;
+            case Scalar::K::DBL:
+                t = double_text(v.d);
+                break;
+            default:
+                t = v.s;
+        }
+        text[r] = t;
+    }
+    auto vbits = validity_of(present);
+    return df::Series::strings(std::span<const std::string_view>(text),
+                               vbits.empty() ? nullptr : vbits.data());
+}
+
+// The array at `path` as JSON text, or nullopt when the event holds no
+// array there.
+// `a[0].b` as the flattened key `a.0.b` events store it under.
+std::string flat_key(std::string_view path) {
+    std::string out;
+    out.reserve(path.size());
+    for (const char c : path) {
+        if (c == '[')
+            out += '.';
+        else if (c != ']')
+            out += c;
+    }
+    return out;
+}
+
+std::optional<std::string> array_text(
+    const FoldEvent& ev, const dftracer::utils::StringIntern& intern,
+    std::string_view at) {
+    const std::string path = flat_key(at);
+    PodSource src(ev, intern);
+    if (const auto* sp = src.special(path)) {
+        if (*sp == FoldEvent::Special::EMPTY_ARRAY) return "[]";
+        if (*sp == FoldEvent::Special::JSON_ARRAY)
+            return std::string(src.value(path));
+        return std::nullopt;
+    }
+    if (src.has(path)) return std::nullopt;
+    auto cell = container_cell(ev, intern, path);
+    if (!cell || cell->kind != duql::Cell::Kind::ARRAY) return std::nullopt;
+    return std::get<std::string>(std::move(cell->value));
+}
+
+df::Series list_column(const std::vector<FoldEvent>& evs,
+                       const dftracer::utils::StringIntern& intern,
+                       std::string_view spec, std::string_view path) {
+    std::vector<std::pair<std::string, char>> fields;
+    const bool fixed_struct = spec.starts_with('{');
+    if (fixed_struct) {
+        std::string_view body = spec.substr(1, spec.size() - 2);
+        while (!body.empty()) {
+            const std::size_t comma = std::min(body.find(','), body.size());
+            const std::string_view f = body.substr(0, comma);
+            const std::size_t eq = f.find('=');
+            fields.emplace_back(std::string(f.substr(0, eq)),
+                                eq + 1 < f.size() ? f[eq + 1] : 'j');
+            body.remove_prefix(std::min(comma + 1, body.size()));
+        }
+    }
+    dftracer::utils::json::RecordParser parser;
+    std::vector<std::int32_t> offsets{0};
+    std::vector<std::int64_t> rows;
+    bool null_row = false;
+    std::vector<Scalar> elems;
+    std::vector<std::vector<std::pair<std::string, Scalar>>> objects;
+    for (std::size_t r = 0; r < evs.size(); ++r) {
+        const auto text = array_text(evs[r], intern, path);
+        simdjson::dom::element root;
+        simdjson::dom::array arr;
+        if (!text || parser.parse(*text).get(root) != simdjson::SUCCESS ||
+            root.get_array().get(arr) != simdjson::SUCCESS) {
+            offsets.push_back(offsets.back());
+            rows.push_back(-1);
+            null_row = true;
+            continue;
+        }
+        for (auto el : arr) {
+            elems.push_back(scalar_of(el));
+            if (!fixed_struct) continue;
+            auto& obj = objects.emplace_back();
+            simdjson::dom::object o;
+            if (el.get_object().get(o) == simdjson::SUCCESS)
+                for (auto kv : o) obj.emplace_back(kv.key, scalar_of(kv.value));
+        }
+        offsets.push_back(static_cast<std::int32_t>(elems.size()));
+        rows.push_back(static_cast<std::int64_t>(r));
+    }
+    df::Series values;
+    if (fixed_struct) {
+        std::vector<std::string> names;
+        std::vector<df::Series> cols;
+        for (const auto& [name, kind] : fields) {
+            std::vector<Scalar> vals(objects.size());
+            for (std::size_t e = 0; e < objects.size(); ++e)
+                for (auto& [k, v] : objects[e])
+                    if (k == name) vals[e] = v;
+            names.push_back(name);
+            cols.push_back(column_of(vals, kind));
+        }
+        values = df::Series::structs(std::move(names), std::move(cols));
+    } else {
+        values = column_of(elems, spec == "a" ? infer_kind(elems) : spec[0]);
+    }
+    df::Series list = df::Series::list(offsets, std::move(values));
+    if (null_row) return list.take(rows);
+    return list;
 }
 
 // The value of arg `keyid` on `ev`, or nullptr if the event lacks it.
@@ -170,97 +437,143 @@ df::Series str_id_column(const std::vector<FoldEvent>& evs,
                                vbits.empty() ? nullptr : vbits.data());
 }
 
-// Build one arg column: int64 unless a real forces Float64 or a string value
-// forces String; a row lacking the key (or, in the String case, nothing) is
-// null. A nested/extra field is captured under its full name and a flat arg
-// under its bare key, so `keyid` (full) is tried first and `keyid_alt` (bare)
-// as a fallback, matching PodSource::find_arg; pass NO_ID for no fallback.
+// The column type a set of arg values needs: int64 while every value is one,
+// uint64 once a value is above int64 and none is negative, float64 once a
+// real (or a negative next to a uint64) appears, string when every value is
+// text, and JSON once text and numbers mix.
+struct ArgType {
+    enum class Kind : std::uint8_t { Int, Uint, Dbl, Str, Json };
+    Kind kind = Kind::Int;
+    bool negative = false;
+    bool number = false;
+
+    void see(const FoldEvent::ArgValue& v) {
+        if (kind == Kind::Json) return;
+        const bool text = std::holds_alternative<std::uint32_t>(v);
+        if (kind == Kind::Str) {
+            if (!text) kind = Kind::Json;
+            return;
+        }
+        if (text) {
+            kind = number ? Kind::Json : Kind::Str;
+            return;
+        }
+        number = true;
+        if (std::holds_alternative<double>(v)) {
+            kind = Kind::Dbl;
+        } else if (const auto* i = std::get_if<std::int64_t>(&v)) {
+            negative = negative || *i < 0;
+            if (kind == Kind::Uint && negative) kind = Kind::Dbl;
+        } else if (kind == Kind::Int) {
+            kind = negative ? Kind::Dbl : Kind::Uint;
+        }
+    }
+};
+
+double arg_double(const FoldEvent::ArgValue& v) {
+    return std::visit([](auto x) { return static_cast<double>(x); }, v);
+}
+
+std::uint64_t arg_uint(const FoldEvent::ArgValue& v) {
+    if (const auto* u = std::get_if<std::uint64_t>(&v)) return *u;
+    return static_cast<std::uint64_t>(std::get<std::int64_t>(v));
+}
+
+// A number as JSON text: integers exactly, doubles in shortest round-trip
+// form.
+std::string number_text(const FoldEvent::ArgValue& v) {
+    if (const auto* i = std::get_if<std::int64_t>(&v))
+        return std::to_string(*i);
+    if (const auto* u = std::get_if<std::uint64_t>(&v))
+        return std::to_string(*u);
+    return dftracer::utils::double_text(std::get<double>(v));
+}
+
+// The column of `vals` (one per row, null when absent) as `type`.
+df::Series typed_arg_column(const std::vector<const FoldEvent::ArgValue*>& vals,
+                            const ArgType& type,
+                            const dftracer::utils::StringIntern& intern) {
+    using Kind = ArgType::Kind;
+    const auto n = static_cast<std::int64_t>(vals.size());
+    std::vector<bool> present(vals.size());
+    for (std::size_t r = 0; r < vals.size(); ++r) present[r] = vals[r];
+    auto vbits = validity_of(present);
+    const std::uint8_t* valid = vbits.empty() ? nullptr : vbits.data();
+    switch (type.kind) {
+        case Kind::Json: {
+            std::vector<std::string> cells(vals.size());
+            std::vector<std::string_view> out(vals.size());
+            for (std::size_t r = 0; r < vals.size(); ++r) {
+                if (!vals[r]) continue;
+                if (const auto* id = std::get_if<std::uint32_t>(vals[r])) {
+                    cells[r] += '"';
+                    dftracer::utils::json::append_json_escaped(
+                        cells[r], intern.resolve(*id));
+                    cells[r] += '"';
+                } else {
+                    cells[r] = number_text(*vals[r]);
+                }
+                out[r] = cells[r];
+            }
+            return df::Series::strings(std::span<const std::string_view>(out),
+                                       valid)
+                .as_json();
+        }
+        case Kind::Str: {
+            // Interned strings are views into stable intern storage; only
+            // number text needs owning, in a deque so views stay valid.
+            std::deque<std::string> owned;
+            std::vector<std::string_view> out(vals.size());
+            for (std::size_t r = 0; r < vals.size(); ++r) {
+                if (!vals[r]) continue;
+                if (const auto* id = std::get_if<std::uint32_t>(vals[r]))
+                    out[r] = intern.resolve(*id);
+                else
+                    out[r] = owned.emplace_back(number_text(*vals[r]));
+            }
+            return df::Series::strings(std::span<const std::string_view>(out),
+                                       valid);
+        }
+        case Kind::Dbl: {
+            std::vector<double> out(vals.size(), 0.0);
+            for (std::size_t r = 0; r < vals.size(); ++r)
+                if (vals[r]) out[r] = arg_double(*vals[r]);
+            return df::Series::flat(df::TypeId::Float64, out.data(), n, valid);
+        }
+        case Kind::Uint: {
+            std::vector<std::uint64_t> out(vals.size(), 0);
+            for (std::size_t r = 0; r < vals.size(); ++r)
+                if (vals[r]) out[r] = arg_uint(*vals[r]);
+            return df::Series::flat(df::TypeId::Uint64, out.data(), n, valid);
+        }
+        case Kind::Int: {
+            std::vector<std::int64_t> out(vals.size(), 0);
+            for (std::size_t r = 0; r < vals.size(); ++r)
+                if (vals[r]) out[r] = std::get<std::int64_t>(*vals[r]);
+            return df::Series::flat(df::TypeId::Int64, out.data(), n, valid);
+        }
+    }
+    return df::Series::nulls(df::TypeId::Int64, n);
+}
+
+// Build one arg column, typed as ArgType says; a row lacking the key is null.
+// A nested/extra field is captured under its full name and a flat arg under
+// its bare key, so `keyid` (full) is tried first and `keyid_alt` (bare) as a
+// fallback, matching PodSource::find_arg; pass NO_ID for no fallback.
 df::Series arg_column(const std::vector<FoldEvent>& evs, std::uint32_t keyid,
                       std::uint32_t keyid_alt,
                       const dftracer::utils::StringIntern& intern) {
-    auto lookup = [&](const FoldEvent& ev) -> const FoldEvent::ArgValue* {
-        if (const auto* v = find_arg(ev, keyid)) return v;
-        return keyid_alt == dftracer::utils::StringIntern::NO_ID
-                   ? nullptr
-                   : find_arg(ev, keyid_alt);
-    };
-    bool any_str = false, any_dbl = false;
-    for (const auto& ev : evs)
-        if (const auto* v = lookup(ev)) {
-            if (std::holds_alternative<std::uint32_t>(*v))
-                any_str = true;
-            else if (std::holds_alternative<double>(*v))
-                any_dbl = true;
-        }
-
-    const std::int64_t n = static_cast<std::int64_t>(evs.size());
-    std::vector<bool> present;
-    present.reserve(evs.size());
-
-    if (any_str) {
-        // Mixed numeric/string collapses to String (numbers stringified).
-        // Interned strings are views into stable intern storage; only
-        // stringified numbers need owning, in a deque so views stay valid.
-        std::deque<std::string> owned;
-        std::vector<std::string_view> vals;
-        vals.reserve(evs.size());
-        for (const auto& ev : evs) {
-            const auto* v = lookup(ev);
-            if (!v) {
-                vals.emplace_back();
-                present.push_back(false);
-                continue;
-            }
-            if (const auto* s = std::get_if<std::uint32_t>(v))
-                vals.emplace_back(intern.resolve(*s));
-            else if (const auto* i = std::get_if<std::int64_t>(v))
-                vals.emplace_back(owned.emplace_back(std::to_string(*i)));
-            else
-                vals.emplace_back(
-                    owned.emplace_back(std::to_string(std::get<double>(*v))));
-            present.push_back(true);
-        }
-        auto vbits = validity_of(present);
-        return df::Series::strings(std::span<const std::string_view>(vals),
-                                   vbits.empty() ? nullptr : vbits.data());
-    }
-
-    if (any_dbl) {
-        std::vector<double> vals;
-        vals.reserve(evs.size());
-        for (const auto& ev : evs) {
-            const auto* v = lookup(ev);
-            if (!v) {
-                vals.push_back(0.0);
-                present.push_back(false);
-            } else if (const auto* d = std::get_if<double>(v)) {
-                vals.push_back(*d);
-                present.push_back(true);
-            } else {
-                vals.push_back(static_cast<double>(std::get<std::int64_t>(*v)));
-                present.push_back(true);
-            }
-        }
-        auto vbits = validity_of(present);
-        return df::Series::flat(df::TypeId::Float64, vals.data(), n,
-                                vbits.empty() ? nullptr : vbits.data());
-    }
-
-    std::vector<std::int64_t> vals;
+    std::vector<const FoldEvent::ArgValue*> vals;
     vals.reserve(evs.size());
+    ArgType type;
     for (const auto& ev : evs) {
-        const auto* v = lookup(ev);
-        if (const auto* i = v ? std::get_if<std::int64_t>(v) : nullptr) {
-            vals.push_back(*i);
-            present.push_back(true);
-        } else {
-            vals.push_back(0);
-            present.push_back(false);
-        }
+        const auto* v = find_arg(ev, keyid);
+        if (!v && keyid_alt != dftracer::utils::StringIntern::NO_ID)
+            v = find_arg(ev, keyid_alt);
+        if (v) type.see(*v);
+        vals.push_back(v);
     }
-    auto vbits = validity_of(present);
-    return df::Series::flat(df::TypeId::Int64, vals.data(), n,
-                            vbits.empty() ? nullptr : vbits.data());
+    return typed_arg_column(vals, type, intern);
 }
 
 // Every arg column of the empty select, named "args.<key>" in sorted key order,
@@ -269,27 +582,27 @@ df::Series arg_column(const std::vector<FoldEvent>& evs, std::uint32_t keyid,
 void append_all_arg_columns(const std::vector<FoldEvent>& evs,
                             const dftracer::utils::StringIntern& intern,
                             df::DataFrame& out, std::string_view prefix) {
-    enum class Kind : std::uint8_t { Int, Dbl, Str };
     struct Col {
         std::uint32_t key = 0;
-        Kind kind = Kind::Int;
-        std::vector<std::int64_t> i;
-        std::vector<double> d;
-        std::vector<std::string_view> s;
-        std::vector<bool> present;
+        ArgType type;
+        std::vector<const FoldEvent::ArgValue*> vals;
     };
     std::unordered_map<std::uint32_t, std::uint32_t> slot;
     std::vector<Col> cols;
-    for (const auto& ev : evs)
-        for (const auto& [k, v] : ev.args) {
+    const std::size_t n = evs.size();
+    for (std::size_t r = 0; r < n; ++r)
+        for (const auto& [k, v] : evs[r].args) {
             auto [it, inserted] =
                 slot.emplace(k, static_cast<std::uint32_t>(cols.size()));
-            if (inserted) cols.emplace_back().key = k;
+            if (inserted) {
+                Col& fresh = cols.emplace_back();
+                fresh.key = k;
+                fresh.vals.assign(n, nullptr);
+            }
             Col& c = cols[it->second];
-            if (std::holds_alternative<std::uint32_t>(v))
-                c.kind = Kind::Str;
-            else if (c.kind == Kind::Int && std::holds_alternative<double>(v))
-                c.kind = Kind::Dbl;
+            if (c.vals[r]) continue;
+            c.vals[r] = &v;
+            c.type.see(v);
         }
     if (cols.empty()) return;
 
@@ -298,54 +611,10 @@ void append_all_arg_columns(const std::vector<FoldEvent>& evs,
     for (std::uint32_t c = 0; c < cols.size(); ++c)
         order.emplace_back(intern.resolve(cols[c].key), c);
     std::sort(order.begin(), order.end());
-
-    const std::size_t n = evs.size();
-    for (Col& c : cols) {
-        c.present.assign(n, false);
-        if (c.kind == Kind::Str)
-            c.s.assign(n, {});
-        else if (c.kind == Kind::Dbl)
-            c.d.assign(n, 0.0);
-        else
-            c.i.assign(n, 0);
-    }
-    std::deque<std::string> owned;
-    for (std::size_t r = 0; r < n; ++r)
-        for (const auto& [k, v] : evs[r].args) {
-            Col& c = cols[slot.find(k)->second];
-            if (c.present[r]) continue;
-            c.present[r] = true;
-            if (c.kind == Kind::Int) {
-                c.i[r] = std::get<std::int64_t>(v);
-            } else if (c.kind == Kind::Dbl) {
-                const auto* x = std::get_if<double>(&v);
-                c.d[r] =
-                    x ? *x : static_cast<double>(std::get<std::int64_t>(v));
-            } else if (const auto* id = std::get_if<std::uint32_t>(&v)) {
-                c.s[r] = intern.resolve(*id);
-            } else if (const auto* x = std::get_if<std::int64_t>(&v)) {
-                c.s[r] = owned.emplace_back(std::to_string(*x));
-            } else {
-                c.s[r] =
-                    owned.emplace_back(std::to_string(std::get<double>(v)));
-            }
-        }
-
-    const auto len = static_cast<std::int64_t>(n);
     for (const auto& [name, idx] : order) {
-        Col& c = cols[idx];
         out.names.push_back(std::string(prefix) + std::string(name));
-        auto vbits = validity_of(c.present);
-        const std::uint8_t* valid = vbits.empty() ? nullptr : vbits.data();
-        if (c.kind == Kind::Str)
-            out.columns.push_back(df::Series::strings(
-                std::span<const std::string_view>(c.s), valid));
-        else if (c.kind == Kind::Dbl)
-            out.columns.push_back(
-                df::Series::flat(df::TypeId::Float64, c.d.data(), len, valid));
-        else
-            out.columns.push_back(
-                df::Series::flat(df::TypeId::Int64, c.i.data(), len, valid));
+        out.columns.push_back(
+            typed_arg_column(cols[idx].vals, cols[idx].type, intern));
     }
 }
 
@@ -398,26 +667,86 @@ df::Series accpat_column(const std::vector<FoldEvent>& evs) {
     return df::Series::strings(std::vector<std::string>(evs.size(), "0"));
 }
 
-// A group-key string column rendered exactly as the engine agg path builds its
-// key (PodSource append_arg for an Arg key, append_value for a Field key), so
-// the engine group-by is byte-identical: a missing value is the empty string,
-// numbers are stringified.
+// `field` of `src` as canonical JSON text; false when absent or null.
+bool append_json_key(const PodSource& src, std::string& out,
+                     std::string_view field) {
+    if (const auto* sp = src.special(field)) {
+        switch (*sp) {
+            case FoldEvent::Special::NULL_VALUE:
+                return false;
+            case FoldEvent::Special::FALSE_VALUE:
+                out += "false";
+                return true;
+            case FoldEvent::Special::TRUE_VALUE:
+                out += "true";
+                return true;
+            case FoldEvent::Special::EMPTY_ARRAY:
+                out += "[]";
+                return true;
+            case FoldEvent::Special::EMPTY_OBJECT:
+                out += "{}";
+                return true;
+            case FoldEvent::Special::JSON_ARRAY:
+            case FoldEvent::Special::JSON_OBJECT:
+                return src.append_value(out, field);
+        }
+    }
+    if (src.number_typed(field)) return src.append_value(out, field);
+    if (!src.has(field)) return false;
+    out += '"';
+    dftracer::utils::json::append_json_escaped(out, src.value(field));
+    out += '"';
+    return true;
+}
+
+// A group-key string column (see AGG_KEY_ARG_PREFIX): null where the event
+// lacks the value or holds JSON null, so a missing key never merges with "".
+// A `json` key column holds canonical JSON text.
 df::Series group_key_str_column(const std::vector<FoldEvent>& evs,
                                 const dftracer::utils::StringIntern& intern,
-                                std::string_view field, bool arg_only) {
-    std::vector<std::string> vals;
-    vals.reserve(evs.size());
-    std::string buf;
+                                std::string_view field, bool arg_only,
+                                bool json) {
+    std::string data;
+    std::vector<std::size_t> ends;
+    std::vector<bool> present;
+    ends.reserve(evs.size());
+    present.reserve(evs.size());
     for (const auto& ev : evs) {
-        buf.clear();
         PodSource src(ev, intern);
-        if (arg_only)
-            src.append_arg(buf, field);
-        else
-            src.append_value(buf, field);
-        vals.push_back(buf);
+        if (json) {
+            const bool has = append_json_key(src, data, field);
+            ends.push_back(data.size());
+            present.push_back(has);
+            continue;
+        }
+        bool has = arg_only ? src.append_arg(data, field)
+                            : src.append_value(data, field);
+        if (!has)
+            if (const auto* sp = src.special(field)) {
+                if (*sp == FoldEvent::Special::EMPTY_ARRAY) {
+                    data += "[]";
+                    has = true;
+                } else if (*sp == FoldEvent::Special::EMPTY_OBJECT) {
+                    data += "{}";
+                    has = true;
+                }
+            }
+        ends.push_back(data.size());
+        present.push_back(has);
     }
-    return df::Series::strings(vals);
+    std::vector<std::string_view> vals;
+    vals.reserve(evs.size());
+    std::size_t begin = 0;
+    for (std::size_t end : ends) {
+        vals.emplace_back(data.data() + begin, end - begin);
+        begin = end;
+    }
+    auto vbits = validity_of(present);
+    df::Series out =
+        df::Series::strings(std::span<const std::string_view>(vals),
+                            vbits.empty() ? nullptr : vbits.data());
+    if (json) return out.as_json();
+    return out;
 }
 
 // One auto-discovered numeric arg as a Float64 value column for the agg
@@ -446,10 +775,8 @@ df::Series num_arg_column(const std::vector<FoldEvent>& evs,
         }
         if (!num) {
             if (const auto* v = find_arg(ev, keyid)) {
-                if (const auto* d = std::get_if<double>(v))
-                    num = *d;
-                else if (const auto* i = std::get_if<std::int64_t>(v))
-                    num = static_cast<double>(*i);
+                if (!std::holds_alternative<std::uint32_t>(*v))
+                    num = arg_double(*v);
             }
         }
         if (num) {
@@ -545,43 +872,6 @@ df::Series clip_column(const std::vector<FoldEvent>& evs, const WindowSel& w) {
                             vbits.empty() ? nullptr : vbits.data());
 }
 
-bool is_resolved(std::string_view f) {
-    return f.starts_with(dftracer::utils::index::RESOLVED_PREFIX);
-}
-
-// The key field of `resolved.<key field>.<field>`.
-std::string_view resolved_key(std::string_view f) {
-    f.remove_prefix(dftracer::utils::index::RESOLVED_PREFIX.size());
-    return f.substr(0, f.find('.'));
-}
-
-// An all-null String column of length n (validity all zero).
-df::Series null_string_column(std::size_t n) {
-    std::vector<std::uint8_t> vbits((n + 7) / 8, 0);
-    return df::Series::strings(std::vector<std::string_view>(n),
-                               n ? vbits.data() : nullptr);
-}
-
-// Each key of `keys` resolved through `table`; null where the key is unset or
-// unknown.
-df::Series resolved_column(const df::Series& keys,
-                           const StringViewMap<std::string>& table) {
-    const std::int64_t n = keys.length();
-    std::vector<std::string_view> vals(static_cast<std::size_t>(n));
-    std::vector<bool> present(static_cast<std::size_t>(n), false);
-    if (keys.type() == df::TypeId::String)
-        for (std::int64_t i = 0; i < n; ++i) {
-            if (keys.is_null(i)) continue;
-            auto it = table.find(keys.string_at(i));
-            if (it == table.end() || it->second.empty()) continue;
-            vals[static_cast<std::size_t>(i)] = it->second;
-            present[static_cast<std::size_t>(i)] = true;
-        }
-    auto vbits = validity_of(present);
-    return df::Series::strings(std::span<const std::string_view>(vals),
-                               vbits.empty() ? nullptr : vbits.data());
-}
-
 bool any_hash_present(const std::vector<FoldEvent>& evs,
                       std::uint32_t FoldEvent::* field) {
     for (const auto& ev : evs)
@@ -601,9 +891,20 @@ std::string clip_token(std::uint64_t lo, std::uint64_t hi,
     return window_sel(CLIP_PREFIX, lo, hi, part);
 }
 
+std::string list_token(std::string_view spec, std::string_view path) {
+    std::string out(LIST_PREFIX);
+    out += spec;
+    out += ':';
+    out += path;
+    return out;
+}
+
 std::string_view select_source_field(std::string_view sel) {
     sel = window_inner(sel);
     if (is_clip_token(sel)) return {};
+    std::string_view spec;
+    std::string_view path;
+    if (parse_list_sel(sel, spec, path)) return path;
     std::string_view f;
     bool arg_only = false;
     if (is_agg_key_field(sel, f, arg_only) || is_num_arg_field(sel, f) ||
@@ -619,15 +920,6 @@ std::string_view window_inner(std::string_view sel) {
 
 bool is_clip_token(std::string_view sel) {
     return sel.substr(0, CLIP_PREFIX.size()) == CLIP_PREFIX;
-}
-
-std::vector<std::string> select_resolved(
-    const std::vector<std::string>& select) {
-    std::vector<std::string> out;
-    for (const std::string& s : select)
-        if (const std::string_view f = window_inner(s); is_resolved(f))
-            out.emplace_back(f);
-    return out;
 }
 
 std::vector<std::string> row_fold_extra_captures(
@@ -647,6 +939,11 @@ std::vector<std::string> row_fold_extra_captures(
         const std::string_view sel = window_inner(token);
         if (is_clip_token(sel)) continue;
         std::string_view f = sel;
+        std::string_view list_spec;
+        if (parse_list_sel(sel, list_spec, f)) {
+            add(f);
+            continue;
+        }
         std::string_view uf;
         bool ao = false;
         if (is_agg_key_field(sel, uf, ao)) f = uf;
@@ -662,13 +959,7 @@ std::vector<std::string> row_fold_extra_captures(
         // (from ts/dur scalars) are derived, not captured raw.
         std::string_view df_name;
         if (is_derived_agg_field(sel, df_name)) continue;
-        // A resolved column captures its key field; io_cat and acc_pat are
-        // computed, not captured raw.
-        if (is_resolved(f)) {
-            const std::string_view key = resolved_key(f);
-            if (!is_hash_field(key)) add(key);
-            continue;
-        }
+        // io_cat and acc_pat are computed, not captured raw.
         if (is_iocat_field(f) || is_accpat_field(f)) continue;
         add(f);
     }
@@ -679,6 +970,10 @@ std::string canonical_row_column_name(std::string_view sel, bool by_path) {
     if (sel.substr(0, WINDOW_PREFIX.size()) == WINDOW_PREFIX ||
         is_clip_token(sel))
         return std::string(sel);
+    std::string_view spec;
+    std::string_view path;
+    if (parse_list_sel(sel, spec, path))
+        return canonical_row_column_name(path, by_path);
     if (by_path && !is_path_token(sel)) return std::string(sel);
     std::string_view f;
     bool arg_only = false;
@@ -688,7 +983,6 @@ std::string canonical_row_column_name(std::string_view sel, bool by_path) {
     if (is_num_arg_field(sel, num_name)) return std::string(sel);
     if (is_derived_agg_field(sel, deriv_name)) return std::string(deriv_name);
     if (is_top_level(sel)) return std::string(sel);
-    if (is_resolved(sel)) return std::string(sel);
     if (is_iocat_field(sel)) return std::string(sel);
     if (is_accpat_field(sel)) return std::string(sel);
     const std::string_view key = strip_args_prefix(sel);
@@ -702,6 +996,9 @@ dataframe::TypeId row_column_type(std::string_view sel, bool by_path) {
         return w.rest.empty() ? df::TypeId::Int64
                               : row_column_type(w.rest, by_path);
     if (parse_window_sel(sel, CLIP_PREFIX, w)) return df::TypeId::Uint64;
+    std::string_view spec;
+    std::string_view path;
+    if (parse_list_sel(sel, spec, path)) return df::TypeId::List;
     if (by_path && !is_path_token(sel)) return df::TypeId::Unknown;
     std::string_view f;
     bool arg_only = false;
@@ -715,7 +1012,6 @@ dataframe::TypeId row_column_type(std::string_view sel, bool by_path) {
         if (sel == "ph") return df::TypeId::Int64;
         return df::TypeId::Uint64;  // pid, tid, ts, dur
     }
-    if (is_resolved(sel)) return df::TypeId::String;
     if (is_iocat_field(sel)) return df::TypeId::Int64;
     if (is_accpat_field(sel)) return df::TypeId::String;
     const std::string_view key = strip_args_prefix(sel);
@@ -725,24 +1021,27 @@ dataframe::TypeId row_column_type(std::string_view sel, bool by_path) {
 
 namespace {
 
-df::Series select_column(
-    const std::vector<FoldEvent>& evs,
-    const dftracer::utils::StringIntern& intern, const std::string& sel,
-    double time_scale,
-    const dftracer::utils::index::plan::GroupResolver* resolver, bool by_path) {
+df::Series select_column(const std::vector<FoldEvent>& evs,
+                         const dftracer::utils::StringIntern& intern,
+                         const std::string& sel, double time_scale,
+                         bool by_path) {
     WindowSel win;
     if (parse_window_sel(sel, WINDOW_PREFIX, win)) {
         df::Series mask = window_mask_column(evs, win);
         if (win.rest.empty()) return mask;
         df::Series col = select_column(evs, intern, std::string(win.rest),
-                                       time_scale, resolver, by_path);
+                                       time_scale, by_path);
         return col.where(mask.valid_mask(),
                          df::Series::nulls(col.type(), col.length()));
     }
     if (parse_window_sel(sel, CLIP_PREFIX, win)) return clip_column(evs, win);
+    std::string_view list_spec;
+    std::string_view list_path;
+    if (parse_list_sel(sel, list_spec, list_path))
+        return list_column(evs, intern, list_spec, list_path);
     if (by_path && !is_path_token(sel)) {
         auto& mut = const_cast<dftracer::utils::StringIntern&>(intern);
-        const std::uint32_t id = mut.get_or_insert(sel);
+        const std::uint32_t id = mut.get_or_insert(flat_key(sel));
         return arg_column(evs, id, id, intern);
     }
     std::string_view agg_key_f;
@@ -750,20 +1049,14 @@ df::Series select_column(
     std::string_view num_arg_name;
     std::string_view deriv_name;
     if (is_agg_key_field(sel, agg_key_f, agg_key_arg_only)) {
-        return group_key_str_column(evs, intern, agg_key_f, agg_key_arg_only);
+        return group_key_str_column(evs, intern, agg_key_f, agg_key_arg_only,
+                                    sel.starts_with(AGG_KEY_JSON_PREFIX));
     } else if (is_num_arg_field(sel, num_arg_name)) {
         return num_arg_column(evs, num_arg_name, intern);
     } else if (is_derived_agg_field(sel, deriv_name)) {
         return derived_agg_column(evs, deriv_name, intern);
     } else if (is_top_level(sel)) {
         return top_column(evs, sel, intern, time_scale);
-    } else if (is_resolved(sel)) {
-        const auto* table = resolver ? resolver->column(sel) : nullptr;
-        if (!table) return null_string_column(evs.size());
-        return resolved_column(
-            select_column(evs, intern, std::string(resolved_key(sel)),
-                          time_scale, resolver, by_path),
-            *table);
     } else if (is_iocat_field(sel)) {
         return iocat_column(evs, intern);
     } else if (is_accpat_field(sel)) {
@@ -776,8 +1069,8 @@ df::Series select_column(
         // name, a flat arg under its bare key; try the full name first,
         // then the stripped key, matching PodSource::find_arg.
         auto& mut = const_cast<dftracer::utils::StringIntern&>(intern);
-        const std::uint32_t id_full = mut.get_or_insert(sel);
-        const std::uint32_t id_bare = mut.get_or_insert(key);
+        const std::uint32_t id_full = mut.get_or_insert(flat_key(sel));
+        const std::uint32_t id_bare = mut.get_or_insert(flat_key(key));
         return arg_column(evs, id_full, id_bare, intern);
     }
 }
@@ -787,8 +1080,7 @@ df::Series select_column(
 dataframe::DataFrame build_row_frame(
     const std::vector<FoldEvent>& evs,
     const dftracer::utils::StringIntern& intern,
-    const std::vector<std::string>& select, double time_scale,
-    const dftracer::utils::index::plan::GroupResolver* resolver, bool by_path) {
+    const std::vector<std::string>& select, double time_scale, bool by_path) {
     df::DataFrame out;
     const dftracer::utils::StringIntern* intern_ = &intern;
     const std::vector<std::string>& select_ = select;
@@ -818,8 +1110,8 @@ dataframe::DataFrame build_row_frame(
     } else {
         for (const std::string& sel : select_) {
             out.names.push_back(canonical_row_column_name(sel, by_path));
-            out.columns.push_back(select_column(evs, *intern_, sel, time_scale,
-                                                resolver, by_path));
+            out.columns.push_back(
+                select_column(evs, *intern_, sel, time_scale, by_path));
         }
     }
 
@@ -870,8 +1162,8 @@ build_dyn_numeric_columns(const std::vector<FoldEvent>& evs,
 }
 
 dataframe::DataFrame NativeRowFold::build() {
-    dataframe::DataFrame out = build_row_frame(
-        events_, *intern_, select_, time_scale_, resolver_.get(), by_path_);
+    dataframe::DataFrame out =
+        build_row_frame(events_, *intern_, select_, time_scale_, by_path_);
     events_.clear();
     return out;
 }

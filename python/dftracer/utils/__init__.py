@@ -20,13 +20,13 @@ from .dftracer_utils_ext import (  # noqa: F401
     CheckpointIndexer,  # noqa: F401
     DFTUtilsAggregationError,
     DFTUtilsCompressionError,
+    DFTUtilsDuqlError,
     DFTUtilsError,
     DFTUtilsIndexerError,
     DFTUtilsIOError,
     DFTUtilsNotFoundError,
     DFTUtilsParseError,
     DFTUtilsPipelineError,
-    DFTUtilsQueryError,
     DFTUtilsReaderError,
     DFTUtilsValueError,
     JsonDictValue,  # noqa: F401
@@ -43,6 +43,7 @@ from .dftracer_utils_ext import (
 from .dftracer_utils_ext import (
     set_default_runtime as _set_default_native_runtime,
 )
+from .duql import Expr, Field  # noqa: F401
 from .enums import AggOp, DType, GroupKey, Phase  # noqa: F401
 from .indexer import (  # noqa: F401
     AggregationConfig,
@@ -58,7 +59,6 @@ from .lazyframe import (  # noqa: F401
     collect_all,
     lazy,
 )
-from .query import Expr, Field, resolved  # noqa: F401
 from .runtime import Runtime, TaskHandle  # noqa: F401
 from .series import Series  # noqa: F401
 from .time_unit import TimeUnit  # noqa: F401
@@ -139,7 +139,6 @@ __all__ = [
     "Agg",
     "GroupBy",
     "count",
-    "resolved",
     "schemas",
     "Indexer",
     "IndexStatus",

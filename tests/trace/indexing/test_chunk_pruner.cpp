@@ -18,9 +18,9 @@
 using namespace dftracer::utils;
 using namespace dftracer::utils::index::extensions;
 using namespace dftracer::utils::index::plan;
+using dftracer::utils::duql::Query;
 using dftracer::utils::index::store::IndexDatabase;
 using dftracer::utils::index::store::internal::get_logical_path;
-using dftracer::utils::query::Query;
 
 static void populate_test_idx(const std::string& index_path,
                               const std::string& file_path) {

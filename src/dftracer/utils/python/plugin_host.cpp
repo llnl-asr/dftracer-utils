@@ -102,7 +102,7 @@ const Plugins* built_set(PluginHostObject* self) {
     return &*st->set;
 }
 
-// Expand any directory in `inputs` to its .pfw/.pfw.gz files, index (unless
+// Expand any directory in `inputs` to its trace files, index (unless
 // disabled), then drive every loaded plugin as a fold over one fused scan.
 CoroTask<void> run_host_scan(CoroScope& scope, std::vector<std::string> inputs,
                              std::string index_dir, const Plugins* plugins,
@@ -112,7 +112,7 @@ CoroTask<void> run_host_scan(CoroScope& scope, std::vector<std::string> inputs,
         std::error_code ec;
         if (fs::is_directory(p, ec)) {
             filesystem::PatternDirectoryScannerUtilityInput in(
-                p, {".pfw", ".pfw.gz"}, /*recursive=*/true,
+                p, filesystem::trace_file_patterns(), /*recursive=*/true,
                 /*populate_size=*/false);
             filesystem::PatternDirectoryScannerUtility scanner;
             auto entries = co_await scanner(scope, in);
@@ -124,8 +124,7 @@ CoroTask<void> run_host_scan(CoroScope& scope, std::vector<std::string> inputs,
     std::sort(files.begin(), files.end());
     if (files.empty())
         throw dftracer::utils::DFTUtilsException(
-            dftracer::utils::ErrorCode::NOT_FOUND,
-            "no .pfw or .pfw.gz trace files found");
+            dftracer::utils::ErrorCode::NOT_FOUND, "no trace files found");
 
     if (auto_index) {
         auto norm = co_await dftracer::utils::index::build::

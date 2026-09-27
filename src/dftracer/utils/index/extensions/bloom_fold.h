@@ -40,8 +40,9 @@ class BloomFold : public trace::views::detail::Fold {
 
     /// A filtered read would build a pruner index that later reads cannot tell
     /// from a complete one.
+    /// Every record, metadata included, so the chunk metadata is whole.
     bool accepts(const trace::views::detail::ScanShape& shape) const override {
-        return !shape.filtered;
+        return !shape.filtered && shape.include_metadata;
     }
     bool needs_args() const override { return true; }
     /// The nested extra dimensions, under their args.-prefixed path.

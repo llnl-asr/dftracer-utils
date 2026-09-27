@@ -59,12 +59,93 @@ def trace(tmp_path):
 
 @pytest.fixture
 def tv(trace):
-    return TraceViewer(trace).metadata(False)
+    return TraceViewer(trace)
 
 
 def _rows(frame, cols):
     data = frame.to_dict()
     return sorted(zip(*(data[c] for c in cols)))
+
+
+class TestDuqlPipeline:
+    QUERY = "where dur > $min | sort ts, name | take $n | select name, dur"
+
+    def test_pipeline_with_parameters(self, tv):
+        out = tv.duql(self.QUERY, min=350, n=3).collect().to_dict()
+        assert list(zip(out["name"], out["dur"])) == [
+            ("step", 900),
+            ("step", 900),
+            ("read", 400),
+        ]
+
+    def test_durations_take_the_role_unit(self, tv):
+        assert tv.duql("where dur > 0.35ms").collect().height == 16
+
+    def test_explain_lists_the_steps(self, tv):
+        plan = tv.explain_duql(self.QUERY, min=350, n=3)
+        assert plan.splitlines() == [
+            "scan filter: dur > 350 (pushed)",
+            "scan select: ts, name, dur",
+            "scan order: file, then line",
+            "sort_by_multi ts, name",
+            "head 3",
+            "select name, dur",
+        ]
+
+    def test_bad_parameter_type(self, tv):
+        with pytest.raises(TypeError):
+            tv.duql(self.QUERY, min=[1], n=3)
+
+    def test_stage_of_a_later_release(self, tv):
+        with pytest.raises(DFTUtilsValueError, match="12h"):
+            tv.duql("where dur > 1 | call myplug.sessions(gap = 5)")
+
+    def test_semi_join_arrow_and_lookup(self, tv):
+        semi = tv.duql('where name in (from data | where cat == "POSIX" | select name)')
+        assert semi.collect().height == 16
+        cats = "let cats = where dur == 400 | select name, c = cat; "
+        arrow = tv.duql(cats + 'where name -> cats.c == "POSIX"')
+        assert set(arrow.collect().to_dict()["name"]) == {"read"}
+        assert arrow.collect().height == 8
+        looked = tv.duql(
+            cats + "where tid == 1 and ts < 2000 | lookup cats on name | select name, c"
+        )
+        out = looked.collect().to_dict()
+        assert list(zip(out["name"], out["c"])) == [
+            ("step", None),
+            ("read", "POSIX"),
+            ("decode", None),
+            ("write", None),
+        ]
+        plan = tv.explain_duql(cats + 'where name -> cats.c == "POSIX"')
+        assert "side cats: from data" in plan
+        assert "name in (keys of cats) (pushed)" in plan
+
+    def test_folded_aggregates_and_array_functions(self, tv):
+        q = (
+            "where tid == 1 | group name { d = count_distinct(ts), c = collect(dur),"
+            " a = arg_max(ts, size) } | sort name"
+        )
+        out = tv.duql(q).collect().to_dict()
+        assert out["name"] == ["decode", "read", "step", "write"]
+        assert out["d"] == [STEPS] * 4
+        assert out["c"][1] == [400] * STEPS
+        assert out["a"][2] == 1000
+        assert "group fold over" in tv.explain_duql(q)
+        parts = tv.duql('where tid == 1 | derive p = split(name, "e") | select name, p | take 1')
+        assert parts.collect().to_dict()["p"] == [["st", "p"]]
+
+    def test_group_with_a_parameter(self, tv):
+        q = "where dur > $min | group name { n = count(), t = sum(dur) }"
+        out = tv.duql(q, min=350).collect().to_dict()
+        rows = tv.duql("where dur > 350").collect().to_dict()
+        want = {}
+        for name, dur in zip(rows["name"], rows["dur"]):
+            n, t = want.get(name, (0, 0))
+            want[name] = (n + 1, t + dur)
+        assert out["name"] == sorted(want)
+        assert list(zip(out["n"], out["t"])) == [want[n] for n in out["name"]]
+        assert "group (trace plan)" in tv.explain_duql(q, min=350)
 
 
 class TestOneCollect:
@@ -273,7 +354,7 @@ class TestRuntimeAndStream:
     def test_runtime_runs_the_plan(self, trace):
         rt = dft.Runtime(threads=2)
         try:
-            viewer = TraceViewer(trace, runtime=rt).metadata(False)
+            viewer = TraceViewer(trace, runtime=rt)
             assert viewer.filter('cat == "POSIX"').collect().height == 16
             assert viewer.group_by("name").agg("count").sort_by("name").collect().height == 4
         finally:
@@ -281,5 +362,5 @@ class TestRuntimeAndStream:
         assert rt.get_progress()["completed"] >= 2
 
     def test_directory_input(self, trace):
-        viewer = TraceViewer(os.path.dirname(trace)).metadata(False)
+        viewer = TraceViewer(os.path.dirname(trace))
         assert viewer.collect().height == 32

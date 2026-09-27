@@ -1,4 +1,4 @@
-#include <dftracer/utils/query/query.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/utilities/reader/internal/trace_reader_prefilter.h>
 #include <simdjson.h>
 
@@ -6,11 +6,12 @@
 #include <optional>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace dftracer::utils::utilities::reader::internal {
 
-using query::Query;
+using duql::Query;
 
 namespace {
 
@@ -18,8 +19,8 @@ namespace {
 // evaluator does, top level first and then under "args"; "args.<key>" reads
 // args only. Other dotted paths may name a nested object or a flat dotted
 // key, so they are left to the full evaluator (returns false).
-bool compile_eq_leaf(const query::CompareNode& n, CompiledEqProbe& out) {
-    if (n.op != query::CompareOp::EQ) return false;
+bool compile_eq_leaf(const duql::CompareNode& n, CompiledEqProbe& out) {
+    if (n.op != duql::CompareOp::EQ) return false;
     const std::string& path = n.field.path;
     const auto dot = path.find('.');
     if (dot == std::string::npos) {
@@ -122,8 +123,8 @@ bool probe_matches_value(const CompiledEqProbe& p,
 // Try to compile the query AST as an AND of EQ leaves. nullopt on
 // unsupported shapes; the ValueMap path handles those.
 std::optional<std::vector<CompiledEqProbe>> try_compile_eq_probes(
-    const query::QueryNode& node) {
-    using namespace query;
+    const duql::QueryNode& node) {
+    using namespace duql;
     return std::visit(
         [&](const auto& n) -> std::optional<std::vector<CompiledEqProbe>> {
             using T = std::decay_t<decltype(n)>;
@@ -149,35 +150,35 @@ std::optional<std::vector<CompiledEqProbe>> try_compile_eq_probes(
 // Evaluate compiled AND-of-EQ probes by directly probing simdjson fields.
 bool eval_compiled_eq(const std::vector<CompiledEqProbe>& probes,
                       simdjson::ondemand::document_reference doc) {
-    // The value of `key` in `obj`, if present and not null.
-    auto field =
-        [](auto&& obj,
-           const std::string& key) -> std::optional<simdjson::ondemand::value> {
+    // The value of `key` in `obj`: nullopt when absent, an empty value when
+    // it is null.
+    using Found = std::optional<std::optional<simdjson::ondemand::value>>;
+    auto field = [](auto&& obj, const std::string& key) -> Found {
         auto r = obj.find_field_unordered(std::string_view(key));
         if (r.error()) return std::nullopt;
         simdjson::ondemand::value v = r.value_unsafe();
         bool null = false;
         if (v.is_null().get(null) != simdjson::SUCCESS || null)
-            return std::nullopt;
-        return v;
+            return Found{std::in_place};
+        return Found{v};
     };
     for (const auto& p : probes) {
         doc.rewind();
         if (p.nested_key.empty()) {
             if (auto v = field(doc, p.top_key)) {
-                if (!probe_matches_value(p, *v)) return false;
+                if (!*v || !probe_matches_value(p, **v)) return false;
                 continue;
             }
             if (!p.args_fallback) return false;
             doc.rewind();
         }
         auto args = field(doc, "args");
-        if (!args) return false;
-        auto obj = args->get_object();
+        if (!args || !*args) return false;
+        auto obj = (*args)->get_object();
         if (obj.error()) return false;
         auto v = field(obj.value_unsafe(),
                        p.nested_key.empty() ? p.top_key : p.nested_key);
-        if (!v || !probe_matches_value(p, *v)) return false;
+        if (!v || !*v || !probe_matches_value(p, **v)) return false;
     }
     return true;
 }

@@ -5,12 +5,14 @@
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/core/utils/timer.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/index_batch_writer.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
+#include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/index/schemas/dft/bloom_core.h>
 #include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/index_database.h>
@@ -19,7 +21,6 @@
 #include <dftracer/utils/index/store/queries.h>
 #include <dftracer/utils/json/json.h>
 #include <dftracer/utils/json/json_value.h>
-#include <dftracer/utils/query/query.h>
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/statistics/detail_stats_view.h>
@@ -52,7 +53,7 @@ using namespace dftracer::utils::index::schemas::dft;
 using namespace dftracer::utils::utilities::filesystem;
 using dftracer::utils::index::schemas::dft::ChunkStatistics;
 using dftracer::utils::index::store::IndexDatabase;
-using query::Query;
+using duql::Query;
 namespace cli = dftracer::utils::cli;
 
 struct StatsConfig {
@@ -77,7 +78,7 @@ class StatsArgParse : public cli::ArgParse {
     cli::FilesArgs files_args{"Trace files to inspect (.pfw, .pfw.gz)"};
     cli::PipelineArgs pipeline;
     cli::IndexingArgs indexing;
-    cli::QueryArgs query_args;
+    cli::DuqlArgs duql_args;
 
     bool json_output = false;
     std::string report_str = "summary";
@@ -92,7 +93,7 @@ class StatsArgParse : public cli::ArgParse {
         indexing.with_force = false;
         indexing.index_dir_help =
             "Directory where .dftindex stores are created";
-        schema(directory, files_args, pipeline, indexing, query_args);
+        schema(directory, files_args, pipeline, indexing, duql_args);
     }
 
     bool to_config(StatsConfig& config) const {
@@ -108,11 +109,11 @@ class StatsArgParse : public cli::ArgParse {
         config.filter_cats = filter_cats;
         config.group_by = group_by;
 
-        const auto& query_str_val = query_args.query;
-        if (!query_str_val.empty()) {
-            auto result = Query::from_string(query_str_val);
+        const auto& duql_str = duql_args.duql;
+        if (!duql_str.empty()) {
+            auto result = Query::from_string(duql_str);
             if (!result) {
-                DFTRACER_UTILS_LOG_ERROR("Invalid --query: %s",
+                DFTRACER_UTILS_LOG_ERROR("Invalid --duql: %s",
                                          result.error().format().c_str());
                 return false;
             }
@@ -677,18 +678,15 @@ static void print_text_detailed(
 // DetailedStatistics over a View's index-pruned parallel scan, then resolves
 // hashes and produces output.
 static coro::CoroTask<void> process_file_detailed(
-    CoroScope& fctx, std::string file_path, std::size_t fi,
-    std::string index_dir, std::size_t checkpoint_size,
+    std::string file_path, std::size_t fi, std::string index_dir,
     bool needs_hash_resolution, bool json_output, std::uint64_t top_n,
-    const query::Query* query_ptr,
+    const duql::Query* query_ptr,
     const std::vector<std::string>* filter_names_ptr,
     const std::vector<std::string>* filter_cats_ptr,
     const std::vector<std::string>* group_by_ptr,
     DetailedStatistics* aggregate_detailed_ptr, std::mutex* aggregate_mutex_ptr,
     std::mutex* output_mutex_ptr,
     std::vector<std::pair<std::size_t, std::string>>* json_results_ptr) {
-    (void)fctx;
-    (void)checkpoint_size;
     std::string index_path =
         trace::internal::determine_index_path(file_path, index_dir);
 
@@ -706,32 +704,29 @@ static coro::CoroTask<void> process_file_detailed(
     std::unordered_map<std::string, std::string> hash_resolutions;
     if (needs_hash_resolution && fs::exists(index_path)) {
         try {
-            IndexDatabase idx_db(index_path);
-            auto resolve_hashes = [&](std::string_view dict,
-                                      std::string_view field) {
-                for (const auto& [key, _] : file_detailed.grouped_duration) {
-                    if (hash_resolutions.count(key) == 0) {
-                        auto resolved = idx_db.dict_value(dict, key, field);
-                        if (resolved.has_value()) {
-                            hash_resolutions[key] = resolved.value();
-                        }
-                    }
-                }
-                for (const auto& [key, _] : file_detailed.grouped_io) {
-                    if (hash_resolutions.count(key) == 0) {
-                        auto resolved = idx_db.dict_value(dict, key, field);
-                        if (resolved.has_value()) {
-                            hash_resolutions[key] = resolved.value();
-                        }
-                    }
-                }
+            using dftracer::utils::index::plan::GroupResolver;
+            const std::vector<dftracer::utils::index::plan::RowSetFile> files{
+                {file_path, index_path}};
+            auto resolve_hashes = [&](const GroupResolver::Column& column) {
+                const GroupResolver r(files, {column});
+                const auto* values = r.column(column.name);
+                if (!values) return;
+                auto add = [&](const auto& grouped) {
+                    for (const auto& [key, _] : grouped)
+                        if (hash_resolutions.count(key) == 0)
+                            if (auto it = values->find(key);
+                                it != values->end())
+                                hash_resolutions[key] = it->second;
+                };
+                add(file_detailed.grouped_duration);
+                add(file_detailed.grouped_io);
             };
 
             for (const auto& dim : *group_by_ptr) {
                 if (dim == "fhash") {
-                    resolve_hashes("file", "path");
+                    resolve_hashes({"file", "files", "fhash", "path"});
                 } else if (dim == "hhash") {
-                    resolve_hashes("host", "name");
+                    resolve_hashes({"host", "hosts", "hhash", "name"});
                 }
             }
         } catch (const std::exception& e) {
@@ -766,11 +761,11 @@ static coro::CoroTask<void> process_file_detailed(
 static void run_detailed_query_workers(
     CoroScope& scope, const std::vector<std::string>* files_ptr,
     std::size_t executor_threads, const std::string* index_dir_ptr,
-    std::size_t checkpoint_size, bool needs_hash_resolution, bool json_output,
-    std::size_t top_n, const query::Query* qp,
-    const std::vector<std::string>* fn, const std::vector<std::string>* fc,
-    const std::vector<std::string>* gb, DetailedStatistics* ad, std::mutex* am,
-    std::mutex* om, std::vector<std::pair<std::size_t, std::string>>* jr) {
+    bool needs_hash_resolution, bool json_output, std::size_t top_n,
+    const duql::Query* qp, const std::vector<std::string>* fn,
+    const std::vector<std::string>* fc, const std::vector<std::string>* gb,
+    DetailedStatistics* ad, std::mutex* am, std::mutex* om,
+    std::vector<std::pair<std::size_t, std::string>>* jr) {
     auto file_chan = coro::make_channel<std::size_t>(executor_threads * 2);
 
     scope.spawn([ch = file_chan->producer(),
@@ -786,16 +781,15 @@ static void run_detailed_query_workers(
 
     for (std::size_t w = 0; w < executor_threads; ++w) {
         scope.spawn([ch = file_chan->consumer(), files_ptr, index_dir_ptr,
-                     checkpoint_size, needs_hash_resolution, json_output, top_n,
-                     qp, fn, fc, gb, ad, am, om,
-                     jr](CoroScope& fctx) -> coro::CoroTask<void> {
+                     needs_hash_resolution, json_output, top_n, qp, fn, fc, gb,
+                     ad, am, om, jr](CoroScope&) -> coro::CoroTask<void> {
             while (auto fi_opt = co_await ch.receive()) {
                 std::size_t fi = *fi_opt;
                 std::string file_path = (*files_ptr)[fi];
                 co_await process_file_detailed(
-                    fctx, std::move(file_path), fi, *index_dir_ptr,
-                    checkpoint_size, needs_hash_resolution, json_output, top_n,
-                    qp, fn, fc, gb, ad, am, om, jr);
+                    std::move(file_path), fi, *index_dir_ptr,
+                    needs_hash_resolution, json_output, top_n, qp, fn, fc, gb,
+                    ad, am, om, jr);
             }
             co_return;
         });
@@ -890,7 +884,7 @@ static coro::CoroTask<std::vector<std::string>> collect_files(
             ctx, directory, /*recursive=*/false);
 
         if (files.empty()) {
-            DFTRACER_UTILS_LOG_ERROR("No .pfw or .pfw.gz files found in: %s",
+            DFTRACER_UTILS_LOG_ERROR("No trace files found in: %s",
                                      directory.c_str());
         }
         co_return files;
@@ -1100,7 +1094,6 @@ static coro::CoroTask<int> run_detailed_stats(
     auto* json_results_ptr = json_results.get();
     auto* query_ptr = config_ptr->query ? &*config_ptr->query : nullptr;
     const auto* index_dir_for_detailed_ptr = &config_ptr->index_dir;
-    std::size_t checkpoint_size_for_detailed = config_ptr->checkpoint_size;
     std::size_t executor_threads_for_detailed = config_ptr->executor_threads;
     bool needs_hash_resolution_for_detailed = needs_hash_resolution;
     bool json_output_for_detailed = config_ptr->json_output;
@@ -1108,18 +1101,18 @@ static coro::CoroTask<int> run_detailed_stats(
 
     co_await ctx.scope(
         [files_ptr, executor_threads_for_detailed, index_dir_for_detailed_ptr,
-         checkpoint_size_for_detailed, needs_hash_resolution_for_detailed,
-         json_output_for_detailed, top_n_for_detailed, query_ptr,
-         filter_names_ptr, filter_cats_ptr, group_by_ptr,
-         aggregate_detailed_ptr, aggregate_mutex_ptr, output_mutex_ptr,
+         needs_hash_resolution_for_detailed, json_output_for_detailed,
+         top_n_for_detailed, query_ptr, filter_names_ptr, filter_cats_ptr,
+         group_by_ptr, aggregate_detailed_ptr, aggregate_mutex_ptr,
+         output_mutex_ptr,
          json_results_ptr](CoroScope& scope) -> coro::CoroTask<void> {
             run_detailed_query_workers(
                 scope, files_ptr, executor_threads_for_detailed,
-                index_dir_for_detailed_ptr, checkpoint_size_for_detailed,
-                needs_hash_resolution_for_detailed, json_output_for_detailed,
-                top_n_for_detailed, query_ptr, filter_names_ptr,
-                filter_cats_ptr, group_by_ptr, aggregate_detailed_ptr,
-                aggregate_mutex_ptr, output_mutex_ptr, json_results_ptr);
+                index_dir_for_detailed_ptr, needs_hash_resolution_for_detailed,
+                json_output_for_detailed, top_n_for_detailed, query_ptr,
+                filter_names_ptr, filter_cats_ptr, group_by_ptr,
+                aggregate_detailed_ptr, aggregate_mutex_ptr, output_mutex_ptr,
+                json_results_ptr);
             co_return;
         });
 
@@ -1156,13 +1149,11 @@ static coro::CoroTask<void> process_index_group(
     const std::string* index_path_ptr,
     const std::vector<ResolvedFile>* group_ptr,
     std::vector<std::pair<std::size_t, TraceStatistics>>* indexed_stats_ptr,
-    std::mutex* stats_mutex_ptr, std::size_t expected_indexed_files,
-    bool needs_per_file_results, TraceStatistics* total_ptr,
-    std::mutex* total_mutex_ptr, std::atomic<std::size_t>* successful_ptr,
+    std::mutex* stats_mutex_ptr, bool needs_per_file_results,
+    TraceStatistics* total_ptr, std::mutex* total_mutex_ptr,
+    std::atomic<std::size_t>* successful_ptr,
     std::atomic<std::size_t>* failed_ptr,
-    StatisticsQueryType report_type_for_reader, Timer* metrics_timer_ptr) {
-    (void)expected_indexed_files;
-    (void)metrics_timer_ptr;
+    StatisticsQueryType report_type_for_reader) {
     try {
         namespace stats_ns = dftracer::utils::trace::statistics;
 
@@ -1301,16 +1292,13 @@ static coro::CoroTask<AggregateStatsResult> run_aggregate_stats(
     auto* total_mutex_ptr = &total_mutex;
     auto* successful_ptr = &successful;
     auto* failed_ptr = &failed;
-    auto* read_timer_ptr = &read_timer;
     StatisticsQueryType report_type_for_reader = config_ptr->report_type;
 
     if (!indexed_entries_ptr->empty()) {
-        const auto expected_indexed_files = indexed_entries_ptr->size();
         co_await process_index_group(
             index_path_ptr, indexed_entries_ptr, indexed_stats_ptr,
-            stats_mutex_ptr, expected_indexed_files, needs_per_file_results,
-            total_ptr, total_mutex_ptr, successful_ptr, failed_ptr,
-            report_type_for_reader, read_timer_ptr);
+            stats_mutex_ptr, needs_per_file_results, total_ptr, total_mutex_ptr,
+            successful_ptr, failed_ptr, report_type_for_reader);
     }
     read_timer.stop();
 

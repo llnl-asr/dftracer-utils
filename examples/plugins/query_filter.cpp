@@ -20,10 +20,10 @@ struct QueryFilter {
     explicit QueryFilter(const Config&) {}
 
     void step(const Batch& b, Host h) {
-        dftu_query* q = h.query_compile(F("dur") > 300);
+        dftu_duql* q = h.duql_compile(F("dur") > 300);
         for (const Event& e : b) {
             ++total;
-            if (q && h.query_matches(q, e.frame(), e.row())) ++matched;
+            if (q && h.duql_matches(q, e.frame(), e.row())) ++matched;
         }
     }
 

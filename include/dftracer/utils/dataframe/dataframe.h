@@ -6,7 +6,7 @@
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
-#include <dftracer/utils/query/query.h>
+#include <dftracer/utils/duql/query.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -184,10 +184,11 @@ struct DataFrame {
                         std::int64_t n_parts) const;
 
     /// Evaluate a compiled query as a per-row bit-packed Bool mask (for
-    /// filter()). Throws std::runtime_error if the predicate has no columnar
-    /// lowering for this frame (pattern match, ordered string compare, or a
-    /// referenced field absent here).
-    Series mask(const query::Query& q) const;
+    /// filter()) under three-valued logic: an UNKNOWN row (a missing column,
+    /// a null cell, a type mismatch) is null and filter() drops it. Throws
+    /// std::runtime_error if the predicate has no columnar lowering (pattern
+    /// match, any(), ordered comparison on a string or bool column).
+    Series mask(const duql::Query& q) const;
 
     DataFrame select(const std::vector<std::string>& names) const;
     DataFrame rename(const std::vector<std::string>& new_names) const;
@@ -222,8 +223,12 @@ struct DataFrame {
     /// name (emitted once); any other colliding name gets `suffix`. Matched
     /// rows keep this frame's order; Right / Outer append the unmatched right
     /// rows. Semi / Anti return this frame's columns only; Cross ignores the
-    /// keys. Throws std::out_of_range on an absent key, std::invalid_argument
-    /// on an empty or uneven key list or a key type mismatch.
+    /// keys. Lookup and Nest keep each row of this frame once and compare keys
+    /// by value (dftu_join_how); Nest names its list column `suffix`. Throws
+    /// std::out_of_range on an absent key, std::invalid_argument on an empty
+    /// or uneven key list, a key type mismatch (not for Lookup or Nest), or a
+    /// Lookup key whose right rows differ or whose filled left cell holds a
+    /// value.
     DataFrame join(const DataFrame& other,
                    const std::vector<std::string>& left_on,
                    const std::vector<std::string>& right_on,

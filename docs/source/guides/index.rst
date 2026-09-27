@@ -33,7 +33,7 @@ Open trace data and narrow it down to what you care about.
    :maxdepth: 1
 
    ../trace-viewer
-   core/query-dsl
+   core/duql
    core/indexing
    core/c-abi
 

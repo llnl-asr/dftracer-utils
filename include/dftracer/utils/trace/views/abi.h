@@ -4,7 +4,7 @@
 #include <dftracer/utils/core/common/export.h>
 #include <dftracer/utils/core/coro/abi.h>
 #include <dftracer/utils/dataframe/abi.h>
-#include <dftracer/utils/query/abi.h>
+#include <dftracer/utils/duql/abi.h>
 #include <stdint.h>
 
 /*
@@ -19,7 +19,7 @@
  * dftracer::utils::trace::views::View): time_bucket / time_bucket_min /
  * occ_cell / time_scale, materialize, rollup_root / views_root, cancel_when
  * (would need a C callback), memory_budget / auto_spill, agg_numeric_args,
- * metadata / emit_all_metadata, topk, export_json, phase, time_range. The
+ * topk, export_json, time_range. The
  * generic fold<P> / map_batches<P> / run_folds escape hatches take a
  * compile-time partial type P and cannot cross a C ABI at all; they stay
  * C++-only.
@@ -52,8 +52,25 @@ DFTU_EXPORT dftu_view* dftu_view_from_directory(const char* dir,
 DFTU_EXPORT void dftu_view_free(dftu_view* v);
 
 /** Keep only events matching `q`. `q` is borrowed; not consumed or freed. */
-DFTU_EXPORT dftu_view* dftu_view_filter(const dftu_view* v,
-                                        const dftu_query* q);
+DFTU_EXPORT dftu_view* dftu_view_filter(const dftu_view* v, const dftu_duql* q);
+
+/** The record family a view reads; see dftu_view_phase. The values are part
+ * of the ABI and do not follow the C++ Phase enumerators. */
+typedef enum {
+    DFTU_VIEW_PHASE_ANY = 0,
+    DFTU_VIEW_PHASE_EVENTS = 1,
+    DFTU_VIEW_PHASE_COUNTERS = 2,
+    DFTU_VIEW_PHASE_AGGREGATED = 3,
+    DFTU_VIEW_PHASE_METADATA = 4
+} dftu_view_phase_kind;
+
+/** Restrict the view to one record family. DFTU_VIEW_PHASE_ANY reads every
+ * record, metadata included; a view with no phase reads the record schema's
+ * `data` row set, which leaves metadata out. NULL on an unknown `phase`. */
+DFTU_EXPORT dftu_view* dftu_view_phase(const dftu_view* v, int phase);
+
+/** Same as dftu_view_phase(v, DFTU_VIEW_PHASE_ANY). */
+DFTU_EXPORT dftu_view* dftu_view_all(const dftu_view* v);
 
 /** Read the files as the registered record schema `id` instead of their
  * recorded or detected one. NULL on an unregistered or NULL id. */
@@ -87,9 +104,8 @@ DFTU_EXPORT dftu_view* dftu_view_sort_by(const dftu_view* v, const char* column,
 
 /** Kind of one dftu_group_key, mirroring View::GroupKey::Kind. Arg groups on
  * an args-map entry named by `arg`; Field resolves `arg` as a field by name,
- * top-level then args (unlike Arg, it also sees top-level fields); Resolved
- * groups on the `resolved.<key field>.<field>` column `arg`; every other kind
- * ignores `arg`. */
+ * top-level then args (unlike Arg, it also sees top-level fields); every
+ * other kind ignores `arg`. */
 typedef enum {
     DFTU_GROUP_KEY_NAME = 0,
     DFTU_GROUP_KEY_CAT,
@@ -104,8 +120,7 @@ typedef enum {
     DFTU_GROUP_KEY_HOST_NAME,
     DFTU_GROUP_KEY_RANK,
     DFTU_GROUP_KEY_ARG,
-    DFTU_GROUP_KEY_FIELD,
-    DFTU_GROUP_KEY_RESOLVED
+    DFTU_GROUP_KEY_FIELD
 } dftu_group_key_kind;
 
 /** Value transform applied to the resolved group value before the merge key
@@ -200,6 +215,26 @@ DFTU_EXPORT dftu_dataframe* dftu_view_collect(const dftu_view* v,
  * dftu_lazyframe_collect. Caller owns the result; free with
  * dftu_lazyframe_free. */
 DFTU_EXPORT dftu_lazyframe* dftu_view_lazy(const dftu_view* v);
+
+/** The duql pipeline `text` over this View as a lazy plan (View::duql):
+ * leading `where` stages filter the scan, later stages run on its columns.
+ * Parameter `names[i]` is bound to `values[i]`, a duql literal (a number,
+ * a quoted string, true or false); `names` and `values` may be NULL when
+ * `n` is 0. Caller owns the result; free with dftu_lazyframe_free. On
+ * failure returns NULL and, when `error` is not NULL, sets `*error` to the
+ * message, which the caller frees with dftu_view_string_free. */
+DFTU_EXPORT dftu_lazyframe* dftu_view_duql(const dftu_view* v, const char* text,
+                                           const char* const* names,
+                                           const char* const* values, int32_t n,
+                                           char** error);
+
+/** The plan dftu_view_duql builds, one step per line, without scanning.
+ * Arguments and failure as dftu_view_duql; the caller frees the result with
+ * dftu_view_string_free. */
+DFTU_EXPORT char* dftu_view_explain_duql(const dftu_view* v, const char* text,
+                                         const char* const* names,
+                                         const char* const* values, int32_t n,
+                                         char** error);
 
 #ifdef __cplusplus
 }

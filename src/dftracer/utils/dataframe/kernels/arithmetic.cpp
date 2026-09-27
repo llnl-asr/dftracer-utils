@@ -187,7 +187,7 @@ HWY_EXPORT(DivScalarKernel);
 
 namespace {
 
-using BinOp = ArithOp;
+using BinOp = TemporalOp;
 
 bool is_numeric(TypeId t) { return is_arithmetic_type(t); }
 bool is_decimal_type(TypeId t) {

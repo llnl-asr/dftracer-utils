@@ -7,7 +7,7 @@
 #include <dftracer/utils/dataframe/field.h>
 #include <dftracer/utils/dataframe/lazy_ops.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
-#include <dftracer/utils/query/query.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/trace/trace_config.h>
 #include <dftracer/utils/trace/views/result_join.h>
 #include <dftracer/utils/utilities/common/statistics/ddsketch.h>
@@ -40,7 +40,7 @@ namespace dftracer::utils::trace::views {
 
 using dftracer::utils::dataframe::field::FieldAggExpr;
 using dftracer::utils::dataframe::field::FieldExpr;
-using query::Query;
+using duql::Query;
 
 /// `ph="X"` events, `ph="C"` counters, `ph="A"` aggregated (folded events),
 /// `ph="M"` metadata, or all (`Any`).
@@ -67,8 +67,8 @@ struct GroupKey {
         FilePath,
         FileName,
         HostName,
-        /// Group by pid, relabeled to the rank from the trace's PR metadata.
-        /// rank is stable across runs where pid is not.
+        /// Group by pid, relabeled to its rank from the source's `ranks`
+        /// row set; rank is stable across runs where pid is not.
         Rank,
         Arg,
         /// Any field by name, resolved top-level then args; `arg` holds the
@@ -76,11 +76,7 @@ struct GroupKey {
         Field,
         /// A column the plan computes per event from other fields; `arg`
         /// names it. Its values keep their type.
-        Expr,
-        /// A `resolved.<key field>.<field>` column named by `arg`: grouped
-        /// on the key field and relabeled to the dictionary field after
-        /// aggregation, like FilePath.
-        Resolved
+        Expr
     };
     /// Value transform applied to the resolved group value, before the
     /// merge key is built. Coarsens the grain (many values fold to one), so
@@ -112,13 +108,10 @@ struct GroupKey {
     static GroupKey field(std::string name) {
         return {Kind::Field, std::move(name)};
     }
-    static GroupKey resolved(std::string name) {
-        return {Kind::Resolved, std::move(name)};
-    }
 };
 
-/// Var/Std are population variance / standard deviation of `field`, over the
-/// same N as Mean (the group's event count). Pct is the `q`-quantile of `field`
+/// Var/Std are the sample variance / standard deviation of `field` (divided
+/// by n - 1 over its present values). Pct is the `q`-quantile of `field`
 /// from a DDSketch (q in (0,1)).
 enum class AggOp {
     Count,
@@ -198,6 +191,12 @@ struct ViewFile {
 struct ExportStats {
     std::uint64_t events_matched = 0;
     std::uint64_t events_scanned = 0;
+    /// Lines that are not a JSON object (bad JSON, or nested past the
+    /// parser's depth limit); they are skipped.
+    std::uint64_t lines_invalid = 0;
+    /// Values of declared fields that did not convert to the declared type
+    /// and read as null.
+    std::uint64_t values_unconverted = 0;
     std::uint64_t chunks_scanned = 0;
     std::uint64_t chunks_skipped = 0;
     /// Chunks read end to end. Below chunks_scanned when the scan stopped
@@ -412,7 +411,7 @@ class ViewSession {
         const FieldExpr& predicate,
         std::function<void(P&, const json::JsonValue&, std::string_view)> f,
         std::function<P(P&&, P&&)> combine) {
-        return fold<P>(predicate.to_query(), std::move(f), std::move(combine));
+        return fold<P>(predicate.to_duql(), std::move(f), std::move(combine));
     }
 
     /// Attach an externally-built Fold to the shared scan. `make` constructs it
@@ -545,7 +544,7 @@ enum class JoinType;
 /// A column of the trace schema and its type, as the index reports it.
 struct ColumnInfo {
     std::string name;  ///< Dotted leaf path (e.g. "hostname", "pos.x").
-    std::string type;  ///< "int64", "float64", or "string".
+    std::string type;  ///< "int64", "float64", "string" or "json".
 };
 
 /// One path of a View's schema tree, from the index.
@@ -597,6 +596,8 @@ coro::CoroTask<void> resolve_into(
     std::vector<dataframe::DataFrame> frames) {
     *out = co_await finish(std::move(frames));
 }
+/// A View over `plan` with no ops above the scan, for the C ABI.
+View view_of(ScanPlan plan);
 }  // namespace detail
 
 /// Plans registered here run together on execute(), as collect_all() runs
@@ -650,9 +651,11 @@ class View : public dataframe::LazyOps<View> {
 
     static View from_file(std::string file_path, std::string index_path = "");
     static View from_files(std::vector<ViewFile> files);
-    /// Scans `dir` recursively for .pfw.gz, .jsonl.gz and .ndjson.gz files,
-    /// sorted by path; each file's index resolves under `index_path` (empty
-    /// = beside the trace). The files must share one record_schema.
+    /// Scans `dir` recursively for trace files (.pfw, .jsonl and
+    /// .ndjson, plain or gzip), sorted by path; index, split and schemas
+    /// directories are skipped. Each file's index resolves under
+    /// `index_path` (empty = beside the trace). The files with records must
+    /// share one record_schema.
     static coro::CoroTask<View> from_directory(std::string dir,
                                                std::string index_path = "");
 
@@ -668,7 +671,15 @@ class View : public dataframe::LazyOps<View> {
     View select(std::vector<std::string> names) const;
     View filter(Query q) const;
     View filter(const FieldExpr& pred) const;
-    View query(const std::string& dsl) const;
+    /// Apply the duql pipeline `text` with `params` bound: the leading
+    /// `where` stages filter the scan, a leading field-only `select` is the
+    /// scan projection, and the later stages run on the scanned columns.
+    /// Throws DFTUtilsException INVALID_ARGUMENT for a query that does not
+    /// compile against this view's columns and record schema.
+    View duql(const std::string& text, const duql::Params& params = {}) const;
+    /// The plan duql() builds, one step per line; nothing is scanned.
+    std::string explain_duql(const std::string& text,
+                             const duql::Params& params = {}) const;
     View phase(Phase p) const;
     /// Keep the data events that start in [begin, end) (raw ts). Busy,
     /// concurrency, utilization and active instead take every event that
@@ -685,18 +696,21 @@ class View : public dataframe::LazyOps<View> {
     /// concurrency, utilization, active) snap interval edges to; 0 is the
     /// exact union.
     View resolution(std::uint64_t cell_us) const;
+    /// Multiplies the ts and dur a dftracer trace outputs by `ns_ratio`.
+    /// Throws INVALID_ARGUMENT for a path schema, whose fields declare units.
     View time_scale(double ns_ratio) const;
     View group_by(std::vector<GroupKey> keys) const;
     View agg(std::vector<AggSpec> specs) const;
     View agg(std::vector<FieldAggExpr> exprs) const;
     View agg_numeric_args() const;
     View agg_numeric_args(std::vector<AggSpec> reductions) const;
-    View metadata(bool include) const;
+    /// Read every record, metadata (`ph="M"`) included, as rows the filters
+    /// and aggregations see, instead of the record schema's `data` row set.
+    View all() const;
     /// Read the files as the registered record_schema `id` instead of their
     /// recorded or detected one. Throws DFTUtilsException INVALID_ARGUMENT
     /// for an unregistered id.
     View record_schema(std::string id) const;
-    View emit_all_metadata(bool v) const;
     View rollup_root(std::string dir) const;
     View views_root(std::string dir) const;
     View cancel_when(std::function<bool()> pred) const;
@@ -909,6 +923,9 @@ class View : public dataframe::LazyOps<View> {
     /// The scan plan with every op of this view absorbed into it, for the
     /// terminal `method`; throws naming the first op that stays behind.
     detail::ScanPlan absorbed(const char* method, Need need) const;
+    friend View detail::view_of(detail::ScanPlan plan);
+    std::pair<View, std::vector<std::string>> duql_plan(
+        const std::string& text, const duql::Params& params) const;
 
     detail::ScanPlan plan_;
     dataframe::LazyFrame lf_;

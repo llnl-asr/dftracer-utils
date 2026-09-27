@@ -10,7 +10,7 @@
 
 namespace dftracer::utils::dataframe {
 
-enum class ArithOp : std::int32_t { Add, Sub, Mul, Div };
+enum class TemporalOp : std::int32_t { Add, Sub, Mul, Div };
 
 /// Nanoseconds per tick of `unit`, used to compare and rescale between
 /// TimeUnit granularities.
@@ -53,7 +53,7 @@ struct TemporalResult {
 /// build.
 inline std::optional<TemporalResult> temporal_binop_result(
     TypeId a_id, TimeUnit a_unit, const std::string& a_tz, TypeId b_id,
-    TimeUnit b_unit, const std::string& b_tz, ArithOp op) {
+    TimeUnit b_unit, const std::string& b_tz, TemporalOp op) {
     auto is_ts = [](TypeId t) { return t == TypeId::Timestamp; };
     auto is_dur = [](TypeId t) { return t == TypeId::Duration; };
     auto is_time64 = [](TypeId t) { return t == TypeId::Time64; };
@@ -64,7 +64,7 @@ inline std::optional<TemporalResult> temporal_binop_result(
 
     const TimeUnit unit = finer_unit(a_unit, b_unit);
 
-    if (op == ArithOp::Add) {
+    if (op == TemporalOp::Add) {
         if (is_ts(a_id) && is_dur(b_id))
             return TemporalResult{TypeId::Timestamp, unit, a_tz};
         if (is_dur(a_id) && is_ts(b_id))
@@ -77,7 +77,7 @@ inline std::optional<TemporalResult> temporal_binop_result(
             return TemporalResult{TypeId::Time64, unit, ""};
         return std::nullopt;
     }
-    if (op == ArithOp::Sub) {
+    if (op == TemporalOp::Sub) {
         if (is_ts(a_id) && is_ts(b_id)) {
             if (a_tz != b_tz) return std::nullopt;
             return TemporalResult{TypeId::Duration, unit, ""};
@@ -102,8 +102,9 @@ inline std::optional<TemporalResult> temporal_binop_result(
 /// unit, so "timestamp + 5" cannot mean anything without guessing one.
 inline std::optional<TemporalResult> temporal_scalarop_result(TypeId a_id,
                                                               TimeUnit a_unit,
-                                                              ArithOp op) {
-    if (a_id == TypeId::Duration && (op == ArithOp::Mul || op == ArithOp::Div))
+                                                              TemporalOp op) {
+    if (a_id == TypeId::Duration &&
+        (op == TemporalOp::Mul || op == TemporalOp::Div))
         return TemporalResult{TypeId::Duration, a_unit, ""};
     return std::nullopt;
 }

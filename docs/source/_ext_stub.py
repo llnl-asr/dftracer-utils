@@ -42,8 +42,8 @@ def install_extension_stub() -> None:
     class DFTUtilsParseError(DFTUtilsError):
         """Input could not be parsed."""
 
-    class DFTUtilsQueryError(DFTUtilsError):
-        """A query expression was invalid."""
+    class DFTUtilsDuqlError(DFTUtilsError):
+        """A duql expression was invalid."""
 
     class DFTUtilsReaderError(DFTUtilsError):
         """A trace reader operation failed."""
@@ -254,13 +254,14 @@ def install_extension_stub() -> None:
             """
             return CheckpointIndexer(file_path)
 
-        def get_dictionary(self, name: str, field: str) -> dict[str, str]:
-            """Key -> `field` of every row of the index dictionary `name`.
+        def rowset(self, name: str) -> object:
+            """The rows the index build stored for row set `name`, as a
+            DataFrame.
 
             Raises:
-                ValueError: If `name` has no field `field`.
+                ValueError: If the index holds no rows for `name`.
             """
-            return {}
+            return None
 
         def query_file_pids(self, file_id: int) -> set:
             """Query PIDs observed in a specific file.
@@ -499,74 +500,6 @@ def install_extension_stub() -> None:
             compute_percentiles: bool = False,
         ) -> Iterator[object]:
             return iter(())
-
-    class ComparatorUtility(_BaseNative):
-        def __init__(self, runtime: Runtime | None = None) -> None:
-            self.runtime = runtime
-
-        def compare(
-            self,
-            baseline: str,
-            variant: str,
-            query: str = "",
-            group_by: str = "",
-            format: str = "table",
-            time_interval_ms: float = 5000.0,
-            threshold: float = 0.0,
-            executor_threads: int = 0,
-            index_dir: str = "",
-            force_rebuild: bool = False,
-            config: str = "",
-        ) -> object:
-            return None
-
-        def __call__(
-            self,
-            baseline: str,
-            variant: str,
-            query: str = "",
-            group_by: str = "",
-            format: str = "table",
-            time_interval_ms: float = 5000.0,
-            threshold: float = 0.0,
-            executor_threads: int = 0,
-            index_dir: str = "",
-            force_rebuild: bool = False,
-            config: str = "",
-        ) -> object:
-            return None
-
-        def compare_json(
-            self,
-            baseline: str,
-            variant: str,
-            query: str = "",
-            group_by: str = "",
-            format: str = "table",
-            time_interval_ms: float = 5000.0,
-            threshold: float = 0.0,
-            executor_threads: int = 0,
-            index_dir: str = "",
-            force_rebuild: bool = False,
-            config: str = "",
-        ) -> str:
-            return "{}"
-
-        def compare_table(
-            self,
-            baseline: str,
-            variant: str,
-            query: str = "",
-            group_by: str = "",
-            format: str = "table",
-            time_interval_ms: float = 5000.0,
-            threshold: float = 0.0,
-            executor_threads: int = 0,
-            index_dir: str = "",
-            force_rebuild: bool = False,
-            config: str = "",
-        ) -> str:
-            return ""
 
     class IndexDatabase(_BaseNative):
         """Handle to a .dftindex RocksDB store.
@@ -837,7 +770,7 @@ def install_extension_stub() -> None:
         "DFTUtilsNotFoundError",
         "DFTUtilsParseError",
         "DFTUtilsPipelineError",
-        "DFTUtilsQueryError",
+        "DFTUtilsDuqlError",
         "DFTUtilsReaderError",
         "DFTUtilsValueError",
         "IndexDatabase",

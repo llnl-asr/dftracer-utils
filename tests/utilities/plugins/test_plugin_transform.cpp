@@ -1,7 +1,7 @@
 // dftu_plugin::transform: a plugin rewrites the batch, and every plugin after
 // it in fold order receives the rewrite instead of the scanned events - rows
 // dropped, values changed, a column added - while a plugin before it still
-// sees the scan as it was. A later plugin's reads projection and plan_query
+// sees the scan as it was. A later plugin's reads projection and plan_duql
 // apply to the rewritten frame.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
@@ -175,10 +175,10 @@ dftu_plugin make_after() {
     return p;
 }
 
-// ---- "after_query": after the transform, with a plan_query the host must
+// ---- "after_query": after the transform, with a plan_duql the host must
 // re-apply to the rewritten rows (dur is doubled there, so the bound selects
 // against the rewritten values, not the scanned ones).
-const char* after_query_plan_query(void*) { return "dur > 60"; }
+const char* after_query_plan_duql(void*) { return "dur > 60"; }
 dftu_task* after_query_on_batch(void*, const dftu_dataframe* df,
                                 const dftu_plugin_host*) {
     record(g_after_query, df);
@@ -188,7 +188,7 @@ dftu_plugin make_after_query() {
     dftu_plugin p = make_bare_plugin();
     p.on_batch = after_query_on_batch;
     p.consumes = after_consumes;
-    p.plan_query = after_query_plan_query;
+    p.plan_duql = after_query_plan_duql;
     return p;
 }
 
@@ -274,7 +274,7 @@ TEST_SUITE("PluginTransform") {
         CHECK(g_after.twice_rows == EVENTS / 2);
         CHECK(g_after.pid_columns == 0);
 
-        // The plan_query ran against the rewritten values.
+        // The plan_duql ran against the rewritten values.
         CHECK(g_after_query.rows == pid1_doubled_over(60));
         CHECK(g_after_query.rows > 0);
         CHECK(g_after_query.rows < EVENTS / 2);

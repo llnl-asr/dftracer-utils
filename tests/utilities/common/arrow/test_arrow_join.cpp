@@ -457,6 +457,24 @@ TEST_CASE("asof - nearest with backward tie-break") {
     }
 }
 
+TEST_CASE("asof - equal right times follow merge_asof") {
+    auto r = make_ts_vals({8, 8, 14, 14}, {"a", "b", "c", "d"});
+    auto pick = [&](AsofDirection dir, std::int64_t t) {
+        auto l = make_ts({t});
+        auto out = asof_g(l, r, dir);
+        Reader rd(out);
+        REQUIRE(rd.rows() == 1);
+        return rd.str(1, 0);
+    };
+    CHECK(pick(AsofDirection::BACKWARD, 8) == "b");
+    CHECK(pick(AsofDirection::FORWARD, 8) == "a");
+    CHECK(pick(AsofDirection::NEAREST, 8) == "b");
+    CHECK(pick(AsofDirection::NEAREST, 14) == "d");
+    CHECK(pick(AsofDirection::NEAREST, 10) == "b");
+    CHECK(pick(AsofDirection::NEAREST, 11) == "b");
+    CHECK(pick(AsofDirection::NEAREST, 12) == "c");
+}
+
 TEST_CASE("asof - equi-key partitioning") {
     RecordBatchBuilder lb;
     lb.declare_schema({{"pid", ColumnType::INT64}, {"ts", ColumnType::INT64}});

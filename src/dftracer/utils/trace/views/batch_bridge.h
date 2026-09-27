@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -26,17 +27,22 @@ namespace dftracer::utils::trace::views::detail {
 using Batch =
     std::variant<std::reference_wrapper<const FoldBatch>, dataframe::Morsel>;
 
+/// The columns a plan gives as JSON, by name: true when the column's text is
+/// already JSON (a declared json field), false when its values convert (a
+/// field of mixed types).
+using JsonColumns = std::unordered_map<std::string, bool>;
+
 /// Which columns a scan batch materializes into. `select` holds build_row_frame
-/// select tokens (empty = every column); `resolver` is needed only when
-/// `select` names a `resolved.` column; `emit_dyn` adds the auto-numeric
+/// select tokens (empty = every column); `emit_dyn` adds the auto-numeric
 /// per-arg columns.
 struct ColumnSpec {
     std::vector<std::string> select;
     double time_scale = 1.0;
-    const dftracer::utils::index::plan::GroupResolver* resolver = nullptr;
     bool emit_dyn = false;
     /// Name columns by exact path (path-decoded records).
     bool by_path = false;
+    /// Columns delivered as JSON, so every batch agrees with the schema.
+    std::shared_ptr<const JsonColumns> json;
 };
 
 /// Materialize `events` into columns: build_row_frame's order for

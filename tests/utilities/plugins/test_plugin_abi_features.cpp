@@ -1,5 +1,5 @@
 // In-process coverage for the plugin ABI surface the host-service suite leaves
-// untested: the config tree, query compile/match and plan_query event routing,
+// untested: the config tree, query compile/match and plan_duql event routing,
 // and the coroutine control ops (drive path).
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
@@ -318,7 +318,7 @@ void col_merge(void* into, void* other) {
     static_cast<ColState*>(into)->dur_sum +=
         static_cast<ColState*>(other)->dur_sum;
 }
-const char* col_plan_query(void*) { return nullptr; }
+const char* col_plan_duql(void*) { return nullptr; }
 ::dftu_task* col_on_finalize(void*, const dftu_plugin_host*) { return nullptr; }
 ::dftu_task* col_on_batch(void* slice, const dftu_dataframe* df,
                           const dftu_plugin_host*) {
@@ -336,7 +336,7 @@ const char* col_plan_query(void*) { return nullptr; }
 }
 
 // Owning wrapper for a hand-built [cat, name] test dataframe (freed on scope
-// exit), for dftu_svc_query::query_matches tests outside an on_batch call.
+// exit), for dftu_svc_duql::duql_matches tests outside an on_batch call.
 struct QueryFrame {
     dftu_dataframe* df = nullptr;
     ~QueryFrame() {
@@ -375,7 +375,7 @@ TEST_CASE("plugin ABI: on_batch hands the batch as columns") {
     g_col_state = {};
     dftu_plugin p{};
     p.abi_version = DFTRACER_PLUGIN_ABI_VERSION;
-    p.plan_query = col_plan_query;
+    p.plan_duql = col_plan_duql;
     p.make_slice = col_make_slice;
     p.merge = col_merge;
     p.on_finalize = col_on_finalize;
@@ -422,40 +422,40 @@ TEST_CASE("plugin ABI: config tree reads scalars, nested, array, and default") {
     p->destroy(p->self);
 }
 
-TEST_CASE("plugin ABI: query_compile then query_matches on known events") {
+TEST_CASE("plugin ABI: duql_compile then duql_matches on known events") {
     FoldFixture<CountSlice> fx(nullptr);
     dftu_plugin_host& host = fx.host();
 
-    const auto* qx = static_cast<const dftu_svc_query*>(
-        host.get_service(host.h, DFTU_SVC_QUERY));
+    const auto* qx = static_cast<const dftu_svc_duql*>(
+        host.get_service(host.h, DFTU_SVC_DUQL));
     REQUIRE(qx != nullptr);
 
     std::string src = "cat == \"POSIX\"";
-    dftu_query* q = qx->query_compile(host.h, src.data(),
-                                      static_cast<std::uint32_t>(src.size()));
+    dftu_duql* q = qx->duql_compile(host.h, src.data(),
+                                    static_cast<std::uint32_t>(src.size()));
     REQUIRE(q != nullptr);
 
     // Row 0 is the hit (cat=POSIX), row 1 the miss (cat=STDIO); both name
     // "read".
     QueryFrame frame = cat_name_frame({"POSIX", "STDIO"}, {"read", "read"});
-    CHECK(qx->query_matches(host.h, q, frame.df, 0) == 1);
-    CHECK(qx->query_matches(host.h, q, frame.df, 1) == 0);
+    CHECK(qx->duql_matches(host.h, q, frame.df, 0) == 1);
+    CHECK(qx->duql_matches(host.h, q, frame.df, 1) == 0);
 
     SUBCASE("malformed query source does not compile and match is safe") {
         std::string bad = "cat ==";
-        dftu_query* bq = qx->query_compile(
+        dftu_duql* bq = qx->duql_compile(
             host.h, bad.data(), static_cast<std::uint32_t>(bad.size()));
         CHECK(bq == nullptr);
         // A null query must yield a defined 0, never a throw across the ABI.
-        CHECK(qx->query_matches(host.h, nullptr, frame.df, 0) == 0);
+        CHECK(qx->duql_matches(host.h, nullptr, frame.df, 0) == 0);
     }
 }
 
-TEST_CASE("plugin ABI: plan_query on fhash delivers only matching events") {
+TEST_CASE("plugin ABI: plan_duql on fhash delivers only matching events") {
     SUBCASE("fhash predicate keeps every match, drops the rest") {
         g_count = CountState{};
         ConfigTree tree;
-        tree.set("query", "fhash == \"fhAAA\"");
+        tree.set("duql", "fhash == \"fhAAA\"");
         FoldFixture<CountSlice> fx(tree.root());
 
         std::vector<FoldEvent> evs;
@@ -470,7 +470,7 @@ TEST_CASE("plugin ABI: plan_query on fhash delivers only matching events") {
         fx.fold->step(batch);
         CHECK(fx.fold->take_pending() == nullptr);
 
-        // The regression: a plan_query on fhash must not silently drop matches.
+        // The regression: a plan_duql on fhash must not silently drop matches.
         CHECK(g_count.seen == 3);
         for (const auto& f : g_count.fhashes) CHECK(f == "fhAAA");
     }
@@ -478,7 +478,7 @@ TEST_CASE("plugin ABI: plan_query on fhash delivers only matching events") {
     SUBCASE("hhash predicate routes on a non cat/name field too") {
         g_count = CountState{};
         ConfigTree tree;
-        tree.set("query", "hhash == \"hhZ\"");
+        tree.set("duql", "hhash == \"hhZ\"");
         FoldFixture<CountSlice> fx(tree.root());
 
         std::vector<FoldEvent> evs;

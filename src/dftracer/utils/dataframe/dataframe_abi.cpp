@@ -6,7 +6,7 @@
 #include <dftracer/utils/dataframe/internal/expr_handle.h>
 #include <dftracer/utils/dataframe/internal/lazyframe_handle.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
-#include <dftracer/utils/query/internal/query_handle.h>
+#include <dftracer/utils/duql/internal/duql_handle.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -358,10 +358,10 @@ dftu_series* dftu_dataframe_is_unique(const dftu_dataframe* df) {
 }
 
 dftu_series* dftu_dataframe_mask_frame(const dftu_dataframe* df,
-                                       const dftu_query* q) {
+                                       const dftu_duql* q) {
     if (!df || !q) return nullptr;
     try {
-        return df->df.mask(dftracer::utils::query::query_handle_unwrap(q))
+        return df->df.mask(dftracer::utils::duql::duql_handle_unwrap(q))
             .release();
     } catch (const std::exception&) {
         return nullptr;
@@ -679,6 +679,23 @@ dftu_lazyframe* dftu_lazyframe_drop_duplicates(const dftu_lazyframe* lf) {
     if (!lf) return nullptr;
     try {
         return wrap_lazy(lf->lf.drop_duplicates());
+    } catch (const std::exception&) {
+        return nullptr;
+    }
+}
+
+dftu_lazyframe* dftu_lazyframe_head_by(const dftu_lazyframe* lf,
+                                       const char* const* keys, int32_t n_keys,
+                                       int64_t n) {
+    if (!lf || n_keys < 0 || (n_keys > 0 && !keys)) return nullptr;
+    try {
+        std::vector<std::string> ks;
+        ks.reserve(static_cast<std::size_t>(n_keys));
+        for (int32_t i = 0; i < n_keys; ++i) {
+            if (!keys[i]) return nullptr;
+            ks.emplace_back(keys[i]);
+        }
+        return wrap_lazy(lf->lf.head_by(std::move(ks), n));
     } catch (const std::exception&) {
         return nullptr;
     }

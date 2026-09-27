@@ -20,12 +20,15 @@ class GroupResolver;
 namespace dftracer::utils::trace::views::detail {
 
 /// Sentinel select tokens the agg engine uses to ask build_row_frame for a
-/// group-key STRING column rendered exactly as the engine agg path builds its
-/// key (PodSource append_arg for an Arg key, append_value for a Field key): ""
-/// for a missing value, numbers stringified. Internal to the agg-engine <->
-/// row-fold seam; never a user-facing select.
+/// group-key STRING column (PodSource append_arg for an Arg key, append_value
+/// for a Field key): null for a missing or JSON-null value, numbers and
+/// booleans (0/1) stringified, an empty array or object as [] or {}. Internal
+/// to the agg-engine <-> row-fold seam; never a user-facing select.
 inline constexpr std::string_view AGG_KEY_ARG_PREFIX = "__aggkey_arg:";
 inline constexpr std::string_view AGG_KEY_FIELD_PREFIX = "__aggkey_field:";
+/// A Field key of mixed JSON types: each value's canonical JSON text, so `3`
+/// and `"3"` are different keys.
+inline constexpr std::string_view AGG_KEY_JSON_PREFIX = "__aggkey_json:";
 
 /// Sentinel select token the agg engine uses to ask build_row_frame for a
 /// numeric-only Float64 VALUE column for one auto-discovered numeric arg (the
@@ -58,6 +61,15 @@ std::string clip_token(std::uint64_t lo, std::uint64_t hi,
 /// window token's inner field), or `sel` itself; empty for a clip token.
 std::string_view select_source_field(std::string_view sel);
 
+/// A select token for the array at `path` as a List column named as `path`
+/// is: `spec` is the element type, `i` (Int64), `f` (Float64), `s`
+/// (String), `b` (Bool), `j` (String of each element's JSON text), `a` (the
+/// type the batch's elements share, else `j`), or `{name=t,...}` (a struct
+/// of those fields of object elements, each typed by its letter). A missing,
+/// null or non-array value is a null row; an element of another type is a null
+/// element.
+std::string list_token(std::string_view spec, std::string_view path);
+
 /// The `sel` a window_token wraps, or `sel` itself.
 std::string_view window_inner(std::string_view sel);
 bool is_clip_token(std::string_view sel);
@@ -65,16 +77,13 @@ bool is_clip_token(std::string_view sel);
 /// Build one native DataFrame from `events`: top-level columns plus every arg
 /// (empty `select`) or a projected subset. Arg columns infer their type per key
 /// and null-fill absent rows. `fhash`/`hhash` resolve from their dedicated
-/// fields; a selected `resolved.<key>.<field>` column resolves through
-/// `resolver` (the index dictionaries), or is all-null when it is null. With
-/// `by_path` (path-decoded records) every column is a field named by its
-/// exact path, with no fixed columns. Shared by the materialized collect and
-/// the streaming chunk builder.
+/// fields. With `by_path` (path-decoded records) every column is a field
+/// named by its exact path, with no fixed columns. Shared by the materialized
+/// collect and the streaming chunk builder.
 dataframe::DataFrame build_row_frame(
     const std::vector<FoldEvent>& events,
     const dftracer::utils::StringIntern& intern,
     const std::vector<std::string>& select, double time_scale = 1.0,
-    const dftracer::utils::index::plan::GroupResolver* resolver = nullptr,
     bool by_path = false);
 
 /// The per-batch auto-numeric dyn value columns for `events`: one Float64
@@ -89,11 +98,6 @@ std::vector<std::pair<std::string, dataframe::Series>>
 build_dyn_numeric_columns(const std::vector<FoldEvent>& events,
                           const dftracer::utils::StringIntern& intern,
                           const std::vector<std::string>& select);
-
-/// The `resolved.` columns `select` names; the caller builds a GroupResolver
-/// (which reads the index dictionaries) for build_row_frame when non-empty.
-std::vector<std::string> select_resolved(
-    const std::vector<std::string>& select);
 
 /// The non-scalar fields a `select` needs the scan to capture: nested paths and
 /// non-POD top-level fields the scan does not carry by default (args, nested
@@ -138,16 +142,12 @@ dataframe::TypeId row_column_type(std::string_view sel, bool by_path = false);
 /// value forces String (numbers stringified).
 class NativeRowFold : public Fold {
    public:
-    NativeRowFold(
-        const dftracer::utils::StringIntern& intern,
-        std::vector<std::string> select, double time_scale = 1.0,
-        std::shared_ptr<const dftracer::utils::index::plan::GroupResolver>
-            resolver = nullptr,
-        bool keep_metadata = false, bool by_path = false)
+    NativeRowFold(const dftracer::utils::StringIntern& intern,
+                  std::vector<std::string> select, double time_scale = 1.0,
+                  bool keep_metadata = false, bool by_path = false)
         : intern_(&intern),
           select_(std::move(select)),
           time_scale_(time_scale),
-          resolver_(std::move(resolver)),
           keep_metadata_(keep_metadata),
           by_path_(by_path) {}
 
@@ -161,8 +161,7 @@ class NativeRowFold : public Fold {
 
     std::unique_ptr<Fold> slice() const override {
         return std::make_unique<NativeRowFold>(*intern_, select_, time_scale_,
-                                               resolver_, keep_metadata_,
-                                               by_path_);
+                                               keep_metadata_, by_path_);
     }
 
     void step(const FoldBatch& batch) override {
@@ -196,8 +195,6 @@ class NativeRowFold : public Fold {
     const dftracer::utils::StringIntern* intern_;
     std::vector<std::string> select_;  // empty = every column
     double time_scale_;                // ts/dur multiplier (1.0 = none)
-    std::shared_ptr<const dftracer::utils::index::plan::GroupResolver>
-        resolver_;                     // resolved columns, or null
     bool keep_metadata_;               // phase("metadata"): keep ph=M records
     bool by_path_;
     std::vector<FoldEvent> events_;

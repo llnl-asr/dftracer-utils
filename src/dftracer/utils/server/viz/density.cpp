@@ -4,11 +4,11 @@
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
-#include <dftracer/utils/query/query.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
 #include <dftracer/utils/server/json_builder.h>
@@ -19,6 +19,7 @@
 #include <dftracer/utils/server/viz/density.h>
 #include <dftracer/utils/server/viz/handlers.h>
 #include <dftracer/utils/server/viz/internal.h>
+#include <dftracer/utils/server/viz/record_event.h>
 #include <dftracer/utils/server/viz/scan.h>
 #include <dftracer/utils/server/viz/summary_build.h>
 #include <dftracer/utils/server/viz_api.h>
@@ -196,17 +197,22 @@ static std::string serialize_density_body(
 }
 
 // The summary is unfiltered, so any server-side predicate forces a live scan.
-// pid/tid are exempt: they select whole lanes, which the summary can still do.
-bool viz_summary_eligible(const QueryParams& params) {
-    return params.get("query").empty() && params.get("cat").empty() &&
+// pid/tid are exempt: they select whole lanes, which the summary can still do,
+// except for a path schema, whose lane ids are not the values they name.
+bool viz_summary_eligible(const QueryParams& params,
+                          const TraceFields& fields) {
+    return params.get("duql").empty() && params.get("cat").empty() &&
            params.get("lanes").empty() && params.get("filters").empty() &&
-           params.get("file").empty() && params.get("group_by").empty();
+           params.get("file").empty() && params.get("group_by").empty() &&
+           !(fields.by_path &&
+             (!params.get("pid").empty() || !params.get("tid").empty()));
 }
 
 coro::CoroTask<void> append_app_spans(std::vector<std::string>& out,
                                       TraceIndex& index, double begin,
-                                      double end, const QueryParams& params) {
-    if (!viz_summary_eligible(params)) co_return;
+                                      double end, const QueryParams& params,
+                                      const TraceFields& fields) {
+    if (!viz_summary_eligible(params, fields)) co_return;
     const VizSummary* s = co_await ensure_viz_summary(index);
     if (!s) co_return;
     auto pid_s = params.get("pid");
@@ -406,29 +412,28 @@ static std::string serve_density_from_summary(
         metric, &span_depth, nullptr);
 }
 
-// A dictionary field that group values resolve through for display.
-struct DictField {
-    const dftracer::utils::index::Dictionary* dictionary;
-    std::string field;
+// The row set column that names the keys a group column holds, for display.
+struct RowSetField {
+    std::string_view rowset;
+    std::string_view key;
+    std::string_view value;
 };
 
-// Canonicalize one group column: a resolved column maps to its key field and
-// "args.x" to "x". Sets `rt` to the dictionary field when the canonical column
-// holds dictionary keys (so its values can be resolved for display). Throws
-// DFTUtilsException INVALID_ARGUMENT for an unknown resolved column.
-static std::string canonicalize_group_col(
-    std::string col, std::optional<DictField>& rt,
-    const dftracer::utils::index::RecordSchema& schema) {
+// Canonicalize one group column ("args.x" to "x"), and set `rt` when it
+// holds keys of one of the dftracer source's row sets.
+static std::string canonicalize_group_col(std::string col,
+                                          std::optional<RowSetField>& rt) {
+    static constexpr std::pair<std::string_view, RowSetField> KEYS[] = {
+        {"fhash", {"files", "fhash", "path"}},
+        {"cwd", {"files", "fhash", "path"}},
+        {"hhash", {"hosts", "hhash", "name"}},
+        {"exec_hash", {"strings", "shash", "value"}},
+        {"cmd_hash", {"strings", "shash", "value"}},
+    };
     col = std::string(strip_args_prefix(col));
     rt = std::nullopt;
-    if (std::string_view(col).starts_with(
-            dftracer::utils::index::RESOLVED_PREFIX)) {
-        const auto rc = schema.resolved_column(col);
-        rt = DictField{rc.dictionary, rc.field};
-        return rc.key_field;
-    }
-    if (const auto* d = schema.dictionary_of(col))
-        rt = DictField{d, d->fields.front().first};
+    for (const auto& [field, rs] : KEYS)
+        if (col == field) rt = rs;
     return col;
 }
 
@@ -449,11 +454,9 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     int summary = params.get_int("summary", 2);
     if (summary < 1) summary = 1;
 
-    auto query = params.get("query");
-    if (!query.empty() && !query::try_parse(query).has_value()) {
-        co_return HttpResponse::bad_request("Invalid query: " +
-                                            std::string(query));
-    }
+    auto query = params.get("duql");
+    if (auto refused = refuse_duql(query, req.path))
+        co_return std::move(*refused);
 
     // Optional density grouping column. A well-formed name that matches no
     // event field is fine (all blocks land in the client's "(none)" group);
@@ -469,10 +472,10 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
 
     // Dictionary key columns auto-resolve for display: group values stay raw
     // keys, and a group_names map (key -> value) rides along in the metadata.
-    // Resolved columns map to their key fields. group_by may list several
-    // comma-separated columns; canonicalize each and record its dictionary
-    // field so the composite value's components resolve independently.
-    std::vector<std::optional<DictField>> resolve_types;
+    // group_by may list several comma-separated columns; canonicalize each
+    // and record its row set column so the composite value's components
+    // resolve independently.
+    std::vector<std::optional<RowSetField>> resolve_types;
     {
         std::string rebuilt;
         std::size_t start = 0;
@@ -481,14 +484,8 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
             std::string part(group_col.substr(
                 start, comma == std::string::npos ? group_col.size() - start
                                                   : comma - start));
-            std::optional<DictField> rt;
-            std::string canon;
-            try {
-                canon = canonicalize_group_col(std::move(part), rt,
-                                               index.record_schema());
-            } catch (const DFTUtilsException& e) {
-                co_return HttpResponse::bad_request(e.what());
-            }
+            std::optional<RowSetField> rt;
+            std::string canon = canonicalize_group_col(std::move(part), rt);
             if (!rebuilt.empty()) rebuilt.push_back(',');
             rebuilt += canon;
             resolve_types.push_back(rt);
@@ -501,8 +498,9 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     for (const auto& rt : resolve_types)
         if (rt) any_resolve = true;
 
-    auto win = parse_viz_window(params, index);
+    auto win = parse_viz_window(params, index, req.path);
     if (!win) co_return std::move(win.error());
+    const TraceFields fields(index.record_schema());
     begin = win->begin;
     end = win->end;
     double original_begin = win->original_begin;
@@ -526,7 +524,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     // zooms finer than the pyramid's finest level.
     double cfg_agg_interval = 0;  // trace-declared aggregation window, us
     bool trace_has_agg = false;
-    if (threshold > 0 && viz_summary_eligible(params)) {
+    if (threshold > 0 && viz_summary_eligible(params, fields)) {
         const VizSummary* s = co_await ensure_viz_summary(index);
         if (s && s->t_end > s->t_begin) {
             cfg_agg_interval = s->agg_interval_us;
@@ -578,7 +576,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     const VizSummary* enc_summary = nullptr;
     double enc_threshold_us = 0;
     double enc_threshold_native = 0;
-    if (lookback > 0 && viz_summary_eligible(params)) {
+    if (lookback > 0 && viz_summary_eligible(params, fields)) {
         const VizSummary* s = co_await ensure_viz_summary(index);
         if (s != nullptr && s->long_threshold_us > 0) {
             enc_summary = s;
@@ -631,15 +629,14 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     // (cached per-chunk bounds can be wrong under clock skew), so skip the
     // time_range chunk pruning then - the per-event filter still applies.
     auto make_window_view = [&](double lo, double hi) {
-        ViewDefinition vd = build_viz_view(params, lo, hi, 0);
+        ViewDefinition vd = build_viz_view(params, lo, hi, 0, fields);
         views::View v =
             views::View::from_files(
                 to_view_files(select_viz_target_files(index, params, lo, hi)))
-                .phase(views::Phase::Events)
-                .metadata(false)
                 .cancel_when(cancel_pred);
+        if (fields.by_path) v = v.phase(views::Phase::Events);
         if (vd.query) v = v.filter(*vd.query);
-        if (!single_file) v = v.time_range(lo, hi);
+        if (!single_file || fields.by_path) v = v.time_range(lo, hi);
         return v;
     };
     auto capped = [scan_cap](views::View v) {
@@ -659,22 +656,42 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     // phases split as fused partition branches so a single decode feeds both.
     Acc ev_out, cs_out, ag_out;
     bool truncated = false;
+    auto fold_event = [&group_col, threshold, begin](
+                          Acc& acc, simdjson::dom::element root,
+                          std::string_view raw) {
+        double dur = 0;
+        if (!fold_density(root, threshold, begin, acc.dens, &dur, group_col)) {
+            acc.big.emplace_back(raw);
+            acc.big_dur.push_back(dur);
+        }
+        if (dur > acc.max_dur) acc.max_dur = dur;
+    };
+    // Every record of a path schema is a data event.
+    auto pass1_path = [&](views::ViewSession& p1run) {
+        auto ev_h = p1run.fold<Acc>(
+            [&fields, &fold_event](Acc& acc, const auto&,
+                                   std::string_view raw) {
+                fields.with_event(
+                    raw, [&](simdjson::dom::element root, std::string_view ev) {
+                        fold_event(acc, root, ev);
+                    });
+            },
+            merge_acc);
+        return std::function<void(const views::ExportStats&)>(
+            [&, ev_h](const views::ExportStats& st) mutable {
+                ev_out = std::move(ev_h.get());
+                truncated = st.truncated;
+            });
+    };
     auto pass1 = [&](views::ViewSession& p1run) {
         auto ev_h = p1run.fold<Acc>(
-            query::parse_or_throw("ph == 1 or ph == \"X\""),
-            [&group_col, threshold, begin](Acc& acc, const auto& jv,
-                                           std::string_view raw) {
-                double dur = 0;
-                if (!fold_density(jv.element(), threshold, begin, acc.dens,
-                                  &dur, group_col)) {
-                    acc.big.emplace_back(raw);
-                    acc.big_dur.push_back(dur);
-                }
-                if (dur > acc.max_dur) acc.max_dur = dur;
+            duql::parse_or_throw("ph == 1 or ph == \"X\""),
+            [&fold_event](Acc& acc, const auto& jv, std::string_view raw) {
+                fold_event(acc, jv.element(), raw);
             },
             merge_acc);
         auto cs_h = p1run.fold<Acc>(
-            query::parse_or_throw("ph == 2 or ph == \"C\""),
+            duql::parse_or_throw("ph == 2 or ph == \"C\""),
             [begin, threshold, ncols](Acc& acc, const auto& jv,
                                       std::string_view) {
                 fold_counter_density(jv.element(), begin, threshold, ncols,
@@ -686,7 +703,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
         // selection) and give it a renderable span below once the aggregation
         // window is known.
         auto ag_h = p1run.fold<Acc>(
-            query::parse_or_throw("ph == 3 or ph == \"A\""),
+            duql::parse_or_throw("ph == 3 or ph == \"A\""),
             [](Acc& acc, const auto& jv, std::string_view raw) {
                 collect_aggregated(jv.element(), raw, acc.agg);
             },
@@ -700,8 +717,8 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
             });
     };
     dataframe::LazyFrame p1 =
-        capped(make_window_view(begin, end).phase(views::Phase::Any))
-            .branch(pass1);
+        fields.by_path ? capped(make_window_view(begin, end)).branch(pass1_path)
+                       : capped(make_window_view(begin, end)).branch(pass1);
     co_await p1.collect();
 
     DensityMap dens = std::move(ev_out.dens);
@@ -770,25 +787,38 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
             std::optional<views::Deferred<Acc>> agg_h, enc_h;
             if (want_agg)
                 agg_h = s.fold<Acc>(
-                    query::parse_or_throw("ph == 3 or ph == \"A\""),
+                    duql::parse_or_throw("ph == 3 or ph == \"A\""),
                     [agg_lo](Acc& acc, const auto& jv, std::string_view raw) {
                         double ts = 0, dur = 0;
                         if (!parse_ts_dur(raw, ts, dur) || ts < agg_lo) return;
                         collect_aggregated(jv.element(), raw, acc.agg);
                     },
                     merge_acc);
-            if (want_enc)
+            auto enclose = [begin, enc_lo, skip_from](Acc& acc,
+                                                      std::string_view raw) {
+                double ts = 0, dur = 0;
+                if (!parse_ts_dur(raw, ts, dur) || ts < enc_lo) return;
+                if (dur > acc.max_dur) acc.max_dur = dur;
+                if (ts < begin && ts + dur > begin && dur < skip_from) {
+                    acc.big.emplace_back(raw);
+                    acc.big_dur.push_back(dur);
+                }
+            };
+            if (want_enc && fields.by_path)
                 enc_h = s.fold<Acc>(
-                    query::parse_or_throw("ph == 1 or ph == \"X\""),
-                    [begin, enc_lo, skip_from](Acc& acc, const auto&,
-                                               std::string_view raw) {
-                        double ts = 0, dur = 0;
-                        if (!parse_ts_dur(raw, ts, dur) || ts < enc_lo) return;
-                        if (dur > acc.max_dur) acc.max_dur = dur;
-                        if (ts < begin && ts + dur > begin && dur < skip_from) {
-                            acc.big.emplace_back(raw);
-                            acc.big_dur.push_back(dur);
-                        }
+                    [&fields, enclose](Acc& acc, const auto&,
+                                       std::string_view raw) {
+                        fields.with_event(raw, [&](simdjson::dom::element,
+                                                   std::string_view ev) {
+                            enclose(acc, ev);
+                        });
+                    },
+                    merge_acc);
+            else if (want_enc)
+                enc_h = s.fold<Acc>(
+                    duql::parse_or_throw("ph == 1 or ph == \"X\""),
+                    [enclose](Acc& acc, const auto&, std::string_view raw) {
+                        enclose(acc, raw);
                     },
                     merge_acc);
             return std::function<void(const views::ExportStats&)>(
@@ -798,10 +828,9 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
                     back_truncated = st.truncated;
                 });
         };
-        dataframe::LazyFrame lb =
-            capped(make_window_view(std::min(agg_lo, enc_lo), begin)
-                       .phase(views::Phase::Any))
-                .branch(back);
+        views::View back_view =
+            make_window_view(std::min(agg_lo, enc_lo), begin);
+        dataframe::LazyFrame lb = capped(back_view).branch(back);
         co_await lb.collect();
         for (auto& r : agg_back.agg) ag_out.agg.emplace_back(std::move(r));
         if (want_enc) {
@@ -898,7 +927,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
 
     drop_unreferenced_hash_records(big);
 
-    co_await append_app_spans(big, index, begin, end, params);
+    co_await append_app_spans(big, index, begin, end, params, fields);
 
     // Aggregated (ph=3) records ride through as whole events so selection keeps
     // every arg (dur_sum, tag_min, ...); we only tag them and give them the
@@ -933,7 +962,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     if (any_resolve && !group_col.empty()) {
         // Split each composite group key into its per-column components and
         // collect the ones from hash columns; resolve each distinct hash once.
-        ankerl::unordered_dense::map<std::string, DictField> to_resolve;
+        ankerl::unordered_dense::map<std::string, RowSetField> to_resolve;
         auto collect = [&](std::string_view composite) {
             std::size_t start = 0, idx = 0;
             while (start <= composite.size() && idx < resolve_types.size()) {
@@ -956,7 +985,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
             if (!g.empty()) collect(g);
         }
         for (const auto& [hash, df] : to_resolve) {
-            auto name = index.resolve(df.dictionary->name, df.field, hash);
+            auto name = index.resolve(df.rowset, df.key, df.value, hash);
             if (!name.empty()) group_names.emplace(hash, std::move(name));
         }
     }

@@ -1,8 +1,8 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/mask.h>
-#include <dftracer/utils/query/abi.h>
-#include <dftracer/utils/query/internal/query_handle.h>
+#include <dftracer/utils/duql/abi.h>
+#include <dftracer/utils/duql/internal/duql_handle.h>
 
 #include <cstdint>
 #include <exception>
@@ -15,33 +15,21 @@ namespace {}  // namespace
 
 namespace dftracer::utils::dataframe {
 
-Series DataFrame::mask(const query::Query& q) const {
-    std::vector<const dftu_series*> cols;
-    std::vector<const char*> col_names;
-    cols.reserve(columns.size());
-    col_names.reserve(names.size());
-    for (const Series& c : columns) cols.push_back(c.handle());
-    for (const std::string& n : names) col_names.push_back(n.c_str());
-
-    dftu_query* handle = dftu_query_parse(q.source().c_str());
-    if (!handle)
-        throw std::runtime_error("DataFrame::mask: failed to compile query");
-    dftu_series* out =
-        dftu_dataframe_mask(handle, cols.data(), col_names.data(),
-                            static_cast<std::int32_t>(cols.size()));
-    dftu_query_free(handle);
-    if (!out)
+Series DataFrame::mask(const duql::Query& q) const {
+    try {
+        return evaluate_mask(q.root(), *this);
+    } catch (const std::exception&) {
         throw std::runtime_error(
             "DataFrame::mask: predicate has no columnar lowering for this "
             "frame");
-    return Series{out};
+    }
 }
 
 }  // namespace dftracer::utils::dataframe
 
 extern "C" {
 
-dftu_series* dftu_dataframe_mask(const dftu_query* q,
+dftu_series* dftu_dataframe_mask(const dftu_duql* q,
                                  const dftu_series* const* columns,
                                  const char* const* names, int32_t n) {
     if (!q || n < 0) return nullptr;
@@ -54,7 +42,7 @@ dftu_series* dftu_dataframe_mask(const dftu_query* q,
     }
     dftu_series* out = nullptr;
     try {
-        const auto& query = dftracer::utils::query::query_handle_unwrap(q);
+        const auto& query = dftracer::utils::duql::duql_handle_unwrap(q);
         out = dftracer::utils::dataframe::evaluate_mask(query.root(), b)
                   .release();
     } catch (const std::exception&) {

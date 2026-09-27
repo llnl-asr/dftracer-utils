@@ -4,10 +4,10 @@
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/core/common/string_intern.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/result_registry.h>
 #include <dftracer/utils/plugins/state_registry.h>
-#include <dftracer/utils/query/query.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
 
@@ -168,6 +168,7 @@ class PluginFold : public trace::views::detail::Fold {
     // The batch materializes every flat arg as a dyn column regardless (see
     // step()), so a plugin fold always needs args extracted.
     bool needs_args() const override { return true; }
+    bool reads_every_field() const override { return true; }
 
     std::unique_ptr<Fold> slice() const override {
         return std::make_unique<PluginFold>(plugin_, *intern_, results_,
@@ -268,16 +269,16 @@ class PluginFold : public trace::views::detail::Fold {
     ::dftu_plugin_host& host() { return host_; }
 
     // Valid until this PluginFold is destroyed; null on parse error.
-    ::dftu_query* compile_query(const char* src, std::uint32_t len);
-    int match_query(const query::Query& q, const dftu_dataframe* df,
+    ::dftu_duql* compile_query(const char* src, std::uint32_t len);
+    int match_query(const duql::Query& q, const dftu_dataframe* df,
                     std::int64_t row);
 
    private:
-    using Query = query::Query;
-    using ValueMap = query::ValueMap;
+    using Query = duql::Query;
+    using ValueMap = duql::ValueMap;
     using FoldEvent = trace::views::detail::FoldEvent;
 
-    // This plugin's own plan_query, finer than the union prune (which only
+    // This plugin's own plan_duql, finer than the union prune (which only
     // skips whole chunks no plugin wants); filters events within a batch.
     bool passes_query(const FoldEvent& ev);
     // Publish this fold's merged accumulators into the shared registry so a
@@ -330,14 +331,14 @@ class PluginFold : public trace::views::detail::Fold {
     std::vector<std::unique_ptr<PluginWriter>> writers_;
     std::vector<std::unique_ptr<PluginTraceWriter>> trace_writers_;
 
-    // This plugin's own plan_query, compiled once from the C string the
-    // plugin's dftu_plugin::plan_query returns. Unset means deliver every
+    // This plugin's own plan_duql, compiled once from the C string the
+    // plugin's dftu_plugin::plan_duql returns. Unset means deliver every
     // event.
     std::optional<Query> query_;
     ValueMap qmap_;
 
-    // dftu_svc_query::query_compile/query_matches: queries a plugin compiles
-    // itself, independent of plan_query above.
+    // dftu_svc_duql::duql_compile/duql_matches: queries a plugin compiles
+    // itself, independent of plan_duql above.
     std::deque<Query> compiled_queries_;
     ValueMap match_qmap_;
 

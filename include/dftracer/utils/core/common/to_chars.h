@@ -4,6 +4,7 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <system_error>
 
 #if defined(__APPLE__) && (!defined(__MAC_OS_X_VERSION_MIN_REQUIRED) || \
@@ -32,6 +33,27 @@ inline char* to_chars_double(char* first, char* last, double v) noexcept {
 #else
     auto [p, ec] = std::to_chars(first, last, v);
     return ec == std::errc{} ? p : nullptr;
+#endif
+}
+
+/// `v` in shortest round-trip form ("2.5", not "2.500000").
+inline std::string double_text(double v) {
+    char buf[32];
+    char* end = to_chars_double(buf, buf + sizeof(buf), v);
+    return end ? std::string(buf, end) : std::string();
+}
+
+/// `v` in shortest round-trip form for a float ("0.1", not "0.100000001").
+inline std::string float_text(float v) {
+    char buf[32];
+#ifdef DFTRACER_UTILS_FP_TO_CHARS_UNAVAILABLE
+    const int n =
+        std::snprintf(buf, sizeof(buf), "%.9g", static_cast<double>(v));
+    return n > 0 ? std::string(buf, static_cast<std::size_t>(n))
+                 : std::string();
+#else
+    auto [p, ec] = std::to_chars(buf, buf + sizeof(buf), v);
+    return ec == std::errc{} ? std::string(buf, p) : std::string();
 #endif
 }
 

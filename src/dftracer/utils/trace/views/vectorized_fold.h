@@ -63,8 +63,8 @@ class VectorizedFold : public Fold {
             scratch_.push_back(ev);
         }
         if (scratch_.empty()) return;
-        on_batch_(state_, build_row_frame(scratch_, *intern_, select_,
-                                          time_scale_, nullptr));
+        on_batch_(state_,
+                  build_row_frame(scratch_, *intern_, select_, time_scale_));
     }
 
     void seal_unit(const ScanUnit&) override {}

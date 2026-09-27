@@ -1,10 +1,10 @@
+#include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/core/common/string_arena.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/plan/prefilter.h>
-#include <dftracer/utils/index/plan/resolved_field_rewriter.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/query/query.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/utilities/common/arrow/column_builder.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
@@ -20,13 +20,12 @@
 
 namespace dftracer::utils::utilities::reader {
 
+using duql::Query;
 using internal::CompiledEqProbe;
 using internal::eval_compiled_eq;
-using internal::ondemand_to_literal;
 using internal::read_chunks_indexed;
 using internal::strip_ndjson_bookends;
 using internal::try_compile_eq_probes;
-using query::Query;
 
 namespace {
 
@@ -209,7 +208,7 @@ bool arrow_row_from_doc(RecordBatchBuilder& builder,
 
 void collect_query_fields(simdjson::ondemand::document_reference doc,
                           const Query& query, bool check_dotted,
-                          query::ValueMap& out);
+                          duql::ValueMap& out);
 
 // Build a simdjson-padded buffer containing only the lines in `chunk` that
 // pass the line-level prefilter. For queries with no useful prefilter, the
@@ -240,7 +239,7 @@ std::string collect_matching_lines(std::span<const char> chunk,
 // of object nesting. Fields not referenced by the query are skipped.
 void collect_query_fields(simdjson::ondemand::document_reference doc,
                           const Query& query, bool check_dotted,
-                          query::ValueMap& out) {
+                          duql::ValueMap& out) {
     auto obj = doc.get_object();
     if (obj.error()) return;
     for (auto field : obj.value()) {
@@ -279,18 +278,8 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
     std::optional<Query> query;
     if (!config.query.empty()) {
         auto parsed = Query::from_string(config.query);
-        if (!parsed) throw query::QueryParseError(parsed.error());
+        if (!parsed) throw duql::DuqlParseError(parsed.error());
         query = std::move(*parsed);
-    }
-
-    // Resolve `resolved.` columns to key in-clauses through the index
-    // dictionaries before the query drives pruning or per-event evaluation.
-    if (query && has_index_ && !index_path_.empty() &&
-        dftracer::utils::index::plan::has_resolved_fields(*query)) {
-        if (auto rewritten =
-                dftracer::utils::index::plan::rewrite_resolved_fields(
-                    *query, index_path_, config_.file_path))
-            query = std::move(*rewritten);
     }
 
     // When chunk_prune_only is set, dim_stats already proved every event in
@@ -369,6 +358,9 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
                                            : index::plan::Prefilter{};
     bool have_line_prefilter = !prefilter.empty();
 
+    // An expression may read a whole object or array, which the field map
+    // cannot hold, so it runs on the record's DOM.
+    dftracer::utils::json::RecordParser expr_parser;
     simdjson::ondemand::parser bulk_parser;
     RecordBatchBuilder builder;
     StringArena arena;
@@ -438,8 +430,16 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
             if (query && !config.chunk_prune_only) {
                 if (use_compiled) {
                     if (!eval_compiled_eq(compiled_probes, doc)) continue;
+                } else if (query->has_expressions()) {
+                    const std::string_view src(it.source().data(),
+                                               it.source().size());
+                    simdjson::dom::element record;
+                    if (expr_parser.parse(src.data(), src.size()).get(record) !=
+                            simdjson::SUCCESS ||
+                        !query->evaluate(json::JsonValue(record)))
+                        continue;
                 } else {
-                    query::ValueMap fields;
+                    duql::ValueMap fields;
                     collect_query_fields(doc, *query, query_has_dotted, fields);
                     if (!query->evaluate(fields)) continue;
                 }

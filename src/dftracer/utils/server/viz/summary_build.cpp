@@ -4,10 +4,11 @@
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
-#include <dftracer/utils/query/query.h>
+#include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
 #include <dftracer/utils/server/json_builder.h>
@@ -15,6 +16,7 @@
 #include <dftracer/utils/server/signal_handler.h>
 #include <dftracer/utils/server/trace_index.h>
 #include <dftracer/utils/server/viz/internal.h>
+#include <dftracer/utils/server/viz/record_event.h>
 #include <dftracer/utils/server/viz/summary_build.h>
 #include <dftracer/utils/server/viz_api.h>
 #include <dftracer/utils/trace/schema.h>
@@ -144,6 +146,8 @@ struct FineAcc {
 };
 
 struct SumBuild {
+    explicit SumBuild(const TraceFields& f) : fields(f) {}
+    const TraceFields& fields;
     std::size_t nb = 0;       // level 0 (counter grid)
     double bucket_us = 1;
     std::size_t nb_fine = 0;  // finest level, before any coarsening
@@ -183,7 +187,7 @@ struct SumBuild {
     // Per-worker simdjson parser + reusable buffer. Frame-local (owned here,
     // constructed on the caller's thread) rather than thread_local, which a
     // coroutine running on a pool thread leaves zero-initialised.
-    std::vector<simdjson::dom::parser> parsers;
+    std::vector<dftracer::utils::json::RecordParser> parsers;
     std::vector<std::string> parse_bufs;
 
     std::vector<FineAcc> fine;
@@ -399,7 +403,7 @@ static void fold_group(NameMap& m, std::string_view key, double dur) {
 }
 
 static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
-    simdjson::dom::parser& parser = b.parsers[w];
+    dftracer::utils::json::RecordParser& parser = b.parsers[w];
     std::string& buf = b.parse_bufs[w];
     // Give simdjson zero-filled trailing padding it can over-read into. Parsing
     // a bare std::string pads it in place, leaving that padding uninitialised.
@@ -584,6 +588,15 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
                 static_cast<std::uint64_t>(json_number(tr.value_unsafe()));
             auto& row = b.proc_of(w, pid);
             if (row.first_ts == 0 || ts < row.first_ts) row.first_ts = ts;
+            // A path record's entity that is not a number names its lane.
+            if (b.fields.by_path && row.label.empty()) {
+                auto ar = root["args"];
+                auto v = ar.error()
+                             ? std::nullopt
+                             : find_path(ar.value_unsafe(), b.fields.entity);
+                if (v && v->is_string())
+                    row.label = std::string(v->get_string().value_unsafe());
+            }
 
             double ret = 0;
             auto args = root["args"];
@@ -654,6 +667,9 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
     if (!pr.error())
         pid = static_cast<std::int64_t>(json_number(pr.value_unsafe()));
 
+    // A path record without a time falls in no window of a live scan.
+    if (b.fields.by_path && root["ts"].error()) return;
+
     // Analyze aggregates: whole-trace, ts-independent so they match a live
     // scan.
     {
@@ -671,7 +687,14 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
         if (!cr.error() && cr.is_string())
             fold_group(b.g_cat[w], cr.get_string().value_unsafe(), dur);
         thread_local std::string pidkey;
-        pidkey.assign(std::to_string(pid));
+        if (b.fields.by_path) {
+            auto ar = root["args"];
+            auto v = ar.error() ? std::nullopt
+                                : find_path(ar.value_unsafe(), b.fields.entity);
+            pidkey.assign(v ? scalar_text(*v) : std::string());
+        } else {
+            pidkey.assign(std::to_string(pid));
+        }
         fold_group(b.g_pid[w], pidkey, dur);
         auto ar = root["args"];
         if (!ar.error() && ar.is_object()) {
@@ -766,7 +789,8 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     nb = std::clamp(nb, VizSummary::MIN_BUCKETS_PER_LANE,
                     VizSummary::MAX_BUCKETS_PER_LANE);
 
-    SumBuild b;
+    const TraceFields fields(index.record_schema());
+    SumBuild b(fields);
     b.nb = nb;
     b.t0 = gmin;
     b.bucket_us = static_cast<double>(gmax - gmin) / static_cast<double>(nb);
@@ -811,18 +835,19 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     b.hh_parts.resize(slots);
     b.c_series.resize(slots);
 
-    // The summary aggregates all hash metadata (hosts, file paths); traces
-    // whose data events carry no hash args would otherwise never surface it.
+    // The summary reads the metadata records (hosts, file paths, ranks, app
+    // names) along with the data events.
     std::vector<const TraceIndex::FileInfo*> files;
     files.reserve(index.files().size());
     for (const auto& f : index.files()) files.push_back(&f);
 
     co_await views::View::from_files(to_view_files(files))
-        .phase(views::Phase::Any)  // ph="X" cells + ph="C" counter series
-        .emit_all_metadata(true)
+        .phase(views::Phase::Any)  // every record: cells, counters, metadata
         .for_each_batch(
             [&b](std::size_t w, const std::vector<std::string_view>& events) {
-                for (auto ev : events) fold_summary(w, ev, b);
+                b.fields.for_each_event(events, [&](std::string_view ev) {
+                    fold_summary(w, ev, b);
+                });
             },
             slots);
 
@@ -868,9 +893,8 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
             cd.tid = acc.tid;
             std::vector<std::uint32_t> bks;
             bks.reserve(acc.byb.size());
-            for (auto& [bk, sc] : acc.byb) {
-                (void)sc;
-                bks.push_back(bk);
+            for (auto& kv : acc.byb) {
+                bks.push_back(kv.first);
             }
             std::sort(bks.begin(), bks.end());
             cd.buckets = bks;
@@ -1097,7 +1121,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
             auto it = tbl.find(h);
             return it != tbl.end() ? it->second : h;
         };
-        simdjson::dom::parser sp, ep;
+        dftracer::utils::json::RecordParser sp, ep;
         for (auto& [pid, sjson] : starts) {
             auto eit = ends.find(pid);
             if (eit == ends.end()) continue;
@@ -1211,6 +1235,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
                 dst.io_busy += src.io_busy;
                 if (dst.hhash.empty()) dst.hhash = src.hhash;
                 if (dst.rank.empty()) dst.rank = src.rank;
+                if (dst.label.empty()) dst.label = src.label;
             }
             part.clear();
         }

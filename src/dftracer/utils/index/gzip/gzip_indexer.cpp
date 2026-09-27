@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/constants.h>
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/channel.h>
@@ -514,13 +515,11 @@ build_gzip_index_artifacts(const std::string& gz_path, std::uint64_t ckpt_size,
                 "corrupt, so the index will be empty.",
                 gz_path.c_str());
         } else {
-            // An uncompressed .pfw scans to zero members; say so rather than
-            // silently producing an empty index.
-            DFTRACER_UTILS_LOG_WARN(
-                "Indexer: no gzip members found in %s; it is not a gzip "
-                "stream, so the index will be empty. dftracer emits .pfw.gz - "
-                "gzip the trace.",
-                gz_path.c_str());
+            throw DFTUtilsException::cat(
+                ErrorCode::INVALID_ARGUMENT, "Indexer: ", gz_path,
+                " is not gzip; an index reads gzip traces only. Gzip it, or "
+                "let dftracer_view, dftracer_run or dftracer_index convert it "
+                "(they write a gzip copy under split/)");
         }
     }
 

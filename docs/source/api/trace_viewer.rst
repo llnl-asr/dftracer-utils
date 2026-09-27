@@ -53,7 +53,7 @@ Builder methods are lazy and chainable, and every one below returns a
 
 The trace builders (``phase``, ``time_range``, ``time_bucket``,
 ``resolution``, ``time_unit``, ``time_scale``, ``metadata``, ``rollup_root``,
-``views_root``, ``group_by``, ``agg``, ``agg_numeric_args``, a query-DSL
+``views_root``, ``group_by``, ``agg``, ``agg_numeric_args``, a duql
 ``filter``, a ``select`` of names) may only follow filters. After ``sort_by``,
 ``head``, ``limit``, ``offset``, ``topk``, ``with_column`` and the like they
 raise ``DFTUtilsValueError`` naming that op, so put trace settings and
@@ -67,10 +67,12 @@ aggregated output.
 
    * - Method
      - Effect
-   * - ``filter(pred)`` / ``query(pred)``
-     - Keep events matching the :doc:`query DSL <query>` (e.g. ``'dur >= 1000 and cat == "POSIX"'``) or a columnar expression (``col("dur") > 1000``). A plain field predicate with only filters before it is pushed to the index; otherwise it filters the plan's rows.
+   * - ``filter(pred)`` / ``duql(pred)``
+     - Keep events matching the :doc:`duql <duql>` (e.g. ``'dur >= 1000 and cat == "POSIX"'``) or a columnar expression (``col("dur") > 1000``). A plain field predicate with only filters before it is pushed to the index; otherwise it filters the plan's rows.
    * - ``phase(name)``
      - Restrict to a record family: ``"events"`` (``ph="X"``), ``"counters"`` (``ph="C"``), ``"aggregated"`` (rollup records), ``"metadata"`` (``ph="M"``), or ``"any"``.
+   * - ``all()``
+     - Read every record, metadata (``ph="M"``) included, as rows the filters and aggregations see. Without it a viewer reads the record schema's ``data`` row set, which for dftracer traces leaves the metadata records out.
    * - ``time_range(begin, end)``
      - Keep the events that start in ``[begin, end)``. The occupancy aggregates (``busy``, ``concurrency``, ``utilization``, ``active``) instead take every event that overlaps the window, clipped to it. Metadata records are not windowed.
    * - ``time_bucket(interval_us, normalize_to=None)``
@@ -197,7 +199,8 @@ Inspecting the schema
 ---------------------
 
 ``column_info()`` maps every column discoverable from the index to its type
-(``"int64"`` / ``"float64"`` / ``"string"``). It reads index metadata only - no
+(``"int64"`` / ``"float64"`` / ``"string"`` / ``"json"``). It reads index
+metadata only - no
 trace scan - so it is cheap and does not need the whole trace materialized the
 way ``collect().columns`` does (which also only sees the columns present in
 the collected rows).
@@ -214,12 +217,18 @@ properties describe the plan's output instead: its column names, and a
 
 The set is schemaless: the base axis fields (``pid`` / ``tid`` / ``ts`` /
 ``dur``), every path in the index's path catalog (top-level fields plus flat
-and nested args), and the resolved columns of each dictionary key field present. A
+and nested args). A
 nested-object arg surfaces as its dotted leaf columns (``pos.x``, ``pos.y``) and
 an array as one column per element (``tags.0``, ``tags.1``). The type folds
 every record of every file (booleans and integers read as ``int64``, any other
-number widens to ``float64``, and any mix with a string widens to
-``string``).
+number widens to ``float64``, and a mix of text with numbers or booleans is
+``json``).
+
+A ``json`` column, and a declared ``json`` field, holds each value's canonical
+JSON text, so the number ``3`` and the text ``"3"`` stay two values in rows and
+group keys. JSON output writes the value as is (``2.5``, ``"3"``);
+``Series.is_json`` tells such a column, ``Series.to_list()`` gives the parsed
+values, and Arrow carries it as the ``arrow.json`` extension of ``utf8``.
 
 Materialized views
 -------------------

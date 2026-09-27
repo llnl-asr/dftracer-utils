@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cstdlib>
 
 namespace dftracer::utils::index::extensions::kinds {
 
@@ -77,6 +78,32 @@ index::gzip::TimeBounds file_time_bounds(const index::store::IndexDatabase& db,
             std::max(bounds.max_timestamp_us, range.second);
     }
     return bounds;
+}
+
+std::optional<std::pair<double, double>> file_value_range(
+    const index::store::IndexDatabase& db, int file_id, std::string_view path) {
+    std::optional<std::pair<double, double>> out;
+    if (!db.extension_current(file_id, index::store::IndexExtension::ZONEMAP))
+        return out;
+    auto number = [](const std::string& text, double& v) {
+        char* end = nullptr;
+        v = std::strtod(text.c_str(), &end);
+        return !text.empty() && end == text.c_str() + text.size();
+    };
+    for (const auto& [granule, bytes] :
+         db.path_granules(file_id, index::store::IndexExtension::ZONEMAP,
+                          std::string(path))) {
+        auto zone = decode_zone(bytes);
+        double lo = 0;
+        double hi = 0;
+        if (!zone || zone->value_type == "string" || !number(zone->min, lo) ||
+            !number(zone->max, hi) || lo > hi)
+            continue;
+        out = out ? std::make_pair(std::min(out->first, lo),
+                                   std::max(out->second, hi))
+                  : std::make_pair(lo, hi);
+    }
+    return out;
 }
 
 }  // namespace dftracer::utils::index::extensions::kinds

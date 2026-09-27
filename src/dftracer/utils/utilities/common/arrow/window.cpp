@@ -8,6 +8,7 @@
 #include <dftracer/utils/utilities/common/arrow/window.h>
 #include <nanoarrow/nanoarrow.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <deque>
 #include <limits>
@@ -47,9 +48,14 @@ struct WState {
     std::int64_t ext_row = -1;
     std::int64_t rank_val = 0;
     const ArrowArrayView* tview = nullptr;
-    double threshold = 0.0;
     bool counter = false;
+    // SESSIONIZE: the end column and, per partition, the open session.
+    const ArrowArrayView* eview = nullptr;
+    double gap = 0.0;
+    double span = 0.0;
     std::int64_t session_id = 0;
+    double session_first = 0.0;
+    double session_end = 0.0;
     std::int64_t frame_preceding = 0;
     std::int64_t frame_following = 0;
     std::int64_t win_lo = 0;
@@ -121,12 +127,37 @@ ArrowExportResult window(const ArrowSchema* s, const ArrowArray* a,
         WState& st = states[j];
         st.func = ws.func;
         st.out_col = n_input + j;
-        st.offset = ws.offset;
+        if (is_frame_func(ws.func))
+            st.offset = ws.params.frame.min_count;
+        else if (is_offset_func(ws.func))
+            st.offset = ws.params.offset;
 
         if (ws.func == WindowFunc::DELTA || ws.func == WindowFunc::RATE ||
             ws.func == WindowFunc::SESSIONIZE) {
-            st.counter = ws.counter;
-            st.threshold = ws.threshold;
+            if (ws.func == WindowFunc::RATE)
+                st.counter = ws.params.rate.counter;
+            if (ws.func == WindowFunc::SESSIONIZE) {
+                const auto& ss = ws.params.session;
+                if (!(ss.gap >= 0.0) || !(ss.span >= 0.0))
+                    throw DFTUtilsException(
+                        ErrorCode::INVALID_ARGUMENT,
+                        "window: SESSIONIZE gap and span are not negative");
+                st.gap = ss.gap;
+                st.span = ss.span;
+                if (ss.has_end) {
+                    if (ss.end_col >= static_cast<std::uint32_t>(ncols))
+                        throw DFTUtilsException(
+                            ErrorCode::INVALID_ARGUMENT,
+                            "window: end column index out of range");
+                    st.eview = av.children[ss.end_col];
+                    auto ek = key_kind_from_storage(st.eview->storage_type);
+                    if (!ek || *ek == KeyKind::BYTES)
+                        throw DFTUtilsException(
+                            ErrorCode::INVALID_ARGUMENT,
+                            "window: SESSIONIZE over a non-numeric end "
+                            "column");
+                }
+            }
             if (ws.func != WindowFunc::SESSIONIZE) {
                 if (ws.value_col >= static_cast<std::uint32_t>(ncols)) {
                     throw DFTUtilsException(
@@ -144,12 +175,15 @@ ArrowExportResult window(const ArrowSchema* s, const ArrowArray* a,
                 st.vkind = *vk;
             }
             if (ws.func != WindowFunc::DELTA) {
-                if (ws.time_col >= static_cast<std::uint32_t>(ncols)) {
+                const std::uint32_t time_col = ws.func == WindowFunc::RATE
+                                                   ? ws.params.rate.time_col
+                                                   : ws.params.session.time_col;
+                if (time_col >= static_cast<std::uint32_t>(ncols)) {
                     throw DFTUtilsException(
                         ErrorCode::INVALID_ARGUMENT,
                         "window: time column index out of range");
                 }
-                st.tview = av.children[ws.time_col];
+                st.tview = av.children[time_col];
                 auto tk = key_kind_from_storage(st.tview->storage_type);
                 if (!tk || *tk == KeyKind::BYTES) {
                     throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
@@ -196,14 +230,10 @@ ArrowExportResult window(const ArrowSchema* s, const ArrowArray* a,
             continue;
         }
 
-        if (ws.func == WindowFunc::FRAME_SUM ||
-            ws.func == WindowFunc::FRAME_MIN ||
-            ws.func == WindowFunc::FRAME_MAX ||
-            ws.func == WindowFunc::FRAME_COUNT ||
-            ws.func == WindowFunc::FRAME_MEAN) {
-            st.frame_preceding = ws.frame_preceding;
-            st.frame_following = ws.frame_following;
-            if (ws.frame_mode == WindowFrameMode::RANGE) {
+        if (is_frame_func(ws.func)) {
+            st.frame_preceding = ws.params.frame.preceding;
+            st.frame_following = ws.params.frame.following;
+            if (ws.params.frame.mode == WindowFrameMode::RANGE) {
                 if (n_order != 1 || okinds[0] == KeyKind::BYTES) {
                     throw DFTUtilsException(
                         ErrorCode::INVALID_ARGUMENT,
@@ -594,19 +624,25 @@ ArrowExportResult window(const ArrowSchema* s, const ArrowArray* a,
                         break;
                     }
                     case WindowFunc::SESSIONIZE: {
-                        if (local == 0) {
-                            st.session_id = 1;
+                        if (local == 0) st.session_id = 0;
+                        // A row without a time is outside every session.
+                        if (ArrowArrayViewIsNull(st.tview, g)) {
+                            b.append_null(st.out_col);
+                            break;
+                        }
+                        const double t =
+                            ArrowArrayViewGetDoubleUnsafe(st.tview, g);
+                        double e = t;
+                        if (st.eview && !ArrowArrayViewIsNull(st.eview, g))
+                            e = std::max(
+                                t, ArrowArrayViewGetDoubleUnsafe(st.eview, g));
+                        if (st.session_id == 0 || t - st.session_end > st.gap ||
+                            (st.span > 0.0 && t - st.session_first > st.span)) {
+                            ++st.session_id;
+                            st.session_first = t;
+                            st.session_end = e;
                         } else {
-                            const std::int64_t prev =
-                                idx[static_cast<std::size_t>(r - 1)];
-                            if (!ArrowArrayViewIsNull(st.tview, g) &&
-                                !ArrowArrayViewIsNull(st.tview, prev)) {
-                                double gap =
-                                    ArrowArrayViewGetDoubleUnsafe(st.tview, g) -
-                                    ArrowArrayViewGetDoubleUnsafe(st.tview,
-                                                                  prev);
-                                if (gap > st.threshold) ++st.session_id;
-                            }
+                            st.session_end = std::max(st.session_end, e);
                         }
                         b.append_int64(st.out_col, st.session_id);
                         break;

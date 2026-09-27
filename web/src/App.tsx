@@ -11,7 +11,7 @@ import {
   fetchVizBreaks,
   fetchVizDensity,
   fetchVizStats,
-  fetchResolve,
+  fetchRowset,
   fetchUntimed,
   SINGLE_FILE,
   UNTIMED_PAGE,
@@ -29,6 +29,7 @@ import type {
   VizDensityResponse,
 } from "./data/types";
 import { CONFIG } from "./data/config";
+import { entityClause, laneClause, setEntityLabels, setSchema, textClause } from "./data/fields";
 import { onHostMessage, post } from "./data/vscode";
 import {
   eventGroupValue,
@@ -175,7 +176,7 @@ export default function App() {
   let flameCanvas!: HTMLCanvasElement;
   let flame: Flamegraph | undefined;
   let flameInflight: AbortController | undefined;
-  let flameLoadedQuery: string | null = null;
+  let flameLoadedDuql: string | null = null;
   let bottomFlame: Flamegraph | undefined;
   let timeline: Timeline | undefined;
   let inflight: AbortController | undefined;
@@ -303,8 +304,8 @@ export default function App() {
   const [flameTree, setFlameTree] = createSignal<FlameNode | null>(null);
   const [flameTreeGrouped, setFlameTreeGrouped] = createSignal(false);
   const [byProcess, setByProcess] = createSignal(false);
-  const [queryText, setQueryText] = createSignal("");
-  const [appliedQuery, setAppliedQuery] = createSignal("");
+  const [duqlText, setDuqlText] = createSignal("");
+  const [appliedDuql, setAppliedDuql] = createSignal("");
   const [fullDetail, setFullDetail] = createSignal(false);
   const [selected, setSelected] = createSignal<TraceEvent | null>(null);
   const [hover, setHover] = createSignal<HoverState | null>(null);
@@ -510,7 +511,7 @@ export default function App() {
   function loadAnFlame() {
     if (totalSpan <= 0) return;
     const [b, e] = scopeRange();
-    const q = scopedQuery();
+    const q = scopedDuql();
     const key = `${q}|${Math.floor(b)}-${Math.ceil(e)}`;
     if (anFlameKey === key && !anFlameLoading()) return;
     anFlameInflight?.abort();
@@ -618,7 +619,7 @@ export default function App() {
       ac?.abort();
   };
   // Cached per query, shared by every selection's sandwich to avoid refetching.
-  let inspTreeQuery: string | null = null;
+  let inspTreeDuql: string | null = null;
   let inspTreePromise: Promise<FlameNode | null> | null = null;
   let searchInput: HTMLInputElement | undefined;
   // Resolution maps accumulated from HH/FH metadata (persist across fetches;
@@ -684,25 +685,25 @@ export default function App() {
     const s = anScope();
     return s ? [s.t0, s.t1] : [0, totalSpan];
   };
-  // Query clause restricting to the selected lanes, or "" for the whole height.
+  // duql clause restricting to the selected lanes, or "" for the whole height.
   const laneFilter = (): string => {
     const lanes = anScope()?.lanes;
     if (!lanes || lanes.length === 0) return "";
-    const clauses = lanes.map((l) =>
-      l.tid ? `(pid == ${l.pid} and tid == ${l.tid})` : `pid == ${l.pid}`,
-    );
+    const clauses = lanes.map((l) => laneClause(l.pid, l.tid));
+    if (clauses.some((c) => c == null)) return "";
     return `(${clauses.join(" or ")})`;
   };
   // Clause restricting to the operations under the covered rows.
   const nameFilter = (): string => {
     const names = anScope()?.names;
     if (!names || names.length === 0) return "";
-    const clauses = names.map((n) => `name == "${n.replace(/"/g, '\\"')}"`);
+    const clauses = names.map((n) => textClause("name", n));
+    if (clauses.some((c) => c == null)) return "";
     return `(${clauses.join(" or ")})`;
   };
   // Combine the applied query with the selection's lane and name filters.
-  const scopedQuery = (): string =>
-    [appliedQuery(), laneFilter(), nameFilter()]
+  const scopedDuql = (): string =>
+    [appliedDuql(), laneFilter(), nameFilter()]
       .filter((c) => c)
       .map((c) => `(${c})`)
       .join(" and ");
@@ -755,7 +756,7 @@ export default function App() {
   function loadOverview() {
     if (totalSpan <= 0) return;
     overviewInflight?.abort();
-    const key = appliedQuery();
+    const key = appliedDuql();
     const cached = overviewCache.get(key);
     if (cached) {
       timeline?.setOverview(cached);
@@ -764,7 +765,7 @@ export default function App() {
     const ac = new AbortController();
     overviewInflight = ac;
     fetchVizDensity(
-      { begin: 0, end: totalSpan, summary: 2, query: key, width: timeline?.viewportWidth() },
+      { begin: 0, end: totalSpan, summary: 2, duql: key, width: timeline?.viewportWidth() },
       ac.signal,
     )
       .then((res) => {
@@ -784,10 +785,10 @@ export default function App() {
 
   function loadFlame() {
     if (totalSpan <= 0) return;
-    const q = appliedQuery();
+    const q = appliedDuql();
     const grouped = flameGrouped();
     const key = `${q}|${grouped ? "p" : ""}`;
-    if (flameLoadedQuery === key && !flameLoading()) return;
+    if (flameLoadedDuql === key && !flameLoading()) return;
     flameInflight?.abort();
     const ac = new AbortController();
     flameInflight = ac;
@@ -795,7 +796,7 @@ export default function App() {
     fetchCallTree(0, totalSpan, q, grouped, ac.signal)
       .then((res) => {
         if (ac.signal.aborted) return;
-        flameLoadedQuery = key;
+        flameLoadedDuql = key;
         setFlameTreeGrouped(grouped);
         setFlameTree(res.tree);
         flame?.setTree(res.tree);
@@ -840,9 +841,9 @@ export default function App() {
     const ac = new AbortController();
     inspInflight = ac;
     setInspHist(null);
-    const esc = name.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-    const q = appliedQuery();
-    const pred = `name == "${esc}"`;
+    const q = appliedDuql();
+    const pred = textClause("name", name);
+    if (!pred) return;
     fetchHistogram(0, totalSpan, q ? `(${q}) and ${pred}` : pred, ac.signal)
       .then((r) => {
         if (!ac.signal.aborted) setInspHist(r);
@@ -851,9 +852,9 @@ export default function App() {
   }
 
   function ensureInspTree(): Promise<FlameNode | null> {
-    const q = appliedQuery();
-    if (inspTreeQuery === q && inspTreePromise) return inspTreePromise;
-    inspTreeQuery = q;
+    const q = appliedDuql();
+    if (inspTreeDuql === q && inspTreePromise) return inspTreePromise;
+    inspTreeDuql = q;
     inspTreePromise = fetchCallTree(0, totalSpan, q, false)
       .then((r) => r.tree)
       .catch(() => null);
@@ -913,25 +914,40 @@ export default function App() {
   // Hashes seen but not resolved yet, so a miss is only ever fetched once.
   const resolvePending = new Set<string>();
 
-  function resolveHash(hash: string, type: "file" | "host"): void {
-    const key = type + ":" + hash;
-    if (resolvePending.has(key)) return;
-    resolvePending.add(key);
-    fetchResolve([hash], type)
+  function resolveHashes(hashes: string[], type: "file" | "host"): Promise<void> {
+    const fresh = hashes.filter((h) => !resolvePending.has(type + ":" + h));
+    if (!fresh.length) return Promise.resolve();
+    for (const h of fresh) resolvePending.add(type + ":" + h);
+    const request =
+      type === "file"
+        ? fetchRowset("files", "fhash", "path", fresh)
+        : fetchRowset("hosts", "hhash", "name", fresh);
+    return request
       .then((r) => {
         const entries = Object.entries(r.names);
         if (!entries.length) return;
-        if (type === "file") {
-          const m = new Map(fileByHash());
-          for (const [h, n] of entries) m.set(h, n);
-          setFileByHash(m);
-        } else {
-          const m = new Map(hostByHash());
-          for (const [h, n] of entries) m.set(h, n);
-          setHostByHash(m);
-        }
+        const m = new Map(type === "file" ? fileByHash() : hostByHash());
+        for (const [h, n] of entries) m.set(h, n);
+        if (type === "file") setFileByHash(m);
+        else setHostByHash(m);
       })
-      .catch(() => resolvePending.delete(key));
+      .catch(() => {
+        for (const h of fresh) resolvePending.delete(type + ":" + h);
+      });
+  }
+
+  function resolveHash(hash: string, type: "file" | "host"): void {
+    void resolveHashes([hash], type);
+  }
+
+  function showHosts(): void {
+    const hh = hostByHash();
+    const hosts = new Map<number, string>();
+    for (const [pid, hash] of hostByPid) {
+      const host = hh.get(hash);
+      if (host) hosts.set(Number(pid), host);
+    }
+    timeline?.setHosts(hosts);
   }
 
   function resolvedRows(ev: TraceEvent): [string, string][] {
@@ -971,7 +987,7 @@ export default function App() {
           begin,
           end,
           summary: summary(),
-          query: appliedQuery(),
+          duql: appliedDuql(),
           lookback: maxDurSeen,
           width: timeline?.viewportWidth(),
           groupBy: flatColumns().join(",") || undefined,
@@ -1015,46 +1031,24 @@ export default function App() {
       counterInflight?.abort();
       const cac = new AbortController();
       counterInflight = cac;
-      fetchVizCounters(begin, end, appliedQuery(), 1200, cac.signal)
+      fetchVizCounters(begin, end, appliedDuql(), 1200, cac.signal)
         .then((c) => {
           if (!cac.signal.aborted)
             timeline?.setCounters(c.begin, c.bucket_us, c.read_bytes, c.write_bytes);
         })
         .catch(() => {});
 
-      const hh = new Map(hostByHash());
-      const fh = new Map(fileByHash());
-      let resolvedChanged = false;
       for (const ev of res.events) {
         const args = (ev.args ?? {}) as Record<string, unknown>;
-        if (ev.ph === "M") {
-          const val = args.value != null ? String(args.value) : "";
-          const nm = args.name != null ? String(args.name) : "";
-          if (ev.name === "HH" && val && nm && hh.get(val) !== nm) {
-            hh.set(val, nm);
-            resolvedChanged = true;
-          } else if (ev.name === "FH" && val && nm && fh.get(val) !== nm) {
-            fh.set(val, nm);
-            resolvedChanged = true;
-          }
-          continue;
-        }
         if (args.hhash != null && !hostByPid.has(String(ev.pid))) {
           hostByPid.set(String(ev.pid), String(args.hhash));
         }
       }
-      if (resolvedChanged) {
-        setHostByHash(hh);
-        setFileByHash(fh);
-      }
       setLegendSource({ events: res.events, density: res.density });
 
-      const hosts = new Map<number, string>();
-      for (const [pid, hash] of hostByPid) {
-        const host = hh.get(hash);
-        if (host) hosts.set(Number(pid), host);
-      }
-      timeline?.setHosts(hosts);
+      showHosts();
+      const unnamed = [...new Set(hostByPid.values())].filter((h) => !hostByHash().has(h));
+      if (unnamed.length) void resolveHashes(unnamed, "host").then(showHosts);
       setGaps(timeline?.topGaps(15) ?? []);
     } catch (err) {
       if ((err as Error).name === "AbortError") return;
@@ -1101,7 +1095,7 @@ export default function App() {
     untimedInflight?.abort();
     const ac = new AbortController();
     untimedInflight = ac;
-    fetchUntimed(appliedQuery(), offset, ac.signal)
+    fetchUntimed(appliedDuql(), offset, ac.signal)
       .then((res) => {
         if (!ac.signal.aborted) setUntimed(res);
       })
@@ -1110,7 +1104,7 @@ export default function App() {
       });
   }
 
-  function afterQueryChange() {
+  function afterDuqlChange() {
     loadOverview();
     loadUntimed();
     if (view() === "flamegraph" || view() === "sandwich") loadFlame();
@@ -1118,28 +1112,29 @@ export default function App() {
     if (vp) ensureData(vp.begin, vp.end, true);
   }
 
-  function applyQuery(e?: Event) {
+  function applyDuql(e?: Event) {
     e?.preventDefault();
-    setAppliedQuery(queryText());
-    afterQueryChange();
+    setAppliedDuql(duqlText());
+    afterDuqlChange();
   }
 
   function filterByName(name: string) {
-    // The query DSL has no string escapes, so such a name cannot be expressed.
+    // duql has no string escapes, so such a name cannot be expressed.
     if (name.includes('"') || name.includes("\\")) {
       setError(`Cannot filter on a name containing a quote or backslash: ${name}`);
       return;
     }
-    const q = `name == "${name}"`;
-    setQueryText(q);
-    setAppliedQuery(q);
-    afterQueryChange();
+    const q = textClause("name", name);
+    if (!q) return;
+    setDuqlText(q);
+    setAppliedDuql(q);
+    afterDuqlChange();
   }
 
-  function clearQuery() {
-    setQueryText("");
-    setAppliedQuery("");
-    afterQueryChange();
+  function clearDuql() {
+    setDuqlText("");
+    setAppliedDuql("");
+    afterDuqlChange();
   }
 
   function doSearch(term: string) {
@@ -1157,7 +1152,7 @@ export default function App() {
     setDistKey(null);
     setDistHist(null);
     analyzeInflight?.abort();
-    const cacheKey = `${appliedQuery()}|${tab}|${scopeKey()}`;
+    const cacheKey = `${appliedDuql()}|${tab}|${scopeKey()}`;
     const cached = analyzeCache.get(cacheKey);
     if (cached) {
       setAnalyzeStats(cached);
@@ -1170,7 +1165,7 @@ export default function App() {
     try {
       const group = tab === "file" ? "fhash" : tab;
       const [b, e] = scopeRange();
-      const res = await fetchVizStats(b, e, scopedQuery(), group, ac.signal);
+      const res = await fetchVizStats(b, e, scopedDuql(), group, ac.signal);
       if (!ac.signal.aborted) {
         analyzeCache.set(cacheKey, res);
         setAnalyzeStats(res);
@@ -1193,7 +1188,7 @@ export default function App() {
     try {
       const [b, e] = scopeRange();
       const res = await fetchViz(
-        { begin: b, end: e, summary: 1, query: scopedQuery(), limit: 1000 },
+        { begin: b, end: e, summary: 1, duql: scopedDuql(), limit: 1000 },
         ac.signal,
       );
       if (!ac.signal.aborted) {
@@ -1221,13 +1216,11 @@ export default function App() {
     return raw;
   }
 
-  // Query predicate narrowing to one Analyze row (null when not expressible,
+  // duql predicate narrowing to one Analyze row (null when not expressible,
   // e.g. the file tab keys on a resolved path, not the fhash we could filter on).
   function distPredicate(tab: string, raw: string): string | null {
-    const esc = (s: string) => s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-    if (tab === "name") return `name == "${esc(raw)}"`;
-    if (tab === "cat") return `cat == "${esc(raw)}"`;
-    if (tab === "pid") return `pid == ${raw}`;
+    if (tab === "name" || tab === "cat") return textClause(tab, raw);
+    if (tab === "pid") return entityClause(raw);
     return null;
   }
 
@@ -1240,7 +1233,7 @@ export default function App() {
     distInflight = ac;
     setDistLoading(true);
     setDistHist(null);
-    const q = scopedQuery();
+    const q = scopedDuql();
     const combined = q ? `(${q}) and ${pred}` : pred;
     try {
       const [b, e] = scopeRange();
@@ -1356,6 +1349,7 @@ export default function App() {
       if (NEEDS_LOAD) return; // no server yet; the load screen is shown instead
       try {
         const i = await fetchInfo();
+        setSchema(i.schema);
         setInfo(i);
         const tr = i.time_range;
         const span = tr ? tr.max_timestamp_us - tr.min_timestamp_us : 0;
@@ -1395,14 +1389,17 @@ export default function App() {
             const ioBusy = new Map<number, number>();
             const labels = new Map<string, string>();
             const ranks = new Map<string, string>();
+            const entities = new Map<string, string>();
             for (const n of pt.nodes) {
               if (n.host) hosts.set(n.pid, n.host);
               if (n.bytes) bytes.set(n.pid, n.bytes);
               if (n.io_busy) ioBusy.set(n.pid, n.io_busy);
               const hasRank = n.rank != null && n.rank !== "";
-              labels.set(String(n.pid), hasRank ? `rank ${n.rank}` : `proc ${n.pid}`);
+              if (n.label) entities.set(String(n.pid), n.label);
+              labels.set(String(n.pid), hasRank ? `rank ${n.rank}` : (n.label ?? `proc ${n.pid}`));
               if (hasRank) ranks.set(String(n.pid), n.rank as string);
             }
+            setEntityLabels(entities);
             timeline?.setHosts(hosts);
             timeline?.setBytes(bytes);
             timeline?.setIoBusy(ioBusy);
@@ -1515,17 +1512,17 @@ export default function App() {
           <div class="loadbar" />
         </Show>
         <header class="toolbar">
-          <form class="query" onSubmit={applyQuery}>
+          <form class="query" onSubmit={applyDuql}>
             <input
               type="text"
-              placeholder='query, e.g.  dur >= 1000 and cat == "POSIX"'
-              value={queryText()}
-              onInput={(e) => setQueryText(e.currentTarget.value)}
+              placeholder='duql, e.g.  dur >= 1000 and cat == "POSIX"'
+              value={duqlText()}
+              onInput={(e) => setDuqlText(e.currentTarget.value)}
               spellcheck={false}
             />
             <button type="submit">Apply</button>
-            <Show when={appliedQuery()}>
-              <button type="button" class="ghost" onClick={clearQuery}>
+            <Show when={appliedDuql()}>
+              <button type="button" class="ghost" onClick={clearDuql}>
                 Clear
               </button>
             </Show>

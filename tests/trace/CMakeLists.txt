@@ -20,7 +20,6 @@ set(TRACE_TEST_SOURCES
     indexing/test_chunk_statistics.cpp
     indexing/test_chunk_indexer.cpp
     indexing/test_chunk_pruner.cpp
-    indexing/test_resolved_field_rewriter.cpp
     indexing/test_shard_manifest.cpp
 
     # Views
@@ -28,6 +27,9 @@ set(TRACE_TEST_SOURCES
     views/test_view_planner.cpp
     views/test_view_scanner.cpp
     views/test_view_scan.cpp
+    views/test_view_duql.cpp
+    views/test_view_duql_joins.cpp
+    views/test_view_duql_sources.cpp
     views/test_view_lazy.cpp
     views/test_view_stream_rows.cpp
     views/test_dynamic_prune.cpp
@@ -39,7 +41,7 @@ set(TRACE_TEST_SOURCES
     views/test_schema_view.cpp
     views/test_any_view.cpp
     views/test_typed_rows.cpp
-    views/test_resolved_view.cpp
+    views/test_rowset_view.cpp
     views/test_view_agg_parity.cpp
     views/test_view_agg_keys.cpp
     views/test_view_agg_scan.cpp
@@ -53,7 +55,8 @@ set(TRACE_TEST_SOURCES
     views/test_vectorized_fold.cpp
     views/test_rollup_store.cpp
     views/test_query_cache.cpp
-    views/test_dict_fold.cpp
+    views/test_lookup_store.cpp
+    views/test_rowset_fold.cpp
     views/test_bloom_fold.cpp
     views/test_raw_gzip_fuse.cpp
     views/test_event_source.cpp
@@ -62,6 +65,8 @@ set(TRACE_TEST_SOURCES
     views/test_view_join.cpp
     views/test_compare_view.cpp
     views/test_view_c_abi.cpp
+    views/test_duql_paths.cpp
+    views/test_schemaless.cpp
 
     # Statistics
     statistics/test_trace_statistics.cpp
@@ -118,4 +123,24 @@ foreach(test_file ${TRACE_TEST_SOURCES})
   add_test(NAME trace/${bin_exec} COMMAND ${target_name})
   set_tests_properties(trace/${bin_exec} PROPERTIES
                        WORKING_DIRECTORY "${test_working_directory}")
+  # Hundreds of queries over several traces: about 75 s alone on a laptop,
+  # several times that on the macOS coverage runner.
+  if(bin_exec STREQUAL "views/test_view_duql")
+    set(duql_timeout 600)
+    if(DFTRACER_UTILS_COVERAGE OR DFTRACER_UTILS_ENABLE_TSAN
+       OR DFTRACER_UTILS_ENABLE_ASAN)
+      set(duql_timeout 1800)
+    endif()
+    set_tests_properties(trace/${bin_exec} PROPERTIES TIMEOUT ${duql_timeout})
+  endif()
+endforeach()
+
+# duql joins give the same rows on any number of workers.
+foreach(threads 1 2 8)
+  add_test(NAME trace/views/test_view_duql_joins_t${threads}
+           COMMAND trace_views_test_view_duql_joins)
+  set_tests_properties(trace/views/test_view_duql_joins_t${threads} PROPERTIES
+    WORKING_DIRECTORY
+      "${CMAKE_CURRENT_BINARY_DIR}/workdirs/trace_views_test_view_duql_joins"
+    ENVIRONMENT "DFTRACER_UTILS_THREADS=${threads}")
 endforeach()

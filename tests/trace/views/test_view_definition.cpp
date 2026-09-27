@@ -11,18 +11,16 @@ TEST_SUITE("ViewDefinition") {
         ViewDefinition view;
         view.with_name("test_view")
             .with_description("A test view")
-            .with_query(R"(cat == "POSIX")")
-            .with_include_metadata(false);
+            .with_query(R"(cat == "POSIX")");
 
         CHECK(view.name == "test_view");
         CHECK(view.description == "A test view");
         CHECK(view.query.has_value());
-        CHECK(view.include_metadata == false);
     }
 
-    TEST_CASE("ViewDefinition - include_metadata defaults to true") {
+    TEST_CASE("ViewDefinition - metadata records are left out by default") {
         ViewDefinition view;
-        CHECK(view.include_metadata == true);
+        CHECK_FALSE(view.include_metadata);
     }
 
     TEST_CASE("ViewDefinition - Predefined io_view") {
@@ -47,8 +45,9 @@ TEST_SUITE("ViewDefinition") {
         ViewDefinition original;
         original.with_name("test_roundtrip")
             .with_description("Round-trip test")
-            .with_query(R"(cat in ["POSIX", "STDIO"] and dur >= 10)")
-            .with_include_metadata(false);
+            .with_query(R"(cat in ["POSIX", "STDIO"] and dur >= 10)");
+        original.include_metadata = true;
+        original.metadata_records = true;
 
         std::string json = original.to_json();
         CHECK(!json.empty());
@@ -57,7 +56,8 @@ TEST_SUITE("ViewDefinition") {
         CHECK(restored.name == "test_roundtrip");
         CHECK(restored.description == "Round-trip test");
         CHECK(restored.query.has_value());
-        CHECK(restored.include_metadata == false);
+        CHECK(restored.include_metadata);
+        CHECK(restored.metadata_records);
     }
 
     TEST_CASE("ViewDefinition - JSON round-trip with no query") {
@@ -69,5 +69,6 @@ TEST_SUITE("ViewDefinition") {
 
         CHECK(restored.name == "empty");
         CHECK_FALSE(restored.query.has_value());
+        CHECK_FALSE(restored.metadata_records);
     }
 }

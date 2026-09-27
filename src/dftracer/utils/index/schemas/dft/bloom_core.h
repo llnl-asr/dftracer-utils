@@ -111,12 +111,15 @@ class BloomCore {
     /// min/max, so a range filter never prunes on it.
     static void observe_extra(ChunkState& chunk, std::size_t e,
                               std::int64_t value);
+    static void observe_extra(ChunkState& chunk, std::size_t e,
+                              std::uint64_t value);
     static void observe_extra(ChunkState& chunk, std::size_t e, double value);
     static void observe_extra(ChunkState& chunk, std::size_t e,
                               std::string_view value);
 
     /// observe_extra's min/max and type rule, without the bloom.
     static void observe_value(ChunkDimensionStats& stats, std::int64_t value);
+    static void observe_value(ChunkDimensionStats& stats, std::uint64_t value);
     static void observe_value(ChunkDimensionStats& stats, double value);
     static void observe_value(ChunkDimensionStats& stats,
                               std::string_view value);

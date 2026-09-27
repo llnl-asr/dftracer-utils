@@ -8,6 +8,12 @@
 #include <dftracer/utils/core/common/no_destructor.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/duql/ast.h>
+#include <dftracer/utils/duql/evaluator.h>
+#include <dftracer/utils/duql/pattern.h>
+#include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/index/extensions/kinds/payloads.h>
+#include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_db_open.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_output.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_serialization.h>
@@ -18,24 +24,25 @@
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
-#include <dftracer/utils/query/ast.h>
-#include <dftracer/utils/query/evaluator.h>
-#include <dftracer/utils/query/pattern.h>
-#include <dftracer/utils/query/query.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_plan.h>
+#include <dftracer/utils/trace/views/view_scan.h>
 
 #include <cctype>
 #include <functional>
 #include <limits>
+#include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <shared_mutex>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <variant>
+#include <vector>
 
 namespace dataframe = dftracer::utils::dataframe;
 
@@ -55,13 +62,112 @@ bool answerable_field(const std::string& f) {
     return f == "dur" || f == "size" || f == "offset" || f == "ts" || f == "te";
 }
 
+// The tier's name for field `f` of `plan`: a dftracer field keeps its own. A
+// path-decoded record's name, entity, lane, duration or time role maps to
+// name, pid, tid, dur or ts when the tier holds exactly the value the scan
+// reads: a required field, a string name, an int otherwise and times in
+// microseconds. Empty when the tier holds no such value.
+std::string tier_field(const trace::views::detail::ViewPlan& plan,
+                       std::string_view f) {
+    if (!trace::views::detail::plan_by_path(plan)) return std::string(f);
+    namespace ix = dftracer::utils::index;
+    const ix::RecordSchema& s = trace::views::detail::plan_record_schema(plan);
+    const ix::Roles& r = s.roles;
+    auto exact = [&](const std::string& path, ix::FieldType type) {
+        if (f.empty() || path != f) return false;
+        const ix::FieldSpec* spec = s.field_at(path);
+        return spec && !spec->optional && spec->type == type;
+    };
+    if (exact(r.name, ix::FieldType::STRING)) return "name";
+    if (exact(r.entity, ix::FieldType::INT)) return "pid";
+    if (exact(r.lane, ix::FieldType::INT)) return "tid";
+    if (r.duration_unit == ix::TimeUnit::US &&
+        exact(r.duration, ix::FieldType::INT))
+        return "dur";
+    if (r.time_unit == ix::TimeUnit::US && exact(r.time, ix::FieldType::INT))
+        return "ts";
+    return {};
+}
+
+// Whether every record of `plan`'s path-decoded files holds a value of each
+// role the tier maps, not negative: the tier folds a missing value as 0 where
+// the scan reads null. Each chunk's zone must show the role in every record.
+bool roles_complete(const trace::views::detail::ViewPlan& plan) {
+    namespace ix = dftracer::utils::index;
+    const ix::Roles& r = trace::views::detail::plan_record_schema(plan).roles;
+    std::vector<std::string_view> paths;
+    for (const std::string* p :
+         {&r.name, &r.entity, &r.lane, &r.duration, &r.time})
+        if (!tier_field(plan, *p).empty()) paths.push_back(*p);
+    if (paths.empty()) return true;
+    for (const auto& f : plan.files) {
+        IndexDatabase db(f.index_path, index::store::IndexOpenMode::ReadOnly);
+        const int fid = db.get_file_info_id(get_logical_path(f.file_path));
+        if (fid < 0 ||
+            !db.extension_current(fid, index::store::IndexExtension::ZONEMAP))
+            return false;
+        const auto spans = db.query_chunk_spans(fid);
+        for (std::string_view p : paths) {
+            std::map<std::uint64_t, index::extensions::kinds::Zone> zones;
+            for (const auto& [granule, bytes] :
+                 db.path_granules(fid, index::store::IndexExtension::ZONEMAP,
+                                  std::string(p)))
+                if (auto z = index::extensions::kinds::decode_zone(bytes))
+                    zones.emplace(granule, std::move(*z));
+            for (std::uint64_t i = 0; i < spans.size(); ++i) {
+                if (spans[i].first_line_num == 0 ||
+                    spans[i].last_line_num < spans[i].first_line_num)
+                    continue;
+                const std::uint64_t lines =
+                    spans[i].last_line_num - spans[i].first_line_num + 1;
+                const auto z = zones.find(i);
+                if (z == zones.end() || z->second.observed != lines ||
+                    z->second.present != lines ||
+                    z->second.min.starts_with('-'))
+                    return false;
+            }
+        }
+    }
+    return true;
+}
+
+// Whether the tier holds the rows the scan of `plan` reads: it aggregates
+// every record, and a path schema's `data` row set can leave some out.
+bool tier_rows_match(const trace::views::detail::ViewPlan& plan) {
+    return !trace::views::detail::plan_by_path(plan) || plan.all_records ||
+           trace::views::detail::plan_record_schema(plan).data.empty();
+}
+
+// The group keys the tier reads for `plan`: a path plan's field keys on the
+// name, entity and lane roles become name, pid and tid keys. nullopt when a
+// path plan has a key the tier cannot answer.
+std::optional<std::vector<trace::views::GroupKey>> tier_group_keys(
+    const trace::views::detail::ViewPlan& plan) {
+    using Kind = trace::views::GroupKey::Kind;
+    std::vector<trace::views::GroupKey> keys = plan.group_by;
+    if (!trace::views::detail::plan_by_path(plan)) return keys;
+    for (auto& gk : keys) {
+        if (gk.kind != Kind::Field) return std::nullopt;
+        const std::string t = tier_field(plan, gk.arg);
+        if (t == "name")
+            gk.kind = Kind::Name;
+        else if (t == "pid")
+            gk.kind = Kind::Pid;
+        else if (t == "tid")
+            gk.kind = Kind::Tid;
+        else
+            return std::nullopt;
+    }
+    return keys;
+}
+
 std::string to_lower_ascii(std::string s) {
     for (char& c : s)
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return s;
 }
 
-void lower_literal(query::LiteralNode& lit) {
+void lower_literal(duql::LiteralNode& lit) {
     if (auto* s = std::get_if<std::string>(&lit.value)) *s = to_lower_ascii(*s);
 }
 
@@ -69,8 +175,8 @@ void lower_literal(query::LiteralNode& lit) {
 // The tier stores cat lowercased (the aggregation's canonical form), so a
 // filter literal like "POSIX" is folded to match; this also restores the
 // pre-View iter_arrow behavior of comparing cat case-insensitively.
-query::QueryNodePtr clone_cat_lowered(const query::QueryNode& n) {
-    using namespace query;
+duql::QueryNodePtr clone_cat_lowered(const duql::QueryNode& n) {
+    using namespace duql;
     return std::visit(
         [](const auto& node) -> QueryNodePtr {
             using T = std::decay_t<decltype(node)>;
@@ -109,15 +215,17 @@ query::QueryNodePtr clone_cat_lowered(const query::QueryNode& n) {
 
 // A cat predicate is foldable onto the tier's lowercased cat only when it is an
 // equality/membership form (whose literal we can lowercase). A like/regex on
-// cat can't be case-folded safely, so the tier declines and the scan (raw cat)
-// answers it.
-bool cat_foldable(const query::QueryNode& n) {
-    using namespace query;
+// cat can't be case-folded safely, and an expression leaf is never folded, so
+// the tier declines and the scan (raw cat) answers it.
+bool cat_foldable(const duql::QueryNode& n) {
+    using namespace duql;
     return std::visit(
         [](const auto& node) -> bool {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, MatchNode>)
                 return node.field.path != "cat";
+            else if constexpr (std::is_same_v<T, ExprLeaf>)
+                return false;
             else if constexpr (std::is_same_v<T, AndNode> ||
                                std::is_same_v<T, OrNode>)
                 return cat_foldable(*node.left) && cat_foldable(*node.right);
@@ -132,14 +240,37 @@ bool cat_foldable(const query::QueryNode& n) {
 // Filter fields evaluable from a CF key. cat is answerable only when foldable
 // (see cat_foldable): the tier stores it lowercased, so equality/membership
 // literals are lowercased to match, but like/regex on cat must scan.
-bool query_answerable(const query::Query& q) {
+bool query_answerable(const trace::views::detail::ViewPlan& plan) {
+    const duql::Query& q = *plan.query;
     // Aggregated records keep no array elements.
     if (!q.any_paths().empty()) return false;
-    for (std::string_view f : q.fields())
-        if (f != "name" && f != "pid" && f != "tid" && f != "fhash" &&
-            f != "hhash" && f != "cat")
+    for (std::string_view f : q.fields()) {
+        const std::string t = tier_field(plan, f);
+        if (t != "name" && t != "pid" && t != "tid" && t != "fhash" &&
+            t != "hhash" && t != "cat")
             return false;
+    }
     return cat_foldable(q.root());
+}
+
+// The query's evaluation root over tier keys. The tier stores dftracer's cat
+// lowercased, so its cat literals are lowercased (see clone_cat_lowered); a
+// path plan has no cat.
+duql::QueryNodePtr tier_query_root(const trace::views::detail::ViewPlan& plan) {
+    if (!plan.query) return nullptr;
+    return trace::views::detail::plan_by_path(plan)
+               ? duql::clone(plan.query->root())
+               : clone_cat_lowered(plan.query->root());
+}
+
+// Each query field with its tier name, resolved once per collect.
+std::vector<std::pair<std::string, std::string>> tier_query_fields(
+    const trace::views::detail::ViewPlan& plan) {
+    std::vector<std::pair<std::string, std::string>> out;
+    if (plan.query)
+        for (std::string_view f : plan.query->fields())
+            out.emplace_back(std::string(f), tier_field(plan, f));
+    return out;
 }
 
 // Ops the seed path can reconstruct from stored FieldStat + optional DDSketch.
@@ -175,29 +306,33 @@ bool tier_serves_op(trace::views::AggOp op) {
 // unified events+profiles paths (which differ only on group-key allowances).
 bool aggs_and_fields_answerable(const trace::views::detail::ViewPlan& plan,
                                 const trace::views::detail::AggSchema& sch) {
+    if (!tier_rows_match(plan)) return false;
     for (const auto& s : plan.agg) {
         if (!tier_serves_op(s.op)) return false;
+        const std::string field = tier_field(plan, s.field);
+        const std::string by = tier_field(plan, s.by);
+        if (field.empty() != s.field.empty() || by.empty() != s.by.empty())
+            return false;
         // Only dur/size persist m3/m4 and a DDSketch; skew/kurtosis,
         // percentiles and histograms on any other field must scan.
         if ((s.op == trace::views::AggOp::Skew ||
              s.op == trace::views::AggOp::Kurt ||
              s.op == trace::views::AggOp::Pct ||
              s.op == trace::views::AggOp::Hist) &&
-            s.field != "dur" && s.field != "size")
+            field != "dur" && field != "size")
             return false;
-        if (s.op == trace::views::AggOp::Count && !s.field.empty())
-            return false;
-        if (s.field == "ts" && s.op != trace::views::AggOp::Min) return false;
-        if (s.field == "te" && s.op != trace::views::AggOp::Max) return false;
+        if (s.op == trace::views::AggOp::Count && !field.empty()) return false;
+        if (field == "ts" && s.op != trace::views::AggOp::Min) return false;
+        if (field == "te" && s.op != trace::views::AggOp::Max) return false;
         // The scan scales ts/dur/te by time_scale; the tier stores raw metrics,
         // so a scaled-field agg would diverge. Decline it.
         if (plan.time_scale != 1.0 &&
-            (s.field == "ts" || s.field == "dur" || s.field == "te" ||
-             s.by == "ts" || s.by == "dur" || s.by == "te"))
+            (field == "ts" || field == "dur" || field == "te" || by == "ts" ||
+             by == "dur" || by == "te"))
             return false;
     }
     for (const auto& f : sch.fields)
-        if (!answerable_field(f)) return false;
+        if (!answerable_field(tier_field(plan, f))) return false;
     return true;
 }
 
@@ -206,16 +341,15 @@ bool answerable(const trace::views::detail::ViewPlan& plan,
     if (plan.time_bucket_us != 0 || plan.time_range || plan.files.empty() ||
         !plan.computed.empty())
         return false;
-    if (plan.query && !query_answerable(*plan.query)) return false;
-    for (const auto& gk : plan.group_by) {
-        if (gk.kind == trace::views::GroupKey::Kind::Arg ||
-            gk.kind == trace::views::GroupKey::Kind::Field ||
-            gk.kind == trace::views::GroupKey::Kind::Rank)
-            return false;
-        if (gk.kind == trace::views::GroupKey::Kind::Resolved) {
-            const auto key = trace::views::detail::resolved_key_field(gk);
-            if (key != "fhash" && key != "hhash") return false;
-        }
+    if (plan.query && !query_answerable(plan)) return false;
+    if (trace::views::detail::plan_by_path(plan)) {
+        if (!tier_group_keys(plan)) return false;
+    } else {
+        for (const auto& gk : plan.group_by)
+            if (gk.kind == trace::views::GroupKey::Kind::Arg ||
+                gk.kind == trace::views::GroupKey::Kind::Field ||
+                gk.kind == trace::views::GroupKey::Kind::Rank)
+                return false;
     }
     return aggs_and_fields_answerable(plan, sch);
 }
@@ -250,11 +384,6 @@ std::string key_value(const AggKeyView& kv, const trace::views::GroupKey& gk,
         case trace::views::GroupKey::Kind::Expr:
             // Never reached: a computed column keeps a plan off the tier.
             return {};
-        case trace::views::GroupKey::Kind::Resolved:
-            // Only fhash and hhash keys reach the tier (answerable()).
-            if (trace::views::detail::resolved_key_field(gk) == "fhash")
-                return std::string(agg::fhash_text(kv, fbuf));
-            return std::string(kv.hhash);
         case trace::views::GroupKey::Kind::Arg:
         case trace::views::GroupKey::Kind::Field:
             // Resolved from the key's extra_keys (e.g. PROFILE epoch/step);
@@ -266,13 +395,16 @@ std::string key_value(const AggKeyView& kv, const trace::views::GroupKey& gk,
     return {};
 }
 
+// `domain` is the scan's: U64 for a dftracer field, I64 for a path record's int
+// field.
 void fill_field(dataframe::FieldStat& fs, const std::string& field,
-                const AggMetricsFullView& mv) {
+                const AggMetricsFullView& mv,
+                dataframe::FieldStatDomain domain) {
     // Tier metrics are uint64; restore the exact integer domain (sum/min/max)
     // so a tier-answered Min/Max/Sum matches the scan path past 2^53.
     auto set_exact = [&](std::uint64_t total, std::uint64_t mn,
                          std::uint64_t mx) {
-        fs.domain = dftracer::utils::dataframe::FieldStatDomain::U64;
+        fs.domain = domain;
         fs.esum = std::bit_cast<std::int64_t>(total);
         fs.emin = std::bit_cast<std::int64_t>(mn);
         fs.emax = std::bit_cast<std::int64_t>(mx);
@@ -417,15 +549,14 @@ void evict_tier_cache(const std::string& index_path) {
 }
 
 std::shared_ptr<const TierCache> tier_cache(const std::string& index_path) {
-    static const int registered = [] {
+    [[maybe_unused]] static const bool registered = [] {
         index::store::register_pre_exit_cleanup(clear_tier_cache);
         // Drop this index's cached agg DB when its manager entry is reset (e.g.
         // a rebuild removing the directory), so the tier does not keep the DB
         // open and block the removal.
         index::store::register_reset_listener(evict_tier_cache);
-        return 0;
+        return true;
     }();
-    (void)registered;
     const std::int64_t mtime = current_mtime(index_path);
     {
         std::shared_lock<std::shared_mutex> rlk(g_tier_mtx);
@@ -454,9 +585,7 @@ bool plan_needs_file(const trace::views::detail::ViewPlan& plan) {
     for (const auto& g : plan.group_by)
         if (g.kind == trace::views::GroupKey::Kind::Fhash ||
             g.kind == trace::views::GroupKey::Kind::FilePath ||
-            g.kind == trace::views::GroupKey::Kind::FileName ||
-            (g.kind == trace::views::GroupKey::Kind::Resolved &&
-             trace::views::detail::resolved_key_field(g) == "fhash"))
+            g.kind == trace::views::GroupKey::Kind::FileName)
             return true;
     if (plan.query)
         for (std::string_view f : plan.query->fields())
@@ -480,6 +609,8 @@ std::shared_ptr<const TierCache> covering_tier(
         if (f.index_path != index_path) return nullptr;
         if (!tc->files.count(get_logical_path(f.file_path))) return nullptr;
     }
+    if (trace::views::detail::plan_by_path(plan) && !roles_complete(plan))
+        return nullptr;
     return tc;
 }
 
@@ -493,16 +624,23 @@ namespace {
 struct TierValueCol {
     std::int32_t value_col;
     std::string field;
+    dataframe::FieldStatDomain domain;
 };
 
 std::vector<TierValueCol> tier_value_cols(
+    const trace::views::detail::ViewPlan& plan,
     const std::vector<std::string>& value_names) {
+    const dataframe::FieldStatDomain domain =
+        trace::views::detail::plan_by_path(plan)
+            ? dataframe::FieldStatDomain::I64
+            : dataframe::FieldStatDomain::U64;
     std::vector<TierValueCol> out;
     for (std::size_t vc = 0; vc < value_names.size(); ++vc) {
-        std::string field =
-            trace::views::detail::agg_value_base_field(value_names[vc]);
+        std::string field = tier_field(
+            plan, trace::views::detail::agg_value_base_field(value_names[vc]));
         if (!answerable_field(field)) continue;  // e.g. a SetUnion text column
-        out.push_back({static_cast<std::int32_t>(vc), std::move(field)});
+        out.push_back(
+            {static_cast<std::int32_t>(vc), std::move(field), domain});
     }
     return out;
 }
@@ -521,7 +659,7 @@ std::vector<dataframe::AggSeedValue> row_seed_values(
     for (std::size_t i = 0; i < cols.size(); ++i) {
         dataframe::AggSeedValue v;
         v.value_col = cols[i].value_col;
-        fill_field(v.stat, cols[i].field, mv);
+        fill_field(v.stat, cols[i].field, mv, cols[i].domain);
         const std::string_view blob = cols[i].field == "dur" ? mv.dur_sketch
                                       : cols[i].field == "size"
                                           ? mv.size_sketch
@@ -545,16 +683,15 @@ bool tier_key_is_resolved(trace::views::GroupKey::Kind kind) {
     return kind == trace::views::GroupKey::Kind::FilePath ||
            kind == trace::views::GroupKey::Kind::FileName ||
            kind == trace::views::GroupKey::Kind::HostName ||
-           kind == trace::views::GroupKey::Kind::Rank ||
-           kind == trace::views::GroupKey::Kind::Resolved;
+           kind == trace::views::GroupKey::Kind::Rank;
 }
 
 void build_tier_keys(std::vector<std::string>& keys,
-                     const trace::views::detail::ViewPlan& plan,
+                     const std::vector<trace::views::GroupKey>& group_by,
                      const AggKeyView& kv,
                      const index::plan::GroupResolver* resolver,
                      char (&fbuf)[::dftracer::utils::hash::HEX64_DIGITS]) {
-    for (const auto& gk : plan.group_by) {
+    for (const auto& gk : group_by) {
         std::string v = key_value(kv, gk, fbuf);
         if (gk.transform != trace::views::GroupKey::Transform::None) {
             if (resolver && tier_key_is_resolved(gk.kind))
@@ -567,30 +704,31 @@ void build_tier_keys(std::vector<std::string>& keys,
 
 }  // namespace
 
-// `eval_root` is the cat-lowered clone of plan.query's AST (see
-// clone_cat_lowered), built once by the caller; the tier's cat values are
-// lowercased, so cat literals must be too. Non-null whenever plan.query is set.
+// `eval_root` is tier_query_root(plan), and `fields` tier_query_fields(plan),
+// built once by the caller. Non-null whenever plan.query is set.
 static bool key_passes_query(
-    const trace::views::detail::ViewPlan& plan,
-    const query::QueryNode* eval_root, const AggKeyView& kv,
-    char (&fbuf)[::dftracer::utils::hash::HEX64_DIGITS]) {
-    if (!plan.query) return true;
-    query::ValueMap vm;
-    for (std::string_view f : plan.query->fields()) {
-        if (f == "name")
+    const duql::QueryNode* eval_root,
+    const std::vector<std::pair<std::string, std::string>>& fields,
+    const AggKeyView& kv, char (&fbuf)[::dftracer::utils::hash::HEX64_DIGITS]) {
+    if (!eval_root) return true;
+    duql::ValueMap vm;
+    for (const auto& [f, t] : fields) {
+        if (t == "name")
             vm[f] = std::string(kv.name);
-        else if (f == "cat")
+        else if (t == "cat")
             vm[f] = std::string(kv.cat);
-        else if (f == "pid")
+        else if (t == "pid")
             vm[f] = kv.pid;
-        else if (f == "tid")
+        else if (t == "tid")
             vm[f] = kv.tid;
-        else if (f == "hhash")
+        else if (t == "hhash" && !kv.hhash.empty())
             vm[f] = std::string(kv.hhash);
-        else if (f == "fhash")
-            vm[f] = std::string(agg::fhash_text(kv, fbuf));
+        else if (t == "fhash") {
+            const std::string_view fh = agg::fhash_text(kv, fbuf);
+            if (!fh.empty()) vm[f] = std::string(fh);
+        }
     }
-    return query::evaluate(*eval_root, vm);
+    return duql::evaluate(*eval_root, vm);
 }
 
 bool agg_tier_collect(const trace::views::detail::ViewPlan& plan,
@@ -619,7 +757,8 @@ bool agg_tier_collect(const trace::views::detail::ViewPlan& plan,
     auto state = dataframe::agg_new(lowered.specs, spec.dyn_specs);
     dataframe::agg_seed_begin(*state, plan.group_by.size());
     const std::vector<TierValueCol> vcols =
-        tier_value_cols(lowered.value_names);
+        tier_value_cols(plan, lowered.value_names);
+    const std::vector<trace::views::GroupKey> group_by = *tier_group_keys(plan);
 
     // A transformed key needs the resolved+transformed value at seed time
     // (finalize_engine_result skips resolver for transformed keys); a plain
@@ -635,20 +774,21 @@ bool agg_tier_collect(const trace::views::detail::ViewPlan& plan,
     char fbuf[::dftracer::utils::hash::HEX64_DIGITS];
     std::vector<std::string> keys;
     std::vector<utilities::common::statistics::DDSketch> sketch_store;
-    const auto eval_root =
-        plan.query ? clone_cat_lowered(plan.query->root()) : nullptr;
+    const auto eval_root = tier_query_root(plan);
+    const auto qfields = tier_query_fields(plan);
     agg::tier::for_each_row(
         *tc->handle->db, 0, agg::AGG_KEY_NUM_SHARDS,
         [&](std::string_view kdata, std::string_view vdata) {
             AggKeyView kv;
             if (!agg::parse_agg_key_view(kdata, intern, kv)) return true;
             if (kv.map_type != agg::AggMapType::EVENT) return true;
-            if (!key_passes_query(plan, eval_root.get(), kv, fbuf)) return true;
+            if (!key_passes_query(eval_root.get(), qfields, kv, fbuf))
+                return true;
             AggMetricsFullView mv;
             if (!agg::parse_agg_value_full_view(vdata, mv)) return true;
             keys.clear();
-            keys.reserve(plan.group_by.size());
-            build_tier_keys(keys, plan, kv, resolver, fbuf);
+            keys.reserve(group_by.size());
+            build_tier_keys(keys, group_by, kv, resolver, fbuf);
             dataframe::agg_seed_group(*state, keys, mv.count,
                                       row_seed_values(vcols, mv, sketch_store));
             return true;
@@ -680,8 +820,17 @@ bool events_profiles_collect(const trace::views::detail::ViewPlan& plan,
     // time_range() is a window filter the tier cannot evaluate; time_bucket()
     // maps onto the CF's stored bucket grain and is supported.
     if (plan.time_range) return false;
-    if (plan.query && !query_answerable(*plan.query)) return false;
+    if (plan.query && !query_answerable(plan)) return false;
     if (!aggs_and_fields_answerable(plan, sch)) return false;
+    const auto group_by = tier_group_keys(plan);
+    if (!group_by) return false;
+    // A path plan buckets on its time role, which the tier holds in
+    // microseconds only when it maps to ts.
+    if (plan.time_bucket_us > 0 && trace::views::detail::plan_by_path(plan) &&
+        tier_field(plan,
+                   trace::views::detail::plan_record_schema(plan).roles.time) !=
+            "ts")
+        return false;
 
     const auto tc = covering_tier(plan);
     if (!tc) return false;
@@ -720,7 +869,7 @@ bool events_profiles_collect(const trace::views::detail::ViewPlan& plan,
     dataframe::LoweredGroupAggs lowered =
         dataframe::lower_group_aggs(ispec.gaggs);
     const std::vector<TierValueCol> vcols =
-        tier_value_cols(lowered.value_names);
+        tier_value_cols(plan, lowered.value_names);
     auto ev_state = dataframe::agg_new(lowered.specs, ispec.dyn_specs);
     auto prof_state = dataframe::agg_new(lowered.specs, ispec.dyn_specs);
     dataframe::agg_seed_begin(*ev_state, nkeys);
@@ -737,8 +886,8 @@ bool events_profiles_collect(const trace::views::detail::ViewPlan& plan,
     if (progress && *progress) (*progress)(0, total_shards);
     // Keys begin with a big-endian 2-byte shard prefix, so a shard range is a
     // contiguous key range and no group straddles shards.
-    const auto eval_root =
-        plan.query ? clone_cat_lowered(plan.query->root()) : nullptr;
+    const auto eval_root = tier_query_root(plan);
+    const auto qfields = tier_query_fields(plan);
     agg::tier::for_each_row(
         *tc->handle->db, static_cast<std::uint16_t>(shard_begin),
         static_cast<std::uint16_t>(shard_end),
@@ -756,7 +905,8 @@ bool events_profiles_collect(const trace::views::detail::ViewPlan& plan,
             const bool is_profile = kv.map_type == agg::AggMapType::PROFILE;
             if (kv.map_type != agg::AggMapType::EVENT && !is_profile)
                 return true;
-            if (!key_passes_query(plan, eval_root.get(), kv, fbuf)) return true;
+            if (!key_passes_query(eval_root.get(), qfields, kv, fbuf))
+                return true;
 
             AggMetricsFullView mv;
             if (!agg::parse_agg_value_full_view(vdata, mv)) return true;
@@ -769,7 +919,7 @@ bool events_profiles_collect(const trace::views::detail::ViewPlan& plan,
             // for it.
             if (has_bucket)
                 keys.push_back(std::to_string(tier_time_bucket(kv, plan)));
-            build_tier_keys(keys, plan, kv, resolver, fbuf);
+            build_tier_keys(keys, *group_by, kv, resolver, fbuf);
             dataframe::agg_seed_group(is_profile ? *prof_state : *ev_state,
                                       keys, mv.count,
                                       row_seed_values(vcols, mv, sketch_store));

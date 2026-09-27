@@ -45,29 +45,25 @@ Query the output
    from dftracer.utils import Indexer
    from dftracer.utils.trace_viewer import TraceViewer
 
-   # Build the index once: it holds the run dictionary.
+   # Build the index once: it stores the runs row set.
    with Indexer(files=["genesis.pfw.gz"]) as ix:
        ix.ensure_indexed()
+       runs = ix.rowset("runs")  # one row per run, with the run keys
 
    tv = TraceViewer("genesis.pfw.gz")
 
    # One record per call path per run: nested stats are args columns, and
-   # the run's keys resolve through the index's run dictionary.
-   dist = tv.select(
-       "resolved.run.app", "resolved.run.system",
-       "resolved.run.unique_input", "resolved.run.nodes",
-       "resolved.run.ppn", "resolved.run.papi_set",
-       "path", "depth", "count", "dur.p50", "dur.p99",
-       "counters.PAPI_TOT_CYC.p50",
+   # an arrow reads each run key from the runs row set.
+   dist = tv.duql(
+       "derive app = run -> runs.app, system = run -> runs.system,"
+       " nodes = run -> runs.nodes, papi_set = run -> runs.papi_set"
    ).collect()
 
    # Filter by run key: the filter becomes a test on the run id.
-   laghos = tv.query('resolved.run.app == "laghos"').collect()
+   laghos = tv.duql('where run -> runs.app == "laghos"').collect()
 
-   # One RUN line per run with the run keys and the full summary.json.
-   runs = TraceViewer("genesis.pfw.gz").phase("metadata").filter(
-       "name == 'RUN'"
-   ).collect()
+   # The runs row set as query rows, with no trace decoded.
+   runs = tv.duql("from runs").collect()
 
 Each record is a ``ph:3`` event with ``pid`` 0. Its ``args`` hold the
 ``run`` id, ``path`` (call names joined by ``;``), ``parent``, ``depth``,
@@ -78,11 +74,13 @@ object has ``min``, ``max``, ``avg``, ``p25``, ``p50``, ``p75``, ``p90`` and
 is the FNV-1a hash of ``app|system|unique_input|nodes|ppn|papi_set``, so the
 same run gets the same id in any output and files from separate invocations
 can be concatenated. The run keys themselves are on the ``RUN`` line only:
-the index detects the file as the ``genesis`` record schema and builds a
-``run`` dictionary from the ``RUN`` lines, so ``resolved.run.<key>`` reads
-``app``, ``system``, ``unique_input``, ``nodes``, ``ppn``, ``papi_set``,
-``method``, ``sketch_accuracy`` or ``leaf`` on any record. Numeric keys read
-as text (``"4"``) and match numeric filters (``resolved.run.nodes == 4``).
+the index detects the file as the ``genesis`` record schema, whose source
+declares the row set ``runs`` over the ``RUN`` lines, so ``run -> runs.<key>``
+reads ``app``, ``system``, ``unique_input``, ``nodes``, ``ppn``,
+``papi_set``, ``method``, ``sketch_accuracy`` or ``leaf`` on any record. The
+index build stores ``runs``, so reading it decodes no trace. Numeric keys stay
+numbers (``run -> runs.nodes == 4``). A default query reads no ``RUN`` line;
+``from all`` or ``TraceViewer.all()`` reads them with the call records.
 
 How counters are attributed
 ---------------------------

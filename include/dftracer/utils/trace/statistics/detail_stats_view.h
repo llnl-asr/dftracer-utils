@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace dftracer::utils::query {
+namespace dftracer::utils::duql {
 class Query;
 }
 
@@ -23,7 +23,7 @@ struct DetailNeeds {
     const std::vector<std::string>* group_by = nullptr;
     const std::vector<std::string>* filter_names = nullptr;
     const std::vector<std::string>* filter_categories = nullptr;
-    const query::Query* query = nullptr;  ///< chunk pruning; null = scan all
+    const duql::Query* query = nullptr;  ///< chunk pruning; null = scan all
     std::size_t num_slots = 0;  ///< parallel scan width; 0 = a small default
 };
 

@@ -4,8 +4,8 @@
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/string_intern.h>
 #include <dftracer/utils/core/coro/async_generator.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
-#include <dftracer/utils/query/query.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
@@ -33,7 +33,7 @@ struct ViewScannerInput {
     std::size_t batch_size = 4 * 1024 * 1024;  // IO buffer size
     std::size_t event_batch_size = 10000;      // events per batch
     ViewDefinition view;
-    std::optional<query::Query> query;
+    std::optional<duql::Query> query;
 
     /// Fold mode: when set, the scanner parses each matching event once and
     /// emits an owned interned FoldEvent (in ViewScannerBatch::fold_events)
@@ -64,6 +64,20 @@ struct ViewScannerInput {
     ViewScannerInput& with_view(const ViewDefinition& v);
 };
 
+struct ExportStats;
+struct ViewScannerBatch;
+
+/// One worker's share of a scan's counts.
+struct ScanCounts {
+    std::uint64_t events_matched = 0;
+    std::uint64_t events_scanned = 0;
+    std::uint64_t lines_invalid = 0;
+    std::uint64_t values_unconverted = 0;
+
+    void add(const ViewScannerBatch& b);
+    void add_to(ExportStats& st) const;
+};
+
 struct ViewScannerBatch {
     /// Event lines. In stream mode these are string_view into the
     /// decompressed chunk (zero copy, valid until next generator resume).
@@ -77,6 +91,8 @@ struct ViewScannerBatch {
     std::vector<detail::FoldEvent> fold_events;
     std::uint64_t events_matched = 0;
     std::uint64_t events_scanned = 0;
+    std::uint64_t lines_invalid = 0;
+    std::uint64_t values_unconverted = 0;
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
     utilities::common::arrow::ArrowExportResult to_arrow() const;
@@ -84,6 +100,13 @@ struct ViewScannerBatch {
         utilities::common::arrow::RecordBatchBuilder& builder) const;
 #endif
 };
+
+inline void ScanCounts::add(const ViewScannerBatch& b) {
+    events_matched += b.events_matched;
+    events_scanned += b.events_scanned;
+    lines_invalid += b.lines_invalid;
+    values_unconverted += b.values_unconverted;
+}
 
 struct ViewScannerUtility {
     coro::AsyncGenerator<ViewScannerBatch> operator()(

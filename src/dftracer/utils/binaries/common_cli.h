@@ -14,6 +14,7 @@
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/duql/macros.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/store/database.h>
@@ -275,7 +276,8 @@ struct DirectoryArgs : CliSchema {
 };
 
 struct FilesArgs : CliSchema {
-    std::string help = "Trace files (.pfw, .pfw.gz)";
+    std::string help =
+        "Trace files (.pfw, .jsonl, .ndjson, .json; plain or .gz)";
     std::vector<std::string> value;
 
     FilesArgs() = default;
@@ -390,21 +392,30 @@ struct IndexingArgs : CliSchema {
     }
 };
 
-struct QueryArgs : CliSchema {
-    std::string query;
-    std::string help =
-        "Query DSL filter (e.g., 'cat == \"POSIX\" and dur > 1000')";
+struct DuqlArgs : CliSchema {
+    std::string duql;
+    std::string help = "duql filter (e.g., 'cat == \"POSIX\" and dur > 1000')";
 
-    QueryArgs() = default;
-    explicit QueryArgs(std::string h) : help(std::move(h)) {}
+    DuqlArgs() = default;
+    explicit DuqlArgs(std::string h) : help(std::move(h)) {}
 
     void register_on(argparse::ArgumentParser& p) override {
-        p.add_group("Query");
-        p.add_argument("--query").help(help).default_value<std::string>("");
+        p.add_group("duql");
+        p.add_argument("--duql", "--query")
+            .help(help)
+            .default_value<std::string>("");
+        p.add_argument("--duql-path")
+            .help(
+                "A .duql macro file or a directory of them, read after "
+                "$DFTRACER_DUQL_PATH (repeatable)")
+            .append()
+            .default_value<std::vector<std::string>>({});
     }
 
     void parse_from(const argparse::ArgumentParser& p) override {
-        query = p.get<std::string>("--query");
+        duql = p.get<std::string>("--duql");
+        for (const auto& path : p.get<std::vector<std::string>>("--duql-path"))
+            dftracer::utils::duql::load_macros(path);
     }
 };
 
@@ -493,13 +504,7 @@ inline PipelineConfig build_pipeline_config(const std::string& name,
     return config;
 }
 
-// A DFTracer trace file: .pfw or .pfw.gz.
-inline bool is_trace_file(const std::string& path) {
-    return (path.size() >= 4 &&
-            path.compare(path.size() - 4, 4, ".pfw") == 0) ||
-           (path.size() >= 7 &&
-            path.compare(path.size() - 7, 7, ".pfw.gz") == 0);
-}
+using utilities::filesystem::is_trace_file;
 
 // Split a comma-separated list, dropping empty fields.
 inline std::vector<std::string> split_csv(const std::string& str) {
@@ -529,14 +534,14 @@ inline void warn_if_memory_tight(std::size_t required_bytes,
     }
 }
 
-// Parallel per-subdirectory scan of `directory` for .pfw/.pfw.gz files via
+// Parallel per-subdirectory scan of `directory` for trace files via
 // ctx.spawn (context lets a recursive walk fan out per subdirectory); sizes
 // are not populated. Returns the matched paths.
 inline coro::CoroTask<std::vector<std::string>> scan_directory_trace_files(
     CoroScope& ctx, const std::string& directory, bool recursive) {
     utilities::filesystem::PatternDirectoryScannerUtility scanner;
     utilities::filesystem::PatternDirectoryScannerUtilityInput scan_input{
-        directory, {".pfw", ".pfw.gz"}, recursive};
+        directory, utilities::filesystem::trace_file_patterns(), recursive};
     auto matched = co_await scanner(ctx, scan_input);
     std::vector<std::string> files;
     files.reserve(matched.size());

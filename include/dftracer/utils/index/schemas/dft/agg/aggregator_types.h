@@ -3,10 +3,10 @@
 
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_key.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_metrics.h>
-#include <dftracer/utils/query/query.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/utilities/common/arrow/arrow_export.h>
@@ -40,7 +40,7 @@ struct DfanalyzerContext {
     /// the trace's entire file list to load.
     const index::store::IndexDatabase* hash_db = nullptr;
 
-    const query::Query* query_filter = nullptr;
+    const duql::Query* query_filter = nullptr;
 
     /// Time origin (minimum time_bucket) for normalization.
     std::uint64_t time_origin = 0;
@@ -77,8 +77,8 @@ struct AggregationEntry {
 
     /// ValueMap of this entry's fields (cat, name, pid, tid, hhash, fhash,
     /// time_bucket, extra_keys, and aggregation metrics), for query evaluation.
-    query::ValueMap to_value_map(const StringIntern& intern) const {
-        query::ValueMap fields;
+    duql::ValueMap to_value_map(const StringIntern& intern) const {
+        duql::ValueMap fields;
         fields["cat"] = std::string(key.cat(intern));
         fields["name"] = std::string(key.name(intern));
         fields["pid"] = static_cast<uint64_t>(key.pid);
@@ -120,7 +120,7 @@ struct AggregationEntry {
         return fields;
     }
 
-    bool matches(const query::Query& query, const StringIntern& intern) const {
+    bool matches(const duql::Query& query, const StringIntern& intern) const {
         return query.evaluate(to_value_map(intern));
     }
 };
@@ -150,7 +150,7 @@ struct AggregationBatch {
         return intern->intern;
     }
 
-    AggregationBatch filter(const query::Query& query) const {
+    AggregationBatch filter(const duql::Query& query) const {
         AggregationBatch filtered;
         filtered.batch_type = batch_type;
         filtered.total_events_processed = total_events_processed;

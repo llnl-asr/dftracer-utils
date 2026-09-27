@@ -37,7 +37,7 @@ typedef enum {
     REF_SVC_OPS,
     REF_SVC_PORTS,
     REF_SVC_PROVIDERS,
-    REF_SVC_QUERY,
+    REF_SVC_DUQL,
     REF_SVC_RESULT,
     REF_SVC_SKETCH,
     REF_SVC_TRACE,
@@ -72,8 +72,8 @@ static const char* ref_svc_name(ref_svc_id id) {
             return "ports";
         case REF_SVC_PROVIDERS:
             return "providers";
-        case REF_SVC_QUERY:
-            return "query";
+        case REF_SVC_DUQL:
+            return "duql";
         case REF_SVC_RESULT:
             return "result";
         case REF_SVC_SKETCH:
@@ -108,8 +108,8 @@ static const char* ref_svc_ext_id(ref_svc_id id) {
             return DFTU_SVC_PORTS;
         case REF_SVC_PROVIDERS:
             return DFTU_SVC_PROVIDERS;
-        case REF_SVC_QUERY:
-            return DFTU_SVC_QUERY;
+        case REF_SVC_DUQL:
+            return DFTU_SVC_DUQL;
         case REF_SVC_RESULT:
             return DFTU_SVC_RESULT;
         case REF_SVC_SKETCH:
@@ -601,15 +601,15 @@ static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
         }
 
         {
-            const dftu_svc_query* q =
-                (const dftu_svc_query*)ref_get_service(host, REF_SVC_QUERY);
+            const dftu_svc_duql* q =
+                (const dftu_svc_duql*)ref_get_service(host, REF_SVC_DUQL);
             if (q) {
                 const char src[] = "cat == \"POSIX\"";
-                dftu_query* compiled =
-                    q->query_compile(host->h, src, (uint32_t)(sizeof(src) - 1));
+                dftu_duql* compiled =
+                    q->duql_compile(host->h, src, (uint32_t)(sizeof(src) - 1));
                 int matched =
-                    compiled ? q->query_matches(host->h, compiled, df, 0) : -1;
-                g_status[REF_SVC_QUERY] = matched == 1 ? REF_OK : REF_FAIL;
+                    compiled ? q->duql_matches(host->h, compiled, df, 0) : -1;
+                g_status[REF_SVC_DUQL] = matched == 1 ? REF_OK : REF_FAIL;
             }
         }
 
@@ -844,7 +844,7 @@ static void finalize_tail(FinalizeCtx* ctx) {
             int schema_ok = (names != NULL) && (g_decimal_field_index >= 0);
             dftu_lazyframe* lf2;
             int node_ran = 0;
-            if (names) dftu_query_string_free(names);
+            if (names) dftu_duql_string_free(names);
 
             lf2 = dftu_lazyframe_op(lf, "reference_plugin.node", NULL);
             if (lf2) {

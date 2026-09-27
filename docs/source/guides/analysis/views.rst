@@ -20,7 +20,7 @@ hatches (``map_batches``, ``session``) that go beyond ``group_by``/``agg``.
 Build a view
 ------------
 
-Builder methods (``filter``, ``query``, ``phase``, ``time_range``, ...) are
+Builder methods (``filter``, ``duql``, ``phase``, ``time_range``, ...) are
 lazy and return a new view; they do no I/O until a terminal runs.
 
 .. tab-set::
@@ -37,16 +37,16 @@ lazy and return a new view; they do no I/O until a terminal runs.
          // One file, with an explicit index path (empty = sidecar convention).
          View v = View::from_file("trace.pfw.gz");
 
-         // Or scan a directory recursively for .pfw.gz, .jsonl.gz and
-         // .ndjson.gz files (a coroutine).
+         // Or scan a directory recursively for .pfw, .jsonl
+         // and .ndjson files (a coroutine).
          View v = View::from_directory("traces/").get();
 
          // The unified F: filter() takes the expression directly (pushdown).
          View filtered = v.filter((F("cat") == "POSIX") && (F("dur") >= 1000));
-         // or a Query built from a DSL string:
-         View also = v.filter(query::Query::from_string(R"(cat == "POSIX")").value());
-         // or the DSL string form:
-         View str_form = v.query(R"(cat == "POSIX" and dur >= 1000)");
+         // or a Query built from a duql string:
+         View also = v.filter(duql::Query::from_string(R"(cat == "POSIX")").value());
+         // or the duql string form:
+         View str_form = v.duql(R"(cat == "POSIX" and dur >= 1000)");
 
    .. tab-item:: Python
 
@@ -62,17 +62,19 @@ lazy and return a new view; they do no I/O until a terminal runs.
 
 ``filter`` and ``fold`` accept the unified ``F`` expression
 (``<dftracer/utils/dataframe/field.h>``) directly - the pushdown predicate is
-derived via ``.to_query()`` - as well as a ``Query`` built from a DSL string
+derived via ``.to_duql()`` - as well as a ``Query`` built from a duql string
 with ``Query::from_string(...)``. The same ``F`` also builds value/derived
 columns (``.apply(df)``); a predicate that mixes in value ops is not pushable
-and ``filter`` throws. Plugins instead use the predicate-only ``query::F``
-(``<dftracer/utils/query/builder.h>``) finished with ``Expr::build()``, which
-links no dataframe engine. See :doc:`../core/query-dsl` for the builder surface.
+and ``filter`` throws. Plugins instead use the predicate-only ``duql::F``
+(``<dftracer/utils/duql/builder.h>``) finished with ``Expr::build()``, which
+links no dataframe engine. See :doc:`../core/duql` for the builder surface.
 
 Row-shaping builders: ``.phase(p)`` restricts to one ``Phase`` value -
 ``Phase::Events`` (``ph="X"`` events), ``Phase::Counters`` (``ph="C"``
 counters), ``Phase::Aggregated`` (rollup records), ``Phase::Metadata``
-(``ph="M"``), or ``Phase::Any``; ``.time_range(begin,
+(``ph="M"``), or ``Phase::Any``; ``.all()`` reads every record, metadata
+included (a View reads the record schema's ``data`` by default, which leaves
+the dftracer metadata records out); ``.time_range(begin,
 end)`` keeps the events that start in ``[begin, end)`` and
 ``.time_bucket(interval_us, origin)`` keys each event by the bucket of its
 start (``origin`` anchors the windows; Python's ``normalize_to="min"`` anchors
@@ -154,8 +156,7 @@ only (no trace scan) and read the per-index metadata in parallel:
 
 The set is schemaless: the base axis fields (``pid`` / ``tid`` / ``ts`` /
 ``dur``), every path in the index's path catalog (top-level fields plus flat
-and nested args as dotted paths, e.g. ``pos.x``), and the resolved columns of
-each dictionary key field present. Types fold every record of every file. The catalog
+and nested args as dotted paths, e.g. ``pos.x``). Types fold every record of every file. The catalog
 is built in the one index-building pass, so the schema costs no extra scan. In Python, ``TraceViewer.column_info()`` returns the
 same set as a ``{name: type}`` dict; the ``columns`` and ``schema``
 properties describe the plan's output instead, as on any ``LazyFrame``.

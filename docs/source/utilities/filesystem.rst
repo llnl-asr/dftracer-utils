@@ -16,8 +16,12 @@ called without a scope (they open their own on the current executor). A
 recursive scan fans out one child scan per subdirectory over the scope, so
 many directories are read concurrently on parallel filesystems such as
 Lustre. Index-artifact directories (any name that starts with
-``.dftindex``, such as ``.dftindex-cache`` and ``.dftindex_staging``) are never descended into during a recursive scan,
-since they hold generated output, not source trace files.
+``.dftindex``, such as ``.dftindex-cache`` and ``.dftindex_staging``),
+``split/`` (rechunked copies) and ``schemas/`` (record schema specs) are
+never descended into during a recursive scan, since they hold no source
+trace files. ``trace_file_patterns()`` lists the suffixes every directory
+discovery matches (``.pfw``, ``.jsonl`` and ``.ndjson``, plain
+or ``.gz``); ``is_trace_file(path)`` tests one path against them.
 
 DirectoryScannerUtility
 -----------------------

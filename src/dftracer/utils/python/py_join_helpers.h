@@ -30,10 +30,15 @@ inline bool join_how_from_str(const char* how, dataframe::JoinHow& out) {
         out = JoinHow::Anti;
     else if (std::strcmp(how, "cross") == 0)
         out = JoinHow::Cross;
+    else if (std::strcmp(how, "lookup") == 0)
+        out = JoinHow::Lookup;
+    else if (std::strcmp(how, "nest") == 0)
+        out = JoinHow::Nest;
     else {
         PyErr_Format(PyExc_ValueError,
                      "join() how must be "
-                     "inner|left|right|outer|full|semi|anti|cross, got '%s'",
+                     "inner|left|right|outer|full|semi|anti|cross|lookup|nest, "
+                     "got '%s'",
                      how);
         return false;
     }

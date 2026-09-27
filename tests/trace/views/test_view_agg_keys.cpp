@@ -1,4 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/trace/views/result_join.h>
+
+#include <optional>
+
 #include "agg_parity_common.h"
 
 namespace scan = dftracer::utils::trace::views::detail::scan;
@@ -213,9 +217,9 @@ TEST_SUITE("View") {
 
         // An Arg/Field key derives a group-key column from a flattened arg (or,
         // for Field, a top-level-then-arg lookup); both paths must render the
-        // same key text, including "" for the events missing the arg. The
-        // read events carry arg x, the write events carry arg y, so grouping by
-        // x exercises the present-and-missing split.
+        // same key text, including a null key for the events missing the arg.
+        // The read events carry arg x, the write events carry arg y, so
+        // grouping by x exercises the present-and-missing split.
         const std::string gz7 = parity_sub("arg") + "/agg_engine_arg.pfw.gz";
         const std::string idx7 = determine_index_path(gz7, "");
         if (!fs::exists(gz7)) {
@@ -861,6 +865,161 @@ TEST_SUITE("View") {
             for (std::int64_t r = 0; r < a.num_rows(); ++r)
                 CHECK(bnum(a, r, "sum_x") ==
                       doctest::Approx(bnum(b, r, "sum_x")));
+        }
+    }
+
+    // A missing or JSON-null Arg/Field value is its own group with a null key
+    // cell, never merged with a real "" (string) or 0 (int) value.
+    TEST_CASE("View - a missing or null arg key groups as null, not \"\"") {
+        REQUIRE(parity_env().is_valid());
+        const std::string dir = parity_sub("nullkey");
+        const std::string gz = dir + "/agg_null_key.pfw.gz";
+        const std::string idx = determine_index_path(gz, "");
+        if (!fs::exists(gz)) {
+            const std::string pfw = dir + "/agg_null_key.pfw";
+            std::ofstream ofs(pfw);
+            const char* names[] = {"read", "read", "write", "write"};
+            const char* args[] = {R"({"k":5,"s":"x","e":[]})",
+                                  R"({"k":0,"s":"","e":{}})", R"({})",
+                                  R"({"k":null,"s":null,"e":null})"};
+            for (int i = 0; i < 4; ++i)
+                ofs << R"({"ph":"X","name":")" << names[i]
+                    << R"(","cat":"POSIX","pid":1,"tid":10,"ts":)"
+                    << (1000 + 100 * i) << R"(,"dur":5,"args":)" << args[i]
+                    << "}\n";
+            ofs.close();
+            dftu_utils_test::compress_file_to_gzip(pfw, gz);
+            fs::remove(pfw);
+        }
+
+        using Key = std::vector<std::optional<std::string>>;
+        using Groups = std::map<Key, std::int64_t>;
+        const std::nullopt_t null = std::nullopt;
+        auto groups = [](const dataframe::DataFrame& f,
+                         const std::vector<std::string>& keys) {
+            Groups g;
+            for (std::int64_t r = 0; r < f.num_rows(); ++r) {
+                Key k;
+                for (const auto& name : keys) {
+                    const auto& c =
+                        f.columns[static_cast<std::size_t>(bcol(f, name))];
+                    REQUIRE(c.type() == dataframe::TypeId::String);
+                    if (c.is_null(r))
+                        k.emplace_back();
+                    else
+                        k.emplace_back(std::string(c.string_at(r)));
+                }
+                CHECK(g.emplace(k, static_cast<std::int64_t>(bnum(f, r, "n")))
+                          .second);
+            }
+            return g;
+        };
+        const std::vector<AggSpec> count{{AggOp::Count, "", "n"}};
+        auto view = [&](std::vector<GroupKey> gb) {
+            return View::from_files({{gz, idx}}).group_by(gb).agg(count);
+        };
+        auto plan = [&](std::vector<GroupKey> gb) {
+            return scan::agg(scan::group_by(scan::from_file(gz, idx), gb),
+                             count);
+        };
+
+        struct Probe {
+            std::vector<GroupKey> gb;
+            std::vector<std::string> cols;
+            Groups want;
+        };
+        const std::vector<Probe> probes{
+            {{GroupKey::field("args.s")},
+             {"args.s"},
+             {{{"x"}, 1}, {{""}, 1}, {{null}, 2}}},
+            {{GroupKey::field("args.k")},
+             {"args.k"},
+             {{{"5"}, 1}, {{"0"}, 1}, {{null}, 2}}},
+            {{GroupKey::of_arg("s")},
+             {"s"},
+             {{{"x"}, 1}, {{""}, 1}, {{null}, 2}}},
+            {{GroupKey::of_arg("k")},
+             {"k"},
+             {{{"5"}, 1}, {{"0"}, 1}, {{null}, 2}}},
+            {{GroupKey::field("args.e")},
+             {"args.e"},
+             {{{"[]"}, 1}, {{"{}"}, 1}, {{null}, 2}}},
+            {{GroupKey::name(), GroupKey::field("args.s")},
+             {"name", "args.s"},
+             {{{"read", "x"}, 1}, {{"read", ""}, 1}, {{"write", null}, 2}}},
+            {{GroupKey::name(), GroupKey::of_arg("k")},
+             {"name", "k"},
+             {{{"read", "5"}, 1}, {{"read", "0"}, 1}, {{"write", null}, 2}}},
+        };
+
+        SUBCASE("collect") {
+            for (const Probe& p : probes)
+                CHECK(groups(view(p.gb).collect().get(), p.cols) == p.want);
+        }
+        SUBCASE("engine collect, forced spill") {
+            for (const Probe& p : probes)
+                CHECK(groups(collect_engine_plan(
+                                 scan::memory_budget(plan(p.gb), 128)),
+                             p.cols) == p.want);
+        }
+        SUBCASE("GroupMap oracle agrees") {
+            run_both_file(gz, idx, GroupKey::field("args.s"), "args.s", 0);
+            run_both_file(gz, idx, GroupKey::of_arg("k"), "k", 0);
+            run_both_multi({{gz, idx}},
+                           {GroupKey::name(), GroupKey::field("args.s")},
+                           {"name", "args.s"}, 0);
+        }
+        SUBCASE("distributed partials") {
+            for (const Probe& p : probes) {
+                const std::string part =
+                    view(p.gb).aggregate_partial().collect().get();
+                CHECK(groups(view(p.gb).merge_partials({part}), p.cols) ==
+                      p.want);
+            }
+        }
+        SUBCASE("rollup: coarsened and same grain") {
+            scan::collect(scan::materialize(plan(probes[5].gb), 0, 0))
+                .collect()
+                .get();
+            CHECK(groups(collect_engine_plan(plan(probes[0].gb)),
+                         probes[0].cols) == probes[0].want);
+            for (const Probe& p : probes) {
+                scan::collect(scan::materialize(plan(p.gb), 0, 0))
+                    .collect()
+                    .get();
+                CHECK(groups(collect_engine_plan(plan(p.gb)), p.cols) ==
+                      p.want);
+            }
+        }
+        SUBCASE("a transformed key keeps null") {
+            GroupKey gk = GroupKey::field("args.s");
+            gk.transform = GroupKey::Transform::Basename;
+            CHECK(groups(view({gk}).collect().get(), {"args.s"}) ==
+                  probes[0].want);
+        }
+        SUBCASE("join matches null to null, never to \"\"") {
+            const dataframe::DataFrame r =
+                view({GroupKey::field("args.s")}).collect().get();
+            const dataframe::DataFrame j =
+                join_batches(r, r, 1, JoinType::INNER);
+            REQUIRE(j.num_rows() == 3);
+            Groups got;
+            for (std::int64_t i = 0; i < j.num_rows(); ++i) {
+                const auto& c = j.columns[0];
+                got.emplace(Key{c.is_null(i) ? std::optional<std::string>()
+                                             : std::string(c.string_at(i))},
+                            static_cast<std::int64_t>(bnum(j, i, "l_n")));
+            }
+            CHECK(got == probes[0].want);
+        }
+        SUBCASE("counters write a null key as JSON null") {
+            StringSink sink;
+            view({GroupKey::field("args.s")}).sink_counters(sink).get();
+            const auto lines = sink.lines();
+            REQUIRE(lines.size() == 3);
+            CHECK(count_containing(lines, R"("args.s":null)") == 1);
+            CHECK(count_containing(lines, R"("args.s":"")") == 1);
+            CHECK(count_containing(lines, R"("args.s":"x")") == 1);
         }
     }
 }

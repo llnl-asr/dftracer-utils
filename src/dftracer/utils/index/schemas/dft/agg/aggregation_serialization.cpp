@@ -266,7 +266,7 @@ std::string serialize_agg_key(AggMapType map_type, const AggregationKey& key,
 
 DeserializedAggKey deserialize_agg_key(std::string_view data) {
     BinaryReader r(data);
-    (void)r.be16();
+    r.skip(2);  // shard
     const auto type_byte = r.u8();
     auto map_type = static_cast<AggMapType>(type_byte & ~AGG_KEY_FHASH_INLINE);
     AggregationKey key;

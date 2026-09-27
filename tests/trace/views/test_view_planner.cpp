@@ -112,7 +112,7 @@ TEST_SUITE("ViewPlannerUtility") {
         populate_test_idx(index_path, file_path);
 
         ViewPlannerInput input;
-        input.with_view(ViewDefinition::io_view().with_include_metadata(false))
+        input.with_view(ViewDefinition::io_view())
             .with_file_path(file_path)
             .with_index_path(index_path)
             .with_uncompressed_size(40000)
@@ -148,9 +148,7 @@ TEST_SUITE("ViewPlannerUtility") {
         populate_test_idx(index_path, file_path);
 
         ViewPlannerInput input;
-        input
-            .with_view(
-                ViewDefinition::compute_view().with_include_metadata(false))
+        input.with_view(ViewDefinition::compute_view())
             .with_file_path(file_path)
             .with_index_path(index_path)
             .with_uncompressed_size(40000)
@@ -180,9 +178,7 @@ TEST_SUITE("ViewPlannerUtility") {
         populate_test_idx(index_path, file_path);
 
         ViewDefinition view;
-        view.with_name("nonexistent")
-            .with_query(R"(cat == "NONEXISTENT")")
-            .with_include_metadata(false);
+        view.with_name("nonexistent").with_query(R"(cat == "NONEXISTENT")");
 
         ViewPlannerInput input;
         input.with_view(view)
@@ -302,8 +298,6 @@ TEST_SUITE("ViewPlannerUtility") {
                                              fhash_bloom.num_entries());
             dftu_utils_test::index_records::put_path(
                 *writer, dftu_utils_test::IndexExtension::BLOOM, fid, "fhash");
-            dftu_utils_test::index_records::put_dict_row(
-                *writer, "file", "hash123", {{"path", "/data/file.h5"}});
             dftu_utils_test::mark_built(*writer, fid);
             writer->commit();
         }

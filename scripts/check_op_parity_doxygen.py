@@ -84,6 +84,8 @@ FOLDS = {
 ALLOWLIST = {
     "Series": {
         "type",
+        "is_json",
+        "as_json",
         "encoding",
         "length",
         "null_count",
@@ -456,6 +458,7 @@ PY_ALLOWLIST = {
         "num_children",
         "time_unit",
         "timezone",
+        "is_json",
         # Handles, shape, iteration and exports (through pandas / pyarrow).
         "array",
         "values",

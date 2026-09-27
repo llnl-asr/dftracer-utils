@@ -5,6 +5,10 @@
 
 #include <string_view>
 
+namespace dftracer::utils::duql {
+struct CompiledPattern;
+}
+
 namespace dftracer::utils::dataframe {
 
 /// String predicates over a String/Binary column, each returning a Bool column.
@@ -13,6 +17,10 @@ namespace dftracer::utils::dataframe {
 Series str_eq(const Series& v, std::string_view rhs);
 Series str_contains(const Series& v, std::string_view needle);
 Series str_starts_with(const Series& v, std::string_view prefix);
+
+/// Bool mask of the duql pattern `p` over a String/Binary column; a row whose
+/// match reaches the pattern's work limit is null.
+Series str_pattern(const Series& v, const duql::CompiledPattern& p);
 
 }  // namespace dftracer::utils::dataframe
 

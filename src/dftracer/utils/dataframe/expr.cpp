@@ -1,22 +1,37 @@
+#include <dftracer/utils/core/common/to_chars.h>
 #include <dftracer/utils/dataframe/batch_ops.h>          // concat_columns
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/cell_ops.h>  // cell_to_string
+#include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>
 #include <dftracer/utils/dataframe/internal/fingerprint.h>
-#include <dftracer/utils/dataframe/internal/scalar.h>    // scalar_as
+#include <dftracer/utils/dataframe/internal/scalar.h>     // scalar_as
+#include <dftracer/utils/dataframe/kernels/string_ops.h>  // str_pattern
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/duql/pattern_engine.h>
+#include <dftracer/utils/json/json_escape.h>
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <bit>
+#include <charconv>
+#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <map>
+#include <optional>
+#include <random>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <type_traits>
 #include <vector>
 
 namespace dataframe = dftracer::utils::dataframe;
+namespace duql = dftracer::utils::duql;
 
 namespace dftracer::utils::dataframe {
 
@@ -41,7 +56,27 @@ enum class ExprKind {
     StrSlice,
     IsIn,
     Select,
-    IsNull
+    IsNull,
+    LitStr,
+    LitBool,
+    LitNull,
+    Arith,
+    Neg,
+    CmpExpr,
+    Coalesce,
+    Extreme,
+    Concat,
+    Round,
+    Log,
+    Pow,
+    StrSubstr,
+    StrPattern,
+    StrExtract,
+    Convert,
+    ListLen,
+    ListGet,
+    ListSum,
+    ListContains
 };
 
 struct ExprNode {
@@ -56,8 +91,9 @@ struct ExprNode {
     // the whole evaluation, so the borrow is valid for as long as the
     // compiled program can read it.
     std::string text;
-    std::string text2;                  // str_replace `to`
-    Series values;                      // is_in set
+    std::string text2;                                     // str_replace `to`
+    std::shared_ptr<const duql::CompiledPattern> pattern;  // text: identity
+    Series values;                                         // is_in set
     std::shared_ptr<const ExprNode> a;  // first child (select: cond)
     std::shared_ptr<const ExprNode> b;  // second child (select: then)
     std::shared_ptr<const ExprNode> c;  // select: otherwise
@@ -189,6 +225,7 @@ std::shared_ptr<ExprNode> clone(const ExprNode& n) {
     c->scalar2 = n.scalar2;
     c->text = n.text;
     c->text2 = n.text2;
+    c->pattern = n.pattern;
     if (n.scalar.kind == DFTU_SCALAR_TAG_STR) {
         c->scalar.value.s = c->text.data();
         c->scalar.len = static_cast<std::uint32_t>(c->text.size());
@@ -423,6 +460,146 @@ Expr expr_select(const Expr& cond, const Expr& a, const Expr& b) {
     return e;
 }
 
+Expr expr_lit_str(std::string_view value) {
+    Expr e = make(ExprKind::LitStr, 0, {}, nullptr, nullptr);
+    const_cast<ExprNode*>(e.node().get())->text.assign(value);
+    return e;
+}
+Expr expr_lit_bool(bool value) {
+    return make(ExprKind::LitBool, value ? 1 : 0, {}, nullptr, nullptr);
+}
+Expr expr_lit_null(TypeId type) {
+    return make(ExprKind::LitNull, static_cast<std::int32_t>(type), {}, nullptr,
+                nullptr);
+}
+Expr expr_arith(ArithOp op, const Expr& a, const Expr& b) {
+    return make(ExprKind::Arith, static_cast<std::int32_t>(op), {}, a.node(),
+                b.node());
+}
+Expr expr_neg(const Expr& a) {
+    return make(ExprKind::Neg, 0, {}, a.node(), nullptr);
+}
+Expr expr_cmp_expr(CmpOp cmp, const Expr& a, const Expr& b) {
+    return make(ExprKind::CmpExpr, static_cast<std::int32_t>(cmp), {}, a.node(),
+                b.node());
+}
+
+namespace {
+// An n-ary node as a right fold of binary nodes; every n-ary form here is
+// associative.
+Expr fold_args(ExprKind k, std::int32_t i, const std::vector<Expr>& args,
+               const char* who) {
+    if (args.empty())
+        throw std::invalid_argument(std::string("expr: ") + who +
+                                    " needs at least one operand");
+    Expr out = args.back();
+    for (auto it = args.rbegin() + 1; it != args.rend(); ++it)
+        out = make(k, i, {}, it->node(), out.node());
+    return out;
+}
+}  // namespace
+
+Expr expr_coalesce(const std::vector<Expr>& args) {
+    return fold_args(ExprKind::Coalesce, 0, args, "coalesce");
+}
+Expr expr_extreme(const std::vector<Expr>& args, bool least) {
+    return fold_args(ExprKind::Extreme, least ? 1 : 0, args,
+                     least ? "least" : "greatest");
+}
+Expr expr_concat(const std::vector<Expr>& args) {
+    if (args.size() == 1)
+        return make(ExprKind::Concat, 0, {}, args.front().node(),
+                    expr_lit_str("").node());
+    return fold_args(ExprKind::Concat, 0, args, "concat");
+}
+Expr expr_round(const Expr& a, std::int64_t digits) {
+    dftu_scalar s{};
+    s.kind = DFTU_SCALAR_TAG_I64;
+    s.value.i = digits;
+    return make(ExprKind::Round, 0, s, a.node(), nullptr);
+}
+Expr expr_log(const Expr& a) {
+    return make(ExprKind::Log, 0, {}, a.node(), nullptr);
+}
+Expr expr_pow(const Expr& a, const Expr& b) {
+    return make(ExprKind::Pow, 0, {}, a.node(), b.node());
+}
+Expr expr_str_substr(const Expr& a, std::int64_t start, std::int64_t len) {
+    auto n = std::make_shared<ExprNode>();
+    n->kind = ExprKind::StrSubstr;
+    n->scalar.kind = DFTU_SCALAR_TAG_I64;
+    n->scalar.value.i = start;
+    n->scalar2.kind = DFTU_SCALAR_TAG_I64;
+    n->scalar2.value.i = len;
+    n->a = a.node();
+    return Expr{std::move(n)};
+}
+namespace {
+// A compiled pattern has no source text to persist, so each pattern node
+// gets an identity no other node in any process shares: a persisted plan
+// that holds one never matches another, where a shared text could match a
+// different pattern.
+std::string pattern_identity() {
+    static const std::string seed = [] {
+        std::random_device rd;
+        return std::to_string(rd()) + '.' + std::to_string(rd()) + '.' +
+               std::to_string(rd());
+    }();
+    static std::atomic<std::uint64_t> next{0};
+    return "pattern:" + seed + ':' + std::to_string(next++);
+}
+
+Expr pattern_node(ExprKind k, const Expr& a,
+                  std::shared_ptr<const duql::CompiledPattern> p,
+                  std::int64_t group) {
+    dftu_scalar s{};
+    s.kind = DFTU_SCALAR_TAG_I64;
+    s.value.i = group;
+    Expr e = make(k, 0, s, a.node(), nullptr);
+    auto* n = const_cast<ExprNode*>(e.node().get());
+    n->pattern = std::move(p);
+    n->text = pattern_identity();
+    return e;
+}
+}  // namespace
+
+Expr expr_str_pattern(const Expr& a,
+                      std::shared_ptr<const duql::CompiledPattern> p) {
+    return pattern_node(ExprKind::StrPattern, a, std::move(p), 0);
+}
+Expr expr_str_extract(const Expr& a,
+                      std::shared_ptr<const duql::CompiledPattern> p,
+                      std::int64_t group) {
+    return pattern_node(ExprKind::StrExtract, a, std::move(p), group);
+}
+Expr expr_convert(ConvertOp op, const Expr& a) {
+    return make(ExprKind::Convert, static_cast<std::int32_t>(op), {}, a.node(),
+                nullptr);
+}
+Expr expr_list_len(const Expr& a) {
+    return make(ExprKind::ListLen, 0, {}, a.node(), nullptr);
+}
+Expr expr_list_get(const Expr& a, std::int64_t index) {
+    dftu_scalar s{};
+    s.kind = DFTU_SCALAR_TAG_I64;
+    s.value.i = index;
+    return make(ExprKind::ListGet, 0, s, a.node(), nullptr);
+}
+Expr expr_list_sum(const Expr& a) {
+    return make(ExprKind::ListSum, 0, {}, a.node(), nullptr);
+}
+Expr expr_list_contains(const Expr& a, Scalar value) {
+    Expr e = make(ExprKind::ListContains, 0, value, a.node(), nullptr);
+    const dftu_scalar raw = value;
+    if (raw.kind == DFTU_SCALAR_TAG_STR) {
+        auto* n = const_cast<ExprNode*>(e.node().get());
+        n->text.assign(raw.value.s != nullptr ? raw.value.s : "", raw.len);
+        n->scalar.value.s = n->text.data();
+        n->scalar.len = static_cast<std::uint32_t>(n->text.size());
+    }
+    return e;
+}
+
 bool expr_as_col_str_pred(const Expr& e, std::int32_t* col, StrPredOp* op,
                           std::string_view* pattern) {
     const auto& n = e.node();
@@ -474,9 +651,27 @@ enum {
     OP_STR_REPLACE,
     OP_STR_SLICE,
     OP_IS_IN,
-    OP_CONST,   // a column of `param` type filled with `scalar`
-    OP_SELECT,  // c ? a : b, with the mask in slot `c`
-    OP_IS_NULL  // the null mask of slot `a` (param 1) or the valid mask (0)
+    OP_CONST,    // a column of `param` type filled with `scalar`
+    OP_SELECT,   // c ? a : b, with the mask in slot `c`
+    OP_IS_NULL,  // the null mask of slot `a` (param 1) or the valid mask (0)
+    OP_CONST_NULL,
+    OP_TO_I64,   // Uint64 -> Int64, null past int64
+    OP_ARITH,
+    OP_NEG,
+    OP_CMP_EXPR,
+    OP_EXTREME,
+    OP_CONCAT,
+    OP_ROUND,
+    OP_LOG,
+    OP_POW,
+    OP_STR_SUBSTR,
+    OP_STR_PATTERN,
+    OP_STR_EXTRACT,
+    OP_CONVERT,
+    OP_LIST_LEN,
+    OP_LIST_GET,
+    OP_LIST_SUM,
+    OP_LIST_CONTAINS
 };
 
 struct SlotOp {
@@ -492,6 +687,8 @@ struct SlotOp {
     std::string_view text;
     std::string_view text2;
     const dftu_series* values = nullptr;
+    // OP_STR_PATTERN / OP_STR_EXTRACT, keyed by the node identity in `text`.
+    const duql::CompiledPattern* pattern = nullptr;
 };
 
 const int COL_OP[4] = {OP_ADD, OP_SUB, OP_MUL, OP_DIV};
@@ -532,6 +729,47 @@ dftu_scalar to_f64_scalar(dftu_scalar s) {
     return r;
 }
 
+bool is_int_type(TypeId t) {
+    switch (t) {
+        case TypeId::Int8:
+        case TypeId::Int16:
+        case TypeId::Int32:
+        case TypeId::Int64:
+        case TypeId::Uint8:
+        case TypeId::Uint16:
+        case TypeId::Uint32:
+        case TypeId::Uint64:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool is_num_type(TypeId t) {
+    return is_int_type(t) || t == TypeId::Float32 || t == TypeId::Float64;
+}
+
+bool is_text_type(TypeId t) {
+    return t == TypeId::String || t == TypeId::LargeString;
+}
+
+// The type two numeric operands meet at: either float makes Float64, two
+// different integer types meet at Int64.
+TypeId promote(TypeId a, TypeId b) {
+    if (a == TypeId::Float64 || b == TypeId::Float64 || a == TypeId::Float32 ||
+        b == TypeId::Float32)
+        return TypeId::Float64;
+    return a == b && (a == TypeId::Int64 || a == TypeId::Uint64)
+               ? a
+               : TypeId::Int64;
+}
+
+TypeId arith_type(std::int32_t op, TypeId a, TypeId b) {
+    return static_cast<ArithOp>(op) == ArithOp::Div ? TypeId::Float64
+           : promote(a, b) == TypeId::Float64       ? TypeId::Float64
+                                                    : TypeId::Int64;
+}
+
 // Depends only on each input column's DataType, never its data, so the same
 // compile() drives eval() (Series::data_type()) and infer_type() (a schema
 // with no data) and the two can never disagree.
@@ -539,6 +777,15 @@ class Compiler {
    public:
     explicit Compiler(const std::vector<DataType>& input_types)
         : input_types_(input_types) {}
+
+    // A root that folded to a scalar, as a column of that value in every row.
+    Val column(const Val& v) {
+        if (!v.is_scalar) return v;
+        return broadcast(
+            v.scalar, v.scalar.kind == DFTU_SCALAR_TAG_F64   ? TypeId::Float64
+                      : v.scalar.kind == DFTU_SCALAR_TAG_U64 ? TypeId::Uint64
+                                                             : TypeId::Int64);
+    }
 
     Val compile(const ExprNode* n) {
         switch (n->kind) {
@@ -741,6 +988,166 @@ class Compiler {
             }
             case ExprKind::Select:
                 return compile_select(n);
+            case ExprKind::LitStr: {
+                dftu_scalar s{};
+                s.kind = DFTU_SCALAR_TAG_STR;
+                s.value.s = n->text.data();
+                s.len = static_cast<std::uint32_t>(n->text.size());
+                return broadcast(s, TypeId::String);
+            }
+            case ExprKind::LitBool: {
+                dftu_scalar s{};
+                s.kind = DFTU_SCALAR_TAG_I64;
+                s.value.i = n->i;
+                return broadcast(s, TypeId::Bool);
+            }
+            case ExprKind::LitNull: {
+                const auto t = static_cast<TypeId>(n->i);
+                if (!is_num_type(t) && t != TypeId::Bool && t != TypeId::String)
+                    throw std::invalid_argument(
+                        std::string("expr: no null literal of type ") +
+                        type_name(t));
+                return col_val(emit(OP_CONST_NULL, -1, -1, n->i, {}), t);
+            }
+            case ExprKind::Arith: {
+                Val a0 = compile(n->a.get());
+                Val b0 = compile(n->b.get());
+                if (is_unknown(a0) || is_unknown(b0)) return unknown_val();
+                Val a = num(a0, "arithmetic");
+                Val b = num(b0, "arithmetic");
+                const TypeId t = arith_type(n->i, a.type, b.type);
+                return col_val(emit(OP_ARITH, a.slot, b.slot, n->i, {}), t);
+            }
+            case ExprKind::Neg: {
+                Val a0 = compile(n->a.get());
+                if (is_unknown(a0)) return unknown_val();
+                Val a = num(a0, "negation");
+                const TypeId t =
+                    a.type == TypeId::Float64 ? TypeId::Float64 : TypeId::Int64;
+                return col_val(emit(OP_NEG, a.slot, -1, 0, {}), t);
+            }
+            case ExprKind::CmpExpr: {
+                Val a0 = compile(n->a.get());
+                Val b0 = compile(n->b.get());
+                if (is_unknown(a0) || is_unknown(b0)) return unknown_val();
+                Val a = operand(a0, "compare");
+                Val b = operand(b0, "compare");
+                same_domain(a, b, "compare");
+                return col_val(emit(OP_CMP_EXPR, a.slot, b.slot, n->i, {}),
+                               TypeId::Bool);
+            }
+            case ExprKind::Coalesce: {
+                Val a0 = compile(n->a.get());
+                Val b0 = compile(n->b.get());
+                if (is_unknown(a0) || is_unknown(b0)) return unknown_val();
+                Val a = operand(a0, "coalesce");
+                Val b = operand(b0, "coalesce");
+                const TypeId t = common_type(a, b, "coalesce");
+                // Presence is the operand's own: a value that does not fit
+                // `t` is a null result, not a reason to move on to `b`.
+                const int present = emit(OP_IS_NULL, a.slot, -1, 0, {});
+                a = to_type(a, t);
+                b = to_type(b, t);
+                SlotOp op;
+                op.opcode = OP_SELECT;
+                op.a = a.slot;
+                op.b = b.slot;
+                op.c = present;
+                return col_val(emit_op(op), t);
+            }
+            case ExprKind::Extreme: {
+                Val a0 = compile(n->a.get());
+                Val b0 = compile(n->b.get());
+                if (is_unknown(a0) || is_unknown(b0)) return unknown_val();
+                Val a = operand(a0, "least/greatest");
+                Val b = operand(b0, "least/greatest");
+                same_domain(a, b, "least/greatest");
+                const TypeId t = common_type(a, b, "least/greatest");
+                return col_val(emit(OP_EXTREME, a.slot, b.slot, n->i, {}), t);
+            }
+            case ExprKind::Concat: {
+                Val a0 = compile(n->a.get());
+                Val b0 = compile(n->b.get());
+                if (is_unknown(a0) || is_unknown(b0)) return unknown_val();
+                Val a = as_str(a0, "concat", false);
+                Val b = as_str(b0, "concat", false);
+                return col_val(emit(OP_CONCAT, a.slot, b.slot, 0, {}),
+                               TypeId::String);
+            }
+            case ExprKind::Round: {
+                Val a0 = compile(n->a.get());
+                if (is_unknown(a0)) return unknown_val();
+                const bool integer = a0.is_scalar
+                                         ? a0.scalar.kind != DFTU_SCALAR_TAG_F64
+                                         : is_int_type(a0.type);
+                if (integer && n->scalar.value.i >= 0) return a0;
+                Val a = num(a0, "round");
+                const TypeId t = integer ? TypeId::Int64 : TypeId::Float64;
+                return col_val(emit(OP_ROUND, a.slot, -1, 0, n->scalar), t);
+            }
+            case ExprKind::Log: {
+                Val a0 = compile(n->a.get());
+                if (is_unknown(a0)) return unknown_val();
+                Val a = num(a0, "log");
+                return col_val(emit(OP_LOG, a.slot, -1, 0, {}),
+                               TypeId::Float64);
+            }
+            case ExprKind::Pow: {
+                Val a0 = compile(n->a.get());
+                Val b0 = compile(n->b.get());
+                if (is_unknown(a0) || is_unknown(b0)) return unknown_val();
+                Val a = num(a0, "pow");
+                Val b = num(b0, "pow");
+                return col_val(emit(OP_POW, a.slot, b.slot, 0, {}),
+                               TypeId::Float64);
+            }
+            case ExprKind::StrSubstr: {
+                Val a0 = compile(n->a.get());
+                if (is_unknown(a0)) return unknown_val();
+                Val a = as_str(a0, "substr", false);
+                return col_val(
+                    emit(OP_STR_SUBSTR, a.slot, -1, 0, n->scalar, n->scalar2),
+                    TypeId::String);
+            }
+            case ExprKind::StrPattern:
+            case ExprKind::StrExtract:
+                return compile_pattern(n);
+            case ExprKind::Convert:
+                return compile_convert(n);
+            case ExprKind::ListLen: {
+                Val a0 = compile(n->a.get());
+                if (is_unknown(a0)) return unknown_val();
+                as_list(a0, "list_len");
+                return col_val(emit(OP_LIST_LEN, a0.slot, -1, 0, {}),
+                               TypeId::Int64);
+            }
+            case ExprKind::ListGet: {
+                Val a0 = compile(n->a.get());
+                if (is_unknown(a0)) return unknown_val();
+                const DataType elem = as_list(a0, "list_get");
+                return {false,
+                        emit(OP_LIST_GET, a0.slot, -1, 0, n->scalar),
+                        elem.id,
+                        {},
+                        elem};
+            }
+            case ExprKind::ListSum: {
+                Val a0 = compile(n->a.get());
+                if (is_unknown(a0)) return unknown_val();
+                const TypeId e = as_list(a0, "list_sum").id;
+                const TypeId t = e == TypeId::Float32 || e == TypeId::Float64
+                                     ? TypeId::Float64
+                                     : TypeId::Int64;
+                return col_val(emit(OP_LIST_SUM, a0.slot, -1, 0, {}), t);
+            }
+            case ExprKind::ListContains: {
+                Val a0 = compile(n->a.get());
+                if (is_unknown(a0)) return unknown_val();
+                as_list(a0, "list_contains");
+                return col_val(
+                    emit(OP_LIST_CONTAINS, a0.slot, -1, 0, n->scalar),
+                    TypeId::Bool);
+            }
             case ExprKind::IsNull: {
                 Val a0 = compile(n->a.get());
                 if (is_unknown(a0)) return unknown_val();
@@ -758,6 +1165,114 @@ class Compiler {
     std::vector<SlotOp> program;
 
    private:
+    static Val col_val(int slot, TypeId t) {
+        return {false, slot, t, {}, scalar(t)};
+    }
+
+    // A numeric operand as Int64, Uint64 or Float64, the three types the
+    // duql kernels read; a literal broadcasts.
+    Val num(Val v, const char* who) {
+        if (v.is_scalar)
+            return broadcast(v.scalar, v.scalar.kind == DFTU_SCALAR_TAG_F64
+                                           ? TypeId::Float64
+                                       : v.scalar.kind == DFTU_SCALAR_TAG_U64
+                                           ? TypeId::Uint64
+                                           : TypeId::Int64);
+        if (!is_num_type(v.type))
+            throw std::invalid_argument(std::string("expr: ") + who +
+                                        " needs a numeric operand, got " +
+                                        type_name(v.type));
+        if (v.type == TypeId::Int64 || v.type == TypeId::Uint64 ||
+            v.type == TypeId::Float64)
+            return v;
+        return cast(v, is_int_type(v.type) ? TypeId::Int64 : TypeId::Float64);
+    }
+
+    // An operand of a comparison-like node: numeric ones as num() makes
+    // them, the rest as they are.
+    Val operand(Val v, const char* who) {
+        if (v.is_scalar || is_num_type(v.type)) return num(v, who);
+        return v;
+    }
+
+    static void same_domain(const Val& a, const Val& b, const char* who) {
+        const bool ok = (is_num_type(a.type) && is_num_type(b.type)) ||
+                        (is_text_type(a.type) && is_text_type(b.type)) ||
+                        (a.type == TypeId::Bool && b.type == TypeId::Bool);
+        if (!ok)
+            throw std::invalid_argument(std::string("expr: ") + who + " of " +
+                                        type_name(a.type) + " and " +
+                                        type_name(b.type) + " has no ordering");
+    }
+
+    static TypeId common_type(const Val& a, const Val& b, const char* who) {
+        if (is_num_type(a.type) && is_num_type(b.type))
+            return promote(a.type, b.type);
+        if (a.type != b.type)
+            throw std::invalid_argument(
+                std::string("expr: ") + who + " needs one type, got " +
+                type_name(a.type) + " and " + type_name(b.type));
+        return a.type;
+    }
+
+    Val to_type(Val v, TypeId t) {
+        if (v.type == t) return v;
+        if (v.type == TypeId::Uint64 && t == TypeId::Int64)
+            return col_val(emit(OP_TO_I64, v.slot, -1, 0, {}), t);
+        return cast(v, t);
+    }
+
+    // The element type of a List operand, which must be known.
+    DataType as_list(const Val& v, const char* who) {
+        if (v.is_scalar || v.type != TypeId::List || v.full.fields.size() != 1)
+            throw std::invalid_argument(
+                std::string("expr: ") + who +
+                " needs a List column with a known element type, got " +
+                type_name(v.is_scalar ? TypeId::Int64 : v.type));
+        return v.full.fields.front().type;
+    }
+
+    Val compile_pattern(const ExprNode* n) {
+        Val a0 = compile(n->a.get());
+        if (is_unknown(a0)) return unknown_val();
+        const bool extract = n->kind == ExprKind::StrExtract;
+        Val a =
+            as_str(a0, extract ? "string extract" : "string pattern", !extract);
+        if (!n->pattern)
+            throw std::invalid_argument("expr: a pattern node needs a pattern");
+        const std::int64_t group = n->scalar.value.i;
+        if (extract && (group < 0 || static_cast<std::uint64_t>(group) >
+                                         duql::capture_count(*n->pattern)))
+            throw std::invalid_argument("expr: extract group " +
+                                        std::to_string(group) +
+                                        " is not in the pattern");
+        SlotOp op;
+        op.opcode = extract ? OP_STR_EXTRACT : OP_STR_PATTERN;
+        op.a = a.slot;
+        op.scalar = n->scalar;
+        op.text = n->text;
+        op.pattern = n->pattern.get();
+        return col_val(emit_op(op), extract ? TypeId::String : TypeId::Bool);
+    }
+
+    Val compile_convert(const ExprNode* n) {
+        Val a0 = compile(n->a.get());
+        if (is_unknown(a0)) return unknown_val();
+        Val a = operand(a0, "convert");
+        if (!is_num_type(a.type) && !is_text_type(a.type) &&
+            a.type != TypeId::Bool)
+            throw std::invalid_argument(
+                std::string("expr: convert needs a scalar operand, got ") +
+                type_name(a.type));
+        const auto op = static_cast<ConvertOp>(n->i);
+        if (op == ConvertOp::Int && a.type == TypeId::Int64) return a;
+        if (op == ConvertOp::String && a.type == TypeId::String) return a;
+        const TypeId t = op == ConvertOp::Int     ? TypeId::Int64
+                         : op == ConvertOp::Float ? TypeId::Float64
+                                                  : TypeId::String;
+        return col_val(emit(OP_CONVERT, a.slot, -1, n->i, {}), t);
+    }
+
     Val as_col(Val v, const char* who) {
         if (v.is_scalar)
             throw std::invalid_argument(std::string("expr: ") + who +
@@ -1033,9 +1548,14 @@ Series const_column(TypeId t, const dftu_scalar& s, std::int64_t len) {
             return const_fixed<float>(t, s, len);
         case TypeId::Float64:
             return const_fixed<double>(t, s, len);
+        case TypeId::String: {
+            const std::string_view v(s.value.s ? s.value.s : "", s.len);
+            const std::vector<std::string_view> rows(
+                static_cast<std::size_t>(len), v);
+            return Series::strings(std::span<const std::string_view>(rows));
+        }
         case TypeId::Unknown:
         case TypeId::Float16:
-        case TypeId::String:
         case TypeId::Binary:
         case TypeId::List:
         case TypeId::Struct:
@@ -1060,6 +1580,944 @@ Series const_column(TypeId t, const dftu_scalar& s, std::int64_t len) {
         " column");
 }
 
+// ---- duql kernels: flat loops over Int64 / Uint64 / Float64, String and Bool
+// columns; every unknown result is a null cell
+// ---------------------------------
+
+Series flat_view(const Series& s) {
+    if (!s.valid() || s.encoding() == Encoding::Flat) return s.share();
+    return s.materialize();
+}
+
+bool valid_at(const dftu_series* h, std::int64_t i) {
+    return !h->validity || ((h->validity->data()[i >> 3] >> (i & 7)) & 1);
+}
+
+bool bit_at(const dftu_series* h, std::int64_t i) {
+    return (h->data->data()[i >> 3] >> (i & 7)) & 1;
+}
+
+template <class T>
+const T* values_of(const dftu_series* h) {
+    return h->data ? reinterpret_cast<const T*>(h->data->data()) : nullptr;
+}
+
+struct TextCol {
+    const char* data = "";
+    const std::int32_t* off32 = nullptr;
+    const std::int64_t* off64 = nullptr;
+
+    explicit TextCol(const dftu_series* h) {
+        if (h->data) data = reinterpret_cast<const char*>(h->data->data());
+        if (h->offsets)
+            off32 = reinterpret_cast<const std::int32_t*>(h->offsets->data());
+        if (h->offsets64)
+            off64 = reinterpret_cast<const std::int64_t*>(h->offsets64->data());
+    }
+    bool ok() const { return off32 || off64; }
+    std::string_view at(std::int64_t i) const {
+        if (off32)
+            return {data + off32[i],
+                    static_cast<std::size_t>(off32[i + 1] - off32[i])};
+        return {data + off64[i],
+                static_cast<std::size_t>(off64[i + 1] - off64[i])};
+    }
+};
+
+std::vector<std::uint8_t> bitmap(std::int64_t n) {
+    return std::vector<std::uint8_t>(static_cast<std::size_t>((n + 7) / 8), 0);
+}
+
+void set_bit(std::vector<std::uint8_t>& bits, std::int64_t i) {
+    bits[static_cast<std::size_t>(i >> 3)] |=
+        static_cast<std::uint8_t>(1u << (i & 7));
+}
+
+// Fixed-width output cells; a row never set is null.
+template <class T>
+class Cells {
+   public:
+    explicit Cells(std::int64_t n)
+        : vals_(static_cast<std::size_t>(n)), valid_(bitmap(n)) {}
+    void set(std::int64_t i, T v) {
+        vals_[static_cast<std::size_t>(i)] = v;
+        set_bit(valid_, i);
+        ++set_;
+    }
+    void set(std::int64_t i, std::optional<T> v) {
+        if (v) set(i, *v);
+    }
+    Series finish(TypeId t) {
+        const auto n = static_cast<std::int64_t>(vals_.size());
+        const std::uint8_t* validity = set_ == n ? nullptr : valid_.data();
+        const T* data = vals_.data();
+        return Series::from_borrowed(t, data, n, std::move(vals_), validity);
+    }
+
+   private:
+    std::vector<T> vals_;
+    std::vector<std::uint8_t> valid_;
+    std::int64_t set_ = 0;
+};
+
+class BoolCells {
+   public:
+    explicit BoolCells(std::int64_t n)
+        : n_(n), bits_(bitmap(n)), valid_(bitmap(n)) {}
+    void set(std::int64_t i, bool v) {
+        if (v) set_bit(bits_, i);
+        set_bit(valid_, i);
+        ++set_;
+    }
+    Series finish() {
+        return Series::flat(TypeId::Bool, bits_.data(), n_,
+                            set_ == n_ ? nullptr : valid_.data());
+    }
+
+   private:
+    std::int64_t n_;
+    std::vector<std::uint8_t> bits_;
+    std::vector<std::uint8_t> valid_;
+    std::int64_t set_ = 0;
+};
+
+// String output rows, appended in row order.
+class TextCells {
+   public:
+    explicit TextCells(std::int64_t n) : n_(n), valid_(bitmap(n)) {
+        off_.reserve(static_cast<std::size_t>(n) + 1);
+        off_.push_back(0);
+    }
+    std::string& buf() { return data_; }
+    void end_row(bool valid) {
+        if (valid) {
+            set_bit(valid_, static_cast<std::int64_t>(off_.size()) - 1);
+            ++set_;
+        }
+        off_.push_back(static_cast<std::int32_t>(data_.size()));
+    }
+    void add(std::string_view s) {
+        data_.append(s);
+        end_row(true);
+    }
+    Series finish() {
+        return Series{
+            dftu_series_new_string(DFTU_TYPE_STRING, off_.data(), data_.data(),
+                                   n_, set_ == n_ ? nullptr : valid_.data())};
+    }
+
+   private:
+    std::int64_t n_;
+    std::vector<std::int32_t> off_;
+    std::string data_;
+    std::vector<std::uint8_t> valid_;
+    std::int64_t set_ = 0;
+};
+
+// Calls fn with a value of the C++ type behind Int64, Uint64 or Float64.
+template <class Fn>
+void with_num(TypeId t, Fn&& fn) {
+    if (t == TypeId::Int64)
+        fn(std::int64_t{});
+    else if (t == TypeId::Uint64)
+        fn(std::uint64_t{});
+    else
+        fn(double{});
+}
+
+template <class T>
+constexpr bool IS_DOUBLE = std::is_same_v<T, double>;
+
+template <class T>
+int order(T a, T b) {
+    return a < b ? -1 : (b < a ? 1 : 0);
+}
+
+// Exact comparison of an integer with a double, as the duql evaluator does
+// it: the integer is never rounded to a double.
+std::optional<int> cmp_num(std::int64_t a, double d) {
+    constexpr double TWO_POW_63 = 9223372036854775808.0;
+    if (std::isnan(d)) return std::nullopt;
+    if (d >= TWO_POW_63) return -1;
+    if (d < -TWO_POW_63) return 1;
+    const double f = std::floor(d);
+    const auto fi = static_cast<std::int64_t>(f);
+    if (a != fi) return order(a, fi);
+    return d > f ? -1 : 0;
+}
+
+std::optional<int> cmp_num(std::uint64_t a, double d) {
+    constexpr double TWO_POW_64 = 18446744073709551616.0;
+    if (std::isnan(d)) return std::nullopt;
+    if (d < 0) return 1;
+    if (d >= TWO_POW_64) return -1;
+    const double f = std::floor(d);
+    const auto fu = static_cast<std::uint64_t>(f);
+    if (a != fu) return order(a, fu);
+    return d > f ? -1 : 0;
+}
+
+std::optional<int> cmp_num(std::int64_t a, std::uint64_t b) {
+    if (a < 0) return -1;
+    return order(static_cast<std::uint64_t>(a), b);
+}
+
+std::optional<int> flip(std::optional<int> c) {
+    if (c) return -*c;
+    return c;
+}
+
+template <class A, class B>
+std::optional<int> cmp_numbers(A a, B b) {
+    if constexpr (std::is_same_v<A, B>) {
+        if constexpr (IS_DOUBLE<A>)
+            if (std::isnan(a) || std::isnan(b)) return std::nullopt;
+        return order(a, b);
+    } else if constexpr (IS_DOUBLE<A>) {
+        return flip(cmp_num(b, a));
+    } else if constexpr (IS_DOUBLE<B>) {
+        return cmp_num(a, b);
+    } else if constexpr (std::is_same_v<A, std::int64_t>) {
+        return cmp_num(a, b);
+    } else {
+        return flip(cmp_num(b, a));
+    }
+}
+
+bool apply_cmp(CmpOp op, int c) {
+    switch (op) {
+        case CmpOp::Gt:
+            return c > 0;
+        case CmpOp::Ge:
+            return c >= 0;
+        case CmpOp::Lt:
+            return c < 0;
+        case CmpOp::Le:
+            return c <= 0;
+        case CmpOp::Eq:
+            return c == 0;
+        case CmpOp::Ne:
+            return c != 0;
+    }
+    return false;
+}
+
+// An integer as sign and magnitude, so int64 and uint64 mix without loss.
+struct Int {
+    bool neg = false;
+    std::uint64_t mag = 0;
+};
+
+constexpr std::uint64_t U64_MAX = std::numeric_limits<std::uint64_t>::max();
+constexpr std::uint64_t I64_MIN_MAG = std::uint64_t{1} << 63;
+
+Int int_of(std::int64_t v) {
+    if (v < 0) return {true, std::uint64_t{0} - static_cast<std::uint64_t>(v)};
+    return {false, static_cast<std::uint64_t>(v)};
+}
+Int int_of(std::uint64_t v) { return {false, v}; }
+
+std::optional<std::int64_t> i64_of(Int x) {
+    if (!x.neg) {
+        if (x.mag > static_cast<std::uint64_t>(
+                        std::numeric_limits<std::int64_t>::max()))
+            return std::nullopt;
+        return static_cast<std::int64_t>(x.mag);
+    }
+    if (x.mag > I64_MIN_MAG) return std::nullopt;
+    return static_cast<std::int64_t>(std::uint64_t{0} - x.mag);
+}
+
+std::optional<Int> int_add(Int a, Int b) {
+    if (a.neg == b.neg) {
+        if (a.mag > U64_MAX - b.mag) return std::nullopt;
+        return Int{a.neg, a.mag + b.mag};
+    }
+    if (a.mag >= b.mag) return Int{a.neg, a.mag - b.mag};
+    return Int{b.neg, b.mag - a.mag};
+}
+
+std::optional<std::int64_t> int_arith(ArithOp op, Int a, Int b) {
+    std::optional<Int> out;
+    switch (op) {
+        case ArithOp::Add:
+            out = int_add(a, b);
+            break;
+        case ArithOp::Sub:
+            out = int_add(a, Int{!b.neg, b.mag});
+            break;
+        case ArithOp::Mul:
+            if (a.mag != 0 && b.mag > U64_MAX / a.mag) return std::nullopt;
+            out = Int{a.neg != b.neg, a.mag * b.mag};
+            break;
+        case ArithOp::FloorDiv: {
+            if (b.mag == 0) return std::nullopt;
+            Int q{a.neg != b.neg, a.mag / b.mag};
+            if (q.neg && a.mag % b.mag != 0) ++q.mag;
+            out = q;
+            break;
+        }
+        case ArithOp::Mod: {
+            if (b.mag == 0) return std::nullopt;
+            std::uint64_t rem = a.mag % b.mag;
+            if (rem != 0 && a.neg != b.neg) rem = b.mag - rem;
+            out = Int{b.neg, rem};
+            break;
+        }
+        case ArithOp::Div:
+            return std::nullopt;
+    }
+    if (!out) return std::nullopt;
+    if (out->mag == 0) return 0;
+    return i64_of(*out);
+}
+
+std::optional<double> of_double(double d) {
+    if (std::isnan(d)) return std::nullopt;
+    return d;
+}
+
+std::optional<double> dbl_arith(ArithOp op, double a, double b) {
+    switch (op) {
+        case ArithOp::Add:
+            return of_double(a + b);
+        case ArithOp::Sub:
+            return of_double(a - b);
+        case ArithOp::Mul:
+            return of_double(a * b);
+        case ArithOp::Div:
+            if (b == 0) return std::nullopt;
+            return of_double(a / b);
+        case ArithOp::FloorDiv:
+            if (b == 0) return std::nullopt;
+            return of_double(std::floor(a / b));
+        case ArithOp::Mod: {
+            if (b == 0) return std::nullopt;
+            double rem = std::fmod(a, b);
+            if (rem != 0 && (rem < 0) != (b < 0)) rem += b;
+            return of_double(rem);
+        }
+    }
+    return std::nullopt;
+}
+
+// A number as the output type R: past int64 is null, NaN is null.
+template <class R, class V>
+std::optional<R> num_as(V v) {
+    if constexpr (IS_DOUBLE<R>) {
+        return of_double(static_cast<double>(v));
+    } else if constexpr (std::is_same_v<R, V>) {
+        return v;
+    } else if constexpr (std::is_same_v<R, std::int64_t> &&
+                         std::is_same_v<V, std::uint64_t>) {
+        return i64_of(Int{false, v});
+    } else {
+        return std::nullopt;
+    }
+}
+
+// A double truncated to int64; null when it is not finite or out of range.
+std::optional<std::int64_t> trunc_i64(double d) {
+    if (!std::isfinite(d)) return std::nullopt;
+    const double t = std::trunc(d);
+    if (t >= -9223372036854775808.0 && t < 9223372036854775808.0)
+        return static_cast<std::int64_t>(t);
+    return std::nullopt;
+}
+
+bool same_rows(const dftu_series* a, const dftu_series* b) {
+    return a && b && a->length == b->length;
+}
+
+Series arith_kernel(const Series& sa, const Series& sb, std::int32_t code) {
+    const Series fa = flat_view(sa);
+    const Series fb = flat_view(sb);
+    const dftu_series* a = fa.handle();
+    const dftu_series* b = fb.handle();
+    if (!same_rows(a, b)) return {};
+    const auto op = static_cast<ArithOp>(code);
+    const std::int64_t n = a->length;
+    const TypeId t = arith_type(code, a->type, b->type);
+    Series out;
+    with_num(a->type, [&](auto xa) {
+        with_num(b->type, [&](auto xb) {
+            using A = decltype(xa);
+            using B = decltype(xb);
+            const A* pa = values_of<A>(a);
+            const B* pb = values_of<B>(b);
+            if constexpr (!IS_DOUBLE<A>) {
+                if constexpr (!IS_DOUBLE<B>) {
+                    if (t == TypeId::Int64) {
+                        Cells<std::int64_t> c(n);
+                        for (std::int64_t i = 0; i < n; ++i)
+                            if (valid_at(a, i) && valid_at(b, i))
+                                c.set(i, int_arith(op, int_of(pa[i]),
+                                                   int_of(pb[i])));
+                        out = c.finish(TypeId::Int64);
+                        return;
+                    }
+                }
+            }
+            Cells<double> c(n);
+            for (std::int64_t i = 0; i < n; ++i)
+                if (valid_at(a, i) && valid_at(b, i))
+                    c.set(i, dbl_arith(op, static_cast<double>(pa[i]),
+                                       static_cast<double>(pb[i])));
+            out = c.finish(TypeId::Float64);
+        });
+    });
+    return out;
+}
+
+Series neg_kernel(const Series& sa) {
+    const Series fa = flat_view(sa);
+    const dftu_series* a = fa.handle();
+    if (!a) return {};
+    const std::int64_t n = a->length;
+    Series out;
+    with_num(a->type, [&](auto xa) {
+        using A = decltype(xa);
+        const A* pa = values_of<A>(a);
+        if constexpr (IS_DOUBLE<A>) {
+            Cells<double> c(n);
+            for (std::int64_t i = 0; i < n; ++i)
+                if (valid_at(a, i)) c.set(i, of_double(-pa[i]));
+            out = c.finish(TypeId::Float64);
+        } else {
+            Cells<std::int64_t> c(n);
+            for (std::int64_t i = 0; i < n; ++i) {
+                if (!valid_at(a, i)) continue;
+                const Int x = int_of(pa[i]);
+                c.set(i, x.mag == 0 ? std::optional<std::int64_t>{0}
+                                    : i64_of(Int{!x.neg, x.mag}));
+            }
+            out = c.finish(TypeId::Int64);
+        }
+    });
+    return out;
+}
+
+bool is_num_col(const dftu_series* h) {
+    return h->type == TypeId::Int64 || h->type == TypeId::Uint64 ||
+           h->type == TypeId::Float64;
+}
+
+// -1/0/1 of row i of `a` against row i of `b` (both present), per domain:
+// numbers exactly, strings bytewise, false before true; fn gets the order or
+// nullopt when the two do not compare (a NaN).
+template <class Fn>
+bool order_rows(const dftu_series* a, const dftu_series* b, Fn&& fn) {
+    const std::int64_t n = a->length;
+    if (is_num_col(a) && is_num_col(b)) {
+        with_num(a->type, [&](auto xa) {
+            with_num(b->type, [&](auto xb) {
+                using A = decltype(xa);
+                using B = decltype(xb);
+                const A* pa = values_of<A>(a);
+                const B* pb = values_of<B>(b);
+                for (std::int64_t i = 0; i < n; ++i)
+                    if (valid_at(a, i) && valid_at(b, i))
+                        fn(i, cmp_numbers(pa[i], pb[i]));
+            });
+        });
+        return true;
+    }
+    if (a->type == TypeId::Bool && b->type == TypeId::Bool) {
+        for (std::int64_t i = 0; i < n; ++i)
+            if (valid_at(a, i) && valid_at(b, i))
+                fn(i, std::optional<int>(order(bit_at(a, i), bit_at(b, i))));
+        return true;
+    }
+    const TextCol ta(a), tb(b);
+    if (!is_text_type(a->type) || !is_text_type(b->type) || !ta.ok() ||
+        !tb.ok())
+        return false;
+    for (std::int64_t i = 0; i < n; ++i)
+        if (valid_at(a, i) && valid_at(b, i))
+            fn(i, std::optional<int>(order(ta.at(i), tb.at(i))));
+    return true;
+}
+
+Series cmp_expr_kernel(const Series& sa, const Series& sb, std::int32_t code) {
+    const Series fa = flat_view(sa);
+    const Series fb = flat_view(sb);
+    const dftu_series* a = fa.handle();
+    const dftu_series* b = fb.handle();
+    if (!same_rows(a, b)) return {};
+    const auto op = static_cast<CmpOp>(code);
+    BoolCells c(a->length);
+    if (!order_rows(a, b, [&](std::int64_t i, std::optional<int> o) {
+            if (o) c.set(i, apply_cmp(op, *o));
+        }))
+        return {};
+    return c.finish();
+}
+
+Series extreme_kernel(const Series& sa, const Series& sb, bool least) {
+    const Series fa = flat_view(sa);
+    const Series fb = flat_view(sb);
+    const dftu_series* a = fa.handle();
+    const dftu_series* b = fb.handle();
+    if (!same_rows(a, b)) return {};
+    const std::int64_t n = a->length;
+    const int want = least ? -1 : 1;
+    // Row i takes b only when b is strictly beyond a, as duql keeps the
+    // first of equal operands.
+    std::vector<char> take_b(static_cast<std::size_t>(n), 0);
+    std::vector<char> known(static_cast<std::size_t>(n), 0);
+    if (!order_rows(b, a, [&](std::int64_t i, std::optional<int> o) {
+            if (!o) return;
+            known[static_cast<std::size_t>(i)] = 1;
+            take_b[static_cast<std::size_t>(i)] = *o == want;
+        }))
+        return {};
+    auto pick = [&](std::int64_t i) {
+        return take_b[static_cast<std::size_t>(i)] != 0;
+    };
+    auto have = [&](std::int64_t i) {
+        return known[static_cast<std::size_t>(i)] != 0;
+    };
+    if (is_num_col(a)) {
+        Series out;
+        const TypeId t = promote(a->type, b->type);
+        with_num(t, [&](auto xr) {
+            with_num(a->type, [&](auto xa) {
+                with_num(b->type, [&](auto xb) {
+                    using R = decltype(xr);
+                    using A = decltype(xa);
+                    using B = decltype(xb);
+                    const A* pa = values_of<A>(a);
+                    const B* pb = values_of<B>(b);
+                    Cells<R> c(n);
+                    for (std::int64_t i = 0; i < n; ++i)
+                        if (have(i))
+                            c.set(i, pick(i) ? num_as<R>(pb[i])
+                                             : num_as<R>(pa[i]));
+                    out = c.finish(t);
+                });
+            });
+        });
+        return out;
+    }
+    if (a->type == TypeId::Bool) {
+        BoolCells c(n);
+        for (std::int64_t i = 0; i < n; ++i)
+            if (have(i)) c.set(i, pick(i) ? bit_at(b, i) : bit_at(a, i));
+        return c.finish();
+    }
+    const TextCol ta(a), tb(b);
+    TextCells c(n);
+    for (std::int64_t i = 0; i < n; ++i) {
+        if (have(i))
+            c.add(pick(i) ? tb.at(i) : ta.at(i));
+        else
+            c.end_row(false);
+    }
+    return c.finish();
+}
+
+Series to_i64_kernel(const Series& sa) {
+    const Series fa = flat_view(sa);
+    const dftu_series* a = fa.handle();
+    if (!a || a->type != TypeId::Uint64) return {};
+    const auto* p = values_of<std::uint64_t>(a);
+    Cells<std::int64_t> c(a->length);
+    for (std::int64_t i = 0; i < a->length; ++i)
+        if (valid_at(a, i)) c.set(i, i64_of(Int{false, p[i]}));
+    return c.finish(TypeId::Int64);
+}
+
+// Round half away from zero to `digits` decimals, as the duql evaluator
+// does; an integer operand comes back as Int64.
+Series round_kernel(const Series& sa, std::int64_t digits) {
+    const Series fa = flat_view(sa);
+    const dftu_series* a = fa.handle();
+    if (!a) return {};
+    const std::int64_t n = a->length;
+    const bool integer = a->type != TypeId::Float64;
+    const bool in_range = digits >= -308 && digits <= 308;
+    const double scale = std::pow(10.0, static_cast<double>(digits));
+    Series out;
+    with_num(a->type, [&](auto xa) {
+        using A = decltype(xa);
+        const A* pa = values_of<A>(a);
+        auto rounded = [&](std::int64_t i) {
+            return std::round(static_cast<double>(pa[i]) * scale) / scale;
+        };
+        if (integer) {
+            Cells<std::int64_t> c(n);
+            for (std::int64_t i = 0; i < n; ++i)
+                if (in_range && valid_at(a, i)) c.set(i, trunc_i64(rounded(i)));
+            out = c.finish(TypeId::Int64);
+        } else {
+            Cells<double> c(n);
+            for (std::int64_t i = 0; i < n; ++i)
+                if (in_range && valid_at(a, i)) c.set(i, of_double(rounded(i)));
+            out = c.finish(TypeId::Float64);
+        }
+    });
+    return out;
+}
+
+Series log_kernel(const Series& sa) {
+    const Series fa = flat_view(sa);
+    const dftu_series* a = fa.handle();
+    if (!a) return {};
+    Cells<double> c(a->length);
+    with_num(a->type, [&](auto xa) {
+        using A = decltype(xa);
+        const A* pa = values_of<A>(a);
+        for (std::int64_t i = 0; i < a->length; ++i) {
+            const auto d = static_cast<double>(pa[i]);
+            if (valid_at(a, i) && d > 0) c.set(i, std::log(d));
+        }
+    });
+    return c.finish(TypeId::Float64);
+}
+
+Series pow_kernel(const Series& sa, const Series& sb) {
+    const Series fa = flat_view(sa);
+    const Series fb = flat_view(sb);
+    const dftu_series* a = fa.handle();
+    const dftu_series* b = fb.handle();
+    if (!same_rows(a, b)) return {};
+    Cells<double> c(a->length);
+    with_num(a->type, [&](auto xa) {
+        with_num(b->type, [&](auto xb) {
+            using A = decltype(xa);
+            using B = decltype(xb);
+            const A* pa = values_of<A>(a);
+            const B* pb = values_of<B>(b);
+            for (std::int64_t i = 0; i < a->length; ++i)
+                if (valid_at(a, i) && valid_at(b, i))
+                    c.set(i, of_double(std::pow(static_cast<double>(pa[i]),
+                                                static_cast<double>(pb[i]))));
+        });
+    });
+    return c.finish(TypeId::Float64);
+}
+
+bool utf8_continuation(char c) {
+    return (static_cast<unsigned char>(c) & 0xC0) == 0x80;
+}
+
+// Byte offset of code point `n` in `s`, or s.size() past the end.
+std::size_t utf8_offset(std::string_view s, std::uint64_t n) {
+    std::size_t i = 0;
+    while (i < s.size() && n > 0) {
+        ++i;
+        while (i < s.size() && utf8_continuation(s[i])) ++i;
+        --n;
+    }
+    return i;
+}
+
+Series substr_kernel(const Series& sa, std::int64_t start, std::int64_t len) {
+    const Series fa = flat_view(sa);
+    const dftu_series* a = fa.handle();
+    if (!a || !is_text_type(a->type)) return {};
+    const TextCol ta(a);
+    if (!ta.ok()) return {};
+    TextCells c(a->length);
+    for (std::int64_t i = 0; i < a->length; ++i) {
+        if (start < 0 || !valid_at(a, i)) {
+            c.end_row(false);
+            continue;
+        }
+        const std::string_view s = ta.at(i);
+        const std::string_view rest =
+            s.substr(utf8_offset(s, static_cast<std::uint64_t>(start)));
+        c.add(len < 0
+                  ? rest
+                  : rest.substr(
+                        0, utf8_offset(rest, static_cast<std::uint64_t>(len))));
+    }
+    return c.finish();
+}
+
+Series extract_kernel(const Series& sa, const duql::CompiledPattern& p,
+                      std::size_t group) {
+    const Series fa = flat_view(sa);
+    const dftu_series* a = fa.handle();
+    if (!a || !is_text_type(a->type)) return {};
+    const TextCol ta(a);
+    if (!ta.ok()) return {};
+    TextCells c(a->length);
+    for (std::int64_t i = 0; i < a->length; ++i) {
+        std::string_view m;
+        if (valid_at(a, i) &&
+            duql::extract(p, ta.at(i), group, m) == duql::MatchResult::YES)
+            c.add(m);
+        else
+            c.end_row(false);
+    }
+    return c.finish();
+}
+
+template <class T>
+void append_number(std::string& out, T v) {
+    if constexpr (std::is_floating_point_v<T>) {
+        char buf[32];
+        if (char* end = to_chars_double(buf, buf + sizeof(buf), v))
+            out.append(buf, end);
+    } else {
+        char buf[24];
+        const auto res = std::to_chars(buf, buf + sizeof(buf), v);
+        out.append(buf, res.ptr);
+    }
+}
+
+template <class V>
+std::optional<V> parse_number(std::string_view s) {
+    V out{};
+    std::from_chars_result res{};
+    if constexpr (std::is_same_v<V, double>)
+        res = from_chars_double(s.data(), s.data() + s.size(), out);
+    else
+        res = std::from_chars(s.data(), s.data() + s.size(), out);
+    if (res.ec != std::errc{} || res.ptr != s.data() + s.size())
+        return std::nullopt;
+    return out;
+}
+
+std::optional<std::int64_t> text_to_int(std::string_view s) {
+    if (auto i = parse_number<std::int64_t>(s)) return i;
+    if (auto d = parse_number<double>(s)) return trunc_i64(*d);
+    return std::nullopt;
+}
+
+// int(x) / float(x): numbers convert (a double truncates toward zero), Bool
+// is 0/1, a String parses; anything out of range or unparseable is null.
+template <class R>
+Series to_number_kernel(const dftu_series* a, TypeId t) {
+    const std::int64_t n = a->length;
+    Cells<R> c(n);
+    auto convert = [](auto v) -> std::optional<R> {
+        if constexpr (IS_DOUBLE<R>) {
+            return of_double(static_cast<double>(v));
+        } else if constexpr (IS_DOUBLE<decltype(v)>) {
+            return trunc_i64(v);
+        } else {
+            return num_as<R>(v);
+        }
+    };
+    if (a->type == TypeId::Bool) {
+        for (std::int64_t i = 0; i < n; ++i)
+            if (valid_at(a, i)) c.set(i, static_cast<R>(bit_at(a, i)));
+    } else if (is_text_type(a->type)) {
+        const TextCol ta(a);
+        for (std::int64_t i = 0; i < n; ++i) {
+            if (!valid_at(a, i)) continue;
+            if constexpr (IS_DOUBLE<R>) {
+                const auto d = parse_number<double>(ta.at(i));
+                if (d) c.set(i, of_double(*d));
+            } else {
+                c.set(i, text_to_int(ta.at(i)));
+            }
+        }
+    } else {
+        with_num(a->type, [&](auto xa) {
+            using A = decltype(xa);
+            const A* pa = values_of<A>(a);
+            for (std::int64_t i = 0; i < n; ++i)
+                if (valid_at(a, i)) c.set(i, convert(pa[i]));
+        });
+    }
+    return c.finish(t);
+}
+
+// string(x) and json(x): numbers in decimal or shortest round-trip form,
+// Bool as true/false; json quotes a string and writes a null (or NaN) as
+// null, string leaves them null.
+Series to_text_kernel(const dftu_series* a, bool json) {
+    const std::int64_t n = a->length;
+    TextCells c(n);
+    auto missing = [&]() {
+        if (json)
+            c.add("null");
+        else
+            c.end_row(false);
+    };
+    if (a->type == TypeId::Bool) {
+        for (std::int64_t i = 0; i < n; ++i) {
+            if (!valid_at(a, i))
+                missing();
+            else
+                c.add(bit_at(a, i) ? "true" : "false");
+        }
+    } else if (is_text_type(a->type)) {
+        const TextCol ta(a);
+        for (std::int64_t i = 0; i < n; ++i) {
+            if (!valid_at(a, i)) {
+                missing();
+            } else if (json) {
+                c.buf() += '"';
+                json::append_json_escaped(c.buf(), ta.at(i));
+                c.buf() += '"';
+                c.end_row(true);
+            } else {
+                c.add(ta.at(i));
+            }
+        }
+    } else {
+        with_num(a->type, [&](auto xa) {
+            using A = decltype(xa);
+            const A* pa = values_of<A>(a);
+            for (std::int64_t i = 0; i < n; ++i) {
+                bool nan = false;
+                if constexpr (IS_DOUBLE<A>) nan = std::isnan(pa[i]);
+                if (!valid_at(a, i) || nan) {
+                    missing();
+                } else {
+                    append_number(c.buf(), pa[i]);
+                    c.end_row(true);
+                }
+            }
+        });
+    }
+    return c.finish();
+}
+
+Series convert_kernel(const Series& sa, std::int32_t code) {
+    const Series fa = flat_view(sa);
+    const dftu_series* a = fa.handle();
+    if (!a) return {};
+    switch (static_cast<ConvertOp>(code)) {
+        case ConvertOp::Int:
+            return to_number_kernel<std::int64_t>(a, TypeId::Int64);
+        case ConvertOp::Float:
+            return to_number_kernel<double>(a, TypeId::Float64);
+        case ConvertOp::String:
+            return to_text_kernel(a, false);
+        case ConvertOp::Json:
+            return to_text_kernel(a, true);
+    }
+    return {};
+}
+
+// A List column's flat parts: its int32 offsets and its element column as
+// Int64 / Uint64 / Float64 when the elements are numeric.
+struct ListParts {
+    Series list;
+    Series elems;
+    const std::int32_t* off = nullptr;
+};
+
+std::optional<ListParts> list_parts(const Series& s) {
+    ListParts p;
+    p.list = flat_view(s);
+    const dftu_series* h = p.list.handle();
+    if (!h || h->type != TypeId::List || !h->offsets || !h->child)
+        return std::nullopt;
+    p.off = reinterpret_cast<const std::int32_t*>(h->offsets->data());
+    Series child = flat_view(Series{dftu_series_share(h->child.get())});
+    const TypeId t = child.type();
+    if (is_num_type(t) && t != TypeId::Int64 && t != TypeId::Uint64 &&
+        t != TypeId::Float64)
+        child = Series{dftu_series_cast(
+            child.handle(),
+            static_cast<dftu_dtype>(is_int_type(t) ? TypeId::Int64
+                                                   : TypeId::Float64))};
+    if (!child.valid()) return std::nullopt;
+    p.elems = std::move(child);
+    return p;
+}
+
+// Sum of each list's elements: integers exactly (past int64 is null),
+// doubles in order; a null or non-numeric element makes the row null.
+Series list_sum_kernel(const Series& s) {
+    auto parts = list_parts(s);
+    if (!parts) return {};
+    const dftu_series* h = parts->list.handle();
+    const dftu_series* e = parts->elems.handle();
+    const std::int32_t* off = parts->off;
+    const std::int64_t n = h->length;
+    if (!is_num_col(e)) {
+        Cells<std::int64_t> c(n);
+        for (std::int64_t i = 0; i < n; ++i)
+            if (valid_at(h, i) && off[i] == off[i + 1]) c.set(i, 0);
+        return c.finish(TypeId::Int64);
+    }
+    Series out;
+    with_num(e->type, [&](auto xe) {
+        using E = decltype(xe);
+        const E* pe = values_of<E>(e);
+        if constexpr (IS_DOUBLE<E>) {
+            Cells<double> c(n);
+            for (std::int64_t i = 0; i < n; ++i) {
+                if (!valid_at(h, i)) continue;
+                double total = 0;
+                bool ok = true;
+                for (std::int32_t k = off[i]; k < off[i + 1] && ok; ++k) {
+                    ok = valid_at(e, k);
+                    total += pe[k];
+                }
+                if (ok) c.set(i, of_double(total));
+            }
+            out = c.finish(TypeId::Float64);
+        } else {
+            Cells<std::int64_t> c(n);
+            for (std::int64_t i = 0; i < n; ++i) {
+                if (!valid_at(h, i)) continue;
+                std::optional<Int> total = Int{};
+                for (std::int32_t k = off[i]; k < off[i + 1] && total; ++k)
+                    total = valid_at(e, k) ? int_add(*total, int_of(pe[k]))
+                                           : std::nullopt;
+                if (total)
+                    c.set(i, total->mag == 0 ? std::optional<std::int64_t>{0}
+                                             : i64_of(*total));
+            }
+            out = c.finish(TypeId::Int64);
+        }
+    });
+    return out;
+}
+
+// Whether an element of each list equals `v`: numbers exactly, strings
+// bytewise; an element of another domain never equals it.
+Series list_contains_kernel(const Series& s, const dftu_scalar& v) {
+    auto parts = list_parts(s);
+    if (!parts) return {};
+    const dftu_series* h = parts->list.handle();
+    const dftu_series* e = parts->elems.handle();
+    const std::int32_t* off = parts->off;
+    const std::int64_t n = h->length;
+    BoolCells c(n);
+    auto each_row = [&](auto&& equal) {
+        for (std::int64_t i = 0; i < n; ++i) {
+            if (!valid_at(h, i)) continue;
+            bool hit = false;
+            for (std::int32_t k = off[i]; k < off[i + 1] && !hit; ++k)
+                hit = valid_at(e, k) && equal(k);
+            c.set(i, hit);
+        }
+    };
+    if (v.kind == DFTU_SCALAR_TAG_STR && is_text_type(e->type)) {
+        const TextCol te(e);
+        const std::string_view want(v.value.s ? v.value.s : "", v.len);
+        each_row([&](std::int32_t k) { return te.at(k) == want; });
+    } else if (v.kind != DFTU_SCALAR_TAG_STR && is_num_col(e)) {
+        const TypeId vt = v.kind == DFTU_SCALAR_TAG_I64   ? TypeId::Int64
+                          : v.kind == DFTU_SCALAR_TAG_U64 ? TypeId::Uint64
+                                                          : TypeId::Float64;
+        with_num(e->type, [&](auto xe) {
+            with_num(vt, [&](auto xv) {
+                using E = decltype(xe);
+                using V = decltype(xv);
+                const E* pe = values_of<E>(e);
+                const V want = scalar_as<V>(v);
+                each_row([&](std::int32_t k) {
+                    const auto o = cmp_numbers(pe[k], want);
+                    return o && *o == 0;
+                });
+            });
+        });
+    } else {
+        each_row([](std::int32_t) { return false; });
+    }
+    return c.finish();
+}
+
 // Evaluate the slot program over rows [offset, offset+len) and extract one
 // column per requested final slot (shared, so distinct outputs that resolved to
 // the same slot alias the one buffer).
@@ -1072,6 +2530,12 @@ std::vector<Series> eval_chunk(const std::vector<SlotOp>& prog,
         const SlotOp& op = prog[k];
         auto A = [&]() { return s[static_cast<std::size_t>(op.a)].handle(); };
         auto B = [&]() { return s[static_cast<std::size_t>(op.b)].handle(); };
+        auto SA = [&]() -> const Series& {
+            return s[static_cast<std::size_t>(op.a)];
+        };
+        auto SB = [&]() -> const Series& {
+            return s[static_cast<std::size_t>(op.b)];
+        };
         switch (op.opcode) {
             case OP_LOAD:
                 s[k] = load_slice(inputs[static_cast<std::size_t>(op.param)],
@@ -1259,6 +2723,63 @@ std::vector<Series> eval_chunk(const std::vector<SlotOp>& prog,
                 s[k] = Series{dftu_series_where(
                     s[static_cast<std::size_t>(op.c)].handle(), A(), B())};
                 break;
+            case OP_CONST_NULL:
+                s[k] = Series::nulls(static_cast<TypeId>(op.param), len);
+                break;
+            case OP_TO_I64:
+                s[k] = to_i64_kernel(SA());
+                break;
+            case OP_ARITH:
+                s[k] = arith_kernel(SA(), SB(), op.param);
+                break;
+            case OP_NEG:
+                s[k] = neg_kernel(SA());
+                break;
+            case OP_CMP_EXPR:
+                s[k] = cmp_expr_kernel(SA(), SB(), op.param);
+                break;
+            case OP_EXTREME:
+                s[k] = extreme_kernel(SA(), SB(), op.param != 0);
+                break;
+            case OP_CONCAT:
+                s[k] = Series{dftu_series_str_cat(A(), B())};
+                break;
+            case OP_ROUND:
+                s[k] = round_kernel(SA(), op.scalar.value.i);
+                break;
+            case OP_LOG:
+                s[k] = log_kernel(SA());
+                break;
+            case OP_POW:
+                s[k] = pow_kernel(SA(), SB());
+                break;
+            case OP_STR_SUBSTR:
+                s[k] =
+                    substr_kernel(SA(), op.scalar.value.i, op.scalar2.value.i);
+                break;
+            case OP_STR_PATTERN:
+                s[k] = str_pattern(SA(), *op.pattern);
+                break;
+            case OP_STR_EXTRACT:
+                s[k] =
+                    extract_kernel(SA(), *op.pattern,
+                                   static_cast<std::size_t>(op.scalar.value.i));
+                break;
+            case OP_CONVERT:
+                s[k] = convert_kernel(SA(), op.param);
+                break;
+            case OP_LIST_LEN:
+                s[k] = Series{dftu_series_list_len(A())};
+                break;
+            case OP_LIST_GET:
+                s[k] = Series{dftu_series_list_get(A(), op.scalar.value.i)};
+                break;
+            case OP_LIST_SUM:
+                s[k] = list_sum_kernel(SA());
+                break;
+            case OP_LIST_CONTAINS:
+                s[k] = list_contains_kernel(SA(), op.scalar);
+                break;
             default:
                 return {};
         }
@@ -1322,11 +2843,7 @@ std::vector<Series> eval_many(const std::vector<Expr>& roots,
     finals.reserve(roots.size());
     for (const Expr& root : roots) {
         if (!root.valid()) throw std::invalid_argument("expr: null expression");
-        Val out = c.compile(root.node().get());
-        if (out.is_scalar)
-            throw std::invalid_argument(
-                "expr: a constant expression has no column");
-        finals.push_back(out.slot);
+        finals.push_back(c.column(c.compile(root.node().get())).slot);
     }
 
     // Pruner: materialize only the inputs the program actually loads.
@@ -1347,9 +2864,14 @@ std::vector<Series> eval_many(const std::vector<Expr>& roots,
 
     const std::int64_t chunks = (n + GRAIN - 1) / GRAIN;
     std::vector<std::vector<Series>> parts(static_cast<std::size_t>(chunks));
-    parallel_for(n, GRAIN, [&](std::int64_t b, std::int64_t e) {
-        parts[static_cast<std::size_t>(b / GRAIN)] =
-            eval_chunk(c.program, flat, finals, b, e - b);
+    // One task per chunk: without a parallel backend parallel_for runs the
+    // whole range as one call, which must still fill every chunk.
+    parallel_for(chunks, 1, [&](std::int64_t b, std::int64_t e) {
+        for (std::int64_t k = b; k < e; ++k) {
+            const std::int64_t lo = k * GRAIN;
+            parts[static_cast<std::size_t>(k)] = eval_chunk(
+                c.program, flat, finals, lo, std::min(GRAIN, n - lo));
+        }
     });
     for (const std::vector<Series>& part : parts) require_evaluated(part);
     std::vector<Series> outs;
@@ -1373,11 +2895,7 @@ DataType infer_type(const Expr& root,
                     const std::vector<DataType>& input_types) {
     if (!root.valid()) throw std::invalid_argument("expr: null expression");
     Compiler c(input_types);
-    Val out = c.compile(root.node().get());
-    if (out.is_scalar)
-        throw std::invalid_argument(
-            "expr: a constant expression has no column");
-    return out.full;
+    return c.column(c.compile(root.node().get())).full;
 }
 
 }  // namespace dftracer::utils::dataframe
@@ -1551,6 +3069,100 @@ dftu_expr* dftu_expr_select(const dftu_expr* cond, const dftu_expr* a,
 dftu_expr* dftu_expr_is_null(const dftu_expr* a, int32_t null) {
     if (!a) return nullptr;
     return wrap(dataframe::expr_is_null(unwrap(a), null != 0));
+}
+dftu_expr* dftu_expr_lit_str(const char* value, int32_t len) {
+    if (len < 0 || (len > 0 && !value)) return nullptr;
+    return wrap(dataframe::expr_lit_str(
+        std::string_view(value ? value : "", static_cast<std::size_t>(len))));
+}
+dftu_expr* dftu_expr_lit_bool(int32_t value) {
+    return wrap(dataframe::expr_lit_bool(value != 0));
+}
+dftu_expr* dftu_expr_lit_null(int32_t type) {
+    return wrap(dataframe::expr_lit_null(static_cast<dataframe::TypeId>(type)));
+}
+dftu_expr* dftu_expr_arith(int32_t op, const dftu_expr* a, const dftu_expr* b) {
+    if (!a || !b) return nullptr;
+    return wrap(dataframe::expr_arith(static_cast<dataframe::ArithOp>(op),
+                                      unwrap(a), unwrap(b)));
+}
+dftu_expr* dftu_expr_neg(const dftu_expr* a) {
+    if (!a) return nullptr;
+    return wrap(dataframe::expr_neg(unwrap(a)));
+}
+dftu_expr* dftu_expr_cmp_expr(int32_t cmp, const dftu_expr* a,
+                              const dftu_expr* b) {
+    if (!a || !b) return nullptr;
+    return wrap(dataframe::expr_cmp_expr(static_cast<dataframe::CmpOp>(cmp),
+                                         unwrap(a), unwrap(b)));
+}
+namespace {
+bool expr_args(const dftu_expr* const* args, int32_t n,
+               std::vector<dataframe::Expr>& out) {
+    if (!args || n <= 0) return false;
+    out.reserve(static_cast<std::size_t>(n));
+    for (int32_t i = 0; i < n; ++i) {
+        if (!args[i]) return false;
+        out.push_back(unwrap(args[i]));
+    }
+    return true;
+}
+}  // namespace
+dftu_expr* dftu_expr_coalesce(const dftu_expr* const* args, int32_t n) {
+    std::vector<dataframe::Expr> v;
+    if (!expr_args(args, n, v)) return nullptr;
+    return wrap(dataframe::expr_coalesce(v));
+}
+dftu_expr* dftu_expr_extreme(const dftu_expr* const* args, int32_t n,
+                             int32_t least) {
+    std::vector<dataframe::Expr> v;
+    if (!expr_args(args, n, v)) return nullptr;
+    return wrap(dataframe::expr_extreme(v, least != 0));
+}
+dftu_expr* dftu_expr_concat(const dftu_expr* const* args, int32_t n) {
+    std::vector<dataframe::Expr> v;
+    if (!expr_args(args, n, v)) return nullptr;
+    return wrap(dataframe::expr_concat(v));
+}
+dftu_expr* dftu_expr_round(const dftu_expr* a, int64_t digits) {
+    if (!a) return nullptr;
+    return wrap(dataframe::expr_round(unwrap(a), digits));
+}
+dftu_expr* dftu_expr_log(const dftu_expr* a) {
+    if (!a) return nullptr;
+    return wrap(dataframe::expr_log(unwrap(a)));
+}
+dftu_expr* dftu_expr_pow(const dftu_expr* a, const dftu_expr* b) {
+    if (!a || !b) return nullptr;
+    return wrap(dataframe::expr_pow(unwrap(a), unwrap(b)));
+}
+dftu_expr* dftu_expr_str_substr(const dftu_expr* a, int64_t start,
+                                int64_t len) {
+    if (!a) return nullptr;
+    return wrap(dataframe::expr_str_substr(unwrap(a), start, len));
+}
+dftu_expr* dftu_expr_convert(int32_t op, const dftu_expr* a) {
+    if (!a) return nullptr;
+    return wrap(dataframe::expr_convert(static_cast<dataframe::ConvertOp>(op),
+                                        unwrap(a)));
+}
+dftu_expr* dftu_expr_list_len(const dftu_expr* a) {
+    if (!a) return nullptr;
+    return wrap(dataframe::expr_list_len(unwrap(a)));
+}
+dftu_expr* dftu_expr_list_get(const dftu_expr* a, int64_t index) {
+    if (!a) return nullptr;
+    return wrap(dataframe::expr_list_get(unwrap(a), index));
+}
+dftu_expr* dftu_expr_list_sum(const dftu_expr* a) {
+    if (!a) return nullptr;
+    return wrap(dataframe::expr_list_sum(unwrap(a)));
+}
+dftu_expr* dftu_expr_list_contains(const dftu_expr* a, dftu_scalar value) {
+    if (!a ||
+        (value.kind == DFTU_SCALAR_TAG_STR && value.len > 0 && !value.value.s))
+        return nullptr;
+    return wrap(dataframe::expr_list_contains(unwrap(a), value));
 }
 void dftu_expr_free(dftu_expr* e) { delete e; }
 

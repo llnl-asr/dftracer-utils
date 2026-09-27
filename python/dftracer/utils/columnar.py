@@ -11,10 +11,10 @@ Build from it in two directions with the same object:
   explicit ``.to_arrow()`` / ``.to_pandas()`` edge.
 - **Filter predicates** - comparisons (``> >= < <= == !=``), string matching
   (``.like()``, ``.ilike()``, ``.regex()``, ``.contains()``, ``.starts_with()``,
-  ``.ends_with()``), membership (``.is_in()`` / ``.not_in()``), ``resolved.*``
-  virtual fields, and ``& | ~``. A predicate over a bare field serializes to
-  the query DSL (``str(expr)`` / ``.to_query()``) that ``TraceViewer.filter()``
-  / ``.query()`` push down to the index.
+  ``.ends_with()``), membership (``.is_in()`` / ``.not_in()``) and
+  ``& | ~``. A predicate over a bare field serializes to
+  duql (``str(expr)`` / ``.to_duql()``) that ``TraceViewer.filter()``
+  / ``.duql()`` push down to the index.
 - **String values** - ``.lower()``, ``.upper()``, ``.strip()``, ``.len_bytes()``,
   ``.find()``, ``.replace()``, ``.slice()`` and friends.
 
@@ -67,7 +67,6 @@ __all__ = [
     "ColumnExpr",
     "Field",
     "F",
-    "resolved",
     "Value",
     "where",
     "when",
@@ -196,7 +195,7 @@ _NOT_PUSHABLE = (
 )
 _PREDICATE_ONLY = (
     "a case-insensitive regex (iregex) is filter-only and has no in-memory "
-    ".apply() form; push it down with TraceViewer.filter()/.query(), or use "
+    ".apply() form; push it down with TraceViewer.filter()/.duql(), or use "
     "regex() on lower()"
 )
 
@@ -205,7 +204,7 @@ class Expr:
     """A lazy expression. Build values with ``+ - * /`` and the numeric prims,
     or predicates with comparisons / string-match / membership / ``& | ~``.
     Evaluate a value or a numeric-comparison mask in memory with :meth:`apply`;
-    serialize a pure predicate for index pushdown with :meth:`to_query`."""
+    serialize a pure predicate for index pushdown with :meth:`to_duql`."""
 
     def __add__(self, other: object) -> "Expr":
         return _Bin("+", self, _wrap(other))
@@ -300,8 +299,8 @@ class Expr:
             return eval_with_column_ops(self, source)
         return Columnar(self).apply(source)
 
-    def to_query(self) -> str:
-        """Serialize this predicate to an index-pushable query-DSL string.
+    def to_duql(self) -> str:
+        """Serialize this predicate to an index-pushable duql string.
 
         Raises ``TypeError`` if the expression mixes value ops (arithmetic or
         numeric prims) into the predicate, i.e. it is not pushable; evaluate
@@ -521,10 +520,10 @@ class Expr:
         return Named(name, self)
 
     # String predicates (Bool masks). Each runs in memory through the engine's
-    # string kernels and, on a bare field, pushes down as a query.
+    # string kernels and, on a bare field, pushes down as duql.
     def contains(self, sub: str, case: bool = True) -> "Expr":
         """Substring predicate. Case-sensitive like pandas / polars; ``case=False``
-        folds both sides to lowercase first (the query DSL's ``"sub" in field``)."""
+        folds both sides to lowercase first (duql's ``"sub" in field``)."""
         if case:
             return _StrPred("contains", self, sub)
         return _IContains(self, sub)
@@ -546,8 +545,8 @@ class Expr:
         return _ILike(self, pattern)
 
     def regex(self, pattern: str) -> "Expr":
-        """ECMAScript regex found anywhere in the value (a search, like the
-        query DSL's ``~``). See :meth:`fullmatch` for a whole-string match."""
+        """duql regex found anywhere in the value (a search, like
+        duql's ``~``). See :meth:`fullmatch` for a whole-string match."""
         return _StrPred("regex", self, pattern)
 
     def iregex(self, pattern: str) -> "Expr":
@@ -555,8 +554,8 @@ class Expr:
         return _IRegex(self, pattern)
 
     def fullmatch(self, pattern: str) -> "Expr":
-        """ECMAScript regex matching the whole value (pandas ``str.fullmatch``).
-        In-memory only: the query DSL has no anchored form."""
+        """duql regex matching the whole value (pandas ``str.fullmatch``).
+        In-memory only: duql has no anchored form."""
         return _StrPred("fullmatch", self, pattern)
 
     def is_in(self, values: Sequence[Value]) -> "Expr":
@@ -793,12 +792,12 @@ class _Col(Expr):
     def any(self) -> "_AnyCol":
         """The same field as ``any(name)``: a predicate on it holds when any
         element of the array holds. It filters in the trace scan
-        (``TraceViewer.query``); ``apply`` cannot evaluate it."""
+        (``TraceViewer.duql``); ``apply`` cannot evaluate it."""
         return _AnyCol(f"any({self.name})")
 
 
 class _AnyCol(_Col):
-    """``any(name)``: renders to the query DSL; no column to evaluate."""
+    """``any(name)``: renders to duql; no column to evaluate."""
 
 
 #: Back-compat alias: ``Field("dur")`` is the field leaf, same as ``F.dur``.
@@ -949,9 +948,9 @@ def _escape_like(s: str) -> str:
 
 class _StrPred(Expr):
     """``arg <op> pattern`` for op in _STR_PRED_CODES: a Bool mask through the
-    engine's string kernels. On a bare field it also serializes to the query
-    DSL: contains / starts_with / ends_with as an escaped LIKE, like as LIKE,
-    regex as ``~``; fullmatch has no DSL form."""
+    engine's string kernels. On a bare field it also serializes to
+    duql: contains / starts_with / ends_with as an escaped LIKE, like as LIKE,
+    regex as ``~``; fullmatch has no duql form."""
 
     def __init__(self, op: str, arg: Expr, pattern: str) -> None:
         self.op = op
@@ -1397,15 +1396,6 @@ F = _FAccessor()
 F.any = _Wildcard()  # type: ignore[attr-defined]
 
 
-def resolved(name: str) -> Expr:
-    """The column ``resolved.<name>``, where `name` is ``<key field>.<field>``:
-    `field` of the index dictionary row whose key the event's `key field`
-    holds, such as ``resolved("fhash.path")``. The dftracer schema resolves
-    ``fhash.path``, ``cwd.path``, ``hhash.name``, ``exec_hash.value`` and
-    ``cmd_hash.value``; the engine rejects any other name."""
-    return _Col("resolved." + name)
-
-
 def columnar(expr: Expr) -> "Columnar":
     """Wrap a value expression; call ``apply(source)`` to evaluate it on the
     DataFrame engine and get a native ``Series``."""
@@ -1418,8 +1408,8 @@ def where(table: _Frame, pred: "Expr | str") -> _Frame:
     """Keep the rows where ``pred`` is true.
 
     ``pred`` is either an expression (numeric comparisons / ``& | ~``),
-    evaluated on the DataFrame engine to a boolean mask, or a query DSL
-    **string** (e.g. ``"dur > 100 and cat == 'io'"``), parsed by the query
+    evaluated on the DataFrame engine to a boolean mask, or a duql
+    **string** (e.g. ``"dur > 100 and cat == 'io'"``), parsed by the duql
     library and evaluated as a SIMD mask. A native ``DataFrame`` in stays fully
     columnar (returns a filtered ``DataFrame``); a ``pyarrow.Table`` in returns
     a filtered ``pyarrow.Table``."""
@@ -1596,7 +1586,7 @@ def _emit_ast(expr: Expr, resolve: Callable[[str], int], ast: List[tuple]) -> No
         if isinstance(expr.rhs, bool) or not isinstance(expr.rhs, (int, float, str)):
             raise TypeError(
                 "in-memory comparison needs a number or a string; a bool "
-                "comparison is filter-only (push it down with .filter()/.query())"
+                "comparison is filter-only (push it down with .filter()/.duql())"
             )
         if isinstance(expr.rhs, str) and expr.op not in ("eq", "ne"):
             raise TypeError("an ordered comparison against a string is not supported; use == or !=")
@@ -2745,7 +2735,7 @@ def _collect_columns(expr: Expr) -> List[str]:
             return
         if isinstance(e, _AnyCol):
             raise _ext.DFTUtilsValueError(
-                f"{e.name} filters in the trace scan (TraceViewer.query); "
+                f"{e.name} filters in the trace scan (TraceViewer.duql); "
                 "apply cannot evaluate any()"
             )
         if isinstance(e, _Col):
@@ -2865,7 +2855,7 @@ def _eval(expr: Expr, cols: Dict[str, "_ext._Series"], out_float: bool) -> _Eval
         if isinstance(expr.rhs, bool) or not isinstance(expr.rhs, (int, float)):
             raise TypeError(
                 "in-memory comparison needs a numeric value; a string/bool "
-                "comparison is filter-only (push it down with .filter()/.query())"
+                "comparison is filter-only (push it down with .filter()/.duql())"
             )
         v = _need_col(
             _eval(expr.left, cols, out_float=_is_float(expr.left, cols)),

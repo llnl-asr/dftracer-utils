@@ -404,9 +404,8 @@ FoldEvent evt(std::uint64_t pid, std::uint64_t dur, std::uint64_t tid) {
 // One accumulator keyed on pid built through the ergonomic Host::agg + agg::
 // factories: a per-key row count and the tid at the largest duration. Neither
 // names a raw DFTU_AGG_* code nor fills a dftu_agg_col by hand.
-::dftu_task* agg_facade_columns(void* slice, const dftu_dataframe* df,
+::dftu_task* agg_facade_columns(void*, const dftu_dataframe* df,
                                 const dftu_plugin_host* host) {
-    (void)slice;
     dftracer::utils::plugins::Host h{host};
     const auto acc =
         h.agg("by_pid", {"pid"},
@@ -418,7 +417,7 @@ FoldEvent evt(std::uint64_t pid, std::uint64_t dur, std::uint64_t tid) {
 dftu_plugin make_agg_facade_plugin() {
     dftu_plugin p{};
     p.abi_version = DFTRACER_PLUGIN_ABI_VERSION;
-    p.plan_query = [](void*) -> const char* { return nullptr; };
+    p.plan_duql = [](void*) -> const char* { return nullptr; };
     p.make_slice = [](void*) -> void* {
         static int sentinel;
         return &sentinel;

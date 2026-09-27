@@ -519,9 +519,11 @@ ArrowExportResult asof_join(const ArrowSchema* left_s, const ArrowArray* left_a,
 
         // Cursors advance monotonically because left rows are ts-ascending
         // within the partition. `cur` chases the backward/forward boundary;
-        // `ge` is the first right ts >= left ts for the nearest split.
+        // `ge` and `gt` are the first right ts >= and > left ts for the
+        // nearest split.
         std::int64_t cur = rstart;
         std::int64_t ge = rstart;
+        std::int64_t gt = rstart;
         for (std::int64_t a = li; a < lj; ++a) {
             std::int64_t lr = lorder[static_cast<std::size_t>(a)];
             emit_left(lr);
@@ -554,17 +556,12 @@ ArrowExportResult asof_join(const ArrowSchema* left_s, const ArrowArray* left_a,
                        ts_cmp(rts, rorder[static_cast<std::size_t>(ge)], lts,
                               lr, ts_kind) < 0)
                     ++ge;
-                std::int64_t back = -1;
-                std::int64_t fwd = -1;
-                if (ge < rtsend &&
-                    ts_cmp(rts, rorder[static_cast<std::size_t>(ge)], lts, lr,
-                           ts_kind) == 0) {
-                    back = ge;
-                    fwd = ge;
-                } else {
-                    if (ge - 1 >= rstart) back = ge - 1;
-                    if (ge < rtsend) fwd = ge;
-                }
+                while (gt < rtsend &&
+                       ts_cmp(rts, rorder[static_cast<std::size_t>(gt)], lts,
+                              lr, ts_kind) <= 0)
+                    ++gt;
+                const std::int64_t back = gt - 1 >= rstart ? gt - 1 : -1;
+                const std::int64_t fwd = ge < rtsend ? ge : -1;
                 if (back < 0)
                     cand = fwd;
                 else if (fwd < 0)

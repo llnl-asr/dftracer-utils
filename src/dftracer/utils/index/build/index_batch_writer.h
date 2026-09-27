@@ -5,8 +5,8 @@
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
-#include <dftracer/utils/index/extensions/dict_fold.h>
 #include <dftracer/utils/index/extensions/plugin_extension.h>
+#include <dftracer/utils/index/extensions/rowset_fold.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
@@ -22,7 +22,7 @@
 namespace dftracer::utils::index::build {
 
 using index::extensions::BloomFold;
-using index::extensions::DictFold;
+using index::extensions::RowSetFold;
 using index::schemas::dft::agg::AggregationFold;
 
 struct ParsedIndexJob {
@@ -37,7 +37,7 @@ struct ParsedIndexJob {
     // first so it is destroyed last.
     std::unique_ptr<dftracer::utils::StringIntern> intern;
     std::unique_ptr<BloomFold> bloom_fold;
-    std::unique_ptr<DictFold> dict_fold;
+    std::unique_ptr<RowSetFold> rowset_fold;
     std::unique_ptr<AggregationFold> agg_fold;
     std::unique_ptr<index::extensions::PluginBuilders> plugin_builders;
     bool success = true;
@@ -102,8 +102,7 @@ inline coro::CoroTask<void> index_batch_write_worker(
                     // batch may commit after that ingest.
                     for (auto ext : index::store::ALL_EXTENSIONS)
                         if (!spills &&
-                            ext != index::store::IndexExtension::MEMBERS &&
-                            ext != index::store::IndexExtension::DICT)
+                            ext != index::store::IndexExtension::MEMBERS)
                             index::store::records::clear_file(sink, ext,
                                                               job.file_id);
                     // Plugin data is never in a spill run, so it clears here.
@@ -123,7 +122,7 @@ inline coro::CoroTask<void> index_batch_write_worker(
                     job.bloom_fold->write(sink, job.file_id);
                 if (job.plugin_builders)
                     job.plugin_builders->write(sink, job.file_id);
-                if (job.dict_fold) job.dict_fold->write(sink, job.file_id);
+                if (job.rowset_fold) job.rowset_fold->write(sink, job.file_id);
                 if (job.agg_fold) job.agg_fold->write(sink);
             } catch (const std::exception& e) {
                 job.success = false;
@@ -173,7 +172,7 @@ inline coro::CoroTask<void> index_batch_write_worker(
 
     while (auto item = co_await channel->receive()) {
         std::size_t entries =
-            item->dict_fold ? item->dict_fold->entry_count() : 0;
+            item->rowset_fold ? item->rowset_fold->entry_count() : 0;
         batch.push_back(std::move(*item));
         batch_hash_entries += entries;
         if (batch.size() >= batch_size ||

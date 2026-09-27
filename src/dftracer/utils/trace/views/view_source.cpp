@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/field_ref.h>
+#include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/core/coro/async_semaphore.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/coro/coro.h>
@@ -7,9 +8,9 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>  // expr_fingerprint
 #include <dftracer/utils/dataframe/scalar.h>
+#include <dftracer/utils/duql/builder.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/query/builder.h>
-#include <dftracer/utils/query/query.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/trace/views/stream_row_fold.h>
@@ -24,10 +25,13 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <future>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -80,7 +84,7 @@ ViewCursor::next(std::int64_t max_rows) {
 namespace {
 
 namespace df = dftracer::utils::dataframe;
-namespace q = dftracer::utils::query;
+namespace q = dftracer::utils::duql;
 
 // What a source can push for one predicate: the query, plus whether it is the
 // predicate exactly or merely a superset of it (a superset prunes I/O but must
@@ -397,7 +401,8 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
         std::shared_ptr<std::atomic<bool>> stop,
         std::shared_ptr<detail::DynamicPrune> dyn_prune,
         std::vector<ViewFile> files, double time_scale,
-        std::vector<std::string> fnames, bool metadata_rows)
+        std::vector<std::string> fnames, bool metadata_rows,
+        std::shared_ptr<coro::CoroSemaphore> gate)
         : channel_(std::move(channel)),
           budget_(std::move(budget)),
           producer_(std::move(producer)),
@@ -406,7 +411,8 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
           files_(std::move(files)),
           time_scale_(time_scale),
           fnames_(std::move(fnames)),
-          metadata_rows_(metadata_rows) {}
+          metadata_rows_(metadata_rows),
+          gate_(std::move(gate)) {}
 
     // Abandoning the cursor must stop the scan behind it: the producer holds
     // its own channel registration, so nothing else ends it, and the byte
@@ -417,23 +423,26 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
     ~StreamViewCursor() override {
         stop_->store(true, std::memory_order_relaxed);
         budget_->release(std::numeric_limits<std::uint32_t>::max());
+        if (gate_) gate_->release(std::numeric_limits<std::uint32_t>::max());
     }
 
     // The fold behind `channel_` fans out across scan workers (see
-    // ViewSource::open_stream / run_folds), so morsels can land here out of
-    // the order the underlying data was produced in. batch_index is still
-    // stamped (this cursor's own receive-order counter, for diagnostics) but
-    // ordering stays Unordered - claiming Sequence here would be a lie a
-    // windowed consumer could act on.
+    // ViewSource::open_stream / run_folds), so morsels land here in the order
+    // workers finish them. Without `gate_` they go out that way, Unordered;
+    // with it they go out in unit order (see receive()), a Sequence.
+    // batch_index is this cursor's own hand-out counter.
     coro::CoroTask<std::optional<dftracer::utils::dataframe::Morsel>> next(
         std::int64_t max_rows) override {
+        const auto ordering =
+            gate_ ? dftracer::utils::dataframe::Ordering::Sequence
+                  : dftracer::utils::dataframe::Ordering::Unordered;
         if (max_rows <= 0) {
-            auto item = co_await channel_->receive();
+            std::uint64_t owed = 0;
+            auto item = co_await receive(owed);
             if (item) {
-                budget_->release(detail::morsel_bytes(*item));
+                budget_->release(owed);
                 item->batch_index = next_index_++;
-                item->ordering =
-                    dftracer::utils::dataframe::Ordering::Unordered;
+                item->ordering = ordering;
             } else {
                 producer_.get();
             }
@@ -441,12 +450,11 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
         }
 
         if (!pending_ || offset_ >= pending_->rows) {
-            auto item = co_await channel_->receive();
+            auto item = co_await receive(pending_bytes_);
             if (!item) {
                 producer_.get();
                 co_return std::nullopt;
             }
-            pending_bytes_ = detail::morsel_bytes(*item);
             pending_ = std::move(item);
             offset_ = 0;
         }
@@ -455,7 +463,7 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
         dftracer::utils::dataframe::Morsel out =
             slice_morsel(*pending_, offset_, n);
         out.batch_index = next_index_++;
-        out.ordering = dftracer::utils::dataframe::Ordering::Unordered;
+        out.ordering = ordering;
         offset_ += n;
         if (offset_ >= pending_->rows) {
             budget_->release(pending_bytes_);
@@ -513,6 +521,56 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
     }
 
    private:
+    using Morsel = dftracer::utils::dataframe::Morsel;
+
+    // The next morsel with rows, or nullopt once the channel drains; `owed`
+    // is the budget it still holds. With `gate_`, morsels come in unit order:
+    // the ordered fold stamps each with its unit's seq and ends each unit with
+    // an empty morsel. One that arrives before its turn is held, its budget
+    // returned at once so no producer waits on budget the hold keeps; the
+    // gate bounds how many units can be held. Units a stopped scan never
+    // ended go out in seq order once the channel drains.
+    coro::CoroTask<std::optional<Morsel>> receive(std::uint64_t& owed) {
+        if (!gate_) {
+            auto item = co_await channel_->receive();
+            owed = item ? detail::morsel_bytes(*item) : 0;
+            co_return item;
+        }
+        owed = 0;
+        for (;;) {
+            auto it = held_.find(head_);
+            if (it != held_.end() && !it->second.empty()) {
+                Morsel m = std::move(it->second.front());
+                it->second.pop_front();
+                co_return m;
+            }
+            if (ended_.erase(head_) > 0 || (drained_ && it != held_.end())) {
+                if (it != held_.end()) held_.erase(it);
+                ++head_;
+                gate_->release(1);
+                continue;
+            }
+            if (drained_) {
+                if (held_.empty()) co_return std::nullopt;
+                head_ = held_.begin()->first;
+                continue;
+            }
+            auto item = co_await channel_->receive();
+            if (!item) {
+                drained_ = true;
+                continue;
+            }
+            budget_->release(detail::morsel_bytes(*item));
+            const auto seq = static_cast<std::size_t>(item->batch_index);
+            if (item->rows == 0)
+                ended_.insert(seq);
+            else if (seq == head_)
+                co_return item;
+            else
+                held_[seq].push_back(std::move(*item));
+        }
+    }
+
     std::shared_ptr<coro::Channel<dftracer::utils::dataframe::Morsel>> channel_;
     std::shared_ptr<coro::CoroSemaphore> budget_;
     std::shared_future<void> producer_;
@@ -527,6 +585,11 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
     std::int64_t offset_ = 0;
     std::uint64_t pending_bytes_ = 0;
     std::int64_t next_index_ = 0;
+    std::shared_ptr<coro::CoroSemaphore> gate_;
+    std::size_t head_ = 0;
+    std::map<std::size_t, std::deque<Morsel>> held_;
+    std::set<std::size_t> ended_;
+    bool drained_ = false;
 };
 
 // A group key the view folds natively with the raw value, named as its output
@@ -618,7 +681,8 @@ std::optional<df::SourceApplication> ViewSource::apply_projection(
 
 namespace {
 
-// `e`, positional against `current`, as a computed column over the columns it
+// `e`, positional against `current` (the scan's select tokens, so a list
+// column is rebuilt as a list), as a computed column over the columns it
 // reads, or std::nullopt when it reads none it can name.
 std::optional<detail::ComputedColumn> computed_from(
     std::string name, const df::Expr& e,
@@ -646,6 +710,8 @@ std::optional<df::SourceApplication> ViewSource::apply_aggregation(
         !detail::is_row_query(*plan_) || p.auto_numeric_metrics)
         return std::nullopt;
     const std::vector<std::string> current = names();
+    const std::vector<std::string>& tokens =
+        p.select.size() == current.size() ? p.select : current;
     std::vector<GroupKey> keys;
     std::vector<detail::ComputedColumn> computed;
     std::vector<std::string> raw_reads;
@@ -660,7 +726,7 @@ std::optional<df::SourceApplication> ViewSource::apply_aggregation(
                 continue;
             }
         std::optional<detail::ComputedColumn> col =
-            computed_from(k.name, k.expr, current);
+            computed_from(k.name, k.expr, tokens);
         if (!col) return std::nullopt;
         keys.push_back({GroupKey::Kind::Expr, k.name});
         computed.push_back(std::move(*col));
@@ -680,7 +746,7 @@ std::optional<df::SourceApplication> ViewSource::apply_aggregation(
             } else {
                 field = "__view_agg_in_" + std::to_string(i);
                 std::optional<detail::ComputedColumn> col =
-                    computed_from(field, a.input, current);
+                    computed_from(field, a.input, tokens);
                 if (!col) return std::nullopt;
                 computed.push_back(std::move(*col));
             }
@@ -721,9 +787,6 @@ std::optional<std::string> ViewSource::batch_key() const {
         p.auto_numeric_metrics || !p.sort_col.empty() || !p.topk_col.empty() ||
         p.limit || p.offset)
         return std::nullopt;
-    if (output_ == TraceOutput::Events && detail::is_row_query(*plan_) &&
-        !detail::select_resolved(p.select).empty())
-        return std::nullopt;
     // The session's export branch writes whole events.
     if (output_ == TraceOutput::ExportJson && !p.select.empty())
         return std::nullopt;
@@ -741,10 +804,9 @@ std::optional<std::string> ViewSource::batch_key() const {
         key += std::to_string(p.time_range->first) + ',' +
                std::to_string(p.time_range->second);
     key += '\0';
-    key += std::to_string(p.time_scale) + '\0' +
-           std::to_string(p.include_metadata) +
-           std::to_string(p.emit_all_metadata) + '\0' + p.rollup_root + '\0' +
-           p.views_root + '\0' + std::to_string(p.memory_budget);
+    key += std::to_string(p.time_scale) + '\0' + std::to_string(p.all_records) +
+           '\0' + p.rollup_root + '\0' + p.views_root + '\0' +
+           std::to_string(p.memory_budget);
     return key;
 }
 
@@ -753,8 +815,7 @@ namespace {}  // namespace
 ViewSession ViewSource::base_session(const detail::ViewPlan& p) {
     auto base = std::make_shared<detail::ViewPlan>();
     base->files = p.files;
-    base->include_metadata = p.include_metadata;
-    base->emit_all_metadata = p.emit_all_metadata;
+    base->all_records = p.all_records;
     base->time_scale = p.time_scale;
     base->rollup_root = p.rollup_root;
     base->views_root = p.views_root;
@@ -896,12 +957,44 @@ coro::CoroTask<ViewSource::Batch> ViewSource::run_batch(
 
 namespace {
 
+// `f` laid out as the declared `schema`: its columns in schema order, a
+// declared column the rows lack as nulls, then any column the schema does not
+// declare, so a batch member matches the schema its plan was built against.
+df::DataFrame declared(df::DataFrame f, const df::Schema& schema) {
+    if (schema.fields.empty()) return f;
+    df::DataFrame out;
+    const std::int64_t n = f.num_rows();
+    std::vector<bool> used(f.names.size(), false);
+    for (const df::Field& field : schema.fields) {
+        const auto it = std::find(f.names.begin(), f.names.end(), field.name);
+        out.names.push_back(field.name);
+        if (it != f.names.end()) {
+            const auto at = static_cast<std::size_t>(it - f.names.begin());
+            used[at] = true;
+            out.columns.push_back(std::move(f.columns[at]));
+            continue;
+        }
+        const df::TypeId t = field.type.id;
+        const bool scalar = t != df::TypeId::Unknown && t != df::TypeId::List &&
+                            t != df::TypeId::Struct;
+        out.columns.push_back(
+            df::Series::nulls(scalar ? t : df::TypeId::String, n));
+    }
+    for (std::size_t c = 0; c < f.names.size(); ++c)
+        if (!used[c]) {
+            out.names.push_back(std::move(f.names[c]));
+            out.columns.push_back(std::move(f.columns[c]));
+        }
+    return out;
+}
+
 // The shared scan every open_batch cursor reads from. Holding each channel's
 // producer slot until it ends means every channel closes, even when the scan
 // fails before its folds exist.
 coro::CoroTask<void> run_open_batch(
     std::shared_ptr<ViewSession> session,
     std::vector<std::function<df::DataFrame(const ExportStats&)>> frames,
+    std::vector<df::Schema> schemas,
     std::vector<std::shared_ptr<coro::Channel<df::Morsel>>> channels,
     std::vector<std::shared_ptr<coro::CoroSemaphore>> budgets) {
     std::vector<std::unique_ptr<coro::Channel<df::Morsel>::ProducerGuard>>
@@ -914,7 +1007,7 @@ coro::CoroTask<void> run_open_batch(
     const ExportStats stats = co_await session->execute();
     for (std::size_t i = 0; i < frames.size(); ++i) {
         if (!frames[i]) continue;
-        df::DataFrame f = frames[i](stats);
+        df::DataFrame f = declared(frames[i](stats), schemas[i]);
         df::Morsel m;
         m.rows = f.num_rows();
         m.columns = std::move(f.columns);
@@ -933,8 +1026,11 @@ std::optional<std::vector<std::unique_ptr<df::Cursor>>> ViewSource::open_batch(
     views.reserve(members.size());
     for (const auto& m : members) {
         const auto* v = dynamic_cast<const ViewSource*>(m.get());
-        if (!v || (v->output_ == TraceOutput::Events &&
-                   detail::is_row_query(*v->plan_) && !v->can_stream_rows()))
+        // A shared scan hands rows out unordered, so an ordered view scans
+        // on its own.
+        if (!v || v->plan_->ordered ||
+            (v->output_ == TraceOutput::Events &&
+             detail::is_row_query(*v->plan_) && !v->can_stream_rows()))
             return std::nullopt;
         views.push_back(v);
     }
@@ -963,15 +1059,19 @@ std::optional<std::vector<std::unique_ptr<df::Cursor>>> ViewSource::open_batch(
     }
     std::vector<std::function<df::DataFrame(const ExportStats&)>> frames =
         add_branches(*session, views, streamed);
+    std::vector<df::Schema> schemas;
+    for (const ViewSource* v : views) schemas.push_back(v->schema());
 
-    std::shared_future<void> producer = spawn_on_current_executor(
-        run_open_batch(session, std::move(frames), channels, budgets));
+    std::shared_future<void> producer =
+        spawn_on_current_executor(run_open_batch(
+            session, std::move(frames), std::move(schemas), channels, budgets));
     std::vector<std::unique_ptr<df::Cursor>> cursors;
     cursors.reserve(views.size());
     for (std::size_t i = 0; i < views.size(); ++i)
         cursors.push_back(std::make_unique<StreamViewCursor>(
             channels[i], budgets[i], producer, dropped[i], nullptr,
-            std::vector<ViewFile>{}, 1.0, std::vector<std::string>{}, false));
+            std::vector<ViewFile>{}, 1.0, std::vector<std::string>{}, false,
+            nullptr));
     return cursors;
 }
 
@@ -981,7 +1081,11 @@ coro::CoroTask<std::vector<df::DataFrame>> ViewSource::collect_batch(
     views.reserve(members.size());
     for (auto& m : members)
         views.push_back(std::static_pointer_cast<const ViewSource>(m));
+    std::vector<df::Schema> schemas;
+    for (const auto& v : views) schemas.push_back(v->schema());
     Batch b = co_await run_batch(std::move(views));
+    for (std::size_t i = 0; i < b.frames.size(); ++i)
+        b.frames[i] = declared(std::move(b.frames[i]), schemas[i]);
     co_return std::move(b.frames);
 }
 
@@ -989,12 +1093,15 @@ bool ViewSource::can_stream_rows() const {
     if (output_ != TraceOutput::Events || !detail::is_row_query(*plan_))
         return false;
     const detail::ViewPlan& p = *plan_;
+    // The index lists the args of data events only, so dftracer metadata rows
+    // take their columns from the rows themselves.
+    if (!detail::plan_by_path(p) && p.select.empty() &&
+        (p.all_records || p.phase == Phase::Metadata))
+        return false;
     // scan::collect() always strips sort/topk/offset/limit before building a
-    // ViewSource, and select unless it needs the resolver (resolved.
-    // columns, which the raw stream never computes); these checks stay as a
-    // defensive guard for any other caller.
+    // ViewSource; these checks stay as a defensive guard for any other caller.
     return p.sort_col.empty() && p.topk_col.empty() && p.offset == 0 &&
-           p.limit == 0 && detail::select_resolved(p.select).empty();
+           p.limit == 0;
 }
 
 // Matches build_row_frame's own empty-select order (fixed top-level fields,
@@ -1019,7 +1126,6 @@ std::vector<std::string> ViewSource::row_schema() const {
         if (c == "pid" || c == "tid" || c == "ts" || c == "dur" ||
             c == "name" || c == "cat" || c == "fhash" || c == "hhash")
             continue;
-        if (c.rfind("resolved.", 0) == 0) continue;
         // A flattened arg column: build_row_frame's empty-select branch
         // always names these "args.<key>", so the schemas must match.
         out.push_back(std::string(dftracer::utils::ARGS_PREFIX) + c);
@@ -1075,6 +1181,8 @@ dftracer::utils::dataframe::Schema ViewSource::compute_schema() const {
         case TraceOutput::ExportJson:
             return fixed_schema({{"events_matched", T::Int64},
                                  {"events_scanned", T::Int64},
+                                 {"lines_invalid", T::Int64},
+                                 {"values_unconverted", T::Int64},
                                  {"chunks_scanned", T::Int64},
                                  {"chunks_skipped", T::Int64},
                                  {"chunks_covered", T::Int64},
@@ -1089,16 +1197,16 @@ dftracer::utils::dataframe::Schema ViewSource::compute_schema() const {
         // access; fill those in from the same harvest columns()/schema() use,
         // so name and type cannot disagree.
         const bool by_path = detail::plan_by_path(*plan_);
-        std::unordered_map<std::string, df::TypeId> harvested;
+        std::unordered_map<std::string, df::DataType> harvested;
         auto resolve = [&](const std::string& name) {
-            df::TypeId id = detail::row_column_type(name, by_path);
-            if (id != df::TypeId::Unknown) return id;
+            const df::TypeId id = detail::row_column_type(name, by_path);
+            if (id != df::TypeId::Unknown) return df::scalar(id);
             if (harvested.empty()) harvested = scan::column_types(plan_);
             std::string_view key = detail::window_inner(name);
             if (!by_path && key.rfind(dftracer::utils::ARGS_PREFIX, 0) == 0)
                 key.remove_prefix(dftracer::utils::ARGS_PREFIX.size());
             auto it = harvested.find(std::string(key));
-            return it == harvested.end() ? id : it->second;
+            return it == harvested.end() ? df::scalar(id) : it->second;
         };
         // A non-empty select fixes every streamed morsel's columns to exactly
         // this list (see open_stream()), so the schema must match it, not the
@@ -1112,14 +1220,13 @@ dftracer::utils::dataframe::Schema ViewSource::compute_schema() const {
                 std::string col_name =
                     detail::canonical_row_column_name(sel, by_path);
                 s.fields.push_back(
-                    df::Field{col_name, df::scalar(resolve(col_name)), true});
+                    df::Field{col_name, resolve(col_name), true});
             }
         } else {
             std::vector<std::string> names = row_schema();
             s.fields.reserve(names.size());
             for (const std::string& name : names)
-                s.fields.push_back(
-                    df::Field{name, df::scalar(resolve(name)), true});
+                s.fields.push_back(df::Field{name, resolve(name), true});
         }
         return s;
     }
@@ -1205,27 +1312,35 @@ std::unique_ptr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
     // drain_to_frame reconcile them. A non-empty select instead fixes every
     // morsel's columns to that exact list (build_row_frame's select branch
     // always emits each one, null-filled where absent), matching schema().
+    // An ordered scan lets workers claim at most two units each past the
+    // oldest unit the cursor has not finished.
+    auto gate = v->ordered
+                    ? std::make_shared<coro::CoroSemaphore>(
+                          2 * std::max<std::size_t>(1, available_parallelism()))
+                    : nullptr;
     auto task =
         [](detail::ScanPlan vv, double ts,
            std::shared_ptr<coro::Channel<dftracer::utils::dataframe::Morsel>>
                ch,
            std::shared_ptr<coro::CoroSemaphore> sem,
            std::shared_ptr<dftracer::utils::StringIntern> iv,
-           std::shared_ptr<detail::DynamicPrune> dp,
-           bool emit_dyn) -> coro::CoroTask<void> {
-        detail::StreamRowFold fold(ch, sem, iv, vv->select, ts, nullptr,
-                                   vv->phase == Phase::Metadata, emit_dyn,
-                                   nullptr, nullptr, detail::plan_by_path(*vv));
+           std::shared_ptr<detail::DynamicPrune> dp, bool emit_dyn,
+           std::shared_ptr<coro::CoroSemaphore> gt) -> coro::CoroTask<void> {
+        detail::StreamRowFold fold(ch, sem, iv, vv->select, ts,
+                                   detail::metadata_rows(*vv), emit_dyn,
+                                   nullptr, nullptr, detail::plan_by_path(*vv),
+                                   gt != nullptr, scan::json_columns(*vv));
         std::array<detail::Fold*, 1> folds{&fold};
-        co_await scan::run_folds(vv, folds, *iv, dp.get());
-    }(scan_view, time_scale, channel, budget, intern, dyn_prune, emit_dyn_);
+        co_await scan::run_folds(vv, folds, *iv, dp.get(), gt.get());
+    }(scan_view, time_scale, channel, budget, intern, dyn_prune, emit_dyn_,
+                                                    gate);
 
     std::shared_future<void> producer =
         spawn_on_current_executor(std::move(task));
     return std::make_unique<StreamViewCursor>(
         std::move(channel), std::move(budget), std::move(producer),
         std::move(stop), std::move(dyn_prune), v->files, time_scale,
-        std::move(fnames), v->phase == Phase::Metadata);
+        std::move(fnames), detail::metadata_rows(*v), std::move(gate));
 }
 
 dftracer::utils::dataframe::ScanResult ViewSource::scan(
@@ -1302,6 +1417,8 @@ df::DataFrame stats_frame(const ExportStats& stats) {
     };
     count("events_matched", stats.events_matched);
     count("events_scanned", stats.events_scanned);
+    count("lines_invalid", stats.lines_invalid);
+    count("values_unconverted", stats.values_unconverted);
     count("chunks_scanned", stats.chunks_scanned);
     count("chunks_skipped", stats.chunks_skipped);
     count("chunks_covered", stats.chunks_covered);
@@ -1320,6 +1437,8 @@ ExportStats stats_of(const df::DataFrame& frame) {
     ExportStats s;
     s.events_matched = count("events_matched");
     s.events_scanned = count("events_scanned");
+    s.lines_invalid = count("lines_invalid");
+    s.values_unconverted = count("values_unconverted");
     s.chunks_scanned = count("chunks_scanned");
     s.chunks_skipped = count("chunks_skipped");
     s.chunks_covered = count("chunks_covered");

@@ -7,7 +7,7 @@ Use the dfanalyzer bridge
    :class: goal
 
    Get a trace directory into the pandas frames that
-   `dfanalyzer <https://github.com/LLNL/dfanalyzer>`_ expects, using the
+   `dfanalyzer <https://github.com/llnl-asr/dfanalyzer>`_ expects, using the
    ``dftracer.utils.dfanalyzer`` module that bridges the C++ aggregation index to
    it. This is Python-only; there is no C++ or C equivalent.
 

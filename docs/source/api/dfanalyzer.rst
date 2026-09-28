@@ -4,7 +4,7 @@ DFAnalyzer Module
 =================
 
 The ``dftracer.utils.dfanalyzer`` module bridges the C++ aggregation index to
-`dfanalyzer <https://github.com/LLNL/dfanalyzer>`_. It builds the
+`dfanalyzer <https://github.com/llnl-asr/dfanalyzer>`_. It builds the
 high-level metrics (HLM) as a :class:`~dftracer.utils.TraceViewer` aggregation,
 plus the index-build, typed-read, and dtype-coercion helpers dfanalyzer drives
 over a Dask cluster.

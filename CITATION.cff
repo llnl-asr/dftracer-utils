@@ -5,8 +5,8 @@ contact:
   - name: "Ray Sinurat"
     email: "raydreww@gmail.com"
 license: "MIT"
-url: "https://github.com/LLNL/dftracer-utils"
-repository-code: "https://github.com/LLNL/dftracer-utils"
+url: "https://github.com/llnl-asr/dftracer-utils"
+repository-code: "https://github.com/llnl-asr/dftracer-utils"
 authors:
   - family-names: "Sinurat"
     given-names: "Ray A. O."

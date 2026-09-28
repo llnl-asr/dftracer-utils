@@ -353,7 +353,7 @@ html_theme_options = {
     "accent_color": "cyan",
     "light_logo": "_static/logo-light.svg",
     "dark_logo": "_static/logo-dark.svg",
-    "github_url": "https://github.com/LLNL/dftracer-utils",
+    "github_url": "https://github.com/llnl-asr/dftracer-utils",
     "globaltoc_expand_depth": 1,
     # Shibuya's built-in "Copy page" fetches the source over the network, which
     # fails for a private repo and behind firewalls; we inject our own that

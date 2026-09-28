@@ -5,7 +5,7 @@ Developer's Guide
 
 This guide contains information for developers contributing to dftracer utilities.
 
-For more detailed development information, see the `DEVELOPERS_GUIDE.md <https://github.com/LLNL/dftracer-utils/blob/main/DEVELOPERS_GUIDE.md>`_ in the repository.
+For more detailed development information, see the `DEVELOPERS_GUIDE.md <https://github.com/llnl-asr/dftracer-utils/blob/main/DEVELOPERS_GUIDE.md>`_ in the repository.
 
 Development Setup
 -----------------
@@ -14,7 +14,7 @@ Development Setup
 
    .. code-block:: bash
 
-      git clone https://github.com/LLNL/dftracer-utils.git
+      git clone https://github.com/llnl-asr/dftracer-utils.git
       cd dftracer-utils
 
 2. Install development dependencies:

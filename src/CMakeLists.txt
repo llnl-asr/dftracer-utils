@@ -370,7 +370,7 @@ create_library(
   DESCRIPTION
     "DFTracer utils core library (indexer, reader, pipeline)"
   URL
-    "https://github.com/LLNL/dftracer-utils"
+    "https://github.com/llnl-asr/dftracer-utils"
   BUILD_SHARED
     ${DFTRACER_UTILS_BUILD_SHARED}
   BUILD_STATIC
@@ -561,7 +561,7 @@ create_library(
   DESCRIPTION
     "DFTracer utils json library (simdjson-backed JSON value + parser)"
   URL
-    "https://github.com/LLNL/dftracer-utils"
+    "https://github.com/llnl-asr/dftracer-utils"
   BUILD_SHARED
     ${DFTRACER_UTILS_BUILD_SHARED}
   BUILD_STATIC
@@ -622,7 +622,7 @@ create_library(
   DESCRIPTION
     "DFTracer utils query library (predicate IR, string parser, evaluator)"
   URL
-    "https://github.com/LLNL/dftracer-utils"
+    "https://github.com/llnl-asr/dftracer-utils"
   BUILD_SHARED
     ${DFTRACER_UTILS_BUILD_SHARED}
   BUILD_STATIC
@@ -688,7 +688,7 @@ create_library(
   DESCRIPTION
     "DFTracer utils dataframe engine (columnar Series/DataFrame + kernels, expressions, query execution)"
   URL
-    "https://github.com/LLNL/dftracer-utils"
+    "https://github.com/llnl-asr/dftracer-utils"
   BUILD_SHARED
     ${DFTRACER_UTILS_BUILD_SHARED}
   BUILD_STATIC
@@ -761,7 +761,7 @@ create_library(
   DESCRIPTION
     "DFTracer utils utilities library (hash, io, compression, trace)"
   URL
-    "https://github.com/LLNL/dftracer-utils"
+    "https://github.com/llnl-asr/dftracer-utils"
   BUILD_SHARED
     ${DFTRACER_UTILS_BUILD_SHARED}
   BUILD_STATIC
@@ -911,7 +911,7 @@ create_unified_library_config(
   DESCRIPTION
     "DFTracer utils core library (indexer, reader, pipeline)"
   URL
-    "https://github.com/LLNL/dftracer-utils"
+    "https://github.com/llnl-asr/dftracer-utils"
   BUILD_SHARED
     ${DFTRACER_UTILS_BUILD_SHARED}
   BUILD_STATIC
@@ -925,7 +925,7 @@ create_unified_library_config(
   DESCRIPTION
     "DFTracer utils utilities library (hash, io, compression, trace)"
   URL
-    "https://github.com/LLNL/dftracer-utils"
+    "https://github.com/llnl-asr/dftracer-utils"
   PKG_CONFIG_REQUIRES
     "dftracer_utils_core"
   FIND_DEPENDENCIES
@@ -1099,7 +1099,7 @@ if(DFTRACER_UTILS_PREFERRED_TYPE)
     DESCRIPTION
     "DFTracer utils library (core + utilities)"
     URL
-    "https://github.com/LLNL/dftracer-utils"
+    "https://github.com/llnl-asr/dftracer-utils"
     REQUIRES
     "dftracer_utils_core dftracer_utils_utilities")
 

@@ -29,7 +29,7 @@ scikit-build-core, so a plain ``pip install`` compiles the extension:
 
 .. code-block:: bash
 
-   git clone https://github.com/LLNL/dftracer-utils
+   git clone https://github.com/llnl-asr/dftracer-utils
    cd dftracer-utils
    pip install -e ".[dev]"     # editable, with test/lint/type tooling
 
@@ -41,7 +41,7 @@ build dirs land under ``build/build-<preset>/``).
 
 .. code-block:: bash
 
-   git clone https://github.com/LLNL/dftracer-utils
+   git clone https://github.com/llnl-asr/dftracer-utils
    cd dftracer-utils
 
    cmake --preset dev            # RelWithDebInfo, shared + static, no Python
@@ -215,7 +215,7 @@ options by hand.
 
 Dependencies (RocksDB, simdjson, nanoarrow, Highway, zstd, lz4, and others) are
 vendored via CPM and cached under ``.cpmsource/``; see the
-`THIRD-PARTY-NOTICES <https://github.com/LLNL/dftracer-utils/blob/develop/THIRD-PARTY-NOTICES.md>`_
+`THIRD-PARTY-NOTICES <https://github.com/llnl-asr/dftracer-utils/blob/develop/THIRD-PARTY-NOTICES.md>`_
 for the full list and licenses.
 
 Link against dftracer-utils

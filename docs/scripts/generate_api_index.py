@@ -462,7 +462,7 @@ def _ns_to_filename(ns_suffix: str) -> str:
     return ns_suffix.replace(".", "/")
 
 
-CANONICAL_REPO_URL = "https://github.com/LLNL/dftracer-utils"
+CANONICAL_REPO_URL = "https://github.com/llnl-asr/dftracer-utils"
 
 
 def detect_repo_url(repo_root: Path) -> str:

@@ -37,9 +37,12 @@ std::int64_t nunique(const Series& v);
 Series unique(const Series& v);
 
 /// Rank of each row (ascending unless `descending`) as a Float64 column; ties
-/// resolve per `method` (see RankMethod in types.h). Null rows get a NaN rank.
+/// resolve per `method` (see RankMethod in types.h). A null row has a null
+/// rank. With `pct`, each rank is divided by the count of non-null values (by
+/// the number of distinct values for RankMethod::Dense, as pandas does), so the
+/// ranks lie in (0, 1].
 Series rank(const Series& v, RankMethod method = RankMethod::Average,
-            bool descending = false);
+            bool descending = false, bool pct = false);
 
 /// Rolling reduction over each row's `window` trailing values, as a Float64
 /// column; the first window-1 rows are null. `op` selects the reduction (see
@@ -71,7 +74,7 @@ Series ewm_std(const Series& v, double alpha);
 /// Bin each value into the half-open intervals defined by the ascending numeric
 /// `breaks`: bin index = count of breaks <= x, in 0..breaks.length(). Int32
 /// column; a null input row yields a null bin.
-Series cut(const Series& v, const Series& breaks);
+Series cut(const Series& v, const Series& breaks, std::int32_t flags = 0);
 
 /// Like `cut`, but the edges are the `q`-quantiles of the column (q buckets,
 /// q-1 interior edges), so bins are 0..q-1. Int32 column; a null input row

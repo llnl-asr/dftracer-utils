@@ -236,6 +236,8 @@ Binning and search
 
          breaks = Series.from_list([10, 100, 1000])
          bins = dur.cut(breaks)        # Int32 bin index (count of breaks <= x)
+         # pandas.cut(labels=False): right-closed interior bins numbered from 0
+         pbins = dur.cut(breaks, right=True, outer=False)
          quartile = dur.qcut(4)        # Int32 bins 0..3, by this column's quantiles
          idx = dur.search_sorted(Series.from_list([50, 500]))  # Int64 insertion index
 
@@ -244,12 +246,18 @@ Binning and search
       .. code-block:: cpp
 
          Series bins = dur.cut(breaks);
+         // right-closed interior bins numbered from 0
+         Series pbins = dur.cut(breaks, DFTU_CUT_RIGHT | DFTU_CUT_INNER);
          Series quartile = dur.qcut(4);
          Series idx = dur.search_sorted(values);
 
 ``cut`` and ``search_sorted`` both assume the input (``breaks`` for ``cut``,
 ``dur`` itself for ``search_sorted``) is ascending; a null row in ``cut``
-yields a null bin.
+yields a null bin. By default the intervals are ``[a, b)`` and a value below
+the first break gets bin 0. ``right=True`` (``DFTU_CUT_RIGHT``) closes each
+interval on the right, ``(a, b]``. ``outer=False`` (``DFTU_CUT_INNER``) gives a
+null for a value outside the interior intervals and numbers them from 0; with
+both, ``cut`` equals ``pandas.cut(labels=False)``.
 
 Select and test rows
 -----------------------
@@ -322,13 +330,29 @@ Strings
          Series parts = names.str_split(",");
 
 Also on both sides: ``str_ends_with``, ``str_find``, ``str_len_bytes``,
-``str_len_chars``, ``str_replace`` / ``str_replace_all``, ``str_lstrip`` /
+``str_len_chars``, ``str_replace`` / ``str_replace_all``, ``str_regex_replace(pattern, to)``, ``str_lstrip`` /
 ``str_rstrip``, ``str_pad_start`` / ``str_pad_end``, ``str_zfill``.
 ``str_like`` follows SQL LIKE rules (``%`` any run, newlines included, ``_``
 one UTF-8 character, ``\`` escapes a literal ``%``/``_``/``\``);
 ``str_matches`` takes a duql regex matched against the whole string, and
-``str_search`` the same regex anywhere in it. See :doc:`/reference/duql` for
+``str_search`` the same regex anywhere in it. ``str_regex_replace`` replaces
+every match of a regex; ``to`` takes ``$n``, ``${n}``, ``${name}`` and ``$$``,
+and an invalid pattern or replacement raises ``ValueError`` in Python. The
+pandas ``.str.replace`` stays literal. In C it is ``dftu_series_str_regex_replace``,
+and ``DFTU_STR_FN_REGEX_REPLACE`` for ``dftu_expr_str_fn``. See :doc:`/reference/duql` for
 the regex dialect and the match limit.
+
+``dt_format(fmt, unit)`` formats a time column as UTC text; ``unit`` is the
+unit of the stored integers, coded as in ``dt_part`` (0 seconds, 1
+milliseconds, 2 microseconds, 3 nanoseconds); a timestamp column uses its own
+unit. In Python
+it is the pandas ``.dt.strftime(fmt)``. The directives are ``%Y %y %m %d %H
+%I %M %S %f %j %a %A %b %B %p %F %T %s %z %Z`` and ``%%``; ``%f`` is six digit
+microseconds, names are English, ``%z`` is ``+0000`` and ``%Z`` is ``UTC``. An
+unknown directive or a trailing ``%`` raises ``ValueError``; there is no other
+time zone. In C it is ``dftu_series_dt_format``, and ``dftu_expr_date_part``
+and ``dftu_expr_format_time`` build the expressions that duql ``date_part``
+and ``format_time`` use.
 
 Derived columns via F expressions
 ------------------------------------

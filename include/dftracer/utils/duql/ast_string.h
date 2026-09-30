@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_DUQL_AST_STRING_H
 
 #include <dftracer/utils/duql/ast.h>
+#include <dftracer/utils/duql/string_literal.h>
 
 #include <cstddef>
 #include <sstream>
@@ -34,19 +35,8 @@ inline const char* match_op_str(MatchOp op, bool negated) {
     return "??";
 }
 
-// A string literal in the quote that lets it parse back: strings keep their
-// bytes as written, so one holding an unescaped '"' goes in single quotes.
 inline void string_to_string(std::ostringstream& os, const std::string& v) {
-    char q = '"';
-    std::size_t slashes = 0;
-    for (char c : v) {
-        if (c == '"' && slashes % 2 == 0) {
-            q = '\'';
-            break;
-        }
-        slashes = c == '\\' ? slashes + 1 : 0;
-    }
-    os << q << v << q;
+    os << quote_string(v);
 }
 
 inline void literal_to_string(std::ostringstream& os, const LiteralNode& lit) {

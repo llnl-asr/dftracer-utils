@@ -1,14 +1,22 @@
+#include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/to_chars.h>
 #include <dftracer/utils/duql/ast.h>
 #include <dftracer/utils/duql/pattern_engine.h>
 #include <dftracer/utils/index/plan/condition.h>
 #include <dftracer/utils/index/plan/prefilter.h>
 
+#ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
+#include <hs.h>
+#endif
+
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <optional>
 #include <type_traits>
+#include <unordered_map>
 #include <variant>
 
 namespace dftracer::utils::index::plan {
@@ -295,6 +303,40 @@ bool contains(std::string_view line, const std::string& n, std::size_t p) {
 
 }  // namespace
 
+#ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
+namespace {
+
+struct ThreadScratch {
+    hs_scratch_t* scratch = nullptr;
+    ~ThreadScratch() { hs_free_scratch(scratch); }
+};
+
+struct Hits {
+    std::uint64_t* bits;
+    std::size_t remaining;
+};
+
+int on_hit(unsigned id, unsigned long long, unsigned long long, unsigned,
+           void* ctx) {
+    auto* h = static_cast<Hits*>(ctx);
+    h->bits[id >> 6] |= std::uint64_t{1} << (id & 63);
+    return --h->remaining == 0 ? 1 : 0;
+}
+
+// hs_alloc_scratch allocates and checks on every call, so scan first and
+// grow the scratch only when the scan reports it missing or too small.
+hs_error_t scan_grow(const hs_database_t* db, std::string_view s, Hits& hits) {
+    thread_local ThreadScratch ts;
+    const auto n = static_cast<unsigned>(s.size());
+    hs_error_t rc = hs_scan(db, s.data(), n, 0, ts.scratch, on_hit, &hits);
+    if (rc != HS_INVALID || hs_alloc_scratch(db, &ts.scratch) != HS_SUCCESS)
+        return rc;
+    return hs_scan(db, s.data(), n, 0, ts.scratch, on_hit, &hits);
+}
+
+}  // namespace
+#endif
+
 Prefilter::Prefilter(const duql::Query& q) : clauses_(clauses_of(q.root())) {
     ranges_of(q.root(), ranges_);
     pivots_.reserve(clauses_.size());
@@ -302,9 +344,46 @@ Prefilter::Prefilter(const duql::Query& q) : clauses_(clauses_of(q.root())) {
         auto& p = pivots_.emplace_back();
         for (const auto& n : clause) p.push_back(pivot_of(n));
     }
+#ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
+    std::size_t widest = 0;
+    for (const auto& clause : clauses_)
+        widest = std::max(widest, clause.size());
+    if (widest < HS_MIN_ALTERNATIVES) return;
+    std::unordered_map<std::string, unsigned> seen;
+    std::vector<const char*> exprs;
+    std::vector<std::size_t> lens;
+    ids_.reserve(clauses_.size());
+    for (const auto& clause : clauses_) {
+        auto& ids = ids_.emplace_back();
+        for (const auto& n : clause) {
+            auto [it, fresh] =
+                seen.try_emplace(n, static_cast<unsigned>(exprs.size()));
+            if (fresh) {
+                exprs.push_back(n.c_str());
+                lens.push_back(n.size());
+            }
+            ids.push_back(it->second);
+        }
+    }
+    distinct_ = exprs.size();
+    if (exprs.empty()) return;
+    std::vector<unsigned> flags(exprs.size(), HS_FLAG_SINGLEMATCH);
+    std::vector<unsigned> idv(exprs.size());
+    for (std::size_t i = 0; i < idv.size(); ++i)
+        idv[i] = static_cast<unsigned>(i);
+    hs_database_t* db = nullptr;
+    hs_compile_error_t* err = nullptr;
+    if (hs_compile_lit_multi(exprs.data(), flags.data(), idv.data(),
+                             lens.data(), static_cast<unsigned>(exprs.size()),
+                             HS_MODE_BLOCK, nullptr, &db, &err) != HS_SUCCESS) {
+        hs_free_compile_error(err);
+        return;
+    }
+    db_ = std::shared_ptr<hs_database>(db, hs_free_database);
+#endif
 }
 
-bool Prefilter::may_match(std::string_view line) const {
+bool Prefilter::may_match_per_needle(std::string_view line) const {
     for (std::size_t c = 0; c < clauses_.size(); ++c) {
         bool any = false;
         for (std::size_t k = 0; k < clauses_[c].size(); ++k)
@@ -317,6 +396,35 @@ bool Prefilter::may_match(std::string_view line) const {
     for (const auto& r : ranges_)
         if (!range_may_hold(line, r)) return false;
     return true;
+}
+
+bool Prefilter::may_match(std::string_view line) const {
+#ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
+    if (!db_ || line.size() > std::numeric_limits<unsigned>::max())
+        return may_match_per_needle(line);
+    thread_local std::vector<std::uint64_t> bits;
+    bits.assign((distinct_ + 63) >> 6, 0);
+    Hits hits{bits.data(), distinct_};
+    if (!line.empty()) {
+        const hs_error_t rc = scan_grow(db_.get(), line, hits);
+        if (rc != HS_SUCCESS && rc != HS_SCAN_TERMINATED)
+            return may_match_per_needle(line);
+    }
+    for (const auto& ids : ids_) {
+        bool any = false;
+        for (const unsigned id : ids)
+            if ((bits[id >> 6] >> (id & 63)) & 1) {
+                any = true;
+                break;
+            }
+        if (!any) return false;
+    }
+    for (const auto& r : ranges_)
+        if (!range_may_hold(line, r)) return false;
+    return true;
+#else
+    return may_match_per_needle(line);
+#endif
 }
 
 bool Prefilter::Gate::may_match(std::string_view line) {

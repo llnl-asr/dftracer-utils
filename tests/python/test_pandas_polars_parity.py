@@ -148,8 +148,11 @@ def test_series_statistics_and_windows():
     assert _lst(s.rank(ascending=False)) == _lst(s.rank(descending=True))
     assert _lst(s.clip(lower=2, upper=4)) == _lst(s.clip(2, 4)) == [2.0, 2.0, 4.0, 4.0]
     assert _lst(s.clip(lower_bound=2, upper_bound=4)) == [2.0, 2.0, 4.0, 4.0]
+    # one bound is enough; with no bound there is nothing to clip to
+    assert _lst(s.clip(lower=2)) == [2.0, 2.0, 4.0, 8.0]
+    assert _lst(s.clip(upper=4)) == [1.0, 2.0, 4.0, 4.0]
     with pytest.raises(TypeError):
-        s.clip(lower=2)
+        s.clip()
     with pytest.raises(NotImplementedError):
         s.round(2)
 

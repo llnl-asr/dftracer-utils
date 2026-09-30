@@ -28,7 +28,8 @@ namespace dftracer::utils::duql {
 /// the column that holds that lookup's values (see lookup()). In a
 /// quantifier's element frame, the element is the column named `.` and a
 /// field of a struct element the column `.<field>`. `call` marks the column
-/// that holds that call's values (see call_column()).
+/// that holds that call's values (see call_column()); `index` and `list` mark
+/// the column of that computed index or list literal, likewise.
 struct VectorColumn {
     std::string name;
     dataframe::DataType type;
@@ -37,6 +38,8 @@ struct VectorColumn {
     const TQuant* quant = nullptr;
     const TLookup* lookup = nullptr;
     const TCall* call = nullptr;
+    const TIndex* index = nullptr;
+    const TList* list = nullptr;
 };
 
 struct VectorizeError {
@@ -53,6 +56,11 @@ struct VectorizeError {
 dftracer::utils::expected<dataframe::Expr, VectorizeError> vectorize(
     const Term& t, const std::vector<VectorColumn>& columns,
     bool args_fallback);
+
+/// Whether `t` compiles to a null in every row: the literal null or a field no
+/// column names.
+bool is_null_term(const Term& t, const std::vector<VectorColumn>& columns,
+                  bool args_fallback);
 
 /// `t` as a Bool column: its truth, null where it is not a bool.
 dftracer::utils::expected<dataframe::Expr, VectorizeError> vectorize_condition(
@@ -76,23 +84,33 @@ dftracer::utils::expected<dataframe::Series, VectorizeError> lookup(
     const std::vector<VectorColumn>& columns, bool args_fallback);
 
 /// Whether `fn` runs on columns only through call_column(): slice, flatten,
-/// keys, values, parse_json and split.
+/// keys, values, parse_json, split, index_of, sort, unique and join.
 bool is_column_call(Fn fn);
 
-/// The type call_column() gives `c` over arguments of `args` types; for keys
-/// and values, the types of the object's fields. Nullopt when every row is
-/// unknown. Throws std::invalid_argument for values() of fields with no
-/// common type.
-std::optional<dataframe::DataType> call_type(
-    const TCall& c, const std::vector<dataframe::DataType>& args);
+/// Whether `t` runs on columns only through call_column(): such a call, a
+/// computed array index or a list literal.
+bool is_column_term(const Term& t);
 
-/// The column of `c` over its arguments' columns `args`, as `type`. For keys
-/// and values, `args` are the object's fields named `keys`, or its one struct
-/// column. parse_json gives canonical JSON text.
-dataframe::Series call_column(const TCall& c,
+/// The type call_column() gives `t` over arguments of `args` types; for keys
+/// and values, the types of the object's fields. For a computed index the
+/// arguments are the array and the index, for a list literal its items; an
+/// item of Unknown type is a null element, and items of different numeric
+/// kinds give Float64.
+/// Nullopt when every row is unknown. Throws std::invalid_argument for
+/// values() of fields with no common type, a list literal whose items are not
+/// of one scalar type, and sort() or unique() of an array of arrays or
+/// objects.
+std::optional<dataframe::DataType> call_type(
+    const Term& t, const std::vector<dataframe::DataType>& args);
+
+/// The column of `t` over its arguments' columns `args`, as `type`, of
+/// `rows` rows. For keys and values, `args` are the object's fields named
+/// `keys`, or its one struct column. parse_json gives canonical JSON text.
+dataframe::Series call_column(const Term& t,
                               const std::vector<dataframe::Series>& args,
                               const std::vector<std::string>& keys,
-                              const dataframe::DataType& type);
+                              const dataframe::DataType& type,
+                              std::int64_t rows);
 
 /// The key of row `r` of the FLAT column `s`; false when it has none.
 bool append_cell_key(std::string& out, const dataframe::Series& s,

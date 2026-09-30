@@ -151,11 +151,14 @@ ignore = ["E501"]
 
 [[tool.ty.overrides]]
 include = [
+  "python/dftracer/utils/_import.py",
   "python/dftracer/utils/_pandas_frame.py",
+  "python/dftracer/utils/_pandas_series.py",
   "python/dftracer/utils/_polars_frame.py",
   "python/dftracer/utils/arrow.py",
   "python/dftracer/utils/columnar.py",
   "python/dftracer/utils/dask.py",
+  "python/dftracer/utils/dask_frame.py",
   "python/dftracer/utils/dataframe.py",
   "python/dftracer/utils/dfanalyzer.py",
   "python/dftracer/utils/dftracer_utils_ext.pyi",

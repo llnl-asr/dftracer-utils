@@ -6,6 +6,7 @@ into :class:`Series`: spellings (``between``, ``drop_duplicates``,
 from __future__ import annotations
 
 import math
+import numbers
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -13,17 +14,130 @@ from typing import (
     Dict,
     Iterator,
     List,
+    Mapping,
     Optional,
     Sequence,
     Tuple,
     Union,
+    cast,
 )
 
 if TYPE_CHECKING:
+    from numpy import generic
+    from pandas._libs.missing import NAType
+
     from .dataframe import DataFrame
     from .series import Series
 
+    # A value of ``replace`` as the caller writes it, and as the engine takes it.
+    PlainScalar = Union[int, float, str, None, NAType]
+    ReplaceScalar = Union[PlainScalar, generic]
+    ReplaceValue = Union[ReplaceScalar, Sequence[ReplaceScalar]]
+    ReplaceKey = Union[ReplaceValue, Mapping[ReplaceScalar, ReplaceScalar]]
+
 _Scalar = Union[int, float]
+
+
+class _Omitted:
+    """The type of ``_OMITTED``: ``replace``'s ``value`` when the caller gave none."""
+
+
+_OMITTED = _Omitted()
+
+
+def _plain(v: "ReplaceScalar") -> "PlainScalar":
+    """A NumPy scalar as the Python number the engine accepts."""
+    if type(v).__module__ == "numpy" and getattr(v, "ndim", 1) == 0:
+        return cast("PlainScalar", v.item())  # ty: ignore[unresolved-attribute]
+    return cast("PlainScalar", v)
+
+
+def _kind(v: "PlainScalar") -> str:
+    """What a replace value is: ``null``, ``nan``, ``str`` or ``num``."""
+    if v is None or type(v).__name__ == "NAType":  # pd.NA, without importing pandas
+        return "null"
+    if isinstance(v, str):
+        return "str"
+    if type(v).__name__ in ("bool", "bool_"):
+        raise TypeError("replace: bool values are not supported")
+    if isinstance(v, numbers.Real):
+        return "nan" if v != v else "num"
+    raise TypeError(f"replace: cannot replace a {type(v).__name__} value")
+
+
+def _replace_pairs(
+    to_replace: "ReplaceKey", value: "Union[ReplaceValue, _Omitted]"
+) -> "List[Tuple[ReplaceScalar, ReplaceScalar]]":
+    """The (old, new) pairs of any replace form."""
+    if isinstance(to_replace, dict):
+        if value is not _OMITTED:
+            raise TypeError("replace: value must be omitted when to_replace is a dict")
+        return list(to_replace.items())
+    if isinstance(value, _Omitted):
+        raise TypeError("replace() missing required argument: 'value'")
+    if isinstance(to_replace, (list, tuple)):
+        keys = cast("Sequence[ReplaceScalar]", to_replace)
+        if isinstance(value, (list, tuple)):
+            if len(value) != len(keys):
+                raise ValueError(
+                    f"replace: to_replace has {len(keys)} values but value has {len(value)}"
+                )
+            return list(zip(keys, cast("Sequence[ReplaceScalar]", value)))
+        return [(old, cast("ReplaceScalar", value)) for old in keys]
+    if isinstance(value, (list, tuple)):
+        raise TypeError("replace: value is a list but to_replace is a scalar")
+    return [(cast("ReplaceScalar", to_replace), cast("ReplaceScalar", value))]
+
+
+def _replace_in(
+    s: "Series",
+    pairs: "List[Tuple[ReplaceScalar, ReplaceScalar]]",
+    column: Optional[str],
+    strict: bool,
+) -> "Series":
+    """``s`` with every pair applied together. ``column`` names a frame column in
+    errors; ``strict`` False leaves a column of an unsupported type alone."""
+    from ._pandas_frame import _STRING, _is_numeric
+    from .enums import DType
+    from .series import Series
+
+    dtype = s.dtype
+    if dtype in _STRING:
+        is_str = True
+    elif dtype != DType.BOOL and _is_numeric(s):
+        is_str = False
+    elif strict:
+        raise TypeError(f"replace: a {dtype.name.lower()} column is not supported")
+    else:
+        return s
+    floats = dtype in (DType.FLOAT32, DType.FLOAT64)
+    steps: "List[Tuple[Series, Union[Series, int, float, None]]]" = []
+    for old, new in pairs:
+        old, new = _plain(old), _plain(new)
+        old_kind, new_kind = _kind(old), _kind(new)
+        if old_kind == "null":
+            hit = s.isna()
+        elif old_kind == "nan":
+            hit = (s != s) if floats else None
+        elif is_str == (old_kind == "str"):
+            hit = s.str_eq(cast(str, old)) if is_str else s.eq(cast(_Scalar, old))
+        else:
+            hit = None  # an old value the column type cannot hold matches nothing
+        if hit is None:
+            continue
+        if new_kind == "null":
+            other: Union[Series, int, float, None] = None
+        elif (new_kind == "str") != is_str:
+            where = f" (column {column!r})" if column is not None else ""
+            what = "a string" if new_kind == "str" else "a number"
+            raise TypeError(f"replace: cannot put {what} into a {dtype.name.lower()} column{where}")
+        else:
+            other = Series.from_list([new] * len(s)) if is_str else cast(_Scalar, new)
+        steps.append((hit, other))
+    out = s
+    for hit, other in steps:
+        out = out.mask(hit, other)
+    return out
 
 
 class _SeriesPandasMixin:
@@ -159,19 +273,20 @@ class _SeriesPandasMixin:
             raise ValueError("repeat: repeats must be non-negative")
         return s.take([i for i in range(len(s)) for _ in range(n)])
 
-    def replace(self, to_replace: object, value: object) -> "Series":
-        """``to_replace`` -> ``value`` where the value equals ``to_replace``."""
-        from .enums import DType
-        from .series import Series
-
-        s = self._s()
-        if s.dtype == DType.STRING:
-            if not isinstance(to_replace, str) or not isinstance(value, str):
-                raise TypeError("replace on a String Series takes two strings")
-            return s.mask(s.str_eq(to_replace), Series.from_list([value] * len(s)))
-        if not isinstance(to_replace, (int, float)) or not isinstance(value, (int, float)):
-            raise TypeError("replace on a numeric Series takes two numbers")
-        return s.mask(s.eq(to_replace), value)
+    def replace(
+        self, to_replace: "ReplaceKey", value: "Union[ReplaceValue, _Omitted]" = _OMITTED
+    ) -> "Series":
+        """Replace values, pandas' forms: ``replace(old, new)``,
+        ``replace([old, ...], new)``, ``replace([old, ...], [new, ...])`` (paired
+        by position) and ``replace({old: new, ...})``. Every match is found on the
+        original values and applied together, so ``{1: 2, 2: 1}`` swaps. A new value
+        of ``None`` or ``pd.NA`` makes the value null; a NaN makes it NaN. An old
+        ``None`` or ``pd.NA`` matches the nulls, an old NaN the NaN values. The
+        column keeps its type (a float into an integer column widens it, as
+        :meth:`where` does); a string needs a string column and a number a numeric
+        one, else ``TypeError``. An old value its column type cannot hold matches
+        nothing. Bool, list and temporal columns raise ``TypeError``."""
+        return _replace_in(self._s(), _replace_pairs(to_replace, value), None, True)
 
     def to_frame(self, name: str = "0") -> "DataFrame":
         from .dataframe import DataFrame
@@ -275,7 +390,8 @@ class _SeriesPandasMixin:
     # -- reductions and stats with a frame shape -------------------------------------
     def corr(self, other: "Series") -> float:
         """Pearson correlation with ``other`` (positional; the group-by
-        ``corr`` aggregate over one group)."""
+        ``corr`` aggregate over one group). NaN below two complete pairs and
+        when a column has no spread, as in pandas."""
         return self._pair(other, "corr")
 
     def cov(self, other: "Series") -> float:
@@ -292,6 +408,11 @@ class _SeriesPandasMixin:
         if int(pairs.astype("int64").sum()) < 2:
             return float("nan")
         frame = DataFrame({"x": s, "y": other})
+        if agg == "corr":
+            # pandas gives NaN when a column has no spread over the complete
+            # pairs; the aggregate's readout is 0.
+            if s.filter(pairs).var() == 0 or other.filter(pairs).var() == 0:
+                return float("nan")
         out = GroupBy(frame, []).agg(Agg(agg, _Col("y"), "r", by=_Col("x")))
         value = Series(out._native["r"])[0]
         assert isinstance(value, float)

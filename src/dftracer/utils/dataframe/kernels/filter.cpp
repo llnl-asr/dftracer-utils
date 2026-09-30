@@ -520,16 +520,37 @@ dftu_series* dftu_series_materialize(const dftu_series* v) {
     const dftu_series& base = *v->child();
     if (base.encoding != Encoding::Flat) return nullptr;
 
+    // A null row of the view itself (a dictionary's code for a null value) is
+    // null in the result, whatever the base entry the code points at holds.
+    auto with_own_nulls = [&](dftu_series* out) {
+        if (!out || !v->validity) return out;
+        const std::int64_t n = out->length;
+        const std::size_t bytes = static_cast<std::size_t>((n + 7) / 8);
+        auto bits = Buffer::allocate(bytes);
+        const std::uint8_t* own = v->validity->data();
+        const std::uint8_t* gathered =
+            out->validity ? out->validity->data() : nullptr;
+        for (std::size_t k = 0; k < bytes; ++k)
+            bits->data()[k] = static_cast<std::uint8_t>(
+                (gathered ? gathered[k] : 0xFF) & own[k]);
+        std::int64_t valid = 0;
+        for (std::int64_t i = 0; i < n; ++i)
+            valid += (bits->data()[i >> 3] >> (i & 7)) & 1;
+        out->validity = std::move(bits);
+        out->null_count = n - valid;
+        return out;
+    };
+
     if (v->encoding == Encoding::Selection) {
         const std::int64_t* idx =
             reinterpret_cast<const std::int64_t*>(v->data->data());
-        return gather_column(base, idx, v->length);
+        return with_own_nulls(gather_column(base, idx, v->length));
     }
     // Dictionary codes are int32 (they index a small distinct-value set);
     // the gather reads them as they are.
     const std::int32_t* codes =
         reinterpret_cast<const std::int32_t*>(v->data->data());
-    return gather_column(base, codes, v->length);
+    return with_own_nulls(gather_column(base, codes, v->length));
 }
 
 namespace dftracer::utils::dataframe {

@@ -409,9 +409,11 @@ void fill_field(dataframe::FieldStat& fs, const std::string& field,
     if (field == "dur") {
         fs.n = mv.count;
         fs.sum = static_cast<double>(mv.dur_total);
-        fs.sumsq = mv.dur_m2;
-        fs.m3 = mv.dur_m3;
-        fs.m4 = mv.dur_m4;
+        fs.shift = mv.dur_mean;
+        fs.cmean = mv.dur_mean_lo;
+        fs.cm2 = mv.dur_m2;
+        fs.cm3 = mv.dur_m3;
+        fs.cm4 = mv.dur_m4;
         fs.min = static_cast<double>(mv.dur_min);
         fs.max = static_cast<double>(mv.dur_max);
         set_exact(mv.dur_total, mv.dur_min, mv.dur_max);
@@ -419,18 +421,25 @@ void fill_field(dataframe::FieldStat& fs, const std::string& field,
         if (mv.size_total == 0) return;  // no size events: leave absent
         fs.n = mv.count;
         fs.sum = static_cast<double>(mv.size_total);
-        fs.sumsq = mv.size_m2;
-        fs.m3 = mv.size_m3;
-        fs.m4 = mv.size_m4;
+        fs.shift = mv.size_mean;
+        fs.cmean = mv.size_mean_lo;
+        fs.cm2 = mv.size_m2;
+        fs.cm3 = mv.size_m3;
+        fs.cm4 = mv.size_m4;
         fs.min = static_cast<double>(mv.size_min);
         fs.max = static_cast<double>(mv.size_max);
         set_exact(mv.size_total, mv.size_min, mv.size_max);
     } else if (field == "offset") {
+        // No offset events: leave absent. A profile may carry only min/max.
+        if (mv.offset_total == 0 && mv.offset_min == 0 && mv.offset_max == 0)
+            return;
         fs.n = mv.count;
         fs.sum = static_cast<double>(mv.offset_total);
-        fs.sumsq = mv.offset_m2;
-        fs.m3 = mv.offset_m3;
-        fs.m4 = mv.offset_m4;
+        fs.shift = mv.offset_mean;
+        fs.cmean = mv.offset_mean_lo;
+        fs.cm2 = mv.offset_m2;
+        fs.cm3 = mv.offset_m3;
+        fs.cm4 = mv.offset_m4;
         fs.min = static_cast<double>(mv.offset_min);
         fs.max = static_cast<double>(mv.offset_max);
         set_exact(mv.offset_total, mv.offset_min, mv.offset_max);
@@ -633,8 +642,14 @@ std::vector<TierValueCol> tier_value_cols(
             : dataframe::FieldStatDomain::U64;
     std::vector<TierValueCol> out;
     for (std::size_t vc = 0; vc < value_names.size(); ++vc) {
-        std::string field = tier_field(
-            plan, trace::views::detail::agg_value_base_field(value_names[vc]));
+        std::string base =
+            trace::views::detail::agg_value_base_field(value_names[vc]);
+        // offset is an arg, so its value column is named args.offset; the tier
+        // stores it under the bare name.
+        if (!trace::views::detail::plan_by_path(plan) &&
+            base == std::string(dftracer::utils::ARGS_PREFIX) + "offset")
+            base = "offset";
+        std::string field = tier_field(plan, base);
         if (!answerable_field(field)) continue;  // e.g. a SetUnion text column
         out.push_back(
             {static_cast<std::int32_t>(vc), std::move(field), domain});

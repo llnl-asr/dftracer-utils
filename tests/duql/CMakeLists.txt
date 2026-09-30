@@ -27,6 +27,9 @@ foreach(name test_duql_syntax test_duql_golden test_parser test_evaluator
     ${target}
     PRIVATE DUQL_SAMPLES_PATH="${CMAKE_CURRENT_SOURCE_DIR}/grammar_samples.duql"
             DUQL_GOLDEN_PATH="${CMAKE_CURRENT_SOURCE_DIR}/golden_filters.jsonl")
+  if(DFTRACER_UTILS_ENABLE_VECTORSCAN AND name STREQUAL "test_patterns")
+    target_link_libraries(${target} PRIVATE $<BUILD_INTERFACE:dftracer_utils_hs>)
+  endif()
   target_set_warnings(${target})
   set_target_properties(${target} PROPERTIES OUTPUT_NAME ${name})
   target_enable_coroutine(${target})

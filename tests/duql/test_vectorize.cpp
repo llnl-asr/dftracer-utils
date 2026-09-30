@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/mask.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/parser.h>
+#include <dftracer/utils/duql/pipeline.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
@@ -31,6 +32,7 @@ const std::vector<OptI> J = {2, 3, 0, 1, 5, {}, -2, 4};
 const std::vector<OptD> F = {0.5, -2.5, 0.0, 1e300, 2.0, {}, 3.0, 6.0};
 const std::vector<OptU> U = {1, U64_MAX, 0, 5, 2, 3, {}, 7};
 const std::vector<OptS> S = {"a", "B", "", {}, "abc", " x y ", "Ab", "zz"};
+const std::vector<OptS> T = {"a", "B", "", "q", "bc", " x", "b", {}};
 const std::vector<OptB> B = {true, false, {}, true, false, true, false, true};
 
 template <class T>
@@ -51,7 +53,7 @@ df::Series numbers(df::TypeId type, const std::vector<std::optional<T>>& v) {
 
 df::DataFrame frame() {
     df::DataFrame f;
-    f.names = {"i", "j", "f", "u", "s", "b"};
+    f.names = {"i", "j", "f", "u", "s", "b", "t"};
     f.columns.push_back(numbers(df::TypeId::Int64, I));
     f.columns.push_back(numbers(df::TypeId::Int64, J));
     f.columns.push_back(numbers(df::TypeId::Float64, F));
@@ -68,6 +70,10 @@ df::DataFrame frame() {
     const auto bbits = validity(B);
     f.columns.push_back(
         df::Series::flat(df::TypeId::Bool, packed.data(), N, bbits.data()));
+    std::vector<std::string_view> t;
+    for (const auto& x : T) t.push_back(x ? std::string_view(*x) : "");
+    const auto tbits = validity(T);
+    f.columns.push_back(df::Series::strings(t, tbits.data()));
     return f;
 }
 
@@ -84,6 +90,7 @@ ValueMap row(std::size_t r) {
     m["u"] = cell(U[r]);
     m["s"] = S[r] ? Cell(*S[r]) : Cell::null();
     m["b"] = cell(B[r]);
+    m["t"] = T[r] ? Cell(*T[r]) : Cell::null();
     return m;
 }
 
@@ -167,6 +174,24 @@ TEST_CASE("vectorized expressions agree with the row evaluator") {
         "substr(s, 1) == \"bc\"",
         "substr(s, 0, 1) == \"a\"",
         "replace(s, \"a\", \"q\") == \"qbc\"",
+        "starts_with(s, t)",
+        "ends_with(s, t)",
+        "contains(s, t)",
+        "starts_with(s, \"a\") and contains(s, t)",
+        "replace(s, t, \"q\") == \"qbc\"",
+        "replace(s, \"a\", t) == \"bbc\"",
+        "replace(s, t, t) == s",
+        "substr(s, j) == \"c\"",
+        "substr(s, i) == \"\"",
+        "substr(s, i, j) == \"b\"",
+        "substr(s, 1, j) == \"bc\"",
+        "substr(s, i, 1) == \"a\"",
+        "round(f, j) == 0.5",
+        "round(i, j) == 9",
+        "round(u, j) == 1",
+        "round(1.23456, j) == 1.2",
+        "extract(s, \"(b)\", j) == \"b\"",
+        "extract(s, \"(a)(b)?\", i) == \"a\"",
         "json(s) == '\"a\"'",
         "json(i) == \"1\"",
         "json(f) == \"0.5\"",
@@ -183,6 +208,10 @@ TEST_CASE("vectorized expressions agree with the row evaluator") {
         "s ~* \"^a\"",
         "s !~ \"b\"",
         "extract(s, \"(b)\") == \"b\"",
+        "regex_replace(s, \"(?<x>[a-z])\", \"<${x}$1>\") == \"<aa>\"",
+        "regex_replace(s, \"x*\", \"-\") == \"-a-\"",
+        "regex_replace(s, \"(q)|b\", \"[$1]\") == \"[]\"",
+        "regex_replace(s, \"b\", \"$$\") == \"a$\"",
         "exists(i)",
         "i + 1 > 0 and f > 0",
     };
@@ -195,6 +224,65 @@ TEST_CASE("vectorized expressions agree with the row evaluator") {
         for (std::int64_t r = 0; r < N; ++r) {
             const Truth want =
                 evaluate_truth(**q, row(static_cast<std::size_t>(r)));
+            const Truth got = column_truth(mask, r);
+            CHECK_MESSAGE(got == want, "row ", r, ": columns ",
+                          std::string(name(got)), ", rows ",
+                          std::string(name(want)));
+        }
+    }
+}
+
+TEST_CASE("calendar time agrees between the column and row evaluators") {
+    const std::vector<OptI> TS = {1700000000123456,
+                                  -1,
+                                  0,
+                                  {},
+                                  -86400000000,
+                                  951782400000000,
+                                  -62135596800000000,
+                                  253402300799999999};
+    const std::vector<OptD> SECS = {1700000000.9, -0.5,  0.0,   2.5,
+                                    {},           -1e30, 1e300, 86399.0};
+    df::DataFrame f;
+    f.names = {"ts", "secs", "s"};
+    f.columns.push_back(numbers(df::TypeId::Int64, TS));
+    f.columns.push_back(numbers(df::TypeId::Float64, SECS));
+    f.columns.push_back(
+        df::Series::strings({"a", "b", "c", "d", "e", "f", "g", "h"}));
+    Roles roles;
+    roles.fields.emplace("ts", 1000);
+    roles.fields.emplace("secs", 1000000000);
+    std::vector<std::string> forms;
+    for (const char* col : {"ts", "secs"}) {
+        for (const char* part :
+             {"year", "month", "day", "hour", "minute", "second", "millisecond",
+              "microsecond", "nanosecond", "day_of_week", "day_of_year",
+              "quarter", "iso_week", "iso_year"})
+            for (const char* k : {"-1", "0", "1", "3", "6", "12", "23", "59",
+                                  "364", "999", "1969", "2022"})
+                forms.push_back(std::string("date_part(") + col + ", \"" +
+                                part + "\") > " + k);
+        for (const char* fmt : {"%F %T.%f", "%Y-%m-%d %H:%M:%S %j",
+                                "%A %B %p %I %y", "%s %z %Z %%"})
+            for (const char* k : {"\"0\"", "\"1969\"", "\"2000\"",
+                                  "\"2023-11-14\"", "\"A\"", "\"Thu\""})
+                forms.push_back(std::string("format_time(") + col + ", \"" +
+                                fmt + "\") < " + k);
+    }
+    forms.push_back("date_part(as_time(s, \"us\"), \"hour\") > 0");
+    for (const std::string& form : forms) {
+        const std::string text = "where " + form;
+        INFO("query: ", text);
+        auto p = compile_program(text, {}, &roles);
+        REQUIRE_MESSAGE(p.has_value(), (p ? "" : p.error().format()));
+        REQUIRE(p->main.filter);
+        const df::Series mask = df::evaluate_mask(*p->main.filter, f);
+        for (std::int64_t r = 0; r < N; ++r) {
+            ValueMap m;
+            m["ts"] = cell(TS[static_cast<std::size_t>(r)]);
+            m["secs"] = cell(SECS[static_cast<std::size_t>(r)]);
+            m["s"] = Cell(std::string(1, static_cast<char>('a' + r)));
+            const Truth want = evaluate_truth(*p->main.filter, m);
             const Truth got = column_truth(mask, r);
             CHECK_MESSAGE(got == want, "row ", r, ": columns ",
                           std::string(name(got)), ", rows ",

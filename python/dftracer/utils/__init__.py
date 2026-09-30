@@ -6,7 +6,9 @@ from . import schemas  # noqa: F401
 from .columnar import (  # noqa: F401
     Agg,
     ColumnExpr,
+    Expr,
     F,
+    Field,
     GroupBy,
     col,
     columnar,
@@ -43,7 +45,6 @@ from .dftracer_utils_ext import (
 from .dftracer_utils_ext import (
     set_default_runtime as _set_default_native_runtime,
 )
-from .duql import Expr, Field  # noqa: F401
 from .enums import AggOp, DType, GroupKey, Phase  # noqa: F401
 from .indexer import (  # noqa: F401
     AggregationConfig,

@@ -151,7 +151,15 @@ PyObject* Series_cast(PyObject* self, PyObject* target) {
     if (!a) return nullptr;
     long tid = PyLong_AsLong(target);
     if (tid == -1 && PyErr_Occurred()) return nullptr;
-    return make_series(dataframe::cast(*a, static_cast<TypeId>(tid)));
+    const TypeId to = static_cast<TypeId>(tid);
+    Series out = dataframe::cast(*a, to);
+    if (!out.valid()) {
+        // The engine refused the pair: say which, not "null column".
+        PyErr_Format(PyExc_TypeError, "astype: cannot cast %s to %s",
+                     dataframe::type_name(a->type()), dataframe::type_name(to));
+        return nullptr;
+    }
+    return make_series(std::move(out));
 }
 
 PyObject* Series_prim(PyObject* self, PyObject* code) {

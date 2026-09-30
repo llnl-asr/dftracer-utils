@@ -2,6 +2,7 @@
 #include <dftracer/utils/python/series_detail.h>  // Python.h first
 #include <datetime.h>
 // clang-format on
+#include <dftracer/utils/core/common/hash/fnv1a.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
 #include <dftracer/utils/dataframe/series.h>
@@ -10,6 +11,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -467,9 +469,138 @@ PyObject* type_error(const char* what) {
 
 }  // namespace
 
+namespace {
+
+PyObject* strings_to_list(const Series& col, const std::uint8_t* valid,
+                          PyObject* na);  // below
+
+// A flat integer, float, bool or string column as a list, one typed loop with
+// the null test only when the column has nulls. Null when the type has no fast
+// loop (the caller then uses the general per-cell reader); an exception is set
+// only when the result is null because a build failed.
+template <class T, class Make>
+PyObject* typed_list(const T* d, std::int64_t n, const std::uint8_t* valid,
+                     Make make) {
+    PyObject* out = PyList_New(static_cast<Py_ssize_t>(n));
+    if (!out) return nullptr;
+    PyObject** items = &PyList_GET_ITEM(out, 0);
+    for (std::int64_t i = 0; i < n; ++i) {
+        PyObject* v;
+        if (valid && !((valid[i >> 3] >> (i & 7)) & 1U)) {
+            v = Py_None;
+            Py_INCREF(v);
+        } else {
+            v = make(d[i]);
+            if (!v) {
+                Py_DECREF(out);
+                return nullptr;
+            }
+        }
+        items[i] = v;
+    }
+    return out;
+}
+
+bool fast_pylist(const Series& col, PyObject** result) {
+    const std::int64_t n = col.length();
+    const dftu_series* h = col.handle();
+    const std::uint8_t* valid =
+        col.null_count() > 0 && h->validity ? h->validity->data() : nullptr;
+    if (col.null_count() > 0 && !valid) return false;
+    const void* d = dftu_series_data(const_cast<dftu_series*>(h));
+    if (!d && n > 0) return false;
+    switch (col.type()) {
+        case TypeId::Int8:
+            *result =
+                typed_list(static_cast<const std::int8_t*>(d), n, valid,
+                           [](std::int8_t x) { return PyLong_FromLong(x); });
+            return true;
+        case TypeId::Int16:
+            *result =
+                typed_list(static_cast<const std::int16_t*>(d), n, valid,
+                           [](std::int16_t x) { return PyLong_FromLong(x); });
+            return true;
+        case TypeId::Int32:
+            *result =
+                typed_list(static_cast<const std::int32_t*>(d), n, valid,
+                           [](std::int32_t x) { return PyLong_FromLong(x); });
+            return true;
+        case TypeId::Int64:
+            *result = typed_list(
+                static_cast<const std::int64_t*>(d), n, valid,
+                [](std::int64_t x) { return PyLong_FromLongLong(x); });
+            return true;
+        case TypeId::Uint8:
+            *result = typed_list(
+                static_cast<const std::uint8_t*>(d), n, valid,
+                [](std::uint8_t x) { return PyLong_FromUnsignedLong(x); });
+            return true;
+        case TypeId::Uint16:
+            *result = typed_list(
+                static_cast<const std::uint16_t*>(d), n, valid,
+                [](std::uint16_t x) { return PyLong_FromUnsignedLong(x); });
+            return true;
+        case TypeId::Uint32:
+            *result = typed_list(
+                static_cast<const std::uint32_t*>(d), n, valid,
+                [](std::uint32_t x) { return PyLong_FromUnsignedLong(x); });
+            return true;
+        case TypeId::Uint64:
+            *result = typed_list(
+                static_cast<const std::uint64_t*>(d), n, valid,
+                [](std::uint64_t x) { return PyLong_FromUnsignedLongLong(x); });
+            return true;
+        case TypeId::Float32:
+            *result =
+                typed_list(static_cast<const float*>(d), n, valid, [](float x) {
+                    return PyFloat_FromDouble(static_cast<double>(x));
+                });
+            return true;
+        case TypeId::Float64:
+            *result =
+                typed_list(static_cast<const double*>(d), n, valid,
+                           [](double x) { return PyFloat_FromDouble(x); });
+            return true;
+        case TypeId::Bool: {
+            const auto* bits = static_cast<const std::uint8_t*>(d);
+            PyObject* out = PyList_New(static_cast<Py_ssize_t>(n));
+            if (!out) {
+                *result = nullptr;
+                return true;
+            }
+            PyObject** items = &PyList_GET_ITEM(out, 0);
+            for (std::int64_t i = 0; i < n; ++i) {
+                PyObject* v = (valid && !((valid[i >> 3] >> (i & 7)) & 1U))
+                                  ? Py_None
+                              : ((bits[i >> 3] >> (i & 7)) & 1U) ? Py_True
+                                                                 : Py_False;
+                Py_INCREF(v);
+                items[i] = v;
+            }
+            *result = out;
+            return true;
+        }
+        case TypeId::String:
+        case TypeId::LargeString:
+            *result = strings_to_list(col, valid, Py_None);
+            return true;
+        default:
+            return false;
+    }
+}
+
+}  // namespace
+
 PyObject* Series_to_pylist(PyObject* self, PyObject*) {
     Series* a = as_series(self);
     if (!a || !datetime_ready()) return nullptr;
+    {
+        const Series col = a->encoding() == dataframe::Encoding::Flat
+                               ? a->share()
+                               : a->materialize();
+        PyObject* fast = nullptr;
+        if (fast_pylist(col, &fast)) return fast;
+    }
     try {
         const Node node = build_node(*a);
         const std::int64_t n = node.col.length();
@@ -488,6 +619,362 @@ PyObject* Series_to_pylist(PyObject* self, PyObject*) {
         PyErr_SetString(PyExc_TypeError, e.what());
         return nullptr;
     }
+}
+
+namespace {
+
+// 8 mask bytes (1 = null) for each validity byte: one store expands a byte of
+// the bitmap.
+const std::uint64_t* null_expand_table() {
+    static const auto* table = [] {
+        static std::uint64_t t[256];
+        for (unsigned b = 0; b < 256; ++b) {
+            std::uint64_t w = 0;
+            for (unsigned j = 0; j < 8; ++j)
+                if (!((b >> j) & 1U)) w |= std::uint64_t{1} << (8 * j);
+            t[b] = w;  // little endian: byte j of the word is row 8k + j
+        }
+        return t;
+    }();
+    return table;
+}
+
+// n bytes, 1 where the validity bit is 0.
+PyObject* null_mask_bytes(const std::uint8_t* valid, std::int64_t n) {
+    PyObject* out =
+        PyByteArray_FromStringAndSize(nullptr, static_cast<Py_ssize_t>(n));
+    if (!out) return nullptr;
+    auto* dst = reinterpret_cast<std::uint8_t*>(PyByteArray_AS_STRING(out));
+    const std::uint64_t* table = null_expand_table();
+    const std::int64_t full = n / 8;
+    for (std::int64_t k = 0; k < full; ++k) {
+        const std::uint64_t w = table[valid[k]];
+        std::memcpy(dst + 8 * k, &w, 8);
+    }
+    for (std::int64_t i = 8 * full; i < n; ++i)
+        dst[i] = ((valid[i >> 3] >> (i & 7)) & 1U) ? 0 : 1;
+    return out;
+}
+
+// Calls `set(i)` for every row whose validity bit is 0, skipping a byte of
+// eight present rows and jumping from zero bit to zero bit inside a byte.
+template <class Fn>
+void for_each_null(const std::uint8_t* valid, std::int64_t n, Fn set) {
+    const std::int64_t bytes = (n + 7) / 8;
+    for (std::int64_t k = 0; k < bytes; ++k) {
+        auto m = static_cast<unsigned>(~valid[k] & 0xFFU);
+        while (m) {
+            const std::int64_t i = 8 * k + __builtin_ctz(m);
+            if (i < n) set(i);
+            m &= m - 1;
+        }
+    }
+}
+
+template <class In>
+PyObject* widen_to_double(const In* in, const std::uint8_t* valid,
+                          std::int64_t n) {
+    PyObject* out =
+        PyByteArray_FromStringAndSize(nullptr, static_cast<Py_ssize_t>(n * 8));
+    if (!out) return nullptr;
+    auto* dst = reinterpret_cast<double*>(PyByteArray_AS_STRING(out));
+    for (std::int64_t i = 0; i < n; ++i)
+        dst[i] = static_cast<double>(in[i]);  // vectorizes
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    for_each_null(valid, n, [&](std::int64_t i) { dst[i] = nan; });
+    return out;
+}
+
+// The values as bytes; `nan_fill` writes NaN into the null slots of a float
+// column.
+PyObject* copy_values(const void* data, std::int64_t n, std::size_t width,
+                      const std::uint8_t* valid, bool nan_fill) {
+    PyObject* out = PyByteArray_FromStringAndSize(
+        nullptr, static_cast<Py_ssize_t>(n) * static_cast<Py_ssize_t>(width));
+    if (!out) return nullptr;
+    auto* dst = reinterpret_cast<std::uint8_t*>(PyByteArray_AS_STRING(out));
+    if (n > 0) std::memcpy(dst, data, static_cast<std::size_t>(n) * width);
+    if (nan_fill && valid) {
+        const double nan64 = std::numeric_limits<double>::quiet_NaN();
+        const float nan32 = std::numeric_limits<float>::quiet_NaN();
+        for_each_null(valid, n, [&](std::int64_t i) {
+            if (width == 8)
+                std::memcpy(dst + 8 * i, &nan64, 8);
+            else
+                std::memcpy(dst + 4 * i, &nan32, 4);
+        });
+    }
+    return out;
+}
+
+// A bit-packed Bool column as n bytes of 0 or 1.
+PyObject* bool_bytes(const std::uint8_t* bits, std::int64_t n) {
+    PyObject* out =
+        PyByteArray_FromStringAndSize(nullptr, static_cast<Py_ssize_t>(n));
+    if (!out) return nullptr;
+    auto* dst = reinterpret_cast<std::uint8_t*>(PyByteArray_AS_STRING(out));
+    for (std::int64_t i = 0; i < n; ++i)
+        dst[i] = static_cast<std::uint8_t>((bits[i >> 3] >> (i & 7)) & 1U);
+    return out;
+}
+
+PyObject* tuple3(PyObject* a, PyObject* b, const char* dtype) {
+    if (!a) {
+        Py_XDECREF(b);
+        return nullptr;
+    }
+    PyObject* d = PyUnicode_FromString(dtype);
+    PyObject* t = d ? PyTuple_New(3) : nullptr;
+    if (!t) {
+        Py_DECREF(a);
+        Py_XDECREF(b);
+        Py_XDECREF(d);
+        return nullptr;
+    }
+    if (!b) {
+        Py_INCREF(Py_None);
+        b = Py_None;
+    }
+    PyTuple_SET_ITEM(t, 0, a);
+    PyTuple_SET_ITEM(t, 1, b);
+    PyTuple_SET_ITEM(t, 2, d);
+    return t;
+}
+
+// A cheap hash of a short string's first and last bytes. A collision only
+// costs a cache miss (the cached text is compared in full).
+inline std::uint64_t quick_hash(const char* p, std::size_t n) {
+    std::uint64_t a = 0, b = 0;
+    if (n >= 8) {
+        std::memcpy(&a, p, 8);
+        std::memcpy(&b, p + n - 8, 8);
+    } else if (n >= 4) {
+        std::uint32_t x, y;
+        std::memcpy(&x, p, 4);
+        std::memcpy(&y, p + n - 4, 4);
+        a = x;
+        b = y;
+    } else if (n > 0) {
+        a = static_cast<std::uint8_t>(p[0]) |
+            (static_cast<std::uint64_t>(static_cast<std::uint8_t>(p[n >> 1]))
+             << 8) |
+            (static_cast<std::uint64_t>(static_cast<std::uint8_t>(p[n - 1]))
+             << 16);
+    }
+    std::uint64_t h =
+        (a ^ (b * 0x9E3779B97F4A7C15ULL) ^ n) * 0xFF51AFD7ED558CCDULL;
+    return h ^ (h >> 32);
+}
+
+// Fill `dst` (n PyObject* slots) with a str per row, null rows holding `na`.
+// Rows with the same text share one str object (a small cache keyed by
+// quick_hash), so a column of repeated names allocates once per distinct name.
+// `drop_old` releases what a slot held (a numpy object array starts as None);
+// a fresh list's slots are empty. False with an exception set on failure.
+bool fill_strings(const Series& col, const std::uint8_t* valid, PyObject* na,
+                  PyObject** dst, bool drop_old) {
+    const std::int64_t n = col.length();
+    struct Slot {
+        std::string_view text;
+        PyObject* obj =
+            nullptr;  // borrowed: the destination holds the reference
+    };
+    constexpr std::size_t SLOTS = 1U << 16;
+    std::vector<Slot> cache(SLOTS);
+    for (std::int64_t i = 0; i < n; ++i) {
+        PyObject* v;
+        if (valid && !((valid[i >> 3] >> (i & 7)) & 1U)) {
+            v = na;
+            Py_INCREF(v);
+        } else {
+            const std::string_view t = col.string_at(i);
+            Slot& slot = cache[quick_hash(t.data(), t.size()) & (SLOTS - 1)];
+            if (slot.obj && slot.text == t) {
+                v = slot.obj;
+                Py_INCREF(v);
+            } else {
+                v = PyUnicode_DecodeUTF8(
+                    t.data(), static_cast<Py_ssize_t>(t.size()), "strict");
+                if (!v) return false;
+                slot.text = t;
+                slot.obj = v;
+            }
+        }
+        if (drop_old) Py_XDECREF(dst[i]);
+        dst[i] = v;
+    }
+    return true;
+}
+
+PyObject* strings_to_list(const Series& col, const std::uint8_t* valid,
+                          PyObject* na) {
+    const std::int64_t n = col.length();
+    PyObject* out = PyList_New(static_cast<Py_ssize_t>(n));
+    if (!out) return nullptr;
+    if (!fill_strings(col, valid, na, &PyList_GET_ITEM(out, 0), false)) {
+        Py_DECREF(out);  // slots past the failure are still NULL, which a list
+                         // tolerates
+        return nullptr;
+    }
+    return out;
+}
+
+}  // namespace
+
+// np_parts(nullable, na) -> (values, mask, dtype): the column in one native
+// pass, ready for numpy.frombuffer with no Python object per row (strings
+// aside).
+//  - integer and float columns: `values` is a bytearray of the column's bytes
+//  and
+//    `mask` a bytearray of n bytes (1 = null) or None when there is no null;
+//    nullable=False turns nulls into NaN instead (integers widen to float64)
+//    and returns no mask;
+//  - Bool: 0/1 bytes ("u1"), mask as above, nullable only when the column has
+//  nulls;
+//  - String / LargeString: a list of str, null rows holding `na`; dtype "O";
+//  - any other type: TypeError.
+PyObject* Series_np_parts(PyObject* self, PyObject* args) {
+    Series* a = as_series(self);
+    if (!a) return nullptr;
+    int nullable = 0;
+    PyObject* na = Py_None;
+    if (!PyArg_ParseTuple(args, "|pO", &nullable, &na)) return nullptr;
+    const Series col = a->encoding() == dataframe::Encoding::Flat
+                           ? a->share()
+                           : a->materialize();
+    const dftu_series* h = col.handle();
+    const std::int64_t n = col.length();
+    const bool has_nulls = col.null_count() > 0;
+    const std::uint8_t* valid =
+        has_nulls && h->validity ? h->validity->data() : nullptr;
+    if (has_nulls && !valid) {
+        PyErr_SetString(PyExc_TypeError,
+                        "Series has nulls but no validity bitmap");
+        return nullptr;
+    }
+    const void* data = dftu_series_data(const_cast<dftu_series*>(h));
+    auto mask = [&]() -> PyObject* {
+        return (nullable && valid) ? null_mask_bytes(valid, n) : nullptr;
+    };
+    auto fixed = [&](std::size_t width, const char* dtype) -> PyObject* {
+        if (!data && n > 0) {
+            PyErr_SetString(PyExc_TypeError, "Series has no contiguous buffer");
+            return nullptr;
+        }
+        PyObject* m = mask();
+        if (nullable && valid && !m) return nullptr;
+        return tuple3(copy_values(data, n, width, valid, !nullable), m, dtype);
+    };
+    auto widen = [&](auto tag, const char* from) -> PyObject* {
+        using T = decltype(tag);
+        (void)from;
+        if (!data && n > 0) {
+            PyErr_SetString(PyExc_TypeError, "Series has no contiguous buffer");
+            return nullptr;
+        }
+        return tuple3(widen_to_double(static_cast<const T*>(data), valid, n),
+                      nullptr, "<f8");
+    };
+    try {
+        switch (col.type()) {
+            case TypeId::Int8:
+                return valid && !nullable ? widen(std::int8_t{}, "i1")
+                                          : fixed(1, "i1");
+            case TypeId::Int16:
+                return valid && !nullable ? widen(std::int16_t{}, "i2")
+                                          : fixed(2, "<i2");
+            case TypeId::Int32:
+                return valid && !nullable ? widen(std::int32_t{}, "i4")
+                                          : fixed(4, "<i4");
+            case TypeId::Int64:
+                return valid && !nullable ? widen(std::int64_t{}, "i8")
+                                          : fixed(8, "<i8");
+            case TypeId::Uint8:
+                return valid && !nullable ? widen(std::uint8_t{}, "u1")
+                                          : fixed(1, "u1");
+            case TypeId::Uint16:
+                return valid && !nullable ? widen(std::uint16_t{}, "u2")
+                                          : fixed(2, "<u2");
+            case TypeId::Uint32:
+                return valid && !nullable ? widen(std::uint32_t{}, "u4")
+                                          : fixed(4, "<u4");
+            case TypeId::Uint64:
+                return valid && !nullable ? widen(std::uint64_t{}, "u8")
+                                          : fixed(8, "<u8");
+            case TypeId::Float32:
+                return fixed(4, "<f4");
+            case TypeId::Float64:
+                return fixed(8, "<f8");
+            case TypeId::Bool: {
+                if (valid && !nullable) {
+                    PyErr_SetString(
+                        PyExc_TypeError,
+                        "a Bool column with nulls needs nullable=True");
+                    return nullptr;
+                }
+                if (!data && n > 0) {
+                    PyErr_SetString(PyExc_TypeError,
+                                    "Series has no contiguous buffer");
+                    return nullptr;
+                }
+                PyObject* m = mask();
+                if (nullable && valid && !m) return nullptr;
+                return tuple3(
+                    bool_bytes(static_cast<const std::uint8_t*>(data), n), m,
+                    "u1");
+            }
+            case TypeId::String:
+            case TypeId::LargeString:
+                return tuple3(strings_to_list(col, valid, na), nullptr, "O");
+            default:
+                PyErr_SetString(PyExc_TypeError,
+                                "column type has no native numpy conversion");
+                return nullptr;
+        }
+    } catch (const std::exception& e) {
+        PyErr_SetString(PyExc_TypeError, e.what());
+        return nullptr;
+    }
+}
+
+// str_into(out, na): the String column's rows into `out`, a writable
+// one-dimensional numpy object array of the column's length (made with
+// numpy.empty(n, dtype=object)); null rows get `na`. Returns None.
+PyObject* Series_str_into(PyObject* self, PyObject* args) {
+    Series* a = as_series(self);
+    if (!a) return nullptr;
+    PyObject* out = nullptr;
+    PyObject* na = Py_None;
+    if (!PyArg_ParseTuple(args, "O|O", &out, &na)) return nullptr;
+    const Series col = a->encoding() == dataframe::Encoding::Flat
+                           ? a->share()
+                           : a->materialize();
+    if (col.type() != TypeId::String && col.type() != TypeId::LargeString) {
+        PyErr_SetString(PyExc_TypeError, "str_into needs a String column");
+        return nullptr;
+    }
+    Py_buffer view;
+    if (PyObject_GetBuffer(
+            out, &view, PyBUF_WRITABLE | PyBUF_FORMAT | PyBUF_C_CONTIGUOUS) < 0)
+        return nullptr;
+    const std::int64_t n = col.length();
+    if (view.itemsize != static_cast<Py_ssize_t>(sizeof(PyObject*)) ||
+        view.format == nullptr || view.format[0] != 'O' ||
+        view.len != n * static_cast<Py_ssize_t>(sizeof(PyObject*))) {
+        PyBuffer_Release(&view);
+        PyErr_SetString(
+            PyExc_ValueError,
+            "str_into needs an object array of the column's length");
+        return nullptr;
+    }
+    const dftu_series* h = col.handle();
+    const std::uint8_t* valid =
+        col.null_count() > 0 && h->validity ? h->validity->data() : nullptr;
+    const bool ok =
+        fill_strings(col, valid, na, static_cast<PyObject**>(view.buf), true);
+    PyBuffer_Release(&view);
+    if (!ok) return nullptr;
+    Py_RETURN_NONE;
 }
 
 PyObject* Series_item(PyObject* self, PyObject* arg) {

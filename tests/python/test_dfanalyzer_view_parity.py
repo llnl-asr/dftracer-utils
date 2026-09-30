@@ -112,6 +112,51 @@ def test_view_agg_tier_matches_raw_scan(tmp_path):
             assert (tier[c].astype(str).values == raw[c].astype(str).values).all(), c
 
 
+def test_view_agg_tier_serves_offset_like_raw_scan(tmp_path):
+    """min/max/sum of the offset arg come from the tier, not as null: offset is
+    an arg, so the engine names its column args.offset, which the tier must map
+    back to its stored offset stats. A group with no offset stays null."""
+
+    from dftracer.utils import AggregationConfig, TraceViewer
+
+    path = str(tmp_path / "t.pfw.gz")
+    with gzip.open(path, "wt") as f:
+        for i in range(30):
+            name = ("read", "write", "open")[i % 3]
+            offset = "" if name == "open" else ', "offset": %d' % (100 + i)
+            f.write(
+                '{"ph":"X","name":"%s","cat":"POSIX","pid":1,"tid":1,'
+                '"ts":%d,"dur":10,"args":{"fhash":"f0"%s}}\n' % (name, 1000 + i, offset)
+            )
+    agg, noagg = str(tmp_path / "agg"), str(tmp_path / "noagg")
+    with dftu_utils.Indexer(
+        files=[path],
+        index_dir=agg,
+        require_aggregation=AggregationConfig(time_interval_ms=100000),
+    ) as ix:
+        ix.ensure_indexed()
+    with dftu_utils.Indexer(files=[path], index_dir=noagg) as ix:
+        ix.ensure_indexed()
+
+    def collect(idx):
+        tv = (
+            TraceViewer([path], index_path=idx)
+            .group_by("name")
+            .agg("min:offset", "max:offset", "sum:offset")
+        )
+        return tv.collect().to_pandas().sort_values("name").reset_index(drop=True)
+
+    tier, raw = collect(agg), collect(noagg)
+    assert raw.set_index("name").loc["read", "min_offset"] == 100
+    assert tier.set_index("name").loc["read", "min_offset"] == 100
+    assert tier.set_index("name").loc["write", "max_offset"] == 128
+    assert tier.set_index("name")["min_offset"].isna().loc["open"]
+    assert (
+        tier.fillna(-1).drop(columns="name").astype(float).values
+        == raw.fillna(-1).drop(columns="name").astype(float).values
+    ).all()
+
+
 def test_view_agg_tier_skew_kurt_pct_match_raw_scan(tmp_path):
     """skew/kurt (from persisted m3/m4) and percentiles (from the persisted
     DDSketch) come back from the aggregation CF tier and match the raw-scan
@@ -676,3 +721,30 @@ def test_group_key_transform_applies_on_both_read_paths(tmp_path):
         return sorted(df[df.columns[0]].tolist()), int(df["count"].sum())
 
     assert group(scan_idx) == group(tier_idx)
+
+
+def test_profile_on_a_bucket_boundary_keeps_its_bucket(tmp_path):
+    """A profile row at a bucket's first microsecond belongs to that bucket,
+    as an event does."""
+    pytest.importorskip("pyarrow")
+    import gzip
+
+    from dftracer.utils import AggregationConfig
+    from dftracer.utils.dfanalyzer import view_typed_frames
+
+    p = str(tmp_path / "t.pfw.gz")
+    with gzip.open(p, "wt") as f:
+        f.write('{"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10}\n')
+        f.write(
+            '{"ph":"C","name":"train","cat":"app","pid":1,"tid":1,"ts":5000000,"dur":5,"args":{"count":1}}\n'
+        )
+    idx = str(tmp_path / "idx")
+    with dftu_utils.Indexer(
+        files=[p], index_dir=idx, require_aggregation=AggregationConfig(time_interval_ms=5000)
+    ) as ix:
+        ix.ensure_indexed()
+    prof = view_typed_frames([p], idx, time_granularity=5.0)["profiles"]
+    assert prof["func_name"].tolist() == ["train"]
+    assert int(prof["time_start"].iloc[0]) == 5_000_000
+    assert int(prof["time_end"].iloc[0]) == 10_000_000
+    assert int(prof["time_range"].iloc[0]) == 1

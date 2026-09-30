@@ -53,10 +53,15 @@ struct FieldNum {
     }
 };
 
-/// One field's running sufficient statistic as raw power sums (sumsq = sum x^2,
-/// m3 = sum x^3, m4 = sum x^4) plus n/min/max: a complete mergeable summary for
-/// count/sum/min/max/mean/var/std/skew/kurt. The shared aggregation atom for
-/// the dataframe engine, the View, and the aggregation tier.
+/// One field's running sufficient statistic: n, sum, min, max and the central
+/// moments about the running mean (cm2 = sum (x - mean)^2, cm3 and cm4
+/// likewise): a complete mergeable summary for
+/// count/sum/min/max/mean/var/std/skew/kurt. The central form is what keeps
+/// var/std/skew/kurt accurate when the mean is large next to the spread: raw
+/// power sums (sum x^2 ...) cancel catastrophically there (1e9 + N(0, 1) gave a
+/// std of 0). Adds use the Welford/Pebay update and merges the Chan/Pebay
+/// combination. The shared aggregation atom for the dataframe engine, the View,
+/// and the aggregation tier.
 ///
 /// The double sum/min/max/moments are always maintained (variance/skew/kurtosis
 /// are inherently double). In addition, when every value has been a same-domain
@@ -81,9 +86,18 @@ struct FieldStat {
     std::int64_t emin = 0;
     std::int64_t emax = 0;
 
-    double sumsq = 0;
-    double m3 = 0;
-    double m4 = 0;
+    /// The running mean as a pair, `shift + cmean`: `shift` is a value near the
+    /// mean (the first value, or a chunk's mean) and `cmean` the small
+    /// remainder, so the centre keeps digits that one double would lose when
+    /// the mean is large next to the spread. The central moments are sums of
+    /// (x - mean)^2, ^3, ^4. Kept only by the adds and merges that maintain
+    /// moments; a state built with `add_light` leaves them zero and must not be
+    /// read for a variance.
+    double shift = 0;
+    double cmean = 0;
+    double cm2 = 0;
+    double cm3 = 0;
+    double cm4 = 0;
     /// Net wraps of `esum`: the exact sum is esum + ecarry * 2^64, so it fits
     /// its domain only while ecarry is 0, whatever the order of adds and
     /// merges. Touched only when an add wraps.
@@ -111,7 +125,7 @@ struct FieldStat {
             FieldStatDomain::F64;  // a float value makes the field non-integral
     }
 
-    /// The `add` overloads without the higher moments (sumsq, m3, m4): for
+    /// The `add` overloads without the moments (cmean, cm2, cm3, cm4): for
     /// an accumulation whose reducers are count, sum, mean, min and max only,
     /// which is most group-bys. The moments then stay zero, so a state built
     /// this way must not be read for a variance or a skew; the caller that
@@ -218,10 +232,8 @@ struct FieldStat {
         // Double path (variance/skew/kurtosis atoms).
         if (o.min < min) min = o.min;
         if (o.max > max) max = o.max;
+        merge_moments(o);  // reads the pre-merge n and sum of both sides
         sum += o.sum;
-        sumsq += o.sumsq;
-        m3 += o.m3;
-        m4 += o.m4;
         n += o.n;
 
         // Exact path: only when both sides share the same integer domain.
@@ -244,6 +256,32 @@ struct FieldStat {
         }
     }
 
+    /// The centre the moments are taken about, as the pair (hi, lo). A state
+    /// with no shift and no moments is totals only (a pre-aggregated row or an
+    /// `add_light` state): it is centred on its own mean, sum / n.
+    void centre(double& hi, double& lo) const {
+        if (n != 0 && shift == 0.0 && cmean == 0.0 && cm2 == 0.0 &&
+            cm3 == 0.0 && cm4 == 0.0) {
+            hi = sum / static_cast<double>(n);
+            lo = 0.0;
+        } else {
+            hi = shift;
+            lo = cmean;
+        }
+    }
+    /// The mean the moments are taken about, rounded to one double.
+    double moment_mean() const {
+        double hi, lo;
+        centre(hi, lo);
+        return hi + lo;
+    }
+
+    /// Sum of squares, from the central moments: cm2 + n * mean^2.
+    double sumsq() const {
+        const double mu = moment_mean();
+        return n ? cm2 + static_cast<double>(n) * mu * mu : 0.0;
+    }
+
     /// Finalizers over n = the field-present count (the dataframe-engine
     /// convention; consumers that denominate by a different N, e.g. the View's
     /// group-row count, finalize from the raw sums directly). Sample
@@ -253,8 +291,7 @@ struct FieldStat {
     double variance(bool sample = true) const {
         if (n < 1) return 0.0;
         const double dn = static_cast<double>(n);
-        double c2 = sumsq - sum * sum / dn;
-        if (c2 < 0.0) c2 = 0.0;  // clamp round-off
+        const double c2 = cm2 < 0.0 ? 0.0 : cm2;  // clamp round-off
         if (sample) return n < 2 ? 0.0 : c2 / (dn - 1.0);
         return c2 / dn;
     }
@@ -264,23 +301,16 @@ struct FieldStat {
     double skewness() const {
         if (n < 1) return 0.0;
         const double dn = static_cast<double>(n);
-        const double mu = sum / dn;
-        const double c2 = sumsq / dn - mu * mu;
+        const double c2 = cm2 / dn;
         if (c2 <= 0.0) return 0.0;
-        const double c3 =
-            m3 / dn - 3.0 * mu * (sumsq / dn) + 2.0 * mu * mu * mu;
-        return c3 / std::pow(c2, 1.5);
+        return (cm3 / dn) / std::pow(c2, 1.5);
     }
     double kurtosis() const {
         if (n < 1) return 0.0;
         const double dn = static_cast<double>(n);
-        const double mu = sum / dn;
-        const double c2 = sumsq / dn - mu * mu;
+        const double c2 = cm2 / dn;
         if (c2 <= 0.0) return 0.0;
-        const double c4 = m4 / dn - 4.0 * mu * (m3 / dn) +
-                          6.0 * mu * mu * (sumsq / dn) -
-                          3.0 * mu * mu * mu * mu;
-        return c4 / (c2 * c2) - 3.0;
+        return (cm4 / dn) / (c2 * c2) - 3.0;
     }
 
    private:
@@ -291,12 +321,54 @@ struct FieldStat {
             if (x < min) min = x;
             if (x > max) max = x;
         }
-        const double x2 = x * x;
+        // Welford/Pebay single-value update of the central moments.
+        double hi, lo;
+        centre(hi, lo);  // before sum and n change
+        if (n == 0) {
+            hi = x;      // the first value is the shift
+            lo = 0.0;
+        }
         sum += x;
-        sumsq += x2;
-        m3 += x2 * x;
-        m4 += x2 * x2;
+        const double n1 = static_cast<double>(n);
         ++n;
+        const double nn = static_cast<double>(n);
+        const double delta = (x - hi) - lo;  // x - mean, without losing digits
+        const double dn = delta / nn;
+        const double dn2 = dn * dn;
+        const double term1 = delta * dn * n1;
+        shift = hi;
+        cmean = lo + dn;
+        cm4 += term1 * dn2 * (nn * nn - 3.0 * nn + 3.0) + 6.0 * dn2 * cm2 -
+               4.0 * dn * cm3;
+        cm3 += term1 * dn * (nn - 2.0) - 3.0 * dn * cm2;
+        cm2 += term1;
+    }
+    /// Chan/Pebay combination of the central moments of this state and `o`;
+    /// `n` is still the count before the merge.
+    void merge_moments(const FieldStat& o) {
+        const double na = static_cast<double>(n);
+        const double nb = static_cast<double>(o.n);
+        const double nt = na + nb;
+        double ha, la, hb, lb;
+        centre(ha, la);
+        o.centre(hb, lb);
+        const double delta = (hb - ha) + (lb - la);  // the difference of means
+        const double d2 = delta * delta;
+        const double nanb = na * nb;
+        const double m2 = cm2 + o.cm2 + d2 * nanb / nt;
+        const double m3 = cm3 + o.cm3 +
+                          d2 * delta * nanb * (na - nb) / (nt * nt) +
+                          3.0 * delta * (na * o.cm2 - nb * cm2) / nt;
+        const double m4 =
+            cm4 + o.cm4 +
+            d2 * d2 * nanb * (na * na - nanb + nb * nb) / (nt * nt * nt) +
+            6.0 * d2 * (na * na * o.cm2 + nb * nb * cm2) / (nt * nt) +
+            4.0 * delta * (na * o.cm3 - nb * cm3) / nt;
+        shift = ha;
+        cmean = la + delta * nb / nt;
+        cm2 = m2;
+        cm3 = m3;
+        cm4 = m4;
     }
     void add_light(double x) {
         if (n == 0) {
@@ -307,6 +379,61 @@ struct FieldStat {
         }
         sum += x;
         ++n;
+    }
+};
+
+/// Mergeable central co-moments of a pair (x, y): the accumulator behind corr,
+/// covar and the regressions. Each running mean is a pair `shift + cmean` (see
+/// FieldStat), and `cxx`, `cyy`, `cxy` are the sums of (x - mx)^2, (y - my)^2
+/// and (x - mx)(y - my). A row updates it with the Welford step; two states
+/// merge with the Chan combination, which is associative, so any split of the
+/// rows into merged partitions gives the one-pass result.
+struct CoStat {
+    std::uint64_t n = 0;
+    double shx = 0, cmx = 0;
+    double shy = 0, cmy = 0;
+    double cxx = 0, cyy = 0, cxy = 0;
+
+    double mean_x() const { return shx + cmx; }
+    double mean_y() const { return shy + cmy; }
+
+    void add(double x, double y) {
+        if (n == 0) {
+            shx = x;
+            shy = y;
+            cmx = cmy = 0.0;
+        }
+        const double n1 = static_cast<double>(n);
+        ++n;
+        const double nn = static_cast<double>(n);
+        const double dx = (x - shx) - cmx;  // x - mean_x, without losing digits
+        const double dy = (y - shy) - cmy;
+        const double w = n1 / nn;
+        cxx += dx * dx * w;
+        cyy += dy * dy * w;
+        cxy += dx * dy * w;
+        cmx += dx / nn;
+        cmy += dy / nn;
+    }
+
+    void merge(const CoStat& o) {
+        if (o.n == 0) return;
+        if (n == 0) {
+            *this = o;
+            return;
+        }
+        const double na = static_cast<double>(n);
+        const double nb = static_cast<double>(o.n);
+        const double nt = na + nb;
+        const double dx = (o.shx - shx) + (o.cmx - cmx);  // difference of means
+        const double dy = (o.shy - shy) + (o.cmy - cmy);
+        const double w = na * nb / nt;
+        cxx += o.cxx + dx * dx * w;
+        cyy += o.cyy + dy * dy * w;
+        cxy += o.cxy + dx * dy * w;
+        cmx += dx * nb / nt;
+        cmy += dy * nb / nt;
+        n += o.n;
     }
 };
 

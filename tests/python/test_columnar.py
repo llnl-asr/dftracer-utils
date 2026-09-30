@@ -1465,7 +1465,7 @@ def test_columnar_expr_apply_direct_no_wrapper():
 
 
 def test_query_F_shorthand_and_callable():
-    from dftracer.utils.duql import F, Field
+    from dftracer.utils.columnar import F, Field
 
     assert str(F.dur > 100) == str(Field("dur") > 100)
     assert str(F("args.level") == 3) == str(Field("args.level") == 3)

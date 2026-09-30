@@ -1,4 +1,6 @@
 #include <dftracer/utils/core/common/base64.h>
+#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/duql/group_fold.h>
 #include <dftracer/utils/duql/vectorize.h>
 
@@ -77,6 +79,29 @@ std::vector<std::uint8_t> validity(const std::vector<bool>& valid) {
     for (std::size_t i = 0; i < valid.size(); ++i)
         if (valid[i]) bits[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
     return bits;
+}
+
+dftu_op_arg plugin_arg(const dftu_op_desc& op,
+                       const std::vector<double>& params) {
+    dftu_op_arg arg{};
+    for (std::uint32_t i = 1; i < DFTU_OP_MAX_ARGS; ++i) {
+        const dftu_op_tok tok = DFTU_OP_SIG_ARG(op.sig, i);
+        if (tok == DFTU_TOK_NONE) break;
+        const double v = i - 1 < params.size() ? params[i - 1] : 0;
+        switch (tok) {
+            case DFTU_TOK_F64:
+                arg.args[i].f64 = v;
+                break;
+            case DFTU_TOK_SCALAR:
+                arg.args[i].scalar.kind = DFTU_SCALAR_TAG_F64;
+                arg.args[i].scalar.value.d = v;
+                break;
+            default:
+                arg.args[i].i32 = static_cast<std::int32_t>(v);
+                break;
+        }
+    }
+    return arg;
 }
 
 }  // namespace
@@ -241,6 +266,25 @@ void GroupFold::add(df::DataFrame batch) {
                 part_rows_[a] += static_cast<std::int64_t>(rows.size());
                 break;
             }
+            case FoldOp::PLUGIN: {
+                auto& members = members_[a];
+                members.resize(groups);
+                const df::DataType want = df::scalar(
+                    parts_[a].empty() ? in.type() : parts_[a].front().type());
+                std::vector<std::int64_t> rows;
+                for (std::int64_t r = 0; r < n; ++r) {
+                    if (in.is_null(r)) continue;
+                    members[static_cast<std::size_t>(
+                                gid[static_cast<std::size_t>(r)])]
+                        .push_back(part_rows_[a] +
+                                   static_cast<std::int64_t>(rows.size()));
+                    rows.push_back(r);
+                }
+                if (rows.empty()) break;
+                parts_[a].push_back(as_type(in, want).take(rows));
+                part_rows_[a] += static_cast<std::int64_t>(rows.size());
+                break;
+            }
             case FoldOp::ARGMAX:
             case FoldOp::ARGMIN:
                 arg(a, in, batch.columns[static_cast<std::size_t>(f.by)], gid);
@@ -378,6 +422,65 @@ df::DataFrame GroupFold::finish(std::vector<std::string> names) {
                 out.columns.push_back(df::Series::list(
                     offsets,
                     joined(parts_[a], f.type.fields.front().type).take(rows)));
+                break;
+            }
+            case FoldOp::PLUGIN: {
+                const dftu_op_desc* op = dftu_op_find(f.plugin.c_str());
+                if (!op)
+                    throw DFTUtilsException::cat(ErrorCode::INVALID_ARGUMENT,
+                                                 "plugin function '", f.plugin,
+                                                 "' is not registered");
+                const dftu_op_arg arg = plugin_arg(*op, f.params);
+                auto& members = members_[a];
+                members.resize(count);
+                std::vector<bool> valid(count, false);
+                std::vector<double> d(count, 0);
+                std::vector<std::int64_t> i(count, 0);
+                const bool real = f.type.id == TypeId::Float64;
+                if (!parts_[a].empty()) {
+                    const df::Series all = joined(parts_[a], f.type);
+                    for (std::size_t g = 0; g < count; ++g) {
+                        if (members[g].empty()) continue;
+                        const df::Series part =
+                            all.take(members[g]).materialize();
+                        int ok = 0;
+                        const dftu_scalar r =
+                            dftu_op_run_aggregate(op, part.handle(), &arg, &ok);
+                        if (!ok)
+                            throw DFTUtilsException::cat(
+                                ErrorCode::INVALID_ARGUMENT,
+                                "plugin function '", f.plugin,
+                                "' failed on a group; it takes ",
+                                dftu_op_signature(op->sig));
+                        valid[g] = true;
+                        const bool from_f = r.kind == DFTU_SCALAR_TAG_F64;
+                        const bool from_u = r.kind == DFTU_SCALAR_TAG_U64;
+                        if (real)
+                            d[g] = from_f   ? r.value.d
+                                   : from_u ? static_cast<double>(r.value.u)
+                                            : static_cast<double>(r.value.i);
+                        else
+                            i[g] = from_f ? static_cast<std::int64_t>(r.value.d)
+                                   : from_u
+                                       ? static_cast<std::int64_t>(r.value.u)
+                                       : r.value.i;
+                    }
+                }
+                const auto bits = validity(valid);
+                if (real) {
+                    out.columns.push_back(
+                        df::Series::flat_f64(d.data(), groups, bits.data()));
+                } else if (f.type.id == TypeId::Bool) {
+                    std::vector<bool> truth(count);
+                    for (std::size_t g = 0; g < count; ++g)
+                        truth[g] = i[g] != 0;
+                    const auto packed = validity(truth);
+                    out.columns.push_back(df::Series::flat(
+                        TypeId::Bool, packed.data(), groups, bits.data()));
+                } else {
+                    out.columns.push_back(
+                        df::Series::flat_i64(i.data(), groups, bits.data()));
+                }
                 break;
             }
             case FoldOp::ARGMAX:

@@ -14,6 +14,9 @@ namespace dftracer::utils::duql::syntax {
 dftracer::utils::expected<Program, duql::DuqlError> parse(
     std::string_view source);
 
+/// Whether `word` names a stage (`where`, `sort`, ...), ignoring case.
+bool is_stage_word(std::string_view word);
+
 }  // namespace dftracer::utils::duql::syntax
 
 #endif  // DFTRACER_UTILS_DUQL_SYNTAX_PARSER_H

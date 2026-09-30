@@ -450,6 +450,133 @@ TEST_CASE("expressions - array and object functions") {
     }
 }
 
+TEST_CASE("expressions - computed array index") {
+    const char* r = R"({"xs":[10,20,30],"i":2,"f":1.5,"n":null,"s":"x"})";
+    CHECK(eval("xs[i] == 30", r));
+    CHECK(eval("xs[i - 3] == 30", r));
+    CHECK(eval("xs[i - 2] == 10", r));
+    CHECK(eval("xs[-i] == 20", r));
+    for (const char* q :
+         {"xs[i + 1] is null", "xs[-i - 2] is null", "xs[n] is null",
+          "xs[missing] is null", "xs[f] is null", "xs[s] is null",
+          "s[i] is null", "missing[i] is null"}) {
+        INFO(q);
+        CHECK(eval(q, r));
+    }
+    CHECK(truth("xs[i + 1] == 1", r) == Truth::UNKNOWN);
+}
+
+TEST_CASE("expressions - array index parameters fold to a literal step") {
+    Params p;
+    p.emplace("n", LiteralValue{std::int64_t{1}});
+    p.emplace("m", LiteralValue{std::int64_t{-1}});
+    p.emplace("big", LiteralValue{std::uint64_t{1}});
+    const char* r = R"({"xs":["a","b","c"],"o":[{"k":7}]})";
+    auto at = [&](const char* q) {
+        auto ast = parse(q, p);
+        REQUIRE_MESSAGE(ast.has_value(), q);
+        JsonDoc doc(r);
+        return evaluate(**ast, doc.root());
+    };
+    CHECK(at(R"(xs[$n] == "b")"));
+    CHECK(at(R"(xs[$m] == "c")"));
+    CHECK(at(R"(xs[$big] == "b")"));
+    CHECK(at("o[$n] is missing"));
+    CHECK_FALSE(at(R"(xs[$n] == "a")"));
+    p.emplace("bad", LiteralValue{std::string("1")});
+    auto bad = parse("xs[$bad] == 1", p);
+    REQUIRE_FALSE(bad.has_value());
+    CHECK(
+        bad.error().message.find("an array index parameter holds an integer") !=
+        std::string::npos);
+}
+
+TEST_CASE("expressions - list literals") {
+    const char* r =
+        R"({"name":"read","cat":"POSIX","xs":[1,2,3],"n":null,"i":1})";
+    CHECK(eval(R"(contains(["read", "write"], name))", r));
+    CHECK_FALSE(eval(R"(contains(["open", "write"], name))", r));
+    CHECK(eval("len([1, 2, 3]) == 3 and len([]) == 0", r));
+    CHECK(eval("first([cat, name]) == \"POSIX\"", r));
+    CHECK(eval("last([cat, name]) == \"read\"", r));
+    CHECK(eval(R"(json([cat, name, n, missing, 1.5, true, [1, 2]]) ==
+        "[\"POSIX\",\"read\",null,null,1.5,true,[1,2]]")",
+               r));
+    CHECK(eval("any([1, 2, 3], . > 2)", r));
+    CHECK_FALSE(eval("all([1, 2, 3], . > 2)", r));
+    CHECK(eval("sum([i, i + 1]) == 3", r));
+}
+
+TEST_CASE("expressions - index_of") {
+    const char* r = R"({"tags":["b","a","b",null],"xs":[1,2.5,3],"s":"a"})";
+    CHECK(eval(R"(index_of(tags, "a") == 1)", r));
+    CHECK(eval(R"(index_of(tags, "b") == 0)", r));
+    CHECK(eval("index_of(xs, 3) == 2 and index_of(xs, 2.5) == 1", r));
+    for (const char* q :
+         {R"(index_of(tags, "z") is null)", "index_of(tags, null) is null",
+          "index_of(tags, missing) is null", R"(index_of(s, "a") is null)",
+          "index_of(missing, 1) is null", R"(index_of(xs, "a") is null)"}) {
+        INFO(q);
+        CHECK(eval(q, r));
+    }
+}
+
+TEST_CASE("expressions - sort") {
+    const char* r =
+        R"({"tags":["b","a","b",null],"n":[3,1.5,2,-1],"e":[],"one":[[1]],)"
+        R"("mix":[1,"a"],"b":[true,false],"objs":[{"a":1},{"a":2}],)"
+        R"("nulls":[null,null],"recs":[{"k":2,"v":"x"},{"k":1,"v":"y"}],"s":"a"})";
+    CHECK(eval(R"(json(sort(tags)) == "[\"a\",\"b\",\"b\",null]")", r));
+    CHECK(eval(R"(json(sort(n)) == "[-1,1.5,2,3]")", r));
+    CHECK(eval(R"(json(sort(b)) == "[false,true]")", r));
+    CHECK(eval(R"(json(sort(e)) == "[]")", r));
+    CHECK(eval(R"(json(sort(nulls)) == "[null,null]")", r));
+    CHECK(eval(R"(json(sort(one)) == "[[1]]")", r));
+    CHECK(eval("first(sort(n)) == -1 and last(sort(n)) == 3", r));
+    CHECK(eval("type(sort(mix)) == \"null\"", r));
+    CHECK(eval("type(sort(objs)) == \"null\"", r));
+    CHECK(eval("type(sort(s)) == \"null\" and type(sort(missing)) == \"null\"",
+               r));
+    CHECK(eval("len(sort(tags)) == 4 and last(sort(tags)) is null", r));
+}
+
+TEST_CASE("expressions - unique") {
+    const char* r = R"({"tags":["b","a","b",null,null],"n":[1,1.0,2,1],"e":[],)"
+                    R"("o":[{"a":1},{"a":1},{"a":2},[1],[1]],"s":"a"})";
+    CHECK(eval(R"(json(unique(tags)) == "[\"b\",\"a\",null]")", r));
+    CHECK(eval(R"(json(unique(n)) == "[1,2]")", r));
+    CHECK(eval(R"(json(unique(e)) == "[]")", r));
+    CHECK(eval(R"(json(unique(o)) == "[{\"a\":1},{\"a\":2},[1]]")", r));
+    CHECK(eval("unique(s) is null and unique(missing) is null", r));
+}
+
+TEST_CASE("expressions - join") {
+    const char* r =
+        R"({"tags":["b","a","b",null],"e":[],"n":["a",1],"s":"a","sep":"-"})";
+    CHECK(eval(R"(join(tags, ",") == "b,a,b")", r));
+    CHECK(eval(R"(join(e, ",") == "")", r));
+    CHECK(eval(R"(join(["x"], ",") == "x")", r));
+    CHECK(eval(R"(join(tags, "") == "bab")", r));
+    CHECK(eval(R"(join(n, ",") is null)", r));
+    CHECK(eval(R"(join(s, ",") is null and join(missing, ",") is null)", r));
+    Params p;
+    p.emplace("sep", LiteralValue{std::string("; ")});
+    auto ast = parse("join(tags, $sep) == \"b; a; b\"", p);
+    REQUIRE(ast.has_value());
+    JsonDoc doc(r);
+    CHECK(evaluate(**ast, doc.root()));
+    CHECK(compile_error("join(tags, sep) == \"x\"")
+              .find("join() takes a string separator") != std::string::npos);
+    CHECK(compile_error("join(tags, 1) == \"x\"")
+              .find("join() takes a string separator") != std::string::npos);
+}
+
+TEST_CASE("expressions - sort is a stage keyword and a function") {
+    CHECK(eval(R"(first(sort(xs)) == 1)", R"({"xs":[3,1,2]})"));
+    CHECK(kept("first(sort(xs)) == 1", {R"({"xs":[3,1]})", R"({"xs":[2]})"}) ==
+          std::vector<int>{0});
+}
+
 TEST_CASE("expressions - string functions") {
     const char* r =
         R"({"s":"  Hello World  ","u":"h\u00e9llo","p":"/a/b.txt"})";
@@ -512,6 +639,9 @@ TEST_CASE("expressions - compile errors") {
     CHECK(compile_error("case(a, 1) == 1").find("case") != std::string::npos);
     CHECK(compile_error("exists(x + 1)").find("path") != std::string::npos);
     CHECK(compile_error("dur > 1ms").find("as_time") != std::string::npos);
+    CHECK(compile_error("now() > 1").find("time roles") != std::string::npos);
+    CHECK(compile_error("date_part(ts, \"hour\") > 1").find("needs a time") !=
+          std::string::npos);
 }
 
 TEST_CASE("expressions - field maps agree with JSON records") {
@@ -575,4 +705,23 @@ TEST_CASE("quantifiers - a flattened record reads the array cell") {
     CHECK(truth("all(h, . > 3)", m) == Truth::NO);
     CHECK(truth(R"(any(h, . == 1 and ^.cat == "io"))", m) == Truth::YES);
     CHECK(truth("any(x, . > 3)", m) == Truth::UNKNOWN);
+}
+
+TEST_CASE("evaluate - regex_replace") {
+    CHECK(eval(R"q(regex_replace(name, "(?<op>[a-z]+)64_(\d+)", "${op}#$2")
+                   == "open#17")q",
+               R"({"name":"open64_17"})"));
+    CHECK(eval(R"(regex_replace(path, "/+", "/") == "/a/b/c")",
+               R"({"path":"/a//b///c"})"));
+    CHECK(eval(R"(regex_replace("ab", "x*", "-") == "-a-b-")", R"({})"));
+    CHECK(eval(R"(regex_replace(s, "(a)(b)?", "[$2]") == "[]c")",
+               R"({"s":"ac"})"));
+    CHECK(eval(R"(regex_replace(s, "z", "y") == "abc")", R"({"s":"abc"})"));
+    CHECK(eval(R"(regex_replace(s, "a", "$$") == "$bc")", R"({"s":"abc"})"));
+    CHECK(truth(R"(regex_replace(s, "a", "b") == "b")", R"({"s":null})") ==
+          Truth::UNKNOWN);
+    CHECK(truth(R"(regex_replace(s, "a", "b") == "b")", R"({"s":5})") ==
+          Truth::UNKNOWN);
+    CHECK(truth(R"(regex_replace(s, "a", "b") == "b")", R"({})") ==
+          Truth::UNKNOWN);
 }

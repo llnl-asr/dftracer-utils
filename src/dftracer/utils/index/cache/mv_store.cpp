@@ -31,7 +31,7 @@ namespace {
 constexpr const char* VIEWS_DIRNAME = "views";
 constexpr const char* MANIFEST_NAME = "manifest";
 constexpr const char* LAST_USED_NAME = "last_used";
-constexpr int MANIFEST_VERSION = 2;
+constexpr int MANIFEST_VERSION = 1;
 constexpr std::size_t SLUG_MAX = 80;
 
 struct BaseId {

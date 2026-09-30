@@ -282,9 +282,21 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
             Series s = row.build();
             REQUIRE(s.valid());
             if (row.ops[OP_REDUCE] == Support::Refuses) {
-                CHECK(scalar_value<double>(s.min()) == 0.0);
-                CHECK(scalar_value<double>(s.max()) == 0.0);
-                CHECK(scalar_value<double>(s.sum()) == 0.0);
+                // A refused reduction throws; it never returns 0. A text
+                // column is the one partial case: min and max give its
+                // bytewise extremes, sum and mean are refused.
+                if (row.id == TypeId::LargeString) {
+                    CHECK(s.min().str() <= s.max().str());
+                } else {
+                    CHECK_THROWS_AS((void)s.min(),
+                                    dftracer::utils::DFTUtilsException);
+                    CHECK_THROWS_AS((void)s.max(),
+                                    dftracer::utils::DFTUtilsException);
+                }
+                CHECK_THROWS_AS((void)s.sum(),
+                                dftracer::utils::DFTUtilsException);
+                CHECK_THROWS_AS((void)s.mean(),
+                                dftracer::utils::DFTUtilsException);
                 CHECK(s.arg_min() == -1);
                 CHECK(s.arg_max() == -1);
                 continue;

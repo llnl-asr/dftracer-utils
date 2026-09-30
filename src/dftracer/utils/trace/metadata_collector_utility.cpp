@@ -3,9 +3,9 @@
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/async_mutex.h>
 #include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/utils/string.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/json/line.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/fileio/indexed_file_reader_utility.h>
@@ -203,9 +203,9 @@ MetadataCollectorUtility::process_compressed(
                     const auto& line = *line_opt;
                     const char* trimmed;
                     std::size_t trimmed_length;
-                    if (json_trim_and_validate(line.content.data(),
-                                               line.content.length(), trimmed,
-                                               trimmed_length) &&
+                    if (json::trim_and_validate(line.content.data(),
+                                                line.content.length(), trimmed,
+                                                trimmed_length) &&
                         trimmed_length > 8) {
                         hasher.reset();
                         hasher.update(

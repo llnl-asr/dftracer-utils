@@ -18,7 +18,7 @@ inline bool is_reserved_arg(std::string_view k) {
             return k == "fhash";
         case 'd':
             return k == "dur" || k == "dur_sum" || k == "dur_min" ||
-                   k == "dur_max" || k == "dftu_cnt";
+                   k == "dur_max" || k == "dftu_cnt" || k == "dft_cnt";
         case 'r':
             return k == "ret" || k == "ret_sum" || k == "ret_min" ||
                    k == "ret_max";

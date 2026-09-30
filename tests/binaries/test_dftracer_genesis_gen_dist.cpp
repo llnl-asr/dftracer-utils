@@ -47,7 +47,7 @@ fs::path write_run(const fs::path& root, const std::string& input) {
     return dir / "compacted" / "set1.pfw.gz";
 }
 
-// A run with `paths` distinct call names, so records outnumber its RUN line.
+// A run with `paths` distinct call names, so records outnumber its run record.
 void write_wide_run(const fs::path& root, const std::string& input, int paths) {
     const fs::path dir = root / "app" / "sys" / input / "nodes_1" / "ppn_1";
     fs::create_directories(dir / "compacted");
@@ -155,7 +155,9 @@ TEST_CASE("records carry the run id and resolve run keys through the index") {
 
     std::size_t records = 0;
     for (const auto& line : gz_lines(out)) {
-        if (line.find(R"("ph":3)") == std::string::npos) continue;
+        CHECK(line.find(R"("ph":)") == std::string::npos);
+        CHECK(line.find(R"("args":)") == std::string::npos);
+        if (line.rfind(R"({"gtype":"run",)", 0) == 0) continue;
         ++records;
         CHECK(line.find(R"("run":")") != std::string::npos);
         CHECK(line.find(R"("unique_input")") == std::string::npos);
@@ -173,27 +175,64 @@ TEST_CASE("records carry the run id and resolve run keys through the index") {
     const std::string index_path = d.file(".dftindex");
     auto rows = [&](const std::string& q) {
         return View::from_file(out, index_path)
-            .metadata(false)
             .duql(q)
             .collect()
             .get()
             .num_rows();
     };
-    const std::size_t x = rows(R"(resolved.run.unique_input == "x")");
-    const std::size_t y = rows(R"(resolved.run.unique_input == "y")");
+    const std::size_t x = rows(R"(run -> runs.unique_input == "x")");
+    const std::size_t y = rows(R"(run -> runs.unique_input == "y")");
     CHECK(x > 0);
     CHECK(x + y == records);
-    CHECK(rows("resolved.run.nodes == 1") == records);
-    CHECK(rows(R"(resolved.run.papi_set == "set1")") == records);
+    CHECK(rows("run -> runs.nodes == 1") == records);
+    CHECK(rows(R"(run -> runs.papi_set == "set1")") == records);
 
     const auto df = View::from_file(out, index_path)
-                        .metadata(false)
-                        .select({"args.path", "resolved.run.unique_input"})
+                        .duql(
+                            "derive u = run -> runs.unique_input | select "
+                            "path, u")
                         .collect()
                         .get();
-    const auto& col = df.columns[df.column_index("resolved.run.unique_input")];
+    const auto& col = df.columns[df.column_index("u")];
+    REQUIRE(col.length() > 0);
     for (std::int64_t i = 0; i < col.length(); ++i) {
         const std::string v(col.string_at(i));
         CHECK((v == "x" || v == "y"));
     }
+
+    const auto runs = View::from_file(out, index_path)
+                          .duql("from runs | where true")
+                          .collect()
+                          .get();
+    CHECK(runs.num_rows() == 2);
+    for (const char* name :
+         {"run", "app", "system", "unique_input", "nodes", "ppn", "papi_set",
+          "method", "sketch_accuracy", "leaf"}) {
+        CAPTURE(name);
+        CHECK(runs.column_index(name) >= 0);
+    }
+
+    CHECK(rows(R"(gtype == "run")") == 0);
+    const auto run_records = View::from_file(out, index_path)
+                                 .duql(R"(from all | where gtype == "run")")
+                                 .collect()
+                                 .get();
+    CHECK(run_records.num_rows() == 2);
+    CHECK(run_records.column_index("summary.ok") >= 0);
+}
+
+TEST_CASE("a dftracer trace is still detected as dftracer") {
+    namespace ix = dftracer::utils::index;
+    ScopedTestDir d("gen_dist_detect_dft");
+    const std::string trace = d.file("t.pfw.gz");
+    dftu_utils_test::write_gz_trace(
+        trace, R"({"id":1,"name":"read","cat":"POSIX","pid":1,"tid":1,)"
+               R"("ts":1,"dur":5,"ph":"X"})"
+               "\n");
+    ix::IndexerOptions o;
+    o.index_dir = d.str();
+    auto indexer = ix::Indexer::open({trace}, o);
+    indexer.build();
+    REQUIRE(indexer.files().size() == 1);
+    CHECK(indexer.files()[0].schema == "dftracer");
 }

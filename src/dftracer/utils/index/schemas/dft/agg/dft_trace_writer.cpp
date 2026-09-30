@@ -171,8 +171,9 @@ inline void emit_metric_stats_from_bytes(BinaryReader& r,
     auto total = r.varint();
     auto min = r.varint();
     auto max = r.varint();
-    r.skip(8);  // mean
+    r.skip(16);  // mean, mean_lo
     auto m2 = r.f64();
+    r.skip(16);  // m3, m4
     if (fmt == METRIC_FMT_FULL_WITH_SKETCH) {
         r.skip_blob();
     }
@@ -196,14 +197,10 @@ inline void emit_metric_stats_from_bytes(BinaryReader& r,
     }
 
     if (compute_statistics && count >= 2) {
-        // `m2` holds the raw power sum
-        // `sum_x^2`, not Welford's central M2. Convert to central
-        // moment then to sample variance. Clamp at zero for float
-        // cancellation.
+        // `m2` is the central second moment, sum (x - mean)^2: the sample
+        // variance is that over n - 1. Clamp at zero for rounding.
         const double n = static_cast<double>(count);
-        const double sum_x = static_cast<double>(total);
-        const double central = m2 - sum_x * sum_x / n;
-        const double var = (central > 0.0 ? central : 0.0) / (n - 1.0);
+        const double var = (m2 > 0.0 ? m2 : 0.0) / (n - 1.0);
         const double stddev = var > 0.0 ? std::sqrt(var) : 0.0;
         buf.append_literal(",\"");
         buf.append(prefix);
@@ -218,12 +215,13 @@ inline void skip_metric_stats(BinaryReader& r) {
         r.varint();
         return;
     }
-    // FULL: count, total, min, max (varints), 2 doubles (mean, m2)
+    // FULL: count, total, min, max (varints), 5 doubles (mean, mean_lo, m2,
+    // m3, m4)
     r.varint();
     r.varint();
     r.varint();
     r.varint();
-    r.skip(16);
+    r.skip(40);
     if (fmt == METRIC_FMT_FULL_WITH_SKETCH) r.skip_blob();
 }
 

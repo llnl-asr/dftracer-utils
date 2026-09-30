@@ -130,16 +130,17 @@ class LazyOps {
     }
     LazyFrame join(LazyFrame other, std::vector<std::string> left_on,
                    std::vector<std::string> right_on,
-                   JoinHow how = JoinHow::Inner,
-                   std::string suffix = "_right") const {
+                   JoinHow how = JoinHow::Inner, std::string suffix = "_right",
+                   bool nulls_equal = false) const {
         return lf().join(std::move(other), std::move(left_on),
-                         std::move(right_on), how, std::move(suffix));
+                         std::move(right_on), how, std::move(suffix),
+                         nulls_equal);
     }
     LazyFrame join(LazyFrame other, std::vector<std::string> on,
-                   JoinHow how = JoinHow::Inner,
-                   std::string suffix = "_right") const {
+                   JoinHow how = JoinHow::Inner, std::string suffix = "_right",
+                   bool nulls_equal = false) const {
         return lf().join(std::move(other), std::move(on), how,
-                         std::move(suffix));
+                         std::move(suffix), nulls_equal);
     }
     LazyFrame concat(LazyFrame other) const {
         return lf().concat(std::move(other));

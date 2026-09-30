@@ -169,6 +169,24 @@ def test_window_fill_forward_and_frame_min_periods():
     assert _col(two, "lo") == [None, 4, None]
 
 
+def test_window_range_frame_includes_peers_within_width():
+    df = _df({"g": [1, 1, 1, 1, 1], "k": [1, 2, 2, 4, 7], "x": [1, 10, 100, 1000, 10000]})
+    out = df.window(
+        partition_by=["g"],
+        order_by=["k"],
+        specs=[
+            ("frame_sum", "x", 2, 0, "rng", 0, "range"),
+            ("frame_sum", "x", 2, 0, "rws", 0, "rows"),
+            ("frame_count", "x", 2, 0, "n", 0, "range"),
+        ],
+    )
+    assert _col(out, "rng") == [1, 111, 111, 1110, 10000]
+    assert _col(out, "rws") == [1, 11, 111, 1110, 11100]
+    assert _col(out, "n") == [1, 3, 3, 3, 1]
+    with pytest.raises(ValueError, match="mode"):
+        df.window(["g"], ["k"], [("frame_sum", "x", 2, 0, "bad", 0, "cols")])
+
+
 def test_window_rank_dense_rank_sessionize():
     df = _df({"g": [1, 1, 1, 1], "ts": [10, 10, 20, 100]})
     out = df.window(
@@ -843,3 +861,122 @@ def test_sort_nulls_first_select_expr_and_with_columns():
     assert out.columns == ["k", "v", "v1", "v2"]
     assert _col(out, "v1") == [2.0, 3.0, 4.0, 5.0]
     assert _col(out, "v2") == [2.0, 4.0, 6.0, 8.0]
+
+
+def _frame_ref(xs, ks, pre, post, mode, fn):
+    out = []
+    for i in range(len(xs)):
+        if mode == "rows":
+            lo = 0 if pre is None else max(0, i - pre)
+            hi = len(xs) - 1 if post is None else min(len(xs) - 1, i + post)
+            idx = list(range(lo, hi + 1))
+        else:
+            idx = [
+                j
+                for j in range(len(xs))
+                if (pre is None or ks[j] >= ks[i] - pre) and (post is None or ks[j] <= ks[i] + post)
+            ]
+        out.append(fn([j for j in idx]))
+    return out
+
+
+def _quantile(vals, q):
+    vals = sorted(vals)
+    if not vals:
+        return None
+    pos = q * (len(vals) - 1)
+    lo = int(pos)
+    hi = min(lo + 1, len(vals) - 1)
+    return vals[lo] + (vals[hi] - vals[lo]) * (pos - lo)
+
+
+@pytest.mark.parametrize(
+    "mode,pre,post", [("rows", 2, 1), ("rows", None, 0), ("range", 2, 0), ("rows", None, None)]
+)
+def test_window_frame_statistics_match_reference(mode, pre, post):
+    ks = [1, 2, 3, 4, 7, 8]
+    xs = [3.0, None, 5.0, 5.0, 1.0, 9.0]
+    bs = [10, 30, 30, 20, 40, 5]
+    df = _df({"g": [1] * 6, "k": ks, "x": xs, "b": bs})
+    out = df.window(
+        ["g"],
+        ["k"],
+        [
+            ("frame_var", "x", pre, post, "var", 0, mode),
+            ("frame_std", "x", pre, post, "std", 0, mode),
+            ("frame_quantile", "x", pre, post, "q", 0, mode, 0.3),
+            ("frame_count_distinct", "x", pre, post, "cd", 0, mode),
+            ("frame_arg_max", "x", pre, post, "amax", 0, mode, "b"),
+            ("frame_arg_min", "x", pre, post, "amin", 0, mode, "b"),
+            ("frame_collect", "x", pre, post, "col", 0, mode),
+        ],
+    )
+
+    def vals(idx):
+        return [xs[j] for j in idx if xs[j] is not None]
+
+    def var(idx):
+        v = vals(idx)
+        if len(v) < 2:
+            return None
+        m = sum(v) / len(v)
+        return sum((a - m) ** 2 for a in v) / (len(v) - 1)
+
+    def arg(idx, sign):
+        best = None
+        for j in idx:
+            if best is None or sign * bs[j] > sign * bs[best]:
+                best = j
+        return None if best is None else xs[best]
+
+    def run(fn):
+        return _frame_ref(xs, ks, pre, post, mode, fn)
+
+    got_var = _col(out, "var")
+    for g, e in zip(got_var, run(var)):
+        assert (g is None) == (e is None) and (e is None or g == pytest.approx(e))
+    got_std = _col(out, "std")
+    for g, e in zip(got_std, run(var)):
+        assert (g is None) == (e is None) and (e is None or g == pytest.approx(e**0.5))
+    got_q = _col(out, "q")
+    for g, e in zip(got_q, run(lambda i: _quantile(vals(i), 0.3))):
+        assert (g is None) == (e is None) and (e is None or g == pytest.approx(e))
+    assert _col(out, "cd") == run(lambda i: len(set(vals(i))))
+    assert _col(out, "amax") == run(lambda i: arg(i, 1))
+    assert _col(out, "amin") == run(lambda i: arg(i, -1))
+    assert _col(out, "col") == run(lambda i: vals(i))
+
+
+def test_window_frame_arg_tie_takes_earliest_row():
+    df = _df({"g": [1, 1, 1], "k": [1, 2, 3], "x": [10, 20, 30], "b": [5, 5, 5]})
+    out = df.window(
+        ["g"],
+        ["k"],
+        [
+            ("frame_arg_max", "x", None, None, "amax", 0, "rows", "b"),
+            ("frame_arg_min", "x", None, None, "amin", 0, "rows", "b"),
+        ],
+    )
+    assert _col(out, "amax") == [10, 10, 10]
+    assert _col(out, "amin") == [10, 10, 10]
+
+
+def test_window_frame_quantile_matches_pandas_rolling():
+    pd = pytest.importorskip("pandas")
+    xs = [4.0, 1.0, 7.0, 3.0, 9.0, 2.0]
+    df = _df({"g": [1] * 6, "k": list(range(6)), "x": xs})
+    out = df.window(["g"], ["k"], [("frame_quantile", "x", 2, 0, "q", 0, "rows", 0.4)])
+    ref = pd.Series(xs).rolling(3, min_periods=1).quantile(0.4, interpolation="linear")
+    assert _col(out, "q") == pytest.approx(ref.tolist())
+
+
+def test_window_frame_new_function_errors():
+    df = _df({"g": [1, 1], "k": [1, 2], "x": [1.0, 2.0]})
+    with pytest.raises(Exception):
+        df.window(["g"], ["k"], [("frame_quantile", "x", 1, 0, "q", 0, "rows", 1.5)])
+    with pytest.raises(Exception):
+        df.window(["g"], ["k"], [("frame_arg_max", "x", 1, 0, "a", 0, "rows", "nope")])
+    with pytest.raises(ValueError):
+        df.window(["g"], ["k"], [("frame_arg_max", "x", 1, 0, "a")])
+    with pytest.raises(ValueError):
+        df.window(["g"], ["k"], [("frame_quantile", "x", 1, 0, "q", 0, "rows")])

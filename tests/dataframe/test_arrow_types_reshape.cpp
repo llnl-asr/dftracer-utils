@@ -101,7 +101,7 @@ const TypeRow TYPE_ROWS[] = {
     {TypeId::LargeString,
      build_large_string,
      needle_large_string,
-     {C, C, C, C, R},
+     {C, C, C, C, C},
      0.0},
     {TypeId::LargeBinary,
      build_large_binary,
@@ -315,6 +315,14 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
             Series value = m.column("value");
             REQUIRE(value.valid());
             CHECK(value.type() == row.id);
+            if (row.id == TypeId::LargeString) {
+                // A sum of text is refused; the values, in order, are the
+                // check.
+                const char* want[] = {"c", "a", "b", "a", "c", "a", "b", "a"};
+                for (int i = 0; i < 8; ++i)
+                    CHECK(value.string_at(i) == want[i]);
+                continue;
+            }
             CHECK(scalar_value<double>(value.sum()) ==
                   doctest::Approx(2.0 * row.expect_sum));
         }

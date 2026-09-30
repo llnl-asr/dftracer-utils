@@ -34,6 +34,23 @@ std::optional<int> Env::get<int>(std::string_view name) {
     return parsed;
 }
 
+template <>
+std::optional<std::uint64_t> Env::get<std::uint64_t>(std::string_view name) {
+    auto value = get<std::string_view>(name);
+    if (!value.has_value()) {
+        return std::nullopt;
+    }
+
+    std::uint64_t parsed = 0;
+    auto* begin = value->data();
+    auto* end = begin + value->size();
+    auto [ptr, ec] = std::from_chars(begin, end, parsed);
+    if (ec != std::errc{} || ptr != end) {
+        return std::nullopt;
+    }
+    return parsed;
+}
+
 int Env::rocksdb_max_open_files() {
     static const int cached_value = [] {
         constexpr int default_max_open_files = 32;

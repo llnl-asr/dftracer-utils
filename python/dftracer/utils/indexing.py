@@ -17,6 +17,7 @@ import re
 from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple, Union
 
 from ._apply import Row
+from .enums import DType
 from .series import Series, _unwrap
 
 if TYPE_CHECKING:
@@ -93,8 +94,6 @@ def _positions(n: int, values: Sequence[object]) -> List[int]:
 
 
 def _is_bool(series: Series) -> bool:
-    from .enums import DType
-
     return series.dtype == DType.BOOL
 
 
@@ -297,6 +296,52 @@ def _mask_of(df: "DataFrame", rows: Rows) -> Optional[Series]:
     return mask
 
 
+_INT_RANGE = {
+    DType.INT8: (-(2**7), 2**7 - 1),
+    DType.INT16: (-(2**15), 2**15 - 1),
+    DType.INT32: (-(2**31), 2**31 - 1),
+    DType.INT64: (-(2**63), 2**63 - 1),
+    DType.UINT8: (0, 2**8 - 1),
+    DType.UINT16: (0, 2**16 - 1),
+    DType.UINT32: (0, 2**32 - 1),
+    DType.UINT64: (0, 2**64 - 1),
+}
+_FLOATS = frozenset({DType.FLOAT32, DType.FLOAT64})
+_SAME_KIND = {
+    DType.STRING: frozenset({DType.STRING, DType.LARGE_STRING}),
+    DType.BINARY: frozenset({DType.BINARY, DType.LARGE_BINARY}),
+    DType.BOOL: frozenset({DType.BOOL}),
+    DType.FLOAT64: _FLOATS,
+    DType.DATE32: frozenset({DType.DATE32, DType.DATE64}),
+}
+
+
+def _fits(value: object, own: DType, column: DType) -> bool:
+    """Whether a value of type ``own`` converts to ``column`` without loss."""
+    if own in (DType.INT64, DType.UINT64) and isinstance(value, int):
+        if column in _FLOATS:
+            return True
+        bounds = _INT_RANGE.get(column)
+        return bounds is not None and bounds[0] <= value <= bounds[1]
+    return column in _SAME_KIND.get(own, frozenset())
+
+
+def _fill(value: object, n: int, like: Series) -> Series:
+    """``value`` repeated ``n`` times as a Series of ``like``'s type. A type a
+    native DType does not name in full (list, struct, timestamp, decimal, ...)
+    goes through its Arrow type."""
+    column = like.dtype
+    if (
+        column not in _INT_RANGE
+        and column not in _FLOATS
+        and not any(column in kinds for kinds in _SAME_KIND.values())
+    ):
+        return Series.from_list([value] * n, dtype=like.to_arrow().type)
+    if value is not None and not _fits(value, Series.from_list([value]).dtype, column):
+        raise TypeError(f"cannot assign {value!r} to a {column.name.lower()} column")
+    return Series.from_list([value] * n, dtype=column)
+
+
 def _broadcast(value: object, n: int, like: Optional[Series]) -> Series:
     """``value`` as an n-row Series of ``like``'s type (or the value's own)."""
     if isinstance(value, Series):
@@ -308,12 +353,14 @@ def _broadcast(value: object, n: int, like: Optional[Series]) -> Series:
             raise ValueError(f"value has {len(value)} rows; the frame has {n}")
         return Series.from_list(list(value))
     if like is not None:
-        return Series.from_list([value] * n, dtype=like.to_arrow().type)
+        return _fill(value, n, like)
     return Series.from_list([value] * n)
 
 
 def _scatter(value: object, mask: Series, n: int) -> object:
-    """A list value sized to the selected rows becomes a full-length list."""
+    """A list or Series value sized to the selected rows becomes a full-length list."""
+    if isinstance(value, Series) and len(value) != n:
+        value = value.to_list()
     if not isinstance(value, (list, tuple)) or len(value) == n:
         return value
     hits = mask.to_list()
@@ -324,15 +371,54 @@ def _scatter(value: object, mask: Series, n: int) -> object:
     return [next(it) if h else None for h in hits]
 
 
+def _per_column(value: object) -> Optional[List[Series]]:
+    """The columns of a frame, or the Series of a non-empty list or tuple of
+    Series: one per target column, by position. None for any other value."""
+    from .dataframe import DataFrame
+
+    if isinstance(value, DataFrame):
+        return [Series(value._native[c]) for c in value.columns]
+    if isinstance(value, (list, tuple)) and value and all(isinstance(v, Series) for v in value):
+        return list(value)
+    return None
+
+
+def _check_per_column(
+    columns: List[str], series: List[Series], n: int, mask: Optional[Series]
+) -> None:
+    """The counts and row counts of a multi-column assignment, before any write."""
+    if len(columns) != len(series):
+        raise ValueError(
+            f"assign: {len(columns)} target columns but the value has {len(series)} columns"
+        )
+    selected = n if mask is None else sum(1 for h in mask.to_list() if h)
+    for name, s in zip(columns, series):
+        if len(s) != n and len(s) != selected:
+            what = "the frame has" if mask is None else "the selection has"
+            raise ValueError(f"assign: column {name!r} gets {len(s)} rows; {what} {selected}")
+
+
 def assign_rows(df: "DataFrame", rows: Rows, columns: List[str], value: object) -> None:
     """``df.loc[rows, columns] = value``: each column rebuilt where the rows
-    select, the handle rebound to the new frame."""
+    select, the handle rebound to the new frame. A frame or a list of Series
+    gives each target column the value at the same position."""
     if isinstance(value, dict):
         for name, v in value.items():
             assign_rows(df, rows, [str(name)], v)
         return
     n = len(df)
     mask = _mask_of(df, rows)
+    per_column = _per_column(value)
+    if per_column is not None:
+        _check_per_column(columns, per_column, n, mask)
+        before = df._native
+        try:
+            for name, series in zip(columns, per_column):
+                assign_rows(df, rows, [name], series)
+        except BaseException:
+            df._native = before
+            raise
+        return
     if mask is not None:
         value = _scatter(value, mask, n)
     native = df._native
@@ -347,7 +433,7 @@ def assign_rows(df: "DataFrame", rows: Rows, columns: List[str], value: object) 
             raise TypeError(f"cannot assign {value!r} to column {name!r}: {e}") from None
         if mask is not None:
             if existing is None:
-                blank = Series.from_list([None] * n, dtype=new.to_arrow().type)
+                blank = _fill(None, n, new)
                 new = blank.mask(mask, new)
             else:
                 if existing.dtype != new.dtype:

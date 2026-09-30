@@ -9,7 +9,8 @@ namespace dftracer::utils::index::schemas::dft::agg {
 /// pre-folded per-key MetricStats), folding CF rows onto the plan's group_by.
 /// Returns false with `out` untouched when the tier cannot answer the plan
 /// exactly, so the caller scans instead. Event-exact: dur/size carry the stored
-/// power sum (m2) as sumsq. `out` is the mergeable engine AggState (finalize
+/// running mean and central moments (m2, m3, m4).
+/// `out` is the mergeable engine AggState (finalize
 /// with finalize_engine_result). Requires plan.schema to be built.
 bool agg_tier_collect(const trace::views::detail::ViewPlan& plan,
                       dftracer::utils::dataframe::AggStatePtr& out);

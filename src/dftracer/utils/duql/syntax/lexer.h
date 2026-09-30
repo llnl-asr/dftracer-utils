@@ -40,6 +40,7 @@ enum class Tok : std::uint8_t {
     DOTDOT,
     CARET,
     ASSIGN,
+    FATARROW,
     PIPE,
     COMMA,
     SEMI,

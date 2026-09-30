@@ -92,7 +92,8 @@ struct GroupAgg {
     std::string column;
     std::string out;
     double param = 0.0;  ///< Pct: quantile q in [0, 1]; occupancy: occ_cell_us;
-                         ///< Distinct/TopK/BottomK/ApproxTopK/Sample: k
+                         ///< Distinct/TopK/BottomK/ApproxTopK/Sample: k;
+                         ///< SetUnion: nonzero asks for the typed list
     std::string by{};    ///< the second input column for the ops
                          ///< agg_uses_by_col() names; unused otherwise
 };
@@ -218,7 +219,9 @@ struct DataFrame {
                        const std::vector<AggExprSpec>& aggs) const;
 
     /// Hash join with `other` on `left_on[i]` = `right_on[i]` (exact match; a
-    /// null key never matches; each pair must share a type). Output: this
+    /// null key never matches unless `nulls_equal`, which makes a null key cell
+    /// match another null key cell and is refused for Cross, Lookup and Nest;
+    /// each pair must share a type). Output: this
     /// frame's columns, then `other`'s except a key sharing its left key's
     /// name (emitted once); any other colliding name gets `suffix`. Matched
     /// rows keep this frame's order; Right / Outer append the unmatched right
@@ -233,11 +236,13 @@ struct DataFrame {
                    const std::vector<std::string>& left_on,
                    const std::vector<std::string>& right_on,
                    JoinHow how = JoinHow::Inner,
-                   const std::string& suffix = "_right") const;
+                   const std::string& suffix = "_right",
+                   bool nulls_equal = false) const;
     /// Join on the same-named key columns `on`.
     DataFrame join(const DataFrame& other, const std::vector<std::string>& on,
                    JoinHow how = JoinHow::Inner,
-                   const std::string& suffix = "_right") const;
+                   const std::string& suffix = "_right",
+                   bool nulls_equal = false) const;
     /// Compare this aggregation result with `variant` on their first `n_key`
     /// key columns: keys, `l_<m>` / `r_<m>` per metric, then `delta_<m>` and
     /// `pct_<m>` per numeric metric.

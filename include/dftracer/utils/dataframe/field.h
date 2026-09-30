@@ -228,8 +228,9 @@ class FieldExpr {
     FieldAggExpr std() const { return agg_of(AggFn::Std); }
     FieldAggExpr skew() const { return agg_of(AggFn::Skew); }
     FieldAggExpr kurt() const { return agg_of(AggFn::Kurt); }
-    /// Group row count (the field is ignored, matching the engine's Count).
-    FieldAggExpr count() const { return FieldAggExpr(AggFn::Count, ""); }
+    /// The number of rows of the group where this field is present (non-null),
+    /// as the engine's Count(field); the group row count is `F.any.count()`.
+    FieldAggExpr count() const { return agg_of(AggFn::Count); }
     /// The value of this field at the row where `by` is maximal (ArgMax). No
     /// argmin: the engine's AggOp has only ArgMax.
     FieldAggExpr argmax_by(std::string_view by) const {

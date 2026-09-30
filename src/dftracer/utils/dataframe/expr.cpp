@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/calendar.h>
 #include <dftracer/utils/core/common/to_chars.h>
 #include <dftracer/utils/dataframe/batch_ops.h>          // concat_columns
 #include <dftracer/utils/dataframe/expr.h>
@@ -9,6 +10,7 @@
 #include <dftracer/utils/dataframe/kernels/string_ops.h>  // str_pattern
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/duql/pattern_engine.h>
+#include <dftracer/utils/duql/substr_simd.h>
 #include <dftracer/utils/json/json_escape.h>
 
 #include <algorithm>
@@ -20,6 +22,7 @@
 #include <cstdint>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <random>
 #include <span>
@@ -72,11 +75,20 @@ enum class ExprKind {
     StrSubstr,
     StrPattern,
     StrExtract,
+    StrRegexReplace,
     Convert,
     ListLen,
     ListGet,
     ListSum,
-    ListContains
+    ListContains,
+    StrFn,
+    StrPredCol,
+    StrReplaceCol,
+    StrSubstrCol,
+    RoundCol,
+    StrExtractCol,
+    DatePart,
+    FormatTime
 };
 
 struct ExprNode {
@@ -93,6 +105,7 @@ struct ExprNode {
     std::string text;
     std::string text2;                                     // str_replace `to`
     std::shared_ptr<const duql::CompiledPattern> pattern;  // text: identity
+    std::shared_ptr<const duql::Substitution> subst;       // regex replace
     Series values;                                         // is_in set
     std::shared_ptr<const ExprNode> a;  // first child (select: cond)
     std::shared_ptr<const ExprNode> b;  // second child (select: then)
@@ -226,6 +239,7 @@ std::shared_ptr<ExprNode> clone(const ExprNode& n) {
     c->text = n.text;
     c->text2 = n.text2;
     c->pattern = n.pattern;
+    c->subst = n.subst;
     if (n.scalar.kind == DFTU_SCALAR_TAG_STR) {
         c->scalar.value.s = c->text.data();
         c->scalar.len = static_cast<std::uint32_t>(c->text.size());
@@ -436,6 +450,35 @@ Expr expr_str_replace(const Expr& a, std::string_view from, std::string_view to,
     n->text2.assign(to);
     return e;
 }
+namespace {
+Expr make_time_node(ExprKind k, std::int32_t part, const Expr& a,
+                    std::int64_t ns_per_unit, std::string_view fmt) {
+    if (ns_per_unit <= 0)
+        throw std::invalid_argument("expr: time unit must be positive");
+    auto n = std::make_shared<ExprNode>();
+    n->kind = k;
+    n->i = part;
+    n->scalar.kind = DFTU_SCALAR_TAG_I64;
+    n->scalar.value.i = ns_per_unit;
+    n->text.assign(fmt);
+    n->a = a.node();
+    return Expr{std::move(n)};
+}
+}  // namespace
+Expr expr_date_part(const Expr& a, std::int32_t part,
+                    std::int64_t ns_per_unit) {
+    if (!is_date_part_code(part))
+        throw std::invalid_argument("expr: unknown date part");
+    return make_time_node(ExprKind::DatePart, part, a, ns_per_unit, {});
+}
+Expr expr_format_time(const Expr& a, std::string_view fmt,
+                      std::int64_t ns_per_unit) {
+    const std::string_view bad = invalid_time_format(fmt);
+    if (!bad.empty())
+        throw std::invalid_argument("expr: invalid time format directive '" +
+                                    std::string(bad) + "'");
+    return make_time_node(ExprKind::FormatTime, 0, a, ns_per_unit, fmt);
+}
 Expr expr_str_slice(const Expr& a, std::int64_t start, std::int64_t len) {
     auto n = std::make_shared<ExprNode>();
     n->kind = ExprKind::StrSlice;
@@ -444,6 +487,21 @@ Expr expr_str_slice(const Expr& a, std::int64_t start, std::int64_t len) {
     n->scalar2.kind = DFTU_SCALAR_TAG_I64;
     n->scalar2.value.i = len;
     n->a = a.node();
+    return Expr{std::move(n)};
+}
+Expr expr_str_fn(StrFn fn, const Expr& a, const Expr* b, std::string_view text,
+                 std::string_view text2, std::int64_t i0, std::int64_t i1) {
+    auto n = std::make_shared<ExprNode>();
+    n->kind = ExprKind::StrFn;
+    n->i = static_cast<std::int32_t>(fn);
+    n->scalar.kind = DFTU_SCALAR_TAG_I64;
+    n->scalar.value.i = i0;
+    n->scalar2.kind = DFTU_SCALAR_TAG_I64;
+    n->scalar2.value.i = i1;
+    n->text.assign(text);
+    n->text2.assign(text2);
+    n->a = a.node();
+    if (b != nullptr) n->b = b->node();
     return Expr{std::move(n)};
 }
 Expr expr_is_in(const Expr& a, Series values) {
@@ -524,6 +582,27 @@ Expr expr_log(const Expr& a) {
 Expr expr_pow(const Expr& a, const Expr& b) {
     return make(ExprKind::Pow, 0, {}, a.node(), b.node());
 }
+Expr expr_str_pred_col(StrPredOp op, const Expr& a, const Expr& needle) {
+    if (op != StrPredOp::Contains && op != StrPredOp::StartsWith &&
+        op != StrPredOp::EndsWith)
+        throw std::invalid_argument(
+            "expr: a column needle takes contains, starts_with or ends_with");
+    return make(ExprKind::StrPredCol, static_cast<std::int32_t>(op), {},
+                a.node(), needle.node());
+}
+Expr expr_str_replace_col(const Expr& a, const Expr& from, const Expr& to) {
+    Expr e = make(ExprKind::StrReplaceCol, 0, {}, a.node(), from.node());
+    const_cast<ExprNode*>(e.node().get())->c = to.node();
+    return e;
+}
+Expr expr_str_substr_col(const Expr& a, const Expr& start, const Expr* len) {
+    Expr e = make(ExprKind::StrSubstrCol, 0, {}, a.node(), start.node());
+    if (len != nullptr) const_cast<ExprNode*>(e.node().get())->c = len->node();
+    return e;
+}
+Expr expr_round_col(const Expr& a, const Expr& digits) {
+    return make(ExprKind::RoundCol, 0, {}, a.node(), digits.node());
+}
 Expr expr_str_substr(const Expr& a, std::int64_t start, std::int64_t len) {
     auto n = std::make_shared<ExprNode>();
     n->kind = ExprKind::StrSubstr;
@@ -571,6 +650,21 @@ Expr expr_str_extract(const Expr& a,
                       std::shared_ptr<const duql::CompiledPattern> p,
                       std::int64_t group) {
     return pattern_node(ExprKind::StrExtract, a, std::move(p), group);
+}
+Expr expr_str_extract_col(const Expr& a,
+                          std::shared_ptr<const duql::CompiledPattern> p,
+                          const Expr& group) {
+    Expr e = pattern_node(ExprKind::StrExtractCol, a, std::move(p), 0);
+    const_cast<ExprNode*>(e.node().get())->b = group.node();
+    return e;
+}
+Expr expr_str_regex_replace(const Expr& a,
+                            std::shared_ptr<const duql::CompiledPattern> p,
+                            duql::Substitution sub) {
+    Expr e = pattern_node(ExprKind::StrRegexReplace, a, std::move(p), 0);
+    const_cast<ExprNode*>(e.node().get())->subst =
+        std::make_shared<const duql::Substitution>(std::move(sub));
+    return e;
 }
 Expr expr_convert(ConvertOp op, const Expr& a) {
     return make(ExprKind::Convert, static_cast<std::int32_t>(op), {}, a.node(),
@@ -667,11 +761,20 @@ enum {
     OP_STR_SUBSTR,
     OP_STR_PATTERN,
     OP_STR_EXTRACT,
+    OP_STR_REGEX_REPLACE,
     OP_CONVERT,
     OP_LIST_LEN,
     OP_LIST_GET,
     OP_LIST_SUM,
-    OP_LIST_CONTAINS
+    OP_LIST_CONTAINS,
+    OP_STR_FN,  // param = StrFn; scalar/scalar2 = i0/i1; text/text2
+    OP_STR_PRED_COL,
+    OP_STR_REPLACE_COL,
+    OP_STR_SUBSTR_COL,
+    OP_ROUND_COL,
+    OP_STR_EXTRACT_COL,
+    OP_DATE_PART,   // param = part code, scalar = ns per unit
+    OP_FORMAT_TIME  // text = format, scalar = ns per unit
 };
 
 struct SlotOp {
@@ -689,6 +792,7 @@ struct SlotOp {
     const dftu_series* values = nullptr;
     // OP_STR_PATTERN / OP_STR_EXTRACT, keyed by the node identity in `text`.
     const duql::CompiledPattern* pattern = nullptr;
+    const duql::Substitution* subst = nullptr;
 };
 
 const int COL_OP[4] = {OP_ADD, OP_SUB, OP_MUL, OP_DIV};
@@ -956,6 +1060,27 @@ class Compiler {
                     {},
                     scalar(TypeId::String)};
             }
+            case ExprKind::DatePart:
+            case ExprKind::FormatTime: {
+                const bool fmt = n->kind == ExprKind::FormatTime;
+                Val a0 = compile(n->a.get());
+                if (is_unknown(a0)) return unknown_val();
+                if (!a0.is_scalar && !is_num_type(a0.type))
+                    throw std::invalid_argument(
+                        std::string("expr: ") +
+                        (fmt ? "format_time" : "date_part") +
+                        " needs a time or integer operand, got " +
+                        type_name(a0.type));
+                Val a = num(a0, fmt ? "format_time" : "date_part");
+                SlotOp op;
+                op.opcode = fmt ? OP_FORMAT_TIME : OP_DATE_PART;
+                op.a = a.slot;
+                op.param = n->i;
+                op.scalar = n->scalar;
+                op.text = n->text;
+                return col_val(emit_op(op),
+                               fmt ? TypeId::String : TypeId::Int64);
+            }
             case ExprKind::StrSlice: {
                 Val a0 = compile(n->a.get());
                 if (is_unknown(a0)) return unknown_val();
@@ -1109,8 +1234,68 @@ class Compiler {
                     emit(OP_STR_SUBSTR, a.slot, -1, 0, n->scalar, n->scalar2),
                     TypeId::String);
             }
+            case ExprKind::StrPredCol: {
+                Val a0 = compile(n->a.get());
+                Val b0 = compile(n->b.get());
+                if (is_unknown(a0) || is_unknown(b0)) return unknown_val();
+                Val a = as_str(a0, "string predicate", true);
+                Val b = as_str(b0, "string predicate", true);
+                return col_val(emit(OP_STR_PRED_COL, a.slot, b.slot, n->i, {}),
+                               TypeId::Bool);
+            }
+            case ExprKind::StrReplaceCol: {
+                Val a0 = compile(n->a.get());
+                Val b0 = compile(n->b.get());
+                Val c0 = compile(n->c.get());
+                if (is_unknown(a0) || is_unknown(b0) || is_unknown(c0))
+                    return unknown_val();
+                Val a = as_str(a0, "string replace", false);
+                Val b = as_str(b0, "string replace", false);
+                Val c = as_str(c0, "string replace", false);
+                SlotOp op;
+                op.opcode = OP_STR_REPLACE_COL;
+                op.a = a.slot;
+                op.b = b.slot;
+                op.c = c.slot;
+                return col_val(emit_op(op), TypeId::String);
+            }
+            case ExprKind::StrSubstrCol: {
+                Val a0 = compile(n->a.get());
+                Val b0 = compile(n->b.get());
+                Val c0 = n->c ? compile(n->c.get()) : Val{};
+                if (is_unknown(a0) || is_unknown(b0) ||
+                    (n->c && is_unknown(c0)))
+                    return unknown_val();
+                Val a = as_str(a0, "substr", false);
+                Val b = num(b0, "substr");
+                SlotOp op;
+                op.opcode = OP_STR_SUBSTR_COL;
+                op.a = a.slot;
+                op.b = b.slot;
+                if (n->c) op.c = num(c0, "substr").slot;
+                return col_val(emit_op(op), TypeId::String);
+            }
+            case ExprKind::RoundCol: {
+                Val a0 = compile(n->a.get());
+                Val b0 = compile(n->b.get());
+                if (is_unknown(a0) || is_unknown(b0)) return unknown_val();
+                const bool integer = a0.is_scalar
+                                         ? a0.scalar.kind != DFTU_SCALAR_TAG_F64
+                                         : is_int_type(a0.type);
+                Val a = num(a0, "round");
+                Val b = num(b0, "round");
+                const bool unsigned_in =
+                    a0.is_scalar ? a0.scalar.kind == DFTU_SCALAR_TAG_U64
+                                 : a0.type == TypeId::Uint64;
+                return col_val(emit(OP_ROUND_COL, a.slot, b.slot, 0, {}),
+                               unsigned_in ? TypeId::Uint64
+                               : integer   ? TypeId::Int64
+                                           : TypeId::Float64);
+            }
             case ExprKind::StrPattern:
             case ExprKind::StrExtract:
+            case ExprKind::StrExtractCol:
+            case ExprKind::StrRegexReplace:
                 return compile_pattern(n);
             case ExprKind::Convert:
                 return compile_convert(n);
@@ -1148,6 +1333,8 @@ class Compiler {
                     emit(OP_LIST_CONTAINS, a0.slot, -1, 0, n->scalar),
                     TypeId::Bool);
             }
+            case ExprKind::StrFn:
+                return compile_str_fn(n);
             case ExprKind::IsNull: {
                 Val a0 = compile(n->a.get());
                 if (is_unknown(a0)) return unknown_val();
@@ -1235,11 +1422,31 @@ class Compiler {
     Val compile_pattern(const ExprNode* n) {
         Val a0 = compile(n->a.get());
         if (is_unknown(a0)) return unknown_val();
-        const bool extract = n->kind == ExprKind::StrExtract;
-        Val a =
-            as_str(a0, extract ? "string extract" : "string pattern", !extract);
+        const bool extract_col = n->kind == ExprKind::StrExtractCol;
+        const bool extract = n->kind == ExprKind::StrExtract || extract_col;
+        const bool replace = n->kind == ExprKind::StrRegexReplace;
+        const bool text_out = extract || replace;
+        Val a = as_str(a0,
+                       extract   ? "string extract"
+                       : replace ? "string regex replace"
+                                 : "string pattern",
+                       !text_out);
+        if (replace && !n->subst)
+            throw std::invalid_argument(
+                "expr: a regex replace node needs a substitution");
         if (!n->pattern)
             throw std::invalid_argument("expr: a pattern node needs a pattern");
+        if (extract_col) {
+            Val g0 = compile(n->b.get());
+            if (is_unknown(g0)) return unknown_val();
+            SlotOp op;
+            op.opcode = OP_STR_EXTRACT_COL;
+            op.a = a.slot;
+            op.b = num(g0, "string extract").slot;
+            op.text = n->text;
+            op.pattern = n->pattern.get();
+            return col_val(emit_op(op), TypeId::String);
+        }
         const std::int64_t group = n->scalar.value.i;
         if (extract && (group < 0 || static_cast<std::uint64_t>(group) >
                                          duql::capture_count(*n->pattern)))
@@ -1247,12 +1454,15 @@ class Compiler {
                                         std::to_string(group) +
                                         " is not in the pattern");
         SlotOp op;
-        op.opcode = extract ? OP_STR_EXTRACT : OP_STR_PATTERN;
+        op.opcode = extract   ? OP_STR_EXTRACT
+                    : replace ? OP_STR_REGEX_REPLACE
+                              : OP_STR_PATTERN;
+        op.subst = n->subst.get();
         op.a = a.slot;
         op.scalar = n->scalar;
         op.text = n->text;
         op.pattern = n->pattern.get();
-        return col_val(emit_op(op), extract ? TypeId::String : TypeId::Bool);
+        return col_val(emit_op(op), text_out ? TypeId::String : TypeId::Bool);
     }
 
     Val compile_convert(const ExprNode* n) {
@@ -1271,6 +1481,95 @@ class Compiler {
                          : op == ConvertOp::Float ? TypeId::Float64
                                                   : TypeId::String;
         return col_val(emit(OP_CONVERT, a.slot, -1, n->i, {}), t);
+    }
+
+    int emit_str_fn(const ExprNode* n, int a, int b) {
+        SlotOp op;
+        op.opcode = OP_STR_FN;
+        op.a = a;
+        op.b = b;
+        op.param = n->i;
+        op.scalar = n->scalar;
+        op.scalar2 = n->scalar2;
+        op.text = n->text;
+        op.text2 = n->text2;
+        return emit_op(op);
+    }
+
+    // The expression forms of the eager Series.str methods; the types are
+    // the eager results'.
+    Val compile_str_fn(const ExprNode* n) {
+        const auto fn = static_cast<StrFn>(n->i);
+        Val a0 = compile(n->a.get());
+        Val b0{};
+        if (fn == StrFn::Cat) {
+            if (!n->b)
+                throw std::invalid_argument(
+                    "expr: cat needs another column; the one-column join is "
+                    "an aggregate (use Series.str.cat)");
+            b0 = compile(n->b.get());
+            if (is_unknown(b0)) return unknown_val();
+        }
+        if (is_unknown(a0)) return unknown_val();
+        const DataType list_str = list_of(scalar(TypeId::String));
+        if (fn == StrFn::Join) {
+            const DataType elem = as_list(a0, "join");
+            if (elem.id != TypeId::String)
+                throw std::invalid_argument(
+                    std::string("expr: join needs a List<String> column, got "
+                                "List<") +
+                    type_name(elem.id) + ">");
+            return col_val(emit_str_fn(n, a0.slot, -1), TypeId::String);
+        }
+        if (fn == StrFn::Get && !a0.is_scalar && a0.type == TypeId::List) {
+            const DataType elem = as_list(a0, "get");
+            return {false,
+                    emit(OP_LIST_GET, a0.slot, -1, 0, n->scalar),
+                    elem.id,
+                    {},
+                    elem};
+        }
+        Val a = as_str(a0, "string method", false);
+        switch (fn) {
+            case StrFn::IsAlnum:
+            case StrFn::IsAlpha:
+            case StrFn::IsDigit:
+            case StrFn::IsDecimal:
+            case StrFn::IsNumeric:
+            case StrFn::IsSpace:
+            case StrFn::IsLower:
+            case StrFn::IsUpper:
+            case StrFn::IsTitle:
+                return col_val(emit_str_fn(n, a.slot, -1), TypeId::Bool);
+            case StrFn::Split:
+            case StrFn::Partition:
+            case StrFn::RPartition:
+            case StrFn::Findall:
+                return {false,
+                        emit_str_fn(n, a.slot, -1),
+                        TypeId::List,
+                        {},
+                        list_str};
+            case StrFn::Rfind:
+            case StrFn::Index:
+            case StrFn::Rindex:
+                return col_val(emit_str_fn(n, a.slot, -1), TypeId::Int64);
+            case StrFn::Get:
+                if (n->scalar.value.i < 0)
+                    throw std::invalid_argument(
+                        "expr: get with a negative position needs a List "
+                        "column; use slice");
+                return col_val(emit_str_fn(n, a.slot, -1), TypeId::String);
+            case StrFn::Cat: {
+                Val b = as_str(b0, "cat", false);
+                return col_val(emit_str_fn(n, a.slot, b.slot), TypeId::String);
+            }
+            case StrFn::Join:
+                break;
+            default:
+                return col_val(emit_str_fn(n, a.slot, -1), TypeId::String);
+        }
+        throw std::invalid_argument("expr: unknown string method");
     }
 
     Val as_col(Val v, const char* who) {
@@ -1343,7 +1642,14 @@ class Compiler {
                     out_type,
                     {},
                     scalar(out_type)};
-        throw std::invalid_argument("expr: scalar - / column has no kernel");
+        // scalar - col and scalar / col have no scalar-first kernel: broadcast
+        // the scalar to a column of the result type and run the column kernel.
+        const Val left = broadcast(a.scalar, out_type);
+        return {false,
+                emit(COL_OP[op], left.slot, b.slot, 0, {}),
+                out_type,
+                {},
+                scalar(out_type)};
     }
 
     void promote_float(Val& v) {
@@ -2236,6 +2542,59 @@ Series substr_kernel(const Series& sa, std::int64_t start, std::int64_t len) {
     return c.finish();
 }
 
+// A time operand as whole units: a Float64 is floored, and a NaN, an infinity
+// or a value past int64 is null.
+template <class T>
+std::optional<std::int64_t> time_units(T x) {
+    if constexpr (IS_DOUBLE<T>) {
+        return trunc_i64(std::floor(x));
+    } else if constexpr (std::is_same_v<T, std::uint64_t>) {
+        if (x > static_cast<std::uint64_t>(
+                    std::numeric_limits<std::int64_t>::max()))
+            return std::nullopt;
+        return static_cast<std::int64_t>(x);
+    } else {
+        return x;
+    }
+}
+
+Series date_part_kernel(const Series& sa, std::int32_t part,
+                        std::int64_t ns_per_unit) {
+    const Series fa = flat_view(sa);
+    const dftu_series* a = fa.handle();
+    if (!a) return {};
+    Cells<std::int64_t> c(a->length);
+    with_num(a->type, [&](auto xa) {
+        using A = decltype(xa);
+        const A* pa = values_of<A>(a);
+        const auto p = static_cast<DatePart>(part);
+        for (std::int64_t i = 0; i < a->length; ++i) {
+            if (!valid_at(a, i)) continue;
+            if (const auto t = time_units<A>(pa[i]))
+                c.set(i, date_part(civil_time(*t, ns_per_unit), p));
+        }
+    });
+    return c.finish(TypeId::Int64);
+}
+
+Series format_time_kernel(const Series& sa, std::string_view fmt,
+                          std::int64_t ns_per_unit) {
+    const Series fa = flat_view(sa);
+    const dftu_series* a = fa.handle();
+    if (!a) return {};
+    TextCells c(a->length);
+    with_num(a->type, [&](auto xa) {
+        using A = decltype(xa);
+        const A* pa = values_of<A>(a);
+        for (std::int64_t i = 0; i < a->length; ++i) {
+            const auto t = valid_at(a, i) ? time_units<A>(pa[i]) : std::nullopt;
+            if (t) format_time(c.buf(), civil_time(*t, ns_per_unit), fmt);
+            c.end_row(t.has_value());
+        }
+    });
+    return c.finish();
+}
+
 Series extract_kernel(const Series& sa, const duql::CompiledPattern& p,
                       std::size_t group) {
     const Series fa = flat_view(sa);
@@ -2248,6 +2607,206 @@ Series extract_kernel(const Series& sa, const duql::CompiledPattern& p,
         std::string_view m;
         if (valid_at(a, i) &&
             duql::extract(p, ta.at(i), group, m) == duql::MatchResult::YES)
+            c.add(m);
+        else
+            c.end_row(false);
+    }
+    return c.finish();
+}
+
+// An integer operand column as the scan evaluator reads one: a Float64 cell
+// is not an integer and reads as null.
+struct IntCol {
+    const dftu_series* h;
+    const void* p;
+    explicit IntCol(const dftu_series* s)
+        : h(s), p(s->data ? s->data->data() : nullptr) {}
+    std::optional<Int> at(std::int64_t i) const {
+        if (!valid_at(h, i)) return std::nullopt;
+        if (h->type == TypeId::Int64)
+            return int_of(static_cast<const std::int64_t*>(p)[i]);
+        if (h->type == TypeId::Uint64)
+            return int_of(static_cast<const std::uint64_t*>(p)[i]);
+        return std::nullopt;
+    }
+};
+
+Series str_pred_col_kernel(const Series& sa, const Series& sb,
+                           std::int32_t code) {
+    const Series fa = flat_view(sa);
+    const Series fb = flat_view(sb);
+    const dftu_series* a = fa.handle();
+    const dftu_series* b = fb.handle();
+    if (!same_rows(a, b)) return {};
+    const TextCol ta(a);
+    const TextCol tb(b);
+    if (!ta.ok() || !tb.ok()) return {};
+    const auto op = static_cast<StrPredOp>(code);
+    BoolCells c(a->length);
+    for (std::int64_t i = 0; i < a->length; ++i) {
+        if (!valid_at(a, i) || !valid_at(b, i)) continue;
+        const std::string_view s = ta.at(i);
+        const std::string_view n = tb.at(i);
+        bool hit = false;
+        if (op == StrPredOp::StartsWith)
+            hit = s.starts_with(n);
+        else if (op == StrPredOp::EndsWith)
+            hit = s.ends_with(n);
+        else
+            hit = duql::detail::substr_find(
+                      s.data(), static_cast<std::int64_t>(s.size()), n.data(),
+                      static_cast<std::int64_t>(n.size())) >= 0;
+        c.set(i, hit);
+    }
+    return c.finish();
+}
+
+Series str_replace_col_kernel(const Series& sa, const Series& sb,
+                              const Series& sc) {
+    const Series fa = flat_view(sa);
+    const Series fb = flat_view(sb);
+    const Series fc = flat_view(sc);
+    const dftu_series* a = fa.handle();
+    const dftu_series* b = fb.handle();
+    const dftu_series* d = fc.handle();
+    if (!same_rows(a, b) || !same_rows(a, d)) return {};
+    const TextCol ta(a);
+    const TextCol tb(b);
+    const TextCol td(d);
+    if (!ta.ok() || !tb.ok() || !td.ok()) return {};
+    TextCells c(a->length);
+    for (std::int64_t i = 0; i < a->length; ++i) {
+        if (!valid_at(a, i) || !valid_at(b, i) || !valid_at(d, i)) {
+            c.end_row(false);
+            continue;
+        }
+        const std::string_view s = ta.at(i);
+        const std::string_view from = tb.at(i);
+        const std::string_view to = td.at(i);
+        std::string& out = c.buf();
+        std::size_t pos = 0;
+        if (!from.empty()) {
+            for (std::size_t hit = s.find(from); hit != std::string_view::npos;
+                 hit = s.find(from, pos)) {
+                out.append(s.substr(pos, hit - pos));
+                out.append(to);
+                pos = hit + from.size();
+            }
+        }
+        out.append(s.substr(pos));
+        c.end_row(true);
+    }
+    return c.finish();
+}
+
+Series substr_col_kernel(const Series& sa, const Series& sb, const Series* sc) {
+    const Series fa = flat_view(sa);
+    const Series fb = flat_view(sb);
+    const Series fc = sc ? flat_view(*sc) : Series{};
+    const dftu_series* a = fa.handle();
+    const dftu_series* b = fb.handle();
+    const dftu_series* d = fc.handle();
+    if (!same_rows(a, b) || (sc && !same_rows(a, d))) return {};
+    const TextCol ta(a);
+    if (!ta.ok()) return {};
+    const IntCol starts(b);
+    const IntCol lens(sc ? d : b);
+    TextCells c(a->length);
+    for (std::int64_t i = 0; i < a->length; ++i) {
+        const auto start = valid_at(a, i) ? starts.at(i) : std::nullopt;
+        if (!start || start->neg) {
+            c.end_row(false);
+            continue;
+        }
+        const std::string_view s = ta.at(i);
+        const std::string_view rest = s.substr(utf8_offset(s, start->mag));
+        if (!sc) {
+            c.add(rest);
+            continue;
+        }
+        const auto len = lens.at(i);
+        if (!len || len->neg)
+            c.end_row(false);
+        else
+            c.add(rest.substr(0, utf8_offset(rest, len->mag)));
+    }
+    return c.finish();
+}
+
+Series round_col_kernel(const Series& sa, const Series& sb) {
+    const Series fa = flat_view(sa);
+    const Series fb = flat_view(sb);
+    const dftu_series* a = fa.handle();
+    const dftu_series* b = fb.handle();
+    if (!same_rows(a, b)) return {};
+    const std::int64_t n = a->length;
+    const IntCol digits(b);
+    constexpr double TWO_POW_63 = 9223372036854775808.0;
+    auto rounded = [](double x, const Int& d) {
+        const double scale = std::pow(10.0, d.neg ? -static_cast<double>(d.mag)
+                                                  : static_cast<double>(d.mag));
+        return std::round(x * scale) / scale;
+    };
+    Series out;
+    with_num(a->type, [&](auto xa) {
+        using A = decltype(xa);
+        const A* pa = values_of<A>(a);
+        if constexpr (IS_DOUBLE<A>) {
+            Cells<double> c(n);
+            for (std::int64_t i = 0; i < n; ++i) {
+                const auto d = valid_at(a, i) ? digits.at(i) : std::nullopt;
+                if (d && d->mag <= 308) c.set(i, of_double(rounded(pa[i], *d)));
+            }
+            out = c.finish(TypeId::Float64);
+        } else if constexpr (std::is_same_v<A, std::uint64_t>) {
+            Cells<std::uint64_t> c(n);
+            for (std::int64_t i = 0; i < n; ++i) {
+                const auto d = valid_at(a, i) ? digits.at(i) : std::nullopt;
+                if (!d) continue;
+                if (!d->neg) {
+                    c.set(i, pa[i]);
+                } else if (d->mag <= 308) {
+                    const double r = rounded(static_cast<double>(pa[i]), *d);
+                    if (r >= 0 && r < TWO_POW_63)
+                        c.set(i, static_cast<std::uint64_t>(r));
+                }
+            }
+            out = c.finish(TypeId::Uint64);
+        } else {
+            Cells<std::int64_t> c(n);
+            for (std::int64_t i = 0; i < n; ++i) {
+                const auto d = valid_at(a, i) ? digits.at(i) : std::nullopt;
+                if (!d) continue;
+                if (!d->neg)
+                    c.set(i, pa[i]);
+                else if (d->mag <= 308)
+                    c.set(i,
+                          trunc_i64(rounded(static_cast<double>(pa[i]), *d)));
+            }
+            out = c.finish(TypeId::Int64);
+        }
+    });
+    return out;
+}
+
+Series extract_col_kernel(const Series& sa, const Series& sb,
+                          const duql::CompiledPattern& p) {
+    const Series fa = flat_view(sa);
+    const Series fb = flat_view(sb);
+    const dftu_series* a = fa.handle();
+    const dftu_series* b = fb.handle();
+    if (!same_rows(a, b)) return {};
+    const TextCol ta(a);
+    if (!ta.ok()) return {};
+    const IntCol groups(b);
+    const std::uint64_t max_group = duql::capture_count(p);
+    TextCells c(a->length);
+    for (std::int64_t i = 0; i < a->length; ++i) {
+        const auto g = valid_at(a, i) ? groups.at(i) : std::nullopt;
+        std::string_view m;
+        if (g && !g->neg && g->mag <= max_group &&
+            duql::extract(p, ta.at(i), static_cast<std::size_t>(g->mag), m) ==
+                duql::MatchResult::YES)
             c.add(m);
         else
             c.end_row(false);
@@ -2519,6 +3078,135 @@ Series list_contains_kernel(const Series& s, const dftu_scalar& v) {
     return c.finish();
 }
 
+// A failure a worker raises for the calling thread (index / rindex finding no
+// match); require_evaluated throws it, since a parallel worker cannot.
+std::mutex g_eval_error_mutex;
+std::string g_eval_error;
+
+void set_eval_error(std::string message) {
+    std::lock_guard<std::mutex> lock(g_eval_error_mutex);
+    g_eval_error = std::move(message);
+}
+
+Series str_const(std::string_view t, std::int64_t len) {
+    dftu_scalar sc{};
+    sc.kind = DFTU_SCALAR_TAG_STR;
+    sc.value.s = t.data();
+    sc.len = static_cast<std::uint32_t>(t.size());
+    return const_column(TypeId::String, sc, len);
+}
+
+// The OP_STR_FN runtime: the same C ABI kernels the eager Series.str calls, so
+// an expression gives the eager result.
+Series str_fn_eval(const SlotOp& op, const Series& a, const Series* b,
+                   std::int64_t len) {
+    const dftu_series* h = a.handle();
+    const std::int64_t i0 = op.scalar.value.i;
+    const std::int64_t i1 = op.scalar2.value.i;
+    const char* t = op.text.data();
+    const auto tn = static_cast<std::int32_t>(op.text.size());
+    const char fill = op.text.empty() ? ' ' : op.text.front();
+    const auto fn = static_cast<StrFn>(op.param);
+    switch (fn) {
+        case StrFn::IsAlnum:
+        case StrFn::IsAlpha:
+        case StrFn::IsDigit:
+        case StrFn::IsDecimal:
+        case StrFn::IsNumeric:
+        case StrFn::IsSpace:
+        case StrFn::IsLower:
+        case StrFn::IsUpper:
+        case StrFn::IsTitle:
+            return Series{dftu_series_str_is(h, op.param)};
+        case StrFn::PadStart:
+            return Series{dftu_series_str_pad_start(h, i0, fill)};
+        case StrFn::PadEnd:
+            return Series{dftu_series_str_pad_end(h, i0, fill)};
+        case StrFn::Center:
+            return Series{dftu_series_str_center(h, i0, fill)};
+        case StrFn::Zfill:
+            return Series{dftu_series_str_zfill(h, i0)};
+        case StrFn::RemovePrefix:
+            return Series{dftu_series_str_remove_prefix(h, t, tn)};
+        case StrFn::RemoveSuffix:
+            return Series{dftu_series_str_remove_suffix(h, t, tn)};
+        case StrFn::Repeat:
+            return Series{dftu_series_str_repeat(h, i0)};
+        case StrFn::SliceReplace: {
+            Series head{dftu_series_str_slice(h, 0, i0)};
+            Series tail{
+                i1 == std::numeric_limits<std::int64_t>::min()
+                    ? dftu_series_str_slice(h, 0, 0)
+                    : dftu_series_str_slice(h, i1, std::int64_t{1} << 62)};
+            if (!head.handle() || !tail.handle()) return Series{};
+            const Series mid = str_const(op.text, len);
+            Series hm{dftu_series_str_cat(head.handle(), mid.handle())};
+            if (!hm.handle()) return Series{};
+            return Series{dftu_series_str_cat(hm.handle(), tail.handle())};
+        }
+        case StrFn::Split:
+            return Series{dftu_series_str_split(h, t, tn)};
+        case StrFn::Partition:
+            return Series{dftu_series_str_partition(h, t, tn, 0)};
+        case StrFn::RPartition:
+            return Series{dftu_series_str_partition(h, t, tn, 1)};
+        case StrFn::Findall:
+            return Series{dftu_series_str_findall(h, t, tn)};
+        case StrFn::Extract:
+            return Series{dftu_series_str_extract(h, t, tn, i0)};
+        case StrFn::RegexReplace:
+            return Series{dftu_series_str_regex_replace(
+                h, t, tn, op.text2.data(),
+                static_cast<std::int32_t>(op.text2.size()))};
+        case StrFn::Rfind:
+            return Series{dftu_series_str_rfind(h, t, tn)};
+        case StrFn::Index:
+        case StrFn::Rindex: {
+            Series r{fn == StrFn::Index ? dftu_series_str_find(h, t, tn)
+                                        : dftu_series_str_rfind(h, t, tn)};
+            if (!r.handle()) return Series{};
+            dftu_scalar minus_one{};
+            minus_one.kind = DFTU_SCALAR_TAG_I64;
+            minus_one.value.i = -1;
+            Series miss{
+                dftu_series_compare(r.handle(), DFTU_CMP_EQ, minus_one)};
+            if (miss.handle() && dftu_series_any(miss.handle()) != 0) {
+                set_eval_error(
+                    std::string(fn == StrFn::Index ? "index" : "rindex") +
+                    ": substring '" + std::string(op.text) +
+                    "' not found in every row");
+                return Series{};
+            }
+            return r;
+        }
+        case StrFn::Join:
+            return Series{dftu_series_list_join(h, t, tn)};
+        case StrFn::Get: {
+            Series piece{dftu_series_str_slice(h, i0, 1)};
+            Series lens{dftu_series_str_len_bytes(h)};
+            if (!piece.handle() || !lens.handle()) return Series{};
+            dftu_scalar bound{};
+            bound.kind = DFTU_SCALAR_TAG_I64;
+            bound.value.i = i0;
+            Series cond{dftu_series_compare(lens.handle(), DFTU_CMP_GT, bound)};
+            const Series nulls = Series::nulls(TypeId::String, len);
+            if (!cond.handle()) return Series{};
+            return Series{dftu_series_where(cond.handle(), piece.handle(),
+                                            nulls.handle())};
+        }
+        case StrFn::Cat: {
+            if (b == nullptr) return Series{};
+            if (op.text.empty())
+                return Series{dftu_series_str_cat(h, b->handle())};
+            const Series sep = str_const(op.text, len);
+            Series ab{dftu_series_str_cat(h, sep.handle())};
+            if (!ab.handle()) return Series{};
+            return Series{dftu_series_str_cat(ab.handle(), b->handle())};
+        }
+    }
+    return Series{};
+}
+
 // Evaluate the slot program over rows [offset, offset+len) and extract one
 // column per requested final slot (shared, so distinct outputs that resolved to
 // the same slot alias the one buffer).
@@ -2682,6 +3370,15 @@ std::vector<Series> eval_chunk(const std::vector<SlotOp>& prog,
                     case StrMapOp::Rstrip:
                         r = dftu_series_str_rstrip(A());
                         break;
+                    case StrMapOp::Capitalize:
+                        r = dftu_series_str_case(A(), 0);
+                        break;
+                    case StrMapOp::Title:
+                        r = dftu_series_str_case(A(), 1);
+                        break;
+                    case StrMapOp::Swapcase:
+                        r = dftu_series_str_case(A(), 2);
+                        break;
                 }
                 s[k] = Series{r};
                 break;
@@ -2758,6 +3455,30 @@ std::vector<Series> eval_chunk(const std::vector<SlotOp>& prog,
                 s[k] =
                     substr_kernel(SA(), op.scalar.value.i, op.scalar2.value.i);
                 break;
+            case OP_STR_PRED_COL:
+                s[k] = str_pred_col_kernel(SA(), SB(), op.param);
+                break;
+            case OP_STR_REPLACE_COL:
+                s[k] = str_replace_col_kernel(
+                    SA(), SB(), s[static_cast<std::size_t>(op.c)]);
+                break;
+            case OP_STR_SUBSTR_COL:
+                s[k] = substr_col_kernel(
+                    SA(), SB(),
+                    op.c >= 0 ? &s[static_cast<std::size_t>(op.c)] : nullptr);
+                break;
+            case OP_ROUND_COL:
+                s[k] = round_col_kernel(SA(), SB());
+                break;
+            case OP_STR_EXTRACT_COL:
+                s[k] = extract_col_kernel(SA(), SB(), *op.pattern);
+                break;
+            case OP_DATE_PART:
+                s[k] = date_part_kernel(SA(), op.param, op.scalar.value.i);
+                break;
+            case OP_FORMAT_TIME:
+                s[k] = format_time_kernel(SA(), op.text, op.scalar.value.i);
+                break;
             case OP_STR_PATTERN:
                 s[k] = str_pattern(SA(), *op.pattern);
                 break;
@@ -2765,6 +3486,9 @@ std::vector<Series> eval_chunk(const std::vector<SlotOp>& prog,
                 s[k] =
                     extract_kernel(SA(), *op.pattern,
                                    static_cast<std::size_t>(op.scalar.value.i));
+                break;
+            case OP_STR_REGEX_REPLACE:
+                s[k] = str_regex_replace(SA(), *op.pattern, *op.subst);
                 break;
             case OP_CONVERT:
                 s[k] = convert_kernel(SA(), op.param);
@@ -2781,6 +3505,9 @@ std::vector<Series> eval_chunk(const std::vector<SlotOp>& prog,
             case OP_LIST_CONTAINS:
                 s[k] = list_contains_kernel(SA(), op.scalar);
                 break;
+            case OP_STR_FN:
+                s[k] = str_fn_eval(op, SA(), op.b >= 0 ? &SB() : nullptr, len);
+                break;
             default:
                 return {};
         }
@@ -2795,9 +3522,16 @@ std::vector<Series> eval_chunk(const std::vector<SlotOp>& prog,
 // eval_chunk returns no columns when a kernel does not take its input type;
 // raised here, on the calling thread, since the parallel workers cannot throw.
 void require_evaluated(const std::vector<Series>& outs) {
-    if (outs.empty())
+    if (outs.empty()) {
+        std::string message;
+        {
+            std::lock_guard<std::mutex> lock(g_eval_error_mutex);
+            message.swap(g_eval_error);
+        }
+        if (!message.empty()) throw std::invalid_argument(message);
         throw std::invalid_argument(
             "expr: an operation does not take its input column type");
+    }
 }
 
 Series ensure_flat(const Series& c) {
@@ -3027,10 +3761,52 @@ dftu_expr* dftu_expr_str_pred(int32_t op, const dftu_expr* a,
         std::string_view(pattern ? pattern : "",
                          static_cast<std::size_t>(pattern_len))));
 }
+dftu_expr* dftu_expr_str_pred_col(int32_t op, const dftu_expr* a,
+                                  const dftu_expr* needle) {
+    if (!a || !needle) return nullptr;
+    if (op != static_cast<int32_t>(dataframe::StrPredOp::Contains) &&
+        op != static_cast<int32_t>(dataframe::StrPredOp::StartsWith) &&
+        op != static_cast<int32_t>(dataframe::StrPredOp::EndsWith))
+        return nullptr;
+    return wrap(dataframe::expr_str_pred_col(
+        static_cast<dataframe::StrPredOp>(op), unwrap(a), unwrap(needle)));
+}
+dftu_expr* dftu_expr_str_replace_col(const dftu_expr* a, const dftu_expr* from,
+                                     const dftu_expr* to) {
+    if (!a || !from || !to) return nullptr;
+    return wrap(
+        dataframe::expr_str_replace_col(unwrap(a), unwrap(from), unwrap(to)));
+}
+dftu_expr* dftu_expr_str_substr_col(const dftu_expr* a, const dftu_expr* start,
+                                    const dftu_expr* len) {
+    if (!a || !start) return nullptr;
+    const dataframe::Expr l = len ? unwrap(len) : dataframe::Expr{};
+    return wrap(dataframe::expr_str_substr_col(unwrap(a), unwrap(start),
+                                               len ? &l : nullptr));
+}
+dftu_expr* dftu_expr_round_col(const dftu_expr* a, const dftu_expr* digits) {
+    if (!a || !digits) return nullptr;
+    return wrap(dataframe::expr_round_col(unwrap(a), unwrap(digits)));
+}
 dftu_expr* dftu_expr_str_map(int32_t op, const dftu_expr* a) {
     if (!a) return nullptr;
     return wrap(dataframe::expr_str_map(static_cast<dataframe::StrMapOp>(op),
                                         unwrap(a)));
+}
+dftu_expr* dftu_expr_str_fn(int32_t fn, const dftu_expr* a, const dftu_expr* b,
+                            const char* text, int32_t text_len,
+                            const char* text2, int32_t text2_len, int64_t i0,
+                            int64_t i1) {
+    if (!a || fn < 0 || fn > DFTU_STR_FN_REGEX_REPLACE ||
+        (text_len > 0 && !text) || (text2_len > 0 && !text2))
+        return nullptr;
+    const dataframe::Expr other = b ? unwrap(b) : dataframe::Expr{};
+    return wrap(dataframe::expr_str_fn(
+        static_cast<dataframe::StrFn>(fn), unwrap(a), b ? &other : nullptr,
+        std::string_view(text ? text : "", static_cast<std::size_t>(text_len)),
+        std::string_view(text2 ? text2 : "",
+                         static_cast<std::size_t>(text2_len)),
+        i0, i1));
 }
 dftu_expr* dftu_expr_str_len(const dftu_expr* a, int32_t chars) {
     if (!a) return nullptr;
@@ -3052,6 +3828,20 @@ dftu_expr* dftu_expr_str_replace(const dftu_expr* a, const char* from,
         std::string_view(from ? from : "", static_cast<std::size_t>(from_len)),
         std::string_view(to ? to : "", static_cast<std::size_t>(to_len)),
         all != 0));
+}
+dftu_expr* dftu_expr_date_part(const dftu_expr* a, int32_t part,
+                               int64_t ns_per_unit) {
+    if (!a || !dftracer::utils::is_date_part_code(part) || ns_per_unit <= 0)
+        return nullptr;
+    return wrap(dataframe::expr_date_part(unwrap(a), part, ns_per_unit));
+}
+dftu_expr* dftu_expr_format_time(const dftu_expr* a, const char* fmt,
+                                 int32_t fmt_len, int64_t ns_per_unit) {
+    if (!a || fmt_len < 0 || (fmt_len > 0 && !fmt) || ns_per_unit <= 0)
+        return nullptr;
+    const std::string_view f(fmt ? fmt : "", static_cast<std::size_t>(fmt_len));
+    if (!dftracer::utils::invalid_time_format(f).empty()) return nullptr;
+    return wrap(dataframe::expr_format_time(unwrap(a), f, ns_per_unit));
 }
 dftu_expr* dftu_expr_str_slice(const dftu_expr* a, int64_t start, int64_t len) {
     if (!a) return nullptr;

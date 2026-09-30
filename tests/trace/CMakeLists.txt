@@ -79,6 +79,7 @@ set(TRACE_TEST_SOURCES
     aggregators/test_aggregation_key.cpp
     aggregators/test_aggregation_config.cpp
     aggregators/test_aggregation_serialization.cpp
+    aggregators/test_variance_tier.cpp
     aggregators/test_aggregator_utility.cpp
     aggregators/test_event_aggregator_utility.cpp
     aggregators/test_aggregation_augmentation.cpp

@@ -153,7 +153,7 @@ DFTU_SERIES_OP(dftu.series.rolling_median, dftu_series_rolling_median, SERIES, S
 
 /* Membership / binning (series, series -> series). */
 DFTU_SERIES_OP(dftu.series.is_in, dftu_series_is_in, SERIES, SERIES, SERIES, NONE)
-DFTU_SERIES_OP(dftu.series.cut, dftu_series_cut, SERIES, SERIES, SERIES, NONE)
+DFTU_SERIES_OP(dftu.series.cut, dftu_series_cut, SERIES, SERIES, SERIES, I32)
 DFTU_SERIES_OP(dftu.series.search_sorted, dftu_series_search_sorted, SERIES, SERIES, SERIES,
                NONE)
 
@@ -238,5 +238,9 @@ DFTU_SERIES_OP(dftu.series.dt_part, dftu_series_dt_part, SERIES, SERIES, I32, I3
 DFTU_SERIES_OP(dftu.series.dt_round, dftu_series_dt_round, SERIES, SERIES, I64, I32)
 DFTU_SERIES_OP(dftu.series.with_timezone, dftu_series_with_timezone, SERIES, SERIES, STR, NONE)
 DFTU_SERIES_OP(dftu.series.compare_series, dftu_series_compare_series, SERIES, SERIES, SERIES, CMP)
+
+/* Regex replace with group references in the replacement. */
+DFTU_SERIES_OP(dftu.series.str_regex_replace, dftu_series_str_regex_replace, SERIES, SERIES, STR, STR)
+DFTU_SERIES_OP(dftu.series.dt_format, dftu_series_dt_format, SERIES, SERIES, STR, I32)
 
 #undef DFTU_SERIES_OP

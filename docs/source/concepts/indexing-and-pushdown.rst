@@ -57,7 +57,7 @@ compares.
 Each file's schema is detected before it is indexed, from up to 1000
 records at its start; metadata lines before them are read past, up to
 16 MiB of text. A schema judges the records its ``data`` row set keeps, so
-dftracer metadata and genesis ``RUN`` lines neither match nor miss it. A
+dftracer metadata records, and genesis ``run`` records, neither match nor miss it. A
 record matches when it holds every required field, or, for a schema whose
 fields are all optional, any declared field; paths resolve as queries read
 them (a flat dotted key, an array index). Of the schemas at least 90
@@ -206,7 +206,7 @@ unusable for a person; writing it against a live string comparison at scan
 time would mean decoding every candidate row before it can even be tested.
 The dftracer record schema instead has a duql source that declares row sets
 over its metadata records (``files``, ``hosts``, ``strings``, ``ranks``; the
-``genesis`` schema adds ``runs``, built from its ``RUN`` lines). A row set
+``genesis`` schema has its own ``runs``, built from its ``run`` records). A row set
 that is a ``where`` plus a plain ``select`` is evaluated while the index is
 built and stored per file as a native frame in ``core.rowset``, so reading
 it later decodes no trace.

@@ -148,6 +148,10 @@ dftracer::utils::expected<std::vector<Token>, duql::DuqlError> lex(
 
         switch (c) {
             case '=':
+                if (n == '>') {
+                    push(Tok::FATARROW, start, 2);
+                    continue;
+                }
                 push(n == '=' ? Tok::EQ : Tok::ASSIGN, start, n == '=' ? 2 : 1);
                 continue;
             case '!':

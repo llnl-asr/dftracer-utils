@@ -29,6 +29,16 @@
 // agg_state.cpp.
 namespace dftracer::utils::dataframe {
 
+// Separator joining a SetUnion group's distinct values into one text cell;
+// matches views/view_aggregate.h SET_SEP so the two engines agree.
+inline constexpr char AGG_SET_SEP = '\x1e';
+
+// SetUnion's typed result rides AggSpec::param: 0 is the joined text, nonzero
+// is a list column. The state records the element type in its own copy of the
+// spec once it sees the value column (param = 1 + TypeId), so a merged or
+// deserialized partial knows it with no field of its own.
+inline bool set_typed(const AggSpec& sp) { return sp.param != 0.0; }
+
 FieldStatDomain col_domain(TypeId t);
 std::uint64_t read_bits(const Series& c, std::int64_t i, FieldStatDomain d);
 bool is_bytes_key_type(TypeId t);
@@ -40,6 +50,11 @@ void agg_permute_groups(AggState& st, const std::vector<std::int64_t>& perm);
 /// seen in a frame accumulated in parallel); untouched when they already
 /// are, or their first rows are not known.
 AggStatePtr agg_in_first_seen_order(AggStatePtr st);
+
+/// The aggregate columns of `st` alone, with no key columns: the same columns
+/// agg_finalize writes after its keys, for a caller that writes the keys
+/// itself.
+DataFrame agg_finalize_values(const AggState& st);
 
 /// The packed row a partitioned group-by scatters: its row index over the
 /// low word of its key hash, the key words, the value cells, and a null
@@ -283,13 +298,72 @@ class AggState {
     // While `light_on`, `light` (groups * nf) stands in for `fstats`, which
     // is empty; settle_light() folds it into fstats before anything else
     // reads them.
-    struct LightStat {
-        std::uint64_t n = 0;
-        std::uint64_t sum = 0;
-        std::uint64_t lo = 0;
-        std::uint64_t hi = 0;
-    };
-    std::vector<LightStat> light;
+    // A group's row is a presence word (bit f: field f has a value) and then,
+    // per field, only the cells its reducers read, in the order count, sum,
+    // min, max, as bits in the field's domain: a field that is only summed (or
+    // only min'd, or only max'd) takes one word where a general cell took four.
+    // A variance or standard deviation adds three words after those (the mean
+    // as the pair shift + cmean, and the sum of squared deviations cm2), the
+    // fields FieldStat's Welford update keeps for them, so a std column takes
+    // seven words at most where a FieldStat took fourteen.
+    // `light` holds light_stride words a group.
+    static constexpr std::uint8_t LIGHT_SUM = 1;   // sum and mean read it
+    static constexpr std::uint8_t LIGHT_MIN = 2;
+    static constexpr std::uint8_t LIGHT_MAX = 4;
+    static constexpr std::uint8_t LIGHT_N = 8;     // count, mean: a count word
+    static constexpr std::uint8_t LIGHT_MOM = 16;  // var, std: three words
+    std::vector<std::uint64_t> light;
+    std::vector<std::uint8_t> light_mask;  // field -> LIGHT_* cells it keeps
+    std::vector<std::uint32_t>
+        light_off;  // field -> word offset in a group row
+    std::size_t light_stride = 0;
+    // The cell layout from the specs; the state must hold no group yet.
+    void init_light() {
+        light_mask.assign(nf, 0);
+        for (std::size_t i = 0; i < specs.size(); ++i) {
+            const int f = spec_field[i];
+            if (f < 0) continue;
+            switch (specs[i].op) {
+                case AggOp::Sum:
+                    light_mask[static_cast<std::size_t>(f)] |= LIGHT_SUM;
+                    break;
+                case AggOp::Mean:
+                    light_mask[static_cast<std::size_t>(f)] |=
+                        LIGHT_SUM | LIGHT_N;
+                    break;
+                case AggOp::CountValid:
+                    light_mask[static_cast<std::size_t>(f)] |= LIGHT_N;
+                    break;
+                case AggOp::Min:
+                    light_mask[static_cast<std::size_t>(f)] |= LIGHT_MIN;
+                    break;
+                case AggOp::Max:
+                    light_mask[static_cast<std::size_t>(f)] |= LIGHT_MAX;
+                    break;
+                case AggOp::Var:
+                case AggOp::Std:
+                    light_mask[static_cast<std::size_t>(f)] |=
+                        LIGHT_MOM | LIGHT_N;
+                    break;
+                default:
+                    break;
+            }
+        }
+        light_off.assign(nf, 0);
+        light_stride = 1;  // the presence word
+        for (std::size_t f = 0; f < nf; ++f) {
+            // The presence word holds 64 fields; a later one keeps a count.
+            if (f >= 64) light_mask[f] |= LIGHT_N;
+            light_off[f] = static_cast<std::uint32_t>(light_stride);
+            light_stride +=
+                static_cast<std::size_t>((light_mask[f] & LIGHT_N) != 0) +
+                static_cast<std::size_t>((light_mask[f] & LIGHT_SUM) != 0) +
+                static_cast<std::size_t>((light_mask[f] & LIGHT_MIN) != 0) +
+                static_cast<std::size_t>((light_mask[f] & LIGHT_MAX) != 0) +
+                3 * static_cast<std::size_t>((light_mask[f] & LIGHT_MOM) != 0);
+        }
+        light.clear();
+    }
     // Net wraps of an integer light sum by `light` index (FieldStat::ecarry),
     // present only once that sum wraps.
     ankerl::unordered_dense::map<std::size_t, std::int64_t> light_carry;
@@ -301,6 +375,12 @@ class AggState {
     std::vector<std::int64_t> group_first_row;
     // Row index of row 0 of the batch being accumulated (agg_set_row_base).
     std::int64_t row_base = 0;
+    // When set, the original row of batch row i is row_ids[i] (a batch that
+    // is a gather of rows, agg_set_row_ids); row_base is then not used.
+    const std::int64_t* row_ids = nullptr;
+    std::int64_t row_of(std::int64_t i) const {
+        return row_ids ? row_ids[i] : row_base + i;
+    }
     std::vector<FieldStat> fstats;  // groups * nf
 
     // First/Last state, allocated (groups * nf) only when `has_fl`. First/Last
@@ -393,18 +473,14 @@ class AggState {
 
     // Co-moments (Corr/CovarPop/CovarSamp/RegrSlope/RegrIntercept/RegrR2): one
     // slot per distinct (value column, by column) pair over x = by, y = value.
-    // The six raw power sums are additive, so merge is a component-wise add.
+    // One CoStat per group and slot: central co-moments, merged with the Chan
+    // combination (associative, so any partitioning gives the one-pass result).
     bool has_co = false;
     std::size_t n_co = 0;
     std::vector<int> spec_co;  // spec -> slot, or -1
     std::vector<std::int32_t> co_val_col;
     std::vector<std::int32_t> co_by_col;
-    std::vector<double> co_n;  // each groups * n_co
-    std::vector<double> co_sx;
-    std::vector<double> co_sy;
-    std::vector<double> co_sxx;
-    std::vector<double> co_syy;
-    std::vector<double> co_sxy;
+    std::vector<CoStat> co;    // each groups * n_co
 
     // SetUnion: one slot per SetUnion spec (no field-level dedup, mirroring the
     // View's AggSchema). `set_val_col` is a raw index into `values`.
@@ -723,10 +799,31 @@ class AggState {
             if (d.op == AggOp::Pct) dyn_has_sketch = true;
     }
 
+    // The groups a state is expected to hold (an estimate from a probe of the
+    // rows), reserved once the first group arrives, so the per-group arrays
+    // are allocated once and not regrown (and freed) as the groups come in.
+    std::size_t groups_hint = 0;
+    void reserve_groups(std::size_t h) {
+        counts.reserve(h);
+        group_first_row.reserve(h);
+        next_in_bucket.reserve(h);
+        for (std::size_t k = 0; k < nkeys; ++k) {
+            nkey_cols[k].reserve(h);
+            if (key_is_bytes[k])
+                skey_cols[k].reserve(h);
+            else
+                ikey_cols[k].reserve(h);
+        }
+        key_buckets.reserve(h);
+        if (light_on)
+            light.reserve(h * light_stride);
+        else
+            fstats.reserve(h * nf);
+    }
     void grow_group() {
         counts.push_back(0);
         if (light_on)
-            light.resize(light.size() + nf);
+            light.resize(light.size() + light_stride);
         else
             fstats.resize(fstats.size() + nf);
         if (has_fl) {
@@ -748,14 +845,7 @@ class AggState {
         if (has_kmv) kmv.resize(kmv.size() + n_kmv);
         if (has_lst) lst.resize(lst.size() + n_lst);
         if (has_ss) ss_counters.resize(ss_counters.size() + n_ss);
-        if (has_co) {
-            co_n.resize(co_n.size() + n_co, 0.0);
-            co_sx.resize(co_sx.size() + n_co, 0.0);
-            co_sy.resize(co_sy.size() + n_co, 0.0);
-            co_sxx.resize(co_sxx.size() + n_co, 0.0);
-            co_syy.resize(co_syy.size() + n_co, 0.0);
-            co_sxy.resize(co_sxy.size() + n_co, 0.0);
-        }
+        if (has_co) co.resize(co.size() + n_co);
         if (has_set) sets.resize(sets.size() + n_set);
         if (has_occ) {
             occ_deltas.resize(occ_deltas.size() + n_occ);
@@ -769,41 +859,70 @@ class AggState {
             if (dyn_has_sketch) dyn_sketch.emplace_back();
         }
     }
+    // The field stat of slot i (group * nf + field) from its light cells.
+    FieldStat light_stat(std::size_t i) const {
+        const std::size_t fld = i % nf;
+        const std::uint64_t* row = light.data() + (i / nf) * light_stride;
+        const std::uint64_t* c = row + light_off[fld];
+        const std::uint8_t m = light_mask[fld];
+        FieldStat f;
+        std::size_t pos = 0;
+        if (m & LIGHT_N)
+            f.n = c[pos++];
+        else
+            f.n = (row[0] >> fld) & 1;
+        if (f.n == 0) return f;
+        struct Cells {
+            std::uint64_t sum = 0, lo = 0, hi = 0;
+        } l;
+        if (m & LIGHT_SUM) l.sum = c[pos++];
+        if (m & LIGHT_MIN) l.lo = c[pos++];
+        if (m & LIGHT_MAX) l.hi = c[pos++];
+        if (m & LIGHT_MOM) {
+            f.shift = std::bit_cast<double>(c[pos++]);
+            f.cmean = std::bit_cast<double>(c[pos++]);
+            f.cm2 = std::bit_cast<double>(c[pos++]);
+        }
+        f.domain = field_domain[fld];
+        switch (f.domain) {
+            case FieldStatDomain::F64:
+                f.sum = std::bit_cast<double>(l.sum);
+                f.min = std::bit_cast<double>(l.lo);
+                f.max = std::bit_cast<double>(l.hi);
+                break;
+            case FieldStatDomain::I64:
+                f.esum = std::bit_cast<std::int64_t>(l.sum);
+                f.emin = std::bit_cast<std::int64_t>(l.lo);
+                f.emax = std::bit_cast<std::int64_t>(l.hi);
+                f.sum = static_cast<double>(f.esum);
+                f.min = static_cast<double>(f.emin);
+                f.max = static_cast<double>(f.emax);
+                break;
+            case FieldStatDomain::U64:
+                f.esum = std::bit_cast<std::int64_t>(l.sum);
+                f.emin = std::bit_cast<std::int64_t>(l.lo);
+                f.emax = std::bit_cast<std::int64_t>(l.hi);
+                f.sum = static_cast<double>(l.sum);
+                f.min = static_cast<double>(l.lo);
+                f.max = static_cast<double>(l.hi);
+                break;
+        }
+        if (!light_carry.empty())
+            if (const auto it = light_carry.find(i); it != light_carry.end())
+                f.ecarry = it->second;
+        return f;
+    }
+    // The field stat of slot i, wherever it is kept.
+    FieldStat field_stat(std::size_t i) const {
+        return light_on ? light_stat(i) : fstats[i];
+    }
     void settle_light() {
         if (!light_on) return;
+        std::vector<FieldStat> settled_stats(ngroups() * nf);
+        for (std::size_t i = 0; i < settled_stats.size(); ++i)
+            settled_stats[i] = light_stat(i);
+        fstats = std::move(settled_stats);
         light_on = false;
-        fstats.assign(light.size(), FieldStat{});
-        for (std::size_t i = 0; i < light.size(); ++i) {
-            const LightStat& l = light[i];
-            FieldStat& f = fstats[i];
-            f.n = l.n;
-            if (l.n == 0) continue;
-            f.domain = field_domain[i % nf];
-            switch (f.domain) {
-                case FieldStatDomain::F64:
-                    f.sum = std::bit_cast<double>(l.sum);
-                    f.min = std::bit_cast<double>(l.lo);
-                    f.max = std::bit_cast<double>(l.hi);
-                    break;
-                case FieldStatDomain::I64:
-                    f.esum = std::bit_cast<std::int64_t>(l.sum);
-                    f.emin = std::bit_cast<std::int64_t>(l.lo);
-                    f.emax = std::bit_cast<std::int64_t>(l.hi);
-                    f.sum = static_cast<double>(f.esum);
-                    f.min = static_cast<double>(f.emin);
-                    f.max = static_cast<double>(f.emax);
-                    break;
-                case FieldStatDomain::U64:
-                    f.esum = std::bit_cast<std::int64_t>(l.sum);
-                    f.emin = std::bit_cast<std::int64_t>(l.lo);
-                    f.emax = std::bit_cast<std::int64_t>(l.hi);
-                    f.sum = static_cast<double>(l.sum);
-                    f.min = static_cast<double>(l.lo);
-                    f.max = static_cast<double>(l.hi);
-                    break;
-            }
-        }
-        for (const auto& [i, carry] : light_carry) fstats[i].ecarry = carry;
         light_carry.clear();
         light.clear();
         light.shrink_to_fit();
@@ -823,6 +942,12 @@ class AggState {
                 : key_is_bytes[k] ? std::hash<std::string_view>{}(get_str(k))
                                   : static_cast<std::size_t>(get_int(k));
             dftracer::utils::hash_combine(h, cv);
+        }
+        // Before the lookup: reserving rehashes key_buckets, which would leave
+        // `it` below pointing at a bucket that moved.
+        if (groups_hint != 0 && ngroups() == 0) {
+            reserve_groups(groups_hint);
+            groups_hint = 0;
         }
         [[maybe_unused]] auto [it, fresh] =
             key_buckets.try_emplace(static_cast<std::uint64_t>(h), -1);
@@ -1070,14 +1195,8 @@ class AggState {
         if (has_co) {
             const std::size_t dc = static_cast<std::size_t>(g) * n_co;
             const std::size_t sc = static_cast<std::size_t>(j) * n_co;
-            for (std::size_t slot = 0; slot < n_co; ++slot) {
-                co_n[dc + slot] += other.co_n[sc + slot];
-                co_sx[dc + slot] += other.co_sx[sc + slot];
-                co_sy[dc + slot] += other.co_sy[sc + slot];
-                co_sxx[dc + slot] += other.co_sxx[sc + slot];
-                co_syy[dc + slot] += other.co_syy[sc + slot];
-                co_sxy[dc + slot] += other.co_sxy[sc + slot];
-            }
+            for (std::size_t slot = 0; slot < n_co; ++slot)
+                co[dc + slot].merge(other.co[sc + slot]);
         }
         if (has_set) {
             const std::size_t ds = static_cast<std::size_t>(g) * n_set;

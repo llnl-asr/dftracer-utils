@@ -112,12 +112,14 @@ Aggregation specs are ``op:field`` (or bare ``count``):
      - Result column
    * - ``count``
      - row count
+   * - ``count:field``
+     - rows where the field is present (non-null)
    * - ``sum:dur`` / ``sum:size``
      - summed metric (``sum_dur``, ...)
    * - ``min:ts`` / ``max:te`` / ``min:dur`` / ``max:dur``
      - extrema (``min_ts``, ``max_te``, ...)
    * - ``sumsq:dur``
-     - sum of squares (for variance/std)
+     - sum of squares (``std:dur`` and ``var:dur`` are accurate at any offset; they do not need it)
    * - ``p50:dur`` / ``p90:dur``
      - percentiles (from the persisted DDSketch when indexed)
    * - ``hist:dur``
@@ -125,7 +127,7 @@ Aggregation specs are ``op:field`` (or bare ``count``):
    * - ``skew:dur`` / ``kurt:dur``
      - skewness / kurtosis
    * - ``set_union:field``
-     - distinct values per group (``set_field``)
+     - distinct values per group (``set_field``), joined by ``\x1e``; a float keeps every digit, an empty string is a value, and a string that holds ``\x1e`` fails
 
 Reading the result
 -------------------

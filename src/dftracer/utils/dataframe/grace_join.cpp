@@ -64,7 +64,7 @@ GraceJoin::GraceJoin(std::vector<std::string> left_names,
                      std::vector<std::string> right_names,
                      std::vector<std::string> left_on,
                      std::vector<std::string> right_on, JoinHow how,
-                     std::string suffix, std::uint64_t budget)
+                     std::string suffix, std::uint64_t budget, bool nulls_equal)
     : left_names_(std::move(left_names)),
       right_names_(std::move(right_names)),
       left_on_(std::move(left_on)),
@@ -72,6 +72,7 @@ GraceJoin::GraceJoin(std::vector<std::string> left_names,
       how_(how),
       suffix_(std::move(suffix)),
       budget_(budget),
+      nulls_equal_(nulls_equal),
       dir_(std::make_shared<spill::Dir>()) {
     if (left_on_.size() != right_on_.size() || left_on_.empty())
         throw std::invalid_argument("join: uneven or empty key list");
@@ -220,7 +221,7 @@ coro::CoroTask<std::optional<DataFrame>> GraceJoin::next(
             DataFrame right = co_await right_rows(p, max_rows);
             cur_.emplace();
             cur_->join.emplace(std::move(right), left_on_, right_on_, how_,
-                               suffix_);
+                               suffix_, nulls_equal_);
             cur_->left = p.left.reader();
             cur_->part = std::move(work.part);
         }

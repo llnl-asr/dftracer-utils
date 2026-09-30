@@ -61,11 +61,13 @@ std::vector<Field> join_out_fields(const std::vector<Field>& left,
 class HashJoin {
    public:
     /// Validates `how`, the key arity and the right key columns; a left key is
-    /// validated by the first probe. Throws std::invalid_argument /
-    /// std::out_of_range naming the offending key.
+    /// validated by the first probe. With `nulls_equal` a null key cell matches
+    /// another null key cell (never a value); it is refused for a cross, lookup
+    /// or nest join. Throws std::invalid_argument / std::out_of_range naming
+    /// the offending key.
     HashJoin(DataFrame right, std::vector<std::string> left_on,
-             std::vector<std::string> right_on, JoinHow how,
-             std::string suffix);
+             std::vector<std::string> right_on, JoinHow how, std::string suffix,
+             bool nulls_equal = false);
 
     /// join_out_names over this build side's column names.
     std::vector<std::string> out_names(
@@ -116,6 +118,7 @@ class HashJoin {
     std::vector<std::string> right_on_;
     JoinHow how_;
     std::string suffix_;
+    bool nulls_equal_ = false;  // a null key matches a null key
     std::vector<Series> right_keys_;
     // The 64-bit key hash of each right row to the first row with it; rows
     // sharing a hash chain through `next_` (ascending), and a probe compares

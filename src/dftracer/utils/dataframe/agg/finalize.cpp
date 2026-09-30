@@ -1,4 +1,5 @@
 #include <ankerl/unordered_dense.h>
+#include <dftracer/utils/core/common/to_chars.h>
 #include <dftracer/utils/dataframe/agg/detail.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
@@ -6,6 +7,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -18,10 +20,6 @@
 namespace dftracer::utils::dataframe {
 
 namespace {
-
-// Separator joining a SetUnion group's distinct values into one text cell;
-// matches views/view_aggregate.h SET_SEP so the two engines agree.
-constexpr char AGG_SET_SEP = '\x1e';
 
 // One group's occupancy scalars from its endpoint delta-map. Reproduces
 // view_aggregate.cpp occupancy_summary byte-for-byte: busy is the exact
@@ -173,17 +171,17 @@ Series strings_list(const std::vector<std::vector<std::string>>& rows) {
     return Series::list(off, Series::strings(flat));
 }
 
-// The two-variable readouts over one co-moment slot's raw power sums.
-// Reproduces the deleted plugin monoid byte-for-byte, zero-guards included.
-double co_readout(AggOp op, double n, double sx, double sy, double sxx,
-                  double syy, double sxy) {
-    if (n < 2.0) return 0.0;
-    const double cxy = sxy - sx * sy / n;
-    const double cxx = sxx - sx * sx / n;
-    const double cyy = syy - sy * sy / n;
+// The two-variable readouts over one slot's central co-moments. Fewer than two
+// pairs, or a column with no spread, gives 0.
+double co_readout(AggOp op, const CoStat& c) {
+    if (c.n < 2) return 0.0;
+    const double n = static_cast<double>(c.n);
+    const double cxy = c.cxy;
+    const double cxx = c.cxx;
+    const double cyy = c.cyy;
     auto corr = [&]() -> double {
-        const double denom = cxx * cyy;
-        return denom > 0.0 ? cxy / std::sqrt(denom) : 0.0;
+        return cxx > 0.0 && cyy > 0.0 ? cxy / (std::sqrt(cxx) * std::sqrt(cyy))
+                                      : 0.0;
     };
     auto slope = [&]() -> double { return cxx > 0.0 ? cxy / cxx : 0.0; };
     switch (op) {
@@ -196,7 +194,7 @@ double co_readout(AggOp op, double n, double sx, double sy, double sxx,
         case AggOp::RegrSlope:
             return slope();
         case AggOp::RegrIntercept:
-            return sy / n - slope() * sx / n;
+            return c.mean_y() - slope() * c.mean_x();
         default:  // RegrR2
             return corr() * corr();
     }
@@ -222,16 +220,122 @@ static void mark_null_keys(Series& col,
     h->null_count = count;
 }
 
-DataFrame agg_finalize(const AggState& st_in,
-                       const std::vector<std::string>& key_names) {
-    const AggState& st = settled(st_in);
+namespace {
+
+// The IEEE total order as an unsigned key: negative zero sorts before zero and
+// NaN last, so the order of a float set never depends on hash order.
+std::uint64_t total_order_key(double v) {
+    std::uint64_t b = std::bit_cast<std::uint64_t>(v);
+    return (b >> 63) ? ~b : (b | (std::uint64_t{1} << 63));
+}
+
+// A typed SetUnion: each group's set as a list of the element type, ascending.
+// The set holds element text (decimal, shortest round-trip floats, 0/1 bools),
+// parsed back here; an element type the state never saw falls back to string.
+Series set_list_column(const AggState& st, std::size_t spec, std::int64_t ng) {
+    const int slot = st.spec_set[spec];
+    const double p = st.specs[spec].param;
+    const TypeId et = p >= 2.0 ? static_cast<TypeId>(static_cast<int>(p) - 1)
+                               : TypeId::String;
+    const FieldStatDomain dom =
+        et == TypeId::String ? FieldStatDomain::I64 : col_domain(et);
+    std::vector<std::int32_t> off{0};
+    std::vector<std::string> strs;
+    std::vector<std::int64_t> ints;
+    std::vector<std::uint64_t> uints;
+    std::vector<double> fls;
+    std::vector<std::uint8_t> bits;
+    std::int64_t n = 0;
+    std::vector<std::string_view> sorted;
+    for (std::int64_t g = 0; g < ng; ++g) {
+        sorted.clear();
+        if (slot >= 0) {
+            const AggState::StringSet& gset =
+                st.sets[static_cast<std::size_t>(g) * st.n_set +
+                        static_cast<std::size_t>(slot)];
+            sorted.assign(gset.begin(), gset.end());
+        }
+        if (et == TypeId::String) {
+            std::sort(sorted.begin(), sorted.end());
+            for (const std::string_view x : sorted) strs.emplace_back(x);
+        } else if (et == TypeId::Bool) {
+            std::sort(sorted.begin(), sorted.end());
+            for (std::size_t j = 0; j < sorted.size(); ++j) {
+                const std::int64_t i = n + static_cast<std::int64_t>(j);
+                if (static_cast<std::size_t>(i >> 3) >= bits.size())
+                    bits.resize(static_cast<std::size_t>(i >> 3) + 1, 0);
+                if (sorted[j] == "1")
+                    bits[static_cast<std::size_t>(i >> 3)] |=
+                        static_cast<std::uint8_t>(1u << (i & 7));
+            }
+        } else if (dom == FieldStatDomain::F64) {
+            std::vector<double> v;
+            for (const std::string_view x : sorted) {
+                double d = 0.0;
+                from_chars_double(x.data(), x.data() + x.size(), d);
+                if (et == TypeId::Float32)
+                    d = static_cast<double>(static_cast<float>(d));
+                v.push_back(d);
+            }
+            std::sort(v.begin(), v.end(), [](double a, double b) {
+                return total_order_key(a) < total_order_key(b);
+            });
+            fls.insert(fls.end(), v.begin(), v.end());
+        } else if (dom == FieldStatDomain::U64) {
+            std::vector<std::uint64_t> v;
+            for (const std::string_view x : sorted) {
+                std::uint64_t d = 0;
+                std::from_chars(x.data(), x.data() + x.size(), d);
+                v.push_back(d);
+            }
+            std::sort(v.begin(), v.end());
+            uints.insert(uints.end(), v.begin(), v.end());
+        } else {
+            std::vector<std::int64_t> v;
+            for (const std::string_view x : sorted) {
+                std::int64_t d = 0;
+                std::from_chars(x.data(), x.data() + x.size(), d);
+                v.push_back(d);
+            }
+            std::sort(v.begin(), v.end());
+            ints.insert(ints.end(), v.begin(), v.end());
+        }
+        n += static_cast<std::int64_t>(sorted.size());
+        off.push_back(static_cast<std::int32_t>(n));
+    }
+    Series child;
+    if (et == TypeId::String)
+        child = Series::strings(strs);
+    else if (et == TypeId::Bool)
+        child = Series::flat(TypeId::Bool, bits.data(), n);
+    else if (dom == FieldStatDomain::F64)
+        child = Series::flat_f64(fls.data(), n);
+    else if (dom == FieldStatDomain::U64)
+        child = Series::flat(TypeId::Uint64, uints.data(), n);
+    else
+        child = Series::flat_i64(ints.data(), n);
+    return Series::list(off, std::move(child));
+}
+
+}  // namespace
+
+// The finalized columns of one state. `with_keys` false leaves the key columns
+// out, for a caller that writes them itself (the in-place group-by).
+static DataFrame finalize_impl(const AggState& st_in,
+                               const std::vector<std::string>& key_names,
+                               bool with_keys) {
+    // A light state is read cell by cell, never expanded into field stats.
+    const AggState& st =
+        st_in.has_sketch || st_in.has_dyn ? settled(st_in) : st_in;
     const std::int64_t ng = st.ngroups();
     const std::size_t ns = st.nspecs();
     DataFrame out;
     // A state finalized without accumulating (empty stream) has no key layout;
     // still emit one empty column per requested key so the schema is complete.
     const std::size_t nk =
-        st.nkeys > key_names.size() ? st.nkeys : key_names.size();
+        !with_keys
+            ? 0
+            : (st.nkeys > key_names.size() ? st.nkeys : key_names.size());
     for (std::size_t k = 0; k < nk; ++k) {
         out.names.push_back(k < key_names.size() ? key_names[k]
                                                  : "key" + std::to_string(k));
@@ -329,16 +433,17 @@ DataFrame agg_finalize(const AggState& st_in,
         }
     }
 
-    for (std::size_t k = 0; k < st.nkeys && k < st.nkey_cols.size(); ++k)
+    for (std::size_t k = 0;
+         with_keys && k < st.nkeys && k < st.nkey_cols.size(); ++k)
         mark_null_keys(out.columns[k], st.nkey_cols[k]);
 
     for (std::size_t s = 0; s < ns; ++s) {
         const AggSpec& sp = st.specs[s];
         const int fi = st.spec_field[s];
         out.names.push_back(sp.out);
-        auto fs_at = [&](std::int64_t g) -> const FieldStat& {
-            return st.fstats[static_cast<std::size_t>(g) * st.nf +
-                             static_cast<std::size_t>(fi)];
+        auto fs_at = [&](std::int64_t g) -> FieldStat {
+            return st.field_stat(static_cast<std::size_t>(g) * st.nf +
+                                 static_cast<std::size_t>(fi));
         };
         const FieldStatDomain dom =
             fi >= 0 ? st.field_domain[static_cast<std::size_t>(fi)]
@@ -422,7 +527,7 @@ DataFrame agg_finalize(const AggState& st_in,
         } else if (sp.op == AggOp::SumSq) {
             std::vector<double> v(static_cast<std::size_t>(ng));
             for (std::int64_t g = 0; g < ng; ++g)
-                v[static_cast<std::size_t>(g)] = fs_at(g).sumsq;
+                v[static_cast<std::size_t>(g)] = fs_at(g).sumsq();
             out.columns.push_back(Series::flat_f64(v.data(), ng));
         } else if (sp.op == AggOp::ArgMax || sp.op == AggOp::ArgMin) {
             const int slot = st.spec_arg[s];
@@ -534,11 +639,11 @@ DataFrame agg_finalize(const AggState& st_in,
             for (std::int64_t g = 0; g < ng && slot >= 0; ++g) {
                 const std::size_t cs = static_cast<std::size_t>(g) * st.n_co +
                                        static_cast<std::size_t>(slot);
-                v[static_cast<std::size_t>(g)] =
-                    co_readout(sp.op, st.co_n[cs], st.co_sx[cs], st.co_sy[cs],
-                               st.co_sxx[cs], st.co_syy[cs], st.co_sxy[cs]);
+                v[static_cast<std::size_t>(g)] = co_readout(sp.op, st.co[cs]);
             }
             out.columns.push_back(Series::flat_f64(v.data(), ng));
+        } else if (sp.op == AggOp::SetUnion && set_typed(sp)) {
+            out.columns.push_back(set_list_column(st, s, ng));
         } else if (sp.op == AggOp::SetUnion) {
             const int slot = st.spec_set[s];
             std::vector<std::string> v(static_cast<std::size_t>(ng));
@@ -551,8 +656,11 @@ DataFrame agg_finalize(const AggState& st_in,
                     std::vector<std::string_view> sorted(gset.begin(),
                                                          gset.end());
                     std::sort(sorted.begin(), sorted.end());
+                    bool first =
+                        true;  // an empty string is a value, so test position
                     for (const std::string_view x : sorted) {
-                        if (!joined.empty()) joined.push_back(AGG_SET_SEP);
+                        if (!first) joined.push_back(AGG_SET_SEP);
+                        first = false;
                         joined += x;
                     }
                 }
@@ -787,7 +895,7 @@ DataFrame agg_finalize(const AggState& st_in,
                                 r = f->n ? f->max : 0.0;
                                 break;
                             case AggOp::SumSq:
-                                r = f->sumsq;
+                                r = f->sumsq();
                                 break;
                             case AggOp::Mean:
                                 r = f->mean();
@@ -815,6 +923,15 @@ DataFrame agg_finalize(const AggState& st_in,
         }
     }
     return out;
+}
+
+DataFrame agg_finalize(const AggState& st,
+                       const std::vector<std::string>& key_names) {
+    return finalize_impl(st, key_names, true);
+}
+
+DataFrame agg_finalize_values(const AggState& st) {
+    return finalize_impl(st, {}, false);
 }
 
 DataFrame agg_finalize(const AggState& st, const std::string& key_name) {

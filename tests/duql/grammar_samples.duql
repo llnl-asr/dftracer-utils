@@ -2,6 +2,8 @@ cat == "POSIX" and dur >= 1000
 ---
 name like "%Send%"
 ---
+name == "a\"b" or name == 'it\'s' or name == "tab\there\u00e9" or path ~ "\d+\.h5"
+---
 name ilike "%send%" escape "\\"
 ---
 "io" in cat
@@ -82,9 +84,17 @@ lookup runs on run | lookup hosts on (run, host) into hs | expand hs keep_empty
 ---
 lookup runs on run == id, (a, b) == (c, d), -x == y + 1 into r
 ---
-lookup s on pid asof ts == t | lookup s on pid asof ts forward within 5 | lookup s on (a, b) == (c, d) asof ts nearest within $w
+lookup s on pid asof ts == t | lookup s on pid asof ts forward within 5 | lookup s on (a, b) == (c, d) asof ts nearest within $w | lookup s on pid asof ts within 5ms | lookup s on pid asof ts backward within 1.5
 ---
 lookup s on pid overlap | lookup s on (a, b) == (c, d) overlap into m
+---
+lookup runs on run inner | lookup runs on run inner into r | lookup runs on run anti
+---
+lookup (from runs | select run) on run | lookup (from runs) on run inner into r | lookup (from runs) on run anti
+---
+lookup (from s | select pid, ts) on pid asof ts | lookup (from s) on pid overlap into m
+---
+where inner == 1 and anti > 2 | derive anti = inner + 1
 ---
 union (from runs | select run)
 ---
@@ -92,7 +102,27 @@ call myplug.table(x, n = 5) | call_tree
 ---
 time_range 1s .. 5s overlap | bucket 100ms fill
 ---
+bucket 5s every 1s | agg { n = count() }
+---
+bucket 2ms at 1ms | agg { n = count() }
+---
+bucket 5s every 1s at $t0 fill forward from 0 to 10s as w | agg { n = count() }
+---
+bucket $w every $e | agg { n = count() }
+---
 time_range $start..$end | bucket 1m
+---
+bucket 1ms fill forward | agg { n = count() }
+---
+bucket 1ms fill linear from 0 to 6ms as b | agg { n = count() }
+---
+bucket $w fill from $lo - 1s to ($hi + 2) * 3 / 2 as b | agg { n = count() }
+---
+distinct c = cat, dur // 10 as d | pivot k in ["a" as x, "b"] { n = count() } | take 3..5 | take $a..$b
+---
+where name in $names and name not in $skip and path like $p and path not ilike $q escape "!"
+---
+time_range $t0 .. $t0 + 10s | time_range 1s .. | time_range .. 5s overlap | bucket 1s fill as sec | sample $n seed $s | union runs | union "b.pfw.gz"
 ---
 duql 1
 let runs = where type == "run";
@@ -104,8 +134,8 @@ where ms(dur) > 5 and big()
 ---
 # genesis source
 source genesis {
-    data = where type != "run";
-    runs = where type == "run"
+    data = where gtype != "run";
+    runs = where gtype == "run"
 }
 ---
 source dftracer {
@@ -120,6 +150,18 @@ where ms(dur) > 1   # trailing comment
 ---
 source s { data = where x > 1; def f(a, b) = a + b; }
 f(1, 2) > 0
+---
+def io_rate(d) = where cat == "POSIX" | bucket d | agg { b = sum(size) };
+from data | io_rate(1ms) | sort b
+---
+def pos = where cat == "POSIX";
+def rate(d) = pos() | bucket d | agg { n = count() };
+rate(1ms) | sort n
+---
+io_rate(1ms) | sort b
+---
+source s { data = where x > 1; def f(a) = where x > a | take 3 }
+from data | f(1)
 ---
 source empty {}
 ---
@@ -146,8 +188,51 @@ where g not in (from data | where run == ^.run and any(tags, . == ^.cat) | selec
 derive m = (from data | where pid == ^.pid and ts between ^.ts - 1000 and ^.ts | agg { m = max(dur) })
 ---
 where fd in (from data | where name == "write" and ^.ts > ts | group fd {})
-
+---
+group name { count(), sum(dur), quantile(dur, 0.99) }
+---
+derive s = case { dur > 500 => "slow", dur > 100 => "mid", else => "fast" } | derive t = case { ok => 1 }
+---
+window tid sort ts { m = max(dur) over 10 rows, b = sum(size) over 1s, c = count() over $w }
+---
+derive r = mean(size) over 1s / 2 | derive s = sum(x) over 2.5 + 1
+---
+where over > 1
+---
+parse name ~ "(?<op>\\w+)_(?<fd>\\d+)" | where op == "open"
+---
+parse args.fname ~ $p
+---
+where xs[i] > 1 and xs[$n] == "a"
+---
+derive y = a.b[i - 1]
+---
+select a[0].b[i], xs[-i], ys[1 + 1]
 ### invalid
+def m = from data | where x;
+---
+where x | foo.bar(1)
+---
+where x | foo
+---
+parse name ~* "(?<a>x)"
+---
+parse name
+---
+parse name ~
+---
+parse name ~ 5
+---
+window { m = max(dur) over }
+---
+window { m = max(dur) over 10 row }
+---
+derive s = case { }
+---
+derive s = case { else => 1, x > 1 => 2 }
+---
+derive s = case { x > 1, 2 }
+---
 where a ==
 ---
 sort
@@ -161,8 +246,6 @@ x in 5
 like == 1
 ---
 a ~
----
-group k { n }
 ---
 (a, )
 ---
@@ -184,13 +267,35 @@ lookup s on pid overlap into
 ---
 lookup s on pid overlap forward
 ---
-lookup s on pid asof ts within -1
+lookup s on pid asof ts within
 ---
-lookup s on pid asof ts within 1.5
+time_range ..
+---
+bucket 1s as
+---
+bucket 1s from 0 to 5s
+---
+bucket 5s every
+---
+bucket 5s at
+---
+bucket 1s fill from 0
+---
+bucket 1s fill forward linear
+---
+take 1..2 by cat
 ---
 lookup s on pid asof
 ---
 lookup s asof ts
+---
+lookup runs on run anti into r
+---
+lookup runs on run inner asof ts
+---
+lookup runs on run anti overlap
+---
+lookup (runs) on run
 ---
 sort - nulls first
 ---
@@ -200,6 +305,8 @@ f (x) == 1 extra
 ---
 take -5
 ---
-a[1.5] == 1
+where xs[i].b == 1
+---
+where xs[i][0] == 1
 ---
 session pid gap

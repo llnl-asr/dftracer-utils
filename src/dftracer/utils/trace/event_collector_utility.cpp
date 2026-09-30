@@ -1,8 +1,8 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/utils/string.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/json/line.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/trace/event_collector_utility.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
@@ -31,10 +31,10 @@ class EventIdCollector : public utilities::reader::internal::LineProcessor {
         const char* trimmed;
         std::size_t trimmed_length;
 
-        bool valid = trim_commas ? json_trim_and_validate_with_comma(
+        bool valid = trim_commas ? json::trim_and_validate_with_comma(
                                        data, length, trimmed, trimmed_length)
-                                 : json_trim_and_validate(data, length, trimmed,
-                                                          trimmed_length);
+                                 : json::trim_and_validate(
+                                       data, length, trimmed, trimmed_length);
 
         if (!valid || trimmed_length <= 8) {
             co_return true;

@@ -29,17 +29,15 @@ void MetricStats::merge_from(const MetricStats& other) {
     }
 }
 
-// Central moments from the raw power sums (sumsq = sum x^2, m3 = sum x^3,
-// m4 = sum x^4): M2 = sumsq - n*mu^2, plus the analogous M3/M4 identities.
+// The central moments the FieldStat already keeps (sums of (x - mean)^k).
 static void central_moments(const dftracer::utils::dataframe::FieldStat& s,
                             double& M2, double& M3, double& M4, double& n,
                             double& mu) {
     n = static_cast<double>(s.n);
-    mu = s.sum / n;
-    M2 = s.sumsq - n * mu * mu;
-    M3 = s.m3 - 3.0 * mu * s.sumsq + 2.0 * n * mu * mu * mu;
-    M4 = s.m4 - 4.0 * mu * s.m3 + 6.0 * mu * mu * s.sumsq -
-         3.0 * n * mu * mu * mu * mu;
+    mu = s.moment_mean();
+    M2 = s.cm2;
+    M3 = s.cm3;
+    M4 = s.cm4;
     if (M2 < 0.0) M2 = 0.0;  // rounding can push nonneg moments slightly < 0
     if (M4 < 0.0) M4 = 0.0;
 }

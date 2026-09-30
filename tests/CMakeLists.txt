@@ -223,20 +223,18 @@ foreach(test_file ${TEST_CPP_SOURCES})
                                            RESOURCE_LOCK heavy_threading)
   endif()
 
-  # 300 random queries, each scanned four ways; about 100 s alone.
-  if(bin_exec STREQUAL "index/test_prefilter_fuzz")
-    set_tests_properties(${bin_exec} PROPERTIES TIMEOUT 300)
-  endif()
-
   # Robustness test generates large (128 MB) gzip files; coverage
   # instrumentation on macOS CI runners makes it significantly slower, and
   # TSan more so (about 1200 s on an M4 Pro). The prune oracle reads its corpus
   # once per query and time range (about 95 s alone under ASan).
+  # The prefilter fuzz scans 300 random queries four ways (about 170 s
+  # alone on a laptop, over 900 s on the macOS coverage runner).
   if(bin_exec STREQUAL "reader/test_reader_robustness"
-     OR bin_exec STREQUAL "index/test_prune_oracle")
+     OR bin_exec STREQUAL "index/test_prune_oracle"
+     OR bin_exec STREQUAL "index/test_prefilter_fuzz")
     set(robustness_timeout 600)
     if(DFTRACER_UTILS_COVERAGE)
-      set(robustness_timeout 900)
+      set(robustness_timeout 1800)
     endif()
     if(DFTRACER_UTILS_ENABLE_TSAN)
       set(robustness_timeout 1800)

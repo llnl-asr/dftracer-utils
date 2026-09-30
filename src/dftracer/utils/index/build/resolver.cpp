@@ -252,10 +252,17 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
             bool needs_agg = false;
             if (aggregate) {
                 if (find_schema(schema)) {
-                    const bool current = agg_current(
-                        db.extension_state(reg.file_id,
-                                           index::store::IndexExtension::AGG),
-                        params);
+                    const auto agg_state = db.extension_state(
+                        reg.file_id, index::store::IndexExtension::AGG);
+                    // Rows stored by another version of the tier are of another
+                    // layout and the tier cannot replace one file's rows, so
+                    // the whole tier is stale: it is cleared and rebuilt, never
+                    // merged onto.
+                    if (agg_state && agg_state->version !=
+                                         index::store::layout::ext_version(
+                                             index::store::IndexExtension::AGG))
+                        result.aggregation_stale = true;
+                    const bool current = agg_current(agg_state, params);
                     agg_candidates.emplace_back(
                         FileWorkItem{
                             f.file_index, f.file_path, reg.file_id, {}, schema},
@@ -293,6 +300,9 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
         DFTRACER_UTILS_LOG_WARN(
             "Index resolve failed (%s); falling back to full rebuild",
             e.what());
+        // Every file is rebuilt whole and the tier cannot replace one file's
+        // rows, so the stored tier (possibly the corrupt part) is cleared.
+        result.aggregation_stale = true;
         for (auto& f : input.files) {
             result.needs_checkpoint.push_back(
                 FileWorkItem{f.file_index, std::move(f.file_path), -1, {}, {}});

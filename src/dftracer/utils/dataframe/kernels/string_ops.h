@@ -7,7 +7,8 @@
 
 namespace dftracer::utils::duql {
 struct CompiledPattern;
-}
+struct Substitution;
+}  // namespace dftracer::utils::duql
 
 namespace dftracer::utils::dataframe {
 
@@ -21,6 +22,11 @@ Series str_starts_with(const Series& v, std::string_view prefix);
 /// Bool mask of the duql pattern `p` over a String/Binary column; a row whose
 /// match reaches the pattern's work limit is null.
 Series str_pattern(const Series& v, const duql::CompiledPattern& p);
+
+/// String column of `s` with every match of `p` replaced per `sub`; null rows
+/// and rows whose match reaches the work limit are null.
+Series str_regex_replace(const Series& v, const duql::CompiledPattern& p,
+                         const duql::Substitution& sub);
 
 }  // namespace dftracer::utils::dataframe
 

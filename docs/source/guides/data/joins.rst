@@ -69,7 +69,7 @@ Join two DataFrames
       ``nest``. ``merge`` is the
       pandas spelling of the same call (``right`` first, then ``how``); only the
       right side's colliding columns are suffixed. A missing key column raises
-      ``KeyError``.
+      ``KeyError``. ``nulls_equal=True`` matches null keys (see "Null keys").
 
    .. tab-item:: C
 
@@ -77,12 +77,55 @@ Join two DataFrames
 
          const char* on[] = {"fid"};
          dftu_dataframe* joined =
-             dftu_dataframe_join(left, right, on, on, 1, DFTU_JOIN_INNER, NULL);
+             dftu_dataframe_join(left, right, on, on, 1, DFTU_JOIN_INNER, NULL, 0);
 
       ``dftu_dataframe_join`` returns NULL on an absent key, a key type mismatch,
-      an empty key list for a keyed join, or an unknown ``dftu_join_how``. The
-      same op is registered as ``dftu.frame.join`` (two frame operands, then
-      the two key lists, the join kind and the suffix).
+      an empty key list for a keyed join, an unknown ``dftu_join_how``, or a
+      nonzero last argument (``nulls_equal``) with a cross, lookup or nest
+      join. The same op is registered as ``dftu.frame.join`` (two frame
+      operands, then the two key lists, the join kind, the suffix and
+      ``nulls_equal``).
+
+Null keys
+---------
+
+A null key never matches another null key: that is the SQL rule, and it is the
+default for every kind and for the lazy join. pandas matches them, so a pandas
+``merge`` over keys with nulls gives more rows than this join does. Pass
+``nulls_equal`` to match them: a null key cell then matches another null key
+cell (in the same key column, so ``(x, null)`` matches ``(x, null)`` and never
+``(x, 1)``) and never matches a value. It applies to the inner, left, right,
+outer, semi and anti kinds, eager and lazy, and to a join that spills to disk;
+it is refused for cross, lookup and nest. Every null row on one side matches
+every null row on the other, so a frame with many null keys on both sides
+returns their product.
+
+.. tab-set::
+
+   .. tab-item:: C++
+
+      .. code-block:: cpp
+
+         DataFrame like_pandas =
+             left.join(right, {"k"}, JoinHow::Inner, "_right", /*nulls_equal=*/true);
+
+   .. tab-item:: Python
+
+      .. code-block:: python
+
+         like_pandas = left.merge(right, on="k", nulls_equal=True)
+         lazy = left.lazy().join(right.lazy(), on="k", nulls_equal=True).collect()
+
+   .. tab-item:: C
+
+      .. code-block:: c
+
+         dftu_dataframe* like_pandas =
+             dftu_dataframe_join(left, right, on, on, 1, DFTU_JOIN_INNER, NULL, 1);
+
+A join that matches nulls is run by the host: it is not offered to a source's
+join pushdown, and the build keys do not narrow the left scan (they leave out
+their nulls, which a left null key must still reach).
 
 Join lazily
 -----------
@@ -125,7 +168,7 @@ is read, never the result.
       .. code-block:: c
 
          dftu_lazyframe* plan =
-             dftu_lazyframe_join(left_lf, right_lf, on, on, 1, DFTU_JOIN_LEFT, NULL);
+             dftu_lazyframe_join(left_lf, right_lf, on, on, 1, DFTU_JOIN_LEFT, NULL, 0);
 
       Registered as ``dftu.lazy.join``, so a plugin reaches it through
       ``OwnedLazyFrame::join`` as well.
@@ -200,8 +243,9 @@ columns by name:
    spans = events.interval(phases, point="ts", lo="start", hi="end", by="pid")
 
 ``asof`` matches each left row to the nearest right row by the time column
-``on`` (``direction`` ``backward`` / ``forward`` / ``nearest``; ``tolerance``
-bounds the allowed distance); unmatched left rows get null right values.
+``on`` (``direction`` ``backward`` / ``forward`` / ``nearest``; ``tolerance``,
+an int or float in the units of ``on``, bounds the allowed distance); unmatched
+left rows get null right values.
 ``interval`` matches each left row's ``point`` to every right row whose closed
 span ``[lo, hi]`` contains it, one output row per match, and ``outer=True`` also
 emits an unmatched left row once with null right values. Neither is the same op

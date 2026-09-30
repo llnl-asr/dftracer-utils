@@ -213,14 +213,11 @@ TEST_CASE("TraceIndex - directory and index_dir accessors") {
 TEST_CASE("TraceIndex - genesis output resolves run keys through runs") {
     dftu_utils_test::TestEnvironment env(10);
     REQUIRE(env.is_valid());
-    std::string text =
-        R"({"name":"RUN","cat":"dftracer","pid":0,"tid":0,"ts":0,"ph":4,)"
-        R"("args":{"run":"ab","app":"laghos","nodes":4}})"
-        "\n";
+    std::string text = R"({"gtype":"run","run":"ab","app":"laghos","nodes":4})"
+                       "\n";
     for (int i = 0; i < 20; ++i)
-        text += R"({"name":"f","cat":"c","pid":0,"tid":0,"ts":1,"ph":3,)"
-                R"("args":{"run":"ab","path":"main;f)" +
-                std::to_string(i) + R"(","depth":1,"count":2}})" + "\n";
+        text += R"({"gtype":"func","run":"ab","ts":1,"path":"main;f)" +
+                std::to_string(i) + R"(","depth":1,"count":2})" + "\n";
     const std::string gz = env.get_dir() + "/genesis.pfw.gz";
     dftu_utils_test::write_gz_trace(gz, text);
     dftracer::utils::index::IndexerOptions o;

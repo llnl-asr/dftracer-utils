@@ -74,7 +74,10 @@ std::vector<Member> members(std::string_view text, std::string_view origin) {
                 params += (i ? ", " : "") + d.params[i];
             params += ")";
         }
-        add(d.name, "def " + d.name + params + " = " + syn::to_text(*d.body));
+        add(d.name, "def " + d.name + params + " = " +
+                        (std::holds_alternative<syn::PipelinePtr>(d.body)
+                             ? syn::to_text(*std::get<syn::PipelinePtr>(d.body))
+                             : syn::to_text(*std::get<syn::ExprPtr>(d.body))));
     }
     return out;
 }

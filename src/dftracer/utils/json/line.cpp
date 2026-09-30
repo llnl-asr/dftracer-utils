@@ -1,6 +1,6 @@
-#include <dftracer/utils/core/utils/string.h>
+#include <dftracer/utils/json/line.h>
 
-namespace dftracer::utils {
+namespace dftracer::utils::json {
 namespace {
 inline bool is_json_ws(char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
@@ -37,14 +37,14 @@ bool json_trim_impl(const char* data, std::size_t length, const char*& start,
 }
 }  // namespace
 
-bool json_trim_and_validate(const char* data, std::size_t length,
-                            const char*& start, std::size_t& trimmed_length) {
+bool trim_and_validate(const char* data, std::size_t length, const char*& start,
+                       std::size_t& trimmed_length) {
     return json_trim_impl(data, length, start, trimmed_length, false);
 }
 
-bool json_trim_and_validate_with_comma(const char* data, std::size_t length,
-                                       const char*& start,
-                                       std::size_t& trimmed_length) {
+bool trim_and_validate_with_comma(const char* data, std::size_t length,
+                                  const char*& start,
+                                  std::size_t& trimmed_length) {
     return json_trim_impl(data, length, start, trimmed_length, true);
 }
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::json

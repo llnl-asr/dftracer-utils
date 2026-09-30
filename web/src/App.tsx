@@ -1119,11 +1119,6 @@ export default function App() {
   }
 
   function filterByName(name: string) {
-    // duql has no string escapes, so such a name cannot be expressed.
-    if (name.includes('"') || name.includes("\\")) {
-      setError(`Cannot filter on a name containing a quote or backslash: ${name}`);
-      return;
-    }
     const q = textClause("name", name);
     if (!q) return;
     setDuqlText(q);

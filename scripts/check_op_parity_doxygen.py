@@ -450,6 +450,10 @@ PY_ALLOWLIST = {
         "to_pandas",
         "to_polars",
         "to_pylist",
+        # The column as raw NumPy buffers, and its strings into an object array:
+        # conversion handles of the Python extension, not engine operations.
+        "np_parts",
+        "str_into",
         "to_bytes",
         "physical",
         "ops",
@@ -530,6 +534,8 @@ PY_ALLOWLIST = {
         "dtypes",
         "schema",
         "apply",
+        # A formula as text, lowered with apply's source tier to one column expression; no op of its own.
+        "eval",
         # The spec list a broadcast lowers to; the op is group_by.
         "reduce_specs",
         # The index column's name is wrapper metadata; the column is data.

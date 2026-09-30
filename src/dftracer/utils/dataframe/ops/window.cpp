@@ -590,6 +590,405 @@ Series frame(const Layout& lay, const Series& column, const WindowColumn& w) {
                      : ints.series(TypeId::Int64);
 }
 
+constexpr std::int64_t WINDOW_COLLECT_MAX_ELEMENTS = std::int64_t{1} << 27;
+
+struct FrameCtx {
+    const Layout& lay;
+    const WindowParams::Frame& f;
+    bool range;
+};
+
+FrameCtx frame_context(const Layout& lay, const WindowColumn& w) {
+    const WindowParams::Frame& f = w.params.frame;
+    if ((f.preceding < 0 && f.preceding != WINDOW_UNBOUNDED) ||
+        (f.following < 0 && f.following != WINDOW_UNBOUNDED) || f.min_count < 0)
+        throw std::invalid_argument(
+            "window: frame bounds and min_count must not be negative");
+    const bool range = f.mode == WindowFrameMode::Range;
+    const std::vector<ColumnView>& order = *lay.order_keys;
+    if (range && (order.size() != 1 || order[0].is_bytes()))
+        throw std::invalid_argument(
+            "window: RANGE frame needs exactly one numeric order column");
+    return {lay, f, range};
+}
+
+// Visits each row of the partition [p, q) with its frame [lo, hi] (partition
+// local positions), calling enter and leave for the positions that join and
+// leave the frame first. The bounds are those of frame().
+template <class Enter, class Leave, class Emit>
+void walk_frame(const FrameCtx& c, std::int64_t p, std::int64_t q,
+                Enter&& enter, Leave&& leave, Emit&& emit) {
+    const Layout& lay = c.lay;
+    const WindowParams::Frame& f = c.f;
+    const std::vector<ColumnView>& order = *lay.order_keys;
+    const std::int64_t sz = q - p;
+    std::int64_t win_lo = 0, win_hi = -1, first_missing = -1;
+    for (std::int64_t r = p; r < q; ++r) {
+        const std::int64_t local = r - p;
+        std::int64_t lo, hi;
+        if (!c.range) {
+            lo = f.preceding == WINDOW_UNBOUNDED
+                     ? 0
+                     : std::max<std::int64_t>(0, local - f.preceding);
+            hi = f.following == WINDOW_UNBOUNDED
+                     ? sz - 1
+                     : std::min<std::int64_t>(sz - 1, local + f.following);
+        } else if (order[0].is_missing(lay.row(r))) {
+            if (first_missing < 0) {
+                first_missing = r - p;
+                while (first_missing > 0 &&
+                       order[0].is_missing(lay.row(p + first_missing - 1)))
+                    --first_missing;
+            }
+            lo = std::max(win_lo, first_missing);
+            hi = sz - 1;
+        } else {
+            const double ov = order[0].get_double(lay.row(r));
+            const double inf = std::numeric_limits<double>::infinity();
+            const double lo_val = f.preceding == WINDOW_UNBOUNDED
+                                      ? -inf
+                                      : ov - static_cast<double>(f.preceding);
+            const double hi_val = f.following == WINDOW_UNBOUNDED
+                                      ? inf
+                                      : ov + static_cast<double>(f.following);
+            const auto od = [&](std::int64_t pos) {
+                return order[0].get_double(lay.row(p + pos));
+            };
+            lo = win_lo;
+            while (lo < sz && !order[0].is_missing(lay.row(p + lo)) &&
+                   od(lo) < lo_val)
+                ++lo;
+            hi = std::max(win_hi, local);
+            while (hi + 1 < sz && !order[0].is_missing(lay.row(p + hi + 1)) &&
+                   od(hi + 1) <= hi_val)
+                ++hi;
+        }
+        for (std::int64_t pos = win_hi + 1; pos <= hi; ++pos) enter(pos);
+        for (std::int64_t pos = win_lo; pos < lo; ++pos) leave(pos);
+        win_lo = lo;
+        win_hi = hi;
+        emit(r, lo, hi);
+    }
+}
+
+// Dense ranks of a partition's present values: equal values share a rank.
+struct Ranks {
+    std::vector<std::int32_t> of;
+    std::vector<std::int32_t> scratch;
+    std::vector<double> value;
+    std::int32_t count = 0;
+
+    void build(const Layout& lay, const ColumnView& v, std::int64_t p,
+               std::int64_t q, bool keep_values) {
+        const std::int64_t sz = q - p;
+        of.assign(static_cast<std::size_t>(sz), -1);
+        scratch.clear();
+        value.clear();
+        count = 0;
+        for (std::int64_t i = 0; i < sz; ++i)
+            if (!v.is_null(lay.row(p + i)))
+                scratch.push_back(static_cast<std::int32_t>(i));
+        std::sort(scratch.begin(), scratch.end(),
+                  [&](std::int32_t a, std::int32_t b) {
+                      return v.compare(lay.row(p + a), lay.row(p + b)) < 0;
+                  });
+        for (std::size_t i = 0; i < scratch.size(); ++i) {
+            const std::int64_t g = lay.row(p + scratch[i]);
+            if (i == 0 || v.compare(lay.row(p + scratch[i - 1]), g) != 0) {
+                ++count;
+                if (keep_values) value.push_back(v.get_double(g));
+            }
+            of[static_cast<std::size_t>(scratch[i])] = count - 1;
+        }
+    }
+};
+
+struct Fenwick {
+    std::vector<std::int32_t> tree;
+    std::int32_t n = 0;
+
+    void reset(std::int32_t size) {
+        n = size;
+        tree.assign(static_cast<std::size_t>(size) + 1, 0);
+    }
+    void add(std::int32_t at, std::int32_t delta) {
+        for (std::int32_t i = at + 1; i <= n; i += i & -i)
+            tree[static_cast<std::size_t>(i)] += delta;
+    }
+    // The 0-based rank holding the k-th (1-based) counted element.
+    std::int32_t kth(std::int32_t k) const {
+        std::int32_t pos = 0;
+        std::int32_t pw = 1;
+        while ((pw << 1) <= n) pw <<= 1;
+        for (; pw > 0; pw >>= 1) {
+            const std::int32_t next = pos + pw;
+            if (next <= n && tree[static_cast<std::size_t>(next)] < k) {
+                pos = next;
+                k -= tree[static_cast<std::size_t>(next)];
+            }
+        }
+        return pos;
+    }
+};
+
+Series frame_variance(const FrameCtx& c, const Series& column, bool root,
+                      std::int64_t min_count) {
+    const ColumnView v = view_of(column, "FRAME_VAR/FRAME_STD");
+    numeric(v, "FRAME_VAR/FRAME_STD");
+    Column<double> out(c.lay.n);
+    std::vector<std::int64_t> next_present, prev_present, run_start;
+    for (const auto& [p, q] : c.lay.parts) {
+        std::int64_t n = 0;
+        double mean = 0.0, m2 = 0.0;
+        // Variance is shift invariant; centering on the partition mean keeps
+        // the running mean small when the values sit far from zero.
+        double shift = 0.0;
+        std::int64_t present = 0;
+        for (std::int64_t r = p; r < q; ++r) {
+            const std::int64_t g = c.lay.row(r);
+            if (v.is_null(g)) continue;
+            shift += (v.get_double(g) - shift) / static_cast<double>(++present);
+        }
+        const std::int64_t sz = q - p;
+        next_present.assign(static_cast<std::size_t>(sz) + 1, sz);
+        prev_present.assign(static_cast<std::size_t>(sz), -1);
+        run_start.assign(static_cast<std::size_t>(sz), -1);
+        for (std::int64_t i = 0, last = -1; i < sz; ++i) {
+            const std::int64_t g = c.lay.row(p + i);
+            if (!v.is_null(g)) {
+                const bool same =
+                    last >= 0 &&
+                    v.get_double(g) == v.get_double(c.lay.row(p + last));
+                run_start[static_cast<std::size_t>(i)] =
+                    same ? run_start[static_cast<std::size_t>(last)] : i;
+                last = i;
+            }
+            prev_present[static_cast<std::size_t>(i)] = last;
+        }
+        for (std::int64_t i = sz - 1; i >= 0; --i)
+            next_present[static_cast<std::size_t>(i)] =
+                v.is_null(c.lay.row(p + i))
+                    ? next_present[static_cast<std::size_t>(i) + 1]
+                    : i;
+        walk_frame(
+            c, p, q,
+            [&](std::int64_t pos) {
+                const std::int64_t g = c.lay.row(p + pos);
+                if (v.is_null(g)) return;
+                const double x = v.get_double(g) - shift;
+                ++n;
+                const double d = x - mean;
+                mean += d / static_cast<double>(n);
+                m2 += d * (x - mean);
+            },
+            [&](std::int64_t pos) {
+                const std::int64_t g = c.lay.row(p + pos);
+                if (v.is_null(g)) return;
+                const double x = v.get_double(g) - shift;
+                if (--n == 0) {
+                    mean = 0.0;
+                    m2 = 0.0;
+                    return;
+                }
+                const double d = x - mean;
+                mean -= d / static_cast<double>(n);
+                m2 -= d * (x - mean);
+            },
+            [&](std::int64_t r, std::int64_t lo, std::int64_t hi) {
+                if (n < 2 || n < min_count) {
+                    out.null(r);
+                    return;
+                }
+                const std::int64_t last =
+                    prev_present[static_cast<std::size_t>(hi)];
+                const bool constant =
+                    run_start[static_cast<std::size_t>(last)] <=
+                    next_present[static_cast<std::size_t>(lo)];
+                const double var =
+                    constant ? 0.0
+                             : std::max(m2, 0.0) / static_cast<double>(n - 1);
+                out.set(r, root ? std::sqrt(var) : var);
+            });
+    }
+    return out.series(TypeId::Float64);
+}
+
+Series frame_quantile(const FrameCtx& c, const Series& column, double level,
+                      std::int64_t min_count) {
+    if (!(level >= 0.0 && level <= 1.0))
+        throw std::invalid_argument(
+            "window: FRAME_QUANTILE level must be in [0, 1]");
+    const ColumnView v = view_of(column, "FRAME_QUANTILE");
+    numeric(v, "FRAME_QUANTILE");
+    Column<double> out(c.lay.n);
+    Ranks ranks;
+    Fenwick fen;
+    for (const auto& [p, q] : c.lay.parts) {
+        ranks.build(c.lay, v, p, q, true);
+        fen.reset(ranks.count);
+        std::int32_t n = 0;
+        const auto at = [&](std::int32_t k) {
+            return ranks.value[static_cast<std::size_t>(fen.kth(k))];
+        };
+        walk_frame(
+            c, p, q,
+            [&](std::int64_t pos) {
+                const std::int32_t k = ranks.of[static_cast<std::size_t>(pos)];
+                if (k < 0) return;
+                ++n;
+                fen.add(k, 1);
+            },
+            [&](std::int64_t pos) {
+                const std::int32_t k = ranks.of[static_cast<std::size_t>(pos)];
+                if (k < 0) return;
+                --n;
+                fen.add(k, -1);
+            },
+            [&](std::int64_t r, std::int64_t, std::int64_t) {
+                if (n == 0 || n < min_count) {
+                    out.null(r);
+                    return;
+                }
+                if (level <= 0.0) {
+                    out.set(r, at(1));
+                } else if (level >= 1.0) {
+                    out.set(r, at(n));
+                } else {
+                    const double pos = level * static_cast<double>(n - 1);
+                    const std::int32_t lo = static_cast<std::int32_t>(pos);
+                    const double frac = pos - static_cast<double>(lo);
+                    out.set(r, lo + 1 >= n ? at(lo + 1)
+                                           : at(lo + 1) * (1.0 - frac) +
+                                                 at(lo + 2) * frac);
+                }
+            });
+    }
+    return out.series(TypeId::Float64);
+}
+
+Series frame_count_distinct(const FrameCtx& c, const Series& column) {
+    const ColumnView v = view_of(column, "FRAME_COUNT_DISTINCT");
+    Column<std::int64_t> out(c.lay.n);
+    Ranks ranks;
+    std::vector<std::int32_t> freq;
+    for (const auto& [p, q] : c.lay.parts) {
+        ranks.build(c.lay, v, p, q, false);
+        freq.assign(static_cast<std::size_t>(ranks.count), 0);
+        std::int64_t distinct = 0;
+        walk_frame(
+            c, p, q,
+            [&](std::int64_t pos) {
+                const std::int32_t k = ranks.of[static_cast<std::size_t>(pos)];
+                if (k >= 0 && freq[static_cast<std::size_t>(k)]++ == 0)
+                    ++distinct;
+            },
+            [&](std::int64_t pos) {
+                const std::int32_t k = ranks.of[static_cast<std::size_t>(pos)];
+                if (k >= 0 && --freq[static_cast<std::size_t>(k)] == 0)
+                    --distinct;
+            },
+            [&](std::int64_t r, std::int64_t, std::int64_t) {
+                out.set(r, distinct);
+            });
+    }
+    return out.series(TypeId::Int64);
+}
+
+Series frame_arg(const FrameCtx& c, const Series& column, const Series& by,
+                 bool smallest, std::int64_t min_count) {
+    const ColumnView b = view_of(by, "FRAME_ARG_MAX/FRAME_ARG_MIN");
+    std::vector<std::int64_t> source(static_cast<std::size_t>(c.lay.n), -1);
+    std::deque<std::int64_t> dq;
+    for (const auto& [p, q] : c.lay.parts) {
+        dq.clear();
+        std::int64_t n = 0;
+        walk_frame(
+            c, p, q,
+            [&](std::int64_t pos) {
+                const std::int64_t g = c.lay.row(p + pos);
+                if (b.is_null(g)) return;
+                ++n;
+                while (!dq.empty()) {
+                    const int cmp = b.compare(g, c.lay.row(p + dq.back()));
+                    if (smallest ? cmp < 0 : cmp > 0)
+                        dq.pop_back();
+                    else
+                        break;
+                }
+                dq.push_back(pos);
+            },
+            [&](std::int64_t pos) {
+                if (!b.is_null(c.lay.row(p + pos))) --n;
+            },
+            [&](std::int64_t r, std::int64_t lo, std::int64_t) {
+                while (!dq.empty() && dq.front() < lo) dq.pop_front();
+                if (!dq.empty() && n >= min_count)
+                    source[static_cast<std::size_t>(r)] =
+                        c.lay.row(p + dq.front());
+            });
+    }
+    return pass_through(column, source);
+}
+
+Series frame_collect(const FrameCtx& c, const Series& column) {
+    const std::size_t n = static_cast<std::size_t>(c.lay.n);
+    std::vector<std::int64_t> lows(n), highs(n);
+    std::int64_t total = 0;
+    for (const auto& [p, q] : c.lay.parts) {
+        std::int64_t count = 0;
+        walk_frame(
+            c, p, q,
+            [&](std::int64_t pos) {
+                if (!column.is_null(c.lay.row(p + pos))) ++count;
+            },
+            [&](std::int64_t pos) {
+                if (!column.is_null(c.lay.row(p + pos))) --count;
+            },
+            [&](std::int64_t r, std::int64_t lo, std::int64_t hi) {
+                total += count;
+                if (total > WINDOW_COLLECT_MAX_ELEMENTS)
+                    throw std::length_error(
+                        "window: FRAME_COLLECT frames hold more than 2^27 "
+                        "values in all");
+                lows[static_cast<std::size_t>(r)] = p + lo;
+                highs[static_cast<std::size_t>(r)] = p + hi;
+            });
+    }
+    std::vector<std::int32_t> offsets(n + 1, 0);
+    std::vector<std::int64_t> source;
+    source.reserve(static_cast<std::size_t>(total));
+    for (std::size_t r = 0; r < n; ++r) {
+        for (std::int64_t pos = lows[r]; pos <= highs[r]; ++pos) {
+            const std::int64_t g = c.lay.row(pos);
+            if (!column.is_null(g)) source.push_back(g);
+        }
+        offsets[r + 1] = static_cast<std::int32_t>(source.size());
+    }
+    return Series::list(offsets, pass_through(column, source));
+}
+
+Series frame_stats(const Layout& lay, const Series& column, const Series* by,
+                   const WindowColumn& w) {
+    const FrameCtx c = frame_context(lay, w);
+    const std::int64_t min_count = w.params.frame.min_count;
+    switch (w.func) {
+        case WindowFunc::FrameVar:
+        case WindowFunc::FrameStd:
+            return frame_variance(c, column, w.func == WindowFunc::FrameStd,
+                                  min_count);
+        case WindowFunc::FrameQuantile:
+            return frame_quantile(c, column, w.params.frame.q, min_count);
+        case WindowFunc::FrameCountDistinct:
+            return frame_count_distinct(c, column);
+        case WindowFunc::FrameArgMax:
+        case WindowFunc::FrameArgMin:
+            return frame_arg(c, column, *by, w.func == WindowFunc::FrameArgMin,
+                             min_count);
+        default:
+            return frame_collect(c, column);
+    }
+}
+
 }  // namespace
 
 WindowColumn window_column(const dftu_window_spec& s) {
@@ -599,7 +998,10 @@ WindowColumn window_column(const dftu_window_spec& s) {
     c.out = s.out ? s.out : "";
     if (is_frame_func(c.func)) {
         c.params.frame = {s.param.frame.min_count, s.param.frame.preceding,
-                          s.param.frame.following, WindowFrameMode::Rows};
+                          s.param.frame.following,
+                          static_cast<WindowFrameMode>(s.param.frame.mode),
+                          s.param.frame.q};
+        if (s.param.frame.by) c.set_by(s.param.frame.by);
     } else if (is_offset_func(c.func)) {
         c.params.offset = s.param.offset;
     } else if (c.func == WindowFunc::Rate) {
@@ -689,6 +1091,19 @@ DataFrame window(const DataFrame& df,
             case WindowFunc::FrameMean:
                 column = frame(lay, value_column(df, w), w);
                 break;
+            case WindowFunc::FrameVar:
+            case WindowFunc::FrameStd:
+            case WindowFunc::FrameQuantile:
+            case WindowFunc::FrameCountDistinct:
+            case WindowFunc::FrameCollect:
+                column = frame_stats(lay, value_column(df, w), nullptr, w);
+                break;
+            case WindowFunc::FrameArgMax:
+            case WindowFunc::FrameArgMin: {
+                const Series& by = named_column(df, w.by(), w, "by");
+                column = frame_stats(lay, value_column(df, w), &by, w);
+                break;
+            }
         }
         out.names.push_back(w.out);
         out.columns.push_back(std::move(column));

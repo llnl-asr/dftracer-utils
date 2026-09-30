@@ -3,7 +3,9 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/index/build/corrupt_index.h>
 #include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/index_database.h>
@@ -137,6 +139,135 @@ TEST_SUITE("AggExtension") {
         CHECK(Indexer::open({gz}, with_aggregation(1'000'000))
                   .status()
                   .needs_work.empty());
+    }
+
+    TEST_CASE(
+        "a tier stored under another version is rebuilt without double "
+        "counting") {
+        namespace layout = dftracer::utils::index::store::layout;
+        TestEnvironment env(10);
+        const auto gz = write_trace(env.get_dir(), "old", 50, 1000);
+        auto ix = Indexer::open({gz}, with_aggregation(1000000));
+        ix.build();
+        const auto built = agg_entry(ix, gz);
+        REQUIRE(built);
+        CHECK(built->current);
+        const std::uint32_t stale = built->version + 1;
+        // Store the entry under a number the code does not use.
+        {
+            const int fid = file_id(gz);
+            IndexDatabase db(index_of(gz));
+            auto w = db.begin_write();
+            w->put(layout::Family::REGISTRY,
+                   layout::manifest_key(static_cast<std::uint32_t>(fid),
+                                        layout::Ext::AGG),
+                   layout::encode_manifest(
+                       {stale, built->params_hash, layout::ExtStatus::READY}));
+            w->commit();
+        }
+        auto reopened = Indexer::open({gz}, with_aggregation(1000000));
+        const auto old = agg_entry(reopened, gz);
+        REQUIRE(old);
+        CHECK(old->version == stale);
+        CHECK_FALSE(old->current);
+        CHECK(reopened.status().needs_work == std::vector<std::string>{gz});
+        reopened.build();
+        const auto fresh = agg_entry(reopened, gz);
+        REQUIRE(fresh);
+        CHECK(fresh->version == built->version);
+        CHECK(fresh->current);
+        CHECK(count_reads({gz}) == 50);
+    }
+
+    TEST_CASE(
+        "two files share one tier and each is counted once after a rebuild") {
+        namespace layout = dftracer::utils::index::store::layout;
+        TestEnvironment env(10);
+        const auto a = write_trace(env.get_dir(), "a", 50, 1000);
+        const auto b = write_trace(env.get_dir(), "b", 50, 5000);
+        auto ix = Indexer::open({a, b}, with_aggregation(1000000));
+        ix.build();
+        const auto built = agg_entry(ix, a);
+        REQUIRE(built);
+        {
+            const int fid = file_id(a);
+            IndexDatabase db(index_of(a));
+            auto w = db.begin_write();
+            w->put(
+                layout::Family::REGISTRY,
+                layout::manifest_key(static_cast<std::uint32_t>(fid),
+                                     layout::Ext::AGG),
+                layout::encode_manifest({built->version + 1, built->params_hash,
+                                         layout::ExtStatus::READY}));
+            w->commit();
+        }
+        auto reopened = Indexer::open({a, b}, with_aggregation(1000000));
+        reopened.build();
+        CHECK(count_reads({a, b}) == 100);
+    }
+
+    TEST_CASE("a corrupt aggregation tier names the index directory") {
+        namespace layout = dftracer::utils::index::store::layout;
+        TestEnvironment env(10);
+        const auto gz = write_trace(env.get_dir(), "bad", 50, 1000);
+        Indexer::open({gz}, with_aggregation(1'000'000)).build();
+        {
+            IndexDatabase db(index_of(gz));
+            auto w = db.begin_write();
+            // An operand the aggregation merge operator cannot read.
+            w->merge(layout::Family::AGGREGATION, "\xFF\xFE", "garbage");
+            w->commit();
+        }
+        IndexDatabase db(index_of(gz), index::store::IndexOpenMode::ReadOnly);
+        bool threw = false;
+        try {
+            (void)index::schemas::dft::agg::tier::read_config(*db.db());
+        } catch (const std::exception& e) {
+            threw = true;
+            const std::string message = e.what();
+            CHECK(message.find(index_of(gz)) != std::string::npos);
+            CHECK(message.find("corrupt") != std::string::npos);
+            CHECK(message.find("delete that directory and build the index "
+                               "again") != std::string::npos);
+        }
+        CHECK(threw);
+    }
+
+    TEST_CASE("a corrupt aggregation tier is cleared and built again") {
+        namespace layout = dftracer::utils::index::store::layout;
+        TestEnvironment env(10);
+        const auto gz = write_trace(env.get_dir(), "fix", 50, 1000);
+        Indexer::open({gz}, with_aggregation(1'000'000)).build();
+        CHECK(count_reads({gz}) == 50);
+        {
+            IndexDatabase db(index_of(gz));
+            auto w = db.begin_write();
+            w->merge(layout::Family::AGGREGATION, "\xFF\xFE", "garbage");
+            w->commit();
+        }
+        auto ix = Indexer::open({gz}, with_aggregation(1'000'000));
+        ix.build();
+        const auto entry = agg_entry(ix, gz);
+        REQUIRE(entry);
+        CHECK(entry->current);
+        CHECK(count_reads({gz}) == 50);
+    }
+
+    TEST_CASE("the message for a corrupt index names the directories") {
+        const auto once = index::build::corrupt_index_message(
+            {"/data/a/.dftindex", "/data/b/.dftindex"}, "Corruption: x", false);
+        CHECK(once.find("/data/a/.dftindex") != std::string::npos);
+        CHECK(once.find("/data/b/.dftindex") != std::string::npos);
+        CHECK(once.find("Corruption: x") != std::string::npos);
+        CHECK(once.find("did not repair") == std::string::npos);
+        CHECK(once.find("delete that directory and build the index again") !=
+              std::string::npos);
+        const auto twice = index::build::corrupt_index_message(
+            {"/data/a/.dftindex"}, "Corruption: y", true);
+        CHECK(twice.find("clearing its aggregation tier did not repair it") !=
+              std::string::npos);
+        CHECK(twice.find("delete that directory and build the index again") !=
+              std::string::npos);
     }
 
     TEST_CASE("an interval change rebuilds only the tier") {

@@ -50,6 +50,11 @@ enum {
     AST_IS_IN = 18,
     AST_SELECT = 19,
     AST_IS_NULL = 20,
+    AST_CMP_EXPR = 21,
+    AST_STR_FN = 22,  // (fn, text, text2, i0, i1, operand count)
+    AST_STR_PRED_COL = 23,
+    AST_STR_REPLACE_COL = 24,
+    AST_LIT_S = 25,
 };
 
 // A borrowed view of a Python str; valid while `o` lives, which the ast list
@@ -146,6 +151,12 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
             case AST_LIT_F:
                 stack.push_back(dataframe::expr_lit(PyFloat_AsDouble(arg(1))));
                 break;
+            case AST_LIT_S: {
+                std::string_view v;
+                if (!py_str_view(arg(1), &v)) return false;
+                stack.push_back(dataframe::expr_lit_str(v));
+                break;
+            }
             case AST_BIN: {
                 dataframe::Expr b = pop(), a = pop();
                 stack.push_back(dataframe::expr_binary(
@@ -176,6 +187,13 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                 stack.push_back(dataframe::expr_cmp(
                     static_cast<dataframe::CmpOp>(PyLong_AsLong(arg(1))), a,
                     rhs));
+                break;
+            }
+            case AST_CMP_EXPR: {
+                dataframe::Expr b = pop(), a = pop();
+                stack.push_back(dataframe::expr_cmp_expr(
+                    static_cast<dataframe::CmpOp>(PyLong_AsLong(arg(1))), a,
+                    b));
                 break;
             }
             case AST_LOGICAL: {
@@ -226,11 +244,60 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                     pattern));
                 break;
             }
+            case AST_STR_PRED_COL: {
+                if (stack.size() < 2) {
+                    PyErr_SetString(PyExc_ValueError,
+                                    "string predicate needs its operands");
+                    return false;
+                }
+                dataframe::Expr needle = pop();
+                dataframe::Expr a = pop();
+                stack.push_back(dataframe::expr_str_pred_col(
+                    static_cast<dataframe::StrPredOp>(PyLong_AsLong(arg(1))), a,
+                    needle));
+                break;
+            }
+            case AST_STR_REPLACE_COL: {
+                if (stack.size() < 3) {
+                    PyErr_SetString(PyExc_ValueError,
+                                    "replace needs its operands");
+                    return false;
+                }
+                dataframe::Expr to = pop();
+                dataframe::Expr from = pop();
+                dataframe::Expr a = pop();
+                stack.push_back(dataframe::expr_str_replace_col(a, from, to));
+                break;
+            }
             case AST_STR_MAP: {
                 dataframe::Expr a = pop();
                 stack.push_back(dataframe::expr_str_map(
                     static_cast<dataframe::StrMapOp>(PyLong_AsLong(arg(1))),
                     a));
+                break;
+            }
+            case AST_STR_FN: {
+                std::string_view text, text2;
+                if (PyTuple_GET_SIZE(t) != 7 || !py_str_view(arg(2), &text) ||
+                    !py_str_view(arg(3), &text2))
+                    return false;
+                const long fn = PyLong_AsLong(arg(1));
+                const long long i0 = PyLong_AsLongLong(arg(4));
+                const long long i1 = PyLong_AsLongLong(arg(5));
+                const long nargs = PyLong_AsLong(arg(6));
+                if (PyErr_Occurred()) return false;
+                if (nargs < 1 || nargs > 2 ||
+                    stack.size() < static_cast<std::size_t>(nargs)) {
+                    PyErr_SetString(PyExc_ValueError,
+                                    "string method needs its operands");
+                    return false;
+                }
+                dataframe::Expr b;
+                if (nargs == 2) b = pop();
+                dataframe::Expr a = pop();
+                stack.push_back(dataframe::expr_str_fn(
+                    static_cast<dataframe::StrFn>(fn), a,
+                    nargs == 2 ? &b : nullptr, text, text2, i0, i1));
                 break;
             }
             case AST_STR_LEN: {

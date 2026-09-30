@@ -39,7 +39,8 @@ enum class AggOp {
         13,  ///< the String repr of `value_col` at the row maximizing `by_col`
     SumSq = 14,  ///< sum of squares (Float64), from the shared FieldStat
     SetUnion =
-        15,      ///< distinct String values of `value_col`, sorted and joined
+        15,      ///< distinct String values of `value_col`, sorted and joined;
+                 ///< `param` != 0: a list of the element type, ascending
     // Occupancy (time-window reductions over the ts=`value_col`, dur=`by_col`
     // pair; `param` carries the endpoint-snap tolerance occ_cell_us): a
     // per-group +1/-1 endpoint delta-map, mergeable by key-wise add.
@@ -125,7 +126,16 @@ inline bool agg_uses_raw_value(AggOp op) {
 /// Unknown for the widening ops: collect() settles it from the data. Never
 /// guesses: every AggOp is covered, so schema code built on this can never
 /// disagree with collect().
-DataType agg_output_type(AggOp op, TypeId value_type);
+///
+/// SetUnion with a nonzero `param` is the typed result: a list of the value
+/// column's element type (set_union_element_type), or of Unknown when the
+/// column is itself a list (the caller reads that element type from the field).
+DataType agg_output_type(AggOp op, TypeId value_type, double param = 0.0);
+
+/// The element type a typed SetUnion over a column of type `t` lists: String
+/// and Bool as is, integers widened to Int64 or Uint64, floats to Float64,
+/// Unknown for any other type.
+DataType set_union_element_type(TypeId t);
 
 /// One aggregate: `op` over the value column at index `value_col` in the values
 /// passed to accumulate (ignored for Count), named `out` in the result.
@@ -134,7 +144,8 @@ struct AggSpec {
     std::int32_t value_col = -1;
     std::string out;
     double param = 0.0;  ///< Pct: quantile q in [0, 1]; occupancy: occ_cell_us;
-                         ///< Distinct/TopK/BottomK/ApproxTopK/Sample: k
+                         ///< Distinct/TopK/BottomK/ApproxTopK/Sample: k;
+                         ///< SetUnion: nonzero asks for the typed list
     std::int32_t by_col = -1;  ///< the second input for the ops
                                ///< agg_uses_by_col() names; unused otherwise
 };
@@ -329,6 +340,11 @@ DataFrame group_agg(const std::vector<const Series*>& keys,
 /// Single-key convenience: forwards to the N-key form.
 DataFrame group_agg(const Series& key, const std::vector<const Series*>& values,
                     std::vector<AggSpec> specs, const std::string& key_name);
+
+/// How many group-bys wrote their aggregate columns in place (straight into
+/// the output, with no per-partition columns to join) since the process began.
+/// For tests and benchmarks.
+std::uint64_t agg_in_place_finalizes();
 
 }  // namespace dftracer::utils::dataframe
 

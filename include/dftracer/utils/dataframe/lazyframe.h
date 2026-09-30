@@ -499,15 +499,17 @@ class LazyFrame {
     /// collect(). When the build side outgrows memory_budget() (any kind but
     /// Cross), both sides are partitioned on the key to disk and joined one
     /// partition at a time: the same rows and columns in no particular row
-    /// order.
+    /// order. With `nulls_equal` a null key cell matches another null key cell
+    /// (never a value); it is refused for Cross, Lookup and Nest, and such a
+    /// join is not offered to a source's apply_join.
     LazyFrame join(LazyFrame other, std::vector<std::string> left_on,
                    std::vector<std::string> right_on,
-                   JoinHow how = JoinHow::Inner,
-                   std::string suffix = "_right") const;
+                   JoinHow how = JoinHow::Inner, std::string suffix = "_right",
+                   bool nulls_equal = false) const;
     /// Join on the same-named key columns `on`.
     LazyFrame join(LazyFrame other, std::vector<std::string> on,
-                   JoinHow how = JoinHow::Inner,
-                   std::string suffix = "_right") const;
+                   JoinHow how = JoinHow::Inner, std::string suffix = "_right",
+                   bool nulls_equal = false) const;
     /// Vertical concatenation: every row of this plan, then every row of
     /// `other`. Both plans must have the same column names in the same order
     /// with the same types where known; a mismatch throws

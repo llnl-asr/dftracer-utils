@@ -40,7 +40,8 @@ class GraceJoin {
               std::vector<std::string> right_names,
               std::vector<std::string> left_on,
               std::vector<std::string> right_on, JoinHow how,
-              std::string suffix, std::uint64_t budget);
+              std::string suffix, std::uint64_t budget,
+              bool nulls_equal = false);
 
     void add_right(const DataFrame& right);
 
@@ -87,6 +88,7 @@ class GraceJoin {
     JoinHow how_;
     std::string suffix_;
     std::uint64_t budget_;
+    bool nulls_equal_ = false;
     std::shared_ptr<spill::Dir> dir_;
     Parts top_;
     std::deque<Work> queue_;

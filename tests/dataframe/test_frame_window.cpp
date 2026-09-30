@@ -6,12 +6,15 @@
 #include <doctest/doctest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <functional>
 #include <numeric>
 #include <optional>
 #include <random>
+#include <set>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -125,7 +128,7 @@ WindowColumn frame_spec(WindowFunc func, std::string value, std::string out,
                         std::int64_t min_count = 0,
                         WindowFrameMode mode = WindowFrameMode::Rows) {
     WindowColumn w = spec(func, std::move(value), std::move(out));
-    w.params.frame = {min_count, preceding, following, mode};
+    w.params.frame = {min_count, preceding, following, mode, 0.0};
     return w;
 }
 
@@ -1566,4 +1569,794 @@ TEST_CASE("window - sliding integer sums equal a 128-bit reference") {
                 REQUIRE(static_cast<wide>(c.data<std::int64_t>()[i]) == sum);
         }
     }
+}
+
+static bool same(const DataFrame& a, const DataFrame& b, WindowFunc func) {
+    return func == WindowFunc::FrameMean ? dbls(a, "r") == dbls(b, "r")
+                                         : ints(a, "r") == ints(b, "r");
+}
+
+TEST_CASE("window - ABI range frames equal the C++ range results") {
+    const DataFrame in = make3({1, 1, 1, 1, 2, 2}, {10, 12, 12, 21, 5, 9},
+                               {1, 2, std::nullopt, 4, 5, 6});
+    for (const FrameCase& fc : RANGE_FRAMES) {
+        CAPTURE(fc.preceding);
+        CAPTURE(fc.following);
+        for (const WindowFunc func : FRAME_FUNCS) {
+            dftu_window_spec abi{};
+            abi.func = static_cast<dftu_window_func>(func);
+            abi.value = "v";
+            abi.out = "r";
+            abi.param.frame = {fc.min_count, fc.preceding,
+                               fc.following, DFTU_WINDOW_FRAME_RANGE,
+                               0.0,          nullptr};
+            const DataFrame via_abi =
+                win(in, {"p"}, {"o"}, {df::window_column(abi)});
+            const DataFrame want =
+                win(in, {"p"}, {"o"},
+                    {frame_spec(func, "v", "r", fc.preceding, fc.following,
+                                fc.min_count, WindowFrameMode::Range)});
+            CHECK(same(via_abi, want, func));
+            abi.param.frame.mode = DFTU_WINDOW_FRAME_ROWS;
+            const DataFrame rows =
+                win(in, {"p"}, {"o"}, {df::window_column(abi)});
+            const DataFrame rows_want =
+                win(in, {"p"}, {"o"},
+                    {frame_spec(func, "v", "r", fc.preceding, fc.following,
+                                fc.min_count)});
+            CHECK(same(rows, rows_want, func));
+        }
+    }
+}
+
+namespace {
+
+using Keys = std::vector<std::optional<std::string>>;
+
+std::string key_at(const Series& c, std::int64_t i) {
+    switch (c.type()) {
+        case TypeId::Int64:
+            return std::to_string(c.data<std::int64_t>()[i]);
+        case TypeId::Float64: {
+            char buf[40];
+            std::snprintf(buf, sizeof buf, "%.17g", c.data<double>()[i]);
+            return buf;
+        }
+        case TypeId::String:
+            return std::string(c.string_at(i));
+        case TypeId::Bool:
+            return ((c.data<std::uint8_t>()[i >> 3] >> (i & 7)) & 1) ? "T"
+                                                                     : "F";
+        default:
+            FAIL("unexpected column type");
+            return {};
+    }
+}
+
+Keys keys_of(const Series& column) {
+    const Series c = column.materialize();
+    Keys out;
+    if (c.type() == TypeId::List) {
+        const std::int32_t* off = c.offsets();
+        REQUIRE(off != nullptr);
+        const Series elems = c.child(0).materialize();
+        for (std::int64_t i = 0; i < c.length(); ++i) {
+            std::string joined;
+            for (std::int32_t at = off[i]; at < off[i + 1]; ++at)
+                joined += (at > off[i] ? "|" : "") + key_at(elems, at);
+            out.emplace_back(joined);
+        }
+        return out;
+    }
+    for (std::int64_t i = 0; i < c.length(); ++i)
+        out.push_back(c.is_null(i) ? std::optional<std::string>{}
+                                   : std::optional<std::string>{key_at(c, i)});
+    return out;
+}
+
+struct Extra {
+    std::vector<std::string> vs, bs;
+    std::vector<bool> vs_ok, bs_ok, vb, vb_ok, bb, bb_ok, bi_ok;
+    std::vector<std::int64_t> bi;
+};
+
+Extra random_extra(std::uint64_t seed, std::size_t n) {
+    std::mt19937_64 rng(seed * 7919 + 13);
+    const auto pick = [&rng](int lo, int hi) {
+        return std::uniform_int_distribution<int>(lo, hi)(rng);
+    };
+    static const char* const WORDS[] = {"a", "b", "c", "dd", "e"};
+    Extra e;
+    for (std::size_t i = 0; i < n; ++i) {
+        e.vs_ok.push_back(pick(0, 99) >= 15);
+        e.vs.push_back(e.vs_ok.back() ? WORDS[pick(0, 4)] : "");
+        e.bs_ok.push_back(pick(0, 99) >= 10);
+        e.bs.push_back(e.bs_ok.back() ? WORDS[pick(0, 2)] : "");
+        e.vb_ok.push_back(pick(0, 99) >= 15);
+        e.vb.push_back(e.vb_ok.back() && pick(0, 1) == 1);
+        e.bb_ok.push_back(pick(0, 99) >= 10);
+        e.bb.push_back(e.bb_ok.back() && pick(0, 1) == 1);
+        e.bi_ok.push_back(pick(0, 99) >= 10);
+        e.bi.push_back(e.bi_ok.back() ? pick(0, 6) : 99);
+    }
+    return e;
+}
+
+Series text_series(const std::vector<std::string>& v,
+                   const std::vector<bool>& ok) {
+    const std::vector<std::string_view> views(v.begin(), v.end());
+    const std::vector<std::uint8_t> bits = bits_of(ok);
+    return Series::strings(views, bits.data());
+}
+
+Series bool_series(const std::vector<bool>& v, const std::vector<bool>& ok) {
+    const std::vector<std::uint8_t> data = bits_of(v);
+    const std::vector<std::uint8_t> bits = bits_of(ok);
+    return Series::flat(TypeId::Bool, data.data(),
+                        static_cast<std::int64_t>(v.size()), bits.data());
+}
+
+DataFrame stat_frame(const RandomFrame& f, const Extra& e) {
+    DataFrame d = to_frame(f);
+    d.names.insert(d.names.end(), {"vs", "vb", "bi", "bs", "bb"});
+    d.columns.push_back(text_series(e.vs, e.vs_ok));
+    d.columns.push_back(bool_series(e.vb, e.vb_ok));
+    d.columns.push_back(i64s(e.bi, e.bi_ok));
+    d.columns.push_back(text_series(e.bs, e.bs_ok));
+    d.columns.push_back(bool_series(e.bb, e.bb_ok));
+    return d;
+}
+
+WindowColumn stat_spec(WindowFunc func, const std::string& value,
+                       std::string out, const FrameCase& fc,
+                       WindowFrameMode mode, double q = 0.0,
+                       const std::string& by = {}) {
+    WindowColumn w = frame_spec(func, value, std::move(out), fc.preceding,
+                                fc.following, fc.min_count, mode);
+    w.params.frame.q = q;
+    if (!by.empty()) w.set_by(by);
+    return w;
+}
+
+using Members = std::vector<Part>;
+
+Members frame_members(const Sorted& s, const RandomFrame& f,
+                      const FrameCase& fc, WindowFrameMode mode) {
+    Members out(s.rows.size());
+    for (const auto& [b, e] : s.parts) {
+        for (std::size_t i = b; i < e; ++i) {
+            const std::size_t gi = s.rows[i];
+            for (std::size_t j = b; j < e; ++j) {
+                const std::size_t gj = s.rows[j];
+                bool inside;
+                if (mode == WindowFrameMode::Rows) {
+                    const auto pi = static_cast<std::int64_t>(i - b);
+                    const auto pj = static_cast<std::int64_t>(j - b);
+                    inside = (fc.preceding == WINDOW_UNBOUNDED ||
+                              pj >= pi - fc.preceding) &&
+                             (fc.following == WINDOW_UNBOUNDED ||
+                              pj <= pi + fc.following);
+                } else if (!f.o_ok[gi]) {
+                    inside = !f.o_ok[gj];
+                } else {
+                    inside = f.o_ok[gj] &&
+                             (fc.preceding == WINDOW_UNBOUNDED ||
+                              f.o[gj] >= f.o[gi] - fc.preceding) &&
+                             (fc.following == WINDOW_UNBOUNDED ||
+                              f.o[gj] <= f.o[gi] + fc.following);
+                }
+                if (inside) out[i].push_back(gj);
+            }
+        }
+    }
+    return out;
+}
+
+Vals frame_cells(const Members& mem, std::size_t k, const Vals& v) {
+    Vals cells;
+    for (const std::size_t g : mem[k]) cells.push_back(v[g]);
+    return cells;
+}
+
+Val variance_ref(const Vals& cells, bool root, std::int64_t min_count) {
+    std::vector<long double> x;
+    for (const Val& c : cells)
+        if (c) x.push_back(*c);
+    const auto n = static_cast<std::int64_t>(x.size());
+    if (n < 2 || n < min_count) return Val{};
+    long double mean = 0;
+    for (const long double v : x) mean += v;
+    mean /= static_cast<long double>(n);
+    long double s2 = 0;
+    for (const long double v : x) s2 += (v - mean) * (v - mean);
+    const long double var = s2 / static_cast<long double>(n - 1);
+    return static_cast<double>(root ? std::sqrt(var) : var);
+}
+
+double quantile_ref(std::vector<double> x, double q) {
+    std::sort(x.begin(), x.end());
+    const std::size_t n = x.size();
+    if (q <= 0.0) return x.front();
+    if (q >= 1.0) return x.back();
+    const double pos = q * static_cast<double>(n - 1);
+    const auto lo = static_cast<std::size_t>(pos);
+    const double frac = pos - static_cast<double>(lo);
+    if (lo + 1 >= n) return x[lo];
+    return x[lo] * (1.0 - frac) + x[lo + 1] * frac;
+}
+
+double max_rel_error = 0.0;
+
+void check_close(const DataFrame& d, const std::string& name, const Vals& want,
+                 double rel) {
+    REQUIRE_MESSAGE(column_of(d, name).type() == TypeId::Float64, name);
+    const Vals got = nums(d, name);
+    REQUIRE(got.size() == want.size());
+    for (std::size_t i = 0; i < got.size(); ++i) {
+        const bool same = got[i].has_value() == want[i].has_value();
+        REQUIRE_MESSAGE(same, name << " null mismatch at sorted row " << i);
+        if (!got[i]) continue;
+        if (*want[i] == 0.0)
+            REQUIRE_MESSAGE(*got[i] == 0.0, name << " at sorted row " << i
+                                                 << ": got " << *got[i]
+                                                 << ", want exactly 0");
+        const double err =
+            std::fabs(*got[i] - *want[i]) / std::max(1.0, std::fabs(*want[i]));
+        max_rel_error = std::max(max_rel_error, err);
+        REQUIRE_MESSAGE(err <= rel, name << " at sorted row " << i << ": got "
+                                         << *got[i] << ", want " << *want[i]);
+    }
+}
+
+void check_keys(const DataFrame& d, const std::string& name, const Keys& want) {
+    const Keys got = keys_of(d.column(name));
+    REQUIRE(got.size() == want.size());
+    for (std::size_t i = 0; i < got.size(); ++i)
+        REQUIRE_MESSAGE(got[i] == want[i],
+                        name << " differs at sorted row " << i << ": got "
+                             << got[i].value_or("null") << ", want "
+                             << want[i].value_or("null"));
+}
+
+struct ByCase {
+    std::string name;
+    std::vector<bool> ok;
+    std::function<int(std::size_t, std::size_t)> cmp;
+};
+
+void run_stat_frames(std::uint64_t seed, bool order_nulls, WindowFrameMode mode,
+                     std::span<const FrameCase> frames) {
+    const RandomFrame f = random_frame(seed, 300, order_nulls);
+    const Extra e = random_extra(seed, 300);
+    const Sorted s = sort_frame(f);
+    const DataFrame in = stat_frame(f, e);
+    const std::size_t n = s.rows.size();
+
+    const std::vector<std::pair<std::string, Vals>> numeric = {
+        {"vi", to_vals(f.vi, f.vi_ok)}, {"vf", to_vals(f.vf, f.vf_ok)}};
+    const std::vector<std::string> value_names = {"vi", "vf", "vs", "vb"};
+    const std::vector<ByCase> bys = {
+        {"bi", e.bi_ok,
+         [&e](std::size_t a, std::size_t b) {
+             return e.bi[a] < e.bi[b] ? -1 : (e.bi[a] > e.bi[b] ? 1 : 0);
+         }},
+        {"bs", e.bs_ok,
+         [&e](std::size_t a, std::size_t b) {
+             return e.bs[a].compare(e.bs[b]) < 0 ? -1
+                                                 : (e.bs[a] == e.bs[b] ? 0 : 1);
+         }},
+        {"bb", e.bb_ok, [&e](std::size_t a, std::size_t b) {
+             return static_cast<int>(e.bb[a]) - static_cast<int>(e.bb[b]);
+         }}};
+    constexpr double LEVELS[] = {0.0, 0.25, 0.5, 0.9, 1.0};
+
+    std::vector<WindowColumn> specs;
+    std::vector<std::function<void(const DataFrame&)>> checks;
+    int id = 0;
+    const auto uniq = [&id](const char* tag, const std::string& col) {
+        return std::string(tag) + "_" + col + "_" + std::to_string(id++);
+    };
+
+    for (const FrameCase& fc : frames) {
+        const Members mem = frame_members(s, f, fc, mode);
+        for (const auto& [col, vals] : numeric) {
+            for (const bool root : {false, true}) {
+                const std::string out = uniq(root ? "std" : "var", col);
+                specs.push_back(stat_spec(
+                    root ? WindowFunc::FrameStd : WindowFunc::FrameVar, col,
+                    out, fc, mode));
+                Vals want(n);
+                for (std::size_t k = 0; k < n; ++k)
+                    want[k] = variance_ref(frame_cells(mem, k, vals), root,
+                                           fc.min_count);
+                checks.push_back([out, want](const DataFrame& d) {
+                    check_close(d, out, want, 1e-9);
+                });
+            }
+            for (const double q : LEVELS) {
+                const std::string out = uniq("q", col);
+                specs.push_back(stat_spec(WindowFunc::FrameQuantile, col, out,
+                                          fc, mode, q));
+                Vals want(n);
+                for (std::size_t k = 0; k < n; ++k) {
+                    std::vector<double> x;
+                    for (const Val& c : frame_cells(mem, k, vals))
+                        if (c) x.push_back(*c);
+                    if (!x.empty() &&
+                        static_cast<std::int64_t>(x.size()) >= fc.min_count)
+                        want[k] = quantile_ref(std::move(x), q);
+                }
+                checks.push_back([out, want](const DataFrame& d) {
+                    check_close(d, out, want, 0.0);
+                });
+            }
+        }
+        for (const std::string& col : value_names) {
+            const Keys vk = keys_of(in.column(col));
+            const TypeId vtype = in.column(col).type();
+            {
+                const std::string out = uniq("cd", col);
+                specs.push_back(stat_spec(WindowFunc::FrameCountDistinct, col,
+                                          out, fc, mode));
+                Keys want(n);
+                for (std::size_t k = 0; k < n; ++k) {
+                    std::set<std::string> seen;
+                    for (const std::size_t g : mem[k])
+                        if (vk[g]) seen.insert(*vk[g]);
+                    want[k] = std::to_string(seen.size());
+                }
+                checks.push_back([out, want](const DataFrame& d) {
+                    REQUIRE(column_of(d, out).type() == TypeId::Int64);
+                    check_keys(d, out, want);
+                });
+            }
+            {
+                const std::string out = uniq("collect", col);
+                specs.push_back(
+                    stat_spec(WindowFunc::FrameCollect, col, out, fc, mode));
+                Keys want(n);
+                for (std::size_t k = 0; k < n; ++k) {
+                    std::string joined;
+                    bool first = true;
+                    for (const std::size_t g : mem[k]) {
+                        if (!vk[g]) continue;
+                        joined += (first ? "" : "|") + *vk[g];
+                        first = false;
+                    }
+                    want[k] = joined;
+                }
+                checks.push_back([out, want](const DataFrame& d) {
+                    REQUIRE(column_of(d, out).type() == TypeId::List);
+                    check_keys(d, out, want);
+                });
+            }
+            for (const ByCase& by : bys) {
+                for (const bool smallest : {false, true}) {
+                    const std::string out =
+                        uniq(smallest ? "argmin" : "argmax", col + by.name);
+                    specs.push_back(
+                        stat_spec(smallest ? WindowFunc::FrameArgMin
+                                           : WindowFunc::FrameArgMax,
+                                  col, out, fc, mode, 0.0, by.name));
+                    Keys want(n);
+                    for (std::size_t k = 0; k < n; ++k) {
+                        std::optional<std::size_t> best;
+                        std::int64_t present = 0;
+                        for (const std::size_t g : mem[k]) {
+                            if (!by.ok[g]) continue;
+                            ++present;
+                            if (!best) {
+                                best = g;
+                                continue;
+                            }
+                            const int c = by.cmp(g, *best);
+                            if (smallest ? c < 0 : c > 0) best = g;
+                        }
+                        if (best && present >= fc.min_count)
+                            want[k] = vk[*best];
+                    }
+                    checks.push_back([out, want, vtype](const DataFrame& d) {
+                        REQUIRE(column_of(d, out).type() == vtype);
+                        check_keys(d, out, want);
+                    });
+                }
+            }
+        }
+    }
+    const DataFrame out = win(in, {"p"}, {"o"}, specs);
+    REQUIRE(out.num_rows() == static_cast<std::int64_t>(n));
+    for (const auto& check : checks) check(out);
+}
+
+}  // namespace
+
+TEST_CASE("window - new rows frame functions match a naive reference") {
+    for (std::uint64_t seed = 21; seed <= 24; ++seed) {
+        CAPTURE(seed);
+        run_stat_frames(seed, true, WindowFrameMode::Rows, ROWS_FRAMES);
+    }
+}
+
+TEST_CASE("window - new range frame functions match a naive reference") {
+    for (std::uint64_t seed = 31; seed <= 34; ++seed) {
+        CAPTURE(seed);
+        run_stat_frames(seed, false, WindowFrameMode::Range, RANGE_FRAMES);
+    }
+}
+
+TEST_CASE("window - new range frame functions treat null orders as peers") {
+    for (std::uint64_t seed = 41; seed <= 44; ++seed) {
+        CAPTURE(seed);
+        run_stat_frames(seed, true, WindowFrameMode::Range, RANGE_FRAMES);
+    }
+}
+
+namespace {
+
+DataFrame names_dur(const std::vector<std::string>& names, const Col& dur) {
+    DataFrame d;
+    d.names = {"p", "o", "name", "dur"};
+    std::vector<std::int64_t> p(names.size(), 1), o(names.size());
+    std::iota(o.begin(), o.end(), std::int64_t{0});
+    d.columns.push_back(plain(p));
+    d.columns.push_back(plain(o));
+    d.columns.push_back(Series::strings(names));
+    d.columns.push_back(i64s(dur));
+    return d;
+}
+
+}  // namespace
+
+TEST_CASE("window - count_distinct over 3 rows of a, b, a, c") {
+    const DataFrame in = names_dur({"a", "b", "a", "c"}, {1, 2, 3, 4});
+    const DataFrame out =
+        win(in, {"p"}, {"o"},
+            {frame_spec(WindowFunc::FrameCountDistinct, "name", "cd", 2, 0)});
+    CHECK(ints(out, "cd") == Col{1, 2, 2, 3});
+}
+
+TEST_CASE("window - arg_max over 2 rows takes the earliest row on a tie") {
+    const DataFrame in = names_dur({"n0", "n1", "n2", "n3"}, {5, 9, 9, 2});
+    WindowColumn mx = frame_spec(WindowFunc::FrameArgMax, "name", "mx", 1, 0);
+    mx.set_by("dur");
+    WindowColumn mn = frame_spec(WindowFunc::FrameArgMin, "name", "mn", 1, 0);
+    mn.set_by("dur");
+    const DataFrame out = win(in, {"p"}, {"o"}, {mx, mn});
+    CHECK(strs(out, "mx") == SCol{"n0", "n1", "n1", "n2"});
+    CHECK(strs(out, "mn") == SCol{"n0", "n0", "n1", "n3"});
+}
+
+TEST_CASE("window - arg_max skips a null by and may return a null value") {
+    DataFrame in = names_dur({"x", "y", "z", "w"}, {5, std::nullopt, 9, 9});
+    WindowColumn mx =
+        frame_spec(WindowFunc::FrameArgMax, "name", "mx", WINDOW_UNBOUNDED, 0);
+    mx.set_by("dur");
+    CHECK(strs(win(in, {"p"}, {"o"}, {mx}), "mx") == SCol{"x", "x", "z", "z"});
+
+    DataFrame nullval;
+    nullval.names = {"p", "o", "v", "b"};
+    nullval.columns.push_back(plain({1, 1}));
+    nullval.columns.push_back(plain({1, 2}));
+    nullval.columns.push_back(i64s(Col{std::nullopt, 7}));
+    nullval.columns.push_back(plain({9, 1}));
+    WindowColumn pick =
+        frame_spec(WindowFunc::FrameArgMax, "v", "r", WINDOW_UNBOUNDED, 0);
+    pick.set_by("b");
+    CHECK(ints(win(nullval, {"p"}, {"o"}, {pick}), "r") ==
+          Col{std::nullopt, std::nullopt});
+}
+
+TEST_CASE("window - quantile over 3 rows is exact with interpolation") {
+    const DataFrame in = names_dur({"a", "b", "c", "d", "e"}, {4, 1, 3, 10, 2});
+    const auto q = [&](double level, std::int64_t pre) {
+        WindowColumn w =
+            frame_spec(WindowFunc::FrameQuantile, "dur", "q", pre, 0);
+        w.params.frame.q = level;
+        return dbls(win(in, {"p"}, {"o"}, {w}), "q");
+    };
+    const Vals half = q(0.5, 2);
+    const std::vector<double> want = {4.0, 2.5, 3.0, 3.0, 3.0};
+    for (std::size_t i = 0; i < want.size(); ++i) CHECK(*half[i] == want[i]);
+    CHECK(*q(0.25, 2)[1] == 1.75);
+    CHECK(*q(0.0, 2)[4] == 2.0);
+    CHECK(*q(1.0, 2)[3] == 10.0);
+}
+
+TEST_CASE("window - collect lists present values in frame order") {
+    DataFrame in = names_dur({"x", "y", "z"}, {1, 2, 3});
+    in.columns[2] = text_series({"x", "", "z"}, {true, false, true});
+    const DataFrame out = win(
+        in, {"p"}, {"o"},
+        {frame_spec(WindowFunc::FrameCollect, "name", "c", WINDOW_UNBOUNDED, 0),
+         frame_spec(WindowFunc::FrameCollect, "name", "e", 0, 0)});
+    CHECK(keys_of(out.column("c")) == Keys{"x", "x", "x|z"});
+    CHECK(keys_of(out.column("e")) == Keys{"x", "", "z"});
+}
+
+TEST_CASE("window - collect past 2^27 values in all fails naming the frame") {
+    const std::int64_t n = 12000;
+    std::vector<std::int64_t> p(static_cast<std::size_t>(n), 1), o(p.size());
+    std::iota(o.begin(), o.end(), std::int64_t{0});
+    DataFrame in;
+    in.names = {"p", "o", "v"};
+    in.columns.push_back(plain(p));
+    in.columns.push_back(plain(o));
+    in.columns.push_back(plain(o));
+    const auto run = [&](std::int64_t rows) {
+        DataFrame part;
+        part.names = in.names;
+        for (const Series& c : in.columns)
+            part.columns.push_back(c.slice(0, rows));
+        return win(part, {"p"}, {"o"},
+                   {frame_spec(WindowFunc::FrameCollect, "v", "c",
+                               WINDOW_UNBOUNDED, WINDOW_UNBOUNDED)});
+    };
+    try {
+        (void)run(n);
+        FAIL("expected the cap error");
+    } catch (const std::length_error& e) {
+        CHECK(std::string(e.what()).find("FRAME_COLLECT") != std::string::npos);
+    }
+    CHECK(run(100).num_rows() == 100);
+}
+
+TEST_CASE("window - new frame functions refuse bad parameters") {
+    const DataFrame in = names_dur({"a", "b"}, {1, 2});
+    const auto quantile = [&](double level) {
+        WindowColumn w = frame_spec(WindowFunc::FrameQuantile, "dur", "q",
+                                    WINDOW_UNBOUNDED, 0);
+        w.params.frame.q = level;
+        return win(in, {"p"}, {"o"}, {w});
+    };
+    CHECK_THROWS_AS((void)quantile(-0.1), std::invalid_argument);
+    CHECK_THROWS_AS((void)quantile(1.5), std::invalid_argument);
+    CHECK_THROWS_AS((void)quantile(std::nan("")), std::invalid_argument);
+    CHECK_NOTHROW((void)quantile(0.0));
+    CHECK_NOTHROW((void)quantile(1.0));
+
+    CHECK_THROWS_AS(
+        (void)win(in, {"p"}, {"o"},
+                  {frame_spec(WindowFunc::FrameArgMax, "name", "r", 1, 0)}),
+        std::invalid_argument);
+    WindowColumn unknown =
+        frame_spec(WindowFunc::FrameArgMax, "name", "r", 1, 0);
+    unknown.set_by("nope");
+    CHECK_THROWS_AS((void)win(in, {"p"}, {"o"}, {unknown}), std::out_of_range);
+    WindowColumn listed = frame_spec(WindowFunc::FrameArgMin, "dur", "r", 1, 0);
+    listed.set_by("tags");
+    DataFrame with_tags = names_dur({"a", "b"}, {1, 2});
+    with_tags.names.push_back("tags");
+    with_tags.columns.push_back(tag_lists());
+    CHECK_THROWS_AS((void)win(with_tags, {"p"}, {"o"}, {listed}),
+                    std::invalid_argument);
+    CHECK_THROWS_AS(
+        (void)win(in, {"p"}, {"o"},
+                  {frame_spec(WindowFunc::FrameVar, "name", "r", 1, 0)}),
+        std::invalid_argument);
+    CHECK_THROWS_AS(
+        (void)win(in, {"p"}, {"o"},
+                  {frame_spec(WindowFunc::FrameQuantile, "name", "r", 1, 0)}),
+        std::invalid_argument);
+}
+
+TEST_CASE("window - frame variance near 1e9 matches a two-pass reference") {
+    std::mt19937_64 rng(42);
+    std::uniform_real_distribution<double> noise(0.0, 10.0);
+    constexpr std::size_t PER = 400;
+    std::vector<std::int64_t> p, o;
+    std::vector<double> v;
+    std::vector<bool> ok;
+    for (std::size_t i = 0; i < 3 * PER; ++i) {
+        p.push_back(static_cast<std::int64_t>(i / PER));
+        o.push_back(static_cast<std::int64_t>((i % PER) / 2));
+        v.push_back(1.0e9 + noise(rng));
+        ok.push_back(i % 17 != 3);
+    }
+    DataFrame in;
+    in.names = {"p", "o", "v"};
+    in.columns.push_back(plain(p));
+    in.columns.push_back(plain(o));
+    in.columns.push_back(f64s(v, ok));
+    const std::vector<std::pair<FrameCase, WindowFrameMode>> cases = {
+        {{7, 3, 0}, WindowFrameMode::Rows},
+        {{WINDOW_UNBOUNDED, 0, 0}, WindowFrameMode::Rows},
+        {{0, WINDOW_UNBOUNDED, 0}, WindowFrameMode::Rows},
+        {{WINDOW_UNBOUNDED, WINDOW_UNBOUNDED, 0}, WindowFrameMode::Rows},
+        {{50, 0, 0}, WindowFrameMode::Rows},
+        {{5, 5, 0}, WindowFrameMode::Range},
+        {{WINDOW_UNBOUNDED, 0, 0}, WindowFrameMode::Range},
+        {{20, 20, 0}, WindowFrameMode::Range}};
+    max_rel_error = 0.0;
+    const Vals all = to_vals(v, ok);
+    for (const auto& [fc, mode] : cases) {
+        std::vector<WindowColumn> specs;
+        specs.push_back(stat_spec(WindowFunc::FrameVar, "v", "var", fc, mode));
+        specs.push_back(stat_spec(WindowFunc::FrameStd, "v", "std", fc, mode));
+        const DataFrame out = win(in, {"p"}, {"o"}, specs);
+        Vals want_var(p.size()), want_std(p.size());
+        for (std::size_t i = 0; i < p.size(); ++i) {
+            Vals cells;
+            for (std::size_t j = (i / PER) * PER; j < (i / PER + 1) * PER;
+                 ++j) {
+                bool inside;
+                if (mode == WindowFrameMode::Rows) {
+                    const auto pi = static_cast<std::int64_t>(i % PER);
+                    const auto pj = static_cast<std::int64_t>(j % PER);
+                    inside = (fc.preceding == WINDOW_UNBOUNDED ||
+                              pj >= pi - fc.preceding) &&
+                             (fc.following == WINDOW_UNBOUNDED ||
+                              pj <= pi + fc.following);
+                } else {
+                    inside = (fc.preceding == WINDOW_UNBOUNDED ||
+                              o[j] >= o[i] - fc.preceding) &&
+                             (fc.following == WINDOW_UNBOUNDED ||
+                              o[j] <= o[i] + fc.following);
+                }
+                if (inside) cells.push_back(all[j]);
+            }
+            want_var[i] = variance_ref(cells, false, 0);
+            want_std[i] = variance_ref(cells, true, 0);
+        }
+        check_close(out, "var", want_var, 1e-9);
+        check_close(out, "std", want_std, 1e-9);
+    }
+    MESSAGE("max relative error near 1e9: " << max_rel_error);
+    CHECK(max_rel_error <= 1e-9);
+}
+
+TEST_CASE("window - ABI new frame functions equal the C++ results") {
+    const RandomFrame f = random_frame(77, 120, false);
+    const Extra e = random_extra(77, 120);
+    const DataFrame in = stat_frame(f, e);
+    std::vector<const char*> names;
+    std::vector<dftu_series*> cols;
+    for (std::size_t i = 0; i < in.names.size(); ++i) {
+        names.push_back(in.names[i].c_str());
+        cols.push_back(in.columns[i].share().release());
+    }
+    dftu_dataframe* handle = dftu_dataframe_new(
+        names.data(), cols.data(), static_cast<std::int32_t>(names.size()));
+    REQUIRE(handle);
+    const char* part[1] = {"p"};
+    const char* order[1] = {"o"};
+
+    struct Case {
+        dftu_window_func func;
+        const char* value;
+        const char* by;
+        double q;
+    };
+    const Case cases[] = {
+        {DFTU_WINDOW_FRAME_VAR, "vf", nullptr, 0.0},
+        {DFTU_WINDOW_FRAME_STD, "vi", nullptr, 0.0},
+        {DFTU_WINDOW_FRAME_QUANTILE, "vf", nullptr, 0.25},
+        {DFTU_WINDOW_FRAME_COUNT_DISTINCT, "vs", nullptr, 0.0},
+        {DFTU_WINDOW_FRAME_ARG_MAX, "vs", "bi", 0.0},
+        {DFTU_WINDOW_FRAME_ARG_MIN, "vi", "bs", 0.0},
+        {DFTU_WINDOW_FRAME_COLLECT, "vs", nullptr, 0.0}};
+    for (const dftu_window_frame_mode mode :
+         {DFTU_WINDOW_FRAME_ROWS, DFTU_WINDOW_FRAME_RANGE}) {
+        for (const Case& c : cases) {
+            dftu_window_spec abi{};
+            abi.func = c.func;
+            abi.value = c.value;
+            abi.out = "r";
+            abi.param.frame = {1, 3, 2, mode, c.q, c.by};
+            dftu_dataframe* got =
+                dftu_dataframe_window(handle, part, 1, order, 1, &abi, 1);
+            REQUIRE(got);
+            const Series col(dftu_dataframe_column(got, "r"));
+            REQUIRE(col.valid());
+            const DataFrame want =
+                win(in, {"p"}, {"o"}, {df::window_column(abi)});
+            CHECK(keys_of(col) == keys_of(want.column("r")));
+            CHECK(col.type() == want.column("r").type());
+            dftu_dataframe_free(got);
+
+            abi.param.frame.q =
+                c.func == DFTU_WINDOW_FRAME_QUANTILE ? 2.0 : 0.0;
+            if (c.func == DFTU_WINDOW_FRAME_QUANTILE)
+                CHECK(dftu_dataframe_window(handle, part, 1, order, 1, &abi,
+                                            1) == nullptr);
+            if (c.by) {
+                abi.param.frame.by = nullptr;
+                CHECK(dftu_dataframe_window(handle, part, 1, order, 1, &abi,
+                                            1) == nullptr);
+            }
+        }
+    }
+    dftu_dataframe_free(handle);
+}
+
+TEST_CASE("window - frame variance and std are exactly 0 on constant frames") {
+    for (const double base : {0.0, 3.25, 1.0e9}) {
+        std::vector<std::int64_t> p, o;
+        std::vector<double> v;
+        std::vector<bool> ok;
+        std::mt19937_64 rng(5);
+        std::uniform_real_distribution<double> noise(0.0, 10.0);
+        for (int i = 0; i < 90; ++i) {
+            p.push_back(1);
+            o.push_back(i);
+            const bool run = i >= 30 && i < 60;
+            v.push_back(run ? base + 0.5 : base + noise(rng));
+            ok.push_back(!(run && i % 7 == 0));
+        }
+        DataFrame in;
+        in.names = {"p", "o", "v"};
+        in.columns.push_back(plain(p));
+        in.columns.push_back(plain(o));
+        in.columns.push_back(f64s(v, ok));
+        const Vals all = to_vals(v, ok);
+        for (const auto& [fc, mode] :
+             std::vector<std::pair<FrameCase, WindowFrameMode>>{
+                 {{3, 0, 0}, WindowFrameMode::Rows},
+                 {{4, 2, 0}, WindowFrameMode::Rows},
+                 {{WINDOW_UNBOUNDED, 0, 0}, WindowFrameMode::Rows},
+                 {{3, 3, 0}, WindowFrameMode::Range}}) {
+            const DataFrame out =
+                win(in, {"p"}, {"o"},
+                    {stat_spec(WindowFunc::FrameVar, "v", "var", fc, mode),
+                     stat_spec(WindowFunc::FrameStd, "v", "std", fc, mode)});
+            Vals want_var(90), want_std(90);
+            bool saw_constant = false;
+            for (int i = 0; i < 90; ++i) {
+                Vals cells;
+                for (int j = 0; j < 90; ++j) {
+                    const bool inside = (fc.preceding == WINDOW_UNBOUNDED ||
+                                         j >= i - fc.preceding) &&
+                                        (fc.following == WINDOW_UNBOUNDED ||
+                                         j <= i + fc.following);
+                    if (inside)
+                        cells.push_back(all[static_cast<std::size_t>(j)]);
+                }
+                want_var[static_cast<std::size_t>(i)] =
+                    variance_ref(cells, false, 0);
+                want_std[static_cast<std::size_t>(i)] =
+                    variance_ref(cells, true, 0);
+                saw_constant = saw_constant ||
+                               want_var[static_cast<std::size_t>(i)] == 0.0;
+            }
+            if (fc.preceding != WINDOW_UNBOUNDED) CHECK(saw_constant);
+            check_close(out, "var", want_var, 1e-9);
+            check_close(out, "std", want_std, 1e-9);
+        }
+    }
+}
+
+TEST_CASE("window - frame variance of values drifting past 1e9 stays close") {
+    std::mt19937_64 rng(9);
+    std::uniform_real_distribution<double> noise(0.0, 1.0);
+    std::vector<std::int64_t> p, o;
+    std::vector<double> v;
+    std::vector<bool> ok;
+    for (int i = 0; i < 2000; ++i) {
+        p.push_back(1);
+        o.push_back(i);
+        v.push_back(1.0e9 + 1000.0 * i + noise(rng));
+        ok.push_back(true);
+    }
+    DataFrame in;
+    in.names = {"p", "o", "v"};
+    in.columns.push_back(plain(p));
+    in.columns.push_back(plain(o));
+    in.columns.push_back(f64s(v, ok));
+    const FrameCase fc{10, 0, 0};
+    const DataFrame out = win(in, {"p"}, {"o"},
+                              {stat_spec(WindowFunc::FrameVar, "v", "var", fc,
+                                         WindowFrameMode::Rows)});
+    const Vals all = to_vals(v, ok);
+    Vals want(2000);
+    for (int i = 0; i < 2000; ++i) {
+        Vals cells(all.begin() + std::max(0, i - 10), all.begin() + i + 1);
+        want[static_cast<std::size_t>(i)] = variance_ref(cells, false, 0);
+    }
+    max_rel_error = 0.0;
+    const Vals got = nums(out, "var");
+    for (std::size_t i = 0; i < got.size(); ++i)
+        if (got[i])
+            max_rel_error = std::max(max_rel_error,
+                                     std::fabs(*got[i] - *want[i]) / *want[i]);
+    MESSAGE("drift max relative error: " << max_rel_error);
+    CHECK(max_rel_error <= 1e-9);
 }

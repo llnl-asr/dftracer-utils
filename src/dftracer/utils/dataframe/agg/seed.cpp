@@ -70,14 +70,7 @@ void agg_permute_groups(AggState& st, const std::vector<std::int64_t>& perm) {
     if (st.has_kmv) permute_blocks(st.kmv, perm, st.n_kmv);
     if (st.has_lst) permute_blocks(st.lst, perm, st.n_lst);
     if (st.has_ss) permute_blocks(st.ss_counters, perm, st.n_ss);
-    if (st.has_co) {
-        permute_blocks(st.co_n, perm, st.n_co);
-        permute_blocks(st.co_sx, perm, st.n_co);
-        permute_blocks(st.co_sy, perm, st.n_co);
-        permute_blocks(st.co_sxx, perm, st.n_co);
-        permute_blocks(st.co_syy, perm, st.n_co);
-        permute_blocks(st.co_sxy, perm, st.n_co);
-    }
+    if (st.has_co) permute_blocks(st.co, perm, st.n_co);
     if (st.has_set) permute_blocks(st.sets, perm, st.n_set);
     if (st.has_occ) {
         permute_blocks(st.occ_deltas, perm, st.n_occ);
@@ -200,14 +193,8 @@ AggStatePtr agg_extract_group(const AggState& st_in, std::int64_t g) {
     }
     if (st.has_co) {
         const std::size_t cbase = static_cast<std::size_t>(g) * st.n_co;
-        for (std::size_t slot = 0; slot < st.n_co; ++slot) {
-            out->co_n[slot] = st.co_n[cbase + slot];
-            out->co_sx[slot] = st.co_sx[cbase + slot];
-            out->co_sy[slot] = st.co_sy[cbase + slot];
-            out->co_sxx[slot] = st.co_sxx[cbase + slot];
-            out->co_syy[slot] = st.co_syy[cbase + slot];
-            out->co_sxy[slot] = st.co_sxy[cbase + slot];
-        }
+        for (std::size_t slot = 0; slot < st.n_co; ++slot)
+            out->co[slot] = st.co[cbase + slot];
     }
     if (st.has_set) {
         const std::size_t setbase = static_cast<std::size_t>(g) * st.n_set;

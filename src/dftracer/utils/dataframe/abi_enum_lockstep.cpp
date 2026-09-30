@@ -42,6 +42,17 @@ static_assert(code(WindowFunc::PercentRank) == DFTU_WINDOW_PERCENT_RANK);
 static_assert(code(WindowFunc::CumeDist) == DFTU_WINDOW_CUME_DIST);
 static_assert(code(WindowFunc::FillForward) == DFTU_WINDOW_FILL_FORWARD);
 static_assert(code(WindowFunc::RunningProd) == DFTU_WINDOW_RUNNING_PROD);
+static_assert(code(WindowFunc::FrameVar) == DFTU_WINDOW_FRAME_VAR);
+static_assert(code(WindowFunc::FrameStd) == DFTU_WINDOW_FRAME_STD);
+static_assert(code(WindowFunc::FrameQuantile) == DFTU_WINDOW_FRAME_QUANTILE);
+static_assert(code(WindowFunc::FrameCountDistinct) ==
+              DFTU_WINDOW_FRAME_COUNT_DISTINCT);
+static_assert(code(WindowFunc::FrameArgMax) == DFTU_WINDOW_FRAME_ARG_MAX);
+static_assert(code(WindowFunc::FrameArgMin) == DFTU_WINDOW_FRAME_ARG_MIN);
+static_assert(code(WindowFunc::FrameCollect) == DFTU_WINDOW_FRAME_COLLECT);
+
+static_assert(code(WindowFrameMode::Rows) == DFTU_WINDOW_FRAME_ROWS);
+static_assert(code(WindowFrameMode::Range) == DFTU_WINDOW_FRAME_RANGE);
 
 static_assert(code(GapFillMode::None) == DFTU_GAP_FILL_NONE);
 static_assert(code(GapFillMode::Locf) == DFTU_GAP_FILL_LOCF);
@@ -77,6 +88,39 @@ static_assert(code(StrMapOp::Upper) == DFTU_STR_MAP_UPPER);
 static_assert(code(StrMapOp::Strip) == DFTU_STR_MAP_STRIP);
 static_assert(code(StrMapOp::Lstrip) == DFTU_STR_MAP_LSTRIP);
 static_assert(code(StrMapOp::Rstrip) == DFTU_STR_MAP_RSTRIP);
+static_assert(code(StrMapOp::Capitalize) == DFTU_STR_MAP_CAPITALIZE);
+static_assert(code(StrMapOp::Title) == DFTU_STR_MAP_TITLE);
+static_assert(code(StrMapOp::Swapcase) == DFTU_STR_MAP_SWAPCASE);
+
+static_assert(code(StrFn::IsAlnum) == DFTU_STR_FN_ISALNUM);
+static_assert(code(StrFn::IsAlpha) == DFTU_STR_FN_ISALPHA);
+static_assert(code(StrFn::IsDigit) == DFTU_STR_FN_ISDIGIT);
+static_assert(code(StrFn::IsDecimal) == DFTU_STR_FN_ISDECIMAL);
+static_assert(code(StrFn::IsNumeric) == DFTU_STR_FN_ISNUMERIC);
+static_assert(code(StrFn::IsSpace) == DFTU_STR_FN_ISSPACE);
+static_assert(code(StrFn::IsLower) == DFTU_STR_FN_ISLOWER);
+static_assert(code(StrFn::IsUpper) == DFTU_STR_FN_ISUPPER);
+static_assert(code(StrFn::IsTitle) == DFTU_STR_FN_ISTITLE);
+static_assert(code(StrFn::PadStart) == DFTU_STR_FN_PAD_START);
+static_assert(code(StrFn::PadEnd) == DFTU_STR_FN_PAD_END);
+static_assert(code(StrFn::Center) == DFTU_STR_FN_CENTER);
+static_assert(code(StrFn::Zfill) == DFTU_STR_FN_ZFILL);
+static_assert(code(StrFn::RemovePrefix) == DFTU_STR_FN_REMOVE_PREFIX);
+static_assert(code(StrFn::RemoveSuffix) == DFTU_STR_FN_REMOVE_SUFFIX);
+static_assert(code(StrFn::Repeat) == DFTU_STR_FN_REPEAT);
+static_assert(code(StrFn::SliceReplace) == DFTU_STR_FN_SLICE_REPLACE);
+static_assert(code(StrFn::Split) == DFTU_STR_FN_SPLIT);
+static_assert(code(StrFn::Partition) == DFTU_STR_FN_PARTITION);
+static_assert(code(StrFn::RPartition) == DFTU_STR_FN_RPARTITION);
+static_assert(code(StrFn::Findall) == DFTU_STR_FN_FINDALL);
+static_assert(code(StrFn::Extract) == DFTU_STR_FN_EXTRACT);
+static_assert(code(StrFn::Rfind) == DFTU_STR_FN_RFIND);
+static_assert(code(StrFn::Index) == DFTU_STR_FN_INDEX);
+static_assert(code(StrFn::Rindex) == DFTU_STR_FN_RINDEX);
+static_assert(code(StrFn::Join) == DFTU_STR_FN_JOIN);
+static_assert(code(StrFn::Get) == DFTU_STR_FN_GET);
+static_assert(code(StrFn::Cat) == DFTU_STR_FN_CAT);
+static_assert(code(StrFn::RegexReplace) == DFTU_STR_FN_REGEX_REPLACE);
 
 static_assert(code(ConcatHow::Vertical) == DFTU_CONCAT_VERTICAL);
 static_assert(code(ConcatHow::Diagonal) == DFTU_CONCAT_DIAGONAL);
@@ -101,6 +145,8 @@ static_assert(code(PrimOp::Mix64) == DFTU_PRIM_MIX64);
 static_assert(code(ScalarTag::I64) == DFTU_SCALAR_TAG_I64);
 static_assert(code(ScalarTag::U64) == DFTU_SCALAR_TAG_U64);
 static_assert(code(ScalarTag::F64) == DFTU_SCALAR_TAG_F64);
+static_assert(code(ScalarTag::Str) == DFTU_SCALAR_TAG_STR);
+static_assert(code(ScalarTag::Err) == DFTU_SCALAR_TAG_ERR);
 
 // Every TypeId mirrors a dftu_dtype, in lockstep, so a plugin can name any
 // type a Series can hold through the C ABI.

@@ -179,14 +179,18 @@ struct AggMetricsFullView {
     std::uint64_t dur_total;
     std::uint64_t dur_min;
     std::uint64_t dur_max;
+    /// The running mean is dur_mean + dur_mean_lo (a value near it, and the
+    /// small remainder); dur_m2/m3/m4 are the central moments about it.
     double dur_mean;
-    double dur_m2;  ///< raw power sum sum(x^2); central M2 = m2 - n*mean^2
+    double dur_mean_lo;
+    double dur_m2;
     double dur_m3;
     double dur_m4;
     std::uint64_t size_total;
     std::uint64_t size_min;
     std::uint64_t size_max;
     double size_mean;
+    double size_mean_lo;
     double size_m2;
     double size_m3;
     double size_m4;
@@ -194,6 +198,7 @@ struct AggMetricsFullView {
     std::uint64_t offset_min;
     std::uint64_t offset_max;
     double offset_mean;
+    double offset_mean_lo;
     double offset_m2;
     double offset_m3;
     double offset_m4;
@@ -205,14 +210,11 @@ struct AggMetricsFullView {
     std::string_view dur_sketch;
     std::string_view size_sketch;
 
-    /// m2 is the raw power sum sum(x^2); the central sum of squares is
-    /// m2 - n*mean^2. Population stddev = sqrt(central / n).
-    static double stddev_from(std::uint64_t n, double total_mean, double m2) {
+    /// m2 is the central sum of squares, sum (x - mean)^2. Population stddev
+    /// = sqrt(m2 / n).
+    static double stddev_from(std::uint64_t n, double m2) {
         if (n <= 1) return 0.0;
-        const double central =
-            m2 - static_cast<double>(n) * total_mean * total_mean;
-        return central > 0.0 ? std::sqrt(central / static_cast<double>(n))
-                             : 0.0;
+        return m2 > 0.0 ? std::sqrt(m2 / static_cast<double>(n)) : 0.0;
     }
 };
 
@@ -238,6 +240,7 @@ inline bool parse_agg_value_view(std::string_view data, AggMetricsView& out) {
             min = read_varint();
             max = read_varint();
             skip_f64();  // mean
+            skip_f64();  // mean_lo
             skip_f64();  // m2
             skip_f64();  // m3
             skip_f64();  // m4
@@ -298,24 +301,24 @@ inline bool parse_agg_value_full_view(std::string_view data,
 
     auto read_metric_stats_full = [&](std::uint64_t& total, std::uint64_t& min,
                                       std::uint64_t& max, double& mean,
-                                      double& m2, double& m3, double& m4,
-                                      std::string_view* sketch) {
+                                      double& mean_lo, double& m2, double& m3,
+                                      double& m4, std::string_view* sketch) {
         auto fmt = read_varint();
         if (fmt == METRIC_FMT_COMPACT) {
             auto val = read_varint();
             total = min = max = val;
             const double v = static_cast<double>(val);
             mean = v;
-            m2 = v * v;
-            m3 = v * v * v;
-            m4 = v * v * v * v;
+            mean_lo = 0.0;
+            m2 = m3 = m4 = 0.0;  // one value: no spread about its mean
             return;
         }
-        read_varint();  // skip count (use outer count)
+        read_varint();           // skip count (use outer count)
         total = read_varint();
         min = read_varint();
         max = read_varint();
         mean = read_f64();
+        mean_lo = read_f64();
         m2 = read_f64();
         m3 = read_f64();
         m4 = read_f64();
@@ -332,14 +335,14 @@ inline bool parse_agg_value_full_view(std::string_view data,
 
     out.count = read_varint();
     read_metric_stats_full(out.dur_total, out.dur_min, out.dur_max,
-                           out.dur_mean, out.dur_m2, out.dur_m3, out.dur_m4,
-                           &out.dur_sketch);
+                           out.dur_mean, out.dur_mean_lo, out.dur_m2,
+                           out.dur_m3, out.dur_m4, &out.dur_sketch);
     read_metric_stats_full(out.size_total, out.size_min, out.size_max,
-                           out.size_mean, out.size_m2, out.size_m3, out.size_m4,
-                           &out.size_sketch);
+                           out.size_mean, out.size_mean_lo, out.size_m2,
+                           out.size_m3, out.size_m4, &out.size_sketch);
     read_metric_stats_full(out.offset_total, out.offset_min, out.offset_max,
-                           out.offset_mean, out.offset_m2, out.offset_m3,
-                           out.offset_m4, nullptr);
+                           out.offset_mean, out.offset_mean_lo, out.offset_m2,
+                           out.offset_m3, out.offset_m4, nullptr);
     out.ts = read_varint();
     out.te = read_varint();
 

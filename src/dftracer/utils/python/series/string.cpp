@@ -226,6 +226,22 @@ PyObject* Series_str_extract(PyObject* self, PyObject* args) {
     }
     return make_series(std::move(out));
 }
+PyObject* Series_str_regex_replace(PyObject* self, PyObject* args) {
+    Series* a = as_series(self);
+    if (!a) return nullptr;
+    PyObject *pat = nullptr, *to = nullptr;
+    if (!PyArg_ParseTuple(args, "OO", &pat, &to)) return nullptr;
+    std::string_view pattern, repl;
+    if (!as_str_view(pat, &pattern) || !as_str_view(to, &repl)) return nullptr;
+    Series out = a->str_regex_replace(pattern, repl);
+    if (!out.valid()) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "str_regex_replace: the pattern or the replacement is invalid");
+        return nullptr;
+    }
+    return make_series(std::move(out));
+}
 PyObject* Series_list_len(PyObject* self, PyObject*) {
     Series* a = as_series(self);
     if (!a) return nullptr;
@@ -435,6 +451,27 @@ PyObject* Series_dt_part(PyObject* self, PyObject* args) {
         PyErr_SetString(PyExc_TypeError,
                         "dt_part: not a Timestamp, Date, Duration or Int64 "
                         "column");
+        return nullptr;
+    }
+    return make_series(std::move(out));
+}
+PyObject* Series_dt_format(PyObject* self, PyObject* args) {
+    Series* a = as_series(self);
+    if (!a) return nullptr;
+    PyObject* fmt_obj = nullptr;
+    int unit = DFTU_TIME_UNIT_MICRO;
+    if (!PyArg_ParseTuple(args, "O|i", &fmt_obj, &unit)) return nullptr;
+    std::string_view fmt;
+    if (!as_str_view(fmt_obj, &fmt)) return nullptr;
+    if (unit < DFTU_TIME_UNIT_SECOND || unit > DFTU_TIME_UNIT_NANO) {
+        PyErr_SetString(PyExc_ValueError, "dt_format: unit must be 0..3");
+        return nullptr;
+    }
+    Series out = a->dt_format(fmt, static_cast<dataframe::TimeUnit>(unit));
+    if (!out.valid()) {
+        std::string msg = "dt_format: invalid format '" + std::string(fmt) +
+                          "' or not a Timestamp, Date or Int64 column";
+        PyErr_SetString(PyExc_ValueError, msg.c_str());
         return nullptr;
     }
     return make_series(std::move(out));

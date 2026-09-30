@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/to_chars.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/decimal.h>
@@ -11,7 +12,10 @@
 #include <cstdint>
 #include <cstring>
 #include <exception>
+#include <span>
 #include <string>
+#include <string_view>
+#include <type_traits>
 #include <vector>
 
 namespace dftracer::utils::dataframe {
@@ -182,6 +186,113 @@ dftu_series* parse_numbers_w(const dftu_series& v, TypeId mid) {
     return out;
 }
 
+// A shortest round-trip float text with ".0" added when it is only digits, so
+// 2.0 reads "2.0" as Python's repr and pandas give it; "1e+21", "nan" and
+// "inf" already show a point, an exponent or letters.
+std::string float_repr(std::string t) {
+    bool plain = !t.empty();
+    for (char c : t)
+        if (c != '-' && (c < '0' || c > '9')) {
+            plain = false;
+            break;
+        }
+    if (plain) t += ".0";
+    return t;
+}
+
+// Integers and the two float widths (not Float16 or decimals) read as text
+// and as a truth value here.
+bool is_plain_number(TypeId t) {
+    return is_integral(t) || t == TypeId::Float32 || t == TypeId::Float64;
+}
+
+template <class T>
+void number_texts(const void* sv, const dftu_series& v,
+                  std::vector<std::string>& owned) {
+    const T* s = static_cast<const T*>(sv);
+    for (std::int64_t i = 0; i < v.length; ++i) {
+        if (!row_valid(v, i)) continue;
+        std::string& out = owned[static_cast<std::size_t>(i)];
+        if constexpr (std::is_same_v<T, float>)
+            out = float_repr(dftracer::utils::float_text(s[i]));
+        else if constexpr (std::is_same_v<T, double>)
+            out = float_repr(dftracer::utils::double_text(s[i]));
+        else if constexpr (std::is_signed_v<T>)
+            out = std::to_string(static_cast<std::int64_t>(s[i]));
+        else
+            out = std::to_string(static_cast<std::uint64_t>(s[i]));
+    }
+}
+
+// A Bool or plain-number column as String: decimal digits, shortest float
+// text, "true" / "false". A null stays null.
+dftu_series* to_text(const dftu_series& v) {
+    const std::size_t n = static_cast<std::size_t>(v.length);
+    std::vector<std::string> owned(n);
+    if (v.type == TypeId::Bool) {
+        const auto* bits = static_cast<const std::uint8_t*>(v.data->data());
+        for (std::size_t i = 0; i < n; ++i)
+            if (row_valid(v, static_cast<std::int64_t>(i)))
+                owned[i] = ((bits[i >> 3] >> (i & 7)) & 1) ? "true" : "false";
+    } else {
+        DF_NUMERIC_DISPATCH(v.type, number_texts, v.data->data(), v, owned)
+    }
+    std::vector<std::string_view> views(owned.begin(), owned.end());
+    return Series::strings(std::span<const std::string_view>(views),
+                           v.validity ? v.validity->data() : nullptr)
+        .release();
+}
+
+template <class T>
+void nonzero_bits(const void* sv, const dftu_series& v, std::uint8_t* data,
+                  std::uint8_t* valid, std::int64_t& nulls) {
+    const T* s = static_cast<const T*>(sv);
+    for (std::int64_t i = 0; i < v.length; ++i) {
+        bool skip = !row_valid(v, i);
+        if constexpr (std::is_floating_point_v<T>)
+            skip = skip || s[i] != s[i];  // a NaN is not silently true
+        if (skip) {
+            ++nulls;
+            continue;
+        }
+        valid[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
+        if (s[i] != T{})
+            data[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
+    }
+}
+
+// A plain-number column as Bool: zero is false, anything else true; a null and
+// a float NaN are null.
+dftu_series* to_bool(const dftu_series& v) {
+    const std::int64_t n = v.length;
+    auto* out = new dftu_series();
+    out->type = TypeId::Bool;
+    out->encoding = Encoding::Flat;
+    out->length = n;
+    out->data = Buffer::allocate(buffer_bytes(TypeId::Bool, n));
+    std::memset(out->data->data(), 0, out->data->size());
+    out->validity = Buffer::allocate(buffer_bytes(TypeId::Bool, n));
+    std::memset(out->validity->data(), 0, out->validity->size());
+    std::int64_t nulls = 0;
+    // No input nulls: the SIMD path packs the bits (and a float's NaN mask).
+    const std::int64_t simd_nulls =
+        v.validity
+            ? -1
+            : cast_bool_simd(static_cast<std::int32_t>(v.type), v.data->data(),
+                             static_cast<std::uint8_t*>(out->data->data()),
+                             static_cast<std::uint8_t*>(out->validity->data()),
+                             static_cast<std::size_t>(n));
+    if (simd_nulls >= 0) {
+        nulls = simd_nulls;
+    } else {
+        DF_NUMERIC_DISPATCH(v.type, nonzero_bits, v.data->data(), v,
+                            out->data->data(), out->validity->data(), nulls)
+    }
+    out->null_count = nulls;
+    if (nulls == 0) out->validity = nullptr;
+    return out;
+}
+
 dftu_series* parse_numbers(const dftu_series& v, TypeId mid) {
     if (v.encoding != Encoding::Flat) return nullptr;
     return is_wide_offset_type(v.type) ? parse_numbers_w<std::int64_t>(v, mid)
@@ -229,6 +340,16 @@ dftu_series* dftu_series_cast(const dftu_series* v, dftu_dtype target) {
         dftu_series_free(as_i64);
         return out;
     }
+    // A column of the type asked for is itself; this is also the only way a
+    // String, Bool or temporal column casts to its own type.
+    if (src == dst && !dftracer::utils::dataframe::is_numeric(src))
+        return dftu_series_share(v);
+    if (dst == TypeId::String &&
+        (src == TypeId::Bool ||
+         dftracer::utils::dataframe::is_plain_number(src)))
+        return dftracer::utils::dataframe::to_text(*v);
+    if (dst == TypeId::Bool && dftracer::utils::dataframe::is_plain_number(src))
+        return dftracer::utils::dataframe::to_bool(*v);
     if ((src == TypeId::String || src == TypeId::LargeString) &&
         dftracer::utils::dataframe::is_numeric(dst)) {
         // Parse each row as a number (a whole-row integer or a float);

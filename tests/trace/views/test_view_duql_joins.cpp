@@ -22,12 +22,12 @@ struct NullSink : ExportSink {
 };
 
 // Sets an environment variable for one scope.
-struct Env {
+struct ScopedEnv {
     std::string name;
-    Env(std::string n, const std::string& v) : name(std::move(n)) {
+    ScopedEnv(std::string n, const std::string& v) : name(std::move(n)) {
         setenv(name.c_str(), v.c_str(), 1);
     }
-    ~Env() { unsetenv(name.c_str()); }
+    ~ScopedEnv() { unsetenv(name.c_str()); }
 };
 
 // `lines` as an indexed NDJSON trace; `member_bytes` > 0 frames it into
@@ -397,6 +397,107 @@ TEST_SUITE("View duql joins") {
         CHECK(column(k2, "app") == std::vector<std::string>{"laghos", "amg"});
     }
 
+    TEST_CASE("a lookup column is the needle of a string predicate") {
+        TestEnvironment env(10);
+        std::vector<std::string> lines = {
+            R"({"type":"run","run":1,"prefix":"/pfs"})",
+            R"({"type":"run","run":2,"prefix":"/ssd"})",
+        };
+        const char* const FN[] = {"/pfs/a", "/ssd/b", "/pfs/c", "/tmp/d"};
+        for (int i = 0; i < 4; ++i)
+            lines.push_back(R"({"type":"ev","i":)" + std::to_string(i) +
+                            R"(,"run":)" + std::to_string(i % 3 + 1) +
+                            R"(,"fname":")" + FN[i] + R"("})");
+        lines.push_back(R"({"type":"ev","i":4,"run":1})");
+        const View v = view_of(write_records(env, "pc", lines));
+        const std::string q =
+            "let runs = where type == \"run\" | select run, prefix; where "
+            "type == \"ev\" | lookup runs on run | derive p = "
+            "starts_with(fname, prefix) | ";
+        CHECK(column(frame(v.duql(q + "where p | select i")), "i") ==
+              std::vector<std::string>{"0", "1"});
+        CHECK(column(frame(v.duql(q + "where not p | select i")), "i") ==
+              std::vector<std::string>{"3"});
+        CHECK(column(frame(v.duql(q + "where p is null | select i")), "i") ==
+              std::vector<std::string>{"2", "4"});
+    }
+
+    TEST_CASE("lookup inner and anti keep or drop the rows with a match") {
+        TestEnvironment env(10);
+        auto lines = runs_and_events();
+        lines.push_back(R"({"type":"run","run":3})");
+        lines.push_back(R"({"type":"ev","i":9,"run":null})");
+        lines.push_back(R"({"type":"ev","i":10,"run":4})");
+        const View v = view_of(write_records(env, "ia", lines));
+        const std::string let =
+            "let runs = where type == \"run\" and run < 3 | select run, "
+            "sapp = app; ";
+        const std::string ev = "where type == \"ev\" | ";
+
+        const auto left =
+            frame(v.duql(let + ev +
+                         "lookup runs on run | where sapp == \"laghos\" or "
+                         "sapp == \"amg\" | select i, sapp"));
+        const auto inner = frame(
+            v.duql(let + ev + "lookup runs on run inner | select i, sapp"));
+        CHECK(column(inner, "i") == column(left, "i"));
+        CHECK(column(inner, "sapp") == column(left, "sapp"));
+        CHECK(column(inner, "i").size() == 6);
+
+        const auto nullable = frame(v.duql(
+            "let runs = where type == \"run\" | select run, sapp = app; " + ev +
+            "lookup runs on run inner | select i, sapp"));
+        CHECK(column(nullable, "i") == std::vector<std::string>{"0", "1", "2",
+                                                                "3", "4", "5",
+                                                                "6", "7", "8"});
+        CHECK(column(nullable, "sapp") ==
+              std::vector<std::string>{"laghos", "amg", "null", "laghos", "amg",
+                                       "null", "laghos", "amg", "null"});
+
+        const auto into = frame(
+            v.duql(let + ev + "lookup runs on run inner into m | select i, m"));
+        CHECK(column(into, "i") == column(inner, "i"));
+
+        const auto anti =
+            frame(v.duql(let + ev + "lookup runs on run anti | select i"));
+        CHECK(column(anti, "i") ==
+              std::vector<std::string>{"2", "5", "8", "9", "10"});
+        const auto not_in = frame(v.duql(
+            let + ev + "where run not in (from runs | select run) | select i"));
+        CHECK(column(not_in, "i") ==
+              std::vector<std::string>{"2", "5", "8", "10"});
+        const auto all_cols =
+            frame(v.duql(let + ev + "lookup runs on run anti"));
+        CHECK(all_cols.column_index("sapp") < 0);
+
+        CHECK(has(error_of([&] {
+                      (void)frame(v.duql(
+                          "let runs = where type == \"run\" | select run, "
+                          "type; " +
+                          ev + "lookup runs on run inner"));
+                  }),
+                  {"'type'", "already"}));
+    }
+
+    TEST_CASE("a lookup side may be inline but not correlated") {
+        TestEnvironment env(10);
+        const View v = view_of(write_records(env, "il", runs_and_events()));
+        const auto a = frame(v.duql(
+            "let runs = where type == \"run\" | select run, app; where type "
+            "== \"ev\" | lookup runs on run | select i, app"));
+        const auto b = frame(
+            v.duql("where type == \"ev\" | lookup (from data | where type == "
+                   "\"run\" | select run, app) on run | select i, app"));
+        CHECK(column(b, "i") == column(a, "i"));
+        CHECK(column(b, "app") == column(a, "app"));
+        CHECK(has(error_of([&] {
+                      (void)v.duql(
+                          "where type == \"ev\" | lookup (from data | where "
+                          "run == ^.run | select run, app) on run");
+                  }),
+                  {"lookup side", "enclosing row"}));
+    }
+
     // Samples `{"type":"s","k":..,"t":..,"v":..}` and events
     // `{"type":"ev","i":..,"k":..,"ts":..}` with equal times, missing keys
     // and missing times; `expect` is the nested-loop answer per event.
@@ -512,6 +613,32 @@ TEST_SUITE("View duql joins") {
             std::vector<std::string> order;
             for (int i = 0; i < 300; ++i) order.push_back(std::to_string(i));
             CHECK(text_of(column(f, "i")) == text_of(order));
+        }
+    }
+
+    TEST_CASE("within takes a number, a fraction, a parameter or a duration") {
+        TestEnvironment env(10);
+        const AsofData d = asof_data(300, 80, 11);
+        const View v = view_of(write_records(env, "w", d.lines, 4096, 4096));
+        auto run_with = [&](const std::string& within,
+                            const duql::Params& p = {}) {
+            return column(
+                frame(v.duql("let s = where type == \"s\" | select k, t, v; "
+                             "where type == \"ev\" | lookup s on k asof ts "
+                             "== t within " +
+                                 within + " | select i, v",
+                             p)),
+                "v");
+        };
+        duql::Params p;
+        p.emplace("w", duql::LiteralValue{std::uint64_t{4}});
+        for (const std::string w : {"4", "4.5", "$w"}) {
+            CAPTURE(w);
+            CHECK(first_diff(run_with(w, p), d.expect[3]) == "");
+        }
+        for (const std::string w : {"-1", "ts", "1 + 3", "4us"}) {
+            CAPTURE(w);
+            CHECK(has(error_of([&] { (void)run_with(w); }), {"within"}));
         }
     }
 
@@ -733,7 +860,7 @@ TEST_SUITE("View duql joins") {
         const std::string q =
             "let ks = where k >= 0 | select k, v = k; where k -> ks.v >= 0";
         {
-            Env cap("DUQL_LOOKUP_MAX_ROWS", "10");
+            ScopedEnv cap("DUQL_LOOKUP_MAX_ROWS", "10");
             const View planned = v.duql(q);
             (void)v.explain_duql(q);
             CHECK(has(error_of([&] { (void)frame(planned); }),
@@ -764,7 +891,7 @@ TEST_SUITE("View duql joins") {
                       .num_rows() == 11);
         }
         {
-            Env cap("DUQL_LOOKUP_MAX_BYTES", "16");
+            ScopedEnv cap("DUQL_LOOKUP_MAX_BYTES", "16");
             CHECK(has(error_of([&] { (void)frame(v.duql(q)); }),
                       {"'ks'", "DUQL_LOOKUP_MAX_BYTES", "16"}));
         }
@@ -1434,8 +1561,8 @@ TEST_SUITE("View duql joins") {
     TEST_CASE("sub-queries over the caps and the memory budget") {
         TestEnvironment env(10);
         const CorrelatedData d = correlated_data(300, 13);
-        Env rows("DUQL_LOOKUP_MAX_ROWS", "10");
-        Env bytes("DUQL_LOOKUP_MAX_BYTES", "1024");
+        ScopedEnv rows("DUQL_LOOKUP_MAX_ROWS", "10");
+        ScopedEnv bytes("DUQL_LOOKUP_MAX_BYTES", "1024");
         for (const std::size_t checkpoint :
              {std::size_t{2048}, std::size_t{65536}}) {
             const std::string gz =
@@ -1547,8 +1674,8 @@ TEST_SUITE("View duql joins") {
             const View v =
                 view_of(write_records(env, "sp" + std::to_string(checkpoint),
                                       d.lines, 4096, checkpoint));
-            Env rows("DUQL_LOOKUP_MAX_ROWS", "10");
-            Env bytes("DUQL_LOOKUP_MAX_BYTES", "1024");
+            ScopedEnv rows("DUQL_LOOKUP_MAX_ROWS", "10");
+            ScopedEnv bytes("DUQL_LOOKUP_MAX_BYTES", "1024");
             for (const std::uint64_t budget :
                  {std::uint64_t{1024}, std::uint64_t{0}}) {
                 CAPTURE(checkpoint);

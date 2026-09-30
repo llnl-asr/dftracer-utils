@@ -488,16 +488,16 @@ PyObject* LazyFrame_asof(PyObject* self, PyObject* args, PyObject* kwds) {
         return nullptr;
     std::vector<std::string> equi;
     if (!parse_string_seq(by, "asof: by must be names", equi)) return nullptr;
-    std::int64_t tol = -1;
+    double tol = -1;
     if (tol_obj != Py_None) {
-        const long long t = PyLong_AsLongLong(tol_obj);
+        const double t = PyFloat_AsDouble(tol_obj);
         if (PyErr_Occurred()) return nullptr;
-        if (t < 0) {
+        if (!(t >= 0)) {
             PyErr_SetString(PyExc_ValueError,
                             "asof: tolerance must not be negative");
             return nullptr;
         }
-        tol = static_cast<std::int64_t>(t);
+        tol = t;
     }
     std::vector<const char*> ec;
     for (const std::string& s : equi) ec.push_back(s.c_str());
@@ -505,7 +505,7 @@ PyObject* LazyFrame_asof(PyObject* self, PyObject* args, PyObject* kwds) {
     a.str(2, on)
         .strlist(3, ec.data(), static_cast<std::int32_t>(ec.size()))
         .i32(4, static_cast<std::int32_t>(dir))
-        .i64(5, tol);
+        .f64(5, tol);
     return run_lazy_op([&] {
         std::vector<std::string> dropped = equi;
         dropped.emplace_back(on);
@@ -617,11 +617,12 @@ PyObject* LazyFrame_join(PyObject* self, PyObject* args, PyObject* kwds) {
     PyObject* left_on = nullptr;
     PyObject* right_on = nullptr;
     const char* suffix = "_right";
-    static const char* kw[] = {"other",    "on",     "how",  "left_on",
-                               "right_on", "suffix", nullptr};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|OsOOs",
-                                     const_cast<char**>(kw), &other, &on, &how,
-                                     &left_on, &right_on, &suffix))
+    int nulls_equal = 0;
+    static const char* kw[] = {"other",    "on",     "how",         "left_on",
+                               "right_on", "suffix", "nulls_equal", nullptr};
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwds, "O|OsOOsp", const_cast<char**>(kw), &other, &on, &how,
+            &left_on, &right_on, &suffix, &nulls_equal))
         return nullptr;
     LazyFrameObject* o = as_lazyframe(other);
     if (!o) return nullptr;
@@ -633,7 +634,8 @@ PyObject* LazyFrame_join(PyObject* self, PyObject* args, PyObject* kwds) {
                                                       l, r))
         return nullptr;
     return run_lazy_op([&] {
-        return b->lf.join(o->lf, std::move(l), std::move(r), jh, suffix);
+        return b->lf.join(o->lf, std::move(l), std::move(r), jh, suffix,
+                          nulls_equal != 0);
     });
 }
 
@@ -955,7 +957,7 @@ PyMethodDef LazyFrame_methods[] = {
      "the two collected plans."},
     {"window", DFTU_PYCFUNCTION(LazyFrame_window), METH_VARARGS | METH_KEYWORDS,
      "window(partition_by, order_by, specs) -> LazyFrame: SQL window "
-     "functions over the collected plan; specs are normalized 9-tuples."},
+     "functions over the collected plan; specs are normalized 12-tuples."},
     {"column_op", DFTU_PYCFUNCTION(LazyFrame_column_op),
      METH_VARARGS | METH_KEYWORDS,
      "column_op(column, op, column2=None, a=0, b=0, text=None) -> the "

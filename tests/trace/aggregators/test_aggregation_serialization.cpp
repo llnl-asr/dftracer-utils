@@ -185,7 +185,9 @@ TEST_SUITE("AggregationSerialization") {
         m.duration.stat.sum = 5000;
         m.duration.stat.min = 10;
         m.duration.stat.max = 200;
-        m.duration.stat.sumsq = 1234.5;
+        m.duration.stat.shift = 50.0;
+        m.duration.stat.cmean = 0.0;
+        m.duration.stat.cm2 = 1234.5;
         m.size.stat.n = 50;
         m.size.stat.sum = 2000;
         m.size.stat.min = 5;
@@ -203,6 +205,8 @@ TEST_SUITE("AggregationSerialization") {
         CHECK(m2.duration.min() == 10);
         CHECK(m2.duration.max() == 200);
         CHECK(m2.duration.mean() == doctest::Approx(50.0));
+        CHECK(m2.duration.shift() == doctest::Approx(50.0));
+        CHECK(m2.duration.cmean() == 0.0);
         CHECK(m2.duration.m2() == doctest::Approx(1234.5));
         CHECK(m2.size.count() == 50);
         CHECK(m2.size.total() == 2000);
@@ -217,19 +221,26 @@ TEST_SUITE("AggregationSerialization") {
         // big-endian to match put_double on the write side. A little-endian
         // read byte-swaps mean/m2, corrupting the mean/stddev columns that
         // iter_aggregation / dfanalyzer emit.
-        // mean is derived from sum/n on the wire, so set n=1 with sum = the
-        // desired mean; m2 is the raw power sum stored in stat.sumsq.
+        // The wire carries the running mean as a pair (stat.shift and
+        // stat.cmean) and the central moment (stat.cm2); set them to
+        // distinctive values.
         AggregationMetrics m;
         m.count = 100;
         m.duration.stat.n = 1;
         m.duration.stat.sum = 12345.678;
-        m.duration.stat.sumsq = 98765.4321;
+        m.duration.stat.shift = 12345.678;
+        m.duration.stat.cmean = 0.125;
+        m.duration.stat.cm2 = 98765.4321;
         m.size.stat.n = 1;
         m.size.stat.sum = 42.5;
-        m.size.stat.sumsq = 271828.1828;
+        m.size.stat.shift = 42.5;
+        m.size.stat.cmean = 0.0625;
+        m.size.stat.cm2 = 271828.1828;
         m.offset.stat.n = 1;
         m.offset.stat.sum = 3.14159;
-        m.offset.stat.sumsq = 161803.398;
+        m.offset.stat.shift = 3.14159;
+        m.offset.stat.cmean = 0.03125;
+        m.offset.stat.cm2 = 161803.398;
 
         auto data = serialize_agg_value(m);
 
@@ -238,10 +249,13 @@ TEST_SUITE("AggregationSerialization") {
 
         CHECK(fv.count == 100);
         CHECK(fv.dur_mean == doctest::Approx(12345.678));
+        CHECK(fv.dur_mean_lo == doctest::Approx(0.125));
         CHECK(fv.dur_m2 == doctest::Approx(98765.4321));
         CHECK(fv.size_mean == doctest::Approx(42.5));
+        CHECK(fv.size_mean_lo == doctest::Approx(0.0625));
         CHECK(fv.size_m2 == doctest::Approx(271828.1828));
         CHECK(fv.offset_mean == doctest::Approx(3.14159));
+        CHECK(fv.offset_mean_lo == doctest::Approx(0.03125));
         CHECK(fv.offset_m2 == doctest::Approx(161803.398));
     }
 
@@ -260,7 +274,8 @@ TEST_SUITE("AggregationSerialization") {
         cm.stat.sum = 250;
         cm.stat.min = 20;
         cm.stat.max = 80;
-        cm.stat.sumsq = 100.0;
+        cm.stat.shift = 50.0;
+        cm.stat.cm2 = 100.0;
         m.custom_metrics->emplace("offset", std::move(cm));
 
         auto data = serialize_agg_value(m);

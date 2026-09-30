@@ -21,7 +21,17 @@ set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_methods.cpp
                            test_morsel_ordering.cpp
                            test_order.cpp test_frame_window.cpp
                            test_frame_gap_fill.cpp test_frame_asof.cpp
-                           test_frame_ops.cpp)
+                           test_frame_ops.cpp test_reduce_types.cpp
+                           test_count_nulls.cpp test_set_union.cpp test_cast_pairs.cpp
+                           test_filter_columns.cpp test_rank_pct.cpp test_rank_nan.cpp test_cut_flags.cpp test_fillna_bool_string.cpp test_cast_followups.cpp
+                           test_where_null.cpp test_constant_column.cpp
+                           test_variance_stable.cpp
+                           test_covariance_stable.cpp
+                           test_join_null_keys.cpp
+                           test_concat_large_string.cpp
+                           test_groupby_scale.cpp
+                           test_string_simd.cpp test_expr_string_methods.cpp
+                           test_concat_text.cpp)
 
 foreach(test_file ${DATAFRAME_TEST_SOURCES})
   string(REPLACE ".cpp" "" bin_exec ${test_file})
@@ -62,6 +72,16 @@ foreach(test_file ${DATAFRAME_TEST_SOURCES})
   add_test(NAME dataframe/${bin_exec} COMMAND ${target_name})
   set_tests_properties(dataframe/${bin_exec} PROPERTIES
                        WORKING_DIRECTORY "${test_working_directory}")
+  # 1.2M rows folded per case on every thread count: about 200 s alone on a
+  # laptop, twice that on a 4-core runner and more under coverage.
+  if(bin_exec STREQUAL "test_groupby_scale")
+    set(scale_timeout 900)
+    if(DFTRACER_UTILS_COVERAGE OR DFTRACER_UTILS_ENABLE_TSAN
+       OR DFTRACER_UTILS_ENABLE_ASAN)
+      set(scale_timeout 1800)
+    endif()
+    set_tests_properties(dataframe/${bin_exec} PROPERTIES TIMEOUT ${scale_timeout})
+  endif()
 endforeach()
 
 # ##############################################################################

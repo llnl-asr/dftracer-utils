@@ -1,6 +1,7 @@
 #include <dftracer/utils/dataframe/kernels/cast.h>
 #include <dftracer/utils/dataframe/parallel.h>
 
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -81,6 +82,61 @@ void CastF64I64(const void* s, void* d, std::size_t n) {
     ConvertSameWidth<double, std::int64_t>(s, d, n);
 }
 
+// Number -> Bool: one packed result bit per row, 64 rows a word (LSB first, as
+// the column's bit order). A float also writes a validity bit per row, so a NaN
+// is null and not silently true. `bits` and `valid` are zeroed by the caller.
+template <class T, bool kFloat>
+void NonzeroBits(const void* sv, std::uint8_t* bits, std::uint8_t* valid,
+                 std::size_t n) {
+    const T* s = static_cast<const T*>(sv);
+    const hn::ScalableTag<T> d;
+    const std::size_t lanes = hn::Lanes(d);
+    const auto zero = hn::Zero(d);
+    std::size_t i = 0;
+    for (; i + 64 <= n; i += 64) {
+        std::uint64_t data_word = 0;
+        std::uint64_t valid_word = 0;
+        for (std::size_t c = 0; c < 64; c += lanes) {
+            const auto v = hn::LoadU(d, s + i + c);
+            auto nonzero = hn::Ne(v, zero);
+            if constexpr (kFloat) {
+                const auto ordered = hn::Eq(v, v);
+                valid_word |= hn::BitsFromMask(d, ordered) << c;
+                nonzero = hn::And(nonzero, ordered);
+            }
+            data_word |= hn::BitsFromMask(d, nonzero) << c;
+        }
+        std::memcpy(bits + (i >> 3), &data_word, 8);
+        if constexpr (kFloat) std::memcpy(valid + (i >> 3), &valid_word, 8);
+    }
+    for (; i < n; ++i) {
+        const T x = s[i];
+        bool ordered = true;
+        if constexpr (kFloat) ordered = (x == x);
+        if (!ordered) continue;
+        if constexpr (kFloat)
+            valid[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
+        if (x != T{}) bits[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
+    }
+}
+
+void NonzeroBitsI32(const void* s, std::uint8_t* b, std::uint8_t* v,
+                    std::size_t n) {
+    NonzeroBits<std::int32_t, false>(s, b, v, n);
+}
+void NonzeroBitsI64(const void* s, std::uint8_t* b, std::uint8_t* v,
+                    std::size_t n) {
+    NonzeroBits<std::int64_t, false>(s, b, v, n);
+}
+void NonzeroBitsF32(const void* s, std::uint8_t* b, std::uint8_t* v,
+                    std::size_t n) {
+    NonzeroBits<float, true>(s, b, v, n);
+}
+void NonzeroBitsF64(const void* s, std::uint8_t* b, std::uint8_t* v,
+                    std::size_t n) {
+    NonzeroBits<double, true>(s, b, v, n);
+}
+
 }  // namespace HWY_NAMESPACE
 }  // namespace dftracer::utils::dataframe
 HWY_AFTER_NAMESPACE();
@@ -95,6 +151,42 @@ HWY_EXPORT(CastI32F32);
 HWY_EXPORT(CastF32I32);
 HWY_EXPORT(CastI64F64);
 HWY_EXPORT(CastF64I64);
+HWY_EXPORT(NonzeroBitsI32);
+HWY_EXPORT(NonzeroBitsI64);
+HWY_EXPORT(NonzeroBitsF32);
+HWY_EXPORT(NonzeroBitsF64);
+
+std::int64_t cast_bool_simd(std::int32_t src, const void* sv,
+                            std::uint8_t* bits, std::uint8_t* valid,
+                            std::size_t n) {
+    const TypeId s = static_cast<TypeId>(src);
+    if (n == 0) return 0;
+    switch (s) {
+        case TypeId::Int32:
+            HWY_DYNAMIC_DISPATCH(NonzeroBitsI32)(sv, bits, valid, n);
+            return 0;
+        case TypeId::Int64:
+            HWY_DYNAMIC_DISPATCH(NonzeroBitsI64)(sv, bits, valid, n);
+            return 0;
+        case TypeId::Float32:
+            HWY_DYNAMIC_DISPATCH(NonzeroBitsF32)(sv, bits, valid, n);
+            break;
+        case TypeId::Float64:
+            HWY_DYNAMIC_DISPATCH(NonzeroBitsF64)(sv, bits, valid, n);
+            break;
+        default:
+            return -1;
+    }
+    // A float: the rows with no validity bit are the NaN rows. Count the set
+    // bits a byte at a time, and the last partial byte under its mask.
+    std::int64_t ok = 0;
+    const std::size_t full = n >> 3;
+    for (std::size_t b = 0; b < full; ++b) ok += std::popcount(valid[b]);
+    if (n & 7)
+        ok += std::popcount(
+            static_cast<std::uint8_t>(valid[full] & ((1u << (n & 7)) - 1u)));
+    return static_cast<std::int64_t>(n) - ok;
+}
 
 // Vectorize the numeric casts Highway maps directly onto a single ConvertTo /
 // Promote / Demote (float <-> same-width int, and float widen/narrow) - the

@@ -158,7 +158,7 @@ DataFrame ts_vals(const std::vector<I>& ts, const std::vector<S>& vals) {
 }
 
 DataFrame asof_g(const DataFrame& l, const DataFrame& r, AsofDirection dir,
-                 std::optional<std::int64_t> tol = std::nullopt) {
+                 std::optional<double> tol = std::nullopt) {
     return df::asof(l, r, "ts", {}, dir, tol);
 }
 
@@ -305,6 +305,34 @@ TEST_CASE("asof - uint64 times near the top of the range") {
           std::vector<S>{"near"});
     CHECK(str_col(asof_g(l, r, AsofDirection::Backward, 2), "val") ==
           std::vector<S>{NS});
+}
+
+TEST_CASE("asof - a fractional tolerance") {
+    SUBCASE("integer times take its floor") {
+        const DataFrame l = ts_frame({10});
+        const DataFrame r = ts_vals({4}, {"a"});
+        CHECK(str_col(asof_g(l, r, AsofDirection::Backward, 5.99), "val") ==
+              std::vector<S>{NS});
+        CHECK(str_col(asof_g(l, r, AsofDirection::Backward, 6.5), "val") ==
+              std::vector<S>{"a"});
+    }
+    SUBCASE("float times compare it exactly") {
+        const DataFrame l = frame({"ts"}, f64s({1.0}));
+        const DataFrame r = frame({"ts", "val"}, f64s({0.995}), strs({"a"}));
+        CHECK(str_col(asof_g(l, r, AsofDirection::Backward, 0.004), "val") ==
+              std::vector<S>{NS});
+        CHECK(str_col(asof_g(l, r, AsofDirection::Backward, 0.006), "val") ==
+              std::vector<S>{"a"});
+    }
+    SUBCASE("uint64 distances past 2^53 stay exact") {
+        const std::uint64_t top = std::numeric_limits<std::uint64_t>::max();
+        const DataFrame l = frame({"ts"}, u64s({top}));
+        const DataFrame r = frame({"ts", "val"}, u64s({top - 3}), strs({"a"}));
+        CHECK(str_col(asof_g(l, r, AsofDirection::Backward, 2.9), "val") ==
+              std::vector<S>{NS});
+        CHECK(str_col(asof_g(l, r, AsofDirection::Backward, 1e30), "val") ==
+              std::vector<S>{"a"});
+    }
 }
 
 TEST_CASE("asof - float ts rejects a negative tolerance") {

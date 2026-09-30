@@ -254,7 +254,7 @@ def _rank_name(spec: ColumnOp) -> str:
 
 
 def _ascending(spec: ColumnOp) -> bool:
-    return not (spec.op == "dftu.series.rank" and int(spec.b))
+    return not (spec.op == "dftu.series.rank" and int(spec.b) & 1)
 
 
 # ---- lazy ------------------------------------------------------------------

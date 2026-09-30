@@ -4,21 +4,27 @@
 
 namespace dftracer::utils::python::series_detail {
 
-// A tagged scalar as the matching Python number.
+// A tagged scalar as the matching Python value: a number, a str for a STR
+// scalar, or a TypeError carrying the message of an ERR scalar (a reduction the
+// engine refuses).
 PyObject* scalar_to_py(dftu_scalar v) {
-    using dataframe::ScalarTag;
-    if (v.kind < static_cast<std::int32_t>(ScalarTag::I64) ||
-        v.kind > static_cast<std::int32_t>(ScalarTag::F64)) {
-        PyErr_SetString(PyExc_RuntimeError, "unknown scalar tag");
-        return nullptr;
-    }
-    switch (static_cast<ScalarTag>(v.kind)) {
-        case ScalarTag::I64:
+    switch (v.kind) {
+        case DFTU_SCALAR_TAG_I64:
             return PyLong_FromLongLong(v.value.i);
-        case ScalarTag::U64:
+        case DFTU_SCALAR_TAG_U64:
             return PyLong_FromUnsignedLongLong(v.value.u);
-        case ScalarTag::F64:
+        case DFTU_SCALAR_TAG_F64:
             return PyFloat_FromDouble(v.value.d);
+        case DFTU_SCALAR_TAG_STR:
+            return PyUnicode_DecodeUTF8(v.value.s ? v.value.s : "",
+                                        static_cast<Py_ssize_t>(v.len),
+                                        "strict");
+        case DFTU_SCALAR_TAG_ERR:
+            PyErr_SetString(PyExc_TypeError,
+                            v.value.err != nullptr && v.value.err->message
+                                ? v.value.err->message
+                                : "reduction failed");
+            return nullptr;
     }
     PyErr_SetString(PyExc_RuntimeError, "unknown scalar tag");
     return nullptr;

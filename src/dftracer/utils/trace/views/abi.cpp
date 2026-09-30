@@ -33,6 +33,7 @@ using dftracer::utils::duql::duql_handle_unwrap;
 using dftracer::utils::trace::views::AggOp;
 using dftracer::utils::trace::views::AggSpec;
 using dftracer::utils::trace::views::GroupKey;
+using dftracer::utils::trace::views::Phase;
 namespace scan = dftracer::utils::trace::views::detail::scan;
 using dftracer::utils::trace::views::ViewFile;
 using dftracer::utils::trace::views::ViewSource;
@@ -63,7 +64,7 @@ dftracer::utils::duql::Params duql_params(const char* const* names,
     for (int32_t i = 0; i < n; ++i) {
         if (!names || !values || !names[i] || !values[i])
             throw std::invalid_argument("a NULL parameter name or value");
-        auto value = dftracer::utils::duql::parse_literal(values[i]);
+        auto value = dftracer::utils::duql::parse_param(values[i]);
         if (!value)
             throw std::invalid_argument("$" + std::string(names[i]) + ": " +
                                         value.error().message);
@@ -277,13 +278,37 @@ dftu_view* dftu_view_select(const dftu_view* v, const char* const* cols,
     }
 }
 
-dftu_view* dftu_view_all(const dftu_view* v) {
+dftu_view* dftu_view_phase(const dftu_view* v, int phase) {
     if (!v) return nullptr;
+    Phase p;
+    switch (phase) {
+        case DFTU_VIEW_PHASE_EVENTS:
+            p = Phase::Events;
+            break;
+        case DFTU_VIEW_PHASE_COUNTERS:
+            p = Phase::Counters;
+            break;
+        case DFTU_VIEW_PHASE_AGGREGATED:
+            p = Phase::Aggregated;
+            break;
+        case DFTU_VIEW_PHASE_METADATA:
+            p = Phase::Metadata;
+            break;
+        case DFTU_VIEW_PHASE_ANY:
+            p = Phase::Any;
+            break;
+        default:
+            return nullptr;
+    }
     try {
-        return wrap(scan::all(v->p));
+        return wrap(scan::phase(v->p, p));
     } catch (const std::exception&) {
         return nullptr;
     }
+}
+
+dftu_view* dftu_view_all(const dftu_view* v) {
+    return dftu_view_phase(v, DFTU_VIEW_PHASE_ANY);
 }
 
 dftu_view* dftu_view_limit(const dftu_view* v, uint64_t n) {

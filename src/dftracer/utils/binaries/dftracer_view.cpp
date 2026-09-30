@@ -101,7 +101,6 @@ class ViewArgParse : public cli::ArgParse {
     double min_duration = 0.0;
     double max_duration = 0.0;
     std::string output;
-    bool all = false;
     bool no_auto_index = false;
     std::string group_by;
     std::string agg;
@@ -182,13 +181,6 @@ class ViewArgParse : public cli::ArgParse {
             .default_value<std::string>("");
 
         parser()
-            .add_argument("--all")
-            .help(
-                "Read every record, metadata (ph=M) included, instead of the "
-                "source's data")
-            .flag();
-
-        parser()
             .add_argument("--no-auto-index")
             .help(
                 "Disable automatic index building for files missing .dftindex")
@@ -251,7 +243,10 @@ class ViewArgParse : public cli::ArgParse {
 
         parser()
             .add_argument("--phase")
-            .help("Select events by phase: events (ph=X), counters (ph=C), any")
+            .help(
+                "Select events by phase: events (ph=X), counters (ph=C), "
+                "aggregated, "
+                "metadata (ph=M), any (every record, metadata included)")
             .default_value<std::string>("");
 
         parser()
@@ -359,7 +354,6 @@ class ViewArgParse : public cli::ArgParse {
         min_duration = cli::get_duration_arg(parser(), "--min-duration", 1e6);
         max_duration = cli::get_duration_arg(parser(), "--max-duration", 1e6);
         output = parser().get<std::string>("--output");
-        all = parser().get<bool>("--all");
         no_auto_index = parser().get<bool>("--no-auto-index");
         group_by = parser().get<std::string>("--group-by");
         agg = parser().get<std::string>("--agg");
@@ -638,7 +632,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                                      kv.c_str());
             co_return 1;
         }
-        auto value = duql::parse_literal(std::string_view(kv).substr(eq + 1));
+        auto value = duql::parse_param(std::string_view(kv).substr(eq + 1));
         if (!value) {
             DFTRACER_UTILS_LOG_ERROR("Invalid --param '%s': %s", kv.c_str(),
                                      value.error().message.c_str());
@@ -692,11 +686,6 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         view.with_query(std::move(*query));
     }
 
-    if (cli->all) {
-        view.include_metadata = true;
-        view.metadata_records = true;
-    }
-
     std::vector<GroupKey> group_keys;
     std::vector<AggSpec> agg_specs;
     if (!parse_group_by(cli->group_by, group_keys)) co_return 1;
@@ -728,7 +717,8 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         co_return 1;
     }
 
-    // --phase selects the input phase; the default spans all phases.
+    // --phase selects the input phase; "any" reads every record, metadata
+    // included. Without it the view reads the source's data.
     Phase view_phase = Phase::Any;
     if (!cli->phase.empty()) {
         if (cli->phase == "events")
@@ -743,7 +733,8 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
             view_phase = Phase::Any;
         else {
             DFTRACER_UTILS_LOG_ERROR(
-                "Unknown --phase: %s. Use events, counters, or any.",
+                "Unknown --phase: %s. Use events, counters, aggregated, "
+                "metadata, or any.",
                 cli->phase.c_str());
             co_return 1;
         }
@@ -956,8 +947,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         if (!cli->record_schema.empty())
             v = v.record_schema(cli->record_schema);
         if (view.query) v = v.filter(*view.query);
-        v = v.phase(view_phase);
-        if (view.metadata_records) v = v.all();
+        if (!cli->phase.empty()) v = v.phase(view_phase);
         if (time_range) v = v.time_range(time_range->first, time_range->second);
         if (cli->time_scale > 0) v = v.time_scale(cli->time_scale);
         if (time_bucket > 0) v = v.time_bucket(time_bucket);

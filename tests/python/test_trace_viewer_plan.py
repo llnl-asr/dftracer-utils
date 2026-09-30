@@ -94,10 +94,12 @@ class TestDuqlPipeline:
 
     def test_bad_parameter_type(self, tv):
         with pytest.raises(TypeError):
+            tv.duql(self.QUERY, min={"a": 1}, n=3)
+        with pytest.raises(DFTUtilsValueError, match=r"\$min holds a list"):
             tv.duql(self.QUERY, min=[1], n=3)
 
     def test_stage_of_a_later_release(self, tv):
-        with pytest.raises(DFTUtilsValueError, match="12h"):
+        with pytest.raises(DFTUtilsValueError, match="Unknown function 'myplug.sessions'"):
             tv.duql("where dur > 1 | call myplug.sessions(gap = 5)")
 
     def test_semi_join_arrow_and_lookup(self, tv):

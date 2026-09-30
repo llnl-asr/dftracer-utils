@@ -30,7 +30,8 @@ typedef enum {
     DFTU_SCALAR_TAG_I64 = 0,
     DFTU_SCALAR_TAG_U64 = 1,
     DFTU_SCALAR_TAG_F64 = 2,
-    DFTU_SCALAR_TAG_STR = 3
+    DFTU_SCALAR_TAG_STR = 3,
+    DFTU_SCALAR_TAG_ERR = 4
 } dftu_scalar_tag;
 
 /** A scalar operand, tagged by its domain so a kernel converts it to the
@@ -41,7 +42,14 @@ typedef enum {
  * dftu_scalar past the call it was passed to, and the owner of the text (an
  * ExprNode, a caller's std::string) outlives it. `len` sits in the padding
  * after `kind`, so the struct is 16 bytes and 8-aligned exactly as before and
- * no by-value call site changes. */
+ * no by-value call site changes.
+ *
+ * An ERR scalar is what a reducer returns when it refuses its input (see
+ * dftu_series_reduce): `value.err` points at a dftu_error whose `message` names
+ * the operation and the column type. The error and its message are BORROWED
+ * from thread-local storage and stay valid until the next reduction on the same
+ * thread, so copy them if they must outlive that. The other value members are
+ * not meaningful for an ERR scalar. */
 #ifndef DFTU_TYPEDEF_DFTU_SCALAR
 #define DFTU_TYPEDEF_DFTU_SCALAR
 typedef struct dftu_scalar dftu_scalar;
@@ -54,6 +62,7 @@ struct dftu_scalar {
         uint64_t u;
         double d;
         const char* s;
+        const dftu_error* err;
     } value;
 };
 
@@ -316,7 +325,12 @@ DFTU_EXPORT dftu_series* dftu_series_where(const dftu_series* mask,
 DFTU_EXPORT dftu_series* dftu_series_filter(const dftu_series* v,
                                             const dftu_series* mask);
 
-/** Convert a FLAT numeric column to the numeric type `target`. */
+/** Cast a FLAT column to `target`. Supported: numeric to numeric (a string
+ * parses, unparsable text is null); an integer, float or Bool column to String
+ * (decimal digits, shortest float text that shows a point or exponent, `true` /
+ * `false`); an integer or float column to Bool (zero false, other true, a NaN
+ * and a null null); any non-numeric type to itself. NULL for every other pair
+ * (for example String to Bool); the Python wrapper names both types. */
 DFTU_EXPORT dftu_series* dftu_series_cast(const dftu_series* v,
                                           dftu_dtype target);
 
@@ -381,6 +395,19 @@ DFTU_EXPORT dftu_series* dftu_series_str_extract(const dftu_series* v,
                                                  const char* pattern,
                                                  int32_t pattern_len,
                                                  int64_t group);
+/** Replaces every non-overlapping match of the regex `pattern` in each row
+ * with `to`, scanning left to right, as a String column. In `to`, `$n` and
+ * `${n}` insert group n, `${name}` the named group, `$$` a dollar sign; a
+ * group that took no part inserts nothing. An empty match inserts `to` and
+ * advances one character. A row with no match is unchanged; a null row, or a
+ * row whose match reaches the work limit, is null. NULL if the pattern fails
+ * to compile or `to` is invalid (a group the pattern lacks, or a `$` followed
+ * by anything else). */
+DFTU_EXPORT dftu_series* dftu_series_str_regex_replace(const dftu_series* v,
+                                                       const char* pattern,
+                                                       int32_t pattern_len,
+                                                       const char* to,
+                                                       int32_t to_len);
 /** True where the WHOLE string matches the regex `pattern`. NULL if the
  * pattern fails to compile. */
 DFTU_EXPORT dftu_series* dftu_series_str_matches(const dftu_series* v,
@@ -577,6 +604,16 @@ typedef enum {
  * type or a bad code. */
 DFTU_EXPORT dftu_series* dftu_series_dt_part(const dftu_series* v, int32_t part,
                                              int32_t unit);
+/** Each instant of a Timestamp / Date32 / Date64 / Duration column (its own
+ * unit) or an Int64 column read in `unit` (a dftu_time_unit) as UTC text by the
+ * strftime-style `fmt` (fmt_len bytes): %Y %y %m %d %H %I %M %S %f (six-digit
+ * microseconds) %j %a %A %b %B %p %F %T %s (epoch seconds, floored) %z (+0000)
+ * %Z (UTC) %%. A null row stays null. NULL for another input type, a bad
+ * `unit`, a NULL `fmt` with a positive length, an unknown directive or a
+ * trailing '%'. The caller frees the result. */
+DFTU_EXPORT dftu_series* dftu_series_dt_format(const dftu_series* v,
+                                               const char* fmt, int32_t fmt_len,
+                                               int32_t unit);
 /** How dftu_series_dt_round rounds to a bucket. */
 typedef enum {
     DFTU_DT_FLOOR = 0,
@@ -602,10 +639,21 @@ DFTU_EXPORT dftu_series* dftu_series_list_join(const dftu_series* v,
                                                const char* sep,
                                                int32_t sep_len);
 
-/* Reduce a FLAT numeric column to a scalar (op is a dftu_reduce_op code),
- * skipping nulls. SUM accumulates in the widest type of the column's domain
- * (i64/u64/f64) so it does not overflow narrow types or lose integer precision;
- * MIN/MAX return a value in the column's domain. */
+/* Reduce a column to a scalar (op is a dftu_reduce_op code), skipping nulls.
+ * SUM accumulates in the widest type of the column's domain (i64/u64/f64) so it
+ * does not overflow narrow types or lose integer precision; MIN/MAX return a
+ * value in the column's domain.
+ *
+ * A Bool column counts true as 1 and reduces as int64: SUM is the number of
+ * true values, MIN/MAX are 0 or 1. MIN/MAX of a String or LargeString column
+ * return a STR scalar borrowing the smallest or largest value (bytewise) from
+ * the column, empty when no value is valid; SUM of a string is refused. A
+ * Duration column also has SUM; every other temporal column has MIN/MAX only.
+ *
+ * A reduction the engine does not define (an op other than SUM/MIN/MAX, or a
+ * type the op has no meaning for) returns an ERR scalar, never a value: check
+ * `kind == DFTU_SCALAR_TAG_ERR` before reading the result. A column with no
+ * valid value reduces to 0, as before. */
 /** Aggregation ops. A bitmask (power-of-two values) so group_by can compute
  * several in one pass; dftu_series_reduce takes a single flag (SUM/MIN/MAX). */
 typedef enum {
@@ -788,12 +836,23 @@ typedef enum {
     DFTU_RANK_MAX = 4
 } dftu_rank_method;
 
+/** Bit flags for dftu_series_rank's `flags`. */
+typedef enum {
+    DFTU_RANK_FLAG_DESCENDING = 1, /**< rank from the largest value down */
+    DFTU_RANK_FLAG_PCT = 2 /**< divide each rank by the non-null count */
+} dftu_rank_flags;
+
 /** Rank of each row (`method` is a dftu_rank_method:
- * DFTU_RANK_AVERAGE/MIN/DENSE/ORDINAL/MAX), ascending unless `descending`.
- * Returns a Float64 column; a null value has a null rank. */
+ * DFTU_RANK_AVERAGE/MIN/DENSE/ORDINAL/MAX), ascending unless `flags` has
+ * DFTU_RANK_FLAG_DESCENDING. With DFTU_RANK_FLAG_PCT each rank is divided by
+ * the count of non-null values, or by the number of distinct values for
+ * DFTU_RANK_DENSE as pandas does (a percentile rank in (0, 1]). Returns a
+ * Float64 column; a null value has a null rank. The old `descending` argument
+ * is the DFTU_RANK_FLAG_DESCENDING bit, so a caller passing 0 or 1 is
+ * unchanged. */
 DFTU_EXPORT dftu_series* dftu_series_rank(const dftu_series* v,
                                           dftu_rank_method method,
-                                          int32_t descending);
+                                          int32_t flags);
 
 /** Reduction for dftu_series_rolling. */
 typedef enum {
@@ -819,8 +878,46 @@ typedef enum {
     DFTU_STR_MAP_UPPER = 1,
     DFTU_STR_MAP_STRIP = 2,
     DFTU_STR_MAP_LSTRIP = 3,
-    DFTU_STR_MAP_RSTRIP = 4
+    DFTU_STR_MAP_RSTRIP = 4,
+    DFTU_STR_MAP_CAPITALIZE = 5,
+    DFTU_STR_MAP_TITLE = 6,
+    DFTU_STR_MAP_SWAPCASE = 7
 } dftu_str_map_op;
+
+/** A string method with text, integer or second-column operands, evaluated
+ * by the Series function the eager Series.str method of the same name calls
+ * (dftu_expr_str_fn). 0-8 are the dftu_series_str_is classes in order. */
+typedef enum {
+    DFTU_STR_FN_ISALNUM = 0,
+    DFTU_STR_FN_ISALPHA = 1,
+    DFTU_STR_FN_ISDIGIT = 2,
+    DFTU_STR_FN_ISDECIMAL = 3,
+    DFTU_STR_FN_ISNUMERIC = 4,
+    DFTU_STR_FN_ISSPACE = 5,
+    DFTU_STR_FN_ISLOWER = 6,
+    DFTU_STR_FN_ISUPPER = 7,
+    DFTU_STR_FN_ISTITLE = 8,
+    DFTU_STR_FN_PAD_START = 9,
+    DFTU_STR_FN_PAD_END = 10,
+    DFTU_STR_FN_CENTER = 11,
+    DFTU_STR_FN_ZFILL = 12,
+    DFTU_STR_FN_REMOVE_PREFIX = 13,
+    DFTU_STR_FN_REMOVE_SUFFIX = 14,
+    DFTU_STR_FN_REPEAT = 15,
+    DFTU_STR_FN_SLICE_REPLACE = 16,
+    DFTU_STR_FN_SPLIT = 17,
+    DFTU_STR_FN_PARTITION = 18,
+    DFTU_STR_FN_RPARTITION = 19,
+    DFTU_STR_FN_FINDALL = 20,
+    DFTU_STR_FN_EXTRACT = 21,
+    DFTU_STR_FN_RFIND = 22,
+    DFTU_STR_FN_INDEX = 23,
+    DFTU_STR_FN_RINDEX = 24,
+    DFTU_STR_FN_JOIN = 25,
+    DFTU_STR_FN_GET = 26,
+    DFTU_STR_FN_CAT = 27,
+    DFTU_STR_FN_REGEX_REPLACE = 28
+} dftu_str_fn;
 
 /** Rolling-window reduction (`op` is a dftu_rolling_op:
  * DFTU_ROLLING_SUM/MEAN/MIN/MAX) over `window` trailing rows; the first
@@ -855,11 +952,23 @@ DFTU_EXPORT dftu_series* dftu_series_ewm_mean(const dftu_series* v,
 DFTU_EXPORT dftu_series* dftu_series_ewm_std(const dftu_series* v,
                                              double alpha);
 
-/** Bin each value into the half-open intervals defined by the ascending numeric
- * `breaks` column: bin index = count of breaks <= x, in 0..breaks length.
- * Returns Int32; a null input row yields a null bin. */
+/** Flags of dftu_series_cut. */
+typedef enum dftu_cut_flag {
+    DFTU_CUT_RIGHT = 1, /**< close each interval on the right: (a, b] */
+    DFTU_CUT_INNER = 2  /**< null outside the interior intervals, bins from 0 */
+} dftu_cut_flag;
+
+/** Bin each value into the intervals defined by the ascending numeric `breaks`
+ * column. With `flags` 0 the intervals are [a, b) and the bin index is the
+ * count of breaks <= x, in 0..breaks length. DFTU_CUT_RIGHT counts the breaks
+ * < x instead, so each interval is closed on the right. DFTU_CUT_INNER gives a
+ * null for a value outside the interior intervals and numbers the interior
+ * intervals from 0 (with both flags this is pandas cut(labels=False)). A bit
+ * outside the two flags returns NULL. Returns Int32; a null input row yields a
+ * null bin. */
 DFTU_EXPORT dftu_series* dftu_series_cut(const dftu_series* v,
-                                         const dftu_series* breaks);
+                                         const dftu_series* breaks,
+                                         int32_t flags);
 /** Like dftu_series_cut, but the edges are the `q`-quantiles of the column (q
  * buckets, bins 0..q-1). Returns Int32; a null input row yields a null bin. */
 DFTU_EXPORT dftu_series* dftu_series_qcut(const dftu_series* v, int32_t q);
@@ -1230,8 +1339,10 @@ typedef enum {
 } dftu_join_how;
 
 /** Hash join `df` (left) with `other` (right) on the `n` key pairs
- * `left_on[i]` = `right_on[i]`, compared exactly (a null key never matches,
- * and each pair must share a type, except for LOOKUP and NEST). Output columns:
+ * `left_on[i]` = `right_on[i]`, compared exactly (a null key never matches
+ * unless `nulls_equal` is nonzero, which makes a null key cell match another
+ * null key cell and is refused, as NULL, for CROSS, LOOKUP and NEST; and each
+ * pair must share a type, except for LOOKUP and NEST). Output columns:
  * every left column, then every right column except a key whose name equals its
  * left key (that column is emitted once, coalesced for OUTER); another right
  * column whose name collides with a left column gets `suffix` appended (NULL =
@@ -1239,12 +1350,10 @@ typedef enum {
  * the unmatched right rows. CROSS ignores the keys. NULL if a key column is
  * absent, a key pair's types differ, `n` is 0 for a keyed join, or `how` is
  * not a dftu_join_how. */
-DFTU_EXPORT dftu_dataframe* dftu_dataframe_join(const dftu_dataframe* df,
-                                                const dftu_dataframe* other,
-                                                const char* const* left_on,
-                                                const char* const* right_on,
-                                                int32_t n, dftu_join_how how,
-                                                const char* suffix);
+DFTU_EXPORT dftu_dataframe* dftu_dataframe_join(
+    const dftu_dataframe* df, const dftu_dataframe* other,
+    const char* const* left_on, const char* const* right_on, int32_t n,
+    dftu_join_how how, const char* suffix, int32_t nulls_equal);
 
 /*
  * dftu_lazyframe: an opaque handle to a deferred query over a dftu_dataframe
@@ -1286,8 +1395,53 @@ DFTU_EXPORT dftu_expr* dftu_expr_lower(const dftu_expr* a);
 DFTU_EXPORT dftu_expr* dftu_expr_str_pred(int32_t op, const dftu_expr* a,
                                           const char* pattern,
                                           int32_t pattern_len);
+/** `a <op> needle` per row with `needle` an expression (op is
+ * DFTU_STR_PRED_CONTAINS, STARTS_WITH or ENDS_WITH). Null where either operand
+ * is null; true for an empty needle. Returns a new handle the caller frees
+ * with dftu_expr_free, or NULL when `a` or `needle` is NULL or `op` is another
+ * predicate. Both operands are shared by the new node, not consumed. Never
+ * throws. */
+DFTU_EXPORT dftu_expr* dftu_expr_str_pred_col(int32_t op, const dftu_expr* a,
+                                              const dftu_expr* needle);
+/** Replace every `from` with `to` per row, all three String expressions; null
+ * where any is null, the row unchanged for an empty `from`. Ownership and
+ * NULL as dftu_expr_str_pred_col. */
+DFTU_EXPORT dftu_expr* dftu_expr_str_replace_col(const dftu_expr* a,
+                                                 const dftu_expr* from,
+                                                 const dftu_expr* to);
+/** `len` UTF-8 characters from character `start` per row, both integer
+ * expressions; `len` NULL means to the end. Null where an operand is null,
+ * negative or not an integer. Ownership as dftu_expr_str_pred_col; returns
+ * NULL when `a` or `start` is NULL. */
+DFTU_EXPORT dftu_expr* dftu_expr_str_substr_col(const dftu_expr* a,
+                                                const dftu_expr* start,
+                                                const dftu_expr* len);
 /** A String -> String map (op is a dftu_str_map_op). */
 DFTU_EXPORT dftu_expr* dftu_expr_str_map(int32_t op, const dftu_expr* a);
+/** A string method (`fn` a dftu_str_fn) over `a`. `text` and `text2` are
+ * copied (a separator, fill byte, affix, pattern or replacement; NULL with
+ * length 0 for none), `i0` and `i1` are the integer operands (width, repeat
+ * count, group, index, start/stop), and `b` is the second column for
+ * DFTU_STR_FN_CAT (NULL otherwise). Returns NULL for an unknown `fn`. */
+DFTU_EXPORT dftu_expr* dftu_expr_str_fn(int32_t fn, const dftu_expr* a,
+                                        const dftu_expr* b, const char* text,
+                                        int32_t text_len, const char* text2,
+                                        int32_t text2_len, int64_t i0,
+                                        int64_t i1);
+/** The UTC calendar field `part` (a dftu_dt_part code: 0-11, 14 or 15) of the
+ * time `a`, Int64, where `a` counts units of `ns_per_unit` nanoseconds since
+ * the Unix epoch. A null cell, or a Float64 that is NaN or infinite, is null.
+ * Returns a new handle the caller frees, or NULL for a NULL `a`, an unknown
+ * `part` or `ns_per_unit` <= 0. */
+DFTU_EXPORT dftu_expr* dftu_expr_date_part(const dftu_expr* a, int32_t part,
+                                           int64_t ns_per_unit);
+/** The time `a` as UTC text by the strftime-style `fmt` (copied; see
+ * dftu_series_dt_format for the directives), String. Returns a new handle the
+ * caller frees, or NULL for a NULL `a`, an invalid `fmt` (unknown directive or
+ * trailing '%'), a NULL `fmt` with a positive length or `ns_per_unit` <= 0. */
+DFTU_EXPORT dftu_expr* dftu_expr_format_time(const dftu_expr* a,
+                                             const char* fmt, int32_t fmt_len,
+                                             int64_t ns_per_unit);
 /** Per-row byte length, or codepoint count when `chars` is nonzero. */
 DFTU_EXPORT dftu_expr* dftu_expr_str_len(const dftu_expr* a, int32_t chars);
 /** Byte index of the first `needle` per row, or -1. */
@@ -1338,6 +1492,13 @@ DFTU_EXPORT dftu_expr* dftu_expr_extreme(const dftu_expr* const* args,
 DFTU_EXPORT dftu_expr* dftu_expr_concat(const dftu_expr* const* args,
                                         int32_t n);
 DFTU_EXPORT dftu_expr* dftu_expr_round(const dftu_expr* a, int64_t digits);
+/** Round `a` to `digits` decimals per row, `digits` an integer expression;
+ * null where `digits` is null or not an integer, and for a float `a` with
+ * `digits` outside [-308, 308]. Integer `a` with `digits` >= 0 is unchanged
+ * (Int64). Ownership as dftu_expr_str_pred_col; returns NULL when `a` or
+ * `digits` is NULL. */
+DFTU_EXPORT dftu_expr* dftu_expr_round_col(const dftu_expr* a,
+                                           const dftu_expr* digits);
 DFTU_EXPORT dftu_expr* dftu_expr_log(const dftu_expr* a);
 DFTU_EXPORT dftu_expr* dftu_expr_pow(const dftu_expr* a, const dftu_expr* b);
 /** `len` UTF-8 characters from character `start`; `len` < 0 to the end. */
@@ -1621,14 +1782,14 @@ DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_sort_by_multi(
  * plan is collected in full when the joined plan runs (the hash build side);
  * the left plan streams through it morsel by morsel. `other` is borrowed: the
  * returned plan holds its own copy. NULL if either handle is NULL, `n` is 0
- * for a keyed join, or `how` is not a dftu_join_how; an absent key column or a
- * key type mismatch surfaces as a collect error. */
-DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_join(const dftu_lazyframe* lf,
-                                                const dftu_lazyframe* other,
-                                                const char* const* left_on,
-                                                const char* const* right_on,
-                                                int32_t n, dftu_join_how how,
-                                                const char* suffix);
+ * for a keyed join, `how` is not a dftu_join_how, or `nulls_equal` is nonzero
+ * for CROSS, LOOKUP or NEST; an absent key column or a key type mismatch
+ * surfaces as a collect error. A join with `nulls_equal` is not offered to a
+ * source's apply. */
+DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_join(
+    const dftu_lazyframe* lf, const dftu_lazyframe* other,
+    const char* const* left_on, const char* const* right_on, int32_t n,
+    dftu_join_how how, const char* suffix, int32_t nulls_equal);
 
 /** Compare two aggregation results sharing their first `n_key` key columns:
  * keys (outer-joined, sorted ascending), `l_<m>` / `r_<m>` per metric, then
@@ -1690,8 +1851,21 @@ typedef enum {
     DFTU_WINDOW_PERCENT_RANK = 21,
     DFTU_WINDOW_CUME_DIST = 22,
     DFTU_WINDOW_FILL_FORWARD = 23,
-    DFTU_WINDOW_RUNNING_PROD = 24
+    DFTU_WINDOW_RUNNING_PROD = 24,
+    DFTU_WINDOW_FRAME_VAR = 25,
+    DFTU_WINDOW_FRAME_STD = 26,
+    DFTU_WINDOW_FRAME_QUANTILE = 27,
+    DFTU_WINDOW_FRAME_COUNT_DISTINCT = 28,
+    DFTU_WINDOW_FRAME_ARG_MAX = 29,
+    DFTU_WINDOW_FRAME_ARG_MIN = 30,
+    DFTU_WINDOW_FRAME_COLLECT = 31
 } dftu_window_func;
+
+/** How a FRAME_* bound reads; mirrors the utilities WindowFrameMode. */
+typedef enum {
+    DFTU_WINDOW_FRAME_ROWS = 0,
+    DFTU_WINDOW_FRAME_RANGE = 1
+} dftu_window_frame_mode;
 
 /** A FRAME_* bound that is unbounded on its side. */
 #define DFTU_WINDOW_UNBOUNDED INT64_MAX
@@ -1703,7 +1877,20 @@ typedef enum {
  * functions read, and `func` names the member that is set:
  * - `offset`: the LAG/LEAD shift, NTILE bucket count or NTH_VALUE 1-based k.
  * - `frame` (FRAME_*): the present count below which the output is null (0 =
- *   none) and the row bounds (DFTU_WINDOW_UNBOUNDED = no bound).
+ *   none), the bounds (DFTU_WINDOW_UNBOUNDED = no bound) and their `mode`:
+ *   row offsets, or value deltas on the single numeric order column. The
+ *   frame functions after FRAME_MEAN skip null values: FRAME_VAR and
+ *   FRAME_STD (sample, Float64, null below 2 values), FRAME_QUANTILE
+ *   (Float64, exact, linear interpolation at level `q` in [0, 1]; any other
+ *   `q` fails), FRAME_COUNT_DISTINCT (Int64, 0 for an empty frame),
+ *   FRAME_ARG_MAX / FRAME_ARG_MIN (the `value` at the earliest frame row with
+ *   the extreme `by`, null for an empty frame; `by` names the numeric, string
+ *   or bool ordering column and is borrowed for the call, NULL = error) and
+ *   FRAME_COLLECT (a List of the frame's values in frame order, empty for an
+ *   empty frame; more than 2^27 values in all fails). `q` is read by
+ *   FRAME_QUANTILE only and `by` by FRAME_ARG_MAX / FRAME_ARG_MIN only; the
+ *   other frame functions ignore them. FRAME_COUNT_DISTINCT and FRAME_COLLECT
+ *   ignore `min_count`, as FRAME_COUNT does.
  * - `rate` (RATE): the time column and, when `counter` is nonzero, the
  *   counter-reset correction.
  * - `session` (SESSIONIZE): the time column, the row-end column (NULL = each
@@ -1719,6 +1906,9 @@ typedef struct dftu_window_spec {
             int64_t min_count;
             int64_t preceding;
             int64_t following;
+            dftu_window_frame_mode mode;
+            double q;
+            const char* by;
         } frame;
         struct {
             const char* time;
@@ -1771,12 +1961,13 @@ DFTU_EXPORT dftu_dataframe* dftu_dataframe_gap_fill(
     int32_t n_range);
 
 /** As-of join of `left` to `right` on the time column `on` within the `by`
- * partition (n_by names); a negative `tolerance` means unbounded. NULL on a
- * NULL handle, an unknown column, a bad `direction` or a type mismatch. */
+ * partition (n_by names); `tolerance` is in the units of `on`, and a
+ * negative or NaN one means unbounded. NULL on a NULL handle, an unknown
+ * column, a bad `direction` or a type mismatch. */
 DFTU_EXPORT dftu_dataframe* dftu_dataframe_asof(
     const dftu_dataframe* left, const dftu_dataframe* right, const char* on,
     const char* const* by, int32_t n_by, dftu_asof_direction direction,
-    int64_t tolerance);
+    double tolerance);
 
 /** Point-in-range join of `left.point` into `right.[lo, hi]` within the `by`
  * partition (n_by names); nonzero `outer` keeps unmatched left rows with null

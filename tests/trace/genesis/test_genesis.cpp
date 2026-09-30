@@ -1,5 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/core/common/base64.h>
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
@@ -120,13 +122,32 @@ std::vector<std::string> lines_of(const std::string& text) {
     return out;
 }
 
-// The record line whose args.path equals `path`, or "" when absent.
-std::string record(const GroupResult& r, const std::string& path) {
+// The first line of `gtype` holding every needle, or "" when absent.
+std::string find_line(const GroupResult& r, const std::string& type,
+                      const std::vector<std::string>& needles) {
     REQUIRE(r.runs.size() == 1);
-    const std::string needle = R"("path":")" + path + R"(",)";
-    for (const auto& l : lines_of(r.runs[0].lines))
-        if (l.find(needle) != std::string::npos) return l;
+    const std::string prefix = R"({"gtype":")" + type + R"(",)";
+    for (const auto& l : lines_of(r.runs[0].lines)) {
+        if (l.rfind(prefix, 0) != 0) continue;
+        if (std::all_of(needles.begin(), needles.end(), [&](const auto& n) {
+                return l.find(n) != std::string::npos;
+            }))
+            return l;
+    }
     return "";
+}
+
+// The func record of `path`, or "" when absent.
+std::string record(const GroupResult& r, const std::string& path) {
+    return find_line(r, "func", {R"("path":")" + path + R"(",)"});
+}
+
+// The counter record of `path` and `metric`, or "" when absent.
+std::string counter(const GroupResult& r, const std::string& path,
+                    const std::string& metric) {
+    return find_line(
+        r, "counter",
+        {R"("path":")" + path + R"(",)", R"("metric":")" + metric + R"(",)"});
 }
 
 simdjson::dom::element at(simdjson::dom::parser& p, const std::string& line,
@@ -146,6 +167,22 @@ double num(const std::string& line, const std::string& pointer) {
 bool has(const std::string& line, const std::string& pointer) {
     simdjson::dom::parser p;
     return p.parse(line).at_pointer(pointer).error() == simdjson::SUCCESS;
+}
+
+std::string str(const std::string& line, const std::string& pointer) {
+    simdjson::dom::parser p;
+    std::string_view v;
+    REQUIRE(at(p, line, pointer).get(v) == simdjson::SUCCESS);
+    return std::string(v);
+}
+
+using Sketch = dataframe::BasicDDSketch<2048>;
+
+Sketch sketch_at(const std::string& line, const std::string& pointer) {
+    const auto raw = base64_decode(str(line, pointer));
+    REQUIRE(raw.has_value());
+    return Sketch::deserialize(
+        reinterpret_cast<const std::uint8_t*>(raw->data()), raw->size());
 }
 
 bool skipped_with(const GroupResult& r, const std::string& text) {
@@ -310,11 +347,13 @@ TEST_CASE("the same function under two parents gives two records") {
     const auto b = record(r, "main;SolveEnergy;cudaMemcpy");
     REQUIRE(!a.empty());
     REQUIRE(!b.empty());
-    CHECK(num(a, "/args/depth") == 3);
+    CHECK(num(a, "/depth") == 3);
+    CHECK(str(a, "/name") == "cudaMemcpy");
+    CHECK(str(b, "/name") == "cudaMemcpy");
     CHECK(a.find(R"("parent":"main;SolveVelocity;ForceMult")") !=
           std::string::npos);
-    CHECK_FALSE(has(record(r, "main"), "/args/parent"));
-    CHECK(num(record(r, "main"), "/args/count") == 2);
+    CHECK_FALSE(has(record(r, "main"), "/parent"));
+    CHECK(num(record(r, "main"), "/count") == 2);
 }
 
 TEST_CASE("duration aggregates are exact across ranks") {
@@ -326,11 +365,11 @@ TEST_CASE("duration aggregates are exact across ranks") {
                    call(2, 2, "X", 100, 9));
     auto r = process_only(d);
     const auto x = record(r, "main;X");
-    CHECK(num(x, "/args/count") == 3);
-    CHECK(num(x, "/args/dur/min") == 5);
-    CHECK(num(x, "/args/dur/max") == 9);
-    CHECK(num(x, "/args/dur/sum") == 21);
-    CHECK(num(x, "/args/dur/avg") == 7);
+    CHECK(num(x, "/count") == 3);
+    CHECK(num(x, "/dur/min") == 5);
+    CHECK(num(x, "/dur/max") == 9);
+    CHECK(num(x, "/dur/sum") == 21);
+    CHECK(num(x, "/dur/avg") == 7);
 }
 
 TEST_CASE("per-process counters are pro-rated by overlap") {
@@ -341,15 +380,15 @@ TEST_CASE("per-process counters are pro-rated by overlap") {
                    papi(1, 200, "PAPI_TOT_CYC", 2000) +
                    call(1, 1, "main", 0, 1000) + call(1, 1, "work", 50, 100));
     auto r = process_only(d);
-    const auto w = record(r, "main;work");
-    CHECK(num(w, "/args/counters/PAPI_TOT_CYC/sum") == doctest::Approx(1500));
-    CHECK(num(record(r, "main"), "/args/counters/PAPI_TOT_CYC/sum") ==
+    const auto w = counter(r, "main;work", "PAPI_TOT_CYC");
+    REQUIRE(!w.empty());
+    CHECK(num(w, "/v/sum") == doctest::Approx(1500));
+    CHECK(num(w, "/v/n") == 1);
+    CHECK(num(counter(r, "main", "PAPI_TOT_CYC"), "/v/sum") ==
           doctest::Approx(3000));
-    simdjson::dom::parser p;
-    std::string_view scope;
-    REQUIRE(at(p, w, "/args/counters/PAPI_TOT_CYC/scope").get(scope) ==
-            simdjson::SUCCESS);
-    CHECK(scope == "pid");
+    CHECK(str(w, "/name") == "work");
+    CHECK(str(w, "/scope") == "pid");
+    CHECK(str(w, "/kind") == "delta");
 }
 
 TEST_CASE("host count-like counters are split across the ranks of a host") {
@@ -361,9 +400,10 @@ TEST_CASE("host count-like counters are split across the ranks of a host") {
         t += rank(pid, 0, 1000) + call(pid, pid, "ForceMult", 0, 1000);
     matrix_run(d, 4, t);
     auto r = process_only(d);
-    const auto f = record(r, "ForceMult");
-    CHECK(num(f, "/args/counters/net-hsi0.bytes_sent/sum") ==
-          doctest::Approx(100000000));
+    const auto f = counter(r, "ForceMult", "net-hsi0.bytes_sent");
+    CHECK(num(f, "/v/sum") == doctest::Approx(100000000));
+    CHECK(num(f, "/v/n") == 4);
+    CHECK(str(f, "/scope") == "host");
 }
 
 TEST_CASE("host levels are time-weighted and per-core cpu is dropped") {
@@ -376,10 +416,14 @@ TEST_CASE("host levels are time-weighted and per-core cpu is dropped") {
                    host("sys", "cpu-0", 70, R"("user_pct":5)") +
                    call(1, 1, "work", 0, 40));
     auto r = process_only(d);
-    const auto w = record(r, "work");
-    CHECK(num(w, "/args/counters/cpu.user_pct/min") == doctest::Approx(17.5));
-    CHECK_FALSE(has(w, "/args/counters/cpu.user_pct/sum"));
-    CHECK_FALSE(has(w, "/args/counters/cpu-0.user_pct"));
+    const auto w = counter(r, "work", "cpu.user_pct");
+    REQUIRE(!w.empty());
+    CHECK(num(w, "/v/min") == doctest::Approx(17.5));
+    CHECK(str(w, "/kind") == "gauge");
+    CHECK(str(w, "/scope") == "host");
+    CHECK_FALSE(has(w, "/v/sum"));
+    CHECK(has(w, "/v/avg"));
+    CHECK(counter(r, "work", "cpu-0.user_pct").empty());
 }
 
 TEST_CASE("matrix GPU CSV values become per-GPU gauges") {
@@ -395,12 +439,13 @@ TEST_CASE("matrix GPU CSV values become per-GPU gauges") {
         "0.000100000,node1,0, 60.00, 10, 512\n"
         "0.000200000,node1,0, 80.00, 30, 1024\n");
     auto r = process_only(d);
-    const auto w = record(r, "work");
-    CHECK(num(w, "/args/counters/gpu.power.GPU_0/avg") == doctest::Approx(70));
-    CHECK(num(w, "/args/counters/gpu.utilization.GPU_0/avg") ==
+    CHECK(num(counter(r, "work", "gpu.power.GPU_0"), "/v/avg") ==
+          doctest::Approx(70));
+    CHECK(num(counter(r, "work", "gpu.utilization.GPU_0"), "/v/avg") ==
           doctest::Approx(20));
-    CHECK(num(w, "/args/counters/gpu.memory_used.GPU_0/avg") ==
+    CHECK(num(counter(r, "work", "gpu.memory_used.GPU_0"), "/v/avg") ==
           doctest::Approx(768));
+    CHECK(str(counter(r, "work", "gpu.power.GPU_0"), "/kind") == "gauge");
 }
 
 TEST_CASE("GPU events nest under the host thread named by args.tid") {
@@ -423,8 +468,8 @@ TEST_CASE("async GPU events attach under the host call at their start") {
                  R"(,"tid":11)"));
     auto r = process_only(d);
     REQUIRE(r.skips.empty());
-    CHECK(num(record(r, "main;MemcpyDtoH"), "/args/depth") == 1);
-    CHECK(num(record(r, "main;StreamSynchronize"), "/args/depth") == 1);
+    CHECK(num(record(r, "main;MemcpyDtoH"), "/depth") == 1);
+    CHECK(num(record(r, "main;StreamSynchronize"), "/depth") == 1);
 }
 
 TEST_CASE("a GPU tracer thread attaches to the rank's main thread") {
@@ -453,8 +498,9 @@ TEST_CASE("events outside the process window are depth-0 duration records") {
     auto r = process_only(d);
     const auto c = record(r, "cudaMalloc");
     REQUIRE(!c.empty());
-    CHECK(num(c, "/args/depth") == 0);
-    CHECK(c.find(R"("counters":{})") != std::string::npos);
+    CHECK(num(c, "/depth") == 0);
+    CHECK(find_line(r, "counter", {R"("path":"cudaMalloc",)"}).empty());
+    CHECK_FALSE(counter(r, "main", "PAPI_TOT_CYC").empty());
 }
 
 TEST_CASE("a truncated trace file skips the run and names the file") {
@@ -536,22 +582,81 @@ TEST_CASE("percentiles are within the sketch accuracy") {
     auto r = process_only(d);
     std::sort(durs.begin(), durs.end());
     const double exact = durs[durs.size() / 2];
-    CHECK(std::abs(num(record(r, "w"), "/args/dur/p50") - exact) / exact <=
+    CHECK(std::abs(num(record(r, "w"), "/dur/p50") - exact) / exact <=
           SKETCH_ACCURACY + 1e-9);
 }
 
-TEST_CASE("the RUN line carries keys, settings and the summary") {
+TEST_CASE("the run record carries keys, settings and the summary") {
     ScopedTestDir d("genesis_runline");
     matrix_run(d, 1, rank(1, 0, 10) + call(1, 1, "m", 0, 5));
     auto r = process_only(d);
     REQUIRE(r.runs.size() == 1);
     const auto first = lines_of(r.runs[0].lines).at(0);
-    CHECK(num(first, "/ph") == 4);
-    CHECK(num(first, "/args/sketch_accuracy") == doctest::Approx(0.01));
-    CHECK(has(first, "/args/summary/sets"));
+    CHECK(str(first, "/gtype") == "run");
+    CHECK(num(first, "/version") == 1);
+    CHECK(first.rfind(R"({"gtype":"run","version":1,)", 0) == 0);
+    CHECK(num(first, "/sketch_accuracy") == doctest::Approx(0.01));
+    CHECK(str(first, "/method") == "prorate");
+    CHECK(str(first, "/papi_set") == "set1");
+    CHECK(has(first, "/summary/sets"));
     CHECK(first.find(R"("run":")" +
                      run_id({"app1", "sys1", "in1", 1, 1, "set1"}) + "\"") !=
           std::string::npos);
+}
+
+TEST_CASE("records have a gtype and no dftracer envelope or metric keys") {
+    ScopedTestDir d("genesis_long");
+    matrix_run(d, 1,
+               rank(1, 0, 1000) + papi(1, 0, "PAPI_TOT_CYC", 0) +
+                   papi(1, 500, "PAPI_TOT_CYC", 7) +
+                   host("sys", "cpu", 0, R"("user_pct":1)") +
+                   host("sys", "cpu", 500, R"("user_pct":3)") +
+                   call(1, 1, "main", 0, 900) + call(1, 1, "x", 10, 20));
+    auto r = process_only(d);
+    REQUIRE(r.runs.size() == 1);
+    const auto lines = lines_of(r.runs[0].lines);
+    std::vector<std::string> types;
+    for (const auto& l : lines) {
+        types.push_back(str(l, "/gtype"));
+        for (const char* k : {"/ph", "/pid", "/tid", "/args", "/counters",
+                              "/PAPI_TOT_CYC", "/cpu.user_pct"})
+            CHECK_FALSE(has(l, k));
+    }
+    CHECK(types == std::vector<std::string>{"run", "func", "counter", "counter",
+                                            "func", "counter", "counter"});
+    CHECK(str(lines[2], "/metric") == "PAPI_TOT_CYC");
+    CHECK(str(lines[3], "/metric") == "cpu.user_pct");
+    CHECK(has(lines[2], "/v/sum"));
+    CHECK_FALSE(has(lines[3], "/v/sum"));
+}
+
+TEST_CASE("stored sketches decode and merge exactly") {
+    ScopedTestDir d("genesis_merge");
+    std::string t = rank(1, 0, 100000) + call(1, 1, "main", 0, 100000) +
+                    call(1, 1, "solve", 50000, 40000);
+    for (int i = 0; i < 30; ++i) t += call(1, 1, "fgets", 100 + i * 100, 1 + i);
+    for (int i = 0; i < 20; ++i)
+        t += call(1, 1, "fgets", 50100 + i * 100, 5 + 3 * i);
+    matrix_run(d, 1, t);
+    auto r = process_only(d);
+    const auto a = record(r, "main;fgets");
+    const auto b = record(r, "main;solve;fgets");
+    REQUIRE(!a.empty());
+    REQUIRE(!b.empty());
+    Sketch sa = sketch_at(a, "/dur/sketch");
+    const Sketch sb = sketch_at(b, "/dur/sketch");
+    CHECK(sa.count() == 30);
+    CHECK(sb.count() == 20);
+    CHECK(sa.min() == num(a, "/dur/min"));
+    CHECK(sa.max() == num(a, "/dur/max"));
+
+    Sketch all{SKETCH_ACCURACY};
+    for (int i = 0; i < 30; ++i) all.add(1 + i);
+    for (int i = 0; i < 20; ++i) all.add(5 + 3 * i);
+    sa.merge(sb);
+    CHECK(sa.count() == 50);
+    for (double q : {0.25, 0.5, 0.75, 0.9, 0.99})
+        CHECK(sa.quantile(q) == all.quantile(q));
 }
 
 TEST_CASE("processing the same group twice gives identical output") {

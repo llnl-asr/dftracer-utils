@@ -28,6 +28,8 @@ struct op_fn;
 // dftu_op_run (DFTU_OP_KIND_SERIES).
 DFTU_OP_FN(DFTU_OP_SIG(SERIES, SERIES, NONE, NONE), dftu_series* (*)(CS))
 DFTU_OP_FN(DFTU_OP_SIG(SERIES, SERIES, SERIES, NONE), dftu_series* (*)(CS, CS))
+DFTU_OP_FN(DFTU_OP_SIG(SERIES, SERIES, SERIES, I32),
+           dftu_series* (*)(CS, CS, int32_t))
 DFTU_OP_FN(DFTU_OP_SIG(SERIES, SERIES, SERIES, SERIES),
            dftu_series* (*)(CS, CS, CS))
 DFTU_OP_FN(DFTU_OP_SIG(SERIES, SERIES, SCALAR, NONE),
@@ -159,15 +161,15 @@ DFTU_OP_FN(DFTU_OP_SIG8(FRAME, FRAME, STRLIST, STR, I64, STRLIST, I32, I64LIST),
            DF (*)(CDF, const char* const*, int32_t, const char*, int64_t,
                   const char* const*, int32_t, dftu_gap_fill_mode,
                   const int64_t*, int32_t))
-DFTU_OP_FN(DFTU_OP_SIG8(FRAME, FRAME, FRAME, STR, STRLIST, I32, I64, NONE),
+DFTU_OP_FN(DFTU_OP_SIG8(FRAME, FRAME, FRAME, STR, STRLIST, I32, F64, NONE),
            DF (*)(CDF, CDF, const char*, const char* const*, int32_t,
-                  dftu_asof_direction, int64_t))
+                  dftu_asof_direction, double))
 DFTU_OP_FN(DFTU_OP_SIG8(FRAME, FRAME, FRAME, STR, STR, STR, STRLIST, I32),
            DF (*)(CDF, CDF, const char*, const char*, const char*,
                   const char* const*, int32_t, int32_t))
-DFTU_OP_FN(DFTU_OP_SIG8(FRAME, FRAME, FRAME, STRLIST, STRLIST, I32, STR, NONE),
+DFTU_OP_FN(DFTU_OP_SIG8(FRAME, FRAME, FRAME, STRLIST, STRLIST, I32, STR, I32),
            DF (*)(CDF, CDF, const char* const*, const char* const*, int32_t,
-                  dftu_join_how, const char*))
+                  dftu_join_how, const char*, int32_t))
 
 // dftu_op_run_lazy (DFTU_OP_KIND_LAZY).
 DFTU_OP_FN(DFTU_OP_SIG(LAZY, LAZY, NONE, NONE), LF (*)(CLF))
@@ -208,9 +210,9 @@ DFTU_OP_FN(DFTU_OP_SIG8(LAZY, LAZY, STRLIST, I32, I64, I32, I32, NONE),
            LF (*)(CLF, const char* const*, int32_t, int32_t, int64_t, int32_t,
                   int32_t))
 
-DFTU_OP_FN(DFTU_OP_SIG8(LAZY, LAZY, LAZY, STRLIST, STRLIST, I32, STR, NONE),
+DFTU_OP_FN(DFTU_OP_SIG8(LAZY, LAZY, LAZY, STRLIST, STRLIST, I32, STR, I32),
            LF (*)(CLF, CLF, const char* const*, const char* const*, int32_t,
-                  dftu_join_how, const char*))
+                  dftu_join_how, const char*, int32_t))
 DFTU_OP_FN(DFTU_OP_SIG(LAZY, LAZY, LAZY, NONE), LF (*)(CLF, CLF))
 DFTU_OP_FN(DFTU_OP_SIG(LAZY, LAZY, LAZY, I64), LF (*)(CLF, CLF, int64_t))
 

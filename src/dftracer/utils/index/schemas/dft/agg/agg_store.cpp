@@ -27,22 +27,29 @@ constexpr std::size_t CONFIG_BYTES = 17;
 constexpr std::uint8_t FLAG_GROUP_BY_FILE = 1U << 0;
 constexpr std::size_t WRITER_BATCH_ROWS = 4096;
 
-void check(const ::rocksdb::Status& status, const char* what) {
-    if (!status.ok())
-        throw DFTUtilsException::cat(ErrorCode::IO, what, ": ",
-                                     status.ToString());
+// A corrupt index names its directory and says what to do; the status text
+// alone ("Merge operator failed") does not.
+void check(const ::rocksdb::Status& status, const char* what,
+           const RocksDatabase& db) {
+    if (status.ok()) return;
+    if (status.IsCorruption())
+        throw DFTUtilsException::cat(
+            ErrorCode::AGGREGATION, what, " failed: the index at ", db.path(),
+            " is corrupt (", status.ToString(),
+            "); delete that directory and build the index again");
+    throw DFTUtilsException::cat(ErrorCode::IO, what, ": ", status.ToString());
 }
 
 std::optional<std::string> get(const RocksDatabase& db, std::string_view key) {
     std::string value;
     auto status = db.get(key, &value, cf::AGGREGATION);
     if (status.IsNotFound()) return std::nullopt;
-    check(status, "aggregation tier read");
+    check(status, "aggregation tier read", db);
     return value;
 }
 
 void put(RocksDatabase& db, std::string_view key, std::string_view value) {
-    check(db.put(key, value, cf::AGGREGATION), "aggregation tier write");
+    check(db.put(key, value, cf::AGGREGATION), "aggregation tier write", db);
 }
 
 std::string manifest_value(std::uint64_t params_hash) {
@@ -153,7 +160,7 @@ void put_files(RocksDatabase& db, std::span<const int> file_ids,
                    layout::manifest_key(static_cast<std::uint32_t>(id),
                                         layout::Ext::AGG),
                    value);
-    check(db.commit_batch(batch), "aggregation manifest write");
+    check(db.commit_batch(batch), "aggregation manifest write", db);
 }
 
 void merge_row(index::store::IndexWrite& w, std::string_view key,
@@ -170,7 +177,7 @@ Writer::Writer(RocksDatabase& db) : db_(&db), batch_(db.begin_batch()) {}
 
 void Writer::count() {
     if (++pending_ < WRITER_BATCH_ROWS) return;
-    check(db_->commit_batch(batch_), "aggregation tier write");
+    check(db_->commit_batch(batch_), "aggregation tier write", *db_);
     batch_ = db_->begin_batch();
     pending_ = 0;
 }
@@ -186,7 +193,7 @@ void Writer::merge_system_row(std::string_view key, std::string_view value) {
 }
 
 void Writer::finish() {
-    check(db_->commit_batch(batch_), "aggregation tier write");
+    check(db_->commit_batch(batch_), "aggregation tier write", *db_);
     batch_ = db_->begin_batch();
     pending_ = 0;
 }
@@ -268,7 +275,7 @@ void flush_dictionary(RocksDatabase& db, AggInternTable& table) {
     flush_entries(table, [&](std::string_view key, std::string_view value) {
         db.put(batch, cf::AGGREGATION, key, value);
     });
-    check(db.commit_batch(batch), "aggregation dictionary write");
+    check(db.commit_batch(batch), "aggregation dictionary write", db);
 }
 
 void clear(RocksDatabase& db) {
@@ -288,7 +295,7 @@ void clear(RocksDatabase& db) {
                 static_cast<std::uint16_t>(layout::Ext::AGG))
             db.del(batch, cf::DEFAULT, key);
     }
-    check(db.commit_batch(batch), "aggregation tier clear");
+    check(db.commit_batch(batch), "aggregation tier clear", db);
     intern_for_index(db.path())->flushed_entries.store(
         0, std::memory_order_relaxed);
 }

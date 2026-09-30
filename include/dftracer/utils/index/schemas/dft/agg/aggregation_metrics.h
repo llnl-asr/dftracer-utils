@@ -56,9 +56,13 @@ struct MetricStats {
     double mean() const {
         return stat.n ? stat.sum / static_cast<double>(stat.n) : 0.0;
     }
-    double m2() const { return stat.sumsq; }
-    double m3() const { return stat.m3; }
-    double m4() const { return stat.m4; }
+    /// The running mean as the pair shift + cmean, and the central moments
+    /// (sums of (x - mean)^k), as persisted.
+    double shift() const { return stat.shift; }
+    double cmean() const { return stat.cmean; }
+    double m2() const { return stat.cm2; }
+    double m3() const { return stat.cm3; }
+    double m4() const { return stat.cm4; }
 
     /// Exact integer total/min/max, valid when the metric accumulated integers
     /// (the tier's ts/dur/size/offset/custom metrics are all uint64). Lets the

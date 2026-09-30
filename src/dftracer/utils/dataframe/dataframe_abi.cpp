@@ -458,7 +458,8 @@ dftu_dataframe* dftu_dataframe_join(const dftu_dataframe* df,
                                     const dftu_dataframe* other,
                                     const char* const* left_on,
                                     const char* const* right_on, int32_t n,
-                                    dftu_join_how how, const char* suffix) {
+                                    dftu_join_how how, const char* suffix,
+                                    int32_t nulls_equal) {
     if (!df || !other || n < 0 || (n > 0 && (!left_on || !right_on)))
         return nullptr;
     try {
@@ -473,7 +474,7 @@ dftu_dataframe* dftu_dataframe_join(const dftu_dataframe* df,
         return wrap(
             df->df.join(other->df, l, r,
                         static_cast<dftracer::utils::dataframe::JoinHow>(how),
-                        suffix ? suffix : ""));
+                        suffix ? suffix : "", nulls_equal != 0));
     } catch (const std::exception&) {
         return nullptr;
     }
@@ -992,7 +993,8 @@ dftu_lazyframe* dftu_lazyframe_join(const dftu_lazyframe* lf,
                                     const dftu_lazyframe* other,
                                     const char* const* left_on,
                                     const char* const* right_on, int32_t n,
-                                    dftu_join_how how, const char* suffix) {
+                                    dftu_join_how how, const char* suffix,
+                                    int32_t nulls_equal) {
     if (!lf || !other || n < 0 || (n > 0 && (!left_on || !right_on)))
         return nullptr;
     try {
@@ -1007,7 +1009,7 @@ dftu_lazyframe* dftu_lazyframe_join(const dftu_lazyframe* lf,
         return wrap_lazy(
             lf->lf.join(other->lf, std::move(l), std::move(r),
                         static_cast<dftracer::utils::dataframe::JoinHow>(how),
-                        suffix ? suffix : ""));
+                        suffix ? suffix : "", nulls_equal != 0));
     } catch (const std::exception&) {
         return nullptr;
     }

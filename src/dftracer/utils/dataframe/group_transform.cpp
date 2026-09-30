@@ -37,7 +37,12 @@ dftu_window_spec spec(dftu_window_func func, const char* value, const char* out,
     s.value = value;
     s.out = out;
     if (func >= DFTU_WINDOW_FRAME_SUM && func <= DFTU_WINDOW_FRAME_MEAN)
-        s.param.frame = {offset, DFTU_WINDOW_UNBOUNDED, DFTU_WINDOW_UNBOUNDED};
+        s.param.frame = {offset,
+                         DFTU_WINDOW_UNBOUNDED,
+                         DFTU_WINDOW_UNBOUNDED,
+                         DFTU_WINDOW_FRAME_ROWS,
+                         0.0,
+                         nullptr};
     else
         s.param.offset = offset;
     return s;

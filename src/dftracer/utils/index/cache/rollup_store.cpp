@@ -45,7 +45,7 @@ std::uint64_t get_be64(std::string_view b) {
 // rest_signature.
 // Part of every rollup key: a rollup persisted under another identity is never
 // matched (it is recomputed instead).
-constexpr std::string_view ROLLUP_FORMAT = "2";
+constexpr std::string_view ROLLUP_FORMAT = "3";
 
 constexpr std::uint64_t DEFAULT_CACHE_MAX_BYTES = std::uint64_t{2} << 30;
 
@@ -142,7 +142,7 @@ void add_rest_fields(std::string& sig,
     add(dyn_sketch ? "1" : "0");
     // On-disk rollup format tag: a persisted rollup of another layout lands
     // under a different signature and is recomputed, never misread.
-    add("accumfmt1");
+    add("accumfmt2");
     for (const auto& s : plan.select) add(s);
 }
 

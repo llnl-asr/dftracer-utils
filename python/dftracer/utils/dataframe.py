@@ -33,8 +33,10 @@ from ._polars_frame import _FramePolarsMixin
 from .enums import DType
 from .series import (
     Series,
+    _apply_index,
     _arrow_native,
     _indices,
+    _pandas_nullable,
     _pandas_values,
     _register,
     _require_pyarrow,
@@ -49,8 +51,9 @@ if TYPE_CHECKING:
     import pandas as pd  # ty: ignore[unresolved-import]
     import polars as pl  # ty: ignore[unresolved-import]
     import pyarrow as pa  # ty: ignore[unresolved-import]
+    from pandas.api.extensions import ExtensionArray  # ty: ignore[unresolved-import]
 
-    from .columnar import Agg, ColumnExpr, GroupBy
+    from .columnar import Agg, ColumnExpr, GroupBy, Named
     from .indexing import At, ILoc, Loc, Resampler
     from .lazyframe import LazyFrame
 
@@ -70,7 +73,19 @@ _WINDOW_VALUE_ONLY = (
     "last_value",
     "fill_forward",
 )
-_WINDOW_FRAME = ("frame_sum", "frame_min", "frame_max", "frame_count", "frame_mean")
+_WINDOW_FRAME = (
+    "frame_sum",
+    "frame_min",
+    "frame_max",
+    "frame_count",
+    "frame_mean",
+    "frame_var",
+    "frame_std",
+    "frame_count_distinct",
+    "frame_collect",
+)
+_WINDOW_FRAME_Q = "frame_quantile"
+_WINDOW_FRAME_BY = ("frame_arg_max", "frame_arg_min")
 
 # Finite value sets for the viewer builder args (kept as reusable aliases so the
 # wrappers, the dask plan, and the stub share one definition).
@@ -92,20 +107,79 @@ SessSpec = Union[
     Tuple[Literal["sessionize"], str, float, str, Optional[str], float],
 ]
 FrameSpec = Tuple[
-    Literal["frame_sum", "frame_min", "frame_max", "frame_count", "frame_mean"],
+    Literal[
+        "frame_sum",
+        "frame_min",
+        "frame_max",
+        "frame_count",
+        "frame_mean",
+        "frame_var",
+        "frame_std",
+        "frame_count_distinct",
+        "frame_collect",
+    ],
     str,
     Optional[int],
     Optional[int],
     str,
 ]
-NtileSpec = Tuple[Literal["ntile"], int, str]
-FrameMinSpec = Tuple[
-    Literal["frame_sum", "frame_min", "frame_max", "frame_count", "frame_mean"],
+FrameQuantileSpec = Tuple[
+    Literal["frame_quantile"],
     str,
     Optional[int],
     Optional[int],
     str,
     int,
+    Literal["rows", "range"],
+    float,
+]
+FrameArgSpec = Tuple[
+    Literal["frame_arg_max", "frame_arg_min"],
+    str,
+    Optional[int],
+    Optional[int],
+    str,
+    int,
+    Literal["rows", "range"],
+    str,
+]
+NtileSpec = Tuple[Literal["ntile"], int, str]
+FrameMinSpec = Tuple[
+    Literal[
+        "frame_sum",
+        "frame_min",
+        "frame_max",
+        "frame_count",
+        "frame_mean",
+        "frame_var",
+        "frame_std",
+        "frame_count_distinct",
+        "frame_collect",
+    ],
+    str,
+    Optional[int],
+    Optional[int],
+    str,
+    int,
+]
+FrameModeSpec = Tuple[
+    Literal[
+        "frame_sum",
+        "frame_min",
+        "frame_max",
+        "frame_count",
+        "frame_mean",
+        "frame_var",
+        "frame_std",
+        "frame_count_distinct",
+        "frame_collect",
+    ],
+    str,
+    Optional[int],
+    Optional[int],
+    str,
+    int,
+    Literal["rows", "range"],
 ]
 PosSpec = Tuple[Literal["first_value", "last_value", "fill_forward"], str, str]
 NthSpec = Tuple[Literal["nth_value"], str, int, str]
@@ -119,6 +193,9 @@ WindowSpec = Union[
     SessSpec,
     FrameSpec,
     FrameMinSpec,
+    FrameModeSpec,
+    FrameQuantileSpec,
+    FrameArgSpec,
     NtileSpec,
     PosSpec,
     NthSpec,
@@ -182,9 +259,9 @@ def _nulls_first_keys(
 
 
 def _norm_window_spec(spec: Sequence[Any]) -> Tuple[object, ...]:
-    # Normalize to the fixed 11-tuple the native kernel reads: (func,
+    # Normalize to the fixed 12-tuple the native kernel reads: (func,
     # value|None, offset, name, time|None, threshold, counter, frame_pre,
-    # frame_post, end|None, span).
+    # frame_post, end|None, span, range_frame).
     if not isinstance(spec, (tuple, list)) or not spec:
         raise ValueError(f"window: bad spec {spec!r}")
     func = spec[0]
@@ -198,6 +275,7 @@ def _norm_window_spec(spec: Sequence[Any]) -> Tuple[object, ...]:
     post = 0
     end: Optional[str] = None
     span = 0.0
+    range_frame = False
     if func in _WINDOW_NULLARY:
         _window_arity(spec, 2)
         name = spec[1]
@@ -218,11 +296,24 @@ def _norm_window_spec(spec: Sequence[Any]) -> Tuple[object, ...]:
         time, threshold, name = spec[1], float(spec[2]), spec[3]
         end = spec[4] if len(spec) > 4 else None
         span = float(spec[5]) if len(spec) > 5 else 0.0
-    elif func in _WINDOW_FRAME:
-        if len(spec) not in (5, 6):
-            raise ValueError(f"window: {func!r} spec expects 5 or 6 elements: {spec!r}")
+    elif func in _WINDOW_FRAME or func == _WINDOW_FRAME_Q or func in _WINDOW_FRAME_BY:
+        extra = func == _WINDOW_FRAME_Q or func in _WINDOW_FRAME_BY
+        if len(spec) not in ((8,) if extra else (5, 6, 7)):
+            raise ValueError(
+                f"window: {func!r} spec expects {8 if extra else '5 to 7'} elements: {spec!r}"
+            )
+        if func == _WINDOW_FRAME_Q:
+            threshold = float(spec[7])
+        elif extra:
+            end = spec[7]
+            if not isinstance(end, str):
+                raise ValueError(f"window: {func!r} needs a str 'by' column: {spec!r}")
+        if len(spec) >= 7:
+            if spec[6] not in ("rows", "range"):
+                raise ValueError(f"window: frame mode must be 'rows' or 'range': {spec!r}")
+            range_frame = spec[6] == "range"
         value, pre, post, name = spec[1], _window_bound(spec[2]), _window_bound(spec[3]), spec[4]
-        offset = int(spec[5]) if len(spec) == 6 else 0
+        offset = int(spec[5]) if len(spec) > 5 else 0
     elif func == "ntile":
         _window_arity(spec, 3)
         offset, name = int(spec[1]), spec[2]
@@ -233,7 +324,7 @@ def _norm_window_spec(spec: Sequence[Any]) -> Tuple[object, ...]:
         raise ValueError(f"window: unknown function {func!r}")
     if not isinstance(name, str):
         raise ValueError(f"window: output name must be a str: {spec!r}")
-    return (func, value, offset, name, time, threshold, counter, pre, post, end, span)
+    return (func, value, offset, name, time, threshold, counter, pre, post, end, span, range_frame)
 
 
 class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"]):
@@ -398,7 +489,17 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         _require_pyarrow()
         import pyarrow.parquet as pq  # ty: ignore[unresolved-import]
 
-        return _dataframe_from_arrow(pq.read_table(path, columns=columns))
+        table = pq.read_table(path, columns=columns)
+        # Dask writes its default index as a column of this name and lists it as
+        # an index column; it is not data. Any other stored index stays a column.
+        marker = "__null_dask_index__"
+        if marker in table.column_names and marker not in (columns or ()):
+            import json
+
+            pandas_md = (table.schema.metadata or {}).get(b"pandas")
+            if pandas_md and marker in json.loads(pandas_md).get("index_columns", ()):
+                table = table.drop_columns([marker])
+        return _dataframe_from_arrow(table)
 
     @classmethod
     def from_dict(cls, mapping: Mapping[str, object]) -> "DataFrame":
@@ -435,22 +536,84 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         stream)."""
         return _require_pyarrow().table(self._native)
 
+    def _arrow_for_parquet(self) -> "pa.Table":
+        """The Arrow table a Parquet writer saves: ``to_arrow`` plus the pandas
+        metadata block that makes ``pandas.read_parquet`` restore the nullable
+        extension dtype (``Int8`` to ``Int64``, ``UInt8`` to ``UInt64``,
+        ``boolean``, ``string``) of every integer, bool and string column that
+        holds a null. Other columns read as pandas reads them by default. The
+        block is made by pyarrow from a zero-row pandas frame; without pandas
+        nothing is added."""
+        pa = _require_pyarrow()
+        table = self.to_arrow()
+        try:
+            import pandas  # noqa: F401  (to_pandas below needs it)
+        except ImportError:
+            return table
+        extension: Dict[str, str] = {}
+        for field in table.schema:
+            if table.column(field.name).null_count == 0:
+                continue
+            t = field.type
+            if pa.types.is_integer(t):
+                extension[field.name] = ("Int" if pa.types.is_signed_integer(t) else "UInt") + str(
+                    t.bit_width
+                )
+            elif pa.types.is_boolean(t):
+                extension[field.name] = "boolean"
+            elif pa.types.is_string(t) or pa.types.is_large_string(t):
+                extension[field.name] = "string"
+        if not extension:
+            return table
+        empty = table.slice(0, 0).to_pandas()
+        for name, dtype in extension.items():
+            empty[name] = empty[name].astype(dtype)
+        block = pa.Table.from_pandas(empty, schema=table.schema, preserve_index=False)
+        pandas_md = (block.schema.metadata or {}).get(b"pandas")
+        if pandas_md is None:
+            return table
+        return table.replace_schema_metadata(
+            {**(table.schema.metadata or {}), b"pandas": pandas_md}
+        )
+
     def to_ipc(self) -> bytes:
         """This frame serialized as an Arrow IPC stream (schema + one record
         batch + EOS) - bytes any Arrow IPC reader opens, no pyarrow needed."""
         return self._native.to_ipc()
 
-    def to_pandas(self, *, arrow: bool = False) -> "pd.DataFrame":
+    def to_pandas(
+        self,
+        *,
+        arrow: bool = False,
+        nullable: bool = False,
+        index: "Union[str, Sequence[str], None]" = None,
+    ) -> "pd.DataFrame":
         """This frame as a pandas DataFrame. By default the columns are NumPy
         dtypes, which copies (pyarrow packs them into blocks); ``arrow=True``
         keeps them Arrow-backed (``int64[pyarrow]``, ``string[pyarrow]``, ...),
-        sharing this frame's buffers with no copy. The NumPy form is built
-        natively, with no pyarrow."""
-        if arrow:
-            return _to_pandas(self.to_arrow(), arrow)
-        import pandas as pd  # ty: ignore[unresolved-import]
+        sharing this frame's buffers with no copy; ``nullable=True`` gives
+        pandas' own nullable dtypes (``Int8`` .. ``UInt64``, ``Float32``,
+        ``Float64``, ``boolean``, ``string``) so a null is ``pd.NA`` and a float
+        NaN stays NaN; a column of another type converts as usual. The NumPy and
+        nullable forms are built natively, with no pyarrow.
 
-        return pd.DataFrame({name: _pandas_values(self._native[name]) for name in self.columns})
+        ``index`` names the columns to move into the pandas index, in the order
+        given: a flat index for one name, a MultiIndex for several. An unknown
+        name raises ``KeyError`` and a repeated one ``ValueError``."""
+        if arrow and nullable:
+            raise ValueError("to_pandas: pass either arrow=True or nullable=True, not both")
+        if arrow:
+            out = _to_pandas(self.to_arrow(), arrow)
+        else:
+            import pandas as pd  # ty: ignore[unresolved-import]
+
+            def one(name: str) -> "Union[pd.Series, np.ndarray, ExtensionArray]":
+                col = self._native[name]
+                values = _pandas_nullable(col) if nullable else None
+                return values if values is not None else _pandas_values(col)
+
+            out = pd.DataFrame({name: one(name) for name in self.columns})
+        return out if index is None else _apply_index(out, index)
 
     def to_polars(self) -> "pl.DataFrame":
         """This frame as a polars DataFrame."""
@@ -519,16 +682,50 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
             raise KeyError(f"drop: no column named {missing[0]!r}")
         return self._like(self._native.select(*[c for c in self.columns if c not in dropped]))
 
-    def assign(self, **columns: "Union[Series, ColumnExpr]") -> "DataFrame":
-        """Add or replace columns from Series or column expressions (pandas
-        ``assign``; polars ``with_columns``)."""
+    def _constant_column(self, value: "Union[bool, int, float, str, None]") -> Series:
+        """A column of this frame's row count holding ``value``: an Int64, Float64,
+        Bool or String column, empty for a frame with no rows. ``None`` gives an
+        all-null String column, the type a column of only ``None`` has in
+        ``from_dict`` and ``from_pandas``."""
+        kind = (
+            DType.BOOL
+            if isinstance(value, bool)
+            else DType.INT64
+            if isinstance(value, int)
+            else DType.FLOAT64
+            if isinstance(value, float)
+            else DType.STRING
+        )
+        n = len(self)
+        if n == 0:
+            return Series(_ext._series_from_list([], int(kind)))
+        # Built from the row count alone, so no other column's nulls reach it.
+        if value is None:
+            return Series(_ext._series_nulls(int(kind), n))
+        return Series(_ext._series_nulls(int(kind), n).fillna(value))
+
+    def assign(
+        self, **columns: "Union[Series, ColumnExpr, bool, int, float, str, None]"
+    ) -> "DataFrame":
+        """Add or replace columns from Series, column expressions or Python
+        scalars (pandas ``assign``; polars ``with_columns``). A scalar, or
+        ``lit(value)``, gives a column of the frame's row count holding it;
+        ``None`` (or ``lit(None)``) gives an all-null String column."""
+        from .columnar import _Lit
+
         out = self
         for name, value in columns.items():
+            if isinstance(value, _Lit) and value.value is None:
+                value = None  # lit(None) is the null constant, as a bare None is
+            if value is None or isinstance(value, (bool, int, float, str)):
+                value = out._constant_column(value)
             col = value if isinstance(value, Series) else value.apply(out)
             out = _wrap(out._native.with_column(name, _unwrap(col)))
         return out
 
-    def with_columns(self, *named: object, **columns: "Union[Series, ColumnExpr]") -> "DataFrame":
+    def with_columns(
+        self, *named: "Named", **columns: "Union[Series, ColumnExpr, bool, int, float, str, None]"
+    ) -> "DataFrame":
         """:meth:`assign`, also taking named expressions positionally
         (``with_columns((col("a") * 2).alias("b"))``, the polars spelling)."""
         from .columnar import Named
@@ -540,16 +737,36 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
             out = out.assign(**{item.name: item.expr})
         return out.assign(**columns)
 
-    def cast(self, dtypes: "Mapping[str, Union[str, int, DType]]") -> "DataFrame":
-        """Cast the named columns (polars ``cast``; pandas ``astype``)."""
-        out = self
+    def cast(
+        self, dtypes: "Union[Mapping[str, Union[str, int, DType, type]], str, int, DType, type]"
+    ) -> "DataFrame":
+        """Cast columns (polars ``cast``; pandas ``astype``). A mapping casts
+        only the named columns; a single dtype casts every column to it. If a
+        column cannot be cast the call raises ``TypeError`` that names the column
+        and the two types, and no frame is returned."""
+        if not isinstance(dtypes, Mapping):
+            dtypes = {name: dtypes for name in self.columns}
+        casted: Dict[str, Series] = {}
         for name, dtype in dtypes.items():
-            casted = Series(out._native[name]).astype(dtype)
-            out = _wrap(out._native.with_column(name, _unwrap(casted)))
+            try:
+                casted[name] = Series(self._native[name]).astype(dtype)
+            except TypeError as e:
+                raise TypeError(f"astype: column {name!r}: {e}") from None
+        out = self
+        for name, column in casted.items():
+            out = _wrap(out._native.with_column(name, _unwrap(column)))
         return out
 
-    def astype(self, dtypes: "Mapping[str, Union[str, int, DType]]") -> "DataFrame":
-        return self.cast(dtypes)
+    def astype(
+        self, dtypes: "Union[Mapping[str, Union[str, int, DType, type]], str, int, DType, type]"
+    ) -> "DataFrame":
+        out = self.cast(dtypes)
+        for name in self.columns:
+            # A bool column that became text is spelled True/False, as Series.astype does.
+            was_bool = int(self[name].dtype) == int(DType.BOOL)
+            if was_bool and int(out[name].dtype) == int(DType.STRING):
+                out = out.with_column(name, out[name].str.capitalize())
+        return out
 
     def dropna(self) -> "DataFrame":
         return self._like(self._native.drop_nulls())
@@ -672,9 +889,24 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
           far (``end_col``, else the time), or more than ``span`` after the
           session's first time; a null time is a null session
         - ``("frame_sum"|"frame_min"|"frame_max"|"frame_count"|"frame_mean",
-          value_col, preceding, following, out[, min_periods])`` (a bound of
-          ``None`` is unbounded; the output is null while the frame holds fewer
-          than ``min_periods`` present values)
+          value_col, preceding, following, out[, min_periods[, mode]])`` (a bound
+          of ``None`` is unbounded; the output is null while the frame holds
+          fewer than ``min_periods`` present values; ``mode`` is ``"rows"``
+          (default, bounds are row offsets) or ``"range"``, where the bounds
+          are value deltas on the single numeric ``order_by`` column and peers
+          are included)
+        - ``("frame_var"|"frame_std"|"frame_count_distinct"|"frame_collect",
+          value_col, preceding, following, out[, min_periods[, mode]])``: the
+          sample variance and standard deviation (null below 2 values), the
+          distinct count (0 for an empty frame) and the list of the frame's
+          values in frame order (an empty list for an empty frame)
+        - ``("frame_quantile", value_col, preceding, following, out,
+          min_periods, mode, q)``: the exact quantile at level ``q`` in
+          [0, 1] with linear interpolation
+        - ``("frame_arg_max"|"frame_arg_min", value_col, preceding, following,
+          out, min_periods, mode, by_col)``: the ``value_col`` value of the row
+          with the largest (smallest) ``by_col`` in the frame, the earliest
+          row on a tie (``by_col`` is numeric, string or bool)
         - ``("ntile", n, out)``
         - ``("first_value"|"last_value"|"fill_forward", value_col, out)``
           (``fill_forward`` is the nearest present value at or before the row)
@@ -725,13 +957,16 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         left_on: Union[str, Sequence[str], None] = None,
         right_on: Union[str, Sequence[str], None] = None,
         suffix: str = "_right",
+        nulls_equal: bool = False,
     ) -> "DataFrame":
         """Hash join with ``other``.
 
         ``on`` names the key column(s) shared by both frames (a str, a list of
         names, or an int count of the leading columns); ``left_on`` /
         ``right_on`` name each side's keys instead when they differ. A null key
-        never matches. ``how`` is ``"inner"``, ``"left"``, ``"right"``,
+        never matches (the SQL rule), unless ``nulls_equal=True``: then a null
+        key cell matches another null key cell (never a value), as pandas does;
+        it is refused for ``"cross"``, ``"lookup"`` and ``"nest"``. ``how`` is ``"inner"``, ``"left"``, ``"right"``,
         ``"outer"`` (alias ``"full"``), ``"semi"``, ``"anti"``, ``"cross"``
         (no keys), ``"lookup"`` or ``"nest"``. Output is this frame's columns,
         then ``other``'s except a key sharing its left key's name; any other
@@ -764,6 +999,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
                 left_on=_unwrap(left_on),
                 right_on=_unwrap(right_on),
                 suffix=suffix,
+                nulls_equal=nulls_equal,
             )
         )
 
@@ -775,11 +1011,13 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         left_on: Union[str, Sequence[str], None] = None,
         right_on: Union[str, Sequence[str], None] = None,
         suffixes: Tuple[str, str] = ("_x", "_y"),
+        nulls_equal: bool = False,
     ) -> "DataFrame":
         """pandas ``merge``: :meth:`join` with ``right`` first, then ``how``.
         With no key given, joins on the columns both frames share. A non-key
         column present on both sides is suffixed on BOTH sides with
-        ``suffixes``, as pandas does."""
+        ``suffixes``, as pandas does. A null key does not match another null
+        key unless ``nulls_equal=True``, which is the pandas rule."""
         if on is None and left_on is None and right_on is None:
             shared = [c for c in self.columns if c in right]
             if not shared:
@@ -795,7 +1033,13 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
             left = self.rename({c: c + suffixes[0] for c in collide})
             right = right.rename({c: c + suffixes[1] for c in collide})
         return left.join(
-            right, on=on, how=how, left_on=left_on, right_on=right_on, suffix=suffixes[1]
+            right,
+            on=on,
+            how=how,
+            left_on=left_on,
+            right_on=right_on,
+            suffix=suffixes[1],
+            nulls_equal=nulls_equal,
         )
 
     def compare_agg(
@@ -831,7 +1075,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         on: str,
         by: Optional[Union[str, Sequence[str]]] = None,
         direction: Literal["backward", "forward", "nearest"] = "backward",
-        tolerance: Optional[int] = None,
+        tolerance: Optional[float] = None,
     ) -> "DataFrame":
         """Temporal (as-of) join: match each row to the nearest ``other`` row by
         the time column ``on``, within optional equi-key partition ``by``.
@@ -1187,6 +1431,66 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
             )
         )
 
+    def eval(self, expr: str) -> "Union[Series, DataFrame]":
+        """Evaluate Python expressions over the columns (pandas ``eval``).
+        ``df.eval("a / b")`` gives a Series; ``df.eval("m = a / b")`` gives a new
+        frame with column ``m`` added or replaced. Several lines run in order, each
+        seeing the columns the lines before it made; every line but the last is an
+        assignment, and a last line that is an expression returns its value. The
+        text is parsed with ``ast`` and each line lowered by the same code as
+        :meth:`apply`'s source tier into one column expression; it is never run as
+        Python code.
+
+        Supported (what that lowering supports): column names; number literals;
+        ``+ - * /`` (a number may be on either side); ``//`` and ``%`` (integer
+        columns give integers, as Python does); ``**`` with a constant exponent
+        from 0 to 8 or 0.5; unary ``- +``; ``< <= > >= == !=`` (chains too);
+        ``and``, ``or``, ``not`` and the mask operators ``& | ~``; ``x if c else
+        y``; ``in`` and ``not in`` a list of constants; ``x is None`` and ``x is not
+        None``; ``abs``, ``min``, ``max``, ``int``, ``float``, ``round`` (whole
+        numbers) and ``len``; ``math.sqrt``, ``log``, ``exp``, ``floor``, ``ceil``;
+        and the string methods ``lower``, ``upper``, ``strip``, ``lstrip``,
+        ``rstrip``, ``startswith``, ``endswith`` and ``replace`` with literal
+        arguments; and the pandas methods ``fillna`` (a number or a column),
+        ``isna``, ``isnull``, ``notna``, ``notnull``, ``abs``, ``clip`` (``lower``,
+        ``upper`` or both), ``round`` (``decimals``), ``where`` and ``mask`` (with
+        or without ``other``) and ``str.contains`` (``regex``, ``case``), with the
+        keyword spellings pandas takes; any other keyword raises, naming it. Nulls propagate as the column operators propagate them. ``&``,
+        ``|`` and ``~`` combine and negate masks (comparisons), as ``and``, ``or``
+        and ``not`` do. An unknown column raises ``KeyError``; anything else raises
+        ``TranspileError`` naming the first unsupported construct (``@name``,
+        attribute access, ...)."""
+        from ._transpile import NULL_COLUMN, TranspileError, eval_statements, transpile_expr
+        from .columnar import Columnar
+
+        statements = eval_statements(expr)
+        if not statements:
+            raise TranspileError("eval needs an expression")
+        frame = self
+        for i, text in enumerate(statements):
+            int_inputs = {
+                c: t.name.startswith(("INT", "UINT")) for c, t in zip(frame.columns, frame.dtypes)
+            }
+            target, column_expr = transpile_expr(text, frame.columns, int_inputs)
+            # `where` / `mask` without a replacement read an all-null column (the
+            # expression language has no null literal); it is added for this line only.
+            with_null = NULL_COLUMN in Columnar(column_expr).columns
+            work = (
+                frame.with_columns(
+                    **{NULL_COLUMN: Series(_ext._series_nulls(int(DType.FLOAT64), len(frame)))}
+                )
+                if with_null
+                else frame
+            )
+            if target is None:
+                if i != len(statements) - 1:
+                    raise TranspileError("only the last line of eval can be an expression")
+                return column_expr.apply(work)
+            frame = work.with_columns(**{target: column_expr})
+            if with_null:
+                frame = frame.select(*[c for c in frame.columns if c != NULL_COLUMN])
+        return frame
+
     def group_by(
         self,
         key: "Union[str, Series, Sequence[Union[str, Series]], None]" = None,
@@ -1366,8 +1670,11 @@ def _native_columns(
         elif isinstance(value, _ext._Series):
             cols.append(value)
         elif isinstance(value, (list, tuple)):
+            items = list(value)
+            # no value to infer a type from: a string column of nulls, as from_pandas gives
+            kind = (int(DType.STRING),) if all(v is None for v in items) else ()
             try:
-                cols.append(_ext._series_from_list(list(value)))
+                cols.append(_ext._series_from_list(items, *kind))
             except TypeError:
                 return None
         elif type(value).__module__.startswith("pandas") and type(value).__name__ == "Series":

@@ -54,6 +54,13 @@ enum class Fn : std::uint8_t {
     VALUES,
     PARSE_JSON,
     SPLIT,
+    REGEX_REPLACE,
+    DATE_PART,
+    FORMAT_TIME,
+    INDEX_OF,
+    SORT,
+    UNIQUE,
+    JOIN,
 };
 
 struct FnInfo {
@@ -105,6 +112,13 @@ inline constexpr FnInfo FUNCTIONS[] = {
     {Fn::VALUES, "values", 1, 1},
     {Fn::PARSE_JSON, "parse_json", 1, 1},
     {Fn::SPLIT, "split", 2, 2},
+    {Fn::REGEX_REPLACE, "regex_replace", 3, 3},
+    {Fn::DATE_PART, "date_part", 2, 2},
+    {Fn::FORMAT_TIME, "format_time", 2, 2},
+    {Fn::INDEX_OF, "index_of", 2, 2},
+    {Fn::SORT, "sort", 1, 1},
+    {Fn::UNIQUE, "unique", 1, 1},
+    {Fn::JOIN, "join", 2, 2},
 };
 
 inline const FnInfo& fn_info(Fn fn) {
@@ -189,11 +203,20 @@ struct TIn {
     bool negated = false;
 };
 
+struct Substitution;
+
 struct TCall {
     Fn fn;
     std::vector<TermPtr> args;
-    /// EXTRACT: the compiled regex of its second argument.
+    /// EXTRACT, REGEX_REPLACE: the compiled regex of its second argument.
     std::shared_ptr<const CompiledPattern> pattern;
+    /// REGEX_REPLACE: the third argument compiled against `pattern`.
+    std::shared_ptr<const Substitution> substitution;
+    /// DATE_PART, FORMAT_TIME: nanoseconds per unit of the time argument.
+    /// The second argument stays the user's part name or format constant.
+    std::int64_t ns_per_unit = 0;
+    /// DATE_PART: the DatePart code of the second argument.
+    std::int32_t part = 0;
 };
 
 /// `any(subject, cond)`, or `all(subject, cond)` when `all`: `cond` holds
@@ -285,9 +308,21 @@ struct TMatch {
     std::shared_ptr<const CompiledPattern> compiled;
 };
 
+/// `array[index]`: the element of `array` at a computed index, 0-based and
+/// from the end when negative; null out of range or when `array` is not one.
+struct TIndex {
+    TermPtr array;
+    TermPtr index;
+};
+
+/// A list literal; a missing item is null.
+struct TList {
+    std::vector<TermPtr> items;
+};
+
 struct Term {
     std::variant<TConst, TField, TUnary, TBinary, TBetween, TIs, TIn, TCall,
-                 TMatch, TQuant, TLookup>
+                 TMatch, TQuant, TLookup, TIndex, TList>
         node;
 };
 
@@ -324,6 +359,11 @@ void for_each_term(const Term& t, F&& fn) {
                 for_each_term(*n.cond, fn);
             } else if constexpr (std::is_same_v<T, TLookup>) {
                 for (const auto& k : n.keys) for_each_term(*k, fn);
+            } else if constexpr (std::is_same_v<T, TIndex>) {
+                for_each_term(*n.array, fn);
+                for_each_term(*n.index, fn);
+            } else if constexpr (std::is_same_v<T, TList>) {
+                for (const auto& x : n.items) for_each_term(*x, fn);
             }
         },
         t.node);

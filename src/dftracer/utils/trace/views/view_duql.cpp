@@ -4,10 +4,12 @@
 #include <dftracer/utils/core/common/memory_budget.h>
 #include <dftracer/utils/core/common/string_intern.h>
 #include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/core/env.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/expr.h>
+#include <dftracer/utils/dataframe/internal/dataframe_handle.h>
 #include <dftracer/utils/dataframe/internal/frame_native.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
@@ -50,6 +52,37 @@
 namespace dftracer::utils::trace::views {
 
 namespace {
+
+// The plugin functions the op registry holds now.
+duql::PluginCatalog registry_plugins() {
+    duql::PluginCatalog out;
+    out.kind = [](std::string_view name) {
+        const dftu_op_desc* op = dftu_op_find(std::string(name).c_str());
+        if (!op) return duql::PluginKind::NONE;
+        const dftu_op_kind k = dftu_op_kind_of(op->sig);
+        if (k == DFTU_OP_KIND_SERIES &&
+            DFTU_OP_SIG_ARG(op->sig, 0) == DFTU_TOK_SERIES)
+            return duql::PluginKind::COLUMN;
+        if (k == DFTU_OP_KIND_FRAME &&
+            DFTU_OP_SIG_ARG(op->sig, 0) == DFTU_TOK_FRAME)
+            return duql::PluginKind::TABLE;
+        if (k == DFTU_OP_KIND_AGGREGATE &&
+            DFTU_OP_SIG_ARG(op->sig, 0) == DFTU_TOK_SERIES)
+            return duql::PluginKind::AGGREGATE;
+        return duql::PluginKind::OTHER;
+    };
+    for (std::uint32_t k = 0; k < dftu_op_count(); ++k) {
+        const std::string_view op = dftu_op_at(k)->name;
+        const auto dot = op.find('.');
+        if (dot == std::string_view::npos || op.starts_with("dftu.")) continue;
+        std::string ns(op.substr(0, dot));
+        if (std::find(out.namespaces.begin(), out.namespaces.end(), ns) ==
+            out.namespaces.end())
+            out.namespaces.push_back(std::move(ns));
+    }
+    std::sort(out.namespaces.begin(), out.namespaces.end());
+    return out;
+}
 
 namespace df = dftracer::utils::dataframe;
 namespace ix = dftracer::utils::index;
@@ -293,15 +326,11 @@ class FoldSource final : public df::Source {
 };
 
 std::uint64_t pivot_max_columns() {
-    if (const char* v = std::getenv("DUQL_PIVOT_MAX_COLUMNS"))
-        return std::strtoull(v, nullptr, 10);
-    return 1024;
+    return Env::get<std::uint64_t>("DUQL_PIVOT_MAX_COLUMNS").value_or(1024);
 }
 
 std::uint64_t fill_max_rows() {
-    if (const char* v = std::getenv("DUQL_FILL_MAX_ROWS"))
-        return std::strtoull(v, nullptr, 10);
-    return 10'000'000;
+    return Env::get<std::uint64_t>("DUQL_FILL_MAX_ROWS").value_or(10'000'000);
 }
 
 std::string agg_name(duql::AggFn fn) {
@@ -350,6 +379,8 @@ std::string agg_name(duql::AggFn fn) {
             return "sketch";
         case duql::AggFn::MERGE:
             return "merge";
+        case duql::AggFn::PLUGIN:
+            return "plugin function";
     }
     return {};
 }
@@ -393,6 +424,7 @@ std::optional<AggOp> trace_op(const duql::PipelineAgg& a) {
         case duql::AggFn::ARGMIN:
         case duql::AggFn::SKETCH:
         case duql::AggFn::MERGE:
+        case duql::AggFn::PLUGIN:
             return std::nullopt;
     }
     return std::nullopt;
@@ -481,7 +513,9 @@ Reads referenced_fields(
         return std::find(v.begin(), v.end(), n) != v.end();
     };
     auto field = [&](const std::string& base, bool array) {
-        if (known(defined, base)) return;
+        if (known(defined, base) ||
+            known(defined, base.substr(0, base.find_first_of(".["))))
+            return;
         if (!known(out.fields, base)) out.fields.push_back(base);
         if (array && !known(out.arrays, base)) out.arrays.push_back(base);
     };
@@ -493,6 +527,9 @@ Reads referenced_fields(
                 field(f->base, false);
             if (const auto* q = std::get_if<duql::TQuant>(&x.node))
                 if (const auto* a = array_field(*q->subject))
+                    field(a->base, true);
+            if (const auto* i = std::get_if<duql::TIndex>(&x.node))
+                if (const auto* a = array_field(*i->array))
                     field(a->base, true);
         });
     };
@@ -506,6 +543,7 @@ Reads referenced_fields(
         for (const auto& k : v) add(k.key.term);
     };
     bool whole_rows = false;
+    std::string bucket_name = "bucket";
     for (const auto& stage : stages)
         std::visit(
             [&](const auto& s) {
@@ -534,6 +572,13 @@ Reads referenced_fields(
                         field(pair.second, false);
                         defined.push_back(pair.first);
                     }
+                } else if constexpr (std::is_same_v<T, duql::PipelinePlugin>) {
+                    add(s.arg.term);
+                    defined.push_back(s.arg.name);
+                    if (s.arg2) {
+                        add(s.arg2->term);
+                        defined.push_back(s.arg2->name);
+                    }
                 } else if constexpr (std::is_same_v<T, duql::PipelineSort>) {
                     sort_keys(s.keys);
                 } else if constexpr (std::is_same_v<T, duql::PipelineTakeBy>) {
@@ -547,12 +592,13 @@ Reads referenced_fields(
                     }
                     define(s.keys);
                     for (const auto& a : s.aggs) defined.push_back(a.name);
-                    defined.push_back("bucket");
+                    defined.push_back(bucket_name);
                 } else if constexpr (std::is_same_v<T,
                                                     duql::PipelineTimeRange>) {
                     add(s.condition);
                 } else if constexpr (std::is_same_v<T, duql::PipelineBucket>) {
                     add(s.key);
+                    bucket_name = s.name;
                 } else if constexpr (std::is_same_v<T, duql::PipelineSession>) {
                     items(s.keys);
                     add(s.time);
@@ -563,6 +609,7 @@ Reads referenced_fields(
                     sort_keys(s.order);
                     for (const auto& c : s.calls) {
                         add(c.arg);
+                        add(c.by);
                         defined.push_back(c.column);
                     }
                     items(s.items);
@@ -765,11 +812,11 @@ bool is_count(duql::AggFn fn) {
            fn == duql::AggFn::COUNT_DISTINCT;
 }
 
-std::uint64_t env_count(const char* name, std::uint64_t fallback) {
-    if (const char* v = std::getenv(name)) return std::strtoull(v, nullptr, 10);
-    return fallback;
+std::uint64_t env_count(std::string_view name, std::uint64_t fallback) {
+    return Env::get<std::uint64_t>(name).value_or(fallback);
 }
 
+constexpr const char* HIT_COLUMN = "__duql_hit";
 constexpr std::uint64_t LOOKUP_MAX_ROWS = 1'000'000;
 constexpr std::int64_t TYPE_PROBE_ROWS = 65'536;
 // Keys a side's distinct rows in the lookup cache apart from its rows.
@@ -1497,7 +1544,8 @@ class Applier {
         std::visit([this](const auto& s) { this->stage(s); }, stage);
         std::vector<std::string> rest;
         for (const auto& c : cols_)
-            if (!c.quant && !c.lookup && !c.call) rest.push_back(c.name);
+            if (!c.quant && !c.lookup && !c.call && !c.index && !c.list)
+                rest.push_back(c.name);
         if (rest.size() != cols_.size()) keep(std::move(rest));
     }
 
@@ -1773,20 +1821,29 @@ class Applier {
                     inner.push_back(&y);
                 });
         });
+        // The vectorizer reads a list literal that contains() tests directly.
+        std::vector<const duql::Term*> literal;
+        duql::for_each_term(*t, [&](const duql::Term& x) {
+            if (const auto* c = std::get_if<duql::TCall>(&x.node);
+                c && c->fn == duql::Fn::CONTAINS &&
+                std::holds_alternative<duql::TList>(c->args[0]->node))
+                literal.push_back(c->args[0].get());
+        });
         std::vector<const duql::Term*> found;
         duql::for_each_term(*t, [&](const duql::Term& x) {
             const auto* l = std::get_if<duql::TLookup>(&x.node);
-            const auto* c = std::get_if<duql::TCall>(&x.node);
             if (std::holds_alternative<duql::TQuant>(x.node) ||
                 (l && !l->all) ||
-                (c && duql::is_column_call(c->fn) &&
-                 std::find(inner.begin(), inner.end(), &x) == inner.end()))
+                (duql::is_column_term(x) &&
+                 std::find(inner.begin(), inner.end(), &x) == inner.end() &&
+                 std::find(literal.begin(), literal.end(), &x) ==
+                     literal.end()))
                 found.push_back(&x);
         });
         for (auto it = found.rbegin(); it != found.rend(); ++it) {
             if (std::holds_alternative<duql::TQuant>((*it)->node))
                 quantifier(t, *it);
-            else if (std::holds_alternative<duql::TCall>((*it)->node))
+            else if (duql::is_column_term(**it))
                 call(t, *it);
             else
                 lookup(t, *it);
@@ -1849,22 +1906,34 @@ class Applier {
         }
     }
 
-    // The column of a call only call_column() computes.
+    // The column of a call, computed index or list literal only
+    // call_column() computes.
     void call(const duql::TermRef& t, const duql::Term* term) {
-        const auto* c = &std::get<duql::TCall>(term->node);
-        if (std::any_of(cols_.begin(), cols_.end(),
-                        [c](const auto& x) { return x.call == c; }))
+        const auto* c = std::get_if<duql::TCall>(&term->node);
+        const auto* ix = std::get_if<duql::TIndex>(&term->node);
+        const auto* ls = std::get_if<duql::TList>(&term->node);
+        if (std::any_of(cols_.begin(), cols_.end(), [&](const auto& x) {
+                return (c && x.call == c) || (ix && x.index == ix) ||
+                       (ls && x.list == ls);
+            }))
             return;
         const std::string text = duql::term_text(*term);
+        std::vector<const duql::Term*> operands;
+        if (c)
+            for (const auto& a : c->args) operands.push_back(a.get());
+        else if (ix)
+            operands = {ix->array.get(), ix->index.get()};
+        else
+            for (const auto& a : ls->items) operands.push_back(a.get());
         std::vector<df::Expr> args;
         std::vector<df::DataType> arg_types;
         std::vector<std::string> keys;
-        if (c->fn == duql::Fn::KEYS || c->fn == duql::Fn::VALUES) {
+        if (c && (c->fn == duql::Fn::KEYS || c->fn == duql::Fn::VALUES)) {
             if (const auto* f = std::get_if<duql::TField>(&c->args[0]->node))
                 object_fields(*f, text, c->fn == duql::Fn::VALUES, keys, args,
                               arg_types);
         } else {
-            for (const auto& a : c->args) {
+            for (const auto* a : operands) {
                 if (const auto* inner = std::get_if<duql::TCall>(&a->node);
                     inner && inner->fn == duql::Fn::PARSE_JSON)
                     refuse("'" + text +
@@ -1873,34 +1942,45 @@ class Applier {
                 auto e = duql::vectorize(*a, cols_, schema_.args_fallback);
                 if (!e) refuse(e.error().message + " in '" + text + "'");
                 args.push_back(std::move(*e));
-                arg_types.push_back(df::infer_type(args.back(), types()));
+                arg_types.push_back(
+                    ls && duql::is_null_term(*a, cols_, schema_.args_fallback)
+                        ? df::scalar(df::TypeId::Unknown)
+                        : df::infer_type(args.back(), types()));
             }
         }
         std::optional<df::DataType> type;
         try {
-            type = duql::call_type(*c, arg_types);
+            type = duql::call_type(*term, arg_types);
         } catch (const std::invalid_argument& e) {
             refuse("'" + text + "': " + e.what());
         }
         const std::string name = "__duql_c_" + std::to_string(calls_++);
+        auto mark = [&](duql::VectorColumn& col) {
+            col.call = c;
+            col.index = ix;
+            col.list = ls;
+        };
         if (!type) {
             with_column(name, df::expr_lit_null(df::TypeId::Bool), text);
             cols_.back().type = df::scalar(df::TypeId::Unknown);
-            cols_.back().call = c;
+            mark(cols_.back());
             return;
         }
         std::vector<duql::VectorColumn> next = cols_;
-        next.push_back({name, *type, c->fn == duql::Fn::PARSE_JSON, false,
-                        nullptr, nullptr, c});
+        next.push_back(
+            {name, *type, c && c->fn == duql::Fn::PARSE_JSON, false});
+        mark(next.back());
         map_rows(
-            [t, c, args, keys, type = *type, name](df::DataFrame f) {
+            [t, term, args, keys, type = *type, name](df::DataFrame f) {
                 std::vector<const df::Series*> inputs;
                 for (const auto& x : f.columns) inputs.push_back(&x);
                 std::vector<df::Series> values;
                 for (const auto& a : args)
                     values.push_back(df::eval(a, inputs));
+                const std::int64_t rows = f.num_rows();
                 f.names.push_back(name);
-                f.columns.push_back(duql::call_column(*c, values, keys, type));
+                f.columns.push_back(
+                    duql::call_column(*term, values, keys, type, rows));
                 return f;
             },
             std::move(next), "call " + name + " = " + text);
@@ -2384,7 +2464,8 @@ class Applier {
     }
 
     void stage(const duql::PipelineTimeRange& t) {
-        if (scan_ && !t.overlap) {
+        if (scan_ && !t.overlap && std::isfinite(t.low) &&
+            std::isfinite(t.high)) {
             v_ = v_.time_range(t.low * us_per_time_unit(),
                                t.high * us_per_time_unit());
             lines.push_back("scan time_range " + number_text(t.low) + " .. " +
@@ -2436,6 +2517,10 @@ class Applier {
         df::DataType type;
         std::int64_t offset = 0;
         std::int64_t following = DFTU_WINDOW_UNBOUNDED;
+        std::int64_t preceding = DFTU_WINDOW_UNBOUNDED;
+        dftu_window_frame_mode mode = DFTU_WINDOW_FRAME_ROWS;
+        double q = 0;
+        std::string by{};
     };
 
     // One dftu.frame.window pass over `order`, each spec's column appended.
@@ -2453,9 +2538,13 @@ class Applier {
             w.func = s.func;
             w.value = s.value.empty() ? nullptr : s.value.c_str();
             w.out = s.out.c_str();
-            if (s.func >= DFTU_WINDOW_FRAME_SUM &&
-                s.func <= DFTU_WINDOW_FRAME_MEAN)
-                w.param.frame = {s.offset, DFTU_WINDOW_UNBOUNDED, s.following};
+            if ((s.func >= DFTU_WINDOW_FRAME_SUM &&
+                 s.func <= DFTU_WINDOW_FRAME_MEAN) ||
+                s.func >= DFTU_WINDOW_FRAME_VAR)
+                w.param.frame = {
+                    s.offset,    s.preceding,
+                    s.following, s.mode,
+                    s.q,         s.by.empty() ? nullptr : s.by.c_str()};
             else
                 w.param.offset = s.offset;
             raw.push_back(w);
@@ -2575,17 +2664,50 @@ class Applier {
         }
         // Passes: over the order, over the reverse order, then over the
         // order again for what reads the first two.
-        std::vector<WinSpec> forward, reverse, last;
+        std::vector<WinSpec> forward, reverse, last, ranged, distribution;
         std::vector<const duql::PipelineWinCall*> ranks;
+        std::vector<const duql::PipelineWinCall*> dist;
+        std::vector<std::pair<std::string, const duql::PipelineWinCall*>> edges;
+        // A sum, mean, min, max or count over its `over` frame, else over
+        // the whole partition.
+        const auto framed = [&](WinSpec s, const duql::PipelineWinCall& c) {
+            if (!c.frame) {
+                forward.push_back(std::move(s));
+                return;
+            }
+            s.offset = 1;
+            s.following = 0;
+            if (c.frame->range) {
+                if (sort_keys.size() != 1) refuse("'over' needs one sort key");
+                const df::TypeId t = type_of(sort_keys[0]).id;
+                if (t != df::TypeId::Unknown && !is_number(t))
+                    refuse("'" + c.text + "' needs a numeric sort key");
+                s.preceding = static_cast<std::int64_t>(c.frame->width);
+                s.mode = DFTU_WINDOW_FRAME_RANGE;
+                ranged.push_back(std::move(s));
+            } else {
+                s.preceding = c.frame->rows - 1;
+                forward.push_back(std::move(s));
+            }
+        };
         std::vector<std::pair<const duql::PipelineWinCall*, std::string>>
             partition;
         const df::DataType i64 = df::scalar(df::TypeId::Int64);
         for (std::size_t i = 0; i < w.calls.size(); ++i) {
             const auto& c = w.calls[i];
             std::string in;
-            if (c.arg)
+            if (c.fn == duql::WinFn::COUNT_IF) {
+                in = "__duql_in_" + std::to_string(i);
+                with_column(
+                    in,
+                    df::expr_select(compile(c.arg, c.text, true),
+                                    df::expr_lit(std::int64_t{1}),
+                                    df::expr_lit_null(df::TypeId::Int64)),
+                    c.text);
+            } else if (c.arg) {
                 in = source({"", c.arg, c.text},
                             "__duql_in_" + std::to_string(i));
+            }
             const std::string tmp = "__duql_fill_" + std::to_string(i);
             switch (c.fn) {
                 case duql::WinFn::ROW_NUMBER:
@@ -2602,30 +2724,68 @@ class Applier {
                                            ? DFTU_WINDOW_LAG
                                            : DFTU_WINDOW_LEAD,
                                        in, c.column, type_of(in), c.offset});
+                    if (c.fallback) {
+                        const std::string edge =
+                            "__duql_edge_" + std::to_string(i);
+                        forward.push_back(
+                            {forward.back().func, pos, edge, i64, c.offset});
+                        edges.emplace_back(edge, &c);
+                    }
+                    break;
+                case duql::WinFn::RUNNING_MIN:
+                case duql::WinFn::RUNNING_MAX:
+                    forward.push_back({c.fn == duql::WinFn::RUNNING_MIN
+                                           ? DFTU_WINDOW_RUNNING_MIN
+                                           : DFTU_WINDOW_RUNNING_MAX,
+                                       in, c.column, type_of(in)});
+                    break;
+                case duql::WinFn::RUNNING_MEAN:
+                    sum_type(in, c.text);
+                    forward.push_back({DFTU_WINDOW_FRAME_MEAN, in, c.column,
+                                       df::scalar(df::TypeId::Float64), 1, 0});
+                    break;
+                case duql::WinFn::NTILE:
+                    forward.push_back(
+                        {DFTU_WINDOW_NTILE, "", c.column, i64, c.offset});
+                    break;
+                case duql::WinFn::NTH:
+                    forward.push_back({DFTU_WINDOW_NTH_VALUE, in, c.column,
+                                       type_of(in), c.offset});
+                    break;
+                case duql::WinFn::FILL_FORWARD:
+                    forward.push_back(
+                        {DFTU_WINDOW_FILL_FORWARD, in, c.column, type_of(in)});
+                    break;
+                case duql::WinFn::PERCENT_RANK:
+                case duql::WinFn::CUME_DIST:
+                    dist.push_back(&c);
                     break;
                 case duql::WinFn::RUNNING_SUM:
                     forward.push_back({DFTU_WINDOW_FRAME_SUM, in, c.column,
                                        sum_type(in, c.text), 0, 0});
                     break;
                 case duql::WinFn::COUNT:
-                    forward.push_back({DFTU_WINDOW_FRAME_COUNT,
-                                       in.empty() ? pos : in, c.column, i64});
+                    framed({DFTU_WINDOW_FRAME_COUNT, in.empty() ? pos : in,
+                            c.column, i64},
+                           c);
                     break;
                 case duql::WinFn::SUM:
-                    forward.push_back({DFTU_WINDOW_FRAME_SUM, in, c.column,
-                                       sum_type(in, c.text)});
+                    framed({DFTU_WINDOW_FRAME_SUM, in, c.column,
+                            sum_type(in, c.text)},
+                           c);
                     break;
                 case duql::WinFn::MEAN:
                     sum_type(in, c.text);
-                    forward.push_back({DFTU_WINDOW_FRAME_MEAN, in, c.column,
-                                       df::scalar(df::TypeId::Float64)});
+                    framed({DFTU_WINDOW_FRAME_MEAN, in, c.column,
+                            df::scalar(df::TypeId::Float64)},
+                           c);
                     break;
                 case duql::WinFn::MIN:
                 case duql::WinFn::MAX:
-                    forward.push_back({c.fn == duql::WinFn::MIN
-                                           ? DFTU_WINDOW_FRAME_MIN
-                                           : DFTU_WINDOW_FRAME_MAX,
-                                       in, c.column, type_of(in)});
+                    framed({c.fn == duql::WinFn::MIN ? DFTU_WINDOW_FRAME_MIN
+                                                     : DFTU_WINDOW_FRAME_MAX,
+                            in, c.column, type_of(in)},
+                           c);
                     break;
                 case duql::WinFn::LAST:
                     forward.push_back(
@@ -2643,9 +2803,46 @@ class Applier {
                 case duql::WinFn::DENSE_RANK:
                     ranks.push_back(&c);
                     break;
+                case duql::WinFn::COUNT_IF:
+                    framed({DFTU_WINDOW_FRAME_COUNT, in, c.column, i64}, c);
+                    break;
+                case duql::WinFn::COUNT_DISTINCT:
+                    framed(
+                        {DFTU_WINDOW_FRAME_COUNT_DISTINCT, in, c.column, i64},
+                        c);
+                    break;
+                case duql::WinFn::COLLECT:
+                    framed({DFTU_WINDOW_FRAME_COLLECT, in, c.column,
+                            df::list_of(type_of(in))},
+                           c);
+                    break;
+                case duql::WinFn::ARGMAX:
+                case duql::WinFn::ARGMIN: {
+                    WinSpec s{c.fn == duql::WinFn::ARGMAX
+                                  ? DFTU_WINDOW_FRAME_ARG_MAX
+                                  : DFTU_WINDOW_FRAME_ARG_MIN,
+                              in, c.column, type_of(in)};
+                    s.by = source({"", c.by, c.text},
+                                  "__duql_by_" + std::to_string(i));
+                    framed(std::move(s), c);
+                    break;
+                }
                 case duql::WinFn::VAR:
                 case duql::WinFn::STD:
                 case duql::WinFn::QUANTILE:
+                    if (c.frame) {
+                        sum_type(in, c.text);
+                        WinSpec s{
+                            c.fn == duql::WinFn::VAR ? DFTU_WINDOW_FRAME_VAR
+                            : c.fn == duql::WinFn::STD
+                                ? DFTU_WINDOW_FRAME_STD
+                                : DFTU_WINDOW_FRAME_QUANTILE,
+                            in, c.column, df::scalar(df::TypeId::Float64)};
+                        s.q = c.q;
+                        framed(std::move(s), c);
+                        break;
+                    }
+                    [[fallthrough]];
                 case duql::WinFn::HISTOGRAM:
                     sum_type(in, c.text);
                     partition.emplace_back(&c, in);
@@ -2657,7 +2854,9 @@ class Applier {
             forward.push_back({DFTU_WINDOW_FIRST_VALUE, pos, pid, i64});
         // Ranks: a row starts a run of peers when its sort keys differ from
         // the row before it in the partition.
-        if (!ranks.empty() && !sort_keys.empty()) {
+        const bool peers =
+            (!ranks.empty() || !dist.empty()) && !sort_keys.empty();
+        if (peers) {
             forward.push_back({DFTU_WINDOW_ROW_NUMBER, "", "__duql_rn", i64});
             for (std::size_t k = 0; k < sort_keys.size(); ++k)
                 forward.push_back({DFTU_WINDOW_LAG, sort_keys[k],
@@ -2665,7 +2864,14 @@ class Applier {
                                    type_of(sort_keys[k]), 1});
         }
         window_op(part, ord, forward);
-        if (!ranks.empty() && !sort_keys.empty()) {
+        window_op(part, sort_keys.empty() ? ord : sort_keys[0], ranged);
+        for (const auto& [edge, c] : edges)
+            with_column(
+                c->column,
+                df::expr_select(df::expr_is_null(col(edge)),
+                                compile(c->fallback, c->text), col(c->column)),
+                c->text);
+        if (peers) {
             df::Expr peer = df::expr_cmp(df::CmpOp::Eq, col("__duql_rn"),
                                          df::detail::expr_scalar_i(1));
             for (std::size_t k = 0; k < sort_keys.size(); ++k)
@@ -2687,15 +2893,27 @@ class Applier {
                                    : WinSpec{DFTU_WINDOW_FRAME_SUM,
                                              "__duql_peer", c->column, i64, 0,
                                              0});
+            if (!dist.empty())
+                last.push_back({DFTU_WINDOW_FRAME_SUM, "__duql_peer",
+                                "__duql_dr", i64, 0, 0});
         } else {
             for (const auto* c : ranks)
                 with_column(c->column, df::expr_lit(std::int64_t{1}), c->text);
+            if (!dist.empty())
+                with_column("__duql_dr", df::expr_lit(std::int64_t{1}),
+                            "peer group");
         }
         if (!reverse.empty()) {
             with_column("__duql_rev", df::expr_neg(col(ord)), "-" + ord);
             window_op(part, "__duql_rev", reverse);
         }
         window_op(part, ord, last);
+        for (const auto* c : dist)
+            distribution.push_back(
+                {c->fn == duql::WinFn::PERCENT_RANK ? DFTU_WINDOW_PERCENT_RANK
+                                                    : DFTU_WINDOW_CUME_DIST,
+                 "", c->column, df::scalar(df::TypeId::Float64)});
+        window_op(part, "__duql_dr", distribution);
         if (!partition.empty()) partition_aggs(partition, pid);
         lines.push_back("sort_by_multi " + pos);
         v_ = v_.sort_by_multi({pos}, std::vector<bool>{false});
@@ -2711,6 +2929,163 @@ class Applier {
         lines.push_back("window keys " + keys_text + "; sort " + sort_text +
                         "; " + items);
         keep(std::move(keep_names));
+    }
+
+    static dftu_scalar plugin_scalar(const duql::LiteralValue& v) {
+        dftu_scalar s{};
+        if (const auto* i = std::get_if<std::int64_t>(&v)) {
+            s.kind = DFTU_SCALAR_TAG_I64;
+            s.value.i = *i;
+        } else if (const auto* u = std::get_if<std::uint64_t>(&v)) {
+            s.kind = DFTU_SCALAR_TAG_U64;
+            s.value.u = *u;
+        } else if (const auto* d = std::get_if<double>(&v)) {
+            s.kind = DFTU_SCALAR_TAG_F64;
+            s.value.d = *d;
+        } else if (const auto* b = std::get_if<bool>(&v)) {
+            s.kind = DFTU_SCALAR_TAG_I64;
+            s.value.i = *b ? 1 : 0;
+        }
+        return s;
+    }
+
+    [[noreturn]] static void plugin_refusal(const std::string& what,
+                                            const dftu_op_desc* op,
+                                            const char* why) {
+        refuse(std::string(why) + " for '" + what + "'; it takes " +
+               dftu_op_signature(op->sig));
+    }
+
+    // `f` with the column `name` replaced by the op run over it.
+    static df::DataFrame run_column_op(df::DataFrame f, const std::string& name,
+                                       const dftu_op_desc* op,
+                                       const std::string& second, dftu_scalar a,
+                                       dftu_scalar b,
+                                       const std::optional<std::string>& str) {
+        dftu_dataframe* in = df::dataframe_handle_wrap(std::move(f));
+        dftu_dataframe* out =
+            dftu_dataframe_column_op(in, name.c_str(), op->name,
+                                     second.empty() ? nullptr : second.c_str(),
+                                     a, b, str ? str->c_str() : nullptr);
+        dftu_dataframe_free(in);
+        if (!out) plugin_refusal(op->name, op, "the arguments do not fit");
+        return df::dataframe_handle_take(out);
+    }
+
+    void stage(const duql::PipelinePlugin& p) {
+        leave_scan("plugin function");
+        const dftu_op_desc* op = dftu_op_find(p.op.c_str());
+        if (!op) refuse("plugin function '" + p.op + "' is not registered");
+        with_column(p.arg.name, compile(p.arg.term, p.arg.text), p.arg.text);
+        std::string second;
+        if (p.arg2) {
+            with_column(p.arg2->name, compile(p.arg2->term, p.arg2->text),
+                        p.arg2->text);
+            second = p.arg2->name;
+        }
+        std::size_t takes_scalars = 0, takes_series = 0, takes_str = 0;
+        for (std::uint32_t i = 1; i < DFTU_OP_MAX_ARGS; ++i) {
+            const dftu_op_tok tok = DFTU_OP_SIG_ARG(op->sig, i);
+            if (tok == DFTU_TOK_NONE) break;
+            if (tok == DFTU_TOK_SERIES)
+                ++takes_series;
+            else if (tok == DFTU_TOK_STR || tok == DFTU_TOK_CHAR)
+                ++takes_str;
+            else
+                ++takes_scalars;
+        }
+        if (p.scalars.size() > takes_scalars ||
+            p.arg2.has_value() > takes_series || p.str.has_value() > takes_str)
+            plugin_refusal(p.op, op, "the arguments do not fit");
+        const dftu_scalar a =
+            p.scalars.size() > 0 ? plugin_scalar(p.scalars[0]) : dftu_scalar{};
+        const dftu_scalar b =
+            p.scalars.size() > 1 ? plugin_scalar(p.scalars[1]) : dftu_scalar{};
+        const std::size_t at = *index(p.arg.name);
+        df::DataType type = df::scalar(df::TypeId::Unknown);
+        bool known = cols_[at].type.id != df::TypeId::Unknown;
+        if (p.arg2)
+            known =
+                known && cols_[*index(second)].type.id != df::TypeId::Unknown;
+        if (known) {
+            df::DataFrame probe;
+            probe.names.push_back(p.arg.name);
+            probe.columns.push_back(df::Series::nulls(cols_[at].type.id, 0));
+            if (p.arg2) {
+                probe.names.push_back(second);
+                probe.columns.push_back(
+                    df::Series::nulls(cols_[*index(second)].type.id, 0));
+            }
+            const auto out = run_column_op(std::move(probe), p.arg.name, op,
+                                           second, a, b, p.str);
+            type = df::scalar(out.columns[0].type());
+        }
+        std::vector<duql::VectorColumn> next = cols_;
+        next[at].type = type;
+        map_rows(
+            [name = p.arg.name, op, second, a, b,
+             str = p.str](df::DataFrame f) {
+                return run_column_op(std::move(f), name, op, second, a, b, str);
+            },
+            std::move(next), "plugin " + p.op + " over " + p.arg.name);
+    }
+
+    void stage(const duql::PipelineCall& c) {
+        leave_scan("call");
+        const dftu_op_desc* op = dftu_op_find(c.op.c_str());
+        if (!op) refuse("'call " + c.op + "' is not registered");
+        const std::string what = "call " + c.op;
+        df::OpArgs args;
+        std::size_t used = 0;
+        for (std::uint32_t i = 1; i < DFTU_OP_MAX_ARGS; ++i) {
+            const dftu_op_tok tok = DFTU_OP_SIG_ARG(op->sig, i);
+            if (tok == DFTU_TOK_NONE) break;
+            if (used >= c.args.size())
+                plugin_refusal(what, op, "too few arguments");
+            const duql::LiteralValue& v = c.args[used++];
+            const auto* s = std::get_if<std::string>(&v);
+            const auto* d = std::get_if<double>(&v);
+            std::int64_t n = 0;
+            if (const auto* x = std::get_if<std::int64_t>(&v))
+                n = *x;
+            else if (const auto* u = std::get_if<std::uint64_t>(&v))
+                n = static_cast<std::int64_t>(*u);
+            else if (const auto* b = std::get_if<bool>(&v))
+                n = *b ? 1 : 0;
+            const bool integer = !s && !d;
+            switch (tok) {
+                case DFTU_TOK_I64:
+                    if (!integer)
+                        plugin_refusal(what, op, "an integer is needed");
+                    args.i64(i, n);
+                    break;
+                case DFTU_TOK_I32:
+                case DFTU_TOK_BOOL:
+                    if (!integer)
+                        plugin_refusal(what, op, "an integer is needed");
+                    args.i32(i, static_cast<std::int32_t>(n));
+                    break;
+                case DFTU_TOK_F64:
+                    if (s) plugin_refusal(what, op, "a number is needed");
+                    args.f64(i, d ? *d : static_cast<double>(n));
+                    break;
+                case DFTU_TOK_STR:
+                    if (!s) plugin_refusal(what, op, "a string is needed");
+                    args.str(i, *s);
+                    break;
+                case DFTU_TOK_SCALAR:
+                    if (s) plugin_refusal(what, op, "a number is needed");
+                    args.scalar(i, plugin_scalar(v));
+                    break;
+                default:
+                    plugin_refusal(what, op, "an argument of this kind");
+            }
+        }
+        if (used != c.args.size())
+            plugin_refusal(what, op, "too many arguments");
+        lines.push_back("frame_op " + c.op);
+        v_ = v_.with_lazy(v_.lazy().frame_op(c.op, args));
+        cols_.clear();
     }
 
     void stage(const duql::PipelineSession& ss) {
@@ -2955,6 +3330,15 @@ class Applier {
             },
             "spread __duql_pivot into " + joined(aggs), std::move(schema));
         cols_ = p.fixed ? std::move(next) : std::vector<duql::VectorColumn>{};
+        duql::PipelineRename labels;
+        for (std::size_t i = 0; i < p.labels.size() && i < fixed.size(); ++i) {
+            if (p.labels[i].empty()) continue;
+            for (const auto& a : aggs)
+                labels.pairs.emplace_back(
+                    aggs.size() == 1 ? p.labels[i] : a + "_" + p.labels[i],
+                    a + "." + fixed[i]);
+        }
+        if (!labels.pairs.empty()) stage(labels);
     }
 
     // Rows sorted by (keys, pivot value) as one row per key tuple, with a
@@ -3195,6 +3579,18 @@ class Applier {
             overlap_lookup(l, *o, left, right, keys_text, side_index);
             return;
         }
+        if (l.kind == duql::syntax::LookupKind::ANTI) {
+            bool memory = false;
+            df::LazyFrame side = side_plan(l.side, memory);
+            lines.push_back("lookup " + l.name + " on " + keys_text + " anti" +
+                            (memory ? " (side from memory)"
+                                    : " (side joined, sharing the scan)"));
+            v_ = v_.with_lazy(v_.lazy().join(std::move(side), left, right,
+                                             df::JoinHow::Anti));
+            if (names() != before) keep(before);
+            return;
+        }
+        const bool inner = l.kind == duql::syntax::LookupKind::INNER;
         const auto* into = std::get_if<duql::PipelineNest>(&l.mode);
         const bool nest = into != nullptr;
         std::vector<duql::VectorColumn> next = cols_;
@@ -3244,8 +3640,13 @@ class Applier {
                     n = l.name + "." + n;
             side = side.rename(std::move(renamed));
             for (auto& k : right_on) k = l.name + "." + k;
+            if (inner) {
+                side = side.with_column(HIT_COLUMN, df::expr_lit_bool(true));
+                next.push_back({HIT_COLUMN, df::scalar(df::TypeId::Bool)});
+            }
         }
         lines.push_back("lookup " + l.name + " on " + keys_text +
+                        (inner ? " inner" : "") +
                         (nest ? " into " + into->name : "") +
                         (memory ? " (side from memory)"
                                 : " (side joined, sharing the scan)"));
@@ -3254,6 +3655,14 @@ class Applier {
                            nest ? df::JoinHow::Nest : df::JoinHow::Lookup,
                            nest ? into->name : std::string()));
         cols_ = std::move(next);
+        if (inner) {
+            if (nest)
+                v_ = v_.with_lazy(v_.lazy().filter(
+                    df::expr_list_len(col(into->name)) > std::int64_t{0}));
+            else
+                v_ = v_.with_lazy(v_.lazy().filter(
+                    df::expr_not(df::expr_is_null(col(HIT_COLUMN)))));
+        }
         std::vector<std::string> keep_names = before;
         for (const auto& n : added) keep_names.push_back(n);
         if (names() != keep_names) keep(std::move(keep_names));
@@ -3415,7 +3824,7 @@ class Applier {
         args.str(2, time.c_str())
             .strlist(3, by.data(), static_cast<std::int32_t>(by.size()))
             .i32(4, static_cast<std::int32_t>(a.direction))
-            .i64(5, a.tolerance.value_or(-1));
+            .f64(5, a.tolerance.value_or(-1));
         static constexpr const char* DIRECTIONS[] = {"backward", "forward",
                                                      "nearest"};
         static_assert(static_cast<int>(duql::syntax::AsofDirection::FORWARD) ==
@@ -3425,7 +3834,7 @@ class Applier {
         lines.push_back("lookup " + l.name + " on " + keys_text + " asof " +
                         a.time.text + " " +
                         DIRECTIONS[static_cast<std::size_t>(a.direction)] +
-                        (a.tolerance ? " within " + std::to_string(*a.tolerance)
+                        (a.tolerance ? " within " + number_text(*a.tolerance)
                                      : std::string()) +
                         " (op dftu.frame.asof)");
         v_ = v_.with_lazy(v_.lazy().frame_op("dftu.frame.asof", args,
@@ -3671,6 +4080,7 @@ class Applier {
             case duql::AggFn::MERGE:
                 return df::TypeId::String;
             case duql::AggFn::COLLECT:
+            case duql::AggFn::PLUGIN:
                 return std::nullopt;
             case duql::AggFn::SUM:
                 if (!in) return std::nullopt;
@@ -3723,16 +4133,24 @@ class Applier {
         return c;
     }
 
-    std::string trace_refusal(const duql::PipelineGroup& g) {
+    std::string trace_refusal(
+        const duql::PipelineGroup& g,
+        const std::optional<duql::PipelineBucket>& pending) {
         if (!scan_)
             return "'" + blocker_ +
                    "' comes before it; only where, time_range, bucket and "
                    "a field select may";
-        if (bucket_) {
-            const double us = bucket_->width * us_per_time_unit();
+        if (pending) {
+            if (pending->every)
+                return "a hopping bucket assigns a record to several windows";
+            const double us = pending->width * us_per_time_unit();
             if (std::trunc(us) != us)
                 return "its bucket width is not a whole number of "
                        "microseconds";
+            const double origin_us = pending->origin * us_per_time_unit();
+            if (std::trunc(origin_us) != origin_us || origin_us < 0)
+                return "its bucket origin is not a whole, non-negative number "
+                       "of microseconds";
         }
         // A select at the scan fixes the columns: a field it left out is no
         // column, whatever the files hold.
@@ -3786,19 +4204,26 @@ class Applier {
             if (a.fn == duql::AggFn::SUM) {
                 std::string valid =
                     "__duql_valid_" + std::to_string(sums.size());
-                g.aggs.push_back({valid, duql::AggFn::MEAN, a.arg, 0,
-                                  "mean(" + duql::term_text(*a.arg) + ")",
-                                  nullptr, false});
+                duql::PipelineAgg hidden;
+                hidden.name = valid;
+                hidden.fn = duql::AggFn::MEAN;
+                hidden.arg = a.arg;
+                hidden.text = "mean(" + duql::term_text(*a.arg) + ")";
+                g.aggs.push_back(std::move(hidden));
                 sums.emplace_back(a.name, std::move(valid));
             }
-        const std::string why = trace_refusal(g);
+        const std::string why = trace_refusal(g, bucket);
         if (!why.empty()) {
             for (const auto& a : g.aggs)
-                if (duql::is_occupancy(a.fn))
+                if (duql::is_occupancy(a.fn)) {
+                    if (bucket && bucket->every)
+                        refuse("'" + agg_name(a.fn) +
+                               "' does not run with a hopping bucket");
                     refuse("'" + agg_name(a.fn) +
                            "' needs the trace aggregation, which this group "
                            "cannot take: " +
                            why);
+                }
             leave_scan("group");
         }
         std::vector<std::optional<df::TypeId>> key_types;
@@ -3812,7 +4237,7 @@ class Applier {
             agg_types.push_back(agg_type(a, term_type(a.arg, a.text)));
 
         std::vector<std::string> keys;
-        if (bucket) keys.push_back("bucket");
+        if (bucket) keys.push_back(bucket->name);
         for (const auto& k : g.keys) keys.push_back(k.name);
         std::vector<std::string> out = keys;
         for (const auto& a : group.aggs) out.push_back(a.name);
@@ -3896,8 +4321,16 @@ class Applier {
         if (bucket) {
             const auto width = static_cast<std::uint64_t>(
                 std::llround(bucket->width * us_per_time_unit()));
-            lines.push_back("time_bucket " + std::to_string(width) + " us");
-            v = v.time_bucket(width);
+            const auto origin = static_cast<std::uint64_t>(
+                std::llround(bucket->origin * us_per_time_unit()));
+            if (origin == 0) {
+                lines.push_back("time_bucket " + std::to_string(width) + " us");
+                v = v.time_bucket(width);
+            } else {
+                lines.push_back("time_bucket " + std::to_string(width) +
+                                " us at " + std::to_string(origin) + " us");
+                v = v.time_bucket(width, origin);
+            }
             keep_cols.push_back("time_bucket");
         }
         std::vector<GroupKey> keys;
@@ -3954,12 +4387,147 @@ class Applier {
         }
     }
 
+    // The doubles that fill the reducer's operands after its column, or a
+    // refusal when they do not fit its signature.
+    static std::vector<double> plugin_params(const duql::PipelineAgg& a) {
+        const dftu_op_desc* op = dftu_op_find(a.plugin.c_str());
+        if (!op) refuse("plugin function '" + a.plugin + "' is not registered");
+        if (!a.arg) plugin_refusal(a.plugin, op, "the column is missing");
+        std::size_t takes = 0;
+        for (std::uint32_t i = 1; i < DFTU_OP_MAX_ARGS; ++i)
+            if (DFTU_OP_SIG_ARG(op->sig, i) != DFTU_TOK_NONE) ++takes;
+        if (a.params.size() != takes)
+            plugin_refusal(a.plugin, op, "the arguments do not fit");
+        std::vector<double> out;
+        for (std::size_t i = 0; i < takes; ++i) {
+            const dftu_op_tok tok =
+                DFTU_OP_SIG_ARG(op->sig, static_cast<std::uint32_t>(i + 1));
+            const dftu_scalar v = plugin_scalar(a.params[i]);
+            const bool whole = v.kind != DFTU_SCALAR_TAG_F64;
+            const bool real = tok == DFTU_TOK_F64 || tok == DFTU_TOK_SCALAR;
+            const bool count = tok == DFTU_TOK_I32 || tok == DFTU_TOK_REDUCE ||
+                               tok == DFTU_TOK_BOOL;
+            if (v.kind == DFTU_SCALAR_TAG_STR || !(real || (count && whole)))
+                plugin_refusal(a.plugin, op, "the arguments do not fit");
+            out.push_back(v.kind == DFTU_SCALAR_TAG_F64 ? v.value.d
+                          : v.kind == DFTU_SCALAR_TAG_U64
+                              ? static_cast<double>(v.value.u)
+                              : static_cast<double>(v.value.i));
+        }
+        return out;
+    }
+
+    static df::DataType plugin_type(const std::string& name) {
+        switch (DFTU_OP_SIG_RET(dftu_op_find(name.c_str())->sig)) {
+            case DFTU_TOK_I64:
+                return df::scalar(df::TypeId::Int64);
+            case DFTU_TOK_BOOL:
+                return df::scalar(df::TypeId::Bool);
+            default:
+                return df::scalar(df::TypeId::Float64);
+        }
+    }
+
+    static std::int64_t floor_div(std::int64_t a, std::int64_t b) {
+        std::int64_t q = a / b;
+        if ((a % b != 0) && ((a < 0) != (b < 0))) --q;
+        return q;
+    }
+
+    // Copies each row into every window `[s, s + W)` that holds its time,
+    // with `s = T + k * E`, and writes `s` to `__duql_bucket`. A null time
+    // drops the row.
+    void hop_rows(const duql::PipelineBucket& b) {
+        const std::string time = "__duql_time";
+        with_column(time, compile(column_item(roles_.time).term, roles_.time),
+                    roles_.time);
+        const std::size_t at = *index(time);
+        const df::TypeId tid = cols_[at].type.id;
+        const auto whole = [](double x) { return std::trunc(x) == x; };
+        const double step = *b.every;
+        const bool exact =
+            (tid == df::TypeId::Int64 || tid == df::TypeId::Uint64) &&
+            whole(b.width) && whole(step) && whole(b.origin);
+        const df::TypeId out_type =
+            exact ? df::TypeId::Int64 : df::TypeId::Float64;
+        const double width = b.width;
+        const double origin = b.origin;
+        std::vector<duql::VectorColumn> next = cols_;
+        next.push_back({"__duql_bucket", df::scalar(out_type)});
+        const auto windows =
+            static_cast<std::size_t>(std::max(1.0, std::ceil(width / step)));
+        map_rows(
+            [at, exact, width, step, origin, windows](df::DataFrame f) {
+                const std::int64_t n = f.num_rows();
+                std::vector<std::int64_t> parent;
+                parent.reserve(static_cast<std::size_t>(n) * windows);
+                std::vector<std::int64_t> starts_i;
+                std::vector<double> starts_f;
+                if (exact) {
+                    const df::Series t =
+                        f.columns[at].cast(df::TypeId::Int64).materialize();
+                    const std::int64_t* v = t.data<std::int64_t>();
+                    const auto w = static_cast<std::int64_t>(width);
+                    const auto e = static_cast<std::int64_t>(step);
+                    const auto o = static_cast<std::int64_t>(origin);
+                    starts_i.reserve(parent.capacity());
+                    for (std::int64_t r = 0; r < n; ++r) {
+                        if (t.is_null(r)) continue;
+                        const std::int64_t u = v[r] - o;
+                        const std::int64_t hi = floor_div(u, e);
+                        for (std::int64_t k = floor_div(u - w, e) + 1; k <= hi;
+                             ++k) {
+                            parent.push_back(r);
+                            starts_i.push_back(o + k * e);
+                        }
+                    }
+                } else {
+                    const df::Series t =
+                        f.columns[at].cast(df::TypeId::Float64).materialize();
+                    const double* v = t.data<double>();
+                    starts_f.reserve(parent.capacity());
+                    for (std::int64_t r = 0; r < n; ++r) {
+                        if (t.is_null(r)) continue;
+                        const double u = v[r] - origin;
+                        const auto hi =
+                            static_cast<std::int64_t>(std::floor(u / step));
+                        for (auto k = static_cast<std::int64_t>(
+                                          std::floor((u - width) / step)) +
+                                      1;
+                             k <= hi; ++k) {
+                            parent.push_back(r);
+                            starts_f.push_back(origin +
+                                               static_cast<double>(k) * step);
+                        }
+                    }
+                }
+                const auto m = static_cast<std::int64_t>(parent.size());
+                df::DataFrame out;
+                for (std::size_t j = 0; j < f.columns.size(); ++j) {
+                    out.names.push_back(f.names[j]);
+                    out.columns.push_back(f.columns[j].take(parent));
+                }
+                out.names.push_back("__duql_bucket");
+                out.columns.push_back(
+                    exact ? df::Series::flat_i64(starts_i.data(), m)
+                          : df::Series::flat_f64(starts_f.data(), m));
+                return out;
+            },
+            std::move(next),
+            "hop buckets " + number_text(width) + " every " +
+                number_text(step) +
+                (origin != 0 ? " at " + number_text(origin) : ""));
+    }
+
     void frame_group(const duql::PipelineGroup& g,
                      const std::optional<duql::PipelineBucket>& bucket) {
         std::vector<std::string> keys;
         if (bucket) {
-            with_column("__duql_bucket", compile(bucket->key, bucket->text),
-                        bucket->text);
+            if (bucket->every)
+                hop_rows(*bucket);
+            else
+                with_column("__duql_bucket", compile(bucket->key, bucket->text),
+                            bucket->text);
             keys.push_back("__duql_bucket");
         }
         for (std::size_t k = 0; k < g.keys.size(); ++k)
@@ -4059,6 +4627,11 @@ class Applier {
                 case duql::AggFn::MERGE:
                     fold[i].op = duql::FoldOp::MERGE;
                     break;
+                case duql::AggFn::PLUGIN:
+                    fold[i].op = duql::FoldOp::PLUGIN;
+                    fold[i].plugin = a.plugin;
+                    fold[i].params = plugin_params(a);
+                    break;
             }
             folded = folded || fold[i].op != duql::FoldOp::ENGINE;
             fold[i].engine = df::to_agg_op(spec.op);
@@ -4118,6 +4691,9 @@ class Applier {
                 case duql::FoldOp::ARGMIN:
                     f.type = t;
                     break;
+                case duql::FoldOp::PLUGIN:
+                    f.type = plugin_type(f.plugin);
+                    break;
                 case duql::FoldOp::SKETCH:
                 case duql::FoldOp::MERGE:
                     f.type = df::scalar(df::TypeId::String);
@@ -4171,17 +4747,24 @@ class Applier {
     }
 
     // `bucket ... fill`: a row for every bucket between the first and the
-    // last, for each group.
+    // last, or over the `from .. to` range, for each group. `forward` and
+    // `linear` then fill the nulls of the added rows from the group's real
+    // rows.
     void finish_fill(const duql::PipelineGroup& g,
                      const duql::PipelineBucket& b) {
         std::vector<std::string> counts;
         for (const auto& a : g.aggs)
             if (is_count(a.fn)) counts.push_back(a.name);
         const std::size_t n_keys = g.keys.size();
-        const double width = b.width;
+        const double width = b.every.value_or(b.width);
+        const double origin = b.origin;
         const std::uint64_t limit = fill_max_rows();
+        const duql::syntax::FillMode mode = b.fill_mode;
+        const std::optional<double> range_lo = b.low;
+        const std::optional<double> range_hi = b.high;
         finish(
-            [counts, n_keys, width, limit](df::DataFrame f) {
+            [counts, n_keys, width, origin, limit, mode, range_lo,
+             range_hi](df::DataFrame f) {
                 const std::int64_t n = f.num_rows();
                 if (n == 0) return f;
                 const df::Series bucket =
@@ -4194,6 +4777,12 @@ class Applier {
                     lo = std::min(lo, at[r]);
                     hi = std::max(hi, at[r]);
                 }
+                if (range_lo) {
+                    lo = origin +
+                         std::floor((*range_lo - origin) / width) * width;
+                    hi = origin +
+                         std::floor((*range_hi - origin) / width) * width;
+                }
                 if (lo > hi) return f;
                 const auto steps = static_cast<std::uint64_t>(
                                        std::llround((hi - lo) / width)) +
@@ -4201,12 +4790,17 @@ class Applier {
                 std::map<std::string, std::int64_t> groups;
                 std::vector<std::int64_t> reps;
                 std::map<std::pair<std::string, std::int64_t>, bool> present;
-                std::vector<df::Series> text;
-                for (std::size_t c = 1; c <= n_keys; ++c)
-                    text.push_back(f.columns[c].type() == df::TypeId::String
-                                       ? f.columns[c].share()
-                                       : f.columns[c].cast(df::TypeId::String));
-                auto key_of = [&](std::int64_t r) {
+                const auto texts = [n_keys](const df::DataFrame& fr) {
+                    std::vector<df::Series> text;
+                    for (std::size_t c = 1; c <= n_keys; ++c)
+                        text.push_back(
+                            fr.columns[c].type() == df::TypeId::String
+                                ? fr.columns[c].share()
+                                : fr.columns[c].cast(df::TypeId::String));
+                    return text;
+                };
+                const auto key_in = [](const std::vector<df::Series>& text,
+                                       std::int64_t r) {
                     std::string k;
                     for (const df::Series& s : text) {
                         if (s.is_null(r)) {
@@ -4219,6 +4813,8 @@ class Applier {
                     }
                     return k;
                 };
+                const std::vector<df::Series> text = texts(f);
+                auto key_of = [&](std::int64_t r) { return key_in(text, r); };
                 for (std::int64_t r = 0; r < n; ++r) {
                     std::string k = key_of(r);
                     if (groups
@@ -4258,12 +4854,110 @@ class Applier {
                     add.columns.push_back(
                         df::Series::flat_i64(zeros.data(), m));
                 }
+                const bool carry = mode != duql::syntax::FillMode::ZERO;
+                df::DataFrame flagged;
+                const df::DataFrame* base = &f;
+                if (carry) {
+                    const std::vector<std::int64_t> none(
+                        static_cast<std::size_t>(n), 0);
+                    const std::vector<std::int64_t> ones(
+                        static_cast<std::size_t>(m), 1);
+                    flagged = f.with_column(
+                        "__duql_added", df::Series::flat_i64(none.data(), n));
+                    add.names.push_back("__duql_added");
+                    add.columns.push_back(df::Series::flat_i64(ones.data(), m));
+                }
                 df::DataFrame out =
-                    df::concat({&f, &add}, df::ConcatHow::Diagonal);
-                return out.select(f.names).sort_by_multi(
+                    df::concat({base, &add}, df::ConcatHow::Diagonal);
+                std::vector<std::string> keep = f.names;
+                if (carry) keep.push_back("__duql_added");
+                out = out.select(keep).sort_by_multi(
                     key_names, std::vector<bool>(key_names.size(), false));
+                if (!carry) return out;
+                const std::int64_t total = out.num_rows();
+                const df::Series added_col = out.columns.back().materialize();
+                const std::int64_t* added = added_col.data<std::int64_t>();
+                const df::Series pos = out.columns[0].cast(df::TypeId::Float64);
+                const double* position = pos.data<double>();
+                const std::vector<df::Series> sorted_text = texts(out);
+                std::map<std::string, std::vector<std::int64_t>> members;
+                for (std::int64_t r = 0; r < total; ++r)
+                    if (!pos.is_null(r))
+                        members[key_in(sorted_text, r)].push_back(r);
+                const bool linear = mode == duql::syntax::FillMode::LINEAR;
+                for (std::size_t c = 1 + n_keys; c < f.names.size(); ++c) {
+                    if (std::find(counts.begin(), counts.end(), f.names[c]) !=
+                        counts.end())
+                        continue;
+                    const df::Series& col = out.columns[c];
+                    const bool numeric =
+                        df::is_numeric_dispatchable(col.type());
+                    if (linear && !numeric) continue;
+                    if (!linear) {
+                        std::vector<std::int64_t> pick(
+                            static_cast<std::size_t>(total));
+                        for (std::int64_t r = 0; r < total; ++r) pick[r] = r;
+                        for (const auto& [k, rows] : members) {
+                            std::int64_t last = -1;
+                            for (const std::int64_t r : rows) {
+                                if (added[r] == 0) {
+                                    if (!col.is_null(r)) last = r;
+                                } else if (last >= 0) {
+                                    pick[r] = last;
+                                }
+                            }
+                        }
+                        out.columns[c] = col.take(pick);
+                        continue;
+                    }
+                    const df::Series num = col.cast(df::TypeId::Float64);
+                    const double* v = num.data<double>();
+                    std::vector<double> value(v, v + total);
+                    std::vector<std::uint8_t> valid(
+                        static_cast<std::size_t>((total + 7) / 8), 0);
+                    for (std::int64_t r = 0; r < total; ++r)
+                        if (!col.is_null(r))
+                            valid[static_cast<std::size_t>(r / 8)] |=
+                                static_cast<std::uint8_t>(1U << (r % 8));
+                    for (const auto& [k, rows] : members) {
+                        std::vector<std::int64_t> before(rows.size(), -1);
+                        std::int64_t last = -1;
+                        for (std::size_t i = 0; i < rows.size(); ++i) {
+                            before[i] = last;
+                            const std::int64_t r = rows[i];
+                            if (added[r] == 0 && !col.is_null(r)) last = r;
+                        }
+                        last = -1;
+                        for (std::size_t i = rows.size(); i-- > 0;) {
+                            const std::int64_t r = rows[i];
+                            if (added[r] == 0) {
+                                if (!col.is_null(r)) last = r;
+                            } else if (last >= 0 && before[i] >= 0) {
+                                const std::int64_t p = before[i];
+                                const double t = (position[r] - position[p]) /
+                                                 (position[last] - position[p]);
+                                value[static_cast<std::size_t>(r)] =
+                                    v[p] + (v[last] - v[p]) * t;
+                                valid[static_cast<std::size_t>(r / 8)] |=
+                                    static_cast<std::uint8_t>(1U << (r % 8));
+                            }
+                        }
+                    }
+                    out.columns[c] =
+                        df::Series::flat(df::TypeId::Float64, value.data(),
+                                         total, valid.data())
+                            .cast(col.type());
+                }
+                return out.select(f.names);
             },
-            "fill buckets " + number_text(width));
+            "fill buckets " + number_text(width) +
+                (origin != 0 ? " at " + number_text(origin) : "") +
+                (mode == duql::syntax::FillMode::FORWARD  ? " forward"
+                 : mode == duql::syntax::FillMode::LINEAR ? " linear"
+                                                          : "") +
+                (b.low ? " from " + number_text(*b.low) + " to " +
+                             number_text(*b.high)
+                       : ""));
     }
 };
 
@@ -4334,6 +5028,7 @@ Built build(const Ctx& ctx, const duql::Pipeline& p, bool table,
             out.push_back(into->name);
             return out;
         }
+        if (l.kind == duql::syntax::LookupKind::ANTI) return out;
         for (const auto& c : ctx.sides->columns[l.side]) out.push_back(c.name);
         return out;
     };
@@ -4385,7 +5080,9 @@ std::pair<View, std::vector<std::string>> View::duql_plan(
     const ix::RecordSchema& schema = detail::plan_record_schema(*plan_);
     Ctx ctx;
     ctx.roles = ix::duql_roles(schema);
-    auto p = duql::compile_program(text, params, &ctx.roles, schema.source);
+    const duql::PluginCatalog plugins = registry_plugins();
+    auto p = duql::compile_program(text, params, &ctx.roles, schema.source,
+                                   &plugins);
     if (!p) refuse(p.error().format());
     reject_resolved(*p);
     ctx.sides = std::make_shared<Sides>(std::move(*p));

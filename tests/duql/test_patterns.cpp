@@ -1,4 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/parser.h>
@@ -245,4 +246,198 @@ TEST_SUITE("duql patterns") {
         CHECK(nl.any());
         CHECK_FALSE(col.str_like("a\\b").handle());
     }
+}
+
+TEST_CASE("a catastrophic pattern retries on Vectorscan at any length") {
+    auto p = compile_regex("^(a|aa)+$", false);
+    REQUIRE(p);
+    const std::string no = std::string(10000, 'a') + "!";
+    const std::string yes(10000, 'a');
+#ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
+    CHECK(match(**p, no) == MatchResult::NO);
+    CHECK(match(**p, std::string(60, 'a') + "!") == MatchResult::NO);
+#else
+    CHECK(match(**p, no) == MatchResult::LIMIT);
+    CHECK(match(**p, std::string(60, 'a') + "!") == MatchResult::LIMIT);
+#endif
+    CHECK(match(**p, yes) == MatchResult::YES);
+}
+
+#ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
+#include <hs.h>
+
+TEST_CASE("the engine path gives exact results") {
+    namespace df = dftracer::utils::dataframe;
+    auto m = [](const char* re, bool icase, std::string_view s,
+                bool whole = false) {
+        auto p = compile_regex(re, icase, whole);
+        REQUIRE(p);
+        return match(**p, s);
+    };
+    const std::string hard = std::string(10000, 'a') + "!";
+#ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
+    CHECK(m("^(a|aa)+$", false, hard) == MatchResult::NO);
+    CHECK(m("^(a|aa)+$", true, hard) == MatchResult::NO);
+#endif
+    CHECK(m("^(a|aa)+$", false, std::string(10000, 'a')) == MatchResult::YES);
+    CHECK(m("^(a|aa)+$", true, "AAA") == MatchResult::YES);
+    CHECK(m("b+", true, "aBBc") == MatchResult::YES);
+    CHECK(m("b", false, "aBBc") == MatchResult::NO);
+    CHECK(m("b", false, "abc", true) == MatchResult::NO);
+    CHECK(m("a|b", false, "b", true) == MatchResult::YES);
+    CHECK(m("a|b", false, "ab", true) == MatchResult::NO);
+    CHECK(m("a*", false, "xyz") == MatchResult::YES);
+    CHECK(m("", false, "") == MatchResult::YES);
+    CHECK(m("a.b", false, "a\nb") == MatchResult::NO);
+    CHECK(m("(?s)a.b", false, "a\nb") == MatchResult::YES);
+    CHECK(m("a$", false, "a\n") == MatchResult::YES);
+    CHECK(m("a$", false, "a\nb") == MatchResult::NO);
+    CHECK(m("(?m)a$", false, "a\nb") == MatchResult::YES);
+    CHECK(m("(?m)^b", false, "a\nb") == MatchResult::YES);
+    CHECK(m("^b", false, "a\nb") == MatchResult::NO);
+    CHECK(m("\\bfoo\\b", false, "a foo b") == MatchResult::YES);
+    CHECK(m("\\bfoo\\b", false, "afoo") == MatchResult::NO);
+
+    CHECK(m("caf\xc3\xa9", false, "un caf\xc3\xa9 noir") == MatchResult::YES);
+    CHECK(m("^.$", false, "\xc3\xa9") == MatchResult::YES);
+    CHECK(m("\xc3\xa9", true, "\xc3\x89") == MatchResult::YES);
+#ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
+    CHECK(m("^(a|aa)+$", false, hard + "\xc3\xa9") == MatchResult::NO);
+#else
+    CHECK(m("^(a|aa)+$", false, hard + "\xc3\xa9") == MatchResult::LIMIT);
+#endif
+    CHECK(m("^(a|aa)+$", false, hard + "\xc0\xaf") == MatchResult::LIMIT);
+
+    CHECK(m("^a\\Xc$", false, "abc") == MatchResult::YES);
+    CHECK(m("^a\\Xc$", false, "ac") == MatchResult::NO);
+    CHECK(m("a\\Rb", false, "a\r\nb") == MatchResult::YES);
+
+    const df::Series col =
+        df::Series::strings(std::vector<std::string_view>{hard, "aa"});
+    const df::Series r = col.str_search("^(a|aa)+$");
+    REQUIRE(r.handle());
+#ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
+    CHECK_FALSE(r.is_null(0));
+#endif
+    CHECK_FALSE(r.is_null(1));
+}
+
+TEST_CASE("vectorscan links and scans") {
+    hs_database_t* db = nullptr;
+    hs_compile_error_t* err = nullptr;
+    REQUIRE(hs_compile("a.c", HS_FLAG_SINGLEMATCH, HS_MODE_BLOCK, nullptr, &db,
+                       &err) == HS_SUCCESS);
+    hs_scratch_t* scratch = nullptr;
+    REQUIRE(hs_alloc_scratch(db, &scratch) == HS_SUCCESS);
+    auto count = [&](const char* s) {
+        int hits = 0;
+        hs_scan(
+            db, s, static_cast<unsigned>(std::strlen(s)), 0, scratch,
+            [](unsigned, unsigned long long, unsigned long long, unsigned,
+               void* ctx) {
+                ++*static_cast<int*>(ctx);
+                return 0;
+            },
+            &hits);
+        return hits;
+    };
+    CHECK(count("xxabcxx") == 1);
+    CHECK(count("xxabxx") == 0);
+    hs_free_scratch(scratch);
+    hs_free_database(db);
+}
+#endif
+
+namespace {
+
+std::string replace_with(const char* re, const char* to, std::string_view s,
+                         MatchResult* res = nullptr) {
+    auto p = compile_regex(re, false);
+    REQUIRE(p.has_value());
+    auto sub = compile_substitution(**p, to);
+    REQUIRE_MESSAGE(sub.has_value(), (sub ? "" : sub.error().message));
+    std::string out;
+    const MatchResult r = regex_replace(**p, *sub, s, out);
+    if (res) *res = r;
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE("capture_names lists named groups in group order") {
+    auto p = compile_regex(R"re((a)(?<second>b)(c)(?<fourth>d)(?P<fifth>e))re",
+                           false);
+    REQUIRE(p.has_value());
+    const auto names = capture_names(**p);
+    REQUIRE(names.size() == 3);
+    CHECK(names[0] == std::make_pair(std::size_t{2}, std::string("second")));
+    CHECK(names[1] == std::make_pair(std::size_t{4}, std::string("fourth")));
+    CHECK(names[2] == std::make_pair(std::size_t{5}, std::string("fifth")));
+    auto none = compile_regex("(a)b", false);
+    REQUIRE(none.has_value());
+    CHECK(capture_names(**none).empty());
+    auto lit = compile_contains("x", false);
+    REQUIRE(lit.has_value());
+    CHECK(capture_names(**lit).empty());
+}
+
+TEST_CASE("regex_replace substitution forms") {
+    CHECK(replace_with(R"re((?<op>[a-z]+)64_(\d+))re", "${op}#$2",
+                       "open64_17") == "open#17");
+    CHECK(replace_with("(a)(b)", "$2$1", "ab") == "ba");
+    CHECK(replace_with("(a)", "${1}0", "a") == "a0");
+    CHECK(replace_with("a", "[$0]", "xax") == "x[a]x");
+    CHECK(replace_with("a", "$$1", "a") == "$1");
+    CHECK(replace_with("/+", "/", "/a//b///c") == "/a/b/c");
+    CHECK(replace_with("a", "", "banana") == "bnn");
+}
+
+TEST_CASE("regex_replace no match keeps the string") {
+    MatchResult r;
+    CHECK(replace_with("z", "y", "abc", &r) == "abc");
+    CHECK(r == MatchResult::NO);
+    CHECK(replace_with("a", "b", "a", &r) == "b");
+    CHECK(r == MatchResult::YES);
+}
+
+TEST_CASE("regex_replace empty matches advance one character") {
+    CHECK(replace_with("x*", "-", "ab") == "-a-b-");
+    CHECK(replace_with("x*", "-", "") == "-");
+    CHECK(replace_with("x*", "-", "\xC3\xA9z") == "-\xC3\xA9-z-");
+    CHECK(replace_with("b*", "-", "abba") == "-a--a-");
+}
+
+TEST_CASE("regex_replace unset group inserts nothing") {
+    CHECK(replace_with("(a)|(b)", "[$1|$2]", "ab") == "[a|][|b]");
+}
+
+TEST_CASE("regex_replace invalid UTF-8 never matches the bad bytes") {
+    CHECK(replace_with("a", "X",
+                       "a\xFF"
+                       "a") == "X\xFFX");
+    CHECK(replace_with(".", "X", "\xFF") == "\xFF");
+}
+
+TEST_CASE("compile_substitution rejects bad templates") {
+    auto p = compile_regex("(?<n>a)", false);
+    REQUIRE(p.has_value());
+    auto bad = [&](const char* to) { return compile_substitution(**p, to); };
+    auto g2 = bad("x$2");
+    REQUIRE(!g2.has_value());
+    CHECK(g2.error().message.find("group 2") != std::string::npos);
+    CHECK(g2.error().offset == 1);
+    auto name = bad("${nope}");
+    REQUIRE(!name.has_value());
+    CHECK(name.error().message.find("nope") != std::string::npos);
+    CHECK(!bad("${5}").has_value());
+    CHECK(!bad("$10").has_value());
+    CHECK(!bad("$").has_value());
+    CHECK(!bad("a$x").has_value());
+    CHECK(!bad("${").has_value());
+    CHECK(!bad("${}").has_value());
+    CHECK(!bad("${n").has_value());
+    CHECK(bad("${n}$1$$").has_value());
+    auto lit = compile_contains("x", false);
+    REQUIRE(lit.has_value());
+    CHECK(!compile_substitution(**lit, "y").has_value());
 }

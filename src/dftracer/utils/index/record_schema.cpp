@@ -1,11 +1,13 @@
 #include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/utils/string.h>
+#include <dftracer/utils/core/env.h>
+#include <dftracer/utils/duql/builder.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/source.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/json/json_value.h>
+#include <dftracer/utils/json/line.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 #include <simdjson.h>
@@ -142,8 +144,8 @@ class Detector {
     bool add(std::string_view line) {
         const char* start = nullptr;
         std::size_t length = 0;
-        if (!json_trim_and_validate_with_comma(line.data(), line.size(), start,
-                                               length))
+        if (!json::trim_and_validate_with_comma(line.data(), line.size(), start,
+                                                length))
             return true;
         simdjson::dom::element root;
         if (parser_.parse(start, length).get(root) != simdjson::SUCCESS ||
@@ -404,14 +406,38 @@ std::vector<RecordSchema> builtins() {
         builtin_field("tid", FieldType::INT, true, Role::LANE),
     };
     dft.roles.phase = "ph";
-    dft.source = merge_source({},
-                              R"(data = where ph not in ["M", 4];
-files = where ph in ["M", 4] and name == "FH" | select fhash = args.value, path = args.name | distinct;
-hosts = where ph in ["M", 4] and name == "HH" | select hhash = args.value, name = args.name | distinct;
-strings = where ph in ["M", 4] and name == "SH" | select shash = args.value, value = args.name | distinct;
-ranks = where ph in ["M", 4] and name == "PR" and args.name == "rank" | select pid, rank = args.value | distinct;
-def args_fallback = true)",
-                              "dftracer");
+    {
+        using namespace duql;
+        const Col meta = c("ph").is_in(std::vector<Col>{"M", 4});
+        const auto dict = [&](const char* tag) {
+            return Pipe().where(meta && c("name") == tag);
+        };
+        dft.source = merge_source(
+            {},
+            Source()
+                .rowset("data",
+                        Pipe().where(c("ph").not_in(std::vector<Col>{"M", 4})))
+                .rowset("files", dict("FH")
+                                     .select({{"fhash", c("args.value")},
+                                              {"path", c("args.name")}})
+                                     .distinct())
+                .rowset("hosts", dict("HH")
+                                     .select({{"hhash", c("args.value")},
+                                              {"name", c("args.name")}})
+                                     .distinct())
+                .rowset("strings", dict("SH")
+                                       .select({{"shash", c("args.value")},
+                                                {"value", c("args.name")}})
+                                       .distinct())
+                .rowset("ranks", Pipe()
+                                     .where(meta && c("name") == "PR" &&
+                                            c("args.name") == "rank")
+                                     .select({"pid", {"rank", c("args.value")}})
+                                     .distinct())
+                .flag("args_fallback", true)
+                .text(),
+            "dftracer");
+    }
     dft.data = data_condition(dft);
     dft.args_fallback = source_args_fallback(dft);
     derive(dft);
@@ -421,26 +447,30 @@ def args_fallback = true)",
     generic.builtin = true;
     derive(generic);
 
-    // dftracer_genesis_gen_dist output: call-path records keyed by run, and
-    // one RUN metadata line per run holding its keys.
-    RecordSchema genesis = dft;
+    RecordSchema genesis;
     genesis.id = "genesis";
-    for (auto [name, type] : {std::pair{"run", FieldType::STRING},
-                              std::pair{"path", FieldType::STRING},
-                              std::pair{"depth", FieldType::INT},
-                              std::pair{"count", FieldType::INT}}) {
-        FieldSpec f = builtin_field(name, type, false, Role::NONE);
-        f.path = std::string("args.") + name;
-        genesis.fields.push_back(std::move(f));
+    genesis.builtin = true;
+    genesis.fields = {
+        builtin_field("gtype", FieldType::STRING, false, Role::NONE),
+        builtin_field("run", FieldType::STRING, false, Role::NONE),
+        builtin_field("ts", FieldType::INT, true, Role::TIME),
+    };
+    {
+        using namespace duql;
+        genesis.source = merge_source(
+            {},
+            Source()
+                .rowset("data", Pipe().where(c("gtype") != "run"))
+                .rowset("runs",
+                        Pipe()
+                            .where(c("gtype") == "run")
+                            .select({"run", "app", "system", "unique_input",
+                                     "nodes", "ppn", "papi_set", "method",
+                                     "sketch_accuracy", "leaf"})
+                            .distinct())
+                .text(),
+            "genesis");
     }
-    std::string runs =
-        "runs = where ph in [\"M\", 4] and name == \"RUN\" | select run = "
-        "args.run";
-    for (const char* key : {"app", "system", "unique_input", "nodes", "ppn",
-                            "papi_set", "method", "sketch_accuracy", "leaf"})
-        runs += std::string(", ") + key + " = args." + key;
-    runs += " | distinct";
-    genesis.source = merge_source(dft.source, runs, "genesis");
     genesis.data = data_condition(genesis);
     genesis.args_fallback = source_args_fallback(genesis);
     derive(genesis);
@@ -783,8 +813,8 @@ Registry& registry() {
     static Registry r;
     static std::once_flag env;
     std::call_once(env, [] {
-        if (const char* paths = std::getenv("DFTRACER_SCHEMA_PATH")) {
-            std::stringstream ss(paths);
+        if (const auto paths = Env::get("DFTRACER_SCHEMA_PATH")) {
+            std::stringstream ss{std::string(*paths)};
             for (std::string p; std::getline(ss, p, ':');)
                 if (!p.empty()) load_into(r, p);
         }

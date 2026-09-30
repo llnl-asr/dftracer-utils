@@ -57,6 +57,11 @@ still import and export every column type:
 - ``from_dict`` builds the frame natively from Series, lists of scalars, NumPy
   arrays and pandas or polars Series; a mapping with anything else (a pyarrow
   array, nested lists) goes through ``pyarrow.table``.
+  A list with no value in it (empty, or only ``None``) and no ``dtype`` is a
+  ``string`` column of nulls, in ``from_dict``, the ``DataFrame`` constructor and
+  ``Series.from_list``; that is the type ``from_pandas`` gives a column of
+  ``None``. ``astype`` turns it into another type, or ``Series.from_list(values,
+  dtype=...)`` types it up front.
 - ``Series.from_numpy`` borrows the buffer of a 1-D, C-contiguous, fixed-width
   numeric array (no copy, no pyarrow). Bool, ``float16``, ``datetime64``,
   ``timedelta64``, text, bytes and object arrays, non-contiguous arrays and

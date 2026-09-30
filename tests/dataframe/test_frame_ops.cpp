@@ -9,6 +9,7 @@
 #include <doctest/doctest.h>
 
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -184,7 +185,7 @@ TEST_SUITE("frame ops") {
         aarg.str(2, "ts")
             .strlist(3, pid, 1)
             .i32(4, DFTU_ASOF_BACKWARD)
-            .i64(5, -1);
+            .f64(5, -1);
         DataFrame a =
             run(scan(make_events())
                     .frame_op("dftu.frame.asof", aarg, {scan(make_events())})
@@ -226,7 +227,9 @@ TEST_SUITE("frame ops") {
             dftu_dataframe_window(ev, pid, 1, ts, 1, specs, 2);
         REQUIRE(direct);
         CHECK(dftu_dataframe_num_columns(direct) == 5);
-        specs[1].func = static_cast<dftu_window_func>(31);
+        static_assert(sizeof(dftu_window_func) == sizeof(int));
+        const int bad = 32;
+        std::memcpy(&specs[1].func, &bad, sizeof(bad));
         CHECK(dftu_dataframe_window(ev, pid, 1, ts, 1, specs, 2) == nullptr);
         dftu_dataframe_free(direct);
         dftu_dataframe_free(w);
@@ -256,7 +259,7 @@ TEST_SUITE("frame ops") {
         aarg.str(2, "ts")
             .strlist(3, pid, 1)
             .i32(4, DFTU_ASOF_BACKWARD)
-            .i64(5, -1);
+            .f64(5, -1);
         dftu_dataframe* a = dftu_op_run_frame(asof_op, pair, 2, aarg);
         REQUIRE(a);
         CHECK(dftu_dataframe_num_rows(a) == 4);

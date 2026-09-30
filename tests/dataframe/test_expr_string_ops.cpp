@@ -323,6 +323,84 @@ TEST_SUITE("expr string ops") {
         for (dftu_expr* e : {sel, zero, cond, c}) dftu_expr_free(e);
     }
 
+    TEST_CASE("column argument builders, C++ and C ABI") {
+        Series s = Series::strings({"read", "pread64", "Write"});
+        Series n = Series::strings({"re", "64", "x"});
+        std::vector<std::int64_t> iv{1, 2, 3};
+        Series ints = Series::flat(TypeId::Int64, iv.data(), 3);
+        std::vector<double> dv{1.25, 2.5, 3.75};
+        Series dbl = Series::flat(TypeId::Float64, dv.data(), 3);
+        auto col = [](int i) { return expr_col(i); };
+        const Expr len = col(1);
+        const Expr digits = col(1);
+
+        const DataType si = s.data_type();
+        const DataType ni = n.data_type();
+        const DataType ii = ints.data_type();
+        const DataType di = dbl.data_type();
+        auto inferred = [](const Expr& e, std::vector<const Series*> in,
+                           std::vector<DataType> types) {
+            Series out = eval(e, in);
+            REQUIRE(out.valid());
+            CHECK(infer_type(e, types).id == out.type());
+            return out;
+        };
+        inferred(dftracer::utils::dataframe::expr_str_pred_col(
+                     StrPredOp::StartsWith, col(0), col(1)),
+                 {&s, &n}, {si, ni});
+        inferred(dftracer::utils::dataframe::expr_str_replace_col(
+                     col(0), col(1), col(1)),
+                 {&s, &n}, {si, ni});
+        inferred(dftracer::utils::dataframe::expr_str_substr_col(col(0), col(1),
+                                                                 &len),
+                 {&s, &ints}, {si, ii});
+        inferred(dftracer::utils::dataframe::expr_round_col(col(0), digits),
+                 {&dbl, &ints}, {di, ii});
+        inferred(dftracer::utils::dataframe::expr_round_col(col(0), digits),
+                 {&ints, &ints}, {ii, ii});
+
+        const dftu_series* in2[2] = {s.handle(), n.handle()};
+        dftu_expr* c0 = dftu_expr_col(0);
+        dftu_expr* c1 = dftu_expr_col(1);
+        dftu_expr* pred =
+            dftu_expr_str_pred_col(DFTU_STR_PRED_CONTAINS, c0, c1);
+        REQUIRE(pred);
+        CHECK(bools(Series{dftu_expr_eval(pred, in2, 2)}) ==
+              std::vector<bool>{true, true, false});
+        CHECK(dftu_expr_str_pred_col(DFTU_STR_PRED_LIKE, c0, c1) == nullptr);
+        CHECK(dftu_expr_str_pred_col(DFTU_STR_PRED_CONTAINS, c0, nullptr) ==
+              nullptr);
+        dftu_expr* rep = dftu_expr_str_replace_col(c0, c1, c1);
+        REQUIRE(rep);
+        CHECK(strs(Series{dftu_expr_eval(rep, in2, 2)}) ==
+              std::vector<std::string>{"read", "pread64", "Write"});
+        CHECK(dftu_expr_str_replace_col(c0, c1, nullptr) == nullptr);
+
+        const dftu_series* in3[2] = {s.handle(), ints.handle()};
+        dftu_expr* sub = dftu_expr_str_substr_col(c0, c1, nullptr);
+        dftu_expr* sub2 = dftu_expr_str_substr_col(c0, c1, c1);
+        REQUIRE(sub);
+        REQUIRE(sub2);
+        CHECK(strs(Series{dftu_expr_eval(sub, in3, 2)}) ==
+              std::vector<std::string>{"ead", "ead64", "te"});
+        CHECK(strs(Series{dftu_expr_eval(sub2, in3, 2)}) ==
+              std::vector<std::string>{"e", "ea", "te"});
+        CHECK(dftu_expr_str_substr_col(nullptr, c1, nullptr) == nullptr);
+        CHECK(dftu_expr_str_substr_col(c0, nullptr, nullptr) == nullptr);
+
+        const dftu_series* in4[2] = {dbl.handle(), ints.handle()};
+        dftu_expr* rnd = dftu_expr_round_col(c0, c1);
+        REQUIRE(rnd);
+        Series r{dftu_expr_eval(rnd, in4, 2)};
+        REQUIRE(r.type() == TypeId::Float64);
+        CHECK(r.data<double>()[0] == 1.3);
+        CHECK(r.data<double>()[1] == 2.5);
+        CHECK(r.data<double>()[2] == 3.75);
+        CHECK(dftu_expr_round_col(c0, nullptr) == nullptr);
+        for (dftu_expr* e : {pred, rep, sub, sub2, rnd, c0, c1})
+            dftu_expr_free(e);
+    }
+
     TEST_CASE("C ABI builders") {
         Series s = names();
         dftu_expr* c = dftu_expr_col(0);

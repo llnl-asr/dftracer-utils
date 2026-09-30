@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/core/env.h>
 #include <dftracer/utils/duql/macros.h>
 #include <dftracer/utils/duql/syntax/lexer.h>
 #include <dftracer/utils/duql/syntax/parser.h>
@@ -31,7 +32,7 @@ void set_span(ExprPtr& e, Span span) {
 
 // A copy of `e`: its canonical text parsed again.
 ExprPtr clone(const Expr& e) {
-    auto tree = syntax::parse(syntax::to_text(e));
+    auto tree = syntax::parse("where " + syntax::to_text(e));
     if (!tree || !tree->pipeline || tree->pipeline->stages.empty())
         throw DFTUtilsException(
             ErrorCode::INVALID_ARGUMENT,
@@ -54,24 +55,13 @@ class Expander {
         const Macro* m = find(call->name);
         if (!m) return;
         const Span span = slot->span;
-        if (builtin_(m->name))
-            fail(span, "macro '" + m->name +
-                           "' has the name of a built-in function; rename it");
-        if (call->args.size() != m->params.size())
-            fail(span, "macro '" + m->name + "' takes " +
-                           std::to_string(m->params.size()) +
-                           " argument(s), got " +
-                           std::to_string(call->args.size()));
-        for (const auto& a : call->args)
-            if (!a.name.empty())
-                fail(span, "macro '" + m->name + "' takes no named argument '" +
-                               a.name + "'");
-        if (std::find(stack_.begin(), stack_.end(), m->name) != stack_.end()) {
-            std::string cycle;
-            for (const auto& n : stack_) cycle += n + " -> ";
-            fail(span, "macros call each other: " + cycle + m->name);
-        }
-        ExprPtr body = clone(*m->body);
+        check(*call, *m, span);
+        const auto* expr_body =
+            std::get_if<std::shared_ptr<const Expr>>(&m->body);
+        if (!expr_body)
+            fail(span,
+                 "macro '" + m->name + "' is a pipeline; call it as a stage");
+        ExprPtr body = clone(**expr_body);
         bind(body, *m, call->args);
         stack_.push_back(m->name);
         expand(body);
@@ -80,7 +70,109 @@ class Expander {
         slot = std::move(body);
     }
 
+    void splice(Pipeline& p, bool leading) {
+        for (std::size_t i = 0; i < p.stages.size();) {
+            auto* use = std::get_if<Use>(&p.stages[i].node);
+            if (!use) {
+                ++i;
+                continue;
+            }
+            const Span span = p.stages[i].span;
+            const bool first = leading && p.sources.empty() && i == 0;
+            const Macro* m = find(use->call.name);
+            const auto* body =
+                m ? std::get_if<std::shared_ptr<const Pipeline>>(&m->body)
+                  : nullptr;
+            if (!body) {
+                if (!first) {
+                    if (m)
+                        fail(span, "macro '" + m->name +
+                                       "' is an expression; write 'where " +
+                                       m->name + "(...)'");
+                    fail(span, "Unknown stage or pipeline macro '" +
+                                   use->call.name + "'");
+                }
+                auto e = std::make_unique<Expr>();
+                e->node = std::move(use->call);
+                e->span = span;
+                p.stages[i].node = Where{std::move(e)};
+                ++i;
+                continue;
+            }
+            check(use->call, *m, span);
+            auto tree = syntax::parse(syntax::to_text(**body));
+            if (!tree || !tree->pipeline)
+                throw DFTUtilsException(
+                    ErrorCode::INVALID_ARGUMENT,
+                    "duql: a macro body does not print back: " +
+                        syntax::to_text(**body));
+            PipelinePtr copy = std::move(tree->pipeline);
+            const std::vector<Arg> args = std::move(use->call.args);
+            each_slot(*copy, [&](ExprPtr& e) { bind(e, *m, args); });
+            stack_.push_back(m->name);
+            splice(*copy, first);
+            stack_.pop_back();
+            each_slot(*copy, [&](ExprPtr& e) { set_span(e, span); });
+            for (auto& s : copy->stages) s.span = span;
+            const std::size_t n = copy->stages.size();
+            p.stages.erase(p.stages.begin() + static_cast<std::ptrdiff_t>(i));
+            p.stages.insert(p.stages.begin() + static_cast<std::ptrdiff_t>(i),
+                            std::make_move_iterator(copy->stages.begin()),
+                            std::make_move_iterator(copy->stages.end()));
+            i += n;
+        }
+        for (auto& s : p.stages)
+            std::visit(
+                [&](auto& n) {
+                    using T = std::decay_t<decltype(n)>;
+                    if constexpr (std::is_same_v<T, Lookup> ||
+                                  std::is_same_v<T, AsofLookup> ||
+                                  std::is_same_v<T, OverlapLookup>) {
+                        if (n.side) splice(*n.side, true);
+                    } else if constexpr (std::is_same_v<T, Union>) {
+                        splice(*n.other, true);
+                    }
+                },
+                s.node);
+        each_slot(p, [&](ExprPtr& e) { splice_in(e); });
+    }
+
    private:
+    void splice_in(ExprPtr& e) {
+        if (!e) return;
+        if (auto* sq = std::get_if<Subquery>(&e->node)) {
+            splice(*sq->pipeline, true);
+            return;
+        }
+        if (auto* in = std::get_if<In>(&e->node); in && in->subquery) {
+            splice_in(in->subject);
+            for (auto& x : in->list) splice_in(x);
+            splice(*in->subquery, true);
+            return;
+        }
+        children(*e, [&](ExprPtr& c) { splice_in(c); });
+    }
+
+    void check(const Call& call, const Macro& m, Span span) const {
+        if (builtin_(m.name))
+            fail(span, "macro '" + m.name +
+                           "' has the name of a built-in function; rename it");
+        if (call.args.size() != m.params.size())
+            fail(span, "macro '" + m.name + "' takes " +
+                           std::to_string(m.params.size()) +
+                           " argument(s), got " +
+                           std::to_string(call.args.size()));
+        for (const auto& a : call.args)
+            if (!a.name.empty())
+                fail(span, "macro '" + m.name + "' takes no named argument '" +
+                               a.name + "'");
+        if (std::find(stack_.begin(), stack_.end(), m.name) != stack_.end()) {
+            std::string cycle;
+            for (const auto& n : stack_) cycle += n + " -> ";
+            fail(span, "macros call each other: " + cycle + m.name);
+        }
+    }
+
     const MacroScopes& scopes_;
     std::string_view text_;
     const std::function<bool(std::string_view)>& builtin_;
@@ -185,9 +277,9 @@ void load_locked(PathRegistry& r, const std::string& path) {
 void load_env(PathRegistry& r) {
     if (r.env_loaded) return;
     r.env_loaded = true;
-    const char* env = std::getenv("DFTRACER_DUQL_PATH");
+    const auto env = Env::get("DFTRACER_DUQL_PATH");
     if (!env) return;
-    std::string_view rest = env;
+    std::string_view rest = *env;
     while (!rest.empty()) {
         const std::size_t colon = rest.find(':');
         const std::string part(rest.substr(0, colon));
@@ -204,23 +296,33 @@ dftracer::utils::expected<std::vector<Macro>, DuqlError> macros_of(
     const std::string& origin) {
     std::vector<Macro> out;
     for (auto& def : defs) {
-        if (def.name == "args_fallback" || !def.body) continue;
+        if (def.name == "args_fallback") continue;
+        auto* expr = std::get_if<ExprPtr>(&def.body);
+        if ((expr && !*expr) || (!expr && !std::get<PipelinePtr>(def.body)))
+            continue;
         for (const auto& m : out)
             if (m.name == def.name)
                 return dftracer::utils::unexpected(syntax::make_error(
-                    text, def.body->span.offset, 0,
+                    text, expr ? (*expr)->span.offset : 0, 0,
                     "macro '" + def.name + "' is defined twice"));
-        out.push_back({def.name, def.params,
-                       std::shared_ptr<const Expr>(std::move(def.body)),
-                       origin});
+        if (expr)
+            out.push_back({def.name, def.params,
+                           std::shared_ptr<const Expr>(std::move(*expr)),
+                           origin});
+        else
+            out.push_back({def.name, def.params,
+                           std::shared_ptr<const Pipeline>(
+                               std::move(std::get<PipelinePtr>(def.body))),
+                           origin});
     }
     return out;
 }
 
 bool args_fallback(const std::vector<syntax::Def>& defs) {
     for (const auto& def : defs)
-        if (def.name == "args_fallback" && def.params.empty() && def.body)
-            if (const auto* lit = std::get_if<Literal>(&def.body->node))
+        if (const auto* e = std::get_if<ExprPtr>(&def.body);
+            def.name == "args_fallback" && def.params.empty() && e && *e)
+            if (const auto* lit = std::get_if<Literal>(&(*e)->node))
                 if (const auto* b = std::get_if<bool>(&lit->value)) return *b;
     return false;
 }
@@ -244,9 +346,10 @@ dftracer::utils::expected<void, DuqlError> expand_macros(
     const std::function<bool(std::string_view)>& builtin) {
     bool any = false;
     for (const auto& s : scopes) any = any || !s.empty();
-    if (!any) return {};
     try {
         Expander x(scopes, text, builtin);
+        x.splice(pipeline, true);
+        if (!any) return {};
         each_slot(pipeline, [&](ExprPtr& e) { x.expand(e); });
     } catch (const Failure& f) {
         return dftracer::utils::unexpected(f.error);

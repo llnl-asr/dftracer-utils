@@ -42,124 +42,81 @@ Not there, on purpose: label alignment in arithmetic (``df + other`` is
 positional) and a ``MultiIndex`` type. Both would put an index object
 between the user and the columns.
 
-Group-by
---------
-
-``group_by`` (``groupby`` too) takes one name or several, or a Series
-computed from the frame (the key column is then named ``key``), and
-returns a group-by whose reductions are one engine ``group_by`` each;
-``g["v"]`` or ``g[["v", "w"]]`` narrows it to those value columns, and
-with one column a list of aggregate names labels the outputs by name
-alone, as pandas does. Groups come out in first-seen order (pandas sorts
-them unless ``sort=False``; polars and DuckDB do not):
+Several columns can be assigned at once from a frame or a list of Series. The
+targets and the value's columns pair by position (the value's own names are
+ignored, as in pandas), a target that does not exist is added, and a count or
+row mismatch is a ``ValueError`` that names it before any column changes.
 
 .. code-block:: python
 
-   g = df.group_by("k")                 # a null key is dropped, as pandas
-   g = df.group_by("k", dropna=False)   # or its own group, as polars
-   g = df.groupby(df["ts"] // 1_000_000)          # a computed key, named key
-   g["v"].agg(["sum", "mean"])          # columns k, sum, mean
-   g.sum(); g.mean(); g.size(); g.agg(total=("v", "sum"), n=("v", "count"))
-   g.median(); g.quantile(0.9)          # exact, not a sketch
-   g.cumsum(); g.shift(1); g.rank(); g.head(2); g.nth([0, -1])
-   g.ffill(); g.bfill()                 # group-wise fills
-   g.rolling(3).mean(); g.expanding().sum(); g.ewm(alpha=0.5).mean()
-   g.take([0, -1]); g.sample(2, seed=1)
-   g.resample("5s").sum()               # keys + time bucket
-   g.corr(); g.cov()                    # long form: key, a, b, value
-   g.transform("mean")                  # the group value on every row
+   df[["a", "b"]] = other[["x", "y"]]          # a gets x, b gets y
+   df[["p", "q"]] = [s1, s2]                   # one Series per target
+   df.loc[mask, ["a", "b"]] = selected         # the selected rows only
 
-``apply`` and ``filter`` take a user function. It is traced once on a
-symbolic group, so a body over the group's columns compiles to one
-``group_by`` (plus a join for a row result):
+Replace
+-------
 
-.. code-block:: python
+``Series.replace`` and ``DataFrame.replace`` take pandas' forms: ``replace(old,
+new)``, ``replace([old, ...], new)``, ``replace([old, ...], [new, ...])`` (paired
+by position) and ``replace({old: new, ...})``. Every match is found on the
+original values and applied together, so ``{1: 2, 2: 1}`` swaps. A new value of
+``None`` or ``pd.NA`` makes the value null and keeps the column type; a NaN
+makes it NaN. An old ``None`` or ``pd.NA`` matches the nulls and an old NaN the
+NaN values (a null is not a NaN; pass both to catch both). The column keeps its
+type: a float into an integer column widens it, a string needs a string column
+and a number a numeric one (``TypeError`` otherwise). An old value the column
+type cannot hold matches nothing. Bool, list and temporal columns raise on a
+Series and are left alone by the frame form.
 
-   g.apply(lambda grp: grp["v"].sum() / grp["n"].sum())   # keys + value
-   g.apply(lambda grp: grp["v"] - grp["v"].mean())        # one value per row
-   g.filter(lambda grp: grp["v"].sum() > 10)              # the passing groups' rows
-
-A body the trace cannot follow (``len(grp)``, a ``.to_list()``, ``is``) runs
-in Python per group with a warning. A plan (``df.lazy().group_by(...)``)
-has no Python tier and refuses such a body.
-
-The datetime index and the accessors
---------------------------------------
-
-Over the index column (or ``on=``): ``at_time("09:30")``,
-``between_time(start, end)``, ``first("1min")``, ``last("1D")``,
-``asfreq("1s", method="ffill")``, ``resample("5s")``, ``tz_localize("UTC")``,
-``tz_convert("Asia/Tokyo")``. A timezone is type metadata on a Timestamp
-column: the instants never move, and only UTC can mark a naive column (the
-engine has no zone database). The calendar parts read UTC.
-
-On a Series, ``.str`` (``len``, ``pad``, ``zfill``, ``replace``, ``split``,
-``extract``, ...), ``.dt`` (``year`` .. ``nanosecond``, ``dayofweek``,
-``floor`` / ``ceil`` / ``round(freq)``, ``normalize``, ``total_seconds``,
-``tz``, ``tz_localize``, ``tz_convert``) and ``.list`` (``len``, ``get``,
-``join``) carry the pandas accessors as batches of engine kernels.
-
-Series and frame reductions and windows
------------------------------------------
-
-``sum mean median quantile var std sem skew kurt prod count nunique
-mode`` on a Series and, per column, on a frame; ``cumsum cumprod cummax
-cummin diff pct_change shift rank interpolate ffill bfill`` as scans;
-``rolling(n)``, ``expanding()``, ``ewm(alpha | span | com | halflife)``
-as window objects with ``.sum() .mean() .min() .max() .var() .std()
-.median() .quantile(q)``. A rolling window holding a null is null
-(``min_periods = window``); an expanding or ewm window repeats the value
-on a null row; ``ewm`` is pandas' ``adjust=True``.
-
-Expressions: the polars column ops
------------------------------------
-
-``col("x")`` builds an expression. Beside arithmetic, comparisons, casts
-and the string predicates, an expression carries the polars column ops:
+No form is ever ignored: a call changes the values it names, leaves a column alone
+because no old value can match its type (or it is a bool, list or temporal column),
+or raises an error that names the problem.
 
 .. code-block:: python
 
-   from dftracer.utils import col
-   df.lazy().with_columns(
-       (col("x").cum_sum() * 2 + col("x").shift(1)).alias("a"),
-       col("x").rolling_mean(3).over("k").alias("b"),
-       (col("x") - col("x").mean().over("k")).alias("c"),
-       col("s").str.pad_start(5, "0").alias("d"),
-       col("t").dt.hour().alias("e"),
-   ).collect()
+   s.replace([float("inf"), float("-inf")], pd.NA)   # infinities to null
+   df.replace({0: None})                             # zero to null in every column that can hold it
 
-A column op (``cum_sum cum_prod cum_max cum_min cum_count shift diff
-pct_change rank forward_fill backward_fill interpolate rolling_* ewm_mean
-ewm_std sort arg_sort reverse is_duplicated is_unique is_nan is_finite
-is_infinite hash log10 log1p``, the ``.str`` and ``.dt`` namespaces) reads
-the whole column at once. Eagerly (``df.apply(expr)``) it runs the Series
-kernel on its argument's value; in a plan it is its own step
-(``dftu.frame.column_op``, a breaker), so ``cum_sum`` across a whole
-stream is right. ``over(keys)`` is the group-wise form: the engine's
-group transform, one value per input row; an aggregate's ``over``
-(``col("x").sum().over("k")``) is the group-by joined back on the keys.
-``sort`` inside an expression sorts that column alone, as polars; nulls
-sort last (the pandas convention).
+Formulas as text: ``eval``
+--------------------------
 
-The polars frame names
-------------------------
+``df.eval(expr)`` evaluates Python expressions over the columns, lowered by the
+same code as the source tier of ``apply`` and never run as Python code: the text is
+parsed with ``ast``, a bare name is a column or a ``KeyError``, and a construct with
+no engine form raises ``TranspileError`` naming it. ``df.eval("a / b")`` gives a
+Series; ``df.eval("m = a / b")`` gives a new frame with ``m`` added or replaced.
+Several lines run in order, each seeing the columns the lines before it made (with
+their types), every line but the last an assignment; a last expression line returns
+its value.
 
-``sum_horizontal mean_horizontal min_horizontal max_horizontal`` (row-wise
-over the numeric columns), ``hstack``, ``vstack``, ``gather_every``,
-``partition_by``, ``join_asof``, ``iter_rows`` / ``rows`` / ``row`` /
-``item`` / ``to_dicts`` (through Arrow), ``get_column(s)``, ``to_series``,
-``is_empty``, ``n_unique``, ``fill_nan``, ``drop_nans``, and the writers
-``write_parquet`` / ``write_csv`` / ``write_ipc`` (through pyarrow).
+pandas' operator rule applies: ``&`` and ``|`` mean ``and`` and ``or``, so a comparison
+needs no parentheses (``a > 1 & b < 2`` is ``(a > 1) and (b < 2)``, where plain Python
+reads ``a > (1 & b) < 2``), and ``&`` binds tighter than ``|``. ``~`` negates a mask. The
+pandas ``.str`` accessor spelling works: ``func_name.str.contains("close|open")`` is a
+regex search, as in pandas.
 
-Converting out
---------------
+Supported: column names; number literals; ``+ - * /`` with a number on either side;
+``//`` and ``%`` (integer columns give integers, as Python does); ``**`` with a
+constant exponent from 0 to 8 or 0.5; unary ``- +``; ``< <= > >= == !=`` (chains
+too); ``and``, ``or``, ``not``; ``x if c else y``; ``in`` and ``not in`` a list of
+constants; ``x is None``; ``abs``, ``min``, ``max``, ``int``, ``float``, ``round``
+(whole numbers), ``len``; ``math.sqrt``, ``log``, ``exp``, ``floor``, ``ceil``; the
+string methods ``lower``, ``upper``, ``strip``, ``lstrip``, ``rstrip``,
+``startswith``, ``endswith``, ``replace`` and ``contains``; and ``x.isna()``,
+``isnull()``, ``notna()``, ``notnull()``. Nulls propagate as the column operators
+propagate them (``a > 1`` is null where ``a`` is), where pandas compares NaN as
+false; ``(x.isna() | x == 0)`` is true where ``x`` is null, as in pandas.
+
+Not supported, each with an error that names it: ``@name`` locals and ``@`` matrix
+products, backtick column names, ``inplace``, bitwise ``&`` ``|`` ``~`` on integer
+columns, attribute access, subscripts, lambdas, comprehensions, and string methods
+beyond the list.
 
 .. code-block:: python
 
-   df.to_arrow()                 # shares the engine's buffers, no copy
-   df.to_pandas()                # NumPy dtypes: a copy
-   df.to_pandas(arrow=True)      # pd.ArrowDtype columns: no copy
-   df.to_polars()                # numbers shared, strings copied
+   df.eval("m = a / b\nn = m * 100\nn + c")      # three lines, one result
+   df.eval("io_cat == 3 and func_name.str.contains('close') and ~func_name.str.contains('dir')")
+   df.eval("(x.isna() | x == 0) & (y.isna() | y == 0)")
 
 Left out, and why
 ------------------
@@ -168,11 +125,12 @@ Left out, and why
   ``resample`` and the calendar parts give the same buckets.
 - ``tz_localize`` with a non-UTC zone on a naive column: a wall-time shift
   needs a zone database the engine does not have.
+- ``dt.strftime`` takes the directives of ``Series.dt_format`` only, and
+  formats in UTC. Other directives raise ``ValueError``.
 - ``MultiIndex`` methods, ``align`` / ``reindex``: label alignment was ruled
   out with the index model above.
 - Plotting, styling, ``attrs`` / ``flags``, the file writers beyond
   Parquet / CSV / IPC: not this engine's layer.
-- ``eval``: ``col(...)`` expressions cover it.
 - ``GroupBy.fillna(value)``: pandas deprecates it; ``ffill`` / ``bfill``
   are the spellings.
 

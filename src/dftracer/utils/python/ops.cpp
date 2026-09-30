@@ -9,6 +9,7 @@
 #include <dftracer/utils/python/ops.h>
 #include <dftracer/utils/python/py_scalar_helpers.h>
 #include <dftracer/utils/python/series.h>
+#include <dftracer/utils/python/series_detail.h>
 
 namespace dftracer::utils::python {
 namespace {
@@ -57,16 +58,7 @@ PyObject* op_info(PyObject*, PyObject* args) {
                          dftu_op_signature(op->sig));
 }
 
-PyObject* scalar_to_py(dftu_scalar s) {
-    switch (s.kind) {
-        case DFTU_SCALAR_TAG_U64:
-            return PyLong_FromUnsignedLongLong(s.value.u);
-        case DFTU_SCALAR_TAG_F64:
-            return PyFloat_FromDouble(s.value.d);
-        default:
-            return PyLong_FromLongLong(s.value.i);
-    }
-}
+using series_detail::scalar_to_py;  // numbers, str, and the refusal TypeError
 
 PyObject* op_run(PyObject*, PyObject* args) {
     Py_ssize_t nargs = PyTuple_GET_SIZE(args);

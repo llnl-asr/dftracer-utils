@@ -129,7 +129,7 @@
 {"q": "name ~ \"^p?read$\"", "ok": true, "tree": "name ~ \"^p?read$\""}
 {"q": "name ~* \"READ\"", "ok": true, "tree": "name ~* \"READ\""}
 {"q": "args.file like \"%tmp%\"", "ok": true, "tree": "args.file like \"%tmp%\""}
-{"q": "args.file like \"%a\\%b\\_c%\"", "ok": true, "tree": "args.file like \"%a\\%b\\_c%\""}
+{"q": "args.file like \"%a\\%b\\_c%\"", "ok": true, "tree": "args.file like \"%a\\\\%b\\\\_c%\""}
 {"q": "\"tmp\" in args.file", "ok": true, "tree": "\"tmp\" in args.file"}
 {"q": "name like \"pre%\"", "ok": true, "tree": "name like \"pre%\""}
 {"q": "name like \"%64\"", "ok": true, "tree": "name like \"%64\""}
@@ -147,7 +147,7 @@
 {"q": "any(sizes) > 10", "ok": true, "tree": "any(sizes) > 10"}
 {"q": "any(tags) in [\"a\", \"b\"]", "ok": true, "tree": "any(tags) in [\"a\", \"b\"]"}
 {"q": "not any(tags) == \"a\"", "ok": true, "tree": "not (any(tags) == \"a\")"}
-{"q": "tags == '{\"a\": 2, \"b\": 1}'", "ok": true, "tree": "tags == '{\"a\": 2, \"b\": 1}'"}
+{"q": "tags == '{\"a\": 2, \"b\": 1}'", "ok": true, "tree": "tags == \"{\\\"a\\\": 2, \\\"b\\\": 1}\""}
 {"q": "upstream == \"u2\"", "ok": true, "tree": "upstream == \"u2\""}
 {"q": "resolved.exec_hash.value like \"%laghos%\"", "ok": true, "tree": "resolved.exec_hash.value like \"%laghos%\""}
 {"q": "resolved.fpath == \"/data/f.dat\"", "ok": true, "tree": "resolved.fpath == \"/data/f.dat\""}
@@ -322,10 +322,10 @@
 {"q": "resolved.fpath == \"/var/log/run.txt\"", "ok": true, "tree": "resolved.fpath == \"/var/log/run.txt\""}
 {"q": "resolved.fhash.path == \"/scratch/data/train.h5\"", "ok": true, "tree": "resolved.fhash.path == \"/scratch/data/train.h5\""}
 {"q": "resolved.fhash.path != \"/var/log/run.txt\"", "ok": true, "tree": "resolved.fhash.path != \"/var/log/run.txt\""}
-{"q": "resolved.fhash.path ~ \"/scratch/.*\\.h5\"", "ok": true, "tree": "resolved.fhash.path ~ \"/scratch/.*\\.h5\""}
+{"q": "resolved.fhash.path ~ \"/scratch/.*\\.h5\"", "ok": true, "tree": "resolved.fhash.path ~ \"/scratch/.*\\\\.h5\""}
 {"q": "'TRAIN' in resolved.fhash.path", "ok": true, "tree": "\"TRAIN\" in resolved.fhash.path"}
 {"q": "resolved.fhash.path like \"/scratch/%\"", "ok": true, "tree": "resolved.fhash.path like \"/scratch/%\""}
-{"q": "resolved.fhash.path !~ \"\\.h5\"", "ok": true, "tree": "resolved.fhash.path !~ \"\\.h5\""}
+{"q": "resolved.fhash.path !~ \"\\.h5\"", "ok": true, "tree": "resolved.fhash.path !~ \"\\\\.h5\""}
 {"q": "resolved.hhash.name ilike \"NODE%\"", "ok": true, "tree": "resolved.hhash.name ilike \"NODE%\""}
 {"q": "resolved.fhash.path ~ \"nonexistent\"", "ok": true, "tree": "resolved.fhash.path ~ \"nonexistent\""}
 {"q": "'scratch' in resolved.fhash.path", "ok": true, "tree": "\"scratch\" in resolved.fhash.path"}
@@ -357,7 +357,7 @@
 {"q": "resolved.fhash.path like \"/data/f%\"", "ok": true, "tree": "resolved.fhash.path like \"/data/f%\""}
 {"q": "fhash like \"k%\"", "ok": true, "tree": "fhash like \"k%\""}
 {"q": "resolved.fpath == \"/data/f10\"", "ok": true, "tree": "resolved.fpath == \"/data/f10\""}
-{"q": "tags == '[\"a\", \"b\"]'", "ok": true, "tree": "tags == '[\"a\", \"b\"]'"}
+{"q": "tags == '[\"a\", \"b\"]'", "ok": true, "tree": "tags == \"[\\\"a\\\", \\\"b\\\"]\""}
 {"q": "tags == \"[1, 2]\"", "ok": true, "tree": "tags == \"[1, 2]\""}
 {"q": "tags != \"[1,2]\"", "ok": true, "tree": "tags != \"[1,2]\""}
 {"q": "lat == \"n/a\"", "ok": true, "tree": "lat == \"n/a\""}
@@ -392,7 +392,7 @@
 {"q": "rank == 1", "ok": true, "tree": "rank == 1"}
 {"q": "cat == \"POSIX\" and dur >= 1000", "ok": true, "tree": "(cat == \"POSIX\" and dur >= 1000)"}
 {"q": "op == \"read\" and io.off > 4096", "ok": true, "tree": "(op == \"read\" and io.off > 4096)"}
-{"q": "tags == '[\"api\", \"v1\"]'", "ok": true, "tree": "tags == '[\"api\", \"v1\"]'"}
+{"q": "tags == '[\"api\", \"v1\"]'", "ok": true, "tree": "tags == \"[\\\"api\\\", \\\"v1\\\"]\""}
 {"q": "status >= 500", "ok": true, "tree": "status >= 500"}
 {"q": "dur >= 1000", "ok": true, "tree": "dur >= 1000"}
 {"q": "resolved.run.app == \"laghos\"", "ok": true, "tree": "resolved.run.app == \"laghos\""}

@@ -155,6 +155,10 @@ Pass with ``-D`` at configure time, for example
    * - ``DFTRACER_UTILS_ENABLE_ARROW_IPC``
      - ``ON``
      - Arrow IPC file read/write via nanoarrow.
+   * - ``DFTRACER_UTILS_ENABLE_VECTORSCAN``
+     - ``ON``
+     - Vectorscan for yes/no regex matches. ``OFF`` downloads
+       nothing and runs every regex on PCRE2. See `Vectorscan build needs`_.
    * - ``DFTRACER_UTILS_ENABLE_ZSTD``
      - ``ON``
      - ZSTD compression for RocksDB.
@@ -217,6 +221,26 @@ Dependencies (RocksDB, simdjson, nanoarrow, Highway, zstd, lz4, and others) are
 vendored via CPM and cached under ``.cpmsource/``; see the
 `THIRD-PARTY-NOTICES <https://github.com/llnl-asr/dftracer-utils/blob/develop/THIRD-PARTY-NOTICES.md>`_
 for the full list and licenses.
+
+Vectorscan build needs
+~~~~~~~~~~~~~~~~~~~~~~
+
+With ``DFTRACER_UTILS_ENABLE_VECTORSCAN=ON``, CMake gets three build-time
+inputs and builds Vectorscan 5.4.12 as a static library:
+
+- ``ragel`` from ``PATH``, or Ragel 6.10, which CMake downloads and builds at
+  configure time.
+- Boost headers 1.61 or later from the system, or the Boost 1.86 release,
+  which CMake downloads through CPM.
+- Vectorscan 5.4.12, which CMake downloads through CPM.
+
+Ragel and Boost are needed at build time only; nothing new ships at run time.
+A Linux x86_64 build uses Vectorscan's fat runtime, which picks SSE4.2, AVX2
+or AVX-512 at run time.
+
+For an offline build, fill ``CPM_SOURCE_CACHE`` (``.cpmsource/``) ahead of
+time. The Ragel, Boost and Vectorscan sources join the other vendored
+dependencies there. With the option ``OFF``, none of them is needed.
 
 Link against dftracer-utils
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

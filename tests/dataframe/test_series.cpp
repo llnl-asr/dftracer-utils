@@ -72,6 +72,7 @@ using dftracer::utils::dataframe::sub;
 using dftracer::utils::dataframe::sub_scalar;
 using dftracer::utils::dataframe::sum;
 using dftracer::utils::dataframe::take;
+using dftracer::utils::dataframe::TimeUnit;
 using dftracer::utils::dataframe::TypeId;
 using dftracer::utils::dataframe::with_column;
 namespace dv = dftracer::utils::dataframe;
@@ -427,6 +428,76 @@ TEST_SUITE("vec") {
         CHECK(ro.data<std::int64_t>()[2] == 10'000'000);
         CHECK_FALSE(s.dt_round(0, DFTU_DT_FLOOR).valid());
         CHECK_FALSE(s.dt_round(hour, 7).valid());
+    }
+
+    TEST_CASE("dt_format: every directive on fixed instants") {
+        // 2023-11-14 22:13:20.123456, the epoch, one microsecond before it,
+        // 2024-02-29 12:34:56.789012, 2021-01-03 (ISO week 53 of 2020),
+        // 2024-12-30 (ISO week 1 of 2025), 1900-03-01 00:00:00.000005.
+        const std::int64_t us[7] = {1'700'000'000'123'456,
+                                    0,
+                                    -1,
+                                    1'709'210'096'789'012,
+                                    1'609'632'000'000'000,
+                                    1'735'516'800'000'000,
+                                    -2'203'891'199'999'995};
+        Series s = Series::flat_i64(us, 7);
+        Series f = s.dt_format(
+            "%Y|%y|%m|%d|%H|%I|%M|%S|%f|%j|%a|%A|%b|%B|%p|"
+            "%F|%T|%s|%z|%Z|%%");
+        REQUIRE(f.valid());
+        REQUIRE(f.type() == TypeId::String);
+        CHECK(f.string_at(0) ==
+              "2023|23|11|14|22|10|13|20|123456|318|Tue|Tuesday|Nov|November|"
+              "PM|2023-11-14|22:13:20|1700000000|+0000|UTC|%");
+        CHECK(f.string_at(1) ==
+              "1970|70|01|01|00|12|00|00|000000|001|Thu|Thursday|Jan|January|"
+              "AM|1970-01-01|00:00:00|0|+0000|UTC|%");
+        CHECK(f.string_at(2) ==
+              "1969|69|12|31|23|11|59|59|999999|365|Wed|Wednesday|Dec|December|"
+              "PM|1969-12-31|23:59:59|-1|+0000|UTC|%");
+        CHECK(f.string_at(3) ==
+              "2024|24|02|29|12|12|34|56|789012|060|Thu|Thursday|Feb|February|"
+              "PM|2024-02-29|12:34:56|1709210096|+0000|UTC|%");
+        CHECK(f.string_at(4) ==
+              "2021|21|01|03|00|12|00|00|000000|003|Sun|Sunday|Jan|January|"
+              "AM|2021-01-03|00:00:00|1609632000|+0000|UTC|%");
+        CHECK(f.string_at(5) ==
+              "2024|24|12|30|00|12|00|00|000000|365|Mon|Monday|Dec|December|"
+              "AM|2024-12-30|00:00:00|1735516800|+0000|UTC|%");
+        CHECK(f.string_at(6) ==
+              "1900|00|03|01|00|12|00|00|000005|060|Thu|Thursday|Mar|March|"
+              "AM|1900-03-01|00:00:00|-2203891200|+0000|UTC|%");
+
+        CHECK(s.dt_format("%F %T.%f").string_at(0) ==
+              "2023-11-14 22:13:20.123456");
+        CHECK(s.dt_format("no directives").string_at(1) == "no directives");
+        CHECK(s.dt_format("").string_at(1) == "");
+
+        const std::int64_t secs[1] = {1'700'000'000};
+        CHECK(Series::flat_i64(secs, 1)
+                  .dt_format("%T", TimeUnit::Second)
+                  .string_at(0) == "22:13:20");
+        const std::int64_t ns[1] = {1'700'000'000'123'456'789};
+        CHECK(Series::flat_i64(ns, 1)
+                  .dt_format("%T.%f", TimeUnit::Nano)
+                  .string_at(0) == "22:13:20.123456");
+
+        CHECK_FALSE(s.dt_format("%Q").valid());
+        CHECK_FALSE(s.dt_format("%Y-%").valid());
+        CHECK_FALSE(s.dt_format("%").valid());
+        CHECK_FALSE(Series::strings({"x"}).dt_format("%Y").valid());
+    }
+
+    TEST_CASE("dt_format keeps nulls null") {
+        const std::int64_t v[3] = {1'700'000'000'123'456, 0, -1};
+        const std::uint8_t valid = 0x05;
+        Series s = Series::flat_i64(v, 3, &valid);
+        Series f = s.dt_format("%F");
+        REQUIRE(f.valid());
+        CHECK(f.string_at(0) == "2023-11-14");
+        CHECK(f.is_null(1));
+        CHECK(f.string_at(2) == "1969-12-31");
     }
 
     TEST_CASE("Series method wrappers: rank, rolling, prim") {
@@ -1074,6 +1145,20 @@ TEST_SUITE("vec") {
         CHECK(ex.null_count() == 1);
         Series ex0 = Series::strings({"a-b"}).str_extract("(\\w)-(\\w)", 0);
         CHECK(ex0.string_at(0) == "a-b");
+
+        Series rr =
+            Series::strings({"open64_17", "none"})
+                .str_regex_replace(R"re((?<op>[a-z]+)64_(\d+))re", "${op}#$2");
+        REQUIRE(rr.valid());
+        CHECK(rr.string_at(0) == "open#17");
+        CHECK(rr.string_at(1) == "none");
+        Series slash =
+            Series::strings({"/a//b///c"}).str_regex_replace("/+", "/");
+        CHECK(slash.string_at(0) == "/a/b/c");
+        CHECK_FALSE(Series::strings({"a"}).str_regex_replace("(", "x").valid());
+        CHECK_FALSE(Series::strings({"a"}).str_regex_replace("a", "$").valid());
+        CHECK_FALSE(
+            Series::strings({"a"}).str_regex_replace("a", "$1").valid());
     }
 
     TEST_CASE("nested list<struct> column (histogram shape)") {
@@ -1415,7 +1500,7 @@ TEST_SUITE("vec") {
         for (double x : fv) ref.add(x);
         CHECK(simd.n == ref.n);
         CHECK(simd.sum == doctest::Approx(ref.sum));
-        CHECK(simd.sumsq == doctest::Approx(ref.sumsq));
+        CHECK(simd.sumsq() == doctest::Approx(ref.sumsq()));
         CHECK(simd.min == doctest::Approx(ref.min));
         CHECK(simd.max == doctest::Approx(ref.max));
         CHECK(simd.variance(true) == doctest::Approx(ref.variance(true)));
@@ -1432,7 +1517,7 @@ TEST_SUITE("vec") {
         CHECK(isimd.esum == iref.esum);
         CHECK(isimd.emin == iref.emin);
         CHECK(isimd.emax == iref.emax);
-        CHECK(isimd.sumsq == doctest::Approx(iref.sumsq));
+        CHECK(isimd.sumsq() == doctest::Approx(iref.sumsq()));
 
         // A sub-range reduces only that slice.
         ag::FieldStat part = ag::field_stat_reduce(fc, 10, 20);

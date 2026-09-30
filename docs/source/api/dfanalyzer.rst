@@ -62,10 +62,18 @@ View Groupby Partials
 ---------------------
 
 Mergeable per-partition view aggregation: each partition emits partial
-aggregates (sum, count, min, max, sum-of-squares) that are combined and
-finalized into mean/std without a global shuffle.
+aggregates (sum, count, min, max, and the centered moments ``m2`` and the mean
+as a ``mean_hi`` + ``mean_lo`` pair). ``merge_view_partials`` combines the
+partials of one view row (the moments with the pairwise formula, the sum, min, max and set
+columns by their own rule) and ``finalize_view_partials``
+turns them into mean and std without a global shuffle. The variance is never
+rebuilt from a sum of squares, which loses every digit when the mean is large
+next to the spread (durations near 1e9 with a spread of 1 gave a relative error
+of 1.0).
 
 .. autofunction:: dftracer.utils.dfanalyzer.partial_arrow_view_groupby
+
+.. autofunction:: dftracer.utils.dfanalyzer.merge_view_partials
 
 .. autofunction:: dftracer.utils.dfanalyzer.finalize_view_partials
 

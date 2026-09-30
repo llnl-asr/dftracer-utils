@@ -10,11 +10,8 @@
 using namespace dftracer::utils::trace::comparator;
 using namespace dftracer::utils::index::schemas::dft::agg;
 
-// MetricStats representation change: `m2` now holds the raw power sum
-// `sum_x^2` (not Welford central M2). The caller passes `central_m2`
-// (central moment, = sum((x-mean)^2)); we translate it to raw via
-//   raw_sum_x^2 = central_m2 + n * mean^2
-// so callers keep Welford semantics but we store the new canonical form.
+// `m2` holds the central second moment, sum((x - mean)^2), about the running
+// mean (held as `shift`, with `cmean` the remainder); the caller passes both.
 static MetricStats make_stats(double mean, double central_m2, uint64_t total,
                               uint64_t min_val, uint64_t max_val,
                               uint64_t count = 0) {
@@ -27,7 +24,8 @@ static MetricStats make_stats(double mean, double central_m2, uint64_t total,
         count > 0 ? static_cast<double>(count)
                   : (mean != 0.0 ? static_cast<double>(total) / mean : 0.0);
     s.stat.n = static_cast<std::uint64_t>(n);
-    s.stat.sumsq = central_m2 + n * mean * mean;  // central M2 -> raw power sum
+    s.stat.shift = mean;
+    s.stat.cm2 = central_m2;
     return s;
 }
 

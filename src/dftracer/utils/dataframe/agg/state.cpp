@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/hash/hash.h>
+#include <dftracer/utils/core/common/to_chars.h>
 #include <dftracer/utils/dataframe/agg/detail.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>  // dftu_series
 #include <dftracer/utils/dataframe/internal/column_read.h>  // read_i64/u64/f64
@@ -155,6 +156,19 @@ void fs_add(FieldStat& fs, const Series& c, std::int64_t i, FieldStatDomain d) {
 // String column) so the two engines agree on ArgMax/SetUnion output.
 std::string cell_repr(const Series& c, std::int64_t i) {
     if (c.type() == TypeId::String) return std::string(c.string_at(i));
+    switch (c.type()) {
+        // A nested cell has no integer to read; the integer reader would give
+        // 0 for every row.
+        case TypeId::List:
+        case TypeId::LargeList:
+        case TypeId::FixedSizeList:
+        case TypeId::Struct:
+            throw std::invalid_argument(
+                std::string("agg: a ") + type_name(c.type()) +
+                " column has no text form for this aggregate");
+        default:
+            break;
+    }
     switch (col_domain(c.type())) {
         case FieldStatDomain::F64:
             return std::to_string(read_f64(c, i));
@@ -163,6 +177,58 @@ std::string cell_repr(const Series& c, std::int64_t i) {
         default:
             return std::to_string(read_i64(c, i));
     }
+}
+
+// SetUnion takes a String, Bool, integer or float column, or a List of one of
+// those, whose elements each join the group's set.
+bool set_scalar_type(TypeId t) {
+    switch (t) {
+        case TypeId::String:
+        case TypeId::Bool:
+        case TypeId::Int8:
+        case TypeId::Int16:
+        case TypeId::Int32:
+        case TypeId::Int64:
+        case TypeId::Uint8:
+        case TypeId::Uint16:
+        case TypeId::Uint32:
+        case TypeId::Uint64:
+        case TypeId::Float32:
+        case TypeId::Float64:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool set_is_list(TypeId t) {
+    return t == TypeId::List || t == TypeId::LargeList;
+}
+
+// One non-null element as set text: a float as the shortest text that parses
+// back to the same value (never six fixed decimals), a string as itself.
+std::string set_text(const Series& c, std::int64_t i) {
+    switch (c.type()) {
+        case TypeId::String:
+            return std::string(c.string_at(i));
+        case TypeId::Float32:
+            return dftracer::utils::float_text(
+                static_cast<float>(read_f64(c, i)));
+        case TypeId::Float64:
+            return dftracer::utils::double_text(read_f64(c, i));
+        default:
+            return cell_repr(c, i);
+    }
+}
+
+void set_insert(AggState::StringSet& set, std::string v, std::size_t group,
+                bool typed) {
+    if (!typed && v.find(AGG_SET_SEP) != std::string::npos)
+        throw std::invalid_argument(
+            "set_union: a string value in group " + std::to_string(group) +
+            " contains the set separator (0x1e), which the joined text cannot "
+            "hold");
+    set.insert(std::move(v));
 }
 
 // KMV element hash. FNV-1a avalanches poorly, so the mix is what makes the
@@ -416,55 +482,134 @@ bool fast_open(AggState& st, const std::vector<PlainKey>& k,
     return true;
 }
 
-// One cell into a light accumulator, in the cell's domain. Returns the wrap of
-// an integer sum (+1 up, -1 down, 0 none) for AggState::light_carry.
-__attribute__((always_inline)) inline int light_add(AggState::LightStat& l,
-                                                    FieldStatDomain domain,
-                                                    std::uint64_t bits) {
-    int wrap = 0;
+// The Welford step of FieldStat::add_double for the moment words (shift,
+// cmean, cm2) of a light cell, in the same operations in the same order so a
+// std column's bits equal the FieldStat route's. `n_prev` is the count before
+// this value and `sum` the field's sum word before it, or null when the
+// aggregates do not keep one (then a state whose moment words are all zero was
+// built from zeros, so it is centred on 0, as FieldStat centres it on sum / n).
+__attribute__((always_inline)) inline void light_moments(
+    std::uint64_t* mom, const std::uint64_t* sum, std::uint64_t n_prev,
+    FieldStatDomain domain, std::uint64_t bits) {
+    double x;
     switch (domain) {
-        case FieldStatDomain::F64: {
-            const double x = std::bit_cast<double>(bits);
-            if (l.n == 0) {
-                l.sum = bits;
-                l.lo = l.hi = bits;
-            } else {
-                l.sum = std::bit_cast<std::uint64_t>(
-                    std::bit_cast<double>(l.sum) + x);
-                if (x < std::bit_cast<double>(l.lo)) l.lo = bits;
-                if (x > std::bit_cast<double>(l.hi)) l.hi = bits;
-            }
+        case FieldStatDomain::F64:
+            x = std::bit_cast<double>(bits);
             break;
-        }
-        case FieldStatDomain::I64: {
-            const auto x = std::bit_cast<std::int64_t>(bits);
-            if (l.n == 0) {
-                l.sum = bits;
-                l.lo = l.hi = bits;
-            } else {
-                std::int64_t s = 0;
-                if (__builtin_add_overflow(std::bit_cast<std::int64_t>(l.sum),
-                                           x, &s)) [[unlikely]]
-                    wrap = x < 0 ? -1 : 1;
-                l.sum = std::bit_cast<std::uint64_t>(s);
-                if (x < std::bit_cast<std::int64_t>(l.lo)) l.lo = bits;
-                if (x > std::bit_cast<std::int64_t>(l.hi)) l.hi = bits;
-            }
-            break;
-        }
         case FieldStatDomain::U64:
-            if (l.n == 0) {
-                l.sum = bits;
-                l.lo = l.hi = bits;
-            } else {
-                if (__builtin_add_overflow(l.sum, bits, &l.sum)) [[unlikely]]
-                    wrap = 1;
-                if (bits < l.lo) l.lo = bits;
-                if (bits > l.hi) l.hi = bits;
-            }
+            x = static_cast<double>(bits);
             break;
+        default:
+            x = static_cast<double>(std::bit_cast<std::int64_t>(bits));
     }
-    ++l.n;
+    if (n_prev == 0) {  // the first value is the shift
+        mom[0] = std::bit_cast<std::uint64_t>(x);
+        mom[1] = 0;
+        mom[2] = 0;
+        return;
+    }
+    const double shift = std::bit_cast<double>(mom[0]);
+    const double cmean = std::bit_cast<double>(mom[1]);
+    const double cm2 = std::bit_cast<double>(mom[2]);
+    double hi = shift, lo = cmean;
+    if (shift == 0.0 && cmean == 0.0 && cm2 == 0.0) {  // FieldStat::centre
+        double s = 0.0;
+        if (sum) {
+            switch (domain) {
+                case FieldStatDomain::F64:
+                    s = std::bit_cast<double>(*sum);
+                    break;
+                case FieldStatDomain::U64:
+                    s = static_cast<double>(*sum);
+                    break;
+                default:
+                    s = static_cast<double>(std::bit_cast<std::int64_t>(*sum));
+            }
+        }
+        hi = s / static_cast<double>(n_prev);
+        lo = 0.0;
+    }
+    const double n1 = static_cast<double>(n_prev);
+    const double nn = n1 + 1.0;
+    const double delta = (x - hi) - lo;  // x - mean, without losing digits
+    const double dn = delta / nn;
+    const double term1 = delta * dn * n1;
+    mom[0] = std::bit_cast<std::uint64_t>(hi);
+    mom[1] = std::bit_cast<std::uint64_t>(lo + dn);
+    mom[2] = std::bit_cast<std::uint64_t>(cm2 + term1);
+}
+
+// One cell into field `f` of a light group row (the presence word, then the
+// cells each field's `mask` names), in the cell's domain. Returns the wrap of
+// an integer sum (+1 up, -1 down, 0 none) for AggState::light_carry.
+__attribute__((always_inline)) inline int light_add(
+    std::uint64_t* row, std::uint32_t off, std::uint8_t mask, std::size_t f,
+    FieldStatDomain domain, std::uint64_t bits) {
+    constexpr std::uint8_t SUM = AggState::LIGHT_SUM;
+    constexpr std::uint8_t MIN = AggState::LIGHT_MIN;
+    constexpr std::uint8_t MAX = AggState::LIGHT_MAX;
+    constexpr std::uint8_t CNT = AggState::LIGHT_N;
+    constexpr std::uint8_t MOM = AggState::LIGHT_MOM;
+    std::uint64_t* c = row + off;
+    bool empty;
+    std::uint64_t n_prev = 0;
+    if (mask & CNT) {
+        n_prev = c[0];
+        empty = n_prev == 0;
+        ++c[0];
+        ++c;
+    } else {
+        const std::uint64_t bit = std::uint64_t{1} << f;
+        empty = (row[0] & bit) == 0;
+        row[0] |= bit;
+    }
+    std::uint64_t* sum = (mask & SUM) ? c : nullptr;
+    std::uint64_t* lo = (mask & MIN) ? c + ((mask & SUM) ? 1 : 0) : nullptr;
+    std::uint64_t* hi =
+        (mask & MAX) ? c + ((mask & SUM) ? 1 : 0) + ((mask & MIN) ? 1 : 0)
+                     : nullptr;
+    if (mask & MOM)  // before the sum word changes: the centre may read it
+        light_moments(c + ((mask & SUM) ? 1 : 0) + ((mask & MIN) ? 1 : 0) +
+                          ((mask & MAX) ? 1 : 0),
+                      sum, n_prev, domain, bits);
+    int wrap = 0;
+    if (empty) {
+        if (sum) *sum = bits;
+        if (lo) *lo = bits;
+        if (hi) *hi = bits;
+    } else {
+        switch (domain) {
+            case FieldStatDomain::F64: {
+                const double x = std::bit_cast<double>(bits);
+                if (sum)
+                    *sum = std::bit_cast<std::uint64_t>(
+                        std::bit_cast<double>(*sum) + x);
+                if (lo && x < std::bit_cast<double>(*lo)) *lo = bits;
+                if (hi && x > std::bit_cast<double>(*hi)) *hi = bits;
+                break;
+            }
+            case FieldStatDomain::I64: {
+                const auto x = std::bit_cast<std::int64_t>(bits);
+                if (sum) {
+                    std::int64_t s = 0;
+                    if (__builtin_add_overflow(
+                            std::bit_cast<std::int64_t>(*sum), x, &s))
+                        [[unlikely]]
+                        wrap = x < 0 ? -1 : 1;
+                    *sum = std::bit_cast<std::uint64_t>(s);
+                }
+                if (lo && x < std::bit_cast<std::int64_t>(*lo)) *lo = bits;
+                if (hi && x > std::bit_cast<std::int64_t>(*hi)) *hi = bits;
+                break;
+            }
+            case FieldStatDomain::U64:
+                if (sum && __builtin_add_overflow(*sum, bits, sum)) [[unlikely]]
+                    wrap = 1;
+                if (lo && bits < *lo) *lo = bits;
+                if (hi && bits > *hi) *hi = bits;
+                break;
+        }
+    }
     return wrap;
 }
 
@@ -501,6 +646,18 @@ bool light_reducers(const AggState& st) {
     return true;
 }
 
+// Every reducer reads only what a light row keeps: count, sum, mean, min and
+// max, and a variance or standard deviation through the moment words.
+bool light_cells(const AggState& st) {
+    for (const AggSpec& sp : st.specs)
+        if (sp.op != AggOp::Count && sp.op != AggOp::CountValid &&
+            sp.op != AggOp::Sum && sp.op != AggOp::Mean &&
+            sp.op != AggOp::Min && sp.op != AggOp::Max && sp.op != AggOp::Var &&
+            sp.op != AggOp::Std)
+            return false;
+    return true;
+}
+
 bool accumulate_plain(AggState& st, const std::vector<const Series*>& keys,
                       const std::vector<const Series*>& values,
                       std::int64_t begin, std::int64_t end) {
@@ -510,9 +667,14 @@ bool accumulate_plain(AggState& st, const std::vector<const Series*>& keys,
     const std::size_t nf = st.nf;
     // The higher moments are computed only when a reducer reads them; with
     // none, a fresh state takes the light accumulators.
-    const bool moments = !light_reducers(st);
-    if (!moments && st.ngroups() == 0 && st.fstats.empty() && !st.has_sketch)
+    if (light_cells(st) && st.ngroups() == 0 && st.fstats.empty() &&
+        !st.has_sketch) {
         st.light_on = true;
+        st.init_light();
+    }
+    // A light state keeps its moments in its own words; the field stats of a
+    // state that is not light keep them only when a reducer reads them.
+    const bool moments = st.light_on ? false : !light_reducers(st);
     // A quantile field's sketch keys for the chunk, one SIMD pass per field.
     std::vector<std::vector<std::int32_t>> sketch_keys;
     std::vector<std::vector<double>> sketch_vals;
@@ -643,17 +805,21 @@ bool accumulate_plain(AggState& st, const std::vector<const Series*>& keys,
     auto add_row = [&]<bool Moments, bool Nulls>(std::int64_t g,
                                                  std::int64_t i) {
         if (static_cast<std::size_t>(g) == st.group_first_row.size())
-            st.group_first_row.push_back(st.row_base + i);
+            st.group_first_row.push_back(st.row_of(i));
+        else if (st.row_ids && st.row_ids[i] < st.group_first_row[g])
+            st.group_first_row[g] = st.row_ids[i];  // gathered rows: any order
         st.counts[static_cast<std::size_t>(g)]++;
         if constexpr (!Moments) {
             if (st.light_on) {
-                AggState::LightStat* ls =
-                    st.light.data() + static_cast<std::size_t>(g) * nf;
+                std::uint64_t* lr =
+                    st.light.data() +
+                    static_cast<std::size_t>(g) * st.light_stride;
                 for (std::size_t fj = 0; fj < nf; ++fj) {
                     const Plain8& c = v[fj];
                     if (Nulls && c.is_null(i)) continue;
-                    if (const int wr = light_add(ls[fj], c.domain, c.bits(i)))
-                        [[unlikely]]
+                    if (const int wr =
+                            light_add(lr, st.light_off[fj], st.light_mask[fj],
+                                      fj, c.domain, c.bits(i))) [[unlikely]]
                         add_carry(st, static_cast<std::size_t>(g) * nf + fj,
                                   wr);
                 }
@@ -709,7 +875,8 @@ bool accumulate_plain(AggState& st, const std::vector<const Series*>& keys,
                     groups[static_cast<std::size_t>(r + AHEAD)]);
                 if (nf > 0) {
                     if (st.light_on)
-                        __builtin_prefetch(st.light.data() + ga * nf, 1);
+                        __builtin_prefetch(
+                            st.light.data() + ga * st.light_stride, 1);
                     else
                         __builtin_prefetch(st.fstats.data() + ga * nf, 1);
                 }
@@ -809,7 +976,8 @@ bool accumulate_plain(AggState& st, const std::vector<const Series*>& keys,
                     __builtin_prefetch(st.fast_words.data() + gi * W, 0);
                     if (nf > 0) {
                         if (st.light_on)
-                            __builtin_prefetch(st.light.data() + gi * nf, 1);
+                            __builtin_prefetch(
+                                st.light.data() + gi * st.light_stride, 1);
                         else
                             __builtin_prefetch(st.fstats.data() + gi * nf, 1);
                     }
@@ -961,6 +1129,36 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
                     "' reduces a String column numerically; only "
                     "count_valid, first and last apply to strings");
         }
+        for (std::size_t s = 0; s < st.specs.size(); ++s) {
+            if (st.specs[s].op != AggOp::SetUnion || st.spec_set[s] < 0)
+                continue;
+            const Series* vc = values[static_cast<std::size_t>(
+                st.set_val_col[static_cast<std::size_t>(st.spec_set[s])])];
+            const TypeId t = vc->type();
+            if (set_scalar_type(t)) {
+                if (set_typed(st.specs[s]))
+                    st.specs[s].param = 1.0 + static_cast<double>(t);
+                continue;
+            }
+            if (set_is_list(t) && set_scalar_type(vc->child(0).type())) {
+                if (!vc->is_flat())
+                    throw std::invalid_argument(
+                        std::string("set_union: aggregate '") +
+                        st.specs[s].out + "' needs a flat list column");
+                if (set_typed(st.specs[s]))
+                    st.specs[s].param =
+                        1.0 + static_cast<double>(vc->child(0).type());
+                continue;
+            }
+            throw std::invalid_argument(
+                std::string("set_union: aggregate '") + st.specs[s].out +
+                "' does not support " +
+                (set_is_list(t)
+                     ? std::string("a list of ") +
+                           type_name(vc->child(0).type())
+                     : std::string("a column of type ") + type_name(t)) +
+                "; use a string, bool, number or a list of those");
+        }
         st.inited = true;
     }
     // A zero-key state (the whole batch is one group) has no key column to read
@@ -971,6 +1169,21 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
               : !values.empty() ? values[0]->length()
                                 : 0;
     const std::int64_t clen = end - begin;
+    // A List column's elements, fetched once per batch for the set slots.
+    std::vector<Series> set_elems;
+    std::vector<char> set_slot_typed;
+    if (st.has_set) {
+        set_elems.resize(st.n_set);
+        set_slot_typed.assign(st.n_set, 0);
+        for (std::size_t sp = 0; sp < st.specs.size(); ++sp)
+            if (st.spec_set[sp] >= 0 && set_typed(st.specs[sp]))
+                set_slot_typed[static_cast<std::size_t>(st.spec_set[sp])] = 1;
+        for (std::size_t slot = 0; slot < st.n_set; ++slot) {
+            const Series* vc =
+                values[static_cast<std::size_t>(st.set_val_col[slot])];
+            if (set_is_list(vc->type())) set_elems[slot] = vc->child(0);
+        }
+    }
 
     // The plain case, which is most group-bys: 8-byte keys and values, no
     // positional / collection state. Every buffer is resolved once and the
@@ -1009,9 +1222,11 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
 
     for (std::int64_t i = begin; i < end; ++i) {
         std::int64_t g = st.group_of(keys, i);
-        const std::int64_t row = st.row_base + i;
+        const std::int64_t row = st.row_of(i);
         if (static_cast<std::size_t>(g) == st.group_first_row.size())
             st.group_first_row.push_back(row);
+        else if (st.row_ids && row < st.group_first_row[g])
+            st.group_first_row[g] = row;  // gathered rows: any order
         st.counts[static_cast<std::size_t>(g)]++;
         const std::size_t base = static_cast<std::size_t>(g) * st.nf;
         for (std::size_t fj = 0; fj < st.nf; ++fj) {
@@ -1159,13 +1374,7 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
                 const double x =
                     read_as_double(*byc, i, col_domain(byc->type()));
                 const double y = read_as_double(*vc, i, col_domain(vc->type()));
-                const std::size_t cs = cbase + slot;
-                st.co_n[cs] += 1.0;
-                st.co_sx[cs] += x;
-                st.co_sy[cs] += y;
-                st.co_sxx[cs] += x * x;
-                st.co_syy[cs] += y * y;
-                st.co_sxy[cs] += x * y;
+                st.co[cbase + slot].add(x, y);
             }
         }
         if (st.has_set) {
@@ -1173,10 +1382,26 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
                 const Series* vc =
                     values[static_cast<std::size_t>(st.set_val_col[slot])];
                 if (vc->is_null(i)) continue;
-                std::string v = cell_repr(*vc, i);
-                if (!v.empty())
-                    st.sets[static_cast<std::size_t>(g) * st.n_set + slot]
-                        .insert(std::move(v));
+                AggState::StringSet& set =
+                    st.sets[static_cast<std::size_t>(g) * st.n_set + slot];
+                if (!set_is_list(vc->type())) {
+                    set_insert(set, set_text(*vc, i),
+                               static_cast<std::size_t>(g),
+                               set_slot_typed[slot] != 0);
+                    continue;
+                }
+                const Series& elems = set_elems[slot];
+                const std::int64_t lo = vc->type() == TypeId::List
+                                            ? vc->offsets()[i]
+                                            : vc->offsets64()[i];
+                const std::int64_t hi = vc->type() == TypeId::List
+                                            ? vc->offsets()[i + 1]
+                                            : vc->offsets64()[i + 1];
+                for (std::int64_t k = lo; k < hi; ++k)
+                    if (!elems.is_null(k))
+                        set_insert(set, set_text(elems, k),
+                                   static_cast<std::size_t>(g),
+                                   set_slot_typed[slot] != 0);
             }
         }
         if (st.has_occ) {
@@ -1361,7 +1586,10 @@ void agg_accumulate_packed(AggState& st, const std::vector<const Series*>& keys,
     std::vector<Plain8> v;
     if (!plain_shape(st, keys, values, k, v))
         throw std::logic_error("agg_accumulate_packed: not a packable shape");
-    if (st.ngroups() == 0 && st.fstats.empty()) st.light_on = true;
+    if (st.ngroups() == 0 && st.fstats.empty()) {
+        st.light_on = true;
+        st.init_light();
+    }
     if (!st.light_on || !fast_open(st, k, true))
         throw std::logic_error("agg_accumulate_packed: not a light state");
     const std::size_t nf = st.nf;
@@ -1391,11 +1619,12 @@ void agg_accumulate_packed(AggState& st, const std::vector<const Series*>& keys,
             st.counts[gi]++;
             const std::uint64_t* vals = w + W;
             const std::uint64_t mask = shape.nulls ? vals[nf] : 0;
-            AggState::LightStat* ls = st.light.data() + gi * nf;
+            std::uint64_t* lr = st.light.data() + gi * st.light_stride;
             for (std::size_t fj = 0; fj < nf; ++fj) {
                 if ((mask >> fj) & 1) continue;
-                if (const int wr = light_add(ls[fj], v[fj].domain, vals[fj]))
-                    [[unlikely]]
+                if (const int wr =
+                        light_add(lr, st.light_off[fj], st.light_mask[fj], fj,
+                                  v[fj].domain, vals[fj])) [[unlikely]]
                     add_carry(st, gi * nf + fj, wr);
             }
         }

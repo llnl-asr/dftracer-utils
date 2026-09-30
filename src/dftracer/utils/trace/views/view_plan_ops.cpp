@@ -608,7 +608,7 @@ AggSpec lower_field_agg(const FieldAggExpr& e) {
     using dftracer::utils::dataframe::field::AggFn;
     switch (e.fn()) {
         case AggFn::Count:
-            return AggSpec(AggOp::Count);
+            return AggSpec(AggOp::Count, e.field());
         case AggFn::Sum:
             return AggSpec(AggOp::Sum, e.field());
         case AggFn::Min:

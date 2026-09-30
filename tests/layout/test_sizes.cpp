@@ -30,7 +30,7 @@ constexpr std::size_t DATA_TYPE_BUDGET = 40;
 constexpr std::size_t FIELD_BUDGET = 72;
 constexpr std::size_t MORSEL_BUDGET = 56;
 constexpr std::size_t AGG_SPEC_BUDGET = 48;
-constexpr std::size_t WINDOW_COLUMN_BUDGET = 112;
+constexpr std::size_t WINDOW_COLUMN_BUDGET = 120;
 constexpr std::size_t FOLD_EVENT_BUDGET = 152;
 constexpr std::size_t LOOKUP_BUDGET = 160;
 

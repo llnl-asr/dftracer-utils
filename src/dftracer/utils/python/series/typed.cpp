@@ -132,6 +132,20 @@ PyObject* Series_to_bytes(PyObject* self, PyObject*) {
     }
 }
 
+// _series_nulls(type_id, n): a column of `n` nulls of the given type.
+PyObject* series_nulls(PyObject*, PyObject* args) {
+    int type_id = 0;
+    Py_ssize_t n = 0;
+    if (!PyArg_ParseTuple(args, "in", &type_id, &n)) return nullptr;
+    if (n < 0) {
+        PyErr_SetString(PyExc_ValueError,
+                        "_series_nulls: the length must not be negative");
+        return nullptr;
+    }
+    return make_series(Series::nulls(static_cast<TypeId>(type_id),
+                                     static_cast<std::int64_t>(n)));
+}
+
 PyObject* series_from_bytes(PyObject*, PyObject* obj) {
     Py_buffer view;
     if (PyObject_GetBuffer(obj, &view, PyBUF_SIMPLE) < 0) return nullptr;

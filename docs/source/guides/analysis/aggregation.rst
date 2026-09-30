@@ -106,7 +106,8 @@ The reductions are ``sum`` / ``min`` / ``max`` / ``mean`` / ``var`` / ``std`` /
 time: ``F.any.mean()`` alone keeps the legacy bare-named per-arg mean column, and
 ``F.any.<op>()`` for ``sum`` / ``min`` / ``max`` / ``var`` / ``std`` / ``skew`` /
 ``kurt`` emits one ``<op>_<arg>`` column per arg (``F.any.count()`` is the group
-count). Per-arg percentiles come from the viewer form
+count). ``F.x.count()`` counts the rows where the field ``x`` is present (non-null)
+and ``count()`` with no field, or the ``"count"`` spec, counts every row. Per-arg percentiles come from the viewer form
 ``TraceViewer(...).agg_numeric_args("p90", "mean")`` (or ``pct:<field>:<q>``),
 which additionally collects a per-arg sketch; ``argmax`` / ``hist`` still need a
 named field.
@@ -233,6 +234,14 @@ For example, a p99 duration per category is ``AggOp::Pct`` with ``q = 0.99`` (C+
 or ``"p99:dur"`` (Python). Percentile and histogram aggregates are backed by a
 DDSketch; see :doc:`statistics`. The last four are the occupancy metrics,
 explained below.
+
+``set_union`` over a trace gives one text cell per group: the distinct values
+sorted as text and joined with the separator byte ``\x1e``. On a ``DataFrame``
+group-by, ``col("x").set_union(typed=True)`` (C++ ``agg_set_union(value, out,
+true)``) returns a list column instead: the distinct non-null values in their own
+type (``string``, ``bool``, ``int64``, ``uint64`` or ``float64``), ascending, so
+``10`` follows ``9``; a group of nulls is an empty list, and a string may hold any
+byte. The trace aggregate keeps the text form only.
 
 Occupancy: concurrency-aware duration
 -------------------------------------
@@ -462,6 +471,19 @@ comparison use ``base.compare(variant)``, a ``LazyFrame`` of the group key, the
 ``l_``/``r_`` metrics and the ``delta_``/``pct_`` columns; register it with
 ``s.collect`` to run it with the rest. ``collect_all([...])`` gives the same
 shared scan without a session.
+
+Many groups
+-----------
+
+A group-by with many groups on an integer key or a string key of any length
+hashes each row's key to a partition, and each partition folds its own rows into
+a state of its own, so the memory above the input is one copy of the groups, not
+one per thread, and the groups come back in the order the frame first shows them.
+On 20 nullable value columns with a string and a small integer key, 5,000,000
+rows and 200,000 groups take about 0.22 s and 0.38 GB above the process level
+(1.36 s and 7.10 GB before). ``benchmarks/groupby_analyzer_bench.py`` measures
+time and peak memory in a fresh process per case; ``--gate`` exits 1 when the
+memory or time bound of the spec is missed.
 
 See also
 --------

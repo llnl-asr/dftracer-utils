@@ -53,6 +53,7 @@ from dftracer.utils import (
     set_default_runtime,
 )
 from dftracer.utils._units import coerce_bytes, coerce_duration
+from dftracer.utils.dask_frame import DaskFrame
 from dftracer.utils.dataframe import DataFrame, PhaseArg, TimeUnitArg
 from dftracer.utils.trace_viewer import TraceViewer
 
@@ -61,6 +62,7 @@ from dftracer.utils.trace_viewer import TraceViewer
 _FileSlice = Tuple[int, int, bool, List[Tuple[int, int]]]
 
 __all__ = [
+    "DaskFrame",
     "DaskTraceViewer",
     "DaskAggregatedTraceViewer",
     "ProgressAggregator",
@@ -590,6 +592,9 @@ class DaskTraceViewer:
         return self._clone(replace(self._plan, filters=self._plan.filters + (dsl,)))
 
     def duql(self, dsl: str) -> "DaskTraceViewer":
+        return self.filter(dsl)
+
+    def query(self, dsl: str) -> "DaskTraceViewer":
         return self.filter(dsl)
 
     def phase(self, phase: PhaseArg) -> "DaskTraceViewer":

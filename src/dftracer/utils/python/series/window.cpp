@@ -80,12 +80,16 @@ PyObject* Series_ewm_std(PyObject* self, PyObject* arg) {
     if (alpha == -1.0 && PyErr_Occurred()) return nullptr;
     return make_series(Series{dftu_series_ewm_std(a->handle(), alpha)});
 }
-PyObject* Series_cut(PyObject* self, PyObject* other) {
+PyObject* Series_cut(PyObject* self, PyObject* args) {
     Series* a = as_series(self);
     if (!a) return nullptr;
+    PyObject* other = nullptr;
+    int flags = 0;
+    if (!PyArg_ParseTuple(args, "O|i", &other, &flags)) return nullptr;
     Series* breaks = as_series(other);
     if (!breaks) return nullptr;
-    return make_series(Series{dftu_series_cut(a->handle(), breaks->handle())});
+    return make_series(
+        Series{dftu_series_cut(a->handle(), breaks->handle(), flags)});
 }
 PyObject* Series_qcut(PyObject* self, PyObject* arg) {
     Series* a = as_series(self);

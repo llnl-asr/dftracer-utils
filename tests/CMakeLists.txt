@@ -320,6 +320,12 @@ add_subdirectory(dataframe)
 add_subdirectory(compose)
 
 # +++++++++++++++++++++++++++++++++++++++++
+# Memory Layout Budgets
+# +++++++++++++++++++++++++++++++++++++++++
+
+add_subdirectory(layout)
+
+# +++++++++++++++++++++++++++++++++++++++++
 # Binary Integration Tests
 # +++++++++++++++++++++++++++++++++++++++++
 

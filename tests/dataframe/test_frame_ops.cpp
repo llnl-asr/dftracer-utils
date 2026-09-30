@@ -73,10 +73,10 @@ TEST_SUITE("frame ops") {
         specs[0].func = dfm::WindowFunc::RowNumber;
         specs[0].out = "rn";
         specs[1].func = dfm::WindowFunc::RunningSum;
-        specs[1].value = "dur";
+        specs[1].set_value("dur");
         specs[1].out = "cum";
         specs[2].func = dfm::WindowFunc::Lag;
-        specs[2].value = "dur";
+        specs[2].set_value("dur");
         specs[2].params.offset = 1;
         specs[2].out = "prev";
         DataFrame out = dfm::window(make_events(), {"pid"}, {"ts"}, specs);
@@ -85,7 +85,7 @@ TEST_SUITE("frame ops") {
         CHECK(i64_col(out, "rn") == std::vector<I>{1, 2, 3, 1});
         CHECK(i64_col(out, "cum") == std::vector<I>{1, 3, 6, 4});
         CHECK(i64_col(out, "prev") == std::vector<I>{NI, 1, 2, NI});
-        specs[1].value = "nope";
+        specs[1].set_value("nope");
         CHECK_THROWS_AS(dfm::window(make_events(), {"pid"}, {"ts"}, specs),
                         std::out_of_range);
     }

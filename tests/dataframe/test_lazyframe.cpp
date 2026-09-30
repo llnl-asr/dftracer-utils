@@ -106,9 +106,9 @@ class RaggedCursor : public Cursor {
             m.columns.push_back(Series::flat_i64(a.data(), 2));
             m.columns.push_back(Series::flat_i64(b.data(), 2));
             m.rows = 2;
-            m.name_ids = {intern_->get_or_insert("a"),
-                          intern_->get_or_insert("b")};
-            m.intern = intern_;
+            m.dyn_state().name_ids = {intern_->get_or_insert("a"),
+                                      intern_->get_or_insert("b")};
+            m.dyn->intern = intern_;
             co_return m;
         }
         if (step_ == 1) {
@@ -119,9 +119,9 @@ class RaggedCursor : public Cursor {
             m.columns.push_back(Series::flat_f64(a.data(), 1));
             m.columns.push_back(Series::strings(c));
             m.rows = 1;
-            m.name_ids = {intern_->get_or_insert("a"),
-                          intern_->get_or_insert("c")};
-            m.intern = intern_;
+            m.dyn_state().name_ids = {intern_->get_or_insert("a"),
+                                      intern_->get_or_insert("c")};
+            m.dyn->intern = intern_;
             co_return m;
         }
         co_return std::nullopt;

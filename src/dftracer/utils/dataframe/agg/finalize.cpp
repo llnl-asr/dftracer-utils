@@ -84,8 +84,8 @@ Series flat_temporal(TypeId type, TimeUnit unit, const std::string& timezone,
     col->type = type;
     col->encoding = Encoding::Flat;
     col->length = n;
-    col->time_unit = unit;
-    if (type == TypeId::Timestamp) col->timezone = timezone;
+    col->set_time_unit(unit);
+    if (type == TypeId::Timestamp) col->set_timezone(timezone);
     const std::size_t bytes = buffer_bytes(type, n);
     col->data = Buffer::allocate(bytes);
     if (bytes != 0) std::memcpy(col->data->data(), data, bytes);
@@ -129,8 +129,8 @@ Series wide_bytes_key(TypeId type, const std::vector<std::string>& values) {
         data += values[i];
         off[i + 1] = static_cast<std::int64_t>(data.size());
     }
-    col->offsets64 = Buffer::allocate(off.size() * sizeof(std::int64_t));
-    std::memcpy(col->offsets64->data(), off.data(),
+    col->offsets = Buffer::allocate(off.size() * sizeof(std::int64_t));
+    std::memcpy(col->offsets->data(), off.data(),
                 off.size() * sizeof(std::int64_t));
     col->data = Buffer::allocate(data.size());
     if (!data.empty()) std::memcpy(col->data->data(), data.data(), data.size());
@@ -151,9 +151,8 @@ Series bytes_flat_key(TypeId type, std::int32_t fixed_size,
     col->type = type;
     col->encoding = Encoding::Flat;
     col->length = static_cast<std::int64_t>(values.size());
-    col->fixed_size = fixed_size;
-    col->decimal_precision = decimal_precision;
-    col->decimal_scale = decimal_scale;
+    col->set_fixed_size(fixed_size);
+    col->set_decimal(decimal_precision, decimal_scale);
     std::string bytes;
     for (const std::string& v : values) bytes += v;
     col->data = Buffer::allocate(bytes.size());

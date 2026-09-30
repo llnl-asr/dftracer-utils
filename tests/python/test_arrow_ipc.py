@@ -1,10 +1,12 @@
 """Tests for Arrow IPC file output and readback via pyarrow."""
 
-import pyarrow as pa
+import pytest
 
-import dftracer.utils as dftu_utils
+pa = pytest.importorskip("pyarrow")
 
-from .common import Environment
+import dftracer.utils as dftu_utils  # noqa: E402
+
+from .common import Environment  # noqa: E402
 
 
 class TestArrowIpcReadback:

@@ -78,10 +78,10 @@ DataFrame frame_from_morsel(
     const std::optional<std::vector<std::string>>& out_names) {
     DataFrame out;
     out.columns = std::move(m.columns);
-    if (!m.name_ids.empty()) {
-        out.names.reserve(m.name_ids.size());
-        for (std::uint32_t id : m.name_ids)
-            out.names.emplace_back(m.intern->resolve(id));
+    if (!m.name_ids().empty()) {
+        out.names.reserve(m.name_ids().size());
+        for (std::uint32_t id : m.name_ids())
+            out.names.emplace_back(m.dyn->intern->resolve(id));
     } else if (out_names) {
         out.names = *out_names;
     } else {
@@ -89,10 +89,11 @@ DataFrame frame_from_morsel(
     }
     // Fold the out-of-band dyn set back in as trailing named columns, so a
     // DataFrame-terminal consumer sees the per-morsel dyn columns by name.
-    for (std::size_t i = 0; i < m.dyn_columns.size(); ++i) {
-        out.names.push_back(std::move(m.dyn_names[i]));
-        out.columns.push_back(std::move(m.dyn_columns[i]));
-    }
+    if (m.dyn)
+        for (std::size_t i = 0; i < m.dyn->dyn_columns.size(); ++i) {
+            out.names.push_back(std::move(m.dyn->dyn_names[i]));
+            out.columns.push_back(std::move(m.dyn->dyn_columns[i]));
+        }
     return out;
 }
 
@@ -587,23 +588,26 @@ class AlignCursor : public Cursor {
 
    private:
     Morsel apply(Morsel&& m) {
-        if (m.name_ids.empty()) return std::move(m);
+        if (m.name_ids().empty()) return std::move(m);
         Morsel out;
         out.rows = m.rows;
         out.batch_index = m.batch_index;
         out.ordering =
             m.ordering == Ordering::ByColumn ? Ordering::Unordered : m.ordering;
-        out.dyn_names = std::move(m.dyn_names);
-        out.dyn_columns = std::move(m.dyn_columns);
+        const std::vector<std::uint32_t>& ids = m.name_ids();
+        if (!m.dyn->dyn_columns.empty()) {
+            out.dyn_state().dyn_names = std::move(m.dyn->dyn_names);
+            out.dyn->dyn_columns = std::move(m.dyn->dyn_columns);
+        }
         out.columns.reserve(fields_.size());
         for (std::size_t f = 0; f < fields_.size(); ++f) {
-            std::size_t at = m.name_ids.size();
-            for (std::size_t c = 0; c < m.name_ids.size(); ++c)
-                if (m.intern->resolve(m.name_ids[c]) == fields_[f].name) {
+            std::size_t at = ids.size();
+            for (std::size_t c = 0; c < ids.size(); ++c)
+                if (m.dyn->intern->resolve(ids[c]) == fields_[f].name) {
                     at = c;
                     break;
                 }
-            if (at < m.name_ids.size()) {
+            if (at < ids.size()) {
                 if (m.ordering == Ordering::ByColumn &&
                     static_cast<std::int32_t>(at) == m.ordered_column) {
                     out.ordering = Ordering::ByColumn;
@@ -665,8 +669,7 @@ class WithColumnCursor : public Cursor {
         if (m.ordering == Ordering::ByColumn && replace_ == m.ordered_column)
             out.ordering = Ordering::Unordered;
         out.columns = std::move(m.columns);
-        out.dyn_names = std::move(m.dyn_names);
-        out.dyn_columns = std::move(m.dyn_columns);
+        out.dyn = std::move(m.dyn);
         if (replace_ >= 0)
             out.columns[static_cast<std::size_t>(replace_)] = std::move(nc);
         else
@@ -1328,16 +1331,17 @@ class GroupByCursor : public Cursor {
                     return;
                 }
                 std::vector<AggDynInput> dyn;
-                dyn.reserve(sch_dyn.size() + m.dyn_columns.size());
+                const MorselDyn* md = m.dyn.get();
+                dyn.reserve(sch_dyn.size() + (md ? md->dyn_columns.size() : 0));
                 for (const auto& [ci, name] : sch_dyn)
                     dyn.push_back(
                         {name, &m.columns[static_cast<std::size_t>(ci)]});
-                for (std::size_t i = 0; i < m.dyn_columns.size(); ++i) {
-                    const std::string& raw = m.dyn_names[i];
+                for (std::size_t i = 0; md && i < md->dyn_columns.size(); ++i) {
+                    const std::string& raw = md->dyn_names[i];
                     std::string name = raw.rfind(dyn_prefix_, 0) == 0
                                            ? raw.substr(dyn_prefix_.size())
                                            : raw;
-                    dyn.push_back({std::move(name), &m.dyn_columns[i]});
+                    dyn.push_back({std::move(name), &md->dyn_columns[i]});
                 }
                 agg_accumulate(st, keys, values, dyn);
             };
@@ -3243,11 +3247,10 @@ class JoinCursor : public Cursor {
                     f.name + "' when the left side produced no rows");
             Series s = Series::nulls(dt.id, 1);
             dftu_series* h = s.handle();
-            h->time_unit = dt.time_unit;
-            h->timezone = dt.timezone;
-            h->decimal_precision = dt.decimal_precision;
-            h->decimal_scale = dt.decimal_scale;
-            h->fixed_size = dt.fixed_size;
+            h->set_time_unit(dt.time_unit());
+            h->set_timezone(dt.timezone());
+            h->set_decimal(dt.decimal_precision(), dt.decimal_scale());
+            h->set_fixed_size(dt.fixed_size());
             out.push_back(std::move(s));
         }
         return out;
@@ -3320,11 +3323,11 @@ class TapCursor : public Cursor {
         }
         if (run_.rows) {
             DataFrame f;
-            if (m->name_ids.empty()) {
+            if (m->name_ids().empty()) {
                 f.names = sch_;
             } else {
-                for (const std::uint32_t id : m->name_ids)
-                    f.names.emplace_back(m->intern->resolve(id));
+                for (const std::uint32_t id : m->name_ids())
+                    f.names.emplace_back(m->dyn->intern->resolve(id));
             }
             for (const Series& c : m->columns) f.columns.push_back(c.share());
             run_.rows(f);

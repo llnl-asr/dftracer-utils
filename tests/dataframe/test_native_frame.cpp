@@ -33,8 +33,8 @@ DataFrame sample() {
 
     Series ts = Series::flat_i64(ints, 4);
     ts.handle()->type = TypeId::Timestamp;
-    ts.handle()->time_unit = TimeUnit::Milli;
-    ts.handle()->timezone = "Europe/Paris";
+    ts.handle()->set_time_unit(TimeUnit::Milli);
+    ts.handle()->set_timezone("Europe/Paris");
     f.columns.push_back(std::move(ts));
 
     const std::uint8_t dec[64] = {
@@ -42,8 +42,7 @@ DataFrame sample() {
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     Series d = Series::flat(TypeId::Decimal128, dec, 4);
-    d.handle()->decimal_precision = 20;
-    d.handle()->decimal_scale = 3;
+    d.handle()->set_decimal(20, 3);
     f.columns.push_back(std::move(d));
 
     // List<String>: ["a","b"], [], ["c"], ["d","e","f"]
@@ -90,10 +89,10 @@ TEST_SUITE("native frame") {
         CHECK(back->columns[4].is_json());
         CHECK_FALSE(back->columns[2].is_json());
         CHECK(back->columns[4].string_at(1) == "\"x\"");
-        CHECK(back->columns[5].handle()->time_unit == TimeUnit::Milli);
-        CHECK(back->columns[5].handle()->timezone == "Europe/Paris");
-        CHECK(back->columns[6].handle()->decimal_scale == 3);
-        CHECK(back->columns[6].handle()->decimal_precision == 20);
+        CHECK(back->columns[5].handle()->time_unit() == TimeUnit::Milli);
+        CHECK(back->columns[5].handle()->timezone() == "Europe/Paris");
+        CHECK(back->columns[6].handle()->decimal_scale() == 3);
+        CHECK(back->columns[6].handle()->decimal_precision() == 20);
         const Series& tags = back->columns[7];
         CHECK(tags.child(0).length() == 6);
         CHECK(tags.child(0).string_at(5) == "f");
@@ -157,14 +156,14 @@ TEST_SUITE("native frame") {
         f.columns.push_back(std::move(m));
         Series fl = Series::list({0, 2, 4}, strings({"a", "b", "c", "d"}));
         fl.handle()->type = TypeId::FixedSizeList;
-        fl.handle()->fixed_size = 2;
+        fl.handle()->set_fixed_size(2);
         fl.handle()->offsets.reset();
         f.columns.push_back(std::move(fl));
         const auto back = frame_from_native(frame_to_native(f));
         REQUIRE(back);
         CHECK(back->columns[0].type() == TypeId::Map);
         CHECK(back->columns[1].type() == TypeId::FixedSizeList);
-        CHECK(back->columns[1].handle()->fixed_size == 2);
+        CHECK(back->columns[1].handle()->fixed_size() == 2);
         CHECK(back->columns[1].child(0).string_at(3) == "d");
     }
 

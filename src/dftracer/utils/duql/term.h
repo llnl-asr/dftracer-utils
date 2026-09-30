@@ -248,23 +248,23 @@ enum class RangeRead : std::uint8_t {
 /// `low` is GT or GE, `high` LT or LE. They count in `correlated` and are not
 /// in `target`.
 struct TLookup {
-    LookupKind kind = LookupKind::IN;
     std::vector<TermPtr> keys;
     std::size_t side = 0;
     std::string name;
     std::vector<std::string> target;
     std::string column;
-    bool negated = false;
-    bool all = false;
     std::size_t correlated = 0;
     std::optional<std::size_t> empty;
-    RangeRead range = RangeRead::NONE;
+    std::shared_ptr<LookupSlot> slot;
     std::optional<TermOp> low;
     std::optional<TermOp> high;
+    LookupKind kind = LookupKind::IN;
+    RangeRead range = RangeRead::NONE;
+    bool negated = false;
+    bool all = false;
     /// IN only: a top-level term of the scan filter, which reads the side's
     /// distinct rows from a table instead of a join.
     bool key_set = false;
-    std::shared_ptr<LookupSlot> slot;
 };
 
 /// Whether `l` reads its side through a join, not a collected table: an

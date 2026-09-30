@@ -239,7 +239,7 @@ void export_dict(const dftu_series& col, ArrowArray* array) {
     auto* h = new ExportedArray();
     h->keep.push_back(col.validity);
     h->keep.push_back(col.data);
-    h->child_keep = col.child;
+    h->child_keep = col.child();
     h->buffers[0] = col.validity ? col.validity->data() : nullptr;
     h->buffers[1] = col.data ? col.data->data() : nullptr;
     array->length = col.length;
@@ -250,7 +250,7 @@ void export_dict(const dftu_series& col, ArrowArray* array) {
     array->private_data = h;
     array->release = release_exported;
     array->dictionary = new ArrowArray();
-    export_array(*col.child, array->dictionary);
+    export_array(*col.child(), array->dictionary);
 }
 
 void export_varwidth(const dftu_series& col, ArrowArray* array) {
@@ -275,10 +275,10 @@ void export_varwidth(const dftu_series& col, ArrowArray* array) {
 void export_varwidth_large(const dftu_series& col, ArrowArray* array) {
     auto* h = new ExportedArray();
     h->keep.push_back(col.validity);
-    h->keep.push_back(col.offsets64);
+    h->keep.push_back(col.offsets);
     h->keep.push_back(col.data);
     h->buffers[0] = col.validity ? col.validity->data() : nullptr;
-    h->buffers[1] = col.offsets64 ? col.offsets64->data() : nullptr;
+    h->buffers[1] = col.offsets ? col.offsets->data() : nullptr;
     h->buffers[2] = col.data ? col.data->data() : nullptr;
     array->length = col.length;
     array->null_count = col.null_count;
@@ -299,12 +299,12 @@ void export_struct(const dftu_series& col, ArrowArray* array) {
     array->offset = 0;
     array->n_buffers = 1;
     array->buffers = h->buffers;
-    array->n_children = static_cast<std::int64_t>(col.children.size());
-    array->children = new ArrowArray*[col.children.size()];
-    for (std::size_t i = 0; i < col.children.size(); ++i) {
+    array->n_children = static_cast<std::int64_t>(col.num_fields());
+    array->children = new ArrowArray*[col.num_fields()];
+    for (std::size_t i = 0; i < col.num_fields(); ++i) {
         array->children[i] = new ArrowArray();
-        export_array(*col.children[i], array->children[i]);
-        h->children_keep.push_back(col.children[i]);
+        export_array(*col.nested[i].series, array->children[i]);
+        h->children_keep.push_back(col.nested[i].series);
     }
     array->private_data = h;
     array->release = release_exported;
@@ -317,7 +317,7 @@ void export_list(const dftu_series& col, ArrowArray* array) {
     auto* h = new ExportedArray();
     h->keep.push_back(col.validity);
     h->keep.push_back(col.offsets);
-    h->child_keep = col.child;
+    h->child_keep = col.child();
     h->buffers[0] = col.validity ? col.validity->data() : nullptr;
     h->buffers[1] = col.offsets ? col.offsets->data() : nullptr;
     array->length = col.length;
@@ -328,7 +328,7 @@ void export_list(const dftu_series& col, ArrowArray* array) {
     array->n_children = 1;
     array->children = new ArrowArray*[1];
     array->children[0] = new ArrowArray();
-    export_array(*col.child, array->children[0]);
+    export_array(*col.child(), array->children[0]);
     array->private_data = h;
     array->release = release_exported;
 }
@@ -337,10 +337,10 @@ void export_list(const dftu_series& col, ArrowArray* array) {
 void export_list_large(const dftu_series& col, ArrowArray* array) {
     auto* h = new ExportedArray();
     h->keep.push_back(col.validity);
-    h->keep.push_back(col.offsets64);
-    h->child_keep = col.child;
+    h->keep.push_back(col.offsets);
+    h->child_keep = col.child();
     h->buffers[0] = col.validity ? col.validity->data() : nullptr;
-    h->buffers[1] = col.offsets64 ? col.offsets64->data() : nullptr;
+    h->buffers[1] = col.offsets ? col.offsets->data() : nullptr;
     array->length = col.length;
     array->null_count = col.null_count;
     array->offset = 0;
@@ -349,7 +349,7 @@ void export_list_large(const dftu_series& col, ArrowArray* array) {
     array->n_children = 1;
     array->children = new ArrowArray*[1];
     array->children[0] = new ArrowArray();
-    export_array(*col.child, array->children[0]);
+    export_array(*col.child(), array->children[0]);
     array->private_data = h;
     array->release = release_exported;
 }
@@ -359,7 +359,7 @@ void export_list_large(const dftu_series& col, ArrowArray* array) {
 void export_fixed_size_list(const dftu_series& col, ArrowArray* array) {
     auto* h = new ExportedArray();
     h->keep.push_back(col.validity);
-    h->child_keep = col.child;
+    h->child_keep = col.child();
     h->buffers[0] = col.validity ? col.validity->data() : nullptr;
     array->length = col.length;
     array->null_count = col.null_count;
@@ -369,7 +369,7 @@ void export_fixed_size_list(const dftu_series& col, ArrowArray* array) {
     array->n_children = 1;
     array->children = new ArrowArray*[1];
     array->children[0] = new ArrowArray();
-    export_array(*col.child, array->children[0]);
+    export_array(*col.child(), array->children[0]);
     array->private_data = h;
     array->release = release_exported;
 }
@@ -426,44 +426,44 @@ void set_type_in_place(const dftu_series& col, ArrowSchema* schema) {
     if (col.type == TypeId::Struct) {
         ArrowSchemaSetType(schema, NANOARROW_TYPE_STRUCT);
         ArrowSchemaAllocateChildren(
-            schema, static_cast<std::int64_t>(col.children.size()));
-        for (std::size_t i = 0; i < col.children.size(); ++i) {
-            build_schema(*col.children[i], schema->children[i]);
-            ArrowSchemaSetName(schema->children[i], col.field_names[i].c_str());
+            schema, static_cast<std::int64_t>(col.num_fields()));
+        for (std::size_t i = 0; i < col.num_fields(); ++i) {
+            build_schema(*col.nested[i].series, schema->children[i]);
+            ArrowSchemaSetName(schema->children[i], col.nested[i].name.c_str());
         }
     } else if (col.type == TypeId::List) {
         ArrowSchemaSetType(schema, NANOARROW_TYPE_LIST);
-        set_type_in_place(*col.child, schema->children[0]);
+        set_type_in_place(*col.child(), schema->children[0]);
     } else if (col.type == TypeId::LargeList) {
         ArrowSchemaSetType(schema, NANOARROW_TYPE_LARGE_LIST);
-        set_type_in_place(*col.child, schema->children[0]);
+        set_type_in_place(*col.child(), schema->children[0]);
     } else if (col.type == TypeId::FixedSizeList) {
         ArrowSchemaSetTypeFixedSize(schema, NANOARROW_TYPE_FIXED_SIZE_LIST,
-                                    col.fixed_size);
-        set_type_in_place(*col.child, schema->children[0]);
+                                    col.fixed_size());
+        set_type_in_place(*col.child(), schema->children[0]);
     } else if (col.type == TypeId::Map) {
         ArrowSchemaSetType(schema, NANOARROW_TYPE_MAP);
         ArrowSchema* entries = schema->children[0];
-        set_type_in_place(*col.child->children[0], entries->children[0]);
-        set_type_in_place(*col.child->children[1], entries->children[1]);
+        set_type_in_place(*col.child()->nested[0].series, entries->children[0]);
+        set_type_in_place(*col.child()->nested[1].series, entries->children[1]);
     } else if (col.type == TypeId::Timestamp || col.type == TypeId::Time32 ||
                col.type == TypeId::Time64 || col.type == TypeId::Duration) {
         const char* tz =
-            (col.type == TypeId::Timestamp && !col.timezone.empty())
-                ? col.timezone.c_str()
+            (col.type == TypeId::Timestamp && !col.timezone().empty())
+                ? col.timezone().data()
                 : nullptr;
         ArrowSchemaSetTypeDateTime(schema, to_arrow_type(col.type),
-                                   to_arrow_time_unit(col.time_unit), tz);
+                                   to_arrow_time_unit(col.time_unit()), tz);
     } else if (col.type == TypeId::Decimal128 ||
                col.type == TypeId::Decimal256) {
         ArrowSchemaSetTypeDecimal(schema, to_arrow_type(col.type),
-                                  col.decimal_precision, col.decimal_scale);
+                                  col.decimal_precision(), col.decimal_scale());
     } else if (col.type == TypeId::FixedSizeBinary) {
         ArrowSchemaSetTypeFixedSize(schema, NANOARROW_TYPE_FIXED_SIZE_BINARY,
-                                    col.fixed_size);
+                                    col.fixed_size());
     } else {
         ArrowSchemaSetType(schema, to_arrow_type(col.type));
-        if (col.json) set_json_extension(schema);
+        if (col.json()) set_json_extension(schema);
     }
 }
 
@@ -477,7 +477,7 @@ void build_schema(const dftu_series& col, ArrowSchema* schema) {
                                        ? NANOARROW_TYPE_INT64
                                        : NANOARROW_TYPE_INT32);
         ArrowSchemaAllocateDictionary(schema);
-        build_schema(*col.child, schema->dictionary);
+        build_schema(*col.child(), schema->dictionary);
     } else {
         set_type_in_place(col, schema);
     }
@@ -525,14 +525,13 @@ Series import_flat(const ArrowSchema* schema, const ArrowArray* arr,
     std::int64_t n = arr->length;
     if (type == TypeId::Timestamp || type == TypeId::Time32 ||
         type == TypeId::Time64 || type == TypeId::Duration) {
-        col->time_unit = from_arrow_time_unit(view.time_unit);
+        col->set_time_unit(from_arrow_time_unit(view.time_unit));
         if (type == TypeId::Timestamp && view.timezone != nullptr)
-            col->timezone = view.timezone;
+            col->set_timezone(view.timezone);
     } else if (type == TypeId::Decimal128 || type == TypeId::Decimal256) {
-        col->decimal_precision = view.decimal_precision;
-        col->decimal_scale = view.decimal_scale;
+        col->set_decimal(view.decimal_precision, view.decimal_scale);
     } else if (type == TypeId::FixedSizeBinary) {
-        col->fixed_size = view.fixed_size;
+        col->set_fixed_size(view.fixed_size);
     }
 
     auto wrap_validity = [&]() {
@@ -567,7 +566,7 @@ Series import_flat(const ArrowSchema* schema, const ArrowArray* arr,
             static_cast<const std::int64_t*>(arr->buffers[1]);
         std::size_t data_len =
             offs != nullptr ? static_cast<std::size_t>(offs[n]) : 0;
-        col->offsets64 = Buffer::wrap(
+        col->offsets = Buffer::wrap(
             static_cast<std::uint8_t*>(const_cast<void*>(arr->buffers[1])),
             static_cast<std::size_t>(n + 1) * sizeof(std::int64_t),
             [owner](void*) {});
@@ -582,7 +581,7 @@ Series import_flat(const ArrowSchema* schema, const ArrowArray* arr,
     // (rare) nonzero Arrow offset would be bit-level; we only import offset 0.
     // FixedSizeBinary's per-row width is col->fixed_size, not a per-TypeId
     // constant, so byte_width needs it passed alongside the type.
-    std::size_t width = byte_width(type, col->fixed_size).value_or(0);
+    std::size_t width = byte_width(type, col->fixed_size()).value_or(0);
     std::size_t ptr_off = (type == TypeId::Bool)
                               ? 0
                               : static_cast<std::size_t>(arr->offset) * width;
@@ -625,7 +624,7 @@ Series import_list_like(TypeId result_type, const ArrowSchema* schema,
         delete col;
         return Series{};
     }
-    col->child = std::shared_ptr<dftu_series>(child.release());
+    col->set_child(std::shared_ptr<dftu_series>(child.release()));
     return Series{col};
 }
 
@@ -639,7 +638,7 @@ Series import_large_list(const ArrowSchema* schema, const ArrowArray* arr,
     col->length = arr->length;
     col->null_count = arr->null_count < 0 ? 0 : arr->null_count;
     std::int64_t n = arr->length;
-    col->offsets64 = Buffer::wrap(
+    col->offsets = Buffer::wrap(
         static_cast<std::uint8_t*>(const_cast<void*>(arr->buffers[1])),
         static_cast<std::size_t>(n + 1) * sizeof(std::int64_t),
         [owner](void*) {});
@@ -652,7 +651,7 @@ Series import_large_list(const ArrowSchema* schema, const ArrowArray* arr,
         delete col;
         return Series{};
     }
-    col->child = std::shared_ptr<dftu_series>(child.release());
+    col->set_child(std::shared_ptr<dftu_series>(child.release()));
     return Series{col};
 }
 
@@ -667,7 +666,7 @@ Series import_fixed_size_list(const ArrowSchemaView& view,
     col->encoding = Encoding::Flat;
     col->length = arr->length;
     col->null_count = arr->null_count < 0 ? 0 : arr->null_count;
-    col->fixed_size = view.fixed_size;
+    col->set_fixed_size(view.fixed_size);
     std::int64_t n = arr->length;
     if (arr->n_buffers > 0 && arr->buffers[0] != nullptr)
         col->validity = Buffer::wrap(
@@ -678,7 +677,7 @@ Series import_fixed_size_list(const ArrowSchemaView& view,
         delete col;
         return Series{};
     }
-    col->child = std::shared_ptr<dftu_series>(child.release());
+    col->set_child(std::shared_ptr<dftu_series>(child.release()));
     return Series{col};
 }
 
@@ -703,9 +702,9 @@ Series import_struct(const ArrowSchema* schema, const ArrowArray* arr,
             delete col;
             return Series{};
         }
-        col->children.push_back(std::shared_ptr<dftu_series>(child.release()));
-        col->field_names.emplace_back(
-            schema->children[i]->name ? schema->children[i]->name : "");
+        col->nested.push_back(
+            {std::shared_ptr<dftu_series>(child.release()),
+             schema->children[i]->name ? schema->children[i]->name : ""});
     }
     return Series{col};
 }
@@ -739,7 +738,7 @@ Series import_dict(const ArrowSchema* schema, const ArrowArray* arr,
     adopt_type_from(*col, *values.handle());
     col->length = n;
     col->null_count = arr->null_count < 0 ? 0 : arr->null_count;
-    col->child = std::shared_ptr<dftu_series>(values.release());
+    col->set_child(std::shared_ptr<dftu_series>(values.release()));
     if (arr->n_buffers > 0 && arr->buffers[0] != nullptr)
         col->validity = Buffer::wrap(
             static_cast<std::uint8_t*>(const_cast<void*>(arr->buffers[0])),

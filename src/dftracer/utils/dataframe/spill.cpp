@@ -143,10 +143,11 @@ Series list_values(Series child, std::int64_t base, std::int64_t count) {
 
 void put_series_trailer(std::string& out, const Series& s) {
     const dftu_series& h = *s.handle();
-    put_pod<std::uint8_t>(out, h.json ? 1 : 0);
-    put_pod<std::int32_t>(out, static_cast<std::int32_t>(h.time_unit));
-    put_pod<std::uint32_t>(out, static_cast<std::uint32_t>(h.timezone.size()));
-    put_bytes(out, h.timezone.data(), h.timezone.size());
+    put_pod<std::uint8_t>(out, h.json() ? 1 : 0);
+    put_pod<std::int32_t>(out, static_cast<std::int32_t>(h.time_unit()));
+    put_pod<std::uint32_t>(out,
+                           static_cast<std::uint32_t>(h.timezone().size()));
+    put_bytes(out, h.timezone().data(), h.timezone().size());
 }
 
 }  // namespace
@@ -165,7 +166,7 @@ void put_series(std::string& out, const Series& s_in) {
         put_bytes(out, v.data(), v.size());
     }
     if (t == TypeId::FixedSizeList) {
-        const std::int32_t width = s.handle()->fixed_size;
+        const std::int32_t width = s.handle()->fixed_size();
         put_pod<std::int32_t>(out, width);
         put_series(out, list_values(s.child(0), 0, n * width));
         put_series_trailer(out, s);
@@ -204,8 +205,8 @@ void put_series(std::string& out, const Series& s_in) {
     if (t == TypeId::Decimal128 || t == TypeId::Decimal256) {
         // read_f64 divides by 10^decimal_scale, so it must round-trip too.
         const DataType dt = s.data_type();
-        put_pod<std::int32_t>(out, dt.decimal_precision);
-        put_pod<std::int32_t>(out, dt.decimal_scale);
+        put_pod<std::int32_t>(out, dt.decimal_precision());
+        put_pod<std::int32_t>(out, dt.decimal_scale());
         put_bytes(out, dftu_series_data(s.handle()), buffer_bytes(t, n));
     } else if (t == TypeId::FixedSizeBinary) {
         const std::int32_t width = dftu_series_fixed_size(s.handle());
@@ -249,9 +250,10 @@ Series get_series(const std::uint8_t*& p, const std::uint8_t* end) {
     const auto zone_bytes = get_pod<std::uint32_t>(p, end);
     const auto* zone = take_bytes(p, end, zone_bytes);
     dftu_series* h = s.handle();
-    h->json = json;
-    h->time_unit = unit;
-    h->timezone.assign(reinterpret_cast<const char*>(zone), zone_bytes);
+    h->set_json(json);
+    h->set_time_unit(unit);
+    h->set_timezone(
+        std::string_view(reinterpret_cast<const char*>(zone), zone_bytes));
     return s;
 }
 
@@ -272,8 +274,8 @@ Series get_series_data(const std::uint8_t*& p, const std::uint8_t* end) {
         col->type = type;
         col->encoding = Encoding::Flat;
         col->length = n;
-        col->fixed_size = width;
-        col->child = std::shared_ptr<dftu_series>(child.release());
+        col->set_fixed_size(width);
+        col->set_child(std::shared_ptr<dftu_series>(child.release()));
         if (validity != nullptr) {
             const std::size_t vbytes = static_cast<std::size_t>((n + 7) / 8);
             col->validity = Buffer::allocate(vbytes);
@@ -296,8 +298,8 @@ Series get_series_data(const std::uint8_t*& p, const std::uint8_t* end) {
         col->length = n;
         auto buffer = Buffer::allocate(off_bytes);
         if (off_bytes != 0) std::memcpy(buffer->data(), offs, off_bytes);
-        (wide ? col->offsets64 : col->offsets) = std::move(buffer);
-        col->child = std::shared_ptr<dftu_series>(child.release());
+        col->offsets = std::move(buffer);
+        col->set_child(std::shared_ptr<dftu_series>(child.release()));
         if (validity != nullptr) {
             const std::size_t vbytes = static_cast<std::size_t>((n + 7) / 8);
             col->validity = Buffer::allocate(vbytes);
@@ -315,11 +317,11 @@ Series get_series_data(const std::uint8_t*& p, const std::uint8_t* end) {
         for (std::int32_t i = 0; i < fields; ++i) {
             const auto name_bytes = get_pod<std::uint32_t>(p, end);
             const auto* name = take_bytes(p, end, name_bytes);
-            col->field_names.emplace_back(reinterpret_cast<const char*>(name),
-                                          name_bytes);
+            std::string field(reinterpret_cast<const char*>(name), name_bytes);
             Series child = get_series(p, end);
-            col->children.push_back(
-                std::shared_ptr<dftu_series>(child.release()));
+            col->nested.push_back(
+                {std::shared_ptr<dftu_series>(child.release()),
+                 std::move(field)});
         }
         if (validity != nullptr) {
             const std::size_t vbytes = static_cast<std::size_t>((n + 7) / 8);
@@ -338,8 +340,7 @@ Series get_series_data(const std::uint8_t*& p, const std::uint8_t* end) {
         col->type = type;
         col->encoding = Encoding::Flat;
         col->length = n;
-        col->decimal_precision = precision;
-        col->decimal_scale = scale;
+        col->set_decimal(precision, scale);
         col->data = Buffer::allocate(bytes);
         if (bytes != 0) std::memcpy(col->data->data(), data, bytes);
         if (validity != nullptr) {
@@ -359,7 +360,7 @@ Series get_series_data(const std::uint8_t*& p, const std::uint8_t* end) {
         col->type = type;
         col->encoding = Encoding::Flat;
         col->length = n;
-        col->fixed_size = width;
+        col->set_fixed_size(width);
         col->data = Buffer::allocate(bytes);
         if (bytes != 0) std::memcpy(col->data->data(), data, bytes);
         if (validity != nullptr) {
@@ -380,9 +381,9 @@ Series get_series_data(const std::uint8_t*& p, const std::uint8_t* end) {
         col->type = type;
         col->encoding = Encoding::Flat;
         col->length = n;
-        col->offsets64 = Buffer::allocate(static_cast<std::size_t>(n + 1) *
-                                          sizeof(std::int64_t));
-        std::memcpy(col->offsets64->data(), offs,
+        col->offsets = Buffer::allocate(static_cast<std::size_t>(n + 1) *
+                                        sizeof(std::int64_t));
+        std::memcpy(col->offsets->data(), offs,
                     static_cast<std::size_t>(n + 1) * sizeof(std::int64_t));
         col->data = Buffer::allocate(static_cast<std::size_t>(nbytes));
         if (nbytes != 0)

@@ -111,11 +111,10 @@ Field to_field(const char* name, ::dftu_dtype type, std::int32_t nullable,
     f.name = name ? name : "";
     f.nullable = nullable != 0;
     f.type.id = static_cast<TypeId>(type);
-    f.type.time_unit = static_cast<TimeUnit>(time_unit);
-    if (tz) f.type.timezone = tz;
-    f.type.decimal_precision = decimal_precision;
-    f.type.decimal_scale = decimal_scale;
-    f.type.fixed_size = fixed_size;
+    f.type.set_time_unit(static_cast<TimeUnit>(time_unit));
+    if (tz) f.type.set_timezone(tz);
+    f.type.set_decimal(decimal_precision, decimal_scale);
+    f.type.set_fixed_size(fixed_size);
     return f;
 }
 

@@ -2,7 +2,6 @@
 #include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_runtime_mixin.h>
 #include <dftracer/utils/python/py_type_helpers.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -42,40 +41,9 @@ static PyObject* ArrowStreamingIterator_iter(PyObject* self) {
     return self;
 }
 
-static PyObject* ArrowStreamingIterator_next(
-    ArrowStreamingIteratorObject* self) {
-    if (!self->cpp_state ||
-        (!self->cpp_state->pull_next && !self->cpp_state->pull_df)) {
-        PyErr_SetString(PyExc_RuntimeError, "Iterator not initialized");
-        return NULL;
-    }
-
-    // Native-DataFrame path: pull a DataFrame chunk (GIL released) and wrap it,
-    // so the stream never crosses Arrow.
-    if (self->cpp_state->pull_df) {
-        std::optional<dftracer::utils::dataframe::DataFrame> df;
-        if (!run_blocking_r([&] { return self->cpp_state->pull_df(); }, df))
-            return NULL;
-        if (!df.has_value()) {
-            if (self->cpp_state->get_error) {
-                if (auto ex = self->cpp_state->get_error()) {
-                    try {
-                        std::rethrow_exception(ex);
-                    } catch (const std::exception& e) {
-                        set_typed_py_error(e);
-                        return NULL;
-                    } catch (...) {
-                        PyErr_SetString(PyExc_RuntimeError,
-                                        "Unknown error in streaming iterator");
-                        return NULL;
-                    }
-                }
-            }
-            return NULL;  // StopIteration
-        }
-        return wrap_dataframe(std::move(*df));
-    }
-
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
+// The next Arrow batch of a pull_next producer, wrapped in a capsule.
+static PyObject* next_batch(ArrowStreamingIteratorObject* self) {
     std::optional<ArrowExportResult> result;
     if (!run_blocking_r([&] { return self->cpp_state->pull_next(); }, result))
         return NULL;
@@ -108,6 +76,43 @@ static PyObject* ArrowStreamingIterator_next(
     if (!obj) return NULL;
     obj->result = new ArrowExportResult(std::move(*result));
     return (PyObject*)obj;
+}
+#endif
+
+static PyObject* ArrowStreamingIterator_next(
+    ArrowStreamingIteratorObject* self) {
+    if (!self->cpp_state || !self->cpp_state->pull_df) {
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
+        if (self->cpp_state && self->cpp_state->pull_next)
+            return next_batch(self);
+#endif
+        PyErr_SetString(PyExc_RuntimeError, "Iterator not initialized");
+        return NULL;
+    }
+
+    // Native-DataFrame path: pull a DataFrame chunk (GIL released) and wrap it,
+    // so the stream never crosses Arrow.
+    std::optional<dftracer::utils::dataframe::DataFrame> df;
+    if (!run_blocking_r([&] { return self->cpp_state->pull_df(); }, df))
+        return NULL;
+    if (!df.has_value()) {
+        if (self->cpp_state->get_error) {
+            if (auto ex = self->cpp_state->get_error()) {
+                try {
+                    std::rethrow_exception(ex);
+                } catch (const std::exception& e) {
+                    set_typed_py_error(e);
+                    return NULL;
+                } catch (...) {
+                    PyErr_SetString(PyExc_RuntimeError,
+                                    "Unknown error in streaming iterator");
+                    return NULL;
+                }
+            }
+        }
+        return NULL;  // StopIteration
+    }
+    return wrap_dataframe(std::move(*df));
 }
 
 static PyObject* ArrowStreamingIterator_cancel(
@@ -175,5 +180,3 @@ int init_arrow_streaming_iterator(PyObject* m) {
 }
 
 }  // namespace dftracer::utils::python
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW

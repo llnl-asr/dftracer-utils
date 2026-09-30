@@ -52,7 +52,7 @@ dftu_series* make_selection(const dftu_series& base,
                             std::shared_ptr<Buffer> indices, std::int64_t n) {
     const std::int64_t* sel =
         reinterpret_cast<const std::int64_t*>(indices->data());
-    if (base.encoding == Encoding::Selection && base.child) {
+    if (base.encoding == Encoding::Selection && base.child()) {
         const std::int64_t* inner =
             reinterpret_cast<const std::int64_t*>(base.data->data());
         auto composed = Buffer::allocate(static_cast<std::size_t>(n) *
@@ -60,7 +60,7 @@ dftu_series* make_selection(const dftu_series& base,
         auto* c = reinterpret_cast<std::int64_t*>(composed->data());
         for (std::int64_t i = 0; i < n; ++i)
             c[i] = sel[i] < 0 ? -1 : inner[sel[i]];
-        return make_selection(*base.child, std::move(composed), n);
+        return make_selection(*base.child(), std::move(composed), n);
     }
     if (base.encoding != Encoding::Flat) {
         dftu_series* flat = dftu_series_materialize(&base);
@@ -74,7 +74,7 @@ dftu_series* make_selection(const dftu_series& base,
     out->encoding = Encoding::Selection;
     out->length = n;
     out->data = std::move(indices);
-    out->child = std::make_shared<dftu_series>(base);
+    out->set_child(std::make_shared<dftu_series>(base));
     return out;
 }
 
@@ -278,7 +278,7 @@ static dftu_series* gather_varwidth_w(const dftu_series& base, const Idx* idx,
 
     auto* result = new dftu_series();
     result->type = base.type;
-    result->json = base.json;
+    result->set_json(base.json());
     result->encoding = Encoding::Flat;
     result->length = n;
     offsets_of<Off>(*result) =
@@ -350,11 +350,11 @@ static dftu_series* gather_struct(const dftu_series& base, const Idx* idx,
     out->type = TypeId::Struct;
     out->encoding = Encoding::Flat;
     out->length = n;
-    out->field_names = base.field_names;
-    out->children.reserve(base.children.size());
-    for (const auto& ch : base.children)
-        out->children.push_back(
-            std::shared_ptr<dftu_series>(gather_column(*ch, idx, n, &info)));
+    out->nested.reserve(base.num_fields());
+    for (std::size_t i = 0; i < base.num_fields(); ++i)
+        out->nested.push_back({std::shared_ptr<dftu_series>(gather_column(
+                                   *base.nested[i].series, idx, n, &info)),
+                               base.nested[i].name});
     out->validity =
         gather_validity(base, idx, n, out->null_count, info.has_neg);
     return out;
@@ -384,9 +384,9 @@ static dftu_series* gather_list_w(const dftu_series& base, const Idx* idx,
     const std::size_t off_bytes = offsets.size() * sizeof(Off);
     offsets_of<Off>(*out) = Buffer::allocate(off_bytes);
     std::memcpy(offsets_of<Off>(*out)->data(), offsets.data(), off_bytes);
-    out->child = std::shared_ptr<dftu_series>(
-        gather_column(*base.child, child_idx.data(),
-                      static_cast<std::int64_t>(child_idx.size())));
+    out->set_child(std::shared_ptr<dftu_series>(
+        gather_column(*base.child(), child_idx.data(),
+                      static_cast<std::int64_t>(child_idx.size()))));
     out->validity =
         gather_validity(base, idx, n, out->null_count, info.has_neg);
     return out;
@@ -448,7 +448,7 @@ static dftu_series* gather_column(const dftu_series& base, const Idx* idx,
     if (base.type == TypeId::Bool) return gather_bool(base, idx, n, info);
 
     const std::size_t width =
-        byte_width(base.type, base.fixed_size).value_or(0);
+        byte_width(base.type, base.fixed_size()).value_or(0);
     if (width == 0) return nullptr;
 
     auto* out = new dftu_series();
@@ -514,10 +514,10 @@ dftu_series* dftu_series_materialize(const dftu_series* v) {
     if (v->encoding == Encoding::Flat) return new dftu_series(*v);
     if ((v->encoding != Encoding::Selection &&
          v->encoding != Encoding::Dictionary) ||
-        !v->child)
+        !v->child())
         return nullptr;
 
-    const dftu_series& base = *v->child;
+    const dftu_series& base = *v->child();
     if (base.encoding != Encoding::Flat) return nullptr;
 
     if (v->encoding == Encoding::Selection) {
@@ -658,7 +658,7 @@ dftu_series* dftu_series_where(const dftu_series* mask, const dftu_series* a,
         }
         out->validity = where_validity(*mask, *fa, *fb, n, out->null_count);
     } else if (const std::size_t width =
-                   byte_width(fa->type, fa->fixed_size).value_or(0);
+                   byte_width(fa->type, fa->fixed_size()).value_or(0);
                width != 0 && fa->type != TypeId::Struct &&
                kind != TypeId::List) {
         out = new dftu_series();

@@ -2043,7 +2043,7 @@ TEST_SUITE("vec") {
         CHECK(m.columns[0].type() ==
               dftracer::utils::dataframe::TypeId::String);
         CHECK(m.columns[0].is_json());
-        CHECK(m.columns[0].data_type().json);
+        CHECK(m.columns[0].data_type().is_json());
         REQUIRE(m.num_rows() == 3);
         CHECK(m.columns[0].string_at(0) == "\"1\"");
         CHECK(m.columns[0].string_at(1) == "1");

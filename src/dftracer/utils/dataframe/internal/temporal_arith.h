@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace dftracer::utils::dataframe {
@@ -52,8 +53,8 @@ struct TemporalResult {
 /// physical storage would need cross-width widening this pass does not
 /// build.
 inline std::optional<TemporalResult> temporal_binop_result(
-    TypeId a_id, TimeUnit a_unit, const std::string& a_tz, TypeId b_id,
-    TimeUnit b_unit, const std::string& b_tz, TemporalOp op) {
+    TypeId a_id, TimeUnit a_unit, std::string_view a_tz, TypeId b_id,
+    TimeUnit b_unit, std::string_view b_tz, TemporalOp op) {
     auto is_ts = [](TypeId t) { return t == TypeId::Timestamp; };
     auto is_dur = [](TypeId t) { return t == TypeId::Duration; };
     auto is_time64 = [](TypeId t) { return t == TypeId::Time64; };
@@ -66,9 +67,9 @@ inline std::optional<TemporalResult> temporal_binop_result(
 
     if (op == TemporalOp::Add) {
         if (is_ts(a_id) && is_dur(b_id))
-            return TemporalResult{TypeId::Timestamp, unit, a_tz};
+            return TemporalResult{TypeId::Timestamp, unit, std::string(a_tz)};
         if (is_dur(a_id) && is_ts(b_id))
-            return TemporalResult{TypeId::Timestamp, unit, b_tz};
+            return TemporalResult{TypeId::Timestamp, unit, std::string(b_tz)};
         if (is_dur(a_id) && is_dur(b_id))
             return TemporalResult{TypeId::Duration, unit, ""};
         if (is_time64(a_id) && is_dur(b_id))
@@ -83,7 +84,7 @@ inline std::optional<TemporalResult> temporal_binop_result(
             return TemporalResult{TypeId::Duration, unit, ""};
         }
         if (is_ts(a_id) && is_dur(b_id))
-            return TemporalResult{TypeId::Timestamp, unit, a_tz};
+            return TemporalResult{TypeId::Timestamp, unit, std::string(a_tz)};
         if (is_time64(a_id) && is_time64(b_id))
             return TemporalResult{TypeId::Duration, unit, ""};
         if (is_time64(a_id) && is_dur(b_id))

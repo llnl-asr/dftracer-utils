@@ -114,8 +114,8 @@ dftu_series* string_predicate_w(const dftu_series* v, Pred pred) {
             for (std::int64_t i = 0; i < v->length; ++i)
                 if (pred(value_at<Off>(*v, i))) set(i);
         }
-    } else if (v->encoding == Encoding::Dictionary && v->child) {
-        const dftu_series& dict = *v->child;
+    } else if (v->encoding == Encoding::Dictionary && v->child()) {
+        const dftu_series& dict = *v->child();
         std::vector<char> hit(static_cast<std::size_t>(dict.length));
         for (std::int64_t k = 0; k < dict.length; ++k)
             hit[static_cast<std::size_t>(k)] =
@@ -152,11 +152,12 @@ class RowReader {
             off_ = reinterpret_cast<const Off*>(offsets_of<Off>(*v)->data());
             data_ = reinterpret_cast<const char*>(v->data->data());
             ok_ = true;
-        } else if (v->encoding == Encoding::Dictionary && v->child &&
-                   offsets_of<Off>(*v->child) && v->child->data && v->data) {
+        } else if (v->encoding == Encoding::Dictionary && v->child() &&
+                   offsets_of<Off>(*v->child()) && v->child()->data &&
+                   v->data) {
             off_ = reinterpret_cast<const Off*>(
-                offsets_of<Off>(*v->child)->data());
-            data_ = reinterpret_cast<const char*>(v->child->data->data());
+                offsets_of<Off>(*v->child())->data());
+            data_ = reinterpret_cast<const char*>(v->child()->data->data());
             codes_ = reinterpret_cast<const std::int32_t*>(v->data->data());
             ok_ = true;
         }
@@ -704,7 +705,7 @@ dftu_series* dftu_series_str_len_bytes(const dftu_series* v) {
     // Every other case (DICTIONARY, or a wide-offset FLAT column) is scalar;
     // a Large* column's row count is bounded by int32 either way, only its
     // byte offsets are not, so the SIMD int32 path stays narrow-only.
-    if (v->encoding == Encoding::Flat && v->offsets) {
+    if (v->encoding == Encoding::Flat && v->offsets && !v->wide_offsets()) {
         std::vector<std::int64_t> vals(static_cast<std::size_t>(v->length), 0);
         if (v->length > 0)
             len_bytes_simd(
@@ -724,7 +725,8 @@ dftu_series* dftu_series_str_len_chars(const dftu_series* v) {
     // FLAT, narrow offsets: count non-continuation bytes per row with the
     // vectorized scan. DICTIONARY and wide-offset columns take the scalar
     // per-row path.
-    if (v->encoding == Encoding::Flat && v->offsets && v->data) {
+    if (v->encoding == Encoding::Flat && v->offsets && !v->wide_offsets() &&
+        v->data) {
         const std::int32_t* off =
             reinterpret_cast<const std::int32_t*>(v->offsets->data());
         const std::uint8_t* data = v->data->data();
@@ -990,7 +992,7 @@ dftu_series* list_transform_w(const dftu_series* v, Fn fn) {
         static_cast<std::size_t>(v->length + 1) * sizeof(std::int32_t);
     out->offsets = Buffer::allocate(loff_bytes);
     std::memcpy(out->offsets->data(), list_off.data(), loff_bytes);
-    out->child = std::shared_ptr<dftu_series>(child);
+    out->set_child(std::shared_ptr<dftu_series>(child));
     return out;
 }
 
@@ -1253,8 +1255,9 @@ dftu_series* list_join_impl(const dftu_series* v, std::string_view sep) {
     if (!v || v->type != TypeId::List || v->encoding != Encoding::Flat)
         return nullptr;
     const std::int32_t* off = dftu_series_offsets(v);
-    if (!off || !v->child || !is_string_kind(v->child->type)) return nullptr;
-    const dftu_series& child = *v->child;
+    if (!off || !v->child() || !is_string_kind(v->child()->type))
+        return nullptr;
+    const dftu_series& child = *v->child();
     const bool wide = is_wide_offset_type(child.type);
     std::vector<std::string> parts(static_cast<std::size_t>(v->length));
     for (std::int64_t i = 0; i < v->length; ++i) {

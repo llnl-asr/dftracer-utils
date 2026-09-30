@@ -255,8 +255,8 @@ bool plain_key(const Series& c, PlainKey& out) {
     out.text = reinterpret_cast<const char*>(h.data->data());
     out.text_size = static_cast<std::int64_t>(h.data->size());
     out.fixed.validity = h.validity ? h.validity->data() : nullptr;
-    if (h.offsets64)
-        out.off64 = reinterpret_cast<const std::int64_t*>(h.offsets64->data());
+    if (h.offsets && h.wide_offsets())
+        out.off64 = reinterpret_cast<const std::int64_t*>(h.offsets->data());
     else if (h.offsets)
         out.off32 = reinterpret_cast<const std::int32_t*>(h.offsets->data());
     else
@@ -927,15 +927,15 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
             if (kt == TypeId::Time32 || kt == TypeId::Time64 ||
                 kt == TypeId::Timestamp || kt == TypeId::Duration) {
                 const DataType dt = keys[k]->data_type();
-                st.key_time_unit[k] = dt.time_unit;
-                st.key_timezone[k] = dt.timezone;
+                st.key_time_unit[k] = dt.time_unit();
+                st.key_timezone[k] = dt.timezone();
             } else if (kt == TypeId::FixedSizeBinary ||
                        kt == TypeId::Decimal128 || kt == TypeId::Decimal256) {
                 const DataType dt = keys[k]->data_type();
                 st.key_byte_width[k] = static_cast<std::int32_t>(
-                    byte_width(kt, dt.fixed_size).value_or(0));
-                st.key_decimal_precision[k] = dt.decimal_precision;
-                st.key_decimal_scale[k] = dt.decimal_scale;
+                    byte_width(kt, dt.fixed_size()).value_or(0));
+                st.key_decimal_precision[k] = dt.decimal_precision();
+                st.key_decimal_scale[k] = dt.decimal_scale();
             }
         }
         st.field_domain.resize(st.nf);

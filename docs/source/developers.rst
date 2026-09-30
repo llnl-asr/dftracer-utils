@@ -97,6 +97,20 @@ Doxygen XML) and Python (``tests/python/test_op_parity.py`` runs that half
 under pytest), is backed by a registered op, and every registered op is
 reachable from Python, so the three surfaces cannot drift apart.
 
+Struct Layout
+-------------
+
+A struct member that only some values of a tag use lives in a ``union``
+(trivially copyable members) or a ``std::variant`` keyed by that tag, and the
+struct holds the tag. Members are declared by decreasing alignment, so
+padding shows in review. ``tests/layout/test_sizes.cpp`` asserts the size
+and alignment of the structs on hot paths (``dftu_series``, ``DataType``,
+``Field``, ``Morsel``, ``AggSpec``, ``WindowColumn``, ``FoldEvent`` and
+``TLookup``); a change that grows one past its budget raises the budget and
+says why. A smaller layout for a hot-path struct needs a benchmark that shows
+it is no slower: ``FoldEvent`` keeps its size because the smaller layout
+added an allocation per event.
+
 Code Coverage
 -------------
 

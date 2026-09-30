@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -139,27 +140,153 @@ enum class TimeUnit : std::int32_t {
     Nano,
 };
 
+/// The id of time zone `name` in the process-wide zone table; 0 is no zone.
+/// Thread-safe. Names are never freed.
+std::uint32_t intern_timezone(std::string_view name);
+/// The name of zone `id` (empty for 0). The view lives for the process.
+std::string_view timezone_name(std::uint32_t id);
+
+/// The parameters of a type, in one union keyed by the type's TypeId: the
+/// time unit and interned zone of a temporal type, the precision and scale of
+/// a decimal, the size of a fixed-size type, the JSON flag of a string. Each
+/// accessor takes the tag and gives the default for a type that has no such
+/// parameter; each setter ignores it. A zero union reads as all defaults.
+class TypeParams {
+   public:
+    TimeUnit time_unit(TypeId id) const noexcept {
+        return temporal(id) ? static_cast<TimeUnit>(bits_.time.unit ^ MICRO)
+                            : TimeUnit::Micro;
+    }
+    std::string_view timezone(TypeId id) const {
+        return id == TypeId::Timestamp ? timezone_name(bits_.time.zone)
+                                       : std::string_view();
+    }
+    std::int32_t decimal_precision(TypeId id) const noexcept {
+        return decimal(id) ? bits_.decimal.precision : 0;
+    }
+    std::int32_t decimal_scale(TypeId id) const noexcept {
+        return decimal(id) ? bits_.decimal.scale : 0;
+    }
+    std::int32_t fixed_size(TypeId id) const noexcept {
+        return fixed(id) ? bits_.fixed_size : 0;
+    }
+    bool is_json(TypeId id) const noexcept { return text(id) && bits_.json; }
+
+    void set_time_unit(TypeId id, TimeUnit unit) noexcept {
+        if (temporal(id))
+            bits_.time.unit = static_cast<std::int32_t>(unit) ^ MICRO;
+    }
+    void set_timezone(TypeId id, std::string_view zone) {
+        if (id == TypeId::Timestamp) bits_.time.zone = intern_timezone(zone);
+    }
+    void set_decimal(TypeId id, std::int32_t precision,
+                     std::int32_t scale) noexcept {
+        if (decimal(id)) bits_.decimal = {precision, scale};
+    }
+    void set_fixed_size(TypeId id, std::int32_t n) noexcept {
+        if (fixed(id)) bits_.fixed_size = n;
+    }
+    void set_json(TypeId id, bool json) noexcept {
+        if (text(id)) bits_.json = json;
+    }
+
+    /// The same parameters as `other` for type `id`.
+    bool same(TypeId id, const TypeParams& other) const {
+        return time_unit(id) == other.time_unit(id) &&
+               timezone(id) == other.timezone(id) &&
+               decimal_precision(id) == other.decimal_precision(id) &&
+               decimal_scale(id) == other.decimal_scale(id) &&
+               fixed_size(id) == other.fixed_size(id) &&
+               is_json(id) == other.is_json(id);
+    }
+
+   private:
+    // A zero union reads as Micro, the default unit.
+    static constexpr std::int32_t MICRO =
+        static_cast<std::int32_t>(TimeUnit::Micro);
+
+    static bool temporal(TypeId id) noexcept {
+        return id == TypeId::Timestamp || id == TypeId::Time32 ||
+               id == TypeId::Time64 || id == TypeId::Duration;
+    }
+    static bool decimal(TypeId id) noexcept {
+        return id == TypeId::Decimal128 || id == TypeId::Decimal256;
+    }
+    static bool fixed(TypeId id) noexcept {
+        return id == TypeId::FixedSizeBinary || id == TypeId::FixedSizeList;
+    }
+    static bool text(TypeId id) noexcept {
+        return id == TypeId::String || id == TypeId::LargeString;
+    }
+
+    struct TimeBits {
+        std::int32_t unit;
+        std::uint32_t zone;
+    };
+    struct DecimalBits {
+        std::int32_t precision;
+        std::int32_t scale;
+    };
+    union Bits {
+        TimeBits time;
+        DecimalBits decimal;
+        std::int32_t fixed_size;
+        bool json;
+        std::uint64_t all;
+    } bits_{.all = 0};
+};
+
 /// A column's full type. `id` is the tag; `fields` carries the nested
 /// structure - exactly one entry for List/LargeList/FixedSizeList (the
 /// element) and for Map (the Struct{key,value} entry type), one per field for
-/// Struct, and none for a scalar. The remaining members are parameters that
-/// are meaningful only for the `id` values named on each: default-valued and
-/// ignored otherwise.
+/// Struct, and none for a scalar. The type parameters share one union keyed
+/// by `id`: set `id` first, then a parameter its type uses; a parameter
+/// another type uses reads as its default.
 struct DataType {
     TypeId id = TypeId::Unknown;
     std::vector<Field> fields;
-    /// Timestamp, Time32, Time64, Duration.
-    TimeUnit time_unit = TimeUnit::Micro;
+    TypeParams params;
+
+    /// Timestamp, Time32, Time64, Duration; Micro otherwise.
+    TimeUnit time_unit() const noexcept { return params.time_unit(id); }
     /// Timestamp only; empty means no timezone (a naive timestamp).
-    std::string timezone;
-    /// Decimal128, Decimal256.
-    std::int32_t decimal_precision = 0;
-    std::int32_t decimal_scale = 0;
-    /// FixedSizeBinary (byte width), FixedSizeList (element count).
-    std::int32_t fixed_size = 0;
-    /// String only: each value is canonical JSON text, so a number, a string
-    /// and a bool keep their JSON types (`3` and `"3"` differ).
-    bool json = false;
+    std::string_view timezone() const { return params.timezone(id); }
+    /// Decimal128, Decimal256; 0 otherwise.
+    std::int32_t decimal_precision() const noexcept {
+        return params.decimal_precision(id);
+    }
+    std::int32_t decimal_scale() const noexcept {
+        return params.decimal_scale(id);
+    }
+    /// FixedSizeBinary (byte width), FixedSizeList (element count); 0
+    /// otherwise.
+    std::int32_t fixed_size() const noexcept { return params.fixed_size(id); }
+    /// String and LargeString: each value is canonical JSON text, so a
+    /// number, a string and a bool keep their JSON types (`3` and `"3"`
+    /// differ).
+    bool is_json() const noexcept { return params.is_json(id); }
+
+    /// Each setter is ignored for a type that has no such parameter.
+    DataType& set_time_unit(TimeUnit unit) noexcept {
+        params.set_time_unit(id, unit);
+        return *this;
+    }
+    DataType& set_timezone(std::string_view zone) {
+        params.set_timezone(id, zone);
+        return *this;
+    }
+    DataType& set_decimal(std::int32_t precision, std::int32_t scale) noexcept {
+        params.set_decimal(id, precision, scale);
+        return *this;
+    }
+    DataType& set_fixed_size(std::int32_t n) noexcept {
+        params.set_fixed_size(id, n);
+        return *this;
+    }
+    DataType& set_json(bool json) noexcept {
+        params.set_json(id, json);
+        return *this;
+    }
 
     bool operator==(const DataType& other) const;
     bool operator!=(const DataType& other) const { return !(*this == other); }
@@ -180,10 +307,7 @@ struct Field {
 
 inline bool DataType::operator==(const DataType& other) const {
     return id == other.id && fields == other.fields &&
-           time_unit == other.time_unit && timezone == other.timezone &&
-           decimal_precision == other.decimal_precision &&
-           decimal_scale == other.decimal_scale &&
-           fixed_size == other.fixed_size && json == other.json;
+           params.same(id, other.params);
 }
 
 /// A scalar DataType with no nested fields.
@@ -217,7 +341,7 @@ inline DataType fixed_size_list_of(DataType item_type, std::int32_t size,
                                    std::string item_name = "item") {
     DataType dt;
     dt.id = TypeId::FixedSizeList;
-    dt.fixed_size = size;
+    dt.set_fixed_size(size);
     dt.fields.push_back(
         Field{std::move(item_name), std::move(item_type), true});
     return dt;
@@ -249,8 +373,8 @@ inline DataType map_of(DataType key_type, DataType value_type) {
 inline DataType timestamp(TimeUnit unit, std::string tz = "") {
     DataType dt;
     dt.id = TypeId::Timestamp;
-    dt.time_unit = unit;
-    dt.timezone = std::move(tz);
+    dt.set_time_unit(unit);
+    dt.set_timezone(tz);
     return dt;
 }
 
@@ -261,7 +385,7 @@ inline DataType time_of(TimeUnit unit) {
     dt.id = (unit == TimeUnit::Second || unit == TimeUnit::Milli)
                 ? TypeId::Time32
                 : TypeId::Time64;
-    dt.time_unit = unit;
+    dt.set_time_unit(unit);
     return dt;
 }
 
@@ -269,7 +393,7 @@ inline DataType time_of(TimeUnit unit) {
 inline DataType duration_of(TimeUnit unit) {
     DataType dt;
     dt.id = TypeId::Duration;
-    dt.time_unit = unit;
+    dt.set_time_unit(unit);
     return dt;
 }
 
@@ -277,8 +401,7 @@ inline DataType duration_of(TimeUnit unit) {
 inline DataType decimal128(std::int32_t precision, std::int32_t scale) {
     DataType dt;
     dt.id = TypeId::Decimal128;
-    dt.decimal_precision = precision;
-    dt.decimal_scale = scale;
+    dt.set_decimal(precision, scale);
     return dt;
 }
 
@@ -286,8 +409,7 @@ inline DataType decimal128(std::int32_t precision, std::int32_t scale) {
 inline DataType decimal256(std::int32_t precision, std::int32_t scale) {
     DataType dt;
     dt.id = TypeId::Decimal256;
-    dt.decimal_precision = precision;
-    dt.decimal_scale = scale;
+    dt.set_decimal(precision, scale);
     return dt;
 }
 
@@ -295,7 +417,7 @@ inline DataType decimal256(std::int32_t precision, std::int32_t scale) {
 inline DataType fixed_size_binary(std::int32_t size) {
     DataType dt;
     dt.id = TypeId::FixedSizeBinary;
-    dt.fixed_size = size;
+    dt.set_fixed_size(size);
     return dt;
 }
 
@@ -833,7 +955,7 @@ constexpr std::optional<std::size_t> byte_width(
 
 /// Byte width of `dt`, resolving FixedSizeBinary via `dt.fixed_size`.
 constexpr std::optional<std::size_t> byte_width(const DataType& dt) noexcept {
-    return byte_width(dt.id, dt.fixed_size);
+    return byte_width(dt.id, dt.fixed_size());
 }
 
 constexpr std::size_t buffer_bytes(TypeId t, std::int64_t n) noexcept {

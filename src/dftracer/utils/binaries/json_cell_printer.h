@@ -197,14 +197,14 @@ inline void append_cell_json(std::string& s, const dataframe::Series& c,
             s += '"';
             s += detail::decimal_to_exact_string(
                 c.data<std::uint8_t>() + static_cast<std::size_t>(i) * 16, 16,
-                c.data_type().decimal_scale);
+                c.data_type().decimal_scale());
             s += '"';
             break;
         case TypeId::Decimal256:
             s += '"';
             s += detail::decimal_to_exact_string(
                 c.data<std::uint8_t>() + static_cast<std::size_t>(i) * 32, 32,
-                c.data_type().decimal_scale);
+                c.data_type().decimal_scale());
             s += '"';
             break;
         case TypeId::List:

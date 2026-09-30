@@ -2,7 +2,6 @@
 """Tests for TraceViewer.join: the generic LazyFrame join of two aggregated
 views on their group key."""
 
-import pyarrow as pa
 import pytest
 
 import dftracer.utils as dftu_utils
@@ -19,7 +18,7 @@ def _indexed(env):
 
 
 def _by_cat(tbl):
-    return {row["cat"]: row for row in tbl.to_pylist()}
+    return {row["cat"]: row for row in tbl.to_dicts()}
 
 
 def _sides(gz):
@@ -35,9 +34,9 @@ class TestViewJoin:
             left, right = _sides(gz)
             joined = left.join(right, on="cat", how="inner")
             assert isinstance(joined, LazyFrame)
-            tbl = pa.table(joined.collect())
+            tbl = joined.collect()
             # The clashing right-side column takes the "_right" suffix.
-            assert tbl.column_names == ["cat", "count", "count_right", "sum_dur"]
+            assert tbl.columns == ["cat", "count", "count_right", "sum_dur"]
             rows = _by_cat(tbl)
             # Inner keeps only the shared key; the right side filtered to posix.
             assert set(rows) == {"posix"}
@@ -49,7 +48,7 @@ class TestViewJoin:
         with Environment(lines=200) as env:
             gz = _indexed(env)
             left, right = _sides(gz)
-            tbl = pa.table(left.join(right, on="cat", how="left").collect())
+            tbl = left.join(right, on="cat", how="left").collect()
             rows = _by_cat(tbl)
             assert {"posix", "stdio"} <= set(rows)
             assert rows["posix"]["sum_dur"] is not None  # matched
@@ -62,9 +61,9 @@ class TestViewJoin:
         with Environment(lines=200) as env:
             gz = _indexed(env)
             left, right = _sides(gz)
-            tbl = pa.table(left.join(right, on="cat", how=how).collect())
-            assert tbl.column_names == ["cat", "count"]
-            cats = set(tbl.column("cat").to_pylist())
+            tbl = left.join(right, on="cat", how=how).collect()
+            assert tbl.columns == ["cat", "count"]
+            cats = set(tbl["cat"].to_list())
             assert cats == ({"posix"} if how == "semi" else {"stdio"})
 
     def test_join_key_missing_on_one_side_raises(self):

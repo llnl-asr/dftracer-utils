@@ -26,10 +26,25 @@ namespace dftracer::utils::dataframe {
 /// ByColumn means this and every later morsel from the same cursor are ordered
 /// by `Morsel::ordered_column`; the claim covers the whole stream, not one
 /// morsel. A producer that can promise neither reports Unordered.
-enum class Ordering {
+enum class Ordering : std::uint8_t {
     Unordered,
     Sequence,
     ByColumn,
+};
+
+/// The out-of-band part of a morsel from a streaming source whose morsels may
+/// differ in columns or types.
+struct MorselDyn {
+    /// One interned id per column of Morsel::columns, resolved via `intern`;
+    /// empty means positional alignment with the plan schema.
+    std::vector<std::uint32_t> name_ids;
+    std::shared_ptr<const dftracer::utils::StringIntern> intern;
+    /// Name-keyed dyn value columns, carried out of band from the columns so
+    /// the positional plan schema stays fixed while the dyn set varies per
+    /// morsel. `dyn_names[i]` (producer-tagged) labels `dyn_columns[i]`; a dyn
+    /// group_by folds these through agg_accumulate's dyn feed.
+    std::vector<std::string> dyn_names;
+    std::vector<Series> dyn_columns;
 };
 
 /// A chunk of columns flowing through the lazy pipeline. Carries no names - the
@@ -37,26 +52,27 @@ enum class Ordering {
 struct Morsel {
     std::vector<Series> columns;
     std::int64_t rows = 0;
-    /// Per-morsel schema for a streaming source whose morsels may differ in
-    /// columns or types. Empty means positional alignment with the plan schema
-    /// (the common case). One interned id per column, resolved via `intern`.
-    std::vector<std::uint32_t> name_ids;
-    std::shared_ptr<const dftracer::utils::StringIntern> intern;
-    /// Name-keyed dyn value columns, carried out of band from `columns` so the
-    /// positional plan schema stays fixed while the dyn set varies per morsel.
-    /// `dyn_names[i]` (producer-tagged) labels `dyn_columns[i]`; a dyn group_by
-    /// folds these through agg_accumulate's dyn feed. Empty for a non-dyn
-    /// morsel.
-    std::vector<std::string> dyn_names;
-    std::vector<Series> dyn_columns;
     /// -1 when the producer keeps none.
     std::int64_t batch_index = -1;
+    /// Null for a positional morsel with no dyn columns (the common case).
+    std::unique_ptr<MorselDyn> dyn;
     /// Opt in explicitly; an operation that reorders, drops, or adds rows
     /// must reset this unless it can prove the property still holds.
     Ordering ordering = Ordering::Unordered;
-    /// Index into `columns`, valid only when `ordering == ByColumn`.
-    std::int32_t ordered_column = -1;
+    /// Valid only when `ordering == ByColumn`: an index into `columns`.
     bool ordered_descending = false;
+    std::int32_t ordered_column = -1;
+
+    /// The per-column names, empty for a positional morsel.
+    const std::vector<std::uint32_t>& name_ids() const {
+        static const std::vector<std::uint32_t> NONE;
+        return dyn ? dyn->name_ids : NONE;
+    }
+    /// The out-of-band part, created on first use.
+    MorselDyn& dyn_state() {
+        if (!dyn) dyn = std::make_unique<MorselDyn>();
+        return *dyn;
+    }
 };
 
 /// A stateful reader over one Source. next() returns the next morsel, or

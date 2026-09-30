@@ -20,13 +20,13 @@
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/series.h>
 #include <dftracer/utils/python/sst_distribution.h>
+#include <dftracer/utils/python/streaming_iterator.h>
 #include <dftracer/utils/python/task_handle.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
 #include <dftracer/utils/python/trace_viewer.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/python/arrow_stream_capsule.h>
-#include <dftracer/utils/python/streaming_iterator.h>
 #endif
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 #include <dftracer/utils/python/arrow_parallel_reader.h>
@@ -171,9 +171,9 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     if (dftracer::utils::python::init_memoryview_batch(m) < 0) return NULL;
     if (dftracer::utils::python::init_json_dict_value(m) < 0) return NULL;
     if (dftracer::utils::python::init_trace_reader_iterator(m) < 0) return NULL;
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
     if (dftracer::utils::python::init_arrow_streaming_iterator(m) < 0)
         return NULL;
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
     if (dftracer::utils::python::init_arrow_batch_stream(m) < 0) return NULL;
 #endif
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC

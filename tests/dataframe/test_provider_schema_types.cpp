@@ -173,17 +173,17 @@ TEST_SUITE("provider schema types") {
 
         const DataType& ts = s.fields[0].type;
         CHECK(ts.id == TypeId::Timestamp);
-        CHECK(ts.time_unit == TimeUnit::Nano);
-        CHECK(ts.timezone == "UTC");
+        CHECK(ts.time_unit() == TimeUnit::Nano);
+        CHECK(ts.timezone() == "UTC");
 
         const DataType& amount = s.fields[1].type;
         CHECK(amount.id == TypeId::Decimal128);
-        CHECK(amount.decimal_precision == 38);
-        CHECK(amount.decimal_scale == 9);
+        CHECK(amount.decimal_precision() == 38);
+        CHECK(amount.decimal_scale() == 9);
 
         const DataType& digest = s.fields[2].type;
         CHECK(digest.id == TypeId::FixedSizeBinary);
-        CHECK(digest.fixed_size == 7);
+        CHECK(digest.fixed_size() == 7);
     }
 
     TEST_CASE("nested List and Struct types are expressible") {
@@ -248,7 +248,7 @@ TEST_SUITE("provider schema types") {
         CHECK(s.fields[0].type.id == TypeId::Float64);
         CHECK(s.fields[1].name == "ts");
         CHECK(s.fields[1].type.id == TypeId::Timestamp);
-        CHECK(s.fields[1].type.time_unit == TimeUnit::Milli);
-        CHECK(s.fields[1].type.timezone == "UTC");
+        CHECK(s.fields[1].type.time_unit() == TimeUnit::Milli);
+        CHECK(s.fields[1].type.timezone() == "UTC");
     }
 }

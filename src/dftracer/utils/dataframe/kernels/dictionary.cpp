@@ -202,7 +202,7 @@ dftu_series* dictionary_encode_w(const dftu_series* v) {
     out->data = Buffer::allocate(codes.size() * sizeof(std::int32_t));
     std::memcpy(out->data->data(), codes.data(),
                 codes.size() * sizeof(std::int32_t));
-    out->child = std::shared_ptr<dftu_series>(dict);
+    out->set_child(std::shared_ptr<dftu_series>(dict));
     return out;
 }
 
@@ -217,8 +217,7 @@ dftu_series* dftu_series_dictionary_encode(const dftu_series* v) {
     const TypeId base = narrow_varwidth_type(v->type);
     if (base != TypeId::String && base != TypeId::Binary) return nullptr;
     const bool wide = is_wide_offset_type(v->type);
-    if ((wide && !v->offsets64) || (!wide && !v->offsets) || !v->data)
-        return nullptr;
+    if (!v->offsets || !v->data) return nullptr;
     return wide ? dictionary_encode_w<std::int64_t>(v)
                 : dictionary_encode_w<std::int32_t>(v);
 }

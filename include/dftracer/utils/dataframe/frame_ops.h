@@ -44,17 +44,42 @@ union WindowParams {
     } session;
 };
 
-/// One appended window column by column name. `value` names the column the
-/// function reads (none for ranking functions, Ntile and Sessionize), `time`
-/// the Rate and Sessionize time column and `end` the Sessionize row-end column
-/// (absent: each row ends at its time).
+/// One appended window column by column name. value() names the column the
+/// function reads (none for ranking functions, Ntile and Sessionize), time()
+/// the Rate and Sessionize time column and end() the Sessionize row-end column
+/// (absent: each row ends at its time). The three names share two slots keyed
+/// by `func`: set `func` before a name. A name is absent when empty.
 struct WindowColumn {
     WindowFunc func;
-    std::optional<std::string> value;
-    std::optional<std::string> time;
-    std::optional<std::string> end;
     std::string out;
     WindowParams params{};
+
+    const std::string* value() const {
+        return func == WindowFunc::Sessionize ? nullptr : named(0);
+    }
+    const std::string* time() const {
+        if (func == WindowFunc::Rate) return named(1);
+        return func == WindowFunc::Sessionize ? named(0) : nullptr;
+    }
+    const std::string* end() const {
+        return func == WindowFunc::Sessionize ? named(1) : nullptr;
+    }
+    void set_value(std::string name) {
+        if (func != WindowFunc::Sessionize) names_[0] = std::move(name);
+    }
+    void set_time(std::string name) {
+        if (func == WindowFunc::Rate) names_[1] = std::move(name);
+        if (func == WindowFunc::Sessionize) names_[0] = std::move(name);
+    }
+    void set_end(std::string name) {
+        if (func == WindowFunc::Sessionize) names_[1] = std::move(name);
+    }
+
+   private:
+    const std::string* named(int i) const {
+        return names_[i].empty() ? nullptr : &names_[i];
+    }
+    std::string names_[2];
 };
 
 /// Whether `f` is a Frame* function (reads WindowParams::frame).

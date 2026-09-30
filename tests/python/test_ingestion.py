@@ -83,31 +83,31 @@ def test_series_from_polars():
 
 def test_dataframe_from_dict():
     df = DataFrame.from_dict({"a": [1, 2, 3], "b": [4.0, 5.0, 6.0]})
-    assert set(df.to_arrow().column_names) == {"a", "b"}
-    assert df["a"].to_arrow().to_pylist() == [1, 2, 3]
-    assert df["b"].to_arrow().to_pylist() == [4.0, 5.0, 6.0]
+    assert set(df.columns) == {"a", "b"}
+    assert df["a"].to_list() == [1, 2, 3]
+    assert df["b"].to_list() == [4.0, 5.0, 6.0]
 
 
 def test_dataframe_from_numpy_2d():
     arr = np.array([[1, 2], [3, 4], [5, 6]], dtype=np.int64)
     df = DataFrame.from_numpy(arr, ["x", "y"])
-    assert df["x"].to_arrow().to_pylist() == [1, 3, 5]
-    assert df["y"].to_arrow().to_pylist() == [2, 4, 6]
+    assert df["x"].to_list() == [1, 3, 5]
+    assert df["y"].to_list() == [2, 4, 6]
 
 
 def test_dataframe_from_numpy_dict():
     df = DataFrame.from_numpy(
         {"p": np.array([1, 2], dtype=np.int64), "q": np.array([3.0, 4.0])}, None
     )
-    assert df["p"].to_arrow().to_pylist() == [1, 2]
-    assert df["q"].to_arrow().to_pylist() == [3.0, 4.0]
+    assert df["p"].to_list() == [1, 2]
+    assert df["q"].to_list() == [3.0, 4.0]
 
 
 def test_dataframe_from_arrow():
     pa = pytest.importorskip("pyarrow")
     tbl = pa.table({"a": [1, 2], "b": [3, 4]})
     df = DataFrame.from_arrow(tbl)
-    assert df["a"].to_arrow().to_pylist() == [1, 2]
+    assert df["a"].to_list() == [1, 2]
 
 
 def test_dataframe_from_pandas():
@@ -115,15 +115,15 @@ def test_dataframe_from_pandas():
     pd = pytest.importorskip("pandas")
     src = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
     df = DataFrame.from_pandas(src)
-    assert df["a"].to_arrow().to_pylist() == [1, 2, 3]
-    assert df["b"].to_arrow().to_pylist() == [4, 5, 6]
+    assert df["a"].to_list() == [1, 2, 3]
+    assert df["b"].to_list() == [4, 5, 6]
 
 
 def test_dataframe_from_polars():
     pl = pytest.importorskip("polars")
     src = pl.DataFrame({"a": [1, 2], "b": [3, 4]})
     df = DataFrame.from_polars(src)
-    assert df["a"].to_arrow().to_pylist() == [1, 2]
+    assert df["a"].to_list() == [1, 2]
 
 
 def test_dataframe_from_parquet(tmp_path):
@@ -133,8 +133,8 @@ def test_dataframe_from_parquet(tmp_path):
     pq.write_table(pa.table({"a": [1, 2, 3], "b": [4.0, 5.0, 6.0]}), path)
 
     df = DataFrame.from_parquet(path)
-    assert df["a"].to_arrow().to_pylist() == [1, 2, 3]
-    assert df["b"].to_arrow().to_pylist() == [4.0, 5.0, 6.0]
+    assert df["a"].to_list() == [1, 2, 3]
+    assert df["b"].to_list() == [4.0, 5.0, 6.0]
 
     only_a = DataFrame.from_parquet(path, columns=["a"])
-    assert only_a.to_arrow().column_names == ["a"]
+    assert only_a.columns == ["a"]

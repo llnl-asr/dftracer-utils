@@ -108,10 +108,10 @@ std::uint64_t frame_bytes(const dataframe::DataFrame& f);
 std::optional<std::size_t> column_of(const dataframe::DataFrame& f,
                                      std::string_view name);
 
-/// The table `t` reads over `frame`, keyed by `t.target` (IN: every column).
-/// Throws DFTUtilsException naming the row set when a key column is missing,
-/// an IN side's width differs from its keys, or a SCALAR side is not one
-/// row and one column.
+/// The table `t` reads over `frame`, keyed by `t.target` (a range IN: every
+/// column but the range). Throws DFTUtilsException naming the row set when a
+/// key column is missing, an uncorrelated SCALAR side is not one row and one
+/// column, or `t` is joined().
 std::shared_ptr<const LookupTable> make_lookup_table(
     const TLookup& t, std::shared_ptr<const dataframe::DataFrame> frame);
 
@@ -143,6 +143,23 @@ Matches match(const LookupTable& table,
 dataframe::Series lookup_column(
     const TLookup& t, const std::vector<const dataframe::Series*>& keys,
     std::int64_t n);
+
+/// A joined `in` over `matched`, the marker its lookup join attached (null
+/// where no side row matched): TRUE on a match (FALSE when `negated`), the
+/// opposite without one, null when one of the first `subject` key columns
+/// has no value.
+dataframe::Series in_column(const std::vector<const dataframe::Series*>& keys,
+                            std::size_t subject,
+                            const dataframe::Series& matched, bool negated);
+
+/// A joined keyed scalar over `nest`, the side rows its nest join gathered:
+/// the value of struct field `field` of the one row, the CORRELATED_VALUE of
+/// the one-row `empty` (else null) for none. Throws the query error naming
+/// the sub-query `name` and the key for several rows.
+dataframe::Series scalar_column(
+    const std::string& name, const std::vector<const dataframe::Series*>& keys,
+    const dataframe::Series& nest, std::size_t field,
+    const dataframe::DataFrame* empty);
 
 /// Row `a` of `x` equals row `b` of `y` as duql values; null equals null.
 bool same_cell(const dataframe::Series& x, std::int64_t a,

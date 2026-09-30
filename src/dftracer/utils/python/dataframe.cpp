@@ -5,15 +5,15 @@
 // interface.
 
 #include <dftracer/utils/core/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/python/dataframe.h>
-#include <dftracer/utils/python/py_frame_op_helpers.h>
-#include <dftracer/utils/utilities/common/arrow/frame_ops.h>
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-
 #include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
+#include <dftracer/utils/dataframe/frame_ops.h>
+#include <dftracer/utils/dataframe/internal/frame_native.h>
+#include <dftracer/utils/python/dataframe.h>
+#include <dftracer/utils/python/py_frame_op_helpers.h>
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/dataframe/arrow_bridge.h>
+#endif
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
@@ -34,7 +34,9 @@
 
 #include <cstdint>
 #include <cstring>
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <nanoarrow/nanoarrow.hpp>
+#endif
 #include <new>
 #include <optional>
 #include <stdexcept>
@@ -915,8 +917,6 @@ PyObject* DataFrame_explode(PyObject* self, PyObject* arg) {
         [&] { return dataframe::explode(to_dataframe(b), name); });
 }
 
-namespace arr = dftracer::utils::utilities::common::arrow;
-
 PyObject* DataFrame_window(PyObject* self, PyObject* args, PyObject* kwds) {
     DataFrameObject* b = as_dataframe(self);
     if (!b) return nullptr;
@@ -937,12 +937,13 @@ PyObject* DataFrame_window(PyObject* self, PyObject* args, PyObject* kwds) {
     dftracer::utils::python::WindowSpecs parsed;
     if (!dftracer::utils::python::parse_window_specs(specs, parsed))
         return nullptr;
-    std::vector<arr::WindowColumn> specv;
+    std::vector<dataframe::WindowColumn> specv;
     specv.reserve(parsed.specs.size());
     for (const dftu_window_spec& w : parsed.specs)
-        specv.push_back(arr::window_column(w));
-    return run_batch_op(
-        [&] { return arr::window(to_dataframe(b), pcols, ocols, specv); });
+        specv.push_back(dataframe::window_column(w));
+    return run_batch_op([&] {
+        return dataframe::window(to_dataframe(b), pcols, ocols, specv);
+    });
 }
 
 PyObject* DataFrame_gap_fill(PyObject* self, PyObject* args, PyObject* kwds) {
@@ -964,7 +965,7 @@ PyObject* DataFrame_gap_fill(PyObject* self, PyObject* args, PyObject* kwds) {
     dftu_gap_fill_mode mode_code;
     if (!dftracer::utils::python::gap_fill_mode_from_str(mode, &mode_code))
         return nullptr;
-    const auto m = static_cast<arr::GapFillMode>(mode_code);
+    const auto m = static_cast<dataframe::GapFillMode>(mode_code);
     std::vector<std::string> pcols;
     std::vector<std::string> vcols;
     if (!parse_string_seq(part, "gap_fill: partition_by must be names",
@@ -980,9 +981,9 @@ PyObject* DataFrame_gap_fill(PyObject* self, PyObject* args, PyObject* kwds) {
                                static_cast<std::int64_t>(e));
     }
     return run_batch_op([&] {
-        return arr::gap_fill(to_dataframe(b), pcols, time,
-                             static_cast<std::int64_t>(bucket), vcols, m,
-                             range);
+        return dataframe::gap_fill(to_dataframe(b), pcols, time,
+                                   static_cast<std::int64_t>(bucket), vcols, m,
+                                   range);
     });
 }
 
@@ -1005,7 +1006,7 @@ PyObject* DataFrame_asof(PyObject* self, PyObject* args, PyObject* kwds) {
     dftu_asof_direction dir_code;
     if (!dftracer::utils::python::asof_direction_from_str(direction, &dir_code))
         return nullptr;
-    const auto dir = static_cast<arr::AsofDirection>(dir_code);
+    const auto dir = static_cast<dataframe::AsofDirection>(dir_code);
     std::vector<std::string> equi;
     if (!parse_string_seq(by, "asof: by must be names", equi)) return nullptr;
     std::optional<std::int64_t> tol;
@@ -1015,7 +1016,8 @@ PyObject* DataFrame_asof(PyObject* self, PyObject* args, PyObject* kwds) {
         tol = static_cast<std::int64_t>(t);
     }
     return run_batch_op([&] {
-        return arr::asof(to_dataframe(b), to_dataframe(o), on, equi, dir, tol);
+        return dataframe::asof(to_dataframe(b), to_dataframe(o), on, equi, dir,
+                               tol);
     });
 }
 
@@ -1040,8 +1042,8 @@ PyObject* DataFrame_interval(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!parse_string_seq(by, "interval: by must be names", equi))
         return nullptr;
     return run_batch_op([&] {
-        return arr::interval(to_dataframe(b), to_dataframe(o), point, lo, hi,
-                             equi, outer != 0);
+        return dataframe::interval(to_dataframe(b), to_dataframe(o), point, lo,
+                                   hi, equi, outer != 0);
     });
 }
 
@@ -1177,6 +1179,7 @@ PyObject* DataFrame_concat(PyObject* self, PyObject* args, PyObject* kwds) {
     return run_batch_op([&] { return dataframe::concat(parts, how); });
 }
 
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
 // Arrow/pandas/polars conversion and pickling live in the Python wrapper
 // (dftracer.utils.frame); the native handle only exposes the zero-copy
 // __arrow_c_array__ / __arrow_c_stream__ capsules.
@@ -1309,8 +1312,36 @@ PyObject* DataFrame_to_ipc(PyObject* self, PyObject*) {
 }
 #endif
 
-// __reduce__: pickle by round-tripping through Arrow (pyarrow Tables pickle via
-// IPC), so a DataFrame can ship across processes / be persisted.
+#endif  // DFTRACER_UTILS_ENABLE_ARROW
+
+PyObject* DataFrame_to_bytes(PyObject* self, PyObject*) {
+    DataFrameObject* b = as_dataframe(self);
+    if (!b) return nullptr;
+    try {
+        const std::string bytes = dataframe::frame_to_native(to_dataframe(b));
+        return PyBytes_FromStringAndSize(bytes.data(),
+                                         static_cast<Py_ssize_t>(bytes.size()));
+    } catch (const std::exception& e) {
+        PyErr_SetString(PyExc_TypeError, e.what());
+        return nullptr;
+    }
+}
+
+PyObject* dataframe_from_bytes(PyObject* /*self*/, PyObject* obj) {
+    Py_buffer view;
+    if (PyObject_GetBuffer(obj, &view, PyBUF_SIMPLE) < 0) return nullptr;
+    auto f = dataframe::frame_from_native(
+        std::string_view(static_cast<const char*>(view.buf),
+                         static_cast<std::size_t>(view.len)));
+    PyBuffer_Release(&view);
+    if (!f) {
+        PyErr_SetString(PyExc_ValueError,
+                        "not a DataFrame written by this version");
+        return nullptr;
+    }
+    return make_dataframe(std::move(*f));
+}
+
 PyObject* DataFrame_get_num_rows(PyObject* self, void*) {
     DataFrameObject* b = as_dataframe(self);
     if (!b) return nullptr;
@@ -1477,16 +1508,20 @@ PyMethodDef DataFrame_methods[] = {
     {"hash_partition", DataFrame_hash_partition, METH_VARARGS,
      "hash_partition(keys, n_parts) -> list[DataFrame] partitioned by a stable "
      "hash of the key columns (the distributed shuffle primitive)."},
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
     {"__arrow_c_array__", DataFrame_arrow_c_array, METH_VARARGS,
      "Arrow PyCapsule export of the struct: (schema_capsule, array_capsule)."},
     {"__arrow_c_stream__", DataFrame_arrow_c_stream, METH_VARARGS,
      "Arrow PyCapsule stream export (one struct batch); pa.table(batch) uses "
      "this to import every column zero-copy."},
+#endif
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
     {"to_ipc", DataFrame_to_ipc, METH_NOARGS,
      "to_ipc() -> bytes: the frame as an Arrow IPC stream (schema + one record "
      "batch + EOS); no pyarrow needed to produce .arrow bytes."},
 #endif
+    {"to_bytes", DataFrame_to_bytes, METH_NOARGS,
+     "to_bytes() -> bytes: the frame in the native frame format."},
     {nullptr, nullptr, 0, nullptr}};
 
 PyGetSetDef DataFrame_getset[] = {
@@ -1580,6 +1615,48 @@ PyObject* vec_batch_from_arrow(PyObject* /*self*/, PyObject* obj) {
     Py_DECREF(names);
     return make_dataframe(std::move(b));
 }
+#endif  // DFTRACER_UTILS_ENABLE_ARROW
+
+// _dataframe_from_columns(names, series) -> DataFrame: a frame of native
+// Series, no Arrow involved.
+PyObject* dataframe_from_columns(PyObject* /*self*/, PyObject* args) {
+    PyObject* names_obj = nullptr;
+    PyObject* series_obj = nullptr;
+    if (!PyArg_ParseTuple(args, "OO", &names_obj, &series_obj)) return nullptr;
+    std::vector<std::string> names;
+    if (!parse_string_seq(names_obj, "names must be strings", names))
+        return nullptr;
+    PyObject* seq = PySequence_Fast(series_obj, "series must be a sequence");
+    if (!seq) return nullptr;
+    const Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
+    if (static_cast<std::size_t>(n) != names.size()) {
+        Py_DECREF(seq);
+        PyErr_SetString(PyExc_ValueError, "names and series differ in length");
+        return nullptr;
+    }
+    DataFrame b;
+    for (Py_ssize_t i = 0; i < n; ++i) {
+        const Series* col = dftracer::utils::python::unwrap_vec_column(
+            PySequence_Fast_GET_ITEM(seq, i));
+        if (!col) {
+            Py_DECREF(seq);
+            PyErr_SetString(PyExc_TypeError, "expected native Series");
+            return nullptr;
+        }
+        b.names.push_back(names[static_cast<std::size_t>(i)]);
+        b.columns.push_back(col->share());
+    }
+    Py_DECREF(seq);
+    if (!b.columns.empty()) {
+        const std::int64_t rows = b.columns.front().length();
+        for (const Series& c : b.columns)
+            if (c.length() != rows) {
+                PyErr_SetString(PyExc_ValueError, "columns differ in length");
+                return nullptr;
+            }
+    }
+    return make_dataframe(std::move(b));
+}
 
 }  // namespace
 
@@ -1607,6 +1684,7 @@ int init_dataframe(PyObject* m) {
     DataFrameType.tp_new = nullptr;  // created only by a trace view
     if (register_type(m, &DataFrameType, "_DataFrame") < 0) return -1;
 
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
     static PyMethodDef from_arrow_def = {
         "_dataframe_from_arrow", vec_batch_from_arrow, METH_O,
         "vec_batch_from_arrow(table) -> DataFrame: import a pyarrow Table's "
@@ -1617,15 +1695,28 @@ int init_dataframe(PyObject* m) {
         Py_DECREF(fn);
         return -1;
     }
+#endif
+    static PyMethodDef from_columns_def = {
+        "_dataframe_from_columns", dataframe_from_columns, METH_VARARGS,
+        "_dataframe_from_columns(names, series) -> DataFrame of native "
+        "Series."};
+    PyObject* cols_fn = PyCFunction_NewEx(&from_columns_def, nullptr, nullptr);
+    if (!cols_fn) return -1;
+    if (PyModule_AddObject(m, "_dataframe_from_columns", cols_fn) < 0) {
+        Py_DECREF(cols_fn);
+        return -1;
+    }
+    static PyMethodDef from_bytes_def = {
+        "_dataframe_from_bytes", dataframe_from_bytes, METH_O,
+        "_dataframe_from_bytes(bytes) -> DataFrame written by "
+        "DataFrame.to_bytes."};
+    PyObject* bytes_fn = PyCFunction_NewEx(&from_bytes_def, nullptr, nullptr);
+    if (!bytes_fn) return -1;
+    if (PyModule_AddObject(m, "_dataframe_from_bytes", bytes_fn) < 0) {
+        Py_DECREF(bytes_fn);
+        return -1;
+    }
     return 0;
 }
 
 }  // namespace dftracer::utils::python
-
-#else   // !DFTRACER_UTILS_ENABLE_ARROW
-
-namespace dftracer::utils::python {
-int init_dataframe(PyObject*) { return 0; }
-}  // namespace dftracer::utils::python
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW

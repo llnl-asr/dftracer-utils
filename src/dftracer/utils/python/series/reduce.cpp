@@ -1,7 +1,3 @@
-#include <dftracer/utils/core/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-
 #include <dftracer/utils/python/series_detail.h>
 
 #include <cstdint>
@@ -47,5 +43,3 @@ PyObject* Series_dot(PyObject* self, PyObject* other) {
 }
 
 }  // namespace dftracer::utils::python::series_detail
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW

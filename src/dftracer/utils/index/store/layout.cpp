@@ -121,7 +121,7 @@ Family family_of(Ext ext, std::uint8_t kind) {
     return Family::REGISTRY;
 }
 
-std::uint32_t ext_version(Ext) { return 1; }
+std::uint32_t ext_version(Ext ext) { return ext == Ext::ROWSET ? 2 : 1; }
 
 void append_u16(std::string& out, std::uint16_t value) {
     out.push_back(static_cast<char>(value >> 8U));

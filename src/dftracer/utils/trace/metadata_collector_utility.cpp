@@ -1,5 +1,7 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/core/coro/async_mutex.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utils/string.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
@@ -11,11 +13,44 @@
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 
 #include <cinttypes>
+#include <memory>
+#include <mutex>
 
 namespace dftracer::utils::trace {
 
 namespace hash = dftracer::utils::utilities::hash;
 using namespace utilities::fileio::lines;
+
+namespace {
+
+// What this process knows of the index at one root, by canonical path: the lock
+// that serializes building it, and the files it built or found current, by
+// modification time and size. Held under the lock.
+struct IndexedFile {
+    std::pair<std::int64_t, std::uint64_t> stamp;
+    std::size_t num_lines = 0;
+    std::uint64_t max_bytes = 0;
+    std::uint64_t checkpoint_size = 0;
+    std::size_t num_checkpoints = 0;
+};
+
+struct IndexRoot {
+    coro::AsyncMutex building;
+    StringViewMap<IndexedFile> current;
+};
+
+std::shared_ptr<IndexRoot> index_root(const std::string& index_path) {
+    static std::mutex guard;
+    static StringViewMap<std::shared_ptr<IndexRoot>> roots;
+    std::error_code ec;
+    const fs::path canonical = fs::weakly_canonical(index_path, ec);
+    const std::lock_guard<std::mutex> lock(guard);
+    auto& r = roots[ec ? index_path : canonical.string()];
+    if (!r) r = std::make_shared<IndexRoot>();
+    return r;
+}
+
+}  // namespace
 
 coro::CoroTask<MetadataCollectorUtilityOutput>
 MetadataCollectorUtility::operator()(
@@ -66,49 +101,79 @@ MetadataCollectorUtility::process_compressed(
             detect_format(input.file_path);
         meta.compressed_size = fs::file_size(input.file_path);
 
-        meta.has_index = fs::exists(input.index_path);
-
-        std::shared_ptr<dftracer::utils::index::gzip::CheckpointIndexer>
-            indexer;
-        if (!meta.has_index || input.force_rebuild) {
-            if (input.force_rebuild && meta.has_index) {
-                DFTRACER_UTILS_LOG_DEBUG("Removing existing index: %s",
-                                         input.index_path.c_str());
-                fs::remove_all(input.index_path);
+        // Scans of one file that start together would each build or
+        // rebuild its index and remove the other's files.
+        const std::shared_ptr<IndexRoot> root = index_root(input.index_path);
+        std::size_t total_lines = 0;
+        {
+            co_await root->building.lock();
+            const coro::AsyncMutexGuard held(root->building);
+            const std::pair<std::int64_t, std::uint64_t> stamp{
+                static_cast<std::int64_t>(
+                    index::store::internal::get_file_modification_time(
+                        input.file_path)),
+                index::store::internal::file_size_bytes(input.file_path)};
+            // A scan writing to the root makes a read-only open fail, which
+            // need_rebuild() takes for a stale index, so a file this process
+            // built or read is not opened again.
+            std::error_code ec;
+            const fs::path canonical =
+                fs::weakly_canonical(input.file_path, ec);
+            const std::string file_key =
+                ec ? input.file_path : canonical.string();
+            if (const auto seen = root->current.find(file_key);
+                seen != root->current.end() && seen->second.stamp == stamp) {
+                meta.has_index = true;
+                total_lines = seen->second.num_lines;
+                meta.uncompressed_size = seen->second.max_bytes;
+                meta.checkpoint_size = seen->second.checkpoint_size;
+                meta.num_checkpoints = seen->second.num_checkpoints;
+            } else {
+                meta.has_index = fs::exists(input.index_path);
+                std::shared_ptr<dftracer::utils::index::gzip::CheckpointIndexer>
+                    indexer;
+                if (!meta.has_index || input.force_rebuild) {
+                    if (input.force_rebuild && meta.has_index) {
+                        DFTRACER_UTILS_LOG_DEBUG("Removing existing index: %s",
+                                                 input.index_path.c_str());
+                        fs::remove_all(input.index_path);
+                    }
+                    DFTRACER_UTILS_LOG_DEBUG("Building index for: %s",
+                                             input.file_path.c_str());
+                    indexer =
+                        dftracer::utils::index::gzip::CheckpointIndexerFactory::
+                            create(input.file_path, input.index_path,
+                                   input.checkpoint_size, true);
+                    co_await indexer->build_async();
+                    meta.has_index = true;
+                } else {
+                    indexer =
+                        dftracer::utils::index::gzip::CheckpointIndexerFactory::
+                            create(input.file_path, input.index_path,
+                                   input.checkpoint_size, false);
+                    if (indexer->need_rebuild()) {
+                        DFTRACER_UTILS_LOG_DEBUG("Index needs rebuild: %s",
+                                                 input.index_path.c_str());
+                        // The root holds other files' indexes and caches,
+                        // and the build replaces this file's records.
+                        indexer = dftracer::utils::index::gzip::
+                            CheckpointIndexerFactory::create(
+                                input.file_path, input.index_path,
+                                input.checkpoint_size, true);
+                        co_await indexer->build_async();
+                    }
+                }
+                total_lines = indexer->get_num_lines();
+                meta.uncompressed_size = indexer->get_max_bytes();
+                meta.checkpoint_size = indexer->get_checkpoint_size();
+                meta.num_checkpoints = indexer->get_members().size();
+                root->current[file_key] =
+                    IndexedFile{stamp, total_lines, meta.uncompressed_size,
+                                meta.checkpoint_size, meta.num_checkpoints};
             }
-            DFTRACER_UTILS_LOG_DEBUG("Building index for: %s",
-                                     input.file_path.c_str());
-            indexer =
-                dftracer::utils::index::gzip::CheckpointIndexerFactory::create(
-                    input.file_path, input.index_path, input.checkpoint_size,
-                    true);
-            co_await indexer->build_async();
-            meta.has_index = true;
-        } else {
-            indexer =
-                dftracer::utils::index::gzip::CheckpointIndexerFactory::create(
-                    input.file_path, input.index_path, input.checkpoint_size,
-                    false);
-            if (indexer->need_rebuild()) {
-                DFTRACER_UTILS_LOG_DEBUG("Index needs rebuild: %s",
-                                         input.index_path.c_str());
-                meta.index_valid = false;
-                fs::remove_all(input.index_path);
-                indexer =
-                    dftracer::utils::index::gzip::CheckpointIndexerFactory::
-                        create(input.file_path, input.index_path,
-                               input.checkpoint_size, true);
-                co_await indexer->build_async();
-            }
+            meta.index_valid = true;
+            meta.num_lines = total_lines;
         }
-
-        meta.index_valid = true;
-
-        std::size_t total_lines = indexer->get_num_lines();
-        meta.num_lines = total_lines;
-        meta.uncompressed_size = indexer->get_max_bytes();
-        meta.checkpoint_size = indexer->get_checkpoint_size();
-        meta.num_checkpoints = indexer->get_members().size();
 
         if (total_lines == 0) {
             DFTRACER_UTILS_LOG_DEBUG("File %s has no lines",

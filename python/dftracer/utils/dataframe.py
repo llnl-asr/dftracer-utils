@@ -33,7 +33,9 @@ from ._polars_frame import _FramePolarsMixin
 from .enums import DType
 from .series import (
     Series,
+    _arrow_native,
     _indices,
+    _pandas_values,
     _register,
     _require_pyarrow,
     _to_pandas,
@@ -373,14 +375,22 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
 
     @classmethod
     def from_pandas(cls, df: "pd.DataFrame") -> "DataFrame":
-        """Import a ``pandas.DataFrame`` (via pyarrow)."""
-        pa = _require_pyarrow()
-        return _dataframe_from_arrow(pa.Table.from_pandas(df))
+        """Import a ``pandas.DataFrame`` through NumPy, with no pyarrow (see
+        :meth:`Series.from_pandas`). A non-default index becomes columns after the
+        data columns, named by its levels or ``__index_level_<i>__``."""
+        from ._import import index_columns
+
+        columns = [(str(name), df[name]) for name in df.columns]
+        if len({n for n, _ in columns}) != len(columns):
+            raise ValueError("from_pandas: column names are not unique")
+        columns += index_columns(df)
+        return _frame_of(columns, Series.from_pandas)
 
     @classmethod
     def from_polars(cls, df: "pl.DataFrame") -> "DataFrame":
-        """Import a ``polars.DataFrame`` (zero-copy via its Arrow buffers)."""
-        return _dataframe_from_arrow(df.to_arrow())
+        """Import a ``polars.DataFrame`` with no pyarrow (see
+        :meth:`Series.from_polars`)."""
+        return _frame_of([(name, df[name]) for name in df.columns], Series.from_polars)
 
     @classmethod
     def from_parquet(cls, path: str, columns: Optional[Sequence[str]] = None) -> "DataFrame":
@@ -392,7 +402,12 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
 
     @classmethod
     def from_dict(cls, mapping: Mapping[str, object]) -> "DataFrame":
-        """Import a ``{name: array-like}`` mapping (via pyarrow)."""
+        """Import a ``{name: array-like}`` mapping: Series, lists of scalars, NumPy
+        arrays and pandas or polars Series import natively; anything else (a
+        pyarrow array, nested lists) goes through pyarrow."""
+        native = _native_columns(mapping)
+        if native is not None:
+            return DataFrame(_ext._dataframe_from_columns(*native))
         pa = _require_pyarrow()
         return _dataframe_from_arrow(pa.table(mapping))
 
@@ -407,12 +422,13 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         ``arr`` is either a 2-D array (one column per column index) or a
         ``{name: 1-D array}`` mapping; ``columns`` names the columns of a 2-D
         array (ignored for a mapping)."""
-        pa = _require_pyarrow()
         if isinstance(arr, dict):
-            data = {name: Series.from_numpy(col).to_arrow() for name, col in arr.items()}
+            cols = {name: Series.from_numpy(col) for name, col in arr.items()}
         else:
-            data = {name: Series.from_numpy(arr[:, i]).to_arrow() for i, name in enumerate(columns)}
-        return _dataframe_from_arrow(pa.table(data))
+            cols = {name: Series.from_numpy(arr[:, i]) for i, name in enumerate(columns)}
+        return DataFrame(
+            _ext._dataframe_from_columns(list(cols), [_unwrap(c) for c in cols.values()])
+        )
 
     def to_arrow(self) -> "pa.Table":
         """This frame as a ``pyarrow.Table`` (zero-copy via the C Data Interface
@@ -428,8 +444,13 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         """This frame as a pandas DataFrame. By default the columns are NumPy
         dtypes, which copies (pyarrow packs them into blocks); ``arrow=True``
         keeps them Arrow-backed (``int64[pyarrow]``, ``string[pyarrow]``, ...),
-        sharing this frame's buffers with no copy."""
-        return _to_pandas(self.to_arrow(), arrow)
+        sharing this frame's buffers with no copy. The NumPy form is built
+        natively, with no pyarrow."""
+        if arrow:
+            return _to_pandas(self.to_arrow(), arrow)
+        import pandas as pd  # ty: ignore[unresolved-import]
+
+        return pd.DataFrame({name: _pandas_values(self._native[name]) for name in self.columns})
 
     def to_polars(self) -> "pl.DataFrame":
         """This frame as a polars DataFrame."""
@@ -439,10 +460,9 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
             raise ImportError(
                 "polars is required for to_polars(). Install with: pip install polars"
             ) from None
-        table = self.to_arrow()
-        if table.num_rows == 0:
+        if self._native.num_rows == 0:
             return pl.DataFrame()
-        return pl.DataFrame(pl.from_arrow(table))
+        return pl.DataFrame({name: self[name].to_polars() for name in self.columns})
 
     def __getitem__(self, key: "Union[str, Sequence[str], Series]") -> "Union[Series, DataFrame]":
         """``df["a"]`` is a column; ``df[["a", "b"]]`` a projection; ``df[mask]``
@@ -574,8 +594,8 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
     def __arrow_c_stream__(self, requested_schema: Optional[object] = None) -> object:
         return self._native.__arrow_c_stream__(requested_schema)
 
-    def __reduce__(self) -> "Tuple[Callable[[object], DataFrame], Tuple[object, ...]]":
-        return (_dataframe_from_arrow, (self.to_arrow(),))
+    def __reduce__(self) -> "Tuple[Callable[[bytes], DataFrame], Tuple[bytes, ...]]":
+        return (_dataframe_from_bytes, (self._native.to_bytes(),))
 
     def apply(
         self, func: "Union[ColumnExpr, Callable[..., object]]", axis: int = 0
@@ -1323,6 +1343,59 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
 _register(_ext._DataFrame, DataFrame)
 
 
+def _frame_of(columns: "List[Tuple[str, object]]", read: "Callable[[Any], Series]") -> DataFrame:
+    """A frame of ``read(value)`` for each ``(name, value)``."""
+    return DataFrame(
+        _ext._dataframe_from_columns(
+            [n for n, _ in columns], [_unwrap(read(v)) for _, v in columns]
+        )
+    )
+
+
+def _native_columns(
+    mapping: Mapping[str, object],
+) -> "Optional[Tuple[List[str], List[_ext._Series]]]":
+    """The names and native columns of a mapping whose values are all Series,
+    lists of scalars, NumPy arrays or pandas and polars Series that import
+    without Arrow; None otherwise."""
+    names: "List[str]" = []
+    cols: "List[_ext._Series]" = []
+    for name, value in mapping.items():
+        if isinstance(value, Series):
+            cols.append(_unwrap(value))
+        elif isinstance(value, _ext._Series):
+            cols.append(value)
+        elif isinstance(value, (list, tuple)):
+            try:
+                cols.append(_ext._series_from_list(list(value)))
+            except TypeError:
+                return None
+        elif type(value).__module__.startswith("pandas") and type(value).__name__ == "Series":
+            try:
+                cols.append(_unwrap(Series.from_pandas(cast(Any, value))))
+            except TypeError:
+                return None
+        elif type(value).__module__.startswith("polars") and type(value).__name__ == "Series":
+            try:
+                cols.append(_unwrap(Series.from_polars(cast(Any, value))))
+            except TypeError:
+                return None
+        elif type(value).__module__ == "numpy" and type(value).__name__ == "ndarray":
+            try:
+                cols.append(_unwrap(Series.from_numpy(cast(Any, value))))
+            except (TypeError, BufferError, RuntimeError, ImportError):
+                return None
+        else:
+            return None
+        names.append(name)
+    return names, cols
+
+
+def _dataframe_from_bytes(data: bytes) -> DataFrame:
+    """The DataFrame a pickle holds (``DataFrame.to_bytes`` of the native frame format)."""
+    return DataFrame(_ext._dataframe_from_bytes(data))
+
+
 def _dataframe_from_arrow(table: "pa.Table") -> DataFrame:
     """Import a pyarrow Table into a native DataFrame wrapper."""
-    return DataFrame(_ext._dataframe_from_arrow(table))
+    return DataFrame(_arrow_native("_dataframe_from_arrow")(table))

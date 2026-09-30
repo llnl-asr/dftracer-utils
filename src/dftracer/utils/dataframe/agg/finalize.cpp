@@ -259,7 +259,10 @@ DataFrame agg_finalize(const AggState& st_in,
                 // accumulate on a real Binary column) retags as Binary.
                 const TypeId bt =
                     kt == TypeId::Binary ? TypeId::Binary : TypeId::String;
-                out.columns.push_back(bytes_key(bt, st.skey_cols[k]));
+                Series key = bytes_key(bt, st.skey_cols[k]);
+                out.columns.push_back(k < st.key_json.size() && st.key_json[k]
+                                          ? key.as_json()
+                                          : std::move(key));
             }
             continue;
         }

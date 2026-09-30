@@ -136,6 +136,17 @@ case(x < 1, "a", x < 2, "b", "c") == if(ok, json(o), lower(trim(s)))
 x between a + 1 and b * 2 and not (x // 2 in [a, 1])
 ---
 session pid, tid gap 100us max 10ms as burst | group pid, tid, burst { n = count() }
+---
+where dur > (from data | where name == ^.name | agg { m = mean(dur) })
+---
+derive n = (from data | where run == ^.run and ^.host == host | agg { c = count() })
+---
+where g not in (from data | where run == ^.run and any(tags, . == ^.cat) | select g)
+---
+derive m = (from data | where pid == ^.pid and ts between ^.ts - 1000 and ^.ts | agg { m = max(dur) })
+---
+where fd in (from data | where name == "write" and ^.ts > ts | group fd {})
+
 ### invalid
 where a ==
 ---

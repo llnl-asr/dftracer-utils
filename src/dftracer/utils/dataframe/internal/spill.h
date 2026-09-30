@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/lazyframe.h>  // Cursor, Morsel
 #include <dftracer/utils/dataframe/series.h>
 
+#include <atomic>
 #include <cstdint>
 #include <fstream>
 #include <memory>
@@ -19,11 +20,16 @@
 namespace dftracer::utils::dataframe::spill {
 
 /// Append a Series to `out` (materialized FLAT first). Supports fixed-width,
-/// String and Binary columns; throws std::invalid_argument on List/Struct.
+/// String and Binary columns and list, large list, fixed-size list, map and
+/// struct columns of those, and keeps a column's JSON flag, time unit and time
+/// zone.
 void put_series(std::string& out, const Series& s);
 
 /// Read one Series written by put_series, advancing `p` toward `end`.
 Series get_series(const std::uint8_t*& p, const std::uint8_t* end);
+
+/// Approximate in-memory bytes of FLAT columns.
+std::size_t columns_bytes(const std::vector<Series>& cols);
 
 /// A self-cleaning temp directory holding one query's spill runs.
 class Dir {
@@ -34,9 +40,12 @@ class Dir {
     Dir& operator=(const Dir&) = delete;
     /// Path of run file `id` within this directory.
     std::string run_path(int id) const;
+    /// A run id no other caller of this directory has taken. Thread-safe.
+    int next_run();
 
    private:
     std::string dir_;
+    std::atomic<int> runs_{0};
 };
 
 /// Appends morsels (columns + row count) to one run file.
@@ -89,7 +98,9 @@ class AggRunReader {
 /// regardless of how expensive the source is to reproduce.
 class Spool {
    public:
-    explicit Spool(std::uint64_t budget);
+    /// With `dir`, the run file lives in that shared directory under its own
+    /// run id, so many spools can share one directory.
+    explicit Spool(std::uint64_t budget, std::shared_ptr<Dir> dir = nullptr);
     ~Spool();
     Spool(const Spool&) = delete;
     Spool& operator=(const Spool&) = delete;
@@ -98,13 +109,19 @@ class Spool {
     /// A fresh cursor replaying every added morsel, in order. Call after all
     /// add()s; may be called more than once.
     std::unique_ptr<Cursor> reader();
+    /// Whether the overflow went to disk.
+    bool spilled() const noexcept { return spilling_; }
+    /// The bytes of every morsel added, in memory or on disk.
+    std::uint64_t total_bytes() const noexcept { return total_bytes_; }
 
    private:
     std::uint64_t budget_;
     std::size_t bytes_ = 0;
+    std::uint64_t total_bytes_ = 0;
     bool spilling_ = false;
     std::vector<Morsel> mem_;
-    std::unique_ptr<Dir> dir_;
+    std::shared_ptr<Dir> dir_;
+    std::string run_;
     std::unique_ptr<Writer> writer_;
 };
 

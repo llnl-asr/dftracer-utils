@@ -1,7 +1,3 @@
-#include <dftracer/utils/core/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/python/dataframe.h>
 #include <dftracer/utils/python/py_frame_op_helpers.h>
@@ -280,5 +276,3 @@ PyObject* Series_child(PyObject* self, PyObject* arg) {
 }
 
 }  // namespace dftracer::utils::python::series_detail
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW

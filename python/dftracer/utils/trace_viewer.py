@@ -328,7 +328,7 @@ class TraceViewer(LazyFrame):
         for name in cls._json:
             path = paths[name]
             if path in data:
-                data[path] = frame[path].to_arrow().to_pylist()
+                data[path] = frame[path]._native.to_pylist()
         columns = {name: data.get(path) for name, path in paths.items()}
         for i in range(len(frame)):
             yield cls(

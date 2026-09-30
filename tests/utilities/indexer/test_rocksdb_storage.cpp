@@ -10,8 +10,10 @@
 #include <testing_utilities.h>
 
 #include <array>
+#include <chrono>
 #include <cstring>
 #include <memory>
+#include <thread>
 
 using dftracer::utils::index::store::KeyBuilder;
 using dftracer::utils::index::store::KeyCodec;
@@ -70,6 +72,27 @@ TEST_SUITE("RocksDBStorage") {
         auto ro = manager.get_or_open(path, RocksDatabase::OpenMode::ReadOnly);
         CHECK(ro == rw);
         CHECK_FALSE(ro->is_read_only());
+    }
+
+    TEST_CASE("a read-write open waits for the last writer to close") {
+        auto root = dftu_utils_test::make_unique_test_path("rocksdb_closing");
+        fs::create_directories(root);
+        const auto path = (root / ".dftindex").string();
+        auto& manager = RocksDBManager::instance();
+        auto held =
+            manager.get_or_open(path, RocksDatabase::OpenMode::ReadWrite);
+        REQUIRE(held != nullptr);
+        manager.reset(path);
+        std::thread closer([&held] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            held.reset();
+        });
+        auto next =
+            manager.get_or_open(path, RocksDatabase::OpenMode::ReadWrite);
+        closer.join();
+        REQUIRE(next != nullptr);
+        CHECK(next->is_open());
+        CHECK_FALSE(next->is_read_only());
     }
 
     TEST_CASE("manager reset drops the cached instance for one path") {

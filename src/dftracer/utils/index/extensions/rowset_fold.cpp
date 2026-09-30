@@ -1,5 +1,6 @@
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dataframe/internal/frame_native.h>
 #include <dftracer/utils/duql/fields.h>
 #include <dftracer/utils/index/extensions/rowset_fold.h>
 #include <dftracer/utils/trace/views/event_source.h>
@@ -297,7 +298,6 @@ void RowSetFold::merge(trace::views::detail::Fold& slice) {
 }
 
 void RowSetFold::write(index::store::IndexWrite& w, int file_id) const {
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
     if (abandoned_ || rowsets_.empty()) return;
     for (std::size_t r = 0; r < rowsets_.size(); ++r) {
         df::DataFrame f;
@@ -305,18 +305,11 @@ void RowSetFold::write(index::store::IndexWrite& w, int file_id) const {
             f.names.push_back(rowsets_[r].columns[c].first);
             f.columns.push_back(series_of(sealed_[r].columns[c]));
         }
-        const std::vector<std::uint8_t> ipc = f.to_ipc();
-        index::store::records::put_rowset(
-            w, file_id, rowsets_[r].name,
-            std::string_view(reinterpret_cast<const char*>(ipc.data()),
-                             ipc.size()));
+        index::store::records::put_rowset(w, file_id, rowsets_[r].name,
+                                          df::frame_to_native(f));
     }
     index::store::records::put_manifest(
         w, file_id, index::store::IndexExtension::ROWSET, 0);
-#else
-    (void)w;
-    (void)file_id;
-#endif
 }
 
 }  // namespace dftracer::utils::index::extensions

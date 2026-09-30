@@ -122,6 +122,7 @@ AggStatePtr agg_extract_group(const AggState& st_in, std::int64_t g) {
     out->key_is_bytes = st.key_is_bytes;
     out->key_domain = st.key_domain;
     out->key_type = st.key_type;
+    out->key_json = st.key_json;
     out->key_byte_width = st.key_byte_width;
     out->key_decimal_precision = st.key_decimal_precision;
     out->key_decimal_scale = st.key_decimal_scale;

@@ -215,10 +215,38 @@ struct LookupSlot {
 /// reads a column of the row with the key, SCALAR is the side's only cell.
 enum class LookupKind : std::uint8_t { IN, ARROW, SCALAR };
 
+/// What a range-correlated lookup gives for the side rows in its range; NONE
+/// for a lookup without a range. ROWS: IN tests that there is one, SCALAR
+/// reads `column` of the only one. COUNT_VALUES counts the non-null values
+/// of `column`, COUNT_IF its true ones; the rest aggregate `column`.
+enum class RangeRead : std::uint8_t {
+    NONE,
+    ROWS,
+    COUNT,
+    COUNT_VALUES,
+    COUNT_IF,
+    SUM,
+    MIN,
+    MAX,
+    MEAN,
+};
+
 /// A read of the row set `side` of the program. `keys` are this row's key
 /// terms, matched against the side's columns `target` (IN: every column).
 /// ARROW reads `column`; with `all`, every matching row's value as a list,
 /// null when none.
+///
+/// A correlated sub-query is a side keyed by the enclosing row: the last
+/// `correlated` of `keys` are the enclosing row's, matched against `target`. IN
+/// compares the other keys with the side's values, and a row whose correlated
+/// key has no match is FALSE. A keyed SCALAR reads `column` of the one row of
+/// its key: none gives the row of side `empty` (the sub-query over no rows)
+/// when it has one, else null, and several are an error.
+///
+/// With a `range`, the last `(low ? 1 : 0) + (high ? 1 : 0)` keys are the
+/// enclosing row's bounds of the side's CORRELATED_RANGE column, lower first:
+/// `low` is GT or GE, `high` LT or LE. They count in `correlated` and are not
+/// in `target`.
 struct TLookup {
     LookupKind kind = LookupKind::IN;
     std::vector<TermPtr> keys;
@@ -228,8 +256,25 @@ struct TLookup {
     std::string column;
     bool negated = false;
     bool all = false;
+    std::size_t correlated = 0;
+    std::optional<std::size_t> empty;
+    RangeRead range = RangeRead::NONE;
+    std::optional<TermOp> low;
+    std::optional<TermOp> high;
+    /// IN only: a top-level term of the scan filter, which reads the side's
+    /// distinct rows from a table instead of a join.
+    bool key_set = false;
     std::shared_ptr<LookupSlot> slot;
 };
+
+/// Whether `l` reads its side through a join, not a collected table: an
+/// `in` sub-query off the scan filter, or a sub-query correlated by `==`
+/// keys alone.
+inline bool joined(const TLookup& l) {
+    return l.range == RangeRead::NONE &&
+           ((l.kind == LookupKind::IN && !l.key_set) ||
+            (l.kind == LookupKind::SCALAR && !l.keys.empty()));
+}
 
 struct TMatch {
     TermPtr subject;

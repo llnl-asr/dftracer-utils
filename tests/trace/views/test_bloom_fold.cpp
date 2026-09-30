@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/dataframe/internal/ipc.h>
+#include <dftracer/utils/dataframe/internal/frame_native.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
@@ -86,7 +86,7 @@ std::string stored_path(const dftracer::utils::index::store::IndexDatabase& db,
                         int fid, std::string_view fhash) {
     const auto bytes = db.rowset(fid, "files");
     if (!bytes) return {};
-    const auto f = dftracer::utils::dataframe::frame_from_ipc(*bytes);
+    const auto f = dftracer::utils::dataframe::frame_from_native(*bytes);
     if (!f) return {};
     const auto keys = f->column("fhash").materialize();
     const auto paths = f->column("path").materialize();

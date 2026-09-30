@@ -2,9 +2,11 @@
 #include <dftracer/utils/duql/syntax/tree.h>
 #include <dftracer/utils/duql/term.h>
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <charconv>
+#include <cstdint>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -1035,7 +1037,8 @@ const char* match_text(MatchOp op, bool negated) {
 
 void put_term(std::string& out, const Term& t);
 
-void put_keys(std::string& out, const std::vector<TermPtr>& keys);
+void put_keys(std::string& out, const std::vector<TermPtr>& keys,
+              std::size_t first = 0, std::size_t last = SIZE_MAX);
 
 void put_child(std::string& out, const Term& t) {
     if (atomic(t)) {
@@ -1045,6 +1048,23 @@ void put_child(std::string& out, const Term& t) {
     out += '(';
     put_term(out, t);
     out += ')';
+}
+
+// ` on keys, range op bound`: the enclosing row's keys from `first` on.
+void put_correlated(std::string& out, const TLookup& n, std::size_t first) {
+    const std::size_t bounds = (n.low ? 1 : 0) + (n.high ? 1 : 0);
+    const std::size_t keys = n.keys.size() - bounds;
+    if (first == n.keys.size()) return;
+    out += " on ";
+    if (keys > first) put_keys(out, n.keys, first, keys);
+    std::size_t at = keys;
+    for (const auto& op : {n.low, n.high}) {
+        if (!op) continue;
+        if (at > first) out += ", ";
+        out += "range";
+        out += op_text(*op);
+        put_child(out, *n.keys[at++]);
+    }
 }
 
 void put_term(std::string& out, const Term& t) {
@@ -1115,9 +1135,10 @@ void put_term(std::string& out, const Term& t) {
             } else if constexpr (std::is_same_v<T, TLookup>) {
                 switch (n.kind) {
                     case LookupKind::IN:
-                        put_keys(out, n.keys);
+                        put_keys(out, n.keys, 0, n.keys.size() - n.correlated);
                         out += n.negated ? " not in (" : " in (";
                         out += n.name;
+                        put_correlated(out, n, n.keys.size() - n.correlated);
                         out += ')';
                         break;
                     case LookupKind::ARROW:
@@ -1139,6 +1160,7 @@ void put_term(std::string& out, const Term& t) {
                     case LookupKind::SCALAR:
                         out += '(';
                         out += n.name;
+                        put_correlated(out, n, 0);
                         out += ')';
                         break;
                 }
@@ -1161,14 +1183,16 @@ void put_term(std::string& out, const Term& t) {
         t.node);
 }
 
-void put_keys(std::string& out, const std::vector<TermPtr>& keys) {
-    if (keys.size() == 1) {
-        put_child(out, *keys[0]);
+void put_keys(std::string& out, const std::vector<TermPtr>& keys,
+              std::size_t first, std::size_t last) {
+    last = std::min(last, keys.size());
+    if (last - first == 1) {
+        put_child(out, *keys[first]);
         return;
     }
     out += '(';
-    for (std::size_t i = 0; i < keys.size(); ++i) {
-        if (i > 0) out += ", ";
+    for (std::size_t i = first; i < last; ++i) {
+        if (i > first) out += ", ";
         put_term(out, *keys[i]);
     }
     out += ')';

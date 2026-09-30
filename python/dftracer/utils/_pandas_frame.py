@@ -23,7 +23,7 @@ from typing import (
 )
 
 from .enums import DType
-from .series import Series, _require_pyarrow, _unwrap
+from .series import Series, _like, _unwrap
 
 if TYPE_CHECKING:
     from .columnar import GroupBy
@@ -756,7 +756,7 @@ class _FramePandasMixin:
         """One row: the bytes each column's Arrow buffers hold."""
         from .dataframe import DataFrame
 
-        return DataFrame({c: [self._col(c).to_arrow().nbytes] for c in self.columns})
+        return DataFrame({c: [self._col(c)._native.nbytes] for c in self.columns})
 
     def isin(
         self, values: "Union[Sequence[object], Series, Mapping[str, Sequence[object]]]"
@@ -816,13 +816,12 @@ class _FramePandasMixin:
                 cols.append(name)
                 mine.append(None if va is None else str(va))
                 theirs.append(None if vb is None else str(vb))
-        pa = _require_pyarrow()
         return DataFrame(
             {
-                "row": pa.array(rows, pa.int64()),
-                "column": pa.array(cols, pa.string()),
-                "self": pa.array(mine, pa.string()),
-                "other": pa.array(theirs, pa.string()),
+                "row": Series.from_list(rows, DType.INT64),
+                "column": Series.from_list(cols, DType.STRING),
+                "self": Series.from_list(mine, DType.STRING),
+                "other": Series.from_list(theirs, DType.STRING),
             }
         )
 
@@ -846,7 +845,7 @@ class _FramePandasMixin:
         total = 0
         for name in self.columns:
             s = self._col(name)
-            nbytes = int(s.to_arrow().nbytes)
+            nbytes = int(s._native.nbytes)
             total += nbytes
             lines.append(
                 f"  {name}: {s.dtype.name.lower()}, {n - s.null_count} present, {nbytes} bytes"
@@ -1044,8 +1043,9 @@ class _FramePandasMixin:
         every = rule_to_units(freq, self._unit_of(s))
         ticks = s.astype("int64")
         lo, hi = int(ticks.min()), int(ticks.max())
-        pa = _require_pyarrow()
-        grid = DataFrame({name: pa.array(range(lo, hi + 1, every), type=s.to_arrow().type)})
+        grid = DataFrame(
+            {name: _like(Series.from_list(list(range(lo, hi + 1, every)), DType.INT64), s)}
+        )
         out = grid.join(frame, on=name, how="left")
         others = [c for c in out.columns if c != name]
         if method in ("ffill", "pad"):

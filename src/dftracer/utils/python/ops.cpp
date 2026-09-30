@@ -5,13 +5,10 @@
 
 #include <dftracer/utils/core/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/dataframe/abi.h>
-#include <dftracer/utils/python/ops.h>
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/python/ops.h>
 #include <dftracer/utils/python/py_scalar_helpers.h>
 #include <dftracer/utils/python/series.h>
-#endif
 
 namespace dftracer::utils::python {
 namespace {
@@ -59,8 +56,6 @@ PyObject* op_info(PyObject*, PyObject* args) {
                          "arity", dftu_op_arity(op->sig), "signature",
                          dftu_op_signature(op->sig));
 }
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 PyObject* scalar_to_py(dftu_scalar s) {
     switch (s.kind) {
@@ -227,16 +222,6 @@ PyObject* op_run(PyObject*, PyObject* args) {
     }
     return scalar_to_py(r);
 }
-
-#else  // no Arrow: columns are unavailable, so op_run cannot marshal a Series.
-
-PyObject* op_run(PyObject*, PyObject*) {
-    PyErr_SetString(PyExc_RuntimeError,
-                    "op_run requires the Arrow-enabled build");
-    return nullptr;
-}
-
-#endif
 
 PyMethodDef ops_methods[] = {
     {"op_list", op_list, METH_NOARGS,

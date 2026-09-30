@@ -173,10 +173,10 @@ TEST_SUITE("View duql joins") {
             {"'f'", "argument"}));
         CHECK(has(error_of([&] {
                       (void)v.duql(
-                          "where dur > (from data | where name == ^.name | agg "
-                          "{ m = mean(dur) })");
+                          "where dur > (from data | where ts < ^.ts + ts | "
+                          "agg { m = max(dur) })");
                   }),
-                  {"^.", "->"}));
+                  {"ts < ^.ts + ts", "mixes"}));
     }
 
     TEST_CASE("a semi-join equals the two-step query") {
@@ -731,13 +731,37 @@ TEST_SUITE("View duql joins") {
             lines.push_back(R"({"k":)" + std::to_string(i) + "}");
         const View v = view_of(write_records(env, "cap", lines));
         const std::string q =
-            "let ks = where k >= 0 | select k; where k in (from ks)";
+            "let ks = where k >= 0 | select k, v = k; where k -> ks.v >= 0";
         {
             Env cap("DUQL_LOOKUP_MAX_ROWS", "10");
             const View planned = v.duql(q);
             (void)v.explain_duql(q);
             CHECK(has(error_of([&] { (void)frame(planned); }),
                       {"'ks'", "11", "10", "DUQL_LOOKUP_MAX_ROWS"}));
+            CHECK(has(error_of([&] {
+                          (void)frame(v.duql(
+                              "derive m = (from data | where k < ^.k | agg { "
+                              "m = max(k) })"));
+                      }),
+                      {"__sub_0", "DUQL_LOOKUP_MAX_ROWS"}));
+            // Sub-queries under 'in' and ones keyed by '==' have no cap.
+            CHECK(
+                frame(v.duql("where k in (from data | select k)")).num_rows() ==
+                11);
+            CHECK(frame(v.duql("where not (k in (from data | select k))"))
+                      .num_rows() == 0);
+            CHECK(has(v.explain_duql("where not (k in (from data | select "
+                                     "k)) and k > 1"),
+                      {"scan filter: k > 1", "lookup join __sub_0 on k"}));
+            CHECK(has(v.explain_duql("where k in (from data | select k)"),
+                      {"reads the distinct rows of __sub_0",
+                       "scan filter: k in (__sub_0)"}));
+            CHECK(has(v.explain_duql("derive n = (from data | where k == ^.k "
+                                     "| agg { c = count() })"),
+                      {"nest join __sub_0 on k"}));
+            CHECK(frame(v.duql("derive n = (from data | where k == ^.k | agg "
+                               "{ c = count() }) | where n == 1"))
+                      .num_rows() == 11);
         }
         {
             Env cap("DUQL_LOOKUP_MAX_BYTES", "16");
@@ -760,10 +784,9 @@ TEST_SUITE("View duql joins") {
             "name in (from data | where name == \"a\" | select name)";
         NullSink sink;
         const auto pushed = v.duql("where " + sub).sink_json(sink).get();
-        const auto kept =
-            v.duql("where (" + sub + ") or false").sink_json(sink).get();
+        const auto kept = v.duql("where name != \"z\"").sink_json(sink).get();
         CHECK(pushed.events_matched == 400);
-        CHECK(kept.events_matched == 400);
+        CHECK(kept.events_matched == 1600);
         CHECK(pushed.chunks_skipped > 0);
         CHECK(pushed.chunks_skipped > kept.chunks_skipped);
         CHECK(
@@ -910,6 +933,651 @@ TEST_SUITE("View duql joins") {
                     else
                         CHECK(got == want[k]);
                 }
+            }
+        }
+    }
+
+    struct Rec {
+        int i;
+        int run_kind;  // 0 missing, 1 null, 2 string, 3 int
+        int run;
+        int name;
+        bool has_dur;
+        double dur;
+    };
+
+    static std::string run_key(const Rec& r) {
+        if (r.run_kind == 2) return "s" + std::to_string(r.run);
+        if (r.run_kind == 3) return "i" + std::to_string(r.run);
+        return "";
+    }
+
+    struct CorrelatedData {
+        std::vector<std::string> lines;
+        std::vector<Rec> recs;
+    };
+
+    static CorrelatedData correlated_data(int n, unsigned seed) {
+        unsigned x = seed;
+        auto next = [&](unsigned m) {
+            x = x * 1664525u + 1013904223u;
+            return static_cast<int>((x >> 8) % m);
+        };
+        CorrelatedData d;
+        for (int i = 0; i < n; ++i) {
+            Rec r{i,
+                  next(10) < 3 ? next(3) : 3,
+                  next(4),
+                  next(4),
+                  next(10) != 0,
+                  next(100) + (next(2) ? 0.5 : 0.0)};
+            d.recs.push_back(r);
+            std::string l = R"({"i":)" + std::to_string(i) + R"(,"g":)" +
+                            std::to_string(i % 5) + R"(,"name":")" +
+                            std::string(1, static_cast<char>('a' + r.name)) +
+                            "\"";
+            if (r.run_kind == 1) l += R"(,"run":null)";
+            if (r.run_kind == 2)
+                l += R"(,"run":")" + std::to_string(r.run) + "\"";
+            if (r.run_kind == 3) l += R"(,"run":)" + std::to_string(r.run);
+            if (r.has_dur) {
+                char buf[32];
+                std::snprintf(buf, sizeof buf, "%g", r.dur);
+                l += std::string(R"(,"dur":)") + buf;
+            }
+            d.lines.push_back(l + R"(,"pad":"xxxxxxxxxxxxxxxxxxxxxxxx"})");
+        }
+        return d;
+    }
+
+    // The queries of the correlated tests, over `where` as the outer filter,
+    // with the rows they must give.
+    struct CorrelatedCase {
+        std::string query;
+        std::string column;
+        std::vector<std::string> want;
+    };
+
+    static std::vector<CorrelatedCase> correlated_cases(
+        const CorrelatedData& d, const std::string& where,
+        const std::string& empty_sum) {
+        const auto& rs = d.recs;
+        auto count = [](double v) {
+            return std::to_string(static_cast<long long>(v));
+        };
+        std::vector<CorrelatedCase> out;
+        {
+            std::vector<double> sum(4, 0);
+            std::vector<int> cnt(4, 0);
+            for (const Rec& r : rs)
+                if (r.has_dur) {
+                    sum[static_cast<std::size_t>(r.name)] += r.dur;
+                    ++cnt[static_cast<std::size_t>(r.name)];
+                }
+            CorrelatedCase c{"where " + where +
+                                 " | where dur > (from data | where name == "
+                                 "^.name | agg { m = mean(dur) }) | select i",
+                             "i",
+                             {}};
+            for (const Rec& r : rs) {
+                const auto k = static_cast<std::size_t>(r.name);
+                if (r.has_dur && cnt[k] && r.dur > sum[k] / cnt[k])
+                    c.want.push_back(std::to_string(r.i));
+            }
+            out.push_back(std::move(c));
+        }
+        {
+            CorrelatedCase c{"where " + where +
+                                 " | derive n = (from data | where run == "
+                                 "^.run | agg { c = count() }) | select i, n",
+                             "n",
+                             {}};
+            for (const Rec& r : rs) {
+                int n = 0;
+                if (!run_key(r).empty())
+                    for (const Rec& o : rs) n += run_key(o) == run_key(r);
+                c.want.push_back(std::to_string(n));
+            }
+            out.push_back(std::move(c));
+        }
+        for (const bool negated : {false, true}) {
+            CorrelatedCase c{
+                "where " + where + " | where g " +
+                    std::string(negated ? "not " : "") +
+                    "in (from data | where run == ^.run and dur > 50 | "
+                    "select g) | select i",
+                "i",
+                {}};
+            for (const Rec& r : rs) {
+                bool hit = false;
+                if (!run_key(r).empty())
+                    for (const Rec& o : rs)
+                        hit = hit || (run_key(o) == run_key(r) && o.has_dur &&
+                                      o.dur > 50 && o.i % 5 == r.i % 5);
+                if (hit != negated) c.want.push_back(std::to_string(r.i));
+            }
+            out.push_back(std::move(c));
+        }
+        {
+            CorrelatedCase c{
+                "where " + where +
+                    " | derive t = (from data | where name == ^.name and run "
+                    "== ^.run | agg { t = sum(dur) }) | select i, t",
+                "t",
+                {}};
+            for (const Rec& r : rs) {
+                double t = 0;
+                bool any = false;
+                if (!run_key(r).empty())
+                    for (const Rec& o : rs)
+                        if (o.name == r.name && run_key(o) == run_key(r)) {
+                            any = true;
+                            if (o.has_dur) t += o.dur;
+                        }
+                c.want.push_back(any ? "" : empty_sum);
+                if (any) {
+                    char buf[32];
+                    std::snprintf(buf, sizeof buf, "%g", t);
+                    c.want.back() = buf;
+                }
+            }
+            out.push_back(std::move(c));
+        }
+        {
+            CorrelatedCase c{"where " + where +
+                                 " | derive x = (from data | where i == ^.i | "
+                                 "select dur) | select i, x",
+                             "x",
+                             {}};
+            for (const Rec& r : rs) {
+                char buf[32];
+                std::snprintf(buf, sizeof buf, "%g", r.dur);
+                c.want.push_back(r.has_dur ? buf : "null");
+            }
+            out.push_back(std::move(c));
+        }
+        {
+            CorrelatedCase c{"where " + where +
+                                 " | derive c = (from data | where dur * 2 == "
+                                 "^.dur * 2 | agg { c = count() }) | select "
+                                 "i, c",
+                             "c",
+                             {}};
+            for (const Rec& r : rs) {
+                int n = 0;
+                if (r.has_dur)
+                    for (const Rec& o : rs) n += o.has_dur && o.dur == r.dur;
+                c.want.push_back(count(n));
+            }
+            out.push_back(std::move(c));
+        }
+        return out;
+    }
+
+    // Column `name` of `f` in the order of column `i`; `i` itself sorted.
+    static std::vector<std::string> by_i(const df::DataFrame& f,
+                                         const std::string& name) {
+        std::vector<std::pair<long, std::string>> rows;
+        const auto ids = column(f, "i");
+        const auto vals = column(f, name);
+        for (std::size_t r = 0; r < ids.size(); ++r)
+            rows.emplace_back(std::stol(ids[r]), vals[r]);
+        std::sort(rows.begin(), rows.end());
+        std::vector<std::string> out;
+        for (auto& [id, v] : rows) out.push_back(std::move(v));
+        return out;
+    }
+
+    static std::string as_number_text(const std::string& s) {
+        if (s == "null" || s.empty()) return s;
+        char* end = nullptr;
+        const double v = std::strtod(s.c_str(), &end);
+        char buf[32];
+        std::snprintf(buf, sizeof buf, "%g", v);
+        return buf;
+    }
+
+    TEST_CASE("a correlated sub-query equals the per-row reference") {
+        TestEnvironment env(10);
+        const CorrelatedData d = correlated_data(300, 7);
+        const View v = view_of(write_records(env, "cr", d.lines, 4096, 4096));
+        const auto none =
+            frame(v.duql("from data | where false | agg { t = sum(dur) }"));
+        REQUIRE(none.num_rows() == 1);
+        const std::string empty_sum = as_number_text(cell(none, 0, "t"));
+        for (const auto& c : correlated_cases(d, "i >= 0", empty_sum)) {
+            CAPTURE(c.query);
+            const auto f = frame(v.duql(c.query));
+            std::vector<std::string> got;
+            for (const auto& x : by_i(f, c.column))
+                got.push_back(as_number_text(x));
+            std::vector<std::string> want;
+            for (const auto& x : c.want) want.push_back(as_number_text(x));
+            CHECK(first_diff(got, want) == "");
+        }
+    }
+
+    TEST_CASE("a correlated sub-query does not depend on layout or pushdown") {
+        TestEnvironment env(10);
+        const CorrelatedData d = correlated_data(300, 21);
+        std::vector<std::vector<std::string>> first;
+        for (const std::size_t checkpoint :
+             {std::size_t{2048}, std::size_t{65536}}) {
+            const std::string gz =
+                write_records(env, "cl" + std::to_string(checkpoint), d.lines,
+                              4096, checkpoint);
+            for (const char* where : {"i >= 0", "(i >= 0) or false"}) {
+                CAPTURE(where);
+                std::size_t at = 0;
+                for (const auto& c : correlated_cases(d, where, "0")) {
+                    const auto got =
+                        by_i(frame(view_of(gz).duql(c.query)), c.column);
+                    if (first.size() <= at) first.push_back(got);
+                    CHECK(got == first[at]);
+                    ++at;
+                }
+            }
+        }
+    }
+
+    static std::string num_text(double v) {
+        char buf[32];
+        std::snprintf(buf, sizeof buf, "%g", v);
+        return buf;
+    }
+
+    // Range sub-queries over `where` with the per-row nested-loop answer.
+    static std::vector<CorrelatedCase> range_cases(const CorrelatedData& d,
+                                                   const std::string& where) {
+        const auto& rs = d.recs;
+        std::vector<CorrelatedCase> out;
+        auto add = [&](const std::string& body, const std::string& column,
+                       auto&& per_row) {
+            CorrelatedCase c{"where " + where + " | " + body, column, {}};
+            for (const Rec& r : rs) c.want.push_back(per_row(r));
+            out.push_back(std::move(c));
+        };
+        // Aggregates of `dur` over the rows `in`: null over none with dur.
+        auto agg = [&](const Rec& r, auto&& in, const char* fn) {
+            double best = 0;
+            double sum = 0;
+            int n = 0;
+            for (const Rec& o : rs) {
+                if (!in(o, r) || !o.has_dur) continue;
+                if (n == 0 || (fn[1] == 'a' ? o.dur > best : o.dur < best))
+                    best = o.dur;
+                sum += o.dur;
+                ++n;
+            }
+            if (n == 0) return std::string("null");
+            if (fn[0] == 's') return num_text(sum);
+            if (fn[0] == 'a') return num_text(sum / n);
+            return num_text(best);
+        };
+        auto name = [](const Rec& r) {
+            return static_cast<char>('a' + r.name);
+        };
+        add("derive m = (from data | where i < ^.i | agg { m = max(dur) }) | "
+            "select i, m",
+            "m", [&](const Rec& r) {
+                return agg(
+                    r, [](const Rec& o, const Rec& x) { return o.i < x.i; },
+                    "max");
+            });
+        add("derive m = (from data | where g == ^.g and i < ^.i | agg { m = "
+            "min(dur) }) | select i, m",
+            "m", [&](const Rec& r) {
+                return agg(
+                    r,
+                    [](const Rec& o, const Rec& x) {
+                        return o.i % 5 == x.i % 5 && o.i < x.i;
+                    },
+                    "min");
+            });
+        add("derive s = (from data | where name == ^.name and i >= ^.i | agg "
+            "{ s = sum(dur) }) | select i, s",
+            "s", [&](const Rec& r) {
+                return agg(
+                    r,
+                    [](const Rec& o, const Rec& x) {
+                        return o.name == x.name && o.i >= x.i;
+                    },
+                    "sum");
+            });
+        add("derive a = (from data | where i > ^.i and i <= ^.i + 5 | agg { "
+            "a = mean(dur) }) | select i, a",
+            "a", [&](const Rec& r) {
+                return agg(
+                    r,
+                    [](const Rec& o, const Rec& x) {
+                        return o.i > x.i && o.i <= x.i + 5;
+                    },
+                    "avg");
+            });
+        add("derive c = (from data | where run == ^.run and dur between "
+            "^.dur - 10 and ^.dur + 10 | agg { c = count() }) | select i, c",
+            "c", [&](const Rec& r) {
+                int n = 0;
+                if (!run_key(r).empty() && r.has_dur)
+                    for (const Rec& o : rs)
+                        n += run_key(o) == run_key(r) && o.has_dur &&
+                             o.dur >= r.dur - 10 && o.dur <= r.dur + 10;
+                return std::to_string(n);
+            });
+        add("derive n = (from data | where dur < ^.dur | agg { n = count(dur) "
+            "}) | select i, n",
+            "n", [&](const Rec& r) {
+                int n = 0;
+                if (r.has_dur)
+                    for (const Rec& o : rs) n += o.has_dur && o.dur < r.dur;
+                return std::to_string(n);
+            });
+        add("derive k = (from data | where name < ^.name and g == ^.g | agg { "
+            "k = count_if(dur > 50) }) | select i, k",
+            "k", [&](const Rec& r) {
+                int n = 0;
+                for (const Rec& o : rs)
+                    n += name(o) < name(r) && o.i % 5 == r.i % 5 && o.has_dur &&
+                         o.dur > 50;
+                return std::to_string(n);
+            });
+        add("derive c = (from data | where run <= ^.run | agg { c = count() "
+            "}) | select i, c",
+            "c", [&](const Rec& r) {
+                int n = 0;
+                if (r.run_kind >= 2)
+                    for (const Rec& o : rs)
+                        n += o.run_kind == r.run_kind && o.run <= r.run;
+                return std::to_string(n);
+            });
+        add("derive x = (from data | where i >= ^.i and i < ^.i + 1 | select "
+            "dur) | select i, x",
+            "x", [&](const Rec& r) {
+                return r.has_dur ? num_text(r.dur) : std::string("null");
+            });
+        for (const char* tail : {"select g", "group g {}"})
+            for (const bool negated : {false, true}) {
+                CorrelatedCase c{
+                    "where " + where + " | where g " + (negated ? "not " : "") +
+                        "in (from data | where name == \"a\" and i < ^.i | " +
+                        tail + ") | select i",
+                    "i",
+                    {}};
+                for (const Rec& r : rs) {
+                    bool hit = false;
+                    for (const Rec& o : rs)
+                        hit = hit ||
+                              (o.name == 0 && o.i < r.i && o.i % 5 == r.i % 5);
+                    if (hit != negated) c.want.push_back(std::to_string(r.i));
+                }
+                out.push_back(std::move(c));
+            }
+        return out;
+    }
+
+    TEST_CASE("a range sub-query equals the per-row reference") {
+        TestEnvironment env(10);
+        const CorrelatedData d = correlated_data(300, 11);
+        const View v = view_of(write_records(env, "rr", d.lines, 4096, 4096));
+        for (const auto& c : range_cases(d, "i >= 0")) {
+            CAPTURE(c.query);
+            const auto f = frame(v.duql(c.query));
+            std::vector<std::string> got;
+            for (const auto& x :
+                 c.column == "i" ? sorted(column(f, "i")) : by_i(f, c.column))
+                got.push_back(as_number_text(x));
+            std::vector<std::string> want;
+            for (const auto& x : c.want) want.push_back(as_number_text(x));
+            if (c.column == "i") want = sorted(want);
+            CHECK(first_diff(got, want) == "");
+        }
+    }
+
+    TEST_CASE("a range sub-query does not depend on layout or pushdown") {
+        TestEnvironment env(10);
+        const CorrelatedData d = correlated_data(300, 29);
+        std::vector<std::vector<std::string>> first;
+        for (const std::size_t checkpoint :
+             {std::size_t{2048}, std::size_t{65536}}) {
+            const std::string gz =
+                write_records(env, "rl" + std::to_string(checkpoint), d.lines,
+                              4096, checkpoint);
+            for (const char* where : {"i >= 0", "(i >= 0) or false"}) {
+                CAPTURE(where);
+                std::size_t at = 0;
+                for (const auto& c : range_cases(d, where)) {
+                    CAPTURE(c.query);
+                    const auto got = sorted(
+                        by_i(frame(view_of(gz).duql(c.query)), c.column));
+                    if (first.size() <= at) first.push_back(got);
+                    CHECK(got == first[at]);
+                    ++at;
+                }
+            }
+        }
+    }
+
+    TEST_CASE("a correlated sub-query refuses what it cannot key") {
+        TestEnvironment env(10);
+        const CorrelatedData d = correlated_data(60, 3);
+        const View v = view_of(write_records(env, "ce", d.lines, 4096, 4096));
+        CHECK(has(error_of([&] {
+                      (void)frame(
+                          v.duql("derive x = (from data | where run == ^.run | "
+                                 "select dur)"));
+                  }),
+                  {"__sub_", "rows for key", "one row"}));
+        CHECK(has(error_of([&] {
+                      (void)v.duql(
+                          "where dur > (from data | where run == ^.run and "
+                          "dur + ^.dur > 1 | agg { m = max(dur) })");
+                  }),
+                  {"dur + ^.dur > 1", "mixes"}));
+        CHECK(has(error_of([&] {
+                      (void)v.duql(
+                          "where dur > (from data | where i < ^.i and dur < "
+                          "^.dur | agg { m = max(dur) })");
+                  }),
+                  {"dur < ^.dur", "overlap"}));
+        CHECK(has(error_of([&] {
+                      (void)v.duql(
+                          "where dur > (from data | where i < ^.i | agg { m "
+                          "= first(dur) })");
+                  }),
+                  {"'first'", "count, count_if"}));
+        CHECK(has(error_of([&] {
+                      (void)frame(
+                          v.duql("derive x = (from data | where i < ^.i | "
+                                 "select dur)"));
+                  }),
+                  {"__sub_", "rows in the range", "one row"}));
+        CHECK(has(v.explain_duql("derive m = (from data | where run == ^.run "
+                                 "and i between ^.i - 5 and ^.i | agg { m = "
+                                 "max(dur) })"),
+                  {"__sub_0 on run, range >= (i - 5), range <= i"}));
+        CHECK(has(error_of([&] {
+                      (void)v.duql(
+                          "where dur > (from data | where run == ^.run | "
+                          "take 2 | agg { m = max(dur) })");
+                  }),
+                  {"take", "correlated"}));
+        CHECK(has(error_of([&] {
+                      (void)v.duql(
+                          "where dur > (from data | where run == ^.run | "
+                          "derive z = ^.dur | agg { m = max(dur) })");
+                  }),
+                  {"^.dur", "other than 'where'"}));
+        CHECK(has(error_of([&] {
+                      (void)v.duql(
+                          "where dur > (from data | where run == ^.run)");
+                  }),
+                  {"select", "group", "agg"}));
+        CHECK(has(error_of([&] {
+                      (void)v.duql(
+                          "where dur > (from data | where run == ^.run | "
+                          "group name { m = max(dur) })");
+                  }),
+                  {"not 'group'"}));
+        CHECK(has(error_of([&] {
+                      (void)v.duql(
+                          "where dur > (from data | where run == ^.run | "
+                          "agg { m = max(dur), n = count() })");
+                  }),
+                  {"one column", "2"}));
+        CHECK(has(v.explain_duql("where dur > (from data | where name == "
+                                 "^.name | agg { m = mean(dur) })"),
+                  {"__sub_0", "__ck0"}));
+    }
+
+    // A top-level `in` reads its side's distinct rows under the memory
+    // budget; the other sub-queries join theirs, which spills.
+    TEST_CASE("sub-queries over the caps and the memory budget") {
+        TestEnvironment env(10);
+        const CorrelatedData d = correlated_data(300, 13);
+        Env rows("DUQL_LOOKUP_MAX_ROWS", "10");
+        Env bytes("DUQL_LOOKUP_MAX_BYTES", "1024");
+        for (const std::size_t checkpoint :
+             {std::size_t{2048}, std::size_t{65536}}) {
+            const std::string gz =
+                write_records(env, "cs" + std::to_string(checkpoint), d.lines,
+                              4096, checkpoint);
+            for (const std::uint64_t budget :
+                 {std::uint64_t{1024}, std::uint64_t{0}}) {
+                const View v =
+                    budget ? view_of(gz).memory_budget(budget) : view_of(gz);
+                for (const char* where : {"i >= 0", "(i >= 0) or false"}) {
+                    CAPTURE(checkpoint);
+                    CAPTURE(budget);
+                    CAPTURE(where);
+                    auto cases = correlated_cases(d, where, "null");
+                    {
+                        CorrelatedCase c{
+                            std::string("where ") + where +
+                                " | where (g in (from data | where dur > 50 | "
+                                "select g)) or i < 0 | select i",
+                            "i",
+                            {}};
+                        for (const Rec& r : d.recs) {
+                            bool hit = false;
+                            for (const Rec& o : d.recs)
+                                hit = hit || (o.has_dur && o.dur > 50 &&
+                                              o.i % 5 == r.i % 5);
+                            if (hit) c.want.push_back(std::to_string(r.i));
+                        }
+                        cases.push_back(std::move(c));
+                    }
+                    for (const auto& c : cases) {
+                        CAPTURE(c.query);
+                        const bool key_set =
+                            c.query.find("| where g in") != std::string::npos;
+                        if (key_set && budget) {
+                            CHECK(has(
+                                error_of([&] { (void)frame(v.duql(c.query)); }),
+                                {"memory budget", "__sub_"}));
+                            continue;
+                        }
+                        const auto f = frame(v.duql(c.query));
+                        std::vector<std::string> got;
+                        for (const auto& x : by_i(f, c.column))
+                            got.push_back(as_number_text(x));
+                        std::vector<std::string> want;
+                        for (const auto& x : c.want)
+                            want.push_back(as_number_text(x));
+                        CHECK(first_diff(got, want) == "");
+                    }
+                }
+            }
+        }
+    }
+
+    struct SpillData {
+        std::vector<std::string> lines;
+        std::vector<std::string> plain;
+        std::vector<std::string> sizes;
+    };
+
+    // Events with a key that may be missing, null or a double, and a row set
+    // of keys 0..299 (a fifth of them written as doubles) with a value each,
+    // plus a second copy of some keys for `into`.
+    static SpillData spill_data(int events, unsigned seed) {
+        unsigned x = seed;
+        auto next = [&](unsigned m) {
+            x = x * 1664525u + 1013904223u;
+            return static_cast<int>((x >> 8) % m);
+        };
+        SpillData d;
+        std::vector<int> copies(300, 1);
+        for (int j = 0; j < 300; ++j) {
+            const bool dup = next(4) == 0;
+            for (int c = 0; c < 1 + dup; ++c) {
+                const std::string k =
+                    std::to_string(j) + (j % 5 == 0 ? ".0" : "");
+                d.lines.push_back(R"({"type":"s","k":)" + k + R"(,"sv":)" +
+                                  std::to_string(j * 3) +
+                                  R"(,"pad":"xxxxxxxxxxxxxxxx"})");
+            }
+            copies[static_cast<std::size_t>(j)] = 1 + dup;
+        }
+        for (int i = 0; i < events; ++i) {
+            const int kind = next(10);
+            const int k = next(400);
+            std::string l = R"({"type":"ev","i":)" + std::to_string(i);
+            if (kind == 0)
+                l += R"(,"k":null)";
+            else if (kind != 1)
+                l += R"(,"k":)" + std::to_string(k) + (k % 2 == 0 ? ".0" : "");
+            d.lines.push_back(l + R"(,"pad":"xxxxxxxxxxxxxxxx"})");
+            const bool keyed = kind >= 2;
+            d.plain.push_back(keyed && k < 300 ? std::to_string(k * 3)
+                                               : "null");
+            d.sizes.push_back(
+                keyed && k < 300
+                    ? std::to_string(copies[static_cast<std::size_t>(k)])
+                    : "0");
+        }
+        return d;
+    }
+
+    TEST_CASE("a lookup joins a side over the caps and the memory budget") {
+        TestEnvironment env(10);
+        const SpillData d = spill_data(3000, 5);
+        std::vector<std::string> base;
+        for (const std::size_t checkpoint :
+             {std::size_t{2048}, std::size_t{65536}}) {
+            const View v =
+                view_of(write_records(env, "sp" + std::to_string(checkpoint),
+                                      d.lines, 4096, checkpoint));
+            Env rows("DUQL_LOOKUP_MAX_ROWS", "10");
+            Env bytes("DUQL_LOOKUP_MAX_BYTES", "1024");
+            for (const std::uint64_t budget :
+                 {std::uint64_t{1024}, std::uint64_t{0}}) {
+                CAPTURE(checkpoint);
+                CAPTURE(budget);
+                const View b = budget ? v.memory_budget(budget) : v;
+                const std::string let =
+                    "let s = where type == \"s\" | select k, sv; ";
+                const auto f = frame(b.duql(
+                    let +
+                    "where type == \"ev\" | lookup s on k | select i, sv"));
+                REQUIRE(f.num_rows() == 3000);
+                std::vector<std::string> sv(3000);
+                const auto ids = column(f, "i");
+                const auto vals = column(f, "sv");
+                for (std::size_t r = 0; r < ids.size(); ++r)
+                    sv[static_cast<std::size_t>(std::stol(ids[r]))] = vals[r];
+                const auto n =
+                    frame(b.duql(
+                        let + "where type == \"ev\" | lookup s on k into m | "
+                              "select i, len(m) as n"));
+                std::vector<std::string> sizes(3000);
+                const auto nid = column(n, "i");
+                const auto nn = column(n, "n");
+                for (std::size_t r = 0; r < nid.size(); ++r)
+                    sizes[static_cast<std::size_t>(std::stol(nid[r]))] = nn[r];
+                CHECK(sizes == d.sizes);
+                if (base.empty()) base = sizes;
+                CHECK(sizes == base);
+                CHECK(sv == d.plain);
             }
         }
     }

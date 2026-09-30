@@ -368,28 +368,35 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
         }
     }
 
-    TEST_CASE(
-        "spill refuses the nested types (List/LargeList/FixedSizeList/"
-        "Struct/Map)") {
+    TEST_CASE("spill round-trips a LargeList") {
         spill::Dir dir;
-        Series large_list = make_large_list_i64({{3}, {1}, {2}, {1}});
+        Series large_list = make_large_list_i64({{3}, {1, 2}, {}, {1}});
+        auto m = spill_round_trip(large_list, dir, 0);
+        REQUIRE(m.has_value());
+        const Series& back = m->columns[0];
+        REQUIRE(back.type() == TypeId::LargeList);
+        REQUIRE(back.length() == 4);
+        CHECK(back.child(0).length() == 4);
+        CHECK(back.offsets64()[2] == 3);
+        CHECK(back.child(0).data<std::int64_t>()[1] == 1);
+    }
+
+    TEST_CASE("spill round-trips FixedSizeList and Map") {
+        spill::Dir dir;
         Series fixed_list =
             make_fixed_size_list_i64({{3, 3}, {1, 1}, {2, 2}, {1, 1}});
+        auto f = spill_round_trip(fixed_list, dir, 0);
+        REQUIRE(f.has_value());
+        CHECK(f->columns[0].type() == TypeId::FixedSizeList);
+        CHECK(f->columns[0].length() == 4);
+        CHECK(f->columns[0].child(0).length() == 8);
         Series map_col = make_map_string_i64(
             {{{"c", 3}}, {{"a", 1}}, {{"b", 2}}, {{"a", 1}}});
-
-        std::vector<Series> types;
-        types.push_back(large_list.share());
-        types.push_back(fixed_list.share());
-        types.push_back(map_col.share());
-        int id = 0;
-        for (Series& col : types) {
-            INFO(std::string(type_name(col.type())));
-            spill::Writer w(dir.run_path(id++));
-            std::vector<Series> cols;
-            cols.push_back(col.share());
-            CHECK_THROWS_AS(w.write(cols, col.length()), std::invalid_argument);
-        }
+        auto m = spill_round_trip(map_col, dir, 1);
+        REQUIRE(m.has_value());
+        CHECK(m->columns[0].type() == TypeId::Map);
+        CHECK(m->columns[0].length() == 4);
+        CHECK(m->columns[0].child(0).num_children() == 2);
     }
 
     // Eager is the oracle: build a 2-column frame (Int64 key `k`, special-typed

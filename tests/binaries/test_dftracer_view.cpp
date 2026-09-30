@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dataframe/builders_arrow_types.h>
 #include <dftracer/utils/binaries/json_cell_printer.h>
+#include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
@@ -16,6 +16,10 @@
 #include <sys/wait.h>
 #include <testing_utilities.h>
 #include <unistd.h>
+
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
+#include <dataframe/builders_arrow_types.h>
+#endif
 
 #include <algorithm>
 #include <cstdlib>
@@ -1022,6 +1026,7 @@ TEST_SUITE("DFTracerView JSON cell printer") {
         CHECK(cell(b, 0) == "\"a\\tb\"");
     }
 
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
     TEST_CASE("FixedSizeBinary reads its declared width") {
         auto fsb = df::test_types::make_fixed_size_binary({"ab\"c"}, 4);
         CHECK(cell(fsb, 0) == "\"ab\\\"c\"");
@@ -1033,6 +1038,7 @@ TEST_SUITE("DFTracerView JSON cell printer") {
         auto lb = df::test_types::make_large_binary({"a\nb"});
         CHECK(cell(lb, 0) == "\"a\\nb\"");
     }
+#endif
 
     TEST_CASE("temporal types emit the exact physical integer") {
         auto date32 = df::Series::flat(

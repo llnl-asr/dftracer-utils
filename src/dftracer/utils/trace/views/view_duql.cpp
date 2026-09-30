@@ -1,15 +1,14 @@
 #include <dftracer/utils/core/common/config.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
-#include <nanoarrow/nanoarrow.h>
-#include <nanoarrow/nanoarrow_ipc.h>
-#endif
 #include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/core/common/hash/splitmix64.h>
+#include <dftracer/utils/core/common/memory_budget.h>
 #include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/expr.h>
-#include <dftracer/utils/dataframe/internal/ipc.h>
+#include <dftracer/utils/dataframe/internal/frame_native.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
@@ -772,6 +771,9 @@ std::uint64_t env_count(const char* name, std::uint64_t fallback) {
 }
 
 constexpr std::uint64_t LOOKUP_MAX_ROWS = 1'000'000;
+constexpr std::int64_t TYPE_PROBE_ROWS = 65'536;
+// Keys a side's distinct rows in the lookup cache apart from its rows.
+constexpr std::uint64_t DISTINCT_CACHE_SALT = 0x64697374696e6374ULL;
 constexpr std::uint64_t LOOKUP_MAX_BYTES = std::uint64_t{256} << 20;
 
 // `resolved.` columns are gone; an arrow into a row set of the source reads
@@ -834,8 +836,10 @@ std::string input_text(const duql::Input& in, const duql::Program& program) {
 void side_reads(const duql::Pipeline& p, std::vector<std::size_t>& out) {
     if (p.input.kind == duql::InputKind::SIDE) out.push_back(p.input.side);
     duql::for_each_pipeline_term(p, [&](const duql::Term& t) {
-        if (const auto* l = std::get_if<duql::TLookup>(&t.node))
+        if (const auto* l = std::get_if<duql::TLookup>(&t.node)) {
             out.push_back(l->side);
+            if (l->empty) out.push_back(*l->empty);
+        }
     });
     for (const auto& s : p.stages) {
         if (const auto* l = std::get_if<duql::PipelineLookup>(&s))
@@ -867,13 +871,27 @@ void asof_reads(const duql::Pipeline& p, std::vector<std::size_t>& out) {
 }
 
 // The sides `p`'s terms and as-of lookups read, a union's included: the ones
-// its build step runs.
+// its build step runs. A joined lookup's side streams into its join.
 void term_reads(const duql::Pipeline& p, std::vector<std::size_t>& out) {
     duql::for_each_pipeline_term(p, [&](const duql::Term& t) {
-        if (const auto* l = std::get_if<duql::TLookup>(&t.node))
-            out.push_back(l->side);
+        if (const auto* l = std::get_if<duql::TLookup>(&t.node)) {
+            if (!duql::joined(*l) && !l->key_set) out.push_back(l->side);
+            if (l->empty) out.push_back(*l->empty);
+        }
     });
     asof_reads(p, out);
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+}
+
+// The sides `p`'s key-set `in`s read: only their distinct rows, before the
+// scan.
+void set_reads(const duql::Pipeline& p, std::vector<std::size_t>& out) {
+    duql::for_each_pipeline_term(p, [&](const duql::Term& t) {
+        if (const auto* l = std::get_if<duql::TLookup>(&t.node);
+            l && l->key_set)
+            out.push_back(l->side);
+    });
     std::sort(out.begin(), out.end());
     out.erase(std::unique(out.begin(), out.end()), out.end());
 }
@@ -1035,7 +1053,6 @@ struct CacheKey {
 std::optional<CacheKey> cache_key(const detail::ViewPlan& given,
                                   duql::InputKind input,
                                   const std::string& text) {
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
     // A file opened without an index path reads the index beside it.
     detail::ViewPlan plan = given;
     for (auto& f : plan.files)
@@ -1057,12 +1074,6 @@ std::optional<CacheKey> cache_key(const detail::ViewPlan& given,
     const auto sig = ix::cache::lookup_signature(plan, key);
     if (!sig) return std::nullopt;
     return CacheKey{path, *sig};
-#else
-    (void)given;
-    (void)input;
-    (void)text;
-    return std::nullopt;
-#endif
 }
 
 [[noreturn]] void over_rows(const std::string& name, std::uint64_t rows,
@@ -1082,7 +1093,6 @@ std::optional<CacheKey> cache_key(const detail::ViewPlan& given,
 
 // Stores a side's rows in the lookup cache; a store that fails keeps none.
 void persist(const CacheKey& key, const std::vector<df::DataFrame>& parts) {
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
     if (parts.empty()) return;
     try {
         const auto db = ix::cache::open_lookup_db(
@@ -1090,20 +1100,13 @@ void persist(const CacheKey& key, const std::vector<df::DataFrame>& parts) {
         if (!db) return;
         std::vector<const df::DataFrame*> ptrs;
         for (const auto& p : parts) ptrs.push_back(&p);
-        const std::vector<std::uint8_t> bytes =
-            (ptrs.size() == 1 ? parts.front().select(parts.front().names)
-                              : df::concat(ptrs, df::ConcatHow::Diagonal))
-                .to_ipc();
-        ix::cache::persist_lookup(
-            *db, key.sig,
-            std::string_view(reinterpret_cast<const char*>(bytes.data()),
-                             bytes.size()));
+        ix::cache::persist_lookup(*db, key.sig,
+                                  ptrs.size() == 1
+                                      ? df::frame_to_native(parts.front())
+                                      : df::frame_to_native(df::concat(
+                                            ptrs, df::ConcatHow::Diagonal)));
     } catch (const std::exception&) {
     }
-#else
-    (void)key;
-    (void)parts;
-#endif
 }
 
 // The row sets of a compiled program. A side runs once, the first time a
@@ -1118,7 +1121,9 @@ class Sides {
           files(program.sides.size()),
           stored(program.sides.size(), 0),
           frames_(program.sides.size()),
-          once_(program.sides.size()) {}
+          once_(program.sides.size()),
+          key_frames_(program.sides.size()),
+          key_once_(program.sides.size()) {}
 
     duql::Program program;
     std::vector<std::optional<View>> views;
@@ -1133,19 +1138,45 @@ class Sides {
         return frames_[i];
     }
 
+    // The first TYPE_PROBE_ROWS rows of side `i`, for the types of its
+    // columns.
+    std::shared_ptr<const df::DataFrame> probe(std::size_t i) const {
+        const df::LazyFrame plan = views[i]->head(TYPE_PROBE_ROWS).lazy();
+        df::DataFrame f;
+        dftracer::utils::default_runtime().run_blocking(
+            "duql_side_types",
+            [&](dftracer::utils::CoroScope&) -> coro::CoroTask<void> {
+                f = co_await plan.collect();
+                co_return;
+            });
+        return std::make_shared<const df::DataFrame>(std::move(f));
+    }
+
+    // The distinct rows of side `i` for a key-set `in`.
+    std::shared_ptr<const df::DataFrame> key_frame(std::size_t i) {
+        std::call_once(key_once_[i], [&] { key_frames_[i] = distinct(i); });
+        return key_frames_[i];
+    }
+
     // Runs the sides `p` reads, binds its lookups to their rows and gives
     // the key sets for its scan filter.
     Pushdown prepare(const duql::Pipeline& p) {
         std::vector<std::size_t> reads;
         term_reads(p, reads);
         for (const auto i : reads) frame(i);
+        std::vector<std::size_t> sets;
+        set_reads(p, sets);
+        for (const auto i : sets)
+            if (std::find(reads.begin(), reads.end(), i) == reads.end())
+                key_frame(i);
         {
             const std::lock_guard<std::mutex> lock(bind_);
             duql::for_each_pipeline_term(p, [&](const duql::Term& t) {
-                if (const auto* l = std::get_if<duql::TLookup>(&t.node);
-                    l && !l->slot->table)
-                    l->slot->table =
-                        duql::make_lookup_table(*l, frames_[l->side]);
+                const auto* l = std::get_if<duql::TLookup>(&t.node);
+                if (!l || duql::joined(*l) || l->slot->table) return;
+                const auto& rows =
+                    frames_[l->side] ? frames_[l->side] : key_frames_[l->side];
+                l->slot->table = duql::make_lookup_table(*l, rows);
             });
         }
         return key_sets(p);
@@ -1154,7 +1185,86 @@ class Sides {
    private:
     std::vector<std::shared_ptr<const df::DataFrame>> frames_;
     std::vector<std::once_flag> once_;
+    std::vector<std::shared_ptr<const df::DataFrame>> key_frames_;
+    std::vector<std::once_flag> key_once_;
     std::mutex bind_;
+
+    // Side `i`'s rows with a value in every column, each once. The rows
+    // caps do not apply; the View's memory budget bounds them.
+    std::shared_ptr<const df::DataFrame> distinct(std::size_t i) {
+        const std::string& name = program.sides[i].name;
+        std::optional<CacheKey> key = keys[i];
+        if (key) {
+            key->sig = dftracer::utils::hash::splitmix64(key->sig ^
+                                                         DISTINCT_CACHE_SALT);
+            try {
+                if (const auto db = ix::cache::open_lookup_db(
+                        key->path,
+                        ix::store::RocksDatabase::OpenMode::ReadOnly))
+                    if (auto bytes = ix::cache::read_lookup(*db, key->sig))
+                        if (auto cached = df::frame_from_native(*bytes))
+                            return std::make_shared<const df::DataFrame>(
+                                duql::flat_frame(std::move(*cached)));
+            } catch (const std::exception&) {
+            }
+        }
+        const std::uint64_t budget = dftracer::utils::resolve_spill_budget(
+            views[i]->memory_budget_bytes());
+        dftracer::utils::StringViewSet seen;
+        std::vector<df::DataFrame> parts;
+        std::uint64_t bytes = 0;
+        const df::LazyFrame plan = views[i]->lazy();
+        dftracer::utils::default_runtime().run_blocking(
+            "duql_key_set",
+            [&](dftracer::utils::CoroScope&) -> coro::CoroTask<void> {
+                auto gen = plan.stream();
+                std::string row_key;
+                while (auto f = co_await gen.next()) {
+                    df::DataFrame part = duql::flat_frame(std::move(*f));
+                    std::vector<std::int64_t> take;
+                    for (std::int64_t r = 0; r < part.num_rows(); ++r) {
+                        row_key.clear();
+                        bool keyed = true;
+                        for (const auto& c : part.columns)
+                            keyed =
+                                keyed && duql::append_cell_key(row_key, c, r);
+                        if (!keyed || !seen.insert(row_key).second) continue;
+                        take.push_back(r);
+                        bytes += row_key.size() + sizeof(std::string);
+                    }
+                    if (take.empty()) continue;
+                    df::DataFrame kept;
+                    kept.names = part.names;
+                    for (const auto& c : part.columns)
+                        kept.columns.push_back(c.take(take));
+                    bytes += duql::frame_bytes(kept);
+                    if (bytes > budget)
+                        refuse("'" + name + "' holds more distinct rows than " +
+                               "the memory budget (" + std::to_string(budget) +
+                               " bytes); a top-level 'in' reads them into "
+                               "memory: raise the budget, or write the test " +
+                               "under 'not' or in a later 'where' to join it");
+                    parts.push_back(std::move(kept));
+                }
+                co_return;
+            });
+        if (parts.empty()) {
+            df::DataFrame none;
+            for (const auto& c : columns[i]) {
+                none.names.push_back(c.name);
+                none.columns.push_back(df::Series::nulls(
+                    c.type.id == df::TypeId::Unknown ? df::TypeId::String
+                                                     : c.type.id,
+                    0));
+            }
+            return std::make_shared<const df::DataFrame>(std::move(none));
+        }
+        if (key) persist(*key, parts);
+        std::vector<const df::DataFrame*> ptrs;
+        for (const auto& part : parts) ptrs.push_back(&part);
+        return std::make_shared<const df::DataFrame>(
+            df::concat(ptrs, df::ConcatHow::Diagonal));
+    }
 
     std::shared_ptr<const df::DataFrame> run(std::size_t i) {
         const std::string& name = program.sides[i].name;
@@ -1175,18 +1285,16 @@ class Sides {
                     over_bytes(name, bytes, max_bytes);
                 return std::make_shared<const df::DataFrame>(std::move(flat));
             }
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
         if (keys[i]) try {
                 if (const auto db = ix::cache::open_lookup_db(
                         keys[i]->path,
                         ix::store::RocksDatabase::OpenMode::ReadWrite))
                     if (auto bytes = ix::cache::read_lookup(*db, keys[i]->sig))
-                        if (auto cached = df::frame_from_ipc(*bytes))
+                        if (auto cached = df::frame_from_native(*bytes))
                             return std::make_shared<const df::DataFrame>(
                                 duql::flat_frame(std::move(*cached)));
             } catch (const std::exception&) {
             }
-#endif
         const df::LazyFrame plan = views[i]->head(limit + 1).lazy();
         df::DataFrame f;
         dftracer::utils::default_runtime().run_blocking(
@@ -1274,8 +1382,9 @@ class SideSource final : public df::Source {
     df::Schema schema_;
 };
 
-// The caps of side `side` as its rows stream into a join, and its cache
-// write once they end. The main plan's tap owns the sides.
+// The cache write of side `side` as its rows stream into a join. A side past
+// DUQL_LOOKUP_MAX_ROWS or DUQL_LOOKUP_MAX_BYTES is not cached; the engine's
+// join spills it instead of failing. The main plan's tap owns the sides.
 std::shared_ptr<const df::detail::Tap> side_tap(std::shared_ptr<Sides> strong,
                                                 std::weak_ptr<Sides> weak,
                                                 std::size_t side) {
@@ -1284,32 +1393,34 @@ std::shared_ptr<const df::detail::Tap> side_tap(std::shared_ptr<Sides> strong,
         struct State {
             std::uint64_t rows = 0;
             std::uint64_t bytes = 0;
+            bool over = false;
             std::vector<df::DataFrame> parts;
         };
         auto state = std::make_shared<State>();
         const auto s = strong ? strong : owner(weak);
-        const std::string name = s->program.sides[side].name;
         const std::optional<CacheKey> key = s->keys[side];
         const std::uint64_t max_rows =
             env_count("DUQL_LOOKUP_MAX_ROWS", LOOKUP_MAX_ROWS);
         const std::uint64_t max_bytes =
             env_count("DUQL_LOOKUP_MAX_BYTES", LOOKUP_MAX_BYTES);
         df::detail::TapRun run;
-        run.rows = [state, name, key, max_rows,
-                    max_bytes](const df::DataFrame& f) {
+        run.rows = [state, key, max_rows, max_bytes](const df::DataFrame& f) {
+            if (state->over) return;
             state->rows += static_cast<std::uint64_t>(f.num_rows());
-            if (state->rows > max_rows) over_rows(name, state->rows, max_rows);
             df::DataFrame part;
             part.names = f.names;
             for (const auto& c : f.columns) part.columns.push_back(c.share());
             part = duql::flat_frame(std::move(part));
             state->bytes += duql::frame_bytes(part);
-            if (state->bytes > max_bytes)
-                over_bytes(name, state->bytes, max_bytes);
+            if (state->rows > max_rows || state->bytes > max_bytes) {
+                state->over = true;
+                state->parts.clear();
+                return;
+            }
             if (key) state->parts.push_back(std::move(part));
         };
         run.end = [state, key] {
-            if (key) persist(*key, state->parts);
+            if (key && !state->over) persist(*key, state->parts);
         };
         return run;
     };
@@ -1339,22 +1450,17 @@ Built build(const Ctx& ctx, const duql::Pipeline& p, bool table,
 // A side's cache state for explain: whether the store holds it and, when
 // it does, its rows. Reads no trace.
 std::string cache_state(const std::optional<CacheKey>& key) {
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
     if (!key) return "not cached";
     const auto db = ix::cache::open_lookup_db(
         key->path, ix::store::RocksDatabase::OpenMode::ReadOnly);
     if (!db || !ix::cache::lookup_exists(*db, key->sig)) return "not cached";
     try {
         if (auto bytes = ix::cache::read_lookup(*db, key->sig))
-            if (auto f = df::frame_from_ipc(*bytes))
+            if (auto f = df::frame_from_native(*bytes))
                 return "cached, " + std::to_string(f->num_rows()) + " rows";
     } catch (const std::exception&) {
     }
     return "cached";
-#else
-    (void)key;
-    return "not cached";
-#endif
 }
 
 // Applies the stages after the scan to a View, keeping the column list each
@@ -1852,17 +1958,187 @@ class Applier {
         return df::scalar(df::TypeId::Unknown);
     }
 
+    // The columns of `l`'s keys over the rows, computed apart when a key is
+    // not a column; `t` owns `l`.
+    std::vector<std::string> key_columns(const duql::TermRef& t,
+                                         const duql::TLookup& l,
+                                         const std::string& id) {
+        std::vector<std::string> out;
+        for (std::size_t k = 0; k < l.keys.size(); ++k) {
+            const duql::TermRef key(t, l.keys[k].get());
+            out.push_back(source({"", key, duql::term_text(*key)},
+                                 "__duql_lk" + id + "_" + std::to_string(k)));
+        }
+        return out;
+    }
+
+    // The side of a joined `l`, with `marker` a TRUE column of that name;
+    // in `right`, the columns it matches on.
+    df::LazyFrame joined_side(const duql::TLookup& l,
+                              std::vector<std::string>& right, bool& memory,
+                              const std::string& marker) {
+        const auto& side_cols = ctx_.sides->columns[l.side];
+        if (l.kind == duql::LookupKind::IN) {
+            if (side_cols.size() != l.keys.size())
+                refuse("the sub-query '" + l.name + "' gives " +
+                       std::to_string(side_cols.size()) +
+                       " columns; 'in' compares " +
+                       std::to_string(l.keys.size() - l.correlated));
+            for (const auto& c : side_cols) right.push_back(c.name);
+        } else {
+            right = l.target;
+        }
+        df::LazyFrame side = side_plan(l.side, memory);
+        if (marker.empty()) return side;
+        return side.with_column(marker, df::expr_lit_bool(true));
+    }
+
+    // Whether `l`'s keys are columns of one exact type each, the type of
+    // the side's column, as a typed semi join matches them.
+    bool typed_keys(const duql::TLookup& l) const {
+        const auto& side_cols = ctx_.sides->columns[l.side];
+        if (side_cols.size() != l.keys.size()) return false;
+        for (std::size_t k = 0; k < l.keys.size(); ++k) {
+            const auto* f = whole_field(l.keys[k].get());
+            const auto i = f ? index(f->base) : std::nullopt;
+            if (!i) return false;
+            const df::DataType& a = cols_[*i].type;
+            const df::DataType& b = side_cols[k].type;
+            const bool exact = is_integer(a.id) || a.id == df::TypeId::String ||
+                               a.id == df::TypeId::Bool;
+            if (!exact || a.id != b.id || a.json || b.json) return false;
+        }
+        return true;
+    }
+
+    // `k in (...)`, a top-level term of a `where`: the rows whose keys match
+    // a row of the side, by a semi join that narrows the scan.
+    void semi_join(const duql::TermRef& t, const duql::TLookup& l) {
+        const std::vector<std::string> before = names();
+        const std::string id = std::to_string(lookups_++);
+        const std::vector<std::string> left = key_columns(t, l, id);
+        std::vector<std::string> right;
+        bool memory = false;
+        df::LazyFrame side = joined_side(l, right, memory, "");
+        lines.push_back("semi join " + l.name + " on " + joined(left) +
+                        (memory ? " (side from memory)"
+                                : " (side joined, sharing the scan)"));
+        v_ = v_.with_lazy(
+            v_.lazy().join(std::move(side), left, right, df::JoinHow::Semi));
+        if (names() != before) keep(before);
+    }
+
+    // A joined lookup's column: `in` through a lookup join that attaches a
+    // marker, a keyed scalar through a nest join that counts the matches.
+    void join_lookup(const duql::TermRef& t, const duql::Term* term) {
+        const auto* l = &std::get<duql::TLookup>(term->node);
+        const std::vector<std::string> before = names();
+        const std::string id = std::to_string(lookups_++);
+        const std::string name = "__duql_l_" + id;
+        const std::vector<std::string> left = key_columns(t, *l, id);
+        std::vector<std::string> right;
+        bool memory = false;
+        const bool in = l->kind == duql::LookupKind::IN;
+        const std::string matched = "__duql_lm_" + id;
+        df::LazyFrame side =
+            joined_side(*l, right, memory, in ? matched : std::string());
+        const std::string how = in ? "lookup join " : "nest join ";
+        lines.push_back(how + l->name + " on " + joined(left) +
+                        (memory ? " (side from memory)"
+                                : " (side joined, sharing the scan)"));
+        std::optional<std::size_t> field;
+        df::DataType type = df::scalar(df::TypeId::Bool);
+        if (in) {
+            v_ = v_.with_lazy(v_.lazy().join(std::move(side), left, right,
+                                             df::JoinHow::Lookup));
+            cols_.push_back({matched, df::scalar(df::TypeId::Bool)});
+        } else {
+            std::vector<df::Field> fields;
+            const auto& side_cols = ctx_.sides->columns[l->side];
+            for (std::size_t c = 0; c < side_cols.size(); ++c) {
+                fields.push_back(
+                    df::Field{side_cols[c].name, side_cols[c].type, true});
+                if (side_cols[c].name == l->column) field = c;
+            }
+            if (!field)
+                refuse("'" + l->name + "' has no column '" + l->column + "'");
+            type = side_cols[*field].type;
+            v_ = v_.with_lazy(v_.lazy().join(std::move(side), left, right,
+                                             df::JoinHow::Nest, matched));
+            cols_.push_back(
+                {matched, df::list_of(df::struct_of(std::move(fields)))});
+        }
+        std::vector<duql::VectorColumn> next = cols_;
+        next.push_back({name, type, false, false, nullptr, l});
+        std::shared_ptr<Sides> strong = main_ ? ctx_.sides : nullptr;
+        std::weak_ptr<Sides> weak = ctx_.sides;
+        const std::size_t subject = l->keys.size() - l->correlated;
+        const bool negated = l->negated;
+        const std::string sub = l->name;
+        const std::optional<std::size_t> empty = l->empty;
+        map_rows(
+            [=](df::DataFrame f) {
+                auto at = [&](const std::string& n) -> const df::Series& {
+                    for (std::size_t i = 0; i < f.names.size(); ++i)
+                        if (f.names[i] == n) return f.columns[i];
+                    refuse("the join of '" + sub + "' lost column '" + n + "'");
+                };
+                std::vector<df::Series> keys;
+                for (const auto& k : left) keys.push_back(at(k).materialize());
+                std::vector<const df::Series*> ptrs;
+                for (const auto& k : keys) ptrs.push_back(&k);
+                df::Series out;
+                if (in) {
+                    out = duql::in_column(ptrs, subject,
+                                          at(matched).materialize(), negated);
+                } else {
+                    std::shared_ptr<const df::DataFrame> none;
+                    if (empty)
+                        none = (strong ? strong : owner(weak))->frame(*empty);
+                    out = duql::scalar_column(sub, ptrs,
+                                              at(matched).materialize(), *field,
+                                              none.get());
+                }
+                f.names.push_back(name);
+                f.columns.push_back(std::move(out));
+                return f;
+            },
+            std::move(next), "lookup " + name + " = " + duql::term_text(*term));
+        std::vector<std::string> keep_names = before;
+        keep_names.push_back(name);
+        keep(std::move(keep_names));
+    }
+
     void lookup(const duql::TermRef& t, const duql::Term* term) {
         const auto* l = &std::get<duql::TLookup>(term->node);
         if (std::any_of(cols_.begin(), cols_.end(),
                         [l](const auto& c) { return c.lookup == l; }))
             return;
+        if (duql::joined(*l)) {
+            join_lookup(t, term);
+            return;
+        }
         df::DataType type = df::scalar(df::TypeId::Bool);
         if (l->kind == duql::LookupKind::ARROW) {
             type = side_type(l->side, l->column);
         } else if (l->kind == duql::LookupKind::SCALAR) {
             const auto& cols = ctx_.sides->columns[l->side];
-            if (!cols.empty()) type = side_type(l->side, cols.front().name);
+            if (l->range == duql::RangeRead::SUM) {
+                const df::TypeId v = side_type(l->side, l->column).id;
+                type = df::scalar(v == df::TypeId::Float32 ||
+                                          v == df::TypeId::Float64
+                                      ? df::TypeId::Float64
+                                      : df::TypeId::Int64);
+            } else if (l->range == duql::RangeRead::MEAN) {
+                type = df::scalar(df::TypeId::Float64);
+            } else if (l->range == duql::RangeRead::COUNT ||
+                       l->range == duql::RangeRead::COUNT_VALUES ||
+                       l->range == duql::RangeRead::COUNT_IF) {
+                type = df::scalar(df::TypeId::Int64);
+            } else if (!l->keys.empty())
+                type = side_type(l->side, l->column);
+            else if (!cols.empty())
+                type = side_type(l->side, cols.front().name);
         }
         const std::string name = "__duql_l_" + std::to_string(lookups_++);
         std::vector<duql::VectorColumn> in = cols_;
@@ -1951,6 +2227,12 @@ class Applier {
 
     void stage(const duql::PipelineWhere& w) {
         leave_scan("where");
+        if (const auto* l = std::get_if<duql::TLookup>(&w.condition->node);
+            l && l->kind == duql::LookupKind::IN && !l->negated &&
+            duql::joined(*l) && typed_keys(*l)) {
+            semi_join(w.condition, *l);
+            return;
+        }
         v_ = v_.filter(compile(w.condition, w.text, true));
         lines.push_back("filter after scan: " + w.text);
     }
@@ -2531,12 +2813,12 @@ class Applier {
         map_rows(
             [at, drop, name, idx, keep_empty](df::DataFrame f) {
                 const std::int64_t n = f.num_rows();
-                df::Series list;
+                df::Series lists;
                 const std::int32_t* off = nullptr;
                 if (at < f.columns.size() &&
                     f.columns[at].type() == df::TypeId::List) {
-                    list = f.columns[at].materialize();
-                    off = list.offsets();
+                    lists = f.columns[at].materialize();
+                    off = lists.offsets();
                 }
                 std::vector<std::int64_t> parent;
                 std::vector<std::int64_t> element;
@@ -2548,7 +2830,7 @@ class Applier {
                     position.push_back(p);
                 };
                 for (std::int64_t r = 0; r < n; ++r) {
-                    if (!off || list.is_null(r)) {
+                    if (!off || lists.is_null(r)) {
                         row(r, -1, -1);
                     } else if (off[r] == off[r + 1]) {
                         if (keep_empty) row(r, -1, -1);
@@ -2560,8 +2842,8 @@ class Applier {
                 const auto m = static_cast<std::int64_t>(parent.size());
                 df::DataFrame out;
                 auto elements = [&] {
-                    if (off && list.child(0).type() == df::TypeId::Struct) {
-                        const df::Series child = list.child(0);
+                    if (off && lists.child(0).type() == df::TypeId::Struct) {
+                        const df::Series child = lists.child(0);
                         for (std::int64_t i = 0; i < child.num_children();
                              ++i) {
                             out.names.push_back(name + "." +
@@ -2570,7 +2852,7 @@ class Applier {
                         }
                     } else if (off) {
                         out.names.push_back(name);
-                        out.columns.push_back(list.child(0).take(element));
+                        out.columns.push_back(lists.child(0).take(element));
                     } else {
                         out.names.push_back(name);
                         out.columns.push_back(
@@ -2852,16 +3134,11 @@ class Applier {
     // Whether the lookup cache holds side `i`, read without a trace.
     bool cached(std::size_t i) const {
         if (ctx_.sides->stored[i]) return true;
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
         const auto& key = ctx_.sides->keys[i];
         if (!key) return false;
         const auto db = ix::cache::open_lookup_db(
             key->path, ix::store::RocksDatabase::OpenMode::ReadOnly);
         return db && ix::cache::lookup_exists(*db, key->sig);
-#else
-        (void)i;
-        return false;
-#endif
     }
 
     // Side `i` as a join's right plan: from memory when the build step or
@@ -3066,10 +3343,6 @@ class Applier {
         const std::vector<std::string>& right, const std::string& keys_text,
         const std::function<std::optional<std::size_t>(const std::string&)>&
             side_index) {
-        if (!dftu_op_find("dftu.frame.asof"))
-            refuse("'lookup " + l.name +
-                   " ... asof' needs the Arrow build "
-                   "(DFTRACER_UTILS_ENABLE_ARROW)");
         const auto& side_cols = ctx_.sides->columns[l.side];
         const auto t = side_index(a.column);
         if (!t)
@@ -4016,8 +4289,10 @@ Built build(const Ctx& ctx, const duql::Pipeline& p, bool table,
     }
     std::vector<std::size_t> reads;
     term_reads(p, reads);
+    std::vector<std::size_t> sets;
+    set_reads(p, sets);
     std::shared_ptr<detail::BuildStep> step;
-    if (!reads.empty()) {
+    if (!reads.empty() || !sets.empty()) {
         struct Once {
             std::once_flag flag;
             Pushdown keys;
@@ -4037,6 +4312,11 @@ Built build(const Ctx& ctx, const duql::Pipeline& p, bool table,
         for (const auto i : reads)
             lines.push_back("reads " + ctx.sides->program.sides[i].name +
                             " before the scan");
+        for (const auto i : sets)
+            if (std::find(reads.begin(), reads.end(), i) == reads.end())
+                lines.push_back("reads the distinct rows of " +
+                                ctx.sides->program.sides[i].name +
+                                " before the scan");
     }
     if (p.filter) {
         lines.push_back("scan filter: " + p.filter_text + " (pushed)");
@@ -4161,6 +4441,15 @@ std::pair<View, std::vector<std::string>> View::duql_plan(
     asof_reads(sides.program.main, asof);
     for (std::size_t i = 0; i < needed.size(); ++i)
         if (needed[i]) asof_reads(sides.program.sides[i].pipeline, asof);
+    std::vector<std::size_t> tables;
+    std::vector<std::size_t> sets;
+    term_reads(sides.program.main, tables);
+    set_reads(sides.program.main, sets);
+    for (std::size_t i = 0; i < needed.size(); ++i)
+        if (needed[i]) {
+            term_reads(sides.program.sides[i].pipeline, tables);
+            set_reads(sides.program.sides[i].pipeline, sets);
+        }
     std::vector<std::string> lines;
     for (std::size_t i = 0; i < needed.size(); ++i) {
         if (!needed[i]) continue;
@@ -4182,12 +4471,20 @@ std::pair<View, std::vector<std::string>> View::duql_plan(
         sides.views[i] = std::move(b.view);
         sides.columns[i] = std::move(b.cols);
         // A column whose type only the data gives (a dftracer arg) takes it
-        // from the side's rows, which the scan reads first anyway.
+        // from the side's rows: all of them when a table reads them anyway,
+        // its distinct rows for a key set, else the first TYPE_PROBE_ROWS, so
+        // a joined side stays uncapped.
         if (std::any_of(sides.columns[i].begin(), sides.columns[i].end(),
                         [](const duql::VectorColumn& c) {
                             return c.type.id == df::TypeId::Unknown;
                         })) {
-            const auto frame = sides.frame(i);
+            const bool table =
+                std::find(tables.begin(), tables.end(), i) != tables.end();
+            const bool set =
+                std::find(sets.begin(), sets.end(), i) != sets.end();
+            const auto frame = table ? sides.frame(i)
+                               : set ? sides.key_frame(i)
+                                     : sides.probe(i);
             for (auto& c : sides.columns[i])
                 for (std::size_t k = 0; k < frame->names.size(); ++k)
                     if (c.type.id == df::TypeId::Unknown &&

@@ -659,6 +659,26 @@ bool value_key(std::string& out, const Value& v) {
         v);
 }
 
+// `v` as a range value: a scalar other than NaN.
+std::optional<Ordered> ordered(const Value& v) {
+    return std::visit(
+        [](const auto& x) -> std::optional<Ordered> {
+            using T = std::decay_t<decltype(x)>;
+            if constexpr (std::is_same_v<T, double>) {
+                if (std::isnan(x)) return std::nullopt;
+                return Ordered{x};
+            } else if constexpr (std::is_same_v<T, std::int64_t> ||
+                                 std::is_same_v<T, std::uint64_t> ||
+                                 std::is_same_v<T, std::string_view> ||
+                                 std::is_same_v<T, bool>) {
+                return Ordered{x};
+            } else {
+                return std::nullopt;
+            }
+        },
+        v);
+}
+
 // Row `r` of the column `t` reads; the table outlives the leaf.
 Value table_value(const LookupTable& t, std::int64_t r) {
     const auto& c = t.cells[static_cast<std::size_t>(r)];
@@ -873,15 +893,51 @@ class TermEval {
         return of_truth(out);
     }
 
+    // A range lookup: the enclosing row's key and bounds, then its answer.
+    Value ranged(const TLookup& l, const LookupTable& t) const {
+        const std::size_t keyed =
+            l.keys.size() - (l.low ? 1 : 0) - (l.high ? 1 : 0);
+        std::string key;
+        std::size_t known = 0;
+        while (known < keyed && value_key(key, (*this)(*l.keys[known])))
+            ++known;
+        if (l.kind == LookupKind::IN && known < l.keys.size() - l.correlated)
+            return VNull{};
+        std::optional<Ordered> low;
+        std::optional<Ordered> high;
+        std::size_t b = keyed;
+        if (l.low) low = ordered((*this)(*l.keys[b++]));
+        if (l.high) high = ordered((*this)(*l.keys[b]));
+        RangeAnswer a;
+        if (known == keyed)
+            a = range_answer(l, t, key, low, high);
+        else if (l.range == RangeRead::COUNT ||
+                 l.range == RangeRead::COUNT_VALUES ||
+                 l.range == RangeRead::COUNT_IF)
+            a.number = Number{std::int64_t{0}};
+        if (l.kind == LookupKind::IN) return (a.rows > 0) != l.negated;
+        if (a.row >= 0) return table_value(t, a.row);
+        if (a.number)
+            return std::visit([](auto x) -> Value { return x; }, *a.number);
+        return VNull{};
+    }
+
     Value node(const TLookup& l) const {
         const LookupTable& t = bound_table(l);
-        if (l.kind == LookupKind::SCALAR) {
+        if (l.range != RangeRead::NONE) return ranged(l, t);
+        if (l.kind == LookupKind::SCALAR && l.keys.empty()) {
             if (t.cells.empty()) return VNull{};
             return table_value(t, 0);
         }
         const auto k = key(l);
         if (l.kind == LookupKind::IN) {
-            if (!k) return VNull{};
+            if (!k) {
+                std::string subject;
+                for (std::size_t i = 0; i + l.correlated < l.keys.size(); ++i)
+                    if (!value_key(subject, (*this)(*l.keys[i])))
+                        return VNull{};
+                return l.negated;
+            }
             return (t.find(*k) != nullptr) != l.negated;
         }
         const auto* hits = k ? t.find(*k) : nullptr;

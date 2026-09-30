@@ -17,6 +17,40 @@ static_assert(code(CmpOp::Le) == DFTU_CMP_LE);
 static_assert(code(CmpOp::Eq) == DFTU_CMP_EQ);
 static_assert(code(CmpOp::Ne) == DFTU_CMP_NE);
 
+static_assert(code(WindowFunc::RowNumber) == DFTU_WINDOW_ROW_NUMBER);
+static_assert(code(WindowFunc::Rank) == DFTU_WINDOW_RANK);
+static_assert(code(WindowFunc::DenseRank) == DFTU_WINDOW_DENSE_RANK);
+static_assert(code(WindowFunc::Lag) == DFTU_WINDOW_LAG);
+static_assert(code(WindowFunc::Lead) == DFTU_WINDOW_LEAD);
+static_assert(code(WindowFunc::RunningSum) == DFTU_WINDOW_RUNNING_SUM);
+static_assert(code(WindowFunc::RunningMin) == DFTU_WINDOW_RUNNING_MIN);
+static_assert(code(WindowFunc::RunningMax) == DFTU_WINDOW_RUNNING_MAX);
+static_assert(code(WindowFunc::RunningCount) == DFTU_WINDOW_RUNNING_COUNT);
+static_assert(code(WindowFunc::Delta) == DFTU_WINDOW_DELTA);
+static_assert(code(WindowFunc::Rate) == DFTU_WINDOW_RATE);
+static_assert(code(WindowFunc::Sessionize) == DFTU_WINDOW_SESSIONIZE);
+static_assert(code(WindowFunc::FrameSum) == DFTU_WINDOW_FRAME_SUM);
+static_assert(code(WindowFunc::FrameMin) == DFTU_WINDOW_FRAME_MIN);
+static_assert(code(WindowFunc::FrameMax) == DFTU_WINDOW_FRAME_MAX);
+static_assert(code(WindowFunc::FrameCount) == DFTU_WINDOW_FRAME_COUNT);
+static_assert(code(WindowFunc::FrameMean) == DFTU_WINDOW_FRAME_MEAN);
+static_assert(code(WindowFunc::Ntile) == DFTU_WINDOW_NTILE);
+static_assert(code(WindowFunc::FirstValue) == DFTU_WINDOW_FIRST_VALUE);
+static_assert(code(WindowFunc::LastValue) == DFTU_WINDOW_LAST_VALUE);
+static_assert(code(WindowFunc::NthValue) == DFTU_WINDOW_NTH_VALUE);
+static_assert(code(WindowFunc::PercentRank) == DFTU_WINDOW_PERCENT_RANK);
+static_assert(code(WindowFunc::CumeDist) == DFTU_WINDOW_CUME_DIST);
+static_assert(code(WindowFunc::FillForward) == DFTU_WINDOW_FILL_FORWARD);
+static_assert(code(WindowFunc::RunningProd) == DFTU_WINDOW_RUNNING_PROD);
+
+static_assert(code(GapFillMode::None) == DFTU_GAP_FILL_NONE);
+static_assert(code(GapFillMode::Locf) == DFTU_GAP_FILL_LOCF);
+static_assert(code(GapFillMode::Linear) == DFTU_GAP_FILL_LINEAR);
+
+static_assert(code(AsofDirection::Backward) == DFTU_ASOF_BACKWARD);
+static_assert(code(AsofDirection::Forward) == DFTU_ASOF_FORWARD);
+static_assert(code(AsofDirection::Nearest) == DFTU_ASOF_NEAREST);
+
 static_assert(code(LogicalOp::And) == DFTU_LOGICAL_AND);
 static_assert(code(LogicalOp::Or) == DFTU_LOGICAL_OR);
 

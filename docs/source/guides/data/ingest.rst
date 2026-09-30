@@ -34,35 +34,47 @@ Bring data in
          s = Series.from_arrow(pyarrow_array)
          s = Series.from_polars(polars_series)
          s = Series.from_numpy(numpy_array)
-         s = Series.from_list([1, 2, 3])            # optional dtype= for a pyarrow type
+         s = Series.from_list([1, 2, 3])            # optional dtype= a native DType or a pyarrow type
 
-Each path takes a different route to the same zero-copy interface:
+Only the Arrow paths need pyarrow. Everything else reads through the native
+engine, so a build without Arrow support and an environment without pyarrow
+still import and export every column type:
 
 - ``Series.from_arrow`` accepts any object implementing the Arrow PyCapsule
   protocol (``__arrow_c_array__``) and imports it with no copy.
   ``DataFrame.from_arrow`` takes a ``pyarrow.Table`` or ``RecordBatch`` (or
   anything exposing the same ``column_names`` / ``column()`` duck-typed API)
   and imports each column the same zero-copy way.
-- ``from_pandas`` and ``from_polars`` go through Arrow too: pandas via
-  ``pyarrow.Table.from_pandas``/``pyarrow.Array.from_pandas``, polars via its
-  own ``to_arrow()`` (polars already stores its columns as Arrow, so this leg
-  is zero-copy on the polars side).
+- ``from_pandas`` and ``from_polars`` read through NumPy: NumPy-backed and
+  nullable pandas dtypes, categoricals, zoned ``datetime64`` and ``timedelta64``
+  columns, and polars numeric, boolean, text, binary, date, datetime,
+  duration, time, decimal and categorical columns. A float ``NaN`` in pandas,
+  a ``NaT`` and a missing value read as null; a non-default pandas index
+  becomes columns after the data columns. Polars list, array and struct
+  columns import as list and struct columns. A pandas Arrow-backed column
+  needs pyarrow (pandas itself needs it to hold one).
 - ``from_parquet`` reads through ``pyarrow.parquet``.
-- ``from_dict`` builds a ``pyarrow.table`` from the mapping first.
-- ``Series.from_numpy`` has its own fast path: a 1-D, C-contiguous,
-  fixed-width numeric array is borrowed directly (no pyarrow, no copy); any
-  other shape or dtype falls back to the Arrow path, which does need pyarrow
-  installed. ``DataFrame.from_numpy`` builds each column through
-  ``Series.from_numpy`` and assembles them with pyarrow.
-- ``Series.from_list`` is the one path with no zero-copy shortcut - a Python
-  list has no buffer to share - but still lands on the same Arrow-backed
-  ``Series`` as everything else, so it composes with the rest of the API the
-  same way. Pass ``dtype=`` (a pyarrow type) to pin the imported type instead
-  of letting pyarrow infer it.
+- ``from_dict`` builds the frame natively from Series, lists of scalars, NumPy
+  arrays and pandas or polars Series; a mapping with anything else (a pyarrow
+  array, nested lists) goes through ``pyarrow.table``.
+- ``Series.from_numpy`` borrows the buffer of a 1-D, C-contiguous, fixed-width
+  numeric array (no copy, no pyarrow). Bool, ``float16``, ``datetime64``,
+  ``timedelta64``, text, bytes and object arrays, non-contiguous arrays and
+  masked arrays are copied natively. ``DataFrame.from_numpy`` builds each
+  column through ``Series.from_numpy``.
+- ``Series.from_list`` has no zero-copy shortcut, since a Python list has no
+  buffer to share. It reads ``bool``, ``int`` (``uint64`` when too large),
+  ``float``, ``str``, ``bytes``, ``datetime.datetime`` (naive or aware, in
+  microseconds; the zone is the ``zoneinfo`` key, ``UTC`` or a fixed offset),
+  ``datetime.date``, ``datetime.time``, ``datetime.timedelta`` and
+  ``decimal.Decimal`` (decimal128 with the widest scale, up to 38 digits), with
+  ``None`` for null, natively. Lists and tuples become list columns and dicts struct
+  columns (keys in first-seen order, a missing key null), to any depth. Pass a
+  native ``DType`` as ``dtype=`` to type an empty or all-null list; a pyarrow
+  type goes through pyarrow.
 
-Every ``from_*`` path except ``from_arrow`` requires pyarrow to be installed
-(``pip install pyarrow``); ``from_arrow`` itself does not, since it only needs
-the capsule protocol, not the pyarrow package.
+Every ``from_*`` path except ``from_arrow`` works without pyarrow, apart from
+the cases above; ``from_arrow`` itself needs only the capsule protocol.
 
 Get data out
 ------------
@@ -82,16 +94,20 @@ Get data out
          s.to_numpy()          # NumPy array
          s.to_polars()          # polars.Series (needs polars installed)
 
-``to_arrow()`` is the zero-copy exit on both classes; ``to_pandas()`` and
-``to_polars()`` are built on top of it (one more Arrow-to-library conversion,
-which is where pandas or polars may copy on their own side). ``Series.to_numpy()``
-has the same fast path as the import direction: a flat, non-null, fixed-width
-numeric column is read straight from the native buffer with no pyarrow
-involved; a Bool column, a column with nulls, a String column, or a non-flat
-encoding (dictionary/selection) falls back through the Arrow path instead,
-which needs pyarrow. ``DataFrame`` has no ``to_numpy()`` - convert the column
-you want with ``df["dur"].to_numpy()``, or go through ``to_pandas()``/
-``to_arrow()`` for the whole frame.
+``to_arrow()`` is the zero-copy exit on both classes and needs pyarrow.
+``to_pandas()``, ``to_polars()``, ``to_numpy()`` and ``to_list()`` are built
+natively, with no pyarrow, for every column type: a flat, non-null,
+fixed-width numeric column is read straight from the native buffer; nulls in
+an integer column become NaN (float64); dates and timestamps are
+``datetime64`` (UTC values for a zoned timestamp, which pandas and polars
+show in their zone), durations ``timedelta64``, with ``NaT`` for null; text,
+bytes, decimals, times, lists, structs and maps are object arrays of Python
+objects. ``to_list()`` gives ``datetime``, ``date``, ``time``, ``timedelta``
+and ``decimal.Decimal`` objects (nanoseconds truncate to microseconds there
+only). ``to_pandas(arrow=True)`` keeps the Arrow-backed dtypes and needs
+pyarrow. ``DataFrame`` has no ``to_numpy()`` - convert the column you want
+with ``df["dur"].to_numpy()``, or go through ``to_pandas()`` for the whole
+frame. A ``Series`` and a ``DataFrame`` pickle in the native frame format.
 
 ``np.asarray(series)`` also works directly (``Series`` implements the NumPy
 array protocol), and Series arithmetic (``+ - * /``) and comparisons against

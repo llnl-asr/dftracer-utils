@@ -5,10 +5,6 @@
 // that point, so the Python wrapper resolves names to indices against schema().
 
 #include <dftracer/utils/core/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/python/lazyframe.h>
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-
 #include <dftracer/utils/core/common/memory_budget.h>  // NO_SPILL_BUDGET
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
@@ -17,6 +13,7 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/python/columnar_eval.h>
 #include <dftracer/utils/python/dataframe.h>
+#include <dftracer/utils/python/lazyframe.h>
 #include <dftracer/utils/python/py_agg_helpers.h>
 #include <dftracer/utils/python/py_frame_op_helpers.h>
 #include <dftracer/utils/python/py_join_helpers.h>
@@ -27,7 +24,9 @@
 #include <dftracer/utils/python/py_seq_helpers.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/series.h>
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/python/streaming_iterator.h>
+#endif
 
 #include <cstdint>
 #include <new>
@@ -832,6 +831,7 @@ PyObject* LazyFrame_collect(PyObject* self, PyObject* args, PyObject* kwds) {
     return dftracer::utils::python::wrap_dataframe(std::move(out));
 }
 
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
 // Drains the plan's chunk generator into `state`, which the Python iterator
 // pulls from with the GIL released.
 dftracer::utils::coro::CoroTask<void> drain_stream(
@@ -886,6 +886,7 @@ PyObject* LazyFrame_stream(PyObject* self, PyObject* args, PyObject* kwds) {
         "lazyframe_stream");
     Py_END_ALLOW_THREADS return reinterpret_cast<PyObject*>(it);
 }
+#endif  // DFTRACER_UTILS_ENABLE_ARROW
 
 PyObject* LazyFrame_output_schema(PyObject* self, PyObject*) {
     LazyFrameObject* b = as_lazyframe(self);
@@ -1038,8 +1039,10 @@ PyMethodDef LazyFrame_methods[] = {
     {"output_schema", LazyFrame_output_schema, METH_NOARGS,
      "output_schema() -> [(name, dtype id)] without running; a type the "
      "plan cannot know statically is 0 (unknown)."},
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
     {"stream", DFTU_PYCFUNCTION(LazyFrame_stream), METH_VARARGS | METH_KEYWORDS,
      "stream(morsel_rows=0, runtime=None) -> iterator of DataFrame chunks."},
+#endif
     {"schema", LazyFrame_schema, METH_NOARGS,
      "schema() -> list[str] of output column names, or [] if data-dependent."},
     {"explain", LazyFrame_explain, METH_NOARGS,
@@ -1127,20 +1130,3 @@ const dataframe::LazyFrame* lazyframe_of(PyObject* o) {
 }
 
 }  // namespace dftracer::utils::python
-
-#else   // !DFTRACER_UTILS_ENABLE_ARROW
-
-namespace dftracer::utils::python {
-int init_lazyframe(PyObject*) { return 0; }
-PyObject* wrap_lazyframe(dftracer::utils::dataframe::LazyFrame&&) {
-    PyErr_SetString(PyExc_RuntimeError, "LazyFrame requires the Arrow build");
-    return nullptr;
-}
-
-const dftracer::utils::dataframe::LazyFrame* lazyframe_of(PyObject*) {
-    PyErr_SetString(PyExc_RuntimeError, "LazyFrame requires the Arrow build");
-    return nullptr;
-}
-}  // namespace dftracer::utils::python
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW

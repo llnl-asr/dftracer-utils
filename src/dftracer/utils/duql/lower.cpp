@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/to_chars.h>
+#include <dftracer/utils/duql/decorrelate.h>
 #include <dftracer/utils/duql/fields.h>
 #include <dftracer/utils/duql/lower.h>
 #include <dftracer/utils/duql/macros.h>
@@ -7,6 +8,7 @@
 #include <dftracer/utils/duql/pipeline.h>
 #include <dftracer/utils/duql/syntax/lexer.h>
 #include <dftracer/utils/duql/syntax/parser.h>
+#include <dftracer/utils/duql/syntax/walk.h>
 #include <dftracer/utils/duql/term.h>
 
 #include <algorithm>
@@ -244,20 +246,46 @@ class Lowering {
         // Rows of a row set are no scan: every stage runs on them.
         const bool scan = out.input.kind != duql::InputKind::SIDE;
         std::size_t i = 0;
+        // A term that joins a sub-query's side runs after the scan; the
+        // other terms of the leading `where`s filter the scan, a top-level
+        // `k in (...)` from the side's distinct rows.
+        std::vector<duql::PipelineStage> joined;
         for (; scan && i < steps.size(); ++i) {
             const auto* w = steps[i].stage
                                 ? std::get_if<Where>(&steps[i].stage->node)
                                 : nullptr;
             if (!w) break;
-            auto node = condition(*w->condition);
-            if (reads_text_time(*node)) break;
+            std::vector<const Expr*> terms;
+            conjuncts(*w->condition, terms);
+            QueryNodePtr node;
+            std::vector<const Expr*> after;
+            for (const Expr* t : terms) {
+                const auto* semi = std::get_if<In>(&t->node);
+                const bool set =
+                    semi && semi->subquery && !semi->negated && joins(*t);
+                if (joins(*t) && !set) {
+                    after.push_back(t);
+                    continue;
+                }
+                key_set_ = set;
+                auto n = condition(*t);
+                key_set_ = false;
+                node = node ? duql::make_node(
+                                  duql::AndNode{std::move(node), std::move(n)})
+                            : std::move(n);
+            }
+            if (node && reads_text_time(*node)) break;
+            for (const Expr* t : after) joined.push_back(where_stage(*t));
+            if (!node) continue;
             out.filter = out.filter
                              ? duql::make_node(duql::AndNode{
                                    std::move(out.filter), std::move(node)})
                              : std::move(node);
         }
         if (out.filter) out.filter_text = duql::to_string(*out.filter);
-        if (scan && i < steps.size() && steps[i].stage)
+        const bool after_scan = !joined.empty();
+        for (auto& st : joined) out.stages.push_back(std::move(st));
+        if (scan && !after_scan && i < steps.size() && steps[i].stage)
             if (const auto* sel = std::get_if<Select>(&steps[i].stage->node);
                 sel && plain_paths(*sel)) {
                 for (const auto& it : sel->items)
@@ -310,7 +338,7 @@ class Lowering {
 
    private:
     const duql::Params& params_;
-    std::string_view src_;
+    mutable std::string_view src_;
     const duql::Roles* roles_;
     // While a window entry lowers: its calls, and whether a call's argument
     // is lowering.
@@ -321,6 +349,8 @@ class Lowering {
     // Whether a condition lowers, where an arrow compared with a value holds
     // when any matching row makes it hold.
     mutable bool cond_ = false;
+    // Whether the `in` lowering next is a top-level term of the scan filter.
+    mutable bool key_set_ = false;
     // Sub-queries being lowered.
     mutable int sub_ = 0;
     // False when lowering a filter, which has no other row sets to read.
@@ -514,17 +544,73 @@ class Lowering {
         t.side = add_side(t.name, p, true, duql::InputKind::DATA);
     }
 
+    // Lowers the correlated sub-query `p` into `t`: its side, and after the
+    // keys `t` has the keys of the enclosing row. False when `p` is not
+    // correlated.
+    bool correlated(const syntax::Pipeline& p, bool scalar,
+                    duql::TLookup& t) const {
+        std::optional<duql::Decorrelated> d;
+        try {
+            d = duql::decorrelate(p, scalar);
+        } catch (const duql::Refusal& r) {
+            throw Failure{
+                make_error(r.text, r.span.offset, r.span.length, r.message)};
+        }
+        if (!d) return false;
+        const std::size_t subject = t.keys.size();
+        const std::string_view outer = src_;
+        src_ = d->text;
+        try {
+            auto outer_key = [&](const Expr& e) {
+                t.keys.push_back(term(e));
+                duql::for_each_term(*t.keys.back(), [&](const duql::Term& x) {
+                    if (const auto* f = std::get_if<duql::TField>(&x.node);
+                        f && f->root != duql::FieldRoot::RECORD)
+                        fail(e.span,
+                             "a correlated key inside any() or all() reads "
+                             "the record, not '.' or '^.'");
+                });
+            };
+            for (const auto& e : d->outer) outer_key(*e);
+            if (d->low) {
+                outer_key(*d->low->outer);
+                t.low = d->low->open ? duql::TermOp::GT : duql::TermOp::GE;
+            }
+            if (d->high) {
+                outer_key(*d->high->outer);
+                t.high = d->high->open ? duql::TermOp::LT : duql::TermOp::LE;
+            }
+            t.name = "__sub_" + std::to_string(subs_++);
+            t.side = add_side(t.name, *d->side, true, duql::InputKind::DATA);
+            if (d->empty)
+                t.empty = add_side("__sub_" + std::to_string(subs_++),
+                                   *d->empty, true, duql::InputKind::DATA);
+        } catch (...) {
+            src_ = outer;
+            throw;
+        }
+        src_ = outer;
+        t.target = std::move(d->names);
+        t.correlated = t.keys.size() - subject;
+        t.range = d->read;
+        return true;
+    }
+
     duql::TLookup semi_join(const In& n, Span span) const {
         need_view(span, "a sub-query");
         duql::TLookup t;
         t.kind = duql::LookupKind::IN;
         t.negated = n.negated;
+        t.key_set = std::exchange(key_set_, false);
         t.keys = key_terms(*n.subject);
-        side_of(*n.subquery, t);
-        if (const auto w = width(t.side); w && *w != t.keys.size())
-            fail(span, "the sub-query gives " + std::to_string(*w) +
+        const std::size_t subject = t.keys.size();
+        if (!correlated(*n.subquery, false, t)) side_of(*n.subquery, t);
+        const std::size_t added =
+            t.target.size() + (t.range != duql::RangeRead::NONE ? 1 : 0);
+        if (const auto w = width(t.side); w && *w != subject + added)
+            fail(span, "the sub-query gives " + std::to_string(*w - added) +
                            " columns; 'in' compares " +
-                           std::to_string(t.keys.size()));
+                           std::to_string(subject));
         t.slot = slot();
         return t;
     }
@@ -533,6 +619,11 @@ class Lowering {
         need_view(span, "a sub-query");
         duql::TLookup t;
         t.kind = duql::LookupKind::SCALAR;
+        if (correlated(*n.pipeline, true, t)) {
+            t.column = duql::CORRELATED_VALUE;
+            t.slot = slot();
+            return t;
+        }
         side_of(*n.pipeline, t);
         if (const auto w = width(t.side); w && *w != 1)
             fail(span,
@@ -659,16 +750,51 @@ class Lowering {
         return n;
     }
 
+    duql::PipelineWhere where_stage(const Expr& condition) const {
+        const Flag in_condition(cond_, true);
+        auto t = term(condition);
+        std::string text = duql::term_text(*t);
+        return duql::PipelineWhere{duql::TermRef(std::move(t)),
+                                   std::move(text)};
+    }
+
+    static void conjuncts(const Expr& e, std::vector<const Expr*>& out) {
+        if (const auto* b = std::get_if<Binary>(&e.node);
+            b && b->op == BinaryOp::AND) {
+            conjuncts(*b->left, out);
+            conjuncts(*b->right, out);
+            return;
+        }
+        out.push_back(&e);
+    }
+
+    // Whether `e` holds a sub-query whose side it reads through a join: one
+    // under `in`, or one correlated by `==` keys alone. A sub-query that
+    // does not decorrelate fails later, when it lowers.
+    static bool joins(const Expr& e) {
+        const auto* in = std::get_if<In>(&e.node);
+        const auto* s = std::get_if<Subquery>(&e.node);
+        if ((in && in->subquery) || s) {
+            try {
+                const auto d = duql::decorrelate(
+                    in ? *in->subquery : *s->pipeline, s != nullptr);
+                return (in || d) && !(d && (d->low || d->high));
+            } catch (const duql::Refusal&) {
+                return false;
+            }
+        }
+        bool out = false;
+        syntax::children(const_cast<Expr&>(e),
+                         [&](ExprPtr& c) { out = out || joins(*c); });
+        return out;
+    }
+
     duql::PipelineStage stage(const Stage& s) const {
         return std::visit(
             [&](const auto& n) -> duql::PipelineStage {
                 using T = std::decay_t<decltype(n)>;
                 if constexpr (std::is_same_v<T, Where>) {
-                    const Flag in_condition(cond_, true);
-                    auto t = term(*n.condition);
-                    std::string text = duql::term_text(*t);
-                    return duql::PipelineWhere{duql::TermRef(std::move(t)),
-                                               std::move(text)};
+                    return where_stage(*n.condition);
                 } else if constexpr (std::is_same_v<T, Select>) {
                     duql::PipelineSelect out;
                     for (const auto& it : n.items)

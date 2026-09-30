@@ -208,7 +208,7 @@ The dftracer record schema instead has a duql source that declares row sets
 over its metadata records (``files``, ``hosts``, ``strings``, ``ranks``; the
 ``genesis`` schema adds ``runs``, built from its ``RUN`` lines). A row set
 that is a ``where`` plus a plain ``select`` is evaluated while the index is
-built and stored per file as an Arrow frame in ``core.rowset``, so reading
+built and stored per file as a native frame in ``core.rowset``, so reading
 it later decodes no trace.
 
 An arrow such as ``fhash -> files.path like "%/scratch/%"`` at the top of the

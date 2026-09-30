@@ -1,11 +1,7 @@
 #include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
-#include <dftracer/utils/index/schemas/dft/agg/view_agg_tier.h>
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/no_destructor.h>
+#include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/duql/ast.h>
@@ -18,6 +14,7 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_output.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_serialization.h>
 #include <dftracer/utils/index/schemas/dft/agg/system_metrics_serialization.h>
+#include <dftracer/utils/index/schemas/dft/agg/view_agg_tier.h>
 #include <dftracer/utils/index/store/column_families.h>
 #include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/index/store/db_manager.h>
@@ -1013,25 +1010,3 @@ bool system_collect(const trace::views::detail::ViewPlan& plan,
 }
 
 }  // namespace dftracer::utils::index::schemas::dft::agg
-
-#else  // !DFTRACER_UTILS_ENABLE_ARROW
-
-namespace dftracer::utils::index::schemas::dft::agg {
-bool agg_tier_collect(const trace::views::detail::ViewPlan&,
-                      dftracer::utils::dataframe::AggStatePtr&) {
-    return false;
-}
-bool events_profiles_collect(const trace::views::detail::ViewPlan&,
-                             dftracer::utils::dataframe::DataFrame&,
-                             dftracer::utils::dataframe::DataFrame&, int, int,
-                             const trace::views::ProgressFn*) {
-    return false;
-}
-bool system_collect(const trace::views::detail::ViewPlan&,
-                    dftracer::utils::dataframe::DataFrame&, int, int,
-                    const trace::views::ProgressFn*) {
-    return false;
-}
-}  // namespace dftracer::utils::index::schemas::dft::agg
-
-#endif

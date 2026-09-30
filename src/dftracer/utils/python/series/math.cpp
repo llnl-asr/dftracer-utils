@@ -1,7 +1,3 @@
-#include <dftracer/utils/core/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-
 #include <dftracer/utils/python/py_scalar_helpers.h>
 #include <dftracer/utils/python/series_detail.h>
 
@@ -36,5 +32,3 @@ PyObject* Series_clip(PyObject* self, PyObject* args) {
 }
 
 }  // namespace dftracer::utils::python::series_detail
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW

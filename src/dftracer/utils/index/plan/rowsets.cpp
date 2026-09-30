@@ -2,7 +2,7 @@
 #include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
-#include <dftracer/utils/dataframe/internal/ipc.h>
+#include <dftracer/utils/dataframe/internal/frame_native.h>
 #include <dftracer/utils/index/plan/rowsets.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 
@@ -79,7 +79,6 @@ const RecordSchema& files_schema(const std::vector<RowSetFile>& files) {
 
 std::optional<df::DataFrame> stored_rowset(const std::vector<RowSetFile>& files,
                                            std::string_view name) {
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
     if (files.empty()) return std::nullopt;
     std::map<std::string, std::optional<store::IndexDatabase>, std::less<>> dbs;
     std::vector<df::DataFrame> parts;
@@ -98,7 +97,7 @@ std::optional<df::DataFrame> stored_rowset(const std::vector<RowSetFile>& files,
             if (fid < 0) return std::nullopt;
             auto bytes = db.rowset(fid, name);
             if (!bytes) return std::nullopt;
-            auto frame = df::frame_from_ipc(*bytes);
+            auto frame = df::frame_from_native(*bytes);
             if (!frame) return std::nullopt;
             parts.push_back(std::move(*frame));
         }
@@ -109,15 +108,9 @@ std::optional<df::DataFrame> stored_rowset(const std::vector<RowSetFile>& files,
     std::vector<const df::DataFrame*> ptrs;
     for (const auto& p : parts) ptrs.push_back(&p);
     return df::concat(ptrs, df::ConcatHow::Diagonal);
-#else
-    (void)files;
-    (void)name;
-    return std::nullopt;
-#endif
 }
 
 bool has_stored_rowsets(const std::vector<RowSetFile>& files) {
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
     if (files.empty()) return false;
     std::map<std::string, std::optional<store::IndexDatabase>, std::less<>> dbs;
     try {
@@ -140,10 +133,6 @@ bool has_stored_rowsets(const std::vector<RowSetFile>& files) {
         return false;
     }
     return true;
-#else
-    (void)files;
-    return false;
-#endif
 }
 
 }  // namespace dftracer::utils::index::plan

@@ -7,15 +7,12 @@
 // pool.
 
 #include <dftracer/utils/core/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/python/columnar_eval.h>
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/python/columnar_eval.h>
 #include <dftracer/utils/python/py_method.h>
 #include <dftracer/utils/python/py_scalar_helpers.h>
 #include <dftracer/utils/python/series.h>
@@ -445,14 +442,3 @@ int init_columnar_eval(PyObject* m) {
 }
 
 }  // namespace dftracer::utils::python
-
-#else   // !DFTRACER_UTILS_ENABLE_ARROW
-
-namespace dftracer::utils::python {
-int init_columnar_eval(PyObject*) { return 0; }
-bool build_expr_from_ast(PyObject*, dftracer::utils::dataframe::Expr*) {
-    return false;
-}
-}  // namespace dftracer::utils::python
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW

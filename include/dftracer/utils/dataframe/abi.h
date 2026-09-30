@@ -1749,6 +1749,43 @@ typedef enum {
     DFTU_ASOF_NEAREST = 2
 } dftu_asof_direction;
 
+/** SQL window functions over `df`: PARTITION BY `partition_by` (n_part
+ * names), ORDER BY `order_by` (n_order names), one appended column per spec.
+ * Every input column comes first, then one column per spec, in (partition,
+ * order) sorted order with ties in row order and nulls last. NULL on a NULL
+ * handle, an unknown column or an unsupported type. */
+DFTU_EXPORT dftu_dataframe* dftu_dataframe_window(
+    const dftu_dataframe* df, const char* const* partition_by, int32_t n_part,
+    const char* const* order_by, int32_t n_order, const dftu_window_spec* specs,
+    int32_t n_specs);
+
+/** A regular grid of width `bucket` on the integer `time` column, PARTITION
+ * BY `partition_by`; `values` (n_values names) fill on generated rows per
+ * `mode`. `range` is either NULL / n_range 0 (each partition's own extent) or
+ * two int64 [start, end]. NULL on a NULL handle, an unknown column, a bad
+ * `mode` or an n_range other than 0 or 2. */
+DFTU_EXPORT dftu_dataframe* dftu_dataframe_gap_fill(
+    const dftu_dataframe* df, const char* const* partition_by, int32_t n_part,
+    const char* time, int64_t bucket, const char* const* values,
+    int32_t n_values, dftu_gap_fill_mode mode, const int64_t* range,
+    int32_t n_range);
+
+/** As-of join of `left` to `right` on the time column `on` within the `by`
+ * partition (n_by names); a negative `tolerance` means unbounded. NULL on a
+ * NULL handle, an unknown column, a bad `direction` or a type mismatch. */
+DFTU_EXPORT dftu_dataframe* dftu_dataframe_asof(
+    const dftu_dataframe* left, const dftu_dataframe* right, const char* on,
+    const char* const* by, int32_t n_by, dftu_asof_direction direction,
+    int64_t tolerance);
+
+/** Point-in-range join of `left.point` into `right.[lo, hi]` within the `by`
+ * partition (n_by names); nonzero `outer` keeps unmatched left rows with null
+ * right values. NULL on a NULL handle, an unknown column or a type mismatch. */
+DFTU_EXPORT dftu_dataframe* dftu_dataframe_interval(
+    const dftu_dataframe* left, const dftu_dataframe* right, const char* point,
+    const char* lo, const char* hi, const char* const* by, int32_t n_by,
+    int32_t outer);
+
 /* ---- Provider registry --------------------------------------------------- */
 /* One name-keyed registry of Source vtables, so a LazyFrame can be built by
  * name over a provider registered from anywhere in the process - a plugin

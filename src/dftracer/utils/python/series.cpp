@@ -9,14 +9,11 @@
 // reduce,string,arrow}.cpp and are declared in series_detail.h.
 
 #include <dftracer/utils/core/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/python/series.h>
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/python/py_method.h>
 #include <dftracer/utils/python/py_type_helpers.h>
+#include <dftracer/utils/python/series.h>
 #include <dftracer/utils/python/series_detail.h>
 
 #include <cstdint>
@@ -235,8 +232,10 @@ PyMethodDef Series_methods[] = {
      "logical(op, other) -> Bool column (op is a DFTU_LOGICAL_* code)."},
     {"logical_not", Series_logical_not, METH_NOARGS,
      "Boolean NOT of a Bool column."},
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
     {"__arrow_c_array__", Series_arrow_c_array, METH_VARARGS,
      "Arrow PyCapsule export: (schema_capsule, array_capsule)."},
+#endif
     {"quantile", Series_quantile, METH_O,
      "quantile(q) -> float (linear interpolation, SIMD sort)."},
     {"median", Series_median, METH_NOARGS, "Median (quantile 0.5)."},
@@ -384,6 +383,16 @@ PyMethodDef Series_methods[] = {
      "argsort(descending=False) -> Int64 Series of the sorted row order."},
     {"dictionary_encode", Series_dictionary_encode, METH_NOARGS,
      "Dictionary-encode a String/Binary column -> Series."},
+    {"to_pylist", Series_to_pylist, METH_NOARGS,
+     "to_pylist() -> list of Python values, None for null; TypeError for a "
+     "column type with no native conversion."},
+    {"physical", Series_physical, METH_NOARGS,
+     "physical() -> _Series: the integers of a date, time, timestamp, "
+     "duration or float16 column (buffers shared)."},
+    {"to_bytes", Series_to_bytes, METH_NOARGS,
+     "to_bytes() -> bytes: the column in the native frame format."},
+    {"item", Series_item, METH_O,
+     "item(i) -> the value at row i as a Python object (None for null)."},
     {"materialize", Series_materialize, METH_NOARGS,
      "Materialize any encoding to a new FLAT Series (gather)."},
     {"share", Series_share, METH_NOARGS,
@@ -516,6 +525,8 @@ PyGetSetDef Series_getset[] = {
     {"timezone", Series_get_timezone, nullptr,
      "Zone name of a Timestamp column; '' for a naive one or another type.",
      nullptr},
+    {"nbytes", Series_get_nbytes, nullptr,
+     "Bytes held by the column's buffers, children included.", nullptr},
     {"is_json", Series_get_is_json, nullptr,
      "Whether this String column holds canonical JSON text per value.",
      nullptr},
@@ -536,9 +547,11 @@ const dftracer::utils::dataframe::Series* unwrap_vec_column(PyObject* o) {
     return &reinterpret_cast<series_detail::SeriesObject*>(o)->col;
 }
 
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
 dftracer::utils::dataframe::Series column_from_arrow(PyObject* arrow_array) {
     return series_detail::import_arrow_column(arrow_array);
 }
+#endif
 
 int init_series(PyObject* m) {
     using namespace series_detail;
@@ -560,6 +573,7 @@ int init_series(PyObject* m) {
         nullptr;  // created only via _series_from_arrow / kernels
     if (register_type(m, &SeriesType, "_Series") < 0) return -1;
 
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
     static PyMethodDef from_arrow_def = {
         "_series_from_arrow", vec_from_arrow, METH_O,
         "_series_from_arrow(arrow_array) -> _Series: import a pyarrow array "
@@ -570,11 +584,48 @@ int init_series(PyObject* m) {
         Py_DECREF(fn);
         return -1;
     }
+#endif
+
+    static PyMethodDef from_list_def = {
+        "_series_from_list", vec_from_list, METH_VARARGS,
+        "_series_from_list(values[, type_id]) -> _Series: a column from a list "
+        "of bool, int, float, str, bytes, datetime, date, time, timedelta or "
+        "Decimal (None is null), typed `type_id` when given; TypeError "
+        "otherwise."};
+    PyObject* list_fn = PyCFunction_NewEx(&from_list_def, nullptr, nullptr);
+    if (!list_fn) return -1;
+    if (PyModule_AddObject(m, "_series_from_list", list_fn) < 0) {
+        Py_DECREF(list_fn);
+        return -1;
+    }
+
+    static PyMethodDef retype_def = {
+        "_series_retype", series_retype, METH_VARARGS,
+        "_series_retype(series, type_id[, unit, timezone, precision, scale, "
+        "width]) -> _Series: the same buffers read as another type of the "
+        "same width."};
+    PyObject* retype_fn = PyCFunction_NewEx(&retype_def, nullptr, nullptr);
+    if (!retype_fn) return -1;
+    if (PyModule_AddObject(m, "_series_retype", retype_fn) < 0) {
+        Py_DECREF(retype_fn);
+        return -1;
+    }
+    static PyMethodDef from_bytes_def = {
+        "_series_from_bytes", series_from_bytes, METH_O,
+        "_series_from_bytes(bytes) -> _Series written by Series.to_bytes."};
+    PyObject* bytes_fn = PyCFunction_NewEx(&from_bytes_def, nullptr, nullptr);
+    if (!bytes_fn) return -1;
+    if (PyModule_AddObject(m, "_series_from_bytes", bytes_fn) < 0) {
+        Py_DECREF(bytes_fn);
+        return -1;
+    }
 
     static PyMethodDef from_numpy_def = {
-        "_series_from_numpy", vec_from_numpy, METH_O,
-        "_series_from_numpy(array) -> _Series: import a 1-D C-contiguous "
-        "numeric numpy array (buffer protocol, zero-copy borrow, no pyarrow)."};
+        "_series_from_numpy", vec_from_numpy, METH_VARARGS,
+        "_series_from_numpy(array[, mask]) -> _Series: import a 1-D "
+        "C-contiguous numeric, float16 or bool numpy array (buffer protocol; "
+        "numbers borrow the memory, no pyarrow); `mask` is a bool array, true "
+        "where null."};
     PyObject* np_fn = PyCFunction_NewEx(&from_numpy_def, nullptr, nullptr);
     if (!np_fn) return -1;
     if (PyModule_AddObject(m, "_series_from_numpy", np_fn) < 0) {
@@ -585,14 +636,3 @@ int init_series(PyObject* m) {
 }
 
 }  // namespace dftracer::utils::python
-
-#else   // !DFTRACER_UTILS_ENABLE_ARROW
-
-namespace dftracer::utils::python {
-int init_series(PyObject*) { return 0; }
-const dftracer::utils::dataframe::Series* unwrap_vec_column(PyObject*) {
-    return nullptr;
-}
-}  // namespace dftracer::utils::python
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW

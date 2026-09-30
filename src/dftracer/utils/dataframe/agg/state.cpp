@@ -903,6 +903,7 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
         st.key_is_bytes.resize(st.nkeys);
         st.key_domain.resize(st.nkeys);
         st.key_type.resize(st.nkeys);
+        st.key_json.assign(st.nkeys, 0);
         st.key_time_unit.resize(st.nkeys);
         st.key_timezone.resize(st.nkeys);
         st.key_byte_width.resize(st.nkeys);
@@ -922,6 +923,7 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
             st.key_is_bytes[k] = is_bytes_key_type(kt) ? 1 : 0;
             st.key_domain[k] = col_domain(kt);
             st.key_type[k] = kt;
+            st.key_json[k] = keys[k]->is_json() ? 1 : 0;
             if (kt == TypeId::Time32 || kt == TypeId::Time64 ||
                 kt == TypeId::Timestamp || kt == TypeId::Duration) {
                 const DataType dt = keys[k]->data_type();
@@ -1256,6 +1258,7 @@ void agg_merge(AggState& into, const AggState& other_in,
         into.key_is_bytes = other.key_is_bytes;
         into.key_domain = other.key_domain;
         into.key_type = other.key_type;
+        into.key_json = other.key_json;
         into.key_time_unit = other.key_time_unit;
         into.key_timezone = other.key_timezone;
         into.key_byte_width = other.key_byte_width;
@@ -1486,6 +1489,7 @@ AggStatePtr agg_regroup(const AggState& src_in,
     dst->key_is_bytes.resize(dst->nkeys);
     dst->key_domain.resize(dst->nkeys);
     dst->key_type.resize(dst->nkeys);
+    dst->key_json.assign(dst->nkeys, 0);
     dst->key_time_unit.resize(dst->nkeys);
     dst->key_timezone.resize(dst->nkeys);
     dst->key_byte_width.resize(dst->nkeys);
@@ -1496,6 +1500,7 @@ AggStatePtr agg_regroup(const AggState& src_in,
         dst->key_is_bytes[k] = src.key_is_bytes[s];
         dst->key_domain[k] = src.key_domain[s];
         dst->key_type[k] = src.key_type[s];
+        if (s < src.key_json.size()) dst->key_json[k] = src.key_json[s];
         dst->key_time_unit[k] = src.key_time_unit[s];
         dst->key_timezone[k] = src.key_timezone[s];
         dst->key_byte_width[k] = src.key_byte_width[s];

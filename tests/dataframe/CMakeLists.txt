@@ -10,7 +10,7 @@ set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_methods.cpp
                            test_arrow_types_windowed.cpp test_arrow_types_reshape.cpp
                            test_field.cpp test_op_registry.cpp test_op_parity.cpp
                            test_lazyframe.cpp test_join.cpp test_concat.cpp test_lazy_frame_ops.cpp
-                           test_lazyframe_abi.cpp test_lazy_ops.cpp test_lazy_plan.cpp test_source_hooks.cpp test_plugin_sdk.cpp test_spill.cpp test_agg_state.cpp
+                           test_lazyframe_abi.cpp test_lazy_ops.cpp test_lazy_plan.cpp test_source_hooks.cpp test_plugin_sdk.cpp test_spill.cpp test_native_frame.cpp test_join_spill.cpp test_agg_state.cpp
                            test_agg_extended_ops.cpp test_host_ops.cpp
                            test_host_ops_autoregister.cpp test_expr_string.cpp test_expr_string_ops.cpp test_expr_duql.cpp
                            test_expr_infer_type.cpp
@@ -18,7 +18,10 @@ set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_methods.cpp
                            test_type_parameter_propagation.cpp
                            test_lazyframe_output_schema.cpp
                            test_lazyframe_plugin_node.cpp
-                           test_morsel_ordering.cpp)
+                           test_morsel_ordering.cpp
+                           test_order.cpp test_frame_window.cpp
+                           test_frame_gap_fill.cpp test_frame_asof.cpp
+                           test_frame_ops.cpp)
 
 foreach(test_file ${DATAFRAME_TEST_SOURCES})
   string(REPLACE ".cpp" "" bin_exec ${test_file})

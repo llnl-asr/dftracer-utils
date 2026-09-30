@@ -115,3 +115,24 @@ def test_full_include_tree_bundled(wheel_names):
     expected = _source_tree_headers(REPO_ROOT)
     missing = expected - shipped
     assert not missing, f"{Path(wheel).name} is missing headers: {sorted(missing)[:20]}"
+
+
+def test_record_matches_contents():
+    """PyPI rejects wheels whose files differ from RECORD."""
+    import base64
+    import csv
+    import hashlib
+    import io
+
+    wheel = _find_wheel()
+    if wheel is None:
+        pytest.skip("no wheel found (set DFTRACER_UTILS_WHEEL or build into wheelhouse/)")
+    with zipfile.ZipFile(wheel) as zf:
+        record = next(n for n in zf.namelist() if n.endswith(".dist-info/RECORD"))
+        rows = {r[0]: r for r in csv.reader(io.StringIO(zf.read(record).decode())) if r}
+        files = {n for n in zf.namelist() if not n.endswith("/")}
+        assert files == set(rows), f"RECORD/file mismatch: {sorted(files ^ set(rows))[:10]}"
+        for name in files - {record}:
+            data = zf.read(name)
+            digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
+            assert rows[name][1:] == [f"sha256={digest}", str(len(data))], f"bad RECORD: {name}"

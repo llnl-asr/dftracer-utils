@@ -522,6 +522,42 @@ run_py() {
     done < <(find "$REPO_ROOT/tests/python" -name "test_*.py" | sort)
   fi
 
+  local shard="${VALGRIND_SHARD:-1/1}"
+  if [[ "$shard" != "1/1" ]]; then
+    # Greedy longest-first split by py-durations.tsv; a hint is for balance only.
+    mapfile -t files < <(python3 - "$shard" "$SUPP_DIR/py-durations.tsv" "${files[@]}" <<'PY'
+import os, sys
+
+index, count = (int(x) for x in sys.argv[1].split("/", 1))
+if not 1 <= index <= count:
+    sys.exit(f"VALGRIND_SHARD={sys.argv[1]} is out of range")
+hints = {}
+try:
+    with open(sys.argv[2]) as fh:
+        for line in fh:
+            if line.startswith("#") or not line.strip():
+                continue
+            name, _, seconds = line.partition("\t")
+            try:
+                hints[name] = float(seconds)
+            except ValueError:
+                pass
+except OSError:
+    pass
+default = sorted(hints.values())[len(hints) // 2] if hints else 1.0
+weight = lambda f: hints.get(os.path.basename(f)[:-3], default)
+bins = [[] for _ in range(count)]
+loads = [0.0] * count
+for f in sorted(sys.argv[3:], key=lambda f: -weight(f)):
+    i = loads.index(min(loads))
+    bins[i].append(f)
+    loads[i] += weight(f)
+print("\n".join(sorted(bins[index - 1])))
+PY
+    )
+    log "Python shard $shard: ${#files[@]} file(s)"
+  fi
+
   log "Python tests under Valgrind (${#files[@]} file(s) x $(test_jobs) parallel):"
   printf '         %s\n' "${files[@]}"
 

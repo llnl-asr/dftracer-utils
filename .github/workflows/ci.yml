@@ -26,7 +26,7 @@ jobs:
       - name: Resolve the pinned RocksDB version
         id: rocksdb
         run: echo "version=$(./scripts/ci/rocksdb_version.sh)" >> "$GITHUB_OUTPUT"
-      - uses: dorny/paths-filter@v3.0.2
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
@@ -102,6 +102,9 @@ jobs:
           key: rocksdb-v1-${{ matrix.os }}-${{ env.ROCKSDB_VERSION }}-${{ steps.fp.outputs.cc }}-${{ hashFiles('scripts/ci/build_rocksdb.sh') }}
 
   test:
+    permissions:
+      contents: read
+      actions: write
     needs: [changes, rocksdb]
     if: needs.changes.outputs.code == 'true' || needs.changes.outputs.coverage == 'true'
     env:
@@ -110,7 +113,7 @@ jobs:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_COMPILERCHECK: content
-      CCACHE_MAXSIZE: 700M
+      CCACHE_MAXSIZE: 1000M
       CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime,pch_defines,system_headers,locale
       CCACHE_NOHASHDIR: "true"
 
@@ -281,7 +284,7 @@ jobs:
       # the log shows the tail. Short retention keeps storage negligible.
       - name: Upload backtraces
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6.0.0
         with:
           name: backtraces-${{ matrix.os }}-py${{ matrix.python-version }}
           path: /tmp/backtraces
@@ -318,6 +321,18 @@ jobs:
           path: ${{ github.workspace }}/.ccache
           key: ccache-v4-${{ matrix.os }}-${{ github.run_id }}
 
+      - name: Drop older ccache copies
+        continue-on-error: true
+        if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prefix='ccache-v4-${{ matrix.os }}-'
+          current="$prefix${{ github.run_id }}"
+          gh cache list --key "$prefix" --ref "$GITHUB_REF" --limit 100 --json id,key \
+            -q ".[] | select(.key | test(\"^${prefix}[0-9]+\$\")) | select(.key != \"$current\") | .id" \
+            | xargs -r -n1 gh cache delete
+
   coverage-finish:
     needs: test
     if: always()
@@ -339,7 +354,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "20"
           cache: npm
@@ -365,23 +380,26 @@ jobs:
           path: web/dist/index.html
 
   valgrind-cpp:
+    permissions:
+      contents: read
+      actions: write
     needs: [changes, rocksdb]
     if: needs.changes.outputs.code == 'true'
-    name: Valgrind (C++ ${{ matrix.shard }}/4)
+    name: Valgrind (C++ ${{ matrix.shard }}/6)
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
     env:
-      VALGRIND_SHARD: ${{ matrix.shard }}/4
+      VALGRIND_SHARD: ${{ matrix.shard }}/6
       ROCKSDB_VERSION: ${{ needs.changes.outputs.rocksdb_version }}
       CMAKE_POLICY_VERSION_MINIMUM: 3.5
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_COMPILERCHECK: content
-      CCACHE_MAXSIZE: 700M
+      CCACHE_MAXSIZE: 1000M
       CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime,pch_defines,system_headers,locale
       CCACHE_NOHASHDIR: "true"
       CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpmsource
@@ -455,15 +473,30 @@ jobs:
           path: ${{ github.workspace }}/.ccache
           key: ccache-valgrind-cpp-${{ github.run_id }}
 
+      - name: Drop older ccache copies
+        continue-on-error: true
+        if: matrix.shard == 1 && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prefix='ccache-valgrind-cpp-'
+          current="$prefix${{ github.run_id }}"
+          gh cache list --key "$prefix" --ref "$GITHUB_REF" --limit 100 --json id,key \
+            -q ".[] | select(.key | test(\"^${prefix}[0-9]+\$\")) | select(.key != \"$current\") | .id" \
+            | xargs -r -n1 gh cache delete
+
       - name: Upload Valgrind logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6.0.0
         with:
           name: valgrind-cpp-logs-${{ matrix.shard }}
           path: build/valgrind-logs/
           if-no-files-found: ignore
 
   valgrind-mpi:
+    permissions:
+      contents: read
+      actions: write
     needs: [changes, rocksdb]
     if: needs.changes.outputs.code == 'true'
     name: Valgrind (MPI)
@@ -475,7 +508,7 @@ jobs:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_COMPILERCHECK: content
-      CCACHE_MAXSIZE: 700M
+      CCACHE_MAXSIZE: 1000M
       CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime,pch_defines,system_headers,locale
       CCACHE_NOHASHDIR: "true"
       CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpmsource
@@ -549,27 +582,47 @@ jobs:
           path: ${{ github.workspace }}/.ccache
           key: ccache-valgrind-mpi-${{ github.run_id }}
 
+      - name: Drop older ccache copies
+        continue-on-error: true
+        if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prefix='ccache-valgrind-mpi-'
+          current="$prefix${{ github.run_id }}"
+          gh cache list --key "$prefix" --ref "$GITHUB_REF" --limit 100 --json id,key \
+            -q ".[] | select(.key | test(\"^${prefix}[0-9]+\$\")) | select(.key != \"$current\") | .id" \
+            | xargs -r -n1 gh cache delete
+
       - name: Upload Valgrind logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6.0.0
         with:
           name: valgrind-mpi-logs
           path: build/valgrind-logs/
           if-no-files-found: ignore
 
   valgrind-python:
+    permissions:
+      contents: read
+      actions: write
     needs: [changes, rocksdb]
     if: needs.changes.outputs.code == 'true'
-    name: Valgrind (Python, full suite incl. dask)
+    name: Valgrind (Python ${{ matrix.shard }}/3)
     runs-on: ubuntu-24.04
     timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     env:
+      VALGRIND_SHARD: ${{ matrix.shard }}/3
       ROCKSDB_VERSION: ${{ needs.changes.outputs.rocksdb_version }}
       CMAKE_POLICY_VERSION_MINIMUM: 3.5
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_COMPILERCHECK: content
-      CCACHE_MAXSIZE: 700M
+      CCACHE_MAXSIZE: 1000M
       CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime,pch_defines,system_headers,locale
       CCACHE_NOHASHDIR: "true"
       CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpmsource
@@ -645,29 +698,45 @@ jobs:
         run: ccache -s || true
 
       - name: Save ccache
-        if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        if: matrix.shard == 1 && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         uses: actions/cache/save@v5
         with:
           path: ${{ github.workspace }}/.ccache
           key: ccache-valgrind-py-${{ github.run_id }}
 
+      - name: Drop older ccache copies
+        continue-on-error: true
+        if: matrix.shard == 1 && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prefix='ccache-valgrind-py-'
+          current="$prefix${{ github.run_id }}"
+          gh cache list --key "$prefix" --ref "$GITHUB_REF" --limit 100 --json id,key \
+            -q ".[] | select(.key | test(\"^${prefix}[0-9]+\$\")) | select(.key != \"$current\") | .id" \
+            | xargs -r -n1 gh cache delete
+
       - name: Upload Valgrind logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6.0.0
         with:
-          name: valgrind-python-logs
+          name: valgrind-python-logs-${{ matrix.shard }}
           path: build/valgrind-logs/
           if-no-files-found: ignore
 
   wheel:
+    permissions:
+      contents: read
+      actions: write
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    name: Wheel build (deps from source) on ${{ matrix.os }}
+    name: Wheel build (deps from source) on ${{ matrix.os }} (cp${{ matrix.python }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-22.04, ubuntu-22.04-arm, macos-14]
+        python: ["38", "39", "310", "311", "312", "313", "314"]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -715,7 +784,7 @@ jobs:
       - name: Build and test wheel
         uses: pypa/cibuildwheel@v3.3.0
         env:
-          CIBW_BUILD: cp38-* cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*
+          CIBW_BUILD: cp${{ matrix.python }}-*
           CIBW_SKIP: "*-win32 *-manylinux_i686 *-musllinux_* *-manylinux_ppc64le *-manylinux_s390x"
           CIBW_CONFIG_SETTINGS: "cmake.define.DFTRACER_UTILS_LOCAL_PACKAGES=OFF"
           CIBW_BEFORE_ALL_LINUX: "yum install -y epel-release ccache || dnf install -y epel-release ccache || true"
@@ -748,8 +817,20 @@ jobs:
         run: du -sh .ccache 2>/dev/null || echo "no .ccache dir (uncached)"
 
       - name: Save ccache (wheel)
-        if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        if: matrix.python == '312' && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         uses: actions/cache/save@v5
         with:
           path: .ccache
           key: ccache-wheel-v2-${{ matrix.os }}-${{ github.run_id }}
+
+      - name: Drop older ccache copies
+        continue-on-error: true
+        if: matrix.python == '312' && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prefix='ccache-wheel-v2-${{ matrix.os }}-'
+          current="$prefix${{ github.run_id }}"
+          gh cache list --key "$prefix" --ref "$GITHUB_REF" --limit 100 --json id,key \
+            -q ".[] | select(.key | test(\"^${prefix}[0-9]+\$\")) | select(.key != \"$current\") | .id" \
+            | xargs -r -n1 gh cache delete

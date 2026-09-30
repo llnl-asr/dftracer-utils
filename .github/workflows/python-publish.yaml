@@ -39,7 +39,7 @@ jobs:
           fi
 
   build_wheels:
-    name: Build wheels on ${{ matrix.os }}
+    name: Build wheels on ${{ matrix.os }} (cp${{ matrix.python }})
     needs: check
     if: needs.check.outputs.publish == 'true'
     runs-on: ${{ matrix.os }}
@@ -47,6 +47,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-22.04, ubuntu-22.04-arm, macos-14]
+        python: ["38", "39", "310", "311", "312", "313", "314"]
 
     steps:
       - uses: actions/checkout@v6
@@ -80,7 +81,7 @@ jobs:
 
       # Build the web UI on the host (needs Node) so cibuildwheel's CMake embed
       # step bakes the real page into dftracer_server instead of a placeholder.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "20"
           cache: npm
@@ -109,7 +110,7 @@ jobs:
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.3.0
         env:
-          CIBW_BUILD: cp38-* cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*
+          CIBW_BUILD: cp${{ matrix.python }}-*
           CIBW_SKIP: "*-win32 *-manylinux_i686 *-musllinux_* *-manylinux_ppc64le *-manylinux_s390x"
           CIBW_CONFIG_SETTINGS: "cmake.define.DFTRACER_UTILS_LOCAL_PACKAGES=OFF"
           CIBW_BEFORE_ALL_LINUX: "yum install -y epel-release ccache || dnf install -y epel-release ccache || true"
@@ -154,7 +155,7 @@ jobs:
 
       # Ship the built UI in the sdist too, so source installs embed the real
       # page (sdist.include forces web/dist/index.html in).
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "20"
           cache: npm

@@ -165,8 +165,8 @@ Pass with ``-D`` at configure time, for example
      - ``OFF``
      - MPI support (distributes ``dftracer_view --flamegraph`` across ranks).
    * - ``DFTRACER_UTILS_ENABLE_PCH``
-     - ``ON``
-     - Precompiled headers (faster builds).
+     - ``OFF``
+     - Precompiled headers (faster cold builds). ccache cannot cache GCC's, so leave it off when using ccache.
    * - ``DFTRACER_USE_ZLIB_NG``
      - ``ON``
      - Use zlib-ng instead of madler/zlib (falls back on failure).

@@ -2,6 +2,7 @@ name: Check code formatting
 
 on:
   push:
+    branches: [ main, develop ]
   pull_request:
     branches: [ develop, stage-in ]
   workflow_dispatch:

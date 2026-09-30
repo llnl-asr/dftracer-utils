@@ -71,11 +71,11 @@ inline double read_f64(const Series& c, std::int64_t i) {
         case TypeId::Decimal128:
             return decimal128_to_double(
                 c.data<std::uint8_t>() + static_cast<std::size_t>(i) * 16,
-                c.data_type().decimal_scale);
+                c.data_type().decimal_scale());
         case TypeId::Decimal256:
             return decimal256_to_double(
                 c.data<std::uint8_t>() + static_cast<std::size_t>(i) * 32,
-                c.data_type().decimal_scale);
+                c.data_type().decimal_scale());
         case TypeId::Uint8:
         case TypeId::Uint16:
         case TypeId::Uint32:
@@ -96,7 +96,7 @@ inline std::string_view read_bytes(const Series& c, std::int64_t i) {
         return c.string_at(i);
     std::size_t width;
     if (t == TypeId::FixedSizeBinary)
-        width = static_cast<std::size_t>(c.data_type().fixed_size);
+        width = static_cast<std::size_t>(c.data_type().fixed_size());
     else if (t == TypeId::Decimal128 || t == TypeId::Decimal256)
         width = byte_width(t).value_or(0);
     else

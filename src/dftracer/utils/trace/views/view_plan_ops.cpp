@@ -489,7 +489,7 @@ std::unordered_map<std::string, dataframe::DataType> column_types(
                 break;
             case CT::Json:
                 type.id = df::TypeId::String;
-                type.json = true;
+                type.set_json(true);
                 break;
             case CT::Unknown:
                 break;

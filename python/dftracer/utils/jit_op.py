@@ -25,7 +25,7 @@ from __future__ import annotations
 import ast
 import inspect
 import textwrap
-from typing import TYPE_CHECKING, Callable, List, Optional, Sequence, Tuple, TypedDict, Union
+from typing import TYPE_CHECKING, Callable, List, Optional, Sequence, Tuple, TypedDict, Union, cast
 
 from . import _plugin_build
 from .enums import DType
@@ -558,12 +558,10 @@ def run_op_array(
 def _run_fused(
     op_obj: Op, ast_tokens: List[tuple], values: Sequence[_ArrayValue]
 ) -> List[_ArrayValue]:
-    import pyarrow as pa  # ty: ignore[unresolved-import]
-
     from .dftracer_utils_ext import vec_eval
     from .series import Series, _unwrap
 
-    pa_type = pa.float64() if is_float_type(op_obj.in_type) else pa.int64()
-    col = Series.from_list(list(values), dtype=pa_type)
+    dtype = DType.FLOAT64 if is_float_type(op_obj.in_type) else DType.INT64
+    col = Series.from_list(list(values), dtype=dtype)
     out = Series(vec_eval(ast_tokens, [_unwrap(col)]))
-    return out.to_arrow().to_pylist()
+    return cast(List[_ArrayValue], out.to_list())

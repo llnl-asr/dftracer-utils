@@ -1504,7 +1504,8 @@ class Compiler {
 // String/Binary/List; take()'s gather_column handles those instead.
 Series load_slice(const Series& in, std::int64_t offset, std::int64_t len) {
     const TypeId t = in.type();
-    if (byte_width(t, in.data_type().fixed_size)) return in.slice(offset, len);
+    if (byte_width(t, in.data_type().fixed_size()))
+        return in.slice(offset, len);
     std::vector<std::int64_t> idx(static_cast<std::size_t>(len));
     for (std::int64_t i = 0; i < len; ++i)
         idx[static_cast<std::size_t>(i)] = offset + i;
@@ -1609,10 +1610,10 @@ struct TextCol {
 
     explicit TextCol(const dftu_series* h) {
         if (h->data) data = reinterpret_cast<const char*>(h->data->data());
-        if (h->offsets)
+        if (h->offsets && !h->wide_offsets())
             off32 = reinterpret_cast<const std::int32_t*>(h->offsets->data());
-        if (h->offsets64)
-            off64 = reinterpret_cast<const std::int64_t*>(h->offsets64->data());
+        if (h->offsets && h->wide_offsets())
+            off64 = reinterpret_cast<const std::int64_t*>(h->offsets->data());
     }
     bool ok() const { return off32 || off64; }
     std::string_view at(std::int64_t i) const {
@@ -2407,10 +2408,10 @@ std::optional<ListParts> list_parts(const Series& s) {
     ListParts p;
     p.list = flat_view(s);
     const dftu_series* h = p.list.handle();
-    if (!h || h->type != TypeId::List || !h->offsets || !h->child)
+    if (!h || h->type != TypeId::List || !h->offsets || !h->child())
         return std::nullopt;
     p.off = reinterpret_cast<const std::int32_t*>(h->offsets->data());
-    Series child = flat_view(Series{dftu_series_share(h->child.get())});
+    Series child = flat_view(Series{dftu_series_share(h->child().get())});
     const TypeId t = child.type();
     if (is_num_type(t) && t != TypeId::Int64 && t != TypeId::Uint64 &&
         t != TypeId::Float64)

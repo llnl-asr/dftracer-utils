@@ -6,7 +6,6 @@ import json
 import math
 
 import pandas as pd
-import pyarrow as pa
 import pytest
 
 import dftracer.utils as dftu
@@ -69,7 +68,7 @@ def frame():
 
 
 def _table(tv, q):
-    return pa.table(tv.duql(q).collect()).to_pydict()
+    return tv.duql(q).collect().to_dict()
 
 
 def _same(got, want):

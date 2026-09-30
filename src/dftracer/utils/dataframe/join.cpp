@@ -88,10 +88,10 @@ struct KeyView {
         validity = h.validity ? h.validity->data() : nullptr;
         const TypeId narrow = narrow_varwidth_type(h.type);
         if (narrow == TypeId::String || narrow == TypeId::Binary) {
-            if (h.offsets64) {
+            if (h.wide_offsets()) {
                 kind = Str64;
                 off64 =
-                    reinterpret_cast<const std::int64_t*>(h.offsets64->data());
+                    reinterpret_cast<const std::int64_t*>(h.offsets->data());
             } else {
                 kind = Str32;
                 off32 =
@@ -101,7 +101,7 @@ struct KeyView {
             kind = Bool;
         } else {
             kind = Fixed;
-            width = byte_width(h.type, h.fixed_size).value_or(0);
+            width = byte_width(h.type, h.fixed_size()).value_or(0);
         }
     }
     bool is_null(std::int64_t i) const {

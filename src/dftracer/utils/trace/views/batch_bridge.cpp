@@ -49,20 +49,21 @@ dataframe::Morsel events_to_morsel(
     dataframe::Morsel m;
     m.rows = f.num_rows();
     m.columns = std::move(f.columns);
-    m.name_ids.reserve(f.names.size());
+    dataframe::MorselDyn& d = m.dyn_state();
+    d.name_ids.reserve(f.names.size());
     for (const std::string& name : f.names)
-        m.name_ids.push_back(intern->get_or_insert(name));
+        d.name_ids.push_back(intern->get_or_insert(name));
 
     if (spec.emit_dyn) {
         auto dyn = build_dyn_numeric_columns(events, *intern, spec.select);
-        m.dyn_names.reserve(dyn.size());
-        m.dyn_columns.reserve(dyn.size());
+        d.dyn_names.reserve(dyn.size());
+        d.dyn_columns.reserve(dyn.size());
         for (auto& [name, col] : dyn) {
-            m.dyn_names.push_back(std::move(name));
-            m.dyn_columns.push_back(std::move(col));
+            d.dyn_names.push_back(std::move(name));
+            d.dyn_columns.push_back(std::move(col));
         }
     }
-    m.intern = std::move(intern);
+    d.intern = std::move(intern);
     return m;
 }
 

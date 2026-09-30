@@ -10,8 +10,12 @@ dfanalyzer change alongside it.
 
 import inspect
 
-import dftracer.utils.dask as dfa_dask
-import dftracer.utils.dfanalyzer as dfa
+import pytest
+
+pytest.importorskip("pyarrow")
+
+import dftracer.utils.dask as dfa_dask  # noqa: E402
+import dftracer.utils.dfanalyzer as dfa  # noqa: E402
 
 # The exact public surface of dftracer.utils.dfanalyzer that dfanalyzer imports.
 DFANALYZER_SURFACE = {

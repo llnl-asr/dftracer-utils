@@ -108,7 +108,7 @@ WindowColumn spec(WindowFunc func, std::optional<std::string> value,
                   std::string out) {
     WindowColumn w{};
     w.func = func;
-    w.value = std::move(value);
+    if (value) w.set_value(std::move(*value));
     w.out = std::move(out);
     return w;
 }
@@ -132,7 +132,7 @@ WindowColumn frame_spec(WindowFunc func, std::string value, std::string out,
 WindowColumn rate_spec(std::string value, std::string time, std::string out,
                        bool counter) {
     WindowColumn w = spec(WindowFunc::Rate, std::move(value), std::move(out));
-    w.time = std::move(time);
+    w.set_time(std::move(time));
     w.params.rate = {counter};
     return w;
 }
@@ -141,8 +141,8 @@ WindowColumn session_spec(std::string time, std::string out, double gap,
                           double span = 0.0,
                           std::optional<std::string> end = std::nullopt) {
     WindowColumn w = spec(WindowFunc::Sessionize, std::nullopt, std::move(out));
-    w.time = std::move(time);
-    w.end = std::move(end);
+    w.set_time(std::move(time));
+    if (end) w.set_end(std::move(*end));
     w.params.session = {gap, span};
     return w;
 }

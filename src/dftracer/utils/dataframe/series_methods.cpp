@@ -23,13 +23,13 @@ double scalar_as_double(dftu_scalar s) {
 DataType Series::data_type() const {
     DataType dt;
     dt.id = type();
-    dt.time_unit = static_cast<TimeUnit>(dftu_series_time_unit(handle_));
+    dt.set_time_unit(static_cast<TimeUnit>(dftu_series_time_unit(handle_)));
     const char* tz = dftu_series_timezone(handle_);
-    dt.timezone = tz ? tz : "";
-    dt.decimal_precision = dftu_series_decimal_precision(handle_);
-    dt.decimal_scale = dftu_series_decimal_scale(handle_);
-    dt.fixed_size = dftu_series_fixed_size(handle_);
-    dt.json = dftu_series_is_json(handle_) != 0;
+    dt.set_timezone(tz ? tz : "");
+    dt.set_decimal(dftu_series_decimal_precision(handle_),
+                   dftu_series_decimal_scale(handle_));
+    dt.set_fixed_size(dftu_series_fixed_size(handle_));
+    dt.set_json(dftu_series_is_json(handle_) != 0);
     const std::int64_t n = num_children();
     for (std::int64_t i = 0; i < n; ++i) {
         Series c = child(i);

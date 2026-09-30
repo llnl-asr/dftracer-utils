@@ -97,7 +97,7 @@ Groups build_groups(const dftu_series* keys_in) {
     const TypeId key_kind = narrow_varwidth_type(k->type);
     bool str = (key_kind == TypeId::String || key_kind == TypeId::Binary);
     std::size_t width =
-        str ? 0 : byte_width(k->type, k->fixed_size).value_or(0);
+        str ? 0 : byte_width(k->type, k->fixed_size()).value_or(0);
 
     std::vector<std::string> distinct;
     Groups g;
@@ -138,7 +138,7 @@ Groups build_groups(const dftu_series* keys_in) {
         out->type = TypeId::FixedSizeBinary;
         out->encoding = Encoding::Flat;
         out->length = g.num_groups;
-        out->fixed_size = k->fixed_size;
+        out->set_fixed_size(k->fixed_size());
         std::string bytes;
         for (const std::string& s : distinct) bytes += s;
         out->data = dftracer::utils::dataframe::Buffer::allocate(bytes.size());

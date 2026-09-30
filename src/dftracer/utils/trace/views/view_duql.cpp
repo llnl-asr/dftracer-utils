@@ -125,8 +125,8 @@ class FinishSource final : public df::Source {
             }
             auto m = co_await rows_->next(max_rows);
             if (m && named_) {
-                m->name_ids = ids_;
-                m->intern = intern_;
+                m->dyn_state().name_ids = ids_;
+                m->dyn->intern = intern_;
             }
             co_return m;
         }
@@ -2006,7 +2006,8 @@ class Applier {
             const df::DataType& b = side_cols[k].type;
             const bool exact = is_integer(a.id) || a.id == df::TypeId::String ||
                                a.id == df::TypeId::Bool;
-            if (!exact || a.id != b.id || a.json || b.json) return false;
+            if (!exact || a.id != b.id || a.is_json() || b.is_json())
+                return false;
         }
         return true;
     }

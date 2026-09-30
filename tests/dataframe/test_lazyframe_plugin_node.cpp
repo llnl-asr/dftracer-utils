@@ -738,8 +738,8 @@ TEST_SUITE("lazyframe plugin node") {
         CHECK(s.fields[0].type.id == TypeId::Int64);
         CHECK(s.fields[1].name == "ts");
         CHECK(s.fields[1].type.id == TypeId::Timestamp);
-        CHECK(s.fields[1].type.time_unit == TimeUnit::Milli);
-        CHECK(s.fields[1].type.timezone == "UTC");
+        CHECK(s.fields[1].type.time_unit() == TimeUnit::Milli);
+        CHECK(s.fields[1].type.timezone() == "UTC");
 
         CHECK(dftu_node_unregister("test.double.c") == 0);
     }

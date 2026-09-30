@@ -89,7 +89,7 @@ bool resolve_unit(const dftu_series* v, TimeUnit fallback, TimeUnit* unit,
     switch (v->type) {
         case TypeId::Timestamp:
         case TypeId::Duration:
-            *unit = v->time_unit;
+            *unit = v->time_unit();
             return true;
         case TypeId::Date32:
             *days = true;
@@ -259,7 +259,7 @@ dftu_series* dftu_series_with_timezone(const dftu_series* v, const char* tz,
     if (!v || v->type != TypeId::Timestamp || tz_len < 0 || (tz_len > 0 && !tz))
         return nullptr;
     auto* out = new dftu_series(*v);
-    out->timezone.assign(tz, static_cast<std::size_t>(tz_len));
+    out->set_timezone(std::string_view(tz, static_cast<std::size_t>(tz_len)));
     return out;
 }
 

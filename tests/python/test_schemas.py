@@ -8,7 +8,6 @@ import sys
 import textwrap
 from typing import Optional
 
-import pyarrow as pa
 import pytest
 
 import dftracer.utils as dftu
@@ -119,7 +118,7 @@ def test_a_class_source_row_set_runs_from(tmp_path):
         for status in (200, 503, 404, 500):
             f.write(json.dumps({"status": status}) + "\n")
     tv = dftu.TraceViewer(path, record_schema=PyWeb)
-    got = tv.duql("from errors | select status").collect().to_arrow().to_pydict()
+    got = tv.duql("from errors | select status").collect().to_dict()
     assert sorted(got["status"]) == [500, 503]
 
 
@@ -136,10 +135,10 @@ def test_a_json_field_reads_canonical_text(tmp_path):
     ]
     path.write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
     tv = dftu.TraceViewer(str(path), record_schema=PyTagged)
-    tags = pa.table(tv.select("tags").collect()).column("tags").to_pylist()
+    tags = tv.select("tags").collect()["tags"]._native.to_pylist()
     assert tags == ['["a","b"]', '{"a":2,"b":1}', None]
-    assert pa.table(tv.duql('json(tags) == \'{"a":2,"b":1}\'').collect()).num_rows == 1
-    assert pa.table(tv.duql('tags == \'{"a":2,"b":1}\'').collect()).num_rows == 0
+    assert len(tv.duql('json(tags) == \'{"a":2,"b":1}\'').collect()) == 1
+    assert len(tv.duql('tags == \'{"a":2,"b":1}\'').collect()) == 0
     got = next(s for s in schemas.list() if s["id"] == "py_tagged")
     assert [f["type"] for f in got["fields"]] == ["string", "json"]
     with pytest.raises(dftu.DFTUtilsValueError, match="json"):
@@ -156,6 +155,16 @@ def test_a_field_of_mixed_types_is_a_json_column(tmp_path):
     retry = tv.duql("sort k | take 5 | select retry").collect()["retry"]
     assert retry.is_json
     assert retry.to_list() == [0, 1, 2.5, "3", 3]
+    assert not tv.duql("select k").collect()["k"].is_json
+
+
+def test_a_json_column_round_trips_through_arrow(tmp_path):
+    pa = pytest.importorskip("pyarrow")
+    path = tmp_path / "mixed.ndjson.gz"
+    lines = [json.dumps({"k": i, "retry": [0, 1, 2.5, "3", 3][i % 5]}) for i in range(10)]
+    path.write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
+    tv = dftu.TraceViewer(str(path))
+    retry = tv.duql("sort k | take 5 | select retry").collect()["retry"]
     arrow = retry.to_arrow()
     assert arrow.to_pylist() == ["0", "1", "2.5", '"3"', "3"]
     field = pa.table(tv.duql("sort k | take 5 | select retry").collect()).schema.field("retry")
@@ -164,7 +173,6 @@ def test_a_field_of_mixed_types_is_a_json_column(tmp_path):
     ).startswith("extension<arrow.json")
     back = dftu.DataFrame.from_arrow(pa.table(tv.duql("select retry").collect()))["retry"]
     assert back.is_json
-    assert not tv.duql("select k").collect()["k"].is_json
 
 
 def test_schema_tree_nests_paths(tmp_path):
@@ -266,14 +274,14 @@ def test_schemas_next_to_the_index_are_used(tmp_path):
         explained = ix.explain('upstream == "u2"')[0]
     assert len(explained["read"]) < explained["chunks"]
     viewer = dftu.TraceViewer(trace, index_path=str(index_dir / ".dftindex"))
-    rows = pa.table(viewer.duql('upstream == "u2"').collect())
-    assert rows.num_rows == 300
+    rows = viewer.duql('upstream == "u2"').collect()
+    assert len(rows) == 300
 
 
 def test_trace_viewer_record_schema_override(tmp_path):
     trace = _nginx(str(tmp_path / "access.ndjson.gz"))
-    t = pa.table(dftu.TraceViewer(trace, record_schema=schemas.Generic).collect())
-    assert {"status", "upstream"} <= set(t.column_names)
+    t = dftu.TraceViewer(trace, record_schema=schemas.Generic).collect()
+    assert {"status", "upstream"} <= set(t.columns)
     with pytest.raises(dftu.DFTUtilsValueError, match="no_such_schema"):
         dftu.TraceViewer(trace, record_schema="no_such_schema")
 

@@ -69,8 +69,8 @@ ColumnView::ColumnView(const Series& column)
     data_ = h.data ? h.data->data() : nullptr;
     validity_ = h.validity ? h.validity->data() : nullptr;
     if (kind_ == Kind::Bytes) {
-        if (h.offsets64)
-            off64_ = reinterpret_cast<const std::int64_t*>(h.offsets64->data());
+        if (h.wide_offsets())
+            off64_ = reinterpret_cast<const std::int64_t*>(h.offsets->data());
         else
             off32_ = reinterpret_cast<const std::int32_t*>(h.offsets->data());
     }

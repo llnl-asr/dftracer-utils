@@ -35,6 +35,7 @@ def test_typed_read_to_ipc_is_the_ipc_form_of_view_typed_frames(tmp_path):
     """_typed_read_to_ipc emits {events, profiles, system} Arrow IPC in the
     dfanalyzer schema; decoding it reproduces view_typed_frames' event totals,
     since one is just the serialized form of the other."""
+    pytest.importorskip("pyarrow")
     from dftracer.utils import AggregationConfig
     from dftracer.utils.dfanalyzer import _ipc_to_pandas, _typed_read_to_ipc, view_typed_frames
 
@@ -68,7 +69,6 @@ def test_view_agg_tier_matches_raw_scan(tmp_path):
     equals the raw-scan View over a plain index, for tier-answerable groupings
     (cat excluded: the tier lowercases it). sumsq is event-exact via the stored
     m2, so it matches too."""
-    import pyarrow as pa
 
     from dftracer.utils import AggregationConfig, TraceViewer
 
@@ -101,7 +101,7 @@ def test_view_agg_tier_matches_raw_scan(tmp_path):
 
     def collect(idx):
         tv = TraceViewer(files, index_path=idx).group_by(*keys).agg(*metrics)
-        return pa.table(tv.collect()).to_pandas().sort_values(keys).reset_index(drop=True)
+        return tv.collect().to_pandas().sort_values(keys).reset_index(drop=True)
 
     tier, raw = collect(agg), collect(noagg)
     assert tier.shape == raw.shape and len(tier) > 0
@@ -116,7 +116,6 @@ def test_view_agg_tier_skew_kurt_pct_match_raw_scan(tmp_path):
     """skew/kurt (from persisted m3/m4) and percentiles (from the persisted
     DDSketch) come back from the aggregation CF tier and match the raw-scan
     View over a plain index."""
-    import pyarrow as pa
 
     from dftracer.utils import AggregationConfig, TraceViewer
 
@@ -137,7 +136,7 @@ def test_view_agg_tier_skew_kurt_pct_match_raw_scan(tmp_path):
 
     def collect(idx):
         tv = TraceViewer(files, index_path=idx).group_by("name").agg(*metrics)
-        return pa.table(tv.collect()).to_pandas().sort_values("name").reset_index(drop=True)
+        return tv.collect().to_pandas().sort_values("name").reset_index(drop=True)
 
     tier, raw = collect(agg), collect(noagg)
     assert tier.shape == raw.shape and len(tier) > 0
@@ -155,7 +154,6 @@ def test_view_histogram_tier_matches_raw_scan(tmp_path):
     """hist:dur comes back as an arrow list<struct<lo,hi,count>> column; the
     tier (from the persisted DDSketch) and the raw scan produce identical
     buckets, and the bucket counts sum to the event count."""
-    import pyarrow as pa
 
     from dftracer.utils import AggregationConfig, TraceViewer
 
@@ -174,7 +172,7 @@ def test_view_histogram_tier_matches_raw_scan(tmp_path):
 
     def collect(idx):
         tv = TraceViewer(files, index_path=idx).group_by("name").agg("count", "hist:dur")
-        return pa.table(tv.collect()).to_pandas().sort_values("name").reset_index(drop=True)
+        return tv.collect().to_pandas().sort_values("name").reset_index(drop=True)
 
     tier, raw = collect(agg), collect(noagg)
     assert tier["hist_dur"].dtype == object and len(tier) > 0
@@ -192,8 +190,6 @@ def test_collect_typed_one_pass_returns_all_record_families(tmp_path):
     """collect_typed reads regular events, aggregated records (arbitrary extra
     keys), and counters (incl. system) from one tier pass."""
     import gzip
-
-    import pyarrow as pa
 
     from dftracer.utils import AggregationConfig, TraceViewer
 
@@ -224,9 +220,9 @@ def test_collect_typed_one_pass_returns_all_record_families(tmp_path):
 
     res = TraceViewer([p], index_path=idx).group_by("name", "pid", "tid").collect_typed()
     assert set(res) == {"regular", "aggregated", "counters"}
-    regular = pa.table(res["regular"]).to_pydict()
-    aggregated = pa.table(res["aggregated"]).to_pydict()
-    counters = pa.table(res["counters"]).to_pydict()
+    regular = res["regular"].to_dict()
+    aggregated = res["aggregated"].to_dict()
+    counters = res["counters"].to_dict()
 
     assert regular["name"] == ["read"] and regular["count"] == [20.0]
     assert aggregated["name"] == ["train"] and aggregated["count"] == [3.0]
@@ -240,9 +236,6 @@ def test_collect_typed_cat_filter_matches_collect(tmp_path):
     stores cat lowercased, so an equality/membership literal is folded to match
     (case-insensitively), and collect_typed agrees with collect()."""
     import gzip
-
-    import pyarrow as pa
-    import pyarrow.compute  # noqa: F401
 
     from dftracer.utils import AggregationConfig, TraceViewer
 
@@ -266,8 +259,8 @@ def test_collect_typed_cat_filter_matches_collect(tmp_path):
         tv = TraceViewer([p], index_path=idx).filter(q).group_by("name").agg("count")
         c = tv.collect()
         reg = tv.collect_typed()["regular"]
-        cn = 0 if c is None else int(pa.compute.sum(pa.table(c)["count"]).as_py())
-        rn = 0 if reg is None else int(pa.compute.sum(pa.table(reg)["count"]).as_py())
+        cn = 0 if c is None else int(sum(c["count"].to_list()))
+        rn = 0 if reg is None else int(sum(reg["count"].to_list()))
         return cn, rn
 
     # Both cases and the set form match, and collect_typed never silently empties.
@@ -279,6 +272,7 @@ def test_collect_typed_cat_filter_matches_collect(tmp_path):
 def test_view_typed_frames_maps_all_three_to_dfanalyzer_schema(tmp_path):
     """view_typed_frames maps collect_typed's regular/aggregated/counters onto
     the dfanalyzer event/profile/system frames in one pass."""
+    pytest.importorskip("pyarrow")
     import gzip
 
     from dftracer.utils import AggregationConfig
@@ -328,6 +322,7 @@ def test_view_typed_frames_maps_all_three_to_dfanalyzer_schema(tmp_path):
 def test_view_typed_frames_distributed_matches_single_node(tmp_path):
     """The Dask-fanned typed read (disjoint shard ranges per worker) equals the
     single-node read, for events, profiles, and system."""
+    pytest.importorskip("pyarrow")
     import gzip
 
     from dask.distributed import Client, LocalCluster
@@ -388,7 +383,6 @@ def test_resolved_name_group_keys(tmp_path):
     """FilePath/FileName/HostName resolve the hash to a name after aggregation
     (a bijective re-key), so metrics are unchanged and file_name is the basename
     of file_path."""
-    import pyarrow as pa
 
     from dftracer.utils import TraceViewer
 
@@ -401,7 +395,7 @@ def test_resolved_name_group_keys(tmp_path):
 
     def g(key):
         tv = TraceViewer(files, index_path=idx).group_by(key).agg("count", "sum:dur")
-        return pa.table(tv.collect()).to_pandas().set_index(key).sort_index()
+        return tv.collect().to_pandas().set_index(key).sort_index()
 
     fp, fn, fh = g("file_path"), g("file_name"), g("fhash")
     assert list(fp.index) == ["/data/dir/file1.dat", "/data/dir/file2.dat"]
@@ -415,7 +409,6 @@ def test_resolved_name_group_keys(tmp_path):
 def test_collect_typed_resolves_name_group_keys(tmp_path):
     """collect_typed resolves FileName/HostName group keys to names (not the
     stored hash), matching the generic collect() re-key path."""
-    import pyarrow as pa
 
     from dftracer.utils import AggregationConfig, TraceViewer
 
@@ -431,15 +424,13 @@ def test_collect_typed_resolves_name_group_keys(tmp_path):
         ix.ensure_indexed()
 
     typed = TraceViewer(files, index_path=idx).group_by("file_name").collect_typed()
-    reg = pa.table(typed["regular"]).to_pandas()
+    reg = typed["regular"].to_pandas()
     assert sorted(reg["file_name"].unique()) == ["file1.dat", "file2.dat"]
 
 
 def test_percentiles_from_view(tmp_path):
     """p50/p90/p99 come back as numeric columns, within DDSketch's ~1% error."""
     import gzip
-
-    import pyarrow as pa
 
     from dftracer.utils import TraceViewer
 
@@ -453,12 +444,13 @@ def test_percentiles_from_view(tmp_path):
     idx = str(tmp_path / "idx")
     with dftu_utils.Indexer(files=[p], index_dir=idx) as ix:
         ix.ensure_indexed()
-    df = pa.table(
+    df = (
         TraceViewer([p], index_path=idx)
         .group_by("name")
         .agg("count", "p50:dur", "p90:dur", "p99:dur")
         .collect()
-    ).to_pandas()
+        .to_pandas()
+    )
     assert list(df.columns) == ["name", "count", "p50_dur", "p90_dur", "p99_dur"]
     for col, exp in [("p50_dur", 500), ("p90_dur", 900), ("p99_dur", 990)]:
         assert abs(df[col][0] - exp) / exp < 0.02, col
@@ -470,7 +462,6 @@ def test_skew_kurtosis_from_view(tmp_path):
     import gzip
 
     import numpy as np
-    import pyarrow as pa
 
     from dftracer.utils import TraceViewer
 
@@ -485,7 +476,7 @@ def test_skew_kurtosis_from_view(tmp_path):
     idx = str(tmp_path / "idx")
     with dftu_utils.Indexer(files=[p], index_dir=idx) as ix:
         ix.ensure_indexed()
-    df = pa.table(
+    df = (
         TraceViewer([p], index_path=idx).group_by("name").agg("skew:dur", "kurt:dur").collect()
     ).to_pandas()
     a = np.array(vals, dtype=float)
@@ -501,6 +492,7 @@ def test_view_typed_frames_folds_files_into_buckets(tmp_path):
     """group_by_file=False collapses the per-file rows into one, preserving the
     additive metrics and the global extremes, and still emits the file columns
     (empty) that dfanalyzer's dask meta declares."""
+    pytest.importorskip("pyarrow")
     from dftracer.utils import AggregationConfig
     from dftracer.utils.dfanalyzer import typed_group_keys, view_typed_frames
 
@@ -551,6 +543,7 @@ def test_view_typed_frames_folds_files_into_buckets(tmp_path):
 def test_drop_ignored_files_matches_folded_and_unfolded_names():
     """The drop runs after the read, so it must match whether the read kept the
     full path or folded it to the bucket the ignore pattern supplied."""
+    pytest.importorskip("pyarrow")
     import pandas as pd
 
     from dftracer.utils.dfanalyzer import _drop_ignored_files
@@ -592,7 +585,6 @@ def test_fileless_index_serves_non_file_queries(tmp_path):
     """An index built with group_by_file=False keeps no file dimension. The
     tier must still answer queries that do not group by file; only file-grouped
     ones fall back, since the fold cannot be reversed."""
-    import pyarrow as pa
 
     from dftracer.utils import AggregationConfig, TraceViewer
 
@@ -611,7 +603,7 @@ def test_fileless_index_serves_non_file_queries(tmp_path):
 
     def totals(idx):
         tv = TraceViewer([p], index_path=idx).group_by("name").agg("count", "sum:dur")
-        return pa.table(tv.collect_typed()["regular"]).to_pandas()
+        return tv.collect_typed()["regular"].to_pandas()
 
     keyed_rows, fileless_rows = totals(keyed), totals(fileless)
 
@@ -623,7 +615,6 @@ def test_fileless_index_serves_non_file_queries(tmp_path):
 def test_group_key_transforms_coarsen_without_losing_totals(tmp_path):
     """A group key may carry a value transform. Each one folds the values
     differently, but every fold is a pure regrouping, so the totals hold."""
-    import pyarrow as pa
 
     from dftracer.utils import TraceViewer
 
@@ -636,7 +627,7 @@ def test_group_key_transforms_coarsen_without_losing_totals(tmp_path):
 
     def group(expr):
         tv = TraceViewer([p], index_path=idx).group_by(expr).agg("count")
-        df = pa.table(tv.collect()).to_pandas()
+        df = tv.collect().to_pandas()
         return sorted(df[df.columns[0]].tolist()), int(df["count"].sum())
 
     plain, total = group("file_path")
@@ -662,7 +653,6 @@ def test_group_key_transform_applies_on_both_read_paths(tmp_path):
     """The transform must fold identically whether the tier or a raw scan
     serves the query, or the same query answers differently depending on
     whether an aggregation index happens to exist."""
-    import pyarrow as pa
 
     from dftracer.utils import AggregationConfig, TraceViewer
 
@@ -682,7 +672,7 @@ def test_group_key_transform_applies_on_both_read_paths(tmp_path):
 
     def group(idx):
         tv = TraceViewer([p], index_path=idx).group_by("dirname(file_path)").agg("count")
-        df = pa.table(tv.collect()).to_pandas()
+        df = tv.collect().to_pandas()
         return sorted(df[df.columns[0]].tolist()), int(df["count"].sum())
 
     assert group(scan_idx) == group(tier_idx)

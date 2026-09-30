@@ -96,14 +96,13 @@ ColumnView view_of(const Series& column, const char* what) {
 }
 
 const Series& value_column(const DataFrame& df, const WindowColumn& w) {
-    if (!w.value)
+    if (!w.value())
         throw std::invalid_argument("window: '" + w.out +
                                     "' needs a value column");
-    return df.columns[ops::column_named(df, *w.value, "window")];
+    return df.columns[ops::column_named(df, *w.value(), "window")];
 }
 
-const Series& named_column(const DataFrame& df,
-                           const std::optional<std::string>& name,
+const Series& named_column(const DataFrame& df, const std::string* name,
                            const WindowColumn& w, const char* role) {
     if (!name)
         throw std::invalid_argument("window: '" + w.out + "' needs a " + role +
@@ -596,7 +595,7 @@ Series frame(const Layout& lay, const Series& column, const WindowColumn& w) {
 WindowColumn window_column(const dftu_window_spec& s) {
     WindowColumn c;
     c.func = static_cast<WindowFunc>(s.func);
-    if (s.value) c.value = std::string(s.value);
+    if (s.value) c.set_value(s.value);
     c.out = s.out ? s.out : "";
     if (is_frame_func(c.func)) {
         c.params.frame = {s.param.frame.min_count, s.param.frame.preceding,
@@ -604,11 +603,11 @@ WindowColumn window_column(const dftu_window_spec& s) {
     } else if (is_offset_func(c.func)) {
         c.params.offset = s.param.offset;
     } else if (c.func == WindowFunc::Rate) {
-        if (s.param.rate.time) c.time = std::string(s.param.rate.time);
+        if (s.param.rate.time) c.set_time(s.param.rate.time);
         c.params.rate = {s.param.rate.counter != 0};
     } else if (c.func == WindowFunc::Sessionize) {
-        if (s.param.session.time) c.time = std::string(s.param.session.time);
-        if (s.param.session.end) c.end = std::string(s.param.session.end);
+        if (s.param.session.time) c.set_time(s.param.session.time);
+        if (s.param.session.end) c.set_end(s.param.session.end);
         c.params.session = {s.param.session.gap, s.param.session.span};
     }
     return c;
@@ -672,14 +671,14 @@ DataFrame window(const DataFrame& df,
                 break;
             case WindowFunc::Rate:
                 column = rate(lay, value_column(df, w),
-                              named_column(df, w.time, w, "time"),
+                              named_column(df, w.time(), w, "time"),
                               w.params.rate.counter);
                 break;
             case WindowFunc::Sessionize: {
                 const Series* end =
-                    w.end ? &named_column(df, w.end, w, "end") : nullptr;
+                    w.end() ? &named_column(df, w.end(), w, "end") : nullptr;
                 column =
-                    sessionize(lay, named_column(df, w.time, w, "time"), end,
+                    sessionize(lay, named_column(df, w.time(), w, "time"), end,
                                w.params.session.gap, w.params.session.span);
                 break;
             }

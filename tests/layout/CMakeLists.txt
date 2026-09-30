@@ -1,0 +1,7 @@
+add_executable(layout_test_sizes test_sizes.cpp)
+target_include_directories(layout_test_sizes PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(layout_test_sizes PRIVATE doctest::doctest dftracer_utils)
+target_set_warnings(layout_test_sizes)
+set_target_properties(layout_test_sizes PROPERTIES OUTPUT_NAME test_sizes)
+target_enable_coroutine(layout_test_sizes)
+add_test(NAME layout/test_sizes COMMAND layout_test_sizes)

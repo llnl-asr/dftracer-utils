@@ -307,8 +307,6 @@ def test_traceviewer_filter_unified_predicates(tmp_path):
 
 
 def test_any_renders_and_filters_array_elements(tmp_path):
-    import pyarrow as pa
-
     import dftracer.utils as dftu
     from dftracer.utils.duql import F
 
@@ -316,7 +314,7 @@ def test_any_renders_and_filters_array_elements(tmp_path):
     assert str(F.sizes.any() > 10) == "any(sizes) > 10"
     assert str(F.tags.any().is_in(["a", "b"])) == 'any(tags) in ["a", "b"]'
     with pytest.raises(dftu.DFTUtilsValueError, match="any"):
-        (F.tags.any() == "a").apply(pa.table({"tags": [1]}))
+        (F.tags.any() == "a").apply(dftu.DataFrame.from_dict({"tags": [1]}))
 
     path = tmp_path / "tags.ndjson.gz"
     lines = [
@@ -326,9 +324,9 @@ def test_any_renders_and_filters_array_elements(tmp_path):
     ]
     path.write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
     tv = dftu.TraceViewer(str(path))
-    assert pa.table(tv.duql('any(tags) == "a"').collect()).num_rows == 1
-    assert pa.table(tv.filter(F.sizes.any() > 100).collect()).num_rows == 1
-    assert pa.table(tv.duql('not any(tags) == "a"').collect()).num_rows == 1
+    assert len(tv.duql('any(tags) == "a"').collect()) == 1
+    assert len(tv.filter(F.sizes.any() > 100).collect()) == 1
+    assert len(tv.duql('not any(tags) == "a"').collect()) == 1
 
 
 def test_load_path_macros_expand_in_queries(tmp_path):

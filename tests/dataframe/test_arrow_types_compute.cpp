@@ -360,7 +360,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         Series sum = a.add(b);
         REQUIRE(sum.valid());
         CHECK(sum.type() == TypeId::Decimal128);
-        CHECK(sum.data_type().decimal_scale == 0);
+        CHECK(sum.data_type().decimal_scale() == 0);
         const std::uint8_t* d = sum.data<std::uint8_t>();
         REQUIRE(d != nullptr);
         std::int64_t v0, v1;
@@ -397,7 +397,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         Series sum = a.add(b);
         REQUIRE(sum.valid());
         CHECK(sum.type() == TypeId::Decimal128);
-        CHECK(sum.data_type().decimal_scale == 2);
+        CHECK(sum.data_type().decimal_scale() == 2);
         std::int64_t v0;
         std::memcpy(&v0, sum.data<std::uint8_t>(), 8);
         CHECK(v0 == 300);  // 3.00
@@ -409,7 +409,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         Series b = make_decimal128({15}, 10, 1);
         Series diff = a.sub(b);
         REQUIRE(diff.valid());
-        CHECK(diff.data_type().decimal_scale == 2);
+        CHECK(diff.data_type().decimal_scale() == 2);
         std::int64_t v0;
         std::memcpy(&v0, diff.data<std::uint8_t>(), 8);
         CHECK(v0 == 350);  // 3.50
@@ -422,7 +422,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         Series prod = a.mul(b);
         REQUIRE(prod.valid());
         CHECK(prod.type() == TypeId::Decimal128);
-        CHECK(prod.data_type().decimal_scale == 3);
+        CHECK(prod.data_type().decimal_scale() == 3);
         std::int64_t v0;
         std::memcpy(&v0, prod.data<std::uint8_t>(), 8);
         CHECK(v0 == 2500);  // 2.500
@@ -436,7 +436,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         Series b = make_decimal128({30}, 20, 1);
         Series quot = a.div(b);
         REQUIRE(quot.valid());
-        CHECK(quot.data_type().decimal_scale == 6);
+        CHECK(quot.data_type().decimal_scale() == 6);
         std::int64_t v0;
         std::memcpy(&v0, quot.data<std::uint8_t>(), 8);
         CHECK(v0 == 3333333);
@@ -478,7 +478,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         Series sum = a.add(b);
         REQUIRE(sum.valid());
         CHECK(sum.type() == TypeId::Decimal256);
-        CHECK(sum.data_type().decimal_scale == 0);
+        CHECK(sum.data_type().decimal_scale() == 0);
         std::int64_t v0, v1;
         std::memcpy(&v0, sum.data<std::uint8_t>(), 8);
         std::memcpy(&v1, sum.data<std::uint8_t>() + 32, 8);
@@ -491,7 +491,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         Series b = make_decimal256({15}, 40, 1);
         Series diff = a.sub(b);
         REQUIRE(diff.valid());
-        CHECK(diff.data_type().decimal_scale == 2);
+        CHECK(diff.data_type().decimal_scale() == 2);
         std::int64_t v0;
         std::memcpy(&v0, diff.data<std::uint8_t>(), 8);
         CHECK(v0 == 350);  // 3.50
@@ -640,7 +640,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         Series diff = a.sub(b);
         REQUIRE(diff.valid());
         CHECK(diff.type() == TypeId::Duration);
-        CHECK(diff.data_type().time_unit ==
+        CHECK(diff.data_type().time_unit() ==
               dftracer::utils::dataframe::TimeUnit::Micro);
         const std::int64_t* d = diff.data<std::int64_t>();
         REQUIRE(d != nullptr);
@@ -674,9 +674,9 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         Series sum = ts.add(dur);
         REQUIRE(sum.valid());
         CHECK(sum.type() == TypeId::Timestamp);
-        CHECK(sum.data_type().time_unit ==
+        CHECK(sum.data_type().time_unit() ==
               dftracer::utils::dataframe::TimeUnit::Milli);
-        CHECK(sum.data_type().timezone == "UTC");
+        CHECK(sum.data_type().timezone() == "UTC");
         const std::int64_t* d = sum.data<std::int64_t>();
         REQUIRE(d != nullptr);
         CHECK(d[0] == 10500);       // 10s + 500ms
@@ -711,7 +711,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         Series sum = a.add(b);
         REQUIRE(sum.valid());
         CHECK(sum.type() == TypeId::Duration);
-        CHECK(sum.data_type().time_unit ==
+        CHECK(sum.data_type().time_unit() ==
               dftracer::utils::dataframe::TimeUnit::Milli);
         CHECK(sum.data<std::int64_t>()[0] == 2500);
 
@@ -731,7 +731,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         REQUIRE(prod_raw != nullptr);
         Series prod{prod_raw};
         CHECK(prod.type() == TypeId::Duration);
-        CHECK(prod.data_type().time_unit ==
+        CHECK(prod.data_type().time_unit() ==
               dftracer::utils::dataframe::TimeUnit::Milli);
         CHECK(prod.data<std::int64_t>()[0] == 300);
         CHECK(prod.data<std::int64_t>()[1] == 600);
@@ -790,7 +790,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         Series sum = t.add(dur);
         REQUIRE(sum.valid());
         CHECK(sum.type() == TypeId::Time64);
-        CHECK(sum.data_type().time_unit ==
+        CHECK(sum.data_type().time_unit() ==
               dftracer::utils::dataframe::TimeUnit::Nano);
         CHECK(sum.data<std::int64_t>()[0] == 5002000);  // 5000us + 2000ns
     }
@@ -803,7 +803,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         Series sum = t.add(dur);
         REQUIRE(sum.valid());
         CHECK(sum.type() == TypeId::Time64);
-        CHECK(sum.data_type().time_unit ==
+        CHECK(sum.data_type().time_unit() ==
               dftracer::utils::dataframe::TimeUnit::Micro);
         CHECK(sum.data<std::int64_t>()[0] == 1005000);  // 5000us + 1,000,000us
     }
@@ -836,7 +836,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::FixedSizeBinary);
-        CHECK(gk.data_type().fixed_size == 4);
+        CHECK(gk.data_type().fixed_size() == 4);
         const std::int64_t* n = grouped.column("n").data<std::int64_t>();
         REQUIRE(n != nullptr);
         const char* d = gk.data<char>();
@@ -875,7 +875,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         DataFrame out = df::agg_finalize(*st1, "k");
         REQUIRE(out.num_rows() == 3);
         CHECK(out.column("k").type() == TypeId::FixedSizeBinary);
-        CHECK(out.column("k").data_type().fixed_size == 4);
+        CHECK(out.column("k").data_type().fixed_size() == 4);
         const std::int64_t* n = out.column("n").data<std::int64_t>();
         for (std::int64_t g = 0; g < df::agg_num_groups(*st1); ++g) {
             const std::vector<std::string> key = df::agg_group_key(*st1, g);
@@ -909,7 +909,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         DataFrame out = df::agg_finalize(*back, "k");
         REQUIRE(out.num_rows() == 3);
         CHECK(out.column("k").type() == TypeId::FixedSizeBinary);
-        CHECK(out.column("k").data_type().fixed_size == 4);
+        CHECK(out.column("k").data_type().fixed_size() == 4);
         const std::int64_t* n = out.column("n").data<std::int64_t>();
         const char* d = out.column("k").data<char>();
         for (std::int64_t r = 0; r < 3; ++r) {
@@ -940,8 +940,8 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::Decimal128);
         const DataType dt = gk.data_type();
-        CHECK(dt.decimal_precision == 38);
-        CHECK(dt.decimal_scale == 9);
+        CHECK(dt.decimal_precision() == 38);
+        CHECK(dt.decimal_scale() == 9);
         const std::int64_t* n = grouped.column("n").data<std::int64_t>();
         REQUIRE(n != nullptr);
         const std::uint8_t* d = gk.data<std::uint8_t>();
@@ -988,8 +988,8 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         REQUIRE(out.num_rows() == 3);
         CHECK(out.column("k").type() == TypeId::Decimal128);
         const DataType dt = out.column("k").data_type();
-        CHECK(dt.decimal_precision == 38);
-        CHECK(dt.decimal_scale == 9);
+        CHECK(dt.decimal_precision() == 38);
+        CHECK(dt.decimal_scale() == 9);
         const std::int64_t* n = out.column("n").data<std::int64_t>();
         const std::uint8_t* d = out.column("k").data<std::uint8_t>();
         for (std::int64_t r = 0; r < 3; ++r) {
@@ -1021,8 +1021,8 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::Decimal256);
         const DataType dt = gk.data_type();
-        CHECK(dt.decimal_precision == 50);
-        CHECK(dt.decimal_scale == 20);
+        CHECK(dt.decimal_precision() == 50);
+        CHECK(dt.decimal_scale() == 20);
         const std::int64_t* n = grouped.column("n").data<std::int64_t>();
         REQUIRE(n != nullptr);
         const std::uint8_t* d = gk.data<std::uint8_t>();
@@ -1067,8 +1067,8 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         REQUIRE(out.num_rows() == 3);
         CHECK(out.column("k").type() == TypeId::Decimal256);
         const DataType dt = out.column("k").data_type();
-        CHECK(dt.decimal_precision == 50);
-        CHECK(dt.decimal_scale == 20);
+        CHECK(dt.decimal_precision() == 50);
+        CHECK(dt.decimal_scale() == 20);
         const std::int64_t* n = out.column("n").data<std::int64_t>();
         const std::uint8_t* d = out.column("k").data<std::uint8_t>();
         for (std::int64_t r = 0; r < 3; ++r) {

@@ -3,6 +3,7 @@
 
 #include <Python.h>
 #include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/dataframe/dataframe.h>
 
 #include <atomic>
 #include <condition_variable>
@@ -14,9 +15,7 @@
 #include <optional>
 #include <queue>
 #include <utility>
-
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/utilities/common/arrow/arrow_export.h>
 #endif
 
@@ -133,14 +132,16 @@ class StreamingState {
 };
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-
 using utilities::common::arrow::ArrowExportResult;
+#endif
 
 /// Internal C++ state for ArrowStreamingIterator.
 /// Stored as a pointer to avoid C++ object layout issues with Python.
 struct ArrowStreamingIteratorState {
     std::shared_ptr<void> state;
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
     std::function<std::optional<ArrowExportResult>()> pull_next;
+#endif
     // When set, the iterator yields native DataFrame chunks instead of Arrow
     // batches (pull_next is then unused). Keeps Arrow off the streaming path.
     std::function<std::optional<dftracer::utils::dataframe::DataFrame>()>
@@ -164,8 +165,6 @@ extern PyTypeObject ArrowStreamingIteratorType;
 
 /// Initialize the ArrowStreamingIteratorType.
 int init_arrow_streaming_iterator(PyObject* m);
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW
 
 }  // namespace dftracer::utils::python
 

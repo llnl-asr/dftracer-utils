@@ -177,10 +177,10 @@ Node build_node(const Series& s) {
     n.col = flat_of(s);
     n.type = n.col.type();
     const dftu_series& h = *n.col.handle();
-    n.unit = h.time_unit;
-    n.zone = h.timezone;
-    n.scale = h.decimal_scale;
-    n.width = h.fixed_size;
+    n.unit = h.time_unit();
+    n.zone = h.timezone();
+    n.scale = h.decimal_scale();
+    n.width = h.fixed_size();
     switch (n.type) {
         case TypeId::Bool:
         case TypeId::Int8:
@@ -876,8 +876,7 @@ PyObject* build_decimals(PyObject** items, Py_ssize_t n, Bits& bits) {
     }
     Series col = Series::flat(TypeId::Decimal128, bytes.data(), n, bits.data());
     if (!col.valid()) return fail("cannot build a decimal column");
-    col.handle()->decimal_precision = precision;
-    col.handle()->decimal_scale = static_cast<std::int32_t>(scale);
+    col.handle()->set_decimal(precision, static_cast<std::int32_t>(scale));
     return make_series(std::move(col));
 }
 

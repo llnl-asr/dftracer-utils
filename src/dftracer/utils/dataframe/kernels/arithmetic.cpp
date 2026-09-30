@@ -227,7 +227,7 @@ TypeId promote_common(TypeId a, TypeId b) {
 
 // See temporal_scalarop_result (temporal_arith.h) for the rule.
 dftu_series* temporal_scalar_op(const dftu_series* a, dftu_scalar s, BinOp op) {
-    auto res = temporal_scalarop_result(a->type, a->time_unit, op);
+    auto res = temporal_scalarop_result(a->type, a->time_unit(), op);
     if (!res) {
         DFTRACER_UTILS_LOG_ERROR(
             "arithmetic: scalar op not defined for temporal type '%s'",
@@ -240,7 +240,7 @@ dftu_series* temporal_scalar_op(const dftu_series* a, dftu_scalar s, BinOp op) {
     out->length = a->length;
     out->null_count = a->null_count;
     out->validity = a->validity;
-    out->time_unit = res->unit;
+    out->set_time_unit(res->unit);
     out->data = Buffer::allocate(static_cast<std::size_t>(a->length) *
                                  byte_width(TypeId::Int64).value_or(0));
     const std::int32_t t = static_cast<std::int32_t>(TypeId::Int64);
@@ -329,8 +329,9 @@ void and_validity(const dftu_series* a, const dftu_series* b,
 // See temporal_binop_result (temporal_arith.h) for the rule table.
 dftu_series* temporal_binop(const dftu_series* a, const dftu_series* b,
                             BinOp op) {
-    auto res = temporal_binop_result(a->type, a->time_unit, a->timezone,
-                                     b->type, b->time_unit, b->timezone, op);
+    auto res =
+        temporal_binop_result(a->type, a->time_unit(), a->timezone(), b->type,
+                              b->time_unit(), b->timezone(), op);
     if (!res) {
         DFTRACER_UTILS_LOG_ERROR(
             "arithmetic: op not defined for temporal types '%s' and '%s'",
@@ -344,8 +345,8 @@ dftu_series* temporal_binop(const dftu_series* a, const dftu_series* b,
     const auto* pb = static_cast<const std::int64_t*>(
         static_cast<const void*>(b->data->data()));
     const std::size_t n = static_cast<std::size_t>(a->length);
-    if (a->time_unit != res->unit) {
-        auto rescaled = rescale_ticks_up(pa, n, a->time_unit, res->unit);
+    if (a->time_unit() != res->unit) {
+        auto rescaled = rescale_ticks_up(pa, n, a->time_unit(), res->unit);
         if (!rescaled) {
             DFTRACER_UTILS_LOG_ERROR(
                 "arithmetic: temporal rescale overflowed int64");
@@ -354,8 +355,8 @@ dftu_series* temporal_binop(const dftu_series* a, const dftu_series* b,
         tmp_a = std::move(*rescaled);
         pa = tmp_a.data();
     }
-    if (b->time_unit != res->unit) {
-        auto rescaled = rescale_ticks_up(pb, n, b->time_unit, res->unit);
+    if (b->time_unit() != res->unit) {
+        auto rescaled = rescale_ticks_up(pb, n, b->time_unit(), res->unit);
         if (!rescaled) {
             DFTRACER_UTILS_LOG_ERROR(
                 "arithmetic: temporal rescale overflowed int64");
@@ -369,8 +370,8 @@ dftu_series* temporal_binop(const dftu_series* a, const dftu_series* b,
     out->type = res->id;
     out->encoding = Encoding::Flat;
     out->length = a->length;
-    out->time_unit = res->unit;
-    out->timezone = res->timezone;
+    out->set_time_unit(res->unit);
+    out->set_timezone(res->timezone);
     out->data = Buffer::allocate(n * byte_width(TypeId::Int64).value_or(0));
     const std::int32_t t = static_cast<std::int32_t>(TypeId::Int64);
     void* po = out->data->data();
@@ -394,21 +395,22 @@ dftu_series* decimal_binop_exact(const dftu_series* a, const dftu_series* b,
     switch (op) {
         case BinOp::Add:
         case BinOp::Sub:
-            result_scale = std::max(a->decimal_scale, b->decimal_scale);
-            result_precision = std::min(
-                max_prec, std::max(a->decimal_precision - a->decimal_scale,
-                                   b->decimal_precision - b->decimal_scale) +
-                              result_scale + 1);
+            result_scale = std::max(a->decimal_scale(), b->decimal_scale());
+            result_precision =
+                std::min(max_prec,
+                         std::max(a->decimal_precision() - a->decimal_scale(),
+                                  b->decimal_precision() - b->decimal_scale()) +
+                             result_scale + 1);
             break;
         case BinOp::Mul:
-            result_scale = a->decimal_scale + b->decimal_scale;
+            result_scale = a->decimal_scale() + b->decimal_scale();
             result_precision = std::min(
-                max_prec, a->decimal_precision + b->decimal_precision + 1);
+                max_prec, a->decimal_precision() + b->decimal_precision() + 1);
             break;
         case BinOp::Div:
-            result_scale = a->decimal_scale + DECIMAL_DIVIDE_SCALE_INCREMENT;
+            result_scale = a->decimal_scale() + DECIMAL_DIVIDE_SCALE_INCREMENT;
             result_precision =
-                std::min(max_prec, a->decimal_precision + b->decimal_scale +
+                std::min(max_prec, a->decimal_precision() + b->decimal_scale() +
                                        DECIMAL_DIVIDE_SCALE_INCREMENT);
             break;
     }
@@ -422,8 +424,7 @@ dftu_series* decimal_binop_exact(const dftu_series* a, const dftu_series* b,
     out->type = a->type;
     out->encoding = Encoding::Flat;
     out->length = a->length;
-    out->decimal_scale = result_scale;
-    out->decimal_precision = result_precision;
+    out->set_decimal(result_precision, result_scale);
     const std::size_t width = is256 ? 32 : 16;
     const std::int64_t n = a->length;
     out->data = Buffer::allocate(static_cast<std::size_t>(n) * width);
@@ -438,8 +439,8 @@ dftu_series* decimal_binop_exact(const dftu_series* a, const dftu_series* b,
             const i128 vb = load_i128(pb + static_cast<std::size_t>(i) * 16);
             std::optional<i128> r;
             if (op == BinOp::Add || op == BinOp::Sub) {
-                auto ra = rescale_up_i128(va, a->decimal_scale, result_scale);
-                auto rb = rescale_up_i128(vb, b->decimal_scale, result_scale);
+                auto ra = rescale_up_i128(va, a->decimal_scale(), result_scale);
+                auto rb = rescale_up_i128(vb, b->decimal_scale(), result_scale);
                 if (ra && rb) {
                     const i128 rhs = op == BinOp::Add ? *rb : -*rb;
                     const i128 sum = *ra + rhs;
@@ -451,7 +452,7 @@ dftu_series* decimal_binop_exact(const dftu_series* a, const dftu_series* b,
                 r = mul_checked_i128(va, vb, result_precision);
             } else {
                 r = muldiv_checked_i128(
-                    va, b->decimal_scale + DECIMAL_DIVIDE_SCALE_INCREMENT, vb,
+                    va, b->decimal_scale() + DECIMAL_DIVIDE_SCALE_INCREMENT, vb,
                     result_precision);
             }
             if (!r) {
@@ -470,8 +471,8 @@ dftu_series* decimal_binop_exact(const dftu_series* a, const dftu_series* b,
                 load_limbs256(pa + static_cast<std::size_t>(i) * 32);
             const Limbs256 vb =
                 load_limbs256(pb + static_cast<std::size_t>(i) * 32);
-            auto ra = rescale_up_256(va, a->decimal_scale, result_scale);
-            auto rb = rescale_up_256(vb, b->decimal_scale, result_scale);
+            auto ra = rescale_up_256(va, a->decimal_scale(), result_scale);
+            auto rb = rescale_up_256(vb, b->decimal_scale(), result_scale);
             std::optional<Limbs256> r;
             if (ra && rb)
                 r = addsub_checked_256(*ra, *rb, op == BinOp::Sub,

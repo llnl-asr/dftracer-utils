@@ -16,10 +16,9 @@ std::size_t buffer_size(const std::shared_ptr<dataframe::Buffer>& b) {
 }
 
 std::size_t nbytes_of(const dftu_series& c) {
-    std::size_t total = buffer_size(c.data) + buffer_size(c.offsets) +
-                        buffer_size(c.offsets64) + buffer_size(c.validity);
-    if (c.child) total += nbytes_of(*c.child);
-    for (const auto& k : c.children) total += nbytes_of(*k);
+    std::size_t total =
+        buffer_size(c.data) + buffer_size(c.offsets) + buffer_size(c.validity);
+    for (const auto& k : c.nested) total += nbytes_of(*k.series);
     return total;
 }
 
@@ -39,12 +38,11 @@ Series retype_series(const Series& s, TypeId type, dataframe::TimeUnit unit,
     if (!from_width || !to_width || *from_width != *to_width) return Series{};
     auto* h = new dftu_series(*flat.handle());
     h->type = type;
-    h->time_unit = unit;
-    h->timezone = zone;
-    h->decimal_precision = precision;
-    h->decimal_scale = scale;
-    h->fixed_size = width;
-    h->json = false;
+    h->set_time_unit(unit);
+    h->set_timezone(zone);
+    h->set_decimal(precision, scale);
+    h->set_fixed_size(width);
+    h->set_json(false);
     return Series{h};
 }
 
@@ -78,8 +76,8 @@ PyObject* Series_physical(PyObject* self, PyObject*) {
     }
     auto* h = new dftu_series(*flat.handle());
     h->type = to;
-    h->time_unit = dataframe::TimeUnit::Micro;
-    h->timezone.clear();
+    h->set_time_unit(dataframe::TimeUnit::Micro);
+    h->set_timezone({});
     return make_series(Series{h});
 }
 

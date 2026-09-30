@@ -77,8 +77,8 @@ TEST_SUITE("dataframe_arrow_types") {
         REQUIRE(s.valid());
         DataType expected = timestamp(TimeUnit::Micro, "UTC");
         CHECK(s.data_type() == expected);
-        CHECK(s.data_type().time_unit == TimeUnit::Micro);
-        CHECK(s.data_type().timezone == "UTC");
+        CHECK(s.data_type().time_unit() == TimeUnit::Micro);
+        CHECK(s.data_type().timezone() == "UTC");
         const std::int64_t* d = s.data<std::int64_t>();
         REQUIRE(d != nullptr);
         CHECK(d[0] == 1700000000000000LL);
@@ -91,7 +91,7 @@ TEST_SUITE("dataframe_arrow_types") {
         CHECK(tokyo.data_type() == timestamp(TimeUnit::Micro, "Asia/Tokyo"));
         CHECK(tokyo.data<std::int64_t>() == d);
         CHECK(tokyo.data<std::int64_t>()[1] == 1700000001000000LL);
-        CHECK(s.data_type().timezone == "UTC");
+        CHECK(s.data_type().timezone() == "UTC");
         CHECK(tokyo.with_timezone("").data_type() ==
               timestamp(TimeUnit::Micro));
         CHECK_FALSE(Series::flat_i64(d, 2).with_timezone("UTC").valid());
@@ -119,7 +119,7 @@ TEST_SUITE("dataframe_arrow_types") {
         REQUIRE(s.valid());
         DataType expected = timestamp(TimeUnit::Nano);
         CHECK(s.data_type() == expected);
-        CHECK(s.data_type().timezone.empty());
+        CHECK(s.data_type().timezone().empty());
     }
 
     TEST_CASE("Date32 round-trips as Int32 physical storage") {
@@ -188,8 +188,8 @@ TEST_SUITE("dataframe_arrow_types") {
         REQUIRE(s.valid());
         DataType expected = decimal128(38, 9);
         CHECK(s.data_type() == expected);
-        CHECK(s.data_type().decimal_precision == 38);
-        CHECK(s.data_type().decimal_scale == 9);
+        CHECK(s.data_type().decimal_precision() == 38);
+        CHECK(s.data_type().decimal_scale() == 9);
         REQUIRE(s.length() == 1);
 
         OwnedArrow out = s.to_arrow();
@@ -218,7 +218,7 @@ TEST_SUITE("dataframe_arrow_types") {
         REQUIRE(s.valid());
         DataType expected = fixed_size_binary(4);
         CHECK(s.data_type() == expected);
-        CHECK(s.data_type().fixed_size == 4);
+        CHECK(s.data_type().fixed_size() == 4);
         const char* d = s.data<char>();
         REQUIRE(d != nullptr);
         CHECK(std::string(d, 4) == "abcd");
@@ -325,7 +325,7 @@ TEST_SUITE("dataframe_arrow_types") {
         REQUIRE(s.valid());
         DataType expected = fixed_size_list_of(scalar(TypeId::Int64), 2);
         CHECK(s.data_type() == expected);
-        CHECK(s.data_type().fixed_size == 2);
+        CHECK(s.data_type().fixed_size() == 2);
         REQUIRE(s.length() == 2);
 
         OwnedArrow out = s.to_arrow();
@@ -391,8 +391,8 @@ TEST_SUITE("dataframe_arrow_types") {
         REQUIRE(s.valid());
         DataType expected = list_of(timestamp(TimeUnit::Micro, "UTC"));
         CHECK(s.data_type() == expected);
-        CHECK(s.data_type().fields[0].type.time_unit == TimeUnit::Micro);
-        CHECK(s.data_type().fields[0].type.timezone == "UTC");
+        CHECK(s.data_type().fields[0].type.time_unit() == TimeUnit::Micro);
+        CHECK(s.data_type().fields[0].type.timezone() == "UTC");
 
         OwnedArrow out = s.to_arrow();
         Series back = Series::from_arrow(out.schema(), out.array());

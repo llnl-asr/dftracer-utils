@@ -246,7 +246,7 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
             REQUIRE(m.has_value());
             const Series& back = m->columns[0];
             REQUIRE(back.type() == TypeId::Decimal128);
-            CHECK(back.data_type().decimal_scale == 3);
+            CHECK(back.data_type().decimal_scale() == 3);
             CHECK(std::memcmp(back.data<std::uint8_t>(), s.data<std::uint8_t>(),
                               4 * 16) == 0);
             // The scale must actually be used downstream: min() reads the
@@ -261,8 +261,8 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
             REQUIRE(m.has_value());
             const Series& back = m->columns[0];
             REQUIRE(back.type() == TypeId::Decimal256);
-            CHECK(back.data_type().decimal_scale ==
-                  s.data_type().decimal_scale);
+            CHECK(back.data_type().decimal_scale() ==
+                  s.data_type().decimal_scale());
             CHECK(std::memcmp(back.data<std::uint8_t>(), s.data<std::uint8_t>(),
                               4 * 32) == 0);
         }

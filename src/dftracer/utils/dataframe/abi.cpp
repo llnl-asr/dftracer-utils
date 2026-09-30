@@ -126,8 +126,8 @@ dftu_series* dftu_series_new_struct(dftu_series** fields, const char** names,
     // deref).
     col->length = n_fields > 0 ? fields[0]->length : 0;
     for (int32_t i = 0; i < n_fields; ++i) {
-        col->children.push_back(std::shared_ptr<dftu_series>(fields[i]));
-        col->field_names.push_back(names && names[i] ? names[i] : "");
+        col->nested.push_back({std::shared_ptr<dftu_series>(fields[i]),
+                               names && names[i] ? names[i] : ""});
     }
     return col;
 }
@@ -143,7 +143,7 @@ dftu_series* dftu_series_new_list(const int32_t* offsets, int64_t n,
     col->offsets = Buffer::allocate(off_bytes);
     if (offsets != nullptr)
         std::memcpy(col->offsets->data(), offsets, off_bytes);
-    col->child = std::shared_ptr<dftu_series>(values);
+    col->set_child(std::shared_ptr<dftu_series>(values));
     return col;
 }
 
@@ -163,7 +163,7 @@ int64_t dftu_series_null_count(const dftu_series* col) {
     // A SELECTION view holds no count of its own; its nulls are the base's
     // at the selected rows plus the outer-fill sentinels.
     if (col->encoding == dftracer::utils::dataframe::Encoding::Selection &&
-        col->child) {
+        col->child()) {
         std::int64_t n = 0;
         for (std::int64_t i = 0; i < col->length; ++i)
             n += dftu_series_is_null(col, i);
@@ -178,24 +178,24 @@ const void* dftu_series_data(const dftu_series* col) {
 }
 
 const int32_t* dftu_series_offsets(const dftu_series* col) {
-    if (!col->offsets) return nullptr;
+    if (!col->offsets || col->wide_offsets()) return nullptr;
     return reinterpret_cast<const int32_t*>(col->offsets->data());
 }
 
 const int64_t* dftu_series_offsets64(const dftu_series* col) {
-    if (!col->offsets64) return nullptr;
-    return reinterpret_cast<const int64_t*>(col->offsets64->data());
+    if (!col->offsets || !col->wide_offsets()) return nullptr;
+    return reinterpret_cast<const int64_t*>(col->offsets->data());
 }
 
 int32_t dftu_series_is_null(const dftu_series* col, int64_t i) {
     // A SELECTION view carries no bitmap of its own: the row is null when its
     // index is the outer-fill sentinel or the selected base row is null.
     if (col->encoding == dftracer::utils::dataframe::Encoding::Selection &&
-        col->child) {
+        col->child()) {
         const std::int64_t idx =
             reinterpret_cast<const std::int64_t*>(col->data->data())[i];
         if (idx < 0) return 1;
-        return dftu_series_is_null(col->child.get(), idx);
+        return dftu_series_is_null(col->child().get(), idx);
     }
     if (!col->validity) return 0;
     const std::uint8_t* bm = col->validity->data();
@@ -210,16 +210,16 @@ bool is_single_child_container(TypeId t) {
 }  // namespace
 
 int32_t dftu_series_num_children(const dftu_series* col) {
-    if (is_single_child_container(col->type)) return col->child ? 1 : 0;
-    return static_cast<int32_t>(col->children.size());
+    if (is_single_child_container(col->type)) return col->child() ? 1 : 0;
+    return static_cast<int32_t>(col->num_fields());
 }
 
 dftu_series* dftu_series_child(const dftu_series* col, int32_t i) {
     const std::shared_ptr<dftu_series>* ch = nullptr;
     if (is_single_child_container(col->type)) {
-        if (i == 0 && col->child) ch = &col->child;
-    } else if (i >= 0 && static_cast<std::size_t>(i) < col->children.size()) {
-        ch = &col->children[static_cast<std::size_t>(i)];
+        if (i == 0 && col->child()) ch = &col->child();
+    } else if (i >= 0 && static_cast<std::size_t>(i) < col->num_fields()) {
+        ch = &col->nested[static_cast<std::size_t>(i)].series;
     }
     if (!ch || !*ch) return nullptr;
     // Owned copy sharing the child's buffers (shared_ptr members).
@@ -228,42 +228,43 @@ dftu_series* dftu_series_child(const dftu_series* col, int32_t i) {
 
 const char* dftu_series_field_name(const dftu_series* col, int32_t i) {
     if (!col || col->type != TypeId::Struct) return nullptr;
-    if (i < 0 || static_cast<std::size_t>(i) >= col->field_names.size())
+    if (i < 0 || static_cast<std::size_t>(i) >= col->num_fields())
         return nullptr;
-    return col->field_names[static_cast<std::size_t>(i)].c_str();
+    return col->nested[static_cast<std::size_t>(i)].name.c_str();
 }
 
 int32_t dftu_series_time_unit(const dftu_series* col) {
-    return col ? static_cast<int32_t>(col->time_unit)
+    return col ? static_cast<int32_t>(col->time_unit())
                : static_cast<int32_t>(
                      dftracer::utils::dataframe::TimeUnit::Micro);
 }
 
 const char* dftu_series_timezone(const dftu_series* col) {
     static const char empty[] = "";
-    return col ? col->timezone.c_str() : empty;
+    // A zone name is interned, so its text is terminated and never freed.
+    return col && !col->timezone().empty() ? col->timezone().data() : empty;
 }
 
 int32_t dftu_series_decimal_precision(const dftu_series* col) {
-    return col ? col->decimal_precision : 0;
+    return col ? col->decimal_precision() : 0;
 }
 
 int32_t dftu_series_decimal_scale(const dftu_series* col) {
-    return col ? col->decimal_scale : 0;
+    return col ? col->decimal_scale() : 0;
 }
 
 int32_t dftu_series_fixed_size(const dftu_series* col) {
-    return col ? col->fixed_size : 0;
+    return col ? col->fixed_size() : 0;
 }
 
 int32_t dftu_series_is_json(const dftu_series* col) {
-    return col && col->json ? 1 : 0;
+    return col && col->json() ? 1 : 0;
 }
 
 dftu_series* dftu_series_mark_json(const dftu_series* col) {
     if (!col || col->type != TypeId::String) return nullptr;
     auto* out = new dftu_series(*col);
-    out->json = true;
+    out->set_json(true);
     return out;
 }
 
@@ -277,9 +278,9 @@ dftu_series* dftu_series_share(const dftu_series* col) {
 dftu_series* dftu_series_slice(const dftu_series* col, int64_t offset,
                                int64_t len) {
     if (!col) return nullptr;
-    if (byte_width(col->type, col->fixed_size).value_or(0) == 0)
+    if (byte_width(col->type, col->fixed_size()).value_or(0) == 0)
         return nullptr;  // variable-width unsupported
-    if (col->encoding == Encoding::Selection && col->child) {
+    if (col->encoding == Encoding::Selection && col->child()) {
         // A SELECTION slices by its index buffer: still a view over the base.
         if (offset < 0) offset = 0;
         if (offset > col->length) offset = col->length;
@@ -294,7 +295,7 @@ dftu_series* dftu_series_slice(const dftu_series* col, int64_t offset,
                     col->data->data() +
                         static_cast<std::size_t>(offset) * sizeof(std::int64_t),
                     static_cast<std::size_t>(len) * sizeof(std::int64_t));
-        out->child = col->child;
+        out->set_child(col->child());
         return out;
     }
     if (col->encoding != Encoding::Flat) {
@@ -304,7 +305,7 @@ dftu_series* dftu_series_slice(const dftu_series* col, int64_t offset,
         dftu_series_free(flat);
         return out;
     }
-    const std::size_t w = byte_width(col->type, col->fixed_size).value_or(0);
+    const std::size_t w = byte_width(col->type, col->fixed_size()).value_or(0);
     if (w == 0 || !col->data) return nullptr;  // variable-width unsupported
     if (offset < 0) offset = 0;
     if (offset > col->length) offset = col->length;

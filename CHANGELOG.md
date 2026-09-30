@@ -9,6 +9,8 @@ and this project aims to adhere to [Semantic Versioning](https://semver.org/spec
 
 ## [Unreleased]
 
+## [0.0.13] - 2026-09-30
+
 ### Added
 
 - A columnar `DataFrame` / `Series` / `LazyFrame` engine that is a drop-in for
@@ -66,6 +68,14 @@ and this project aims to adhere to [Semantic Versioning](https://semver.org/spec
 
 ### Changed
 
+- Precompiled headers are off by default (`DFTRACER_UTILS_ENABLE_PCH`). GCC's
+  `.gch` cannot be cached by ccache and evicted the rest of the cache; pass
+  `-DDFTRACER_UTILS_ENABLE_PCH=ON` to keep them for local builds.
+- CI: every merge into `develop` publishes a `<tag>.postN.dev0` prerelease to
+  PyPI; wheel and Valgrind jobs run sharded (one job per Python version, three
+  Python and six C++ Valgrind shards); push workflows run on `main` and
+  `develop` only, so a pull request no longer runs twice.
+
 - The dataframe engine is measured (10M rows, Apple M4 Pro): ahead of pandas
   on every benchmark row, of polars on every row but two at the noise floor,
   of DuckDB on every row but one within a millisecond of it. The group-by
@@ -111,6 +121,9 @@ and this project aims to adhere to [Semantic Versioning](https://semver.org/spec
   `View` plans, `View::branch` and `LazyFrame::join`.
 
 ### Fixed
+
+- Prerelease Linux wheels were versioned `.post1.devN` because the manylinux
+  container did not receive the computed version; the version is passed in.
 
 - A sketch quantile (`pct` in a plan, `DDSketch`) returned `-inf` once a
   bucket held more than 65535 values; buckets are 32-bit now.

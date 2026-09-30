@@ -722,6 +722,8 @@ jobs:
           CIBW_BEFORE_ALL_MACOS: "brew install ccache || true"
           CIBW_BEFORE_BUILD: "ccache -s || echo 'WARNING: ccache unavailable - build is uncached'"
           CIBW_CONTAINER_ENGINE: "docker; create_args: --volume=${{ github.workspace }}/.ccache:/ccache"
+          # The container does not inherit the host env, so the version must be passed in.
+          CIBW_ENVIRONMENT_PASS_LINUX: SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DFTRACER_UTILS
           CIBW_ENVIRONMENT_LINUX: >-
             SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DFTRACER_UTILS=$SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DFTRACER_UTILS CCACHE_DIR=/ccache CCACHE_BASEDIR=/project
             CCACHE_COMPILERCHECK=content CCACHE_NOHASHDIR=true CCACHE_MAXSIZE=900M

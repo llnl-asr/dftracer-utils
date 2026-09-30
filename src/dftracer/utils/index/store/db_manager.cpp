@@ -21,8 +21,10 @@ void ensure_exit_cleanup() {
 }  // namespace
 
 RocksDBManager& RocksDBManager::instance() {
-    static RocksDBManager manager;
-    return manager;
+    // Never destroyed: a handle's deleter reaches it however late the handle
+    // dies.
+    static auto* manager = new RocksDBManager();
+    return *manager;
 }
 
 std::size_t RocksDBManager::retain_cap() {
@@ -132,8 +134,15 @@ std::shared_ptr<RocksDatabase> RocksDBManager::get_or_open(
                     break;
                 }
 
-                if (opening_.contains(db_path)) {
-                    cv_.wait(lock, [&] { return !opening_.contains(db_path); });
+                if (opening_.contains(db_path) ||
+                    (open_mode == RocksDatabase::OpenMode::ReadWrite &&
+                     writers_.contains(db_path))) {
+                    cv_.wait(lock, [&] {
+                        return !opening_.contains(db_path) &&
+                               (open_mode !=
+                                    RocksDatabase::OpenMode::ReadWrite ||
+                                !writers_.contains(db_path));
+                    });
                     continue;
                 }
 
@@ -152,9 +161,24 @@ std::shared_ptr<RocksDatabase> RocksDBManager::get_or_open(
             continue;
         }
 
+        const bool writes =
+            needs_upgrade || open_mode == RocksDatabase::OpenMode::ReadWrite;
+        if (writes) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            ++writers_[db_path];
+        }
         std::shared_ptr<RocksDatabase> database;
         try {
-            database = std::make_shared<RocksDatabase>();
+            database = std::shared_ptr<RocksDatabase>(
+                new RocksDatabase(), [this, writes, db_path](RocksDatabase* p) {
+                    delete p;
+                    if (!writes) return;
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    if (auto it = writers_.find(db_path);
+                        it != writers_.end() && --it->second == 0)
+                        writers_.erase(it);
+                    cv_.notify_all();
+                });
             if (cf_override) {
                 database->set_cf_options_override(std::move(cf_override));
             }

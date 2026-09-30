@@ -676,6 +676,50 @@ enum class JoinHow : std::int32_t {
     Nest = 8,
 };
 
+/// Mirrors dftu_window_func. The SQL window functions of the window frame op.
+enum class WindowFunc : std::int32_t {
+    RowNumber = 0,
+    Rank = 1,
+    DenseRank = 2,
+    Lag = 3,
+    Lead = 4,
+    RunningSum = 5,
+    RunningMin = 6,
+    RunningMax = 7,
+    RunningCount = 8,
+    Delta = 9,
+    Rate = 10,
+    Sessionize = 11,
+    FrameSum = 12,
+    FrameMin = 13,
+    FrameMax = 14,
+    FrameCount = 15,
+    FrameMean = 16,
+    Ntile = 17,
+    FirstValue = 18,
+    LastValue = 19,
+    NthValue = 20,
+    PercentRank = 21,
+    CumeDist = 22,
+    FillForward = 23,
+    RunningProd = 24,
+};
+
+/// FRAME_* bound interpretation: Rows = row offsets, Range = value deltas on
+/// the single numeric order column.
+enum class WindowFrameMode : std::int32_t { Rows = 0, Range = 1 };
+
+/// Mirrors dftu_gap_fill_mode. How a generated gap-fill row fills its value
+/// columns.
+enum class GapFillMode : std::int32_t { None = 0, Locf = 1, Linear = 2 };
+
+/// Mirrors dftu_asof_direction. Which right row an as-of join picks.
+enum class AsofDirection : std::int32_t {
+    Backward = 0,
+    Forward = 1,
+    Nearest = 2,
+};
+
 /// Mirrors the dftu_series_prim op codes: a unary numeric primitive over a FLAT
 /// Int64/Uint64 column, producing an Int64 column.
 enum class PrimOp : std::int32_t {

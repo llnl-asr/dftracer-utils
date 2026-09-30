@@ -1,17 +1,20 @@
 #include <dftracer/utils/core/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
+#include <dftracer/utils/python/series_detail.h>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-
 #include <dftracer/utils/dataframe/arrow_bridge.h>
-#include <dftracer/utils/python/series_detail.h>
 #include <nanoarrow/nanoarrow.h>
+#endif
 
 #include <cstdint>
 #include <exception>
 #include <new>
 #include <utility>
+#include <vector>
 
 namespace dftracer::utils::python::series_detail {
+
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 namespace {
 
@@ -116,6 +119,8 @@ PyObject* vec_from_arrow(PyObject* /*self*/, PyObject* obj) {
     return make_series(std::move(col));
 }
 
+#endif  // DFTRACER_UTILS_ENABLE_ARROW
+
 namespace {
 
 // Map a native-byte-order buffer-protocol format code to a fixed-width TypeId.
@@ -168,6 +173,12 @@ bool numpy_format_type(const char* fmt, Py_ssize_t itemsize, TypeId* out) {
         case 'd':
             *out = TypeId::Float64;
             return itemsize == 8;
+        case 'e':
+            *out = TypeId::Float16;
+            return itemsize == 2;
+        case '?':
+            *out = TypeId::Bool;
+            return itemsize == 1;
         default:
             return false;
     }
@@ -191,7 +202,10 @@ void numpy_buffer_release(void* ctx) {
 // column's data buffer points straight at the numpy memory and holds the
 // Py_buffer alive until the column is freed. On any unsupported case a Python
 // error is set and NULL returned, so the Python wrapper falls back to Arrow.
-PyObject* vec_from_numpy(PyObject* /*self*/, PyObject* obj) {
+PyObject* vec_from_numpy(PyObject* /*self*/, PyObject* call_args) {
+    PyObject* obj = nullptr;
+    PyObject* mask_obj = Py_None;
+    if (!PyArg_ParseTuple(call_args, "O|O", &obj, &mask_obj)) return nullptr;
     auto* view = new (std::nothrow) Py_buffer{};
     if (!view) return PyErr_NoMemory();
     if (PyObject_GetBuffer(obj, view,
@@ -213,7 +227,47 @@ PyObject* vec_from_numpy(PyObject* /*self*/, PyObject* obj) {
             "numeric array");
         return nullptr;
     }
-    std::int64_t n = view->shape ? view->shape[0] : 0;
+    const std::int64_t n = view->shape ? view->shape[0] : 0;
+
+    // Null rows: a byte per row, nonzero where null.
+    std::vector<std::uint8_t> validity;
+    if (mask_obj != Py_None) {
+        Py_buffer m{};
+        if (PyObject_GetBuffer(mask_obj, &m, PyBUF_SIMPLE) != 0) {
+            PyBuffer_Release(view);
+            delete view;
+            return nullptr;
+        }
+        if (m.len != n) {
+            PyBuffer_Release(&m);
+            PyBuffer_Release(view);
+            delete view;
+            PyErr_SetString(PyExc_ValueError,
+                            "mask and array differ in length");
+            return nullptr;
+        }
+        validity.assign(static_cast<std::size_t>((n + 7) / 8), 0);
+        const auto* bytes = static_cast<const std::uint8_t*>(m.buf);
+        for (std::int64_t i = 0; i < n; ++i)
+            if (!bytes[i])
+                validity[static_cast<std::size_t>(i >> 3)] |=
+                    static_cast<std::uint8_t>(1U << (i & 7));
+        PyBuffer_Release(&m);
+    }
+    const std::uint8_t* valid = validity.empty() ? nullptr : validity.data();
+
+    if (type == TypeId::Bool) {  // one byte per bool -> bit-packed
+        std::vector<std::uint8_t> packed(static_cast<std::size_t>((n + 7) / 8),
+                                         0);
+        const auto* bytes = static_cast<const std::uint8_t*>(view->buf);
+        for (std::int64_t i = 0; i < n; ++i)
+            if (bytes[i])
+                packed[static_cast<std::size_t>(i >> 3)] |=
+                    static_cast<std::uint8_t>(1U << (i & 7));
+        PyBuffer_Release(view);
+        delete view;
+        return make_series(Series::flat(TypeId::Bool, packed.data(), n, valid));
+    }
     // An empty array has no memory to borrow (the release would not run on a
     // null/zero-length buffer), so copy the (empty) column and free the view.
     if (n == 0 || view->buf == nullptr) {
@@ -229,7 +283,7 @@ PyObject* vec_from_numpy(PyObject* /*self*/, PyObject* obj) {
     }
     dftu_series* h =
         dftu_series_new_flat_borrowed(static_cast<dftu_dtype>(type), view->buf,
-                                      n, nullptr, numpy_buffer_release, view);
+                                      n, valid, numpy_buffer_release, view);
     if (!h) {
         numpy_buffer_release(view);  // releases the buffer and deletes the view
         PyErr_SetString(PyExc_RuntimeError,
@@ -240,5 +294,3 @@ PyObject* vec_from_numpy(PyObject* /*self*/, PyObject* obj) {
 }
 
 }  // namespace dftracer::utils::python::series_detail
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW

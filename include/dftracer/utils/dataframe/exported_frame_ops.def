@@ -92,4 +92,19 @@ DFTU_FRAME_OP(group_transform, dftu_dataframe_group_transform, FRAME, FRAME, STR
  * passing through; the lazy plan's breaker for a whole-column op. */
 DFTU_FRAME_OP(column_op, dftu_dataframe_column_op, FRAME, FRAME, STR, STR, STR, SCALAR, SCALAR, STR)
 
+/* table + partition/order keys + window specs: the SQL window functions. */
+DFTU_FRAME_OP(window, dftu_dataframe_window, FRAME, FRAME, STRLIST, STRLIST, WINLIST, NONE, NONE, NONE)
+
+/* table + partition keys + time column + bucket + fill columns + mode +
+ * optional [start, end]: a regular time grid. */
+DFTU_FRAME_OP(gap_fill, dftu_dataframe_gap_fill, FRAME, FRAME, STRLIST, STR, I64, STRLIST, I32, I64LIST)
+
+/* table + table + time column + partition keys + direction + tolerance: the
+ * as-of join. */
+DFTU_FRAME_OP(asof, dftu_dataframe_asof, FRAME, FRAME, FRAME, STR, STRLIST, I32, I64, NONE)
+
+/* table + table + point, lo, hi columns + partition keys + outer: the
+ * point-in-range join. */
+DFTU_FRAME_OP(interval, dftu_dataframe_interval, FRAME, FRAME, FRAME, STR, STR, STR, STRLIST, I32)
+
 #undef DFTU_FRAME_OP

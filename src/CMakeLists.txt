@@ -319,10 +319,6 @@ if(DFTRACER_UTILS_ENABLE_ARROW)
     DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/arrow/attribution.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/arrow/column_builder.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/arrow/gapfill.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/arrow/join.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/arrow/window.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/arrow/frame_ops.cpp
   )
 endif()
 
@@ -502,6 +498,8 @@ set(DFTRACER_UTILS_VEC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/arrow_bridge.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/arrow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/batch_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/frame_native.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/grace_join.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/join.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/sketch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/sketch_keys.cpp
@@ -621,6 +619,7 @@ set(DFTRACER_UTILS_DUQL_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/syntax/lexer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/lower.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/lookup_key.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/decorrelate.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/macros.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/syntax/parser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/syntax/printer.cpp
@@ -701,6 +700,12 @@ set(DFTRACER_UTILS_DATAFRAME_SOURCES
     ${DFTRACER_UTILS_VEC_SOURCES}
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/series_methods.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/dataframe_methods.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/frame_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/order.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/ops/window.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/ops/gap_fill.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/ops/asof.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/ops/interval.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/dataframe_abi.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/provider_registry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/node_registry.cpp
@@ -1569,62 +1574,64 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
     dftracer_utils_ext
     MODULE
     WITH_SOABI
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/dftracer_utils_ext.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/py_errors.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/py_errors.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/indexer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/indexer.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/index_database.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/index_database.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/sst_distribution.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/sst_distribution.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/series.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/series.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/series_detail.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/series/arith.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/series/math.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/series/window.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/series/stats.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/series/reduce.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/series/string.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/series/arrow.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/dataframe.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/dataframe.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/lazyframe.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/lazyframe.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/columnar_eval.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/columnar_eval.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/py_scalar_helpers.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/py_agg_helpers.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/batch_indexer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/batch_indexer.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_viewer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_viewer.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/plugin_host.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/op_runner.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/ops.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/ops.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/plugin_host.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/runtime.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/runtime.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/task_handle.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/task_handle.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/memoryview_batch.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/memoryview_batch.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_reader_iterator.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_reader_iterator.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/json.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/json.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/arrow_helpers.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/arrow_helpers.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/arrow_stream_capsule.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/arrow_stream_capsule.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/schema_reconcile.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/schema_reconcile.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/streaming_iterator.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/streaming_iterator.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/arrow_parallel_reader.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/arrow_parallel_reader.h)
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/dftracer_utils_ext.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/py_errors.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/py_errors.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/indexer.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/indexer.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/index_database.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/index_database.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/sst_distribution.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/sst_distribution.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/series.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/series.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/series_detail.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/series/arith.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/series/math.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/series/window.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/series/stats.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/series/reduce.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/series/string.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/series/arrow.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/series/convert.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/series/typed.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/dataframe.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/dataframe.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/lazyframe.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/lazyframe.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/columnar_eval.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/columnar_eval.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/py_scalar_helpers.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/py_agg_helpers.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/batch_indexer.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/batch_indexer.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_viewer.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_viewer.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/plugin_host.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/op_runner.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/ops.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/ops.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/plugin_host.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/runtime.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/runtime.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/task_handle.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/task_handle.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/memoryview_batch.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/memoryview_batch.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_reader_iterator.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_reader_iterator.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/json.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/json.h
+       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/arrow_helpers.cpp
+       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/arrow_helpers.h
+       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/arrow_stream_capsule.cpp
+       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/arrow_stream_capsule.h
+       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/schema_reconcile.cpp
+       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/schema_reconcile.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/streaming_iterator.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/streaming_iterator.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/arrow_parallel_reader.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/arrow_parallel_reader.h)
 
   # Link to unified library to test if this fixes the bus error
   target_link_libraries(dftracer_utils_ext PRIVATE dftracer_utils::shared)

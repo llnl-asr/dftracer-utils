@@ -16,7 +16,7 @@ endif()
 foreach(name test_duql_syntax test_duql_golden test_parser test_evaluator
              test_query test_builder test_subsumption test_differential
              test_patterns test_pattern_corpus test_vectorize test_lookup
-             test_overlap)
+             test_overlap test_decorrelate)
   set(target duql_${name})
   add_executable(${target} ${name}.cpp)
   target_include_directories(${target} PRIVATE ${CMAKE_SOURCE_DIR}/src

@@ -1,7 +1,3 @@
-#include <dftracer/utils/core/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-
 #include <dftracer/utils/dataframe/kernels/kernels.h>
 #include <dftracer/utils/dataframe/kernels/prims.h>
 #include <dftracer/utils/dataframe/types.h>
@@ -200,5 +196,3 @@ PyObject* Series_logical_not(PyObject* self, PyObject*) {
 }
 
 }  // namespace dftracer::utils::python::series_detail
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW

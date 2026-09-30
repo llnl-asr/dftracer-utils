@@ -44,7 +44,7 @@ from typing import (
 from . import dftracer_utils_ext as _ext
 from .dataframe import DataFrame
 from .enums import DType
-from .series import Series, _unwrap
+from .series import Series, _arrow_native, _unwrap
 
 if TYPE_CHECKING:
     import pyarrow as pa  # ty: ignore[unresolved-import]
@@ -1086,11 +1086,11 @@ def _format_value(v: object) -> str:
 
 # Import Arrow data into the native columnar engine (the boundary for the DSL).
 def _series_from_arrow(array: "pa.Array") -> "_ext._Series":
-    return _ext._series_from_arrow(array)
+    return _arrow_native("_series_from_arrow")(array)
 
 
 def _dataframe_from_arrow(table: "pa.Table") -> "_ext._DataFrame":
-    return _ext._dataframe_from_arrow(table)
+    return _arrow_native("_dataframe_from_arrow")(table)
 
 
 def col(name: str) -> Expr:
@@ -1419,7 +1419,7 @@ def where(table: _Frame, pred: "Expr | str") -> _Frame:
             return DataFrame(native.query(pred))
         import pyarrow as pa
 
-        return pa.table(_ext._dataframe_from_arrow(native).query(pred))
+        return pa.table(_arrow_native("_dataframe_from_arrow")(native).query(pred))
     mask = columnar(pred).apply(native)  # a wrapped Series
     if isinstance(native, _ext._DataFrame):
         return DataFrame(native.filter(_unwrap(mask)))
@@ -1491,7 +1491,7 @@ def _unwrap_source_columns(source: object) -> Dict[str, Series]:
         arr = native.column(name)
         if isinstance(arr, pa.ChunkedArray):
             arr = arr.combine_chunks()
-        out[name] = Series(_ext._series_from_arrow(arr))
+        out[name] = Series(_arrow_native("_series_from_arrow")(arr))
     return out
 
 
@@ -1510,7 +1510,7 @@ def _import_vec_columns(names: List[str], source: _Source) -> Dict[str, "_ext._S
         arr = source.column(name)
         if isinstance(arr, pa.ChunkedArray):
             arr = arr.combine_chunks()
-        cols[name] = _ext._series_from_arrow(arr)
+        cols[name] = _arrow_native("_series_from_arrow")(arr)
     return cols
 
 

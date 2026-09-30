@@ -224,6 +224,9 @@ class AggState {
     // Duration all widen to the I64 domain above); finalize retags the group
     // key with this instead of a bare Int64.
     std::vector<TypeId> key_type;  // nkeys
+    // 1 where a String key column holds canonical JSON text, so finalize
+    // keeps the flag on the group key.
+    std::vector<char> key_json;  // nkeys
     // Time32/Time64/Timestamp/Duration key_type only: the unit (and, for
     // Timestamp, the timezone) the raw I64 bits in ikey_cols are expressed
     // in, so finalize retags the group key with the source's own unit

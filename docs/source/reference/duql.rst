@@ -655,7 +655,9 @@ entry.
        non-negative integer literal or a parameter, default 1. Null past the
        edge of the partition.
    * - ``running_sum(e)``
-     - The sum of the non-null values so far; null until the first one.
+     - The sum of the non-null values so far; null until the first one. An
+       integer sum is exact (``uint64`` over an unsigned column); a sum
+       outside the type is a query error.
    * - ``running_count()``
      - The number of rows so far.
    * - ``count()``, ``count(e)``
@@ -962,7 +964,9 @@ the query, before the main scan, unless the index stores its rows (see
 
 ``(from ...)`` in an expression
    A scalar sub-query: the value of its one cell, null when it gives no
-   row. More rows or columns are a query error that names the sub-query.
+   row. More rows or columns are a query error that names the sub-query. A
+   sub-query may read the enclosing row with ``^.``; see `Correlated
+   sub-queries`_.
 
 ``lookup s on k [== c], ... [into m]``
    Keeps every row once, in order, and adds each column of ``s`` but its
@@ -971,7 +975,10 @@ the query, before the main scan, unless the index stores its rows (see
    list ``m`` of every matching row as an object, ``[]`` when none. It runs
    as the engine's ``lookup`` (or ``nest``) join: the rows stream, and when
    ``s`` is not already in memory its plan joins in, so a side over the same
-   files shares their scan.
+   files shares their scan. The side has no size cap: when it outgrows the
+   View's memory budget the join partitions both sides on the key onto disk
+   and joins one partition at a time, giving the same rows and columns in an
+   unspecified order (see `Limits`_).
 
 ``lookup s on k [== c], ... asof t [== c2] [backward | forward | nearest] [within n]``
    Keeps every row once, in order, and adds each column of ``s`` but its
@@ -989,7 +996,7 @@ the query, before the main scan, unless the index stores its rows (see
    and keys of different number types compare as integers when both are
    integers, else as doubles. It runs on the engine's ``asof`` op, which
    collects the rows and ``s`` (``s`` is read in file order, before the
-   scan), so it needs the Arrow build and does not combine with ``into``.
+   scan), so it does not combine with ``into``.
    A column of ``s`` the rows already have is an error, except a record field
    the rows lack: those rows keep their own value and take ``s`` where they
    have none.
@@ -1111,17 +1118,108 @@ different values are a query error that names the row set and the key;
 equal values give that value. ``lookup ... into`` never fails on several
 matches.
 
-A correlated sub-query (``^.`` inside a sub-query) is a compile error that
-points to ``->``.
+Correlated sub-queries
+~~~~~~~~~~~~~~~~~~~~~~
+
+A sub-query, under ``in`` or in an expression, may compare its own fields
+with the row around it. Write each comparison as a term of a ``where`` joined
+by ``and``, with ``^.`` naming the enclosing row on one side of ``==``:
+
+.. code-block:: text
+
+   where dur > (from data | where name == ^.name | agg { m = mean(dur) })
+   derive n = (from data | where run == ^.run and host == ^.host
+               | agg { c = count() })
+   where g not in (from data | where run == ^.run and dur > 50 | select g)
+
+The result is what the sub-query gives when it runs for each row with ``^.``
+bound to that row. It runs once, over every key, and each row reads the
+rows of its own keys. Either side of ``==`` may hold the enclosing row, and
+both sides may be expressions; they match as keys do (see `Matching`_). A row
+whose key is missing or null has no matching rows: ``in`` gives FALSE and
+``not in`` TRUE (unknown only when the tested value is missing or null), a
+scalar over ``agg`` gives what the aggregate gives over no rows (``count()``
+is 0, ``mean`` is null), and a scalar over ``select`` gives null. A scalar
+sub-query that gives several rows for the key of a row is a query error that
+names the sub-query and the key.
+
+A correlated ``where`` may also bound one expression of the sub-query's row
+by the enclosing row: ``inner < ^.x``, ``<=``, ``>``, ``>=`` (either side
+first) and ``inner between ^.lo and ^.hi``, with at most one lower and one
+upper bound. The sub-query then reads, for each row, the rows of its keys
+whose bounded expression lies in that range:
+
+.. code-block:: text
+
+   derive longest_before = (from data | where ts < ^.ts | agg { m = max(dur) })
+   derive recent = (from data | where pid == ^.pid
+                    and ts between ^.ts - 1000 and ^.ts | agg { n = count() })
+   where name == "read" and fd in (from data | where name == "write"
+                                   and ts < ^.ts | select fd)
+
+Bounds compare as ``<`` does: numbers by value across integer and float
+types, strings by bytes, booleans apart. A null, missing or NaN value on
+either side, or two values of different kinds, selects no row. Such a
+sub-query ends, in an expression, in ``agg`` with one of ``count``,
+``count_if``, ``sum``, ``min``, ``max`` or ``mean``, or in a one-column
+``select``; under ``in``, in ``select`` or in ``group`` without aggregates.
+The types are those of ``agg``: counts are integers, ``sum`` of integers is
+an exact integer (a sum past int64 is a query error), ``sum`` of floats and
+``mean`` are floats, ``min`` and ``max`` keep the column's type. ``sum`` and
+``mean`` read a typed number column; cast an untyped (JSON) column with
+``int()`` or ``float()``. Each row's answer comes from a sorted index of the
+side found by binary search, never from a scan per row.
+
+After the first correlated ``where`` a sub-query holds only ``where`` and
+``derive`` stages and a last ``select``, ``group`` (under ``in``) or
+``agg``. These are compile errors that name what to write instead:
+
+- ``^.`` in a term that is neither a key nor a bound, a term that mixes the
+  enclosing row with the sub-query's own fields on one side, bounds on two
+  expressions (an interval: use ``lookup ... overlap``), a second lower or
+  upper bound, ``not between``, ``^.`` in a stage other than ``where``, and
+  a term comparing two enclosing fields;
+- over a range, an aggregate other than the six above, and ``agg`` or a
+  ``group`` with aggregates under ``in``;
+- ``take``, ``sort``, ``distinct``, ``window`` or any other stage after the
+  correlated ``where``, and a sub-query that does not end in ``select``,
+  ``group`` or ``agg``.
+
+``^.`` inside ``any()`` and ``all()`` still names the quantified record. The
+side is the whole sub-query over every key; see `Limits`_ for its size. A
+correlated ``in`` adds no key set to the scan, since its keys are tuples. A
+mixed-type key (JSON column) keeps its value type.
 
 Limits
 ~~~~~~
 
-A lookup side is small by contract. A side over
-``DUQL_LOOKUP_MAX_ROWS`` rows (default 1,000,000) or
-``DUQL_LOOKUP_MAX_BYTES`` bytes (default 256 MiB) fails the query with an
-error that names the side and both numbers. It never gives a truncated
-answer.
+The side of an ``asof`` or ``overlap`` lookup, of a range-correlated
+sub-query, of an arrow and of an uncorrelated scalar sub-query is collected
+in memory, so it is small by contract. A side over ``DUQL_LOOKUP_MAX_ROWS``
+rows (default 1,000,000) or ``DUQL_LOOKUP_MAX_BYTES`` bytes (default
+256 MiB) fails the query with an error that names the side and both numbers.
+It never gives a truncated answer.
+
+The other sides have no such cap:
+
+- A top-level ``and`` term ``k in (...)`` of the leading ``where`` reads only
+  the distinct rows of its side, before the scan, and filters the scan with
+  them, so export (``sink_json``), pruning and scan statistics work as for a
+  literal filter. The distinct rows must fit the View's memory budget
+  (``View::memory_budget``, about a third of the free memory by default);
+  past it the query fails naming the side and the budget. To join a larger
+  side, write the test under ``not`` or in a later ``where``.
+- Any other ``in``, ``not in``, and a sub-query correlated by ``==`` keys,
+  run after the scan through the engine's join, as does the side of a plain
+  or ``into`` ``lookup``. The join keeps the right side in memory up to the
+  memory budget. Over it, both sides are split by a hash of the key into
+  partitions on disk, and a partition that is still over the budget splits
+  again. Rows with equal keys, including a number of two types, meet in one
+  partition. The row order of a spilled join is not the order of the rows,
+  and a side too large for the caps is not stored in the lookup cache.
+
+A term that joins runs after the scan, so the query cannot be exported with
+``sink_json``; the other terms of its ``where`` still filter the scan.
 
 Key-set pushdown
 ~~~~~~~~~~~~~~~~

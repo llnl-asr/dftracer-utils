@@ -49,6 +49,10 @@ class RocksDBManager {
     std::condition_variable cv_;
     StringViewMap<std::weak_ptr<RocksDatabase>> databases_;
     StringViewSet opening_;
+    /// Read-write instances not yet destroyed, by path. An expired handle
+    /// may still be closing and hold the database's lock, so a read-write
+    /// open waits for its path to leave this map.
+    StringViewMap<int> writers_;
     RetainedList retained_;
     StringViewMap<RetainedList::iterator> retained_index_;
     std::size_t retain_cap_ = 0;  ///< 0 until first read from env

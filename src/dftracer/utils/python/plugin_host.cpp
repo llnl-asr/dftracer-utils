@@ -29,9 +29,6 @@
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/python/arrow_helpers.h>
-#include <dftracer/utils/utilities/common/arrow/gapfill.h>
-#include <dftracer/utils/utilities/common/arrow/join.h>
-#include <dftracer/utils/utilities/common/arrow/window.h>
 #include <nanoarrow/nanoarrow.h>
 #endif
 

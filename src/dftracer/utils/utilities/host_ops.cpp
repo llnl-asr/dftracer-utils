@@ -8,7 +8,6 @@
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <dftracer/utils/utilities/host_ops.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/utilities/common/arrow/frame_ops.h>
 #endif
 
 #include <cstdint>
@@ -149,9 +148,6 @@ void register_host_ops() {
     static std::once_flag once;
     std::call_once(once, [] {
         for (const dftu_op_desc& op : HOST_OPS) dftu_op_register(&op);
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-        common::arrow::register_frame_ops();
-#endif
     });
 }
 

@@ -2,8 +2,11 @@
 #define DFTRACER_UTILS_PYTHON_SERIES_DETAIL_H
 
 #include <Python.h>
+#include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+
+#include <string>
 
 // Private seam shared by the Series extension translation units (series.cpp
 // plus series/{arith,math,window,stats,reduce,string,arrow}.cpp). series.cpp
@@ -183,10 +186,29 @@ PyObject* Series_dt_round(PyObject* self, PyObject* args);
 PyObject* Series_with_timezone(PyObject* self, PyObject* arg);
 
 // series/arrow.cpp
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
 PyObject* Series_arrow_c_array(PyObject* self, PyObject* args);
 Series import_arrow_column(PyObject* obj);
 PyObject* vec_from_arrow(PyObject* self, PyObject* obj);
+#endif
 PyObject* vec_from_numpy(PyObject* self, PyObject* obj);
+
+// series/convert.cpp
+PyObject* Series_to_pylist(PyObject* self, PyObject* args);
+PyObject* Series_item(PyObject* self, PyObject* arg);
+PyObject* vec_from_list(PyObject* self, PyObject* args);
+
+// series/typed.cpp
+// `s` (or its materialization) read as `type` with the given parameters,
+// sharing its buffers; an invalid Series when the widths differ.
+Series retype_series(const Series& s, TypeId type, dataframe::TimeUnit unit,
+                     const std::string& zone, int precision, int scale,
+                     int width);
+PyObject* Series_physical(PyObject* self, PyObject*);
+PyObject* Series_get_nbytes(PyObject* self, void*);
+PyObject* Series_to_bytes(PyObject* self, PyObject*);
+PyObject* series_retype(PyObject* self, PyObject* args);
+PyObject* series_from_bytes(PyObject* self, PyObject* obj);
 
 }  // namespace dftracer::utils::python::series_detail
 

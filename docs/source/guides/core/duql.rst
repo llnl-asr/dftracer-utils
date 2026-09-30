@@ -626,6 +626,18 @@ Share of the whole trace
 
 A sub-query in an expression gives its one value.
 
+Slower than the average of its own kind
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: text
+
+   where cat == "POSIX"
+     and dur > (from data | where name == ^.name | agg { m = mean(dur) })
+
+``^.name`` is the event around the sub-query. The sub-query scans once and
+groups by ``name``; every event reads the mean of its own name. The rules
+and limits are in :doc:`../../reference/duql`.
+
 Two traces as one
 ~~~~~~~~~~~~~~~~~
 

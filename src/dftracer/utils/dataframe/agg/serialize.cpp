@@ -111,6 +111,9 @@ std::string agg_serialize(const AggState& st_in) {
         put(s, static_cast<std::uint8_t>(
                    k < st.key_type.size() ? st.key_type[k] : TypeId::Int64));
     for (std::size_t k = 0; k < st.nkeys; ++k)
+        put(s, static_cast<std::uint8_t>(k < st.key_json.size() ? st.key_json[k]
+                                                                : 0));
+    for (std::size_t k = 0; k < st.nkeys; ++k)
         put(s, static_cast<std::int32_t>(k < st.key_time_unit.size()
                                              ? st.key_time_unit[k]
                                              : TimeUnit::Micro));
@@ -310,6 +313,10 @@ AggStatePtr agg_deserialize(const std::string& blob) {
         if (t > static_cast<std::uint8_t>(TypeId::Map)) Reader::truncated();
         st->key_type[k] = static_cast<TypeId>(t);
     }
+    r.count(nkeys);
+    st->key_json.resize(nkeys);
+    for (std::uint32_t k = 0; k < nkeys; ++k)
+        st->key_json[k] = r.get<std::uint8_t>() != 0;
     r.count(nkeys);
     st->key_time_unit.resize(nkeys);
     for (std::uint32_t k = 0; k < nkeys; ++k)

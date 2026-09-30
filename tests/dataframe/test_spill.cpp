@@ -73,4 +73,24 @@ TEST_SUITE("spill") {
         spill::Reader r(path);
         CHECK_FALSE(run(r.next(0)).has_value());
     }
+
+    TEST_CASE("a JSON column keeps its flag through a run file") {
+        Series text = Series::strings(std::vector<std::string>{"1", "\"a\""});
+        std::vector<Series> cols;
+        cols.push_back(text.as_json());
+        cols.push_back(Series::strings(std::vector<std::string>{"x", "y"}));
+        spill::Dir dir;
+        const std::string path = dir.run_path(0);
+        {
+            spill::Writer w(path);
+            w.write(cols, 2);
+            w.close();
+        }
+        spill::Reader r(path);
+        auto m = run(r.next(0));
+        REQUIRE(m);
+        CHECK(m->columns[0].is_json());
+        CHECK_FALSE(m->columns[1].is_json());
+        CHECK(m->columns[0].string_at(1) == "\"a\"");
+    }
 }

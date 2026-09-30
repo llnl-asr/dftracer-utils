@@ -6,7 +6,8 @@
 #include <dftracer/utils/core/coro/when_all.h>
 #include <dftracer/utils/dataframe/agg.h>        // streaming group-by state
 #include <dftracer/utils/dataframe/batch_ops.h>  // concat_columns, take, concat
-#include <dftracer/utils/dataframe/field_stat.h>         // FieldStat (describe)
+#include <dftracer/utils/dataframe/field_stat.h>  // FieldStat (describe)
+#include <dftracer/utils/dataframe/grace_join.h>  // GraceJoin (join cursor)
 #include <dftracer/utils/dataframe/internal/cell_ops.h>  // row_key, cell_to_string
 #include <dftracer/utils/dataframe/internal/column_data.h>  // dftu_series (typed null templates)
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>  // dataframe_handle_wrap/take
@@ -3063,16 +3064,18 @@ class SortByMultiCursor : public Cursor {
     bool done_ = false;
 };
 
-// Hash join: collects the right plan in full on the first pull (the build
-// side), then streams each left morsel through it. A Right / Outer join emits
-// the unmatched right rows as one final morsel once the left is drained.
+// Hash join: collects the right plan on the first pull (the build side), then
+// streams each left morsel through it. A Right / Outer join emits the
+// unmatched right rows as one final morsel once the left is drained. A right
+// side that outgrows the plan's memory budget is joined by GraceJoin instead,
+// partition by partition, in no particular row order.
 class JoinCursor : public Cursor {
    public:
     JoinCursor(std::unique_ptr<Cursor> in, std::vector<std::string> sch,
                std::vector<Field> left_fields, LazyFrame other,
                std::vector<std::string> left_on,
                std::vector<std::string> right_on, JoinHow how,
-               std::string suffix)
+               std::string suffix, std::uint64_t budget)
         : in_(std::move(in)),
           sch_(std::move(sch)),
           left_fields_(std::move(left_fields)),
@@ -3080,15 +3083,12 @@ class JoinCursor : public Cursor {
           left_on_(std::move(left_on)),
           right_on_(std::move(right_on)),
           how_(how),
-          suffix_(std::move(suffix)) {}
+          suffix_(std::move(suffix)),
+          budget_(budget) {}
 
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
-        if (!join_) {
-            DataFrame right = co_await other_.collect();
-            if (std::optional<Expr> pred = build_side_predicate(right))
-                co_await in_->narrow(*pred);
-            join_.emplace(std::move(right), left_on_, right_on_, how_, suffix_);
-        }
+        if (!join_ && !grace_) co_await build(max_rows);
+        if (grace_) co_return co_await next_spilled(max_rows);
         while (in_) {
             auto m = co_await in_->next(max_rows);
             if (!m) {
@@ -3113,6 +3113,78 @@ class JoinCursor : public Cursor {
     }
 
    private:
+    // Reads the right plan into memory, or into a GraceJoin once its rows pass
+    // the budget.
+    coro::CoroTask<void> build(std::int64_t max_rows) {
+        if (budget_ == NO_SPILL_BUDGET || how_ == JoinHow::Cross) {
+            DataFrame right = co_await other_.collect();
+            co_await start_in_memory(std::move(right));
+            co_return;
+        }
+        std::vector<DataFrame> parts;
+        std::uint64_t bytes = 0;
+        auto gen = other_.stream(max_rows);
+        while (auto df = co_await gen.next()) {
+            if (grace_) {
+                grace_->add_right(*df);
+                continue;
+            }
+            bytes += spill::columns_bytes(flat_columns(*df));
+            parts.push_back(std::move(*df));
+            if (bytes <= budget_) continue;
+            grace_ =
+                std::make_unique<GraceJoin>(sch_, parts.front().names, left_on_,
+                                            right_on_, how_, suffix_, budget_);
+            for (const DataFrame& p : parts) grace_->add_right(p);
+            parts.clear();
+        }
+        if (grace_) co_return;
+        co_await start_in_memory(merge_morsels(parts));
+    }
+
+    static std::vector<Series> flat_columns(const DataFrame& f) {
+        std::vector<Series> out;
+        out.reserve(f.columns.size());
+        for (const Series& c : f.columns)
+            out.push_back(c.encoding() == Encoding::Flat ? c.share()
+                                                         : c.materialize());
+        return out;
+    }
+
+    coro::CoroTask<void> start_in_memory(DataFrame right) {
+        if (std::optional<Expr> pred = build_side_predicate(right))
+            co_await in_->narrow(*pred);
+        join_.emplace(std::move(right), left_on_, right_on_, how_, suffix_);
+        co_return;
+    }
+
+    coro::CoroTask<std::optional<Morsel>> next_spilled(std::int64_t max_rows) {
+        while (in_) {
+            auto m = co_await in_->next(max_rows);
+            if (!m) {
+                in_.reset();
+                break;
+            }
+            DataFrame left;
+            left.names = sch_;
+            left.columns = std::move(m->columns);
+            if (templates_.empty())
+                for (const Series& c : left.columns)
+                    templates_.push_back(c.share());
+            grace_->add_left(left);
+        }
+        if (!started_) {
+            started_ = true;
+            if (templates_.empty()) templates_ = null_templates();
+            std::vector<Series> shared;
+            for (const Series& t : templates_) shared.push_back(t.share());
+            grace_->start(std::move(shared));
+        }
+        auto out = co_await grace_->next(max_rows);
+        if (!out) co_return std::nullopt;
+        co_return morsel_of(std::move(*out));
+    }
+
     // A left row whose key is not on the build side is dropped by an Inner,
     // Right or Semi join, so the build keys narrow the left input: the set
     // itself when it is small, its range for a large numeric key, nothing
@@ -3190,8 +3262,11 @@ class JoinCursor : public Cursor {
     JoinHow how_;
     std::string suffix_;
     std::optional<HashJoin> join_;
+    std::unique_ptr<GraceJoin> grace_;
+    std::uint64_t budget_;
     std::vector<Series> templates_;
     bool flushed_ = false;
+    bool started_ = false;
 };
 
 // Vertical concatenation: every morsel of the left plan, then every morsel
@@ -4845,7 +4920,7 @@ std::unique_ptr<Cursor> make_cursor(const LazyOp& op,
             [&](const JoinOp& o) -> std::unique_ptr<Cursor> {
                 return std::make_unique<JoinCursor>(
                     std::move(in), sch, o.left_fields, o.other, o.left_on,
-                    o.right_on, o.how, o.suffix);
+                    o.right_on, o.how, o.suffix, budget);
             },
             [&](const ConcatOp& o) -> std::unique_ptr<Cursor> {
                 return std::make_unique<ConcatCursor>(std::move(in), o.other);

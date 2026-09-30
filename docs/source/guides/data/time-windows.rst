@@ -136,8 +136,11 @@ Supported spec shapes:
 - ``("row_number"|"rank"|"dense_rank", out)``
 - ``("lag"|"lead", value_col, offset, out)``
 - ``("running_sum"|"running_min"|"running_max"|"running_count"|"running_prod", value_col, out)``
-  (``running_prod`` is Float64)
-- ``("delta", value_col, out)``
+  (``running_prod`` is Float64; ``running_sum`` over an integer column is
+  exact, Int64, or UInt64 over an unsigned one, and a sum outside the type is
+  an error, not a wrapped number)
+- ``("delta", value_col, out)`` (over an integer column the exact Int64
+  difference; one outside Int64 is an error)
 - ``("rate", value_col, time_col, out[, counter])``
 - ``("sessionize", time_col, gap, out[, end_col[, span]])``: the 1-based
   session of each row. A row starts a new session when its time is more than
@@ -146,7 +149,8 @@ Supported spec shapes:
   is a null session.
 - ``("frame_sum"|"frame_min"|"frame_max"|"frame_count"|"frame_mean", value_col, preceding, following, out[, min_periods])``
   (a bound of ``None`` means that side of the ROWS frame runs to the partition edge;
-  the output is null while the frame holds fewer than ``min_periods`` present values)
+  the output is null while the frame holds fewer than ``min_periods`` present values;
+  ``frame_sum`` over an integer column is exact like ``running_sum``)
 - ``("ntile", n, out)``
 - ``("first_value"|"last_value"|"fill_forward", value_col, out)``
   (``fill_forward`` is the nearest present value at or before the row: a group-wise ``ffill``)

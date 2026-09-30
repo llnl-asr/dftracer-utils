@@ -480,7 +480,10 @@ class LazyFrame {
     /// Nest hold no left state and Right / Outer add one match bit per right
     /// row. An optimizer barrier: no filter or projection moves across it.
     /// An absent key, a key type mismatch or a Lookup conflict is reported at
-    /// collect().
+    /// collect(). When the build side outgrows memory_budget() (any kind but
+    /// Cross), both sides are partitioned on the key to disk and joined one
+    /// partition at a time: the same rows and columns in no particular row
+    /// order.
     LazyFrame join(LazyFrame other, std::vector<std::string> left_on,
                    std::vector<std::string> right_on,
                    JoinHow how = JoinHow::Inner,

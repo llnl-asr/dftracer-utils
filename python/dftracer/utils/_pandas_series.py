@@ -71,7 +71,7 @@ class _SeriesPandasMixin:
             return every
         if keep not in ("first", "last"):
             raise ValueError("duplicated: keep must be 'first', 'last' or False")
-        rows = DataFrame({"v": s.to_arrow()}).with_row_index("r")
+        rows = DataFrame({"v": s}).with_row_index("r")
         agg = f"{'min' if keep == 'first' else 'max'}:r:r"
         kept = Series(GroupBy(rows, ["v"]).agg(agg)._native["r"])
         first = Series(rows._native["r"]).is_in(kept)
@@ -99,7 +99,7 @@ class _SeriesPandasMixin:
 
     @property
     def nbytes(self) -> int:
-        return int(self._s().to_arrow().nbytes)
+        return int(self._s()._native.nbytes)
 
     @property
     def values(self) -> Any:
@@ -176,7 +176,7 @@ class _SeriesPandasMixin:
     def to_frame(self, name: str = "0") -> "DataFrame":
         from .dataframe import DataFrame
 
-        return DataFrame({name: self._s().to_arrow()})
+        return DataFrame({name: self._s()})
 
     def to_dict(self) -> Dict[int, object]:
         return dict(enumerate(self._s().to_list()))
@@ -291,7 +291,7 @@ class _SeriesPandasMixin:
         pairs = s.notna().logical(0, other.notna())
         if int(pairs.astype("int64").sum()) < 2:
             return float("nan")
-        frame = DataFrame({"x": s.to_arrow(), "y": other.to_arrow()})
+        frame = DataFrame({"x": s, "y": other})
         out = GroupBy(frame, []).agg(Agg(agg, _Col("y"), "r", by=_Col("x")))
         value = Series(out._native["r"])[0]
         assert isinstance(value, float)
@@ -378,7 +378,7 @@ class _SeriesPandasMixin:
         ``GroupBy`` over columns ``key`` and ``value``."""
         from .dataframe import DataFrame
 
-        frame = DataFrame({"key": by.to_arrow(), "value": self._s().to_arrow()})
+        frame = DataFrame({"key": by, "value": self._s()})
         return frame.group_by("key")
 
     def explode(self) -> "Series":
@@ -386,7 +386,7 @@ class _SeriesPandasMixin:
         from .dataframe import DataFrame
         from .series import Series
 
-        return Series(DataFrame({"v": self._s().to_arrow()}).explode("v")._native["v"])
+        return Series(DataFrame({"v": self._s()}).explode("v")._native["v"])
 
     # -- accessors: a Series is positional, so loc is iloc ----------------------------
     @property

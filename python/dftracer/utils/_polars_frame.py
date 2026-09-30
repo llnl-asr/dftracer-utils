@@ -151,12 +151,12 @@ class _FramePolarsMixin:
     def iter_rows(
         self, *, named: bool = False
     ) -> Iterator[Union[Tuple[object, ...], Dict[str, object]]]:
-        """The rows as tuples, or dicts with ``named`` (polars ``iter_rows``;
-        through Arrow, so not a fast path)."""
-        table = self._frame().to_arrow()
-        names = table.column_names
-        columns = [table.column(c).to_pylist() for c in names]
-        for i in range(table.num_rows):
+        """The rows as tuples, or dicts with ``named`` (polars ``iter_rows``; a Python object
+        per cell, so not a fast path)."""
+        frame = self._frame()
+        names = list(frame.columns)
+        columns = [frame[c].to_list() for c in names]
+        for i in range(len(frame)):
             row = tuple(col[i] for col in columns)
             yield dict(zip(names, row)) if named else row
 

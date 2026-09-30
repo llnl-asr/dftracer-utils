@@ -70,9 +70,10 @@ inline T scalar_value(dftu_scalar s) {
             return static_cast<T>(s.value.i);
         case DFTU_SCALAR_TAG_U64:
             return static_cast<T>(s.value.u);
-        // A STR scalar has no numeric reading, and its union member is a
+        // A STR or ERR scalar has no numeric reading, and its union member is a
         // pointer: falling through to value.d would reinterpret it as a double.
         case DFTU_SCALAR_TAG_STR:
+        case DFTU_SCALAR_TAG_ERR:
             return T{};
         default:
             return static_cast<T>(s.value.d);

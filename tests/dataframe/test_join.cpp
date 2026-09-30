@@ -502,35 +502,35 @@ TEST_SUITE("dataframe join") {
         REQUIRE(rh);
         const char* on[] = {"k"};
         dftu_dataframe* joined =
-            dftu_dataframe_join(lh, rh, on, on, 1, DFTU_JOIN_LEFT, nullptr);
+            dftu_dataframe_join(lh, rh, on, on, 1, DFTU_JOIN_LEFT, nullptr, 0);
         REQUIRE(joined);
         CHECK(dftu_dataframe_num_rows(joined) == 7);
         CHECK(dftu_dataframe_num_columns(joined) == 5);
         CHECK(std::string(dftu_dataframe_column_name(joined, 4)) == "v_right");
-        CHECK(dftu_dataframe_join(lh, rh, on, on, 0, DFTU_JOIN_LEFT, nullptr) ==
-              nullptr);
+        CHECK(dftu_dataframe_join(lh, rh, on, on, 0, DFTU_JOIN_LEFT, nullptr,
+                                  0) == nullptr);
         CHECK(dftu_dataframe_join(lh, rh, on, on, 1,
-                                  static_cast<dftu_join_how>(9),
-                                  nullptr) == nullptr);
+                                  static_cast<dftu_join_how>(9), nullptr,
+                                  0) == nullptr);
         const char* bad[] = {"nope"};
-        CHECK(dftu_dataframe_join(lh, rh, bad, on, 1, DFTU_JOIN_LEFT,
-                                  nullptr) == nullptr);
+        CHECK(dftu_dataframe_join(lh, rh, bad, on, 1, DFTU_JOIN_LEFT, nullptr,
+                                  0) == nullptr);
 
         dftu_lazyframe* ll = dftu_dataframe_lazy(lh);
         dftu_lazyframe* rl = dftu_dataframe_lazy(rh);
         REQUIRE(ll);
         REQUIRE(rl);
         dftu_lazyframe* jl =
-            dftu_lazyframe_join(ll, rl, on, on, 1, DFTU_JOIN_LEFT, "_r");
+            dftu_lazyframe_join(ll, rl, on, on, 1, DFTU_JOIN_LEFT, "_r", 0);
         REQUIRE(jl);
         dftu_dataframe* collected = dftu_lazyframe_collect(jl, 0);
         REQUIRE(collected);
         CHECK(dftu_dataframe_num_rows(collected) == 7);
         CHECK(std::string(dftu_dataframe_column_name(collected, 4)) == "v_r");
-        CHECK(dftu_lazyframe_join(ll, rl, on, on, 0, DFTU_JOIN_LEFT, nullptr) ==
-              nullptr);
+        CHECK(dftu_lazyframe_join(ll, rl, on, on, 0, DFTU_JOIN_LEFT, nullptr,
+                                  0) == nullptr);
         CHECK(dftu_lazyframe_join(ll, nullptr, on, on, 1, DFTU_JOIN_LEFT,
-                                  nullptr) == nullptr);
+                                  nullptr, 0) == nullptr);
         dftu_dataframe_free(collected);
         dftu_lazyframe_free(jl);
         dftu_lazyframe_free(rl);

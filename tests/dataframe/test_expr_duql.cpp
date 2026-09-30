@@ -2,6 +2,7 @@
 // numbers compare exactly across integer and double columns.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/series.h>
@@ -445,8 +446,13 @@ TEST_CASE("str_pattern runs a compiled duql pattern; a work limit is null") {
     const Series hard = strs({std::string(10000, 'a') + "!", "AAA"});
     auto iregex = duql::compile_regex("^(a|aa)+$", true);
     REQUIRE(iregex);
+#ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
+    CHECK(as_bools(run(df::expr_str_pattern(c0(), *iregex), {&hard})) ==
+          Opt<bool>{false, true});
+#else
     CHECK(as_bools(run(df::expr_str_pattern(c0(), *iregex), {&hard})) ==
           Opt<bool>{std::nullopt, true});
+#endif
 
     CHECK_THROWS_AS(run(df::expr_str_pattern(c0(), nullptr), {&s}),
                     std::invalid_argument);
@@ -468,6 +474,157 @@ TEST_CASE("str_extract returns a capture group or null") {
     REQUIRE(slow);
     CHECK(as_strs(run(df::expr_str_extract(c0(), *slow, 1), {&hard})) ==
           Opt<std::string>{std::nullopt});
+}
+
+TEST_CASE("string predicates take a column needle") {
+    const Series s = strs({"hello", "hello", "", "abc", std::nullopt, "x"});
+    const Series n = strs({"he", "lo", "", "bc", "a", std::nullopt});
+    using P = df::StrPredOp;
+    CHECK(as_bools(run(df::expr_str_pred_col(P::StartsWith, c0(), c1()),
+                       {&s, &n})) ==
+          Opt<bool>{true, false, true, false, std::nullopt, std::nullopt});
+    CHECK(as_bools(
+              run(df::expr_str_pred_col(P::EndsWith, c0(), c1()), {&s, &n})) ==
+          Opt<bool>{false, true, true, true, std::nullopt, std::nullopt});
+    CHECK(as_bools(
+              run(df::expr_str_pred_col(P::Contains, c0(), c1()), {&s, &n})) ==
+          Opt<bool>{true, true, true, true, std::nullopt, std::nullopt});
+    const Series longer = strs({"hello world", "a", "", "abcd", "q", "x"});
+    CHECK(as_bools(run(df::expr_str_pred_col(P::Contains, c0(), c1()),
+                       {&s, &longer})) ==
+          Opt<bool>{false, false, true, false, std::nullopt, true});
+    for (P op : {P::Contains, P::StartsWith, P::EndsWith}) {
+        CHECK(
+            as_bools(run(df::expr_str_pred_col(op, c0(), df::expr_lit_str("l")),
+                         {&s})) ==
+            as_bools(run(df::expr_str_pred(op, c0(), "l"), {&s})));
+    }
+    CHECK_THROWS_AS(df::expr_str_pred_col(P::Like, c0(), c1()),
+                    std::invalid_argument);
+    CHECK(df::infer_type(df::expr_str_pred_col(P::Contains, c0(), c1()),
+                         {s.data_type(), n.data_type()})
+              .id == TypeId::Bool);
+}
+
+TEST_CASE("replace takes column from and to") {
+    const Series s = strs({"aXbXc", "abc", "aaa", "abc", std::nullopt, "xyz"});
+    const Series from = strs({"X", "", "aa", "b", "a", std::nullopt});
+    const Series to = strs({"--", "Z", "Q", "", "a", "a"});
+    CHECK(as_strs(run(df::expr_str_replace_col(c0(), c1(), df::expr_col(2)),
+                      {&s, &from, &to})) ==
+          Opt<std::string>{"a--b--c", "abc", "Qa", "ac", std::nullopt,
+                           std::nullopt});
+    CHECK(
+        as_strs(run(df::expr_str_replace_col(c0(), df::expr_lit_str("b"), c1()),
+                    {&s, &to})) ==
+        Opt<std::string>{"aX--Xc", "aZc", "aaa", "ac", std::nullopt, "xyz"});
+    CHECK(
+        as_strs(run(df::expr_str_replace_col(c0(), df::expr_lit_str("a"),
+                                             df::expr_lit_str("\xc3\xa9")),
+                    {&s})) ==
+        as_strs(run(df::expr_str_replace(c0(), "a", "\xc3\xa9", true), {&s})));
+}
+
+TEST_CASE("substr takes column start and length") {
+    const Series s =
+        strs({"h\xc3\xa9llo", "abc", "abc", "abc", std::nullopt, "abc"});
+    const Series start = ints({1, 0, -1, 10, 0, std::nullopt});
+    const Series len = ints({3, -1, 2, 2, 1, 1});
+    CHECK(as_strs(run(df::expr_str_substr_col(c0(), c1(), nullptr),
+                      {&s, &start})) ==
+          Opt<std::string>{"\xc3\xa9llo", "abc", std::nullopt, "", std::nullopt,
+                           std::nullopt});
+    const Expr l = df::expr_col(2);
+    CHECK(as_strs(run(df::expr_str_substr_col(c0(), c1(), &l),
+                      {&s, &start, &len})) ==
+          Opt<std::string>{"\xc3\xa9ll", std::nullopt, std::nullopt, "",
+                           std::nullopt, std::nullopt});
+    const Expr lit_len = df::lit(std::int64_t{2});
+    CHECK(as_strs(run(df::expr_str_substr_col(c0(), c1(), &lit_len),
+                      {&s, &start})) ==
+          Opt<std::string>{"\xc3\xa9l", "ab", std::nullopt, "", std::nullopt,
+                           std::nullopt});
+    const Series fl = dbls({1.0, 1.0, 1.0, 1.0, 1.0, 1.0});
+    CHECK(
+        as_strs(run(df::expr_str_substr_col(c0(), c1(), nullptr), {&s, &fl})) ==
+        Opt<std::string>{std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+                         std::nullopt, std::nullopt});
+}
+
+TEST_CASE("round takes a column of digits") {
+    const Series d = dbls({2.5, -2.5, 1.2345, 15.0, std::nullopt, 7.5, 1.5});
+    const Series dg = ints({0, 0, 2, -1, 1, std::nullopt, 400});
+    CHECK(as_dbls(run(df::expr_round_col(c0(), c1()), {&d, &dg})) ==
+          Opt<double>{3.0, -3.0, 1.23, 20.0, std::nullopt, std::nullopt,
+                      std::nullopt});
+    const Series n = ints({1234, -1250, 15, 15, std::nullopt, 15, 15});
+    const Series dg2 = ints({2, -2, 0, -1, 0, 0, 400});
+    CHECK(as_ints(run(df::expr_round_col(c0(), c1()), {&n, &dg2})) ==
+          Opt<std::int64_t>{1234, -1300, 15, 20, std::nullopt, 15, 15});
+    const Series fd = dbls({0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0});
+    CHECK(as_ints(run(df::expr_round_col(c0(), c1()), {&n, &fd})) ==
+          Opt<std::int64_t>(7, std::nullopt));
+    const std::uint64_t big = std::uint64_t{1} << 63;
+    const Series u = uints({big + 2048, big + 2048, U64_MAX, 15, std::nullopt});
+    const Series ud = ints({0, -2, -1, -1, 0});
+    const auto ur = read<std::uint64_t>(
+        run(df::expr_round_col(c0(), c1()), {&u, &ud}), TypeId::Uint64);
+    CHECK(ur == Opt<std::uint64_t>{big + 2048, std::nullopt, std::nullopt, 20,
+                                   std::nullopt});
+    CHECK(as_dbls(run(df::expr_round_col(c0(), df::lit(std::int64_t{2})),
+                      {&d})) == as_dbls(run(df::expr_round(c0(), 2), {&d})));
+    CHECK(df::infer_type(df::expr_round_col(c0(), c1()),
+                         {n.data_type(), dg2.data_type()})
+              .id == TypeId::Int64);
+}
+
+TEST_CASE("extract takes a column of groups") {
+    const Series s =
+        strs({"12-34", "12-34", "12-34", "12-34", "x", std::nullopt, "12-34"});
+    const Series g = ints({2, 0, 3, -1, 1, 1, std::nullopt});
+    auto re = duql::compile_regex("(\\d+)-(\\d+)", false);
+    REQUIRE(re);
+    CHECK(as_strs(run(df::expr_str_extract_col(c0(), *re, c1()), {&s, &g})) ==
+          Opt<std::string>{"34", "12-34", std::nullopt, std::nullopt,
+                           std::nullopt, std::nullopt, std::nullopt});
+    CHECK(as_strs(run(
+              df::expr_str_extract_col(c0(), *re, df::lit(std::int64_t{1})),
+              {&s})) == as_strs(run(df::expr_str_extract(c0(), *re, 1), {&s})));
+    CHECK_THROWS_AS(
+        run(df::expr_str_extract_col(c0(), nullptr, c1()), {&s, &g}),
+        std::invalid_argument);
+}
+
+TEST_CASE("str_regex_replace substitutes groups and keeps nulls") {
+    const Series s = strs({"open64_17", "none", std::nullopt, "/a//b"});
+    const std::string_view pat = R"re((?<op>[a-z]+)64_(\d+))re";
+    auto re = duql::compile_regex(pat, false);
+    REQUIRE(re);
+    auto sub = duql::compile_substitution(**re, "${op}#$2$$");
+    REQUIRE(sub);
+    const Opt<std::string> want{"open#17$", "none", std::nullopt, "/a//b"};
+    CHECK(as_strs(run(df::expr_str_regex_replace(c0(), *re, *sub), {&s})) ==
+          want);
+    CHECK(as_strs(Series{dftu_series_str_regex_replace(
+              s.handle(), pat.data(), static_cast<std::int32_t>(pat.size()),
+              "${op}#$2$$", 10)}) == want);
+    CHECK(as_strs(s.str_regex_replace(pat, "${op}#$2$$")) == want);
+
+    dftu_expr* col = dftu_expr_col(0);
+    dftu_expr* e = dftu_expr_str_fn(
+        DFTU_STR_FN_REGEX_REPLACE, col, nullptr, pat.data(),
+        static_cast<std::int32_t>(pat.size()), "${op}#$2$$", 10, 0, 0);
+    REQUIRE(e);
+    const dftu_series* in[1] = {s.handle()};
+    CHECK(as_strs(Series{dftu_expr_eval(e, in, 1)}) == want);
+    dftu_expr_free(e);
+    dftu_expr_free(col);
+
+    CHECK_THROWS_AS(run(df::expr_str_regex_replace(c0(), nullptr, *sub), {&s}),
+                    std::invalid_argument);
+    CHECK_FALSE(duql::compile_substitution(**re, "$3"));
+    CHECK_FALSE(duql::compile_substitution(**re, "$x"));
+    CHECK_FALSE(s.str_regex_replace("(", "x").valid());
 }
 
 TEST_CASE("convert to int parses, truncates and nulls the unknown") {
@@ -670,4 +827,210 @@ TEST_CASE("string kernels run across evaluation chunks") {
     const auto sub = as_strs(run(df::expr_str_substr(c0(), 1, 1), {&s}));
     CHECK(sub.front() == std::optional<std::string>("\xc3\xa9"));
     CHECK(sub.back() == std::optional<std::string>("\xc3\xa9"));
+}
+
+namespace {
+
+constexpr std::int64_t NS_PER_US = 1'000;
+constexpr std::int64_t NS_PER_MS = 1'000'000;
+constexpr std::int64_t NS_PER_S = 1'000'000'000;
+constexpr std::int64_t NS_PER_MIN = 60 * NS_PER_S;
+constexpr std::int64_t NS_PER_H = 3600 * NS_PER_S;
+constexpr std::int64_t NS_PER_D = 86400 * NS_PER_S;
+
+Opt<std::int64_t> part(const Series& s, std::int32_t p, std::int64_t unit) {
+    return as_ints(run(df::expr_date_part(c0(), p, unit), {&s}));
+}
+Opt<std::string> fmt(const Series& s, std::string_view f, std::int64_t unit) {
+    return as_strs(run(df::expr_format_time(c0(), f, unit), {&s}));
+}
+
+}  // namespace
+
+TEST_CASE("date_part reads a time in every unit") {
+    // 2023-11-14 22:13:20 UTC, in each unit (coarse units floor).
+    const std::int64_t units[7] = {1,          NS_PER_US, NS_PER_MS, NS_PER_S,
+                                   NS_PER_MIN, NS_PER_H,  NS_PER_D};
+    const std::int64_t values[7] = {1'700'000'000'000'000'000,
+                                    1'700'000'000'000'000,
+                                    1'700'000'000'000,
+                                    1'700'000'000,
+                                    28'333'333,
+                                    472'222,
+                                    19'675};
+    const std::int64_t hour[7] = {22, 22, 22, 22, 22, 22, 0};
+    const std::int64_t minute[7] = {13, 13, 13, 13, 13, 0, 0};
+    const std::int64_t second[7] = {20, 20, 20, 20, 0, 0, 0};
+    for (int i = 0; i < 7; ++i) {
+        const Series s = ints({values[i]});
+        CAPTURE(units[i]);
+        CHECK(part(s, DFTU_DT_YEAR, units[i]) == Opt<std::int64_t>{2023});
+        CHECK(part(s, DFTU_DT_MONTH, units[i]) == Opt<std::int64_t>{11});
+        CHECK(part(s, DFTU_DT_DAY, units[i]) == Opt<std::int64_t>{14});
+        CHECK(part(s, DFTU_DT_HOUR, units[i]) == Opt<std::int64_t>{hour[i]});
+        CHECK(part(s, DFTU_DT_MINUTE, units[i]) ==
+              Opt<std::int64_t>{minute[i]});
+        CHECK(part(s, DFTU_DT_SECOND, units[i]) ==
+              Opt<std::int64_t>{second[i]});
+        CHECK(part(s, DFTU_DT_DAY_OF_WEEK, units[i]) == Opt<std::int64_t>{1});
+        CHECK(part(s, DFTU_DT_DAY_OF_YEAR, units[i]) == Opt<std::int64_t>{318});
+        CHECK(part(s, DFTU_DT_QUARTER, units[i]) == Opt<std::int64_t>{4});
+        CHECK(part(s, DFTU_DT_ISO_WEEK, units[i]) == Opt<std::int64_t>{46});
+        CHECK(part(s, DFTU_DT_ISO_YEAR, units[i]) == Opt<std::int64_t>{2023});
+    }
+}
+
+TEST_CASE("date_part: sub-second fields, pre-epoch, leap days, ISO edges") {
+    // 2023-11-14 22:13:20.123456789, the epoch, 1 ns before it, 2024-02-29
+    // 12:34:56, 2021-01-03, 2024-12-30, 1900-03-01.
+    const Series ns =
+        ints({1'700'000'000'123'456'789, 0, -1, 1'709'210'096'000'000'000,
+              1'609'632'000'000'000'000, 1'735'516'800'000'000'000,
+              -2'203'891'200'000'000'000});
+    CHECK(part(ns, DFTU_DT_MILLISECOND, 1)[0] ==
+          std::optional<std::int64_t>(123));
+    CHECK(part(ns, DFTU_DT_MICROSECOND, 1)[0] ==
+          std::optional<std::int64_t>(123456));
+    CHECK(part(ns, DFTU_DT_NANOSECOND, 1)[0] ==
+          std::optional<std::int64_t>(789));
+    CHECK(part(ns, DFTU_DT_YEAR, 1) ==
+          Opt<std::int64_t>{2023, 1970, 1969, 2024, 2021, 2024, 1900});
+    CHECK(part(ns, DFTU_DT_MONTH, 1) ==
+          Opt<std::int64_t>{11, 1, 12, 2, 1, 12, 3});
+    CHECK(part(ns, DFTU_DT_DAY, 1) ==
+          Opt<std::int64_t>{14, 1, 31, 29, 3, 30, 1});
+    CHECK(part(ns, DFTU_DT_HOUR, 1)[2] == std::optional<std::int64_t>(23));
+    CHECK(part(ns, DFTU_DT_NANOSECOND, 1)[2] ==
+          std::optional<std::int64_t>(999));
+    CHECK(part(ns, DFTU_DT_DAY_OF_YEAR, 1) ==
+          Opt<std::int64_t>{318, 1, 365, 60, 3, 365, 60});
+    CHECK(part(ns, DFTU_DT_DAY_OF_WEEK, 1) ==
+          Opt<std::int64_t>{1, 3, 2, 3, 6, 0, 3});
+    CHECK(part(ns, DFTU_DT_ISO_WEEK, 1) ==
+          Opt<std::int64_t>{46, 1, 1, 9, 53, 1, 9});
+    CHECK(part(ns, DFTU_DT_ISO_YEAR, 1) ==
+          Opt<std::int64_t>{2023, 1970, 1970, 2024, 2020, 2025, 1900});
+    CHECK(part(ns, DFTU_DT_QUARTER, 1) ==
+          Opt<std::int64_t>{4, 1, 4, 1, 1, 4, 1});
+}
+
+TEST_CASE("date_part and format_time: nulls, Float64 floored, other types") {
+    const Series d = dbls({1'700'000'000'123'456.75, -0.5, NaN, std::nullopt});
+    CHECK(part(d, DFTU_DT_MICROSECOND, 1000) ==
+          Opt<std::int64_t>{123456, 999999, std::nullopt, std::nullopt});
+    CHECK(fmt(d, "%F %T.%f", 1000) ==
+          Opt<std::string>{"2023-11-14 22:13:20.123456",
+                           "1969-12-31 23:59:59.999999", std::nullopt,
+                           std::nullopt});
+    const Series i = ints({1'700'000'000'123'456, std::nullopt});
+    CHECK(fmt(i, "%F %T.%f", 1000) ==
+          Opt<std::string>{"2023-11-14 22:13:20.123456", std::nullopt});
+    const Series u = uints({1'700'000'000, U64_MAX, std::nullopt});
+    CHECK(part(u, DFTU_DT_HOUR, NS_PER_S) ==
+          Opt<std::int64_t>{22, std::nullopt, std::nullopt});
+    const std::vector<std::int32_t> n32{86400, -1};
+    const Series i32 = Series::flat(TypeId::Int32, n32.data(), 2);
+    CHECK(fmt(i32, "%F %T", NS_PER_S) ==
+          Opt<std::string>{"1970-01-02 00:00:00", "1969-12-31 23:59:59"});
+    // v * ns_per_unit overflows 64 bits here: the instants are the int64
+    // limits in microseconds.
+    CHECK(fmt(ints({I64_MAX, I64_MIN}), "%F %T.%f", 1000) ==
+          Opt<std::string>{"294247-01-10 04:00:54.775807",
+                           "-290308-12-21 19:59:05.224192"});
+}
+
+TEST_CASE("format_time directives on fixed instants in every unit") {
+    const Series ns = ints({1'700'000'000'123'456'789, -1});
+    CHECK(
+        fmt(ns,
+            "%Y|%y|%m|%d|%H|%I|%M|%S|%f|%j|%a|%A|%b|%B|%p|%F|%T|%s|%z|%Z|%%",
+            1) ==
+        Opt<std::string>{
+            "2023|23|11|14|22|10|13|20|123456|318|Tue|Tuesday|Nov|November|PM|"
+            "2023-11-14|22:13:20|1700000000|+0000|UTC|%",
+            "1969|69|12|31|23|11|59|59|999999|365|Wed|Wednesday|Dec|December|"
+            "PM|1969-12-31|23:59:59|-1|+0000|UTC|%"});
+    CHECK(fmt(ints({28'333'333}), "%F %T", NS_PER_MIN) ==
+          Opt<std::string>{"2023-11-14 22:13:00"});
+    CHECK(fmt(ints({472'222}), "%F %T", NS_PER_H) ==
+          Opt<std::string>{"2023-11-14 22:00:00"});
+    CHECK(fmt(ints({19'675}), "%F %T %s", NS_PER_D) ==
+          Opt<std::string>{"2023-11-14 00:00:00 1699920000"});
+    CHECK(fmt(ints({1'700'000'000'123}), "%T.%f", NS_PER_MS) ==
+          Opt<std::string>{"22:13:20.123000"});
+    CHECK(fmt(ints({-62'135'596'800}), "%Y-%m-%d", NS_PER_S) ==
+          Opt<std::string>{"0001-01-01"});
+    CHECK(fmt(ints({-62'135'596'801}), "%Y-%m-%d", NS_PER_S) ==
+          Opt<std::string>{"0000-12-31"});
+    CHECK(fmt(ints({-62'167'219'200 - 86400}), "%Y", NS_PER_S) ==
+          Opt<std::string>{"-0001"});
+    CHECK(fmt(ints({0}), "%I:%M %p", NS_PER_S) == Opt<std::string>{"12:00 AM"});
+    CHECK(fmt(ints({43'200}), "%I:%M %p", NS_PER_S) ==
+          Opt<std::string>{"12:00 PM"});
+}
+
+TEST_CASE("date_part and format_time: types, CSE and refusals") {
+    const Series i = ints({1'700'000'000'123'456});
+    const Series s = strs({"x"});
+    for (const Expr& e : {df::expr_date_part(c0(), DFTU_DT_HOUR, 1000),
+                          df::expr_format_time(c0(), "%F", 1000)}) {
+        CHECK_THROWS_AS(run(e, {&s}), std::invalid_argument);
+    }
+    CHECK(df::infer_type(df::expr_date_part(c0(), DFTU_DT_HOUR, 1000),
+                         {i.data_type()})
+              .id == TypeId::Int64);
+    CHECK(
+        df::infer_type(df::expr_format_time(c0(), "%F", 1000), {i.data_type()})
+            .id == TypeId::String);
+    CHECK_THROWS_AS(df::expr_date_part(c0(), 99, 1000), std::invalid_argument);
+    CHECK_THROWS_AS(df::expr_date_part(c0(), DFTU_DT_IS_LEAP_YEAR, 1000),
+                    std::invalid_argument);
+    CHECK_THROWS_AS(df::expr_date_part(c0(), DFTU_DT_HOUR, 0),
+                    std::invalid_argument);
+    CHECK_THROWS_AS(df::expr_format_time(c0(), "%Q", 1000),
+                    std::invalid_argument);
+    CHECK_THROWS_AS(df::expr_format_time(c0(), "%Y%", 1000),
+                    std::invalid_argument);
+    CHECK_THROWS_AS(df::expr_format_time(c0(), "%F", -5),
+                    std::invalid_argument);
+
+    // The same field of two units and two formats must not share a slot.
+    const Expr both =
+        df::expr_concat({df::expr_format_time(c0(), "%H", 1000),
+                         df::expr_format_time(c0(), "%M", 1000),
+                         df::expr_format_time(c0(), "%H", NS_PER_S)});
+    CHECK(as_strs(run(both, {&i})) ==
+          Opt<std::string>{"22"
+                           "13" +
+                           *fmt(i, "%H", NS_PER_S)[0]});
+    const Expr sum = df::expr_arith(
+        ArithOp::Add, df::expr_date_part(c0(), DFTU_DT_YEAR, 1000),
+        df::expr_date_part(c0(), DFTU_DT_YEAR, NS_PER_S));
+    CHECK(as_ints(run(sum, {&i})) ==
+          Opt<std::int64_t>{*part(i, DFTU_DT_YEAR, 1000)[0] +
+                            *part(i, DFTU_DT_YEAR, NS_PER_S)[0]});
+}
+
+TEST_CASE("date_part and format_time C ABI builders") {
+    const Series i = ints({1'700'000'000'123'456, std::nullopt});
+    dftu_expr* col = dftu_expr_col(0);
+    dftu_expr* hour = dftu_expr_date_part(col, DFTU_DT_HOUR, 1000);
+    dftu_expr* text = dftu_expr_format_time(col, "%F %T.%f", 8, 1000);
+    REQUIRE(hour);
+    REQUIRE(text);
+    const dftu_series* raw[1] = {i.handle()};
+    CHECK(as_ints(Series{dftu_expr_eval(hour, raw, 1)}) ==
+          Opt<std::int64_t>{22, std::nullopt});
+    CHECK(as_strs(Series{dftu_expr_eval(text, raw, 1)}) ==
+          Opt<std::string>{"2023-11-14 22:13:20.123456", std::nullopt});
+
+    CHECK(dftu_expr_date_part(nullptr, DFTU_DT_HOUR, 1000) == nullptr);
+    CHECK(dftu_expr_date_part(col, 99, 1000) == nullptr);
+    CHECK(dftu_expr_date_part(col, DFTU_DT_HOUR, 0) == nullptr);
+    CHECK(dftu_expr_format_time(nullptr, "%F", 2, 1000) == nullptr);
+    CHECK(dftu_expr_format_time(col, "%Q", 2, 1000) == nullptr);
+    CHECK(dftu_expr_format_time(col, "%F%", 3, 1000) == nullptr);
+    CHECK(dftu_expr_format_time(col, "%F", 2, 0) == nullptr);
+    CHECK(dftu_expr_format_time(col, nullptr, 2, 1000) == nullptr);
+    for (dftu_expr* e : {text, hour, col}) dftu_expr_free(e);
 }

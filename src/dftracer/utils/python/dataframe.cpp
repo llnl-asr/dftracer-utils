@@ -854,11 +854,13 @@ PyObject* DataFrame_join(PyObject* self, PyObject* args, PyObject* kwds) {
     PyObject* left_on = nullptr;
     PyObject* right_on = nullptr;
     const char* suffix = "_right";
-    static const char* kwlist[] = {"other",    "on",     "how",  "left_on",
-                                   "right_on", "suffix", nullptr};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|OsOOs",
-                                     const_cast<char**>(kwlist), &other, &on,
-                                     &how, &left_on, &right_on, &suffix))
+    int nulls_equal = 0;
+    static const char* kwlist[] = {"other",       "on",       "how",
+                                   "left_on",     "right_on", "suffix",
+                                   "nulls_equal", nullptr};
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwds, "O|OsOOsp", const_cast<char**>(kwlist), &other, &on,
+            &how, &left_on, &right_on, &suffix, &nulls_equal))
         return nullptr;
     DataFrameObject* o = as_dataframe(other);
     if (!o) return nullptr;
@@ -869,7 +871,7 @@ PyObject* DataFrame_join(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!join_keys_from_objs(on, left_on, right_on, jh, l, r)) return nullptr;
     return run_batch_op([&] {
         return dataframe::join(to_dataframe(b), to_dataframe(o), l, r, jh,
-                               suffix);
+                               suffix, nulls_equal != 0);
     });
 }
 
@@ -1009,11 +1011,16 @@ PyObject* DataFrame_asof(PyObject* self, PyObject* args, PyObject* kwds) {
     const auto dir = static_cast<dataframe::AsofDirection>(dir_code);
     std::vector<std::string> equi;
     if (!parse_string_seq(by, "asof: by must be names", equi)) return nullptr;
-    std::optional<std::int64_t> tol;
+    std::optional<double> tol;
     if (tol_obj != Py_None) {
-        const long long t = PyLong_AsLongLong(tol_obj);
+        const double t = PyFloat_AsDouble(tol_obj);
         if (PyErr_Occurred()) return nullptr;
-        tol = static_cast<std::int64_t>(t);
+        if (!(t >= 0)) {
+            PyErr_SetString(PyExc_ValueError,
+                            "asof: tolerance must not be negative");
+            return nullptr;
+        }
+        tol = t;
     }
     return run_batch_op([&] {
         return dataframe::asof(to_dataframe(b), to_dataframe(o), on, equi, dir,
@@ -1452,7 +1459,7 @@ PyMethodDef DataFrame_methods[] = {
      "element (empty/null list -> one null row)."},
     {"window", DFTU_PYCFUNCTION(DataFrame_window), METH_VARARGS | METH_KEYWORDS,
      "window(partition_by, order_by, specs) -> DataFrame: SQL window "
-     "functions; specs are normalized 9-tuples."},
+     "functions; specs are normalized 12-tuples."},
     {"gap_fill", DFTU_PYCFUNCTION(DataFrame_gap_fill),
      METH_VARARGS | METH_KEYWORDS,
      "gap_fill(partition_by, time, bucket, values, mode, start=None, "

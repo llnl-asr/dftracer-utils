@@ -50,6 +50,8 @@ if TYPE_CHECKING:
 _OCCUPANCY = ("busy", "concurrency", "utilization", "active")
 _WILDCARD_OPS = ("sum", "min", "max", "var", "std", "skew", "kurt")
 
+DuqlParam = Union[bool, int, float, str, Sequence[Union[bool, int, float, str]]]
+
 
 class Containment(NamedTuple):
     """Both containment frames of one buffered fold."""
@@ -94,7 +96,7 @@ def _agg_specs(specs: Sequence[Union[str, Agg]]) -> "tuple[List[str], List[str],
                 "TraceViewer.agg() needs a bare-field aggregate like F.dur.sum(); "
                 "aggregate a computed value with with_column() then group_by()"
             )
-        spec = f"{s.op}:{s.value.name}"
+        spec = f"{'count' if s.op == 'count_valid' else s.op}:{s.value.name}"
         if s.op == "pct":
             spec += f":{s.param}"
         strings.append(spec)
@@ -186,13 +188,14 @@ class TraceViewer(LazyFrame):
             return self._absorbed(LazyFrame.filter(self, predicate))
         return self._trace(self._tv.filter(predicate))
 
-    def duql(self, text: str, **params: Union[bool, int, float, str]) -> "TraceViewer":
+    def duql(self, text: str, **params: DuqlParam) -> "TraceViewer":
         """Run the duql pipeline ``text`` with ``params`` bound to its
-        ``$name`` parameters (bool, int, float or str). Leading ``where``
+        ``$name`` parameters (bool, int, float or str, or a list of them for
+        ``x in $name``). Leading ``where``
         stages filter events in the scan; later stages run on its columns."""
         return self._trace(self._tv.duql(text, params))
 
-    def explain_duql(self, text: str, **params: Union[bool, int, float, str]) -> str:
+    def explain_duql(self, text: str, **params: DuqlParam) -> str:
         """The plan :meth:`duql` builds, one step per line, without
         scanning."""
         return self._tv.explain_duql(text, params)

@@ -31,10 +31,12 @@ inline void each_slot(Pipeline& p, F&& fn) {
                     fn(n.condition);
                 } else if constexpr (std::is_same_v<T, Derive>) {
                     assigns(n.fields);
+                } else if constexpr (std::is_same_v<T, Parse>) {
+                    fn(n.pattern);
                 } else if constexpr (std::is_same_v<T, Select>) {
                     items(n.items);
                 } else if constexpr (std::is_same_v<T, Distinct>) {
-                    exprs(n.keys);
+                    items(n.keys);
                 } else if constexpr (std::is_same_v<T, Group>) {
                     items(n.keys);
                     assigns(n.aggregates);
@@ -54,31 +56,40 @@ inline void each_slot(Pipeline& p, F&& fn) {
                     exprs(n.by);
                     sort_keys(n.order);
                 } else if constexpr (std::is_same_v<T, Lookup>) {
+                    if (n.side) each_slot(*n.side, fn);
                     for (auto& [k, c] : n.keys) {
                         fn(k);
                         fn(c);
                     }
                 } else if constexpr (std::is_same_v<T, OverlapLookup>) {
+                    if (n.side) each_slot(*n.side, fn);
                     for (auto& [k, c] : n.keys) {
                         fn(k);
                         fn(c);
                     }
                 } else if constexpr (std::is_same_v<T, AsofLookup>) {
+                    if (n.side) each_slot(*n.side, fn);
                     for (auto& [k, c] : n.keys) {
                         fn(k);
                         fn(c);
                     }
                     fn(n.time.first);
                     fn(n.time.second);
+                    fn(n.within);
                 } else if constexpr (std::is_same_v<T, Union>) {
                     each_slot(*n.other, fn);
-                } else if constexpr (std::is_same_v<T, CallStage>) {
+                } else if constexpr (std::is_same_v<T, CallStage> ||
+                                     std::is_same_v<T, Use>) {
                     for (auto& a : n.call.args) fn(a.value);
                 } else if constexpr (std::is_same_v<T, TimeRange>) {
                     fn(n.low);
                     fn(n.high);
                 } else if constexpr (std::is_same_v<T, Bucket>) {
                     fn(n.width);
+                    fn(n.every);
+                    fn(n.at);
+                    fn(n.low);
+                    fn(n.high);
                 }
             },
             s.node);
@@ -111,9 +122,15 @@ inline void children(Expr& e, F&& fn) {
                 fn(n.key);
             } else if constexpr (std::is_same_v<T, Call>) {
                 for (auto& a : n.args) fn(a.value);
+            } else if constexpr (std::is_same_v<T, Over>) {
+                fn(n.call);
+                fn(n.width);
             } else if constexpr (std::is_same_v<T, List> ||
                                  std::is_same_v<T, Tuple>) {
                 for (auto& x : n.items) fn(x);
+            } else if constexpr (std::is_same_v<T, Index>) {
+                fn(n.base);
+                fn(n.index);
             } else if constexpr (std::is_same_v<T, Subquery>) {
                 each_slot(*n.pipeline, fn);
             }

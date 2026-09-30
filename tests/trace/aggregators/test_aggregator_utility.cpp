@@ -122,4 +122,111 @@ TEST_SUITE("Aggregator") {
         CHECK(profile_batch->total_files_processed == 1);
         CHECK(system_batch->total_files_processed == 1);
     }
+
+    TEST_CASE("Counts profile rows by dft_cnt, with dftu_cnt taking priority") {
+        TestEnvironment env(0);
+        REQUIRE(env.is_valid());
+
+        auto trace_plain = fs::path(env.get_dir()) / "dft_cnt_trace.pfw";
+        auto trace = fs::path(env.get_dir()) / "dft_cnt_trace.pfw.gz";
+        {
+            std::ofstream out(trace_plain);
+            out << R"({"name":"open64","cat":"POSIX","pid":7,"tid":3,"ts":1500,"dur":0,"ph":"C","args":{"dft_cnt":5,"dur_sum":1000,"hhash":"h","fhash":"f"}})"
+                << "\n";
+            out << R"({"name":"close","cat":"POSIX","pid":7,"tid":3,"ts":1600,"dur":0,"ph":"C","args":{"dftu_cnt":3,"dft_cnt":9,"dur_sum":10,"hhash":"h","fhash":"f"}})"
+                << "\n";
+        }
+        REQUIRE(compress_file_to_gzip(trace_plain.string(), trace.string()));
+        fs::remove(trace_plain);
+
+        AggregatorInput input;
+        input.directory = env.get_dir();
+        input.index_dir = env.get_dir();
+        input.force_rebuild = true;
+        input.config.track_process_parents = false;
+
+        ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 2});
+        Scheduler scheduler(&executor);
+
+        std::vector<AggregationBatch> batches;
+        auto task = make_task(
+            [&](CoroScope& ctx) -> coro::CoroTask<void> {
+                Aggregator agg;
+                auto gen = agg(ctx, input);
+                while (auto batch = co_await gen.next()) {
+                    batches.push_back(std::move(*batch));
+                }
+            },
+            "AggregatorDftCntTest");
+
+        scheduler.schedule(task);
+        task->wait();
+        executor.shutdown();
+
+        const AggregationBatch* profile_batch = nullptr;
+        for (const auto& batch : batches) {
+            if (batch.batch_type == AggregationBatchType::PROFILE) {
+                profile_batch = &batch;
+            }
+        }
+        REQUIRE(profile_batch != nullptr);
+        const auto& intern = profile_batch->strings();
+        REQUIRE(profile_batch->entries.size() == 2);
+        for (const auto& e : profile_batch->entries) {
+            if (e.key.name(intern) == "open64") {
+                CHECK(e.metrics.count == 5);
+            } else {
+                CHECK(e.key.name(intern) == "close");
+                CHECK(e.metrics.count == 3);
+            }
+        }
+    }
+
+    TEST_CASE("A profile on a bucket boundary lands in that bucket") {
+        TestEnvironment env(0);
+        REQUIRE(env.is_valid());
+
+        auto trace_plain = fs::path(env.get_dir()) / "boundary_trace.pfw";
+        auto trace = fs::path(env.get_dir()) / "boundary_trace.pfw.gz";
+        {
+            std::ofstream out(trace_plain);
+            out << R"({"name":"train","cat":"app","pid":7,"tid":3,"ts":2000,"dur":0,"ph":"C","args":{"count":1,"hhash":"h","fhash":"f"}})"
+                << "\n";
+        }
+        REQUIRE(compress_file_to_gzip(trace_plain.string(), trace.string()));
+        fs::remove(trace_plain);
+
+        AggregatorInput input;
+        input.directory = env.get_dir();
+        input.index_dir = env.get_dir();
+        input.force_rebuild = true;
+        input.config.time_interval_us = 1000;
+        input.config.track_process_parents = false;
+
+        ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 2});
+        Scheduler scheduler(&executor);
+
+        std::vector<AggregationBatch> batches;
+        auto task = make_task(
+            [&](CoroScope& ctx) -> coro::CoroTask<void> {
+                Aggregator agg;
+                auto gen = agg(ctx, input);
+                while (auto batch = co_await gen.next()) {
+                    batches.push_back(std::move(*batch));
+                }
+            },
+            "AggregatorBoundaryTest");
+
+        scheduler.schedule(task);
+        task->wait();
+        executor.shutdown();
+
+        const AggregationBatch* profile_batch = nullptr;
+        for (const auto& batch : batches)
+            if (batch.batch_type == AggregationBatchType::PROFILE)
+                profile_batch = &batch;
+        REQUIRE(profile_batch != nullptr);
+        REQUIRE(profile_batch->entries.size() == 1);
+        CHECK(profile_batch->entries[0].key.time_bucket == 2000);
+    }
 }

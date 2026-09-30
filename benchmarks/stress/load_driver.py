@@ -15,7 +15,6 @@ Stdlib only. Not a unit test; run manually against a live server.
 import argparse
 import json
 import random
-import statistics
 import sys
 import threading
 import time

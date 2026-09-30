@@ -24,29 +24,37 @@ inline bool window_func_from_str(const char* name, dftu_window_func* out) {
         const char* name;
         dftu_window_func func;
     };
-    static const Entry table[] = {{"row_number", DFTU_WINDOW_ROW_NUMBER},
-                                  {"rank", DFTU_WINDOW_RANK},
-                                  {"dense_rank", DFTU_WINDOW_DENSE_RANK},
-                                  {"lag", DFTU_WINDOW_LAG},
-                                  {"lead", DFTU_WINDOW_LEAD},
-                                  {"running_sum", DFTU_WINDOW_RUNNING_SUM},
-                                  {"running_min", DFTU_WINDOW_RUNNING_MIN},
-                                  {"running_max", DFTU_WINDOW_RUNNING_MAX},
-                                  {"running_count", DFTU_WINDOW_RUNNING_COUNT},
-                                  {"delta", DFTU_WINDOW_DELTA},
-                                  {"rate", DFTU_WINDOW_RATE},
-                                  {"sessionize", DFTU_WINDOW_SESSIONIZE},
-                                  {"frame_sum", DFTU_WINDOW_FRAME_SUM},
-                                  {"frame_min", DFTU_WINDOW_FRAME_MIN},
-                                  {"frame_max", DFTU_WINDOW_FRAME_MAX},
-                                  {"frame_count", DFTU_WINDOW_FRAME_COUNT},
-                                  {"frame_mean", DFTU_WINDOW_FRAME_MEAN},
-                                  {"ntile", DFTU_WINDOW_NTILE},
-                                  {"first_value", DFTU_WINDOW_FIRST_VALUE},
-                                  {"last_value", DFTU_WINDOW_LAST_VALUE},
-                                  {"nth_value", DFTU_WINDOW_NTH_VALUE},
-                                  {"fill_forward", DFTU_WINDOW_FILL_FORWARD},
-                                  {"running_prod", DFTU_WINDOW_RUNNING_PROD}};
+    static const Entry table[] = {
+        {"row_number", DFTU_WINDOW_ROW_NUMBER},
+        {"rank", DFTU_WINDOW_RANK},
+        {"dense_rank", DFTU_WINDOW_DENSE_RANK},
+        {"lag", DFTU_WINDOW_LAG},
+        {"lead", DFTU_WINDOW_LEAD},
+        {"running_sum", DFTU_WINDOW_RUNNING_SUM},
+        {"running_min", DFTU_WINDOW_RUNNING_MIN},
+        {"running_max", DFTU_WINDOW_RUNNING_MAX},
+        {"running_count", DFTU_WINDOW_RUNNING_COUNT},
+        {"delta", DFTU_WINDOW_DELTA},
+        {"rate", DFTU_WINDOW_RATE},
+        {"sessionize", DFTU_WINDOW_SESSIONIZE},
+        {"frame_sum", DFTU_WINDOW_FRAME_SUM},
+        {"frame_min", DFTU_WINDOW_FRAME_MIN},
+        {"frame_max", DFTU_WINDOW_FRAME_MAX},
+        {"frame_count", DFTU_WINDOW_FRAME_COUNT},
+        {"frame_mean", DFTU_WINDOW_FRAME_MEAN},
+        {"frame_var", DFTU_WINDOW_FRAME_VAR},
+        {"frame_std", DFTU_WINDOW_FRAME_STD},
+        {"frame_quantile", DFTU_WINDOW_FRAME_QUANTILE},
+        {"frame_count_distinct", DFTU_WINDOW_FRAME_COUNT_DISTINCT},
+        {"frame_arg_max", DFTU_WINDOW_FRAME_ARG_MAX},
+        {"frame_arg_min", DFTU_WINDOW_FRAME_ARG_MIN},
+        {"frame_collect", DFTU_WINDOW_FRAME_COLLECT},
+        {"ntile", DFTU_WINDOW_NTILE},
+        {"first_value", DFTU_WINDOW_FIRST_VALUE},
+        {"last_value", DFTU_WINDOW_LAST_VALUE},
+        {"nth_value", DFTU_WINDOW_NTH_VALUE},
+        {"fill_forward", DFTU_WINDOW_FILL_FORWARD},
+        {"running_prod", DFTU_WINDOW_RUNNING_PROD}};
     for (const auto& e : table)
         if (std::strcmp(e.name, name) == 0) {
             *out = e.func;
@@ -56,10 +64,10 @@ inline bool window_func_from_str(const char* name, dftu_window_func* out) {
     return false;
 }
 
-/// Parse the sequence of 9-tuples the Python wrapper normalizes a window()
+/// Parse the sequence of 12-tuples the Python wrapper normalizes a window()
 /// call into: (func, value_col|None, offset, name, time_col|None, threshold,
-/// counter, frame_preceding, frame_following, end_col|None, span). Returns
-/// false with a Python error set.
+/// counter, frame_preceding, frame_following, end_col|None, span, range_frame).
+/// Returns false with a Python error set.
 inline bool parse_window_specs(PyObject* seq, WindowSpecs& out) {
     PyObject* fast = PySequence_Fast(seq, "window: specs must be a sequence");
     if (!fast) return false;
@@ -78,7 +86,7 @@ inline bool parse_window_specs(PyObject* seq, WindowSpecs& out) {
         if (!PyTuple_Check(t)) {
             Py_DECREF(fast);
             PyErr_SetString(PyExc_TypeError,
-                            "window: each spec must be an 11-tuple");
+                            "window: each spec must be a 12-tuple");
             return false;
         }
         const char* func = nullptr;
@@ -92,12 +100,14 @@ inline bool parse_window_specs(PyObject* seq, WindowSpecs& out) {
         Py_ssize_t frame_post = 0;
         PyObject* end_obj = nullptr;
         double span = 0.0;
+        int range_frame = 0;
         dftu_window_spec s{};
         const char* time = nullptr;
         const char* end = nullptr;
-        if (!PyArg_ParseTuple(t, "sOnsOdpnnOd", &func, &value_obj, &offset,
+        if (!PyArg_ParseTuple(t, "sOnsOdpnnOdp", &func, &value_obj, &offset,
                               &name, &time_obj, &threshold, &counter,
-                              &frame_pre, &frame_post, &end_obj, &span) ||
+                              &frame_pre, &frame_post, &end_obj, &span,
+                              &range_frame) ||
             !window_func_from_str(func, &s.func) ||
             !name_of(value_obj, s.value) || !name_of(time_obj, time) ||
             !name_of(end_obj, end)) {
@@ -111,9 +121,20 @@ inline bool parse_window_specs(PyObject* seq, WindowSpecs& out) {
             case DFTU_WINDOW_FRAME_MAX:
             case DFTU_WINDOW_FRAME_COUNT:
             case DFTU_WINDOW_FRAME_MEAN:
+            case DFTU_WINDOW_FRAME_VAR:
+            case DFTU_WINDOW_FRAME_STD:
+            case DFTU_WINDOW_FRAME_QUANTILE:
+            case DFTU_WINDOW_FRAME_COUNT_DISTINCT:
+            case DFTU_WINDOW_FRAME_ARG_MAX:
+            case DFTU_WINDOW_FRAME_ARG_MIN:
+            case DFTU_WINDOW_FRAME_COLLECT:
                 s.param.frame = {static_cast<std::int64_t>(offset),
                                  static_cast<std::int64_t>(frame_pre),
-                                 static_cast<std::int64_t>(frame_post)};
+                                 static_cast<std::int64_t>(frame_post),
+                                 range_frame ? DFTU_WINDOW_FRAME_RANGE
+                                             : DFTU_WINDOW_FRAME_ROWS,
+                                 threshold,
+                                 end};
                 break;
             case DFTU_WINDOW_RATE:
                 s.param.rate.time = time;

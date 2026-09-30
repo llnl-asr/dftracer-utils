@@ -218,6 +218,84 @@ TEST_SUITE("View duql sources") {
                      "ts") == std::vector<std::string>{"30"});
     }
 
+    TEST_CASE("pipeline macros run as stages") {
+        TestEnvironment env(10);
+        const View v = view_of(write_records(env, "t", dftracer_lines()));
+        const std::string rate =
+            "def io_rate(d) = where cat == \"POSIX\" | bucket d | agg { b = "
+            "sum(dur) }; ";
+        const std::string hand =
+            "where cat == \"POSIX\" | bucket 10us | agg { b = sum(dur) } | "
+            "sort b";
+        const df::DataFrame want = frame(v.duql(hand));
+        REQUIRE(want.num_rows() == 3);
+        const df::DataFrame stage =
+            frame(v.duql(rate + "where ts > 0 | io_rate(10us) | sort b"));
+        CHECK(stage.names == want.names);
+        CHECK(column(stage, "b") == column(want, "b"));
+        CHECK(column(stage, "bucket") == column(want, "bucket"));
+
+        const std::string leading = rate + "io_rate(10us) | sort b";
+        CHECK(column(frame(v.duql(leading)), "b") == column(want, "b"));
+        const std::string pushed = "scan filter: cat == \"POSIX\" (pushed)";
+        REQUIRE(v.explain_duql(hand).find(pushed) != std::string::npos);
+        CHECK(v.explain_duql(leading).find(pushed) != std::string::npos);
+
+        CHECK(column(frame(v.duql("def slow(t) = dur > t; slow(1) | select "
+                                  "ts")),
+                     "ts") ==
+              column(frame(v.duql("where dur > 1 | select ts")), "ts"));
+        CHECK(error_of([&] {
+                  (void)v.duql(rate + "where io_rate(1ms)");
+              }).find("is a pipeline; call it as a stage") !=
+              std::string::npos);
+        CHECK(error_of([&] {
+                  (void)v.duql(
+                      "def slow(t) = dur > t; where ts > 0 | "
+                      "slow(1)");
+              }).find("write 'where slow(...)'") != std::string::npos);
+    }
+
+    TEST_CASE("pipeline macros from a source and a file") {
+        ix::register_schema(R"(
+id: weblog2
+fields:
+  status: {type: int}
+  request_time: {type: float, role: duration, unit: s}
+source: |
+  def worst(n) = sort -status | where status > n
+)",
+                            "test");
+        TestEnvironment env(10);
+        const View w =
+            view_of(write_records(env, "w2",
+                                  {R"({"status":200,"request_time":0.5})",
+                                   R"({"status":503,"request_time":2.5})",
+                                   R"({"status":404,"request_time":1.5})"}))
+                .record_schema("weblog2");
+        CHECK(column(frame(w.duql("where status > 0 | worst(300) | select "
+                                  "status")),
+                     "status") == std::vector<std::string>{"503", "404"});
+
+        const std::string path = env.get_dir() + "/pm.duql";
+        {
+            std::ofstream o(path);
+            o << "def posix_rate(d) = where cat == \"POSIX\" | bucket d | agg "
+                 "{ b = sum(dur) };\n";
+        }
+        dftracer::utils::duql::load_macros(path);
+        const View v = view_of(write_records(env, "t", dftracer_lines()));
+        const df::DataFrame want = frame(v.duql(
+            "where cat == \"POSIX\" | bucket 10us | agg { b = sum(dur) } | "
+            "sort b"));
+        CHECK(column(frame(v.duql("where ts > 0 | posix_rate(10us) | sort b")),
+                     "b") == column(want, "b"));
+        CHECK(column(frame(v.duql("def posix_rate(d) = where dur > 1 | "
+                                  "take 1; where ts > 0 | posix_rate(10us)"
+                                  " | select ts")),
+                     "ts") == std::vector<std::string>{"20"});
+    }
+
     TEST_CASE("a user schema's source") {
         ix::register_schema(R"(
 id: weblog

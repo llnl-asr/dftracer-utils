@@ -3079,7 +3079,7 @@ class JoinCursor : public Cursor {
                std::vector<Field> left_fields, LazyFrame other,
                std::vector<std::string> left_on,
                std::vector<std::string> right_on, JoinHow how,
-               std::string suffix, std::uint64_t budget)
+               std::string suffix, std::uint64_t budget, bool nulls_equal)
         : in_(std::move(in)),
           sch_(std::move(sch)),
           left_fields_(std::move(left_fields)),
@@ -3088,6 +3088,7 @@ class JoinCursor : public Cursor {
           right_on_(std::move(right_on)),
           how_(how),
           suffix_(std::move(suffix)),
+          nulls_equal_(nulls_equal),
           budget_(budget) {}
 
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
@@ -3136,9 +3137,9 @@ class JoinCursor : public Cursor {
             bytes += spill::columns_bytes(flat_columns(*df));
             parts.push_back(std::move(*df));
             if (bytes <= budget_) continue;
-            grace_ =
-                std::make_unique<GraceJoin>(sch_, parts.front().names, left_on_,
-                                            right_on_, how_, suffix_, budget_);
+            grace_ = std::make_unique<GraceJoin>(
+                sch_, parts.front().names, left_on_, right_on_, how_, suffix_,
+                budget_, nulls_equal_);
             for (const DataFrame& p : parts) grace_->add_right(p);
             parts.clear();
         }
@@ -3158,7 +3159,8 @@ class JoinCursor : public Cursor {
     coro::CoroTask<void> start_in_memory(DataFrame right) {
         if (std::optional<Expr> pred = build_side_predicate(right))
             co_await in_->narrow(*pred);
-        join_.emplace(std::move(right), left_on_, right_on_, how_, suffix_);
+        join_.emplace(std::move(right), left_on_, right_on_, how_, suffix_,
+                      nulls_equal_);
         co_return;
     }
 
@@ -3194,10 +3196,12 @@ class JoinCursor : public Cursor {
     // itself when it is small, its range for a large numeric key, nothing
     // for a large key of another type. Positional against sch_, the join's
     // input; a key column absent from either side is left to probe(), which
-    // names it in its error.
+    // names it in its error. Nothing is offered when null keys match: the
+    // build keys leave out their nulls, and a left row with a null key must
+    // still reach the probe.
     std::optional<Expr> build_side_predicate(const DataFrame& right) const {
-        if (how_ != JoinHow::Inner && how_ != JoinHow::Right &&
-            how_ != JoinHow::Semi)
+        if (nulls_equal_ || (how_ != JoinHow::Inner && how_ != JoinHow::Right &&
+                             how_ != JoinHow::Semi))
             return std::nullopt;
         std::optional<Expr> pred;
         for (std::size_t i = 0; i < left_on_.size() && i < right_on_.size();
@@ -3264,6 +3268,7 @@ class JoinCursor : public Cursor {
     std::vector<std::string> right_on_;
     JoinHow how_;
     std::string suffix_;
+    bool nulls_equal_ = false;
     std::optional<HashJoin> join_;
     std::unique_ptr<GraceJoin> grace_;
     std::uint64_t budget_;
@@ -3355,6 +3360,9 @@ const char* window_time(const dftu_window_spec& w) {
 }
 
 const char* window_end(const dftu_window_spec& w) {
+    if (w.func == DFTU_WINDOW_FRAME_ARG_MAX ||
+        w.func == DFTU_WINDOW_FRAME_ARG_MIN)
+        return w.param.frame.by;
     return w.func == DFTU_WINDOW_SESSIONIZE ? w.param.session.end : nullptr;
 }
 
@@ -3577,7 +3585,12 @@ class OwnedFrameOpArgs {
                                                ? s.strings[4 * k + 1].c_str()
                                                : nullptr;
                         w.out = s.strings[4 * k + 2].c_str();
-                        if (w.func == DFTU_WINDOW_RATE) {
+                        if (w.func == DFTU_WINDOW_FRAME_ARG_MAX ||
+                            w.func == DFTU_WINDOW_FRAME_ARG_MIN) {
+                            w.param.frame.by =
+                                s.has_end[k] ? s.strings[4 * k + 3].c_str()
+                                             : nullptr;
+                        } else if (w.func == DFTU_WINDOW_RATE) {
                             w.param.rate.time = time;
                         } else if (w.func == DFTU_WINDOW_SESSIONIZE) {
                             w.param.session.time = time;
@@ -3801,6 +3814,7 @@ struct JoinOp {
     JoinHow how;
     std::string suffix;
     std::vector<Field> left_fields;
+    bool nulls_equal = false;
 };
 struct ConcatOp {
     LazyFrame other;
@@ -4043,7 +4057,12 @@ std::vector<Field> group_agg_fields(const Schema& in,
     for (const GroupAgg& a : aggs) {
         TypeId vt = a.column.empty() ? TypeId::Unknown
                                      : field_type_or_unknown(in, a.column);
-        out.push_back(Field{a.out, agg_output_type(to_agg_op(a.op), vt), true});
+        DataType t = agg_output_type(to_agg_op(a.op), vt, a.param);
+        if (a.op == Agg::SetUnion && a.param != 0.0 &&
+            (vt == TypeId::List || vt == TypeId::LargeList))
+            t = list_of(set_union_element_type(
+                find_field(in, a.column)->type.fields[0].type.id));
+        out.push_back(Field{a.out, std::move(t), true});
     }
     return out;
 }
@@ -4288,7 +4307,8 @@ std::string describe_op(const LazyOp& op) {
             [](const JoinOp& o) {
                 return "join " + std::string(join_how_name(o.how)) + " [" +
                        join_names(o.left_on) + "] = [" +
-                       join_names(o.right_on) + "]";
+                       join_names(o.right_on) + "]" +
+                       (o.nulls_equal ? " nulls_equal" : "");
             },
             [](const ConcatOp&) { return std::string("concat"); },
             [](const TapOp&) { return std::string("tap"); },
@@ -4606,6 +4626,9 @@ std::optional<SourceApplication> offer_op(const Source& source,
         return source.apply_tail(o->n);
     }
     if (const auto* j = std::get_if<JoinOp>(&op.node)) {
+        // A source's join has the SQL rule for null keys; one that matches
+        // nulls is run by the host.
+        if (j->nulls_equal) return std::nullopt;
         // Only a right side that its own source fully absorbed can be handed
         // over; anything left above it would have to run first.
         PlanParts right =
@@ -4923,7 +4946,7 @@ std::unique_ptr<Cursor> make_cursor(const LazyOp& op,
             [&](const JoinOp& o) -> std::unique_ptr<Cursor> {
                 return std::make_unique<JoinCursor>(
                     std::move(in), sch, o.left_fields, o.other, o.left_on,
-                    o.right_on, o.how, o.suffix, budget);
+                    o.right_on, o.how, o.suffix, budget, o.nulls_equal);
             },
             [&](const ConcatOp& o) -> std::unique_ptr<Cursor> {
                 return std::make_unique<ConcatCursor>(std::move(in), o.other);
@@ -5425,10 +5448,15 @@ LazyFrame LazyFrame::melt(std::vector<std::string> id_vars,
 
 LazyFrame LazyFrame::join(LazyFrame other, std::vector<std::string> left_on,
                           std::vector<std::string> right_on, JoinHow how,
-                          std::string suffix) const {
+                          std::string suffix, bool nulls_equal) const {
     if (!valid_join_how(how))
         throw std::invalid_argument("join: unknown join kind " +
                                     std::to_string(static_cast<int>(how)));
+    if (nulls_equal && (how == JoinHow::Cross || how == JoinHow::Lookup ||
+                        how == JoinHow::Nest))
+        throw std::invalid_argument(
+            std::string("join: nulls_equal does not apply to a ") +
+            join_how_name(how) + " join");
     if (how == JoinHow::Cross) {
         left_on.clear();
         right_on.clear();
@@ -5440,17 +5468,18 @@ LazyFrame LazyFrame::join(LazyFrame other, std::vector<std::string> left_on,
             "join: left_on and right_on differ in length");
     auto ops = ops_;
     std::vector<Field> left_fields = output_schema().fields;
-    ops.push_back(std::make_shared<LazyOp>(
-        LazyOp{JoinOp{std::move(other), std::move(left_on), std::move(right_on),
-                      how, std::move(suffix), std::move(left_fields)}}));
+    ops.push_back(std::make_shared<LazyOp>(LazyOp{
+        JoinOp{std::move(other), std::move(left_on), std::move(right_on), how,
+               std::move(suffix), std::move(left_fields), nulls_equal}}));
     return with_ops(std::move(ops));
 }
 
 LazyFrame LazyFrame::join(LazyFrame other, std::vector<std::string> on,
-                          JoinHow how, std::string suffix) const {
+                          JoinHow how, std::string suffix,
+                          bool nulls_equal) const {
     std::vector<std::string> right_on = on;
     return join(std::move(other), std::move(on), std::move(right_on), how,
-                std::move(suffix));
+                std::move(suffix), nulls_equal);
 }
 
 LazyFrame LazyFrame::unnest(std::string column, bool keep_empty) const {
@@ -5529,8 +5558,13 @@ LazyFrame LazyFrame::concat(LazyFrame other) const {
             throw std::invalid_argument("concat: column " + std::to_string(i) +
                                         " is '" + lhs[i].name + "' vs '" +
                                         rhs[i].name + "'");
+        // String and LargeString concatenate (the eager kernel widens).
+        const auto text = [](TypeId x) {
+            return x == TypeId::String || x == TypeId::LargeString;
+        };
         if (lhs[i].type.id != TypeId::Unknown &&
-            rhs[i].type.id != TypeId::Unknown && lhs[i].type != rhs[i].type)
+            rhs[i].type.id != TypeId::Unknown && lhs[i].type != rhs[i].type &&
+            !(text(lhs[i].type.id) && text(rhs[i].type.id)))
             throw std::invalid_argument("concat: column '" + lhs[i].name +
                                         "' type differs");
     }
@@ -6287,6 +6321,7 @@ void fingerprint_op(Fingerprint& fp, const LazyOp& op) {
                 fp.strs(o.right_on);
                 fp.pod(o.how);
                 fp.str(o.suffix);
+                fp.pod(o.nulls_equal);
                 fp.pod(static_cast<std::uint64_t>(o.left_fields.size()));
                 for (const Field& f : o.left_fields) {
                     fp.str(f.name);

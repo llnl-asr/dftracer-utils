@@ -326,9 +326,39 @@ Series unique(const Series& v) {
     return take(v, keep);
 }
 
-Series rank(const Series& v, RankMethod method, bool descending) {
+Series rank(const Series& v, RankMethod method, bool descending, bool pct) {
     const std::int64_t n = v.length();
     if (refuse_nested_value("rank", v.type())) return Series{};
+    // A float NaN is missing like a null: rank the present rows alone (so the
+    // pct divisor counts neither) and give the missing rows a null rank.
+    if (v.type() == TypeId::Float64 || v.type() == TypeId::Float32 ||
+        v.type() == TypeId::Float16) {
+        const bool nulls = v.null_count() > 0;
+        std::vector<std::int64_t> keep;
+        keep.reserve(static_cast<std::size_t>(n));
+        bool has_nan = false;
+        for (std::int64_t i = 0; i < n; ++i) {
+            if (nulls && v.is_null(i)) continue;
+            if (std::isnan(read_f64(v, i))) {
+                has_nan = true;
+                continue;
+            }
+            keep.push_back(i);
+        }
+        if (has_nan) {
+            const Series ranked = rank(take(v, keep), method, descending, pct);
+            const double* r = ranked.data<double>();
+            std::vector<double> out(static_cast<std::size_t>(n), std::nan(""));
+            std::vector<std::uint8_t> ok(static_cast<std::size_t>((n + 7) / 8),
+                                         0);
+            for (std::size_t t = 0; t < keep.size(); ++t) {
+                const std::int64_t i = keep[t];
+                out[static_cast<std::size_t>(i)] = r[t];
+                ok[static_cast<std::size_t>(i >> 3)] |= (1u << (i & 7));
+            }
+            return Series::flat(TypeId::Float64, out.data(), n, ok.data());
+        }
+    }
     std::vector<double> ranks(static_cast<std::size_t>(n), std::nan(""));
     Series order = argsort(v, descending);  // nulls sort last
     const std::int64_t* idx = order.data<std::int64_t>();
@@ -367,6 +397,17 @@ Series rank(const Series& v, RankMethod method, bool descending) {
             ranks[static_cast<std::size_t>(idx[t])] = r;
         }
         k = j;
+    }
+    if (pct) {
+        // pandas divides a dense rank by the number of distinct values (its
+        // largest rank), every other method by the non-null count; either way
+        // the largest value ranks 1.0.
+        const double divisor = method == RankMethod::Dense
+                                   ? static_cast<double>(dense)
+                                   : static_cast<double>(n - v.null_count());
+        for (std::int64_t i = 0; i < n; ++i)
+            if (!has_nulls || !v.is_null(i))
+                ranks[static_cast<std::size_t>(i)] /= divisor;
     }
     // A null value has a null rank (pandas and polars both), not a NaN.
     if (!has_nulls) return Series::flat(TypeId::Float64, ranks.data(), n);
@@ -787,6 +828,15 @@ Series ewm_std(const Series& v, double alpha) {
     std::vector<double> out(static_cast<std::size_t>(n), 0.0);
     std::vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
     if (n == 0) return Series::flat(TypeId::Float64, out.data(), n);
+    // The variance is unchanged by a shift, so run the recurrences on the
+    // values minus the first valid one: a running mean of values near 1e9 would
+    // lose the digits of a spread of 1 in a single double.
+    double x0 = 0.0;
+    for (std::int64_t i = 0; i < n; ++i)
+        if (v.null_count() == 0 || !v.is_null(i)) {
+            x0 = read_f64(v, i);
+            break;
+        }
     // Incremental reliability-weight EW variance: at step i observation j
     // carries weight decay^(i-j). w_sum tracks the total weight, w2_sum the
     // sum of squared weights, and s the weighted sum of squared deviations;
@@ -824,8 +874,8 @@ Series ewm_std(const Series& v, double alpha) {
                 return 1.0 - 1.0 / w_sum[static_cast<std::size_t>(i)];
             },
             [&](std::int64_t i) {
-                return i == 0 ? read_f64(v, 0)
-                              : read_f64(v, i) /
+                return i == 0 ? (read_f64(v, 0) - x0)
+                              : (read_f64(v, i) - x0) /
                                     w_sum[static_cast<std::size_t>(i)];
             },
             mean, aprod);
@@ -836,7 +886,7 @@ Series ewm_std(const Series& v, double alpha) {
             n, GRAIN, decay,
             [&](std::int64_t i) {
                 if (i == 0) return 0.0;
-                const double x = read_f64(v, i);
+                const double x = (read_f64(v, i) - x0);
                 const double delta = x - mean[static_cast<std::size_t>(i - 1)];
                 return delta * (x - mean[static_cast<std::size_t>(i)]);
             },
@@ -865,7 +915,7 @@ Series ewm_std(const Series& v, double alpha) {
         w_sum *= decay;
         w2_sum *= decay * decay;
         if (!has_nulls || !v.is_null(i)) {
-            const double x = read_f64(v, i);
+            const double x = (read_f64(v, i) - x0);
             w_sum += 1.0;
             w2_sum += 1.0;
             if (w_sum == 1.0) {
@@ -889,8 +939,11 @@ Series ewm_std(const Series& v, double alpha) {
     return Series::flat(TypeId::Float64, out.data(), n, valid.data());
 }
 
-Series cut(const Series& v, const Series& breaks) {
+Series cut(const Series& v, const Series& breaks, std::int32_t flags) {
     if (refuse_non_numeric("cut", v.type())) return Series{};
+    if ((flags & ~(DFTU_CUT_RIGHT | DFTU_CUT_INNER)) != 0) return Series{};
+    const bool right = (flags & DFTU_CUT_RIGHT) != 0;
+    const bool inner = (flags & DFTU_CUT_INNER) != 0;
     const std::int64_t n = v.length();
     const std::int64_t nb = breaks.length();
     std::vector<double> edges(static_cast<std::size_t>(nb));
@@ -903,9 +956,15 @@ Series cut(const Series& v, const Series& breaks) {
     for (std::int64_t i = 0; i < n; ++i) {
         if (has_nulls && v.is_null(i)) continue;
         const double x = read_f64(v, i);
-        auto it = std::upper_bound(edges.begin(), edges.end(), x);
-        out[static_cast<std::size_t>(i)] =
-            static_cast<std::int32_t>(it - edges.begin());
+        // The count of breaks below x (right-closed) or at or below it.
+        auto it = right ? std::lower_bound(edges.begin(), edges.end(), x)
+                        : std::upper_bound(edges.begin(), edges.end(), x);
+        std::int32_t bin = static_cast<std::int32_t>(it - edges.begin());
+        if (inner) {
+            if (bin < 1 || bin >= static_cast<std::int32_t>(nb)) continue;
+            --bin;
+        }
+        out[static_cast<std::size_t>(i)] = bin;
         valid[static_cast<std::size_t>(i >> 3)] |= (1u << (i & 7));
     }
     return Series::flat(TypeId::Int32, out.data(), n, valid.data());
@@ -1096,13 +1155,14 @@ dftu_series* dftu_series_unique(const dftu_series* v) {
     return r.release();
 }
 dftu_series* dftu_series_rank(const dftu_series* v, dftu_rank_method method,
-                              int32_t descending) {
+                              int32_t flags) {
     if (!v) return nullptr;
-    DFTU_FLAT_INPUT(v, dftu_series_rank, method, descending);
+    DFTU_FLAT_INPUT(v, dftu_series_rank, method, flags);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     dftracer::utils::dataframe::Series r = dftracer::utils::dataframe::rank(
         c, static_cast<dftracer::utils::dataframe::RankMethod>(method),
-        descending != 0);
+        (flags & DFTU_RANK_FLAG_DESCENDING) != 0,
+        (flags & DFTU_RANK_FLAG_PCT) != 0);
     c.release();
     return r.release();
 }
@@ -1171,20 +1231,21 @@ dftu_series* dftu_series_ewm_std(const dftu_series* v, double alpha) {
     c.release();
     return r.release();
 }
-dftu_series* dftu_series_cut(const dftu_series* v, const dftu_series* breaks) {
+dftu_series* dftu_series_cut(const dftu_series* v, const dftu_series* breaks,
+                             int32_t flags) {
     if (!v || !breaks) return nullptr;
-    DFTU_FLAT_INPUT(v, dftu_series_cut, breaks);
+    DFTU_FLAT_INPUT(v, dftu_series_cut, breaks, flags);
     if (breaks->encoding != dftracer::utils::dataframe::Encoding::Flat) {
         dftu_series* flat = dftu_series_materialize(breaks);
         if (!flat) return nullptr;
-        dftu_series* r = dftu_series_cut(v, flat);
+        dftu_series* r = dftu_series_cut(v, flat, flags);
         dftu_series_free(flat);
         return r;
     }
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     dftracer::utils::dataframe::Series b{const_cast<dftu_series*>(breaks)};
     dftracer::utils::dataframe::Series r =
-        dftracer::utils::dataframe::cut(c, b);
+        dftracer::utils::dataframe::cut(c, b, flags);
     c.release();
     b.release();
     return r.release();

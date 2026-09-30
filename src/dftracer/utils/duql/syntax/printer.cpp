@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/to_chars.h>
+#include <dftracer/utils/duql/string_literal.h>
 #include <dftracer/utils/duql/syntax/tree.h>
 #include <dftracer/utils/duql/term.h>
 
@@ -57,8 +58,9 @@ static bool eq(const Binary& a, const Binary& b) {
     return a.op == b.op && eq(a.left, b.left) && eq(a.right, b.right);
 }
 static bool eq(const In& a, const In& b) {
-    return a.negated == b.negated && eq(a.subject, b.subject) &&
-           eq(a.list, b.list) && eq(a.subquery, b.subquery);
+    return a.negated == b.negated && a.list_param == b.list_param &&
+           eq(a.subject, b.subject) && eq(a.list, b.list) &&
+           eq(a.subquery, b.subquery);
 }
 static bool eq(const Contains& a, const Contains& b) {
     return a.text == b.text && a.negated == b.negated && a.path == b.path &&
@@ -71,7 +73,7 @@ static bool eq(const Between& a, const Between& b) {
 static bool eq(const Like& a, const Like& b) {
     return a.negated == b.negated && a.icase == b.icase &&
            a.pattern == b.pattern && a.escape == b.escape &&
-           eq(a.subject, b.subject);
+           a.pattern_param == b.pattern_param && eq(a.subject, b.subject);
 }
 static bool eq(const Is& a, const Is& b) {
     return a.negated == b.negated && a.missing == b.missing &&
@@ -87,10 +89,17 @@ static bool eq(const Arg& a, const Arg& b) {
 static bool eq(const Call& a, const Call& b) {
     return a.name == b.name && eq(a.args, b.args);
 }
+static bool eq(const Over& a, const Over& b) {
+    return a.rows == b.rows && eq(a.call, b.call) && eq(a.width, b.width);
+}
 static bool eq(const List& a, const List& b) { return eq(a.items, b.items); }
 static bool eq(const Tuple& a, const Tuple& b) { return eq(a.items, b.items); }
 static bool eq(const Subquery& a, const Subquery& b) {
     return eq(a.pipeline, b.pipeline);
+}
+
+static bool eq(const Index& a, const Index& b) {
+    return eq(a.base, b.base) && eq(a.index, b.index);
 }
 
 static bool eq(const Expr& a, const Expr& b) { return eq(a.node, b.node); }
@@ -116,6 +125,9 @@ static bool eq(const Where& a, const Where& b) {
 static bool eq(const Derive& a, const Derive& b) {
     return eq(a.fields, b.fields);
 }
+static bool eq(const Parse& a, const Parse& b) {
+    return a.column == b.column && eq(a.pattern, b.pattern);
+}
 static bool eq(const Select& a, const Select& b) {
     return eq(a.items, b.items);
 }
@@ -135,7 +147,7 @@ static bool eq(const Window& a, const Window& b) {
            eq(a.fields, b.fields);
 }
 static bool eq(const Pivot& a, const Pivot& b) {
-    return eq(a.key, b.key) && eq(a.values, b.values) &&
+    return eq(a.key, b.key) && eq(a.values, b.values) && a.labels == b.labels &&
            eq(a.aggregates, b.aggregates);
 }
 static bool eq(const Unpivot& a, const Unpivot& b) {
@@ -144,7 +156,8 @@ static bool eq(const Unpivot& a, const Unpivot& b) {
 }
 static bool eq(const Sort& a, const Sort& b) { return eq(a.keys, b.keys); }
 static bool eq(const Take& a, const Take& b) {
-    return a.count == b.count && eq(a.by, b.by) && eq(a.order, b.order);
+    return a.count == b.count && a.last == b.last && eq(a.by, b.by) &&
+           eq(a.order, b.order);
 }
 static bool eq(const Skip& a, const Skip& b) { return a.count == b.count; }
 static bool eq(const Sample& a, const Sample& b) {
@@ -155,14 +168,17 @@ static bool eq(const Expand& a, const Expand& b) {
            a.keep_empty == b.keep_empty;
 }
 static bool eq(const Lookup& a, const Lookup& b) {
-    return a.rowset == b.rowset && a.into == b.into && eq(a.keys, b.keys);
+    return a.rowset == b.rowset && a.kind == b.kind && a.into == b.into &&
+           eq(a.side, b.side) && eq(a.keys, b.keys);
 }
 static bool eq(const AsofLookup& a, const AsofLookup& b) {
-    return a.rowset == b.rowset && a.direction == b.direction &&
-           a.within == b.within && eq(a.keys, b.keys) && eq(a.time, b.time);
+    return a.rowset == b.rowset && eq(a.side, b.side) &&
+           a.direction == b.direction && eq(a.within, b.within) &&
+           eq(a.keys, b.keys) && eq(a.time, b.time);
 }
 static bool eq(const OverlapLookup& a, const OverlapLookup& b) {
-    return a.rowset == b.rowset && a.into == b.into && eq(a.keys, b.keys);
+    return a.rowset == b.rowset && a.into == b.into && eq(a.side, b.side) &&
+           eq(a.keys, b.keys);
 }
 static bool eq(const Union& a, const Union& b) { return eq(a.other, b.other); }
 static bool eq(const CallStage& a, const CallStage& b) {
@@ -172,8 +188,11 @@ static bool eq(const TimeRange& a, const TimeRange& b) {
     return a.overlap == b.overlap && eq(a.low, b.low) && eq(a.high, b.high);
 }
 static bool eq(const CallTree&, const CallTree&) { return true; }
+static bool eq(const Use& a, const Use& b) { return eq(a.call, b.call); }
 static bool eq(const Bucket& a, const Bucket& b) {
-    return a.fill == b.fill && eq(a.width, b.width);
+    return a.fill == b.fill && a.fill_mode == b.fill_mode && a.as == b.as &&
+           eq(a.width, b.width) && eq(a.every, b.every) && eq(a.at, b.at) &&
+           eq(a.low, b.low) && eq(a.high, b.high);
 }
 
 static bool eq(const Session& a, const Session& b) {
@@ -195,7 +214,12 @@ static bool eq(const Let& a, const Let& b) {
     return a.name == b.name && eq(a.pipeline, b.pipeline);
 }
 static bool eq(const Def& a, const Def& b) {
-    return a.name == b.name && a.params == b.params && eq(a.body, b.body);
+    if (a.name != b.name || a.params != b.params ||
+        a.body.index() != b.body.index())
+        return false;
+    if (a.body.index() == 0)
+        return eq(std::get<0>(a.body), std::get<0>(b.body));
+    return eq(std::get<1>(a.body), std::get<1>(b.body));
 }
 static bool eq(const RowSet& a, const RowSet& b) {
     return a.name == b.name && eq(a.pipeline, b.pipeline);
@@ -255,18 +279,7 @@ bool is_reserved(std::string_view s) {
 }
 
 void put_string(std::string& out, const std::string& raw) {
-    char q = '"';
-    std::size_t slashes = 0;
-    for (char c : raw) {
-        if (c == '"' && slashes % 2 == 0) {
-            q = '\'';
-            break;
-        }
-        slashes = c == '\\' ? slashes + 1 : 0;
-    }
-    out += q;
-    out += raw;
-    out += q;
+    out += quote_string(raw);
 }
 
 bool all_digits(std::string_view s) {
@@ -389,7 +402,10 @@ class Printer {
             out += ')';
         }
         out += " = ";
-        expr(d.body, OR);
+        if (const auto* p = std::get_if<PipelinePtr>(&d.body))
+            inline_pipeline(**p);
+        else
+            expr(std::get<ExprPtr>(d.body), OR);
     }
 
    private:
@@ -514,7 +530,10 @@ class Printer {
     int print(const In& in) {
         expr(in.subject, ADD);
         out += in.negated ? " not in " : " in ";
-        if (in.subquery) {
+        if (!in.list_param.empty()) {
+            out += '$';
+            out += in.list_param;
+        } else if (in.subquery) {
             subquery(in.subquery);
         } else {
             out += '[';
@@ -546,7 +565,12 @@ class Printer {
         expr(l.subject, ADD);
         out += l.negated ? " not " : " ";
         out += l.icase ? "ilike " : "like ";
-        put_string(out, l.pattern);
+        if (l.pattern_param.empty()) {
+            put_string(out, l.pattern);
+        } else {
+            out += '$';
+            out += l.pattern_param;
+        }
         if (l.escape) {
             out += " escape ";
             put_string(out, *l.escape);
@@ -590,6 +614,14 @@ class Printer {
         return PRIMARY;
     }
 
+    int print(const Over& o) {
+        expr(o.call, POSTFIX);
+        out += " over ";
+        expr(o.width, PRIMARY);
+        if (o.rows) out += " rows";
+        return POSTFIX;
+    }
+
     int print(const List& l) {
         out += '[';
         exprs(l.items);
@@ -602,6 +634,14 @@ class Printer {
         exprs(t.items);
         out += ')';
         return PRIMARY;
+    }
+
+    int print(const Index& i) {
+        expr(i.base, POSTFIX);
+        out += '[';
+        expr(i.index, OR);
+        out += ']';
+        return POSTFIX;
     }
 
     int print(const Subquery& s) {
@@ -676,6 +716,13 @@ class Printer {
         assigns(s.fields);
     }
 
+    void print_stage(const Parse& s) {
+        out += "parse ";
+        put_path(out, s.column);
+        out += " ~ ";
+        expr(s.pattern, OR);
+    }
+
     void print_stage(const Select& s) {
         out += "select ";
         items(s.items);
@@ -700,7 +747,7 @@ class Printer {
         out += "distinct";
         if (!s.keys.empty()) {
             out += ' ';
-            exprs(s.keys);
+            items(s.keys);
         }
     }
 
@@ -737,7 +784,14 @@ class Printer {
         expr(s.key, ADD);
         if (!s.values.empty()) {
             out += " in [";
-            exprs(s.values);
+            for (std::size_t i = 0; i < s.values.size(); ++i) {
+                if (i) out += ", ";
+                expr(s.values[i], OR);
+                if (i < s.labels.size() && !s.labels[i].empty()) {
+                    out += " as ";
+                    out += s.labels[i];
+                }
+            }
             out += ']';
         }
         out += ' ';
@@ -761,6 +815,10 @@ class Printer {
     void print_stage(const Take& s) {
         out += "take ";
         out += s.count;
+        if (!s.last.empty()) {
+            out += "..";
+            out += s.last;
+        }
         if (!s.by.empty()) {
             out += " by ";
             exprs(s.by);
@@ -808,10 +866,13 @@ class Printer {
         }
     }
 
-    void join_keys(const std::string& rowset,
+    void join_keys(const std::string& rowset, const PipelinePtr& side,
                    const std::vector<std::pair<ExprPtr, ExprPtr>>& keys) {
         out += "lookup ";
-        out += rowset;
+        if (side)
+            subquery(side);
+        else
+            out += rowset;
         out += " on ";
         for (std::size_t i = 0; i < keys.size(); ++i) {
             if (i) out += ", ";
@@ -820,7 +881,9 @@ class Printer {
     }
 
     void print_stage(const Lookup& s) {
-        join_keys(s.rowset, s.keys);
+        join_keys(s.rowset, s.side, s.keys);
+        if (s.kind == LookupKind::INNER) out += " inner";
+        if (s.kind == LookupKind::ANTI) out += " anti";
         if (!s.into.empty()) {
             out += " into ";
             out += s.into;
@@ -828,7 +891,7 @@ class Printer {
     }
 
     void print_stage(const OverlapLookup& s) {
-        join_keys(s.rowset, s.keys);
+        join_keys(s.rowset, s.side, s.keys);
         out += " overlap";
         if (!s.into.empty()) {
             out += " into ";
@@ -837,7 +900,7 @@ class Printer {
     }
 
     void print_stage(const AsofLookup& s) {
-        join_keys(s.rowset, s.keys);
+        join_keys(s.rowset, s.side, s.keys);
         out += " asof ";
         join_key(s.time);
         switch (s.direction) {
@@ -850,9 +913,9 @@ class Printer {
                 out += " nearest";
                 break;
         }
-        if (!s.within.empty()) {
+        if (s.within) {
             out += " within ";
-            out += s.within;
+            expr(s.within, ADD);
         }
     }
 
@@ -861,6 +924,8 @@ class Printer {
         subquery(s.other);
     }
 
+    void print_stage(const Use& s) { print(s.call); }
+
     void print_stage(const CallStage& s) {
         out += "call ";
         print(s.call);
@@ -868,9 +933,15 @@ class Printer {
 
     void print_stage(const TimeRange& s) {
         out += "time_range ";
-        expr(s.low, OR);
-        out += " .. ";
-        expr(s.high, OR);
+        if (s.low) {
+            expr(s.low, OR);
+            out += ' ';
+        }
+        out += "..";
+        if (s.high) {
+            out += ' ';
+            expr(s.high, OR);
+        }
         if (s.overlap) out += " overlap";
     }
 
@@ -879,7 +950,27 @@ class Printer {
     void print_stage(const Bucket& s) {
         out += "bucket ";
         expr(s.width, OR);
+        if (s.every) {
+            out += " every ";
+            expr(s.every, OR);
+        }
+        if (s.at) {
+            out += " at ";
+            expr(s.at, OR);
+        }
         if (s.fill) out += " fill";
+        if (s.fill_mode == FillMode::FORWARD) out += " forward";
+        if (s.fill_mode == FillMode::LINEAR) out += " linear";
+        if (s.low) {
+            out += " from ";
+            expr(s.low, OR);
+            out += " to ";
+            expr(s.high, OR);
+        }
+        if (!s.as.empty()) {
+            out += " as ";
+            out += s.as;
+        }
     }
 
     void print_stage(const Session& s) {
@@ -976,6 +1067,8 @@ bool atomic(const Term& t) {
     return std::holds_alternative<TField>(t.node) ||
            std::holds_alternative<TCall>(t.node) ||
            std::holds_alternative<TQuant>(t.node) ||
+           std::holds_alternative<TIndex>(t.node) ||
+           std::holds_alternative<TList>(t.node) ||
            std::holds_alternative<TLookup>(t.node);
 }
 
@@ -1126,6 +1219,18 @@ void put_term(std::string& out, const Term& t) {
                     put_term(out, *n.args[i]);
                 }
                 out += ')';
+            } else if constexpr (std::is_same_v<T, TIndex>) {
+                put_child(out, *n.array);
+                out += '[';
+                put_term(out, *n.index);
+                out += ']';
+            } else if constexpr (std::is_same_v<T, TList>) {
+                out += '[';
+                for (std::size_t i = 0; i < n.items.size(); ++i) {
+                    if (i > 0) out += ", ";
+                    put_term(out, *n.items[i]);
+                }
+                out += ']';
             } else if constexpr (std::is_same_v<T, TQuant>) {
                 out += n.all ? "all(" : "any(";
                 put_term(out, *n.subject);

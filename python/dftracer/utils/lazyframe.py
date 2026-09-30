@@ -334,7 +334,7 @@ class LazyFrame:
         on: str,
         by: Optional[Union[str, Sequence[str]]] = None,
         direction: Literal["backward", "forward", "nearest"] = "backward",
-        tolerance: Optional[int] = None,
+        tolerance: Optional[float] = None,
     ) -> "LazyFrame":
         """:meth:`DataFrame.asof` over the two collected plans."""
         return self._like(self._native.asof(other._native, on, _names(by), direction, tolerance))
@@ -496,8 +496,10 @@ class LazyFrame:
         left_on: Union[str, Sequence[str], None] = None,
         right_on: Union[str, Sequence[str], None] = None,
         suffix: str = "_right",
+        nulls_equal: bool = False,
     ) -> "LazyFrame":
-        """Hash join with another ``LazyFrame``, as :meth:`DataFrame.join`.
+        """Hash join with another ``LazyFrame``, as :meth:`DataFrame.join`
+        (``nulls_equal`` included).
         ``other`` is collected in full when this plan runs (the build side);
         this plan streams through it morsel by morsel. No filter or projection
         is moved across the join."""
@@ -511,6 +513,7 @@ class LazyFrame:
                 left_on=left_on,
                 right_on=right_on,
                 suffix=suffix,
+                nulls_equal=nulls_equal,
             )
         )
 

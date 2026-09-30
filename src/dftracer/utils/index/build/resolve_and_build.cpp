@@ -1,9 +1,11 @@
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/core/common/scratch.h>
 #include <dftracer/utils/core/env.h>
 #include <dftracer/utils/index/build/batch_builder.h>
+#include <dftracer/utils/index/build/corrupt_index.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_drain.h>
@@ -19,6 +21,7 @@
 #include <optional>
 #include <set>
 #include <stdexcept>
+#include <string_view>
 #include <system_error>
 
 namespace dftracer::utils::index::build {
@@ -117,7 +120,9 @@ coro::CoroTask<std::vector<ResolverResult::Failure>> build_aggregation(
 
 }  // namespace
 
-coro::CoroTask<ResolverResult> resolve_and_build_index(
+namespace {
+
+coro::CoroTask<ResolverResult> resolve_and_build_once(
     CoroScope* scope, ResolveAndBuildInput input) {
     std::size_t parallelism = input.parallelism;
     if (parallelism == 0) {
@@ -350,6 +355,8 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
     co_return result;
 }
 
+}  // namespace
+
 coro::CoroTask<void> ensure_indexes_fresh(CoroScope* scope,
                                           std::string directory,
                                           std::vector<std::string> files,
@@ -389,6 +396,66 @@ coro::CoroTask<MemberNormalizeResult> normalize_members_for_ingest(
         result.files.push_back(std::move(nf));
     }
     co_return result;
+}
+
+namespace {
+
+bool mentions_corruption(std::string_view text) {
+    return text.find("Corruption") != std::string_view::npos ||
+           text.find("is corrupt") != std::string_view::npos;
+}
+
+// Corruption outside what the build can repair, or corruption the repair did
+// not cure: name the index directories and say what to do.
+[[noreturn]] void throw_corrupt(const std::set<std::string>& roots,
+                                const std::string& cause, bool tier_cleared,
+                                ErrorCode code) {
+    throw DFTUtilsException(code,
+                            corrupt_index_message(roots, cause, tier_cleared));
+}
+
+}  // namespace
+
+// A corrupt aggregation tier is the one failure the build repairs itself: the
+// tier holds only data derived from the traces, so it is cleared (a range
+// delete, which never runs the merge operator) and aggregated again, once.
+// Corruption anywhere else, or corruption the repair did not cure, reaches the
+// caller with the index directories named. Any other error is passed on.
+coro::CoroTask<ResolverResult> resolve_and_build_index(
+    CoroScope* scope, ResolveAndBuildInput input) {
+    std::set<std::string> roots;
+    for (const auto& file : input.files)
+        roots.insert(
+            trace::internal::determine_index_path(file, input.index_dir));
+    std::string failure;
+    try {
+        co_return co_await resolve_and_build_once(scope, input);
+    } catch (const std::exception& e) {
+        if (!mentions_corruption(e.what())) throw;
+        failure = e.what();
+    }
+    // The tier's own message says "is corrupt"; other column families say
+    // only "Corruption" and cannot be repaired by clearing the tier.
+    if (failure.find("is corrupt") == std::string::npos)
+        throw_corrupt(roots, failure, false, ErrorCode::INDEXER);
+    DFTRACER_UTILS_LOG_WARN(
+        "the aggregation tier of %zu index(es) is corrupt (%s); clearing it "
+        "and aggregating again",
+        roots.size(), failure.c_str());
+    for (const auto& root : roots)
+        if (fs::exists(root)) {
+            index::store::RocksDBManager::instance().reset(root);
+            agg::tier::clear(*agg::tier::open(
+                root, index::store::RocksDatabase::OpenMode::ReadWrite));
+        }
+    std::string retry_failure;
+    try {
+        co_return co_await resolve_and_build_once(scope, std::move(input));
+    } catch (const std::exception& e) {
+        if (!mentions_corruption(e.what())) throw;
+        retry_failure = e.what();
+    }
+    throw_corrupt(roots, retry_failure, true, ErrorCode::AGGREGATION);
 }
 
 }  // namespace dftracer::utils::index::build

@@ -70,10 +70,12 @@ std::uint16_t compute_shard(std::string_view cat, std::string_view name,
 
 // Wire layout (FULL / FULL_WITH_SKETCH):
 //   fmt:u8, count:varint, total:varint, min:varint, max:varint,
-//   mean:f64, m2:f64, m3:f64, m4:f64, [sketch blob]
-// m2/m3/m4 are raw power sums (sum_x^2/3/4); mean is redundantly persisted
-// so consumers that don't need stddev can skip the power sums. m3/m4 let the
-// tier answer skewness/kurtosis without a scan.
+//   mean:f64, mean_lo:f64, m2:f64, m3:f64, m4:f64, [sketch blob]
+// The running mean the moments are taken about is the pair mean + mean_lo (a
+// value near it, and the small remainder), so it keeps digits one double would
+// lose when the mean is large next to the spread. m2/m3/m4 are the central
+// moments (sums of (x - mean)^2/3/4), so a stddev from the tier stays accurate
+// at any offset. m3/m4 let the tier answer skewness/kurtosis without a scan.
 inline char* write_metric_stats(char* p, const MetricStats& ms) {
     // COMPACT format can only represent "empty" (count=0) or a single
     // event with value = total (count=1). Critically: count=1 total=0 is
@@ -92,8 +94,8 @@ inline char* write_metric_stats(char* p, const MetricStats& ms) {
     const bool compact_empty =
         ms.count() == 0 && ms.total() == 0 && ms.m2() == 0.0 && !ms.sketch;
     const bool compact_single = ms.count() == 1 && ms.total() > 0 &&
-                                ms.m2() == ms.total() * ms.total() &&
-                                !ms.sketch;
+                                ms.m2() == 0.0 && ms.cmean() == 0.0 &&
+                                ms.shift() == ms.total() && !ms.sketch;
     if (compact_empty || compact_single) {
         *p++ = static_cast<char>(METRIC_FMT_COMPACT);
         return write_varint(p, ms.count() == 0 ? 0 : xtotal);
@@ -103,7 +105,8 @@ inline char* write_metric_stats(char* p, const MetricStats& ms) {
     p = write_varint(p, xtotal);
     p = write_varint(p, xmin);
     p = write_varint(p, xmax);
-    p = write_double(p, ms.mean());
+    p = write_double(p, ms.shift());
+    p = write_double(p, ms.cmean());
     p = write_double(p, ms.m2());
     p = write_double(p, ms.m3());
     p = write_double(p, ms.m4());
@@ -111,8 +114,8 @@ inline char* write_metric_stats(char* p, const MetricStats& ms) {
 }
 
 // Upper bound for MetricStats (FULL fmt, no sketch):
-//   1 (fmt) + 4*10 (varints) + 4*8 (doubles) = 73 bytes
-constexpr std::size_t METRIC_STATS_MAX_BYTES_NO_SKETCH = 73;
+//   1 (fmt) + 4*10 (varints) + 5*8 (doubles) = 81 bytes
+constexpr std::size_t METRIC_STATS_MAX_BYTES_NO_SKETCH = 81;
 
 void serialize_metric_stats(std::string& out, const MetricStats& ms) {
     if (!ms.sketch) {
@@ -129,7 +132,8 @@ void serialize_metric_stats(std::string& out, const MetricStats& ms) {
     put_varint(out, ms.exact_u64() ? ms.total_u64() : u(ms.total()));
     put_varint(out, ms.exact_u64() ? ms.min_u64() : u(ms.min()));
     put_varint(out, ms.exact_u64() ? ms.max_u64() : u(ms.max()));
-    put_double(out, ms.mean());
+    put_double(out, ms.shift());
+    put_double(out, ms.cmean());
     put_double(out, ms.m2());
     put_double(out, ms.m3());
     put_double(out, ms.m4());
@@ -147,9 +151,7 @@ MetricStats deserialize_metric_stats(BinaryReader& r, double accuracy) {
             ms.stat.n = 1;
             ms.stat.sum = v;
             ms.stat.min = ms.stat.max = v;
-            ms.stat.sumsq = v * v;
-            ms.stat.m3 = v * v * v;
-            ms.stat.m4 = v * v * v * v;
+            ms.stat.shift = v;  // one value: no spread about it
             // Tier metrics are uint64; restore the exact domain so a
             // tier-answered query matches the scan path.
             ms.stat.domain = dftracer::utils::dataframe::FieldStatDomain::U64;
@@ -170,10 +172,11 @@ MetricStats deserialize_metric_stats(BinaryReader& r, double accuracy) {
     ms.stat.esum = std::bit_cast<std::int64_t>(total);
     ms.stat.emin = std::bit_cast<std::int64_t>(mn);
     ms.stat.emax = std::bit_cast<std::int64_t>(mx);
-    r.f64();  // mean is derived from sum/n; read to advance past the wire field
-    ms.stat.sumsq = r.f64();
-    ms.stat.m3 = r.f64();
-    ms.stat.m4 = r.f64();
+    ms.stat.shift = r.f64();
+    ms.stat.cmean = r.f64();
+    ms.stat.cm2 = r.f64();
+    ms.stat.cm3 = r.f64();
+    ms.stat.cm4 = r.f64();
     if (fmt == METRIC_FMT_FULL_WITH_SKETCH) {
         auto blob = r.blob();
         ms.sketch = std::make_unique<DDSketch>(DDSketch::deserialize(

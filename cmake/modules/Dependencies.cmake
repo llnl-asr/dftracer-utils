@@ -1910,6 +1910,152 @@ function(need_pcre2)
 endfunction()
 
 # ==============================================================================
+# Vectorscan (static, external build); Ragel and Boost headers are build-only
+# ==============================================================================
+
+function(need_vectorscan)
+  if(TARGET dftracer_utils_hs)
+    return()
+  endif()
+  include(ExternalProject)
+
+  find_program(RAGEL ragel)
+  if(NOT RAGEL)
+    cpmaddpackage(
+      NAME
+      ragel
+      URL
+      https://www.colm.net/files/ragel/ragel-6.10.tar.gz
+      DOWNLOAD_ONLY
+      YES)
+    set(ragel_prefix "${CMAKE_BINARY_DIR}/_deps/ragel-install")
+    set(ragel_build "${CMAKE_BINARY_DIR}/_deps/ragel-build")
+    set(RAGEL "${ragel_prefix}/bin/ragel")
+    if(NOT EXISTS "${RAGEL}")
+      dftracer_utils_status("Building Ragel 6.10 for Vectorscan")
+      # Extraction leaves Makefile.am newer than Makefile.in, which makes
+      # make re-run automake-1.15; touching the generated files prevents it.
+      file(GLOB ragel_generated "${ragel_SOURCE_DIR}/aclocal.m4"
+           "${ragel_SOURCE_DIR}/configure" "${ragel_SOURCE_DIR}/Makefile.in"
+           "${ragel_SOURCE_DIR}/*/Makefile.in"
+           "${ragel_SOURCE_DIR}/*/config.h.in")
+      file(TOUCH ${ragel_generated})
+      file(MAKE_DIRECTORY "${ragel_build}")
+      foreach(step
+              "${ragel_SOURCE_DIR}/configure;--prefix=${ragel_prefix};--disable-manual"
+              "make;-C;ragel;-j4" "make;-C;ragel;install")
+        execute_process(
+          COMMAND ${step}
+          WORKING_DIRECTORY "${ragel_build}"
+          RESULT_VARIABLE ragel_rc
+          OUTPUT_VARIABLE ragel_out
+          ERROR_VARIABLE ragel_out)
+        if(NOT ragel_rc EQUAL 0)
+          message(FATAL_ERROR
+            "Vectorscan needs Ragel and building ragel-6.10 failed "
+            "(${step}):\n${ragel_out}\n"
+            "Install ragel or set -DDFTRACER_UTILS_ENABLE_VECTORSCAN=OFF")
+        endif()
+      endforeach()
+    endif()
+  endif()
+
+  find_package(Boost 1.61 CONFIG QUIET)
+  if(Boost_FOUND AND TARGET Boost::headers)
+    get_target_property(boost_inc Boost::headers INTERFACE_INCLUDE_DIRECTORIES)
+    set(boost_args "-DBoost_INCLUDE_DIR=${boost_inc}")
+  else()
+    cpmaddpackage(
+      NAME
+      boost_headers
+      URL
+      https://archives.boost.io/release/1.86.0/source/boost_1_86_0.tar.gz
+      DOWNLOAD_ONLY
+      YES)
+    set(boost_args "-DBOOST_ROOT=${boost_headers_SOURCE_DIR}"
+                   "-DBoost_INCLUDE_DIR=${boost_headers_SOURCE_DIR}")
+  endif()
+
+  cpmaddpackage(
+    NAME
+    vectorscan
+    URL
+    https://github.com/VectorCamp/vectorscan/archive/refs/tags/vectorscan/5.4.12.tar.gz
+    DOWNLOAD_ONLY
+    YES)
+
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES
+                                            "x86_64|AMD64")
+    set(hs_fat ON)
+  else()
+    set(hs_fat OFF)
+  endif()
+  set(hs_prefix "${CMAKE_BINARY_DIR}/_deps/vectorscan-install")
+  set(hs_lib "${hs_prefix}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}hs${CMAKE_STATIC_LIBRARY_SUFFIX}")
+  set(hs_args "")
+  # Debug symbols under Valgrind, so its reports name hs_scan and the
+  # suppression for Vectorscan's deliberate over-reads can match it.
+  set(hs_build_type Release)
+  if(DFTRACER_UTILS_VALGRIND_MODE)
+    set(hs_build_type RelWithDebInfo)
+  endif()
+  if(CMAKE_OSX_DEPLOYMENT_TARGET)
+    list(APPEND hs_args
+         "-DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}")
+  endif()
+  if(CMAKE_OSX_ARCHITECTURES)
+    list(APPEND hs_args
+         "-DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}")
+  endif()
+  foreach(lang C CXX)
+    if(CMAKE_${lang}_COMPILER_LAUNCHER)
+      list(APPEND hs_args
+           "-DCMAKE_${lang}_COMPILER_LAUNCHER=${CMAKE_${lang}_COMPILER_LAUNCHER}")
+    endif()
+    if(CMAKE_${lang}_COMPILER_ID STREQUAL "GNU")
+      list(APPEND hs_args "-DCMAKE_${lang}_FLAGS=-Wno-psabi")
+    endif()
+  endforeach()
+  file(MAKE_DIRECTORY "${hs_prefix}/include/hs")
+
+  ExternalProject_Add(
+    dftracer_utils_vectorscan_ep
+    SOURCE_DIR "${vectorscan_SOURCE_DIR}"
+    BINARY_DIR "${CMAKE_BINARY_DIR}/_deps/vectorscan-build"
+    INSTALL_DIR "${hs_prefix}"
+    CMAKE_ARGS -Wno-dev
+               -DCMAKE_BUILD_TYPE=${hs_build_type}
+               -DCMAKE_INSTALL_PREFIX=${hs_prefix}
+               -DCMAKE_INSTALL_LIBDIR=lib
+               -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+               -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+               -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+               -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+               -DBUILD_STATIC_LIBS=ON
+               -DBUILD_SHARED_LIBS=OFF
+               -DBUILD_UNIT=OFF
+               -DBUILD_TOOLS=OFF
+               -DBUILD_EXAMPLES=OFF
+               -DBUILD_BENCHMARKS=OFF
+               -DBUILD_DOC=OFF
+               -DBUILD_CHIMERA=OFF
+               -DFAT_RUNTIME=${hs_fat}
+               -DRAGEL=${RAGEL}
+               ${boost_args}
+               ${hs_args}
+    BUILD_BYPRODUCTS "${hs_lib}"
+    USES_TERMINAL_BUILD ON)
+
+  add_library(dftracer_utils_hs STATIC IMPORTED GLOBAL)
+  set_target_properties(
+    dftracer_utils_hs PROPERTIES IMPORTED_LOCATION "${hs_lib}"
+                                 INTERFACE_INCLUDE_DIRECTORIES
+                                 "${hs_prefix}/include/hs")
+  add_dependencies(dftracer_utils_hs dftracer_utils_vectorscan_ep)
+  dftracer_utils_ok("Vectorscan 5.4.12 external static build (${hs_lib})")
+endfunction()
+
+# ==============================================================================
 # Boost.Math (standalone, header-only); for statistical distributions
 # ==============================================================================
 

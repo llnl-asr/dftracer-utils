@@ -3,6 +3,7 @@ and group-by mixins), each value checked against pandas 2.x on the same
 data."""
 
 import math
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -235,8 +236,11 @@ def test_series_surface_matches_pandas():
         == p.replace(3, 0).tolist()[:2] + [None] + p.replace(3, 0).tolist()[3:]
     )
     assert Series(["a", "b"]).replace("a", "z").to_list() == ["z", "b"]
+    # an old value the column type cannot hold matches nothing, as in pandas
+    # (openspec change series-replace-list); a replacement it cannot hold raises
+    assert Series(["a"]).replace(1, 2).to_list() == ["a"]
     with pytest.raises(TypeError):
-        Series(["a"]).replace(1, 2)
+        Series(["a"]).replace("a", 2)
     assert _d(s.to_frame("v")) == {"v": [3, 1, None, 3, 2]}
     assert s.to_dict() == {0: 3, 1: 1, 2: None, 3: 3, 4: 2}
     assert _d(s.reset_index()) == {"index": [0, 1, 2, 3, 4], "0": [3, 1, None, 3, 2]}
@@ -575,6 +579,79 @@ def test_dt_accessor_matches_pandas():
     assert s.dt_round(3_600_000_000, 0).to_list() == s.dt.floor("1h").to_list()
     with pytest.raises(ValueError):
         s.dt_part(99)
+
+
+EPOCH = datetime(1970, 1, 1)
+
+
+def test_dt_strftime_matches_pandas():
+    us = [
+        0,
+        -86_400_000_000 - 1,
+        -2_208_988_800_000_000,
+        951_782_400_000_000,
+        1_709_164_800_000_123,
+        1_704_067_199_999_999,
+        1_735_603_200_000_000,
+        1_700_000_000_123_456,
+        1_719_835_261_000_000,
+        43_200_000_000,
+        None,
+    ]
+    s = Series(us)
+    vals = [None if v is None else v for v in us]
+    p = pd.to_datetime(pd.Series(vals), unit="us")
+    for fmt in (
+        "%Y",
+        "%y",
+        "%m",
+        "%d",
+        "%H",
+        "%I",
+        "%M",
+        "%S",
+        "%f",
+        "%j",
+        "%a",
+        "%A",
+        "%b",
+        "%B",
+        "%p",
+        "%F",
+        "%T",
+        "%%",
+        "%Y-%m-%d %H:%M:%S.%f",
+        "%A %d %B %Y %I:%M %p",
+    ):
+        got = s.dt.strftime(fmt).to_list()
+        if "%f" in fmt:
+            # pandas before 2.1 rounds %f through a float; datetime is exact.
+            want = [
+                None if v is None else (EPOCH + timedelta(microseconds=v)).strftime(fmt) for v in us
+            ]
+        else:
+            want = [None if pd.isna(v) else v for v in p.dt.strftime(fmt)]
+        assert got == want, fmt
+    got = s.dt.strftime("%s").to_list()
+    assert got == [None if v is None else str(v // 1_000_000) for v in us]
+    pz = p.dt.tz_localize("UTC")
+    for fmt in ("%z", "%Z", "%Y%z %Z"):
+        got = s.dt.strftime(fmt).to_list()
+        want = [None if pd.isna(v) else v for v in pz.dt.strftime(fmt)]
+        assert got == want, fmt
+    with pytest.raises(ValueError):
+        s.dt.strftime("%Q")
+    with pytest.raises(ValueError, match="%Q"):
+        s.dt_format("%Q")
+
+
+def test_dt_format_unit_codes():
+    secs = 1_700_000_000
+    for code, scale in ((0, 1), (1, 1000), (2, 1_000_000), (3, 1_000_000_000)):
+        out = Series([secs * scale, None]).dt_format("%Y-%m-%d %H:%M:%S", code).to_list()
+        assert out == ["2023-11-14 22:13:20", None], code
+    with pytest.raises(ValueError):
+        Series([0]).dt_format("%Y", 9)
 
 
 def test_groupby_apply_and_filter_trace_into_the_engine(caplog):

@@ -22,6 +22,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <numeric>
 #include <span>
@@ -226,6 +227,52 @@ Series concat_nested(const std::vector<Series>& mats, std::int64_t total,
     return out.take(idx);
 }
 
+// One part of a text concatenation: its rows copied into the shared result
+// buffers. Offsets are rebased with one add per row; a part without nulls
+// copies its bytes with a single memcpy, a part with nulls copies the bytes of
+// its valid rows only (a null row holds no bytes in the result, whatever its
+// own offset range spans).
+template <class OffIn>
+std::int64_t text_part_bytes(const OffIn* off, const std::uint8_t* valid,
+                             bool has_null, std::int64_t rows) {
+    if (rows == 0) return 0;
+    if (!has_null) return static_cast<std::int64_t>(off[rows] - off[0]);
+    std::int64_t bytes = 0;
+    for (std::int64_t i = 0; i < rows; ++i)
+        if ((valid[i >> 3] >> (i & 7)) & 1)
+            bytes += static_cast<std::int64_t>(off[i + 1] - off[i]);
+    return bytes;
+}
+
+template <class OffIn, class OffOut>
+void text_part_fill(const OffIn* off, const char* data,
+                    const std::uint8_t* valid, bool has_null, std::int64_t rows,
+                    std::int64_t row0, std::int64_t byte0, OffOut* out_off,
+                    char* out_data) {
+    if (rows == 0) return;
+    if (!has_null) {
+        const OffIn base = off[0];
+        for (std::int64_t i = 0; i < rows; ++i)
+            out_off[row0 + i + 1] = static_cast<OffOut>(
+                byte0 + static_cast<std::int64_t>(off[i + 1] - base));
+        const std::size_t bytes = static_cast<std::size_t>(off[rows] - base);
+        if (bytes != 0 && data != nullptr)
+            std::memcpy(out_data + byte0, data + base, bytes);
+        return;
+    }
+    std::int64_t at = byte0;
+    for (std::int64_t i = 0; i < rows; ++i) {
+        if ((valid[i >> 3] >> (i & 7)) & 1) {
+            const std::size_t len =
+                static_cast<std::size_t>(off[i + 1] - off[i]);
+            if (len != 0 && data != nullptr)
+                std::memcpy(out_data + at, data + off[i], len);
+            at += static_cast<std::int64_t>(len);
+        }
+        out_off[row0 + i + 1] = static_cast<OffOut>(at);
+    }
+}
+
 Series concat_columns(const std::vector<const Series*>& parts) {
     if (parts.empty()) return Series{};
     // Materialize each part to FLAT so the value buffers are contiguous; concat
@@ -243,17 +290,23 @@ Series concat_columns(const std::vector<const Series*>& parts) {
                               : Series{dftu_series_materialize(p->handle())});
 
     const TypeId t = mats.front().type();
+    // String and LargeString (64-bit offsets, as Dask writes its strings) are
+    // one family: a column may hold either, alone or mixed.
+    auto is_text = [](TypeId x) {
+        return x == TypeId::String || x == TypeId::LargeString;
+    };
+    const bool text = is_text(t);
     std::int64_t total = 0;
     bool any_null = false;
     for (const Series& m : mats) {
-        if (m.type() != t)
+        if (m.type() != t && !(text && is_text(m.type())))
             throw std::invalid_argument("concat: columns must share a type");
         // Every other branch below has an offset-aware path (String) or
         // memcpy's byte_width(t) bytes per row; refuse anything with neither.
         // FixedSizeBinary also refuses here: dftu_series_new_flat below has no
         // fixed_size parameter to record on the result, so it cannot build one
         // even when the width itself is known.
-        if (t != TypeId::String && t != TypeId::Bool && t != TypeId::List &&
+        if (!text && t != TypeId::Bool && t != TypeId::List &&
             t != TypeId::Struct && !byte_width(t))
             throw std::invalid_argument(std::string("concat: column type '") +
                                         type_name(t) + "' is unsupported");
@@ -303,20 +356,100 @@ Series concat_columns(const std::vector<const Series*>& parts) {
         return concat_nested(mats, total, any_null);
     const std::uint8_t* vptr = any_null ? validity.data() : nullptr;
 
-    if (t == TypeId::String) {
-        std::string data;
-        std::vector<std::int32_t> offs(static_cast<std::size_t>(total) + 1, 0);
-        std::int64_t r = 0;
-        for (const Series& m : mats)
-            for (std::int64_t i = 0; i < m.length(); ++i) {
-                if (!m.is_null(i)) data += m.string_at(i);
-                offs[static_cast<std::size_t>(r) + 1] =
-                    static_cast<std::int32_t>(data.size());
-                ++r;
+    if (text) {
+        // Each part's raw buffers; a text part is Flat here (materialized
+        // above).
+        struct TextPart {
+            const std::int32_t* off32 = nullptr;
+            const std::int64_t* off64 = nullptr;
+            const char* data = nullptr;
+            const std::uint8_t* valid = nullptr;  // null: every row present
+            bool has_null = false;
+        };
+        std::vector<TextPart> tp(mats.size());
+        bool any_wide = false;
+        std::vector<std::int64_t> byte_starts(mats.size() + 1, 0);
+        for (std::size_t i = 0; i < mats.size(); ++i) {
+            const dftu_series* h = mats[i].handle();
+            TextPart& q = tp[i];
+            q.data = h->data ? reinterpret_cast<const char*>(h->data->data())
+                             : nullptr;
+            q.valid = h->validity ? h->validity->data() : nullptr;
+            q.has_null = q.valid != nullptr && mats[i].null_count() > 0;
+            const bool wide_part = is_wide_offset_type(mats[i].type());
+            any_wide |= wide_part;
+            if (mats[i].length() > 0) {
+                if (wide_part)
+                    q.off64 = dftu_series_offsets64(h);
+                else
+                    q.off32 = dftu_series_offsets(h);
             }
-        Series out{
-            dftu_series_new_string(static_cast<dftu_dtype>(TypeId::String),
-                                   offs.data(), data.data(), total, vptr)};
+            std::int64_t part_bytes = 0;
+            if (mats[i].length() > 0) {
+                part_bytes =
+                    wide_part
+                        ? text_part_bytes<std::int64_t>(
+                              q.off64, q.valid, q.has_null, mats[i].length())
+                        : text_part_bytes<std::int32_t>(
+                              q.off32, q.valid, q.has_null, mats[i].length());
+            }
+            byte_starts[i + 1] = byte_starts[i] + part_bytes;
+        }
+        const std::uint64_t bytes =
+            static_cast<std::uint64_t>(byte_starts.back());
+        // The result is LargeString when any part is, or when the bytes pass
+        // what 32-bit offsets address; otherwise String.
+        const bool wide =
+            any_wide || bytes > std::numeric_limits<std::int32_t>::max();
+        auto* w = new dftu_series();
+        w->type = wide ? TypeId::LargeString : TypeId::String;
+        w->encoding = Encoding::Flat;
+        w->length = total;
+        w->offsets = Buffer::allocate(
+            (static_cast<std::size_t>(total) + 1) *
+            (wide ? sizeof(std::int64_t) : sizeof(std::int32_t)));
+        w->data = Buffer::allocate(static_cast<std::size_t>(bytes));
+        char* out_data = reinterpret_cast<char*>(w->data->data());
+        auto* out32 = reinterpret_cast<std::int32_t*>(w->offsets->data());
+        auto* out64 = reinterpret_cast<std::int64_t*>(w->offsets->data());
+        if (wide)
+            out64[0] = 0;
+        else
+            out32[0] = 0;
+        // One task per part: the row ranges and byte ranges are disjoint.
+        parallel_for(
+            static_cast<std::int64_t>(mats.size()), 1,
+            [&](std::int64_t b, std::int64_t e) {
+                for (std::int64_t k = b; k < e; ++k) {
+                    const std::size_t i = static_cast<std::size_t>(k);
+                    const TextPart& q = tp[i];
+                    const std::int64_t rows = mats[i].length();
+                    const std::int64_t row0 = starts[i];
+                    const std::int64_t byte0 = byte_starts[i];
+                    if (q.off64 != nullptr) {
+                        if (wide)
+                            text_part_fill(q.off64, q.data, q.valid, q.has_null,
+                                           rows, row0, byte0, out64, out_data);
+                        else
+                            text_part_fill(q.off64, q.data, q.valid, q.has_null,
+                                           rows, row0, byte0, out32, out_data);
+                    } else if (wide) {
+                        text_part_fill(q.off32, q.data, q.valid, q.has_null,
+                                       rows, row0, byte0, out64, out_data);
+                    } else {
+                        text_part_fill(q.off32, q.data, q.valid, q.has_null,
+                                       rows, row0, byte0, out32, out_data);
+                    }
+                }
+            });
+        if (vptr) {
+            w->validity = Buffer::allocate(validity.size());
+            std::memcpy(w->validity->data(), vptr, validity.size());
+            std::int64_t nulls = 0;
+            for (const Series& m : mats) nulls += m.null_count();
+            w->null_count = nulls;
+        }
+        Series out{w};
         if (json) return out.as_json();
         return out;
     }
@@ -646,6 +779,11 @@ struct ColumnKind {
 
 ColumnKind promote_type(ColumnKind a, ColumnKind b, const std::string& name) {
     if (a.type == b.type && a.json == b.json) return a;
+    // String and LargeString are one family: the wider one holds both.
+    if (!a.json && !b.json &&
+        (a.type == TypeId::String || a.type == TypeId::LargeString) &&
+        (b.type == TypeId::String || b.type == TypeId::LargeString))
+        return {TypeId::LargeString, false};
     const bool a_scalar = a.type != TypeId::List && a.type != TypeId::Struct;
     const bool b_scalar = b.type != TypeId::List && b.type != TypeId::Struct;
     if (!a.json && !b.json && is_numeric_type(a.type) &&
@@ -702,6 +840,9 @@ DataFrame concat_diagonal(const std::vector<const DataFrame*>& parts) {
                     owned.push_back(to_json_series(src));
                 else if (src.type() == target)
                     owned.push_back(src.share());
+                else if (target == TypeId::LargeString &&
+                         src.type() == TypeId::String)
+                    owned.push_back(src.share());  // concat_columns widens
                 else if (target == TypeId::String)
                     owned.push_back(to_string_series(src));
                 else

@@ -3,6 +3,7 @@
 
 #include <Python.h>
 #include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 
@@ -50,17 +51,30 @@ PyObject* series_unary(PyObject* self, PyObject*) {
 // No-argument reducers that call a Series member and wrap the result. Method is
 // the member (returning dftu_scalar / double / int64), bound as a template
 // argument so each stays one PyMethodDef line.
+//
+// A reducer that refuses its column (sum of a string, ...) throws from the C++
+// member; it reaches Python as a TypeError that carries the refusal's message.
 template <auto Method>
 PyObject* series_reduce_scalar(PyObject* self, PyObject*) {
     Series* a = as_series(self);
     if (!a) return nullptr;
-    return scalar_to_py((a->*Method)());
+    try {
+        return scalar_to_py((a->*Method)());
+    } catch (const dftracer::utils::DFTUtilsException& e) {
+        PyErr_SetString(PyExc_TypeError, e.what());
+        return nullptr;
+    }
 }
 template <auto Method>
 PyObject* series_reduce_f64(PyObject* self, PyObject*) {
     Series* a = as_series(self);
     if (!a) return nullptr;
-    return PyFloat_FromDouble((a->*Method)());
+    try {
+        return PyFloat_FromDouble((a->*Method)());
+    } catch (const dftracer::utils::DFTUtilsException& e) {
+        PyErr_SetString(PyExc_TypeError, e.what());
+        return nullptr;
+    }
 }
 template <auto Method>
 PyObject* series_reduce_i64(PyObject* self, PyObject*) {
@@ -167,6 +181,7 @@ PyObject* Series_str_pad_end(PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* Series_str_zfill(PyObject* self, PyObject* arg);
 PyObject* Series_str_split(PyObject* self, PyObject* arg);
 PyObject* Series_str_extract(PyObject* self, PyObject* args);
+PyObject* Series_str_regex_replace(PyObject* self, PyObject* args);
 PyObject* Series_list_len(PyObject* self, PyObject*);
 PyObject* Series_list_get(PyObject* self, PyObject* arg);
 PyObject* Series_list_join(PyObject* self, PyObject* arg);
@@ -182,6 +197,7 @@ PyObject* Series_str_cat(PyObject* self, PyObject* other);
 PyObject* Series_str_findall(PyObject* self, PyObject* arg);
 PyObject* Series_str_partition(PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* Series_dt_part(PyObject* self, PyObject* args);
+PyObject* Series_dt_format(PyObject* self, PyObject* args);
 PyObject* Series_dt_round(PyObject* self, PyObject* args);
 PyObject* Series_with_timezone(PyObject* self, PyObject* arg);
 
@@ -195,6 +211,8 @@ PyObject* vec_from_numpy(PyObject* self, PyObject* obj);
 
 // series/convert.cpp
 PyObject* Series_to_pylist(PyObject* self, PyObject* args);
+PyObject* Series_np_parts(PyObject* self, PyObject* args);
+PyObject* Series_str_into(PyObject* self, PyObject* args);
 PyObject* Series_item(PyObject* self, PyObject* arg);
 PyObject* vec_from_list(PyObject* self, PyObject* args);
 
@@ -209,6 +227,7 @@ PyObject* Series_get_nbytes(PyObject* self, void*);
 PyObject* Series_to_bytes(PyObject* self, PyObject*);
 PyObject* series_retype(PyObject* self, PyObject* args);
 PyObject* series_from_bytes(PyObject* self, PyObject* obj);
+PyObject* series_nulls(PyObject* self, PyObject* args);
 
 }  // namespace dftracer::utils::python::series_detail
 

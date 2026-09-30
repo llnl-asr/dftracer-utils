@@ -677,6 +677,13 @@ class View : public dataframe::LazyOps<View> {
     /// Throws DFTUtilsException INVALID_ARGUMENT for a query that does not
     /// compile against this view's columns and record schema.
     View duql(const std::string& text, const duql::Params& params = {}) const;
+    /// Apply the builder pipeline `pipe` with its bound parameters.
+    View duql(const duql::Pipe& pipe) const {
+        duql::Params params;
+        for (const auto& [name, value] : pipe.bound())
+            params.emplace(name, value);
+        return duql(pipe.raw(), params);
+    }
     /// The plan duql() builds, one step per line; nothing is scanned.
     std::string explain_duql(const std::string& text,
                              const duql::Params& params = {}) const;

@@ -22,13 +22,58 @@ A collected ``DataFrame`` (or a single ``Series``) converts on demand:
    arr = df["dur"].to_arrow()    # pyarrow.Array
    np_arr = df["dur"].to_numpy() # NumPy (zero-copy for flat non-null numeric)
 
-There is no native ``to_parquet``. Write Parquet through the Arrow edge:
+By default ``to_pandas()`` gives NumPy dtypes, so an integer column with nulls
+becomes ``float64`` with NaN. Two options change that, neither needs pyarrow:
 
 .. code-block:: python
 
-   import pyarrow.parquet as pq
-   pq.write_table(df.to_arrow(), "out.parquet")
+   pdf = df.to_pandas(nullable=True)               # Int64, Float64, boolean, string; a null is pd.NA
+   pdf = df.to_pandas(index=["name", "hash"])      # those columns become the (Multi)Index
+
+``nullable=True`` gives pandas' own nullable dtypes for integer, float, bool and
+string columns (``Int8`` to ``Int64``, ``UInt8`` to ``UInt64``, ``Float32``,
+``Float64``, ``boolean``, ``string``); a float NaN stays NaN and only a null is
+``pd.NA``. A column of another type converts as usual. ``index`` moves the named
+columns into the pandas index in the order given (a flat index for one name, a
+MultiIndex for several); an unknown name raises ``KeyError`` and a repeated one
+``ValueError``. The two options combine; ``nullable=True`` with ``arrow=True`` is
+an error. ``Series.to_pandas`` takes ``nullable`` as well. The frame itself has
+no row index: keep the key columns in the frame and ask for the index here.
+
+The conversions to pandas, NumPy and Python lists run natively in one pass per
+column, with no pyarrow and no Python object per row for numbers and bools. On
+5,000,000 rows, ``to_pandas(nullable=True)`` of 20 integer and float columns
+with nulls takes about 55 ms, a bool column with nulls 2 ms, and ``to_list`` of
+an integer column with nulls about 56 ms (Python needs 50 ms to build such a
+list). A string column fills a NumPy object array or a list directly, and rows
+with the same text share one ``str``, so a column of repeated names allocates
+once per distinct name. A dictionary-encoded column keeps its nulls.
+``benchmarks/groupby_analyzer_bench.py --ops to_pandas`` measures it.
+
+Write Parquet with ``to_parquet`` (or the polars-shaped ``write_parquet``), or
+through the Arrow edge:
+
+.. code-block:: python
+
+   df.to_parquet("out.parquet")
+   # or: import pyarrow.parquet as pq; pq.write_table(df.to_arrow(), "out.parquet")
    # or: df.to_polars().write_parquet("out.parquet")
+
+``to_parquet`` and ``write_parquet`` also write the pandas metadata block, so
+``pandas.read_parquet`` restores the nullable extension dtype of every integer,
+bool and string column that holds a null (``Int64``, ``UInt8``, ``boolean``,
+``string``); a column with no null reads as pandas reads it by default
+(``int64``, ``bool``), and a float with nulls reads as ``float64`` with NaN.
+A frame has no memory of the dtype it came from, so a pandas ``Int64`` column
+with no null comes back as ``int64``; read with
+``dtype_backend="numpy_nullable"`` or cast it if you need ``Int64`` regardless.
+
+``DataFrame.from_parquet`` reads a file or a directory of part files. A
+directory written by Dask with its default index holds an extra column,
+``__null_dask_index__``; ``from_parquet`` drops it (the file's pandas metadata
+lists it as an index column), and keeps any other stored index as a column. The
+part files of such a directory, whose strings are ``large_string``, concatenate
+with ``concat`` like any other frames.
 
 The native ``DataFrame`` also implements ``__arrow_c_stream__`` and ``Series``
 implements ``__arrow_c_array__``, so any Arrow-aware library can pull the data

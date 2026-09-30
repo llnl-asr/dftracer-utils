@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace dftracer::utils::duql {
@@ -36,7 +37,7 @@ class DuqlParseError : public DFTUtilsException {
 };
 
 /// Values bound to `$name` parameters, by name without the `$`.
-using Params = StringViewMap<LiteralValue>;
+using Params = StringViewMap<ParamValue>;
 
 /// Parse a duql filter into an AST. Throws nothing; a syntax error, or a
 /// construct this engine cannot evaluate yet, is the error value.

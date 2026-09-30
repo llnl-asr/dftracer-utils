@@ -777,6 +777,45 @@ enum class StrMapOp : std::int32_t {
     Strip = 2,
     Lstrip = 3,
     Rstrip = 4,
+    Capitalize = 5,
+    Title = 6,
+    Swapcase = 7,
+};
+
+/// Mirrors dftu_str_fn: a string method that takes text, integers or a second
+/// column and is evaluated by the matching Series function (the eager
+/// Series.str method of the same name). Codes 0-8 are the character classes
+/// of dftu_series_str_is, in its order.
+enum class StrFn : std::int32_t {
+    IsAlnum = 0,
+    IsAlpha = 1,
+    IsDigit = 2,
+    IsDecimal = 3,
+    IsNumeric = 4,
+    IsSpace = 5,
+    IsLower = 6,
+    IsUpper = 7,
+    IsTitle = 8,
+    PadStart = 9,
+    PadEnd = 10,
+    Center = 11,
+    Zfill = 12,
+    RemovePrefix = 13,
+    RemoveSuffix = 14,
+    Repeat = 15,
+    SliceReplace = 16,
+    Split = 17,
+    Partition = 18,
+    RPartition = 19,
+    Findall = 20,
+    Extract = 21,
+    Rfind = 22,
+    Index = 23,
+    Rindex = 24,
+    Join = 25,
+    Get = 26,
+    Cat = 27,
+    RegexReplace = 28,
 };
 
 /// Mirrors dftu_join_how. Which rows a join keeps: Inner keeps matched pairs;
@@ -825,6 +864,13 @@ enum class WindowFunc : std::int32_t {
     CumeDist = 22,
     FillForward = 23,
     RunningProd = 24,
+    FrameVar = 25,
+    FrameStd = 26,
+    FrameQuantile = 27,
+    FrameCountDistinct = 28,
+    FrameArgMax = 29,
+    FrameArgMin = 30,
+    FrameCollect = 31,
 };
 
 /// FRAME_* bound interpretation: Rows = row offsets, Range = value deltas on
@@ -877,6 +923,8 @@ enum class ScalarTag : std::int32_t {
     I64 = 0,
     U64 = 1,
     F64 = 2,
+    Str = 3,
+    Err = 4,
 };
 
 /// Bytes to hold `n` values of `t` in Arrow layout. Bool is bit-packed

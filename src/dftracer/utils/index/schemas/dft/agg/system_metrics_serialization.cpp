@@ -25,14 +25,17 @@ std::uint16_t system_shard(std::string_view hhash, std::string_view name) {
     return static_cast<std::uint16_t>(h.finish() % AGG_KEY_NUM_SHARDS);
 }
 
-// System metric values are fractional (CPU/GPU %), so sum/min/max/sumsq ride
-// as doubles rather than the varints the event codec uses. sumsq is the raw
-// power sum (sum x^2); mean/stddev derive from it.
+// System metric values are fractional (CPU/GPU %), so sum/min/max and the
+// moments ride as doubles rather than the varints the event codec uses. The
+// moments are the running mean as the pair shift + cmean and the central second
+// moment (the sum of (x - mean)^2), from which the stddev derives.
 void serialize_float_metric_stats(std::string& out, const MetricStats& ms) {
     put_varint(out, ms.count());
     put_double(out, ms.total());
     put_double(out, ms.min());
     put_double(out, ms.max());
+    put_double(out, ms.shift());
+    put_double(out, ms.cmean());
     put_double(out, ms.m2());
     if (ms.sketch) {
         out.push_back(1);
@@ -49,7 +52,9 @@ MetricStats deserialize_float_metric_stats(BinaryReader& r, double accuracy) {
     ms.stat.sum = r.f64();
     ms.stat.min = r.f64();
     ms.stat.max = r.f64();
-    ms.stat.sumsq = r.f64();
+    ms.stat.shift = r.f64();
+    ms.stat.cmean = r.f64();
+    ms.stat.cm2 = r.f64();
     if (r.u8()) {
         auto blob = r.blob();
         ms.sketch = std::make_unique<DDSketch>(DDSketch::deserialize(

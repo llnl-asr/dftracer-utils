@@ -117,8 +117,9 @@ void aggregate_event(const Acc& acc, AggState& st, const AggregationConfig& cfg,
 
     bool is_preaggregated_system = false;
     if (acc.is_system()) {
-        const bool is_preaggregated =
-            acc.arg_is_number("count") || acc.arg_is_number("dftu_cnt");
+        const bool is_preaggregated = acc.arg_is_number("count") ||
+                                      acc.arg_is_number("dftu_cnt") ||
+                                      acc.arg_is_number("dft_cnt");
         if (!is_preaggregated) {
             aggregate_system_event(acc, st, cfg);
             return;
@@ -135,10 +136,7 @@ void aggregate_event(const Acc& acc, AggState& st, const AggregationConfig& cfg,
 
     auto hhash = acc.arg_string("hhash");
     auto fhash = acc.arg_string("fhash");
-    auto bucket_ts = (map_type == AggMapType::PROFILE && acc.ts() > 0)
-                         ? acc.ts() - 1
-                         : acc.ts();
-    auto time_bucket = compute_time_bucket(bucket_ts, cfg);
+    auto time_bucket = compute_time_bucket(acc.ts(), cfg);
     if (time_bucket < st.min_time_bucket) st.min_time_bucket = time_bucket;
     if (time_bucket > st.max_time_bucket) st.max_time_bucket = time_bucket;
 
@@ -181,10 +179,10 @@ void aggregate_event(const Acc& acc, AggState& st, const AggregationConfig& cfg,
 
     std::uint64_t ev_count = 1;
     if (acc.is_counter()) {
-        const bool has_dft_cnt = acc.arg_exists("dftu_cnt");
-        ev_count = has_dft_cnt               ? acc.arg_uint("dftu_cnt")
-                   : acc.arg_exists("count") ? acc.arg_uint("count")
-                                             : 1;
+        ev_count = acc.arg_exists("dftu_cnt")  ? acc.arg_uint("dftu_cnt")
+                   : acc.arg_exists("dft_cnt") ? acc.arg_uint("dft_cnt")
+                   : acc.arg_exists("count")   ? acc.arg_uint("count")
+                                               : 1;
         entry.count += ev_count;
 
         const bool has_dur_sum = acc.arg_exists("dur_sum");

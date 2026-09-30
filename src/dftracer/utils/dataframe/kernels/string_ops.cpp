@@ -2,18 +2,23 @@
 #include <dftracer/utils/core/common/hash/hex64.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dataframe/internal/string_simd.h>
 #include <dftracer/utils/dataframe/internal/varwidth_offsets.h>
 #include <dftracer/utils/dataframe/kernels/string_ops.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/duql/pattern_engine.h>
 #include <dftracer/utils/duql/substr_simd.h>
 
+#include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <unordered_set>
 #include <vector>
 
@@ -429,40 +434,6 @@ std::string replace_literal(std::string_view s, std::string_view pat,
     return out;
 }
 
-std::string slice_bytes(std::string_view s, std::int64_t start,
-                        std::int64_t length) {
-    const std::int64_t len = static_cast<std::int64_t>(s.size());
-    std::int64_t begin = start;
-    if (begin < 0) begin += len;
-    if (begin < 0) begin = 0;
-    if (begin > len) begin = len;
-    // A negative length means "to the end" (polars slice with no length).
-    std::int64_t end = length < 0 ? len : begin + length;
-    if (end < begin) end = begin;
-    if (end > len) end = len;
-    return std::string(s.substr(static_cast<std::size_t>(begin),
-                                static_cast<std::size_t>(end - begin)));
-}
-
-std::string pad(std::string_view s, std::int64_t width, char fill, bool left) {
-    const std::int64_t len = static_cast<std::int64_t>(s.size());
-    if (len >= width) return std::string(s);
-    std::string fillstr(static_cast<std::size_t>(width - len), fill);
-    if (left) return fillstr + std::string(s);
-    return std::string(s) + fillstr;
-}
-
-std::string zfill(std::string_view s, std::int64_t width) {
-    const std::int64_t len = static_cast<std::int64_t>(s.size());
-    if (len >= width) return std::string(s);
-    const std::size_t pad_n = static_cast<std::size_t>(width - len);
-    // A leading sign stays first; zeros are inserted after it (Python zfill).
-    if (!s.empty() && (s[0] == '+' || s[0] == '-'))
-        return std::string(1, s[0]) + std::string(pad_n, '0') +
-               std::string(s.substr(1));
-    return std::string(pad_n, '0') + std::string(s);
-}
-
 // The strings whose regex match reached its work limit; their rows turn null.
 class LimitedRows {
    public:
@@ -555,6 +526,62 @@ Series str_pattern(const Series& v, const duql::CompiledPattern& p) {
     if (v.encoding() != Encoding::Flat && v.encoding() != Encoding::Dictionary)
         return str_pattern(v.materialize(), p);
     return Series{pattern_predicate(v.handle(), p)};
+}
+
+}  // namespace dftracer::utils::dataframe
+
+namespace {
+
+template <class Off>
+dftu_series* regex_replace_w(const dftu_series* v,
+                             const duql::CompiledPattern& re,
+                             const duql::Substitution& sub) {
+    RowReader<Off> r(v);
+    if (!r.ok()) return nullptr;
+    const std::size_t n = static_cast<std::size_t>(v->length);
+    std::vector<std::int32_t> offsets(n + 1, 0);
+    std::string data;
+    std::string buf;
+    std::vector<std::uint8_t> valid((n + 7) / 8, 0);
+    bool any_null = false;
+    for (std::size_t i = 0; i < n; ++i) {
+        bool hit = false;
+        if (!r.is_null(static_cast<std::int64_t>(i))) {
+            const std::string_view s = r.at(static_cast<std::int64_t>(i));
+            if (duql::regex_replace(re, sub, s, buf) !=
+                duql::MatchResult::LIMIT) {
+                data.append(buf);
+                hit = true;
+            }
+        }
+        if (hit)
+            valid[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
+        else
+            any_null = true;
+        offsets[i + 1] = static_cast<std::int32_t>(data.size());
+    }
+    return dftu_series_new_string(DFTU_TYPE_STRING, offsets.data(), data.data(),
+                                  static_cast<int64_t>(n),
+                                  any_null ? valid.data() : nullptr);
+}
+
+dftu_series* regex_replace_flat(const dftu_series* v,
+                                const duql::CompiledPattern& re,
+                                const duql::Substitution& sub) {
+    return is_wide_offset_type(v->type)
+               ? regex_replace_w<std::int64_t>(v, re, sub)
+               : regex_replace_w<std::int32_t>(v, re, sub);
+}
+
+}  // namespace
+
+namespace dftracer::utils::dataframe {
+
+Series str_regex_replace(const Series& v, const duql::CompiledPattern& p,
+                         const duql::Substitution& sub) {
+    if (!v.valid()) return {};
+    const Series flat = v.materialize();
+    return Series{regex_replace_flat(flat.handle(), p, sub)};
 }
 
 }  // namespace dftracer::utils::dataframe
@@ -674,6 +701,23 @@ dftu_series* dftu_series_str_extract(const dftu_series* v, const char* pattern,
     return is_wide_offset_type(v->type)
                ? str_extract_w<std::int64_t>(v, *re, g)
                : str_extract_w<std::int32_t>(v, *re, g);
+}
+
+dftu_series* dftu_series_str_regex_replace(const dftu_series* v,
+                                           const char* pattern,
+                                           int32_t pattern_len, const char* to,
+                                           int32_t to_len) {
+    if (!v || !pattern || !to) return nullptr;
+    DFTU_FLAT_OPERAND(v, flat_v,
+                      dftu_series_str_regex_replace(flat_v, pattern,
+                                                    pattern_len, to, to_len));
+    const auto re = compiled(
+        duql::compile_regex(pattern_text(pattern, pattern_len), false));
+    if (!re) return nullptr;
+    auto sub = duql::compile_substitution(
+        *re, std::string_view(to, static_cast<std::size_t>(to_len)));
+    if (!sub) return nullptr;
+    return regex_replace_flat(v, *re, *sub);
 }
 
 dftu_series* dftu_series_str_search(const dftu_series* v, const char* pattern,
@@ -907,39 +951,6 @@ dftu_series* dftu_series_str_replace_all(const dftu_series* v, const char* pat,
     });
 }
 
-dftu_series* dftu_series_str_slice(const dftu_series* v, int64_t start,
-                                   int64_t length) {
-    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_slice(flat_v, start, length));
-
-    return string_transform(v, [start, length](std::string_view s) {
-        return slice_bytes(s, start, length);
-    });
-}
-
-dftu_series* dftu_series_str_pad_start(const dftu_series* v, int64_t width,
-                                       char fill) {
-    DFTU_FLAT_OPERAND(v, flat_v,
-                      dftu_series_str_pad_start(flat_v, width, fill));
-
-    return string_transform(v, [width, fill](std::string_view s) {
-        return pad(s, width, fill, true);
-    });
-}
-dftu_series* dftu_series_str_pad_end(const dftu_series* v, int64_t width,
-                                     char fill) {
-    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_pad_end(flat_v, width, fill));
-
-    return string_transform(v, [width, fill](std::string_view s) {
-        return pad(s, width, fill, false);
-    });
-}
-dftu_series* dftu_series_str_zfill(const dftu_series* v, int64_t width) {
-    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_zfill(flat_v, width));
-
-    return string_transform(
-        v, [width](std::string_view s) { return zfill(s, width); });
-}
-
 namespace {
 // Splits every row of `v` on `s_sep`, producing a List<String> (always
 // narrow, both levels: the per-row part count and total byte count are the
@@ -1003,36 +1014,7 @@ dftu_series* list_transform(const dftu_series* v, Fn fn) {
                                         : list_transform_w<std::int32_t>(v, fn);
 }
 
-void split_row(std::string_view row, std::string_view s_sep,
-               std::vector<std::string>& all_parts) {
-    if (s_sep.empty()) {
-        // No well-defined split point: one part, the whole string.
-        all_parts.emplace_back(row);
-        return;
-    }
-    std::size_t pos = 0;
-    while (true) {
-        std::size_t hit = row.find(s_sep, pos);
-        if (hit == std::string_view::npos) {
-            all_parts.emplace_back(row.substr(pos));
-            break;
-        }
-        all_parts.emplace_back(row.substr(pos, hit - pos));
-        pos = hit + s_sep.size();
-    }
-}
 }  // namespace
-
-dftu_series* dftu_series_str_split(const dftu_series* v, const char* sep,
-                                   int32_t sep_len) {
-    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_split(flat_v, sep, sep_len));
-
-    std::string_view s_sep(sep, static_cast<std::size_t>(sep_len));
-    return list_transform(
-        v, [s_sep](std::string_view row, std::vector<std::string>& parts) {
-            split_row(row, s_sep, parts);
-        });
-}
 
 dftu_series* dftu_series_list_len(const dftu_series* v) {
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_list_len(flat_v));
@@ -1082,132 +1064,716 @@ dftu_series* dftu_series_list_get(const dftu_series* v, int64_t index) {
     return out;
 }
 
-// The pandas `.str` batch: ASCII case forms, character-class predicates,
-// counting and searching from the right, prefix / suffix removal, repeat,
-// centering, elementwise concatenation, regex findall, partition, and a join
-// over a List<String>.
+// The pandas `.str` batch. Every op below works on the column's buffers
+// directly (no per-row std::string): the SIMD primitives of strsimd scan the
+// whole data buffer, the builders size the output in one pass and fill it in a
+// second.
 namespace {
 
-bool ascii_alpha(unsigned char c) {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
-}
-bool ascii_digit(unsigned char c) { return c >= '0' && c <= '9'; }
-bool ascii_lower(unsigned char c) { return c >= 'a' && c <= 'z'; }
-bool ascii_upper(unsigned char c) { return c >= 'A' && c <= 'Z'; }
-bool ascii_space(unsigned char c) {
-    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' ||
-           c == '\v';
+namespace simd = dftracer::utils::dataframe::strsimd;
+
+// A FLAT String/Binary column read at offset width `Off`. Offsets are
+// absolute positions in `data`; a column cut from a larger one starts past 0.
+template <class Off>
+struct FlatStr {
+    const Off* off = nullptr;
+    const std::uint8_t* data = nullptr;
+    const std::uint8_t* validity = nullptr;
+    std::int64_t n = 0;
+    bool ok = false;
+
+    explicit FlatStr(const dftu_series* v) {
+        if (!v || v->encoding != Encoding::Flat || !is_string_kind(v->type) ||
+            is_wide_offset_type(v->type) != std::is_same_v<Off, std::int64_t>)
+            return;
+        const auto& ob = offsets_of<Off>(*v);
+        if (!ob) return;
+        off = reinterpret_cast<const Off*>(ob->data());
+        data = v->data ? v->data->data() : nullptr;
+        validity = v->validity ? v->validity->data() : nullptr;
+        n = v->length;
+        ok = true;
+    }
+    bool is_null(std::int64_t i) const {
+        return validity != nullptr && ((validity[i >> 3] >> (i & 7)) & 1) == 0;
+    }
+    std::int64_t lo() const {
+        return n != 0 ? static_cast<std::int64_t>(off[0]) : 0;
+    }
+    std::int64_t hi() const {
+        return n != 0 ? static_cast<std::int64_t>(off[n]) : 0;
+    }
+    std::int64_t len(std::int64_t i) const {
+        return static_cast<std::int64_t>(off[i + 1]) - off[i];
+    }
+    const std::uint8_t* row(std::int64_t i) const { return data + off[i]; }
+};
+
+template <class Fn>
+dftu_series* with_flat(const dftu_series* v, Fn&& fn) {
+    if (!v || !is_string_kind(v->type) || v->encoding != Encoding::Flat)
+        return nullptr;
+    if (is_wide_offset_type(v->type)) {
+        FlatStr<std::int64_t> f(v);
+        return f.ok ? fn(f) : nullptr;
+    }
+    FlatStr<std::int32_t> f(v);
+    return f.ok ? fn(f) : nullptr;
 }
 
-std::string capitalize(std::string_view s) {
-    std::string out(s);
-    bool first = true;
-    for (char& c : out) {
-        const auto u = static_cast<unsigned char>(c);
-        if (first) {
-            if (ascii_lower(u)) c = static_cast<char>(u - 32);
-            first = false;
-        } else if (ascii_upper(u)) {
-            c = static_cast<char>(u + 32);
+void share_nulls(dftu_series* out, const dftu_series* v) {
+    if (!out) return;
+    out->validity = v->validity;
+    out->null_count = v->null_count;
+}
+
+void copy_bytes(std::uint8_t* dst, const std::uint8_t* src, std::int64_t n) {
+    if (n > 0) std::memcpy(dst, src, static_cast<std::size_t>(n));
+}
+
+constexpr std::int64_t BUILD_GRAIN = 1 << 14;
+
+// A narrow String column of `n` rows: row i is `len_of(i)` bytes that
+// `fill_of(i, dst)` writes (a null row is empty and never asked). Sizes the
+// output in one pass and fills it in a second, across the pool for a large
+// column. nullptr when the bytes pass what an int32 offset reaches.
+template <class IsNull, class LenFn, class FillFn>
+dftu_series* build_flat_string(std::int64_t n, IsNull is_null, LenFn len_of,
+                               FillFn fill_of) {
+    auto offb = Buffer::allocate(static_cast<std::size_t>(n + 1) *
+                                 sizeof(std::int32_t));
+    auto* od = reinterpret_cast<std::int32_t*>(offb->data());
+    std::int64_t total = 0;
+    od[0] = 0;
+    for (std::int64_t i = 0; i < n; ++i) {
+        if (!is_null(i)) {
+            const std::int64_t l = len_of(i);
+            if (l < 0 || __builtin_add_overflow(total, l, &total) ||
+                total > std::numeric_limits<std::int32_t>::max())
+                return nullptr;
         }
+        od[i + 1] = static_cast<std::int32_t>(total);
     }
+    auto datab = Buffer::allocate(static_cast<std::size_t>(total));
+    std::uint8_t* d = datab->data();
+    auto body = [&](std::int64_t b, std::int64_t e) {
+        for (std::int64_t i = b; i < e; ++i)
+            if (!is_null(i)) fill_of(i, d + od[i]);
+    };
+    if (n > BUILD_GRAIN && parallel_backend_installed())
+        parallel_for(n, BUILD_GRAIN, body);
+    else
+        body(0, n);
+    auto* out = new dftu_series();
+    out->type = TypeId::String;
+    out->encoding = Encoding::Flat;
+    out->length = n;
+    out->offsets = std::move(offb);
+    out->data = std::move(datab);
     return out;
 }
 
-std::string title(std::string_view s) {
-    std::string out(s);
-    bool start = true;
-    for (char& c : out) {
-        const auto u = static_cast<unsigned char>(c);
-        if (ascii_alpha(u)) {
-            if (start && ascii_lower(u)) c = static_cast<char>(u - 32);
-            if (!start && ascii_upper(u)) c = static_cast<char>(u + 32);
-            start = false;
-        } else {
-            start = true;
-        }
-    }
+// One string op over a single column: the output shares its nulls.
+template <class LenFn, class FillFn>
+dftu_series* map_strings(const dftu_series* v, LenFn len_of, FillFn fill_of) {
+    dftu_series* out = with_flat(v, [&](const auto& f) {
+        return build_flat_string(
+            f.n, [&](std::int64_t i) { return f.is_null(i); },
+            [&](std::int64_t i) { return len_of(f, i); },
+            [&](std::int64_t i, std::uint8_t* dst) { fill_of(f, i, dst); });
+    });
+    share_nulls(out, v);
     return out;
 }
 
-std::string swapcase(std::string_view s) {
-    std::string out(s);
-    for (char& c : out) {
-        const auto u = static_cast<unsigned char>(c);
-        if (ascii_lower(u))
-            c = static_cast<char>(u - 32);
-        else if (ascii_upper(u))
-            c = static_cast<char>(u + 32);
+// The bit arrays of one kind over p[0, n), across the pool for a large buffer.
+struct Bits {
+    std::vector<std::uint64_t> bad;
+    std::vector<std::uint64_t> aux;
+};
+
+Bits compute_bits(simd::BitKind kind, const std::uint8_t* p, std::size_t n,
+                  std::uint8_t eq, bool want_aux) {
+    const std::size_t words = (n + 63) / 64;
+    Bits b;
+    b.bad.assign(words + 1, 0);
+    if (want_aux) b.aux.assign(words + 1, 0);
+    std::uint64_t* bp = b.bad.data();
+    std::uint64_t* ap = want_aux ? b.aux.data() : nullptr;
+    constexpr std::int64_t CHUNK = 1 << 14;  // words: 1 MiB of bytes
+    if (static_cast<std::int64_t>(words) > CHUNK &&
+        parallel_backend_installed()) {
+        parallel_for(static_cast<std::int64_t>(words), CHUNK,
+                     [&](std::int64_t b0, std::int64_t e0) {
+                         simd::class_bits(
+                             kind, p, n, static_cast<std::size_t>(b0),
+                             static_cast<std::size_t>(e0), eq, bp, ap);
+                     });
+    } else if (words != 0) {
+        simd::class_bits(kind, p, n, 0, words, eq, bp, ap);
     }
+    return b;
+}
+
+bool lower_byte(std::uint8_t c) { return c >= 'a' && c <= 'z'; }
+
+// Narrow String out of a List<String> shape: row i of the list holds
+// `list_off[i + 1] - list_off[i]` strings.
+dftu_series* make_str_list(const dftu_series* v,
+                           const std::vector<std::int32_t>& list_off,
+                           std::int64_t parts, std::shared_ptr<Buffer> coff,
+                           std::shared_ptr<Buffer> cdata) {
+    auto* child = new dftu_series();
+    child->type = TypeId::String;
+    child->encoding = Encoding::Flat;
+    child->length = parts;
+    child->offsets = std::move(coff);
+    child->data = std::move(cdata);
+    auto* out = new dftu_series();
+    out->type = TypeId::List;
+    out->encoding = Encoding::Flat;
+    out->length = v->length;
+    out->null_count = v->null_count;
+    out->validity = v->validity;  // a null input row stays a null list
+    const std::size_t loff_bytes = list_off.size() * sizeof(std::int32_t);
+    out->offsets = Buffer::allocate(loff_bytes);
+    std::memcpy(out->offsets->data(), list_off.data(), loff_bytes);
+    out->set_child(std::shared_ptr<dftu_series>(child));
     return out;
 }
 
-// Python's str.istitle: at least one cased character, uppercase only at the
-// start of a run of letters, lowercase only after one.
-bool is_title(std::string_view s) {
-    bool cased = false;
-    bool prev_cased = false;
-    for (char c : s) {
-        const auto u = static_cast<unsigned char>(c);
-        if (ascii_upper(u)) {
-            if (prev_cased) return false;
-            prev_cased = true;
-            cased = true;
-        } else if (ascii_lower(u)) {
-            if (!prev_cased) return false;
-            prev_cased = true;
-            cased = true;
-        } else {
-            prev_cased = false;
+// The first (last, when `from_right`) place in row [s, e) of p where `sep`
+// occurs, or NPOS: candidate bits of sep's first byte, each verified.
+std::size_t find_sep(const std::uint64_t* cand, const std::uint8_t* p,
+                     std::size_t s, std::size_t e, std::string_view sep,
+                     bool from_right) {
+    const std::size_t sl = sep.size();
+    if (e - s < sl) return simd::NPOS;
+    const std::size_t limit = e - sl + 1;  // one past the last start
+    auto verify = [&](std::size_t q) {
+        return sl == 1 || std::memcmp(p + q + 1, sep.data() + 1, sl - 1) == 0;
+    };
+    if (!from_right) {
+        std::size_t pos = s;
+        while (pos < limit) {
+            const std::size_t q = simd::bits_next(cand, pos, limit);
+            if (q >= limit) return simd::NPOS;
+            if (verify(q)) return q;
+            pos = q + 1;
         }
+        return simd::NPOS;
     }
-    return cased;
+    std::size_t lim = limit;
+    while (lim > s) {
+        const std::size_t q = simd::bits_prev(cand, s, lim);
+        if (q == simd::NPOS) return simd::NPOS;
+        if (verify(q)) return q;
+        lim = q;
+    }
+    return simd::NPOS;
 }
 
-template <class Pred>
-bool all_of_nonempty(std::string_view s, Pred pred) {
-    if (s.empty()) return false;
-    for (char c : s)
-        if (!pred(static_cast<unsigned char>(c))) return false;
-    return true;
+dftu_series* case_impl(const dftu_series* v, simd::CaseKind kind,
+                       bool capitalize) {
+    if (!v || !is_string_kind(v->type)) return nullptr;
+    const bool wide = is_wide_offset_type(v->type);
+    auto run = [&](const auto& f) -> dftu_series* {
+        auto* out = new dftu_series();
+        out->type = wide ? TypeId::LargeString : TypeId::String;
+        out->encoding = Encoding::Flat;
+        out->length = v->length;
+        out->null_count = v->null_count;
+        out->validity = v->validity;
+        using Off = std::remove_const_t<std::remove_pointer_t<decltype(f.off)>>;
+        offsets_of<Off>(*out) = offsets_of<Off>(*v);  // byte lengths unchanged
+        const std::size_t data_len = v->data ? v->data->size() : 0;
+        out->data = Buffer::allocate(data_len);
+        if (data_len == 0) return out;
+        const std::uint8_t* in = v->data->data();
+        std::uint8_t* o = out->data->data();
+        simd::case_map(capitalize ? simd::CaseKind::Lower : kind, in, o,
+                       data_len);
+        if (capitalize || kind == simd::CaseKind::Title) {
+            // A row's first byte has no previous byte: it is upper-cased when
+            // lower, whatever sat before it in the buffer.
+            for (std::int64_t i = 0; i < f.n; ++i) {
+                if (f.len(i) <= 0) continue;
+                const std::int64_t s = f.off[i];
+                o[s] = lower_byte(in[s]) ? static_cast<std::uint8_t>(in[s] - 32)
+                                         : in[s];
+            }
+        }
+        return out;
+    };
+    if (wide) {
+        FlatStr<std::int64_t> f(v);
+        return f.ok ? run(f) : nullptr;
+    }
+    FlatStr<std::int32_t> f(v);
+    return f.ok ? run(f) : nullptr;
 }
 
-bool str_class(std::string_view s, dftu_str_class cls) {
+dftu_series* is_impl(const dftu_series* v, int cls) {
+    simd::BitKind kind = simd::BitKind::Alnum;
+    bool want_aux = false;
     switch (cls) {
         case DFTU_STR_ALNUM:
-            return all_of_nonempty(s, [](unsigned char c) {
-                return ascii_alpha(c) || ascii_digit(c);
-            });
+            kind = simd::BitKind::Alnum;
+            break;
         case DFTU_STR_ALPHA:
-            return all_of_nonempty(s, ascii_alpha);
+            kind = simd::BitKind::Alpha;
+            break;
         case DFTU_STR_DIGIT:
         case DFTU_STR_DECIMAL:
         case DFTU_STR_NUMERIC:
-            return all_of_nonempty(s, ascii_digit);
+            kind = simd::BitKind::Digit;
+            break;
         case DFTU_STR_SPACE:
-            return all_of_nonempty(s, ascii_space);
-        case DFTU_STR_LOWER: {
-            bool cased = false;
-            for (char c : s) {
-                const auto u = static_cast<unsigned char>(c);
-                if (ascii_upper(u)) return false;
-                if (ascii_lower(u)) cased = true;
-            }
-            return cased;
-        }
-        case DFTU_STR_UPPER: {
-            bool cased = false;
-            for (char c : s) {
-                const auto u = static_cast<unsigned char>(c);
-                if (ascii_lower(u)) return false;
-                if (ascii_upper(u)) cased = true;
-            }
-            return cased;
-        }
+            kind = simd::BitKind::Space;
+            break;
+        case DFTU_STR_LOWER:
+            kind = simd::BitKind::Lower;
+            want_aux = true;
+            break;
+        case DFTU_STR_UPPER:
+            kind = simd::BitKind::Upper;
+            want_aux = true;
+            break;
         case DFTU_STR_TITLE:
-            return is_title(s);
+            kind = simd::BitKind::Title;
+            want_aux = true;
+            break;
+        default:
+            return nullptr;
     }
-    return false;
+    const bool title = kind == simd::BitKind::Title;
+    return with_flat(v, [&](const auto& f) -> dftu_series* {
+        const std::int64_t lo = f.lo();
+        const std::size_t nbytes = static_cast<std::size_t>(f.hi() - lo);
+        const std::uint8_t* p = f.data != nullptr ? f.data + lo : nullptr;
+        // Short strings: one vector pass over the whole buffer, then a bit
+        // range per row. Long strings: scan each row and stop at its first
+        // bad vector (no bit arrays at all).
+        const std::int64_t avg =
+            f.n > 0 ? static_cast<std::int64_t>(nbytes) / f.n : 0;
+        const simd::PredStrategy strat = simd::pred_strategy();
+        const bool by_rows = strat == simd::PredStrategy::Rows ||
+                             (strat == simd::PredStrategy::Auto &&
+                              avg >= simd::PRED_ROWS_MIN_AVG);
+        Bits bits;
+        if (!by_rows) bits = compute_bits(kind, p, nbytes, 0, want_aux);
+        const std::uint64_t* bad = bits.bad.data();
+        const std::uint64_t* aux =
+            want_aux && !by_rows ? bits.aux.data() : nullptr;
+
+        auto* out = new dftu_series();
+        out->type = TypeId::Bool;
+        out->encoding = Encoding::Flat;
+        out->length = f.n;
+        out->null_count = v->null_count;
+        out->validity = v->validity;
+        const std::size_t bytes = buffer_bytes(TypeId::Bool, f.n);
+        out->data = Buffer::allocate(bytes);
+        std::memset(out->data->data(), 0, bytes);
+        std::uint8_t* res = out->data->data();
+        auto rows = [&](std::int64_t b, std::int64_t e) {
+            if (by_rows) {
+                simd::class_rows(kind, f.data, f.off, lo, b, e, res);
+                return;
+            }
+            for (std::int64_t i = b; i < e; ++i) {
+                const std::size_t s = static_cast<std::size_t>(f.off[i] - lo);
+                const std::size_t t =
+                    static_cast<std::size_t>(f.off[i + 1] - lo);
+                if (s >= t) continue;  // an empty string is in no class
+                bool yes;
+                if (title) {
+                    // The first byte has no previous byte, so it breaks the
+                    // rule when lower; the rest read the bit array.
+                    yes = !lower_byte(p[s]) && !simd::bits_any(bad, s + 1, t) &&
+                          simd::bits_any(aux, s, t);
+                } else {
+                    yes = !simd::bits_any(bad, s, t) &&
+                          (aux == nullptr || simd::bits_any(aux, s, t));
+                }
+                if (yes)
+                    res[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
+            }
+        };
+        constexpr std::int64_t ROW_GRAIN = 1 << 15;  // a multiple of 8
+        if (f.n > ROW_GRAIN && parallel_backend_installed())
+            parallel_for(f.n, ROW_GRAIN, rows);
+        else
+            rows(0, f.n);
+        return out;
+    });
+}
+
+// Pad / center: `mode` 0 pads the start, 1 the end, 2 centers.
+dftu_series* pad_impl(const dftu_series* v, std::int64_t width, char fill,
+                      int mode) {
+    return map_strings(
+        v,
+        [width](const auto& f, std::int64_t i) {
+            return std::max<std::int64_t>(f.len(i), width);
+        },
+        [width, fill, mode](const auto& f, std::int64_t i, std::uint8_t* dst) {
+            const std::int64_t len = f.len(i);
+            if (len >= width) {
+                copy_bytes(dst, f.row(i), len);
+                return;
+            }
+            const std::int64_t gap = width - len;
+            // CPython's center puts an odd gap's extra fill on the left when
+            // the width is odd, else on the right.
+            const std::int64_t left = mode == 0   ? gap
+                                      : mode == 1 ? 0
+                                                  : gap / 2 + (gap & width & 1);
+            std::memset(dst, fill, static_cast<std::size_t>(left));
+            copy_bytes(dst + left, f.row(i), len);
+            std::memset(dst + left + len, fill,
+                        static_cast<std::size_t>(gap - left));
+        });
+}
+
+dftu_series* zfill_impl(const dftu_series* v, std::int64_t width) {
+    return map_strings(
+        v,
+        [width](const auto& f, std::int64_t i) {
+            return std::max<std::int64_t>(f.len(i), width);
+        },
+        [width](const auto& f, std::int64_t i, std::uint8_t* dst) {
+            const std::int64_t len = f.len(i);
+            const std::uint8_t* r = f.row(i);
+            if (len >= width) {
+                copy_bytes(dst, r, len);
+                return;
+            }
+            const std::int64_t gap = width - len;
+            // A leading sign stays first; the zeros go after it.
+            const bool sign = len > 0 && (r[0] == '+' || r[0] == '-');
+            std::int64_t at = 0;
+            if (sign) dst[at++] = r[0];
+            std::memset(dst + at, '0', static_cast<std::size_t>(gap));
+            at += gap;
+            copy_bytes(dst + at, r + (sign ? 1 : 0), len - (sign ? 1 : 0));
+        });
+}
+
+dftu_series* remove_affix_impl(const dftu_series* v, std::string_view a,
+                               bool prefix) {
+    const auto plen = static_cast<std::int64_t>(a.size());
+    auto cut = [a, plen, prefix](const auto& f,
+                                 std::int64_t i) -> std::int64_t {
+        const std::int64_t len = f.len(i);
+        if (plen == 0 || len < plen) return 0;
+        const std::uint8_t* at = f.row(i) + (prefix ? 0 : len - plen);
+        return std::memcmp(at, a.data(), static_cast<std::size_t>(plen)) == 0
+                   ? plen
+                   : 0;
+    };
+    return map_strings(
+        v,
+        [&cut](const auto& f, std::int64_t i) { return f.len(i) - cut(f, i); },
+        [&cut, prefix](const auto& f, std::int64_t i, std::uint8_t* dst) {
+            const std::int64_t c = cut(f, i);
+            copy_bytes(dst, f.row(i) + (prefix ? c : 0), f.len(i) - c);
+        });
+}
+
+dftu_series* repeat_impl(const dftu_series* v, std::int64_t n) {
+    return map_strings(
+        v,
+        [n](const auto& f, std::int64_t i) {
+            std::int64_t total;
+            if (__builtin_mul_overflow(f.len(i), n, &total))
+                return std::numeric_limits<std::int64_t>::max();
+            return total;
+        },
+        [n](const auto& f, std::int64_t i, std::uint8_t* dst) {
+            const std::int64_t len = f.len(i);
+            const std::int64_t total = len * n;
+            if (total == 0) return;
+            copy_bytes(dst, f.row(i), len);
+            // Double the filled prefix until the row is full.
+            std::int64_t filled = len;
+            while (filled < total) {
+                const std::int64_t c = std::min(filled, total - filled);
+                std::memcpy(dst + filled, dst, static_cast<std::size_t>(c));
+                filled += c;
+            }
+        });
+}
+
+dftu_series* slice_impl(const dftu_series* v, std::int64_t start,
+                        std::int64_t length) {
+    // The byte range of a row: a negative start counts from the end, a
+    // negative length runs to the end (polars slice with no length).
+    auto range = [start, length](std::int64_t len) {
+        std::int64_t b = start < 0 ? start + len : start;
+        b = std::clamp<std::int64_t>(b, 0, len);
+        std::int64_t e = length < 0 ? len : b + length;
+        e = std::clamp<std::int64_t>(e, b, len);
+        return std::pair<std::int64_t, std::int64_t>(b, e);
+    };
+    return map_strings(
+        v,
+        [&range](const auto& f, std::int64_t i) {
+            const auto [b, e] = range(f.len(i));
+            return e - b;
+        },
+        [&range](const auto& f, std::int64_t i, std::uint8_t* dst) {
+            const auto [b, e] = range(f.len(i));
+            copy_bytes(dst, f.row(i) + b, e - b);
+        });
+}
+
+template <class OffA, class OffB>
+dftu_series* cat_impl(const dftu_series* a, const dftu_series* b) {
+    FlatStr<OffA> fa(a);
+    FlatStr<OffB> fb(b);
+    if (!fa.ok || !fb.ok) return nullptr;
+    dftu_series* out = build_flat_string(
+        fa.n, [&](std::int64_t i) { return fa.is_null(i) || fb.is_null(i); },
+        [&](std::int64_t i) { return fa.len(i) + fb.len(i); },
+        [&](std::int64_t i, std::uint8_t* dst) {
+            copy_bytes(dst, fa.row(i), fa.len(i));
+            copy_bytes(dst + fa.len(i), fb.row(i), fb.len(i));
+        });
+    if (!out) return nullptr;
+    if (fa.validity == nullptr && fb.validity == nullptr) return out;
+    // A null on either side is null: the validity is the two ANDed.
+    const std::size_t vbytes = buffer_bytes(TypeId::Bool, fa.n);
+    auto valid = Buffer::allocate(vbytes);
+    std::int64_t valid_rows = 0;
+    for (std::size_t k = 0; k < vbytes; ++k) {
+        std::uint8_t w =
+            static_cast<std::uint8_t>((fa.validity ? fa.validity[k] : 0xFF) &
+                                      (fb.validity ? fb.validity[k] : 0xFF));
+        const std::int64_t rows_here =
+            std::min<std::int64_t>(8, fa.n - static_cast<std::int64_t>(k) * 8);
+        if (rows_here < 8)
+            w &= static_cast<std::uint8_t>((1u << rows_here) - 1);
+        valid->data()[k] = w;
+        valid_rows += std::popcount(static_cast<unsigned>(w));
+    }
+    out->null_count = fa.n - valid_rows;
+    out->validity = out->null_count != 0 ? std::move(valid) : nullptr;
+    return out;
+}
+
+template <class ChildOff>
+dftu_series* join_impl(const dftu_series* v, const dftu_series& child,
+                       std::string_view sep) {
+    FlatStr<ChildOff> c(&child);
+    if (!c.ok) return nullptr;
+    const std::int32_t* off = dftu_series_offsets(v);
+    const auto sl = static_cast<std::int64_t>(sep.size());
+    auto is_null = [&](std::int64_t i) {
+        return v->validity && !((v->validity->data()[i >> 3] >> (i & 7)) & 1);
+    };
+    dftu_series* out = build_flat_string(
+        v->length, is_null,
+        [&](std::int64_t i) {
+            const std::int64_t cnt = off[i + 1] - off[i];
+            const std::int64_t bytes =
+                static_cast<std::int64_t>(c.off[off[i + 1]]) - c.off[off[i]];
+            return bytes + (cnt > 0 ? (cnt - 1) * sl : 0);
+        },
+        [&](std::int64_t i, std::uint8_t* dst) {
+            const std::int64_t cnt = off[i + 1] - off[i];
+            if (cnt == 0) return;
+            if (sl == 0 || cnt == 1) {
+                // The elements are back to back: one copy.
+                copy_bytes(dst, c.data + c.off[off[i]],
+                           static_cast<std::int64_t>(c.off[off[i + 1]]) -
+                               c.off[off[i]]);
+                return;
+            }
+            for (std::int32_t k = off[i]; k < off[i + 1]; ++k) {
+                if (k != off[i]) {
+                    std::memcpy(dst, sep.data(), static_cast<std::size_t>(sl));
+                    dst += sl;
+                }
+                copy_bytes(dst, c.row(k), c.len(k));
+                dst += c.len(k);
+            }
+        });
+    share_nulls(out, v);
+    return out;
+}
+
+template <class F>
+dftu_series* split_impl(const dftu_series* v, const F& f,
+                        std::string_view sep) {
+    const std::int64_t n = f.n;
+    const std::int64_t lo = f.lo();
+    const std::size_t nbytes = static_cast<std::size_t>(f.hi() - lo);
+    const std::uint8_t* p = f.data != nullptr ? f.data + lo : nullptr;
+    const std::size_t sl = sep.size();
+    Bits cand;
+    if (sl != 0)
+        cand = compute_bits(simd::BitKind::Eq, p, nbytes,
+                            static_cast<std::uint8_t>(sep[0]), false);
+
+    // Pass 1: where the separator occurs in each row, the part counts and
+    // the bytes the parts hold.
+    std::vector<std::size_t> hits;
+    std::vector<std::int32_t> list_off(static_cast<std::size_t>(n + 1), 0);
+    std::int64_t parts = 0, bytes = 0;
+    for (std::int64_t i = 0; i < n; ++i) {
+        if (!f.is_null(i)) {
+            const std::size_t s = static_cast<std::size_t>(f.off[i] - lo);
+            const std::size_t e = static_cast<std::size_t>(f.off[i + 1] - lo);
+            const std::size_t before = hits.size();
+            std::size_t pos = s;
+            while (sl != 0 && pos < e) {
+                const std::size_t q =
+                    find_sep(cand.bad.data(), p, pos, e, sep, false);
+                if (q == simd::NPOS) break;
+                hits.push_back(q);
+                pos = q + sl;
+            }
+            const std::int64_t h =
+                static_cast<std::int64_t>(hits.size() - before);
+            parts += h + 1;
+            bytes += static_cast<std::int64_t>(e - s) -
+                     h * static_cast<std::int64_t>(sl);
+            if (parts > std::numeric_limits<std::int32_t>::max())
+                return nullptr;
+        }
+        list_off[static_cast<std::size_t>(i + 1)] =
+            static_cast<std::int32_t>(parts);
+    }
+    if (bytes > std::numeric_limits<std::int32_t>::max()) return nullptr;
+
+    // Pass 2: copy the parts.
+    auto coff = Buffer::allocate(static_cast<std::size_t>(parts + 1) *
+                                 sizeof(std::int32_t));
+    auto cdata = Buffer::allocate(static_cast<std::size_t>(bytes));
+    auto* co = reinterpret_cast<std::int32_t*>(coff->data());
+    std::uint8_t* cd = cdata->data();
+    std::int64_t at = 0, k = 0;
+    co[0] = 0;
+    std::size_t h = 0;
+    for (std::int64_t i = 0; i < n; ++i) {
+        if (f.is_null(i)) continue;
+        const std::size_t e = static_cast<std::size_t>(f.off[i + 1] - lo);
+        std::size_t start = static_cast<std::size_t>(f.off[i] - lo);
+        auto emit = [&](std::size_t from, std::size_t to) {
+            copy_bytes(cd + at, p + from, static_cast<std::int64_t>(to - from));
+            at += static_cast<std::int64_t>(to - from);
+            co[++k] = static_cast<std::int32_t>(at);
+        };
+        while (h < hits.size() && hits[h] < e) {
+            emit(start, hits[h]);
+            start = hits[h] + sl;
+            ++h;
+        }
+        emit(start, e);
+    }
+    return make_str_list(v, list_off, parts, std::move(coff), std::move(cdata));
+}
+
+template <class F>
+dftu_series* partition_impl(const dftu_series* v, const F& f,
+                            std::string_view sep, bool right) {
+    const std::int64_t n = f.n;
+    const std::int64_t lo = f.lo();
+    const std::size_t nbytes = static_cast<std::size_t>(f.hi() - lo);
+    const std::uint8_t* p = f.data != nullptr ? f.data + lo : nullptr;
+    const std::size_t sl = sep.size();
+    const Bits cand = compute_bits(simd::BitKind::Eq, p, nbytes,
+                                   static_cast<std::uint8_t>(sep[0]), false);
+    std::vector<std::size_t> at(static_cast<std::size_t>(n), simd::NPOS);
+    std::vector<std::int32_t> list_off(static_cast<std::size_t>(n + 1), 0);
+    std::int64_t parts = 0, bytes = 0;
+    for (std::int64_t i = 0; i < n; ++i) {
+        if (!f.is_null(i)) {
+            const std::size_t s = static_cast<std::size_t>(f.off[i] - lo);
+            const std::size_t e = static_cast<std::size_t>(f.off[i + 1] - lo);
+            at[static_cast<std::size_t>(i)] =
+                find_sep(cand.bad.data(), p, s, e, sep, right);
+            parts += 3;
+            bytes += static_cast<std::int64_t>(e - s);
+            if (parts > std::numeric_limits<std::int32_t>::max())
+                return nullptr;
+        }
+        list_off[static_cast<std::size_t>(i + 1)] =
+            static_cast<std::int32_t>(parts);
+    }
+    if (bytes > std::numeric_limits<std::int32_t>::max()) return nullptr;
+    auto coff = Buffer::allocate(static_cast<std::size_t>(parts + 1) *
+                                 sizeof(std::int32_t));
+    auto cdata = Buffer::allocate(static_cast<std::size_t>(bytes));
+    auto* co = reinterpret_cast<std::int32_t*>(coff->data());
+    std::uint8_t* cd = cdata->data();
+    std::int64_t w = 0, k = 0;
+    co[0] = 0;
+    auto put = [&](const std::uint8_t* src, std::int64_t len) {
+        copy_bytes(cd + w, src, len);
+        w += len;
+        co[++k] = static_cast<std::int32_t>(w);
+    };
+    for (std::int64_t i = 0; i < n; ++i) {
+        if (f.is_null(i)) continue;
+        const std::size_t s = static_cast<std::size_t>(f.off[i] - lo);
+        const std::size_t e = static_cast<std::size_t>(f.off[i + 1] - lo);
+        const std::size_t q = at[static_cast<std::size_t>(i)];
+        if (q == simd::NPOS) {
+            // Python: (row, "", "") for partition, ("", "", row) for
+            // rpartition.
+            if (!right) {
+                put(p + s, static_cast<std::int64_t>(e - s));
+                put(p, 0);
+                put(p, 0);
+            } else {
+                put(p, 0);
+                put(p, 0);
+                put(p + s, static_cast<std::int64_t>(e - s));
+            }
+            continue;
+        }
+        put(p + s, static_cast<std::int64_t>(q - s));
+        put(p + q, static_cast<std::int64_t>(sl));
+        put(p + q + sl, static_cast<std::int64_t>(e - q - sl));
+    }
+    return make_str_list(v, list_off, parts, std::move(coff), std::move(cdata));
+}
+
+template <class F>
+dftu_series* rfind_impl(const dftu_series* v, const F& f,
+                        std::string_view needle) {
+    const std::int64_t lo = f.lo();
+    const std::size_t nbytes = static_cast<std::size_t>(f.hi() - lo);
+    const std::uint8_t* p = f.data != nullptr ? f.data + lo : nullptr;
+    Bits cand;
+    if (!needle.empty())
+        cand = compute_bits(simd::BitKind::Eq, p, nbytes,
+                            static_cast<std::uint8_t>(needle[0]), false);
+    auto* out = new dftu_series();
+    out->type = TypeId::Int64;
+    out->encoding = Encoding::Flat;
+    out->length = f.n;
+    out->null_count = v->null_count;
+    out->validity = v->validity;
+    out->data = Buffer::allocate(buffer_bytes(TypeId::Int64, f.n));
+    auto* r = reinterpret_cast<std::int64_t*>(out->data->data());
+    for (std::int64_t i = 0; i < f.n; ++i) {
+        if (f.is_null(i)) {
+            r[i] = 0;
+            continue;
+        }
+        const std::size_t s = static_cast<std::size_t>(f.off[i] - lo);
+        const std::size_t e = static_cast<std::size_t>(f.off[i + 1] - lo);
+        if (needle.empty()) {
+            r[i] = static_cast<std::int64_t>(e - s);
+            continue;
+        }
+        const std::size_t q = find_sep(cand.bad.data(), p, s, e, needle, true);
+        r[i] = q == simd::NPOS ? -1 : static_cast<std::int64_t>(q - s);
+    }
+    return out;
 }
 
 std::int64_t count_literal(std::string_view s, std::string_view pat) {
@@ -1223,90 +1789,79 @@ std::int64_t count_literal(std::string_view s, std::string_view pat) {
     return n;
 }
 
-// Concatenate two String columns row by row; a null on either side is null.
-template <class OffA, class OffB>
-dftu_series* str_cat_w(const dftu_series* a, const dftu_series* b) {
-    RowReader<OffA> ra(a);
-    RowReader<OffB> rb(b);
-    if (!ra.ok() || !rb.ok()) return nullptr;
-    std::vector<std::string> parts(static_cast<std::size_t>(a->length));
-    std::shared_ptr<Buffer> validity =
-        Buffer::allocate(buffer_bytes(TypeId::Bool, a->length));
-    std::memset(validity->data(), 0, validity->size());
-    std::int64_t nulls = 0;
-    for (std::int64_t i = 0; i < a->length; ++i) {
-        if (ra.is_null(i) || rb.is_null(i)) {
-            ++nulls;
-            continue;
-        }
-        validity->data()[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
-        std::string s(ra.at(i));
-        s.append(rb.at(i));
-        parts[static_cast<std::size_t>(i)] = std::move(s);
-    }
-    dftu_series* out = make_string(a, parts);
-    out->validity = nulls ? validity : nullptr;
-    out->null_count = nulls;
-    return out;
-}
-
-// Join each row's list of strings with `sep`; a null list is null.
-dftu_series* list_join_impl(const dftu_series* v, std::string_view sep) {
-    if (!v || v->type != TypeId::List || v->encoding != Encoding::Flat)
-        return nullptr;
-    const std::int32_t* off = dftu_series_offsets(v);
-    if (!off || !v->child() || !is_string_kind(v->child()->type))
-        return nullptr;
-    const dftu_series& child = *v->child();
-    const bool wide = is_wide_offset_type(child.type);
-    std::vector<std::string> parts(static_cast<std::size_t>(v->length));
-    for (std::int64_t i = 0; i < v->length; ++i) {
-        if (v->validity && !((v->validity->data()[i >> 3] >> (i & 7)) & 1))
-            continue;
-        std::string s;
-        for (std::int32_t k = off[i]; k < off[i + 1]; ++k) {
-            if (k != off[i]) s.append(sep);
-            s.append(wide ? value_at<std::int64_t>(child, k)
-                          : value_at<std::int32_t>(child, k));
-        }
-        parts[static_cast<std::size_t>(i)] = std::move(s);
-    }
-    auto* out = new dftu_series();
-    out->type = TypeId::String;
-    out->encoding = Encoding::Flat;
-    out->length = v->length;
-    out->null_count = v->null_count;
-    out->validity = v->validity;
-    std::size_t total = 0;
-    for (const std::string& p : parts) total += p.size();
-    out->offsets = Buffer::allocate(static_cast<std::size_t>(v->length + 1) *
-                                    sizeof(std::int32_t));
-    out->data = Buffer::allocate(total);
-    std::int32_t* od = reinterpret_cast<std::int32_t*>(out->offsets->data());
-    char* bd = total ? reinterpret_cast<char*>(out->data->data()) : nullptr;
-    std::int32_t pos = 0;
-    od[0] = 0;
-    for (std::size_t i = 0; i < parts.size(); ++i) {
-        if (!parts[i].empty())
-            std::memcpy(bd + pos, parts[i].data(), parts[i].size());
-        pos += static_cast<std::int32_t>(parts[i].size());
-        od[i + 1] = pos;
-    }
-    return out;
-}
-
 }  // namespace
+
+dftu_series* dftu_series_str_slice(const dftu_series* v, int64_t start,
+                                   int64_t length) {
+    if (!v || !is_string_kind(v->type)) return nullptr;
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_slice(flat_v, start, length));
+    return slice_impl(v, start, length);
+}
+
+dftu_series* dftu_series_str_pad_start(const dftu_series* v, int64_t width,
+                                       char fill) {
+    if (!v || !is_string_kind(v->type)) return nullptr;
+    DFTU_FLAT_OPERAND(v, flat_v,
+                      dftu_series_str_pad_start(flat_v, width, fill));
+    return pad_impl(v, width, fill, 0);
+}
+dftu_series* dftu_series_str_pad_end(const dftu_series* v, int64_t width,
+                                     char fill) {
+    if (!v || !is_string_kind(v->type)) return nullptr;
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_pad_end(flat_v, width, fill));
+    return pad_impl(v, width, fill, 1);
+}
+dftu_series* dftu_series_str_center(const dftu_series* v, int64_t width,
+                                    char fill) {
+    if (!v || !is_string_kind(v->type)) return nullptr;
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_center(flat_v, width, fill));
+    return pad_impl(v, width, fill, 2);
+}
+dftu_series* dftu_series_str_zfill(const dftu_series* v, int64_t width) {
+    if (!v || !is_string_kind(v->type)) return nullptr;
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_zfill(flat_v, width));
+    return zfill_impl(v, width);
+}
+
+dftu_series* dftu_series_str_split(const dftu_series* v, const char* sep,
+                                   int32_t sep_len) {
+    if (!v || !is_string_kind(v->type)) return nullptr;
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_split(flat_v, sep, sep_len));
+    // An empty separator is no split point: one part, the whole row.
+    const std::string_view s_sep(sep, static_cast<std::size_t>(sep_len));
+    return with_flat(v, [&](const auto& f) { return split_impl(v, f, s_sep); });
+}
+
+dftu_series* dftu_series_str_partition(const dftu_series* v, const char* sep,
+                                       int32_t sep_len, int32_t from_right) {
+    if (!v || !is_string_kind(v->type) || sep_len <= 0) return nullptr;
+    DFTU_FLAT_OPERAND(
+        v, flat_v, dftu_series_str_partition(flat_v, sep, sep_len, from_right));
+    const std::string_view s_sep(sep, static_cast<std::size_t>(sep_len));
+    return with_flat(v, [&](const auto& f) {
+        return partition_impl(v, f, s_sep, from_right != 0);
+    });
+}
+
+dftu_series* dftu_series_str_rfind(const dftu_series* v, const char* needle,
+                                   int32_t needle_len) {
+    if (!v || !is_string_kind(v->type)) return nullptr;
+    DFTU_FLAT_OPERAND(v, flat_v,
+                      dftu_series_str_rfind(flat_v, needle, needle_len));
+    const std::string_view n(needle, static_cast<std::size_t>(needle_len));
+    return with_flat(v, [&](const auto& f) { return rfind_impl(v, f, n); });
+}
 
 dftu_series* dftu_series_str_case(const dftu_series* v, int32_t op) {
     if (!v || !is_string_kind(v->type)) return nullptr;
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_case(flat_v, op));
     switch (static_cast<dftu_str_case>(op)) {
         case DFTU_STR_CAPITALIZE:
-            return string_transform(v, capitalize);
+            return case_impl(v, simd::CaseKind::Lower, true);
         case DFTU_STR_TITLE_CASE:
-            return string_transform(v, title);
+            return case_impl(v, simd::CaseKind::Title, false);
         case DFTU_STR_SWAPCASE:
-            return string_transform(v, swapcase);
+            return case_impl(v, simd::CaseKind::Swapcase, false);
     }
     return nullptr;
 }
@@ -1314,10 +1869,7 @@ dftu_series* dftu_series_str_case(const dftu_series* v, int32_t op) {
 dftu_series* dftu_series_str_is(const dftu_series* v, int32_t cls) {
     if (!v) return nullptr;
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_is(flat_v, cls));
-    if (cls < DFTU_STR_ALNUM || cls > DFTU_STR_TITLE) return nullptr;
-    const auto c = static_cast<dftu_str_class>(cls);
-    return string_predicate(
-        v, [c](std::string_view s) { return str_class(s, c); });
+    return is_impl(v, cls);
 }
 
 dftu_series* dftu_series_str_count(const dftu_series* v, const char* pat,
@@ -1329,29 +1881,13 @@ dftu_series* dftu_series_str_count(const dftu_series* v, const char* pat,
         v, [p](std::string_view s) { return count_literal(s, p); });
 }
 
-dftu_series* dftu_series_str_rfind(const dftu_series* v, const char* needle,
-                                   int32_t needle_len) {
-    if (!v || !is_string_kind(v->type)) return nullptr;
-    DFTU_FLAT_OPERAND(v, flat_v,
-                      dftu_series_str_rfind(flat_v, needle, needle_len));
-    std::string_view n(needle, static_cast<std::size_t>(needle_len));
-    return int_transform(v, [n](std::string_view s) {
-        const std::size_t hit = s.rfind(n);
-        return hit == std::string_view::npos ? std::int64_t{-1}
-                                             : static_cast<std::int64_t>(hit);
-    });
-}
-
 dftu_series* dftu_series_str_remove_prefix(const dftu_series* v,
                                            const char* prefix, int32_t len) {
     if (!v || !is_string_kind(v->type)) return nullptr;
     DFTU_FLAT_OPERAND(v, flat_v,
                       dftu_series_str_remove_prefix(flat_v, prefix, len));
-    std::string_view p(prefix, static_cast<std::size_t>(len));
-    return string_transform(v, [p](std::string_view s) {
-        if (!p.empty() && s.substr(0, p.size()) == p) s.remove_prefix(p.size());
-        return std::string(s);
-    });
+    return remove_affix_impl(
+        v, std::string_view(prefix, static_cast<std::size_t>(len)), true);
 }
 
 dftu_series* dftu_series_str_remove_suffix(const dftu_series* v,
@@ -1359,42 +1895,14 @@ dftu_series* dftu_series_str_remove_suffix(const dftu_series* v,
     if (!v || !is_string_kind(v->type)) return nullptr;
     DFTU_FLAT_OPERAND(v, flat_v,
                       dftu_series_str_remove_suffix(flat_v, suffix, len));
-    std::string_view p(suffix, static_cast<std::size_t>(len));
-    return string_transform(v, [p](std::string_view s) {
-        if (!p.empty() && s.size() >= p.size() &&
-            s.substr(s.size() - p.size()) == p)
-            s.remove_suffix(p.size());
-        return std::string(s);
-    });
+    return remove_affix_impl(
+        v, std::string_view(suffix, static_cast<std::size_t>(len)), false);
 }
 
 dftu_series* dftu_series_str_repeat(const dftu_series* v, int64_t n) {
     if (!v || !is_string_kind(v->type) || n < 0) return nullptr;
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_repeat(flat_v, n));
-    return string_transform(v, [n](std::string_view s) {
-        std::string out;
-        out.reserve(s.size() * static_cast<std::size_t>(n));
-        for (std::int64_t k = 0; k < n; ++k) out.append(s);
-        return out;
-    });
-}
-
-dftu_series* dftu_series_str_center(const dftu_series* v, int64_t width,
-                                    char fill) {
-    if (!v || !is_string_kind(v->type)) return nullptr;
-    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_center(flat_v, width, fill));
-    return string_transform(v, [width, fill](std::string_view s) {
-        const std::int64_t len = static_cast<std::int64_t>(s.size());
-        if (len >= width) return std::string(s);
-        // CPython's placement: an odd gap puts its extra fill character on
-        // the left when the width is odd, else on the right.
-        const std::int64_t gap = width - len;
-        const std::int64_t left = gap / 2 + (gap & width & 1);
-        std::string out(static_cast<std::size_t>(left), fill);
-        out.append(s);
-        out.append(static_cast<std::size_t>(gap - left), fill);
-        return out;
-    });
+    return repeat_impl(v, n);
 }
 
 dftu_series* dftu_series_str_cat(const dftu_series* a, const dftu_series* b) {
@@ -1406,10 +1914,25 @@ dftu_series* dftu_series_str_cat(const dftu_series* a, const dftu_series* b) {
         return nullptr;
     const bool wa = is_wide_offset_type(a->type);
     const bool wb = is_wide_offset_type(b->type);
-    if (wa && wb) return str_cat_w<std::int64_t, std::int64_t>(a, b);
-    if (wa) return str_cat_w<std::int64_t, std::int32_t>(a, b);
-    if (wb) return str_cat_w<std::int32_t, std::int64_t>(a, b);
-    return str_cat_w<std::int32_t, std::int32_t>(a, b);
+    if (wa && wb) return cat_impl<std::int64_t, std::int64_t>(a, b);
+    if (wa) return cat_impl<std::int64_t, std::int32_t>(a, b);
+    if (wb) return cat_impl<std::int32_t, std::int64_t>(a, b);
+    return cat_impl<std::int32_t, std::int32_t>(a, b);
+}
+
+dftu_series* dftu_series_list_join(const dftu_series* v, const char* sep,
+                                   int32_t sep_len) {
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_list_join(flat_v, sep, sep_len));
+    if (!v || v->type != TypeId::List || v->encoding != Encoding::Flat)
+        return nullptr;
+    if (!dftu_series_offsets(v) || !v->child() ||
+        !is_string_kind(v->child()->type))
+        return nullptr;
+    const dftu_series& child = *v->child();
+    const std::string_view s(sep, static_cast<std::size_t>(sep_len));
+    return is_wide_offset_type(child.type)
+               ? join_impl<std::int64_t>(v, child, s)
+               : join_impl<std::int32_t>(v, child, s);
 }
 
 dftu_series* dftu_series_str_findall(const dftu_series* v, const char* pattern,
@@ -1428,36 +1951,4 @@ dftu_series* dftu_series_str_findall(const dftu_series* v, const char* pattern,
             if (r == duql::MatchResult::LIMIT) limited.add(row);
         });
     return limited.apply(out, v);
-}
-
-dftu_series* dftu_series_str_partition(const dftu_series* v, const char* sep,
-                                       int32_t sep_len, int32_t from_right) {
-    if (!v || !is_string_kind(v->type) || sep_len <= 0) return nullptr;
-    DFTU_FLAT_OPERAND(
-        v, flat_v, dftu_series_str_partition(flat_v, sep, sep_len, from_right));
-    std::string_view s_sep(sep, static_cast<std::size_t>(sep_len));
-    const bool right = from_right != 0;
-    return list_transform(v, [s_sep, right](std::string_view row,
-                                            std::vector<std::string>& parts) {
-        const std::size_t hit = right ? row.rfind(s_sep) : row.find(s_sep);
-        if (hit == std::string_view::npos) {
-            // Python: (row, "", "") for partition, ("", "", row) for
-            // rpartition.
-            parts.emplace_back(right ? std::string_view{} : row);
-            parts.emplace_back();
-            parts.emplace_back(right ? row : std::string_view{});
-            return;
-        }
-        parts.emplace_back(row.substr(0, hit));
-        parts.emplace_back(s_sep);
-        parts.emplace_back(row.substr(hit + s_sep.size()));
-    });
-}
-
-dftu_series* dftu_series_list_join(const dftu_series* v, const char* sep,
-                                   int32_t sep_len) {
-    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_list_join(flat_v, sep, sep_len));
-
-    return list_join_impl(
-        v, std::string_view(sep, static_cast<std::size_t>(sep_len)));
 }

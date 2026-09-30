@@ -75,6 +75,14 @@ def test_asof_matches_merge_asof(tmp_path, direction, tolerance, seed):
     assert any(v is not None for v in got["v"])
 
 
+@pytest.mark.parametrize("within", ["7", "7.5", "$w", "7us", "0.007ms"])
+def test_asof_within_forms(tmp_path, within):
+    events = _random_events(4, 3000)
+    tv = _trace(tmp_path, events)
+    got = tv.duql(QUERY.format(clause="nearest within " + within), w=7).collect().to_dict()
+    assert dict(zip(got["tid"], got["v"])) == _expected(events, "nearest", 7)
+
+
 def test_asof_keeps_input_order(tmp_path):
     events = _random_events(9, 2000)
     got = _trace(tmp_path, events).duql(QUERY.format(clause="")).collect().to_dict()
@@ -107,7 +115,7 @@ def test_asof_equal_times(tmp_path):
 
 def test_asof_refusals(tmp_path):
     tv = _trace(tmp_path, _random_events(4, 50))
-    for clause in ["into m", "within -1", "within 1.5"]:
+    for clause in ["into m", "within -1", "within dur", "within 1 + 3"]:
         with pytest.raises(Exception):
             tv.duql(QUERY.format(clause=clause)).collect()
     with pytest.raises(Exception, match="asof"):

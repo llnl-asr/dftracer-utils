@@ -204,6 +204,10 @@ TEST_SUITE("duql decorrelate") {
                           "{ c = count() }",
                           true),
                   {"'sort'", "correlated"}));
+        CHECK(has(refusal("from data | where run == ^.run | parse name ~ "
+                          "\"(?<op>[a-z]+)\" | agg { c = count() }",
+                          true),
+                  {"'parse'", "correlated"}));
         CHECK(has(refusal("from data | derive z = ^.x | where run == ^.run | "
                           "agg { c = count() }",
                           true),

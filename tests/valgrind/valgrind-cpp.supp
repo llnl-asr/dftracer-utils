@@ -52,4 +52,20 @@
    fun:_Znam
    fun:_ZN7rocksdb18VersionStorageInfoC*
 }
+
+# --- Vectorscan: SIMD scans read whole vectors past the end of the input ---
+# Vectorscan reads the haystack in aligned vector loads and masks the bytes
+# past its end, so Memcheck sees branches on bytes never written. The scan
+# entry point is hs_scan; the frames above it are its internal engines.
+{
+   vectorscan-scan-cond
+   Memcheck:Cond
+   ...
+   fun:hs_scan
+}
+{
+   vectorscan-scan-value8
+   Memcheck:Value8
+   ...
+   fun:hs_scan
 }

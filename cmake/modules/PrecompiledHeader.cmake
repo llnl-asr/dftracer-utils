@@ -103,6 +103,7 @@ function(detect_common_headers)
         # third-party headers that might not be available everywhere
         if(NOT HEADER MATCHES "/"
            AND NOT HEADER MATCHES "^Python\\.h$"
+           AND NOT HEADER MATCHES "^hs\\.h$"
            AND NOT HEADER MATCHES "^argparse/")
           # Increment count for this header
           set(FOUND FALSE)

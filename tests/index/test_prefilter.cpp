@@ -3,7 +3,9 @@
 #include <dftracer/utils/index/plan/prefilter.h>
 #include <doctest/doctest.h>
 
+#include <initializer_list>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using dftracer::utils::index::plan::Prefilter;
@@ -13,6 +15,18 @@ namespace {
 
 Prefilter of(const char* q) {
     return Prefilter(dftracer::utils::duql::parse_or_throw(q));
+}
+
+void agree(const Prefilter& p, std::initializer_list<const char*> lines,
+           bool expect_any_true = true) {
+    bool any_true = false;
+    for (const char* l : lines) {
+        CAPTURE(l);
+        const bool a = p.may_match(l);
+        CHECK(a == p.may_match_per_needle(l));
+        any_true = any_true || a;
+    }
+    CHECK(any_true == expect_any_true);
 }
 
 }  // namespace
@@ -124,5 +138,88 @@ TEST_SUITE("Prefilter") {
         for (std::size_t i = 0; i < Prefilter::CHECK_WINDOW; ++i)
             selective.may_match(R"({"name":"write"})");
         CHECK_FALSE(selective.may_match(R"({"name":"write"})"));
+    }
+
+    TEST_CASE("one scan agrees with the per-needle path") {
+        const auto one = of(R"(name == "read")");
+        agree(one, {R"({"name":"read"})", R"({"name":"write"})", "", "read"});
+        CHECK(one.may_match(R"("read")"));
+        CHECK_FALSE(one.may_match(""));
+
+        const auto several = of(
+            R"(name == "read" and cat in ["POSIX", "STDIO"] and pid == 1234)");
+        agree(several, {R"({"name":"read","cat":"POSIX","pid":1234})",
+                        R"({"name":"read","cat":"STDIO","pid":1234})",
+                        R"({"name":"read","cat":"MPI","pid":1234})",
+                        R"({"name":"read","cat":"POSIX","pid":12})", ""});
+        CHECK(several.may_match(R"({"name":"read","cat":"STDIO","pid":1234})"));
+        CHECK_FALSE(
+            several.may_match(R"({"name":"read","cat":"MPI","pid":1234})"));
+
+        std::string many = "pid in [";
+        std::string last;
+        for (int i = 100; i < 200; ++i) {
+            if (i > 100) many += ",";
+            many += std::to_string(i);
+            last = std::to_string(i);
+        }
+        const auto big = of((many + "]").c_str());
+        REQUIRE(big.clauses().size() == 1);
+        REQUIRE(big.clauses()[0].size() == 100);
+        CHECK(big.may_match("x " + last));
+        CHECK(big.may_match("100"));
+        CHECK_FALSE(big.may_match("x 99 y 200"));
+        agree(big, {"199", "100 x", "99 200", ""});
+    }
+
+    TEST_CASE("clauses below and above HS_MIN_ALTERNATIVES agree") {
+        constexpr std::size_t MIN = Prefilter::HS_MIN_ALTERNATIVES;
+        for (const std::size_t k : {std::size_t{1}, MIN - 1, MIN, MIN + 1,
+                                    2 * MIN, std::size_t{16}}) {
+            std::string q = "name in [";
+            for (std::size_t i = 0; i < k; ++i)
+                q += (i ? ", \"n" : "\"n") + std::to_string(i) + "\"";
+            const auto p = of((q + "]").c_str());
+            REQUIRE(p.clauses().size() == 1);
+            REQUIRE(p.clauses()[0].size() == k);
+            const std::string last = "\"n" + std::to_string(k - 1) + "\"";
+            CHECK(p.may_match("x " + last + " y"));
+            CHECK_FALSE(p.may_match(R"({"name":"other"})"));
+            agree(p, {"\"n0\"", last.c_str(), R"("n)", "", R"({"name":"zz"})"});
+        }
+    }
+
+    TEST_CASE("overlapping needles and line ends") {
+        const auto p = of(R"(name like "%abcde%" and cat like "%cde%")");
+        REQUIRE(p.clauses().size() == 2);
+        agree(p, {"abcde", "abcde cde", "cde abcde", "abcd cde", "cde",
+                  "xabcde", "abcdecde", ""});
+        CHECK(p.may_match("abcde"));
+        CHECK_FALSE(p.may_match("abcd cde"));
+        CHECK_FALSE(p.may_match("cde"));
+        CHECK(p.may_match("cde abcde"));
+    }
+
+    TEST_CASE("needles at the start and end of the line, or across clauses") {
+        const auto p =
+            of(R"((name == "read" or pid == 1234) and cat == "POSIX")");
+        CHECK(p.may_match(R"("read" "POSIX")"));
+        CHECK(p.may_match(R"("POSIX" "read")"));
+        CHECK(p.may_match(R"(1234 "POSIX")"));
+        CHECK_FALSE(p.may_match(R"("read" "STDIO")"));
+        CHECK_FALSE(p.may_match(R"("POSIX" 123)"));
+        CHECK_FALSE(p.may_match(""));
+        agree(p, {R"("read" "POSIX")", R"("POSIX" 1234)", "1234", "",
+                  "1234POSIX"});
+    }
+
+    TEST_CASE("a needle shared by clauses and ranges still apply") {
+        const auto p = of(R"(name == "read" or pid == 1234)");
+        agree(p, {R"("read")", "1234", "123", ""});
+        const auto r = of(R"(name == "read" and ts > 5)");
+        CHECK(r.may_match(R"({"name":"read","ts":6})"));
+        CHECK_FALSE(r.may_match(R"({"name":"read","ts":5})"));
+        CHECK_FALSE(r.may_match(R"({"name":"write","ts":6})"));
+        CHECK_FALSE(r.may_match(""));
     }
 }

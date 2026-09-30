@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace dftracer::utils::duql {
@@ -17,7 +18,9 @@ namespace dftracer::utils::duql {
 struct Macro {
     std::string name;
     std::vector<std::string> params;
-    std::shared_ptr<const syntax::Expr> body;
+    std::variant<std::shared_ptr<const syntax::Expr>,
+                 std::shared_ptr<const syntax::Pipeline>>
+        body;
     std::string origin;
 };
 
@@ -36,10 +39,14 @@ bool args_fallback(const std::vector<syntax::Def>& defs);
 /// The `def`s of `decls`, taken out of it.
 std::vector<syntax::Def> take_defs(std::vector<syntax::Decl>& decls);
 
-/// Replaces every call of a macro in `pipeline` with its body, the arguments
-/// bound to the parameters by position. `builtin` names the built-in
-/// functions, which a macro may not take. Fails for a wrong number of
-/// arguments, a named argument, a cycle or a macro with a built-in's name;
+/// Replaces every call of a macro in `pipeline` and in the pipelines it holds
+/// with its body, the arguments bound to the parameters by position. A
+/// pipeline macro called as a stage splices its stages; a call in the first
+/// position that names no pipeline macro becomes a `where` filter, with no
+/// macro in scope too. `builtin` names the built-in functions, which a macro
+/// may not take. Fails for a wrong number of arguments, a named argument, a
+/// cycle, a macro with a built-in's name, a pipeline macro inside an
+/// expression, an expression macro or an unknown name after the first stage;
 /// errors point into `text`.
 dftracer::utils::expected<void, DuqlError> expand_macros(
     syntax::Pipeline& pipeline, const MacroScopes& scopes,

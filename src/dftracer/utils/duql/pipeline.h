@@ -116,6 +116,7 @@ enum class AggFn : std::uint8_t {
     ARGMIN,
     SKETCH,
     MERGE,
+    PLUGIN,
 };
 
 inline bool is_occupancy(AggFn fn) {
@@ -127,6 +128,8 @@ inline bool is_occupancy(AggFn fn) {
 /// `count()` and the occupancy aggregates; `by` is the second argument of
 /// `arg_max` and `arg_min`; `q` is the quantile level. `merged` marks
 /// `quantile(merge(arg), q)`, a quantile of the merged stored sketches.
+/// PLUGIN runs the registered reducer `plugin` over each group's non-null
+/// `arg` values, `params` filling its operands after the column in order.
 struct PipelineAgg {
     std::string name;
     AggFn fn = AggFn::COUNT;
@@ -135,6 +138,8 @@ struct PipelineAgg {
     std::string text;
     TermRef by;
     bool merged = false;
+    std::string plugin;
+    std::vector<LiteralValue> params;
 };
 
 /// `group k { ... }`, or `agg { ... }` with no keys.
@@ -145,6 +150,7 @@ struct PipelineGroup {
 
 /// `time_range low .. high [overlap]`, in the unit of the time role, and
 /// the same window as a condition on the time and duration fields.
+/// `low` or `high` is infinite for an open bound.
 struct PipelineTimeRange {
     double low = 0;
     double high = 0;
@@ -153,13 +159,21 @@ struct PipelineTimeRange {
     std::string text;
 };
 
-/// `bucket width [fill]`, in the unit of the time role; keys the next
-/// `group` or `agg`. `key` is the bucket start of a record.
+/// `bucket width [every step] [at origin] [fill [mode] [from low to high]]`, in
+/// the unit of the time role; keys the next `group` or `agg`. `key` is the
+/// bucket start of a record. A range makes `fill` cover the buckets of `low` to
+/// `high`.
 struct PipelineBucket {
     double width = 0;
+    std::optional<double> low;
+    std::optional<double> high;
+    syntax::FillMode fill_mode = syntax::FillMode::ZERO;
     bool fill = false;
     TermRef key;
     std::string text;
+    std::string name = "bucket";
+    std::optional<double> every;
+    double origin = 0;
 };
 
 struct PipelineCallTree {};
@@ -197,15 +211,42 @@ enum class WinFn : std::uint8_t {
     STD,
     QUANTILE,
     HISTOGRAM,
+    RUNNING_MIN,
+    RUNNING_MAX,
+    RUNNING_MEAN,
+    NTILE,
+    NTH,
+    PERCENT_RANK,
+    CUME_DIST,
+    FILL_FORWARD,
+    COUNT_IF,
+    COUNT_DISTINCT,
+    COLLECT,
+    ARGMAX,
+    ARGMIN,
+};
+
+/// The frame of `over N rows` (`rows` rows ending at the current one) or
+/// `over d` (`range`: the rows whose sort key lies in `[k - width, k]`,
+/// `width` in the sort key's units).
+struct WinFrame {
+    bool range = false;
+    std::int64_t rows = 0;
+    double width = 0;
 };
 
 /// One window function call of a `window` block, computed into the hidden
 /// column `column`. `arg` is null for the functions that take none;
-/// `offset` is the lag or lead distance, `q` the quantile level.
+/// `offset` is the lag or lead distance, the ntile bucket count or the nth
+/// position, `q` the quantile level. `fallback` is the lag or lead default
+/// past the partition's edge (null: none).
 struct PipelineWinCall {
     std::string column;
     WinFn fn = WinFn::ROW_NUMBER;
     TermRef arg;
+    TermRef fallback;
+    TermRef by;
+    std::optional<WinFrame> frame;
     std::int64_t offset = 1;
     double q = 0;
     std::string text;
@@ -232,6 +273,8 @@ struct PipelinePivot {
     PipelineItem key;
     bool fixed = false;
     std::vector<TConst> values;
+    /// Pairs with `values`; a label names that value's column.
+    std::vector<std::string> labels;
     std::vector<PipelineAgg> aggs;
 };
 
@@ -247,13 +290,13 @@ struct PipelineNest {
     std::string name;
 };
 
-/// `asof t == column [direction] [within n]`: the row of the side nearest in
+/// `asof t == column [direction] [within d]`: the row of the side nearest in
 /// time. `tolerance` is in the time column's units.
 struct PipelineAsof {
     PipelineItem time;
     std::string column;
     syntax::AsofDirection direction = syntax::AsofDirection::BACKWARD;
-    std::optional<std::int64_t> tolerance;
+    std::optional<double> tolerance;
 };
 
 /// `overlap [into name]`: the rows of the side whose interval
@@ -277,6 +320,7 @@ struct PipelineLookup {
     std::vector<std::pair<PipelineItem, std::string>> keys;
     std::variant<std::monostate, PipelineNest, PipelineAsof, PipelineOverlap>
         mode;
+    syntax::LookupKind kind = syntax::LookupKind::LEFT;
 };
 
 struct Pipeline;
@@ -286,13 +330,36 @@ struct PipelineUnion {
     std::shared_ptr<const Pipeline> other;
 };
 
+/// A scalar plugin function: the column `arg.name` from `arg`, the column
+/// `arg2->name` from `arg2` when set, then the registered series op `op`
+/// run batch by batch over `arg.name` in place, its operands filled in
+/// signature order from the second column, `scalars` and `str`.
+struct PipelinePlugin {
+    std::string op;
+    PipelineItem arg;
+    std::optional<PipelineItem> arg2;
+    std::vector<LiteralValue> scalars;
+    std::optional<std::string> str;
+    std::string text;
+};
+
+/// `call op(args)`: the registered table -> table op `op` over the rows so
+/// far, its operands after the frame filled in order from `args`. It ends
+/// the pipeline.
+struct PipelineCall {
+    std::string op;
+    std::vector<LiteralValue> args;
+    std::string text;
+};
+
 using PipelineStage =
     std::variant<PipelineWhere, PipelineSelect, PipelineDrop, PipelineRename,
                  PipelineDerive, PipelineDistinct, PipelineSort, PipelineTake,
                  PipelineSkip, PipelineTakeBy, PipelineSample, PipelineGroup,
                  PipelineTimeRange, PipelineBucket, PipelineCallTree,
                  PipelineWindow, PipelineExpand, PipelinePivot, PipelineUnpivot,
-                 PipelineLookup, PipelineUnion, PipelineSession>;
+                 PipelineLookup, PipelineUnion, PipelineSession, PipelinePlugin,
+                 PipelineCall>;
 
 /// The records a pipeline reads: every record of the View's files (`all`),
 /// the records the View reads (`data`), the records of the file `path`, or
@@ -335,15 +402,28 @@ struct Program {
     bool args_fallback = false;
 };
 
+/// What a loaded plugin registered under a name: a column -> column
+/// function, a table -> table function, a column -> value reducer, another
+/// kind, or nothing.
+enum class PluginKind : std::uint8_t { NONE, COLUMN, TABLE, AGGREGATE, OTHER };
+
+/// The plugin functions a compile may call: `kind` of a dotted name, and
+/// the loaded plugin namespaces, sorted, for the unknown-name error.
+struct PluginCatalog {
+    std::function<PluginKind(std::string_view)> kind;
+    std::vector<std::string> namespaces;
+};
+
 /// Compile `text` with `params` bound. With `roles`, durations and the time
 /// functions convert to the units of the schema's fields; without, they fail.
 /// `source` is the members of the record schema's source (`name = pipeline`
 /// and `def ...`, separated by `;`): its row sets are names for `from`,
 /// arrows and `lookup`, and its macros expand as the query's do, after the
-/// query's own and before those on `$DFTRACER_DUQL_PATH`.
+/// query's own and before those on `$DFTRACER_DUQL_PATH`. Without
+/// `plugins`, every dotted function name is unknown.
 dftracer::utils::expected<Program, DuqlError> compile_program(
     std::string_view text, const Params& params, const Roles* roles,
-    std::string_view source = {});
+    std::string_view source = {}, const PluginCatalog* plugins = nullptr);
 
 /// Calls `fn` with every term of `p`'s filter and stages, a union's other
 /// pipeline included.
@@ -351,8 +431,9 @@ void for_each_pipeline_term(const Pipeline& p,
                             const std::function<void(const Term&)>& fn);
 
 /// The parameter value `text` spells as a duql literal: a number (with an
-/// optional `-`), a string, `true` or `false`.
-dftracer::utils::expected<LiteralValue, DuqlError> parse_literal(
+/// optional `-`), a string, `true`, `false`, or a list of them such as
+/// `["a", "b"]`.
+dftracer::utils::expected<ParamValue, DuqlError> parse_param(
     std::string_view text);
 
 }  // namespace dftracer::utils::duql

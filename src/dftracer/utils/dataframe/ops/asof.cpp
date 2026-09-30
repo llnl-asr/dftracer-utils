@@ -12,24 +12,27 @@ namespace dftracer::utils::dataframe {
 namespace {
 
 // |left - right| <= tol in the column's own units; a negative tol rejects.
+// Integer distances compare against floor(tol), exact for any tol.
 bool within(const ColumnView& l, std::int64_t il, const ColumnView& r,
-            std::int64_t ir, std::int64_t tol) {
-    if (tol < 0) return false;
+            std::int64_t ir, double tol) {
+    if (!(tol >= 0)) return false;
+    const bool unbounded = tol >= 18446744073709551616.0;
+    const std::uint64_t itol =
+        unbounded ? 0 : static_cast<std::uint64_t>(std::floor(tol));
     switch (l.kind()) {
         case ColumnView::Kind::Unsigned: {
             const std::uint64_t x = l.get_uint(il), y = r.get_uint(ir);
-            return (x >= y ? x - y : y - x) <= static_cast<std::uint64_t>(tol);
+            return unbounded || (x >= y ? x - y : y - x) <= itol;
         }
         case ColumnView::Kind::Float:
-            return std::fabs(l.get_double(il) - r.get_double(ir)) <=
-                   static_cast<double>(tol);
+            return std::fabs(l.get_double(il) - r.get_double(ir)) <= tol;
         default: {
             const std::int64_t x = l.get_int(il), y = r.get_int(ir);
             const std::uint64_t d = x >= y ? static_cast<std::uint64_t>(x) -
                                                  static_cast<std::uint64_t>(y)
                                            : static_cast<std::uint64_t>(y) -
                                                  static_cast<std::uint64_t>(x);
-            return d <= static_cast<std::uint64_t>(tol);
+            return unbounded || d <= itol;
         }
     }
 }
@@ -72,7 +75,7 @@ struct RightPartition {
 
 DataFrame asof(const DataFrame& left, const DataFrame& right,
                const std::string& on, const std::vector<std::string>& by,
-               AsofDirection direction, std::optional<std::int64_t> tolerance) {
+               AsofDirection direction, std::optional<double> tolerance) {
     const std::size_t lt_at = ops::column_named(left, on, "asof");
     const std::size_t rt_at = ops::column_named(right, on, "asof");
     if (left.columns[lt_at].type() != right.columns[rt_at].type())

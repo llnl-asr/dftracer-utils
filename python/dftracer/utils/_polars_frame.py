@@ -142,7 +142,7 @@ class _FramePolarsMixin:
         on: str,
         by: Optional[Union[str, Sequence[str]]] = None,
         strategy: Literal["backward", "forward", "nearest"] = "backward",
-        tolerance: Optional[int] = None,
+        tolerance: Optional[float] = None,
     ) -> "DataFrame":
         """The polars spelling of :meth:`asof`."""
         return self._frame().asof(other, on, by, strategy, tolerance)
@@ -244,7 +244,7 @@ class _FramePolarsMixin:
         pa = _require_pyarrow()
         import pyarrow.parquet as pq  # ty: ignore[unresolved-import]
 
-        pq.write_table(self._frame().to_arrow(), path, **kwargs)  # type: ignore[arg-type]
+        pq.write_table(self._frame()._arrow_for_parquet(), path, **kwargs)  # type: ignore[arg-type]
         del pa
 
     def write_csv(self, path: str, **kwargs: object) -> None:

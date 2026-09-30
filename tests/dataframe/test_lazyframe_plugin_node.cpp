@@ -1174,6 +1174,17 @@ TEST_SUITE("lazyframe plugin node") {
             CHECK(log.masks.empty());
         }
 
+        SUBCASE("a join that matches null keys offers no narrowing") {
+            // The build keys leave out nulls, so a left row with a null key
+            // would be pruned although it matches a null build key.
+            LazyFrame lf = LazyFrame::scan(make_narrow_source(fx))
+                               .join(right, {"val"}, {"key"}, JoinHow::Inner,
+                                     "_right", true);
+            DataFrame out = run(lf.collect());
+            REQUIRE(out.num_rows() == 3);  // 2, 4, 4
+            CHECK(log.masks.empty());
+        }
+
         SUBCASE("a predicate on the produced column stops at with_column") {
             // The join key is the derived column, which the source does not
             // carry; the offer must not be forwarded as if it were col 0.

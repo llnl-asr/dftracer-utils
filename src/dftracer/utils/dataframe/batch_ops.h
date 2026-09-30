@@ -118,7 +118,7 @@ std::vector<DataFrame> hash_partition(const DataFrame& b,
 DataFrame join(const DataFrame& left, const DataFrame& right,
                const std::vector<std::string>& left_on,
                const std::vector<std::string>& right_on, JoinHow how,
-               const std::string& suffix);
+               const std::string& suffix, bool nulls_equal = false);
 
 /// Compare two aggregation results that share their first `n_key` columns as
 /// group keys: outer-join on the keys (sorted ascending), keep every other

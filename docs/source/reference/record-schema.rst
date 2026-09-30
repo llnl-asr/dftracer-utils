@@ -142,8 +142,10 @@ Built-in schemas
 
 ``dftracer`` reads DFTracer traces; its source declares ``data`` (every
 record but the ``ph: M`` metadata records), the row sets ``files``,
-``hosts``, ``strings`` and ``ranks``, and ``args_fallback``. ``genesis``
-extends ``dftracer`` with the row set ``runs``. ``generic`` has no fields
+``hosts``, ``strings`` and ``ranks``, and ``args_fallback``. ``genesis`` is path-decoded: it requires
+``gtype`` and ``run``, binds ``ts`` as time in microseconds and declares
+``data`` (every record but the ``run`` records) and the row set ``runs``.
+It does not extend ``dftracer``. ``generic`` has no fields
 and no source: ``data`` is every record and a bare name never reads
 ``args.<name>``. The source text is in :ref:`duql-sources`.
 

@@ -16,7 +16,10 @@
 // build_peak_rss_bytes is the peak before any query runs.
 // --aggregation-interval-us also builds the aggregation tier at that interval.
 //
-// An INPUT is a .pfw.gz file or a directory scanned recursively.
+// An INPUT is a .pfw.gz file or a directory scanned recursively. A genesis
+// output file (long or wide format) runs three filter queries and no
+// group_by or flamegraph; a query with an arrow is not pruned, which only
+// reads one file's own columns.
 
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/runtime.h>
@@ -24,6 +27,8 @@
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
+#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <simdjson.h>
@@ -42,6 +47,7 @@
 #include <random>
 #include <sstream>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -216,12 +222,114 @@ coro::CoroTask<QuerySet> sample_queries(std::string file) {
     co_return q;
 }
 
+std::string number_text(double d) {
+    char buf[40];
+    std::snprintf(buf, sizeof(buf), "%.9g", d);
+    return buf;
+}
+
+// Genesis output is not a trace: a long-format file has one `gtype` per line
+// (run, func, counter) and the older wide format has a RUN line then ph 3
+// lines. The three queries are the same filters in either shape: one run,
+// functions above the median duration p50, one counter above its median p50.
+// A metric with a zero median is passed over while another exists, so the
+// filter selects some rows. Empty when the first line is neither shape.
+coro::CoroTask<std::map<std::string, std::string>> sample_genesis(
+    std::string file) {
+    std::map<std::string, std::string> out;
+    std::string app, run_id;
+    std::vector<double> durs;
+    std::map<std::string, std::vector<double>> metrics;
+    int shape = 0;  // 1 long, 2 wide
+    simdjson::dom::parser parser;
+    auto gen =
+        utilities::fileio::lines::sources::async_streaming_gz_lines(file);
+    int seen = 0;
+    while (auto line = co_await gen.next()) {
+        std::string_view l = line->content;
+        simdjson::dom::object o;
+        if (l.empty() || l.front() != '{' ||
+            parser.parse(l.data(), l.size()).get(o) != simdjson::SUCCESS)
+            continue;
+        std::string_view v;
+        double d = 0;
+        if (shape == 0) {
+            if (o["gtype"].get(v) == simdjson::SUCCESS &&
+                (v == "run" || v == "func" || v == "counter"))
+                shape = 1;
+            else if (o["name"].get(v) == simdjson::SUCCESS && v == "RUN")
+                shape = 2;
+            else
+                co_return out;
+        }
+        if (shape == 1) {
+            if (o["gtype"].get(v) != simdjson::SUCCESS) continue;
+            const std::string type(v);
+            if (type == "run" && app.empty()) {
+                if (o["app"].get(v) == simdjson::SUCCESS) app = std::string(v);
+                if (o["run"].get(v) == simdjson::SUCCESS)
+                    run_id = std::string(v);
+            } else if (type == "func") {
+                if (o["dur"]["p50"].get(d) == simdjson::SUCCESS)
+                    durs.push_back(d);
+            } else if (type == "counter") {
+                std::string_view m;
+                if (o["metric"].get(m) == simdjson::SUCCESS &&
+                    o["v"]["p50"].get(d) == simdjson::SUCCESS)
+                    metrics[std::string(m)].push_back(d);
+            }
+        } else {
+            simdjson::dom::object a;
+            if (o["args"].get(a) != simdjson::SUCCESS) continue;
+            if (run_id.empty() && a["run"].get(v) == simdjson::SUCCESS)
+                run_id = std::string(v);
+            if (a["dur"]["p50"].get(d) == simdjson::SUCCESS) durs.push_back(d);
+            simdjson::dom::object c;
+            if (a["counters"].get(c) == simdjson::SUCCESS)
+                for (auto [k, x] : c)
+                    if (x["p50"].get(d) == simdjson::SUCCESS)
+                        metrics[std::string(k)].push_back(d);
+        }
+        if (++seen == 20000) break;
+    }
+    if (shape == 0) co_return out;
+    const bool lng = shape == 1;
+    if (!run_id.empty())
+        out["run"] = (lng ? "run == " : "args.run == ") + quote(run_id);
+    if (lng && !app.empty())
+        out["run_app"] = "run -> runs.app == " + quote(app);
+    if (!durs.empty())
+        out["func"] = std::string(lng ? "gtype == \"func\" and dur.p50 > "
+                                      : "ph == 3 and args.dur.p50 > ") +
+                      number_text(median(durs));
+    const std::vector<double>* best = nullptr;
+    std::string metric;
+    for (const auto& [m, vals] : metrics) {
+        if (median(vals) <= 0) continue;
+        if (!best || vals.size() > best->size()) best = &vals, metric = m;
+    }
+    if (!best)
+        for (const auto& [m, vals] : metrics)
+            if (!best || vals.size() > best->size()) best = &vals, metric = m;
+    if (best) {
+        const std::string med = number_text(median(*best));
+        const std::string key = "`" + metric + "`";
+        out["counter"] =
+            lng ? "gtype == \"counter\" and metric == " + quote(metric) +
+                      " and v.p50 > " + med
+                : "args.counters." + key + ".p50 > " + med;
+    }
+    co_return out;
+}
+
 using Samples = std::vector<double>;
 
 struct Result {
     std::uint64_t files = 0;
     std::uint64_t compressed_bytes = 0;
     std::uint64_t events = 0;
+    std::uint64_t lines = 0;
+    std::uint64_t distinct_paths = 0;
     std::uint64_t index_bytes = 0;
     std::uint64_t peak_rss = 0;
     std::uint64_t build_peak_rss = 0;
@@ -230,6 +338,7 @@ struct Result {
     std::map<std::string, Samples> prune_us_per_file;
     std::map<std::string, Samples> query_s;
     std::map<std::string, std::string> queries;
+    std::map<std::string, std::int64_t> rows;
 };
 
 View open_view(const std::string& input, const std::string& index_dir) {
@@ -288,27 +397,57 @@ Result measure(const Options& opt, const std::string& input,
         },
         opt.warmups, opt.runs);
 
-    const QuerySet qs = run(sample_queries(files.front()));
-    r.queries = {{"name", qs.name}, {"cat", qs.cat}};
-    if (!qs.ts.empty()) r.queries["ts"] = qs.ts;
-    if (!qs.args.empty()) r.queries["args"] = qs.args;
+    {
+        dftracer::utils::index::store::IndexDatabase db(
+            index_path, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
+        std::unordered_set<std::string> paths;
+        for (const auto& f : files) {
+            const int fid = db.get_file_info_id(
+                dftracer::utils::index::store::internal::get_logical_path(f));
+            if (fid < 0) continue;
+            r.lines += db.get_num_lines(fid);
+            for (const auto& [p, stat] : db.catalog(fid)) paths.insert(p);
+        }
+        r.distinct_paths = paths.size();
+    }
+
+    r.queries = run(sample_genesis(files.front()));
+    const bool genesis = !r.queries.empty();
+    QuerySet qs;
+    if (!genesis) {
+        qs = run(sample_queries(files.front()));
+        r.queries = {{"name", qs.name}, {"cat", qs.cat}};
+        if (!qs.ts.empty()) r.queries["ts"] = qs.ts;
+        if (!qs.args.empty()) r.queries["args"] = qs.args;
+    }
 
     for (const auto& [key, text] : r.queries) {
-        const auto parsed = duql::parse_or_throw(text);
-        dftracer::utils::index::plan::ChunkPrunerBatchInput in;
-        in.index_path = index_path;
-        for (const auto& f : files) in.items.push_back({f, parsed});
-        dftracer::utils::index::plan::ChunkPruner pruner;
-        Samples per_file;
-        for (double s :
-             timed([&] { pruner.process_batch(in); }, opt.warmups, opt.runs))
-            per_file.push_back(s * 1e6 / static_cast<double>(files.size()));
-        r.prune_us_per_file[key] = std::move(per_file);
+        if (text.find("->") == std::string::npos) {
+            const auto parsed = duql::parse_or_throw(text);
+            dftracer::utils::index::plan::ChunkPrunerBatchInput in;
+            in.index_path = index_path;
+            for (const auto& f : files) in.items.push_back({f, parsed});
+            dftracer::utils::index::plan::ChunkPruner pruner;
+            Samples per_file;
+            for (double s : timed([&] { pruner.process_batch(in); },
+                                  opt.warmups, opt.runs))
+                per_file.push_back(s * 1e6 / static_cast<double>(files.size()));
+            r.prune_us_per_file[key] = std::move(per_file);
+        }
+        if (genesis)
+            r.rows[key] =
+                run(view.duql(text).agg({{AggOp::Count, "", "n"}}).collect())
+                    .column("n")
+                    .data<std::int64_t>()[0];
         r.query_s[key] = timed(
             [&] {
                 run(view.duql(text).agg({{AggOp::Count, "", "n"}}).collect());
             },
             opt.warmups, opt.runs);
+    }
+    if (genesis) {
+        r.peak_rss = peak_rss_bytes();
+        return r;
     }
     r.query_s["group_by"] = timed(
         [&] {
@@ -358,6 +497,10 @@ std::string to_json(const Result& r) {
     sb.append_comma();
     sb.append_key_value("events", r.events);
     sb.append_comma();
+    sb.append_key_value("lines", r.lines);
+    sb.append_comma();
+    sb.append_key_value("distinct_paths", r.distinct_paths);
+    sb.append_comma();
     sb.append_key_value("index_bytes", r.index_bytes);
     sb.append_comma();
     sb.append_key_value("peak_rss_bytes", r.peak_rss);
@@ -375,6 +518,17 @@ std::string to_json(const Result& r) {
     put_map(sb, "prune_us_per_file", r.prune_us_per_file);
     sb.append_comma();
     put_map(sb, "query_s", r.query_s);
+    sb.append_comma();
+    sb.escape_and_append_with_quotes("rows");
+    sb.append_colon();
+    sb.start_object();
+    bool first_row = true;
+    for (const auto& [k, n] : r.rows) {
+        if (!first_row) sb.append_comma();
+        first_row = false;
+        sb.append_key_value(std::string_view(k), n);
+    }
+    sb.end_object();
     sb.append_comma();
     sb.escape_and_append_with_quotes("queries");
     sb.append_colon();

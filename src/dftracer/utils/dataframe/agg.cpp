@@ -51,7 +51,7 @@ std::size_t agg_approx_bytes(const AggState& st) {
     }
     total += st.counts.size() * sizeof(std::uint64_t);
     total += st.fstats.size() * sizeof(FieldStat);
-    total += st.light.size() * sizeof(AggState::LightStat);
+    total += st.light.size() * sizeof(std::uint64_t);
     if (st.has_fl) {
         total +=
             (st.fl_first.size() + st.fl_last.size()) * sizeof(std::uint64_t);
@@ -81,10 +81,7 @@ std::size_t agg_approx_bytes(const AggState& st) {
         for (const SpaceSavingMap& m : st.ss_counters)
             for (const auto& [v, c] : m)
                 total += v.size() + sizeof(std::uint64_t) + 48;
-    if (st.has_co)
-        total += (st.co_n.size() + st.co_sx.size() + st.co_sy.size() +
-                  st.co_sxx.size() + st.co_syy.size() + st.co_sxy.size()) *
-                 sizeof(double);
+    if (st.has_co) total += st.co.size() * sizeof(CoStat);
     if (st.has_set)
         for (const AggState::StringSet& gset : st.sets)
             for (const std::string& v : gset) total += v.size() + 32;
@@ -106,7 +103,30 @@ std::size_t agg_approx_bytes(const AggState& st) {
     return total;
 }
 
-DataType agg_output_type(AggOp op, TypeId value_type) {
+DataType set_union_element_type(TypeId t) {
+    switch (t) {
+        case TypeId::String:
+        case TypeId::Bool:
+            return scalar(t);
+        case TypeId::Int8:
+        case TypeId::Int16:
+        case TypeId::Int32:
+        case TypeId::Int64:
+            return scalar(TypeId::Int64);
+        case TypeId::Uint8:
+        case TypeId::Uint16:
+        case TypeId::Uint32:
+        case TypeId::Uint64:
+            return scalar(TypeId::Uint64);
+        case TypeId::Float32:
+        case TypeId::Float64:
+            return scalar(TypeId::Float64);
+        default:  // a list column's element type is read from its field
+            return scalar(TypeId::Unknown);
+    }
+}
+
+DataType agg_output_type(AggOp op, TypeId value_type, double param) {
     auto widened = [&] {
         if (value_type == TypeId::Unknown) return scalar(TypeId::Unknown);
         switch (col_domain(value_type)) {
@@ -150,9 +170,12 @@ DataType agg_output_type(AggOp op, TypeId value_type) {
         case AggOp::RegrR2:
         case AggOp::Prod:
             return scalar(TypeId::Float64);
+        case AggOp::SetUnion:
+            if (param != 0.0)
+                return list_of(set_union_element_type(value_type));
+            return scalar(TypeId::String);
         case AggOp::ArgMax:
         case AggOp::ArgMin:
-        case AggOp::SetUnion:
             return scalar(TypeId::String);
         case AggOp::BitOr:
             return scalar(TypeId::Uint64);

@@ -144,8 +144,9 @@ TEST_SUITE("op_registry") {
              {"dftu.series.add", "dftu.series.compare", "dftu.series.cast",
               "dftu.series.prim", "dftu.series.logical",
               "dftu.series.str_contains", "dftu.series.str_replace",
-              "dftu.series.str_slice", "dftu.series.count",
-              "dftu.series.reduce", "dftu.series.mode"})
+              "dftu.series.str_slice", "dftu.series.str_regex_replace",
+              "dftu.series.dt_part", "dftu.series.dt_format",
+              "dftu.series.count", "dftu.series.reduce", "dftu.series.mode"})
             CHECK(dftu_op_find(name) != nullptr);
         CHECK(dftu_op_find("no_such_op") == nullptr);
 

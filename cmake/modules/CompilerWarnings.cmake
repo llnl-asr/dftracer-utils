@@ -147,6 +147,11 @@ function(target_set_warnings TARGET_NAME)
       )
     endif()
 
+    # No fused multiply-add: the light group-by cells and FieldStat compute
+    # the same moments in the same order, and GCC on aarch64 would fuse one
+    # path and not the other, so their bits would differ.
+    target_compile_options(${TARGET_NAME} PRIVATE -ffp-contract=off)
+
     if(WARNINGS_WARNINGS_AS_ERRORS)
       target_compile_options(${TARGET_NAME} PRIVATE -Werror)
     endif()

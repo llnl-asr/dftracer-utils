@@ -9,7 +9,9 @@ namespace dftracer::utils::dataframe {
 // in kernels/field_stat.cpp. Include-guarded so foreach_target's repeated
 // inclusion of the translation unit does not redefine it.
 struct FsRaw {
-    double sum, sumsq, m3, m4, min, max;
+    // sum, min, max, then the running mean as the pair shift + cmean and the
+    // central moments about it.
+    double sum, min, max, shift, cmean, cm2, cm3, cm4;
     std::int64_t esum, emin, emax;
 };
 

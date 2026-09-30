@@ -22,10 +22,12 @@ from typing import (
     Union,
 )
 
+from ._pandas_series import _OMITTED, _replace_in, _replace_pairs
 from .enums import DType
 from .series import Series, _like, _unwrap
 
 if TYPE_CHECKING:
+    from ._pandas_series import ReplaceKey, ReplaceValue, _Omitted
     from .columnar import GroupBy
     from .dataframe import DataFrame
 
@@ -387,29 +389,24 @@ class _FramePandasMixin:
 
     notnull = notna
 
-    def where(self, cond: Series, other: Union[int, float] = 0) -> "DataFrame":
+    def where(self, cond: Series, other: Union[int, float, None] = None) -> "DataFrame":
         """Each numeric column where the row mask ``cond`` holds, else ``other``
-        (``mask`` is the inverse)."""
+        (null by default, as in pandas; ``mask`` is the inverse)."""
         return self._map_columns(lambda s: s.where(cond, other))
 
-    def mask(self, cond: Series, other: Union[int, float] = 0) -> "DataFrame":
+    def mask(self, cond: Series, other: Union[int, float, None] = None) -> "DataFrame":
         return self._map_columns(lambda s: s.mask(cond, other))
 
-    def replace(self, to_replace: object, value: object) -> "DataFrame":
-        """``to_replace`` -> ``value`` in every column whose type holds both."""
-
-        def one(s: Series) -> Series:
-            if s.dtype in _STRING:
-                if not isinstance(to_replace, str) or not isinstance(value, str):
-                    return s
-                return _replace_str(s, to_replace, value)
-            if isinstance(to_replace, str) or isinstance(value, str):
-                return s
-            if not isinstance(to_replace, (int, float)) or not isinstance(value, (int, float)):
-                return s
-            return s.mask(s.eq(to_replace), value)
-
-        return self._map_columns(one, numeric_only=False)
+    def replace(
+        self, to_replace: "ReplaceKey", value: "Union[ReplaceValue, _Omitted]" = _OMITTED
+    ) -> "DataFrame":
+        """:meth:`Series.replace` in every column. A column that no old value can
+        match, or of a bool, list or temporal type, is left as it is; a column whose
+        old value matches but whose new value it cannot hold raises ``TypeError``
+        naming the column."""
+        pairs = _replace_pairs(to_replace, value)
+        out = {name: _replace_in(self._col(name), pairs, name, False) for name in self.columns}
+        return self._rebuild(out, True)
 
     def applymap(self, func: Callable[[object], object]) -> "DataFrame":
         """``func`` over every element, column by column (:meth:`Series.apply`
@@ -468,7 +465,7 @@ class _FramePandasMixin:
             if len(counts) == 0:
                 return None
             count = _series(counts, "count")
-            top = count.max()
+            top = int(count.max())  # a count column: min()/max() can also be str for text
             return _series(counts.filter(count.eq(top)), "value").min()
 
         return self._reduce_scalar(one)
@@ -519,6 +516,15 @@ class _FramePandasMixin:
         table: Dict[str, List[object]] = {"column": list(names)}
         for b in names:
             table[b] = [row[f"{a}__{b}"][0] for a in names]
+        if agg == "corr":
+            # The aggregate reads 0 for a column with no spread; pandas gives
+            # NaN. An exact 0 is re-read through Series.corr, which tells them
+            # apart over the complete pairs.
+            for b in names:
+                table[b] = [
+                    self._col(a).corr(self._col(b)) if v == 0.0 else v
+                    for a, v in zip(names, table[b])
+                ]
         return DataFrame(table)
 
     def value_counts(
@@ -691,9 +697,17 @@ class _FramePandasMixin:
         assert isinstance(out, DataFrame)
         return out
 
-    def sort_index(self, ascending: bool = True) -> "DataFrame":
+    def sort_index(self, ascending: bool = True, *, axis: "Union[int, str]" = 0) -> "DataFrame":
         """Sort by the index columns (a frame with no index is already in
-        position order)."""
+        position order). ``axis=1`` (or ``"columns"``) orders the columns by
+        name instead, ascending unless ``ascending=False``; the values of every
+        column are unchanged and any index columns stay first."""
+        if axis in (1, "columns"):
+            keys = list(self._index or ())
+            rest = sorted((c for c in self.columns if c not in keys), reverse=not ascending)
+            return self._frame().select(*keys, *rest)
+        if axis not in (0, "index"):
+            raise ValueError(f"sort_index: axis must be 0/'index' or 1/'columns', got {axis!r}")
         if self._index is None:
             return self._frame() if ascending else self._frame().reverse()
         return self._frame().sort_values(list(self._index), ascending=ascending)
@@ -1088,20 +1102,12 @@ class _FramePandasMixin:
     def to_parquet(self, path: str, **kwargs: Any) -> None:
         import pyarrow.parquet as pq  # ty: ignore[unresolved-import]
 
-        pq.write_table(self._frame().to_arrow(), path, **kwargs)
+        pq.write_table(self._frame()._arrow_for_parquet(), path, **kwargs)
 
     def to_feather(self, path: str) -> None:
         import pyarrow.feather as feather  # ty: ignore[unresolved-import]
 
         feather.write_feather(self._frame().to_arrow(), path)
-
-
-def _replace_str(s: Series, old: str, new: str) -> Series:
-    """Whole-value replacement on a String column: ``old`` -> ``new`` where
-    the value equals ``old``."""
-    hit = s.str_eq(old)
-    filled = Series.from_list([new] * len(s))
-    return s.mask(hit, filled)
 
 
 class _FrameWindow:

@@ -212,6 +212,25 @@ TEST_SUITE("View C ABI") {
         CHECK(std::string(error).find("$n") != std::string::npos);
         dftu_view_string_free(error);
 
+        const char* list_name[1] = {"names"};
+        const char* list_value[1] = {R"(["read", "write"])"};
+        dftu_lazyframe* listed =
+            dftu_view_duql(v, "where name in $names | select name", list_name,
+                           list_value, 1, &error);
+        REQUIRE(listed != nullptr);
+        dftu_dataframe* names_df = dftu_lazyframe_collect(listed, 0);
+        REQUIRE(names_df != nullptr);
+        duql::Params lp;
+        lp.emplace("names", std::vector<duql::LiteralValue>{
+                                std::string("read"), std::string("write")});
+        CHECK(dftu_dataframe_num_rows(names_df) ==
+              run(View::from_file(s.gz, s.idx)
+                      .duql("where name in $names | select name", lp)
+                      .collect())
+                  .num_rows());
+        dftu_dataframe_free(names_df);
+        dftu_lazyframe_free(listed);
+
         dftu_dataframe_free(df);
         dftu_lazyframe_free(lf);
         dftu_view_free(v);

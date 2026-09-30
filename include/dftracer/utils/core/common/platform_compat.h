@@ -73,6 +73,8 @@
 #define DFTRACER_ALIGNED_BUFFER(type, name, size) \
     alignas(DFTRACER_OPTIMAL_ALIGNMENT) type name[size]
 
+#include <dftracer/utils/core/env.h>
+
 #include <cstddef>
 #include <cstdlib>
 #include <thread>
@@ -82,11 +84,9 @@ namespace dftracer::utils {
 /// Cores this machine reports, never 0. Overridable with
 /// DFTRACER_UTILS_HW_CONCURRENCY.
 inline std::size_t hardware_concurrency() {
-    if (const char *env = std::getenv("DFTRACER_UTILS_HW_CONCURRENCY")) {
-        char *end = nullptr;
-        unsigned long v = std::strtoul(env, &end, 10);
-        if (end != env && v > 0) return static_cast<std::size_t>(v);
-    }
+    if (const auto v = Env::get<std::uint64_t>("DFTRACER_UTILS_HW_CONCURRENCY");
+        v && *v > 0)
+        return static_cast<std::size_t>(*v);
     auto n = std::thread::hardware_concurrency();
     return n == 0 ? 1u : static_cast<std::size_t>(n);
 }

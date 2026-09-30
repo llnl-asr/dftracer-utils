@@ -1,9 +1,7 @@
 # Changelog
 
 All notable changes to dftracer-utils are documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project aims to adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with rules from [Common Changelog](https://common-changelog.org/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
 <!-- changelog-body -->
 
@@ -19,362 +17,1298 @@ and this project aims to adhere to [Semantic Versioning](https://semver.org/spec
 - A Provenance tab in the web viewer that draws the lineage graph with
   Cytoscape and filters by entity, file and storage.
 
+### Changed
+
+- Change `dftracer_genesis_gen_dist` to write one record per run (`gtype` `run`, with the format `version`), per call path (`func`) and per call path and counter (`counter`), with no dftracer `ph`, `args` or envelope, and to store each distribution's DDSketch as base64 `sketch` beside its quantiles, so a file has a fixed set of JSON paths and distributions merge exactly.
+  Old genesis files index as `dftracer` and must be written again.
+- Change the built-in `genesis` record schema to read the new records by path, require `gtype` and `run` and store the `runs` row set, so `run -> runs.app` and `from runs` read run keys from the index.
+- Run a yes/no regex match on a value of 256 bytes or more on Vectorscan when its pattern has a `.*` or `.+` gap, such as `fname ~ "/scratch/.*\.h5$"`, which is 2 to 10 times faster on values of 1 to 4 KB.
+- Run the raw-line prefilter of a query on Vectorscan when a clause has 4 or more alternatives, such as `name in [...]`, which is 3 to 10 times faster on lines that do not match.
+- Change a regex match that reaches the PCRE2 work limit to run again on Vectorscan, which gives the exact result where it gave unknown.
+- Make a column expression over strings run as fast as the eager `Series.str` call: joining the parts of a chunked result copies each part's bytes whole instead of a row at a time (`concat_columns` of text, shared by every caller), so `with_columns(o=col("s").capitalize())` over 5 million short strings takes 0.0025 s, not 0.0875 s, and the peak memory of a string expression falls by 30 to 35 percent.
+- Make the string predicates (`isalpha`, `isdigit`, `isalnum`, `isspace`, `islower`, `isupper`, `istitle`) stop at the first bad vector of each string when the mean length is 24 bytes or more, and keep the whole-buffer bit mask below that: over 100000 random strings of about 750 bytes they are 3 to 50 times faster than pandas (`isdigit` and `isspace` were level with it), and over strings that are all good they are no slower than before.
+  `DFTRACER_UTILS_STRING_PREDICATE=bits` or `rows` forces one strategy.
+- Change `Series.where`, `Series.mask`, `DataFrame.where` and `DataFrame.mask` to take a null replacement by default, as pandas does.
+  `DataFrame.where(cond)` and `mask(cond)` kept `0` where they changed a value; the series forms required the argument.
+- Change a build over an index with a corrupt column family to fail with an error that names the index directory and says to delete it and build again.
+  A corrupt aggregation tier is still cleared and built once more; when that does not cure the index, the error says so.
+- Change `group_by` over many groups to hold no array the size of the frame and to free each partition's state once its result is built.
+- Make `group_by` give bit-identical results on every run and for every thread count: the chunked route folds into fixed lanes merged in lane order, the many-group route folds each group's rows in row order, and the packed route takes only aggregates whose bits do not depend on order.
+  Before, a float sum, mean or std could differ in the last bits between two runs of the same call.
+- Make the count, sum, min, max and mean cells of `group_by` hold only what the requested aggregates read, and reserve the per-group arrays from an estimate of the groups, so the many-group aggregation of 20 columns over 5 million rows and 200 thousand groups needs about 0.1 GB (sum, min, max) to 0.3 GB (with mean, std and count) above the frame, about what pandas needs.
+- Make a variance or standard deviation in `group_by` keep its moments in three words of the packed group row, 32 bytes a column and group for a standard deviation alone and 56 with sum, min, max, mean and count, where a general state took 112, with the same bits, and stop a column batch after the first from joining key columns it drops.
+- Make `group_by` over many groups write its aggregate and key columns straight into the output, at each group's final row, instead of building small columns for each of the 64 hash partitions and joining them: no per-partition columns are held at once and there is no concat or reorder copy, and the values, null masks, dtypes and group order are unchanged. Shapes it does not write (a temporal, decimal, binary or json key, a text, list or boolean aggregate column, order-dependent state) keep the old path. The column batches take 8 MB of cell state a pass instead of 32 MB, so at 200k groups a pass is one column; the environment variable `DFTRACER_UTILS_GROUPBY_STITCH` forces the old path for tests, and `agg_in_place_finalizes()` counts the group-bys that took the new one.
+  Over 5M rows, 200k groups and 20 value columns the memory above the frame fell from 0.38 GB to 0.14 GB for sum, min and max and from 0.91 GB to 0.32 GB for sum, min, max, mean, std and count.
+  Aggregates that keep moments over many columns run a few columns at a time.
+  The sums of a many-group aggregation can differ in the last bits between runs, as they already could in the other many-group routes.
+
+- Change `dftu_series_cut` to take a trailing `int32_t flags` (`DFTU_CUT_RIGHT`, `DFTU_CUT_INNER`; 0 keeps the old result), and the `dftu.series.cut` op to take it as a fourth operand.
+  A caller of the function must pass the new argument; there is no old entry point.
+- Change `Series.rank` to leave a float `NaN` unranked, as it does a null: the row gets a null rank and is not counted by `rank(pct=True)`, where it took a rank like any value and moved the rank of every row after it.
+- Change `dftu_dataframe_join` and `dftu_lazyframe_join` to take a trailing `int32_t nulls_equal` (0 keeps the old rule), and the `dftu.frame.join` and `dftu.lazy.join` ops to take it as a seventh operand; `OwnedLazyFrame::join` takes `bool nulls_equal = false`.
+  A caller of either function must pass the new argument; there is no old entry point.
+- Change `Series.replace` of a value its column type cannot hold (a number on a string column, a string on a numeric one) to leave the column unchanged, as pandas does, where it raised `TypeError`.
+  A replacement the column cannot hold still raises.
+- Change `set_union` to give each value in full.
+  A float prints as the shortest text that parses back to the same value, where it printed six decimals (`0.1234567891` became `0.123457`), and an empty string is kept, where it was dropped.
+  A string value that contains the separator `\x1e` now fails with an error that names the separator and the group, where it read back as two values.
+  A column of a type other than string, bool, integer, float or a list of those fails with an error that names the type.
+  The trace View already printed floats this way; the dataframe engine now agrees.
+- Change `count` of a column inside an aggregation to count the group's non-null values, where it counted every row of the group.
+  This covers `col("x").count()` in `group_by().agg` (default output name `count_x`) and the trace View's `F.x.count()`, which counts the rows where the field is present, as the View engine already ran a counted field.
+  C++ and the C ABI gain `agg_count_valid` and `dftu_agg_count_valid` for the same aggregate.
+  The group row count is unchanged: `count()` with no column, `F.any.count()` and the `"count"` spec.
+  A mean rebuilt as `sum / count` of a column with nulls is now right; the workaround `col("x").is_not_null().sum()` is no longer needed.
+  Two `F.x.count()` in one aggregation share the output name `count`, so give each a separate plan.
+- Change a reduction the engine does not define to fail instead of returning 0: `sum` or `mean` of a string column, `sum` of a timestamp column, and a code other than sum, min or max passed to `dftu_series_reduce`.
+  `dftu_series_reduce` returns a scalar tagged `DFTU_SCALAR_TAG_ERR` that carries a `dftu_error` naming the operation and the type, the C++ `Series` methods throw `DFTUtilsException`, and Python raises `TypeError`.
+  Before, the call logged an error and returned 0 (the maximum, for a count or mean code).
+  `dftu_scalar` gains the tag and its union a `err` member, so code that reads a scalar by tag handles the new tag.
+- Change a duql string literal that holds a backslash before a quote or a doubled backslash to mean one character less.
+  Any other backslash stays in the string, so regexes such as `"\d+\.h5"` read as before ([239a056](https://github.com/llnl-asr/dftracer-utils/commit/239a05684ad9)).
+- Remove the re-export of `F`, `Field`, `Expr` and `Value` from `dftracer.utils.duql`.
+  Import them from `dftracer.utils` ([50c7bdc](https://github.com/llnl-asr/dftracer-utils/commit/50c7bdcadcee)).
+- Change the engine `asof` tolerance (`DataFrame.asof`, `LazyFrame.asof`, `dftu_dataframe_asof` and the `dftu.frame.asof` op) to a double in the units of `on`.
+  A fraction bounds a float time column, and integer times compare with its floor ([dcb7d1b](https://github.com/llnl-asr/dftracer-utils/commit/dcb7d1bf3987)).
+- Remove the `DUQL_LOOKUP_MAX_ROWS` and `DUQL_LOOKUP_MAX_BYTES` caps from `in`, `not in` and sub-queries correlated by `==` keys.
+  A top-level `k in (...)` in the leading `where` still filters the scan, and every other such term runs through the engine join, which spills to disk over the memory budget.
+  Such a term runs after the scan, so the query cannot be exported with `sink_json`.
+  `asof`, `overlap`, range-correlated sub-queries, arrows and uncorrelated scalar sub-queries keep the caps ([811f381](https://github.com/llnl-asr/dftracer-utils/commit/811f3816d1da)).
+- Remove the row and byte caps from the duql `lookup` stage, plain and `into`.
+  A side that outgrows `DUQL_LOOKUP_MAX_ROWS` and `DUQL_LOOKUP_MAX_BYTES` is joined by the engine, spills to disk over the memory budget and is not cached ([1182d92](https://github.com/llnl-asr/dftracer-utils/commit/1182d924efe7)).
+- Make a duql correlated sub-query that mixes `^.` with the sub-query's own fields on one side a compile error.
+  It used to read both fields from the enclosing row ([b7a3f1e](https://github.com/llnl-asr/dftracer-utils/commit/b7a3f1e1fba7)).
+- Change `Series` and `DataFrame` pickles to the native frame format (`to_bytes`).
+  Pickles of an earlier version do not load ([5260050](https://github.com/llnl-asr/dftracer-utils/commit/5260050cee09)).
+- Change a list with mixed value types in `Series.from_list` to raise `ValueError` instead of a pyarrow error ([5260050](https://github.com/llnl-asr/dftracer-utils/commit/5260050cee09)).
+- Change the duql lookup cache and the stored row sets of a source (the `from files` rows and the `file_path`, `host_name` and `rank` group keys) to a native frame format instead of Arrow IPC.
+  Row sets stored by an earlier version read as stale and rebuild on the next index build.
+  A cache entry in another format is recomputed ([a5dca3a](https://github.com/llnl-asr/dftracer-utils/commit/a5dca3a7da5b)).
+- Change a path-decoded schema to always index its duration, entity, lane and name fields, as it does for its time field ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Change an index build to keep an array or object of more than 256 children as one JSON leaf.
+  Records of huge arrays or maps add a bounded number of catalog paths and zone keys, and queries still read every element ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Make duql and the DataFrame string kernels share one pattern engine.
+  Literal patterns such as `like "abc%"`, `"%abc%"` and `"text" in x` run on a SIMD substring search.
+  Other `like` patterns search their literal parts the same way.
+  Regexes run on PCRE2, with its JIT where available, after a SIMD check for the literals every match needs.
+  Case-sensitive `like` and regex filters also give the raw line pre-filter needles, so a View scan parses only the lines that hold them ([3a5a06d](https://github.com/llnl-asr/dftracer-utils/commit/3a5a06dac56a)).
+- Limit the work of every regex match.
+  A string that reaches the limit gives unknown in duql and null in a DataFrame kernel, instead of a hang or a crash ([3a5a06d](https://github.com/llnl-asr/dftracer-utils/commit/3a5a06dac56a)).
+- Make an `in` list over an args field prune chunks by their min and max, not only by bloom filters ([79fddeb](https://github.com/llnl-asr/dftracer-utils/commit/79fddeb1ad1b)).
+- Make the View schema come from the path catalog.
+  The schema now lists a field that only some events of a name carry.
+  Each column takes its type from every record, not from the first event of each name.
+  A column can gain a wider type, such as `float64` where a later event holds a double ([a25bcfa](https://github.com/llnl-asr/dftracer-utils/commit/a25bcfaac368)).
+- Make an `in` or `not in` list of 16 or more strings use a hash set.
+  A filter with thousands of values now costs one lookup per event ([31233d3](https://github.com/llnl-asr/dftracer-utils/commit/31233d3ffe20)).
+- Make views skip lines before they parse them when a line cannot hold the `==` or `in` values of the filter.
+  On a 1M-event trace, a selective name filter runs in about half the time.
+  `name` queries are 21 to 29 percent faster in `index_bench`.
+  Filters without such values are unchanged.
+  The reader uses the same test ([f1a742d](https://github.com/llnl-asr/dftracer-utils/commit/f1a742d74556)).
+- Make the frame ops `window`, `gap_fill`, `asof` and `interval` native kernels that no longer convert to Arrow.
+  They work in every build, with or without `DFTRACER_UTILS_ENABLE_ARROW`, and so do duql `session`, `window` and `lookup ... asof`.
+  Results, C ABI entry points, op names and Python methods stay the same ([706a08d](https://github.com/llnl-asr/dftracer-utils/commit/706a08d4dc1a)).
+- Move the C++ frame op types from `utilities::common::arrow` to `dataframe` in `dataframe/frame_ops.h`.
+  The `WindowFunc` enumerators, such as `WindowFunc::RowNumber`, are now CamelCase ([706a08d](https://github.com/llnl-asr/dftracer-utils/commit/706a08d4dc1a)).
+- Make the Python conversions work without pyarrow.
+  This covers `Series.from_list`, `s[i]`, slices, `to_list`, `to_numpy`, `to_pandas()`, `to_polars()`, `DataFrame.to_dict`, `DataFrame.from_numpy` and `DataFrame.from_dict`.
+  `from_arrow`, `to_arrow` and `to_pandas(arrow=True)` still use pyarrow ([f646bbf](https://github.com/llnl-asr/dftracer-utils/commit/f646bbfa7ae6), [5260050](https://github.com/llnl-asr/dftracer-utils/commit/5260050cee09), [19efd3b](https://github.com/llnl-asr/dftracer-utils/commit/19efd3b33e6a)).
+- Make `gap_fill` take an integer time column only.
+  A floating time column was never reachable from `DataFrame`, the C ABI or Python ([706a08d](https://github.com/llnl-asr/dftracer-utils/commit/706a08d4dc1a)).
+- Change the `sessionize` window function to measure the gap from the latest end of the session so far.
+  A row with a null time now gets a null session.
+  Before, it kept the current session number ([d1ee8df](https://github.com/llnl-asr/dftracer-utils/commit/d1ee8df7c19e)).
+- Change the `dftu_window_spec` C struct and the C++ `WindowSpec` to keep the parameters that only some window functions read in one union.
+  In C, the fields are `param.offset`, `param.frame`, `param.rate` and `param.session`.
+  In C++, the type is `WindowParams`, with `window_spec`, `frame_spec`, `rate_spec` and `session_spec` ([d1ee8df](https://github.com/llnl-asr/dftracer-utils/commit/d1ee8df7c19e)).
+- Make times in duql and the View use the units of the record schema.
+  This covers `time_range`, `bucket` widths and keys, `time_bucket_min`, `busy()` and `active()`.
+  `call_tree` and `flamegraph` write `ts`, `dur`, `total` and `self` in the role units, as floats when a unit is not microseconds.
+  `View::time_scale` on a path schema raises an error, so read the units from the schema fields ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Make a declared schema field convert values to its type.
+  `"42"` and `42.0` become an `int`, number text becomes a `float` and any scalar becomes its JSON text for a `string`.
+  A value that does not convert reads as null and is counted ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Change a duql `let` without `from` to read `data`, as the main query does.
+  Source row sets still read `all` ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Make a column that a scan `select` dropped a compile error that names the columns left.
+  Before, it was a column of nulls ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Make `phase` on a path schema raise an error ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Change record schema detection to judge a schema on the records its `data` row set keeps.
+  Metadata lines no longer match or miss a schema.
+  Detection reads past leading metadata to 1000 records, up to 16 MiB of text ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Make the dftracer schema require `ts` besides `ph` and `name`.
+  Chrome trace events are dftracer, and a log with only `ph` and `name` is generic ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Change schema choice when several schemas match.
+  Equal required-field counts prefer a user schema over a built-in one.
+  A schema whose fields are all optional is chosen when any declared path is present and no schema with required fields matches ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Make schema paths resolve as queries read them, with flat dotted keys and array indexes ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Make `explain_file_schema` report `records`, the objects that no schema treats as metadata.
+  It caches its result per file by path, size and modification time ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Make a View of many files take the schema of the files that have records.
+  An empty file or a file with metadata only takes no vote.
+  A View of such files only is generic, or dftracer when one file holds metadata ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Make `dftracer_server` pick its schema from every file instead of the first ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Make a View, `TraceViewer` and `dftracer_view` read the source `data` row set by default.
+  dftracer metadata records (`ph` `M`) are no longer returned unless you ask for `all()` or `--all`.
+  `phase("metadata")` still selects only metadata records ([25a4c3b](https://github.com/llnl-asr/dftracer-utils/commit/25a4c3b6d827)).
+- Replace the recipe JSON key `include_metadata` with `all` (bool) ([25a4c3b](https://github.com/llnl-asr/dftracer-utils/commit/25a4c3b6d827)).
+- Change a bare field name to read `args.<name>` only when the source sets `def args_fallback = true`.
+  The dftracer and genesis sources set it.
+  For generic files, `x` no longer reads `args.x`, so write `args.x` ([25a4c3b](https://github.com/llnl-asr/dftracer-utils/commit/25a4c3b6d827)).
+- Make the `rank`, `file_path`, `file_name` and `host_name` group keys read the `ranks`, `files` and `hosts` row sets ([25a4c3b](https://github.com/llnl-asr/dftracer-utils/commit/25a4c3b6d827)).
+- Make `dftracer_view`, `dftracer_run`, `dftracer_index` and the plugin host write a gzip copy of a plain trace under `split/` and read it.
+  Building an index for a plain file elsewhere now fails with an error that names the file.
+  Before, it wrote an empty index ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Make existing dftracer indexes rebuild on first use ([25a4c3b](https://github.com/llnl-asr/dftracer-utils/commit/25a4c3b6d827)).
+- Rebuild indexes that were built before this release.
+  The index catalog now lists empty arrays and objects, which `exists()` relies on ([e91c5c6](https://github.com/llnl-asr/dftracer-utils/commit/e91c5c6277f7)).
+- Change the stages after the scan to treat a missing field and a JSON `null` as the same null cell.
+  `x is null` and `x is missing` are true for both, and `exists(x)` is true for neither.
+  DataFrame masks follow the same rule.
+  A leading `where` still tells them apart ([ff49d5c](https://github.com/llnl-asr/dftracer-utils/commit/ff49d5cac0dc)).
+- Make an integer result of duql arithmetic outside int64 unknown, as in a column.
+  `int(x)` gives an int64 ([ff49d5c](https://github.com/llnl-asr/dftracer-utils/commit/ff49d5cac0dc)).
+- Make `dftracer_view --save-recipe` refuse `--duql`.
+  Write the filter into the recipe instead ([ff49d5c](https://github.com/llnl-asr/dftracer-utils/commit/ff49d5cac0dc)).
+- Change regexes to use the duql dialect, the common subset of RE2, PCRE2 and Vectorscan.
+  This applies in duql (`~`, `~*`, `!~`, `!~*`, `extract`) and in the DataFrame kernels `str_matches`, `str_search`, `str_extract` and `str_findall`.
+  Backreferences, lookaround, atomic and possessive groups, recursion, callouts, `\C`, `\K` and `(*VERB)` are compile errors.
+  A kernel returns NULL for them ([3a5a06d](https://github.com/llnl-asr/dftracer-utils/commit/3a5a06dac56a)).
+- Change `like` and `str_like` so that `%` matches newlines too and `_` matches one UTF-8 character instead of one byte.
+  A `str_like` pattern with an inner `_` costs about 0.5 ns more per row ([3a5a06d](https://github.com/llnl-asr/dftracer-utils/commit/3a5a06dac56a)).
+- Change a duql `like` to have no escape character unless `escape` names one.
+  Before, `\` was a literal character there ([3a5a06d](https://github.com/llnl-asr/dftracer-utils/commit/3a5a06dac56a)).
+- Change `str_like` so that a `\` before anything other than `%`, `_` or `\` makes the pattern invalid (NULL).
+  Before, it was a literal.
+  `str_like` keeps `\` as its escape character ([3a5a06d](https://github.com/llnl-asr/dftracer-utils/commit/3a5a06dac56a)).
+- Make a string compared with an object or array unknown, so the filter drops the record.
+  Write `json(x) == "..."` instead, which uses canonical JSON with no spaces and sorted keys.
+  This includes fields that a record schema declares as `json` ([e91c5c6](https://github.com/llnl-asr/dftracer-utils/commit/e91c5c6277f7)).
+- Change duql filters to use three-valued logic on every path.
+  The paths are the JSON scan, the indexed reader, folds, the aggregation tier, plugins and DataFrame masks.
+  A condition on a missing or null field, or across types, is unknown, and a filter keeps only true records.
+  `x != 1`, `x not in [...]` and `not (x == 1)` no longer keep records without `x`.
+  A field present as `null` no longer falls back to `args.x`.
+  Integers and doubles compare exactly, without rounding to a double.
+  A `DataFrame` mask on a missing column or a cell of another type gives null rows, which the mask drops.
+  Before, a missing column threw an error.
+  `Series` `&` and `|` use Kleene logic when either side has nulls, so `between(..., "neither")` is null at a null.
+  See "Missing, null and unknown" in the duql reference ([1510f7a](https://github.com/llnl-asr/dftracer-utils/commit/1510f7ab12d6)).
+- Rename the filter language to duql on every surface.
+  The old names are removed and have no aliases.
+  In Python, rename the module `dftracer.utils.query` to `dftracer.utils.duql`.
+  Rename `TraceViewer.query()` and the Dask `query()` to `duql()`.
+  Rename `DFTUtilsQueryError` to `DFTUtilsDuqlError` and `Expr.to_query()` to `to_duql()`.
+  Rename the `query=` argument of the dfanalyzer readers and `Indexer.explain(query)` to `duql`.
+  In C++, rename the namespace `dftracer::utils::query` to `dftracer::utils::duql`.
+  Rename the headers `dftracer/utils/query/` to `dftracer/utils/duql/` and the library `dftracer_utils_query` to `dftracer_utils_duql`.
+  Rename `View::query()` to `View::duql()`.
+  Rename `QueryError`, `QueryParseError` and `QueryErrc` to `DuqlError`, `DuqlParseError` and `DuqlErrc`, and the error code `QUERY` to `DUQL`.
+  In the C ABI, rename `dftu_query` and `dftu_query_*` to `dftu_duql` and `dftu_duql_*`.
+  Rename `DFTU_QCMP_*` to `DFTU_DUQL_CMP_*`, `DFTU_QMATCH_*` to `DFTU_DUQL_MATCH_*` and `DFTU_TOK_QUERY` to `DFTU_TOK_DUQL`.
+  In the plugin ABI, rename `plugins/abi/query.h` to `plugins/abi/duql.h`.
+  Rename `DFTU_SVC_QUERY` ("dftu.svc.query@1") to `DFTU_SVC_DUQL` ("dftu.svc.duql@1").
+  Rename `query_compile` and `query_matches` to `duql_compile` and `duql_matches`, and the plugin field `plan_query` to `plan_duql`.
+  Rename the plugin config key `"query"` (`--parg query=`) to `"duql"`.
+  The plugin ABI fingerprint changes, so plugins built against the old headers fail to load and you must rebuild them.
+  Rename the CLI option `--query` to `--duql` on `dftracer_view`, `dftracer_stats` and `dftracer_comparator`.
+  `dftracer_info --query` keeps its name.
+  Rename the server and web UI parameter `query` to `duql`.
+  Rename the view recipe and comparator config key `"query"` to `"duql"`.
+  `DataFrame.query`, `Indexer.query_file_*` and the query cache keep their names ([9f37e0b](https://github.com/llnl-asr/dftracer-utils/commit/9f37e0b333ef)).
+- Reserve the words `null`, `is`, `between` and `escape` in queries.
+  Write a field with such a name in backticks ([cf88c18](https://github.com/llnl-asr/dftracer-utils/commit/cf88c1835f84)).
+- Make `-` always an operator, so `a-b` is a subtraction.
+  A query that starts with a stage name, such as `sample == 1`, needs backticks around the field ([cf88c18](https://github.com/llnl-asr/dftracer-utils/commit/cf88c1835f84)).
+- Remove the C++ functions `query::tokenize` and `query::parse_tokens` and the types `query::Token` and `query::TokenKind`.
+  Use `duql::parse` instead ([cf88c18](https://github.com/llnl-asr/dftracer-utils/commit/cf88c1835f84)).
+- Move rollups and materialized views to a query cache beside the index, in `.dftindex-cache/rollups` and `.dftindex-cache/views`.
+  `DFTRACER_CACHE_MAX_BYTES` caps each store (default `2G`) and each store drops its least recently used entries first.
+  A cached result also depends on the record schema, so a schema override does not reuse the result of another schema.
+  Deleting `.dftindex-cache` changes no query result ([0f0cf3f](https://github.com/llnl-asr/dftracer-utils/commit/0f0cf3fc7b6b)).
+- Stop reading rollups stored inside an index and old `.dftindex-views` folders.
+  The next build clears the rollups inside an index.
+  Delete `.dftindex-views` to free its space ([0f0cf3f](https://github.com/llnl-asr/dftracer-utils/commit/0f0cf3fc7b6b)).
+- Store the aggregation tier as the `dftracer.agg` extension, with one manifest entry for each aggregated file.
+  A changed `AggregationConfig` or a changed aggregated trace clears only the tier and aggregates every file again, instead of deleting the whole index.
+  Members, the bloom tier, plugin extensions and rollups stay.
+  Only an index in another format is rebuilt whole.
+  Queries use the tier only when every file of the view has a current entry and read the traces otherwise.
+  `IndexStatus::aggregation_needs_rebuild` now means the next build rebuilds the tier ([b6556be](https://github.com/llnl-asr/dftracer-utils/commit/b6556be38026)).
+- Rebuild aggregation tiers built before this release on the next aggregation build ([b6556be](https://github.com/llnl-asr/dftracer-utils/commit/b6556be38026)).
+- Replace `AggregationConfig::compute_hash` with `params_hash` (64 bits) ([b6556be](https://github.com/llnl-asr/dftracer-utils/commit/b6556be38026)).
+- Replace `IndexDatabase.write_agg_global_config` and `IndexDatabase.write_agg_file_markers` in Python with `write_agg_config(aggregation_config)`.
+  Each file's entry comes with its SSTs ([b6556be](https://github.com/llnl-asr/dftracer-utils/commit/b6556be38026)).
+- Make `EventAggregator` take no config hash ([b6556be](https://github.com/llnl-asr/dftracer-utils/commit/b6556be38026)).
+- Rebuild plugins built before this release.
+  They fail to load with an ABI version error because the plugin ABI fingerprint changed ([634e323](https://github.com/llnl-asr/dftracer-utils/commit/634e3233c1d3)).
+- Change `dftracer_genesis_gen_dist` records to carry only the `run` id.
+  `app`, `system`, `unique_input`, `nodes`, `ppn` and `papi_set` are on the run's `RUN` line alone.
+  Read them as `run -> runs.<key>` instead of `args.<key>` and regenerate existing output to use the new layout ([961916d](https://github.com/llnl-asr/dftracer-utils/commit/961916d9b928)).
+- Make `GET /api/viz/events` stop returning metadata records, which the viewer never used.
+  A request whose filter rules out every chunk now answers in about 10 ms instead of 110 ms on a 1.4M-event trace ([36e18b6](https://github.com/llnl-asr/dftracer-utils/commit/36e18b69553f)).
+- Make views and the reader drop lines before parsing them when a `==`, `<`, `<=`, `>` or `>=` filter on a number cannot hold for any value written after the field's key.
+  On a 1.4M-event trace a viewer time window request goes from 115 ms to 98 ms ([2381f08](https://github.com/llnl-asr/dftracer-utils/commit/2381f08ef3ba), [4979bcc](https://github.com/llnl-asr/dftracer-utils/commit/4979bcc78831)).
+- Make `GET /api/viz/untimed` sort the records of a query once and serve every later page from the server's result cache.
+  A later page takes about 1 ms instead of 100 ms ([c70712c](https://github.com/llnl-asr/dftracer-utils/commit/c70712c21823)).
+- Make the viewer's density requests read the time before a zoomed-in window in one scan instead of two.
+  Cold zoom-ins of a 1.4M-event trace are about 30 percent faster with the same result ([687e8ce](https://github.com/llnl-asr/dftracer-utils/commit/687e8ce2e3ff)).
+- Make an arrow filter that matches more than 4096 keys skip pruning.
+  It still returns the same rows ([25a4c3b](https://github.com/llnl-asr/dftracer-utils/commit/25a4c3b6d827)).
+- Make an index build write the evidence of a file one chunk at a time.
+  On a trace with 4000 args paths the peak memory of an unbounded build drops from about 1.5 GB to 885 MB ([84d303a](https://github.com/llnl-asr/dftracer-utils/commit/84d303a8683e)).
+- Bound automatic evidence with a path budget.
+  Besides the fixed fields and the named ones, the `path_budget` (default 1024) most frequent args paths of each file get a zone map and a bloom.
+  The other paths can still be filtered on but never skip a chunk.
+  `BloomOptions::auto_fields` and `ChunkIndexerConfig::auto_fields` become `path_budget`.
+  Python `BloomConfig(auto=...)` becomes `BloomConfig(path_budget=...)`.
+  `dftracer_index --no-auto-dimensions` becomes `--path-budget 0` ([a25bcfa](https://github.com/llnl-asr/dftracer-utils/commit/a25bcfaac368)).
+- Make each pruning extension record its own configuration hash.
+  A changed bloom setting rebuilds only `bloom` and a changed value-count cap rebuilds only `counts` ([39a99ad](https://github.com/llnl-asr/dftracer-utils/commit/39a99ad49018)).
+- Make a View filter that uses only `ts` prune chunks by their time range instead of reading every chunk ([28b8daf](https://github.com/llnl-asr/dftracer-utils/commit/28b8daf131f8)).
+- Make a View filter on a file path or host name, such as `fhash -> files.path == "/data/a"`, skip the chunks the index rules out.
+  Before, it read every chunk ([25a4c3b](https://github.com/llnl-asr/dftracer-utils/commit/25a4c3b6d827)).
+- Change the index on-disk layout to a new format version (1).
+  Existing indexes are rebuilt once on the next build.
+  The aggregation, system-metrics and rollup data are unchanged ([1398b07](https://github.com/llnl-asr/dftracer-utils/commit/1398b0770f59), [0ae93e4](https://github.com/llnl-asr/dftracer-utils/commit/0ae93e4754ca)).
+- Make `build` rebuild the bloom tier when its false positive rate, expected entries, auto-field settings or value-count cap change.
+  Before, it compared only the indexed fields.
+  Asking for fewer fields still does not rebuild.
+  `Indexer::build` and the Python `Indexer` now rebuild an index from an older schema ([1398b07](https://github.com/llnl-asr/dftracer-utils/commit/1398b0770f59)).
+  Before, only the reader and the server checked the version.
+- Add a trailing `truncated` field to `dftu_indexer_report` and `dftu_indexer_file` in the C ABI ([818dc79](https://github.com/llnl-asr/dftracer-utils/commit/818dc79ba6bf)).
+- Rename C++ `index::gzip::Indexer` to `index::gzip::CheckpointIndexer` and `IndexerFactory` to `CheckpointIndexerFactory`.
+  They live in `index/gzip/checkpoint_indexer.h` and `checkpoint_indexer_factory.h` ([4c84d9a](https://github.com/llnl-asr/dftracer-utils/commit/4c84d9a177c8)).
+- Make Python `Indexer.build()` and `ensure_indexed()` run on `Indexer` and raise when a trace cannot be read.
+  Before, they left the trace in `needs_work`.
+  `dftracer_event_count` fails the same way.
+  Python `CheckpointIndexer.need_rebuild()` and `exists()` raise on an error instead of returning `True` ([4c84d9a](https://github.com/llnl-asr/dftracer-utils/commit/4c84d9a177c8)).
+- Change the index module to use `ankerl::unordered_dense` maps and sets instead of `std::unordered_map` and `std::unordered_set`.
+  This includes the results of the `IndexDatabase` query calls, where string keys use `StringViewMap` and `StringViewSet`.
+  Iteration order is now insertion order.
+  Any later insert or erase invalidates a reference into one of them ([8d10511](https://github.com/llnl-asr/dftracer-utils/commit/8d1051116797)).
+- Move the indexing code into one module, `dftracer/utils/index/`, with a namespace for each layer.
+  The layers are `index/store`, `index/gzip`, `index/extensions`, `index/schemas/dft`, `index/build`, `index/plan` and `index/cache`.
+  `trace/indexing/indexing.h` is now `index/index.h`.
+  Only headers that another public header or the documented build workflow needs stay installed under `include/dftracer/utils/index/`.
+  The index classes drop the `Utility` suffix, so `ChunkIndexerUtility` is `build::ChunkIndexer`, `IndexBatchBuilderUtility` is `build::BatchBuilder`, `IndexResolverUtility` is `build::Resolver`, `ChunkPrunerUtility` is `plan::ChunkPruner`, `AggregatorUtility` is `schemas::dft::agg::Aggregator` and `DftracerTraceWriterUtility` is `schemas::dft::agg::DftTraceWriter`.
+  No forwarding headers or namespace aliases remain ([62b724b](https://github.com/llnl-asr/dftracer-utils/commit/62b724b4fed4), [425d8ab](https://github.com/llnl-asr/dftracer-utils/commit/425d8abf594f)).
+- Make a duql duration beside a product or quotient of a timed field an error.
+  Before, `where dur / 1000 > 0.5ms` compared `dur / 1000` with 500 and matched nothing ([4f14b96](https://github.com/llnl-asr/dftracer-utils/commit/4f14b96bddd9)).
+- Make a missing or JSON `null` group key in View trace `group_by` its own group, shown as null.
+  Before, it merged with `""` and showed as `""`.
+  The same holds in counter export, the `ViewSession` join and rollups.
+  Old rollups are recomputed because the rollup format changed ([17a8d2e](https://github.com/llnl-asr/dftracer-utils/commit/17a8d2e0ab17)).
+- Make a line longer than the read buffer an error instead of the silent end of the stream ([586a21b](https://github.com/llnl-asr/dftracer-utils/commit/586a21b98827)).
+- Make a View scan that cannot read a file's metadata, such as a plain file or a missing trace, raise an error with the cause.
+  Before, it returned no rows ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Prune path-decoded files by zone map for equality and `in` filters on fields named `name`, `pid`, `ts` or another dftracer field.
+  `exists()` on these fields now prunes by the catalog ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Make plugins read path-decoded files with the file's own column names in `on_batch`, `transform`, `trace_read` and duql matches.
+  Before, they got dftracer columns such as `name` and `args.x` that the records do not have ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Make the window functions `running_sum`, `frame_sum` and `delta` exact for integer columns.
+  Over an unsigned column, `running_sum` and `frame_sum` give `uint64`.
+  A result outside its type is an error that names the function.
+  Before, a `uint64` value at or above 2^63 or a sum outside `int64` wrapped ([2b9db37](https://github.com/llnl-asr/dftracer-utils/commit/2b9db37b76f2)).
+- Make integer `sum` in a group aggregation stay an integer and give null when the sum is outside the type.
+  This holds for Int64 and Uint64, spilled partials included.
+  Before, the sum wrapped ([17a8d2e](https://github.com/llnl-asr/dftracer-utils/commit/17a8d2e0ab17)).
+- Make `merge_shard_set` refuse shards that were aggregated with different configs.
+  Before, it merged their rows ([b6556be](https://github.com/llnl-asr/dftracer-utils/commit/b6556be38026)).
+- Make `dftracer_view --time-range min,max` exclude `max` ([8d56ddf](https://github.com/llnl-asr/dftracer-utils/commit/8d56ddfd0b09)).
+- Replace `IndexDatabase::resolve_name_to_hash` with `resolve_name_to_hashes`, which returns every hash for a name ([6a6aadc](https://github.com/llnl-asr/dftracer-utils/commit/6a6aadc6bfc7)).
+- Change the C++ `WindowColumn` to read its column names through `value()`, `time()` and `end()`.
+  Set them through `set_value`, `set_time` and `set_end` after `func`, and an empty name means no column ([a152c78](https://github.com/llnl-asr/dftracer-utils/commit/a152c78f5811)).
+- Move the per-morsel name state of a C++ `Morsel` behind `dyn_state()` ([a152c78](https://github.com/llnl-asr/dftracer-utils/commit/a152c78f5811)).
+- Store the index pruning evidence as the extension kinds `zonemap`, `bloom`, `counts` and `postings`, and move the other dftracer statistics to `dft.stats`.
+  Chunk decisions do not change ([a0e0ab1](https://github.com/llnl-asr/dftracer-utils/commit/a0e0ab18680d)).
+- Change a group-by over many groups to aggregate each hash partition of the rows alone, so the state is one copy of the groups instead of one copy per thread.
+  The partitioned driver now runs for any integer key and for a string key of any length, above 262,144 rows with at least 2,048 groups in a probe, where only a string key of at most 16 bytes took it.
+  Measured on 20 nullable value columns with a string and a small integer key: 5,000,000 rows and 200,000 groups took 1.36 s and 7.10 GB above the process level, now 0.22 s and 0.38 GB; 1,000,000 rows and 200,000 groups took 0.61 s and 4.13 GB, now 0.08 s and 0.22 GB.
+  The result, its values and its group order are unchanged.
+  `benchmarks/groupby_analyzer_bench.py` measures time and peak memory in a fresh process per case and has a `--gate` mode.
+- Change `to_pandas`, `to_numpy` and `to_list` of integer, float, bool and string columns to convert in one native pass.
+  `to_pandas(nullable=True)` of 20 numeric columns with nulls at 5,000,000 rows takes about 55 ms where it took 129 ms to 1.8 s, a bool column with nulls 2 ms, and the benchmark's 22-column frame 50 ns per row (0.25 s at 5,000,000 rows, 1.94 s before).
+  `to_list` of 5,000,000 integers with nulls takes about 56 ms, near the 50 ms Python needs to build such a list.
+  Rows with the same text share one `str` object, so a column of repeated names allocates once per distinct name.
+  `to_pandas()` of a float column with nulls costs about 0.7 ms more per 5,000,000-row column than before; the nullable form is faster.
+- Change `materialize` of a dictionary or selection column to keep the nulls the view itself holds.
+  A dictionary-encoded string column with a null read back as an empty string through every conversion, where the null stayed null before the dictionary was built.
+- Change `partial_arrow_view_groupby` in `dftracer.utils.dfanalyzer` to emit `{c}_m2`, `{c}_mean_hi` and `{c}_mean_lo` in place of `{c}_sumsq`, and `finalize_view_partials` to derive `std` from `m2`.
+  A variance rebuilt from a sum of squares lost every digit when the mean was large next to the spread (durations near 1e9 with a spread of 3 gave a relative error of 1.0).
+  Merge the partials of a view row with the new `merge_view_partials(df, full_cols, sum_cols, min_cols, max_cols, set_cols, flatten_fn)` in place of a `groupby().agg` dict; it merges the moments with the pairwise formula and the sum, min, max and set columns by their own rule, in the partials' column order. A caller that merged `{c}_sumsq` with a plain sum now fails with a `KeyError` naming the column.
+### Added
+
+- Add `duql::Source` to the C++ builder and `Source` to the Python one, which build the row sets, macros and flags of a record schema's duql source, such as `Source().rowset("data", Pipe().where(c("ph") != "M")).flag("args_fallback", true)`; the built-in `dftracer` and `genesis` sources use it.
+- Add hopping buckets to the duql `bucket` stage, such as `bucket 5s every 1s | agg { b = sum(size) }`, which put each record in every window that holds it, and `at` to align buckets to an origin, such as `bucket 1h at 30m`, with `every` and `at` in the Python and C++ builders.
+- Let a duql array index be a parameter or any expression, such as `xs[$n]` and `xs[i - 1]`, and a list literal stand anywhere an expression goes, such as `derive t = [cat, name]`.
+- Add the duql array functions `index_of`, `sort`, `unique` and `join`, and the index form `c("xs")[c("i")]` to the Python and C++ builders.
+- Add the duql calendar functions `date_part(t, part)` and `format_time(t, fmt)`, in UTC, such as `group h = date_part(ts, "hour") { n = count() }`, and `now()`, the time the query compiles in the record's time unit, such as `where ts > now() - 1h`.
+- Add `Series.dt_format` and the pandas `Series.dt.strftime` in Python, `Series::dt_format` in C++, `dftu_series_dt_format` and the expression builders `dftu_expr_date_part` and `dftu_expr_format_time` in the C ABI.
+- Let a duql expression after the scan take a column where it took only a literal: the needle of `starts_with`, `ends_with` and `contains`, `from` and `to` of `replace`, `start` and `length` of `substr`, the digits of `round` and the group of `extract`, such as `lookup runs on run | derive p = starts_with(fname, prefix)`.
+- Add column forms of these expressions to the dataframe expression layer in C++ and the C ABI, and let the Python column expressions `starts_with`, `ends_with`, `contains` and `replace_all` take an expression argument.
+- Let a duql `window` block run `count_if`, `count_distinct`, `collect`, `arg_max` and `arg_min`, over the whole partition or a frame, such as `window rank sort ts { n = count_distinct(fname) over 3 rows }`.
+- Let `var`, `std` and `quantile` in a duql `window` block take an `over N rows` or `over d` frame; a framed `quantile` is exact.
+- Add the window frame functions `FRAME_VAR`, `FRAME_STD`, `FRAME_QUANTILE`, `FRAME_COUNT_DISTINCT`, `FRAME_ARG_MAX`, `FRAME_ARG_MIN` and `FRAME_COLLECT`, with a quantile level and an ordering column in the frame spec, in C++, the C ABI and the Python `frame_*` window specs.
+- Add duql pipeline macros: a `def` whose body is a run of stages, such as `def io_rate(d) = where cat == "POSIX" | bucket d | agg { b = sum(size) };`, runs where a query names it as a stage, such as `from data | io_rate(1s) | sort b`, and `Pipe::define` and `Pipe::use` and their Python forms build them.
+- Add the duql `parse` stage, which adds a column for each named group of a regex, such as `parse name ~ "(?<op>[a-z]+)\d*_(?<fd>\d+)"`, and `Pipe::parse` and `Pipe.parse` to the builders.
+- Add the duql function `regex_replace(s, re, to)`, which replaces every match of a regex and takes `$1`, `${name}` and `$$` in the replacement, such as `regex_replace(path, "/+", "/")`.
+- Add `Series.str_regex_replace`, `Series.str.regex_replace` and the expression `regex_replace` in Python, `Series::str_regex_replace` in C++ and `dftu_series_str_regex_replace` and `DFTU_STR_FN_REGEX_REPLACE` in the C ABI.
+- Add `fill forward` and `fill linear` to the duql `bucket` stage, such as `bucket 1s fill forward | group name { bw = mean(size) }`, which carry or interpolate each group's values into the empty buckets.
+- Let `bucket d fill from lo to hi` fill a fixed range, such as `bucket 1ms fill from 0 to 6ms`.
+- Add `over N rows` and `over d` frames to `sum`, `mean`, `min`, `max` and `count` in a duql `window` block, such as `window pid sort ts { bw = mean(size) over 1s }`, and `Col.over_rows(n)` and `Col.over(width)` in the C++ builder and `.over(rows=n)` and `.over(width)` in the Python one.
+- Add the duql window functions `running_min`, `running_max`, `running_mean`, `ntile`, `nth`, `percent_rank`, `cume_dist` and `fill_forward`, and a default for `lag` and `lead`.
+- Add a frame mode to `dftu_window_spec` so a C ABI window can ask for a range frame, and a trailing `"rows"` or `"range"` element on the Python `frame_*` window specs.
+- Add `inner` and `anti` to the duql `lookup` stage, such as `lookup runs on run inner`, which keeps only the rows with a match.
+- Let a duql `lookup` read an inline side, such as `lookup (from data | where type == "run" | select run, app) on run`.
+- Add Vectorscan to the build, which CMake downloads with Ragel and Boost headers when the system lacks them.
+- Add `DFTRACER_UTILS_ENABLE_VECTORSCAN` to build without it.
+- Let a duql `group` or `agg` entry call an aggregate a loaded plugin registers, such as `group name { e = myplug.entropy(dur) }`.
+- Let duql call a function a loaded plugin registers, in a `derive` or `select` entry, such as `derive e = myplug.entropy(x, 8)`.
+- Add the duql `call` stage, which runs a table function a loaded plugin registers, such as `| call myplug.head(3)`.
+- Let a duql `group` or `agg` entry be an expression over aggregates, such as `group name { ms = sum(dur) / 1000, r = sum(size) / count() }`.
+- Add the expression forms of the string methods `Series.str` already had: `capitalize`, `title`, `swapcase`, `casefold`, the predicates `isalnum`, `isalpha`, `isdecimal`, `isdigit`, `islower`, `isnumeric`, `isspace`, `istitle`, `isupper`, the maps `zfill`, `pad`, `pad_start`, `pad_end`, `ljust`, `rjust`, `center`, `removeprefix`, `removesuffix`, `repeat`, `slice_replace`, and `split`, `rsplit`, `partition`, `rpartition`, `extract`, `findall`, `match`, `join`, `cat`, `get`, `index`, `rfind`, `rindex`, with the same values, nulls and types as the eager call.
+  `rsplit` scans from the left, as the eager `Series.str.rsplit` does, so a separator that overlaps itself splits as `split` does.
+  `get_dummies` (a column per token) and `cat()` with no other column (an aggregate) raise `NotImplementedError` and name the eager form; `count(pat)` keeps the aggregate `count()`.
+  `col("b").cast("string").capitalize()` gives `True` and `False` for a bool.
+  New C++ `expr_str_fn`, C `dftu_expr_str_fn` and `StrMapOp::Capitalize`, `Title`, `Swapcase`.
+- Make the string kernels scan the whole data buffer with SIMD (Highway, chosen at run time) and build their output without a string per row: the case maps, the character classes (`isalpha` ..), `split`, `partition`, `rfind`, `pad`, `zfill`, `center`, `repeat`, `removeprefix`, `removesuffix`, `slice`, `cat` and `join`.
+  A case map of a LargeString column now gives a LargeString (as `lower` and `upper` did); a result past what int32 offsets reach returns an error where the old kernels wrapped.
+  The environment variable `DFTRACER_UTILS_STRING_SCALAR` runs the byte-at-a-time reference for tests and benchmarks.
+- Add `DataFrame.eval` forms for `.fillna(x)`, `.where(cond, other)`, `.mask(cond, other)`, `.abs()`, `.clip(lower, upper)`, `.round(n)` and the `na=`, `case=` and `regex=` keywords of `.str.contains`.
+  `where` and `mask` without `other` give null.
+  A method with no engine form is named in the error.
+- Add `with_columns(z=None)`, which adds an all-null String column.
+
+- Add `Series.cut(breaks, right=, outer=)`: `right=True` closes each interval on the right and `outer=False` gives null outside the interior intervals and numbers them from 0, so `cut(breaks, right=True, outer=False)` equals `pandas.cut(labels=False)`.
+  The default is unchanged.
+- Add `fillna` for bool columns (a boolean or a number, true unless zero) and string columns (a string).
+  `with_columns(flag=True)` and `with_columns(name="k")` now build their column natively, with no Python list.
+- Add a SIMD path for the number to bool cast of int32, int64, float32 and float64 columns without nulls.
+  Over 20 million values `astype("bool")` of an int64 column went from 45 ms to 2.5 ms, and of a float64 column from 57 ms to 6 ms; a column with nulls still takes the scalar loop.
+- Add the typed result of `set_union`: `col("x").set_union(typed=True)` returns a list column of the group's distinct non-null values in their own type (`string`, `bool`, `int64`, `uint64` or `float64`), ascending, with an empty list for a group of nulls and no limit on the bytes of a string.
+  C++ `agg_set_union(value, out, typed)`, the plugin `agg::set_union(value, out, typed)` and the C ABI `dftu_agg_set_union(value, out, typed)` carry the same flag, and the lazy group-by schema reports the list type.
+  The default text form, its order and its separator limit are unchanged; the trace View keeps only the text form.
+  A caller of `dftu_agg_set_union` must pass the new `int32_t typed` argument.
+- Add `nulls_equal` to `merge` and `join` (`DataFrame`, `LazyFrame`, `pandas.merge`; C++ `DataFrame::join` and `LazyFrame::join`; the C ABI).
+  A join does not match a null key with a null key (the SQL rule), and that stays the default; pandas does match them, so a pandas `merge` over keys with nulls gives more rows.
+  With `nulls_equal` a null key cell matches another null key cell in the same key column and never a value, for the inner, left, right, outer, semi and anti kinds, on eager and lazy frames and on a join that spills.
+  It is refused for cross, lookup and nest.
+  A join with the flag is run by the host: it is not offered to a source's join pushdown, and the build keys do not narrow the left scan.
+  Flag off, the join is as fast as before; flag on, a one-million-row left join takes about 3.5 ms where it took about 2 ms, since it uses the generic path.
+- Let `df[["a", "b"]] = other[["x", "y"]]` assign several columns at once from a frame, and `df[["p", "q"]] = [s1, s2]` from a list of Series.
+  The value's columns pair with the targets by position (its own names are ignored, as in pandas), a target that does not exist is added, and a count or row mismatch raises `ValueError` before any column changes.
+  `df.loc[mask, ["a", "b"]] = frame` writes the selected rows.
+  Before, a frame raised `TypeError: cannot assign <DataFrame> to column 'a'` and a list of Series read the list as one column of values.
+- Let `Series.replace` and `DataFrame.replace` take lists, dicts and null: `replace([inf, -inf], pd.NA)`, `replace({1: 2, 2: 1})` (a swap), `replace([1, 4], [10, 40])`.
+  A new value of `None` or `pd.NA` makes the value null and keeps the column type; a NaN makes it NaN; an old `None` or `pd.NA` matches the nulls and an old NaN the NaN values.
+  A float into an integer column widens it, and a replacement the column cannot hold (a string into a numeric column) raises `TypeError` that names the type, and the column in the frame form.
+  Before, `Series.replace` took two scalars and nothing else.
+- Add `DataFrame.eval(expr)`: formulas over the columns as text, such as `df.eval("m = a / b")` for a new frame or `df.eval("a / b")` for a Series.
+  It lowers the text with the same code as the source tier of `apply` and never runs it as Python.
+  Several lines run in order, each seeing the columns the lines before it made, and a last expression line returns its value.
+  `&` and `|` mean `and` and `or` as in pandas eval, so `a > 1 & b < 2` is `(a > 1) and (b < 2)`; `~` negates a mask; `x.str.contains("a|b")` is a regex search and `x.isna()` is the null mask.
+  It supports column names, number literals, `+ - * /` with a number on either side, `//` and `%` (integers stay integers), `**` with a constant exponent, unary `- +`, comparisons and chains, `and`, `or`, `not`, `x if c else y`, `in` and `not in` a list of constants, `is None`, `abs`, `min`, `max`, `int`, `float`, `round`, `len`, `math.sqrt`, `log`, `exp`, `floor`, `ceil`, and the string methods `lower`, `upper`, `strip`, `lstrip`, `rstrip`, `startswith`, `endswith`, `replace` and `contains`.
+  An unknown column raises `KeyError`; anything else with no engine form, such as `@name` or attribute access, raises `TranspileError` that names it.
+- Import an empty list or a list of only `None`, with no type, as a `string` column of nulls in `DataFrame.from_dict`, the `DataFrame` constructor and `Series.from_list`.
+  This is the type `DataFrame.from_pandas` already gives a column of `None`; cast it for another type.
+  Before, they raised `ValueError: unsupported Arrow column`.
+- Let `Series.where` and `Series.mask` take a null replacement (`None` or `pd.NA`): the rows it selects become null and the column keeps its type.
+  Before, `where(cond, None)` raised `TypeError: other must be a Series or a number`.
+- Let `Series.clip` take one bound, `clip(lower=0)` or `clip(upper=b)`; a null stays null.
+  `clip()` with no bound raises `TypeError` that says to pass a bound, where a one-sided call raised `clip() needs both a lower and an upper bound`.
+- Let `DataFrame.astype` and `DataFrame.cast` take one dtype for every column, `df.astype("float64")`.
+  A column that cannot be cast raises `TypeError` that names the column and both types and returns no frame; a mapping still casts only the named columns.
+- Let `with_columns` and `assign` take a Python scalar or `lit(value)` as a column: `df.with_columns(z=1)` adds a column of the frame's row count holding the value, and an empty column for a frame with no rows.
+  Before, `z=1` raised `AttributeError` and `z=lit(1)` raised `ValueError: a constant columnar expression needs at least one column`.
+  The value is the same in every row whatever the other columns hold: a null, a NaN or an infinity in another column does not change it, and the column has no nulls.
+- Let a `filter` expression compare a column with another column: `df.filter(col("a") >= col("b"))`, eager or lazy, with `==`, `!=`, `<`, `<=`, `>` and `>=`.
+  A row where either side is null is left out, numeric columns of different types compare after promotion, and two columns that cannot compare fail with an error that names both types.
+  Before, the expression raised `TypeError: comparison right side must be a scalar value`; the Series mask `df[df["a"] >= df["b"]]` was the only form.
+  Such a comparison is not pushable to a trace scan, so `to_duql()` raises `TypeError`.
+- Add `pct=True` to `Series.rank`, which divides each rank by the count of non-null values (a percentile rank in (0, 1]); `method="dense"` divides by the number of distinct values, as pandas does.
+  `dftu_series_rank` and `Series::rank` gain the option as a `flags` argument (`DFTU_RANK_FLAG_DESCENDING` = 1, `DFTU_RANK_FLAG_PCT` = 2): a C caller passing 0 or 1 for `descending` is unchanged, and any other nonzero value now means something else.
+- Add `DataFrame.sort_index(axis=1)`, which returns the frame with its columns in ascending name order (descending with `ascending=False`); `axis` is keyword-only and `axis=0` is unchanged.
+- Add `DaskFrame` in `dftracer.utils.dask`, a partitioned `DataFrame` over Dask futures, or in memory when no client is given.
+- `DaskFrame` gains `agg(exact=True)` (median, quantile, distinct count and set union in one call), `map_partitions(overlap_next=)` for forward-looking windows, a two-stage shuffle for large partition counts (`shuffle(stages=)`, chosen above 1,024 splits), a `join` that picks the shuffle for `right` and `outer`, and a `nulls_equal` pass-through that raises until the engine's `join` has the option.
+  It runs `map_partitions` (with an `overlap` of rows from the previous partition so `rolling`, `diff` and `shift` are exact across seams), a tree `reduce`, `group_by().agg()` for `count`, `sum`, `min`, `max`, `sumsq`, `mean`, `var` and `std` from per-partition partials, `shuffle` by key, and `join` with a broadcast or a shuffle strategy.
+  After a shuffle every key is in one partition, so an exact median, quantile, distinct count or set union per group needs no merge of partial states; an aggregate that does not combine is refused with an error that says to shuffle first.
+  The in-memory mode gives results equal to the cluster mode.
+  It is Python only: no C++, C ABI or operation matrix change.
+- Add `nullable=True` to `DataFrame.to_pandas` and `Series.to_pandas`, which gives pandas' own nullable dtypes for integer, float, bool and string columns (`Int8` to `Int64`, `UInt8` to `UInt64`, `Float32`, `Float64`, `boolean`, `string`).
+  A null is `pd.NA` and a float NaN stays NaN, where the default turned an integer column with nulls into `float64` with NaN.
+  It is built without pyarrow, the default is unchanged, and it is an error together with `arrow=True`.
+- Add `index=[...]` to `DataFrame.to_pandas`, which moves the named columns into the pandas index in the order given (a MultiIndex for several names).
+  An unknown name raises `KeyError` and a repeated one `ValueError`.
+  The native frame still has no row index.
+- Add casts from integer, float and bool columns to string and from integer and float columns to bool.
+  A column expression can cast to text: `col(x).cast("string")` (it raised `KeyError: 'string'` before) gives the same digits and floats as `astype`, with a bool as `true` or `false`, the engine's spelling.
+  `astype("string")` gives decimal digits for an integer, the shortest text that parses back for a float with a point or exponent added (`2.0`, `1e+21`), and `True` or `False` for a bool (`true` or `false` from the engine and the C++ and C APIs); a null stays null.
+  `astype("bool")` gives false for zero and true for any other value; a float NaN and a null stay null.
+  A column cast to its own type is returned as it is, and any other pair, such as string to bool, raises `TypeError` that names both types, where it raised `RuntimeError: dataframe kernel produced a null column`.
+  `Series.astype` also accepts the Python types `str`, `int`, `float` and `bool` and NumPy scalar types and dtypes that name a supported type; any other argument raises `TypeError` that lists the accepted forms.
+  `dftu_series_cast` still returns NULL for a refused pair.
+- Let a duql `group`, `agg`, `window` or `pivot` block entry leave out its name, such as `group name { count(), sum(dur) }`, which gives the columns `count` and `sum_dur`.
+  Python `Pipe.agg` takes such aggregates as positional arguments.
+- Add the duql `case { c => a, else => d }` block, the same as `case(c, a, d)`, and `case_` to the Python and C++ builders.
+- Let duql `distinct` name its keys as `group` does, such as `distinct c = cat, dur // 10 as d`.
+- Let duql `pivot k in ["a" as x]` name a value's column, so later stages need no backticks.
+  With several aggregates the column is `agg_x`.
+- Add duql `take a..b`, which keeps rows `a` to `b`, counted from 1.
+- Let a duql parameter hold a list that `x in $p` and `x not in $p` read, and let `x like $p` read a string parameter.
+  `TraceViewer.duql` binds a Python list or tuple, and the C ABI and `dftracer_view --param` read a list such as `["read", "write"]`.
+- Add arithmetic with `+`, `-`, `*` and `/` over numbers, parameters and durations to the `time_range`, `bucket` and `session` bounds of duql, such as `time_range $t0 .. $t0 + 10s` ([a7b3ad6](https://github.com/llnl-asr/dftracer-utils/commit/a7b3ad616133)).
+- Let duql `time_range lo ..` and `time_range .. hi` leave one side open ([a7b3ad6](https://github.com/llnl-asr/dftracer-utils/commit/a7b3ad616133)).
+- Let duql `bucket d as name` name the key ([a7b3ad6](https://github.com/llnl-asr/dftracer-utils/commit/a7b3ad616133)).
+- Let duql `sample $n seed $s` take parameters ([a7b3ad6](https://github.com/llnl-asr/dftracer-utils/commit/a7b3ad616133)).
+- Add duql `union name` and `union "file"` to read a row set, a `let` binding or a file ([a7b3ad6](https://github.com/llnl-asr/dftracer-utils/commit/a7b3ad616133)).
+- Improve duql messages to print a parameter with its `$`, to name the argument count a function takes and to list every `as_time` unit ([a7b3ad6](https://github.com/llnl-asr/dftracer-utils/commit/a7b3ad616133)).
+- Add escapes `\\`, `\"`, `\'`, `\n`, `\t`, `\r` and `\uXXXX` to duql string literals, so any string can be written.
+  The printers write double quotes with escapes ([239a056](https://github.com/llnl-asr/dftracer-utils/commit/239a05684ad9)).
+- Let the web viewer filter on a name that holds a quote or a backslash ([239a056](https://github.com/llnl-asr/dftracer-utils/commit/239a05684ad9)).
+- Add a duql builder in Python and C++.
+  `dftracer.utils.duql` holds `source`, `rowset`, `Pipe`, `c`, `lit`, `param`, `duration`, `tup`, `sub` and `fn`, with one `Pipe` method per stage, `let`, `define`, `bind`, `text()` and the terminals `collect`, `count`, `first`, `stream`, `explain` and `on(viewer)`.
+  C++ has `duql::Pipe`, `duql::Col` and the same factories in `duql/builder.h`, and `View::duql(const duql::Pipe&)`.
+  A builder query parses to the same tree as the equal text ([50c7bdc](https://github.com/llnl-asr/dftracer-utils/commit/50c7bdcadcee)).
+- Let duql `lookup ... asof t within d` take a duration such as `5ms`, a fractional number or a parameter.
+  A duration converts to the unit of the time or duration role of `t`, as in a comparison.
+  Before, only a whole number in raw time units or a parameter parsed ([dcb7d1b](https://github.com/llnl-asr/dftracer-utils/commit/dcb7d1bf3987)).
+- Let duql correlated sub-queries use range bounds.
+  Besides `==` keys, a correlated `where` may compare one expression of the sub-query's row with the enclosing row by `<`, `<=`, `>`, `>=` or `between`, such as `derive m = (from data | where ts < ^.ts | agg { m = max(dur) })`.
+  The sub-query ends in `agg` with `count`, `count_if`, `sum`, `min`, `max` or `mean`, or in a one-column `select`.
+  Under `in`, it can also end in `select` or `group` without aggregates.
+  The result equals running the sub-query per row ([b7a3f1e](https://github.com/llnl-asr/dftracer-utils/commit/b7a3f1e1fba7)).
+- Add duql correlated sub-queries that compare their own fields with the enclosing row in `where` terms `inner == ^.outer`, such as `where dur > (from data | where name == ^.name | agg { m = mean(dur) })`.
+  The result equals running the sub-query per row, and an aggregate of no rows (`count()` 0) applies to a key without rows.
+  `^.` in a range term, in a stage other than `where`, or after `take`, `sort` and similar stages is a compile error that points to `lookup ... asof` and `overlap` ([e0a233c](https://github.com/llnl-asr/dftracer-utils/commit/e0a233c866eb)).
+- Run Python conversions of every column type natively in every build, with no pyarrow.
+  `to_list`, `s[i]`, `to_numpy`, `to_pandas` and `to_polars` give `date`, `time`, `datetime` (zone-aware with `zoneinfo`), `timedelta`, `Decimal`, `float16`, fixed-size binary, fixed-size list and map values, or `datetime64`, `timedelta64` and object arrays.
+  `Series.from_list` reads those Python types and takes a native `DType`.
+  `Series.from_numpy` reads `datetime64`, `timedelta64`, `float16`, bool, text, bytes, object, strided and masked arrays.
+  `from_pandas`, `from_polars` and `DataFrame.from_dict` read pandas and polars columns through NumPy, and only an Arrow-backed pandas column needs pyarrow.
+  Lists and dicts in `Series.from_list`, and polars list and struct columns, import as list and struct columns ([5260050](https://github.com/llnl-asr/dftracer-utils/commit/5260050cee09), [19efd3b](https://github.com/llnl-asr/dftracer-utils/commit/19efd3b33e6a)).
+- Stop `astype`, `str.get`, `str.get_dummies`, `dt.isocalendar`, `compare`, `memory_usage` and `iter_rows` from calling `to_arrow` ([5260050](https://github.com/llnl-asr/dftracer-utils/commit/5260050cee09), [19efd3b](https://github.com/llnl-asr/dftracer-utils/commit/19efd3b33e6a)).
+- Make a build with `DFTRACER_UTILS_ENABLE_ARROW=OFF` read and write the lookup cache, the stored row sets and the aggregation tier.
+  Arrow IPC remains for the Arrow exports ([a5dca3a](https://github.com/llnl-asr/dftracer-utils/commit/a5dca3a7da5b)).
+- Add a partitioned hash join on disk for a `LazyFrame` join whose right side outgrows the plan's memory budget, for every kind but `cross`.
+  The rows and columns equal the in-memory join's, in no particular order.
+  The spill format keeps a column's JSON flag, time unit and time zone and holds list, large list, fixed-size list, map and struct columns ([1182d92](https://github.com/llnl-asr/dftracer-utils/commit/1182d924efe7), [c4a0a0e](https://github.com/llnl-asr/dftracer-utils/commit/c4a0a0e655a2)).
+- Let the trace server and viewer serve any JSON trace through its record schema.
+  Timeline bounds, density, events, records without a time, the call tree, Analyze stats, histograms, the process tree and the column list read the time, duration and entity roles and the label field of a path schema, with times in microseconds.
+  `/api/info` reports the schema and the field of each role.
+  `/api/viz/proctree` gives each text entity a `label` and takes host and rank from the `hosts` and `ranks` row sets of the source.
+  The lane, name and Analyze filters of the viewer name the fields of the schema ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Let counter export (`sink_counters`) take the entity and lane group columns of a path schema as the counter `pid` and `tid`.
+  A text value becomes a stable 31-bit id (`index::entity_id`) and stays in `args` ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Add the record schema roles `lane` (the thread within an entity, dftracer `tid`) and `name` (the event name).
+  Entity, lane and name fields are `int` or `string`, and a text entity or lane becomes a stable 31-bit id (`index::entity_id`).
+  `call_tree`, `flamegraph`, `containment` and the View group keys `pid`, `tid` and `name` read these roles of any schema.
+  A dftracer trace read through a schema with the same roles gives the same call tree and flamegraph ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Let the aggregation tier build for files of any record schema.
+  It answers the group keys `name`, `pid` and `tid` of a path schema and aggregates of its duration and time fields, with the same result as the scan.
+  It answers only when each role field is required, the name is a `string`, the others are `int`, times are in `us`, the source of the schema has no `data` row set, and the index shows each role in every record and never negative.
+  Any other plan scans ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Let the View group keys `fhash` and `hhash` group the records of a path schema on the fields of those names.
+  `file_path`, `file_name`, `host_name` and `rank` relabel them through the `files` (`fhash`, `path`), `hosts` (`hhash`, `name`) and `ranks` (`pid`, `rank`) row sets of the source.
+  A schema whose source defines no such row set raises an error that names the row set and the schema ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Let a time role be a `string` field of ISO-8601 times such as `2024-01-02T03:04:05.123Z`, read as microseconds since the epoch ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Add `lines_invalid` and `values_unconverted` to `ExportStats`, the Python stats dict and the stats frame.
+  `lines_invalid` counts the lines that do not parse.
+  `values_unconverted` counts the declared-field values that do not convert to the type of the field ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Make `dftracer_view` print the skipped line count ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Add the duration units `m`, `h` and `d` to duql ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Add duql `lookup s on k [== c], ... overlap [into m]`.
+  Each row matches the rows of `s` with equal keys whose interval `[time, time + duration)` overlaps its own.
+  Each match is an output row, in the row order of `s`, and a row with no match stays once with nulls.
+  With `into m`, every row stays once with the list `m` of its matches ([5a05318](https://github.com/llnl-asr/dftracer-utils/commit/5a05318a4d79)).
+- Add duql `lookup s on k [== c], ... asof t [== c2] [backward | forward | nearest] [within n]`.
+  Every row stays once, in order, with the columns of `s` (but its keys and its time column) from the row of `s` nearest in time among those with equal keys, as pandas `merge_asof` gives them.
+  Among rows of `s` with equal times, `backward` and `nearest` take the last and `forward` takes the first.
+  A null or missing key or time, or no candidate, gives nulls.
+  `within n` drops a farther match.
+  It does not combine with `into` ([5a05318](https://github.com/llnl-asr/dftracer-utils/commit/5a05318a4d79)).
+- Add duql `session [k1, k2] gap d [max m] [as name]`.
+  It gives the 1-based session of each row within its key, in time-role order.
+  A session splits after more than `d` idle after the latest end (time plus duration) or more than `m` from the start of the session.
+  A row without a time has a null session.
+  Durations are in the time unit of the schema, so it works on any record schema ([d1ee8df](https://github.com/llnl-asr/dftracer-utils/commit/d1ee8df7c19e)).
+- Make a duql pipeline scan only the fields its stages name when a later stage sets the output columns (`group`, `agg`, `select`, `pivot`, keyed `distinct`) and the index lists them all ([d1ee8df](https://github.com/llnl-asr/dftracer-utils/commit/d1ee8df7c19e)).
+- Add JSON columns.
+  A field whose records hold text in some and numbers or bools in others is a JSON column, and so is a declared `json` field.
+  Rows and trace-plan group keys keep the type of each value, so `3` and `"3"` stay apart.
+  JSON output writes the values as they are, `column_info()` reports `"json"` and Arrow carries it as the `arrow.json` extension.
+  Python's `Series.is_json` names it and `to_list()` parses it.
+  The C ABI adds `dftu_series_is_json` and `dftu_series_mark_json`, and C++ adds `Series::is_json`, `Series::as_json` and `DataType::json` ([079c548](https://github.com/llnl-asr/dftracer-utils/commit/079c548f72b9)).
+- Add duql sources.
+  A record schema carries a `source` of named row sets (`name = pipeline;`) and macros, declared as the YAML or JSON key `source`, the C++ `static constexpr std::string_view SOURCE` or the Python class attribute `source`.
+  `extends` merges the members of the parent by name.
+  `from <row set>` reads one, `from data` (or no `from`) reads the `data` of the source and `from all` reads every record.
+  The dftracer source declares `data` (every record but `ph` `M`), `files` (`fhash`, `path`), `hosts` (`hhash`, `name`), `strings` (`shash`, `value`) and `ranks` (`pid`, `rank`).
+  Genesis adds `runs` (`run`, `app`, `system`, `unique_input`, `nodes`, `ppn`, `papi_set`, `method`, `sketch_accuracy`, `leaf`) ([25a4c3b](https://github.com/llnl-asr/dftracer-utils/commit/25a4c3b6d827)).
+- Add arrows that read a source row set, such as `fhash -> files.path`, `hhash -> hosts.name`, `exec_hash -> strings(shash).value` and `run -> runs.app`.
+  Arrows work in filters, `select`, `derive` and `group`.
+  A filter such as `where fhash -> files.path like "%/scratch/%"` is pushed down as `fhash in (keys of files)` ([25a4c3b](https://github.com/llnl-asr/dftracer-utils/commit/25a4c3b6d827)).
+- Store a row set that is a `where` and at most one `select` of record paths per file in the index extension `core.rowset`.
+  Reading it decodes no trace and cells keep their JSON type.
+  `explain_duql` shows `stored in the index` for these row sets.
+  Other row sets run as lookup sides when the query executes ([25a4c3b](https://github.com/llnl-asr/dftracer-utils/commit/25a4c3b6d827)).
+- Add C++ `Indexer::rowset(name)` and Python `Indexer.rowset(name)`, which return the stored rows as a DataFrame ([25a4c3b](https://github.com/llnl-asr/dftracer-utils/commit/25a4c3b6d827)).
+- Add duql macros with `def name(a, b) = expr;` in a query, in a source or in `.duql` files on `$DFTRACER_DUQL_PATH`.
+  `$DFTRACER_DUQL_PATH` is a colon-separated list of files or directories.
+  Calls expand by position before planning, so a macro in a filter still pushes down.
+  A query macro hides a source macro, which hides a path file macro.
+  A cycle, a wrong number of arguments, a built-in function's name and a duplicate are compile errors ([25a4c3b](https://github.com/llnl-asr/dftracer-utils/commit/25a4c3b6d827)).
+- Add `--duql-path PATH` (repeatable) to `dftracer_view`, `dftracer_stats` and `dftracer_comparator` to load more macro files ([25a4c3b](https://github.com/llnl-asr/dftracer-utils/commit/25a4c3b6d827)).
+- Add `View::all()`, Python `TraceViewer.all()`, C ABI `dftu_view_all(const dftu_view*)` and `dftracer_view --all`.
+  They read every record, metadata included, as rows that filters and aggregations see ([25a4c3b](https://github.com/llnl-asr/dftracer-utils/commit/25a4c3b6d827)).
+- Add `GET /api/rowset?name=<row set>&key=<key column>&value=<value column>&keys=<k1,k2,...>`.
+  It returns `{"names":{"<key>":"<value>"}}` and a key with no row is absent.
+  The web UI reads host and file names through it, and a density group-by on a hash field resolves through the row sets ([25a4c3b](https://github.com/llnl-asr/dftracer-utils/commit/25a4c3b6d827)).
+- Add duql row sets and joins on a View with `let name = pipeline;`, `from`, semi-joins and anti-joins `k [not] in (from ...)` with tuple keys, arrows `k -> s.path`, `k -> s(id).path` and chains, scalar sub-queries, `lookup s on k [== c] [into m]` and `union (from ...)`.
+  `from` takes `let` names, `all`, `data`, files, parameters and `from a, b`.
+  Keys match by duql value.
+  In a `where`, an arrow holds when any matching row makes it hold.
+  Elsewhere, different values for one key are an error that names the row set and the key.
+  Row sets run when the query executes, never in `duql()` or `explain` ([79fddeb](https://github.com/llnl-asr/dftracer-utils/commit/79fddeb1ad1b)).
+- Push a semi-join or an arrow comparison at the top of the leading duql `where` down as `k in {keys}` in the scan filter.
+  Bloom and min/max pruning then skip chunks, and results are the same without it ([79fddeb](https://github.com/llnl-asr/dftracer-utils/commit/79fddeb1ad1b)).
+- Cap lookup sides with `DUQL_LOOKUP_MAX_ROWS` (default 1,000,000) and `DUQL_LOOKUP_MAX_BYTES` (default 256 MiB).
+  A side over a cap fails the query and never truncates it ([79fddeb](https://github.com/llnl-asr/dftracer-utils/commit/79fddeb1ad1b)).
+- Add a lookup cache at `.dftindex-cache/lookups`.
+  It stays within `DFTRACER_CACHE_MAX_BYTES`, which the rollup store shares ([79fddeb](https://github.com/llnl-asr/dftracer-utils/commit/79fddeb1ad1b)).
+- Add `JoinHow::Lookup` and `JoinHow::Nest` for DataFrame and LazyFrame joins, with C ABI `DFTU_JOIN_LOOKUP` and `DFTU_JOIN_NEST` and Python `how="lookup"` and `how="nest"`.
+  Every left row appears once and keys compare by value, so `1 == 1.0` and `"1" != 1`.
+  `lookup` adds the columns of the matching right row and fails when rows that share a key differ.
+  `nest` adds a list of every match.
+  The duql `lookup` stage uses them, so a side over the same files shares the scan ([79fddeb](https://github.com/llnl-asr/dftracer-utils/commit/79fddeb1ad1b)).
+- Add `var`, `std`, `quantile` and `histogram` to the duql `window` block.
+  They give the partition's value, the same as the aggregate in a `group` ([79fddeb](https://github.com/llnl-asr/dftracer-utils/commit/79fddeb1ad1b)).
+- Add the duql aggregates `count_distinct(e)`, `collect(e)`, `arg_max(e, by)`, `arg_min(e, by)`, `sketch(e)`, `merge(s)` and `quantile(merge(s), q)`.
+  `count_distinct` compares by value, so `1 == 1.0`.
+  `collect` gives a list in input order and `arg_max` and `arg_min` take the first row on a tie.
+  `sketch` and `merge` use DDSketches as base64 text, the form trace summaries store.
+  A block with one of them runs as one streaming pass in input order that also folds the other aggregates of the block.
+  `explain` prints `group fold over ...` ([79fddeb](https://github.com/llnl-asr/dftracer-utils/commit/79fddeb1ad1b)).
+- Add the duql functions `slice(a, i[, j])`, `flatten(a)`, `keys(o)`, `values(o)`, `parse_json(s)` and `split(s, sep)`.
+  They work in scan filters and in every stage after the scan ([79fddeb](https://github.com/llnl-asr/dftracer-utils/commit/79fddeb1ad1b)).
+- Add duql `group k1, k2 { a = f(...), ... }` and `agg { ... }` on a View.
+  Keys are fields or named expressions.
+  Each block entry is one aggregate call whose arguments are expressions.
+  The aggregates are `count()`, `count(e)`, `count_if(c)`, `sum`, `min`, `max`, `mean`, `var`, `std`, `first`, `last`, `quantile(e, q)` (within 1% relative error), `histogram(e)` and the occupancy aggregates `busy`, `concurrency`, `utilization` and `active`.
+  Nulls are skipped and a null key is its own group.
+  Rows come sorted by key with null keys last.
+  `agg` over no rows gives one row ([17a8d2e](https://github.com/llnl-asr/dftracer-utils/commit/17a8d2e0ab17)).
+- Run a duql `group` right after the scan stages, with string or integer field keys and numeric field inputs, in the View's trace aggregation.
+  This path uses the index, rollups and occupancy clipped to buckets.
+  Any other `group` runs as computed columns and a LazyFrame `group_by`, with the same rows.
+  `explain` prints `group (trace plan)` or `group (frame plan)`.
+  Occupancy aggregates need the trace plan and otherwise fail and name the stage that prevents it ([17a8d2e](https://github.com/llnl-asr/dftracer-utils/commit/17a8d2e0ab17)).
+- Add the duql stages `take n by k [sort s]`, `sample n [seed s]`, `sample p% [seed s]`, `time_range lo .. hi [overlap]`, `bucket d [fill]` and `call_tree`.
+  `take n by k` gives the first `n` rows per key.
+  `sample` gives the same rows for the same query, seed and files, with any number of workers.
+  A leading `time_range` is the View's `time_range`.
+  `bucket ... fill` stops at `DUQL_FILL_MAX_ROWS` rows (default 10000000) ([17a8d2e](https://github.com/llnl-asr/dftracer-utils/commit/17a8d2e0ab17)).
+- Add `LazyFrame::head_by(keys, n)`, which streams the first `n` rows of each key tuple in input order.
+  It is also in `LazyOps`, C `dftu_lazyframe_head_by` and Python `LazyFrame.head_by(keys, n)` ([17a8d2e](https://github.com/llnl-asr/dftracer-utils/commit/17a8d2e0ab17)).
+- Add duql `window [k1, k2] [sort s] { a = expr, ... }`.
+  Each entry is an expression over the window functions `row_number`, `rank`, `dense_rank`, `lag`, `lead`, `running_sum` and `running_count`, and over `count`, `sum`, `min`, `max`, `mean`, `first` and `last` on the partition.
+  Every row stays in input order.
+  Partitions are the key tuple, ordered by `sort` ([85a4b50](https://github.com/llnl-asr/dftracer-utils/commit/85a4b5014894)).
+- Add duql `expand p [as e] [with_index i] [keep_empty]`, which gives one row for each element of an array.
+  Object elements become columns `e.<field>` ([85a4b50](https://github.com/llnl-asr/dftracer-utils/commit/85a4b5014894)).
+- Add duql `pivot k [in [v1, v2]] { a = agg(...) }`, which turns the values of `k` into columns `a.<value>`.
+  Without `in`, more than `DUQL_PIVOT_MAX_COLUMNS` values (default 1024) fail.
+  No stage may follow `pivot` ([85a4b50](https://github.com/llnl-asr/dftracer-utils/commit/85a4b5014894)).
+- Add duql `unpivot a, b as key, value`, which gives one row for each listed field ([85a4b50](https://github.com/llnl-asr/dftracer-utils/commit/85a4b5014894)).
+- Add the duql quantifiers `any(p, e)` and `all(p, e)` with `.`, `.name`, `.[0]` and `^.name`.
+  They work in scan filters, in stages after the scan and in DataFrame and LazyFrame filters over List columns ([85a4b50](https://github.com/llnl-asr/dftracer-utils/commit/85a4b5014894)).
+- Make fields that `expand` or a quantifier reads List columns after the scan.
+  The element type comes from the index path catalog, such as `List<Struct>` for objects ([85a4b50](https://github.com/llnl-asr/dftracer-utils/commit/85a4b5014894)).
+- Let `View::duql`, `dftu_view_duql`, `TraceViewer.duql` and `dftracer_view --duql` take the new stages ([85a4b50](https://github.com/llnl-asr/dftracer-utils/commit/85a4b5014894)).
+- Add List and Struct column support to DataFrame concat ([85a4b50](https://github.com/llnl-asr/dftracer-utils/commit/85a4b5014894)).
+- Add duql pipelines on a View with `where`, `select` (with `x = e` and `e as x`), `derive`, `drop`, `rename`, `distinct`, `sort` (`-key`, `nulls first`), `take` and `skip`.
+  Parameters are `$name`, counts included.
+  Leading `where` stages filter the scan and a leading field `select` is its projection.
+  The other stages run on the scanned columns.
+  A pipeline with stages after the scan reads rows in file order, then line order, with any number of workers.
+  Workers still decode in parallel and `take n` stops the scan once the first rows are out ([ff49d5c](https://github.com/llnl-asr/dftracer-utils/commit/ff49d5cac0dc)).
+- Add C++ `View::duql(text, params)` and `View::explain_duql`, C `dftu_view_duql` and `dftu_view_explain_duql`, Python `TraceViewer.duql(text, **params)` and `TraceViewer.explain_duql` and `dftracer_view --duql` with `--param name=value` and `--explain` ([ff49d5c](https://github.com/llnl-asr/dftracer-utils/commit/ff49d5cac0dc)).
+- Add durations such as `250ms` and `10us`, and the functions `as_time`, `to_seconds` and `bin`, to duql.
+  They use the unit of the time and duration roles of the record schema ([ff49d5c](https://github.com/llnl-asr/dftracer-utils/commit/ff49d5cac0dc)).
+- Run duql expressions after the scan and in DataFrame masks on column kernels.
+  New expression nodes give them the duql meaning.
+  They are `expr_arith`, `expr_neg`, `expr_coalesce`, `expr_extreme`, `expr_concat`, `expr_round`, `expr_log`, `expr_pow`, `expr_str_substr`, `expr_convert`, `expr_list_len`, `expr_list_get`, `expr_list_sum`, `expr_list_contains`, `expr_str_pattern` and `expr_str_extract`, with their C ABI entries.
+  They add string, bool and null literals and comparison of two columns.
+  Arithmetic is checked, so overflow and a zero divisor give null, `//` floors and `%` takes the sign of the divisor ([ff49d5c](https://github.com/llnl-asr/dftracer-utils/commit/ff49d5cac0dc)).
+- Let DataFrame masks take pattern conditions and ordered comparisons of string and bool columns ([ff49d5c](https://github.com/llnl-asr/dftracer-utils/commit/ff49d5cac0dc)).
+- Add `like ... escape "c"` and the function `extract(s, regex[, group])` to duql ([3a5a06d](https://github.com/llnl-asr/dftracer-utils/commit/3a5a06dac56a)).
+- Add expressions to duql filters.
+  They are arithmetic (`+ - * / // %`, where `/` gives a double and `//` floors), comparisons between fields, `between`, `is [not] null`, `is [not] missing`, `??`, `in` lists of expressions, negative indexes such as `tags[-1]` and the functions `exists`, `coalesce`, `if`, `case`, `abs`, `floor`, `ceil`, `round`, `min`, `max`, `log`, `exp`, `pow`, `len`, `concat`, `lower`, `upper`, `trim`, `starts_with`, `ends_with`, `contains`, `substr`, `replace`, `first`, `last`, `sum`, `json`, `type`, `int`, `float` and `string`.
+  Every path (View, readers, folds and DataFrame masks) gives the same result.
+  A condition with an expression is checked per record and never skips chunks, except `exists(path)`, which skips a file whose catalog lacks the path.
+  `x == null` and `null` in an `in` list are compile errors ([e91c5c6](https://github.com/llnl-asr/dftracer-utils/commit/e91c5c6277f7)).
+- Add plugin index extensions through the new `DFTU_SVC_INDEX` service in `plugins/abi/index.h`.
+  While the plugin set is loaded, index builds store the bytes its builder returns for each chunk and file.
+  Queries skip the chunks it rules out for a filter leaf.
+  Data of an extension that is not loaded, or of another version, prunes nothing ([634e323](https://github.com/llnl-asr/dftracer-utils/commit/634e3233c1d3)).
+- Make `Indexer::manifest`, `explain`, `rebuild_extension` and `drop_extension` name plugin extensions ([634e323](https://github.com/llnl-asr/dftracer-utils/commit/634e3233c1d3)).
+- Add `--plugin` to `dftracer_index` to load plugins for a build ([634e323](https://github.com/llnl-asr/dftracer-utils/commit/634e3233c1d3)).
+- Add C++ `trace::views::rows<T>(view)`, which decodes each selected record straight into a schema class `T` on the scan workers.
+  It is about twice as fast as `collect()` followed by reading the same columns ([2248146](https://github.com/llnl-asr/dftracer-utils/commit/2248146bb1e5)).
+- Add Python `TraceViewer.rows(cls)`, which yields schema class instances.
+  Schema classes take their fields as keywords ([2248146](https://github.com/llnl-asr/dftracer-utils/commit/2248146bb1e5)).
+- Add an overload of `ViewSession::fold` without a predicate that folds the selection of the base view ([2248146](https://github.com/llnl-asr/dftracer-utils/commit/2248146bb1e5)).
+- Add a built-in `genesis` record schema for `dftracer_genesis_gen_dist` output.
+  Its source adds the row set `runs` over the `RUN` lines.
+  Keys such as `run -> runs.app` and `run -> runs.papi_set` work in filters, `select`, `derive` and `group`.
+  Numeric keys stay numbers, such as `run -> runs.nodes == 4` ([961916d](https://github.com/llnl-asr/dftracer-utils/commit/961916d9b928)).
+- Add array membership filters such as `any(tags) == "gpu"`.
+  The filter holds when any element of the array at `tags` does.
+  It works with every field operator (`==`, `<`, `in`, `not in`, `like`, `~` and others) and inside `and`, `or` and `not`.
+  The index skips chunks through the evidence it keeps for each array position, and the line pre-filter stays exact.
+  C++ `Field("tags").any()`, the C ABI builders with the field `any(tags)` and Python `F.tags.any()` build it ([bb5b553](https://github.com/llnl-asr/dftracer-utils/commit/bb5b5532549c)).
+- Add user record schemas that declare the typed fields of a format.
+  A field has a type (`bool`, `int`, `float`, `string` or `json`) and a path.
+  A field can also have `optional`, a `time`, `duration` or `entity` role with a unit, and `always_index`.
+  A schema can also set `extends`, `index.path_budget` and `source`.
+  Declare a schema as a YAML or JSON spec, as a Python class (`class A(dftracer.utils.schemas.RecordSchema, id="a")` with annotated fields and `field(...)`) or as a C++ class (`index::Field<T, "path", options...>` members in `index/schema_class.h`).
+  Specs load from `$DFTRACER_SCHEMA_PATH` and from `<index_dir>/schemas/` when an index is opened.
+  You can also register them with Python `dftracer.utils.schemas`, C++ `index::register_schema` and `load_schemas`, or C `dftu_schema_register`, `dftu_schema_load`, `dftu_schema_list` and `dftu_schema_detect`.
+  Detection considers every registered schema.
+  The always-indexed fields and the path budget of a schema shape the index of its files.
+  Editing a schema rebuilds those indexes.
+  Fields read as their declared types.
+  `json` fields read as canonical JSON text, and filters compare them with a string literal.
+  `time_range`, `time_bucket`, the occupancy aggregates, `call_tree`, `flamegraph` and containment work on any schema that binds time and duration.
+  They convert units to microseconds, and `time_range` prunes through the index of the time field.
+  A viewer can read files as another schema with `TraceViewer(paths, record_schema=...)`, `View::record_schema`, `dftu_view_record_schema` or `dftracer_view --schema`.
+  Opening an index whose file records a schema that is not registered is an error.
+  The error names the id and where schemas load from ([425d8ab](https://github.com/llnl-asr/dftracer-utils/commit/425d8abf594f)).
+- Add `schemas.explain(path)` (C++ `explain_file_schema`, C `dftu_schema_explain`) to report the detection share of each schema for a file ([425d8ab](https://github.com/llnl-asr/dftracer-utils/commit/425d8abf594f)).
+- Add `TraceViewer.schema_tree()` (C++ `View::schema_tree`, C `dftu_view_schema_tree`) to list the paths the index holds with their types, counts and declared fields.
+  It does not scan records ([425d8ab](https://github.com/llnl-asr/dftracer-utils/commit/425d8abf594f)).
+- Add a "no time" tab to the trace viewer for records written with `ts` 0, such as CUDA activity, events and aggregated records.
+  The status bar counts these records, and the tab pages through them, longest first.
+  The timeline cannot place them.
+  The tab reads `GET /api/viz/untimed` ([b88f00f](https://github.com/llnl-asr/dftracer-utils/commit/b88f00fb75fc)).
+- Let views read JSON lines files of no trace format (the `generic` schema).
+  Collect, filter, `select`, sorting, `group_by` on any path and every aggregate work on their records.
+  Columns are named by exact path, such as `op` and `io.off`, and the schema comes from the path catalog.
+  The View decodes only the paths a query reads.
+  On a 1M-record trace, a full collect takes 1.2 times as long as the dftracer decoder and a grouped aggregate is as fast.
+  Trace operations (`time_range`, `time_bucket`, occupancy, `call_tree` and `flamegraph`) raise an error on the `generic` schema, because it binds no time role.
+  The dftracer-only group keys raise an error too.
+  A View over files of different schemas raises an error ([512e49d](https://github.com/llnl-asr/dftracer-utils/commit/512e49d998b3)).
+- Let `View::from_directory`, the `Indexer` and `dftracer_index --directory` find `.jsonl.gz` and `.ndjson.gz` files ([512e49d](https://github.com/llnl-asr/dftracer-utils/commit/512e49d998b3)).
+- Add `dft.metadata`, an index extension that a build makes with the pruning tier.
+  Per chunk, it holds the number of metadata (`ph="M"`) records and of context records among them, such as thread and process names, `PR` and `CM`.
+  It also holds the distinct names and field paths of these records.
+  Read it with `IndexDatabase::chunk_metadata`.
+  An existing index gains it on its next build ([947ad0a](https://github.com/llnl-asr/dftracer-utils/commit/947ad0a2996c)).
+- Add `agg_clip_occupancy` to bound the occupancy of an `AggState` by a window and time buckets before `agg_finalize` ([8d56ddf](https://github.com/llnl-asr/dftracer-utils/commit/8d56ddfd0b09)).
+- Add record schemas (`dftracer/utils/index/record_schema.h`) that detect the record format of each file from its first lines and record it with the file (`core.profile`, `IndexedFile::schema`).
+  A `generic` file, which is any gzip of JSON lines, is indexed by exact path.
+  Its path catalog and automatic zone maps, blooms and value counts cover top-level and nested fields.
+  A filter such as `op == "read"` skips chunks.
+  Set the schema with `IndexerOptions::schema`, `schema` in `dftu_indexer_options` and `dftu_indexer_file`, Python `Indexer(schema=...)` or `dftracer_index --schema` ([62f217b](https://github.com/llnl-asr/dftracer-utils/commit/62f217b4c310), [425d8ab](https://github.com/llnl-asr/dftracer-utils/commit/425d8abf594f)).
+- Add `memory_budget` for index builds (`IndexerOptions::memory_budget`, `memory_budget` in `dftu_indexer_options`, Python `Indexer(memory_budget=...)` and `dftracer_index --memory-budget`).
+  It has the meaning that `View::memory_budget` has.
+  Under a budget, a build works on fewer large files at once.
+  A file whose evidence outgrows its share spills finished chunks to sorted runs and commits them with the rest in one atomic ingest.
+  The index holds the same data.
+  On a 46 MB trace with 4000 args paths, a 256 MB budget keeps the build near 284 MB peak RSS ([84d303a](https://github.com/llnl-asr/dftracer-utils/commit/84d303a8683e)).
+- Add a path catalog (`core.catalog`) that lists, for every indexed file, each JSON path its data records hold.
+  Paths are as written, such as `args.io.off` and `args.hosts.1`.
+  Each path has a type (int, uint, double, bool, string or mixed) and a non-null record count.
+  Read it with `IndexDatabase::catalog` ([a25bcfa](https://github.com/llnl-asr/dftracer-utils/commit/a25bcfaac368)).
+- Add `Indexer::manifest` and `Indexer::explain`.
+  `manifest` shows which extensions each indexed file has.
+  `explain` shows, for a query, which chunks it reads and which chunks each pruning extension rules out on its own ([39a99ad](https://github.com/llnl-asr/dftracer-utils/commit/39a99ad49018)).
+- Add `rebuild_extension` and `drop_extension` to rewrite or remove one of `zonemap`, `bloom`, `counts`, `postings` or `dft.stats` without touching the others ([39a99ad](https://github.com/llnl-asr/dftracer-utils/commit/39a99ad49018)).
+- Add `IndexerOptions::extensions` to choose which pruning extensions a build makes ([39a99ad](https://github.com/llnl-asr/dftracer-utils/commit/39a99ad49018)).
+- Add the manifest, explain, rebuild, drop and extension calls to the indexer C ABI and Python.
+  `dftu_indexer_manifest` and `dftu_indexer_explain` return owned JSON strings that you free with `dftu_indexer_string_free`.
+  Also add `dftu_indexer_rebuild_extension`, `dftu_indexer_drop_extension` and `extensions` in `dftu_indexer_options`.
+  In Python, use `Indexer.manifest()`, `explain()`, `rebuild_extension()`, `drop_extension()` and `extensions=` ([39a99ad](https://github.com/llnl-asr/dftracer-utils/commit/39a99ad49018)).
+- Make `dftracer_info --query detailed` print the extensions of each file ([39a99ad](https://github.com/llnl-asr/dftracer-utils/commit/39a99ad49018)).
+- Let the indexer and the reader handle a trace whose last gzip member was cut short, such as by a job killed while writing it.
+  They index and read the trace up to its last complete line, and do not lose that member.
+  The cut member is decoded with zlib-ng when libdeflate cannot, and only when the data ran out and is not corrupt.
+  `Indexer` status and files, the indexer C ABI and the Python `IndexStatus` report such traces as truncated.
+  `dftracer_validate` still reports a cut trace as invalid.
+  `dftracer_genesis_gen_dist` still skips a run whose trace is cut ([818dc79](https://github.com/llnl-asr/dftracer-utils/commit/818dc79ba6bf)).
+- Add `Indexer` (`dftracer/utils/index/indexer.h`), the public C++ entry point to build an index.
+  Call `Indexer::open` over trace files and directories.
+  Then call `status`, `build`, `rebuild` and `files`.
+  `build` handles only files that miss a requested tier or changed since indexing.
+  Each call has a blocking form and an async form that runs in the `CoroScope` of the caller.
+  A build that cannot read a trace throws an error that names it ([4c84d9a](https://github.com/llnl-asr/dftracer-utils/commit/4c84d9a177c8)).
+- Add the indexer C ABI (`dftracer/utils/index/abi.h`).
+  It has `dftu_indexer_open`, `dftu_indexer_status`, `dftu_indexer_build`, `dftu_indexer_rebuild`, `dftu_indexer_files` with a file-list handle, and `dftu_indexer_free`.
+  The calls return `DFTU_RESULT` value-or-error results ([4c84d9a](https://github.com/llnl-asr/dftracer-utils/commit/4c84d9a177c8)).
+- Add `dftracer_genesis_gen_dist` to turn genesis sweep traces (matrix and tioga layouts) into one `.pfw.gz`.
+  The file has a `ph:4` `RUN` line per run and a `ph:3` record per call path.
+  Each record holds `dur` and attributed `counters` distributions (min, max, sum, avg and p25 to p99).
+  The tool skips incomplete or unreadable runs with a message and a non-zero exit status ([ab931e3](https://github.com/llnl-asr/dftracer-utils/commit/ab931e3c1905)).
+- Add `BasicDDSketch<BINS>` to let a caller pick the bin count.
+  `DDSketch` stays the 128-bin sketch ([ab931e3](https://github.com/llnl-asr/dftracer-utils/commit/ab931e3c1905)).
+- Let the Python `Series`, `DataFrame` and `LazyFrame` classes, `op_run` and the columnar expression engine work in a build with `DFTRACER_UTILS_ENABLE_ARROW=OFF`.
+  Only the Arrow interop is compiled out.
+  This covers `__arrow_c_array__`, `__arrow_c_stream__`, `to_ipc`, `_series_from_arrow`, `_dataframe_from_arrow`, `LazyFrame.stream` and the Arrow record-batch iterators.
+  Their wrappers raise a `RuntimeError` that names the missing Arrow support.
+  The default build is unchanged ([f646bbf](https://github.com/llnl-asr/dftracer-utils/commit/f646bbfa7ae6)).
+- Add an optional end column and a maximum span to the `sessionize` window function.
+  In Python, use `("sessionize", time_col, gap, out[, end_col[, span]])`.
+  In C, use `dftu_window_spec.param.session` ([d1ee8df](https://github.com/llnl-asr/dftracer-utils/commit/d1ee8df7c19e)).
+- Let directory discovery list `.pfw`, `.jsonl` and `.ndjson` files, plain or gzip.
+  This applies to `View::from_directory`, `Indexer`, `TraceIndex` (`dftracer_server`), the plugin host, the Python dask and dfanalyzer helpers and every CLI.
+  Use `trace_file_patterns()` in C++ and `TRACE_FILE_PATTERNS` in the extension module.
+  Recursive scans skip `schemas/` directories ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Make `dftracer_view -d` scan subdirectories, as `View::from_directory` does ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Let record schema detection read the lines of JSON array traces (`[` and a trailing comma) ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Add duql query syntax.
+  Query strings are now parsed by the duql front end, the first stage of the duql query language.
+  Filters keep their meaning.
+  New syntax includes backtick-quoted keys (``a.`b.c`.d``), `#` comments, `$name` parameters bound through `duql::parse(text, params)` and an optional `duql 1` first line.
+  Errors now name the line and column.
+  Constructs that the engine does not evaluate yet, such as arithmetic, functions, pipelines and lookups, parse and fail with an error that names the stage that adds them.
+  See the duql syntax reference ([cf88c18](https://github.com/llnl-asr/dftracer-utils/commit/cf88c1835f84)).
+- Add flattened nested and array args to the default trace columns, such as `args.dur.p99` and `args.hosts.1`.
+  Bool args read as 0/1 integers.
+  `columns`, `schema` and `column_info` list every array element and every dotted arg name ([e781d80](https://github.com/llnl-asr/dftracer-utils/commit/e781d80a2c71)).
+- Let a short name such as `dur.p99` resolve to args in `select`, `group_by` and `call_tree` fields, as it does in `filter` ([e781d80](https://github.com/llnl-asr/dftracer-utils/commit/e781d80a2c71)).
+- Add index features to records decoded by path.
+  An indexed export (`sink_trace` with `build_index`, and row materialized views) decodes them by their schema and records it.
+  A first query on an unindexed file builds its index in the same pass.
+  A whole scan builds a missing pruning tier along the way ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Let `LazyFrame.stream` work in a build without Arrow.
+  It yields native DataFrame chunks ([d5d507e](https://github.com/llnl-asr/dftracer-utils/commit/d5d507ef6ac8)).
+- Make `jit_op.run_op_array` work without pyarrow ([d5d507e](https://github.com/llnl-asr/dftracer-utils/commit/d5d507ef6ac8)).
+- Allow a negative duration such as `-1ms` in duql ([4f14b96](https://github.com/llnl-asr/dftracer-utils/commit/4f14b96bddd9)).
+### Removed
+
+- Remove the Arrow sort-merge C++ functions `join`, `asof_join`, `interval_join`, `window` and `gap_fill` ([706a08d](https://github.com/llnl-asr/dftracer-utils/commit/706a08d4dc1a)).
+- Remove `resolved.fpath`, `resolved.cwd`, `resolved.hostname`, `resolved.host`, `resolved.exec`, `resolved.cmd` and the `r.` short form.
+  Write arrows such as `fhash -> files.path` instead ([25a4c3b](https://github.com/llnl-asr/dftracer-utils/commit/25a4c3b6d827)).
+- Remove `IndexDatabase::write_agg_global_config`, `write_agg_file_markers` and `write_aggregation_tracker` from C++ ([b6556be](https://github.com/llnl-asr/dftracer-utils/commit/b6556be38026)).
+- Remove `open_with_merge_operator` and `open_read_only_with_merge_operator` from `EventAggregator` ([b6556be](https://github.com/llnl-asr/dftracer-utils/commit/b6556be38026)).
+- Remove `resolved.<key>.<field>` names, the Python `resolved()` helper, the C++ builders `duql::resolved` and `dataframe::field::resolved`, and `GroupKey::resolved` and `DFTU_GROUP_KEY_RESOLVED`.
+  A `resolved.` name now fails with an error that names the arrow to write.
+  Use `fhash -> files.path` for `resolved.fhash.path`, `cwd -> files(fhash).path` for `resolved.cwd.path` and `hhash -> hosts.name` for `resolved.hhash.name`.
+  Use `exec_hash -> strings(shash).value` for `resolved.exec_hash.value` and `run -> runs.app` for `resolved.run.app` ([25a4c3b](https://github.com/llnl-asr/dftracer-utils/commit/25a4c3b6d827)).
+- Remove the `dictionaries:` key of the record schema, `RecordSchema::dictionaries`, the `core.dict` index extension, the `IndexDatabase::dict_*` API and Python `Indexer.get_dictionary`.
+  The `dictionaries:` key is now an unknown key error.
+  Declare `source:` row sets instead, use `core.rowset` for `core.dict` and use `Indexer.rowset(name)` for `Indexer.get_dictionary(name, field)` ([25a4c3b](https://github.com/llnl-asr/dftracer-utils/commit/25a4c3b6d827)).
+- Remove `View::metadata(bool)`, `View::emit_all_metadata(bool)`, Python `TraceViewer.metadata(bool)`, `dftracer_view --no-metadata` and the re-emission of hash metadata and context records beside data events.
+  Drop `.metadata(False)` and `--no-metadata`, because this is now the default.
+  Use `.all()` for `.metadata(True)` and `emit_all_metadata`, or `--all` to emit every record ([25a4c3b](https://github.com/llnl-asr/dftracer-utils/commit/25a4c3b6d827)).
+- Remove `GET /api/resolve`.
+  Use `/api/rowset?name=files&key=fhash&value=path&keys=H` for `/api/resolve?type=file&hash=H` ([25a4c3b](https://github.com/llnl-asr/dftracer-utils/commit/25a4c3b6d827)).
+- Remove `dftracer_view --stream`.
+  The flag had no effect, because matching events always stream to the output.
+  Drop the flag from scripts ([89ee647](https://github.com/llnl-asr/dftracer-utils/commit/89ee647db2a9)).
+- Remove the `dft.hash` index extension (`IndexExtension::HASH`) and its API.
+  This covers `IndexDatabase::HashType`, `query_hash_table`, `resolve_hash`, `lookup_hash`, `count_hash_entries`, `resolve_name_to_hashes`, Python `Indexer.get_hash_table` and `count_hash_entries` and the `proc` type of `/api/resolve`.
+  Use the source row sets instead ([31233d3](https://github.com/llnl-asr/dftracer-utils/commit/31233d3ffe20)).
+- Remove `IndexDatabase::query_all_column_data_types` and the stored column records it read.
+  `query_all_column_types` now answers from the path catalog ([a25bcfa](https://github.com/llnl-asr/dftracer-utils/commit/a25bcfaac368)).
+- Remove C++ `IndexExtension::INDEX` and the reads of its payloads.
+  This covers `query_chunk_bloom_filters*`, `query_file_bloom_filter*`, `query_chunk_dimension_stats*`, `query_index_dimensions`, `query_time_bounds`, `query_merged_statistics_batch`, `file_has_name` and `query_name_chunk_postings`.
+  Use `extension_paths`, `path_granules`, `path_file_value` and the postings reads ([a0e0ab1](https://github.com/llnl-asr/dftracer-utils/commit/a0e0ab18680d)).
+- Remove `BloomFilterCache`, its `View::from_files` argument, `ViewPlannerInput::with_bloom_cache` and `ChunkPrunerInput::cache`.
+  The cache was written and never read ([a0e0ab1](https://github.com/llnl-asr/dftracer-utils/commit/a0e0ab18680d)).
+- Remove the `@auto` dimension marker.
+  Auto fields are now part of the tier parameters ([a0e0ab1](https://github.com/llnl-asr/dftracer-utils/commit/a0e0ab18680d)).
+- Remove C++ `IndexBatchSink` and its `insert_*` methods.
+  Use `IndexWrite` and `store::records` ([1398b07](https://github.com/llnl-asr/dftracer-utils/commit/1398b0770f59)).
+- Remove the C++ file capability bits in `index_file_entry_capability.h`.
+  Use `IndexDatabase::extension_state` and `extension_current` ([1398b07](https://github.com/llnl-asr/dftracer-utils/commit/1398b0770f59)).
+- Remove C++ `has_bloom_data`, the root summaries (`rebuild_root_summaries`, `query_root_*`), the global name dictionary (`query_name_id`, `query_name_by_id`, `query_name_file_postings`) and the per-file category and name count records.
+  Use `file_has_name` in place of the name dictionary ([1398b07](https://github.com/llnl-asr/dftracer-utils/commit/1398b0770f59)).
+- Replace C++ `register_files` with `assign_file_ids`, which writes no record ([1398b07](https://github.com/llnl-asr/dftracer-utils/commit/1398b0770f59)).
+- Replace the `SstArtifactRegistry` per-family accessors with `files(Family)` ([1398b07](https://github.com/llnl-asr/dftracer-utils/commit/1398b0770f59)).
+- Rename `SCHEMA_VERSION`, `schema_outdated` and `Freshness::SchemaOutdated` to `FORMAT_VERSION`, `format_outdated` and `Freshness::FormatOutdated` ([1398b07](https://github.com/llnl-asr/dftracer-utils/commit/1398b0770f59)).
+- Remove Python `IndexDatabase.register_files`, `IndexDatabase.rebuild_root_summaries` and the `rebuild_root_summaries` argument of `dftracer.utils.dask.distributed_index` ([1398b07](https://github.com/llnl-asr/dftracer-utils/commit/1398b0770f59)).
+- Change `IndexDatabase.find_stale_files` to report `format_outdated`.
+  SST artifact dicts now use `<family>_sst` keys ([1398b07](https://github.com/llnl-asr/dftracer-utils/commit/1398b0770f59)).
+- Remove `dftracer_index --rebuild-summaries` ([1398b07](https://github.com/llnl-asr/dftracer-utils/commit/1398b0770f59)).
+- Remove the C++ sub-chunk skipping API.
+  This covers `index::plan::enumerate_work_items`, `index/plan/chunk_geometry.h`, `index/plan/sub_chunk_prune.h`, `ReadConfig::sub_event_counts` and `sub_keep`, `ChunkIndexerConfig::sub_chunk_events`, `ChunkStatistics::sub_zonemaps` and `ViewPlannerInput::with_cached_chunks`.
+  No production path used them ([c0bafa6](https://github.com/llnl-asr/dftracer-utils/commit/c0bafa6b6e93)).
+- Remove the C ABI per-file gzip checkpoint API (`dftu_indexer_create`, `_build`, `_need_rebuild`, `_exists`, `_get_max_bytes`, `_get_num_lines`, `_destroy`), the C reader API (`dftu_reader_*`) and the C reader stream API (`dftu_reader_stream*`, `dftu_stream_config_t`).
+  Build indexes with `dftu_indexer_*` and read events through the View C ABI in `dftracer/utils/trace/views/abi.h`.
+  Raw byte-range and line-range reads are C++ only ([4c84d9a](https://github.com/llnl-asr/dftracer-utils/commit/4c84d9a177c8)).
+- Stop installing the C++ index build headers `index/build/resolve_and_build.h`, `index/build/batch_builder.h`, `index/build/resolver.h`, `index/store/shard_manifest.h`, `index/store/index_batch_sink.h` and `index/schemas/dft/agg/aggregation_drain.h`.
+  Use `Indexer` ([4c84d9a](https://github.com/llnl-asr/dftracer-utils/commit/4c84d9a177c8)).
+- Remove the previous plugin ABI.
+  A plugin built against it does not load.
+  Rebuild the plugin against `dftracer/utils/plugins/abi/plugin.h` ([634e323](https://github.com/llnl-asr/dftracer-utils/commit/634e3233c1d3), [9f37e0b](https://github.com/llnl-asr/dftracer-utils/commit/9f37e0b333ef)).
+### Fixed
+
+- Fix a duql `bucket` whose width is not a whole number of microseconds, such as `bucket 1500ns`, which ran on the trace plan with a cut width and gave wrong buckets; it now runs on the frame plan.
+- Fix a duql index into a column an earlier stage derived, such as `derive l = split(s, ",") | derive y = l[1]`, which read a missing record field and gave null.
+- Fix the partial view aggregation of `dfanalyzer` to return its columns in the order of `build_partial_meta`, so a Dask cluster run no longer rejects the partitions.
+  `merge_view_partials` keeps the dtype of every partial column, including a column that is all null, and accepts a Dask frame.
+- Fix `DaskFrame.reduce`, `group_by().agg()`, `shuffle`, `join` and `map_partitions` on a frame with no partitions, which raised a bare `IndexError`: each now raises a `ValueError` that names the operation and says the frame has no partitions.
+- Fix a build over a corrupt aggregation tier, which failed with `aggregation tier write: Corruption: Merge operator failed`: it now clears the tier and aggregates every file again, once, and logs a warning that names the index directory. A direct read of a corrupt tier fails with an error that names the directory and says to delete it and build again.
+- Fix a build that fell back to a full rebuild after failing to read the index, which kept the old aggregation tier rows and counted every event twice: it now clears the tier first.
+- Fix the Parquet round trip with pandas and Dask.
+  `to_parquet` and `write_parquet` now write the pandas metadata block, so `pandas.read_parquet` restores `Int8` to `Int64`, `UInt8` to `UInt64`, `boolean` and `string` for every integer, bool and string column that holds a null; they read back as `float64` and `object` before.
+  A column with no null reads as pandas reads it by default, and a float with nulls as `float64`.
+  `concat` accepts `string` and `large_string` columns, alone or mixed (it failed with "column type 'large_string' is unsupported"), and so does the lazy concat; the result is `large_string` when any part is or when the bytes pass 32-bit offsets.
+  The diagonal concat no longer turns a `string` / `large_string` mix into quoted JSON text.
+  `from_parquet` drops Dask's `__null_dask_index__` column when the file's pandas metadata lists it as an index column; any other stored index stays a column.
+  Unpivot of two `large_string` columns now concatenates them where it was refused.
+- Fix a number on the left of `-` or `/` in a column expression: `lit(100) - col("x")`, `1 / col("x")` and the `//` and `%` built from them failed with "expr: scalar - / column has no kernel".
+  The native compiler now broadcasts the scalar and runs the column kernel, and `Expr` gains the reflected division (`1 / expr`), which raised `TypeError`.
+  Rebuild the extension to get the compiler part.
+- Fix `a ** b` in the source tier of `apply` and in `eval` crashing with "the truth value of a column expression is ambiguous" when the exponent is a column; it raises `TranspileError` that says the exponent must be a constant.
+- Fix `corr`, `covar_pop`, `covar_samp`, `regr_slope`, `regr_intercept` and `regr_r2` (and so `Series.corr`, `Series.cov`, `DataFrame.corr` and `DataFrame.cov`), which lost their digits when the values sit far from zero next to their spread.
+  The group-by kept the raw sums `sum x`, `sum y`, `sum x^2`, `sum y^2` and `sum xy` and subtracted them at the end; over one million pairs of mean 1e9 and 5e8 and spread 1, `Series.corr` gave 0.0 and `group_by().agg(covar_samp)` gave -671.09, where pandas gives a correlation of 0.447672 and the covariance is 0.500467.
+  A new accumulator keeps the central co-moments about a running mean pair (Welford updates and Chan merges, the same design as `std` and `var`), so any partitioning of the rows merges to the one-pass value.
+  `Series.corr` and `DataFrame.corr` now give NaN for a column with no spread, as pandas does; the group-by `corr` aggregate keeps its readout of 0 for no spread or fewer than two pairs.
+  The partial-aggregate blob (spill files and distributed partials within one run) changes layout in its co-moment block; no stored index changes.
+- Fix `DataFrame.replace` returning the frame unchanged, with no error, when the replacement was null, such as `df.replace(float("inf"), pd.NA)`.
+- Fix `std`, `var`, `skew` and `kurt`, which lost their digits when the mean is large next to the spread.
+  The engine kept raw power sums and rebuilt the variance as `sum x^2 - (sum x)^2 / n`; over one million values of mean 1e9 and standard deviation 1 `Series.std()` gave 0.0 and `group_by().agg(std)` gave 152.38, where the value is 1.000672.
+  The shared accumulator now keeps central moments about a running mean held as a shift plus a small remainder (Welford updates, Chan/Pebay merges, and a corrected two-pass in the vector kernels), so every engine (`Series`, `DataFrame`, `group_by`, the View aggregation and the aggregation tier) matches a two-pass computation to a relative 1e-9 at any offset.
+  `rolling_std` was already accurate; `ewm_std` now runs on values shifted by the first valid one.
+  `DaskFrame` combines `var` and `std` from per-partition counts, means and sums of squared deviations, taken about a per-group reference so they stay accurate at any offset.
+  `sumsq` is rebuilt from the central moments, so it equals the sum of squares to about 1e-15 relative, where the raw sum of small integers was exact.
+  The stored aggregation tier now keeps central moments and the rollup cache layout tags change. Stored formats change freely until the first release, so delete a development index built before this change; no code reads an old development format.
+  A single value still gives NaN and a constant column 0.
+  The serialized partial-aggregate blob gains one field and is written and read by the same version within a run.
+- Fix an index whose aggregation tier carried another version number, which was re-aggregated on top of its old rows and so counted every event twice. The whole tier is now cleared and aggregated again once.
+  A stored aggregation manifest of another version now marks the whole tier stale: it is cleared and rebuilt.
+- Fix the aggregated-trace writer's `_std` and the comparator's Cohen's d, which read the stored second moment as a raw sum of squares; and the writer's parser, which did not skip the stored third and fourth moments.
+- Fix `set_union` over a list column, which gave `0` for every group.
+  It now gives the union of the elements of the lists in the group, as if the lists had been exploded first; a null list, an empty list and a null element add nothing.
+- Fix `sum`, `mean`, `min` and `max` of a bool column, which returned 0.
+  A bool column counts `True` as 1 (`sum` is the number of true values, `min` and `max` are 0 or 1), so `(x > 2).sum()` counts the matches and agrees with the group-by sum.
+- Fix `min` and `max` of a string column, which returned 0.
+  They give the bytewise smallest and largest string, and the empty string when no value is valid.
+- Fix the count of a profile or system row that carries its count in `dft_cnt`.
+  `dftu_cnt` still wins when a row has both.
+- Fix `min`, `max` and `sum` of `offset` in a grouped `TraceViewer` query that the aggregation tier answers, which came back null.
+  A group with no `offset` stays null.
+- Fix a profile row at the first microsecond of an aggregation bucket landing in the bucket before, so the index and the standalone aggregator now agree.
+  Indexes built before this change rebuild their aggregation on the next build.
+- Fix `asof` with direction `nearest` to take the last right row on an exact match among right rows with equal times, as pandas `merge_asof` does.
+  Before, it took the first ([5a05318](https://github.com/llnl-asr/dftracer-utils/commit/5a05318a4d79)).
+- Fix a diagonal concat of a column that is text in one part and a number or bool in another.
+  It now gives a JSON column instead of turning the numbers into text ([079c548](https://github.com/llnl-asr/dftracer-utils/commit/079c548f72b9)).
+- Fix integers above the int64 range.
+  They read exact as uint64, and wider ones read as their digit text, instead of dropping the line ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Fix doubles in group keys and text to print in shortest round-trip form, such as `2.5` instead of `2.500000` ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Fix an expression whose value is a constant, such as `derive y = 1`.
+  It is now a column of that value instead of an error ([ff49d5c](https://github.com/llnl-asr/dftracer-utils/commit/ff49d5cac0dc)).
+- Fix the time window so it skips a chunk whose start-time histogram has no event in the window, even when the chunk also holds events at `ts` 0 ([27490be](https://github.com/llnl-asr/dftracer-utils/commit/27490bec0b55)).
+- Make an index build commit the data of a file together with a per-file manifest entry in one atomic write.
+  Data without a current entry is never read, so an interrupted build leaves files unindexed instead of indexed but empty ([1398b07](https://github.com/llnl-asr/dftracer-utils/commit/1398b0770f59)).
+- Fix `F("name") == 'a"b'` in the Python `F` filter builder, which matched nothing.
+  The builder now writes `'a"b'`.
+  A string that no duql literal can hold raises `ValueError` ([50c7bdc](https://github.com/llnl-asr/dftracer-utils/commit/50c7bdcadcee)).
+- Fix a duql duration that took the unit of the first timed field it found in any expression.
+  The unit of a column now follows the value it holds through `derive`, `select`, `rename`, `group` and `agg`.
+  `coalesce`, `if`, `case`, `min`, `max`, `abs` and `??` keep the unit of their operands ([4f14b96](https://github.com/llnl-asr/dftracer-utils/commit/4f14b96bddd9)).
+- Fix a crash in a spilled join with a text column when the right partition held no rows ([0dbe07e](https://github.com/llnl-asr/dftracer-utils/commit/0dbe07eae60e)).
+- Fix two scans of one trace in a process that could fail on the index database lock ([e9ecf13](https://github.com/llnl-asr/dftracer-utils/commit/e9ecf13fdae0)).
+- Fix two scans of an unindexed trace that could build its index at once.
+  Before, a failed check could remove the whole shared `.dftindex` root with every other file's index and cache.
+  Index checks and builds of one root now run one at a time.
+  The rebuild of one file replaces only the records of that file ([a51e222](https://github.com/llnl-asr/dftracer-utils/commit/a51e222d443b)).
+- Fix the JSON flag of a group key over a JSON column, which `group_by` now keeps on any plan.
+  A correlated sub-query no longer needs a plain field key to keep the value type ([4b0c75a](https://github.com/llnl-asr/dftracer-utils/commit/4b0c75aabb36)).
+- Fix a row set column whose type only the data gives, such as a dftracer `args.value`, that read as null.
+  This happened through an arrow (`pid -> ranks.rank`), a `derive` or a `where`.
+  The column now takes its type from the rows of the row set ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Fix `from all` on a dftracer trace, which dropped the args of metadata records (`args.name`, `args.value`) from a `take` or collected frame ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Fix a null group key on a path-decoded file when an aggregate computes a value, such as `group status { s = sum(bytes + 1) }` ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Fix `len()` of an array inside an aggregate on a path-decoded file, which failed with a type error ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Fix zone map pruning that dropped matching chunks for a comparison with a non-integral literal, such as `x < 1.5` on an int field ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Fix zone maps of a path-decoded file that claimed a field named `ts` or `dur` was in every record.
+  A filter could skip the check on records without it ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Fix a raw export with `select` of nested or dotted paths that wrote empty objects ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Fix schema detection that dropped a last line without a trailing newline.
+  A one-line file read as generic ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Fix schema detection that read no line at all when the first record passed 16 MiB ([488fca7](https://github.com/llnl-asr/dftracer-utils/commit/488fca748db6)).
+- Fix index builds for files whose indexes live in different folders, such as the `split/` copies that `dftracer_view` makes beside unsplit files.
+  Before, every file went into the index of the first file.
+  The others then read as one whole-file chunk and a first query lost rows at random.
+  Each folder's files now build into their own index ([586a21b](https://github.com/llnl-asr/dftracer-utils/commit/586a21b98827)).
+- Fix a line whose newline opens the next gzip member that was lost when the read of its range ended inside the line ([586a21b](https://github.com/llnl-asr/dftracer-utils/commit/586a21b98827)).
+- Fix the last line of a file with no final newline, which was not read.
+  Both fixes apply to the View scan and the index build ([586a21b](https://github.com/llnl-asr/dftracer-utils/commit/586a21b98827)).
+- Fix duql `distinct` with no keys, which returned rows with no columns.
+  It now keeps every column ([25a4c3b](https://github.com/llnl-asr/dftracer-utils/commit/25a4c3b6d827)).
+- Fix a crash when a View whose files share an index path that does not open reads its schema tree ([25a4c3b](https://github.com/llnl-asr/dftracer-utils/commit/25a4c3b6d827)).
+- Fix duql `select name | group name { n = count() }`, which failed with "no column '__duql_agg_0'" ([25a4c3b](https://github.com/llnl-asr/dftracer-utils/commit/25a4c3b6d827)).
+- Fix `dftracer_view --duql` so it writes the matched events, not a table, when the query reads `let`s or row sets only to filter the scan.
+  An example is `fhash -> files.path like "/scratch/%"`.
+  An arrow condition on the value of the row set alone runs as the key set it selects ([25a4c3b](https://github.com/llnl-asr/dftracer-utils/commit/25a4c3b6d827)).
+- Fix the first-touch export pass, which did not honor `cancel_when` ([25a4c3b](https://github.com/llnl-asr/dftracer-utils/commit/25a4c3b6d827)).
+- Fix an array field that only a function reads, such as `len(xs)` in a `derive`, which read as null after the duql scan.
+  It is now a List column ([79fddeb](https://github.com/llnl-asr/dftracer-utils/commit/79fddeb1ad1b)).
+- Fix an object field that read as null after the duql scan.
+  It is now its leaf columns ([79fddeb](https://github.com/llnl-asr/dftracer-utils/commit/79fddeb1ad1b)).
+- Fix a crash in duql `pivot` with an integer key column ([79fddeb](https://github.com/llnl-asr/dftracer-utils/commit/79fddeb1ad1b)).
+- Fix a LazyFrame join, or other multi-plan collect, over a schemaless View that could pair column names with the wrong columns.
+  This happened when the records of a batch lacked a declared field.
+  A missing field is now null ([79fddeb](https://github.com/llnl-asr/dftracer-utils/commit/79fddeb1ad1b)).
+- Fix a duql `agg { n = count() }` after a stage that leaves the scan, such as `sort`, which gave a null count ([79fddeb](https://github.com/llnl-asr/dftracer-utils/commit/79fddeb1ad1b)).
+- Fix a duql `select` that names one field twice, such as `select name, tag = name`, which gave an empty second column ([79fddeb](https://github.com/llnl-asr/dftracer-utils/commit/79fddeb1ad1b)).
+- Fix after-scan duql stages over schemaless records that failed when a batch held only some of the fields.
+  A missing field is now null in that batch ([79fddeb](https://github.com/llnl-asr/dftracer-utils/commit/79fddeb1ad1b)).
+- Fix an indexed path such as `sizes[0]` that read null after the scan ([85a4b50](https://github.com/llnl-asr/dftracer-utils/commit/85a4b5014894)).
+- Fix `View::call_tree` so rows come in `pid`, `tid`, start order.
+  The `parent_id` numbers no longer depend on the number of workers ([17a8d2e](https://github.com/llnl-asr/dftracer-utils/commit/17a8d2e0ab17)).
+- Fix the comparison of an integer column with a fraction or with a value outside the range of the column (`dftu_series_compare`, `expr_cmp`).
+  Before, `x == 2.5` held for 2 ([ff49d5c](https://github.com/llnl-asr/dftracer-utils/commit/ff49d5cac0dc)).
+- Fix `LazyFrame::slice(offset, len)` with a `len` near `INT64_MAX`, which returned no rows ([ff49d5c](https://github.com/llnl-asr/dftracer-utils/commit/ff49d5cac0dc)).
+- Fix `eval_many` over more than 65,536 rows without a parallel backend, which failed ([ff49d5c](https://github.com/llnl-asr/dftracer-utils/commit/ff49d5cac0dc)).
+- Fix a filter on a bool field such as `ok == true` that skipped chunks with matching records ([e91c5c6](https://github.com/llnl-asr/dftracer-utils/commit/e91c5c6277f7)).
+- Fix aggregations with a bool filter that read `true` as the number 1 ([e91c5c6](https://github.com/llnl-asr/dftracer-utils/commit/e91c5c6277f7)).
+- Fix the fast equality path of the reader, which read `args.<name>` for a top-level field present as `null` ([e91c5c6](https://github.com/llnl-asr/dftracer-utils/commit/e91c5c6277f7)).
+- Fix a query tree printed back to text, such as in index pruning and caches, so a string literal that holds `"` stays parseable ([e91c5c6](https://github.com/llnl-asr/dftracer-utils/commit/e91c5c6277f7)).
+- Fix `any(path)` filters on JSON records and on canonical JSON text of arrays and objects that read memory past its lifetime ([e91c5c6](https://github.com/llnl-asr/dftracer-utils/commit/e91c5c6277f7)).
+- Fix an incremental aggregation build that shrank the stored time bounds of the aggregation tier to those of the files it added ([b6556be](https://github.com/llnl-asr/dftracer-utils/commit/b6556be38026)).
+- Fix an index build after a query answered from the aggregation tier that failed with "Cannot upgrade RocksDB instance ... from read-only to read-write".
+  This happened in one process ([b6556be](https://github.com/llnl-asr/dftracer-utils/commit/b6556be38026)).
+- Make distributed builds honor `AggregationConfig.group_by_file` on the workers.
+  Before, the file stayed in every key ([b6556be](https://github.com/llnl-asr/dftracer-utils/commit/b6556be38026)).
+- Fail with an IO error when an indexed trace export cannot open or write its output.
+  This covers `sink_trace` with `build_index` and `dftracer_view -o`.
+  Before, `dftracer_view -o /dev/null` hung forever and the library could abort ([b004e1c](https://github.com/llnl-asr/dftracer-utils/commit/b004e1ca443d)).
+- Fix the server decoded-member cache, which evicted large members on almost every request.
+  The cache now uses one total budget.
+  On a 1.4M-event trace, a timeline window request drops from 98 ms to 22 ms ([60f8ad4](https://github.com/llnl-asr/dftracer-utils/commit/60f8ad4074c2)).
+- Fix filters on `dur`, `pid` or `tid` that could skip chunks with matches when records also had an `args` key of the same name.
+  The `dur` filter now also covers `args.dur` of records without a top-level `dur`.
+  Rebuild indexes to pick up this fix ([7767e7b](https://github.com/llnl-asr/dftracer-utils/commit/7767e7b3c2b4)).
+- Fix a server crash when a request matched nothing and sorted its rows.
+  Such a result now has no rows ([dc04463](https://github.com/llnl-asr/dftracer-utils/commit/dc04463f8f7b)).
+- Fix the trace viewer error "No indexed events with a valid time range" on traces whose clockless events, such as CUDA activity, have `ts` 0.
+  The timeline now starts at the first start above 0.
+  Those events keep `ts` 0 in queries and time filters.
+  Rebuild indexes made before this change ([b0e6f75](https://github.com/llnl-asr/dftracer-utils/commit/b0e6f750928b)).
+- Fix `resolved.exec`, `resolved.cmd` and `resolved.cwd` filters that matched nothing or the wrong field.
+  They now read `exec_hash`, `cmd_hash` and `cwd` ([31233d3](https://github.com/llnl-asr/dftracer-utils/commit/31233d3ffe20)).
+- Fix `TraceReader` filters that dropped matching lines written with a space after the colon, such as the default output of Python `json.dumps` ([f1a742d](https://github.com/llnl-asr/dftracer-utils/commit/f1a742d74556)).
+- Fix the Arrow reader so that an equality on a top-level field of a generic record, such as `op == "read"`, returns the matching rows.
+  The reader now matches a bare field at the top level before `args` ([f1a742d](https://github.com/llnl-asr/dftracer-utils/commit/f1a742d74556)).
+- Fix misaligned pooled coroutine frames on targets such as Apple arm64.
+  A directory scan could hit undefined behavior ([7e4bef9](https://github.com/llnl-asr/dftracer-utils/commit/7e4bef901e4d)).
+- Fix a crash on a group-by or aggregate over a column that the scan does not produce.
+  It now raises an error that names the column ([512e49d](https://github.com/llnl-asr/dftracer-utils/commit/512e49d998b3)).
+- Fix `phase("metadata")` queries that lost records.
+  For example, `phase("metadata").query('name == "thread_name"')` could return nothing ([947ad0a](https://github.com/llnl-asr/dftracer-utils/commit/947ad0a2996c)).
+- Fix `TraceReader` queries so that they return matching metadata lines.
+  An equality on a dotted path with a long value, such as `args.name == "..."`, now matches ([947ad0a](https://github.com/llnl-asr/dftracer-utils/commit/947ad0a2996c)).
+- Keep every `thread_name`, `process_name`, `PR` and `CM` record in a pruned export from `sink_json` or `dftracer_view --output`.
+  Before, a trace viewer showed unnamed threads ([947ad0a](https://github.com/llnl-asr/dftracer-utils/commit/947ad0a2996c)).
+- Make `time_range(begin, end)` keep exactly the data events that start in `[begin, end)`.
+  Before, a collect or aggregation also returned other events of the chunks it read.
+  Busy, concurrency, utilization and active take every event that overlaps the window, clipped to it.
+  Utilization divides by `end - begin`.
+  Other aggregates of the same query take the events that start in the window.
+  Metadata records are not windowed ([8d56ddf](https://github.com/llnl-asr/dftracer-utils/commit/8d56ddfd0b09)).
+- Make occupancy aggregates with `time_bucket` clip each event to every bucket it overlaps.
+  Utilization divides by the bucket width.
+  Before, a long event added all of its duration to the bucket where it started.
+  The aggregation tier now buckets an event by its start, as the scan does, and not by its midpoint ([8d56ddf](https://github.com/llnl-asr/dftracer-utils/commit/8d56ddfd0b09)).
+- Make a `resolved.*` filter, such as `resolved.fpath == "/x"`, match every event whose hash resolves to the name.
+  Before, traces that hashed one name differently could lose events, and two builds of the same traces could differ ([6a6aadc](https://github.com/llnl-asr/dftracer-utils/commit/6a6aadc6bfc7)).
+- Fix re-indexing a trace, which left old data behind.
+  A re-index now replaces all data of the file ([1398b07](https://github.com/llnl-asr/dftracer-utils/commit/1398b0770f59)).
+- Fix a capability bit that was lost when it was added in the same write that registered a file ([1398b07](https://github.com/llnl-asr/dftracer-utils/commit/1398b0770f59)).
+- Make a View fail with an error that names the index when its `resolved.*` rewrite cannot read the hash tables.
+  Before, it matched no event and gave no error ([4aa7e2c](https://github.com/llnl-asr/dftracer-utils/commit/4aa7e2ccacf2)).
+- Fix queries with `NOT` that could skip a chunk with matching records.
+  Such chunks are now read ([c0bafa6](https://github.com/llnl-asr/dftracer-utils/commit/c0bafa6b6e93)).
+
 ## [0.0.13] - 2026-09-30
+
+### Changed
+
+- Turn off precompiled headers by default (`DFTRACER_UTILS_ENABLE_PCH`).
+  Pass `-DDFTRACER_UTILS_ENABLE_PCH=ON` to keep them in a local build.
+- Make the separate builder API internal, so the server, `dftracer_view`, `dftracer_run`, the statistics tools and the C ABI run on the same `View`.
+- Make the trace `View` (C++) and `TraceViewer` (Python) a `LazyFrame` over a trace scan.
+  Generic ops such as filter, select, sort, head and join chain on it.
+  The scan absorbs filters, projections, group keys and a trailing row window at plan time.
+- Make the trace terminals `call_tree`, `flamegraph`, `containment`, `flamegraph_partial`, `aggregate_partial`, `sink_json`, `sink_trace` and `materialize` return lazy results.
+  Use `collect_all` to run several of them over one shared scan.
+  Python adds lazy `[]`, `LazyScalar` reductions and `LazyResult`.
+- Rename the C++ `View` terminals to follow the `LazyFrame` names.
+  `export_json`, `export_trace` and `export_counters` become `sink_json`, `sink_trace` and `sink_counters`.
+  `merge_partials_to_table` becomes `merge_partials`, `limit` and `offset` become `head` and `slice`, `occ_cell` becomes `resolution` and `schema()` becomes `column_info()`.
+- Change C++ `View::collect()` to return the `DataFrame` and `View::lazy()` to return the plan.
+  Use `collect_all` or `TraceSession` for several outputs over one scan, and `View::branch` to attach caller folds.
+- Change `DaskTraceViewer.occ_cell` to `resolution`.
+  Its `offset` and `limit` now trim the merged result instead of each shard.
+- Make the index cover every flat args field by default.
+  Numbers use a per-chunk min and max, and strings use a per-chunk bloom filter up to 256 distinct values.
+  A filter on any arg now prunes chunks.
+  On a 2M-event trace the index is 1.2 MB, against 8.7 MB for the previous named defaults.
+  An existing index rebuilds once.
+  Pass `--no-auto-dimensions` to `dftracer_index` to opt out.
+- Make the dataframe engine faster.
+  At 10M rows on an Apple M4 Pro it is ahead of pandas on every benchmark row, ahead of polars on all but two rows and ahead of DuckDB on all but one row.
+  Group-by, join, sort, filters, comparisons, string predicates, casts, gathers, rolling windows, `//`, `%`, `**`, the dictionary encoder and quantile are faster.
+- Make `Series.rolling(...).mean()` and the other windows write their output in place and run a chunk per thread.
+- Make a plan over a resident frame run whole-column for every op.
+  It no longer streams through a spool or spills to disk.
+- Make a shard set aggregate its shards concurrently, as many at once as the spill budget gives each at least 64 MB.
+  Make `collect_all` split each plan's spill budget across the plans it runs together.
+  Concurrent work stays within the budget.
+- Apply `--select` to raw event queries as an SQL-style column projection.
+- Change the comparator to compare all events by default, not only POSIX and STDIO events.
+- Change the on-disk index to a sharded immutable index with a registry keyed by full path.
+  The on-disk index format changes.
 
 ### Added
 
-- A columnar `DataFrame` / `Series` / `LazyFrame` engine that is a drop-in for
-  pandas and polars: `import dftracer.utils.pandas as pd` (or `.polars as pl`)
-  and most code runs unchanged on the SIMD kernels. The pandas surface covers
-  `loc` / `iloc` / `at` / `iat` and `set_index` (the index is a named column,
-  copy-on-write assignment), `groupby` objects with the `agg` forms, column
-  selection (`groupby(k)["v"]`), a Series key, group-wise transforms
-  (`cumsum`, `shift`, `rank`, `head`, `nth`, `ffill`, `bfill`, `rolling`,
-  `expanding`, `ewm`, `take`, `sample`, `resample`), `apply` / `map` compiled
-  into the engine (Python per row only as a last resort, with a warning), the
-  `str` and `dt` accessors, `tz_localize` / `tz_convert`, `merge`, `nlargest`,
-  `value_counts`, `mode`, `compare`, `pivot_table` and `describe`; the polars
-  spellings sit alongside (`select(Expr)`, `with_columns`, `over`, the `str`
-  namespace). `Series` masks combine with `&`, `|` and `~`; `==` / `!=` return
-  a mask (a Series is unhashable, as in pandas and polars).
-- A hash join on `DataFrame`, `LazyFrame`, the C ABI and Python (`join` /
-  `merge`; inner, left, right, outer, semi, anti and cross). A plan's join sends its
-  build keys to the scan, which prunes the chunks that cannot match.
-- Plans (`LazyFrame`): `explain()`, `schema()` and `output_schema()` without
-  running; `memory_budget` / `auto_spill` bounding every breaker; a source of
-  your own (`Source` / `dftu_source_vt`, registered by name); a plugin's own
-  plan step (`dftu_node_register`, `LazyFrame.op`); a `frame_op` step for
-  every registry table op (`unnest`, `partition_id`, `compare_agg`, `window`,
-  `gap_fill`, `asof`, `interval`, `concat`, `union`, `pivot` and `to_dummies`).
-- Aggregates: `prod`, `cumprod`, exact group `median` / `quantile`,
-  `unique(subset)`, a per-column `reduce`, a whole-frame `group_by()`,
-  `first` / `last` exact across a parallel merge; group keys of any type
-  (Binary, Float16, null keys as their own group with `dropna=False`).
-- Plugin ABI: a plugin transforms the batch every later plugin receives
-  (`transform`), reports and releases what it holds against the memory
-  budget (`bytes` / `reclaim`), and a plugin node or slice under a plan is
-  measured by the same budget; `abi_version` is a hash of the header, so a
-  plugin built against another version is refused at load.
-- `benchmarks/dataframe_vs_pandas_polars.py`: the engine against pandas,
-  polars and DuckDB on the same Arrow tables, eagerly and as a plan, with a
-  correctness check of every result against ours, the cores each engine kept
-  busy and `--memory` for the peak resident set per op.
-- The trace `View` (C++) and `TraceViewer` (Python) are a `LazyFrame` over a
-  trace scan: generic ops (filter, select, sort, head, join, ...) chain on
-  it, and the scan absorbs what it can at plan time (filters, projections,
-  group keys, a trailing row window). Trace terminals (`call_tree`,
-  `flamegraph`, `containment`, `flamegraph_partial`, `aggregate_partial`,
-  `sink_json`, `sink_trace`, `materialize`) are lazy results, and
-  `collect_all` runs several of them over one shared scan. Python adds lazy
-  `[]`, `LazyScalar` reductions and `LazyResult`.
-- Python `Indexer(bloom=BloomConfig(fields=...))` names extra args fields to
-  index.
-- The index covers every flat args field by default: numbers by per-chunk
-  min/max, strings by a per-chunk bloom up to 256 distinct values, so a
-  filter on any arg prunes chunks (equality prunes on min/max as well).
-  `dftracer_index --no-auto-dimensions` opts out. On a 2M-event trace the
-  index is 1.2 MB, against 8.7 MB for the previous named defaults. An
-  existing index rebuilds once.
-
-### Changed
-
-- Precompiled headers are off by default (`DFTRACER_UTILS_ENABLE_PCH`). GCC's
-  `.gch` cannot be cached by ccache and evicted the rest of the cache; pass
-  `-DDFTRACER_UTILS_ENABLE_PCH=ON` to keep them for local builds.
-- CI: every merge into `develop` publishes a `<tag>.postN.dev0` prerelease to
-  PyPI; wheel and Valgrind jobs run sharded (one job per Python version, three
-  Python and six C++ Valgrind shards); push workflows run on `main` and
-  `develop` only, so a pull request no longer runs twice.
-
-- The dataframe engine is measured (10M rows, Apple M4 Pro): ahead of pandas
-  on every benchmark row, of polars on every row but two at the noise floor,
-  of DuckDB on every row but one within a millisecond of it. The group-by
-  runs a plain loop over batches of rows with a direct table for dense
-  integer keys, a word table for string keys and, with many groups on a
-  string key, a scatter into per-thread partitions; the join uses a
-  direct-address table and 32-bit index lists; the sort is a sample sort;
-  filters, comparisons, string predicates, casts, gathers, rolling windows,
-  `//` / `%` / `**` and the dictionary encoder run in parallel; a quantile
-  reads its column in place and sorts one bucket.
-- A plan over a resident frame runs whole-column for every op (an op with no
-  eager form runs its own cursor over the frame as one morsel); it no longer
-  streams through a spool or spills to disk.
-- Memory detection reads the free and inactive pages on macOS (the auto
-  budget assumed 1 GB there).
-- `Series.rolling(...).mean()` and the other windows write their output in
-  place and run a chunk per thread.
-- **Breaking (C++):** `View` terminals follow the `LazyFrame` names:
-  `export_json` / `export_trace` / `export_counters` became `sink_json` /
-  `sink_trace` / `sink_counters`, `merge_partials_to_table` became
-  `merge_partials`, `limit` / `offset` became `head` / `slice`, `occ_cell`
-  became `resolution` and `schema()` became `column_info()`. `collect()`
-  returns the `DataFrame`; `lazy()` returns the plan. `call_tree`,
-  `flamegraph`, `containment` and the partials return plans to collect.
-  Several outputs over one scan use `collect_all` or `TraceSession`;
-  caller folds attach with `View::branch`.
-- **Breaking (Python):** `TraceViewer` is a `LazyFrame`; `AggregatedTraceViewer`
-  and `SessionView` are gone. `DaskTraceViewer.occ_cell` became `resolution`,
-  and its `offset` / `limit` trim the merged result instead of each shard's.
-- The server, `dftracer_view`, `dftracer_run`, the statistics tools and the
-  C ABI run on the same `View`; the separate builder API is internal.
-- A shard set aggregates its shards concurrently, as many at once as the
-  spill budget gives each at least 64 MB, and `collect_all` splits each
-  plan's spill budget across the plans it runs together, so concurrent work
-  stays within the budget.
+- Publish a `<tag>.postN.dev0` prerelease to PyPI on every merge into `develop`.
+- Add a columnar `DataFrame`, `Series` and `LazyFrame` engine that works as a drop-in for pandas and polars.
+  Use `import dftracer.utils.pandas as pd` or `import dftracer.utils.polars as pl` and most code runs unchanged on SIMD kernels.
+- Add these pandas features.
+  `loc`, `iloc`, `at`, `iat` and `set_index` with a named index column and copy-on-write assignment.
+  `groupby` objects with the `agg` forms, column selection such as `groupby(k)["v"]` and a Series key.
+  Group-wise `cumsum`, `shift`, `rank`, `head`, `nth`, `ffill`, `bfill`, `rolling`, `expanding`, `ewm`, `take`, `sample` and `resample`.
+  `apply` and `map` compiled into the engine, with a warning when Python must run per row.
+  The `str` and `dt` accessors, `tz_localize`, `tz_convert`, `merge`, `nlargest`, `value_counts`, `mode`, `compare`, `pivot_table` and `describe`.
+- Add the polars spellings `select(Expr)`, `with_columns`, `over` and the `str` namespace.
+- Let `Series` masks combine with `&`, `|` and `~`.
+  `==` and `!=` return a mask, and a Series is unhashable as in pandas and polars.
+- Add a hash join on `DataFrame`, `LazyFrame`, the C ABI and Python with `join` and `merge`.
+  It supports inner, left, right, outer, semi, anti and cross joins.
+  A plan's join sends its build keys to the scan, which prunes the chunks that cannot match.
+- Add `explain()`, `schema()` and `output_schema()` to `LazyFrame` plans.
+  They do not run the plan.
+- Add `memory_budget` and `auto_spill` to bound the memory of every pipeline breaker in a plan.
+- Let a plan use a source of your own (`Source` or `dftu_source_vt`) registered by name.
+- Let a plugin add its own plan step with `dftu_node_register` or `LazyFrame.op`.
+- Add a `frame_op` plan step for `unnest`, `partition_id`, `compare_agg`, `window`, `gap_fill`, `asof`, `interval`, `concat`, `union`, `pivot` and `to_dummies`.
+- Add the aggregates `prod`, `cumprod`, exact group `median` and `quantile`, `unique(subset)`, a per-column `reduce` and a whole-frame `group_by()`.
+  `first` and `last` are exact across a parallel merge.
+- Let group keys have any type, including Binary and Float16.
+  Null keys form their own group with `dropna=False`.
+- Let a plugin transform the batch that every later plugin receives with `transform`.
+  A plugin reports and releases what it holds against the memory budget with `bytes` and `reclaim`.
+  The same budget measures a plugin node or slice under a plan.
+- Add `Indexer(bloom=BloomConfig(fields=...))` in Python to name extra args fields to index.
+- Add a counter timeline track, a per-counter pid and tid breakdown, bounded-density serving and active-time statistics to the web trace viewer.
+  The track handles malformed values.
+- Let rectangle selection in the viewer scope the analysis to a time range, lanes and rows.
+  The viewer shows aggregated (`ph=3`) events with uniform extrapolation and labels them "aggregated" in tooltips.
+- Let an event-map file remap the DLIO event category and name.
+- Export `DaskTraceViewer` from the Python `dask` module.
+- Add `TraceViewer` and `View` Python bindings that expose the query DSL and portable C-API glue.
+- Add subsumption-based simplification, string-match operators and `resolved.*` virtual fields to the query DSL.
+- Add materialized views with rollups and tier-served aggregation.
+  Add a new `AggregationFold` and more aggregation operators.
+- Add the occupancy aggregates `busy`, `concurrency`, `utilization` and `active`, which measure wall-clock busy time and parallelism.
+  They do not double-count overlapping durations.
+  They take no field and always work over `dur`.
+  They work per group and time bucket and merge across files and ranks.
+  They are available in the `View` and `TraceViewer` `agg`, the `dftracer_view --agg` CLI and the typed `AggOp` enum.
+- Add multi-member split, merge and reorganize for intra-file parallelism.
+- Let every `<bytes>` CLI flag accept a unit suffix such as `64MB`, `1.5GiB`, `512KB` and `8kb`.
+  Units are 1024-based and `b` means bits.
+  A bare number keeps the legacy unit of the flag.
+- Let every `<s>` CLI flag accept a duration suffix such as `30s`, `5m` and `1.5h`.
+  A bare number keeps the legacy unit of the flag.
+- Let the byte and duration arguments of the Python API accept a number or a string.
+- Add `dftracer_server --timeout` to bound the server uptime and then shut down gracefully.
+  The flag accepts a humanized duration.
+  The default `0` disables the limit.
+- Add full type coverage to the public Python surface, including `Series`, `DataFrame`, the viewers, the jit DSL and a generic `TaskHandle`.
 
 ### Removed
 
-- **Breaking:** the previous plugin ABI. A plugin built against it does not
-  load; rebuild against `dftracer/utils/plugins/abi/plugin.h`.
-- **Breaking (C++):** `AggregatedView`, `ViewSession`'s public constructor,
-  `View::join` and `trace/views/result_batch.h` (`collect_batch`); use
-  `View` plans, `View::branch` and `LazyFrame::join`.
+- Remove the previous plugin ABI.
+  A plugin built against it does not load.
+  Rebuild it against `dftracer/utils/plugins/abi/plugin.h`.
+  The `abi_version` is now a hash of the header, and a plugin built against another version is refused at load.
+- Remove the C++ `AggregatedView`, the public constructor of `ViewSession`, `View::join` and `trace/views/result_batch.h` (`collect_batch`).
+  Use `View` plans, `View::branch` and `LazyFrame::join` instead.
+- Remove the Python `AggregatedTraceViewer` and `SessionView`.
+  Use `TraceViewer`, which is now a `LazyFrame`.
+- Remove the `name=` argument from `Runtime.submit()`.
+  The task name now comes from the callable and its call-site source location.
+- Remove the legacy per-line visitor scan path.
+  The batch-native fold-fusion indexer replaces it.
 
 ### Fixed
 
-- Prerelease Linux wheels were versioned `.post1.devN` because the manylinux
-  container did not receive the computed version; the version is passed in.
-
-- A sketch quantile (`pct` in a plan, `DDSketch`) returned `-inf` once a
-  bucket held more than 65535 values; buckets are 32-bit now.
-- Column-column arithmetic dropped nulls; a Bool column was gathered by
-  byte instead of by bit; `group_by` returned groups out of first-seen order
-  after a parallel run; a plugin node was answered asynchronously when the
-  data was resident.
-- `df.groupby(series)` raised a `SystemError`: the frame's `in` test left a
-  pending error for a non-string key.
-- A scan of an unindexed multi-member trace read the lines at each member
-  boundary twice.
-- Index extra args fields were dropped by the fold-based build, so
-  `dftracer_index --dimensions` did nothing; nested fields were dropped in the
-  first-touch build; merged chunk stats ordered numeric min/max as text; and
-  a float literal (`pid == 1.0`) probed the bloom as `"1.000000"` and pruned
-  matching chunks.
-- Session containment branches ignored `phase()`, so `phase(Events)` kept
-  aggregated records; session aggregations with string-arg predicates or
-  transformed keys wrote rollups that later reads served wrongly.
-- A blocking `get()` on a finished coroutine task could miss its result;
-  `LazyFrame::collect()` on a temporary plan read the freed plan.
-- A plan's export sink flushes when the export ends.
-- Data races: libdeflate chose its kernels on first use from several threads
-  at once, and the reader's member decode cache read an entry's ready flag
-  outside the lock that wrote it.
-- An expression the column type cannot take (a string column compared with a
-  number) produced a null column that crashed a later `group_by`; it now
-  raises an error.
-
-- Interactive web trace viewer gains a counter timeline track (with malformed-value
-  handling), per-counter pid/tid breakdown, bounded-density serving, and active-time
-  statistics.
-- Rectangle selection in the viewer scopes analysis to a time range, lanes, and rows;
-  aggregated (`ph=3`) events are visualized with uniform extrapolation and labeled
-  "aggregated" in tooltips.
-- DLIO event category and name can be remapped through an event-map file.
-- Python: `DaskTraceViewer` is exported from the `dask` module; new `TraceViewer`/`View`
-  bindings expose the query DSL and portable C-API glue.
-- Query DSL: subsumption-based simplification, string-match operators, and
-  `resolved.*` virtual fields.
-- Materialized views with rollups and tier-served aggregation; a new `AggregationFold`
-  and extended aggregation operators.
-- Concurrency-aware occupancy aggregates `busy`, `concurrency`, `utilization` and
-  `active` measure wall-clock busy time and parallelism instead of double-counting
-  overlapping durations. They are field-less (always over `dur`), work per group and
-  time bucket, and merge across files and ranks; exposed on the `View`/`TraceViewer`
-  `agg`, the `dftracer_view --agg` CLI, and the typed `AggOp` enum.
-- Multi-member split, merge, and reorganize for intra-file parallelism.
-- Humanized sizes and durations: every `<bytes>` CLI flag accepts a unit suffix
-  (`64MB`, `1.5GiB`, `512KB`, `8kb`; 1024-based, `b` is bits) and every `<s>` flag
-  accepts a duration suffix (`30s`, `5m`, `1.5h`); a bare number keeps the flag's
-  legacy unit. The Python API's byte/duration arguments accept a number or a string.
-- `dftracer_server --timeout` bounds server uptime and then shuts down gracefully
-  (accepts a humanized duration; `0`, the default, disables it).
-- Full type coverage across the public Python surface (`Series`/`DataFrame`/viewers,
-  the jit DSL, and a generic `TaskHandle`).
-
-### Changed
-
-- `Runtime.submit()` no longer accepts a `name=` argument; the task name is derived
-  automatically from the callable and its call-site source location.
-
-- Indexer scan core reworked to a fold-fusion, batch-native design; server query,
-  viz caching, and frontend paths updated to match.
-- `--select` is now applied to raw event queries (SQL-style column projection).
-- Substantial internal refactors: async runtime/pipeline/cache, trace reader and
-  compression I/O, RocksDB manager lifecycle, shared primitives and umbrella headers,
-  domain composites (visitor pattern retired), and CLI binaries/trace generators.
-
-### Removed
-
-- **Breaking:** the legacy per-line visitor scan path is retired in favor of the
-  batch-native fold-fusion indexer.
-
-### Fixed
-
-- Indexer recovers a chunk whose batch parse collapses on a single bad line, closes
-  cached index handles before removing a stale index, and adds a sharded immutable
-  index with a full-path-keyed registry (breaking on-disk change).
-- Comparator now defaults to comparing all events rather than only POSIX/STDIO.
-- Server: zero-fill simdjson padding in the viz summary fold.
-- CI reworked onto a shared Flux allocation with GitLab pipelines mirroring the GitHub
-  workflows; wheel version now sees tags via full-history fetch.
+- Fix memory detection on macOS.
+  It now reads the free and inactive pages, where the automatic budget assumed 1 GB.
+- Fix the version of prerelease Linux wheels, which showed `.post1.devN`.
+  The wheel version now sees tags.
+- Fix sketch quantiles (`pct` in a plan and `DDSketch`) that return `-inf` when a bucket holds more than 65535 values.
+- Fix column-column arithmetic that drops nulls.
+- Fix the gather of a Bool column, which read by byte instead of by bit.
+- Fix `group_by` returning groups out of first-seen order after a parallel run.
+- Fix a plugin node that answers asynchronously when the data is resident.
+- Fix `df.groupby(series)` raising a `SystemError`.
+- Fix a scan of an unindexed multi-member trace that reads the lines at each member boundary twice.
+- Fix `dftracer_index --dimensions` doing nothing because the build dropped the index extra args fields.
+- Fix the index build dropping nested fields.
+- Fix merged chunk stats that order numeric min and max as text.
+- Fix a float literal such as `pid == 1.0` that pruned matching chunks.
+- Fix session containment branches that ignore `phase()`, so `phase(Events)` now drops aggregated records.
+- Fix session aggregations with string-arg predicates or transformed keys that write rollups which later reads serve wrongly.
+- Fix a blocking `get()` on a finished coroutine task that can miss its result.
+- Fix `LazyFrame::collect()` on a temporary plan reading the freed plan.
+- Make the export sink of a plan flush when the export ends.
+- Fix two data races in libdeflate kernel choice and in the member decode cache of the reader.
+- Make an expression that the column type cannot take raise an error.
+  Such an expression, such as a string column compared with a number, used to give a null column that crashed a later `group_by`.
+- Fix the indexer to recover a chunk when one bad line collapses the batch parse.
+- Fix the indexer to close cached index handles before it removes a stale index.
+- Fix the server viz summary to zero-fill simdjson padding.
 
 ## [0.0.12] - 2026-07-13
 
-### Added
-
-- Interactive web trace viewer: a SolidJS canvas frontend backed by a new server
-  visualization API, with timeline node grouping (#93), app-span events, and a
-  timelapse axis for multi-run traces.
-- `dftracer_stats` now shows histogram bounds.
-- Indexer detects and rebuilds stale indexes when the source trace changes; this
-  rebuild is honored across read consumers and the server.
-
 ### Changed
 
-- Leaner wheels; CI compiles RocksDB once and persists ccache for faster builds.
+- Make wheels smaller.
+
+### Added
+
+- Add an interactive web trace viewer that draws traces on a canvas.
+  The viewer has timeline node grouping (#93), app-span events and a timelapse axis for multi-run traces.
+  A new server visualization API feeds the viewer.
+- Show histogram bounds in `dftracer_stats`.
+- Let the indexer detect and rebuild stale indexes when the source trace changes.
+  Read consumers and the server use the rebuilt index.
 
 ### Fixed
 
-- I/O: scatter-gather writes now complete past the `IOV_MAX` limit.
-- Comparator no longer miscounts files.
-- Fixed a deadlock in multi-process dfanalyzer and a stale-index / app-span-complement
-  run break in the server.
-- `dfanalyzer` distributed indexing skips already-indexed files.
-- `lcov` coverage compatibility fix.
+- Fix scatter-gather writes so they complete past the `IOV_MAX` limit.
+- Fix wrong file counts in the comparator.
+- Fix a deadlock in multi-process `dfanalyzer`.
+- Fix a server run break with stale indexes and app-span complement.
+- Make `dfanalyzer` distributed indexing skip files that are already indexed.
 
 ## [0.0.11] - 2026-07-05
 
-### Added
-
-- New `dftracer_validate` CLI tool.
-- `Result<T>` error model with `DFT_TRY`, and Python bindings that map `ErrorCode`
-  to typed exceptions.
-- Comparator gains a DLIO preset.
-- ARM64 (aarch64) build support in CI and Valgrind memory checking for the C++ and
-  Python test suites.
-
 ### Changed
 
-- **Breaking:** core runtime and I/O consolidated around the new `Result<T>` model;
-  single-op utilities migrated to `Result<T>`, with god-file splits and broad dedup.
-- Python bindings deduplicated; GIL ordering fixed and an `atexit` shutdown added.
+- Change the core runtime, I/O and single-op utilities to use the `Result<T>` error model.
+
+### Added
+
+- Add the `dftracer_validate` CLI tool.
+- Add the `Result<T>` error model with `DFT_TRY`.
+- Add typed Python exceptions that map from `ErrorCode`.
+- Add a DLIO preset to the comparator.
+- Add an `atexit` shutdown to the Python bindings.
 
 ### Fixed
 
-- Executor shutdown lost-wakeup deadlock.
-- Object-pool Treiber-stack races (memory ordering plus a DWCAS optimization to fix
-  a segfault).
-- Noisy aarch64 warnings silenced.
+- Fix the GIL ordering in the Python bindings.
+- Fix an executor shutdown deadlock from a lost wakeup.
+- Fix a segfault from races in the object pool.
 
 ## [0.0.10] - 2026-06-08
 
 ### Added
 
-- Distributed HLM filtering and time bucketing.
+- Add distributed HLM filtering and time bucketing.
 
 ## [0.0.9] - 2026-06-07
 
-### Fixed
-
-- Wheel build: updated Xcode version for macOS packaging.
+This release changes only the build and CI.
 
 ## [0.0.8] - 2026-06-05
 
 ### Added
 
-- Portable-wheel support via the `DFTRACER_UTILS_LOCAL_PACKAGES` option.
+- Add portable-wheel support with the `DFTRACER_UTILS_LOCAL_PACKAGES` option.
 
 ### Fixed
 
-- Portable `to_chars_double` fallback for macOS and improved zstd handling.
+- Fix `to_chars_double` on macOS with a portable fallback.
+- Improve zstd handling.
 
 ## [0.0.7] - 2026-05-22
 
-### Changed
-
-- CI cleanup: removed ccache setup and keyed the ccache on `matrix.os`.
+This release changes only the build and CI.
 
 ## [0.0.6] - 2026-05-21
 
-Large feature release: the async core, indexing, aggregation, query, and server
-capabilities that define the current engine landed here.
-
-### Added
-
-- **Query DSL** for filtering trace events, wired into raw byte reading with
-  file-level chunk skipping.
-- **HTTP server** (from-scratch async) exposing trace query APIs, with streaming
-  iovec-based responses.
-- **Arrow data interchange** via nanoarrow (Arrow C Data Interface), zero-copy across
-  the Python boundary.
-- **Python runtime and bindings**: `Runtime` with async `submit()`/`TaskHandle` and
-  Python-callable support, streaming iterators, a `StreamingUtility` with Arrow output,
-  the Indexer wired to the Runtime, and a Dask plugin.
-- **Aggregator** (`dftracer_aggregator`) with profile and system-event aggregation,
-  custom metrics, offset tracking, and time-bucket persistence.
-- **Comparator** (`dftracer_comparator`) for comparing trace metrics, injecting trace
-  metadata into root SUMMARY rows.
-- Bloom-filter multi-index, manifest (`.midx`) sidecars, a DFT view system with bloom
-  filtering and predicate support, and an `index_threshold` to skip bloom/manifest for
-  small files.
-- Parallel statistics with DDSketch and log2 histograms.
-- Replay (`dftracer replay`) with provenance-based, semantic trace reorganization.
-- Call-tree utility with MPI support.
-- DLIO config generation.
-- C++20 coroutine core: async I/O backends (io_uring/kqueue), pipelines, task system,
-  heterogeneous `when_all`/`when_any`, and channels.
+Large feature release with the async core, indexing, aggregation, query and server capabilities.
 
 ### Changed
 
-- **Breaking:** utilities migrated to the query DSL; core string/memory optimizations
-  and a unified index infrastructure.
-- Index storage migrated from SQLite to RocksDB.
-- Replaced the `nonstd::span` polyfill with C++20 `std::span`; removed the xxhash
-  dependency in favor of FNV-1a and standardized hashing.
-- Broad performance work across parsing, scanning, serialization, compression,
-  zero-copy I/O, and the aggregation pipeline.
+- Change utilities to use the query DSL.
+- Store indexes in RocksDB instead of SQLite.
+- Replace xxhash with FNV-1a for hashing.
+- Make parsing, scanning, serialization, compression, zero-copy I/O and the aggregation pipeline faster.
+
+### Added
+
+- Add a query DSL that filters trace events while it reads raw bytes.
+  The reader skips whole chunks at file level.
+- Add an async HTTP server that exposes trace query APIs.
+  Responses stream to the client.
+- Add Arrow data interchange with nanoarrow.
+  Data crosses the Python boundary without a copy.
+- Add a Python `Runtime` with async `submit()` and `TaskHandle`.
+  The `Runtime` accepts Python callables and drives the Indexer.
+- Add streaming iterators and a `StreamingUtility` with Arrow output to Python.
+- Add a Dask plugin.
+- Add `dftracer_aggregator` with profile and system-event aggregation, custom metrics, offset tracking and time-bucket persistence.
+- Add `dftracer_comparator` to compare trace metrics.
+  It injects trace metadata into root SUMMARY rows.
+- Add a bloom-filter multi-index and manifest (`.midx`) sidecars.
+- Add a DFT view system with bloom filtering and predicate support.
+- Add an `index_threshold` option that skips bloom and manifest data for small files.
+- Add parallel statistics with DDSketch and log2 histograms.
+- Add `dftracer replay` for provenance-based, semantic trace reorganization.
+- Add a call-tree utility with MPI support.
+- Add DLIO config generation.
+- Add a C++20 coroutine core with async I/O backends (io_uring and kqueue), pipelines, a task system, heterogeneous `when_all` and `when_any` and channels.
 
 ### Fixed
 
-- Coroutine foundation rewrite fixing `channel`/`when_all` memory leaks, `when_all`
-  await-ready races, and channel lifetime management.
-- gzip inflater trailer/window-reset handling and double-counting when an index
-  already exists.
-- Type-safety, lifetime, concurrency, and portability issues; endianness and query
-  fallback handling.
+- Fix memory leaks in `channel` and `when_all`, `when_all` await-ready races and channel lifetime management.
+- Fix gzip inflater trailer and window-reset handling.
+- Fix double counting when an index already exists.
+- Fix type-safety, lifetime, concurrency and portability issues.
+- Fix endianness and query fallback handling.
 
 ## [0.0.5] - 2025-10-21
 
 ### Fixed
 
-- Wheels now link their libraries correctly.
-- Promise fulfillment and exception handling in pipeline executors.
-- Performance when continuing to read from a gzip stream; default checkpoint size now
-  comes from a defined constant.
-- Dropped a soon-to-be-deprecated macOS version from the build matrix.
+- Fix wheels so they link their libraries correctly.
+- Fix promise fulfillment and exception handling in pipeline executors.
+- Make reading on from a gzip stream faster.
 
 ## [0.0.4] - 2025-10-20
 
 ### Fixed
 
-- Race condition from mutating shared state.
-- Source distribution now excludes unnecessary files and includes `cmake`/`tests`;
-  corrected CLI options in the docs.
+- Fix a race condition from mutation of shared state.
+- Make the source distribution include `cmake` and `tests` and exclude unneeded files.
+- Fix CLI options in the docs.
 
 ## [0.0.3] - 2025-10-20
 
 ### Fixed
 
-- Corrected the versioning scheme and the link to the DFTracer GitHub repo.
-- Excluded unnecessary files from the source distribution and fixed build scripts for
-  the non-publishing path.
+- Fix the versioning scheme and the link to the DFTracer GitHub repo.
+- Exclude unneeded files from the source distribution.
 
 ## [0.0.2] - 2025-10-19
 
 ### Fixed
 
-- Added `setup.py` to fix a Python versioning issue and shipped missing scripts needed
-  for Python publishing.
+- Add `setup.py` to fix a Python versioning issue.
+  Ship the scripts that Python publishing needs.
 
 ## [0.0.1] - 2025-10-19
 
@@ -382,10 +1316,23 @@ Initial release.
 
 ### Added
 
-- Core trace tooling: `dftracer_index` (gzip and tar indexers), `dftracer_merge`,
-  `dftracer_split` (with `--verify`), `dftracer_event_count`, `dftracer_info`, and
-  `pgzip`.
-- A coroutine-driven task scheduler, executor, and pipeline framework with progress
-  callbacks and multiple-output support.
-- gzip block-boundary-aware reading with prefix-based hashes and checkpointing.
-- Python packaging and Sphinx-based documentation with C++ API reference.
+- Add core trace tools `dftracer_index` (gzip and tar indexers), `dftracer_merge`, `dftracer_split` (with `--verify`), `dftracer_event_count`, `dftracer_info` and `pgzip`.
+- Add a coroutine-driven task scheduler, executor and pipeline framework.
+  The framework has progress callbacks and multiple-output support.
+- Add gzip block-boundary-aware reading with prefix-based hashes and checkpointing.
+- Add Python packaging and Sphinx documentation with a C++ API reference.
+
+[Unreleased]: https://github.com/llnl-asr/dftracer-utils/compare/v0.0.13...HEAD
+[0.0.13]: https://github.com/llnl-asr/dftracer-utils/compare/v0.0.12...v0.0.13
+[0.0.12]: https://github.com/llnl-asr/dftracer-utils/compare/v0.0.11...v0.0.12
+[0.0.11]: https://github.com/llnl-asr/dftracer-utils/compare/v0.0.10...v0.0.11
+[0.0.10]: https://github.com/llnl-asr/dftracer-utils/compare/v0.0.9...v0.0.10
+[0.0.9]: https://github.com/llnl-asr/dftracer-utils/compare/v0.0.8...v0.0.9
+[0.0.8]: https://github.com/llnl-asr/dftracer-utils/compare/v0.0.7...v0.0.8
+[0.0.7]: https://github.com/llnl-asr/dftracer-utils/compare/v0.0.6...v0.0.7
+[0.0.6]: https://github.com/llnl-asr/dftracer-utils/compare/v0.0.5...v0.0.6
+[0.0.5]: https://github.com/llnl-asr/dftracer-utils/compare/v0.0.4...v0.0.5
+[0.0.4]: https://github.com/llnl-asr/dftracer-utils/compare/v0.0.3...v0.0.4
+[0.0.3]: https://github.com/llnl-asr/dftracer-utils/compare/v0.0.2...v0.0.3
+[0.0.2]: https://github.com/llnl-asr/dftracer-utils/compare/v0.0.1...v0.0.2
+[0.0.1]: https://github.com/llnl-asr/dftracer-utils/releases/tag/v0.0.1

@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/index/source.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -238,30 +239,35 @@ TEST_SUITE("SchemaRegistry") {
         CHECK(generic.require.empty());
     }
 
-    TEST_CASE("the genesis built-in extends dftracer with a runs row set") {
+    TEST_CASE(
+        "the genesis built-in is path-decoded with a stored runs row set") {
         const auto& g = ix::get_schema("genesis");
         CHECK(g.builtin);
-        CHECK(g.decoder == ix::Decoder::DFTRACER);
-        CHECK(g.require == std::vector<std::string>{
-                               "ph", "name", "ts", "args.run", "args.path",
-                               "args.depth", "args.count"});
-        CHECK(mentions(g.source,
-                       "runs = where ph in [\"M\", 4] and name == "
-                       "\"RUN\""));
-        CHECK(mentions(g.source, "papi_set = args.papi_set"));
-        CHECK(mentions(g.source, "files = "));
+        CHECK(g.decoder == ix::Decoder::PATH);
+        CHECK(g.require == std::vector<std::string>{"gtype", "run"});
+        CHECK(g.roles.time == "ts");
+        CHECK(mentions(g.source, "data = where gtype != \"run\""));
+        CHECK(mentions(g.source, "runs = where gtype == \"run\""));
+        CHECK_FALSE(mentions(g.source, "files = "));
 
         std::vector<std::string_view> lines = {
-            R"({"id":0,"name":"RUN","cat":"genesis","pid":0,"tid":0,"ph":4,)"
-            R"("args":{"run":"ab","app":"laghos","nodes":1}})"};
+            R"({"gtype":"run","run":"ab","app":"laghos","nodes":1})"};
         for (int i = 0; i < 12; ++i)
             lines.push_back(
-                R"({"id":1,"name":"f","cat":"c","pid":0,"tid":0,"ph":3,"ts":1,)"
-                R"("args":{"run":"ab","path":"main;f","depth":1,"count":2}})");
+                R"({"gtype":"func","run":"ab","path":"main;f","ts":1,"count":2})");
         CHECK(ix::detect_schema(lines).id == "genesis");
+        const std::vector<std::string_view> counters = {
+            R"({"gtype":"counter","run":"ab","path":"main","metric":"m"})"};
+        CHECK(ix::detect_schema(counters).id == "genesis");
         const std::vector<std::string_view> dft = {
             R"({"id":1,"name":"read","cat":"POSIX","ph":"X","ts":1})"};
         CHECK(ix::detect_schema(dft).id == "dftracer");
+        const std::vector<std::string_view> other = {
+            R"({"kind":"x","id":"a"})"};
+        CHECK(ix::detect_schema(other).id == "generic");
+        const std::vector<std::string_view> user = {
+            R"({"type":"run","run":1})", R"({"type":"run","run":2})"};
+        CHECK(ix::detect_schema(user).id == "generic");
     }
 
     TEST_CASE("a directory of specs loads once") {
@@ -374,15 +380,13 @@ TEST_SUITE("SchemaDetection") {
     }
 
     static std::string genesis_record(int i) {
-        return R"({"name":"f)" + std::to_string(i) +
-               R"(","cat":"POSIX","pid":0,"tid":0,"ts":)" + std::to_string(i) +
-               R"(,"ph":3,"args":{"run":"r1","path":"main;f","depth":1,)"
-               R"("count":2,"dur":{"n":2}}})";
+        return R"({"gtype":"func","run":"r1","path":"main;f)" +
+               std::to_string(i) + R"(","name":"f","depth":1,"ts":)" +
+               std::to_string(i) + R"(,"count":2,"dur":{"n":2}})";
     }
 
     const std::string RUN_LINE =
-        R"({"name":"RUN","cat":"dftracer","pid":0,"tid":0,"ts":0,"ph":4,)"
-        R"("args":{"run":"r1","app":"laghos","nodes":1}})";
+        R"({"gtype":"run","run":"r1","app":"laghos","nodes":1})";
 
     // `text` as `name` under a fresh directory, gzip when `gz`.
     static std::string write_file(dftu_utils_test::TestEnvironment & env,
@@ -553,10 +557,10 @@ TEST_SUITE("SchemaDetection") {
             ix::detect_file_schema(write_file(env, "big.pfw", big, true)).id ==
             "dftracer");
 
-        // Genesis behind 1500 hash metadata lines, past the sample count.
+        // Genesis behind 1500 run lines, past the sample count.
         std::string gen;
-        for (int i = 0; i < 1500; ++i) gen += hash_line("FH", i) + "\n";
-        gen += RUN_LINE + "\n";
+        for (int i = 0; i < 1500; ++i)
+            gen += R"({"gtype":"run","run":"r)" + std::to_string(i) + "\"}\n";
         for (int i = 0; i < 20; ++i) gen += genesis_record(i) + "\n";
         d = ix::explain_file_schema(write_file(env, "gen.pfw", gen, true));
         CHECK(d.chosen->id == "genesis");
@@ -577,5 +581,27 @@ TEST_SUITE("SchemaDetection") {
         CHECK(ix::detect_file_schema(path).id == "generic");
         std::ofstream(path) << dft_event(1) << "\n" << dft_event(2) << "\n";
         CHECK(ix::detect_file_schema(path).id == "dftracer");
+    }
+
+    TEST_CASE("built-in sources equal their previous literals") {
+        const std::string dft_old =
+            R"(data = where ph not in ["M", 4];
+files = where ph in ["M", 4] and name == "FH" | select fhash = args.value, path = args.name | distinct;
+hosts = where ph in ["M", 4] and name == "HH" | select hhash = args.value, name = args.name | distinct;
+strings = where ph in ["M", 4] and name == "SH" | select shash = args.value, value = args.name | distinct;
+ranks = where ph in ["M", 4] and name == "PR" and args.name == "rank" | select pid, rank = args.value | distinct;
+def args_fallback = true)";
+        const std::string genesis_old =
+            R"re(data = where gtype != "run";
+runs = where gtype == "run" | select run, app, system, unique_input, nodes, ppn, papi_set, method, sketch_accuracy, leaf | distinct)re";
+        for (const auto& [id, old] :
+             {std::pair<std::string, std::string>{"dftracer", dft_old},
+              std::pair<std::string, std::string>{"genesis", genesis_old}}) {
+            const auto& s = ix::get_schema(id);
+            CHECK(s.source == ix::merge_source({}, old, id));
+            ix::RecordSchema before = s;
+            before.source = ix::merge_source({}, old, id);
+            CHECK(s.params_hash() == before.params_hash());
+        }
     }
 }

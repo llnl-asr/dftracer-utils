@@ -1,35 +1,39 @@
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/numeric_dispatch.h>
 #include <dftracer/utils/dataframe/internal/radix_dedup.h>  // parallel dedup
 #include <dftracer/utils/dataframe/internal/reduce_simd.h>
+#include <dftracer/utils/dataframe/internal/scalar.h>
 #include <dftracer/utils/dataframe/internal/type_promotion.h>
 #include <dftracer/utils/dataframe/kernels/reduce.h>
 #include <dftracer/utils/dataframe/parallel.h>
 
 #include <algorithm>
 #include <cstdint>
+#include <string>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
 namespace dftracer::utils::dataframe {
 
 dftu_scalar sum(const Series& v) {
-    return dftu_series_reduce(v.handle(), DFTU_REDUCE_SUM);
+    return raise_if_error(dftu_series_reduce(v.handle(), DFTU_REDUCE_SUM));
 }
 dftu_scalar min(const Series& v) {
-    return dftu_series_reduce(v.handle(), DFTU_REDUCE_MIN);
+    return raise_if_error(dftu_series_reduce(v.handle(), DFTU_REDUCE_MIN));
 }
 dftu_scalar max(const Series& v) {
-    return dftu_series_reduce(v.handle(), DFTU_REDUCE_MAX);
+    return raise_if_error(dftu_series_reduce(v.handle(), DFTU_REDUCE_MAX));
 }
 std::int64_t count(const Series& v) { return dftu_series_count(v.handle()); }
 
 double mean(const Series& v) {
-    std::int64_t n = count(v);
-    if (n == 0) return 0.0;
-    return scalar_value<double>(sum(v)) / static_cast<double>(n);
+    const double total = scalar_value<double>(sum(v));
+    const std::int64_t n = count(v);
+    return n == 0 ? 0.0 : total / static_cast<double>(n);
 }
 
 dftu_scalar product(const Series& v) { return dftu_series_product(v.handle()); }
@@ -246,6 +250,80 @@ void mode_one(const dftu_series& v, dftu_scalar& out) {
     mode_serial<T>(p, tied, out);
 }
 
+const char* reduce_op_name(std::int32_t op) {
+    switch (op) {
+        case DFTU_REDUCE_SUM:
+            return "sum";
+        case DFTU_REDUCE_MIN:
+            return "min";
+        case DFTU_REDUCE_MAX:
+            return "max";
+        case DFTU_REDUCE_COUNT:
+            return "count";
+        case DFTU_REDUCE_MEAN:
+            return "mean";
+    }
+    return "op";
+}
+
+// The ERR scalar a reduction returns instead of a value. The error and its text
+// live in thread-local storage, so they stay valid until the next reduction on
+// this thread (dftu_error borrows its message).
+dftu_scalar refuse(const std::string& message) {
+    static thread_local std::string text;
+    static thread_local dftu_error err;
+    text = message;
+    err.domain = dftracer::utils::CORE_DOMAIN.id;
+    err.code = DFTU_COND_UNSUPPORTED;
+    err.condition = DFTU_COND_UNSUPPORTED;
+    err.message = text.c_str();
+    dftu_scalar out{};
+    out.kind = DFTU_SCALAR_TAG_ERR;
+    out.value.err = &err;
+    return out;
+}
+
+dftu_scalar refuse_type(std::int32_t op, dftracer::utils::dataframe::TypeId t) {
+    return refuse(std::string("reduce: ") + reduce_op_name(op) +
+                  " is not defined for type '" +
+                  dftracer::utils::dataframe::type_name(t) + "'");
+}
+
+// Smallest (MIN) or largest (MAX) valid value of a String or LargeString
+// column, bytewise. The STR scalar borrows the value from the column; a column
+// with no valid value gives the empty string, as a numeric column gives 0.
+dftu_scalar reduce_string(const dftu_series& v, std::int32_t op) {
+    const char* base = static_cast<const char*>(dftu_series_data(&v));
+    const bool wide = dftracer::utils::dataframe::is_wide_offset_type(v.type);
+    const std::int32_t* off32 = wide ? nullptr : dftu_series_offsets(&v);
+    const std::int64_t* off64 = wide ? dftu_series_offsets64(&v) : nullptr;
+    dftu_scalar out{};
+    out.kind = DFTU_SCALAR_TAG_STR;
+    out.len = 0;
+    out.value.s = "";
+    if (base == nullptr || (off32 == nullptr && off64 == nullptr)) return out;
+
+    const bool is_min = op == DFTU_REDUCE_MIN;
+    bool found = false;
+    std::string_view best;
+    for (std::int64_t i = 0; i < v.length; ++i) {
+        if (!is_valid(v, i)) continue;
+        const std::int64_t lo = wide ? off64[i] : off32[i];
+        const std::int64_t hi = wide ? off64[i + 1] : off32[i + 1];
+        const std::string_view cur(base + lo,
+                                   static_cast<std::size_t>(hi - lo));
+        if (!found || (is_min ? cur < best : cur > best)) {
+            best = cur;
+            found = true;
+        }
+    }
+    if (found) {
+        out.len = static_cast<std::uint32_t>(best.size());
+        out.value.s = best.data();
+    }
+    return out;
+}
+
 }  // namespace
 
 dftu_scalar dftu_series_reduce(const dftu_series* v, dftu_reduce_op op) {
@@ -255,11 +333,19 @@ dftu_scalar dftu_series_reduce(const dftu_series* v, dftu_reduce_op op) {
     using dftracer::utils::dataframe::is_temporal_type;
     using dftracer::utils::dataframe::physical_type;
     using dftracer::utils::dataframe::promote_for_arithmetic;
-    using dftracer::utils::dataframe::type_name;
     using dftracer::utils::dataframe::TypeId;
     dftu_scalar out{};
     out.kind = DFTU_SCALAR_TAG_I64;
-    if (v->encoding != dftracer::utils::dataframe::Encoding::Flat) return out;
+
+    // One column, one SUM/MIN/MAX flag: COUNT and MEAN are group_by flags, and
+    // any other code is not an operation. The numeric kernel below treats every
+    // code that is not SUM or MIN as MAX, so refuse them here.
+    if (op != DFTU_REDUCE_SUM && op != DFTU_REDUCE_MIN && op != DFTU_REDUCE_MAX)
+        return refuse(std::string("reduce: ") +
+                      reduce_op_name(static_cast<std::int32_t>(op)) +
+                      " is not a single-column reduction (sum, min or max)");
+    if (v->encoding != dftracer::utils::dataframe::Encoding::Flat)
+        return refuse("reduce: the column is not flat");
 
     // MIN/MAX on any temporal column dispatch on its physical Int32/Int64
     // layout. SUM is additionally defined for Duration (a sum of durations
@@ -269,21 +355,27 @@ dftu_scalar dftu_series_reduce(const dftu_series* v, dftu_reduce_op op) {
     if (is_temporal_type(v->type)) {
         const bool sum_ok =
             op == DFTU_REDUCE_SUM && v->type == TypeId::Duration;
-        if (op != DFTU_REDUCE_MIN && op != DFTU_REDUCE_MAX && !sum_ok) {
-            DFTRACER_UTILS_LOG_ERROR(
-                "reduce: op %d is not defined for temporal type '%s'",
-                static_cast<int>(op), type_name(v->type));
-            return out;
-        }
+        if (op != DFTU_REDUCE_MIN && op != DFTU_REDUCE_MAX && !sum_ok)
+            return refuse_type(op, v->type);
         DF_NUMERIC_DISPATCH(physical_type(v->type), reduce_one, *v, op, out)
         return out;
     }
 
-    if (!is_arithmetic_type(v->type)) {
-        DFTRACER_UTILS_LOG_ERROR("reduce: op %d has no meaning for type '%s'",
-                                 static_cast<int>(op), type_name(v->type));
-        return out;
+    // A bool counts true as 1, as the group-by engine does: reduce it as int64.
+    if (v->type == TypeId::Bool) {
+        dftu_series* as_int = dftu_series_cast(v, DFTU_TYPE_INT64);
+        if (as_int == nullptr) return refuse_type(op, v->type);
+        dftu_scalar r = dftu_series_reduce(as_int, op);
+        dftu_series_free(as_int);
+        return r;
     }
+
+    if (v->type == TypeId::String || v->type == TypeId::LargeString) {
+        if (op == DFTU_REDUCE_SUM) return refuse_type(op, v->type);
+        return reduce_string(*v, op);
+    }
+
+    if (!is_arithmetic_type(v->type)) return refuse_type(op, v->type);
 
     // Float16 has no reduction kernel; Decimal128/256 have no exact one. Both
     // promote here, once, before any dispatch below sees them.

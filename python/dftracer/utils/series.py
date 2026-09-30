@@ -41,6 +41,8 @@ if TYPE_CHECKING:
     import pandas as pd  # ty: ignore[unresolved-import]
     import polars as pl  # ty: ignore[unresolved-import]
     import pyarrow as pa  # ty: ignore[unresolved-import]
+    from pandas._libs.missing import NAType  # ty: ignore[unresolved-import]
+    from pandas.api.extensions import ExtensionArray  # ty: ignore[unresolved-import]
 
     from .dataframe import DataFrame
 
@@ -62,15 +64,65 @@ def _wrap(obj: Any) -> Any:
     return obj
 
 
-def _resolve_dtype(dtype: "Union[str, int, DType]") -> int:
-    """A dtype spelled as a name, a DType member, or a raw int code -> int
-    code. Raises ValueError on an unrecognized name."""
+# Python types and the NumPy names that differ from a DType member name.
+_PY_DTYPES: Dict[type, DType] = {
+    str: DType.STRING,
+    int: DType.INT64,
+    float: DType.FLOAT64,
+    bool: DType.BOOL,
+}
+_NUMPY_NAMES = {"str": "string", "str_": "string", "bool_": "bool"}
+
+
+_INT_BITS = {DType.INT8: 8, DType.INT16: 16, DType.INT32: 32, DType.INT64: 64}
+_UINT_BITS = {DType.UINT8: 8, DType.UINT16: 16, DType.UINT32: 32, DType.UINT64: 64}
+
+
+def _dtype_limits(dtype: DType) -> "Optional[Tuple[Union[int, float], Union[int, float]]]":
+    """The lowest and highest value a numeric column of ``dtype`` can hold (the
+    missing bound of a one-sided ``clip``); ``None`` for a type with no limits
+    here."""
+    if dtype in _INT_BITS:
+        bits = _INT_BITS[dtype]
+        return -(1 << (bits - 1)), (1 << (bits - 1)) - 1
+    if dtype in _UINT_BITS:
+        return 0, (1 << _UINT_BITS[dtype]) - 1
+    if dtype in (DType.FLOAT32, DType.FLOAT64):
+        return float("-inf"), float("inf")
+    return None
+
+
+def _resolve_dtype(dtype: "Union[str, int, DType, type]") -> int:
+    """A dtype spelled as a name, a DType member, a raw int code, a Python type
+    (``str``, ``int``, ``float``, ``bool``) or a NumPy scalar type or dtype that
+    names a supported type -> int code. Raises ValueError on an unrecognized
+    name and TypeError on any other argument."""
     if isinstance(dtype, str):
         try:
             return int(_DTYPE_BY_NAME[dtype.lower()])
         except KeyError:
             raise ValueError(f"unknown dtype name: {dtype!r}") from None
-    return int(dtype)
+    if isinstance(dtype, type) or hasattr(dtype, "kind"):
+        py_dtype = _PY_DTYPES.get(cast(type, dtype))
+        if py_dtype is not None:
+            return int(py_dtype)
+        name = getattr(dtype, "name", None)
+        if not isinstance(name, str):
+            name = getattr(dtype, "__name__", "")
+        name = _NUMPY_NAMES.get(name, name)
+        try:
+            return int(_DTYPE_BY_NAME[name.lower()])
+        except KeyError:
+            pass
+    else:
+        try:
+            return int(dtype)
+        except (TypeError, ValueError):
+            pass
+    raise TypeError(
+        "astype: dtype must be a DType, an int code, a dtype name, a Python type "
+        f"(str, int, float, bool) or a NumPy type that names a supported dtype; got {dtype!r}"
+    )
 
 
 _N = TypeVar("_N")
@@ -208,6 +260,20 @@ def _object_numpy(values: List[object]) -> "np.ndarray":
     return out
 
 
+def _parts(
+    native: "_ext._Series", nullable: bool, na: "Optional[NAType]" = None
+) -> Tuple[bytearray, Optional[bytearray], str]:
+    """The column's values, null mask and numpy dtype string from one native
+    pass (``Series.np_parts``): bytearrays that numpy wraps without a copy."""
+    return native.np_parts(nullable, na)
+
+
+def _frombuffer(data: Union[bytes, bytearray, memoryview], dtype: str) -> "np.ndarray":
+    import numpy as np  # ty: ignore[unresolved-import]
+
+    return np.frombuffer(data, dtype=dtype)
+
+
 def _native_numpy(native: "_ext._Series") -> "np.ndarray":
     """The native column as a NumPy array without pyarrow; TypeError for a
     type with no native conversion."""
@@ -225,10 +291,8 @@ def _native_numpy(native: "_ext._Series") -> "np.ndarray":
     dtype = DType(native.type)
     nulls = native.null_count
     if dtype in _FLOATS or dtype in _INTEGERS:
-        if not nulls:
-            return np.asarray(memoryview(native))  # ty: ignore[invalid-argument-type]
-        as_float = native if dtype in _FLOATS else native.cast(int(DType.FLOAT64))
-        return np.array(memoryview(as_float.fillna(float("nan"))))  # ty: ignore[invalid-argument-type]
+        values, _, dt = _parts(native, False)
+        return _frombuffer(values, dt)
     if dtype in _TEMPORAL_KINDS:
         return _temporal_numpy(native, dtype)
     if dtype == DType.FLOAT16:
@@ -236,13 +300,18 @@ def _native_numpy(native: "_ext._Series") -> "np.ndarray":
             [float("nan") if v is None else v for v in native.to_pylist()], dtype=np.float16
         )
     if dtype == DType.BOOL and not nulls:
-        return np.array(native.to_pylist(), dtype=bool)
+        values, _, _ = _parts(native, False)
+        return _frombuffer(values, "u1").view(np.bool_)
+    if dtype in (DType.STRING, DType.LARGE_STRING):
+        out = np.empty(native.length, dtype=object)
+        native.str_into(out, None)
+        return out
     if dtype == DType.BOOL or dtype in _NATIVE_OBJECT_TYPES or dtype in _PYTHON_OBJECT_TYPES:
         return _object_numpy(native.to_pylist())
     raise TypeError(f"no native conversion for column type '{dtype.name.lower()}'")
 
 
-def _pandas_values(native: "_ext._Series") -> "Any":
+def _pandas_values(native: "_ext._Series") -> "Union[pd.Series, np.ndarray]":
     """The column as a pandas Series or NumPy array built without pyarrow: a
     zoned timestamp gets its zone, everything else its NumPy array."""
     values = _native_numpy(native)
@@ -251,6 +320,58 @@ def _pandas_values(native: "_ext._Series") -> "Any":
     import pandas as pd  # ty: ignore[unresolved-import]
 
     return pd.Series(values).dt.tz_localize("UTC").dt.tz_convert(native.timezone)
+
+
+def _pandas_nullable(native: "_ext._Series") -> "Optional[ExtensionArray]":
+    """The column as pandas' own nullable extension array (``Int8`` .. ``UInt64``,
+    ``Float32``, ``Float64``, ``boolean``, ``string``), built without pyarrow; a
+    null is ``pd.NA`` and a float NaN stays NaN. ``None`` for a type with no such
+    dtype, which the caller converts as usual."""
+    import numpy as np  # ty: ignore[unresolved-import]
+    import pandas as pd  # ty: ignore[unresolved-import]
+
+    if native.encoding != 0:
+        native = native.materialize()
+    dtype = DType(native.type)
+    if dtype in _INTEGERS or dtype in _FLOATS:
+        values, mask, dt = _parts(native, True)
+        arr = _frombuffer(values, dt)
+        m = _frombuffer(mask, "?") if mask is not None else np.zeros(len(arr), dtype=bool)
+        return (
+            pd.arrays.IntegerArray(arr, m)
+            if dtype in _INTEGERS
+            else pd.arrays.FloatingArray(arr, m)
+        )
+    if dtype == DType.BOOL:
+        values, mask, _ = _parts(native, True)
+        arr = _frombuffer(values, "u1").view(np.bool_)
+        m = _frombuffer(mask, "?") if mask is not None else np.zeros(len(arr), dtype=bool)
+        return pd.arrays.BooleanArray(arr, m)
+    if dtype in (DType.STRING, DType.LARGE_STRING):
+        out = np.empty(native.length, dtype=object)
+        native.str_into(out, pd.NA)
+        string = pd.StringDtype()
+        if getattr(string, "storage", "python") == "python":
+            return cast(Any, string.construct_array_type())(out)
+        return pd.array(out, dtype=string)
+    return None
+
+
+def _apply_index(pdf: "pd.DataFrame", index: "Union[str, Sequence[str]]") -> "pd.DataFrame":
+    """``pdf`` with the named columns moved into the pandas index, in the order
+    given (a MultiIndex for several names). KeyError names an unknown column and
+    ValueError a repeated one."""
+    names = [index] if isinstance(index, str) else list(index)
+    if not names:
+        raise ValueError("to_pandas: index must name at least one column")
+    seen: "set[str]" = set()
+    for name in names:
+        if name not in pdf.columns:
+            raise KeyError(f"to_pandas: no column named {name!r} to use as the index")
+        if name in seen:
+            raise ValueError(f"to_pandas: index column {name!r} is repeated")
+        seen.add(name)
+    return pdf.set_index(names if len(names) > 1 else names[0])
 
 
 def _arrow_native(name: str) -> Callable[..., Any]:
@@ -414,14 +535,19 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         ``timedelta`` and ``decimal.Decimal`` values, ``None`` for null. Int
         columns are int64 (uint64 when too large), decimals decimal128 with the
         widest scale, times and datetimes microseconds. A native ``DType`` types
-        an empty or all-null list; a pyarrow type imports through pyarrow.
+        an empty or all-null list; a pyarrow type imports through pyarrow. With
+        no type, an empty or all-null list is a ``string`` column of nulls, the
+        type :meth:`DataFrame.from_pandas` gives a column of ``None``.
         Lists and tuples become list columns and dicts struct columns (keys in
         first-seen order, a missing key null), to any depth."""
+        values = list(values)
+        if dtype is None and all(v is None for v in values):
+            dtype = DType.STRING
         if dtype is None or isinstance(dtype, (DType, int)):
             try:
                 if dtype is None:
-                    return Series(_ext._series_from_list(list(values)))
-                return Series(_ext._series_from_list(list(values), int(dtype)))
+                    return Series(_ext._series_from_list(values))
+                return Series(_ext._series_from_list(values, int(dtype)))
             except TypeError:
                 if dtype is not None:
                     raise
@@ -433,15 +559,23 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         Interface)."""
         return _require_pyarrow().array(self._native)
 
-    def to_pandas(self, *, arrow: bool = False) -> "pd.Series":
+    def to_pandas(self, *, arrow: bool = False, nullable: bool = False) -> "pd.Series":
         """This column as a pandas Series: a NumPy dtype by default (a copy,
-        built natively with no pyarrow), or with ``arrow=True`` Arrow-backed,
-        sharing this column's buffers."""
+        built natively with no pyarrow), with ``arrow=True`` Arrow-backed,
+        sharing this column's buffers, or with ``nullable=True`` pandas' own
+        nullable dtype (``Int64``, ``Float64``, ``boolean``, ``string``, ...)
+        where the column type has one, a null being ``pd.NA`` and a float NaN
+        staying NaN (built without pyarrow). A type with no nullable dtype
+        converts as without the option."""
+        if arrow and nullable:
+            raise ValueError("to_pandas: pass either arrow=True or nullable=True, not both")
         if arrow:
             return _to_pandas(self.to_arrow(), arrow)
         import pandas as pd  # ty: ignore[unresolved-import]
 
-        values = _pandas_values(self._native)
+        values = _pandas_nullable(self._native) if nullable else None
+        if values is None:
+            values = _pandas_values(self._native)
         return values if isinstance(values, pd.Series) else pd.Series(values)
 
     def to_numpy(self) -> "np.ndarray":
@@ -723,12 +857,23 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
 
         return apply_series(self, func, "Series.map")
 
-    def astype(self, dtype: "Union[str, int, DType]") -> "Series":
+    def astype(self, dtype: "Union[str, int, DType, builtins.type]") -> "Series":
         """Cast to ``dtype``: a :class:`~dftracer.utils.enums.DType`, its
-        int code, or a dtype name (``"int64"``, ``"Float64"``, case-insensitive;
-        matches the ``DType`` member names). The pandas-style primary spelling
-        of :meth:`cast`."""
-        return _wrap(self._native.cast(_unwrap(_resolve_dtype(dtype))))
+        int code, a dtype name (``"int64"``, ``"Float64"``, case-insensitive;
+        matches the ``DType`` member names), a Python type (``str``, ``int``,
+        ``float``, ``bool``) or a NumPy scalar type or dtype. Integers, floats
+        and bools cast to string (floats as the shortest text that shows a point
+        or exponent, bools as ``True`` / ``False`` as Python and pandas print
+        them; the native cast under it and the C++ and C APIs spell them
+        ``true`` / ``false``); integers and floats cast to
+        bool (zero false, a NaN or null null). A pair the engine does not
+        support raises ``TypeError`` naming both types. The pandas-style primary
+        spelling of :meth:`cast`."""
+        target = _resolve_dtype(dtype)
+        out = _wrap(self._native.cast(_unwrap(target)))
+        if int(target) == int(DType.STRING) and int(self.dtype) == int(DType.BOOL):
+            out = out.str.capitalize()  # the engine says true/false; Python says True/False
+        return out
 
     def cast(self, type_id: "Union[str, int, DType]") -> "Series":
         """Alias of :meth:`astype`."""
@@ -864,12 +1009,22 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         upper_bound: Union[int, float, None] = None,
     ) -> "Series":
         """Clamp to ``[lo, hi]``. ``lower`` / ``upper`` (pandas) and
-        ``lower_bound`` / ``upper_bound`` (polars) name the same two bounds;
-        both are required."""
+        ``lower_bound`` / ``upper_bound`` (polars) name the same two bounds. One
+        bound is enough: ``clip(lower=0)`` raises values below 0 to 0 and leaves
+        the rest, ``clip(upper=b)`` is the mirror. A null stays null. With no
+        bound it raises ``TypeError``."""
         lo = _first_set(lo, lower, lower_bound)
         hi = _first_set(hi, upper, upper_bound)
+        if lo is None and hi is None:
+            raise TypeError("clip() needs a lower bound, an upper bound, or both")
         if lo is None or hi is None:
-            raise TypeError("clip() needs both a lower and an upper bound")
+            limits = _dtype_limits(self.dtype)
+            if limits is None:
+                raise TypeError(
+                    f"clip() with one bound needs a numeric column, not {self.dtype.name.lower()}"
+                )
+            lo = limits[0] if lo is None else lo
+            hi = limits[1] if hi is None else hi
         return _wrap(self._native.clip(_unwrap(lo), _unwrap(hi)))
 
     def round(self, decimals: int = 0) -> "Series":
@@ -878,7 +1033,7 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
             raise NotImplementedError("round() supports decimals=0 only")
         return _wrap(self._native.round())
 
-    def fillna(self, value: Union[int, float]) -> "Series":
+    def fillna(self, value: Union[bool, int, float, str]) -> "Series":
         return _wrap(self._native.fillna(_unwrap(value)))
 
     def cumsum(self) -> "Series":
@@ -932,15 +1087,20 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         descending: bool = False,
         *,
         ascending: Optional[bool] = None,
+        pct: bool = False,
     ) -> "Series":
         """Rank each element (1-based); ties per ``method``. Always returns a
         Float64 Series, matching pandas ``rank()`` (even ``method="dense"``,
         which pandas also returns as float). Call ``.astype("int64")`` on the
         result for integer ranks. ``ascending`` is the pandas spelling of
-        ``not descending``."""
+        ``not descending``. With ``pct=True`` each rank is divided by the count
+        of ranked values (by the number of distinct values for
+        ``method="dense"``, as pandas does), a percentile rank in (0, 1]. A null
+        and a float ``NaN`` are unranked: each gets a null rank and is not
+        counted."""
         if ascending is not None:
             descending = not ascending
-        return _wrap(self._native.rank(_unwrap(method), _unwrap(descending)))
+        return _wrap(self._native.rank(_unwrap(method), _unwrap(descending), _unwrap(pct)))
 
     def rolling(
         self,
@@ -1004,8 +1164,15 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         the cumulative kernels."""
         return _Expanding(self)
 
-    def cut(self, breaks: "Series") -> "Series":
-        return _wrap(self._native.cut(_unwrap(breaks)))
+    def cut(self, breaks: "Series", right: bool = False, outer: bool = True) -> "Series":
+        """Bin each value by the ascending ``breaks``. By default the intervals are
+        ``[a, b)`` and the bin is the count of breaks at or below the value
+        (0 to ``len(breaks)``). ``right=True`` closes each interval on the right,
+        ``(a, b]``. ``outer=False`` gives null for a value outside the interior
+        intervals and numbers them from 0; ``cut(breaks, right=True, outer=False)``
+        equals ``pandas.cut(labels=False)``. A null value gives a null bin."""
+        flags = (1 if right else 0) | (0 if outer else 2)
+        return _wrap(self._native.cut(_unwrap(breaks), flags))
 
     def qcut(self, q: int) -> "Series":
         return _wrap(self._native.qcut(_unwrap(q)))
@@ -1016,24 +1183,28 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
     def interpolate(self) -> "Series":
         return _wrap(self._native.interpolate())
 
-    def where(self, cond: "Series", other: "Union[Series, int, float]") -> "Series":
+    def where(self, cond: "Series", other: "Union[Series, int, float, None]" = None) -> "Series":
         """This value where ``cond`` is true, else ``other`` (pandas
         ``Series.where``; a scalar ``other`` broadcasts, a float one widens
-        the result to Float64; a null in ``cond`` takes ``other``)."""
+        the result to Float64; a null ``other`` (``None`` or ``pd.NA``, the
+        default) makes every row where ``cond`` is false null, in this
+        column's own type; a null in ``cond`` takes ``other``)."""
         a, b = self._arms(other)
         return _wrap(a._native.where(_unwrap(cond), _unwrap(b)))
 
-    def mask(self, cond: "Series", other: "Union[Series, int, float]") -> "Series":
-        """``other`` where ``cond`` is true, else this value (pandas
-        ``Series.mask``)."""
+    def mask(self, cond: "Series", other: "Union[Series, int, float, None]" = None) -> "Series":
+        """``other`` where ``cond`` is true (null by default), else this value
+        (pandas ``Series.mask``)."""
         a, b = self._arms(other)
         return _wrap(b._native.where(_unwrap(cond), _unwrap(a)))
 
-    def _arms(self, other: "Union[Series, int, float]") -> "Tuple[Series, Series]":
+    def _arms(self, other: "Union[Series, int, float, None]") -> "Tuple[Series, Series]":
         if isinstance(other, Series):
             return self, other
+        if other is None or type(other).__name__ == "NAType":
+            return self, Series(_ext._series_nulls(int(self.dtype), len(self)))
         if isinstance(other, bool) or not isinstance(other, (int, float)):
-            raise TypeError("other must be a Series or a number")
+            raise TypeError("other must be a Series, a number or null")
         me = self
         if isinstance(other, float) and self.dtype not in (DType.FLOAT32, DType.FLOAT64):
             me = self.astype(DType.FLOAT64)
@@ -1056,15 +1227,24 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         return self._native.dot(_unwrap(other))
 
     def sum(self) -> Union[int, float]:
+        """Sum of the valid values; a bool column counts ``True`` as 1, so
+        ``(x > 2).sum()`` counts the matches. Raises ``TypeError`` for a
+        column type with no sum (string, most temporal types)."""
         return self._native.sum()
 
-    def min(self) -> Union[int, float]:
+    def min(self) -> Union[int, float, str]:
+        """Smallest valid value. A bool column gives 0 or 1 and a string
+        column the bytewise smallest string (empty when no value is valid);
+        raises ``TypeError`` for a type with no order here."""
         return self._native.min()
 
-    def max(self) -> Union[int, float]:
+    def max(self) -> Union[int, float, str]:
+        """Largest valid value, over the same column types as :meth:`min`."""
         return self._native.max()
 
     def mean(self) -> float:
+        """Mean of the valid values; a bool column gives the fraction that is
+        ``True``. Raises ``TypeError`` for a column type with no sum."""
         return self._native.mean()
 
     def count(self) -> int:
@@ -1275,6 +1455,12 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
     def str_split(self, sep: str) -> "Series":
         return _wrap(self._native.str_split(_unwrap(sep)))
 
+    def str_regex_replace(self, pattern: str, to: str) -> "Series":
+        """Replace every regex match of ``pattern`` with ``to``; ``$n``,
+        ``${n}``, ``${name}`` insert a group and ``$$`` a dollar sign. Raises
+        ``ValueError`` for an invalid pattern or replacement."""
+        return _wrap(self._native.str_regex_replace(_unwrap(pattern), _unwrap(to)))
+
     def str_extract(self, pattern: str, group: int = 1) -> "Series":
         return _wrap(self._native.str_extract(pattern, group))
 
@@ -1322,6 +1508,13 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
 
     def dt_part(self, code: int, unit: int = 2) -> "Series":
         return _wrap(self._native.dt_part(code, unit))
+
+    def dt_format(self, fmt: str, unit: int = 2) -> "Series":
+        """Each instant formatted by strftime ``fmt`` as a String column.
+        ``unit`` reads an Int64 column (0 s, 1 ms, 2 us, 3 ns); a Timestamp
+        uses its own unit. Directives: %Y %y %m %d %H %I %M %S %f %j %a %A
+        %b %B %p %F %T %s %z %Z %%. Raises ValueError for another directive."""
+        return _wrap(self._native.dt_format(fmt, unit))
 
     def dt_round(self, every: int, mode: int) -> "Series":
         return _wrap(self._native.dt_round(every, mode))
@@ -1697,6 +1890,13 @@ class _DtAccessor:
     def _part(self, code: int) -> Series:
         return self._s.dt_part(code, _TIME_UNITS[self._unit])
 
+    def strftime(self, fmt: str) -> Series:
+        """Format each instant as UTC text (pandas ``strftime``) for the
+        directives %Y %y %m %d %H %I %M %S %f %j %a %A %b %B %p %F %T %s %z
+        %Z %%; another directive raises ValueError. Unlike pandas on a naive
+        column, %z prints ``+0000`` and %Z prints ``UTC`` rather than empty."""
+        return self._s.dt_format(fmt, _TIME_UNITS[self._unit])
+
     @property
     def year(self) -> Series:
         return self._part(0)
@@ -1971,6 +2171,10 @@ class _StrAccessor:
         width = parts.list_len().max()
         n = int(width) if width is not None else 0
         return DataFrame.from_dict({str(i): parts.list_get(i) for i in range(n)})
+
+    def regex_replace(self, pat: str, to: str) -> Series:
+        """:meth:`Series.str_regex_replace`: ``$n``/``${name}`` group references."""
+        return self._s.str_regex_replace(pat, to)
 
     def extract(self, pat: str, group: int = 1) -> Series:
         """The capture ``group`` of the first regex ``pat`` match per row, null

@@ -1,6 +1,7 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/numeric_dispatch.h>
+#include <dftracer/utils/dataframe/internal/varwidth_offsets.h>
 #include <dftracer/utils/dataframe/kernels/elementwise.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/scalar.h>
@@ -11,6 +12,8 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <span>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
@@ -515,6 +518,61 @@ dftu_series* alloc_like(const dftu_series* a, bool keep_validity) {
     return out;
 }
 
+// fillna over a Bool column: the packed bits are copied and each null row takes
+// the fill's truth value (an integer or float fill is true unless zero).
+dftu_series* fillna_bool(const dftu_series* a, dftu_scalar fill) {
+    bool fv = false;
+    switch (fill.kind) {
+        case DFTU_SCALAR_TAG_I64:
+            fv = fill.value.i != 0;
+            break;
+        case DFTU_SCALAR_TAG_U64:
+            fv = fill.value.u != 0;
+            break;
+        case DFTU_SCALAR_TAG_F64:
+            fv = fill.value.d != 0.0;
+            break;
+        default:
+            return nullptr;
+    }
+    dftu_series* out = alloc_like(a, false);
+    auto* bits = static_cast<std::uint8_t*>(out->data->data());
+    std::memcpy(bits, a->data->data(), out->data->size());
+    if (a->validity) {
+        const auto* valid = a->validity->data();
+        for (std::int64_t i = 0; i < a->length; ++i) {
+            if ((valid[i >> 3] >> (i & 7)) & 1) continue;
+            if (fv)
+                bits[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
+            else
+                bits[i >> 3] &= static_cast<std::uint8_t>(~(1u << (i & 7)));
+        }
+    }
+    return out;
+}
+
+// fillna over a String column: each null row becomes the fill text. Only the
+// narrow-offset String type is handled (ponytail: LargeString returns null
+// until a caller needs it).
+dftu_series* fillna_string(const dftu_series* a, dftu_scalar fill) {
+    if (fill.kind != DFTU_SCALAR_TAG_STR || a->type != TypeId::String)
+        return nullptr;
+    const std::string_view fv(fill.value.s, fill.len);
+    const auto* off = reinterpret_cast<const std::int32_t*>(
+        offsets_of<std::int32_t>(*a)->data());
+    const char* text = reinterpret_cast<const char*>(a->data->data());
+    const std::uint8_t* valid = a->validity ? a->validity->data() : nullptr;
+    std::vector<std::string_view> views(static_cast<std::size_t>(a->length));
+    for (std::int64_t i = 0; i < a->length; ++i)
+        views[static_cast<std::size_t>(i)] =
+            (!valid || ((valid[i >> 3] >> (i & 7)) & 1))
+                ? std::string_view(text + off[i], static_cast<std::size_t>(
+                                                      off[i + 1] - off[i]))
+                : fv;
+    return Series::strings(std::span<const std::string_view>(views), nullptr)
+        .release();
+}
+
 // cumsum and the running extrema are scalar (sequential prefix scans); one
 // template each, dispatched by type. Nulls make the per-row "seen" state
 // path-dependent in a way that is not worth the risk to parallelize (this is
@@ -832,6 +890,10 @@ dftu_series* dftu_series_fillna(const dftu_series* a, dftu_scalar fill) {
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_fillna(flat_a, fill));
 
     using namespace dftracer::utils::dataframe;
+    if (a->encoding == Encoding::Flat && a->type == TypeId::Bool)
+        return fillna_bool(a, fill);
+    if (a->encoding == Encoding::Flat && a->type == TypeId::String)
+        return fillna_string(a, fill);
     if (a->encoding != Encoding::Flat || !is_numeric(a->type) ||
         a->type == TypeId::Bool)
         return nullptr;

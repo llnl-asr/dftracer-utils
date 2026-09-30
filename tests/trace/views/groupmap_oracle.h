@@ -422,7 +422,7 @@ inline double finalize_value(const AggAccum& a, const ViewPlan& plan,
         case AggOp::Max:
             return fs ? fs->max : 0.0;
         case AggOp::SumSq:
-            return fs ? fs->sumsq : 0.0;
+            return fs ? fs->sumsq() : 0.0;
         case AggOp::Mean:
             return fs ? fs->mean() : 0.0;
         case AggOp::Var:
@@ -526,7 +526,7 @@ inline double reduce_dyn(const FieldStat& fs, AggOp op, double) {
         case AggOp::Max:
             return fs.n ? fs.max : 0.0;
         case AggOp::SumSq:
-            return fs.sumsq;
+            return fs.sumsq();
         case AggOp::Mean:
             return fs.mean();
         case AggOp::Var:

@@ -13,11 +13,11 @@ namespace {
 using namespace syntax;
 
 constexpr std::array<const char*, std::variant_size_v<StageNode>> STAGE_NAMES =
-    {"where",    "derive",     "select",    "drop",   "rename",
-     "distinct", "group",      "agg",       "window", "pivot",
-     "unpivot",  "sort",       "take",      "skip",   "sample",
-     "expand",   "lookup",     "lookup",    "lookup", "union",
-     "call",     "time_range", "call_tree", "bucket", "session"};
+    {"where",   "derive", "select", "drop",       "rename",    "distinct",
+     "group",   "agg",    "window", "pivot",      "unpivot",   "sort",
+     "take",    "skip",   "sample", "expand",     "lookup",    "lookup",
+     "lookup",  "union",  "call",   "time_range", "call_tree", "bucket",
+     "session", "parse",  "use"};
 
 ExprPtr expr_of(ExprNode node) {
     return std::make_unique<Expr>(Expr{std::move(node), Span{}});
@@ -139,7 +139,7 @@ void set_span(Expr& e, Span span) {
 
 // A copy of `e` with `span`: its canonical text parsed again.
 ExprPtr clone(const Expr& e, Span span) {
-    auto tree = syntax::parse(to_text(e));
+    auto tree = syntax::parse("where " + to_text(e));
     ExprPtr out = std::move(
         std::get<Where>(tree->pipeline->stages.front().node).condition);
     set_span(*out, span);
@@ -374,7 +374,7 @@ std::optional<Decorrelated> decorrelate(const Pipeline& p, bool scalar) {
     for (auto& s : main.pipeline->stages)
         slots(s, [&](ExprPtr& e) {
             auto any = [&](Expr&, Path&) { reads = true; };
-            enclosing(*e, 0, any);
+            if (e) enclosing(*e, 0, any);
         });
     if (!reads) return std::nullopt;
 

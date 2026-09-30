@@ -363,6 +363,11 @@ class Series {
     Series ffill() const;
     Series bfill() const;
 
+    /// Reductions over the valid values. A bool column counts true as 1; min
+    /// and max of a string column give a STR scalar borrowing the column. A
+    /// reduction the engine does not define for the column type (sum of a
+    /// string, sum of a timestamp) throws DFTUtilsException (INVALID_ARGUMENT)
+    /// naming the operation and the type; it never returns 0 for a refusal.
     Scalar sum() const;
     Scalar min() const;
     Scalar max() const;
@@ -373,7 +378,7 @@ class Series {
     std::int64_t arg_min() const;  ///< index of min non-null value (-1 if none)
     std::int64_t arg_max() const;  ///< index of max non-null value (-1 if none)
     std::int64_t count() const;    ///< non-null row count
-    double mean() const;
+    double mean() const;           ///< throws like sum() for a type with no sum
     double variance(bool sample = true) const;
     double stddev(bool sample = true) const;
     double skewness() const;
@@ -388,8 +393,10 @@ class Series {
     DataFrame value_counts() const;
 
     /// Rank of each row (`method` selects the tie-break), ascending unless
-    /// `descending`, as a Float64 column; nulls rank last with a NaN rank.
-    Series rank(RankMethod method, bool descending = false) const;
+    /// `descending`, as a Float64 column; a null and a float NaN are unranked:
+    /// they get a null rank and are not counted.
+    Series rank(RankMethod method, bool descending = false,
+                bool pct = false) const;
     /// Rolling-window reduction (`op` = Sum/Mean/Min/Max) over `window`
     /// trailing rows (first window-1 null), as Float64.
     Series rolling(RollingOp op, std::int64_t window) const;
@@ -406,8 +413,10 @@ class Series {
     Series ewm_mean(double alpha) const;
     Series ewm_std(double alpha) const;
     /// Bin values by the ascending `breaks` edges (count of breaks <= x) ->
-    /// Int32; a null input row yields a null bin.
-    Series cut(const Series& breaks) const;
+    /// Int32; a null input row yields a null bin. `flags` is DFTU_CUT_RIGHT
+    /// (count the breaks < x: right-closed intervals) and/or DFTU_CUT_INNER
+    /// (null outside the interior intervals, bins numbered from 0).
+    Series cut(const Series& breaks, std::int32_t flags = 0) const;
     /// Bin values by the column's `q`-quantile edges -> Int32 (bins 0..q-1).
     Series qcut(std::int32_t q) const;
     /// Lower-bound insertion index of each `values` element into this (assumed
@@ -556,6 +565,11 @@ class Series {
     /// The capture `group` of the first regex `pattern` match per row; null
     /// where there is no match.
     Series str_extract(std::string_view pattern, std::int64_t group = 1) const;
+    /// Replace every non-overlapping regex `pattern` match per row with `to`
+    /// (`$n`, `${n}`, `${name}` insert a group, `$$` a dollar sign). Null rows
+    /// stay null. An invalid pattern or `to` yields an invalid Series.
+    Series str_regex_replace(std::string_view pattern,
+                             std::string_view to) const;
     /// Per-row element count of a List column (Int64).
     Series list_len() const;
     /// The element at `index` (negative from the end) of each row's list,
@@ -582,6 +596,12 @@ class Series {
     Series dt_part(std::int32_t part,
                    std::int32_t unit = DFTU_TIME_UNIT_MICRO) const;
     Series dt_round(std::int64_t every, std::int32_t mode) const;
+    /// Each instant as UTC text by the strftime-style `fmt` (%Y %y %m %d %H %I
+    /// %M %S %f %j %a %A %b %B %p %F %T %s %z %Z %%); `unit` is the unit of an
+    /// Int64 input. Invalid (not valid()) for an unknown directive, a
+    /// trailing '%' or an input that is not a time or Int64 column.
+    Series dt_format(std::string_view fmt,
+                     TimeUnit unit = TimeUnit::Micro) const;
     /// dftu_series_with_timezone: this Timestamp column under zone `tz`
     /// (empty for naive), buffers shared.
     Series with_timezone(std::string_view tz) const;

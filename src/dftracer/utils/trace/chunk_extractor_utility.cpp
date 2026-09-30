@@ -1,7 +1,7 @@
 #include <dftracer/utils/core/common/byte_view.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/utils/string.h>
+#include <dftracer/utils/json/line.h>
 #include <dftracer/utils/trace/chunk_extractor_utility.h>
 #include <dftracer/utils/utilities/fileio/chunk_writer.h>
 #include <dftracer/utils/utilities/fileio/lines/streaming_line_reader.h>
@@ -70,9 +70,9 @@ ChunkExtractorUtility::extract_and_write(
                 const auto& line = *line_opt;
                 const char* trimmed;
                 std::size_t trimmed_length;
-                if (json_trim_and_validate(line.content.data(),
-                                           line.content.length(), trimmed,
-                                           trimmed_length) &&
+                if (json::trim_and_validate(line.content.data(),
+                                            line.content.length(), trimmed,
+                                            trimmed_length) &&
                     trimmed_length > 8) {
                     co_await writer.write_line(
                         ByteView(trimmed, trimmed_length));
@@ -97,9 +97,9 @@ ChunkExtractorUtility::extract_and_write(
                     const auto& line = *line_opt;
                     const char* trimmed;
                     std::size_t trimmed_length;
-                    if (json_trim_and_validate(line.content.data(),
-                                               line.content.length(), trimmed,
-                                               trimmed_length) &&
+                    if (json::trim_and_validate(line.content.data(),
+                                                line.content.length(), trimmed,
+                                                trimmed_length) &&
                         trimmed_length > 8) {
                         co_await writer.write_line(
                             ByteView(trimmed, trimmed_length));
@@ -129,9 +129,9 @@ ChunkExtractorUtility::extract_and_write(
                     if (spec.end_byte > 0 && line_start >= spec.end_byte) break;
                     const char* trimmed;
                     std::size_t trimmed_length;
-                    if (json_trim_and_validate(line.content.data(),
-                                               line.content.length(), trimmed,
-                                               trimmed_length) &&
+                    if (json::trim_and_validate(line.content.data(),
+                                                line.content.length(), trimmed,
+                                                trimmed_length) &&
                         trimmed_length > 8) {
                         co_await writer.write_line(
                             ByteView(trimmed, trimmed_length));

@@ -76,8 +76,8 @@ DFTU_LAZY_OP(pivot, dftu_lazyframe_pivot, LAZY, LAZY, STR, STR, STR, STR, NONE, 
 /* lazy + time column + window spec + aggs + origin. */
 DFTU_LAZY_OP(group_by_dynamic, dftu_lazyframe_group_by_dynamic, LAZY, LAZY, STR, I64, I64, AGGLIST, I64, I32)
 
-/* lazy + lazy + key lists + join kind + suffix. */
-DFTU_LAZY_OP(join, dftu_lazyframe_join, LAZY, LAZY, LAZY, STRLIST, STRLIST, I32, STR, NONE)
+/* lazy + lazy + key lists + join kind + suffix + nulls_equal. */
+DFTU_LAZY_OP(join, dftu_lazyframe_join, LAZY, LAZY, LAZY, STRLIST, STRLIST, I32, STR, I32)
 
 /* lazy + lazy (+ key count). */
 DFTU_LAZY_OP(concat, dftu_lazyframe_concat, LAZY, LAZY, LAZY, NONE, NONE, NONE, NONE, NONE)

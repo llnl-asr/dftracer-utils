@@ -270,6 +270,22 @@ tools also take ``--duql-path PATH`` (repeatable).
 A macro of the query hides one of the record schema's source, which hides one
 from a path file. The rules are in :doc:`../../reference/duql`.
 
+Name a run of stages with a macro
+---------------------------------
+
+A body that starts with a stage word, or with an expression followed by
+``|``, names a run of stages. Call it after a ``|`` or as the first stage.
+
+.. code-block:: text
+
+   def io_rate(d) = where cat == "POSIX" | bucket d | agg { b = sum(size) };
+   from data | io_rate(1ms) | sort b
+
+The call expands before planning, so a leading call pushes its ``where`` into
+the scan. A pipeline macro goes in a query, a source or a ``.duql`` file on
+``$DFTRACER_DUQL_PATH`` or ``--duql-path``, like an expression macro. Call it
+at a stage position: ``where io_rate(1ms)`` is an error.
+
 Shape the result with a pipeline
 --------------------------------
 
@@ -384,6 +400,19 @@ included. Put ``time_range`` first to look at one window only:
    time_range 2s .. 3s
    | bucket 100ms
    | group name { busy = busy(), util = utilization() }
+
+Moving rate
+~~~~~~~~~~~
+
+.. code-block:: text
+
+   where cat == "POSIX"
+   | bucket 5s every 1s
+   | agg { b = sum(size), n = count() }
+
+Each row is a 5 s window that starts every 1 s, so a call is in five rows.
+``b`` is the bytes in the window. ``at 500ms`` moves the window starts.
+Hopping runs on the frame plan, and ``busy()`` does not run after it.
 
 Top 3 slowest calls per file
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -532,6 +561,20 @@ One row per array element
 Each call becomes one row for each entry of ``sizes``, in order. Calls with
 no entries drop out; add ``keep_empty`` to keep them with a null ``size``.
 
+Fields out of a name
+~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: text
+
+   where cat == "POSIX"
+   | parse name ~ "(?<op>[a-z]+)\d*_(?<fd>\d+)"
+   | derive dir = regex_replace(fname, "/+", "/")
+   | group op { n = count() }
+
+``parse`` turns a name such as ``open64_17`` into the columns ``op`` (``open``)
+and ``fd`` (``17``); a row that does not match gets nulls. ``regex_replace``
+collapses every run of slashes in ``fname`` into one.
+
 Metrics as columns
 ~~~~~~~~~~~~~~~~~~
 
@@ -647,6 +690,26 @@ Two traces as one
    | group name { n = count() }
 
 Columns match by name. The other file is read with its own index.
+
+
+Call a plugin function
+~~~~~~~~~~~~~~~~~~~~~~
+
+A function a loaded plugin registers runs in a ``derive`` or ``select``
+entry. Build the plugin set with :class:`~dftracer.utils.plugins.Plugins` and
+keep it alive while the query runs.
+
+.. code-block:: python
+
+   from dftracer.utils import TraceViewer
+   from dftracer.utils.plugins import Plugins
+
+   plugins = Plugins(["myplug.so"])
+   tv = TraceViewer("trace.pfw.gz")
+   df = tv.duql("derive e = myplug.entropy(dur, 8) | select name, e").collect()
+
+``| call myplug.head(3)`` runs a table function as the last stage. See
+:ref:`duql-plugin-functions` for the argument rules and the limits.
 
 
 How it runs

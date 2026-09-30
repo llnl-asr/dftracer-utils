@@ -412,6 +412,19 @@ TEST_SUITE("source_hooks") {
         CHECK(ints(got, "a") == ints(want, "a"));
     }
 
+    TEST_CASE("a join that matches null keys is not offered to a source") {
+        Smart left = smart({all_kinds()});
+        Smart right = smart({all_kinds()});
+        LazyFrame lf = left.lf.join(right.lf, {"a"},
+                                    dftracer::utils::dataframe::JoinHow::Inner,
+                                    "_right", true);
+        // The source's join has the SQL rule for null keys, so the host runs
+        // this one: the join stays in the plan and is never offered.
+        CHECK(lf.explain().find("join") != std::string::npos);
+        CHECK(lf.explain().find("nulls_equal") != std::string::npos);
+        CHECK(left.log->offered.empty());
+    }
+
     TEST_CASE("a join whose right side keeps ops is not offered") {
         Smart left = smart({all_kinds()});
         Smart right = smart({{Kind::Filter}});

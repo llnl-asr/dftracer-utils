@@ -1,13 +1,19 @@
 #ifndef DFTRACER_UTILS_INDEX_PLAN_PREFILTER_H
 #define DFTRACER_UTILS_INDEX_PLAN_PREFILTER_H
 
+#include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/duql/query.h>
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
+struct hs_database;
+#endif
 
 namespace dftracer::utils::index::plan {
 
@@ -29,7 +35,10 @@ class Prefilter {
     explicit Prefilter(const duql::Query& q);
 
     bool empty() const { return clauses_.empty() && ranges_.empty(); }
+    /// `line` may be a whole chunk of lines.
     bool may_match(std::string_view line) const;
+    /// The per-needle reference path of `may_match`; same result.
+    bool may_match_per_needle(std::string_view line) const;
     const std::vector<std::vector<std::string>>& clauses() const {
         return clauses_;
     }
@@ -50,6 +59,9 @@ class Prefilter {
 
     static constexpr std::size_t CHECK_WINDOW = 1024;
     static constexpr double MAX_PASS_RATE = 0.9;
+    /// Fewest needles in some clause for `may_match` to use Vectorscan; below
+    /// it the per-needle scan is faster.
+    static constexpr std::size_t HS_MIN_ALTERNATIVES = 4;
 
     /// `op` a bound, for one number.
     struct Bound {
@@ -73,6 +85,14 @@ class Prefilter {
 
     std::vector<std::vector<std::string>> clauses_;
     std::vector<Range> ranges_;
+#ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
+    /// One literal database over the distinct needles; null with none, or
+    /// when no clause has HS_MIN_ALTERNATIVES needles.
+    std::shared_ptr<hs_database> db_;
+    /// Per clause needle, its id in `db_`.
+    std::vector<std::vector<unsigned>> ids_;
+    std::size_t distinct_ = 0;
+#endif
     /// Per needle, the offset of its rarest byte, which memchr looks for.
     std::vector<std::vector<std::size_t>> pivots_;
 };

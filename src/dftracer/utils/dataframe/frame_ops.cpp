@@ -19,7 +19,7 @@ std::vector<std::string> names_of(const char* const* items, std::int32_t n) {
 }
 
 bool valid_window_func(dftu_window_func f) {
-    return f >= DFTU_WINDOW_ROW_NUMBER && f <= DFTU_WINDOW_RUNNING_PROD;
+    return f >= DFTU_WINDOW_ROW_NUMBER && f <= DFTU_WINDOW_FRAME_COLLECT;
 }
 
 }  // namespace
@@ -77,13 +77,13 @@ dftu_dataframe* dftu_dataframe_asof(const dftu_dataframe* left,
                                     const dftu_dataframe* right, const char* on,
                                     const char* const* by, int32_t n_by,
                                     dftu_asof_direction direction,
-                                    int64_t tolerance) {
+                                    double tolerance) {
     if (!left || !right || !on || (n_by > 0 && !by)) return nullptr;
     if (direction != DFTU_ASOF_BACKWARD && direction != DFTU_ASOF_FORWARD &&
         direction != DFTU_ASOF_NEAREST)
         return nullptr;
     try {
-        std::optional<int64_t> tol;
+        std::optional<double> tol;
         if (tolerance >= 0) tol = tolerance;
         return df::dataframe_handle_wrap(
             df::asof(df::dataframe_handle_view(left),

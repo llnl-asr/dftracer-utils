@@ -67,6 +67,9 @@ std::int64_t index_of(const std::vector<std::string>& names,
     return -1;
 }
 
+// The hash every null key cell gets when nulls match each other.
+constexpr std::uint64_t NULL_KEY_HASH = 0x9E3779B97F4A7C15ULL;
+
 // A key column as the probe reads it: the buffers resolved once, so the
 // per-row hash, null test and compare are pointer arithmetic, not calls
 // across the C ABI.
@@ -77,6 +80,9 @@ struct KeyView {
     const std::int32_t* off32 = nullptr;
     const std::int64_t* off64 = nullptr;
     std::size_t width = 0;
+    // A null cell is a value: it hashes to one constant and equals only another
+    // null cell (the `nulls_equal` join). Off, a null key never matches.
+    bool null_safe = false;
 
     explicit KeyView(const Series& c) {
         const dftu_series& h = *c.handle();
@@ -119,6 +125,7 @@ struct KeyView {
     // The value's bits for a fixed-width cell (a single integer key hashes
     // to itself), the bytes' hash otherwise.
     std::uint64_t hash(std::int64_t i) const {
+        if (null_safe && is_null(i)) return NULL_KEY_HASH;
         switch (kind) {
             case Fixed: {
                 std::uint64_t bits = 0;
@@ -144,6 +151,10 @@ struct KeyView {
         return 0;
     }
     bool equals(std::int64_t i, const KeyView& o, std::int64_t j) const {
+        if (null_safe) {
+            const bool an = is_null(i), bn = o.is_null(j);
+            if (an || bn) return an && bn;
+        }
         switch (kind) {
             case Fixed: {
                 const std::uint8_t* a =
@@ -177,16 +188,20 @@ struct KeyView {
     }
 };
 
-std::vector<KeyView> key_views(const std::vector<Series>& keys) {
+std::vector<KeyView> key_views(const std::vector<Series>& keys,
+                               bool nulls_equal = false) {
     std::vector<KeyView> out;
     out.reserve(keys.size());
-    for (const Series& k : keys) out.emplace_back(k);
+    for (const Series& k : keys) {
+        out.emplace_back(k);
+        out.back().null_safe = nulls_equal;
+    }
     return out;
 }
 
 bool any_null(const std::vector<KeyView>& keys, std::int64_t i) {
     for (const KeyView& k : keys)
-        if (k.is_null(i)) return true;
+        if (!k.null_safe && k.is_null(i)) return true;
     return false;
 }
 
@@ -244,15 +259,24 @@ bool valid_join_how(JoinHow how) noexcept {
 
 HashJoin::HashJoin(DataFrame right, std::vector<std::string> left_on,
                    std::vector<std::string> right_on, JoinHow how,
-                   std::string suffix)
+                   std::string suffix, bool nulls_equal)
     : right_(std::move(right)),
       left_on_(std::move(left_on)),
       right_on_(std::move(right_on)),
       how_(how),
-      suffix_(suffix.empty() ? DEFAULT_SUFFIX : suffix) {
+      suffix_(suffix.empty() ? DEFAULT_SUFFIX : suffix),
+      nulls_equal_(nulls_equal) {
     if (!valid_join_how(how_))
         throw std::invalid_argument("join: unknown join kind " +
                                     std::to_string(static_cast<int>(how_)));
+    if (nulls_equal_ && (how_ == JoinHow::Cross || how_ == JoinHow::Lookup ||
+                         how_ == JoinHow::Nest))
+        throw std::invalid_argument(
+            std::string("join: nulls_equal does not apply to a ") +
+            (how_ == JoinHow::Cross    ? "cross"
+             : how_ == JoinHow::Lookup ? "lookup"
+                                       : "nest") +
+            " join");
     if (how_ == JoinHow::Cross) {
         left_on_.clear();
         right_on_.clear();
@@ -283,7 +307,7 @@ HashJoin::HashJoin(DataFrame right, std::vector<std::string> left_on,
     if (how_ == JoinHow::Cross) return;
 
     std::vector<std::uint8_t> null_row;
-    const std::vector<KeyView> views = key_views(right_keys_);
+    const std::vector<KeyView> views = key_views(right_keys_, nulls_equal_);
     std::vector<std::uint64_t> hashes = build_hashes(views, n, null_row);
     next_.assign(static_cast<std::size_t>(n), -1);
 
@@ -292,7 +316,7 @@ HashJoin::HashJoin(DataFrame right, std::vector<std::string> left_on,
     // an array, no hashing on either side. Signed negatives read as huge
     // unsigned values and widen the span past the limit, which is the
     // fall-back to the hash table.
-    if (views.size() == 1 && views[0].kind == KeyView::Fixed &&
+    if (!nulls_equal_ && views.size() == 1 && views[0].kind == KeyView::Fixed &&
         views[0].width == 8 &&
         (right_keys_[0].type() == TypeId::Int64 ||
          right_keys_[0].type() == TypeId::Uint64)) {
@@ -493,8 +517,9 @@ DataFrame HashJoin::probe(const DataFrame& left) {
     // and the gathers are memory-bound and polars' are 32-bit.
     auto probe_into = [&]<class Idx>(std::vector<Idx>& left_idx,
                                      std::vector<Idx>& right_idx) {
-        const std::vector<KeyView> lviews = key_views(left_keys);
-        const std::vector<KeyView> rviews = key_views(right_keys_);
+        const std::vector<KeyView> lviews = key_views(left_keys, nulls_equal_);
+        const std::vector<KeyView> rviews =
+            key_views(right_keys_, nulls_equal_);
         // Probe in parallel: each chunk of left rows writes its own pair
         // lists, stitched in chunk order so the output stays in left order.
         constexpr std::int64_t GRAIN = std::int64_t{1} << 15;
@@ -558,7 +583,7 @@ DataFrame HashJoin::probe(const DataFrame& left) {
                 rp.v.resize(rp.n);
             });
         };
-        const bool one_word = lviews.size() == 1 &&
+        const bool one_word = !nulls_equal_ && lviews.size() == 1 &&
                               lviews[0].kind == KeyView::Fixed &&
                               lviews[0].width == 8;
         if (one_word && !direct_.empty()) {
@@ -885,7 +910,7 @@ DataFrame HashJoin::flush(const std::vector<std::string>& left_names,
 DataFrame join(const DataFrame& left, const DataFrame& right,
                const std::vector<std::string>& left_on,
                const std::vector<std::string>& right_on, JoinHow how,
-               const std::string& suffix) {
+               const std::string& suffix, bool nulls_equal) {
     HashJoin hj(DataFrame{right.names,
                           [&] {
                               std::vector<Series> cols;
@@ -894,7 +919,7 @@ DataFrame join(const DataFrame& left, const DataFrame& right,
                                   cols.push_back(c.share());
                               return cols;
                           }()},
-                left_on, right_on, how, suffix);
+                left_on, right_on, how, suffix, nulls_equal);
     DataFrame matched = hj.probe(left);
     DataFrame rest = hj.flush(left.names, left.columns);
     if (rest.num_rows() == 0) return matched;

@@ -6,7 +6,7 @@ import os
 import pytest
 
 from dftracer.utils import Field
-from dftracer.utils.duql import Expr
+from dftracer.utils.columnar import Expr
 
 
 def test_comparisons():
@@ -38,7 +38,9 @@ def test_string_match_ops():
     # escaped LIKE; the DSL's literal-first `"sub" in field` is the
     # case-insensitive form.
     assert str(Field("args.file").contains("tmp")) == 'args.file like "%tmp%"'
-    assert str(Field("args.file").contains("a%b_c", case=True)) == 'args.file like "%a\\%b\\_c%"'
+    assert (
+        str(Field("args.file").contains("a%b_c", case=True)) == 'args.file like "%a\\\\%b\\\\_c%"'
+    )
     assert str(Field("args.file").contains("tmp", case=False)) == '"tmp" in args.file'
     assert str(Field("name").starts_with("pre")) == 'name like "pre%"'
     assert str(Field("name").ends_with("64")) == 'name like "%64"'
@@ -159,13 +161,10 @@ def test_unified_f_is_one_object():
     from dftracer.utils import F as top_f
     from dftracer.utils import Field as top_field
     from dftracer.utils.columnar import F as columnar_f
-    from dftracer.utils.duql import F as query_f
-    from dftracer.utils.duql import Field as query_field
-    from dftracer.utils.duql import Value
+    from dftracer.utils.columnar import Field as query_field
 
-    assert top_f is columnar_f is query_f
+    assert top_f is columnar_f
     assert top_field is query_field
-    assert Value is not None
     # Field("dur") and F.dur are the same field leaf.
     assert isinstance(query_field("dur"), Expr)
     assert str(query_field("dur") == 1) == str(top_f.dur == 1)
@@ -308,7 +307,7 @@ def test_traceviewer_filter_unified_predicates(tmp_path):
 
 def test_any_renders_and_filters_array_elements(tmp_path):
     import dftracer.utils as dftu
-    from dftracer.utils.duql import F
+    from dftracer.utils.columnar import F
 
     assert str(Field("tags").any() == "a") == 'any(tags) == "a"'
     assert str(F.sizes.any() > 10) == "any(sizes) > 10"

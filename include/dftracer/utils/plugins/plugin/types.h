@@ -211,9 +211,14 @@ inline AggCol last(const char* value, const char* out) noexcept {
 inline AggCol sumsq(const char* value, const char* out) noexcept {
     return AggCol(AggOp::Sumsq).value(value).out(out);
 }
-/// Distinct String values of `value`, sorted and joined.
-inline AggCol set_union(const char* value, const char* out) noexcept {
-    return AggCol(AggOp::SetUnion).value(value).out(out);
+/// Distinct String values of `value`, sorted and joined; with `typed`, a list
+/// of the values in their own type, ascending.
+inline AggCol set_union(const char* value, const char* out,
+                        bool typed = false) noexcept {
+    return AggCol(AggOp::SetUnion)
+        .value(value)
+        .out(out)
+        .param(typed ? 1.0 : 0.0);
 }
 /// The DDSketch histogram over `value`: a list<struct{lo,hi,count}> column of
 /// the sketch's occupied bins (no bin-count parameter).

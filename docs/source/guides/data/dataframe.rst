@@ -60,7 +60,7 @@ From data you already have, in Python:
    df = DataFrame.from_pandas(pandas_df)
    df = DataFrame.from_arrow(pyarrow_table)
    df = DataFrame.from_polars(polars_df)
-   df = DataFrame.from_parquet("data.parquet", columns=["dur", "cat"])
+   df = DataFrame.from_parquet("data.parquet", columns=["dur", "cat"])  # a file or a Dask directory
    df = DataFrame.from_dict({"cat": ["POSIX", "STDIO"], "dur": [12, 34]})
    df = DataFrame.from_numpy(arr, columns=["a", "b"])  # 2-D array or {name: 1-D array}
 

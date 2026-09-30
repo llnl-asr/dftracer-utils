@@ -269,12 +269,13 @@ struct OwnedLazyFrame {
 
     /// Join with `other` on `left_on[i]` = `right_on[i]` (dftu_dataframe_join
     /// semantics); `other` is borrowed. Empty if the key lists differ in
-    /// length.
+    /// length. `nulls_equal` makes a null key cell match another null key cell.
     OwnedLazyFrame join(const OwnedLazyFrame& other,
                         std::initializer_list<const char*> left_on,
                         std::initializer_list<const char*> right_on,
                         dftu_join_how how = DFTU_JOIN_INNER,
-                        const char* suffix = nullptr) const {
+                        const char* suffix = nullptr,
+                        bool nulls_equal = false) const {
         if (left_on.size() != right_on.size()) return OwnedLazyFrame{};
         std::vector<const char*> l(left_on);
         std::vector<const char*> r(right_on);
@@ -285,14 +286,16 @@ struct OwnedLazyFrame {
                 .strlist(2, l.data(), static_cast<std::int32_t>(l.size()))
                 .strlist(3, r.data(), static_cast<std::int32_t>(r.size()))
                 .i32(4, static_cast<std::int32_t>(how))
-                .str(5, suffix ? suffix : ""));
+                .str(5, suffix ? suffix : "")
+                .i32(6, nulls_equal ? 1 : 0));
     }
     /// Join on the same-named key columns `on`.
     OwnedLazyFrame join(const OwnedLazyFrame& other,
                         std::initializer_list<const char*> on,
                         dftu_join_how how = DFTU_JOIN_INNER,
-                        const char* suffix = nullptr) const {
-        return join(other, on, on, how, suffix);
+                        const char* suffix = nullptr,
+                        bool nulls_equal = false) const {
+        return join(other, on, on, how, suffix, nulls_equal);
     }
 
     OwnedLazyFrame group_by_dynamic(const char* time_col, std::int64_t every,

@@ -1,6 +1,5 @@
 #include <dftracer/utils/core/common/archive_format.h>
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/utils/string.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/index/plan/prefilter.h>
@@ -8,6 +7,7 @@
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/json/json_value.h>
+#include <dftracer/utils/json/line.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
@@ -480,8 +480,8 @@ coro::CoroTask<trace::TimeMetric> TraceReader::read_time_metric(
     while (auto line_opt = co_await gen.next()) {
         const char* start = nullptr;
         std::size_t len = 0;
-        if (!json_trim_and_validate(line_opt->content.data(),
-                                    line_opt->content.size(), start, len))
+        if (!json::trim_and_validate(line_opt->content.data(),
+                                     line_opt->content.size(), start, len))
             continue;
         auto doc = parser.parse(start, len);
         if (doc.error()) continue;
@@ -677,7 +677,7 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
     while (auto opt = co_await line_gen.next()) {
         const char* trimmed;
         std::size_t trimmed_len;
-        if (!dftracer::utils::json_trim_and_validate_with_comma(
+        if (!dftracer::utils::json::trim_and_validate_with_comma(
                 opt->content.data(), opt->content.size(), trimmed, trimmed_len))
             continue;
         if (!parser.parse(std::string_view(trimmed, trimmed_len))) continue;

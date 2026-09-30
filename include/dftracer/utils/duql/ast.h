@@ -48,6 +48,9 @@ inline std::string field_text(const FieldNode& field) {
 /// A typed literal value in a query expression.
 using LiteralValue = std::variant<std::string, int64_t, uint64_t, double, bool>;
 
+/// A value bound to a parameter: a scalar, or a list that `x in $p` reads.
+using ParamValue = std::variant<LiteralValue, std::vector<LiteralValue>>;
+
 /// A literal value node.
 struct LiteralNode {
     LiteralValue value;

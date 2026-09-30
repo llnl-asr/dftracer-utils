@@ -301,6 +301,9 @@ dftu_series* dftu_op_run(const dftu_op_desc* op, const dftu_series* const* in,
         case DFTU_OP_SIG(SERIES, SERIES, SERIES, LOGICAL):
             return as_op<DFTU_OP_SIG(SERIES, SERIES, SERIES, LOGICAL)>(op->fn)(
                 in[0], in[1], static_cast<dftu_logical_op>(g[2].i32));
+        case DFTU_OP_SIG(SERIES, SERIES, SERIES, I32):
+            return as_op<DFTU_OP_SIG(SERIES, SERIES, SERIES, I32)>(op->fn)(
+                in[0], in[1], g[2].i32);
         case DFTU_OP_SIG(SERIES, SERIES, SERIES, CMP):
             return as_op<DFTU_OP_SIG(SERIES, SERIES, SERIES, CMP)>(op->fn)(
                 in[0], in[1], static_cast<dftu_cmp_op>(g[2].i32));
@@ -562,23 +565,22 @@ dftu_dataframe* dftu_op_run_frame(const dftu_op_desc* op,
                 g[4].list.items, g[4].list.n,
                 static_cast<dftu_gap_fill_mode>(g[5].i32), g[6].i64list.items,
                 g[6].i64list.n);
-        case DFTU_OP_SIG8(FRAME, FRAME, FRAME, STR, STRLIST, I32, I64, NONE):
+        case DFTU_OP_SIG8(FRAME, FRAME, FRAME, STR, STRLIST, I32, F64, NONE):
             return as_op<DFTU_OP_SIG8(FRAME, FRAME, FRAME, STR, STRLIST, I32,
-                                      I64, NONE)>(op->fn)(
+                                      F64, NONE)>(op->fn)(
                 df, frames[1], g[2].str.ptr, g[3].list.items, g[3].list.n,
-                static_cast<dftu_asof_direction>(g[4].i32), g[5].i64);
+                static_cast<dftu_asof_direction>(g[4].i32), g[5].f64);
         case DFTU_OP_SIG8(FRAME, FRAME, FRAME, STR, STR, STR, STRLIST, I32):
             return as_op<DFTU_OP_SIG8(FRAME, FRAME, FRAME, STR, STR, STR,
                                       STRLIST, I32)>(op->fn)(
                 df, frames[1], g[2].str.ptr, g[3].str.ptr, g[4].str.ptr,
                 g[5].list.items, g[5].list.n, g[6].i32);
-        case DFTU_OP_SIG8(FRAME, FRAME, FRAME, STRLIST, STRLIST, I32, STR,
-                          NONE):
+        case DFTU_OP_SIG8(FRAME, FRAME, FRAME, STRLIST, STRLIST, I32, STR, I32):
             if (g[2].list.n != g[3].list.n) return nullptr;
             return as_op<DFTU_OP_SIG8(FRAME, FRAME, FRAME, STRLIST, STRLIST,
-                                      I32, STR, NONE)>(op->fn)(
+                                      I32, STR, I32)>(op->fn)(
                 df, frames[1], g[2].list.items, g[3].list.items, g[2].list.n,
-                static_cast<dftu_join_how>(g[4].i32), g[5].str.ptr);
+                static_cast<dftu_join_how>(g[4].i32), g[5].str.ptr, g[6].i32);
         default:
             return nullptr;
     }
@@ -669,12 +671,12 @@ dftu_lazyframe* dftu_op_run_lazy(const dftu_op_desc* op,
                                       NONE)>(op->fn)(
                 lf, g[1].list.items, g[1].list.n, g[2].i32, g[3].i64, g[4].i32,
                 g[5].i32);
-        case DFTU_OP_SIG8(LAZY, LAZY, LAZY, STRLIST, STRLIST, I32, STR, NONE):
+        case DFTU_OP_SIG8(LAZY, LAZY, LAZY, STRLIST, STRLIST, I32, STR, I32):
             if (g[2].list.n != g[3].list.n) return nullptr;
             return as_op<DFTU_OP_SIG8(LAZY, LAZY, LAZY, STRLIST, STRLIST, I32,
-                                      STR, NONE)>(op->fn)(
+                                      STR, I32)>(op->fn)(
                 lf, in[1], g[2].list.items, g[3].list.items, g[2].list.n,
-                static_cast<dftu_join_how>(g[4].i32), g[5].str.ptr);
+                static_cast<dftu_join_how>(g[4].i32), g[5].str.ptr, g[6].i32);
         case DFTU_OP_SIG(LAZY, LAZY, LAZY, NONE):
             return as_op<DFTU_OP_SIG(LAZY, LAZY, LAZY, NONE)>(op->fn)(lf,
                                                                       in[1]);

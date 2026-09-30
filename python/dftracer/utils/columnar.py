@@ -88,10 +88,17 @@ _UINT64 = int(DType.UINT64)
 _FLOAT32 = int(DType.FLOAT32)
 _FLOAT64 = int(DType.FLOAT64)
 _BOOL = int(DType.BOOL)
+_STRING = int(DType.STRING)
 _FLOAT_TYPES = (_FLOAT32, _FLOAT64)
 
 # TypeId codes the .cast() method accepts.
-_CAST_CODES = {"int64": _INT64, "uint64": _UINT64, "float64": _FLOAT64, "bool": _BOOL}
+_CAST_CODES = {
+    "int64": _INT64,
+    "uint64": _UINT64,
+    "float64": _FLOAT64,
+    "bool": _BOOL,
+    "string": _STRING,
+}
 
 # vec::Prim codes (kernels/prims.h). Exposed as methods, e.g. F.dur.ilog2().
 _PRIM_CODES = {
@@ -117,7 +124,8 @@ _AST_PRIM, _AST_CMP, _AST_LOGICAL, _AST_NOT, _AST_CAST = 4, 5, 6, 7, 8
 _AST_UNARY, _AST_CLIP, _AST_FILLNA = 9, 10, 11
 _AST_STR_PRED, _AST_STR_MAP, _AST_STR_LEN, _AST_STR_FIND = 12, 13, 14, 15
 _AST_STR_REPLACE, _AST_STR_SLICE, _AST_IS_IN, _AST_SELECT = 16, 17, 18, 19
-_AST_IS_NULL = 20
+_AST_STR_PRED_COL, _AST_STR_REPLACE_COL, _AST_LIT_S = 23, 24, 25
+_AST_IS_NULL, _AST_CMP_EXPR, _AST_STR_FN = 20, 21, 22
 
 # StrPredOp / StrMapOp codes (dataframe/types.h).
 _STR_PRED_CODES = {
@@ -128,7 +136,50 @@ _STR_PRED_CODES = {
     "fullmatch": 4,
     "regex": 5,
 }
-_STR_MAP_CODES = {"lower": 0, "upper": 1, "strip": 2, "lstrip": 3, "rstrip": 4}
+_STR_MAP_CODES = {
+    "lower": 0,
+    "upper": 1,
+    "strip": 2,
+    "lstrip": 3,
+    "rstrip": 4,
+    "capitalize": 5,
+    "title": 6,
+    "swapcase": 7,
+}
+
+# StrFn codes (dataframe/types.h); 0-8 are the character classes.
+_STR_FN_CODES = {
+    "isalnum": 0,
+    "isalpha": 1,
+    "isdigit": 2,
+    "isdecimal": 3,
+    "isnumeric": 4,
+    "isspace": 5,
+    "islower": 6,
+    "isupper": 7,
+    "istitle": 8,
+    "pad_start": 9,
+    "pad_end": 10,
+    "center": 11,
+    "zfill": 12,
+    "removeprefix": 13,
+    "removesuffix": 14,
+    "repeat": 15,
+    "slice_replace": 16,
+    "split": 17,
+    "partition": 18,
+    "rpartition": 19,
+    "findall": 20,
+    "extract": 21,
+    "rfind": 22,
+    "index": 23,
+    "rindex": 24,
+    "join": 25,
+    "get": 26,
+    "cat": 27,
+    "regex_replace": 28,
+}
+_STR_NO_STOP = -(1 << 63)  # slice_replace without a stop (INT64_MIN)
 
 # UnaryOp codes (dataframe/types.h). Exposed as F.dur.floor() etc. The is_*
 # predicates yield a Bool mask; log/sqrt/exp widen to float.
@@ -227,39 +278,44 @@ class Expr:
     def __rmul__(self, other: object) -> "Expr":
         return _Bin("*", _wrap(other), self)
 
+    def __rtruediv__(self, other: "Union[Expr, Agg, int, float]") -> "Expr":
+        return _Bin("/", _wrap(other), self)
+
     # Comparisons build predicate Exprs. Against a number, or == / != against a
     # string, they also evaluate in memory to a boolean mask; against a bool
-    # they are filter-only.
-    def __gt__(self, other: Value) -> "Expr":
+    # they are filter-only. Against another column expression they compare the
+    # two row by row (null where either side is null) and are not pushable.
+    def __gt__(self, other: "Union[Value, Expr]") -> "Expr":
         return _Cmp("gt", self, other)
 
-    def __ge__(self, other: Value) -> "Expr":
+    def __ge__(self, other: "Union[Value, Expr]") -> "Expr":
         return _Cmp("ge", self, other)
 
-    def __lt__(self, other: Value) -> "Expr":
+    def __lt__(self, other: "Union[Value, Expr]") -> "Expr":
         return _Cmp("lt", self, other)
 
-    def __le__(self, other: Value) -> "Expr":
+    def __le__(self, other: "Union[Value, Expr]") -> "Expr":
         return _Cmp("le", self, other)
 
-    def __eq__(self, other: Value) -> "Expr":  # type: ignore[override]  # ty: ignore[invalid-method-override]
+    def __eq__(self, other: "Union[Value, Expr]") -> "Expr":  # type: ignore[override]  # ty: ignore[invalid-method-override]
         return _Cmp("eq", self, other)
 
-    def __ne__(self, other: Value) -> "Expr":  # type: ignore[override]  # ty: ignore[invalid-method-override]
+    def __ne__(self, other: "Union[Value, Expr]") -> "Expr":  # type: ignore[override]  # ty: ignore[invalid-method-override]
         return _Cmp("ne", self, other)
 
-    def eq(self, other: Value) -> "Expr":
+    def eq(self, other: "Union[Value, Expr]") -> "Expr":
         """Equality predicate (the method form of ``==``)."""
         return _Cmp("eq", self, other)
 
-    def ne(self, other: Value) -> "Expr":
+    def ne(self, other: "Union[Value, Expr]") -> "Expr":
         """Inequality predicate (the method form of ``!=``)."""
         return _Cmp("ne", self, other)
 
     def count(self) -> "Agg":
-        """Group row count as an :class:`Agg` (the field is ignored, matching the
-        engine's count)."""
-        return Agg("count", None)
+        """The number of non-null values of this expression per group, as an
+        :class:`Agg` (pandas ``count``). The group row count is the bare
+        :func:`count`."""
+        return Agg("count_valid", self)
 
     __hash__ = None  # type: ignore[assignment]  # comparisons build exprs, not bools
 
@@ -317,8 +373,13 @@ class Expr:
         """Clamp each value to ``[lo, hi]`` (elementwise, SIMD)."""
         return _Clip(self, lo, hi)
 
-    def cast(self, dtype: "Literal['int64', 'uint64', 'float64', 'bool']") -> "Expr":
-        """Cast each value to ``dtype``."""
+    def cast(self, dtype: "Literal['int64', 'uint64', 'float64', 'bool', 'string']") -> "Expr":
+        """Cast each value to ``dtype``. ``'string'`` gives the decimal digits of an
+        integer, the shortest text of a float that shows a point or exponent
+        (``2.0``, ``1e+21``) and ``true`` / ``false`` for a bool, the engine's
+        spelling (the eager ``Series.astype`` says ``True`` / ``False``); a null
+        stays null. A pair the engine cannot cast, such as string to bool, fails
+        when the plan runs."""
         return _Cast(_CAST_CODES[dtype], self)
 
     def fillna(self, fill: Union[int, float]) -> "Expr":
@@ -521,19 +582,29 @@ class Expr:
 
     # String predicates (Bool masks). Each runs in memory through the engine's
     # string kernels and, on a bare field, pushes down as duql.
-    def contains(self, sub: str, case: bool = True) -> "Expr":
+    def contains(self, sub: "Union[str, Expr]", case: bool = True) -> "Expr":
         """Substring predicate. Case-sensitive like pandas / polars; ``case=False``
-        folds both sides to lowercase first (duql's ``"sub" in field``)."""
+        folds both sides to lowercase first (duql's ``"sub" in field``). ``sub``
+        may be an expression: the per-row needle, null where either side is
+        null, true for an empty needle (``case=False`` needs a ``str``)."""
+        if isinstance(sub, Expr):
+            if not case:
+                raise TypeError("contains(case=False) needs a str needle")
+            return _StrPredCol("contains", self, sub)
         if case:
             return _StrPred("contains", self, sub)
         return _IContains(self, sub)
 
-    def starts_with(self, prefix: str) -> "Expr":
-        """Prefix predicate."""
+    def starts_with(self, prefix: "Union[str, Expr]") -> "Expr":
+        """Prefix predicate; ``prefix`` may be an expression (per-row needle)."""
+        if isinstance(prefix, Expr):
+            return _StrPredCol("starts_with", self, prefix)
         return _StrPred("starts_with", self, prefix)
 
-    def ends_with(self, suffix: str) -> "Expr":
-        """Suffix predicate."""
+    def ends_with(self, suffix: "Union[str, Expr]") -> "Expr":
+        """Suffix predicate; ``suffix`` may be an expression (per-row needle)."""
+        if isinstance(suffix, Expr):
+            return _StrPredCol("ends_with", self, suffix)
         return _StrPred("ends_with", self, suffix)
 
     def like(self, pattern: str) -> "Expr":
@@ -588,6 +659,195 @@ class Expr:
         """Drop trailing whitespace."""
         return _StrMap("rstrip", self)
 
+    # The expression forms of the eager ``Series.str`` methods: the same
+    # names, the same values, nulls and types (ASCII; a byte outside ASCII is
+    # left as it is by the case forms and fails the character classes).
+    def capitalize(self) -> "Expr":
+        """First letter upper, the rest lower."""
+        return _StrMap("capitalize", self)
+
+    def title(self) -> "Expr":
+        """Each run of letters starts upper, the rest lower."""
+        return _StrMap("title", self)
+
+    def swapcase(self) -> "Expr":
+        """Every letter's case flipped."""
+        return _StrMap("swapcase", self)
+
+    def casefold(self) -> "Expr":
+        """ASCII casefold (the lowercase form)."""
+        return _StrMap("lower", self)
+
+    def isalnum(self) -> "Expr":
+        """Bool: non-empty and all letters or digits."""
+        return _StrFn("isalnum", self)
+
+    def isalpha(self) -> "Expr":
+        """Bool: non-empty and all letters."""
+        return _StrFn("isalpha", self)
+
+    def isdigit(self) -> "Expr":
+        """Bool: non-empty and all digits."""
+        return _StrFn("isdigit", self)
+
+    def isdecimal(self) -> "Expr":
+        """Bool: as :meth:`isdigit` over ASCII."""
+        return _StrFn("isdecimal", self)
+
+    def isnumeric(self) -> "Expr":
+        """Bool: as :meth:`isdigit` over ASCII."""
+        return _StrFn("isnumeric", self)
+
+    def isspace(self) -> "Expr":
+        """Bool: non-empty and all whitespace."""
+        return _StrFn("isspace", self)
+
+    def islower(self) -> "Expr":
+        """Bool: has a letter and every letter is lower."""
+        return _StrFn("islower", self)
+
+    def isupper(self) -> "Expr":
+        """Bool: has a letter and every letter is upper."""
+        return _StrFn("isupper", self)
+
+    def istitle(self) -> "Expr":
+        """Bool: title case, as Python ``str.istitle``."""
+        return _StrFn("istitle", self)
+
+    def pad_start(self, width: int, fill: str = " ") -> "Expr":
+        """Left-pad to ``width`` bytes with ``fill``."""
+        return _StrFn("pad_start", self, text=_fill_char(fill), i0=int(width))
+
+    def pad_end(self, width: int, fill: str = " ") -> "Expr":
+        """Right-pad to ``width`` bytes with ``fill``."""
+        return _StrFn("pad_end", self, text=_fill_char(fill), i0=int(width))
+
+    def pad(
+        self, width: int, side: Literal["left", "right"] = "left", fillchar: str = " "
+    ) -> "Expr":
+        """Pad on ``side`` (pandas ``str.pad``)."""
+        if side == "left":
+            return self.pad_start(width, fillchar)
+        if side == "right":
+            return self.pad_end(width, fillchar)
+        raise ValueError("side must be 'left' or 'right'")
+
+    def ljust(self, width: int, fillchar: str = " ") -> "Expr":
+        """As :meth:`pad_end`."""
+        return self.pad_end(width, fillchar)
+
+    def rjust(self, width: int, fillchar: str = " ") -> "Expr":
+        """As :meth:`pad_start`."""
+        return self.pad_start(width, fillchar)
+
+    def center(self, width: int, fillchar: str = " ") -> "Expr":
+        """Center in ``width`` bytes, Python's ``str.center`` placement."""
+        return _StrFn("center", self, text=_fill_char(fillchar), i0=int(width))
+
+    def zfill(self, width: int) -> "Expr":
+        """Left-pad with ``0`` to ``width`` after an optional sign."""
+        return _StrFn("zfill", self, i0=int(width))
+
+    def removeprefix(self, prefix: str) -> "Expr":
+        """Drop a leading ``prefix`` when present."""
+        return _StrFn("removeprefix", self, text=prefix)
+
+    def removesuffix(self, suffix: str) -> "Expr":
+        """Drop a trailing ``suffix`` when present."""
+        return _StrFn("removesuffix", self, text=suffix)
+
+    def repeat(self, repeats: int) -> "Expr":
+        """Each value repeated ``repeats`` times."""
+        return _StrFn("repeat", self, i0=int(repeats))
+
+    def slice_replace(self, start: int = 0, stop: Optional[int] = None, repl: str = "") -> "Expr":
+        """Bytes ``[start, stop)`` of each value replaced with ``repl``."""
+        return _StrFn(
+            "slice_replace",
+            self,
+            text=repl,
+            i0=int(start),
+            i1=_STR_NO_STOP if stop is None else int(stop),
+        )
+
+    def split(self, pat: str) -> "Expr":
+        """Split on the literal ``pat``: a ``list<string>`` (no ``expand``;
+        take the pieces with :meth:`get`)."""
+        return _StrFn("split", self, text=pat)
+
+    def rsplit(self, pat: str) -> "Expr":
+        """As :meth:`split` (every occurrence, so the same parts)."""
+        return _StrFn("split", self, text=pat)
+
+    def partition(self, sep: str = " ") -> "Expr":
+        """Split at the first ``sep`` into a 3-element ``list<string>``
+        (head, sep, tail); take the pieces with :meth:`get`."""
+        return _StrFn("partition", self, text=sep)
+
+    def rpartition(self, sep: str = " ") -> "Expr":
+        """As :meth:`partition`, at the last ``sep``."""
+        return _StrFn("rpartition", self, text=sep)
+
+    def extract(self, pat: str, group: int = 1) -> "Expr":
+        """The capture ``group`` of the first regex ``pat`` match, null where
+        there is none."""
+        return _StrFn("extract", self, text=pat, i0=int(group))
+
+    def regex_replace(self, pat: str, to: str) -> "Expr":
+        """Replace every regex ``pat`` match with ``to`` (``$n``, ``${name}``,
+        ``$$``); an invalid pattern or replacement raises at evaluation."""
+        return _StrFn("regex_replace", self, text=pat, text2=to)
+
+    def findall(self, pat: str) -> "Expr":
+        """Every regex match as a ``list<string>``."""
+        return _StrFn("findall", self, text=pat)
+
+    def match(self, pat: str) -> "Expr":
+        """Regex anchored at the start (pandas ``str.match``)."""
+        return _StrPred("regex", self, "^(?:" + pat + ")")
+
+    def rfind(self, sub: str) -> "Expr":
+        """Byte index of the last ``sub``, or -1 (Int64)."""
+        return _StrFn("rfind", self, text=sub)
+
+    def index(self, sub: str) -> "Expr":
+        """As :meth:`find`, but a plan run over a row without ``sub`` raises
+        ``ValueError``, as Python's ``str.index``."""
+        return _StrFn("index", self, text=sub)
+
+    def rindex(self, sub: str) -> "Expr":
+        """As :meth:`rfind`, raising like :meth:`index`."""
+        return _StrFn("rindex", self, text=sub)
+
+    def join(self, sep: str) -> "Expr":
+        """Each ``list<string>`` value joined with ``sep``."""
+        return _StrFn("join", self, text=sep)
+
+    def get(self, i: int) -> "Expr":
+        """A list's element ``i`` (negative counts from the end), or a
+        string's byte ``i`` (non-negative; null past the end)."""
+        return _StrFn("get", self, i0=int(i))
+
+    def cat(self, others: "Optional[Expr]" = None, sep: str = "") -> "Expr":
+        """Row-wise concatenation with the column ``others``, ``sep`` between.
+        The one-column form joins the whole column into one string, which is
+        an aggregate: use ``Series.str.cat``."""
+        if others is None:
+            raise NotImplementedError(
+                "cat() without others joins the whole column; use Series.str.cat"
+            )
+        if not isinstance(others, Expr):
+            raise TypeError("cat needs another column expression (use lit() for a constant)")
+        return _StrFn("cat", self, other=others, text=sep)
+
+    def get_dummies(self, sep: str = "|") -> "Expr":
+        """Not an expression: it makes one column per token, which a
+        column expression cannot. Use ``Series.str.get_dummies``."""
+        raise NotImplementedError(
+            "get_dummies makes a column per token, so it has no expression form; "
+            "use Series.str.get_dummies"
+        )
+
     def len_bytes(self) -> "Expr":
         """Per-row byte length (Int64)."""
         return _StrLen(self, chars=False)
@@ -601,11 +861,22 @@ class Expr:
         return _StrFind(self, needle)
 
     def replace(self, old: str, new: str) -> "Expr":
-        """Replace the first ``old`` with ``new`` in each value."""
+        """Replace the first ``old`` with ``new`` in each value. Takes ``str``
+        only; use :meth:`replace_all` for expression arguments."""
+        if isinstance(old, Expr) or isinstance(new, Expr):
+            raise TypeError("replace takes str arguments; use replace_all for columns")
         return _StrReplace(self, old, new, all=False)
 
-    def replace_all(self, old: str, new: str) -> "Expr":
-        """Replace every ``old`` with ``new`` in each value."""
+    def replace_all(self, old: "Union[str, Expr]", new: "Union[str, Expr]") -> "Expr":
+        """Replace every ``old`` with ``new`` in each value. Either may be an
+        expression (a ``str`` beside one is a literal); null where any operand
+        is null, the value unchanged for an empty ``old``."""
+        if isinstance(old, Expr) or isinstance(new, Expr):
+            return _StrReplaceCol(
+                self,
+                old if isinstance(old, Expr) else lit(old),
+                new if isinstance(new, Expr) else lit(new),
+            )
         return _StrReplace(self, old, new, all=True)
 
     def slice(self, start: int, length: int) -> "Expr":
@@ -644,6 +915,15 @@ class Expr:
         """Trace occupancy: the peak number of events active at once; see
         :meth:`busy` for ``resolution``."""
         return _occupancy("active", self, resolution)
+
+    def set_union(self, typed: bool = False) -> "Agg":
+        """The distinct values of this expression per group. By default one
+        text cell: the values sorted as text and joined with ``\\x1e``; a string
+        holding that byte is refused. With ``typed=True`` a list column of the
+        values in their own type (``string``, ``bool``, ``int64``, ``uint64`` or
+        ``float64``), ascending (numbers by value), nulls dropped, an empty
+        group an empty list, and no limit on the bytes of a string."""
+        return Agg("set_union", self, param=1.0 if typed else 0.0)
 
     def hist(self) -> "Agg":
         """The DDSketch histogram per group: a ``list<struct{lo, hi, count}>``
@@ -751,7 +1031,6 @@ class Expr:
         def first(self) -> "Agg": ...
         def last(self) -> "Agg": ...
         def sumsq(self) -> "Agg": ...
-        def set_union(self) -> "Agg": ...
         def bit_or(self) -> "Agg": ...
         def prod(self) -> "Agg": ...
 
@@ -861,7 +1140,7 @@ def resolve_selectors(items: Sequence[object]) -> "List[Tuple[str, Optional[Expr
 
 
 class _Lit(Expr):
-    def __init__(self, value: _Scalar) -> None:
+    def __init__(self, value: Union[_Scalar, str]) -> None:
         self.value = value
 
 
@@ -907,14 +1186,12 @@ class _Cmp(Expr):
     def __init__(self, op: str, left: Expr, rhs: object) -> None:
         if isinstance(rhs, _Lit):
             rhs = rhs.value
-        if isinstance(rhs, Expr):
-            raise TypeError("comparison right side must be a scalar value, not an expression")
         self.op = op
         self.left = left
         self.rhs = rhs
 
     def _dsl(self) -> str:
-        if not isinstance(self.left, _Col):
+        if not isinstance(self.left, _Col) or isinstance(self.rhs, Expr):
             raise TypeError(_NOT_PUSHABLE)
         return f"{self.left.name} {_CMP_SYMBOL[self.op]} {_format_value(self.rhs)}"
 
@@ -935,6 +1212,14 @@ def _field_name(arg: Expr) -> str:
     if not isinstance(arg, _Col):
         raise TypeError(_NOT_PUSHABLE)
     return arg.name
+
+
+def _operand(arg: Expr) -> str:
+    if isinstance(arg, _Col):
+        return arg.name
+    if isinstance(arg, _Lit):
+        return _format_value(arg.value)
+    raise TypeError(_NOT_PUSHABLE)
 
 
 def _escape_like(s: str) -> str:
@@ -971,6 +1256,26 @@ class _StrPred(Expr):
         if self.op == "regex":
             return f"{field} ~ {_format_value(p)}"
         raise TypeError(_NOT_PUSHABLE)
+
+
+class _StrPredCol(Expr):
+    def __init__(self, op: str, arg: Expr, needle: Expr) -> None:
+        self.op = op
+        self.arg = arg
+        self.needle = needle
+
+    def _dsl(self) -> str:
+        return f"{self.op}({_operand(self.arg)}, {_operand(self.needle)})"
+
+
+class _StrReplaceCol(Expr):
+    def __init__(self, arg: Expr, old: Expr, new: Expr) -> None:
+        self.arg = arg
+        self.old = old
+        self.new = new
+
+    def _dsl(self) -> str:
+        return f"replace({_operand(self.arg)}, {_operand(self.old)}, {_operand(self.new)})"
 
 
 class _IContains(Expr):
@@ -1042,6 +1347,35 @@ class _StrMap(Expr):
         self.arg = arg
 
 
+def _fill_char(fill: str) -> str:
+    if len(fill.encode()) != 1:
+        raise ValueError("the fill character must be one ASCII character")
+    return fill
+
+
+class _StrFn(Expr):
+    """A string method of the ``_STR_FN_CODES`` family: ``arg`` (and for
+    ``cat`` the column ``other``) plus up to two strings and two integers."""
+
+    def __init__(
+        self,
+        name: str,
+        arg: Expr,
+        other: "Optional[Expr]" = None,
+        text: str = "",
+        text2: str = "",
+        i0: int = 0,
+        i1: int = 0,
+    ) -> None:
+        self.name = name
+        self.arg = arg
+        self.other = other
+        self.text = text
+        self.text2 = text2
+        self.i0 = i0
+        self.i1 = i1
+
+
 class _StrLen(Expr):
     def __init__(self, arg: Expr, chars: bool) -> None:
         self.arg = arg
@@ -1075,10 +1409,28 @@ def _as_expr(x: object) -> Expr:
     raise TypeError("& / | combine expressions, not plain values")
 
 
+_DUQL_ESCAPES = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\t": "\\t", "\r": "\\r"}
+
+
+def _duql_string(v: str) -> str:
+    r"""``v`` as a duql string literal that reads back as exactly ``v``: double
+    quotes, with ``\\``, ``\"``, ``\n``, ``\t``, ``\r`` and ``\u00XX`` for the
+    other control characters."""
+    out = []
+    for ch in v:
+        esc = _DUQL_ESCAPES.get(ch)
+        if esc is not None:
+            out.append(esc)
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+            out.append(f"\\u{ord(ch):04x}")
+        else:
+            out.append(ch)
+    return '"' + "".join(out) + '"'
+
+
 def _format_value(v: object) -> str:
     if isinstance(v, str):
-        escaped = v.replace('"', '\\"')
-        return f'"{escaped}"'
+        return _duql_string(v)
     if isinstance(v, bool):
         return "true" if v else "false"
     return str(v)
@@ -1098,7 +1450,7 @@ def col(name: str) -> Expr:
     return _Col(name)
 
 
-def lit(value: _Scalar) -> Expr:
+def lit(value: Union[_Scalar, str]) -> Expr:
     """A scalar literal (kept distinct from a column name, Polars-style)."""
     return _Lit(value)
 
@@ -1158,13 +1510,13 @@ class _ExprStr:
     def __init__(self, e: Expr) -> None:
         self._e = e
 
-    def contains(self, pattern: str) -> Expr:
+    def contains(self, pattern: "Union[str, Expr]") -> Expr:
         return self._e.contains(pattern)
 
-    def starts_with(self, prefix: str) -> Expr:
+    def starts_with(self, prefix: "Union[str, Expr]") -> Expr:
         return self._e.starts_with(prefix)
 
-    def ends_with(self, suffix: str) -> Expr:
+    def ends_with(self, suffix: "Union[str, Expr]") -> Expr:
         return self._e.ends_with(suffix)
 
     def to_lowercase(self) -> Expr:
@@ -1194,7 +1546,7 @@ class _ExprStr:
     def replace(self, old: str, new: str) -> Expr:
         return self._e.replace(old, new)
 
-    def replace_all(self, old: str, new: str) -> Expr:
+    def replace_all(self, old: "Union[str, Expr]", new: "Union[str, Expr]") -> Expr:
         return self._e.replace_all(old, new)
 
     def slice(self, offset: int, length: int) -> Expr:
@@ -1221,6 +1573,9 @@ class _ExprStr:
     def to_titlecase(self) -> Expr:
         return self._e._op("dftu.series.str_case", a=2)
 
+    def regex_replace(self, pat: str, to: str) -> Expr:
+        return self._e.regex_replace(pat, to)
+
     def extract(self, pattern: str, group_index: int = 1) -> Expr:
         return self._e._op("dftu.series.str_extract", a=int(group_index), text=pattern)
 
@@ -1241,6 +1596,11 @@ class _ExprDt:
         from .series import _TIME_UNITS
 
         return self._e._op("dftu.series.dt_part", a=code, b=_TIME_UNITS[self._unit])
+
+    def strftime(self, fmt: str) -> Expr:
+        from .series import _TIME_UNITS
+
+        return self._e._op("dftu.series.dt_format", a=_TIME_UNITS[self._unit], text=fmt)
 
     def year(self) -> Expr:
         return self._part(0)
@@ -1464,7 +1824,8 @@ class Columnar:
         out_float = _is_float(self._expr, cols)
         result = _eval(self._expr, cols, out_float)
         if isinstance(result, _ScalarVal):
-            return Series(_broadcast_scalar(result.value, out_float, cols))
+            sized = cols or _first_column(source)
+            return Series(_broadcast_scalar(result.value, out_float, sized))
         return Series(result.value)
 
     # Serialize `expr` to a post-order AST (a list of (op, args...) tuples) that
@@ -1493,6 +1854,14 @@ def _unwrap_source_columns(source: object) -> Dict[str, Series]:
             arr = arr.combine_chunks()
         out[name] = Series(_arrow_native("_series_from_arrow")(arr))
     return out
+
+
+def _first_column(source: _Source) -> Dict[str, "_ext._Series"]:
+    """One column of ``source`` to give a constant expression its length (empty
+    when the source has no column)."""
+    native = _unwrap(source)
+    names = list(native)[:1] if isinstance(native, dict) else list(native.column_names)[:1]
+    return _import_vec_columns(names, source) if names else {}
 
 
 def _import_vec_columns(names: List[str], source: _Source) -> Dict[str, "_ext._Series"]:
@@ -1544,12 +1913,13 @@ def eval_many(exprs: "List[Expr | Columnar]", source: _Source) -> "List[Series]"
 def _broadcast_scalar(
     value: _Scalar, out_float: bool, cols: Dict[str, "_ext._Series"]
 ) -> "_ext._Series":
-    # No constant-column kernel; derive one from any input column so a pure
-    # constant expression stays in vec: (col * 0) + value, in the target type.
+    # Only the length of an input column is used, never its values: a null,
+    # NaN or infinity in that column must not reach the constant. An all-null
+    # column of the target type, filled with the value, has no other source.
     if not cols:
         raise ValueError("a constant columnar expression needs at least one column")
-    base = next(iter(cols.values())).cast(_FLOAT64 if out_float else _INT64)
-    return base.mul_scalar(0).add_scalar(value)
+    n = len(next(iter(cols.values())))
+    return _ext._series_nulls(int(_FLOAT64 if out_float else _INT64), n).fillna(value)
 
 
 # Serialize `expr` to a post-order AST, resolving column names to input indices
@@ -1557,7 +1927,9 @@ def _broadcast_scalar(
 # type inference, CSE, and lowering, so every consumer gets the same engine.
 def _emit_ast(expr: Expr, resolve: Callable[[str], int], ast: List[tuple]) -> None:
     if isinstance(expr, _Lit):
-        if isinstance(expr.value, float):
+        if isinstance(expr.value, str):
+            ast.append((_AST_LIT_S, expr.value))
+        elif isinstance(expr.value, float):
             ast.append((_AST_LIT_F, float(expr.value)))
         else:
             ast.append((_AST_LIT_I, int(expr.value)))
@@ -1582,6 +1954,12 @@ def _emit_ast(expr: Expr, resolve: Callable[[str], int], ast: List[tuple]) -> No
     elif isinstance(expr, _Fillna):
         _emit_ast(expr.arg, resolve, ast)
         ast.append((_AST_FILLNA, expr.fill))
+    elif isinstance(expr, _Cmp) and isinstance(expr.rhs, Expr):
+        # Column against column: the engine compares the two row by row, null
+        # where either side is null.
+        _emit_ast(expr.left, resolve, ast)
+        _emit_ast(expr.rhs, resolve, ast)
+        ast.append((_AST_CMP_EXPR, _CMP_CODES[expr.op]))
     elif isinstance(expr, _Cmp):
         if isinstance(expr.rhs, bool) or not isinstance(expr.rhs, (int, float, str)):
             raise TypeError(
@@ -1602,6 +1980,15 @@ def _emit_ast(expr: Expr, resolve: Callable[[str], int], ast: List[tuple]) -> No
     elif isinstance(expr, _StrPred):
         _emit_ast(expr.arg, resolve, ast)
         ast.append((_AST_STR_PRED, _STR_PRED_CODES[expr.op], expr.pattern))
+    elif isinstance(expr, _StrPredCol):
+        _emit_ast(expr.arg, resolve, ast)
+        _emit_ast(expr.needle, resolve, ast)
+        ast.append((_AST_STR_PRED_COL, _STR_PRED_CODES[expr.op]))
+    elif isinstance(expr, _StrReplaceCol):
+        _emit_ast(expr.arg, resolve, ast)
+        _emit_ast(expr.old, resolve, ast)
+        _emit_ast(expr.new, resolve, ast)
+        ast.append((_AST_STR_REPLACE_COL,))
     elif isinstance(expr, (_IContains, _ILike)):
         _emit_ast(expr._lowered(), resolve, ast)
     elif isinstance(expr, _IsIn):
@@ -1612,6 +1999,21 @@ def _emit_ast(expr: Expr, resolve: Callable[[str], int], ast: List[tuple]) -> No
     elif isinstance(expr, _StrMap):
         _emit_ast(expr.arg, resolve, ast)
         ast.append((_AST_STR_MAP, _STR_MAP_CODES[expr.op]))
+    elif isinstance(expr, _StrFn):
+        _emit_ast(expr.arg, resolve, ast)
+        if expr.other is not None:
+            _emit_ast(expr.other, resolve, ast)
+        ast.append(
+            (
+                _AST_STR_FN,
+                _STR_FN_CODES[expr.name],
+                expr.text,
+                expr.text2,
+                expr.i0,
+                expr.i1,
+                1 if expr.other is None else 2,
+            )
+        )
     elif isinstance(expr, _StrLen):
         _emit_ast(expr.arg, resolve, ast)
         ast.append((_AST_STR_LEN, 1 if expr.chars else 0))
@@ -1744,7 +2146,8 @@ class Agg:
         if isinstance(self.value, _Col):
             if self.op == "pct":
                 return f"p{int(round(self.param * 100))}_{self.value.name}"
-            return f"{self.op}_{self.value.name}"
+            op = "count" if self.op == "count_valid" else self.op
+            return f"{op}_{self.value.name}"
         return self.op
 
     def _spec(self, names: List[str]) -> tuple:
@@ -1793,7 +2196,6 @@ for _op in (
     "first",
     "last",
     "sumsq",
-    "set_union",
     "bit_or",
     "prod",
 ):
@@ -2746,8 +3148,17 @@ def _collect_columns(expr: Expr) -> List[str]:
             walk(e.right)
         elif isinstance(e, _STRING_NODES + (_Prim, _Unary, _Clip, _Cast, _Fillna, _IsNull)):
             walk(e.arg)
+            if isinstance(e, _StrFn) and e.other is not None:
+                walk(e.other)
+            elif isinstance(e, _StrPredCol):
+                walk(e.needle)
+            elif isinstance(e, _StrReplaceCol):
+                walk(e.old)
+                walk(e.new)
         elif isinstance(e, _Cmp):
             walk(e.left)
+            if isinstance(e.rhs, Expr):
+                walk(e.rhs)
         elif isinstance(e, _Logical):
             walk(e.left)
             if e.right is not None:
@@ -2773,6 +3184,8 @@ def _collect_columns(expr: Expr) -> List[str]:
 # Every node with a single `arg` operand that the engine's string kernels run.
 _STRING_NODES = (
     _StrPred,
+    _StrPredCol,
+    _StrReplaceCol,
     _IContains,
     _ILike,
     _IsIn,
@@ -2781,6 +3194,7 @@ _STRING_NODES = (
     _StrFind,
     _StrReplace,
     _StrSlice,
+    _StrFn,
 )
 
 
@@ -2852,6 +3266,8 @@ def _eval(expr: Expr, cols: Dict[str, "_ext._Series"], out_float: bool) -> _Eval
             v = v.cast(_INT64)
         return _ColVal(v.prim(_PRIM_CODES[expr.name]))
     if isinstance(expr, _Cmp):
+        if isinstance(expr.rhs, Expr):
+            raise TypeError("a comparison of two expressions needs at least one column")
         if isinstance(expr.rhs, bool) or not isinstance(expr.rhs, (int, float)):
             raise TypeError(
                 "in-memory comparison needs a numeric value; a string/bool "

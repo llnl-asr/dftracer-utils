@@ -184,13 +184,14 @@ DataFrame DataFrame::group_by(const std::vector<Expr>& keys,
 DataFrame DataFrame::join(const DataFrame& other,
                           const std::vector<std::string>& left_on,
                           const std::vector<std::string>& right_on, JoinHow how,
-                          const std::string& suffix) const {
-    return dfops::join(*this, other, left_on, right_on, how, suffix);
+                          const std::string& suffix, bool nulls_equal) const {
+    return dfops::join(*this, other, left_on, right_on, how, suffix,
+                       nulls_equal);
 }
 DataFrame DataFrame::join(const DataFrame& other,
                           const std::vector<std::string>& on, JoinHow how,
-                          const std::string& suffix) const {
-    return dfops::join(*this, other, on, on, how, suffix);
+                          const std::string& suffix, bool nulls_equal) const {
+    return dfops::join(*this, other, on, on, how, suffix, nulls_equal);
 }
 
 DataFrame DataFrame::unpivot(const std::vector<std::string>& id_vars,

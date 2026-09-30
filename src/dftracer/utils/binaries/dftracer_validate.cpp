@@ -8,8 +8,8 @@
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/utils/string.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/json/line.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <simdjson.h>
@@ -23,8 +23,8 @@
 #include <vector>
 
 using namespace dftracer::utils;
-using dftracer::utils::json_trim_and_validate;
 using dftracer::utils::index::gzip::CheckpointIndexerFactory;
+using dftracer::utils::json::trim_and_validate;
 using dftracer::utils::utilities::fileio::lines::sources::
     async_streaming_gz_lines;
 
@@ -95,8 +95,8 @@ coro::CoroTask<void> validate_file(std::string path, FileValResult* result) {
             const auto& line = *line_opt;
             const char* start = nullptr;
             std::size_t trimmed = 0;
-            if (!json_trim_and_validate(line.content.data(),
-                                        line.content.size(), start, trimmed)) {
+            if (!trim_and_validate(line.content.data(), line.content.size(),
+                                   start, trimmed)) {
                 continue;
             }
             ++result->total_lines;

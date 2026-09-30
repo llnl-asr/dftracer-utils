@@ -41,7 +41,7 @@ when one exists.
    )
 
 See :doc:`api/trace_viewer` for the full builder, aggregation specs, and
-``collect_typed``; :doc:`api/duql` for the duql filter builder; and :doc:`guides/index`
+``collect_typed``; :doc:`api/duql` for the duql builder; and :doc:`guides/index`
 for task-oriented recipes. The rest of this page covers ``Runtime``,
 ``Indexer``, and Dask.
 

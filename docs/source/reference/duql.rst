@@ -9,6 +9,10 @@ or a plugin, is duql text. This page lists the syntax. The engine evaluates
 only part of it today (see `What the engine evaluates`_); the rest parses and
 fails with an error that names the release stage that adds it.
 
+The builders in Python (``dftracer.utils.duql``, see :doc:`../api/duql`) and
+C++ (``duql/builder.h``: ``duql::Pipe`` and ``duql::Col``) build the same
+syntax tree as the equal text and print it as canonical text.
+
 Tokens
 ------
 
@@ -28,14 +32,22 @@ Tokens
      - Digits, with an optional fraction and exponent (``1e-5``). A number
        never holds a sign: ``-5`` is unary minus applied to ``5``.
    * - Duration
-     - A number followed directly by ``ns``, ``us``, ``ms``, ``s``, ``m`` or
-       ``h``: ``250ms``.
+     - A number followed directly by ``ns``, ``us``, ``ms``, ``s``, ``m``,
+       ``h`` or ``d``: ``250ms``.
    * - String
-     - Text between ``"`` or ``'``; a backslash keeps the next character in
-       the string.
+     - Text between ``"`` or ``'``. ``\\``, ``\"``, ``\'``, ``\n``, ``\t``,
+       ``\r`` and ``\uXXXX`` (a surrogate pair for one code point above
+       U+FFFF) are escapes; any other backslash stays in the string, so a
+       regex such as ``"\d+\.h5"`` keeps its escapes. Printed strings use
+       double quotes and these escapes.
    * - Parameter
      - ``$name``. A caller binds it to a value; it is never spliced into the
-       text.
+       text. A value is a number, a string, ``true``, ``false``, or a list
+       of them, which only ``x [not] in $name`` reads; an integer also indexes an
+       array, as in ``a[$n]``, and any other value there is a compile error.
+       ``x [not] [i]like
+       $name`` reads a string. The C ABI and ``dftracer_view --param`` take
+       a value as duql text, such as ``--param 'names=["read", "write"]'``.
    * - Comment
      - ``#`` to the end of the line.
 
@@ -52,12 +64,13 @@ written with backticks: ```null` == 1``.
 
 Stage names (``where``, ``derive``, ``select``, ``drop``, ``rename``,
 ``distinct``, ``group``, ``agg``, ``window``, ``pivot``, ``unpivot``,
-``sort``, ``take``, ``skip``, ``sample``, ``expand``, ``lookup``, ``union``,
+``sort``, ``take``, ``skip``, ``sample``, ``expand``, ``parse``, ``lookup``, ``union``,
 ``call``, ``time_range``, ``call_tree``, ``bucket``) and ``from`` are
 keywords only at the start of a stage. Elsewhere they are field names:
 ``where sample == 1`` compares the field ``sample``. A query that starts
 with a stage name is a stage, so a field with that name at the start is
-written with backticks: ```sample` == 1``.
+written with backticks: ```sample` == 1``. After a ``|``, a name followed
+by ``(`` that is not a stage name is a pipeline macro call (see `Macros`_).
 
 The first line may be ``duql 1``, the language version. Printed queries
 always carry it.
@@ -66,7 +79,16 @@ Paths
 -----
 
 ``a.b.c`` walks objects; ``a[0]`` indexes an array and ``a[-1]`` counts from
-the end. ``.`` alone is the current row and ``.name`` a field of it;
+the end. ``a[$n]`` indexes with an integer parameter.
+
+Any other expression indexes too: ``xs[i]`` and ``xs[i - 1]`` read the
+element at that row's index, 0-based, with a negative index counting from the
+end. The result is null when the index is null, not an integer or out of
+range, or when ``xs`` is not an array. A computed index ends the path, so
+``a[i].b`` and ``a[i][0]`` are parse errors. Indexing the result of a call,
+as in ``sort(a)[0]``, is not supported; derive the call first.
+
+``.`` alone is the current row and ``.name`` a field of it;
 ``^.name`` is a field of the enclosing row.
 
 Grammar
@@ -109,6 +131,9 @@ no ``from``, no stage after the first. A condition may use:
 - fields: ``a.b``, ``a[0]``, ``a[-1]`` (from the end of an array) and
   backticked keys;
 - literals, ``null`` and parameters (``$name``);
+- list literals, ``["read", "write"]``, wherever an expression goes, such as
+  ``derive t = [cat, name]``, ``contains(["read", "write"], name)`` and
+  ``len([1, 2, 3])``; a list compared with ``==`` is unknown, as an array is;
 - the comparisons ``==``, ``!=``, ``<``, ``<=``, ``>``, ``>=`` between any
   two expressions;
 - ``in`` and ``not in`` with a list of expressions;
@@ -157,11 +182,24 @@ Patterns
   ``(?m)`` and ``(?s)``. Backreferences, lookahead and lookbehind, atomic
   and possessive groups, recursion, callouts, ``\C``, ``\K`` and verbs
   such as ``(*UTF)`` are compile errors.
-- Each regex match has a work limit. A string that reaches it gives
-  unknown, so a pathological pattern such as ``^(a|aa)+$`` never hangs a
-  scan. Where the regex JIT is not available the limit is counted
-  differently, so a string at the edge of the limit may differ between
-  platforms.
+- A yes/no regex match (``~``, ``~*``, ``!~``, ``!~*``, the DataFrame
+  ``str_search`` and ``str_matches``, and the pattern masks) runs on PCRE2
+  with a JIT, behind a SIMD check for the literals every match needs. A value
+  of 256 bytes or more whose pattern has an unbounded dot gap (``.*``,
+  ``.+``) runs on Vectorscan instead, where it is faster. Vectorscan needs
+  valid UTF-8, does not run ``\X`` or ``\R``, and leaves a non-ASCII value to
+  PCRE2 for a pattern whose non-ASCII results differ between the engines
+  (Unicode properties such as ``\p{L}``, and case-insensitive non-ASCII
+  letters). Captures (``extract``, ``findall``, ``parse`` and ``regex_replace``)
+  always run on PCRE2. The
+  results are the same on both engines.
+- Each PCRE2 match has a work limit. A value that reaches it runs again on
+  Vectorscan, which has no work limit, for the exact result; a value
+  Vectorscan cannot take (invalid UTF-8, or a build without Vectorscan)
+  gives unknown (null in a DataFrame kernel). So a pathological pattern such
+  as ``^(a|aa)+$`` never hangs a scan. Where the regex JIT is not available
+  the limit is counted differently, so a string at the edge of the limit may
+  differ between platforms.
 - A pattern that matches only literal text (``abc``, ``abc%``, ``%abc``,
   ``%abc%``, ``"abc" in x``) runs without a regex engine, on a SIMD
   substring search. Case-sensitive ``like`` and regex conditions also let
@@ -213,6 +251,9 @@ gives unknown.
      - ``a`` when ``c`` is true, else ``b``.
    * - ``case(c1, a1, c2, a2, ..., else)``
      - The ``a`` of the first true ``c``, else the last argument.
+   * - ``case { c1 => a1, c2 => a2, else => d }``
+     - The same as ``case(c1, a1, c2, a2, d)``. ``else`` is optional and
+       last; without it the default is null.
    * - ``abs``, ``floor``, ``ceil``
      - Of a number; an integer stays an integer.
    * - ``round(x)``, ``round(x, digits)``
@@ -236,6 +277,15 @@ gives unknown.
      - Characters of ``s`` from ``start`` (0-based).
    * - ``replace(s, from, to)``
      - ``s`` with every ``from`` replaced by ``to``.
+   * - ``regex_replace(s, re, to)``
+     - ``s`` with every non-overlapping match of the regex ``re`` replaced by
+       ``to``, left to right. In ``to``, ``$n`` and ``${n}`` insert group
+       ``n``, ``${name}`` the named group and ``$$`` a dollar sign; a group
+       that took no part inserts nothing. An empty match inserts ``to`` and
+       advances one character: ``regex_replace("ab", "x*", "-")`` is
+       ``-a-b-``. Null gives null; no match leaves ``s`` as it is. ``re`` and
+       ``to`` are string literals or parameters. An invalid pattern, a missing
+       group and a stray ``$`` are compile errors.
    * - ``first(array)``, ``last(array)``, ``sum(array)``
      - The first or last element, or the sum of the numbers. In a ``group``
        or ``agg`` block these names are aggregates.
@@ -253,6 +303,21 @@ gives unknown.
      - The elements from index ``i`` up to, not including, ``j`` (the end
        when absent). A negative index counts from the end; an index past
        either end is clamped.
+   * - ``index_of(a, v)``
+     - The 0-based position of the first element of ``a`` equal to ``v``;
+       null when none is, when ``a`` is not an array or when ``v`` is null.
+   * - ``sort(a)``
+     - The elements in ascending order, nulls last; null when the elements
+       present do not compare, such as numbers with strings. A filter that
+       starts with ``sort(`` reads as the ``sort`` stage: write
+       ``where sort(a) ...``.
+   * - ``unique(a)``
+     - Each distinct element once, at its first position; numbers compare
+       by value and nulls count as one value.
+   * - ``join(a, sep)``
+     - The string elements joined with ``sep``, nulls skipped; null when an
+       element is not a string or ``a`` is not an array. ``sep`` is a string
+       literal or a parameter.
    * - ``flatten(array)``
      - The elements, with each element that is an array replaced by its
        elements (one level).
@@ -331,57 +396,71 @@ On a View, a query is a pipeline of stages joined by ``|``:
      - All columns but these.
    * - ``rename x = a``
      - Column ``a`` named ``x``.
-   * - ``distinct a, e``
+   * - ``distinct a, x = e, e2 as y``
      - One row for each distinct key, in first-occurrence order, with the
-       key columns only.
+       key columns only. A key is named as in ``group``.
    * - ``sort a, -b, c nulls first``
      - Stable order by the keys; ``-`` sorts descending. Nulls come last in
        both directions unless ``nulls first`` is given.
    * - ``take n``, ``skip n``
      - The first ``n`` rows, or all but them. ``n`` may be a parameter.
+   * - ``take a..b``
+     - Rows ``a`` to ``b``, counted from 1, both included: ``skip a - 1 |
+       take b - a + 1``. It needs ``1 <= a <= b`` and takes no ``by``.
    * - ``take n by a, e [sort s]``
      - For each distinct key tuple, its first ``n`` rows in input order, or
        in the order of the sort keys ``s`` (ties in input order). Rows keep
        that order in the output.
    * - ``sample n [seed s]``
-     - ``n`` rows, in input order.
+     - ``n`` rows, in input order. ``n`` and ``s`` may be parameters.
    * - ``sample p% [seed s]``
      - About ``p`` percent of the rows, in input order.
    * - ``group a, x = e { y = f(...), ... }``
      - One row for each distinct key tuple (see `Group and agg`_).
    * - ``agg { y = f(...), ... }``
      - One row over all input rows.
-   * - ``time_range lo .. hi [overlap]``
-     - The rows in a time window (see `Trace stages`_).
-   * - ``bucket d [fill]``
-     - A time bucket key for the next ``group`` or ``agg``.
+   * - ``time_range [lo] .. [hi] [overlap]``
+     - The rows in a time window, open on a side with no bound (see
+       `Trace stages`_).
+   * - ``bucket w [every e] [at t] [fill [forward | linear] [from lo to hi]] [as name]``
+     - A time bucket key for the next ``group`` or ``agg``. With ``every``,
+       overlapping or sparse windows.
    * - ``call_tree``
      - The nesting of events per ``pid`` and ``tid``.
+   * - ``name(args)``
+     - The stages of a pipeline macro (see `Macros`_).
    * - ``window [k1, k2] [sort s] { a = expr, ... }``
      - Every row, with one added column per entry (see `Window`_).
    * - ``session [k1, k2] gap d [max m] [as name]``
      - Every row, with its session number within its key (see `Session`_).
    * - ``expand p [as e] [with_index i] [keep_empty]``
      - One row for each element of the array ``p`` (see `Expand`_).
-   * - ``pivot k [in [v1, v2]] { a = agg(...), ... }``
+   * - ``parse p ~ re``
+     - One String column for each named group of the regex ``re`` (see
+       `Parse`_).
+   * - ``pivot k [in [v1 [as n1], v2]] { a = agg(...), ... }``
      - The values of ``k`` as columns (see `Pivot`_).
    * - ``unpivot a, b as key, value``
      - One row for each listed field (see `Unpivot`_).
    * - ``lookup s on k [== c], ... [into m]``
      - Every row once, with the columns of the row set ``s`` (see
        `Row sets and lookups`_).
+   * - ``lookup s on k [== c], ... inner [into m]``
+     - Only the rows with a match in ``s`` (see `Row sets and lookups`_).
+   * - ``lookup s on k [== c], ... anti``
+     - Only the rows with no match in ``s`` (see `Row sets and lookups`_).
    * - ``lookup s on k [== c], ... overlap [into m]``
      - The rows of ``s`` whose time span overlaps the row's (see
        `Row sets and lookups`_).
-   * - ``lookup s on k [== c], ... asof t [== c2] [direction] [within n]``
+   * - ``lookup s on k [== c], ... asof t [== c2] [direction] [within d]``
      - Every row once, with the columns of the row of ``s`` nearest in time
        (see `Row sets and lookups`_).
-   * - ``union (from ...)``
-     - The rows so far, then the rows of another pipeline (see
-       `Row sets and lookups`_).
+   * - ``union (from ...)``, ``union name``, ``union "file"``
+     - The rows so far, then the rows of another pipeline, row set, ``let``
+       or file (see `Row sets and lookups`_).
 
-The ``call`` stage (12h) is a compile error that names the stage and its
-release stage.
+``| call ns.f(args)`` runs a function a loaded plugin registers (see
+`Plugin functions`_). It must be the last stage.
 
 The leading ``where`` stages filter events in the scan, so they use the
 index and the raw line pre-filter as a filter does. A ``select`` of plain
@@ -419,9 +498,16 @@ where the scan reads the records.
 Every expression after the scan runs on column kernels with the results
 given above, unknown as a null cell. A ``json`` field of the record schema
 is text in a column: ``json(x)`` reads it, and any other expression on it is
-an error. A function argument that must be known when the query is compiled
-(a ``starts_with`` prefix, a ``round`` digit count, a ``substr`` start) must
-be a literal or a parameter after the scan. ``??``, ``coalesce``, ``if`` and
+an error. After the scan these arguments may be a column or any expression: the
+needle of ``starts_with``, ``ends_with`` and ``contains`` on a string, ``from``
+and ``to`` of ``replace``, ``start`` and ``length`` of ``substr``, ``digits``
+of ``round`` and the group of ``extract``, as in
+``lookup runs on run | derive p = starts_with(fname, prefix)``. Each row gives
+what the scan gives: null where an operand is null, true for an empty needle,
+the row unchanged for an empty ``from``, and null for a negative ``start``,
+``length`` or group and for a group past the groups of the pattern. A pattern
+(``~``, ``like``, the pattern of ``extract`` and ``regex_replace``) and the
+replacement of ``regex_replace`` stay a literal or a parameter. ``??``, ``coalesce``, ``if`` and
 ``case`` whose values have different types are an error; convert them with
 ``int()``, ``float()`` or ``string()``.
 
@@ -436,6 +522,22 @@ field must have a time or duration role in the View's record schema:
 microseconds. A duration beside a field with no role is an error that names
 the field.
 
+The unit follows the expression the duration meets:
+
+- ``+``, ``-``, ``??``, negation, and the value arguments of ``coalesce``,
+  ``if``, ``case``, ``min``, ``max`` and ``abs`` keep the unit their timed
+  operands share: ``coalesce(dur, 0) > 1ms``, ``-dur < -1ms``. A negative
+  duration such as ``-1ms`` is allowed.
+- A product or quotient of a timed field (``dur / 1000``, ``dur * 2``) has no
+  clear unit, so a duration beside it is an error; compare the field itself,
+  or give the unit with ``as_time(dur / 1000, "ms")``.
+- A column keeps the unit of the value it holds: ``derive``, ``window`` and
+  ``select`` columns take the unit of their expression, ``rename`` moves it,
+  and ``group`` and ``agg`` keep it for ``sum``, ``min``, ``max``, ``mean``,
+  ``std``, ``first``, ``last`` and ``quantile`` of a timed value. Any other
+  column has none, even when it reuses a timed field's name:
+  ``group pid { dur = count() } | where dur > 1ms`` is an error.
+
 .. list-table::
    :header-rows: 1
 
@@ -449,20 +551,72 @@ the field.
      - The time or duration field ``t`` in seconds, as a double.
    * - ``bin(t, d)``
      - ``t`` rounded down to a multiple of ``d``: ``(t // d) * d``.
+   * - ``date_part(t, part)``
+     - The UTC calendar field of the time ``t`` as an integer. ``part`` is
+       one of ``"year"``, ``"month"``, ``"day"``, ``"hour"``, ``"minute"``,
+       ``"second"``, ``"millisecond"``, ``"microsecond"``, ``"nanosecond"``,
+       ``"day_of_week"`` (Monday is 0), ``"day_of_year"`` (from 1),
+       ``"quarter"``, ``"iso_week"`` or ``"iso_year"``, as a string literal
+       or parameter. The sub-second fields count within their whole:
+       ``"millisecond"`` 0 to 999 within the second, ``"microsecond"`` 0 to
+       999999 within the second, ``"nanosecond"`` 0 to 999 within the
+       microsecond, as pandas.
+   * - ``format_time(t, fmt)``
+     - ``t`` as UTC text. ``fmt`` is a string literal or parameter with
+       the directives ``%Y %y %m %d %H %I %M %S``, ``%f`` (six digit
+       microseconds), ``%j``, ``%a %A %b %B`` (English names), ``%p``
+       (``AM`` or ``PM``), ``%F`` (``%Y-%m-%d``), ``%T`` (``%H:%M:%S``),
+       ``%s`` (epoch seconds), ``%z`` (``+0000``), ``%Z`` (``UTC``) and
+       ``%%``.
+   * - ``now()``
+     - The current time in the record's time unit. See below.
+
+In ``date_part`` and ``format_time``, ``t`` is a field with a time or
+duration role, or ``as_time(x, unit)``. Its unit comes from the role or the
+unit; trace timestamps are Unix-epoch microseconds by default. A time before
+1970 gives the calendar before 1970. Null gives null. The result is always
+UTC; there is no other time zone. An unknown part, an unknown directive, a
+trailing ``%`` and a ``t`` with no time unit are compile errors.
+
+.. code-block:: text
+
+   group h = date_part(ts, "hour") { n = count() }
+   derive d = format_time(ts, "%F %T.%f")
+
+For ``ts`` 1700000000123456 the second query gives
+``2023-11-14 22:13:20.123456``.
+
+``now()`` is read once when the query compiles. It is the same for every row
+and every use in that query. It carries the time unit, so
+``ts > now() - 1h`` works. It needs a View, because the unit comes from the
+record schema's time roles; ``now()`` without a View is a compile error.
 
 Group and agg
 ~~~~~~~~~~~~~
 
 .. code-block:: text
 
-   group name, big = dur > 1ms { n = count(), t = sum(dur / 1000) }
+   group name, big = dur > 1ms { n = count(), ms = sum(dur) / 1000 }
    agg { n = count(), p99 = quantile(dur, 0.99) }
+   group name { count(), sum(dur) }
 
 - A key is a field or a named expression (``name = expr`` or
   ``expr as name``). A field key is named by its path.
-- Each block entry is ``name = aggregate(args)``: exactly one aggregate call.
-  Its arguments are ordinary expressions, so ``sum(dur / 1000)`` is valid.
-  ``sum(dur) / 1000`` and a bare field are compile errors.
+- Each block entry is ``name = expr``, where ``expr`` holds one or more
+  aggregate calls and no field outside them, such as ``sum(dur) / 1000``,
+  ``sum(size) / count()`` or ``coalesce(max(dur), 0)``. An aggregate's
+  arguments are ordinary expressions, so ``sum(dur / 1000)`` is valid. A
+  field outside an aggregate, such as ``dur + count()``, and an entry with no
+  aggregate are compile errors. In an entry, ``sum``, ``min``, ``max``,
+  ``first`` and ``last`` with one argument are the aggregate, so
+  ``max(max(dur), 0)`` is the function over the aggregate. A ``pivot`` entry
+  is one aggregate call.
+- An entry without ``name =`` is named from its text: each run of
+  characters other than letters, digits and ``_`` becomes one ``_``, trimmed
+  at both ends. So ``count()`` is ``count``, ``sum(dur)`` is ``sum_dur`` and
+  ``quantile(dur, 0.99)`` is ``quantile_dur_0_99``. A name that starts with a
+  digit gets a leading ``_``. The same rule names the entries of a ``window``
+  and a ``pivot`` block. Two entries with one name are an error.
 - The result has the key columns, then one column per aggregate.
 - Rows are sorted by the key tuple, ascending, with null keys last. Equal
   numbers are one key. A null key is its own group, shown as null.
@@ -534,7 +688,8 @@ Every aggregate skips null inputs. Over a group with no non-null input,
    * - ``utilization()``
      - ``busy()`` divided by the span from the first start to the last
        end; with ``bucket``, by the bucket width, and after a leading
-       ``time_range``, by the window.
+       ``time_range``, by the window. They do not run after a ``bucket``
+       with ``every``.
    * - ``active()``
      - The largest number of records that run at the same time.
 
@@ -554,7 +709,8 @@ A ``group`` or ``agg`` runs on one of two plans. Both give the same rows.
      - Runs as
    * - Trace
      - The stage follows only scan stages (leading ``where``, a leading
-       ``time_range``, ``bucket``, a leading field ``select``); every key is
+       ``time_range``, ``bucket`` without ``every``, a leading field
+       ``select``); every key is
        a string or integer field; every input is a numeric field; every
        aggregate is ``count()``, ``sum``, ``min``, ``max``, ``mean``,
        ``var``, ``std``, ``quantile`` with ``0 < q < 1``, ``histogram`` or an
@@ -562,7 +718,7 @@ A ``group`` or ``agg`` runs on one of two plans. Both give the same rows.
      - The View's trace aggregation in the scan: index, rollups, occupancy
        clipped to buckets.
    * - Frame
-     - Any other case.
+     - Any other case, including a ``bucket`` with ``every``.
      - Computed columns, then a LazyFrame ``group_by``. With
        ``count_distinct``, ``collect``, ``arg_max``, ``arg_min``,
        ``sketch`` or ``merge``, one streaming pass over the rows in input
@@ -595,19 +751,63 @@ parameters or durations.
        leading ``where`` stages, it is the View's ``time_range``: the
        occupancy aggregates then take every record that overlaps the
        window, clipped to it. Elsewhere it is a filter on the columns.
+       ``lo ..`` and ``.. hi`` leave a side open; such a window is a filter
+       on the columns, with no clipping. A bound is a number, a parameter,
+       a duration, or ``+``, ``-``, ``*`` and ``/`` over them:
+       ``$t0 .. $t0 + 10s``.
    * - ``time_range lo .. hi overlap``
      - Rows with ``ts < hi and ts + dur > lo``. As the first stage after
        the leading ``where`` stages, it is a scan filter.
-   * - ``bucket d``
-     - The next ``group`` or ``agg`` gets the first key ``bucket``: the start
+   * - ``bucket d [as name]``
+     - The next ``group`` or ``agg`` gets the first key ``bucket`` (or
+       ``name``): the start
        of the ``d``-wide bucket that holds the row's start, aligned to 0.
        Occupancy aggregates clip each record to every bucket it overlaps.
-       A ``bucket`` with no ``group`` or ``agg`` after it is a compile
+       ``bucket d at t`` aligns the bucket starts to ``t`` (default 0):
+       they are ``t + k * d``. A ``bucket`` with no ``group`` or ``agg`` after it is a compile
        error.
+   * - ``bucket w every e``
+     - Windows of width ``w`` that start every ``e``. A record at time
+       ``t`` belongs to every window ``[s, s + w)`` that holds it, and the
+       ``group`` or ``agg`` after the stage sees each window as a group, so
+       every aggregate is exact. With ``e`` smaller than ``w`` the windows
+       overlap, as in a moving rate: ``bucket 5s every 1s | agg { b =
+       sum(size) }``. With ``e`` larger than ``w`` some records fall in no
+       window. The starts are ``t + k * e``. ``w``, ``e`` and ``t`` read
+       like ``d``: numbers, durations, parameters and arithmetic. A
+       non-positive ``w`` or ``e`` is a compile error. Events of size 1, 2,
+       3, 4 at 0, 1000, 2000, 3000 microseconds with
+       ``bucket 2ms every 1ms | agg { b = sum(size), n = count() }`` give
+       windows starting at -1000, 0, 1000, 2000, 3000 with ``b`` 1, 3, 5, 7,
+       4 and ``n`` 1, 2, 2, 2, 1; ``bucket 2ms at 1ms | agg { n = count() }``
+       gives buckets at -1000, 1000, 3000 with ``n`` 1, 2, 1. A hopping
+       bucket runs on the frame plan and copies each row into each window
+       that holds it, so the cost grows with rows times ``w / e``. The
+       occupancy aggregates ``busy``, ``concurrency``, ``utilization`` and
+       ``active`` do not run after it (a compile error); ``at`` alone keeps
+       the trace plan and them.
    * - ``bucket d fill``
      - As ``bucket d``, and each group also has a row for every bucket
        between the first and the last, with counts 0 and other aggregates
        null.
+   * - ``bucket d fill forward``
+     - As ``bucket d fill``, and an added bucket takes the group's
+       nearest earlier present value of every aggregate but the counts.
+       It is null before the group's first present value. A present null
+       is not filled.
+   * - ``bucket d fill linear``
+     - As ``bucket d fill``, and an added bucket takes the straight line
+       between the group's nearest earlier and later present values. Only
+       numeric aggregates are filled; a bucket without both neighbours is
+       null. A present null is not filled.
+   * - ``bucket d fill [forward | linear] from lo to hi``
+     - The range runs from the bucket that holds ``lo`` to the bucket that
+       holds ``hi``, and ``lo`` and ``hi`` read like ``time_range`` bounds.
+       Buckets of the data outside the range stay. ``lo`` greater than
+       ``hi`` is a compile error. Without ``from .. to`` the range is the
+       result's first to last bucket, the same for every group. With
+       ``every``, the missing window starts are on the ``e`` grid and
+       ``lo`` and ``hi`` floor to it.
    * - ``call_tree``
      - For each event, per ``pid`` and ``tid``: its nesting ``depth`` and
        ``parent``, the output row number of the enclosing event (-1 for
@@ -617,7 +817,8 @@ parameters or durations.
 
 ``bucket d fill`` builds a grid of buckets times groups. The environment
 variable ``DUQL_FILL_MAX_ROWS`` caps it (default 10000000); a larger grid
-fails the query with an error that gives both counts.
+fails the query with an error that gives both counts. The cap
+applies to the range of ``from .. to`` and to a hopping bucket. Every mode adds counts of 0.
 
 Window
 ~~~~~~
@@ -639,6 +840,31 @@ entry.
   Ties keep input order.
 - ``min`` and ``max`` with two or more
   arguments stay the scalar functions.
+- ``sum``, ``mean``, ``min``, ``max``, ``count``, ``count_if``,
+  ``count_distinct``, ``collect``, ``arg_max``, ``arg_min``, ``var``, ``std``
+  and ``quantile`` take a frame. ``histogram`` does not:
+
+  - ``f(e) over N rows`` is the row and the ``N - 1`` rows before it.
+  - ``f(e) over d`` is the rows whose sort key lies in ``[k - d, k]`` for the
+    row's key ``k``, peers included. It needs one ascending numeric sort key
+    and a whole-number width in the key's units. A duration such as ``1s``
+    needs a key with a time or duration role. The width may be a parameter.
+  - An empty frame gives null. The counts give 0 and ``collect`` gives an
+    empty list.
+  - Each function gives the value its ``group`` aggregate gives over the
+    frame. Nulls are skipped. ``arg_max`` and ``arg_min`` take the earliest
+    row of the frame on a tie. ``collect`` lists the values in sort order.
+    ``var`` and ``std`` are null with fewer than 2 values and 0 on a
+    constant frame.
+  - A framed ``quantile`` is exact, with linear interpolation. Over the whole
+    partition it stays the sketch that the ``group`` aggregate uses, so the
+    two can differ slightly.
+  - A ``collect`` whose output passes 2^27 values in total fails. A range
+    frame over a large partition repeats the partition for each row.
+
+  .. code-block:: text
+
+     window pid sort ts { m = mean(size) over 3 rows, bw = sum(size) over 1s }
 
 .. list-table::
    :header-rows: 1
@@ -653,13 +879,28 @@ entry.
    * - ``lag(e)``, ``lag(e, n)``, ``lead(e)``, ``lead(e, n)``
      - ``e`` of the row ``n`` before or after, in sort order. ``n`` is a
        non-negative integer literal or a parameter, default 1. Null past the
-       edge of the partition.
+       edge of the partition. ``lag(e, n, default)`` and ``lead(e, n, default)``
+       give ``default`` past the edge only; a null ``e`` stays null.
    * - ``running_sum(e)``
      - The sum of the non-null values so far; null until the first one. An
        integer sum is exact (``uint64`` over an unsigned column); a sum
        outside the type is a query error.
    * - ``running_count()``
      - The number of rows so far.
+   * - ``running_min(e)``, ``running_max(e)``, ``running_mean(e)``
+     - The minimum, maximum or mean of the non-null values so far; null
+       until the first one.
+   * - ``ntile(n)``
+     - The 1-based bucket of the row when the partition is split into ``n``
+       buckets of near-equal size.
+   * - ``nth(e, k)``
+     - ``e`` of the ``k``-th row (1-based) of the whole sorted partition;
+       nulls are not skipped, and null when the partition is shorter.
+   * - ``percent_rank()``, ``cume_dist()``
+     - The relative rank ``(rank - 1) / (rows - 1)``, and the share of rows
+       at or before the row. Rows with equal ``sort`` keys get equal values.
+   * - ``fill_forward(e)``
+     - The nearest non-null ``e`` at or before the row.
    * - ``count()``, ``count(e)``
      - Over the whole partition: its rows, or its rows where ``e`` is not
        null.
@@ -669,13 +910,25 @@ entry.
    * - ``first(e)``, ``last(e)``
      - The first or last non-null value in sort order, for the whole
        partition.
-   * - ``var(e)``, ``std(e)``, ``quantile(e, q)``, ``histogram(e)``
+   * - ``count_if(c)``, ``count_distinct(e)``, ``collect(e)``
+     - Over the whole partition or a frame: the rows where ``c`` is true, the
+       distinct non-null values of ``e``, or the list of the non-null values
+       of ``e``.
+   * - ``arg_max(e, by)``, ``arg_min(e, by)``
+     - The ``e`` of the row with the largest or smallest ``by``, over the
+       whole partition or a frame.
+   * - ``var(e)``, ``std(e)``, ``quantile(e, q)``
+     - Over the whole partition or a frame, the same value the aggregate of
+       that name gives in a ``group`` (see `Aggregates`_).
+   * - ``histogram(e)``
      - Over the whole partition, the same value the aggregate of that name
-       gives in a ``group`` (see `Aggregates`_).
+       gives in a ``group``. It takes no frame.
 
-The stage runs on the ``dftu.frame.window`` kernel after the ordered scan;
-``var``, ``std``, ``quantile`` and ``histogram`` are grouped by partition
-and joined back to the rows.
+The stage runs on the ``dftu.frame.window`` kernel after the ordered scan.
+This holds for ``count_distinct``, ``collect``, ``arg_max`` and ``arg_min``
+over the whole partition and for every framed function. Over the whole
+partition, ``var``, ``std``, ``quantile`` and ``histogram`` are grouped by
+partition and joined back to the rows.
 
 Session
 ~~~~~~~
@@ -725,6 +978,29 @@ order, and repeats the other columns.
 - A missing, null or non-array ``p`` gives one row with ``e`` null (and
   ``i`` null).
 
+Parse
+~~~~~
+
+.. code-block:: text
+
+   where cat == "POSIX" | parse name ~ "(?<op>[a-z]+)\d*_(?<fd>\d+)"
+
+``parse p ~ re`` adds one String column for each named group of the regex
+``re``, named after the group, in group order. ``re`` is a string literal or
+a parameter. The string ``"open64_17"`` gives ``op = "open"`` and
+``fd = "17"``.
+
+- A column is null where ``p`` is null, the pattern does not match, or the
+  group took no part.
+- A group named like an existing column replaces that column, as ``derive``
+  does.
+- Only ``~`` is allowed. For a case-insensitive match write ``(?i)`` in the
+  pattern.
+- It is a compile error when the pattern has no named group, when the
+  operator is ``~*``, ``!~`` or ``!~*``, and when the pattern is invalid.
+- The regex runs once for each group and row, so the cost is that of one
+  ``extract`` for each group. It runs on PCRE2.
+
 Pivot
 ~~~~~
 
@@ -743,6 +1019,8 @@ aggregates of a `Group and agg`_ block.
   value.
 - A value name is the duql literal: a string as is, an integer without
   ``.0``, ``true`` or ``false``, and ``null``.
+- ``v as n`` names the columns of the value ``v``: ``n`` when the block has
+  one aggregate, else ``a_n`` for each aggregate ``a``.
 - With ``in``, the columns are exactly the listed values, in list order, and
   later stages may follow.
 - Without ``in``, the columns follow the values in ascending order. More
@@ -825,7 +1103,7 @@ fails with an error that says its elements mix types. A scan filter still
 works.
 
 After the scan, ``slice``, ``flatten``, ``keys``, ``values``,
-``parse_json`` and ``split`` each compute a column that the rest of the
+``parse_json``, ``split``, ``index_of``, ``sort``, ``unique`` and ``join`` each compute a column that the rest of the
 expression reads, and explain shows it as ``call __duql_c_<n> = ...``.
 
 - ``values(o)`` needs fields of one type, or numbers only, which become
@@ -838,10 +1116,69 @@ expression reads, and explain shows it as ``call __duql_c_<n> = ...``.
   ``select`` or ``derive`` item read it; a scan filter reads the value.
 - Inside the condition of ``any`` or ``all``, these functions run only in a
   scan filter.
+- A list literal after the scan needs items of one type. ``join`` over a
+  list of strings runs as an expression, with no column call.
+- For ``tags`` equal to ``["b", "a", "b", null]``, ``sort(tags)`` is
+  ``["a", "b", "b", null]``, ``unique(tags)`` is ``["b", "a", null]``,
+  ``join(tags, ",")`` is ``b,a,b`` and ``index_of(tags, "a")`` is 1.
 - ``contains(array, v)`` of a string array has no column kernel; it runs
   only in a scan filter.
 
-``call`` names 12h.
+.. _duql-plugin-functions:
+
+Plugin functions
+~~~~~~~~~~~~~~~~
+
+.. code-block:: text
+
+   derive e = myplug.entropy(x, 8) * 2
+   select name, myplug.twice(dur) as d
+   sort ts | call myplug.head(3)
+
+A loaded plugin registers functions under a dotted name (``ns.f``). Build the
+plugin set before the query runs; its functions are visible until the set is
+released.
+
+- A scalar function (column to column) runs in a ``derive`` or ``select``
+  entry, alone or anywhere inside the entry's expression, and gives one value
+  per row. Later ``derive`` entries read the result.
+- The first argument is a column expression. Each later argument fills, in
+  order, the next operand of the function: a string literal is the text
+  operand, a number or bool literal or a parameter is a scalar operand (at
+  most two), and one other expression is the second column. More arguments
+  than that are a compile error. Arguments are positional; a duration literal
+  is not accepted.
+- The result type is the function's own.
+- ``| call ns.f(args)`` runs a table function (table to table) over the rows
+  so far. Its literal arguments fill the operands after the table, in order.
+  The result columns are the function's. ``call`` must be the last stage;
+  any stage after it is a compile error.
+- A dotted name that no loaded plugin registered is a compile error that
+  lists the loaded plugin namespaces, or says that none is loaded.
+- A plugin function in a ``where``, a key, an aggregate argument, a ``let``
+  or a sub-query is a compile error. The error for a ``where``, key or
+  aggregate argument names ``derive`` and ``select``.
+- Arguments the function refuses fail before any row is read. The message
+  names the function and its signature. On a schemaless view, where a
+  column's type is known only from its rows, an argument type the function
+  refuses fails at the first batch.
+- A function a plugin registers as a reducer (column to value) runs as an
+  aggregate in a ``group`` or ``agg`` entry, alone or inside an aggregate
+  expression:
+  ``group name { e = myplug.entropy(dur) }`` or
+  ``agg { r = myplug.entropy(dur) / count() }``.
+  The first argument is a column expression and later arguments are number
+  literals or parameters that fill the reducer's operands in order.
+- A reducer sees each group's non-null values in input order. A group with no
+  non-null value gives null. The column type follows the reducer's result
+  (integer, float or bool); a generic scalar result is a float.
+- A reducer in a ``window`` or ``pivot`` block is a compile error. Arguments
+  it does not take fail before any row is read and name its signature. A
+  reducer that fails on a group fails the query.
+- A plugin aggregate runs on the frame plan and keeps every group's values
+  until the end, like ``collect``. Plugin mergeable states and jit
+  accumulators are not duql aggregates. A plugin node is not a ``call``
+  target.
 
 Explain
 ~~~~~~~
@@ -872,8 +1209,10 @@ their own lines:
        ``group (frame plan): keys ...; aggs ...``
    * - ``bucket d`` (trace plan)
      - ``time_bucket d``
+   * - ``bucket w every e [at t]``
+     - ``hop buckets w every e [at t]``
    * - ``bucket d fill``
-     - ``fill buckets d``
+     - ``fill buckets d [forward | linear] [from lo to hi]``
    * - ``take n by k``
      - ``head_by k n``
    * - ``sample n seed s``
@@ -980,7 +1319,25 @@ the query, before the main scan, unless the index stores its rows (see
    and joins one partition at a time, giving the same rows and columns in an
    unspecified order (see `Limits`_).
 
-``lookup s on k [== c], ... asof t [== c2] [backward | forward | nearest] [within n]``
+``lookup s on k [== c], ... inner [into m]``
+   Keeps only the rows with a match in ``s``, in order, with the columns, the
+   rules and the errors of ``lookup``: at most one distinct match, and a
+   conflict is an error. With ``into m`` it keeps the rows whose ``m`` is not
+   empty. A row whose key is null has no match, so ``inner`` drops it.
+
+``lookup s on k [== c], ... anti``
+   Keeps only the rows with no match in ``s``, in order, and adds no column,
+   so it takes no ``into``. A row whose key is null has no match, so ``anti``
+   keeps it. It gives the rows ``where k not in (from s | select k)`` gives,
+   except that a row with a null key is kept. ``inner`` and ``anti`` do not
+   combine with ``asof`` or ``overlap``.
+
+``lookup (from ...) on k``
+   The side may be an inline pipeline instead of a name, such as
+   ``lookup (from data | where type == "run" | select run, app) on run``. It
+   may not read the enclosing row (``^.``).
+
+``lookup s on k [== c], ... asof t [== c2] [backward | forward | nearest] [within d]``
    Keeps every row once, in order, and adds each column of ``s`` but its
    key columns and its time column ``c2`` (``t`` when it is not named). The
    row it takes is the one of ``s`` with equal keys and the time nearest
@@ -990,8 +1347,11 @@ the query, before the main scan, unless the index stores its rows (see
    ``backward`` and ``nearest`` take the last and ``forward`` the first, in
    the row order of ``s``. A row whose key or time is null or missing, or
    that has no candidate, gets nulls; a row of ``s`` with a null key or time
-   never matches. ``within n`` (an integer in time units, or a parameter)
-   also gives nulls when the taken time is more than ``n`` away. It equals
+   never matches. ``within d`` also gives nulls when the taken time is more
+   than ``d`` away. ``d`` is a non-negative number in the units of ``t``
+   (a fraction bounds integer times by its floor), a parameter, or a
+   duration such as ``5ms``, which takes the unit of ``t``'s time or
+   duration role as in a comparison (a ``t`` with no role refuses it). It equals
    pandas ``merge_asof`` with the same direction, tolerance and keys. Times
    and keys of different number types compare as integers when both are
    integers, else as doubles. It runs on the engine's ``asof`` op, which
@@ -1054,12 +1414,11 @@ The built-in sources:
    ranks = where ph in ["M", 4] and name == "PR" and args.name == "rank" | select pid, rank = args.value | distinct;
    def args_fallback = true
 
-   # genesis: the dftracer source and
-   runs = where ph in ["M", 4] and name == "RUN"
-        | select run = args.run, app = args.app, system = args.system,
-                 unique_input = args.unique_input, nodes = args.nodes,
-                 ppn = args.ppn, papi_set = args.papi_set, method = args.method,
-                 sketch_accuracy = args.sketch_accuracy, leaf = args.leaf
+   # genesis
+   data = where gtype != "run";
+   runs = where gtype == "run"
+        | select run, app, system, unique_input, nodes, ppn, papi_set,
+                 method, sketch_accuracy, leaf
         | distinct
 
 ``ph`` 4 is the numeric metadata phase. The ``generic`` source is empty:
@@ -1087,6 +1446,30 @@ position, before the query is planned; any other name in the body is a
 record path. A macro in a filter therefore pushes down as its expansion
 would. A macro body may call other macros.
 
+A body that starts with a stage word (``where``, ``bucket``, ``group`` and
+the others) or with an expression followed by ``|`` is a pipeline macro; any
+other body is an expression macro. One name space holds both kinds.
+
+.. code-block:: text
+
+   def io_rate(d) = where cat == "POSIX" | bucket d | agg { b = sum(size) };
+   from data | io_rate(1ms) | sort b
+
+A pipeline macro is called at a stage position: after a ``|``, or alone as
+the first stage (``io_rate(1ms) | sort b``). The call runs the stages of the
+body in its place, with each argument bound by position in the expressions
+of those stages, before the query is planned. The ``where`` of a leading
+call pushes into the scan as a hand-written ``where`` would. A body may call
+expression and pipeline macros:
+
+.. code-block:: text
+
+   def pos = where cat == "POSIX";
+   def rate(d) = pos() | bucket d | agg { n = count() };
+
+A leading call that names no pipeline macro keeps its meaning as a filter:
+``slow(250) | group ...`` and ``exists(x) | ...`` still test a condition.
+
 Macros come from three scopes, and a name in an earlier scope hides the same
 name in a later one:
 
@@ -1099,8 +1482,18 @@ name in a later one:
    ``def`` declarations.
 
 A cycle, a wrong number of arguments, a named argument, a macro with the
-name of a built-in function, and two macros of one name in one scope are
-compile errors. A View query sees all three scopes; a single filter
+name of a built-in function or of a stage, and two macros of one name in one
+scope are compile errors. So are a pipeline macro inside an expression
+(``where io_rate(1ms)``: "macro 'io_rate' is a pipeline; call it as a
+stage"), an expression macro after ``|`` ("macro 'slow' is an expression;
+write 'where slow(...)'") and an unknown name after ``|`` ("Unknown stage or
+pipeline macro 'f'"). A body that starts with ``from`` is a parse error.
+
+A parameter binds only where the body has an expression. A stage field that
+takes a literal or a ``$param`` (``take n``, an output name, ``as name``)
+does not take a macro parameter. A pipeline macro cannot read another row
+set: use ``let`` for that. An error inside an expanded body points at the
+call. A View query sees all three scopes; a single filter
 (``Query``, a DataFrame mask, ``dftracer_stats --duql``) has no record schema
 and sees the query and the path files.
 

@@ -52,35 +52,68 @@ Query the output
 
    tv = TraceViewer("genesis.pfw.gz")
 
-   # One record per call path per run: nested stats are args columns, and
-   # an arrow reads each run key from the runs row set.
-   dist = tv.duql(
-       "derive app = run -> runs.app, system = run -> runs.system,"
-       " nodes = run -> runs.nodes, papi_set = run -> runs.papi_set"
+   # Call paths whose median duration is above 1000 us.
+   slow = tv.duql('where gtype == "func" and dur.p50 > 1000').collect()
+
+   # One filter over every counter of every call path.
+   idle = tv.duql(
+       'where gtype == "counter" and metric == "cpu.idle_pct" and v.p50 > 50'
    ).collect()
 
-   # Filter by run key: the filter becomes a test on the run id.
-   laghos = tv.duql('where run -> runs.app == "laghos"').collect()
+   # Read run keys on any record through the runs row set.
+   laghos = tv.duql(
+       'derive app = run -> runs.app | where app == "laghos"'
+   ).collect()
 
    # The runs row set as query rows, with no trace decoded.
    runs = tv.duql("from runs").collect()
 
-Each record is a ``ph:3`` event with ``pid`` 0. Its ``args`` hold the
-``run`` id, ``path`` (call names joined by ``;``), ``parent``, ``depth``,
-``count``, a ``dur`` object and a ``counters`` object. Every statistic
-object has ``min``, ``max``, ``avg``, ``p25``, ``p50``, ``p75``, ``p90`` and
-``p99``, plus ``sum`` for counts. Counter entries also carry ``scope``
-(``pid`` or ``host``) and ``kind`` (``delta`` or ``gauge``). The ``run`` id
-is the FNV-1a hash of ``app|system|unique_input|nodes|ppn|papi_set``, so the
-same run gets the same id in any output and files from separate invocations
-can be concatenated. The run keys themselves are on the ``RUN`` line only:
-the index detects the file as the ``genesis`` record schema, whose source
-declares the row set ``runs`` over the ``RUN`` lines, so ``run -> runs.<key>``
-reads ``app``, ``system``, ``unique_input``, ``nodes``, ``ppn``,
-``papi_set``, ``method``, ``sketch_accuracy`` or ``leaf`` on any record. The
-index build stores ``runs``, so reading it decodes no trace. Numeric keys stay
-numbers (``run -> runs.nodes == 4``). A default query reads no ``RUN`` line;
-``from all`` or ``TraceViewer.all()`` reads them with the call records.
+The output is a long format. Every line has a ``gtype``, the genesis record type, and a ``run`` id and
+none has the dftracer fields ``ph``, ``pid``, ``tid`` or ``args``. The
+``run`` id is the FNV-1a hash of
+``app|system|unique_input|nodes|ppn|papi_set``, so the same run gets the
+same id in any output and files from separate invocations can be
+concatenated. There are three kinds of line:
+
+- ``run``, one per run: ``version`` (the format version, 1), ``run``, ``app``, ``system``, ``unique_input``,
+  ``nodes``, ``ppn``, ``papi_set``, ``method``, ``sketch_accuracy``,
+  ``leaf`` and ``summary``, the run's ``summary.json`` when it has one.
+- ``func``, one per call path: ``run``, ``path`` (call names joined by
+  ``;``), ``parent`` (absent at the root), ``name``, ``cat``, ``depth``,
+  ``ts`` (the earliest call start), ``count`` and ``dur``.
+- ``counter``, one per call path and counter: ``run``, ``path``, ``name``
+  (the call name), ``metric`` (the counter name), ``scope`` (``pid`` or
+  ``host``), ``kind`` (``delta`` or ``gauge``) and ``v``.
+
+A metric name is a value in ``metric``, never a JSON key, so the number of
+JSON paths does not grow with the number of counters. ``dur`` has ``min``,
+``max``, ``sum``, ``avg``, ``p25``, ``p50``, ``p75``, ``p90``, ``p99`` and
+``sketch``. ``v`` has ``n`` (the calls that received a value), ``min``,
+``max``, ``avg``, the same percentiles and ``sketch``, plus ``sum`` for
+``delta`` counters only. Within a run the ``run`` line comes first, then
+for each path, in order, its ``func`` line and its ``counter`` lines by
+``metric``.
+
+``sketch`` is the DDSketch behind the percentiles, as base64 text of its
+serialized form. A reader can decode and merge the sketches of several
+records to get exact quantiles over their union; in C++ use
+``BasicDDSketch`` deserialize. Merging stored sketches in a query is not
+supported yet.
+
+The index detects a file whose records carry ``gtype`` and ``run`` as the
+``genesis`` record schema. Its source declares ``data`` as every record but
+the ``run`` lines, so a query with no ``from`` reads ``func`` and
+``counter`` records. It also declares the row set ``runs``, built from the
+``run`` lines and stored by the index build, so ``run -> runs.<key>`` reads
+``app``, ``system``, ``unique_input``, ``nodes``, ``ppn``, ``papi_set``,
+``method``, ``sketch_accuracy`` or ``leaf`` on any record and ``from runs``
+decodes no trace. Numeric keys stay numbers (``run -> runs.nodes == 4``).
+``from all | where gtype == "run"`` returns the ``run`` records with
+``summary``, whose fields are ``summary.*`` columns.
+
+Files written by an earlier version, with ``ph:3`` events and a ``counters``
+object, are not read as ``genesis``; they index as ``dftracer``. Regenerate
+them.
 
 How counters are attributed
 ---------------------------
@@ -101,4 +134,4 @@ per call:
   so they appear as depth-0 records with durations only.
 
 Percentiles come from a mergeable sketch with 1% relative accuracy, stated
-as ``sketch_accuracy`` in each ``RUN`` line.
+as ``sketch_accuracy`` in each ``run`` line.

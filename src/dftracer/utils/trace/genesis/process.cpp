@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/base64.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/coro/when_all.h>
 #include <dftracer/utils/core/coro/yield.h>
@@ -185,7 +186,13 @@ std::optional<double> weighted_mean(const Series& s, std::int64_t a,
 
 using simdjson::builder::string_builder;
 
-void append_stats(string_builder& sb, const Stats& s, bool with_sum) {
+void append_stats(string_builder& sb, const Stats& s, bool with_n,
+                  bool with_sum, std::vector<std::uint8_t>& buf) {
+    sb.start_object();
+    if (with_n) {
+        sb.append_key_value("n", s.n);
+        sb.append_comma();
+    }
     sb.append_key_value("min", s.min);
     sb.append_comma();
     sb.append_key_value("max", s.max);
@@ -204,6 +211,11 @@ void append_stats(string_builder& sb, const Stats& s, bool with_sum) {
         sb.append_comma();
         sb.append_key_value(k, std::clamp(s.sketch.quantile(q), s.min, s.max));
     }
+    s.sketch.serialize_into(buf);
+    sb.append_comma();
+    sb.append_key_value(
+        "sketch", std::string_view(base64_encode(buf.data(), buf.size())));
+    sb.end_object();
 }
 
 class GroupReader {
@@ -640,8 +652,7 @@ std::string build_set(const GroupReader& r, const RunGroup& g, int set) {
 
     const std::string id = run_id(spec.keys);
     string_builder sb;
-    sb.append_raw(
-        R"({"name":"RUN","cat":"dftracer","pid":0,"tid":0,"ts":0,"ph":4,"args":{)");
+    sb.append_raw(R"({"gtype":"run","version":1,)");
     append_run_keys(sb, id, spec.keys);
     sb.append_comma();
     sb.append_key_value("method", std::string_view("prorate"));
@@ -655,7 +666,7 @@ std::string build_set(const GroupReader& r, const RunGroup& g, int set) {
         sb.append_colon();
         sb.append_raw(g.summary_json);
     }
-    sb.append_raw("}}\n");
+    sb.append_raw("}\n");
 
     std::vector<std::uint32_t> counter_order(counter_keys.size());
     for (std::uint32_t i = 0; i < counter_order.size(); ++i)
@@ -667,15 +678,10 @@ std::string build_set(const GroupReader& r, const RunGroup& g, int set) {
     std::sort(recs.begin(), recs.end(), [](const PathRec& a, const PathRec& b) {
         return a.path < b.path;
     });
+    std::vector<std::uint8_t> buf;
     for (const PathRec& rec : recs) {
-        sb.start_object();
-        sb.append_key_value("name", std::string_view(r.strings_[rec.name]));
-        sb.append_comma();
-        sb.append_key_value("cat", std::string_view(r.strings_[rec.cat]));
-        sb.append_raw(R"(,"pid":0,"tid":0,)");
-        sb.append_key_value("ts", rec.first_ts);
-        sb.append_raw(R"(,"ph":3,"args":{)");
-        // The run's keys live on its RUN line (the run dictionary).
+        const std::string_view name = r.strings_[rec.name];
+        sb.append_raw(R"({"gtype":"func",)");
         sb.append_key_value("run", std::string_view(id));
         sb.append_comma();
         sb.append_key_value("path", std::string_view(rec.path));
@@ -686,36 +692,38 @@ std::string build_set(const GroupReader& r, const RunGroup& g, int set) {
                                 std::string_view(rec.path).substr(0, semi));
         }
         sb.append_comma();
+        sb.append_key_value("name", name);
+        sb.append_comma();
+        sb.append_key_value("cat", std::string_view(r.strings_[rec.cat]));
+        sb.append_comma();
         sb.append_key_value("depth", rec.depth);
+        sb.append_comma();
+        sb.append_key_value("ts", rec.first_ts);
         sb.append_comma();
         sb.append_key_value("count", rec.dur.n);
         sb.append_comma();
         sb.escape_and_append_with_quotes("dur");
         sb.append_colon();
-        sb.start_object();
-        append_stats(sb, rec.dur, true);
-        sb.end_object();
-        sb.append_comma();
-        sb.escape_and_append_with_quotes("counters");
-        sb.append_colon();
-        sb.start_object();
-        bool first = true;
+        append_stats(sb, rec.dur, false, true, buf);
+        sb.append_raw("}\n");
         for (const std::uint32_t cid : counter_order) {
             if (cid >= rec.counters.size() || !rec.counters[cid]) continue;
             const CounterAcc& acc = *rec.counters[cid];
-            if (!first) sb.append_comma();
-            first = false;
-            sb.escape_and_append_with_quotes(counter_keys[cid]);
-            sb.append_colon();
-            sb.append_raw(acc.scope == Scope::PID ? R"({"scope":"pid",)"
-                                                  : R"({"scope":"host",)");
-            sb.append_raw(acc.kind == Kind::DELTA ? R"("kind":"delta",)"
-                                                  : R"("kind":"gauge",)");
-            append_stats(sb, acc.stats, acc.kind == Kind::DELTA);
-            sb.end_object();
+            sb.append_raw(R"({"gtype":"counter",)");
+            sb.append_key_value("run", std::string_view(id));
+            sb.append_comma();
+            sb.append_key_value("path", std::string_view(rec.path));
+            sb.append_comma();
+            sb.append_key_value("name", name);
+            sb.append_comma();
+            sb.append_key_value("metric", std::string_view(counter_keys[cid]));
+            sb.append_raw(acc.scope == Scope::PID ? R"(,"scope":"pid")"
+                                                  : R"(,"scope":"host")");
+            sb.append_raw(acc.kind == Kind::DELTA ? R"(,"kind":"delta","v":)"
+                                                  : R"(,"kind":"gauge","v":)");
+            append_stats(sb, acc.stats, true, acc.kind == Kind::DELTA, buf);
+            sb.append_raw("}\n");
         }
-        sb.end_object();
-        sb.append_raw("}}\n");
     }
     return std::string(sb);
 }

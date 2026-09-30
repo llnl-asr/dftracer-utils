@@ -23,9 +23,11 @@ The pattern
 1. Each rank builds a ``View`` over its own file slice, with the same
    ``group_by``/``agg`` plan as every other rank.
 2. Each rank calls ``aggregate_partial()``, which scans its slice once and
-   returns an opaque serialized partial (running count/sum/sumsq/sketch
+   returns an opaque serialized partial (running count/sum/central-moment/sketch
    accumulators, not finalized values - so merging is exact for mean, stddev,
-   and percentiles, unlike re-combining already-finalized per-rank numbers).
+   and percentiles, unlike re-combining already-finalized per-rank numbers). The
+   moments are central (about a running mean), so a stddev stays accurate when the
+   mean is large next to the spread.
 3. The partials travel to a coordinator (MPI, dask, a shared file, ...).
 4. The coordinator combines them with **one** of:
 

@@ -24,6 +24,7 @@ enum class FoldOp : std::uint8_t {
     SKETCH,
     MERGE,
     MERGE_QUANTILE,
+    PLUGIN,
 };
 
 /// One aggregate of a GroupFold; `in` and `by` index a batch's columns.
@@ -32,7 +33,9 @@ enum class FoldOp : std::uint8_t {
 /// equality; COLLECT lists the values in input order; `arg_max` and `arg_min`
 /// give `in` at the row with the greatest or least `by`, the first on ties;
 /// SKETCH gives the values' DDSketch and MERGE the merge of stored sketches,
-/// both as base64 text; MERGE_QUANTILE the `param` quantile of that merge.
+/// both as base64 text; MERGE_QUANTILE the `param` quantile of that merge;
+/// PLUGIN the registered reducer `plugin` over the group's values, `params`
+/// filling its operands after the column, null for a group with none.
 /// `type` is the output type.
 struct FoldAgg {
     FoldOp op = FoldOp::ENGINE;
@@ -41,6 +44,8 @@ struct FoldAgg {
     std::int32_t by = -1;
     double param = 0;
     dataframe::DataType type;
+    std::string plugin;
+    std::vector<double> params;
 };
 
 /// A group-by over batches whose first `keys` columns are the group keys,

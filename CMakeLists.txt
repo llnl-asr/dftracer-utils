@@ -101,14 +101,10 @@ if(DFTRACER_UTILS_VALGRIND_MODE)
   add_compile_definitions(DFTRACER_UTILS_VALGRIND_MODE=1)
 endif()
 option(DFTRACER_UTILS_ENABLE_MPI "Enable MPI support for call tree" OFF)
-option(
-  DFTRACER_USE_ZLIB_NG
-  "Use zlib-ng (compat) instead of madler/zlib; falls back to madler on failure"
-  ON)
-option(DFTRACER_UTILS_ENABLE_ARROW
-       "Enable Arrow C Data Interface via nanoarrow" ON)
-option(DFTRACER_UTILS_ENABLE_ARROW_IPC
-       "Enable Arrow IPC file read/write via nanoarrow" ON)
+option(DFTRACER_USE_ZLIB_NG "Use zlib-ng (compat) instead of madler/zlib; falls back to madler on failure" ON)
+option(DFTRACER_UTILS_ENABLE_ARROW "Enable Arrow C Data Interface via nanoarrow" ON)
+option(DFTRACER_UTILS_ENABLE_VECTORSCAN "Use Vectorscan for duql regexes and the raw prefilter" ON)
+option(DFTRACER_UTILS_ENABLE_ARROW_IPC "Enable Arrow IPC file read/write via nanoarrow" ON)
 option(DFTRACER_UTILS_ENABLE_ZSTD "Enable ZSTD compression for RocksDB" ON)
 option(DFTRACER_UTILS_ENABLE_LZ4 "Enable LZ4 compression for RocksDB" OFF)
 option(
@@ -299,9 +295,9 @@ dftracer_utils_item(
   "Compression    "
   "zstd=${DFTRACER_UTILS_ENABLE_ZSTD} lz4=${DFTRACER_UTILS_ENABLE_LZ4}")
 dftracer_utils_item("Arrow          " "${DFTRACER_UTILS_ENABLE_ARROW}")
-dftracer_utils_item(
-  "Async I/O      "
-  "io_uring=${DFTRACER_UTILS_HAVE_IO_URING} kqueue=${DFTRACER_UTILS_HAVE_KQUEUE}"
+dftracer_utils_item("Vectorscan     " "${DFTRACER_UTILS_ENABLE_VECTORSCAN}")
+dftracer_utils_item("Async I/O      "
+                    "io_uring=${DFTRACER_UTILS_HAVE_IO_URING} kqueue=${DFTRACER_UTILS_HAVE_KQUEUE}"
 )
 dftracer_utils_item("Lustre API     " "${DFTRACER_UTILS_HAVE_LUSTREAPI}")
 if(DFTRACER_UTILS_HAS_DWCAS)

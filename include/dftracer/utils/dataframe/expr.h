@@ -19,7 +19,8 @@
 // same fusion and CSE; language frontends only build the DAG.
 namespace dftracer::utils::duql {
 struct CompiledPattern;
-}
+struct Substitution;
+}  // namespace dftracer::utils::duql
 
 namespace dftracer::utils::dataframe {
 
@@ -99,6 +100,29 @@ Expr expr_fillna(const Expr& a, Scalar fill);
 /// owns a copy of `pattern`. Throws at compile time if the operand is not a
 /// String or Binary column.
 Expr expr_str_pred(StrPredOp op, const Expr& a, std::string_view pattern);
+/// As expr_str_pred for `Contains`, `StartsWith` or `EndsWith` (anything else
+/// throws std::invalid_argument), with the needle a String expression: null
+/// where `a` or the needle is null, true for an empty needle.
+Expr expr_str_pred_col(StrPredOp op, const Expr& a, const Expr& needle);
+/// As expr_str_replace with `all`, with `from` and `to` String expressions:
+/// null where any operand is null, the row unchanged for an empty `from`.
+Expr expr_str_replace_col(const Expr& a, const Expr& from, const Expr& to);
+/// As expr_str_substr with `start` and `len` expressions; `len` null means to
+/// the end. Null where an operand is null or `start` or `len` is negative. An
+/// operand that is not an integer (a Float64 cell) is null, as in the scan
+/// evaluator.
+Expr expr_str_substr_col(const Expr& a, const Expr& start, const Expr* len);
+/// As expr_round with an expression for `digits`: Uint64 for a Uint64 `a`,
+/// Int64 for another integer `a`, Float64 otherwise; null for a null or
+/// non-integer `digits`, and for a float `a` with `digits` outside [-308, 308].
+/// An integer `a` with `digits` >= 0 is unchanged.
+Expr expr_round_col(const Expr& a, const Expr& digits);
+/// As expr_str_extract with an integer expression for the group: null where
+/// the group is null, negative, not an integer or past the pattern's groups.
+/// Throws at compile time for a null `p`.
+Expr expr_str_extract_col(const Expr& a,
+                          std::shared_ptr<const duql::CompiledPattern> p,
+                          const Expr& group);
 /// A String -> String map (Series::to_lowercase / to_uppercase / str_strip /
 /// str_lstrip / str_rstrip). Throws at compile time if the operand is not a
 /// String column.
@@ -112,8 +136,31 @@ Expr expr_str_find(const Expr& a, std::string_view needle);
 /// Replace the first (or with `all`, every) occurrence of `from` with `to`.
 Expr expr_str_replace(const Expr& a, std::string_view from, std::string_view to,
                       bool all);
+/// The UTC calendar field `part` (a dftu_dt_part: year, month, day, hour,
+/// minute, second, millisecond, microsecond, nanosecond, day of week, day of
+/// year, quarter, ISO week, ISO year) of a time `a`, Int64. `a` counts units
+/// of `ns_per_unit` nanoseconds since the Unix epoch; an Int32, Uint64 or
+/// Float64 (floored) operand is read the same way, and a null cell or one that
+/// is not a whole count in int64 is null. Throws std::invalid_argument for an
+/// unknown `part` or a non-positive `ns_per_unit`, and at compile time for a
+/// non-numeric operand.
+Expr expr_date_part(const Expr& a, std::int32_t part, std::int64_t ns_per_unit);
+/// A time `a` (as for expr_date_part) as UTC text by the strftime-style `fmt`
+/// (%Y %y %m %d %H %I %M %S %f %j %a %A %b %B %p %F %T %s %z %Z %%), String.
+/// Throws std::invalid_argument for an unknown directive, a trailing '%' or a
+/// non-positive `ns_per_unit`.
+Expr expr_format_time(const Expr& a, std::string_view fmt,
+                      std::int64_t ns_per_unit);
 /// The byte substring [start, start + len) of each row (Series::str_slice).
 Expr expr_str_slice(const Expr& a, std::int64_t start, std::int64_t len);
+/// A string method with text, integer or second-column operands (StrFn): the
+/// Series function the eager Series.str method of the same name calls. `b` is
+/// the second column of StrFn::Cat (null otherwise). Throws at compile time if
+/// the operand is not a String column (a List<String> for Join, a String or a
+/// List for Get).
+Expr expr_str_fn(StrFn fn, const Expr& a, const Expr* b = nullptr,
+                 std::string_view text = {}, std::string_view text2 = {},
+                 std::int64_t i0 = 0, std::int64_t i1 = 0);
 /// Membership: true where the row's value is one of `values`
 /// (Series::is_in), Bool. The node shares `values`. Throws at compile time
 /// if `values` is not in the operand's value domain (numeric vs string).
@@ -218,6 +265,15 @@ Expr expr_str_pattern(const Expr& a,
 Expr expr_str_extract(const Expr& a,
                       std::shared_ptr<const duql::CompiledPattern> p,
                       std::int64_t group);
+
+/// String: every non-overlapping match of a compiled duql regex in each row
+/// replaced by the substitution `sub`, which must be compiled against `p`
+/// (compile_substitution); null rows stay null, as does a row whose match
+/// reaches the work limit. Identity as for expr_str_pattern. Throws at
+/// compile time for a null `p`.
+Expr expr_str_regex_replace(const Expr& a,
+                            std::shared_ptr<const duql::CompiledPattern> p,
+                            duql::Substitution sub);
 
 /// duql conversions: `int(x)` (String parses as an integer or a number,
 /// Float64 truncates, Bool is 0/1; out of range or unparseable is null),

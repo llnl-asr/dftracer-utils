@@ -32,9 +32,11 @@ void put(std::string& s, const FieldStat& f) {
     put(s, f.esum);
     put(s, f.emin);
     put(s, f.emax);
-    put(s, f.sumsq);
-    put(s, f.m3);
-    put(s, f.m4);
+    put(s, f.shift);
+    put(s, f.cmean);
+    put(s, f.cm2);
+    put(s, f.cm3);
+    put(s, f.cm4);
 }
 void put_bytes(std::string& s, std::string_view b) {
     put(s, static_cast<std::uint64_t>(b.size()));
@@ -77,9 +79,11 @@ struct Reader {
         f.esum = get<std::int64_t>();
         f.emin = get<std::int64_t>();
         f.emax = get<std::int64_t>();
-        f.sumsq = get<double>();
-        f.m3 = get<double>();
-        f.m4 = get<double>();
+        f.shift = get<double>();
+        f.cmean = get<double>();
+        f.cm2 = get<double>();
+        f.cm3 = get<double>();
+        f.cm4 = get<double>();
         return f;
     }
     std::string get_bytes() {
@@ -278,12 +282,17 @@ std::string agg_serialize(const AggState& st_in) {
     put(s, static_cast<std::uint8_t>(st.has_co ? 1 : 0));
     if (st.has_co) {
         const std::size_t sz = static_cast<std::size_t>(ng) * st.n_co;
-        for (std::size_t i = 0; i < sz; ++i) put(s, st.co_n[i]);
-        for (std::size_t i = 0; i < sz; ++i) put(s, st.co_sx[i]);
-        for (std::size_t i = 0; i < sz; ++i) put(s, st.co_sy[i]);
-        for (std::size_t i = 0; i < sz; ++i) put(s, st.co_sxx[i]);
-        for (std::size_t i = 0; i < sz; ++i) put(s, st.co_syy[i]);
-        for (std::size_t i = 0; i < sz; ++i) put(s, st.co_sxy[i]);
+        for (std::size_t i = 0; i < sz; ++i) {
+            const CoStat& c = st.co[i];
+            put(s, c.n);
+            put(s, c.shx);
+            put(s, c.cmx);
+            put(s, c.shy);
+            put(s, c.cmy);
+            put(s, c.cxx);
+            put(s, c.cyy);
+            put(s, c.cxy);
+        }
     }
     return s;
 }
@@ -607,24 +616,19 @@ AggStatePtr agg_deserialize(const std::string& blob) {
     if (st->has_co != (r.get<std::uint8_t>() != 0)) Reader::truncated();
     if (st->has_co) {
         const std::size_t sz = static_cast<std::size_t>(ng) * st->n_co;
-        r.count(sz);
-        st->co_n.resize(sz);
-        r.count(sz);
-        st->co_sx.resize(sz);
-        r.count(sz);
-        st->co_sy.resize(sz);
-        r.count(sz);
-        st->co_sxx.resize(sz);
-        r.count(sz);
-        st->co_syy.resize(sz);
-        r.count(sz);
-        st->co_sxy.resize(sz);
-        for (std::size_t i = 0; i < sz; ++i) st->co_n[i] = r.get<double>();
-        for (std::size_t i = 0; i < sz; ++i) st->co_sx[i] = r.get<double>();
-        for (std::size_t i = 0; i < sz; ++i) st->co_sy[i] = r.get<double>();
-        for (std::size_t i = 0; i < sz; ++i) st->co_sxx[i] = r.get<double>();
-        for (std::size_t i = 0; i < sz; ++i) st->co_syy[i] = r.get<double>();
-        for (std::size_t i = 0; i < sz; ++i) st->co_sxy[i] = r.get<double>();
+        r.count(sz * 64);
+        st->co.resize(sz);
+        for (std::size_t i = 0; i < sz; ++i) {
+            CoStat& c = st->co[i];
+            c.n = r.get<std::uint64_t>();
+            c.shx = r.get<double>();
+            c.cmx = r.get<double>();
+            c.shy = r.get<double>();
+            c.cmy = r.get<double>();
+            c.cxx = r.get<double>();
+            c.cyy = r.get<double>();
+            c.cxy = r.get<double>();
+        }
     }
     st->inited = true;
     return st;

@@ -54,7 +54,7 @@ struct Discovery {
     std::vector<Skip> skips;
 };
 
-/// One finished run: its sort key and its JSON lines (RUN line first).
+/// One finished run: its sort key and its JSON lines (run record first).
 struct RunOutput {
     std::string sort_key;
     std::string lines;

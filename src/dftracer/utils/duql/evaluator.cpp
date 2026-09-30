@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/calendar.h>
 #include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/field_ref.h>
 #include <dftracer/utils/core/common/to_chars.h>
@@ -814,6 +815,89 @@ Value split(const Value& v, const Value& sep) {
     return parsed(out + "]");
 }
 
+Value index_of(const Value& v, const Value& x) {
+    simdjson::dom::array arr;
+    if (!is_array(v, arr) || absent(x)) return VNull{};
+    std::int64_t i = 0;
+    for (auto el : arr) {
+        const auto o = cmp(of_element(el), x);
+        if (o && *o == 0) return i;
+        ++i;
+    }
+    return VNull{};
+}
+
+Value sort_array(const Value& v) {
+    simdjson::dom::array arr;
+    if (!is_array(v, arr)) return VNull{};
+    std::vector<std::pair<Value, simdjson::dom::element>> present;
+    for (auto el : arr) {
+        Value x = of_element(el);
+        if (absent(x)) continue;
+        present.emplace_back(std::move(x), el);
+    }
+    for (std::size_t i = 1; i < present.size(); ++i)
+        if (!cmp(present[i].first, present[0].first)) return VNull{};
+    std::stable_sort(present.begin(), present.end(),
+                     [](const auto& a, const auto& b) {
+                         return *cmp(a.first, b.first) < 0;
+                     });
+    std::string out = "[";
+    for (const auto& p : present) append_element(out, p.second);
+    for (std::size_t i = 0; i < arr.size() - present.size(); ++i)
+        out += out.size() > 1 ? ",null" : "null";
+    return parsed(out + "]");
+}
+
+bool same(simdjson::dom::element a, simdjson::dom::element b) {
+    const Value x = of_element(a);
+    const Value y = of_element(b);
+    if (absent(x) || absent(y)) return absent(x) && absent(y);
+    if (const auto o = cmp(x, y)) return *o == 0;
+    if (!std::holds_alternative<simdjson::dom::element>(x) ||
+        !std::holds_alternative<simdjson::dom::element>(y))
+        return false;
+    std::string ja;
+    std::string jb;
+    json::append_canonical_json(ja, a);
+    json::append_canonical_json(jb, b);
+    return ja == jb;
+}
+
+Value unique(const Value& v) {
+    simdjson::dom::array arr;
+    if (!is_array(v, arr)) return VNull{};
+    std::vector<simdjson::dom::element> kept;
+    std::string out = "[";
+    for (auto el : arr) {
+        bool seen = false;
+        for (const auto& k : kept)
+            if ((seen = same(k, el))) break;
+        if (seen) continue;
+        kept.push_back(el);
+        append_element(out, el);
+    }
+    return parsed(out + "]");
+}
+
+Value join(const Value& v, const Value& sep) {
+    simdjson::dom::array arr;
+    const auto s = str(sep);
+    if (!is_array(v, arr) || !s) return VNull{};
+    std::string out;
+    bool first = true;
+    for (auto el : arr) {
+        const Value x = of_element(el);
+        if (absent(x)) continue;
+        const auto p = str(x);
+        if (!p) return VNull{};
+        if (!first) out += *s;
+        first = false;
+        out += *p;
+    }
+    return scratch.own(std::move(out));
+}
+
 template <class Record>
 class TermEval {
    public:
@@ -847,6 +931,30 @@ class TermEval {
         if (f.root != FieldRoot::ELEMENT) return walk(rec_.get(f), f);
         if (!element_) return VMissing{};
         return walk(*element_, f);
+    }
+
+    Value node(const TIndex& x) const {
+        const Value a = (*this)(*x.array);
+        const auto i = as_int((*this)(*x.index));
+        simdjson::dom::array arr;
+        if (!i || !is_array(a, arr)) return VNull{};
+        const std::uint64_t size = arr.size();
+        if (i->neg ? i->mag > size : i->mag >= size) return VNull{};
+        simdjson::dom::element el;
+        if (arr.at(i->neg ? size - i->mag : i->mag).get(el) !=
+            simdjson::SUCCESS)
+            return VNull{};
+        return of_element(el);
+    }
+
+    Value node(const TList& l) const {
+        std::string out = "[";
+        for (const auto& item : l.items) {
+            if (out.size() > 1) out += ',';
+            const auto t = text_of((*this)(*item), true);
+            out += t ? *t : "null";
+        }
+        return parsed(out + "]");
     }
 
     // any: YES when some element is YES, NO when every one is NO; all: NO
@@ -1181,6 +1289,14 @@ class TermEval {
                 return parse_json(arg(c, 0));
             case Fn::SPLIT:
                 return split(arg(c, 0), arg(c, 1));
+            case Fn::INDEX_OF:
+                return index_of(arg(c, 0), arg(c, 1));
+            case Fn::SORT:
+                return sort_array(arg(c, 0));
+            case Fn::UNIQUE:
+                return unique(arg(c, 0));
+            case Fn::JOIN:
+                return join(arg(c, 0), arg(c, 1));
             case Fn::EXTRACT: {
                 const auto s = str(arg(c, 0));
                 if (!s || !c.pattern) return VNull{};
@@ -1194,6 +1310,41 @@ class TermEval {
                 if (extract(*c.pattern, *s, group, out) != MatchResult::YES)
                     return VNull{};
                 return out;
+            }
+            case Fn::REGEX_REPLACE: {
+                const auto s = str(arg(c, 0));
+                if (!s || !c.pattern || !c.substitution) return VNull{};
+                std::string out;
+                const MatchResult r =
+                    regex_replace(*c.pattern, *c.substitution, *s, out);
+                if (r == MatchResult::LIMIT) return VNull{};
+                if (r == MatchResult::NO) return *s;
+                return scratch.own(std::move(out));
+            }
+            case Fn::DATE_PART:
+            case Fn::FORMAT_TIME: {
+                const Value x = arg(c, 0);
+                std::int64_t t;
+                if (const auto i = as_int(x)) {
+                    if (i->neg ? i->mag > I64_MIN_MAG : i->mag >= I64_MIN_MAG)
+                        return VNull{};
+                    t = static_cast<std::int64_t>(i->neg ? 0 - i->mag : i->mag);
+                } else if (const auto* d = std::get_if<double>(&x)) {
+                    const double f = std::floor(*d);
+                    if (!(f >= -9.2233720368547758e18 &&
+                          f < 9.2233720368547758e18))
+                        return VNull{};
+                    t = static_cast<std::int64_t>(f);
+                } else {
+                    return VNull{};
+                }
+                const CivilTime ct = civil_time(t, c.ns_per_unit);
+                if (c.fn == Fn::DATE_PART)
+                    return date_part(ct, static_cast<DatePart>(c.part));
+                const auto* fmt = std::get_if<TConst>(&c.args[1]->node);
+                std::string out;
+                format_time(out, ct, std::get<std::string>(fmt->value));
+                return scratch.own(std::move(out));
             }
         }
         return VNull{};

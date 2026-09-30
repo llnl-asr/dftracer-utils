@@ -63,8 +63,8 @@ DFTU_FRAME_OP(sample, dftu_dataframe_sample, FRAME, FRAME, I64, U64, NONE, NONE,
 DFTU_FRAME_OP(group_by_dynamic, dftu_dataframe_group_by_dynamic, FRAME, FRAME, STR, I64, I64, AGGLIST, NONE, NONE)
 DFTU_FRAME_OP(group_by, dftu_dataframe_group_by, FRAME, FRAME, STRLIST, AGGLIST, NONE, NONE, NONE, NONE)
 
-/* table + table + key lists + join kind + suffix. */
-DFTU_FRAME_OP(join, dftu_dataframe_join, FRAME, FRAME, FRAME, STRLIST, STRLIST, I32, STR, NONE)
+/* table + table + key lists + join kind + suffix + nulls_equal. */
+DFTU_FRAME_OP(join, dftu_dataframe_join, FRAME, FRAME, FRAME, STRLIST, STRLIST, I32, STR, I32)
 
 /* table + table (+ concat kind / key count). */
 DFTU_FRAME_OP(concat, dftu_dataframe_concat2, FRAME, FRAME, FRAME, I32, NONE, NONE, NONE, NONE)
@@ -101,7 +101,7 @@ DFTU_FRAME_OP(gap_fill, dftu_dataframe_gap_fill, FRAME, FRAME, STRLIST, STR, I64
 
 /* table + table + time column + partition keys + direction + tolerance: the
  * as-of join. */
-DFTU_FRAME_OP(asof, dftu_dataframe_asof, FRAME, FRAME, FRAME, STR, STRLIST, I32, I64, NONE)
+DFTU_FRAME_OP(asof, dftu_dataframe_asof, FRAME, FRAME, FRAME, STR, STRLIST, I32, F64, NONE)
 
 /* table + table + point, lo, hi columns + partition keys + outer: the
  * point-in-range join. */

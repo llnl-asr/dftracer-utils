@@ -151,6 +151,19 @@ Supported spec shapes:
   (a bound of ``None`` means that side of the ROWS frame runs to the partition edge;
   the output is null while the frame holds fewer than ``min_periods`` present values;
   ``frame_sum`` over an integer column is exact like ``running_sum``)
+- ``("frame_var"|"frame_std"|"frame_count_distinct"|"frame_collect", value_col, preceding, following, out[, min_periods[, mode]])``,
+  ``("frame_quantile", value_col, preceding, following, out, min_periods, mode, q)`` and
+  ``("frame_arg_max"|"frame_arg_min", value_col, preceding, following, out, min_periods, mode, by)``
+  (``mode`` is ``"rows"`` or ``"range"``; ``q`` is the quantile level in [0, 1], and
+  the quantile is exact with linear interpolation; ``by`` is the ordering column of
+  the arg functions, which give the ``value_col`` of the frame row with the
+  largest or smallest ``by``, the earliest row on a tie. Nulls are skipped.
+  ``frame_var`` and ``frame_std`` are null with fewer than 2 values and 0 on a
+  constant frame. ``frame_collect`` gives the list of the frame values in sort
+  order, and an empty list for an empty frame. ``frame_count_distinct`` gives 0
+  for an empty frame. ``min_periods`` does not apply to ``frame_count_distinct``
+  and ``frame_collect``, and counts the present ``by`` rows for the arg
+  functions. A ``frame_collect`` that passes 2^27 values in total is an error)
 - ``("ntile", n, out)``
 - ``("first_value"|"last_value"|"fill_forward", value_col, out)``
   (``fill_forward`` is the nearest present value at or before the row: a group-wise ``ffill``)

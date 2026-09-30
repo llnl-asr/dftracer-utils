@@ -1,3 +1,4 @@
+#include <dftracer/utils/dataframe/internal/scalar.h>
 #include <dftracer/utils/dataframe/series.h>
 
 #include <cstdint>
@@ -58,13 +59,13 @@ Series Series::div(const Series& o) const {
 }
 
 Scalar Series::sum() const {
-    return dftu_series_reduce(handle_, DFTU_REDUCE_SUM);
+    return raise_if_error(dftu_series_reduce(handle_, DFTU_REDUCE_SUM));
 }
 Scalar Series::min() const {
-    return dftu_series_reduce(handle_, DFTU_REDUCE_MIN);
+    return raise_if_error(dftu_series_reduce(handle_, DFTU_REDUCE_MIN));
 }
 Scalar Series::max() const {
-    return dftu_series_reduce(handle_, DFTU_REDUCE_MAX);
+    return raise_if_error(dftu_series_reduce(handle_, DFTU_REDUCE_MAX));
 }
 Scalar Series::product() const { return dftu_series_product(handle_); }
 Scalar Series::mode() const { return dftu_series_mode(handle_); }
@@ -74,8 +75,11 @@ std::int64_t Series::arg_min() const { return dftu_series_arg_min(handle_); }
 std::int64_t Series::arg_max() const { return dftu_series_arg_max(handle_); }
 std::int64_t Series::count() const { return dftu_series_count(handle_); }
 double Series::mean() const {
+    // sum() first: a column type that has no sum (a string) is refused even
+    // when it has no valid value.
+    const double total = scalar_as_double(sum());
     const std::int64_t n = count();
-    return n == 0 ? 0.0 : scalar_as_double(sum()) / static_cast<double>(n);
+    return n == 0 ? 0.0 : total / static_cast<double>(n);
 }
 double Series::variance(bool sample) const {
     return dftu_series_variance(handle_, sample ? 1 : 0);
@@ -91,9 +95,11 @@ double Series::quantile(double q) const {
 double Series::median() const { return dftu_series_quantile(handle_, 0.5); }
 std::int64_t Series::nunique() const { return dftu_series_nunique(handle_); }
 
-Series Series::rank(RankMethod method, bool descending) const {
-    return Series{dftu_series_rank(
-        handle_, static_cast<dftu_rank_method>(method), descending ? 1 : 0)};
+Series Series::rank(RankMethod method, bool descending, bool pct) const {
+    return Series{
+        dftu_series_rank(handle_, static_cast<dftu_rank_method>(method),
+                         (descending ? DFTU_RANK_FLAG_DESCENDING : 0) |
+                             (pct ? DFTU_RANK_FLAG_PCT : 0))};
 }
 Series Series::rolling(RollingOp op, std::int64_t window) const {
     return Series{
@@ -117,8 +123,8 @@ Series Series::ewm_mean(double alpha) const {
 Series Series::ewm_std(double alpha) const {
     return Series{dftu_series_ewm_std(handle_, alpha)};
 }
-Series Series::cut(const Series& breaks) const {
-    return Series{dftu_series_cut(handle_, breaks.handle_)};
+Series Series::cut(const Series& breaks, std::int32_t flags) const {
+    return Series{dftu_series_cut(handle_, breaks.handle_, flags)};
 }
 Series Series::qcut(std::int32_t q) const {
     return Series{dftu_series_qcut(handle_, q)};
@@ -334,6 +340,12 @@ Series Series::str_extract(std::string_view pattern, std::int64_t group) const {
         handle_, pattern.data(), static_cast<std::int32_t>(pattern.size()),
         group)};
 }
+Series Series::str_regex_replace(std::string_view pattern,
+                                 std::string_view to) const {
+    return Series{dftu_series_str_regex_replace(
+        handle_, pattern.data(), static_cast<std::int32_t>(pattern.size()),
+        to.data(), static_cast<std::int32_t>(to.size()))};
+}
 Series Series::list_len() const {
     return Series{dftu_series_list_len(handle_)};
 }
@@ -391,6 +403,10 @@ Series Series::dt_part(std::int32_t part, std::int32_t unit) const {
 }
 Series Series::dt_round(std::int64_t every, std::int32_t mode) const {
     return Series{dftu_series_dt_round(handle_, every, mode)};
+}
+Series Series::dt_format(std::string_view fmt, TimeUnit unit) const {
+    return Series{dftu_series_dt_format(handle_, fmt.data(), sv_len(fmt),
+                                        static_cast<std::int32_t>(unit))};
 }
 Series Series::with_timezone(std::string_view tz) const {
     return Series{dftu_series_with_timezone(

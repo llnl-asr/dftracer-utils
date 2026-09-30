@@ -223,7 +223,9 @@ PyMethodDef Series_methods[] = {
      "ffill() -> nulls filled from the nearest present value before them."},
     {"bfill", series_unary<dftu_series_bfill>, METH_NOARGS,
      "bfill() -> nulls filled from the nearest present value after them."},
-    {"cast", Series_cast, METH_O, "Cast to a numeric TypeId code."},
+    {"cast", Series_cast, METH_O,
+     "Cast to a TypeId code; TypeError names both types for a pair the engine "
+     "refuses."},
     {"prim", Series_prim, METH_O,
      "Apply a unary numeric primitive by Prim code (i64 in, i64 out)."},
     {"compare", Series_compare, METH_VARARGS,
@@ -338,8 +340,10 @@ PyMethodDef Series_methods[] = {
      "ewm_mean(alpha) -> Float64 Series, exponentially weighted mean."},
     {"ewm_std", Series_ewm_std, METH_O,
      "ewm_std(alpha) -> Float64 Series, exponentially weighted sample std."},
-    {"cut", Series_cut, METH_O,
-     "cut(breaks) -> Int32 Series binning by the ascending breaks Series."},
+    {"cut", Series_cut, METH_VARARGS,
+     "cut(breaks, flags=0) -> Int32 Series binning by the ascending breaks "
+     "Series; flags 1 closes each interval on the right, 2 gives null outside "
+     "the interior intervals and numbers them from 0."},
     {"qcut", Series_qcut, METH_O,
      "qcut(q) -> Int32 Series binning by the column's q-quantile edges."},
     {"search_sorted", Series_search_sorted, METH_O,
@@ -383,6 +387,13 @@ PyMethodDef Series_methods[] = {
      "argsort(descending=False) -> Int64 Series of the sorted row order."},
     {"dictionary_encode", Series_dictionary_encode, METH_NOARGS,
      "Dictionary-encode a String/Binary column -> Series."},
+    {"str_into", Series_str_into, METH_VARARGS,
+     "str_into(out, na=None): a String column's rows into a numpy object "
+     "array of its length, null rows holding `na`."},
+    {"np_parts", Series_np_parts, METH_VARARGS,
+     "np_parts(nullable=False, na=None) -> (values, mask, dtype): the column "
+     "in one native pass for numpy.frombuffer (bytearrays; a list of str for "
+     "a String column, null rows holding `na`); mask is 1 = null or None."},
     {"to_pylist", Series_to_pylist, METH_NOARGS,
      "to_pylist() -> list of Python values, None for null; TypeError for a "
      "column type with no native conversion."},
@@ -460,6 +471,9 @@ PyMethodDef Series_methods[] = {
     {"str_extract", Series_str_extract, METH_VARARGS,
      "str_extract(pattern, group=1) -> String Series of the regex capture "
      "group per row, null where there is no match."},
+    {"str_regex_replace", Series_str_regex_replace, METH_VARARGS,
+     "str_regex_replace(pattern, to) -> String Series with every regex match "
+     "replaced by to ($n, ${n}, ${name}, $$ insert groups)."},
     {"list_len", Series_list_len, METH_NOARGS,
      "list_len() -> Int64 Series of each row's list length."},
     {"list_get", Series_list_get, METH_O,
@@ -497,6 +511,10 @@ PyMethodDef Series_methods[] = {
      "dt_part(code, unit=2) -> Int64 calendar part (0 year .. 16 epoch days) "
      "of a Timestamp / Date / Duration column, or an Int64 column read in "
      "unit (0 s, 1 ms, 2 us, 3 ns)."},
+    {"dt_format", Series_dt_format, METH_VARARGS,
+     "dt_format(fmt, unit=2) -> String strftime of a Timestamp / Date column, "
+     "or an Int64 column read in unit (0 s, 1 ms, 2 us, 3 ns); raises "
+     "ValueError on an unsupported directive."},
     {"dt_round", Series_dt_round, METH_VARARGS,
      "dt_round(every, mode) -> each instant rounded to a multiple of every "
      "(the column's unit) by mode 0 floor, 1 ceil, 2 round (half to even)."},
@@ -596,6 +614,17 @@ int init_series(PyObject* m) {
     if (!list_fn) return -1;
     if (PyModule_AddObject(m, "_series_from_list", list_fn) < 0) {
         Py_DECREF(list_fn);
+        return -1;
+    }
+
+    static PyMethodDef nulls_def = {
+        "_series_nulls", series_nulls, METH_VARARGS,
+        "_series_nulls(type_id, n) -> _Series: a column of `n` nulls of that "
+        "type."};
+    PyObject* nulls_fn = PyCFunction_NewEx(&nulls_def, nullptr, nullptr);
+    if (!nulls_fn) return -1;
+    if (PyModule_AddObject(m, "_series_nulls", nulls_fn) < 0) {
+        Py_DECREF(nulls_fn);
         return -1;
     }
 

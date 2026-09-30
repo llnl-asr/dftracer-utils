@@ -31,6 +31,8 @@ union WindowParams {
         std::int64_t preceding;
         std::int64_t following;
         WindowFrameMode mode;
+        /// FrameQuantile: the level in [0, 1].
+        double q;
     } frame;
     /// Rate: the counter-reset correction.
     struct Rate {
@@ -64,6 +66,17 @@ struct WindowColumn {
     const std::string* end() const {
         return func == WindowFunc::Sessionize ? named(1) : nullptr;
     }
+    /// The FrameArgMax/FrameArgMin ordering column.
+    const std::string* by() const {
+        return func == WindowFunc::FrameArgMax ||
+                       func == WindowFunc::FrameArgMin
+                   ? named(1)
+                   : nullptr;
+    }
+    void set_by(std::string name) {
+        if (func == WindowFunc::FrameArgMax || func == WindowFunc::FrameArgMin)
+            names_[1] = std::move(name);
+    }
     void set_value(std::string name) {
         if (func != WindowFunc::Sessionize) names_[0] = std::move(name);
     }
@@ -86,7 +99,11 @@ struct WindowColumn {
 constexpr bool is_frame_func(WindowFunc f) {
     return f == WindowFunc::FrameSum || f == WindowFunc::FrameMin ||
            f == WindowFunc::FrameMax || f == WindowFunc::FrameCount ||
-           f == WindowFunc::FrameMean;
+           f == WindowFunc::FrameMean || f == WindowFunc::FrameVar ||
+           f == WindowFunc::FrameStd || f == WindowFunc::FrameQuantile ||
+           f == WindowFunc::FrameCountDistinct ||
+           f == WindowFunc::FrameArgMax || f == WindowFunc::FrameArgMin ||
+           f == WindowFunc::FrameCollect;
 }
 
 /// Whether `f` reads WindowParams::offset.
@@ -138,7 +155,8 @@ DataFrame gap_fill(const DataFrame& df,
 /// closest (equal distance: the earlier). Among right rows with equal times
 /// Backward takes the last and Forward the first; Nearest takes the last at
 /// or before the left time and the first after it. Every left row appears; a
-/// null or NaN time, no candidate or a match farther than `tolerance` gives
+/// null or NaN time, no candidate or a match farther than `tolerance` (in the
+/// units of `on`; a fraction bounds integer times by its floor) gives
 /// null right values, and a null or NaN right time is never a candidate. A
 /// null key matches only a null key (pandas merge_asof). The output holds
 /// every left column, then the right columns but `on` and `by` (a colliding
@@ -147,7 +165,7 @@ DataFrame gap_fill(const DataFrame& df,
 /// std::invalid_argument on non-numeric or unequal time or key types.
 DataFrame asof(const DataFrame& left, const DataFrame& right,
                const std::string& on, const std::vector<std::string>& by,
-               AsofDirection direction, std::optional<std::int64_t> tolerance);
+               AsofDirection direction, std::optional<double> tolerance);
 
 /// Matches each `left.point` to every `right` row whose closed interval
 /// `[lo, hi]` contains it within the `by` partition, one output row per pair

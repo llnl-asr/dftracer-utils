@@ -147,15 +147,18 @@ PyObject* Series_rank(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!a) return nullptr;
     const char* method = "average";
     int descending = 0;
-    static const char* kwlist[] = {"method", "descending", nullptr};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|sp",
+    int pct = 0;
+    static const char* kwlist[] = {"method", "descending", "pct", nullptr};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|spp",
                                      const_cast<char**>(kwlist), &method,
-                                     &descending))
+                                     &descending, &pct))
         return nullptr;
     dftu_rank_method code = DFTU_RANK_AVERAGE;
     if (!dftracer::utils::python::rank_method_from_str(method, &code))
         return nullptr;
-    return make_series(Series{dftu_series_rank(a->handle(), code, descending)});
+    const int flags = (descending ? DFTU_RANK_FLAG_DESCENDING : 0) |
+                      (pct ? DFTU_RANK_FLAG_PCT : 0);
+    return make_series(Series{dftu_series_rank(a->handle(), code, flags)});
 }
 PyObject* Series_search_sorted(PyObject* self, PyObject* other) {
     Series* a = as_series(self);

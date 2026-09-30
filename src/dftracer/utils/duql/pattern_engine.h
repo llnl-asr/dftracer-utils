@@ -12,6 +12,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace dftracer::utils::duql {
@@ -185,7 +186,17 @@ inline bool segments_match(const CompiledPattern& p, std::string_view s) {
     return true;
 }
 
+/// Shortest value, in bytes, that a Vectorscan-backed regex scans with
+/// Vectorscan; shorter values stay on PCRE2.
+inline constexpr std::size_t HS_MIN_VALUE = 256;
+
 MatchResult match_regex(const CompiledPattern& p, std::string_view s);
+
+// Strict UTF-8: no overlong forms, surrogates, or code points past U+10FFFF.
+bool valid_utf8(std::string_view s);
+
+// The PCRE2 path alone, bypassing Vectorscan; for tests.
+MatchResult match_regex_pcre2(const CompiledPattern& p, std::string_view s);
 
 }  // namespace detail
 
@@ -272,6 +283,34 @@ std::optional<LiteralTest> literal_test(const CompiledPattern& p);
 
 /// Capture groups of a regex; 0 for the other kinds.
 std::size_t capture_count(const CompiledPattern& p);
+
+/// The named groups of a regex as (group number, name), in group-number
+/// order; empty for the other kinds.
+std::vector<std::pair<std::size_t, std::string>> capture_names(
+    const CompiledPattern& p);
+
+/// A replacement template compiled against one pattern: literal text and
+/// group references. Valid for that pattern only.
+struct Substitution {
+    struct Piece {
+        std::string text;
+        std::size_t group = 0;
+        bool is_group = false;
+    };
+    std::vector<Piece> pieces;
+};
+
+/// Compile `to`: `$n` and `${n}` insert group n, `${name}` a named group,
+/// `$$` a dollar sign. A non-regex pattern, an unknown group or name, and a
+/// `$` followed by anything else are errors whose offset is in `to`.
+dftracer::utils::expected<Substitution, PatternError> compile_substitution(
+    const CompiledPattern& p, std::string_view to);
+
+/// Replace every non-overlapping match of a regex in `s` into `out`, left to
+/// right; a group that took no part inserts nothing. NO leaves `out` equal to
+/// `s`; LIMIT leaves `out` unspecified.
+MatchResult regex_replace(const CompiledPattern& p, const Substitution& sub,
+                          std::string_view s, std::string& out);
 
 /// Case-sensitive literals every match contains (empty when none is known).
 const std::vector<std::string>& required_literals(const CompiledPattern& p);

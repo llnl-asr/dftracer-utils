@@ -24,6 +24,9 @@ namespace dftracer::utils::dataframe {
 AggExprSpec agg_count(std::string out) {
     return {AggOp::Count, Expr{}, std::move(out)};
 }
+AggExprSpec agg_count_valid(Expr value, std::string out) {
+    return {AggOp::CountValid, std::move(value), std::move(out)};
+}
 AggExprSpec agg_sum(Expr value, std::string out) {
     return {AggOp::Sum, std::move(value), std::move(out)};
 }
@@ -65,8 +68,10 @@ AggExprSpec agg_argmax(Expr value, Expr by, std::string out) {
     s.by = std::move(by);
     return s;
 }
-AggExprSpec agg_set_union(Expr value, std::string out) {
-    return {AggOp::SetUnion, std::move(value), std::move(out)};
+AggExprSpec agg_set_union(Expr value, std::string out, bool typed) {
+    AggExprSpec s{AggOp::SetUnion, std::move(value), std::move(out)};
+    s.param = typed ? 1.0 : 0.0;
+    return s;
 }
 
 DataFrame group_agg_expr(const std::vector<Expr>& keys,
@@ -204,6 +209,9 @@ extern "C" {
 dftu_agg_spec dftu_agg_count(const char* out) {
     return make_spec(DFTU_AGG_COUNT, nullptr, out);
 }
+dftu_agg_spec dftu_agg_count_valid(const dftu_expr* value, const char* out) {
+    return make_spec(DFTU_AGG_COUNT_VALID, value, out);
+}
 dftu_agg_spec dftu_agg_sum(const dftu_expr* value, const char* out) {
     return make_spec(DFTU_AGG_SUM, value, out);
 }
@@ -247,8 +255,9 @@ dftu_agg_spec dftu_agg_argmax(const dftu_expr* value, const dftu_expr* by,
                               const char* out) {
     return make_spec(DFTU_AGG_ARGMAX, value, out, 0.0, by);
 }
-dftu_agg_spec dftu_agg_set_union(const dftu_expr* value, const char* out) {
-    return make_spec(DFTU_AGG_SET_UNION, value, out);
+dftu_agg_spec dftu_agg_set_union(const dftu_expr* value, const char* out,
+                                 int32_t typed) {
+    return make_spec(DFTU_AGG_SET_UNION, value, out, typed ? 1.0 : 0.0);
 }
 
 int32_t dftu_dataframe_group_agg_expr(const dftu_expr* key,

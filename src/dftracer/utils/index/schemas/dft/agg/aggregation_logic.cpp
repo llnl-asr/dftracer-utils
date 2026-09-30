@@ -124,6 +124,7 @@ void update_aggregation_entry(const trace::DFTracerEvent& ev,
 
     if (ev.is_counter()) {
         auto a_count = ev.args["dftu_cnt"];
+        if (!a_count.exists()) a_count = ev.args["dft_cnt"];
         if (!a_count.exists()) a_count = ev.args["count"];
         ev_count = a_count.exists() ? a_count.get<std::uint64_t>() : 1;
         metrics.count += ev_count;

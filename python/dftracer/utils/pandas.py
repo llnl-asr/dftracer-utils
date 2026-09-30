@@ -56,10 +56,20 @@ def merge(
     left_on: Union[str, Sequence[str], None] = None,
     right_on: Union[str, Sequence[str], None] = None,
     suffixes: Tuple[str, str] = ("_x", "_y"),
+    nulls_equal: bool = False,
 ) -> DataFrame:
     """Join two frames (:meth:`DataFrame.merge`): with no key, on the columns
-    both share; colliding non-key columns are suffixed on both sides."""
-    return left.merge(right, how=how, on=on, left_on=left_on, right_on=right_on, suffixes=suffixes)
+    both share; colliding non-key columns are suffixed on both sides. A null key
+    matches another null key only with ``nulls_equal=True`` (the pandas rule)."""
+    return left.merge(
+        right,
+        how=how,
+        on=on,
+        left_on=left_on,
+        right_on=right_on,
+        suffixes=suffixes,
+        nulls_equal=nulls_equal,
+    )
 
 
 def get_dummies(df: DataFrame, columns: Union[str, Sequence[str]]) -> DataFrame:

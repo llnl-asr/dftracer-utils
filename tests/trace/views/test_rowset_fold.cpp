@@ -146,11 +146,11 @@ TEST_SUITE("RowSetFold") {
     TEST_CASE("the stored genesis runs equal the pipeline over every record") {
         TestEnvironment env(10);
         std::vector<std::string> lines = {
-            R"({"id":0,"name":"RUN","cat":"genesis","pid":0,"tid":0,"ph":4,"args":{"run":"ab","app":"laghos","nodes":4}})",
-            R"({"id":0,"name":"RUN","cat":"genesis","pid":0,"tid":0,"ph":4,"args":{"run":"cd","app":"lulesh","nodes":8}})"};
+            R"({"gtype":"run","run":"ab","app":"laghos","nodes":4})",
+            R"({"gtype":"run","run":"cd","app":"lulesh","nodes":8})"};
         for (int i = 0; i < 30; ++i)
             lines.push_back(
-                R"({"id":1,"name":"f","cat":"c","pid":0,"tid":0,"ph":3,"ts":1,"args":{"run":"ab","path":"main;f","depth":1,"count":2}})");
+                R"({"gtype":"func","run":"ab","path":"main;f","ts":1,"depth":1,"count":2})");
         const std::string gz = write_trace(env, lines);
         const auto ixr = ix::Indexer::open({gz});
         const View v = View::from_file(gz, determine_index_path(gz, ""));

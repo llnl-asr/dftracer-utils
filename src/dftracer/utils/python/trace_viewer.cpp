@@ -6,6 +6,8 @@
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/duql/macros.h>
 #include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/duql/syntax/parser.h>
+#include <dftracer/utils/duql/syntax/tree.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/python/dataframe.h>
@@ -257,7 +259,9 @@ GroupKey parse_group_key(const std::string& s) {
     return out;
 }
 
-// "count" | "op:field" | "argmax:field:by" | "pct:field:q" | "pNN:field"
+// "count" | "op:field" | "argmax:field:by" | "pct:field:q" | "pNN:field".
+// "count" is the group row count; "count:field" counts the rows where the
+// field is present.
 std::optional<AggSpec> parse_agg_spec(const std::string& t) {
     auto c1 = t.find(':');
     std::string op = t.substr(0, c1);
@@ -269,7 +273,7 @@ std::optional<AggSpec> parse_agg_spec(const std::string& t) {
         if (c2 != std::string::npos) by = rest.substr(c2 + 1);
     }
     const std::string occ = field.empty() ? "dur" : field;
-    if (op == "count") return AggSpec(AggOp::Count, "", "", "");
+    if (op == "count") return AggSpec(AggOp::Count, field, "", "");
     if (op == "sum") return AggSpec(AggOp::Sum, field);
     if (op == "sumsq") return AggSpec(AggOp::SumSq, field);
     if (op == "min") return AggSpec(AggOp::Min, field);
@@ -499,6 +503,23 @@ bool duql_args(PyObject* args, const char*& text,
     while (PyDict_Next(dict, &pos, &key, &value)) {
         const char* name = PyUnicode_AsUTF8(key);
         if (!name) return false;
+        if (PyList_Check(value) || PyTuple_Check(value)) {
+            PyObject* seq = PySequence_Fast(value, "a list parameter");
+            if (!seq) return false;
+            std::vector<dftracer::utils::duql::LiteralValue> items;
+            const Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
+            items.reserve(static_cast<std::size_t>(n));
+            bool ok = true;
+            for (Py_ssize_t i = 0; ok && i < n; ++i) {
+                dftracer::utils::duql::LiteralValue lit;
+                ok = duql_param(PySequence_Fast_GET_ITEM(seq, i), lit);
+                if (ok) items.push_back(std::move(lit));
+            }
+            Py_DECREF(seq);
+            if (!ok) return false;
+            params.insert_or_assign(name, std::move(items));
+            continue;
+        }
         dftracer::utils::duql::LiteralValue lit;
         if (!duql_param(value, lit)) return false;
         params.insert_or_assign(name, std::move(lit));
@@ -1157,6 +1178,19 @@ PyObject* duql_load_path_py(PyObject*, PyObject* arg) {
     });
 }
 
+PyObject* duql_canonical_py(PyObject*, PyObject* arg) {
+    const char* text = as_utf8(arg);
+    if (!text) return nullptr;
+    return guarded([&]() -> PyObject* {
+        auto program = dftracer::utils::duql::syntax::parse(text);
+        if (!program) throw std::invalid_argument(program.error().format());
+        const std::string out =
+            dftracer::utils::duql::syntax::to_text(*program);
+        return PyUnicode_FromStringAndSize(out.data(),
+                                           static_cast<Py_ssize_t>(out.size()));
+    });
+}
+
 PyMethodDef module_methods[] = {
     {"merge_flamegraph_partials", merge_flamegraph_partials_py, METH_O,
      "merge_flamegraph_partials(partials) -> node DataFrame (no scan)."},
@@ -1164,6 +1198,8 @@ PyMethodDef module_methods[] = {
      "plugin_results(plugins) -> {name: result} of its last run."},
     {"duql_load_path", duql_load_path_py, METH_O,
      "duql_load_path(path): load the macros of a .duql file or directory."},
+    {"duql_canonical", duql_canonical_py, METH_O,
+     "duql_canonical(text) -> the canonical duql text of `text`."},
     {nullptr, nullptr, 0, nullptr}};
 
 }  // namespace

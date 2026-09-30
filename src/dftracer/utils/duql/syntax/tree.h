@@ -101,11 +101,14 @@ struct Binary {
 };
 
 /// `x [not] in [..]` or `x [not] in (from ...)`.
+/// `x [not] in [..]`, `x [not] in (from ...)` or `x [not] in $p`; binding
+/// `$p` fills `list`.
 struct In {
     ExprPtr subject;
     bool negated = false;
     std::vector<ExprPtr> list;
     PipelinePtr subquery;
+    std::string list_param;
 };
 
 /// `"text" [not] in path` or `"text" [not] in any(path)`: the legacy
@@ -124,12 +127,15 @@ struct Between {
     ExprPtr high;
 };
 
+/// `x [not] [i]like "p"` or `x [not] [i]like $p`; binding `$p` fills
+/// `pattern`.
 struct Like {
     ExprPtr subject;
     bool negated = false;
     bool icase = false;
     std::string pattern;
     std::optional<std::string> escape;
+    std::string pattern_param;
 };
 
 struct Is {
@@ -157,6 +163,14 @@ struct Call {
     std::vector<Arg> args;
 };
 
+/// `call over N rows` (`rows`) or `call over width` (a duration, number or
+/// parameter): the frame of a window call.
+struct Over {
+    ExprPtr call;
+    ExprPtr width;
+    bool rows = false;
+};
+
 struct List {
     std::vector<ExprPtr> items;
 };
@@ -169,9 +183,15 @@ struct Subquery {
     PipelinePtr pipeline;
 };
 
-using ExprNode =
-    std::variant<Literal, Duration, Path, Param, Unary, Binary, In, Contains,
-                 Between, Like, Is, Arrow, Call, List, Tuple, Subquery>;
+/// `base[index]`: the element of `base` at a computed index. It ends a path.
+struct Index {
+    ExprPtr base;
+    ExprPtr index;
+};
+
+using ExprNode = std::variant<Literal, Duration, Path, Param, Unary, Binary, In,
+                              Contains, Between, Like, Is, Arrow, Call, Over,
+                              List, Tuple, Subquery, Index>;
 
 struct Expr {
     ExprNode node;
@@ -203,6 +223,10 @@ struct Where {
 struct Derive {
     std::vector<Assign> fields;
 };
+struct Parse {
+    Path column;
+    ExprPtr pattern;
+};
 struct Select {
     std::vector<Item> items;
 };
@@ -213,7 +237,7 @@ struct Rename {
     std::vector<std::pair<std::string, Path>> pairs;
 };
 struct Distinct {
-    std::vector<ExprPtr> keys;
+    std::vector<Item> keys;
 };
 struct Group {
     std::vector<Item> keys;
@@ -227,9 +251,12 @@ struct Window {
     std::vector<SortKey> order;
     std::vector<Assign> fields;
 };
+/// `pivot k [in [v [as label], ...]] { ... }`; `labels` pairs with
+/// `values`, empty for a value with no label.
 struct Pivot {
     ExprPtr key;
     std::vector<ExprPtr> values;
+    std::vector<std::string> labels;
     std::vector<Assign> aggregates;
 };
 struct Unpivot {
@@ -240,10 +267,13 @@ struct Unpivot {
 struct Sort {
     std::vector<SortKey> keys;
 };
+/// `take n [by ... [sort ...]]`, or `take a..b` (`last` is `b`): rows `a`
+/// to `b`, 1-based and inclusive.
 struct Take {
     std::string count;
     std::vector<ExprPtr> by;
     std::vector<SortKey> order;
+    std::string last;
 };
 struct Skip {
     std::string count;
@@ -259,25 +289,33 @@ struct Expand {
     std::string with_index;
     bool keep_empty = false;
 };
-/// `lookup rowset on k [== k2], ... [into name]`.
+enum class LookupKind : std::uint8_t { LEFT, INNER, ANTI };
+
+/// `lookup side on k [== k2], ... [inner | anti] [into name]`; `side` is the
+/// inline `(from ...)` pipeline when `rowset` is empty.
 struct Lookup {
     std::string rowset;
+    PipelinePtr side;
+    LookupKind kind = LookupKind::LEFT;
     std::vector<std::pair<ExprPtr, ExprPtr>> keys;
     std::string into;
 };
 enum class AsofDirection { BACKWARD, FORWARD, NEAREST };
 
-/// `lookup rowset on k [== k2], ... asof t [== t2] [direction] [within n]`.
+/// `lookup rowset on k [== k2], ... asof t [== t2] [direction] [within d]`;
+/// `within` is a number, a duration or a parameter.
 struct AsofLookup {
     std::string rowset;
+    PipelinePtr side;
     std::vector<std::pair<ExprPtr, ExprPtr>> keys;
     std::pair<ExprPtr, ExprPtr> time;
     AsofDirection direction = AsofDirection::BACKWARD;
-    std::string within;
+    ExprPtr within;
 };
 /// `lookup rowset on k [== k2], ... overlap [into name]`.
 struct OverlapLookup {
     std::string rowset;
+    PipelinePtr side;
     std::vector<std::pair<ExprPtr, ExprPtr>> keys;
     std::string into;
 };
@@ -287,15 +325,29 @@ struct Union {
 struct CallStage {
     Call call;
 };
+/// `time_range [low] .. [high] [overlap]`: at least one bound.
 struct TimeRange {
     ExprPtr low;
     ExprPtr high;
     bool overlap = false;
 };
 struct CallTree {};
+/// `name(args)` at a stage position: a pipeline macro call.
+struct Use {
+    Call call;
+};
+enum class FillMode : std::uint8_t { ZERO, FORWARD, LINEAR };
+/// `bucket width [every step] [at origin] [fill [forward | linear] [from low to
+/// high]] [as name]`; the key column is `bucket` without a name.
 struct Bucket {
     ExprPtr width;
+    ExprPtr every;
+    ExprPtr at;
+    ExprPtr low;
+    ExprPtr high;
+    FillMode fill_mode = FillMode::ZERO;
     bool fill = false;
+    std::string as;
 };
 /// `session [k, ...] gap g [max m] [as name]`.
 struct Session {
@@ -309,7 +361,7 @@ using StageNode =
     std::variant<Where, Derive, Select, Drop, Rename, Distinct, Group, Agg,
                  Window, Pivot, Unpivot, Sort, Take, Skip, Sample, Expand,
                  Lookup, AsofLookup, OverlapLookup, Union, CallStage, TimeRange,
-                 CallTree, Bucket, Session>;
+                 CallTree, Bucket, Session, Parse, Use>;
 
 struct Stage {
     StageNode node;
@@ -332,11 +384,11 @@ struct Let {
     PipelinePtr pipeline;
 };
 
-/// `def name[(params)] = expr`.
+/// `def name[(params)] = expr | stages`.
 struct Def {
     std::string name;
     std::vector<std::string> params;
-    ExprPtr body;
+    std::variant<ExprPtr, PipelinePtr> body;
 };
 
 struct RowSet {

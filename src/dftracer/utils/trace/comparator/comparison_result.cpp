@@ -107,12 +107,11 @@ std::vector<MetricComparison> build_metadata_metrics(
 double compute_cohens_d(const MetricStats& base, std::uint64_t n_base,
                         const MetricStats& var, std::uint64_t n_var) {
     if (n_base < 2 || n_var < 2) return 0.0;
-    // `m2` holds the raw power sum sum_x^2, not Welford central M2.
-    // Population variance: Var = (sum_x^2 - (sum_x)^2 / n) / n.
+    // `m2` is the central second moment, sum (x - mean)^2.
+    // Population variance: Var = m2 / n.
     auto pop_var = [](const MetricStats& ms, std::uint64_t n) {
         const double nd = static_cast<double>(n);
-        const double sx = static_cast<double>(ms.total());
-        const double central = ms.m2() - sx * sx / nd;
+        const double central = ms.m2();
         return (central > 0.0 ? central : 0.0) / nd;
     };
     double var_base = pop_var(base, n_base);

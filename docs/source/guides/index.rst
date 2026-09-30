@@ -143,3 +143,4 @@ Run across ranks and machines.
    scale/mpi
    scale/distributed-index
    scale/distributed-aggregation
+   scale/distributed-frame

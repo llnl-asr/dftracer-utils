@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_ENV_H
 #define DFTRACER_UTILS_CORE_ENV_H
 
+#include <cstdint>
 #include <optional>
 #include <string_view>
 #include <type_traits>
@@ -28,6 +29,9 @@ std::optional<std::string_view> Env::get<std::string_view>(
 
 template <>
 std::optional<int> Env::get<int>(std::string_view name);
+
+template <>
+std::optional<std::uint64_t> Env::get<std::uint64_t>(std::string_view name);
 
 }  // namespace dftracer::utils
 

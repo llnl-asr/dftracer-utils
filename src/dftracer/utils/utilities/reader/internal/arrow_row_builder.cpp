@@ -3,7 +3,7 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/utils/string.h>
+#include <dftracer/utils/json/line.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/schema.h>
 
@@ -478,7 +478,7 @@ bool process_json_line(RecordBatchBuilder &builder, JsonParser &parser,
                        const RowBuildOptions &opts) {
     const char *trimmed;
     std::size_t trimmed_length;
-    if (!dftracer::utils::json_trim_and_validate_with_comma(
+    if (!dftracer::utils::json::trim_and_validate_with_comma(
             content.data(), content.size(), trimmed, trimmed_length))
         return false;
     if (!parser.parse(std::string_view(trimmed, trimmed_length))) return false;

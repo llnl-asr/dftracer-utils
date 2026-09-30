@@ -17,12 +17,14 @@
 namespace dftracer::utils::dataframe {
 
 /// One aggregate whose value is an expression over the input columns. `value`
-/// is ignored for Count (the group row count).
+/// is ignored for Count (the group row count); CountValid counts its non-null
+/// values.
 struct AggExprSpec {
     AggOp op = AggOp::Count;
     Expr value;
     std::string out;
-    double param = 0.0;  ///< Pct: the quantile level q in [0, 1]
+    double param = 0.0;  ///< Pct: the quantile level q in [0, 1]; SetUnion:
+                         ///< nonzero asks for the typed list
     Expr by{};           ///< ArgMax: the value maximized (value is the field
                          ///< represented); unused otherwise
 
@@ -39,6 +41,8 @@ struct AggExprSpec {
 /// Python DSL (`F.x.sum()`) mirror these, so every frontend builds the same
 /// spec. Feed the result to group_agg_expr.
 AggExprSpec agg_count(std::string out = "count");
+/// The number of non-null values of `value` per group (`count` with a column).
+AggExprSpec agg_count_valid(Expr value, std::string out = "count_valid");
 AggExprSpec agg_sum(Expr value, std::string out = "sum");
 AggExprSpec agg_min(Expr value, std::string out = "min");
 AggExprSpec agg_max(Expr value, std::string out = "max");
@@ -56,7 +60,10 @@ AggExprSpec agg_sumsq(Expr value, std::string out = "sumsq");
 /// The String repr of `value` at the row maximizing `by`, per group.
 AggExprSpec agg_argmax(Expr value, Expr by, std::string out = "argmax");
 /// Distinct String values of `value`, sorted and joined (see AggOp::SetUnion).
-AggExprSpec agg_set_union(Expr value, std::string out = "set_union");
+/// With `typed`, a list of the distinct non-null values in their own type
+/// (string, bool, int64, uint64 or float64), ascending, no separator limit.
+AggExprSpec agg_set_union(Expr value, std::string out = "set_union",
+                          bool typed = false);
 
 /// Group `inputs` by `keys` (N expressions) and compute each spec, evaluating
 /// the keys and values in one fused, CSE'd, pruned pass. Identical value
@@ -95,6 +102,7 @@ typedef struct dftu_agg_spec {
 } dftu_agg_spec;
 
 dftu_agg_spec dftu_agg_count(const char* out);
+dftu_agg_spec dftu_agg_count_valid(const dftu_expr* value, const char* out);
 dftu_agg_spec dftu_agg_sum(const dftu_expr* value, const char* out);
 dftu_agg_spec dftu_agg_min(const dftu_expr* value, const char* out);
 dftu_agg_spec dftu_agg_max(const dftu_expr* value, const char* out);
@@ -110,7 +118,8 @@ dftu_agg_spec dftu_agg_hist(const dftu_expr* value, const char* out);
 dftu_agg_spec dftu_agg_sumsq(const dftu_expr* value, const char* out);
 dftu_agg_spec dftu_agg_argmax(const dftu_expr* value, const dftu_expr* by,
                               const char* out);
-dftu_agg_spec dftu_agg_set_union(const dftu_expr* value, const char* out);
+dftu_agg_spec dftu_agg_set_union(const dftu_expr* value, const char* out,
+                                 int32_t typed);
 
 /** Group `n_inputs` columns by `key` (an expression; a bare column ref, e.g. a
  * string category, is taken directly) and compute each of `n_specs` aggregates.

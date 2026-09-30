@@ -134,7 +134,12 @@ fully in the engine (via ``DataFrame.filter``, ``dftu_series_filter``) and retur
 
 Comparisons are numeric scalar predicates for now (string predicates stay in the
 ``Field`` / ``Expr`` DSL, which also compiles to the index query string for
-scan-time pushdown).
+scan-time pushdown). A comparison can also take another column expression on its
+right side, ``col("a") >= col("b")``, in an eager ``DataFrame.filter`` and in a
+``LazyFrame.filter``: the engine compares the two row by row (``expr_cmp_expr``),
+a row where either side is null is left out, and two columns that cannot compare
+(a string and an integer) fail with an error that names both types. Such a
+comparison is not pushable to a trace scan (``to_duql()`` raises ``TypeError``).
 
 Native frame and column ops
 ---------------------------
@@ -205,7 +210,7 @@ float.
    * - Arithmetic
      - :py:meth:`~dftracer.utils.Series.add`, :py:meth:`~dftracer.utils.Series.sub`, :py:meth:`~dftracer.utils.Series.mul`, :py:meth:`~dftracer.utils.Series.div`, :py:meth:`~dftracer.utils.Series.add_scalar`, :py:meth:`~dftracer.utils.Series.sub_scalar`, :py:meth:`~dftracer.utils.Series.mul_scalar`, :py:meth:`~dftracer.utils.Series.div_scalar`
    * - Strings
-     - :py:meth:`~dftracer.utils.Series.str_eq`, :py:meth:`~dftracer.utils.Series.str_contains`, :py:meth:`~dftracer.utils.Series.str_starts_with`, :py:meth:`~dftracer.utils.Series.str_ends_with`, :py:meth:`~dftracer.utils.Series.str_matches`, :py:meth:`~dftracer.utils.Series.str_like`, :py:meth:`~dftracer.utils.Series.str_len_bytes`, :py:meth:`~dftracer.utils.Series.str_len_chars`, :py:meth:`~dftracer.utils.Series.str_find`, :py:meth:`~dftracer.utils.Series.str_slice`, :py:meth:`~dftracer.utils.Series.str_split`, :py:meth:`~dftracer.utils.Series.str_replace`, :py:meth:`~dftracer.utils.Series.str_replace_all`, :py:meth:`~dftracer.utils.Series.str_strip`, :py:meth:`~dftracer.utils.Series.str_lstrip`, :py:meth:`~dftracer.utils.Series.str_rstrip`, :py:meth:`~dftracer.utils.Series.str_pad_start`, :py:meth:`~dftracer.utils.Series.str_pad_end`, :py:meth:`~dftracer.utils.Series.str_zfill`, :py:meth:`~dftracer.utils.Series.to_lowercase`, :py:meth:`~dftracer.utils.Series.to_uppercase`
+     - :py:meth:`~dftracer.utils.Series.str_eq`, :py:meth:`~dftracer.utils.Series.str_contains`, :py:meth:`~dftracer.utils.Series.str_starts_with`, :py:meth:`~dftracer.utils.Series.str_ends_with`, :py:meth:`~dftracer.utils.Series.str_matches`, :py:meth:`~dftracer.utils.Series.str_like`, :py:meth:`~dftracer.utils.Series.str_len_bytes`, :py:meth:`~dftracer.utils.Series.str_len_chars`, :py:meth:`~dftracer.utils.Series.str_find`, :py:meth:`~dftracer.utils.Series.str_slice`, :py:meth:`~dftracer.utils.Series.str_split`, :py:meth:`~dftracer.utils.Series.str_replace`, :py:meth:`~dftracer.utils.Series.str_replace_all`, :py:meth:`~dftracer.utils.Series.str_regex_replace`, :py:meth:`~dftracer.utils.Series.str_strip`, :py:meth:`~dftracer.utils.Series.str_lstrip`, :py:meth:`~dftracer.utils.Series.str_rstrip`, :py:meth:`~dftracer.utils.Series.str_pad_start`, :py:meth:`~dftracer.utils.Series.str_pad_end`, :py:meth:`~dftracer.utils.Series.str_zfill`, :py:meth:`~dftracer.utils.Series.to_lowercase`, :py:meth:`~dftracer.utils.Series.to_uppercase`
    * - Nulls / structure
      - :py:meth:`~dftracer.utils.Series.drop_nulls`, :py:meth:`~dftracer.utils.Series.fillna`, :py:meth:`~dftracer.utils.Series.cast`, :py:meth:`~dftracer.utils.Series.dictionary_encode`, :py:meth:`~dftracer.utils.Series.materialize`, :py:meth:`~dftracer.utils.Series.share`, :py:meth:`~dftracer.utils.Series.child`, :py:meth:`~dftracer.utils.Series.num_children`
    * - Interop

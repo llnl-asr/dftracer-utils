@@ -3,12 +3,45 @@ name: Upload Python Package
 on:
   release:
     types: [published]
+  # Every merge into develop publishes a <tag>.postN.dev0 prerelease.
+  push:
+    branches: [develop]
+    paths:
+      - 'CMakeLists.txt'
+      - 'pyproject.toml'
+      - 'cmake/**'
+      - 'src/**'
+      - 'include/**'
+      - 'python/**'
+      - 'web/**'
+  workflow_dispatch:
 permissions:
   contents: read
 
 jobs:
+  # A develop push that lands exactly on a tag is a release: python-publish
+  # runs for it through the release event, so the push run must not upload it.
+  check:
+    name: Check the commit is not a tagged release
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.check.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - id: check
+        run: |
+          if [ "${{ github.event_name }}" != "push" ] || ! git describe --tags --exact-match --match 'v*' >/dev/null 2>&1; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build_wheels:
     name: Build wheels on ${{ matrix.os }}
+    needs: check
+    if: needs.check.outputs.publish == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -104,6 +137,8 @@ jobs:
 
   build_sdist:
     name: Build source distribution
+    needs: check
+    if: needs.check.outputs.publish == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -157,7 +192,7 @@ jobs:
     name: Publish to PyPI
     needs: [build_wheels, build_sdist]
     runs-on: ubuntu-latest
-    if: github.event_name == 'release' && github.event.action == 'published'
+    if: github.event_name == 'release' || github.ref == 'refs/heads/develop'
 
     steps:
       - uses: actions/download-artifact@v8
@@ -171,3 +206,5 @@ jobs:
         with:
           user: __token__
           password: ${{ secrets.PYPI_TOKEN }}
+          # A re-run of the same commit would otherwise fail on an existing file.
+          skip-existing: true

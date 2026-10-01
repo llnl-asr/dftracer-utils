@@ -38,6 +38,7 @@ import {
   type LaneGroupLevel,
 } from "./timeline/timeline";
 import { ApiExplorer } from "./api/ApiExplorer";
+import { ProvenanceView } from "./prov/ProvenanceView";
 import { Flamegraph } from "./flame/flamegraph";
 import { SandwichView } from "./flame/SandwichView";
 import { FlameTooltip, type FlameHover } from "./flame/FlameTooltip";
@@ -69,10 +70,14 @@ const ICON_SANDWICH =
 const ICON_API =
   '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5.5 4 2 8l3.5 4M10.5 4 14 8l-3.5 4"/></svg>';
 
+const ICON_PROV =
+  '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="3.5" cy="4" r="2"/><circle cx="3.5" cy="12" r="2"/><circle cx="12.5" cy="8" r="2"/><path d="M5.5 4.6 10.6 7.3M5.5 11.4 10.6 8.7"/></svg>';
+
 const NAV_VIEWS = [
   ["timeline", "Timeline", ICON_TIMELINE],
   ["flamegraph", "Flamegraph", ICON_FLAME],
   ["sandwich", "Sandwich", ICON_SANDWICH],
+  ["provenance", "Provenance", ICON_PROV],
   ["api", "API", ICON_API],
 ] as const;
 
@@ -179,7 +184,9 @@ export default function App() {
   const [meta, setMeta] = createSignal<VizDensityResponse["metadata"] | null>(null);
   const [loading, setLoading] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
-  const [view, setView] = createSignal<"timeline" | "flamegraph" | "sandwich" | "api">("timeline");
+  const [view, setView] = createSignal<
+    "timeline" | "flamegraph" | "sandwich" | "provenance" | "api"
+  >("timeline");
   const [navCollapsed, setNavCollapsed] = createSignal(false);
   const [theme, setTheme] = createSignal<"dark" | "light">(initialTheme());
   // ph="C" counter track (PAPI / sys): available series, current picks, mode.
@@ -937,7 +944,7 @@ export default function App() {
     return out;
   }
 
-  function showView(v: "timeline" | "flamegraph" | "sandwich" | "api") {
+  function showView(v: "timeline" | "flamegraph" | "sandwich" | "provenance" | "api") {
     setView(v);
     if (v === "flamegraph" || v === "sandwich") loadFlame();
   }
@@ -2931,6 +2938,12 @@ export default function App() {
                 >
                   {(t) => <SandwichView tree={t()} grouped={flameTreeGrouped()} mode={theme()} />}
                 </Show>
+              </div>
+            </Show>
+
+            <Show when={view() === "provenance"}>
+              <div class="body">
+                <ProvenanceView mode={theme()} />
               </div>
             </Show>
 

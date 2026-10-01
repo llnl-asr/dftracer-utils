@@ -3,9 +3,8 @@
 # array avoids the 65536-char portability ceiling on string literals that large
 # web bundles exceed.
 #
-# Usage:
-#   cmake -DINPUT=<html> -DOUTPUT=<generated.cpp> [-DFUNC=viz_index_html]
-#         [-DVAR=VIZ_INDEX_HTML] -P embed_asset.cmake
+# Usage: cmake -DINPUT=<html> -DOUTPUT=<generated.cpp> [-DFUNC=viz_index_html]
+# [-DVAR=VIZ_INDEX_HTML] -P embed_asset.cmake
 #
 # FUNC/VAR default to the trace-viewer page. INPUT may be absent; a placeholder
 # page is embedded instead so the server always links and serves something.
@@ -24,12 +23,12 @@ if(DEFINED INPUT AND EXISTS "${INPUT}")
   set(ASSET_FILE "${INPUT}")
 else()
   message(
-    WARNING
-    "embed_asset: '${INPUT}' not found; embedding placeholder page. "
-    "Build the web UI with: cd web && npm ci && npm run build")
+    WARNING "embed_asset: '${INPUT}' not found; embedding placeholder page. "
+            "Build the web UI with: cd web && npm ci && npm run build")
   set(ASSET_FILE "${OUTPUT}.placeholder.html")
-  file(WRITE "${ASSET_FILE}"
-      "<!doctype html><html><head><meta charset=\"utf-8\"><title>DFTracer Trace Viewer</title></head><body style=\"font-family:sans-serif;max-width:40rem;margin:4rem auto;padding:0 1rem\"><h1>Trace viewer UI not built</h1><p>The web assets were not embedded in this build. Build them with:</p><pre>cd web\nnpm ci\nnpm run build</pre><p>then rebuild the server. The REST API under <code>/api/v1/</code> is available regardless.</p></body></html>"
+  file(
+    WRITE "${ASSET_FILE}"
+    "<!doctype html><html><head><meta charset=\"utf-8\"><title>DFTracer Trace Viewer</title></head><body style=\"font-family:sans-serif;max-width:40rem;margin:4rem auto;padding:0 1rem\"><h1>Trace viewer UI not built</h1><p>The web assets were not embedded in this build. Build them with:</p><pre>cd web\nnpm ci\nnpm run build</pre><p>then rebuild the server. The REST API under <code>/api/v1/</code> is available regardless.</p></body></html>"
   )
 endif()
 

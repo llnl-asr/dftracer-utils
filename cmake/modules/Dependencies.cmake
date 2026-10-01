@@ -72,13 +72,8 @@ endfunction()
 
 function(need_nonstd_span)
   if(NOT nonstd_span_ADDED)
-    cpmaddpackage(
-      NAME
-      nonstd_span
-      GITHUB_REPOSITORY
-      nonstd-lite/span-lite
-      VERSION
-      0.11.0)
+    cpmaddpackage(NAME nonstd_span GITHUB_REPOSITORY nonstd-lite/span-lite
+                  VERSION 0.11.0)
   endif()
 endfunction()
 
@@ -98,14 +93,13 @@ function(need_unordered_dense)
   endif()
 
   # Public dependency: our installed headers include <ankerl/unordered_dense.h>,
-  # so a consumer (or a plugin that reaches the parser path) building against the
-  # install prefix needs it there. The upstream UNORDERED_DENSE_INSTALL export
-  # does not land in our prefix, so install the single header explicitly, as
-  # simdjson and concurrentqueue are, matching the $<INSTALL_INTERFACE> dir.
+  # so a consumer (or a plugin that reaches the parser path) building against
+  # the install prefix needs it there. The upstream UNORDERED_DENSE_INSTALL
+  # export does not land in our prefix, so install the single header explicitly,
+  # as simdjson and concurrentqueue are, matching the $<INSTALL_INTERFACE> dir.
   if(DEFINED unordered_dense_SOURCE_DIR)
-    install(
-      FILES ${unordered_dense_SOURCE_DIR}/include/ankerl/unordered_dense.h
-      DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ankerl)
+    install(FILES ${unordered_dense_SOURCE_DIR}/include/ankerl/unordered_dense.h
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ankerl)
   endif()
 endfunction()
 
@@ -116,8 +110,8 @@ function(link_unordered_dense TARGET_NAME)
 
   if(NOT TARGET ${TARGET_NAME})
     message(
-      FATAL_ERROR
-        "link_unordered_dense: Target '${TARGET_NAME}' does not exist")
+      FATAL_ERROR "link_unordered_dense: Target '${TARGET_NAME}' does not exist"
+    )
   endif()
 
   if(NOT TARGET unordered_dense::unordered_dense)
@@ -129,15 +123,16 @@ function(link_unordered_dense TARGET_NAME)
 
   get_target_property(UD_INC unordered_dense::unordered_dense
                       INTERFACE_INCLUDE_DIRECTORIES)
-  target_include_directories(${TARGET_NAME} PUBLIC
-    "$<BUILD_INTERFACE:${UD_INC}>"
-    "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
+  target_include_directories(
+    ${TARGET_NAME} PUBLIC "$<BUILD_INTERFACE:${UD_INC}>"
+                          "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
 endfunction()
 
 function(need_tl_expected)
   # tl::expected is only needed when C++23 std::expected is unavailable
   if(CMAKE_CXX_STANDARD GREATER_EQUAL 23)
-    dftracer_utils_warn("C++23 detected: using std::expected (skipping tl::expected)")
+    dftracer_utils_warn(
+      "C++23 detected: using std::expected (skipping tl::expected)")
     return()
   endif()
 
@@ -234,27 +229,25 @@ function(need_simdjson)
     dftracer_utils_ok("Building simdjson library (v4.6.4)")
 
     # simdjson is a single-header + single-source library
-    set(SIMDJSON_SOURCES
-      ${simdjson_SOURCE_DIR}/singleheader/simdjson.h
-      ${simdjson_SOURCE_DIR}/singleheader/simdjson.cpp)
+    set(SIMDJSON_SOURCES ${simdjson_SOURCE_DIR}/singleheader/simdjson.h
+                         ${simdjson_SOURCE_DIR}/singleheader/simdjson.cpp)
 
     set(SIMDJSON_TARGETS)
 
     if(DFTRACER_UTILS_BUILD_STATIC)
       add_library(simdjson_static STATIC ${SIMDJSON_SOURCES})
       target_include_directories(
-        simdjson_static SYSTEM PUBLIC
-        $<BUILD_INTERFACE:${simdjson_SOURCE_DIR}/singleheader>
-        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+        simdjson_static SYSTEM
+        PUBLIC $<BUILD_INTERFACE:${simdjson_SOURCE_DIR}/singleheader>
+               $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
       target_compile_features(simdjson_static PUBLIC cxx_std_17)
       # Suppress warnings from simdjson (third-party code)
       target_compile_options(simdjson_static PRIVATE -w)
       set_target_properties(
         simdjson_static
-        PROPERTIES
-          OUTPUT_NAME simdjson
-          ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
-          POSITION_INDEPENDENT_CODE ON)
+        PROPERTIES OUTPUT_NAME simdjson
+                   ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
+                   POSITION_INDEPENDENT_CODE ON)
       add_library(simdjson::simdjson_static ALIAS simdjson_static)
       list(APPEND SIMDJSON_TARGETS simdjson_static)
       dftracer_utils_ok("Added simdjson static library")
@@ -263,18 +256,17 @@ function(need_simdjson)
     if(DFTRACER_UTILS_BUILD_SHARED)
       add_library(simdjson_shared SHARED ${SIMDJSON_SOURCES})
       target_include_directories(
-        simdjson_shared SYSTEM PUBLIC
-        $<BUILD_INTERFACE:${simdjson_SOURCE_DIR}/singleheader>
-        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+        simdjson_shared SYSTEM
+        PUBLIC $<BUILD_INTERFACE:${simdjson_SOURCE_DIR}/singleheader>
+               $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
       target_compile_features(simdjson_shared PUBLIC cxx_std_17)
       # Suppress warnings from simdjson (third-party code)
       target_compile_options(simdjson_shared PRIVATE -w)
       set_target_properties(
         simdjson_shared
-        PROPERTIES
-          OUTPUT_NAME simdjson
-          LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
-          ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+        PROPERTIES OUTPUT_NAME simdjson
+                   LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
+                   ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
       add_library(simdjson::simdjson ALIAS simdjson_shared)
       list(APPEND SIMDJSON_TARGETS simdjson_shared)
       dftracer_utils_ok("Added simdjson shared library")
@@ -333,7 +325,8 @@ function(link_simdjson TARGET_NAME LIBRARY_TYPE)
       dftracer_utils_ok("Linked ${TARGET_NAME} to system simdjson::simdjson")
     else()
       message(
-        FATAL_ERROR "link_simdjson: No simdjson found! Call need_simdjson() first.")
+        FATAL_ERROR
+          "link_simdjson: No simdjson found! Call need_simdjson() first.")
     endif()
   else() # SHARED
     # For shared libraries, prefer shared simdjson if available
@@ -349,7 +342,8 @@ function(link_simdjson TARGET_NAME LIBRARY_TYPE)
       dftracer_utils_ok("Linked ${TARGET_NAME} to system simdjson::simdjson")
     else()
       message(
-        FATAL_ERROR "link_simdjson: No simdjson found! Call need_simdjson() first.")
+        FATAL_ERROR
+          "link_simdjson: No simdjson found! Call need_simdjson() first.")
     endif()
   endif()
 endfunction()
@@ -367,17 +361,29 @@ set(DFTRACER_UTILS_ROCKSDB_PREFIX
 
 # Consume a RocksDB install tree built by scripts/ci/build_rocksdb.sh.
 function(_use_prebuilt_rocksdb PREFIX)
-  find_package(RocksDB ${DFTRACER_UTILS_ROCKSDB_VERSION} REQUIRED CONFIG
-               PATHS "${PREFIX}" NO_DEFAULT_PATH)
+  find_package(
+    RocksDB
+    ${DFTRACER_UTILS_ROCKSDB_VERSION}
+    REQUIRED
+    CONFIG
+    PATHS
+    "${PREFIX}"
+    NO_DEFAULT_PATH)
   dftracer_utils_ok("Using prebuilt RocksDB from ${PREFIX}")
 
   foreach(tool ldb sst_dump)
     if(EXISTS "${PREFIX}/bin/${tool}")
-      file(COPY "${PREFIX}/bin/${tool}"
-           DESTINATION "${CMAKE_BINARY_DIR}/bin"
-           FILE_PERMISSIONS
-             OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE
-             WORLD_READ WORLD_EXECUTE)
+      file(
+        COPY "${PREFIX}/bin/${tool}"
+        DESTINATION "${CMAKE_BINARY_DIR}/bin"
+        FILE_PERMISSIONS
+          OWNER_READ
+          OWNER_WRITE
+          OWNER_EXECUTE
+          GROUP_READ
+          GROUP_EXECUTE
+          WORLD_READ
+          WORLD_EXECUTE)
       install(PROGRAMS "${PREFIX}/bin/${tool}"
               DESTINATION ${CMAKE_INSTALL_BINDIR})
       if(SKBUILD)
@@ -398,9 +404,15 @@ function(need_rocksdb)
       "Ignoring DFTRACER_UTILS_ROCKSDB_PREFIX: TSan requires a source build")
   elseif(DFTRACER_UTILS_ROCKSDB_PREFIX)
     _use_prebuilt_rocksdb("${DFTRACER_UTILS_ROCKSDB_PREFIX}")
-    set(RocksDB_FOUND TRUE PARENT_SCOPE)
-    set(RocksDB_CPM FALSE PARENT_SCOPE)
-    set(ROCKSDB_IS_STATIC TRUE PARENT_SCOPE)
+    set(RocksDB_FOUND
+        TRUE
+        PARENT_SCOPE)
+    set(RocksDB_CPM
+        FALSE
+        PARENT_SCOPE)
+    set(ROCKSDB_IS_STATIC
+        TRUE
+        PARENT_SCOPE)
     return()
   endif()
 
@@ -501,7 +513,9 @@ function(need_rocksdb)
       endif()
     endif()
 
-    if(rocksdb_ADDED OR TARGET rocksdb OR TARGET rocksdb-shared)
+    if(rocksdb_ADDED
+       OR TARGET rocksdb
+       OR TARGET rocksdb-shared)
       dftracer_utils_ok("Built RocksDB with CPM")
 
       set(ROCKSDB_LIBRARY_DIR "${CMAKE_BINARY_DIR}/lib")
@@ -573,13 +587,12 @@ function(need_rocksdb)
 
       # Stage rocksdb's ldb (and sst_dump) into bin/ and reuse the standard
       # $ORIGIN/../lib rpath helper so they find librocksdb.so without
-      # LD_LIBRARY_PATH. Install alongside our own binaries and ship a
-      # venv wrapper when building a Python wheel.
+      # LD_LIBRARY_PATH. Install alongside our own binaries and ship a venv
+      # wrapper when building a Python wheel.
       foreach(tool ldb sst_dump)
         if(TARGET ${tool})
-          set_target_properties(
-            ${tool} PROPERTIES RUNTIME_OUTPUT_DIRECTORY
-                               "${CMAKE_BINARY_DIR}/bin")
+          set_target_properties(${tool} PROPERTIES RUNTIME_OUTPUT_DIRECTORY
+                                                   "${CMAKE_BINARY_DIR}/bin")
           target_add_rpath(${tool})
           install(TARGETS ${tool} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
           if(SKBUILD)
@@ -615,8 +628,10 @@ function(link_rocksdb TARGET_NAME LIBRARY_TYPE)
     message(FATAL_ERROR "link_rocksdb: Target '${TARGET_NAME}' does not exist")
   endif()
 
-  if(NOT TARGET RocksDB::rocksdb AND NOT TARGET RocksDB::rocksdb_static
-     AND NOT TARGET RocksDB::rocksdb_shared AND NOT TARGET rocksdb
+  if(NOT TARGET RocksDB::rocksdb
+     AND NOT TARGET RocksDB::rocksdb_static
+     AND NOT TARGET RocksDB::rocksdb_shared
+     AND NOT TARGET rocksdb
      AND NOT TARGET rocksdb-shared)
     message(
       FATAL_ERROR
@@ -635,7 +650,10 @@ function(link_rocksdb TARGET_NAME LIBRARY_TYPE)
       target_link_libraries(${TARGET_NAME} PUBLIC RocksDB::rocksdb)
       dftracer_utils_ok("Linked ${TARGET_NAME} to RocksDB::rocksdb")
     else()
-      message(FATAL_ERROR "Static RocksDB requested for ${TARGET_NAME}, but no static RocksDB target is available")
+      message(
+        FATAL_ERROR
+          "Static RocksDB requested for ${TARGET_NAME}, but no static RocksDB target is available"
+      )
     endif()
   else()
     if(TARGET RocksDB::rocksdb_shared)
@@ -672,15 +690,16 @@ function(need_lz4)
   find_path(lz4_INCLUDE_DIRS NAMES lz4.h)
   find_library(lz4_LIBRARIES NAMES lz4)
 
-  if(lz4_INCLUDE_DIRS AND lz4_LIBRARIES AND EXISTS "${lz4_LIBRARIES}")
+  if(lz4_INCLUDE_DIRS
+     AND lz4_LIBRARIES
+     AND EXISTS "${lz4_LIBRARIES}")
     dftracer_utils_ok("Found system lz4: ${lz4_LIBRARIES}")
 
     if(NOT TARGET lz4::lz4)
       add_library(lz4::lz4 UNKNOWN IMPORTED)
       set_target_properties(
-        lz4::lz4
-        PROPERTIES IMPORTED_LOCATION "${lz4_LIBRARIES}"
-                   INTERFACE_INCLUDE_DIRECTORIES "${lz4_INCLUDE_DIRS}")
+        lz4::lz4 PROPERTIES IMPORTED_LOCATION "${lz4_LIBRARIES}"
+                            INTERFACE_INCLUDE_DIRECTORIES "${lz4_INCLUDE_DIRS}")
     endif()
 
     set(lz4_FOUND
@@ -724,10 +743,8 @@ function(need_lz4)
 
       set(LZ4_TARGETS)
       set(LZ4_SOURCES
-          ${lz4_SOURCE_DIR}/lib/lz4.c
-          ${lz4_SOURCE_DIR}/lib/lz4frame.c
-          ${lz4_SOURCE_DIR}/lib/lz4hc.c
-          ${lz4_SOURCE_DIR}/lib/xxhash.c)
+          ${lz4_SOURCE_DIR}/lib/lz4.c ${lz4_SOURCE_DIR}/lib/lz4frame.c
+          ${lz4_SOURCE_DIR}/lib/lz4hc.c ${lz4_SOURCE_DIR}/lib/xxhash.c)
       set(LZ4_SHARED_OUTPUT
           "${CMAKE_BINARY_DIR}/lib/${CMAKE_SHARED_LIBRARY_PREFIX}lz4${CMAKE_SHARED_LIBRARY_SUFFIX}"
       )
@@ -742,9 +759,8 @@ function(need_lz4)
       if(DFTRACER_UTILS_BUILD_STATIC)
         add_library(lz4_static STATIC ${LZ4_SOURCES})
         target_include_directories(
-          lz4_static
-          PUBLIC $<BUILD_INTERFACE:${lz4_SOURCE_DIR}/lib>
-                 $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+          lz4_static PUBLIC $<BUILD_INTERFACE:${lz4_SOURCE_DIR}/lib>
+                            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
         set_target_properties(
           lz4_static
           PROPERTIES OUTPUT_NAME lz4
@@ -756,9 +772,8 @@ function(need_lz4)
       if(DFTRACER_UTILS_BUILD_SHARED)
         add_library(lz4_shared SHARED ${LZ4_SOURCES})
         target_include_directories(
-          lz4_shared
-          PUBLIC $<BUILD_INTERFACE:${lz4_SOURCE_DIR}/lib>
-                 $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+          lz4_shared PUBLIC $<BUILD_INTERFACE:${lz4_SOURCE_DIR}/lib>
+                            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
         set_target_properties(
           lz4_shared
           PROPERTIES OUTPUT_NAME lz4
@@ -872,8 +887,8 @@ function(_try_zlib_ng OUT_VAR)
 
   if(NOT zlib-ng_ADDED)
     # CPM reports ADDED=NO when zlib-ng was already added earlier (src/ adds it,
-    # then tests/ asks again) OR on a reconfigure of an existing build dir. Not a
-    # failure: the zlib-ng targets are still defined. Re-expose the dirs and
+    # then tests/ asks again) OR on a reconfigure of an existing build dir. Not
+    # a failure: the zlib-ng targets are still defined. Re-expose the dirs and
     # report success, and ensure the dftracer_zlib_* aliases exist here too -
     # the one-time property/install setup below is skipped, but the aliases must
     # be (re)created idempotently because on a reconfigure the first (src/) call
@@ -939,8 +954,9 @@ function(_try_zlib_ng OUT_VAR)
     get_target_property(_zng_type ${_zng_shared} TYPE)
     if(_zng_type STREQUAL "SHARED_LIBRARY")
       set_target_properties(
-        ${_zng_shared} PROPERTIES OUTPUT_NAME dftracer_zlib
-                                  LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+        ${_zng_shared}
+        PROPERTIES OUTPUT_NAME dftracer_zlib LIBRARY_OUTPUT_DIRECTORY
+                                             ${CMAKE_BINARY_DIR}/lib)
       target_include_directories(
         ${_zng_shared} PUBLIC $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
       if(NOT TARGET dftracer_zlib_shared)
@@ -966,8 +982,9 @@ function(_try_zlib_ng OUT_VAR)
       set(_zng_static zlib-ng-static)
     endif()
     set_target_properties(
-      ${_zng_static} PROPERTIES OUTPUT_NAME dftracer_zlib
-                                ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+      ${_zng_static}
+      PROPERTIES OUTPUT_NAME dftracer_zlib ARCHIVE_OUTPUT_DIRECTORY
+                                           ${CMAKE_BINARY_DIR}/lib)
     target_include_directories(
       ${_zng_static} PUBLIC $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
     if(NOT TARGET dftracer_zlib_static)
@@ -1404,22 +1421,23 @@ function(need_zstd)
           # zstd's vendored legacy decoders trip GCC -Wmaybe-uninitialized;
           # third-party source, so silence it on zstd's own targets only.
           if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
-            target_compile_options(${_zstd_t}
-                                   PRIVATE -Wno-maybe-uninitialized)
+            target_compile_options(${_zstd_t} PRIVATE -Wno-maybe-uninitialized)
           endif()
           if(DEFINED zstd_SOURCE_DIR)
             set_property(
-              TARGET ${_zstd_t} APPEND PROPERTY INTERFACE_INCLUDE_DIRECTORIES
-              "$<BUILD_INTERFACE:${zstd_SOURCE_DIR}/lib>")
+              TARGET ${_zstd_t}
+              APPEND
+              PROPERTY INTERFACE_INCLUDE_DIRECTORIES
+                       "$<BUILD_INTERFACE:${zstd_SOURCE_DIR}/lib>")
           endif()
           install(
             TARGETS ${_zstd_t}
             ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
             LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
             RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-          # zstd's build tree exposes only libzstd_shared / libzstd_static;
-          # the zstd:: namespaced names exist only post-install. Other
-          # consumers (nanoarrow IPC) link the namespaced names, so alias them.
+          # zstd's build tree exposes only libzstd_shared / libzstd_static; the
+          # zstd:: namespaced names exist only post-install. Other consumers
+          # (nanoarrow IPC) link the namespaced names, so alias them.
           if(NOT TARGET zstd::${_zstd_t})
             add_library(zstd::${_zstd_t} ALIAS ${_zstd_t})
           endif()
@@ -1507,8 +1525,8 @@ function(need_libdeflate)
   endif()
 endfunction()
 
-# Link the resolved libdeflate target (name varies: CPM static build vs a
-# system find_package) into `target`.
+# Link the resolved libdeflate target (name varies: CPM static build vs a system
+# find_package) into `target`.
 function(link_libdeflate target)
   if(TARGET libdeflate::libdeflate_static)
     target_link_libraries(${target} PRIVATE libdeflate::libdeflate_static)
@@ -1545,10 +1563,9 @@ function(need_readerwriterqueue)
         readerwriterqueue
         INTERFACE $<BUILD_INTERFACE:${readerwriterqueue_SOURCE_DIR}>
                   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-      install(
-        FILES ${readerwriterqueue_SOURCE_DIR}/readerwriterqueue.h
-              ${readerwriterqueue_SOURCE_DIR}/atomicops.h
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+      install(FILES ${readerwriterqueue_SOURCE_DIR}/readerwriterqueue.h
+                    ${readerwriterqueue_SOURCE_DIR}/atomicops.h
+              DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
       # Install and export the target
       install(TARGETS readerwriterqueue EXPORT readerwriterqueueTargets)
@@ -1577,8 +1594,9 @@ function(need_concurrentqueue)
     if(concurrentqueue_ADDED)
       add_library(concurrentqueue INTERFACE)
       target_include_directories(
-        concurrentqueue INTERFACE $<BUILD_INTERFACE:${concurrentqueue_SOURCE_DIR}>
-                                  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+        concurrentqueue
+        INTERFACE $<BUILD_INTERFACE:${concurrentqueue_SOURCE_DIR}>
+                  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
       install(
         FILES ${concurrentqueue_SOURCE_DIR}/concurrentqueue.h
               ${concurrentqueue_SOURCE_DIR}/blockingconcurrentqueue.h
@@ -1651,9 +1669,8 @@ function(need_nanoarrow)
     set(NANOARROW_VERSION_PATCH 0)
     set(NANOARROW_VERSION "0.8.0")
     set(NANOARROW_NAMESPACE_DEFINE "")
-    configure_file(
-      ${nanoarrow_SOURCE_DIR}/src/nanoarrow/nanoarrow_config.h.in
-      ${CMAKE_CURRENT_BINARY_DIR}/nanoarrow/nanoarrow_config.h)
+    configure_file(${nanoarrow_SOURCE_DIR}/src/nanoarrow/nanoarrow_config.h.in
+                   ${CMAKE_CURRENT_BINARY_DIR}/nanoarrow/nanoarrow_config.h)
 
     if(DFTRACER_UTILS_BUILD_STATIC)
       add_library(nanoarrow_static STATIC ${NANOARROW_SOURCES})
@@ -1746,13 +1763,14 @@ function(need_nanoarrow)
         PATTERN "*.h")
     endif()
 
-    # Suppress warnings from nanoarrow headers (redundant redeclarations,
-    # shadow warnings in nanoarrow 0.8.0 internal headers)
+    # Suppress warnings from nanoarrow headers (redundant redeclarations, shadow
+    # warnings in nanoarrow 0.8.0 internal headers)
     foreach(_na_target ${NANOARROW_TARGETS})
       get_target_property(_na_inc ${_na_target} INTERFACE_INCLUDE_DIRECTORIES)
       if(_na_inc)
-        set_target_properties(${_na_target} PROPERTIES
-          INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${_na_inc}")
+        set_target_properties(
+          ${_na_target} PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+                                   "${_na_inc}")
       endif()
     endforeach()
 
@@ -1782,8 +1800,8 @@ function(link_nanoarrow TARGET_NAME LIBRARY_TYPE)
 
   if(NOT LIBRARY_TYPE MATCHES "^(STATIC|SHARED)$")
     message(
-      FATAL_ERROR
-        "link_nanoarrow: LIBRARY_TYPE must be either STATIC or SHARED")
+      FATAL_ERROR "link_nanoarrow: LIBRARY_TYPE must be either STATIC or SHARED"
+    )
   endif()
 
   if(NOT TARGET ${TARGET_NAME})
@@ -1846,8 +1864,8 @@ function(need_highway)
       if(TARGET hwy)
         get_target_property(_hwy_inc hwy INTERFACE_INCLUDE_DIRECTORIES)
         if(_hwy_inc)
-          set_target_properties(hwy PROPERTIES
-            INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${_hwy_inc}")
+          set_target_properties(
+            hwy PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${_hwy_inc}")
         endif()
       endif()
       dftracer_utils_ok("Added highway ${highway_VERSION} SIMD library via CPM")
@@ -1872,13 +1890,15 @@ function(need_boost_math)
       YES)
   endif()
 
-  # CPMAddPackage only sets boost_math_SOURCE_DIR in the calling scope. Cache
-  # it so link_boost_math() can find the include dir from anywhere in the tree.
+  # CPMAddPackage only sets boost_math_SOURCE_DIR in the calling scope. Cache it
+  # so link_boost_math() can find the include dir from anywhere in the tree.
   if(boost_math_SOURCE_DIR)
     set(boost_math_SOURCE_DIR
         "${boost_math_SOURCE_DIR}"
         CACHE INTERNAL "Boost.Math source tree from CPM")
-    dftracer_utils_ok("Added Boost.Math (standalone) headers from ${boost_math_SOURCE_DIR}/include")
+    dftracer_utils_ok(
+      "Added Boost.Math (standalone) headers from ${boost_math_SOURCE_DIR}/include"
+    )
   endif()
 endfunction()
 
@@ -1890,15 +1910,18 @@ function(link_boost_math TARGET_NAME)
     message(FATAL_ERROR "link_boost_math: TARGET_NAME is required")
   endif()
   if(NOT TARGET ${TARGET_NAME})
-    message(FATAL_ERROR "link_boost_math: target '${TARGET_NAME}' does not exist")
+    message(
+      FATAL_ERROR "link_boost_math: target '${TARGET_NAME}' does not exist")
   endif()
   if(NOT boost_math_SOURCE_DIR)
-    message(FATAL_ERROR
-      "link_boost_math: boost_math_SOURCE_DIR is unset; call need_boost_math() first")
+    message(
+      FATAL_ERROR
+        "link_boost_math: boost_math_SOURCE_DIR is unset; call need_boost_math() first"
+    )
   endif()
 
-  target_include_directories(${TARGET_NAME} SYSTEM PRIVATE
-                             ${boost_math_SOURCE_DIR}/include)
+  target_include_directories(${TARGET_NAME} SYSTEM
+                             PRIVATE ${boost_math_SOURCE_DIR}/include)
   target_compile_definitions(${TARGET_NAME} PRIVATE BOOST_MATH_STANDALONE)
   dftracer_utils_ok("Linked ${TARGET_NAME} to Boost.Math (standalone)")
 endfunction()
@@ -1937,8 +1960,10 @@ function(link_yaml_cpp TARGET_NAME)
     message(FATAL_ERROR "link_yaml_cpp: target '${TARGET_NAME}' does not exist")
   endif()
   if(NOT TARGET yaml-cpp::yaml-cpp)
-    message(FATAL_ERROR
-      "link_yaml_cpp: yaml-cpp::yaml-cpp target missing; call need_yaml_cpp() first")
+    message(
+      FATAL_ERROR
+        "link_yaml_cpp: yaml-cpp::yaml-cpp target missing; call need_yaml_cpp() first"
+    )
   endif()
   target_link_libraries(${TARGET_NAME} PRIVATE yaml-cpp::yaml-cpp)
   dftracer_utils_ok("Linked ${TARGET_NAME} to yaml-cpp")
@@ -1979,19 +2004,18 @@ macro(check_std_filesystem)
   if(NOT DEFINED DFTRACER_UTILS_HAS_STD_FILESYSTEM)
     try_compile(
       _dftracer_has_std_filesystem "${CMAKE_BINARY_DIR}/temp"
-      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/tests/has_filesystem.cpp"
-      CXX_STANDARD ${CMAKE_CXX_STANDARD}
-      CXX_STANDARD_REQUIRED ON
+      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/tests/has_filesystem.cpp" CXX_STANDARD
+      ${CMAKE_CXX_STANDARD} CXX_STANDARD_REQUIRED ON
       LINK_LIBRARIES stdc++fs)
-    set(DFTRACER_UTILS_HAS_STD_FILESYSTEM ${_dftracer_has_std_filesystem}
+    set(DFTRACER_UTILS_HAS_STD_FILESYSTEM
+        ${_dftracer_has_std_filesystem}
         CACHE INTERNAL "Compiler provides a usable std::filesystem")
   endif()
   if(DFTRACER_UTILS_HAS_STD_FILESYSTEM)
     dftracer_utils_ok("Compiler has std::filesystem support")
   else()
     dftracer_utils_warn(
-      "Compiler does not have std::filesystem support. Use gulrak::filesystem"
-    )
+      "Compiler does not have std::filesystem support. Use gulrak::filesystem")
   endif(DFTRACER_UTILS_HAS_STD_FILESYSTEM)
 endmacro()
 
@@ -2006,14 +2030,16 @@ endfunction()
 # CAS). We add no ISA flags on purpose: forcing -mcx16/+lse would raise the
 # binary's CPU floor and could SIGILL on older hardware. Both paths are
 # lock-free and correct everywhere; the fast path turns on automatically when
-# the toolchain already targets a capable baseline (Apple Silicon, -march=native).
+# the toolchain already targets a capable baseline (Apple Silicon,
+# -march=native).
 macro(check_dwcas)
   if(NOT DEFINED DFTRACER_UTILS_HAS_DWCAS)
-    try_compile(
-      _dftracer_has_dwcas "${CMAKE_BINARY_DIR}/temp"
-      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/tests/has_dwcas.cpp")
-    set(DFTRACER_UTILS_HAS_DWCAS ${_dftracer_has_dwcas}
-        CACHE INTERNAL "ObjectPool: 16-byte CAS is lock-free under active flags")
+    try_compile(_dftracer_has_dwcas "${CMAKE_BINARY_DIR}/temp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/cmake/tests/has_dwcas.cpp")
+    set(DFTRACER_UTILS_HAS_DWCAS
+        ${_dftracer_has_dwcas}
+        CACHE INTERNAL
+              "ObjectPool: 16-byte CAS is lock-free under active flags")
   endif()
 
   dftracer_utils_section("ObjectPool atomics")
@@ -2029,7 +2055,8 @@ macro(check_dwcas)
   # when it is consumed via add_subdirectory, so the link can't leak into a
   # parent project's targets.
   find_library(DFTRACER_UTILS_LIBATOMIC atomic)
-  if(DFTRACER_UTILS_LIBATOMIC AND CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  if(DFTRACER_UTILS_LIBATOMIC AND CMAKE_SOURCE_DIR STREQUAL
+                                  CMAKE_CURRENT_SOURCE_DIR)
     link_libraries(${DFTRACER_UTILS_LIBATOMIC})
   endif()
 endmacro()

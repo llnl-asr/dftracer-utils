@@ -1,0 +1,249 @@
+/* Provenance tab. Uses the app's theme tokens (styles.css) so it follows the
+   dark/light toggle like the other views. */
+.prov {
+  display: grid;
+  grid-template-columns: 290px 1fr;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+.prov-rail {
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  font-size: 12px;
+}
+.prov-rail h3 {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 6px;
+}
+.prov-rail h4 {
+  font-size: 11px;
+  margin: 6px 0 2px;
+  color: var(--muted);
+}
+.prov-rail h4.up {
+  color: #4e9fd6;
+}
+.prov-rail h4.down {
+  color: #d9675f;
+}
+.prov-stats {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 12px;
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.prov-stats dt {
+  color: var(--muted);
+}
+.prov-stats dd {
+  margin: 0;
+  font-family: var(--mono);
+  color: var(--text-hi);
+}
+.prov-stats dd.bad {
+  color: var(--danger);
+}
+.prov-trace {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--elev);
+}
+.prov-trace label {
+  color: var(--muted);
+  font-size: 11px;
+}
+.prov-trace select,
+.prov-trace button {
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+.prov-trace select[multiple] {
+  font-family: var(--mono);
+}
+.prov-trace button {
+  cursor: pointer;
+}
+.prov-trace button.primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
+}
+.prov-trace button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.prov-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.prov-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.prov-keys .k {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin-right: 4px;
+  vertical-align: -1px;
+}
+.prov-keys .k.up {
+  background: #4e9fd6;
+}
+.prov-keys .k.down {
+  background: #d9675f;
+}
+.prov-keys .k.pick {
+  background: var(--accent);
+}
+.prov-result ul {
+  margin: 0;
+  padding-left: 1.1em;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.prov-result p {
+  margin: 4px 0;
+}
+.prov-type {
+  display: grid;
+  grid-template-columns: 14px 12px 1fr auto;
+  gap: 6px;
+  align-items: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+.prov-type .sw {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+}
+.prov-type .sw.sq {
+  border-radius: 1px;
+}
+.prov-type .sw.ln {
+  height: 3px;
+  border-radius: 1px;
+}
+.prov-type .ct {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.prov-canvas {
+  position: relative;
+  min-width: 0;
+  background: var(--bg);
+}
+.prov-cy {
+  position: absolute;
+  inset: 0;
+}
+.prov-detail {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: min(340px, calc(100% - 20px));
+  max-height: calc(100% - 20px);
+  overflow: auto;
+  background: var(--elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 11.5px;
+}
+.prov-detail dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 10px;
+  margin: 0;
+}
+.prov-detail dt {
+  color: var(--muted);
+}
+.prov-detail dd {
+  margin: 0;
+  font-family: var(--mono);
+  word-break: break-all;
+  color: var(--text-hi);
+}
+.prov-hint {
+  position: absolute;
+  left: 10px;
+  bottom: 8px;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--elev);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 8px;
+}
+.prov-error {
+  color: var(--danger);
+}
+
+.prov-radio {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--text);
+}
+.prov-radio label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--text);
+}
+.prov-view optgroup {
+  color: var(--muted);
+  font-style: normal;
+}
+.prov-view option {
+  color: var(--text);
+}
+
+.prov-sub {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 6px 0 2px;
+}
+.prov-radio .sw.ln {
+  display: inline-block;
+  width: 12px;
+  height: 3px;
+  border-radius: 1px;
+}
+.prov-indent {
+  padding-left: 14px;
+}
+.prov-keys .k.meta {
+  background: none;
+  border-top: 2px dotted var(--muted);
+  height: 0;
+  vertical-align: 2px;
+}

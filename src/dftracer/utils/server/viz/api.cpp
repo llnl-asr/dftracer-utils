@@ -74,6 +74,28 @@ void register_viz_api(Router& router, TraceIndex& index) {
             R"("bytes":16384,"io_ops":4,"io_busy":600.0}]})"});
 
     router.get(
+        "/api/prov/graph", bind_index<handle_prov_graph>(index),
+        RouteDoc{
+            "Provenance graph (entities, activities, cause/effect edges) "
+            "assembled from dftracer provenance-mode records.",
+            "Provenance",
+            {{"file", "Limit to one trace file", false, ""},
+             {"io", "Attribute POSIX/STDIO I/O to activities (files, mounts)",
+              false, "1"},
+             {"all_files",
+              "Keep interpreter/system files (.py, .so, /proc, ...)", false,
+              "0"},
+             {"mounts",
+              "Extra mount points, comma-separated (e.g. compute-node mounts)",
+              false, ""}},
+            R"({"entities":[{"hash":"f0f014be4d558b8f","type":"structure",)"
+            R"("id":"out.pdb","store":"file","uri":"out.pdb","pids":[1]}],)"
+            R"("activities":[{"aid":"1-a-1","name":"fold","activity":)"
+            R"("compute","pid":1,"ts":0,"dur":5,"used":[],"generated":)"
+            R"(["f0f014be4d558b8f"]}],"stats":{"entities":1,)"
+            R"("activities":1,"dangling_hashes":0}})"});
+
+    router.get(
         "/api/viz/counters", bind_index<handle_viz_counters>(index),
         RouteDoc{"Read/write bytes and I/O op counts per time bucket.",
                  "Visualization",

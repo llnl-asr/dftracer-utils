@@ -1,19 +1,22 @@
-# Generate the plugin ABI version header: a hash over every header that
-# defines the plugin C ABI shape (the plugins/abi.h umbrella, every
-# plugins/abi/*.h part it includes, and dataframe/abi.h), so any change to any
-# of them automatically changes DFTRACER_PLUGIN_ABI_VERSION and a plugin built
-# against a different shape is refused at load instead of segfaulting on a
-# deleted vtable slot. Mirrors python/dftracer/utils/_plugin_build.py's
-# _abi_fingerprint(), which hashes the same files into the JIT build-cache key.
+# Generate the plugin ABI version header: a hash over every header that defines
+# the plugin C ABI shape (the plugins/abi.h umbrella, every plugins/abi/*.h part
+# it includes, and dataframe/abi.h), so any change to any of them automatically
+# changes DFTRACER_PLUGIN_ABI_VERSION and a plugin built against a different
+# shape is refused at load instead of segfaulting on a deleted vtable slot.
+# Mirrors python/dftracer/utils/_plugin_build.py's _abi_fingerprint(), which
+# hashes the same files into the JIT build-cache key.
 #
-# Usage:
-#   cmake -DPLUGINS_ABI_DIR=<dir containing plugins/abi.h and plugins/abi/>
-#         -DDATAFRAME_ABI=<dataframe/abi.h> -DOUTPUT=<generated.h>
-#         -P plugin_abi_version.cmake
+# Usage: cmake -DPLUGINS_ABI_DIR=<dir containing plugins/abi.h and plugins/abi/>
+# -DDATAFRAME_ABI=<dataframe/abi.h> -DOUTPUT=<generated.h> -P
+# plugin_abi_version.cmake
 
-if(NOT DEFINED PLUGINS_ABI_DIR OR NOT DEFINED DATAFRAME_ABI OR NOT DEFINED OUTPUT)
-  message(FATAL_ERROR
-    "plugin_abi_version.cmake requires -DPLUGINS_ABI_DIR=... -DDATAFRAME_ABI=... -DOUTPUT=...")
+if(NOT DEFINED PLUGINS_ABI_DIR
+   OR NOT DEFINED DATAFRAME_ABI
+   OR NOT DEFINED OUTPUT)
+  message(
+    FATAL_ERROR
+      "plugin_abi_version.cmake requires -DPLUGINS_ABI_DIR=... -DDATAFRAME_ABI=... -DOUTPUT=..."
+  )
 endif()
 
 file(GLOB_RECURSE plugins_abi_headers "${PLUGINS_ABI_DIR}/abi.h"

@@ -113,20 +113,20 @@ function(target_set_warnings TARGET_NAME)
                 # -Wuseless-cast          # Warn about useless casts
       )
 
-      # GCC 12+ has false-positive -Wrestrict in libstdc++ char_traits
-      # (string concat inlining). Disable for affected versions.
+      # GCC 12+ has false-positive -Wrestrict in libstdc++ char_traits (string
+      # concat inlining). Disable for affected versions.
       if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "12")
         target_compile_options(${TARGET_NAME} PRIVATE -Wno-restrict)
       endif()
 
       # GCC 12+ has false-positive -Wnull-dereference, -Warray-bounds,
-      # -Wstringop-overflow, and -Wstringop-overread in libstdc++
-      # (streambuf, exception_ptr, char_traits, vector copy/move).
-      # Disable for affected versions.
+      # -Wstringop-overflow, and -Wstringop-overread in libstdc++ (streambuf,
+      # exception_ptr, char_traits, vector copy/move). Disable for affected
+      # versions.
       if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "12")
-        target_compile_options(${TARGET_NAME} PRIVATE -Wno-null-dereference
-                              -Wno-array-bounds -Wno-stringop-overflow
-                              -Wno-stringop-overread)
+        target_compile_options(
+          ${TARGET_NAME} PRIVATE -Wno-null-dereference -Wno-array-bounds
+                                 -Wno-stringop-overflow -Wno-stringop-overread)
       endif()
     endif()
 
@@ -140,7 +140,9 @@ function(target_set_warnings TARGET_NAME)
                 -Wthread-safety # Warn about thread safety issues
                 -Wimplicit-int-float-conversion # Warn about implicit int to
                                                 # float conversions
-                -Wno-gnu-zero-variadic-macro-arguments # Disable GNU extension warning for ##__VA_ARGS__
+                -Wno-gnu-zero-variadic-macro-arguments # Disable GNU extension
+                                                       # warning for
+                                                       # ##__VA_ARGS__
                 -Wshorten-64-to-32 # Warn about 64-bit to 32-bit conversions
       )
     endif()

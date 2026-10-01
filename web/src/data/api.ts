@@ -219,3 +219,83 @@ export function fetchLayers(signal?: AbortSignal): Promise<LayersResponse> {
     signal,
   );
 }
+
+// ---- provenance (/api/prov/graph) ----------------------------------------
+export interface ProvEntity {
+  hash: string;
+  type: string;
+  id: string;
+  store: string;
+  uri: string;
+  pids: number[];
+}
+export interface ProvActivity {
+  aid: string;
+  name: string;
+  activity: string;
+  pid: number;
+  ts: number;
+  dur: number;
+  used: string[];
+  generated: string[];
+  invalidated?: string[];
+  updated?: string[];
+  cat?: string;
+}
+export interface ProvEntityRelation {
+  relation: string; // contains | part_of | derived_from | revision_of | ...
+  subject: string;
+  object: string;
+}
+export interface ProvFile {
+  fhash: string;
+  path: string;
+  mount: string;
+  rel: string;
+}
+export interface ProvMount {
+  path: string;
+  fstype: string;
+}
+export interface ProvAccess {
+  aid: string;
+  fhash: string;
+  path: string;
+  op: "read" | "write" | "open" | "delete" | "meta";
+  calls: number;
+  bytes: number;
+}
+export interface ProvType {
+  name: string;
+  role: string; // input | output | intermediate
+  description: string;
+}
+export interface ProvGraphResponse {
+  entity_relations?: ProvEntityRelation[];
+  types?: ProvType[];
+  entities: ProvEntity[];
+  activities: ProvActivity[];
+  files?: ProvFile[];
+  mounts?: ProvMount[];
+  accesses?: ProvAccess[];
+  entity_files?: { entity: string; fhash: string; path: string }[];
+  stats: {
+    entities: number;
+    activities: number;
+    entity_records: number;
+    prov_events: number;
+    cont_events: number;
+    dangling_hashes: number;
+    isolated_entities: number;
+    truncated_activities: number;
+    orphan_chunks: number;
+    files?: number;
+    mounts?: number;
+    io_events?: number;
+    io_attributed?: number;
+    files_excluded?: number;
+  };
+}
+export function fetchProvGraph(signal?: AbortSignal): Promise<ProvGraphResponse> {
+  return getJson<ProvGraphResponse>("/api/prov/graph", signal);
+}

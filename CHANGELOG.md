@@ -9,6 +9,16 @@ and this project aims to adhere to [Semantic Versioning](https://semver.org/spec
 
 ## [Unreleased]
 
+### Added
+
+- A provenance graph extractor and a `/api/prov/graph` endpoint in the viz
+  server. It assembles entities and activities from dftracer provenance-mode
+  records and attributes POSIX/STDIO I/O to activities, giving the files each
+  one touched and the mount points holding them (`io`, `all_files` and
+  `mounts` query parameters).
+- A Provenance tab in the web viewer that draws the lineage graph with
+  Cytoscape and filters by entity, file and storage.
+
 ## [0.0.13] - 2026-09-30
 
 ### Added

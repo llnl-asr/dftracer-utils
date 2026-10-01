@@ -26,7 +26,8 @@ get_filename_component(CPM_DOWNLOAD_LOCATION ${CPM_DOWNLOAD_LOCATION} ABSOLUTE)
 if(EXISTS "${CPM_VENDORED_LOCATION}")
   get_filename_component(CPM_DOWNLOAD_DIR "${CPM_DOWNLOAD_LOCATION}" DIRECTORY)
   file(MAKE_DIRECTORY "${CPM_DOWNLOAD_DIR}")
-  file(COPY_FILE "${CPM_VENDORED_LOCATION}" "${CPM_DOWNLOAD_LOCATION}" ONLY_IF_DIFFERENT)
+  file(COPY_FILE "${CPM_VENDORED_LOCATION}" "${CPM_DOWNLOAD_LOCATION}"
+       ONLY_IF_DIFFERENT)
   include("${CPM_DOWNLOAD_LOCATION}")
   return()
 endif()
@@ -44,7 +45,8 @@ if(NOT CPM_DOWNLOAD_STATUS_CODE EQUAL 0)
   message(
     FATAL_ERROR
       "Failed to download CPM.cmake v${CPM_DOWNLOAD_VERSION}: ${CPM_DOWNLOAD_STATUS_MESSAGE}. "
-      "Either restore network access or vendor the file at ${CPM_VENDORED_LOCATION}.")
+      "Either restore network access or vendor the file at ${CPM_VENDORED_LOCATION}."
+  )
 endif()
 
 include(${CPM_DOWNLOAD_LOCATION})

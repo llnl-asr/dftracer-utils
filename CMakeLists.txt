@@ -17,8 +17,7 @@ if(APPLE AND NOT CMAKE_OSX_SYSROOT)
   execute_process(
     COMMAND xcrun --show-sdk-path
     OUTPUT_VARIABLE _dftracer_sdk_path
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET)
+    OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
   if(_dftracer_sdk_path AND IS_DIRECTORY "${_dftracer_sdk_path}")
     set(CMAKE_OSX_SYSROOT
         "${_dftracer_sdk_path}"
@@ -83,9 +82,10 @@ set(DEPENDENCY_LIBRARY_DIRS "")
 option(DFTRACER_UTILS_TESTS "Build tests" OFF)
 option(DFTRACER_UTILS_COVERAGE "Enable coverage reporting" OFF)
 option(DFTRACER_UTILS_DEBUG "Enable debug mode including verbose logging" OFF)
-option(DFTRACER_UTILS_LOGGER_LEVEL_TRACE
-       "Compile in TRACE-level logging and coroutine auto-tracing (still runtime-gated by DFTRACER_UTILS_LOG_LEVEL); OFF strips it for a minimal build"
-       ON)
+option(
+  DFTRACER_UTILS_LOGGER_LEVEL_TRACE
+  "Compile in TRACE-level logging and coroutine auto-tracing (still runtime-gated by DFTRACER_UTILS_LOG_LEVEL); OFF strips it for a minimal build"
+  ON)
 option(DFTRACER_UTILS_BUILD_SHARED "Build shared library" ON)
 option(DFTRACER_UTILS_BUILD_STATIC "Build static library" ON)
 option(DFTRACER_UTILS_BUILD_BINARIES "Build command-line binaries" ON)
@@ -94,11 +94,18 @@ option(DFTRACER_UTILS_ENABLE_PCH "Enable precompiled headers" OFF)
 option(DFTRACER_UTILS_ENABLE_ASAN "Enable AddressSanitizer" OFF)
 option(DFTRACER_UTILS_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
 option(DFTRACER_UTILS_ENABLE_TSAN "Enable ThreadSanitizer" OFF)
-option(DFTRACER_UTILS_VALGRIND_MODE "Build for Valgrind (disables io_uring; bug #428364 in Valgrind <3.23.0)" OFF)
+option(DFTRACER_UTILS_VALGRIND_MODE
+       "Build for Valgrind (disables io_uring; bug #428364 in Valgrind <3.23.0)"
+       OFF)
 option(DFTRACER_UTILS_ENABLE_MPI "Enable MPI support for call tree" OFF)
-option(DFTRACER_USE_ZLIB_NG "Use zlib-ng (compat) instead of madler/zlib; falls back to madler on failure" ON)
-option(DFTRACER_UTILS_ENABLE_ARROW "Enable Arrow C Data Interface via nanoarrow" ON)
-option(DFTRACER_UTILS_ENABLE_ARROW_IPC "Enable Arrow IPC file read/write via nanoarrow" ON)
+option(
+  DFTRACER_USE_ZLIB_NG
+  "Use zlib-ng (compat) instead of madler/zlib; falls back to madler on failure"
+  ON)
+option(DFTRACER_UTILS_ENABLE_ARROW
+       "Enable Arrow C Data Interface via nanoarrow" ON)
+option(DFTRACER_UTILS_ENABLE_ARROW_IPC
+       "Enable Arrow IPC file read/write via nanoarrow" ON)
 option(DFTRACER_UTILS_ENABLE_ZSTD "Enable ZSTD compression for RocksDB" ON)
 option(DFTRACER_UTILS_ENABLE_LZ4 "Enable LZ4 compression for RocksDB" OFF)
 option(
@@ -112,12 +119,11 @@ if(DFTRACER_UTILS_TESTS)
       ON
       CACHE BOOL "" FORCE)
   # Coverage is opt-in (DFTRACER_UTILS_COVERAGE / the `coverage` preset);
-  # building tests does not imply instrumentation.
-  # set(DFTRACER_UTILS_DEBUG
-  #     ON
-  #     CACHE BOOL "" FORCE)
+  # building tests does not imply instrumentation. set(DFTRACER_UTILS_DEBUG ON
+  # CACHE BOOL "" FORCE)
   if(NOT DFTRACER_UTILS_BUILD_SHARED AND NOT DFTRACER_UTILS_BUILD_STATIC)
-    message(FATAL_ERROR "DFTRACER_UTILS_TESTS requires a shared or static build")
+    message(
+      FATAL_ERROR "DFTRACER_UTILS_TESTS requires a shared or static build")
   endif()
   set(DFTRACER_UTILS_BUILD_BINARIES
       ON
@@ -244,7 +250,8 @@ endif()
 # Regenerate the plugin ABI version header on every configure, and reconfigure
 # automatically whenever any ABI header it hashes changes (even without a
 # CMakeLists.txt edit), so a rebuilt plugin and the host it loads into always
-# agree on DFTRACER_PLUGIN_ABI_VERSION. See cmake/scripts/plugin_abi_version.cmake.
+# agree on DFTRACER_PLUGIN_ABI_VERSION. See
+# cmake/scripts/plugin_abi_version.cmake.
 set(DFTRACER_PLUGIN_ABI_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/include/dftracer/utils/plugins")
 set(DFTRACER_DATAFRAME_ABI_HEADER
@@ -260,8 +267,8 @@ execute_process(
   COMMAND
     "${CMAKE_COMMAND}" -DPLUGINS_ABI_DIR=${DFTRACER_PLUGIN_ABI_DIR}
     -DDATAFRAME_ABI=${DFTRACER_DATAFRAME_ABI_HEADER}
-    -DOUTPUT=${CMAKE_BINARY_DIR}/include/dftracer/utils/plugins/abi_version.h
-    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/scripts/plugin_abi_version.cmake"
+    -DOUTPUT=${CMAKE_BINARY_DIR}/include/dftracer/utils/plugins/abi_version.h -P
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/scripts/plugin_abi_version.cmake"
   RESULT_VARIABLE DFTRACER_PLUGIN_ABI_VERSION_RESULT)
 if(NOT DFTRACER_PLUGIN_ABI_VERSION_RESULT EQUAL 0)
   message(FATAL_ERROR "failed to generate the plugin ABI version header")
@@ -277,20 +284,21 @@ dftracer_utils_item("Build type     " "${CMAKE_BUILD_TYPE}")
 dftracer_utils_item("Compiler       "
                     "${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
 dftracer_utils_item("Target arch    " "${CMAKE_SYSTEM_PROCESSOR}")
-dftracer_utils_item("Libraries      "
-                    "shared=${DFTRACER_UTILS_BUILD_SHARED} static=${DFTRACER_UTILS_BUILD_STATIC}"
-)
-dftracer_utils_item("Binaries / PyExt"
-                    "${DFTRACER_UTILS_BUILD_BINARIES} / ${DFTRACER_UTILS_BUILD_PYTHON}"
-)
+dftracer_utils_item(
+  "Libraries      "
+  "shared=${DFTRACER_UTILS_BUILD_SHARED} static=${DFTRACER_UTILS_BUILD_STATIC}")
+dftracer_utils_item(
+  "Binaries / PyExt"
+  "${DFTRACER_UTILS_BUILD_BINARIES} / ${DFTRACER_UTILS_BUILD_PYTHON}")
 dftracer_utils_item("Tests          " "${DFTRACER_UTILS_TESTS}")
 dftracer_utils_item("MPI            " "${DFTRACER_UTILS_ENABLE_MPI}")
-dftracer_utils_item("Compression    "
-                    "zstd=${DFTRACER_UTILS_ENABLE_ZSTD} lz4=${DFTRACER_UTILS_ENABLE_LZ4}"
-)
+dftracer_utils_item(
+  "Compression    "
+  "zstd=${DFTRACER_UTILS_ENABLE_ZSTD} lz4=${DFTRACER_UTILS_ENABLE_LZ4}")
 dftracer_utils_item("Arrow          " "${DFTRACER_UTILS_ENABLE_ARROW}")
-dftracer_utils_item("Async I/O      "
-                    "io_uring=${DFTRACER_UTILS_HAVE_IO_URING} kqueue=${DFTRACER_UTILS_HAVE_KQUEUE}"
+dftracer_utils_item(
+  "Async I/O      "
+  "io_uring=${DFTRACER_UTILS_HAVE_IO_URING} kqueue=${DFTRACER_UTILS_HAVE_KQUEUE}"
 )
 dftracer_utils_item("Lustre API     " "${DFTRACER_UTILS_HAVE_LUSTREAPI}")
 if(DFTRACER_UTILS_HAS_DWCAS)

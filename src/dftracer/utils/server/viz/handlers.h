@@ -46,6 +46,9 @@ coro::CoroTask<HttpResponse> handle_viz_layers(const HttpRequest& req,
 coro::CoroTask<HttpResponse> handle_viz_columns(const HttpRequest& req,
                                                 const QueryParams& params,
                                                 TraceIndex& index);
+coro::CoroTask<HttpResponse> handle_prov_graph(const HttpRequest& req,
+                                               const QueryParams& params,
+                                               TraceIndex& index);
 coro::CoroTask<HttpResponse> handle_viz_breaks(const HttpRequest& req,
                                                const QueryParams& params,
                                                TraceIndex& index);

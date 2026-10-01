@@ -4,13 +4,10 @@
 # This module provides functions to automatically detect and configure
 # precompiled headers for CMake targets.
 #
-# Functions:
-#   - detect_common_headers: Analyzes source files to find commonly used headers
-#   - use_precompiled_header: Applies precompiled headers to a target
+# Functions: - detect_common_headers: Analyzes source files to find commonly
+# used headers - use_precompiled_header: Applies precompiled headers to a target
 #
-# Usage:
-#   include(PrecompiledHeader)
-#   use_precompiled_header(my_target)
+# Usage: include(PrecompiledHeader) use_precompiled_header(my_target)
 # ##############################################################################
 
 include_guard(GLOBAL)
@@ -21,28 +18,19 @@ include_guard(GLOBAL)
 # Analyzes source files in a directory to find the most commonly included
 # standard library and system headers.
 #
-# Parameters:
-#   SOURCE_DIR - Directory to scan for source files
-#   OUTPUT_VAR - Variable name to store the list of detected headers
-#   MIN_COUNT  - Minimum number of occurrences to include a header (default: 3)
+# Parameters: SOURCE_DIR - Directory to scan for source files OUTPUT_VAR -
+# Variable name to store the list of detected headers MIN_COUNT  - Minimum
+# number of occurrences to include a header (default: 3)
 #
-# Example:
-#   detect_common_headers(
-#     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src
-#     OUTPUT_VAR COMMON_HEADERS
-#     MIN_COUNT 5
-#   )
+# Example: detect_common_headers( SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src
+# OUTPUT_VAR COMMON_HEADERS MIN_COUNT 5 )
 # ##############################################################################
 function(detect_common_headers)
   set(options "")
   set(oneValueArgs SOURCE_DIR OUTPUT_VAR MIN_COUNT)
   set(multiValueArgs "")
-  cmake_parse_arguments(
-    ARG
-    "${options}"
-    "${oneValueArgs}"
-    "${multiValueArgs}"
-    ${ARGN})
+  cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}"
+                        ${ARGN})
 
   if(NOT ARG_SOURCE_DIR)
     message(FATAL_ERROR "SOURCE_DIR is required for detect_common_headers")
@@ -68,29 +56,29 @@ function(detect_common_headers)
 
   if(NOT ALL_SOURCES)
     message(
-      WARNING
-        "No source files found in ${ARG_SOURCE_DIR} for PCH detection")
+      WARNING "No source files found in ${ARG_SOURCE_DIR} for PCH detection")
     set(${ARG_OUTPUT_VAR}
         ""
         PARENT_SCOPE)
     return()
   endif()
 
-  # Filter out files from directories that may have optional dependencies
-  # (e.g., Python bindings that are only built conditionally)
+  # Filter out files from directories that may have optional dependencies (e.g.,
+  # Python bindings that are only built conditionally)
   set(FILTERED_SOURCES "")
   foreach(SOURCE_FILE ${ALL_SOURCES})
-    # Exclude Python binding files (only built when DFTRACER_UTILS_BUILD_PYTHON is ON)
+    # Exclude Python binding files (only built when DFTRACER_UTILS_BUILD_PYTHON
+    # is ON)
     if(SOURCE_FILE MATCHES "/python/")
       continue()
     endif()
-    # Exclude MPI-guarded sources when MPI is off. They still live on
-    # disk and include <mpi.h>, which would otherwise land in the PCH
-    # (MIN_COUNT=2 is easy to hit) and break every non-MPI target
-    # because no MPI include path is attached.
+    # Exclude MPI-guarded sources when MPI is off. They still live on disk and
+    # include <mpi.h>, which would otherwise land in the PCH (MIN_COUNT=2 is
+    # easy to hit) and break every non-MPI target because no MPI include path is
+    # attached.
     if(NOT DFTRACER_UTILS_ENABLE_MPI)
-      if(SOURCE_FILE MATCHES "/mpi/"
-         OR SOURCE_FILE MATCHES "_mpi\\.(cpp|cc|cxx|h|hpp)$")
+      if(SOURCE_FILE MATCHES "/mpi/" OR SOURCE_FILE MATCHES
+                                        "_mpi\\.(cpp|cc|cxx|h|hpp)$")
         continue()
       endif()
     endif()
@@ -111,8 +99,8 @@ function(detect_common_headers)
       if(LINE MATCHES "^[ \t]*#[ \t]*include[ \t]*<([^>]+)>")
         set(HEADER "${CMAKE_MATCH_1}")
 
-        # Filter out project-specific headers (containing /)
-        # and specific third-party headers that might not be available everywhere
+        # Filter out project-specific headers (containing /) and specific
+        # third-party headers that might not be available everywhere
         if(NOT HEADER MATCHES "/"
            AND NOT HEADER MATCHES "^Python\\.h$"
            AND NOT HEADER MATCHES "^argparse/")
@@ -203,27 +191,25 @@ endfunction()
 # use_precompiled_header
 #
 # Applies precompiled headers to a target using a global cache of detected
-# headers. This function automatically handles PCH reuse across targets:
-# - First call: detects common headers and creates PCH for the first target
-# - Subsequent calls: reuse PCH from compatible targets (same variant)
+# headers. This function automatically handles PCH reuse across targets: - First
+# call: detects common headers and creates PCH for the first target - Subsequent
+# calls: reuse PCH from compatible targets (same variant)
 #
 # The function maintains separate PCH for shared and static library variants
 # because they have different compile definitions.
 #
-# Parameters:
-#   TARGET          - The CMake target to apply PCH to
+# Parameters: TARGET          - The CMake target to apply PCH to
 #
 # Global variables used (set by detect_common_headers or earlier calls):
-#   DFTRACER_UTILS_ENABLE_PCH     - Enable/disable PCH globally
-#   DFTRACER_UTILS_PCH_HEADERS    - Cached list of detected headers
-#   DFTRACER_UTILS_PCH_SOURCE_DIR - Source directory for header detection
-#   DFTRACER_UTILS_PCH_MIN_COUNT  - Minimum occurrence count (default: 3)
+# DFTRACER_UTILS_ENABLE_PCH     - Enable/disable PCH globally
+# DFTRACER_UTILS_PCH_HEADERS    - Cached list of detected headers
+# DFTRACER_UTILS_PCH_SOURCE_DIR - Source directory for header detection
+# DFTRACER_UTILS_PCH_MIN_COUNT  - Minimum occurrence count (default: 3)
 #
-# Examples:
-#   # Simple usage - handles everything automatically
-#   use_precompiled_header(my_target_shared)
-#   use_precompiled_header(my_target_static)
-#   use_precompiled_header(another_target_shared)  # Reuses from my_target_shared
+# Examples: # Simple usage - handles everything automatically
+# use_precompiled_header(my_target_shared)
+# use_precompiled_header(my_target_static)
+# use_precompiled_header(another_target_shared)  # Reuses from my_target_shared
 # ##############################################################################
 function(use_precompiled_header TARGET)
   # Check if precompiled headers are enabled globally
@@ -250,12 +236,13 @@ function(use_precompiled_header TARGET)
     set(VARIANT_KEY "OTHER")
   endif()
 
-  message(DEBUG "PCH: Target ${TARGET} has type ${TARGET_TYPE}, variant key: ${VARIANT_KEY}")
+  message(
+    DEBUG
+    "PCH: Target ${TARGET} has type ${TARGET_TYPE}, variant key: ${VARIANT_KEY}"
+  )
 
   # Get or detect headers if not already cached
-  get_property(
-    PCH_HEADERS GLOBAL
-    PROPERTY DFTRACER_UTILS_PCH_HEADERS_CACHED)
+  get_property(PCH_HEADERS GLOBAL PROPERTY DFTRACER_UTILS_PCH_HEADERS_CACHED)
 
   if(NOT PCH_HEADERS)
     # Detect headers from source directory
@@ -271,26 +258,25 @@ function(use_precompiled_header TARGET)
     endif()
 
     detect_common_headers(
-      SOURCE_DIR "${DFTRACER_UTILS_PCH_SOURCE_DIR}"
-      OUTPUT_VAR PCH_HEADERS
+      SOURCE_DIR "${DFTRACER_UTILS_PCH_SOURCE_DIR}" OUTPUT_VAR PCH_HEADERS
       MIN_COUNT ${DFTRACER_UTILS_PCH_MIN_COUNT})
 
     if(NOT PCH_HEADERS)
       message(
-        WARNING
-          "No common headers detected for PCH. PCH will not be applied.")
+        WARNING "No common headers detected for PCH. PCH will not be applied.")
       return()
     endif()
 
     # Cache the detected headers globally
     set_property(GLOBAL PROPERTY DFTRACER_UTILS_PCH_HEADERS_CACHED
-                                  "${PCH_HEADERS}")
+                                 "${PCH_HEADERS}")
 
     list(LENGTH PCH_HEADERS HEADER_COUNT)
     dftracer_utils_ok("Detected ${HEADER_COUNT} common headers for PCH")
   endif()
 
-  # Apply PCH to this target (each target gets its own PCH to avoid compile definition issues)
+  # Apply PCH to this target (each target gets its own PCH to avoid compile
+  # definition issues)
   target_precompile_headers(${TARGET} PRIVATE ${PCH_HEADERS})
 
   # Clang should ignore pch timestamp

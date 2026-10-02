@@ -90,7 +90,9 @@ std::vector<std::uint8_t> DataFrame::to_ipc() const {
     std::vector<std::string> field_names = names;
     std::vector<Series> field_columns;
     field_columns.reserve(columns.size());
-    for (const Series& col : columns) field_columns.push_back(col.share());
+    for (const Series& col : columns)
+        field_columns.push_back(col.is_flat() ? col.share()
+                                              : col.materialize());
     Series st =
         Series::structs(std::move(field_names), std::move(field_columns));
     ArrowSchema schema;

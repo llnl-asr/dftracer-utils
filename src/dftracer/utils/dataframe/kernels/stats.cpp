@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/field_stat.h>            // FieldStat
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/column_read.h>  // read_f64
+#include <dftracer/utils/dataframe/internal/value_ids.h>
 #include <dftracer/utils/dataframe/kernels/cast.h>          // cast_simd
 #include <dftracer/utils/dataframe/kernels/field_stat.h>    // field_stat_reduce
 #include <dftracer/utils/dataframe/kernels/filter.h>        // take
@@ -289,41 +290,58 @@ double quantile(const Series& v, double q) {
 double median(const Series& v) { return quantile(v, 0.5); }
 
 std::int64_t nunique(const Series& v) {
-    const std::int64_t n = v.length();
-    if (n == 0) return 0;
+    if (v.length() == 0) return 0;
     if (refuse_nested_value("nunique", v.type())) return 0;
-    Series order = argsort(v, false);  // nulls sort last
-    const std::int64_t* idx = order.data<std::int64_t>();
-    const bool has_nulls = v.null_count() > 0;
-    std::int64_t cnt = 0, prev = -1;
-    for (std::int64_t k = 0; k < n; ++k) {
-        std::int64_t i = idx[k];
-        if (has_nulls && v.is_null(i)) break;  // nulls are last
-        if (prev < 0 || !equal_at(v, i, prev)) {
-            ++cnt;
-            prev = i;
-        }
-    }
-    return cnt;
+    return unique(v).length();
 }
 
 Series unique(const Series& v) {
-    const std::int64_t n = v.length();
     if (refuse_nested_value("unique", v.type())) return Series{};
-    Series order = argsort(v, false);
+    const TypeId t = v.type();
+    // Floats keep the sort over every row: NaN != NaN keeps each NaN row, and
+    // which of 0.0 and -0.0 survives depends on that sort, so ids keyed by
+    // bits would change the result.
+    if (t == TypeId::Float64 || t == TypeId::Float32 || t == TypeId::Float16) {
+        const Series f =
+            v.encoding() == Encoding::Flat ? v.share() : v.materialize();
+        const std::int64_t n = f.length();
+        Series order = argsort(f, false);
+        const std::int64_t* idx = order.data<std::int64_t>();
+        const bool has_nulls = f.null_count() > 0;
+        std::vector<std::int64_t> keep;
+        std::int64_t prev = -1;
+        for (std::int64_t k = 0; k < n; ++k) {
+            std::int64_t i = idx[k];
+            if (has_nulls && f.is_null(i)) break;
+            if (prev < 0 || !equal_at(f, i, prev)) {
+                keep.push_back(i);
+                prev = i;
+            }
+        }
+        return take(f, keep);
+    }
+    ValueIds ids;
+    value_ids(*v.handle(), ids);
+    std::vector<std::int64_t> firsts;
+    firsts.reserve(ids.first.size());
+    for (std::size_t id = 0; id < ids.first.size(); ++id)
+        if (static_cast<std::int32_t>(id) != ids.null_id)
+            firsts.push_back(ids.first[id]);
+    Series d = v.take(firsts);
+    if (d.encoding() != Encoding::Flat) d = d.materialize();
+    const std::int64_t n = d.length();
+    Series order = argsort(d, false);
     const std::int64_t* idx = order.data<std::int64_t>();
-    const bool has_nulls = v.null_count() > 0;
     std::vector<std::int64_t> keep;
     std::int64_t prev = -1;
     for (std::int64_t k = 0; k < n; ++k) {
         std::int64_t i = idx[k];
-        if (has_nulls && v.is_null(i)) break;
-        if (prev < 0 || !equal_at(v, i, prev)) {
+        if (prev < 0 || !equal_at(d, i, prev)) {
             keep.push_back(i);
             prev = i;
         }
     }
-    return take(v, keep);
+    return take(d, keep);
 }
 
 Series rank(const Series& v, RankMethod method, bool descending, bool pct) {
@@ -1139,7 +1157,6 @@ double dftu_series_quantile(const dftu_series* v, double q) {
 }
 int64_t dftu_series_nunique(const dftu_series* v) {
     if (!v) return 0;
-    DFTU_FLAT_INPUT(v, dftu_series_nunique);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     int64_t r = dftracer::utils::dataframe::nunique(c);
     c.release();
@@ -1147,7 +1164,6 @@ int64_t dftu_series_nunique(const dftu_series* v) {
 }
 dftu_series* dftu_series_unique(const dftu_series* v) {
     if (!v) return nullptr;
-    DFTU_FLAT_INPUT(v, dftu_series_unique);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     dftracer::utils::dataframe::Series r =
         dftracer::utils::dataframe::unique(c);

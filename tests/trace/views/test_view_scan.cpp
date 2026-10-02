@@ -1,6 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
+#include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/trace/views/native_row_fold.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -689,5 +691,117 @@ TEST_SUITE("View") {
         CHECK(counts["aaa"] == doctest::Approx(10.0));  // cat is lowercased
         CHECK(counts["bbb"] == doctest::Approx(20.0));
         CHECK(counts["ccc"] == doctest::Approx(5.0));
+    }
+}
+
+namespace {
+
+namespace df = dftracer::utils::dataframe;
+
+constexpr int DICT_ROWS = 1000;
+
+// Row i: cat c<i%3>, name n<i%2>, args.path p<i%900>, and args.metric
+// m<i%3> on even i only.
+View dict_trace(TestEnvironment& env) {
+    const std::string pfw = env.get_dir() + "/dict.pfw";
+    {
+        std::ofstream o(pfw);
+        for (int i = 0; i < DICT_ROWS; ++i) {
+            o << R"({"ph":"X","name":"n)" << i % 2 << R"(","cat":"c)" << i % 3
+              << R"(","pid":1,"tid":1,"ts":)" << 1000 + i * 10
+              << R"(,"dur":5,"args":{"path":"p)" << i % 900 << '"';
+            if (i % 2 == 0) o << R"(,"metric":"m)" << i % 3 << '"';
+            o << "}}\n";
+        }
+    }
+    const std::string gz = pfw + ".gz";
+    REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
+    fs::remove(pfw);
+    dftracer::utils::index::Indexer::open({gz}).build();
+    return View::from_file(gz, determine_index_path(gz, ""));
+}
+
+std::string cell(const df::Series& s, std::int64_t r) {
+    return s.is_null(r) ? "<null>" : std::string(s.string_at(r));
+}
+
+}  // namespace
+
+TEST_SUITE("View scan string columns") {
+    TEST_CASE(
+        "a scan batch is a dictionary or a view column over intern chunks") {
+        namespace detail = dftracer::utils::trace::views::detail;
+        std::vector<std::uint32_t> cat_ids, path_ids;
+        df::Series cat, path;
+        {
+            dftracer::utils::StringIntern intern;
+            for (int i = 0; i < 1000; ++i) {
+                cat_ids.push_back(
+                    intern.get_or_insert("category-" + std::to_string(i % 3)));
+                path_ids.push_back(intern.get_or_insert(
+                    "/data/dir/file-" + std::to_string(i % 900)));
+            }
+            cat_ids[7] = dftracer::utils::StringIntern::NO_ID;
+            cat = detail::interned_column(cat_ids, intern);
+            path = detail::interned_column(path_ids, intern);
+        }
+
+        CHECK(cat.encoding() == df::Encoding::Dictionary);
+        CHECK(cat.handle()->child()->length == 3);
+        CHECK(path.encoding() == df::Encoding::View);
+        REQUIRE(cat.length() == 1000);
+        REQUIRE(path.length() == 1000);
+        CHECK(cat.null_count() == 1);
+        for (std::int64_t r = 0; r < 1000; ++r) {
+            CHECK(cell(cat, r) ==
+                  (r == 7 ? "<null>" : "category-" + std::to_string(r % 3)));
+            CHECK(cell(path, r) == "/data/dir/file-" + std::to_string(r % 900));
+        }
+    }
+
+    TEST_CASE("repeated, unique and null-bearing string columns") {
+        TestEnvironment env(10);
+        const df::DataFrame f =
+            test_view_common::run(dict_trace(env).collect());
+        REQUIRE(f.num_rows() == DICT_ROWS);
+
+        const df::Series cat = f.column("cat");
+
+        const df::Series path = f.column("args.path");
+
+        const df::Series metric = f.column("args.metric");
+
+        const df::Series ts = f.column("ts");
+        for (std::int64_t r = 0; r < f.num_rows(); ++r) {
+            const auto i = (ts.data<std::uint64_t>()[r] - 1000) / 10;
+            CAPTURE(i);
+            CHECK(cell(cat, r) == "c" + std::to_string(i % 3));
+            CHECK(cell(path, r) == "p" + std::to_string(i % 900));
+            CHECK(cell(metric, r) ==
+                  (i % 2 == 0 ? "m" + std::to_string(i % 3) : "<null>"));
+        }
+    }
+
+    TEST_CASE("filter, group and sort read string values") {
+        TestEnvironment env(10);
+        const View v = dict_trace(env);
+        auto q = [&](const char* text) {
+            return test_view_common::run(v.duql(text).collect());
+        };
+
+        CHECK(q(R"(where cat == "c1")").num_rows() == 333);
+        CHECK(q(R"(where starts_with(cat, "c"))").num_rows() == DICT_ROWS);
+        CHECK(q(R"(where args.metric == "m0")").num_rows() == 167);
+
+        const df::DataFrame g = q("group cat { n = count() } | sort cat");
+        REQUIRE(g.num_rows() == 3);
+        const df::Series gc = g.column("cat");
+        CHECK(cell(gc, 0) == "c0");
+        CHECK(cell(gc, 1) == "c1");
+        CHECK(cell(gc, 2) == "c2");
+
+        const df::DataFrame s = q("sort -cat | take 1 | select cat");
+        REQUIRE(s.num_rows() == 1);
+        CHECK(cell(s.column("cat"), 0) == "c2");
     }
 }

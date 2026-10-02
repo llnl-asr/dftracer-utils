@@ -2,6 +2,7 @@
 #include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/source.h>
@@ -101,6 +102,51 @@ TEST_SUITE("SchemaRegistry") {
         CHECK(s.params_hash() != ix::get_schema("generic").params_hash());
     }
 
+    TEST_CASE("index.stats_share and index.path_budget override the build") {
+        const auto& s = ix::register_schema(
+            "id: yaml_share\nfields: {zz_probe_a: {type: int}}\n"
+            "index: {stats_share: 0.2, path_budget: 50}\n",
+            "yaml_share.yaml");
+        REQUIRE(s.stats_share);
+        CHECK(*s.stats_share == doctest::Approx(0.2));
+        CHECK(s.path_budget == 50);
+        const auto cfg =
+            ix::build::for_schema(ix::build::ChunkIndexerConfig{}, s);
+        CHECK(cfg.stats_share == doctest::Approx(0.2));
+        CHECK(cfg.path_budget == 50);
+        CHECK(ix::schemas_json().find("\"stats_share\":0.2") !=
+              std::string::npos);
+
+        const auto& unset = ix::register_schema(
+            "id: yaml_share_unset\nfields: {zz_probe_b: {type: int}}\n",
+            "yaml_share_unset.yaml");
+        CHECK_FALSE(unset.stats_share);
+        CHECK(ix::build::for_schema(ix::build::ChunkIndexerConfig{}, unset)
+                  .stats_share ==
+              doctest::Approx(ix::build::ChunkIndexerConfig{}.stats_share));
+        CHECK(s.params_hash() != unset.params_hash());
+
+        ix::RecordSchema other = s;
+        other.stats_share = 0.3;
+        CHECK(other.params_hash() != s.params_hash());
+    }
+
+    TEST_CASE("a built-in's hash changes only when it sets an override") {
+        const auto& dft = ix::get_schema("dftracer");
+        REQUIRE(dft.builtin);
+        CHECK_FALSE(dft.stats_share);
+        CHECK_FALSE(dft.path_budget);
+        ix::RecordSchema with_share = dft;
+        with_share.stats_share = 0.1;
+        ix::RecordSchema with_budget = dft;
+        with_budget.path_budget = 10;
+        CHECK(with_share.params_hash() != dft.params_hash());
+        CHECK(with_budget.params_hash() != dft.params_hash());
+        CHECK(with_share.params_hash() != with_budget.params_hash());
+        with_share.stats_share.reset();
+        CHECK(with_share.params_hash() == dft.params_hash());
+    }
+
     TEST_CASE("a JSON spec and a SchemaSpec reach the same schema") {
         const auto& s = ix::register_schema(
             R"({"id":"json_a","fields":{"status":{"type":"int"},)"
@@ -195,6 +241,9 @@ TEST_SUITE("SchemaRegistry") {
         reject("id: bad_c\nextends: nope\n", "unknown extends nope");
         reject("id: bad_d\nextends: bad_d\n", "extends itself");
         reject("id: bad_e\nindex: {path_budget: many}\n", "index.path_budget");
+        reject("id: bad_e\nindex: {stats_share: 0}\n", "index.stats_share");
+        reject("id: bad_e\nindex: {stats_share: 1.5}\n", "index.stats_share");
+        reject("id: bad_e\nindex: {stats_share: lots}\n", "index.stats_share");
         reject("id: bad_g\ndictionaries:\n  - {name: d, rows: R, key: k}\n",
                "unknown key dictionaries");
         reject("id: bad_h\nsource: \"a = where x >\"\n", "bad_h");
@@ -329,7 +378,7 @@ TEST_SUITE("SchemaRegistry") {
         const auto gz = write_nginx(env.get_dir(), 3000);
         const auto index_dir = env.get_dir() + "/idx";
         fs::create_directories(index_dir + "/schemas");
-        // path_budget 0: only the always-indexed field is indexed.
+        // path_budget 1: the always-indexed field and the first other path.
         std::ofstream(index_dir + "/schemas/nginx.yaml")
             << "id: idx_nginx\n"
                "fields:\n"
@@ -338,7 +387,7 @@ TEST_SUITE("SchemaRegistry") {
                "  request_time: {type: float}\n"
                "  upstream: {type: string, optional: true, always_index: "
                "true}\n"
-               "index: {path_budget: 0}\n";
+               "index: {path_budget: 1}\n";
         ix::IndexerOptions o;
         o.index_dir = index_dir;
         auto indexer = ix::Indexer::open({gz}, o);

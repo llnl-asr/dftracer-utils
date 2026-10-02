@@ -397,7 +397,9 @@ frame's own buffers, no interned-id round trip needed at the row level. Every
 A plugin working straight off the columns (no per-row cursor) reads the
 ``dftu_dataframe`` with the dataframe C ABI
 (``dftracer/utils/dataframe/abi.h``) - ``dftu_dataframe_column`` by name,
-``dftu_series_type`` / ``dftu_series_data``.
+``dftu_series_type`` / ``dftu_series_data``. A string column can be a
+dictionary column, for which ``dftu_series_data`` and ``dftu_series_offsets``
+are null: read its strings with ``dftu_series_string_at(col, row, &len)``.
 
 .. tab-set::
 

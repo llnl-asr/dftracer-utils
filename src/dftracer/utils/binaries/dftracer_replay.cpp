@@ -530,7 +530,12 @@ int run(int argc, char** argv) {
 
     pipeline.set_source(scan);
     pipeline.set_destination(execute);
-    pipeline.execute();
+    try {
+        pipeline.execute();
+    } catch (const std::exception& e) {
+        DFTRACER_UTILS_LOG_ERROR("Pipeline failed: %s", e.what());
+        return 1;
+    }
 
     if (ctx.is_root) {
         DFTRACER_UTILS_LOG_DEBUG("[done] scan=%.1fms execute=%.1fms",

@@ -276,6 +276,14 @@ std::optional<std::size_t> column_of(const df::DataFrame& f,
 std::shared_ptr<const LookupTable> make_lookup_table(
     std::string name, std::shared_ptr<const df::DataFrame> frame,
     const std::vector<std::size_t>& columns) {
+    if (std::any_of(frame->columns.begin(), frame->columns.end(),
+                    [](const df::Series& c) { return !c.is_flat(); })) {
+        df::DataFrame flat;
+        flat.names = frame->names;
+        for (const df::Series& c : frame->columns)
+            flat.columns.push_back(c.is_flat() ? c.share() : c.materialize());
+        frame = std::make_shared<const df::DataFrame>(std::move(flat));
+    }
     auto t = std::make_shared<LookupTable>();
     t->name = std::move(name);
     const std::int64_t n = frame->num_rows();

@@ -509,7 +509,8 @@ dftracer_index
 - ``--dimensions <dims>`` - Comma-separated args fields to index by name, nested ones included (e.g., level,mode,io.size)
 - ``--schema <id>`` - Record schema of every trace: a registered id, such as ``dftracer`` or ``generic`` (default: detected per file from its first lines)
 - ``--memory-budget <bytes>`` - Bytes the build may hold at once; past it large files are indexed fewer at a time and spill to disk (default: 0 = about a third of available memory; accepts units such as 512MB)
-- ``--path-budget <n>`` - Also index each file's ``n`` most frequent other args paths: numbers get a per-chunk min/max, strings a per-chunk bloom up to 256 distinct values (default: 1024; 0 indexes only the fixed fields and ``--dimensions``)
+- ``--stats-share <fraction>`` - Also index each file's other paths, most frequent first, while their evidence fits this fraction of the file's compressed size, at least 8 MiB: numbers get a per-chunk min/max, strings a per-chunk bloom up to 256 distinct values (default: 0.05; must be in (0, 1])
+- ``--path-budget <n>`` - Ceiling on how many other paths get evidence (default: 0, no count limit)
 - ``-f, --force`` - Force index recreation even if already built
 - ``--checkpoint-size <bytes>`` - Checkpoint size for gzip indexing in bytes (default: 33554432 B / 32 MB)
 - ``--executor-threads <count>`` - Number of worker threads for parallel processing (default: number of CPU cores)

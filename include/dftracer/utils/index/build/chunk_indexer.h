@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_BUILD_CHUNK_INDEXER_H
 #define DFTRACER_UTILS_INDEX_BUILD_CHUNK_INDEXER_H
 
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
@@ -18,6 +19,12 @@
 
 namespace dftracer::utils::index::build {
 
+/// Bytes of automatic evidence every file may keep, whatever its size.
+inline constexpr std::uint64_t STATS_FLOOR_BYTES = 8ULL << 20;
+/// Version of the zonemap, bloom and counts records a build writes; a change
+/// in what they mean bumps it so existing evidence rebuilds.
+inline constexpr std::uint32_t EVIDENCE_FORMAT_VERSION = 2;
+
 struct ChunkIndexerConfig {
     bool index_name = true;
     bool index_cat = true;
@@ -31,11 +38,14 @@ struct ChunkIndexerConfig {
     /// e.g. "args.level", "args.mode", "args.io.size"
     std::vector<std::string> extra_dimensions;
 
-    /// Also index the path_budget most frequent other args paths of each
-    /// file: numbers get a per-chunk min/max, strings a per-chunk bloom while
-    /// the chunk holds at most auto_max_distinct of their values. 0 indexes
-    /// only the fixed fields and extra_dimensions.
-    std::size_t path_budget = 1024;
+    /// Also index the other args paths of each file, most frequent first,
+    /// while their estimated evidence fits max(STATS_FLOOR_BYTES,
+    /// stats_share * the file's size on disk) and, when path_budget is above
+    /// 0, at most path_budget of them: numbers get a per-chunk min/max,
+    /// strings a per-chunk bloom while the chunk holds at most
+    /// auto_max_distinct of their values. stats_share is in (0, 1].
+    std::size_t path_budget = 0;
+    double stats_share = 0.05;
     std::size_t auto_max_distinct = 256;
 
     std::size_t expected_entries_per_chunk = 1024;
@@ -60,19 +70,25 @@ struct ChunkIndexerConfig {
     /// rebuild.
     std::uint64_t params_hash(store::IndexExtension ext) const {
         utilities::hash::HasherUtility hasher;
+        auto selection = [&] {
+            hasher.update(EVIDENCE_FORMAT_VERSION);
+            hasher.update(STATS_FLOOR_BYTES);
+            hasher.update(stats_share);
+            hasher.update(path_budget);
+        };
         switch (ext) {
             case store::IndexExtension::BLOOM:
                 hasher.update(expected_entries_per_chunk);
                 hasher.update(false_positive_rate);
-                hasher.update(path_budget);
                 hasher.update(auto_max_distinct);
+                selection();
                 break;
             case store::IndexExtension::COUNTS:
                 hasher.update(value_counts_cap);
-                hasher.update(path_budget);
+                selection();
                 break;
             case store::IndexExtension::ZONEMAP:
-                hasher.update(path_budget);
+                selection();
                 break;
             case store::IndexExtension::HOST:
             case store::IndexExtension::MEMBERS:
@@ -88,6 +104,15 @@ struct ChunkIndexerConfig {
         }
         return hasher.get_hash().value;
     }
+
+    /// Throws INVALID_ARGUMENT naming the setting when stats_share is not in
+    /// (0, 1].
+    void validate() const {
+        if (!(stats_share > 0.0 && stats_share <= 1.0))
+            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                                    "stats_share must be in (0, 1], got " +
+                                        std::to_string(stats_share));
+    }
 };
 
 /// A field as the index names its dimension: an args key or a dotted path
@@ -99,7 +124,8 @@ inline std::string extra_dimension_name(std::string_view field) {
 
 /// The settings files of `schema` are indexed with: path-decoded records get
 /// no dftracer fixed dimensions or name postings; the schema's always-indexed
-/// paths join the extra dimensions and its path budget replaces the build's.
+/// paths join the extra dimensions and its path budget and stats share replace
+/// the build's.
 inline ChunkIndexerConfig for_schema(ChunkIndexerConfig config,
                                      const RecordSchema& schema) {
     const bool by_path = schema.decoder == Decoder::PATH;
@@ -121,6 +147,7 @@ inline ChunkIndexerConfig for_schema(ChunkIndexerConfig config,
             config.extra_dimensions.push_back(std::move(dim));
     }
     if (schema.path_budget) config.path_budget = *schema.path_budget;
+    if (schema.stats_share) config.stats_share = *schema.stats_share;
     return config;
 }
 

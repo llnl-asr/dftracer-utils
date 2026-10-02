@@ -31,10 +31,16 @@ Spec keys
      - mapping
      - Field name to field settings (below). A field with the name of a
        parent field replaces it.
+   * - ``index.stats_share``
+     - fraction
+     - Share of a file's compressed size, in (0, 1], that automatic evidence
+       may use (default 0.05, at least 8 MiB); replaces the parent's and
+       the build's value. Built-in schemas may set it too.
    * - ``index.path_budget``
      - count
-     - How many of each file's most frequent other paths are indexed;
-       replaces the parent's and the build's default.
+     - Optional ceiling on how many other paths are indexed, most frequent
+       first (default 0, no limit); replaces the parent's and the build's
+       value. A negative count is an error.
    * - ``source``
      - string
      - duql text: the row sets (``name = pipeline``) and macros
@@ -88,7 +94,7 @@ Field settings
        Times a query writes or reads are in these units.
    * - ``always_index``
      - ``true``, ``false``
-     - Index the field even past the path budget. The time, duration,
+     - Index the field even past the evidence cap. The time, duration,
        entity, lane and name fields of a path-decoded schema are always
        indexed.
 

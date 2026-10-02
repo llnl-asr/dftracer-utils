@@ -6,6 +6,7 @@
 #include <dftracer/utils/duql/ast.h>
 #include <dftracer/utils/duql/parser.h>
 #include <dftracer/utils/duql/term.h>
+#include <dftracer/utils/duql/wildcard.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -420,10 +421,13 @@ struct PluginCatalog {
 /// and `def ...`, separated by `;`): its row sets are names for `from`,
 /// arrows and `lookup`, and its macros expand as the query's do, after the
 /// query's own and before those on `$DFTRACER_DUQL_PATH`. Without
-/// `plugins`, every dotted function name is unknown.
+/// `plugins`, every dotted function name is unknown. `leaves` lists the field
+/// paths a wildcard path (`a.*.b`) expands to (see wildcard.h), and without it
+/// a wildcard is an error.
 dftracer::utils::expected<Program, DuqlError> compile_program(
     std::string_view text, const Params& params, const Roles* roles,
-    std::string_view source = {}, const PluginCatalog* plugins = nullptr);
+    std::string_view source = {}, const PluginCatalog* plugins = nullptr,
+    const LeafPaths* leaves = nullptr);
 
 /// Calls `fn` with every term of `p`'s filter and stages, a union's other
 /// pipeline included.

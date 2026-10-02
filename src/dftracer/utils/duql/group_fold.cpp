@@ -163,6 +163,11 @@ struct GroupFold::Ord {
     }
 };
 
+static bool text_column(const df::Series& s) {
+    return s.type() == df::TypeId::String ||
+           s.type() == df::TypeId::LargeString;
+}
+
 struct GroupFold::Arg {
     Ord best;
     std::int64_t at = -1;
@@ -199,7 +204,53 @@ void GroupFold::add(df::DataFrame batch) {
     std::vector<std::int64_t> gid(static_cast<std::size_t>(n));
     std::vector<std::int64_t> fresh;
     std::string key;
+    const bool str_key = n_keys == 1 && text_column(batch.columns[0]);
     for (std::int64_t r = 0; r < n; ++r) {
+        if (str_key) {
+            const df::Series& c = batch.columns[0];
+            std::int64_t id = -1;
+            if (c.is_null(r)) {
+                if (null_group_ < 0) {
+                    null_group_ = num_groups_++;
+                    fresh.push_back(r);
+                }
+                id = null_group_;
+            } else {
+                std::string_view sv;
+                if (!c.is_json()) {
+                    sv = c.string_at(r);
+                } else {
+                    key.clear();
+                    if (!append_cell_key(key, c, r))
+                        throw std::invalid_argument(
+                            "group: key '" + batch.names[0] +
+                            "' holds a list or object; group by a scalar");
+                    const auto text = string_key_text(key);
+                    if (text) {
+                        sv = *text;
+                    } else {
+                        auto [it, added] =
+                            groups_.try_emplace(key, num_groups_);
+                        if (added) {
+                            ++num_groups_;
+                            fresh.push_back(r);
+                        }
+                        id = it->second;
+                    }
+                }
+                if (id < 0) {
+                    auto it = str_groups_.find(sv);
+                    if (it == str_groups_.end()) {
+                        it = str_groups_.emplace(std::string(sv), num_groups_++)
+                                 .first;
+                        fresh.push_back(r);
+                    }
+                    id = it->second;
+                }
+            }
+            gid[static_cast<std::size_t>(r)] = id;
+            continue;
+        }
         key.clear();
         for (std::size_t k = 0; k < n_keys; ++k) {
             const df::Series& c = batch.columns[k];
@@ -214,15 +265,17 @@ void GroupFold::add(df::DataFrame batch) {
                     "' holds a list or object; group by a scalar");
             }
         }
-        auto [it, added] =
-            groups_.try_emplace(key, static_cast<std::int64_t>(groups_.size()));
-        if (added) fresh.push_back(r);
+        auto [it, added] = groups_.try_emplace(key, num_groups_);
+        if (added) {
+            ++num_groups_;
+            fresh.push_back(r);
+        }
         gid[static_cast<std::size_t>(r)] = it->second;
     }
     for (std::size_t k = 0; k < n_keys && !fresh.empty(); ++k)
         key_parts_[k].push_back(
             as_type(batch.columns[k], key_types_[k]).take(fresh));
-    const auto groups = static_cast<std::size_t>(groups_.size());
+    const auto groups = static_cast<std::size_t>(num_groups_);
     if (engine_) {
         const df::Series g = df::Series::flat_i64(gid.data(), n);
         std::vector<const df::Series*> values;
@@ -239,12 +292,27 @@ void GroupFold::add(df::DataFrame batch) {
                 auto& sets = distinct_[a];
                 sets.resize(groups);
                 std::string v;
+                const bool text = text_column(in);
+                const bool json = text && in.is_json();
                 for (std::int64_t r = 0; r < n; ++r) {
-                    v.clear();
-                    if (append_cell_key(v, in, r))
-                        sets[static_cast<std::size_t>(
-                                 gid[static_cast<std::size_t>(r)])]
-                            .insert(v);
+                    Distinct& d = sets[static_cast<std::size_t>(
+                        gid[static_cast<std::size_t>(r)])];
+                    std::string_view sv;
+                    if (text && !json) {
+                        if (in.is_null(r)) continue;
+                        sv = in.string_at(r);
+                    } else {
+                        v.clear();
+                        if (!append_cell_key(v, in, r)) continue;
+                        const auto t = text ? string_key_text(v) : std::nullopt;
+                        if (!t) {
+                            d.tagged.insert(v);
+                            continue;
+                        }
+                        sv = *t;
+                    }
+                    if (d.text.find(sv) == d.text.end())
+                        d.text.emplace(std::string(sv));
                 }
                 break;
             }
@@ -304,7 +372,7 @@ void GroupFold::add(df::DataFrame batch) {
 void GroupFold::arg(std::size_t a, const df::Series& in, const df::Series& by,
                     const std::vector<std::int64_t>& gid) {
     auto& state = args_[a];
-    state.resize(static_cast<std::size_t>(groups_.size()));
+    state.resize(static_cast<std::size_t>(num_groups_));
     const auto b = normal(by);
     if (!b) return;
     const bool boolean = by.type() == TypeId::Bool;
@@ -337,7 +405,7 @@ void GroupFold::arg(std::size_t a, const df::Series& in, const df::Series& by,
 void GroupFold::sketches(std::size_t a, const df::Series& in,
                          const std::vector<std::int64_t>& gid) {
     auto& state = sketches_[a];
-    state.resize(static_cast<std::size_t>(groups_.size()));
+    state.resize(static_cast<std::size_t>(num_groups_));
     const std::int64_t n = in.length();
     if (aggs_[a].op == FoldOp::SKETCH) {
         const TypeId t = in.type();
@@ -374,7 +442,7 @@ void GroupFold::sketches(std::size_t a, const df::Series& in,
 }
 
 df::DataFrame GroupFold::finish(std::vector<std::string> names) {
-    const auto groups = static_cast<std::int64_t>(groups_.size());
+    const auto groups = num_groups_;
     const auto count = static_cast<std::size_t>(groups);
     df::DataFrame out;
     out.names = std::move(names);
@@ -406,7 +474,9 @@ df::DataFrame GroupFold::finish(std::vector<std::string> names) {
             case FoldOp::COUNT_DISTINCT: {
                 std::vector<std::int64_t> v(count, 0);
                 for (std::size_t g = 0; g < distinct_[a].size(); ++g)
-                    v[g] = static_cast<std::int64_t>(distinct_[a][g].size());
+                    v[g] = static_cast<std::int64_t>(
+                        distinct_[a][g].text.size() +
+                        distinct_[a][g].tagged.size());
                 out.columns.push_back(df::Series::flat_i64(v.data(), groups));
                 break;
             }

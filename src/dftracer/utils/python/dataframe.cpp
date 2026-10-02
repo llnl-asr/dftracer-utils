@@ -1260,37 +1260,44 @@ void array_stream_capsule_destructor(PyObject* cap) {
     }
 }
 
-// __arrow_c_stream__: a one-batch stream of the struct, so pa.table(batch) /
-// pl.from_arrow(batch) import every column zero-copy without an explicit
-// to_arrow(). The single struct array carries all fields.
+// __arrow_c_stream__: a stream of the struct (one batch per chunk of a
+// collected frame), so pa.table(batch) / pl.from_arrow(batch) import every
+// column zero-copy without an explicit to_arrow(). The single struct array
+// carries all fields.
 PyObject* DataFrame_arrow_c_stream(PyObject* self, PyObject*) {
     DataFrameObject* b = as_dataframe(self);
     if (!b) return nullptr;
     ArrowSchema schema{};
-    ArrowArray array{};
-    try {
-        dataframe::to_arrow(b->st, &schema, &array);
-    } catch (const std::exception& e) {
+    std::vector<ArrowArray> arrays;
+    auto drop = [&] {
         if (schema.release) schema.release(&schema);
-        if (array.release) array.release(&array);
+        for (auto& a : arrays)
+            if (a.release) a.release(&a);
+    };
+    try {
+        arrays = dataframe::to_arrow_batches(b->st, &schema);
+    } catch (const std::exception& e) {
+        drop();
         PyErr_SetString(PyExc_RuntimeError, e.what());
         return nullptr;
     }
     auto* stream = new (std::nothrow) ArrowArrayStream{};
     if (!stream) {
-        if (schema.release) schema.release(&schema);
-        if (array.release) array.release(&array);
+        drop();
         return PyErr_NoMemory();
     }
-    if (ArrowBasicArrayStreamInit(stream, &schema, 1) != NANOARROW_OK) {
-        if (schema.release) schema.release(&schema);
-        if (array.release) array.release(&array);
+    if (ArrowBasicArrayStreamInit(stream, &schema,
+                                  static_cast<std::int64_t>(arrays.size())) !=
+        NANOARROW_OK) {
+        drop();
         delete stream;
         PyErr_SetString(PyExc_RuntimeError,
                         "failed to init arrow array stream");
         return nullptr;
     }
-    ArrowBasicArrayStreamSetArray(stream, 0, &array);  // moves array in
+    for (std::size_t i = 0; i < arrays.size(); ++i)
+        ArrowBasicArrayStreamSetArray(stream, static_cast<std::int64_t>(i),
+                                      &arrays[i]);
     PyObject* cap = PyCapsule_New(stream, "arrow_array_stream",
                                   array_stream_capsule_destructor);
     if (!cap) {

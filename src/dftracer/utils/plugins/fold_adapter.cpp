@@ -551,13 +551,10 @@ void serialize_row(std::string& out, const dftu_dataframe* df,
     auto str_col = [&](const char* name, std::string_view* out_sv) {
         dftu_series* c = dftu_dataframe_column(df, name);
         if (!c) return;
-        if (dftu_series_type(c) == DFTU_TYPE_STRING &&
-            !dftu_series_is_null(c, row)) {
-            const auto* off = dftu_series_offsets(c);
-            const char* base = static_cast<const char*>(dftu_series_data(c));
-            if (off && base)
-                *out_sv = {base + off[row],
-                           static_cast<std::size_t>(off[row + 1] - off[row])};
+        if (dftu_series_type(c) == DFTU_TYPE_STRING) {
+            std::int64_t n = 0;
+            if (const char* p = dftu_series_string_at(c, row, &n))
+                *out_sv = {p, static_cast<std::size_t>(n)};
         }
         dftu_series_free(c);
     };
@@ -627,14 +624,11 @@ void serialize_row(std::string& out, const dftu_dataframe* df,
         out += "\":";
         switch (dftu_series_type(c)) {
             case DFTU_TYPE_STRING: {
-                const auto* off = dftu_series_offsets(c);
-                const char* base =
-                    static_cast<const char*>(dftu_series_data(c));
-                std::string_view sv =
-                    off && base ? std::string_view{base + off[row],
-                                                   static_cast<std::size_t>(
-                                                       off[row + 1] - off[row])}
-                                : std::string_view{};
+                std::int64_t n = 0;
+                const char* p = dftu_series_string_at(c, row, &n);
+                const std::string_view sv =
+                    p ? std::string_view{p, static_cast<std::size_t>(n)}
+                      : std::string_view{};
                 out += '"';
                 append_json_escaped(out, sv);
                 out += '"';
@@ -1274,13 +1268,10 @@ int PluginFold::match_query(const Query& q, const dftu_dataframe* df,
                         static_cast<const double*>(dftu_series_data(c))[row];
                     break;
                 case DFTU_TYPE_STRING: {
-                    const auto* off = dftu_series_offsets(c);
-                    const char* base =
-                        static_cast<const char*>(dftu_series_data(c));
-                    if (off && base)
-                        match_qmap_[f] = std::string(
-                            base + off[row],
-                            static_cast<std::size_t>(off[row + 1] - off[row]));
+                    std::int64_t n = 0;
+                    if (const char* p = dftu_series_string_at(c, row, &n))
+                        match_qmap_[f] =
+                            std::string(p, static_cast<std::size_t>(n));
                     break;
                 }
                 default:

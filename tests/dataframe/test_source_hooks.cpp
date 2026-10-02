@@ -57,7 +57,10 @@ namespace {
 
 template <class T>
 T run(CoroTask<T> t) {
-    return dftracer::utils::default_runtime().submit(std::move(t)).get();
+    T out = dftracer::utils::default_runtime().submit(std::move(t)).get();
+    if constexpr (std::is_same_v<T, DataFrame>)
+        for (Series& c : out.columns) c = c.materialize();
+    return out;
 }
 
 DataFrame share(const DataFrame& df) {

@@ -138,9 +138,9 @@ spec: ``count``, ``sum_dur``, ``mean_dur``.
                            .get();  // blocks; a dataframe::DataFrame
 
              auto cat = df.column("cat");
-             auto count = df.column("count");
-             auto sum_dur = df.column("sum_dur");
-             auto mean_dur = df.column("mean_dur");
+             const auto count = df.column("count").materialize();
+             const auto sum_dur = df.column("sum_dur").materialize();
+             const auto mean_dur = df.column("mean_dur").materialize();
              for (std::int64_t i = 0; i < df.num_rows(); ++i)
                  std::printf("%-6.*s %4lld %8llu %8.1f\n",
                              static_cast<int>(cat.string_at(i).size()),
@@ -161,8 +161,8 @@ spec: ``count``, ``sum_dur``, ``mean_dur``.
       The default aggregate column names are ``count``, ``sum_dur``,
       ``mean_dur``; access a column by name with ``df.column(...)`` (the
       ``DataFrame`` has no ``operator[]``). ``sum_dur`` is an unsigned 64-bit
-      column (``dur`` is a non-negative field), read with
-      ``data<std::uint64_t>()``. Inside async code, ``co_await`` the task
+      column (``dur`` is a non-negative field). Result columns may be chunked,
+      so call ``materialize()`` before ``data<std::uint64_t>()``. Inside async code, ``co_await`` the task
       instead of ``.get()`` - see :doc:`../concepts/coroutine-caveats`.
 
 4. Filter before aggregating
@@ -227,8 +227,8 @@ the same predicate reads almost identically in Python and C++. Keep only the
                            .get();
 
              auto cat = df.column("cat");
-             auto count = df.column("count");
-             auto mean_dur = df.column("mean_dur");
+             const auto count = df.column("count").materialize();
+             const auto mean_dur = df.column("mean_dur").materialize();
              for (std::int64_t i = 0; i < df.num_rows(); ++i)
                  std::printf("%-6.*s %4lld %8.1f\n",
                              static_cast<int>(cat.string_at(i).size()),
@@ -312,7 +312,7 @@ Now read the folder.
                            .get();
 
              auto cat = df.column("cat");
-             auto count = df.column("count");
+             const auto count = df.column("count").materialize();
              for (std::int64_t i = 0; i < df.num_rows(); ++i)
                  std::printf("%-6.*s %4lld\n",
                              static_cast<int>(cat.string_at(i).size()),

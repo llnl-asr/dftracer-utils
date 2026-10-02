@@ -125,18 +125,23 @@ TEST_SUITE("expr string comparisons") {
         CHECK_FALSE(mask_bit(flat_mask, 3));
     }
 
-    TEST_CASE("ordered comparison on a string scalar is refused at the C ABI") {
+    TEST_CASE("ordered comparison on a string scalar goes by byte order") {
         Series cat = Series::strings({"POSIX", "STDIO"});
         dftu_scalar rhs = dftracer::utils::dataframe::str("POSIX");
-
-        CHECK(dftu_series_compare(cat.handle(), DFTU_CMP_GT, rhs) == nullptr);
-        CHECK(dftu_series_compare(cat.handle(), DFTU_CMP_GE, rhs) == nullptr);
-        CHECK(dftu_series_compare(cat.handle(), DFTU_CMP_LT, rhs) == nullptr);
-        CHECK(dftu_series_compare(cat.handle(), DFTU_CMP_LE, rhs) == nullptr);
-
-        dftu_series* eq = dftu_series_compare(cat.handle(), DFTU_CMP_EQ, rhs);
-        REQUIRE(eq != nullptr);
-        dftu_series_free(eq);
+        const struct {
+            dftu_cmp_op op;
+            bool first, second;
+        } want[] = {{DFTU_CMP_GT, false, true},
+                    {DFTU_CMP_GE, true, true},
+                    {DFTU_CMP_LT, false, false},
+                    {DFTU_CMP_LE, true, false},
+                    {DFTU_CMP_EQ, true, false}};
+        for (const auto& w : want) {
+            Series m{dftu_series_compare(cat.handle(), w.op, rhs)};
+            REQUIRE(m.handle() != nullptr);
+            CHECK(mask_bit(m, 0) == w.first);
+            CHECK(mask_bit(m, 1) == w.second);
+        }
     }
 
     TEST_CASE(

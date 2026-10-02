@@ -34,15 +34,15 @@ stage: plain_stage
 plain_stage: "where" expr                                   -> where
      | "derive" asg ("," asg)*                        -> derive
      | "parse" path "~" (STRING | PARAM)               -> parse
-     | "select" item ("," item)*                      -> select
-     | "drop" path ("," path)*                        -> drop
+     | "select" (item | pattern) ("," (item | pattern))* -> select
+     | "drop" (path | pattern) ("," (path | pattern))* -> drop
      | "rename" NAME "=" path ("," NAME "=" path)*    -> rename
      | "distinct" [item ("," item)*]                  -> distinct
      | "group" item ("," item)* block                 -> group
      | "agg" block                                    -> agg
      | "window" [item ("," item)*] ["sort" keys] block -> window
      | "pivot" add_expr ["in" "[" [pivot_value ("," pivot_value)*] "]"] block -> pivot
-     | "unpivot" path ("," path)* "as" NAME "," NAME  -> unpivot
+     | "unpivot" (path | pattern) ("," (path | pattern))* "as" NAME "," NAME  -> unpivot
      | "sort" keys                                    -> sort
      | "take" (INT | PARAM) (".." (INT | PARAM) | ["by" expr ("," expr)* ["sort" keys]]) -> take
      | "skip" (INT | PARAM)                                    -> skip
@@ -106,6 +106,7 @@ lookup_tail: "into" NAME
         | path
         | indexed
         | call
+        | quant
         | "(" expr ")"
         | tuple
         | list
@@ -127,7 +128,13 @@ ROWS.2: /rows(?![A-Za-z0-9_])/i
 subquery: "(" from_pipeline ")"
 tuple: "(" expr "," expr ("," expr)* ")"
 list: "[" [expr ("," expr)*] "]"
-call: dotted "(" [arg ("," arg)*] ")"
+call: (dotted | ANYALL) "(" [arg ("," arg)*] ")"
+// A wildcard `*` replaces a key after the first; it is not a name. A
+// pattern stands alone in select, drop, unpivot and any()/all().
+quant: ANYALL "(" pattern ")"
+pattern: dotted "." "*" pattern_step*
+pattern_step: "." (NAME | QKEY | "*")
+ANYALL.2: /(any|all)(?=\s*\()/i
 arg: expr | NAME "=" expr
 
 // A path whose leading keys are plain names shares its prefix with a

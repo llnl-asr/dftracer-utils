@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace dftracer::utils::duql {
@@ -77,12 +78,32 @@ class GroupFold {
 
     std::vector<dataframe::DataType> key_types_;
     std::vector<FoldAgg> aggs_;
+    struct SvHash {
+        using is_transparent = void;
+        using is_avalanching = void;
+        std::uint64_t operator()(std::string_view v) const noexcept {
+            return ankerl::unordered_dense::hash<std::string_view>{}(v);
+        }
+    };
+    struct SvEq {
+        using is_transparent = void;
+        bool operator()(std::string_view a, std::string_view b) const noexcept {
+            return a == b;
+        }
+    };
     ankerl::unordered_dense::map<std::string, std::int64_t> groups_;
+    ankerl::unordered_dense::map<std::string, std::int64_t, SvHash, SvEq>
+        str_groups_;
+    std::int64_t null_group_ = -1;
+    std::int64_t num_groups_ = 0;
     std::int64_t rows_ = 0;
     std::vector<std::vector<dataframe::Series>> key_parts_;
     dataframe::AggStatePtr engine_;
-    std::vector<std::vector<ankerl::unordered_dense::set<std::string>>>
-        distinct_;
+    struct Distinct {
+        ankerl::unordered_dense::set<std::string, SvHash, SvEq> text;
+        ankerl::unordered_dense::set<std::string, SvHash, SvEq> tagged;
+    };
+    std::vector<std::vector<Distinct>> distinct_;
     std::vector<std::vector<dataframe::Series>> parts_;
     std::vector<std::int64_t> part_rows_;
     std::vector<std::vector<std::vector<std::int64_t>>> members_;

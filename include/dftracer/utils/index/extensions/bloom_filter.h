@@ -56,13 +56,16 @@ class BloomFilter {
     std::size_t num_hash_functions() const { return num_hashes_; }
     std::size_t num_bits() const { return num_bits_; }
 
+    /// Bits a filter for `n` entries at rate `p` holds: a whole number of
+    /// 512-bit blocks, at least one.
+    static std::size_t optimal_num_bits(std::size_t n, double p);
+
    private:
     BloomFilter(std::vector<unsigned char> bits, std::size_t num_bits,
                 std::size_t num_hashes, std::size_t num_entries);
 
     void compute_hashes(std::string_view value, std::uint64_t& h1,
                         std::uint64_t& h2) const;
-    static std::size_t optimal_num_bits(std::size_t n, double p);
     static std::size_t optimal_num_hashes(std::size_t m, std::size_t n);
 
     std::vector<unsigned char> bits_;

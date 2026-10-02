@@ -255,6 +255,10 @@ static FieldStat field_stat_reduce_serial(const Series& col, std::int64_t begin,
 
 FieldStat field_stat_reduce(const Series& col, std::int64_t begin,
                             std::int64_t end) {
+    if (col.handle()->is_chunked()) {
+        const Series joined = col.materialize();
+        return field_stat_reduce(joined, begin, end);
+    }
     if (end < 0) end = col.length();
     const std::int64_t n = end - begin;
     // The per-range reduction is SIMD; for a large full-column reduction with a

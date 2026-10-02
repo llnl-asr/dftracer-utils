@@ -7,6 +7,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/field_stat.h>
+#include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/kernels/elementwise.h>
 #include <dftracer/utils/dataframe/kernels/field_stat.h>
 #include <dftracer/utils/dataframe/kernels/kernels.h>
@@ -2897,9 +2898,7 @@ TEST_SUITE("vec_arrow") {
         schema.release(&schema);
     }
 
-    // filter/take return a zero-copy SELECTION over a base, which carries no
-    // value buffer of its own. Reading it through string_at used to segfault.
-    TEST_CASE("string_at on a non-FLAT column is empty, not a crash") {
+    TEST_CASE("string_at reads a SELECTION column from filter") {
         Series s = Series::strings({"alpha", "beta", "gamma"});
         // Bool is bit-packed: keep rows 0 and 2.
         std::vector<std::uint8_t> keep{0b0000'0101};
@@ -2907,10 +2906,9 @@ TEST_SUITE("vec_arrow") {
         Series sel = s.filter(mask);
 
         REQUIRE(sel.valid());
-        if (!sel.is_flat()) {
-            for (std::int64_t i = 0; i < sel.length(); ++i)
-                CHECK(sel.string_at(i).empty());
-        }
+        REQUIRE(sel.length() == 2);
+        CHECK(sel.string_at(0) == "alpha");
+        CHECK(sel.string_at(1) == "gamma");
 
         Series flat = sel.materialize();
         REQUIRE(flat.is_flat());
@@ -3041,4 +3039,93 @@ TEST_CASE(
     CHECK(std::string(n1) == "second");
     CHECK(dftu_series_field_name(st.handle(), 2) == nullptr);
     CHECK(dftu_series_field_name(st.handle(), -1) == nullptr);
+}
+
+TEST_CASE("string_at reads dictionary, selection and null rows") {
+    const std::vector<std::string> v = {"x", "x", "y", "x", "z"};
+    Series dict = Series::strings(v).dictionary_encode();
+    REQUIRE(dict.encoding() == Encoding::Dictionary);
+    CHECK(dict.string_at(2) == "y");
+    CHECK(dict.string_at(0) == "x");
+    CHECK(dict.string_at(4) == "z");
+
+    std::vector<std::uint8_t> keep{0b0001'0101};  // rows 0, 2, 4
+    Series picked = dict.filter(Series::flat(TypeId::Bool, keep.data(), 5));
+    REQUIRE(picked.valid());
+    REQUIRE(picked.length() == 3);
+    CHECK(picked.string_at(0) == "x");
+    CHECK(picked.string_at(1) == "y");
+    CHECK(picked.string_at(2) == "z");
+
+    const std::vector<std::string_view> sv = {"a", "b", "a"};
+    const std::uint8_t valid[1] = {0x05};
+    Series with_null = Series::strings(sv, valid).dictionary_encode();
+    REQUIRE(with_null.is_null(1));
+    CHECK(with_null.string_at(0) == "a");
+    CHECK(with_null.string_at(1).empty());
+    CHECK(with_null.string_at(2) == "a");
+}
+
+TEST_CASE("string_at reads a LargeString dictionary") {
+    auto* h = new dftu_series();
+    h->type = TypeId::LargeString;
+    h->length = 3;
+    const std::int64_t offs[4] = {0, 1, 2, 3};
+    h->offsets = dftracer::utils::dataframe::Buffer::allocate(sizeof(offs));
+    std::memcpy(h->offsets->data(), offs, sizeof(offs));
+    h->data = dftracer::utils::dataframe::Buffer::allocate(3);
+    std::memcpy(h->data->data(), "pqp", 3);
+    Series large{h};
+    Series dict = large.dictionary_encode();
+    REQUIRE(dict.encoding() == Encoding::Dictionary);
+    CHECK(dict.string_at(0) == "p");
+    CHECK(dict.string_at(1) == "q");
+    CHECK(dict.string_at(2) == "p");
+}
+
+TEST_CASE("dftu_series_string_at returns null and length 0 when no value") {
+    const std::vector<std::string_view> sv = {"a", "b", "a"};
+    const std::uint8_t valid[1] = {0x05};
+    Series dict = Series::strings(sv, valid).dictionary_encode();
+    std::int64_t len = 7;
+    const char* p = dftu_series_string_at(dict.handle(), 2, &len);
+    REQUIRE(p != nullptr);
+    CHECK(std::string(p, static_cast<std::size_t>(len)) == "a");
+
+    len = 7;
+    CHECK(dftu_series_string_at(dict.handle(), 1, &len) == nullptr);
+    CHECK(len == 0);
+    len = 7;
+    CHECK(dftu_series_string_at(dict.handle(), 3, &len) == nullptr);
+    CHECK(len == 0);
+    len = 7;
+    CHECK(dftu_series_string_at(dict.handle(), -1, &len) == nullptr);
+    CHECK(len == 0);
+
+    const std::int64_t iv[2] = {1, 2};
+    Series ints = Series::flat_i64(iv, 2);
+    len = 7;
+    CHECK(dftu_series_string_at(ints.handle(), 0, &len) == nullptr);
+    CHECK(len == 0);
+}
+
+TEST_CASE("Series::strings refuses more than INT32_MAX total bytes") {
+    constexpr std::size_t MAX_BYTES = 2147483647u;
+    CHECK_NOTHROW(Series::check_string_bytes(MAX_BYTES));
+    CHECK_THROWS_AS(Series::check_string_bytes(MAX_BYTES + 1),
+                    std::length_error);
+
+    // The sizes are summed before any byte is read, so the pointer is never
+    // dereferenced.
+    const char byte = 'x';
+    const std::string_view big(&byte, std::size_t{1} << 30);
+    const std::vector<std::string_view> views = {big, big, big};
+    CHECK_THROWS_AS(Series::strings(std::span<const std::string_view>(views)),
+                    std::length_error);
+}
+
+TEST_CASE("dftu_series_new_string rejects wrapped offsets") {
+    const std::int32_t offsets[2] = {0, -5};
+    CHECK(dftu_series_new_string(DFTU_TYPE_STRING, offsets, "abc", 1,
+                                 nullptr) == nullptr);
 }

@@ -10,6 +10,7 @@
 #include <dftracer/utils/dataframe/internal/column_read.h>
 #include <dftracer/utils/dataframe/internal/compare_simd.h>  // pack_flags
 #include <dftracer/utils/dataframe/internal/radix_dedup.h>   // parallel dedup
+#include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dataframe/kernels/sort.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/series.h>
@@ -106,6 +107,8 @@ bool is_sorted_impl(const Series& v, bool descending) {
     if (n < 2) return true;
     if (refuse_nested_value("is_sorted", v.type())) return false;
     bool simd = false;
+    if (v.encoding() == Encoding::Chunked)
+        return is_sorted_impl(v.materialize(), descending);
     if (is_sorted_numeric(*v.handle(), descending, &simd)) return simd;
     for (std::int64_t i = 1; i < n; ++i) {
         const int cmp = compare_rows(v, i - 1, i);
@@ -113,6 +116,47 @@ bool is_sorted_impl(const Series& v, bool descending) {
     }
     return true;
 }
+Series is_in_strings(const dftu_series& v, const dftu_series& values) {
+    ankerl::unordered_dense::set<std::string_view> set;
+    std::string_view s;
+    for (std::int64_t j = 0; j < values.length; ++j)
+        if (str_at(&values, j, s)) set.insert(s);
+    const std::int64_t n = v.length;
+    std::vector<char> flags(static_cast<std::size_t>(n), 0);
+    std::vector<char> entry_hit;
+    const std::int32_t* codes = nullptr;
+    const bool dict = v.encoding == Encoding::Dictionary && v.child();
+    if (dict) {
+        const dftu_series* d = v.child().get();
+        entry_hit.assign(static_cast<std::size_t>(d->length), 0);
+        for (std::int64_t j = 0; j < d->length; ++j)
+            entry_hit[static_cast<std::size_t>(j)] =
+                str_at(d, j, s) && set.count(s) > 0;
+        codes = reinterpret_cast<const std::int32_t*>(v.data->data());
+    }
+    constexpr std::int64_t GRAIN = 1 << 15;
+    auto probe = [&](std::int64_t b, std::int64_t e) {
+        std::string_view t;
+        for (std::int64_t i = b; i < e; ++i) {
+            bool hit;
+            if (dict) {
+                const auto code = static_cast<std::uint32_t>(codes[i]);
+                hit = code < entry_hit.size() && entry_hit[code] &&
+                      (!v.validity ||
+                       ((v.validity->data()[i >> 3] >> (i & 7)) & 1));
+            } else {
+                hit = str_at(&v, i, t) && set.count(t) > 0;
+            }
+            flags[static_cast<std::size_t>(i)] = hit ? 1 : 0;
+        }
+    };
+    if (parallel_backend_installed() && n > GRAIN)
+        parallel_for(n, GRAIN, probe);
+    else
+        probe(0, n);
+    return bool_from_flags(flags);
+}
+
 Series is_in_impl(const Series& v_in, const Series& values_in) {
     if (refuse_nested_value("is_in", v_in.type())) return Series{};
     // FLAT Float64 with a small needle set: SIMD broadcast-compare.
@@ -123,6 +167,9 @@ Series is_in_impl(const Series& v_in, const Series& values_in) {
         if (is_in_f64_simd(*v_in.handle(), *values_in.handle(), packed.data()))
             return Series::flat(TypeId::Bool, packed.data(), n);
     }
+    if (is_string_column(*v_in.handle()) &&
+        is_string_column(*values_in.handle()))
+        return is_in_strings(*v_in.handle(), *values_in.handle());
     // read_bytes only sees a FLAT column's buffers, so a sliced or dictionary
     // needle would otherwise read empty and match nothing.
     auto flatten = [](const Series& c) {
@@ -268,11 +315,10 @@ int32_t dftu_series_is_sorted(const dftu_series* v, int32_t descending) {
 }
 dftu_series* dftu_series_drop_nulls(const dftu_series* v) {
     if (!v) return nullptr;
-    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_drop_nulls(flat_v));
     Series c = borrow(v);
     const std::int64_t n = c.length();
     std::vector<char> flags(static_cast<std::size_t>(n), 0);
-    const bool has_nulls = c.null_count() > 0;
+    const bool has_nulls = c.null_count() > 0 || v->rowwise_nulls();
     for (std::int64_t i = 0; i < n; ++i)
         flags[static_cast<std::size_t>(i)] =
             (!has_nulls || !c.is_null(i)) ? 1 : 0;
@@ -284,6 +330,7 @@ dftu_series* dftu_series_drop_nulls(const dftu_series* v) {
 dftu_series* dftu_series_is_in(const dftu_series* v,
                                const dftu_series* values) {
     if (!v || !values) return nullptr;
+    DFTU_PER_CHUNK(v, dftu_series_is_in, values);
     Series c = borrow(v);
     Series cv = borrow(values);
     Series r = dftracer::utils::dataframe::is_in_impl(c, cv);
@@ -306,7 +353,6 @@ dftu_series* dftu_series_sort(const dftu_series* v, int32_t descending) {
 }
 dftu_series* dftu_series_head(const dftu_series* v, int64_t n) {
     if (!v) return nullptr;
-    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_head(flat_v, n));
     Series c = borrow(v);
     Series r = dftracer::utils::dataframe::head_impl(c, n);
     c.release();
@@ -314,7 +360,6 @@ dftu_series* dftu_series_head(const dftu_series* v, int64_t n) {
 }
 dftu_series* dftu_series_tail(const dftu_series* v, int64_t n) {
     if (!v) return nullptr;
-    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_tail(flat_v, n));
     Series c = borrow(v);
     Series r = dftracer::utils::dataframe::tail_impl(c, n);
     c.release();

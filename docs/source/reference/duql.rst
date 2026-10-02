@@ -91,6 +91,65 @@ as in ``sort(a)[0]``, is not supported; derive the call first.
 ``.`` alone is the current row and ``.name`` a field of it;
 ``^.name`` is a field of the enclosing row.
 
+Wildcard paths
+~~~~~~~~~~~~~~
+
+A ``*`` in place of a key after the first makes the path a pattern:
+``args.counters.*.p50``. The ``*`` is a token of its own and matches one
+whole segment, so a field named ``*`` is reached only with backticks. A pattern
+stands alone in one of these places and is a syntax error anywhere else:
+
+- an item of ``select``, with no ``as`` and no ``name =``;
+- a path of ``drop``;
+- a path of ``unpivot``;
+- the argument of ``any(...)`` and ``all(...)`` in a comparison.
+
+A pattern expands when the query is planned, to every scalar field path of
+the source with the same number of segments and the same text in each segment
+that is not ``*``. A View reads the paths from the merged index path catalog,
+which the full index holds (``dftracer_index`` or the ``BatchIndexer``); a
+trace whose index has no catalog, such as one indexed only by a query, is
+refused with an error naming the file. Patterns expand against the record
+paths, so a column made by ``derive`` or ``group`` in an earlier stage is not
+matched.
+The query then runs as the same query with those paths spelled out, so pruning
+and the prefilter apply to each path. Array positions are segments: with the
+elements of ``args.pos`` indexed, ``args.pos.*`` matches ``args.pos.0``,
+``args.pos.1`` and so on. Matches are ordered segment by segment: numeric
+segments by value, so ``2`` comes before ``10``, and before the others, which go
+by bytes. A source that falls back to ``args`` also lets a pattern that does
+not start with ``args`` match the paths under it, written without ``args``.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Form
+     - Meaning
+   * - ``select p``
+     - One column for each match, named by its path.
+   * - ``drop p``
+     - Drops each match.
+   * - ``unpivot p as k, v``
+     - One row for each match, with the path as the key.
+   * - ``any(p) op v``
+     - ``(m1 op v) or (m2 op v) or ...`` over the matches.
+   * - ``all(p) op v``
+     - ``(m1 op v) and (m2 op v) and ...`` over the matches.
+
+A missing or null field is unknown for its comparison, as for a spelled-out
+path. With one match, ``any(p) op v`` is that comparison. Without a ``*``,
+``any(p) op v`` keeps its array meaning (see `Quantifiers`_). A pattern with
+no match fails the query and names the pattern:
+``no field matches the pattern 'args.nope.*'``. A pattern matches the paths of
+the index catalog, so it does not match a column made by ``derive`` or
+``group``. ``**`` and a partial segment such as ``p*`` are not patterns.
+
+.. code-block:: text
+
+   select name, args.counters.*.p50
+   where any(args.counters.*.p50) > 92
+   unpivot args.counters.*.p50 as counter, p50
+
 Grammar
 -------
 
@@ -110,6 +169,8 @@ Comparisons do not chain.
    pipeline = "from" src { "," src } { "|" stage }
             | stage { "|" stage }
             | expr { "|" stage }                 # an expression means "where expr"
+   path     = key { "." key | "[" int "]" }
+   pattern  = key "." "*" { "." ( key | "*" ) }   # select, drop, unpivot, any(), all()
 
 A sub-query in an expression starts with ``from``:
 ``run in (from runs | select run)``. The legacy test ``"text" in field`` is
@@ -1082,6 +1143,8 @@ or not an array.
   quantifier inside another quantifier.
 - ``any(p) op v`` equals ``any(p, (. op v) ?? false)``, as the existing
   ``any()`` leaf does. ``all(p) op v`` equals ``all(p, . op v)``.
+- ``any(p)`` and ``all(p)`` with a pattern ``p`` expand over the matching
+  fields instead (see `Wildcard paths`_).
 - In a scan filter, a quantifier is checked per record and never skips a
   chunk. In a stage after the scan, it runs vectorized over list columns.
   Both give the same results. DataFrame and LazyFrame duql filters take

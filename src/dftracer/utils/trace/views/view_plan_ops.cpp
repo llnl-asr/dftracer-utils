@@ -3,6 +3,7 @@
 #include <dftracer/utils/core/common/string_intern.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/cache/mv_store.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/source.h>
@@ -28,7 +29,11 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
+#include <tuple>
+#include <unordered_set>
 #include <utility>
 
 namespace dftracer::utils::trace::views::detail::scan {
@@ -139,7 +144,129 @@ void check_keys(const detail::ViewPlan& p, std::vector<GroupKey>& keys) {
 
 }  // namespace
 
+namespace {
+
+struct ConfirmedFiles {
+    std::mutex mu;
+    std::unordered_set<std::string> keys;
+};
+
+ConfirmedFiles& confirmed_files() {
+    static ConfirmedFiles c;
+    return c;
+}
+
+// Brings every index the files read fresh through the resolver, which clears
+// a changed file's whole record. Only a file whose size, time, checkpoint size
+// or index format changed is rebuilt, with the schema it was indexed with, so
+// an unregistered schema stays an error instead of a silent re-index. A root
+// that does not exist yet holds no evidence, so its first build is left to
+// the first read. Concurrent callers may both rebuild one file; the index
+// writes serialize.
+void ensure_indexes_fresh(const std::vector<ViewFile>& files) {
+    namespace ib = dftracer::utils::index::build;
+    namespace st = dftracer::utils::index::store;
+    struct Pending {
+        std::string key;
+        std::string file;
+    };
+    struct Group {
+        std::string root;
+        std::size_t checkpoint_size;
+        std::string schema;
+        bool operator<(const Group& o) const {
+            return std::tie(root, checkpoint_size, schema) <
+                   std::tie(o.root, o.checkpoint_size, o.schema);
+        }
+    };
+    std::map<Group, std::vector<Pending>> groups;
+    std::vector<std::string> confirmed;
+    {
+        std::map<std::string, std::optional<st::IndexDatabase>> dbs;
+        std::lock_guard<std::mutex> lock(confirmed_files().mu);
+        for (const auto& f : files) {
+            if (f.index_path.empty()) continue;
+            std::error_code ec;
+            const auto mtime = fs::last_write_time(f.file_path, ec);
+            if (ec) continue;
+            const auto size = fs::file_size(f.file_path, ec);
+            if (ec) continue;
+            const std::string logical =
+                st::internal::get_logical_path(f.file_path);
+            std::string key = logical;
+            key += '\n';
+            key += std::to_string(
+                static_cast<long long>(mtime.time_since_epoch().count()));
+            key += '\n';
+            key += std::to_string(size);
+            key += '\n';
+            key += f.index_path;
+            key += '\n';
+            key += std::to_string(f.checkpoint_size);
+            if (confirmed_files().keys.contains(key)) continue;
+
+            auto [it, opened] = dbs.try_emplace(f.index_path);
+            if (opened && fs::exists(f.index_path)) {
+                try {
+                    it->second.emplace(f.index_path,
+                                       st::IndexOpenMode::ReadOnly);
+                } catch (const DFTUtilsException&) {
+                }
+            }
+            if (!it->second) continue;
+            const st::IndexDatabase& db = *it->second;
+            const int id = db.get_file_info_id(logical);
+            std::string schema;
+            if (id >= 0) {
+                const bool same_ckpt =
+                    f.checkpoint_size == 0 || db.get_checkpoint_size(id) == 0 ||
+                    db.get_checkpoint_size(id) == f.checkpoint_size;
+                if (same_ckpt && db.check_freshness(f.file_path) ==
+                                     st::IndexDatabase::Freshness::Fresh) {
+                    confirmed.push_back(std::move(key));
+                    continue;
+                }
+                if (const auto recorded = db.file_schema(id)) {
+                    dftracer::utils::index::get_schema(*recorded);
+                    schema = *recorded;
+                }
+            }
+            groups[{f.index_path, f.checkpoint_size, std::move(schema)}]
+                .push_back({std::move(key), f.file_path});
+        }
+        for (auto& k : confirmed) confirmed_files().keys.insert(std::move(k));
+    }
+    for (auto& [group, pending] : groups) {
+        ib::ResolveAndBuildInput in;
+        in.index_dir = group.root;
+        in.checkpoint_size = group.checkpoint_size;
+        in.schema = group.schema;
+        in.require_checkpoints = true;
+        for (const auto& p : pending) in.files.push_back(p.file);
+        ib::ResolverResult result;
+        default_runtime().run_blocking(
+            "view_index_freshness",
+            [&](CoroScope& scope) -> coro::CoroTask<void> {
+                result =
+                    co_await ib::resolve_and_build_index(&scope, std::move(in));
+            });
+        if (!result.failures.empty())
+            throw DFTUtilsException::cat(ErrorCode::IO, "index of ",
+                                         result.failures.front().file_path,
+                                         " is stale and its rebuild failed: ",
+                                         result.failures.front().message);
+        std::lock_guard<std::mutex> lock(confirmed_files().mu);
+        for (auto& p : pending) confirmed_files().keys.insert(std::move(p.key));
+    }
+}
+
+}  // namespace
+
 ScanPlan from_files(std::vector<ViewFile> files) {
+    for (auto& f : files)
+        if (f.index_path.empty())
+            f.index_path = internal::determine_index_path(f.file_path, "");
+    ensure_indexes_fresh(files);
     auto plan = std::make_shared<detail::ViewPlan>();
     plan->files = std::move(files);
     return plan;
@@ -371,6 +498,29 @@ const char* path_type_name(dftracer::utils::index::store::PathType t) {
 }
 
 }  // namespace
+
+std::optional<std::string> file_without_catalog(const ScanPlan& plan_) {
+    namespace st = dftracer::utils::index::store;
+    ankerl::unordered_dense::map<std::string, std::optional<st::IndexDatabase>>
+        dbs;
+    for (const auto& f : plan_->files) {
+        if (f.index_path.empty()) return f.file_path;
+        try {
+            auto [it, fresh] = dbs.try_emplace(f.index_path);
+            if (fresh)
+                it->second.emplace(f.index_path, st::IndexOpenMode::ReadOnly);
+            if (!it->second) return f.file_path;
+            const int fid = it->second->get_file_info_id(
+                st::internal::get_logical_path(f.file_path));
+            if (fid < 0 ||
+                !it->second->extension_state(fid, st::IndexExtension::CATALOG))
+                return f.file_path;
+        } catch (...) {
+            return f.file_path;
+        }
+    }
+    return std::nullopt;
+}
 
 std::vector<SchemaLeaf> schema_tree(const ScanPlan& plan_) {
     namespace st = dftracer::utils::index::store;

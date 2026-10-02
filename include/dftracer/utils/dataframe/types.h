@@ -688,12 +688,16 @@ constexpr bool is_wide_offset_type(TypeId t) noexcept {
 
 /// FLAT: values contiguous. CONSTANT: one value, logical length N. DICTIONARY:
 /// value[i] = base[codes[i]]. SELECTION: value[i] = base[sel[i]], a view over a
-/// base with no data movement.
+/// base with no data movement. VIEW: a String or Binary column of 16-byte
+/// Arrow views over data buffers the column keeps alive. CHUNKED: the rows of
+/// several columns of the same type, each in any other encoding, in order.
 enum class Encoding : std::int32_t {
     Flat,
     Constant,
     Dictionary,
     Selection,
+    View,
+    Chunked,
 };
 
 /// C++ mirror of the C ABI op-code enums (same values). Kernels cast the raw

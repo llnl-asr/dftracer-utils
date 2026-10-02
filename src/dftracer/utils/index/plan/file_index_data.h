@@ -11,6 +11,8 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace dftracer::utils::index::plan {
@@ -26,6 +28,10 @@ struct GranuleCounts {
 
     const StringViewMap<std::uint64_t>* get() const;
 };
+
+/// Whether a dftracer path is a field every record carries at its top level
+/// (pid, tid, ts, dur, ph, id, or below one), which the catalog leaves out.
+bool unrecorded(std::string_view path);
 
 /// One file's index data for pruning, shared by the Conditions built for one
 /// query. Each kind's data for a path is read the first time a leaf needs it,
@@ -48,9 +54,24 @@ struct FileIndexData {
         ankerl::unordered_dense::map<std::uint64_t,
                                      index::extensions::ScalableBloomFilter>;
 
+    /// Whether `path` is a dftracer fixed dimension, built from the record's
+    /// top-level field.
+    bool fixed_field(std::string_view path) const;
+    /// The name the evidence answering a query on `path` is stored under, or
+    /// nullopt when no evidence answers it: `args.<k>` reads the args key
+    /// `k` unless `k` is a fixed dimension, and a bare dftracer path that a
+    /// record may hold at its top level, where the evaluator looks first
+    /// and the args evidence does not, has none. The accessors below take
+    /// query paths and map them through this.
+    const std::optional<std::string>& evidence_name(const std::string& path);
+
     const Zones& zones(const std::string& path);
     const Counts& counts(const std::string& path);
     const Blooms& blooms(const std::string& path);
+    using Catalog = std::vector<std::pair<std::string, index::store::PathStat>>;
+    /// The file's path catalog; empty when it is not current.
+    const Catalog& catalog();
+
     /// The file-level bloom of `path`; nullptr when there is none.
     const index::extensions::ScalableBloomFilter* file_bloom(
         const std::string& path);
@@ -68,6 +89,8 @@ struct FileIndexData {
     bool current(IndexExtension ext);
 
     ankerl::unordered_dense::map<std::uint16_t, bool> current_;
+    std::optional<Catalog> catalog_;
+    StringViewMap<std::optional<std::string>> evidence_names_;
     StringViewMap<Zones> zones_;
     StringViewMap<Counts> counts_;
     StringViewMap<Blooms> blooms_;

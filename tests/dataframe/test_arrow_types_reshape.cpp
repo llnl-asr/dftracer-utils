@@ -106,7 +106,7 @@ const TypeRow TYPE_ROWS[] = {
     {TypeId::LargeBinary,
      build_large_binary,
      needle_large_binary,
-     {C, C, C, C, R},
+     {C, C, C, C, C},
      0.0},
     {TypeId::LargeList,
      build_large_list,
@@ -314,8 +314,14 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
             REQUIRE(m.num_rows() == 8);
             Series value = m.column("value");
             REQUIRE(value.valid());
-            CHECK(value.type() == row.id);
-            if (row.id == TypeId::LargeString) {
+            const bool large =
+                row.id == TypeId::LargeString || row.id == TypeId::LargeBinary;
+            // Large text parts concatenate into a narrow view column.
+            CHECK(value.type() ==
+                  (row.id == TypeId::LargeString   ? TypeId::String
+                   : row.id == TypeId::LargeBinary ? TypeId::Binary
+                                                   : row.id));
+            if (large) {
                 // A sum of text is refused; the values, in order, are the
                 // check.
                 const char* want[] = {"c", "a", "b", "a", "c", "a", "b", "a"};

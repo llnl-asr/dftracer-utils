@@ -34,6 +34,9 @@ std::vector<TraceConfig> config(const ScanPlan& plan_);
 std::vector<std::string> columns(const ScanPlan& plan_);
 std::vector<ColumnInfo> schema(const ScanPlan& plan_);
 std::vector<SchemaLeaf> schema_tree(const ScanPlan& plan_);
+/// The first file of the plan whose index holds no path catalog (no index,
+/// or one built without its statistics tier), or nullopt.
+std::optional<std::string> file_without_catalog(const ScanPlan& plan_);
 /// Each column's type from the index; a column of mixed JSON types is a JSON
 /// String (DataType::json).
 std::unordered_map<std::string, dataframe::DataType> column_types(

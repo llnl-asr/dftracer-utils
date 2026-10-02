@@ -422,12 +422,31 @@ struct LeafDecode {
     // Whether a json field can be decoded, so objects and arrays are checked.
     bool json;
     std::size_t max_children;
+    DecodeHints* hints;
 
-    // The declared field at `path`, found at `pos` in `paths` when set.
-    const dftracer::utils::index::FieldSpec* field(const std::string& path,
-                                                   std::size_t pos) const {
+    // The declared field at `path`, found at `pos` in `paths` when set, or
+    // remembered by the leaf's path id in `hints`.
+    const dftracer::utils::index::FieldSpec* field(
+        const std::string& path, std::size_t pos,
+        std::uint32_t id = dftracer::utils::StringIntern::NO_ID) const {
         if (path_fields) return (*path_fields)[pos];
-        return record_schema ? record_schema->field_at(path) : nullptr;
+        if (!record_schema) return nullptr;
+        if (!hints || id >= DecodeHints::FIELD_CACHE_IDS)
+            return record_schema->field_at(path);
+        if (hints->schema != record_schema) {
+            hints->schema = record_schema;
+            hints->fields.clear();
+            hints->known.clear();
+        }
+        if (id >= hints->fields.size()) {
+            hints->fields.resize(id + 1, nullptr);
+            hints->known.resize(id + 1, 0);
+        }
+        if (!hints->known[id]) {
+            hints->fields[id] = record_schema->field_at(path);
+            hints->known[id] = 1;
+        }
+        return hints->fields[id];
     }
 };
 
@@ -456,7 +475,9 @@ void bind_field(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
     std::optional<double> num;
     if (numeric) num = v.get_double().value_unsafe();
     std::optional<duql::Number> text_num;
-    if (type == T::STRING)
+    if (type == T::STRING &&
+        (f.type == ix::FieldType::INT || f.type == ix::FieldType::FLOAT ||
+         f.role == ix::Role::TIME || f.role == ix::Role::DURATION))
         text_num = duql::parse_number(v.get_string().value_unsafe());
     auto keep = [&] {
         append_scalar_arg(d.ev.args, d.ev.specials, id, v, d.intern);
@@ -692,7 +713,7 @@ void decode_leaves(std::string& path, simdjson::dom::element v, LeafDecode& d) {
         return;
     }
     if (d.record_schema)
-        if (const auto* f = d.field(path, pos)) {
+        if (const auto* f = d.field(path, pos, id)) {
             bind_field(*f, id, v, d);
             return;
         }
@@ -706,7 +727,7 @@ FoldEvent decode_record(
     bool capture_schema, const std::vector<std::string>* paths,
     const dftracer::utils::index::RecordSchema* record_schema,
     const std::vector<const dftracer::utils::index::FieldSpec*>* path_fields,
-    std::size_t max_children) {
+    std::size_t max_children, DecodeHints* hints) {
     namespace ix = dftracer::utils::index;
     FoldEvent ev;
     ev.phase = RecordPhase::COMPLETE;
@@ -726,9 +747,12 @@ FoldEvent decode_record(
                  record_schema,
                  fields,
                  json,
-                 max_children};
+                 max_children,
+                 hints};
+    if (hints) ev.args.reserve(hints->args);
     std::string path;
     decode_leaves(path, root, d);
+    if (hints) hints->args = ev.args.size();
     return ev;
 }
 

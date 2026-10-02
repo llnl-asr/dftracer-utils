@@ -416,7 +416,8 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
             vfiles.push_back(views::ViewFile{
                 p, dftracer::utils::trace::internal::determine_index_path(
                        p, index_dir)});
-        tv = View::from_files(std::move(vfiles));
+        if (!run_blocking([&] { tv = View::from_files(std::move(vfiles)); }))
+            return -1;
     }
     delete self->tv;
     self->tv = new View(std::move(tv));

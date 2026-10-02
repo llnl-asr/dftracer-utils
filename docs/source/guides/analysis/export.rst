@@ -48,6 +48,13 @@ an integer column with nulls about 56 ms (Python needs 50 ms to build such a
 list). A string column fills a NumPy object array or a list directly, and rows
 with the same text share one ``str``, so a column of repeated names allocates
 once per distinct name. A dictionary-encoded column keeps its nulls.
+``to_arrow`` exports a dictionary-encoded column as an Arrow dictionary array,
+which pandas and polars read through Arrow as a categorical column;
+``to_list``, ``to_numpy``, ``to_pandas`` and ``to_polars`` give plain strings.
+``to_ipc`` writes a dictionary-encoded column as its values.
+A view column exports as an Arrow ``string_view`` or ``binary_view`` array
+with zero copy (pyarrow 16 or later), and ``from_arrow`` imports such arrays
+the same way.
 ``benchmarks/groupby_analyzer_bench.py --ops to_pandas`` measures it.
 
 Write Parquet with ``to_parquet`` (or the polars-shaped ``write_parquet``), or

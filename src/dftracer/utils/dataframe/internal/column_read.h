@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/decimal.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
 
@@ -14,11 +15,26 @@
 // (stats, aggregation, hashing, ...) so the per-type switch lives in one place.
 namespace dftracer::utils::dataframe {
 
+/// `f(chunk, local)` for row `i` of the CHUNKED column `c`: the chunk holding
+/// the row, borrowed for the call, and the row inside it.
+template <class F>
+inline auto at_chunk(const Series& c, std::int64_t i, F&& f) {
+    std::int64_t local = 0;
+    Series chunk{const_cast<dftu_series*>(&c.handle()->chunk_at(i, local))};
+    auto r = f(chunk, local);
+    chunk.release();
+    return r;
+}
+
 /// Cell `i` widened to int64 (Bool -> 0/1). Dispatches on physical_type(),
 /// so Date32/Time32 read as Int32 and Date64/Time64/Timestamp/Duration read
 /// as Int64: their exact on-disk value, not a lossy conversion. 0 for a
 /// column with no integer physical layout.
 inline std::int64_t read_i64(const Series& c, std::int64_t i) {
+    if (c.handle()->is_chunked())
+        return at_chunk(c, i, [](const Series& k, std::int64_t j) {
+            return read_i64(k, j);
+        });
     switch (physical_type(c.type())) {
         case TypeId::Bool: {
             const std::uint8_t* b = c.data<std::uint8_t>();
@@ -41,6 +57,10 @@ inline std::int64_t read_i64(const Series& c, std::int64_t i) {
 /// are read as int64 then reinterpreted (so hashing sees a stable bit pattern).
 /// 0 for non-integer columns.
 inline std::uint64_t read_u64(const Series& c, std::int64_t i) {
+    if (c.handle()->is_chunked())
+        return at_chunk(c, i, [](const Series& k, std::int64_t j) {
+            return read_u64(k, j);
+        });
     switch (c.type()) {
         case TypeId::Uint8:
             return c.data<std::uint8_t>()[i];
@@ -60,6 +80,10 @@ inline std::uint64_t read_u64(const Series& c, std::int64_t i) {
 /// precision loss, so use read_bytes when equality must be exact. 0 for a
 /// column whose value_domain() is not Numeric.
 inline double read_f64(const Series& c, std::int64_t i) {
+    if (c.handle()->is_chunked())
+        return at_chunk(c, i, [](const Series& k, std::int64_t j) {
+            return read_f64(k, j);
+        });
     switch (c.type()) {
         case TypeId::Float16:
             return static_cast<double>(
@@ -90,6 +114,10 @@ inline double read_f64(const Series& c, std::int64_t i) {
 /// lives. Empty for any other column, and, like Series::string_at, for a
 /// non-FLAT one.
 inline std::string_view read_bytes(const Series& c, std::int64_t i) {
+    if (c.handle()->is_chunked())
+        return at_chunk(c, i, [](const Series& k, std::int64_t j) {
+            return read_bytes(k, j);
+        });
     const TypeId t = c.type();
     if (narrow_varwidth_type(t) == TypeId::String ||
         narrow_varwidth_type(t) == TypeId::Binary)

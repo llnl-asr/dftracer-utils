@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/bits.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/index/gzip/checkpoint_size.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -104,10 +105,6 @@ static std::size_t align_down(std::size_t x, std::size_t a) {
     return a ? (x / a) * a : x;
 }
 
-static std::size_t align_up(std::size_t x, std::size_t a) {
-    return a ? ((x + a - 1) / a) * a : x;
-}
-
 // Calculate optimal checkpoint size that divides uncompressed size evenly
 static std::size_t choose_divisible_checkpoint(
     std::size_t U, std::size_t S,
@@ -117,12 +114,14 @@ static std::size_t choose_divisible_checkpoint(
     if (U == 0) {
         // No size info: use user size or default
         std::size_t C = (S ? S : (16u << 10));
-        C = std::max(window, std::min(max_chk, align_up(C, window)));
+        C = std::max(window, std::min(max_chk, dftracer::utils::bits::align_up(
+                                                   C, window)));
         return C;
     }
 
     if (S == 0) S = 256u << 10;  // default 256 KiB
-    S = std::max(window, std::min(max_chk, align_up(S, window)));
+    S = std::max(window,
+                 std::min(max_chk, dftracer::utils::bits::align_up(S, window)));
 
     long double ratio = (long double)U / (long double)S;
     std::size_t k = (std::size_t)(ratio + 0.5L);
@@ -166,7 +165,7 @@ std::size_t determine_checkpoint_size(std::size_t user_checkpoint_size,
         // No file info: use user size or default
         std::size_t S =
             user_checkpoint_size ? user_checkpoint_size : (256u << 10);
-        S = align_up(std::max(window, S), window);
+        S = dftracer::utils::bits::align_up(std::max(window, S), window);
         return std::min(S, align_down(max_chk, window));
     }
 

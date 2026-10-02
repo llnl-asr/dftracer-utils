@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_SPILL_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_SPILL_H
 
+#include <dftracer/utils/core/common/scoped_fd.h>
 #include <dftracer/utils/dataframe/agg.h>        // AggState, AggStatePtr
 #include <dftracer/utils/dataframe/lazyframe.h>  // Cursor, Morsel
 #include <dftracer/utils/dataframe/series.h>
@@ -11,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 // On-disk spill for bounded-memory pipeline breakers. Serializes FLAT columns
@@ -30,6 +32,40 @@ Series get_series(const std::uint8_t*& p, const std::uint8_t* end);
 
 /// Approximate in-memory bytes of FLAT columns.
 std::size_t columns_bytes(const std::vector<Series>& cols);
+/// Bytes of the buffers of `cols` not already in `seen`, which it records:
+/// the memory a frame part adds when parts share buffers. The data buffers a
+/// view column points into are not counted.
+std::size_t new_buffer_bytes(const std::vector<Series>& cols,
+                             std::unordered_set<const void*>& seen);
+
+/// The directory spill files go to: DFTRACER_UTILS_SPILL_DIR, else the system
+/// temp directory. Created if missing. Throws std::runtime_error naming the
+/// directory and the variable when it cannot be created or written; there is
+/// no fallback to another directory.
+std::string spill_dir();
+
+/// One collect's spill file. The file is unlinked as soon as it is created, so
+/// nothing stays in the spill directory; the open descriptor and the mappings
+/// keep its data. Each spilled part is a page-aligned region mapped read-only.
+class PartFile {
+   public:
+    /// Throws as spill_dir() does.
+    PartFile();
+    ~PartFile();
+    PartFile(const PartFile&) = delete;
+    PartFile& operator=(const PartFile&) = delete;
+    /// `cols` as FLAT columns whose buffers are windows over a mapped region
+    /// of the file; a region is unmapped when the last window is released.
+    /// Nested columns are returned as shared copies and stay in memory.
+    /// Throws std::runtime_error naming the spill directory on a write or
+    /// mapping failure.
+    std::vector<Series> append(const std::vector<Series>& cols);
+
+   private:
+    ScopedFd fd_;
+    std::uint64_t end_ = 0;
+    std::string dir_;
+};
 
 /// A self-cleaning temp directory holding one query's spill runs.
 class Dir {

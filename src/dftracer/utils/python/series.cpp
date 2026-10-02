@@ -409,7 +409,8 @@ PyMethodDef Series_methods[] = {
     {"share", Series_share, METH_NOARGS,
      "A new owned Series sharing this column's buffers zero-copy."},
     {"slice", Series_slice, METH_VARARGS,
-     "slice(offset, length) -> zero-copy view Series of a FLAT row range."},
+     "slice(offset, length) -> view Series of a row range, sharing the "
+     "value buffers and keeping the layout; raises for list, map and struct."},
     {"str_eq", Series_str_eq, METH_O,
      "str_eq(rhs) -> Bool Series where the string equals rhs."},
     {"str_contains", Series_str_contains, METH_O,

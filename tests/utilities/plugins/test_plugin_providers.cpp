@@ -50,9 +50,12 @@ std::vector<std::int64_t> read_i64_column(const dftu_dataframe* df,
     dftu_series* col = dftu_dataframe_column(df, name);
     REQUIRE(col);
     REQUIRE(dftu_series_type(col) == DFTU_TYPE_INT64);
-    const auto* data = static_cast<const std::int64_t*>(dftu_series_data(col));
+    dftu_series* flat = dftu_series_materialize(col);
+    REQUIRE(flat);
+    const auto* data = static_cast<const std::int64_t*>(dftu_series_data(flat));
     const std::int64_t n = dftu_dataframe_num_rows(df);
     std::vector<std::int64_t> out(data, data + n);
+    dftu_series_free(flat);
     dftu_series_free(col);
     return out;
 }

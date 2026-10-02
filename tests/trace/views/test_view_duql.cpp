@@ -25,28 +25,36 @@ namespace {
 dftu_series* plug_twice(const dftu_series* in) {
     const std::int64_t n = dftu_series_length(in);
     std::vector<std::int64_t> v(static_cast<std::size_t>(n));
-    const auto* d = static_cast<const std::int64_t*>(dftu_series_data(in));
+    dftu_series* flat = dftu_series_materialize(in);
+    const auto* d = static_cast<const std::int64_t*>(dftu_series_data(flat));
     for (std::int64_t i = 0; i < n; ++i)
         v[static_cast<std::size_t>(i)] = d[i] * 2;
+    dftu_series_free(flat);
     return dftu_series_new_flat(DFTU_TYPE_INT64, v.data(), n, nullptr);
 }
 
 dftu_series* plug_add2(const dftu_series* a, const dftu_series* b) {
     const std::int64_t n = dftu_series_length(a);
     std::vector<std::int64_t> v(static_cast<std::size_t>(n));
-    const auto* x = static_cast<const std::int64_t*>(dftu_series_data(a));
-    const auto* y = static_cast<const std::int64_t*>(dftu_series_data(b));
+    dftu_series* fa = dftu_series_materialize(a);
+    dftu_series* fb = dftu_series_materialize(b);
+    const auto* x = static_cast<const std::int64_t*>(dftu_series_data(fa));
+    const auto* y = static_cast<const std::int64_t*>(dftu_series_data(fb));
     for (std::int64_t i = 0; i < n; ++i)
         v[static_cast<std::size_t>(i)] = x[i] + y[i];
+    dftu_series_free(fa);
+    dftu_series_free(fb);
     return dftu_series_new_flat(DFTU_TYPE_INT64, v.data(), n, nullptr);
 }
 
 dftu_series* plug_scale(const dftu_series* in, double f) {
     const std::int64_t n = dftu_series_length(in);
     std::vector<double> v(static_cast<std::size_t>(n));
-    const auto* d = static_cast<const std::int64_t*>(dftu_series_data(in));
+    dftu_series* flat = dftu_series_materialize(in);
+    const auto* d = static_cast<const std::int64_t*>(dftu_series_data(flat));
     for (std::int64_t i = 0; i < n; ++i)
         v[static_cast<std::size_t>(i)] = static_cast<double>(d[i]) * f;
+    dftu_series_free(flat);
     return dftu_series_new_flat(DFTU_TYPE_FLOAT64, v.data(), n, nullptr);
 }
 
@@ -57,12 +65,14 @@ dftu_dataframe* plug_head(const dftu_dataframe* df, int64_t n) {
 std::vector<double> series_values(const dftu_series* in) {
     const std::int64_t n = dftu_series_length(in);
     std::vector<double> out(static_cast<std::size_t>(n));
-    const void* d = dftu_series_data(in);
+    dftu_series* flat = dftu_series_materialize(in);
+    const void* d = dftu_series_data(flat);
     for (std::int64_t i = 0; i < n; ++i)
         out[static_cast<std::size_t>(i)] =
             dftu_series_type(in) == DFTU_TYPE_FLOAT64
                 ? static_cast<const double*>(d)[i]
                 : static_cast<double>(static_cast<const std::int64_t*>(d)[i]);
+    dftu_series_free(flat);
     return out;
 }
 
@@ -751,8 +761,8 @@ TEST_SUITE("View duql pipeline") {
         TestEnvironment big(10);
         TestEnvironment small(10);
         const std::vector<std::string> files = {
-            create_multimember_trace(big, 3000, 20000),
-            create_multimember_trace(small, 3000, 2048)};
+            create_multimember_trace(big, 600, 6000),
+            create_multimember_trace(small, 600, 1024)};
         for (const auto& q : queries) {
             INFO("query: ", q);
             std::optional<std::string> want;

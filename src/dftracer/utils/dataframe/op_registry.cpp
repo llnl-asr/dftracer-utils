@@ -1,4 +1,7 @@
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dataframe/internal/dataframe_handle.h>
 #include <dftracer/utils/dataframe/internal/op_dispatch.h>
 
 #include <cstring>
@@ -182,6 +185,75 @@ bool needs_arg(dftu_op_sig sig) {
     return false;
 }
 
+bool is_user_op(const dftu_op_desc* op) {
+    std::lock_guard<std::mutex> lock(reg_mutex());
+    for (const auto& u : user_ops())
+        if (&u->desc == op) return true;
+    return false;
+}
+
+// A plugin op reads numbers through the data pointer, so it is handed joined
+// columns: every CHUNKED series or frame column among its operands is replaced
+// by its join for the call.
+class PluginJoin {
+   public:
+    PluginJoin() = default;
+    PluginJoin(const PluginJoin&) = delete;
+    PluginJoin& operator=(const PluginJoin&) = delete;
+    ~PluginJoin() {
+        for (dftu_dataframe* f : frames_) dftu_dataframe_free(f);
+    }
+
+    bool changed() const { return changed_; }
+
+    const dftu_series* series(const dftu_series* s) {
+        if (!s || !s->is_chunked()) return s;
+        changed_ = true;
+        owned_.emplace_back(dftu_series_materialize(s));
+        return owned_.back().handle();
+    }
+
+    const dftu_dataframe* frame(const dftu_dataframe* f) {
+        if (!f) return f;
+        using dftracer::utils::dataframe::DataFrame;
+        using dftracer::utils::dataframe::Encoding;
+        const DataFrame& d =
+            dftracer::utils::dataframe::dataframe_handle_view(f);
+        bool any = false;
+        for (const auto& c : d.columns)
+            any |= c.encoding() == Encoding::Chunked;
+        if (!any) return f;
+        changed_ = true;
+        DataFrame j;
+        j.names = d.names;
+        for (const auto& c : d.columns)
+            j.columns.push_back(c.encoding() == Encoding::Chunked
+                                    ? c.materialize()
+                                    : c.share());
+        frames_.push_back(
+            dftracer::utils::dataframe::dataframe_handle_wrap(std::move(j)));
+        return frames_.back();
+    }
+
+    dftu_op_arg args(dftu_op_sig sig, const dftu_op_arg& a) {
+        dftu_op_arg out = a;
+        const dftu_op_kind kind = dftu_op_kind_of(sig);
+        for (int i = 0; i < DFTU_OP_MAX_ARGS; ++i) {
+            const dftu_op_tok t = DFTU_OP_SIG_ARG(sig, i);
+            if (t == DFTU_TOK_SERIES && i >= 1 && kind != DFTU_OP_KIND_SERIES)
+                out.args[i].series = series(a.args[i].series);
+            else if (t == DFTU_TOK_FRAME && kind != DFTU_OP_KIND_FRAME)
+                out.args[i].frame = frame(a.args[i].frame);
+        }
+        return out;
+    }
+
+   private:
+    std::vector<dftracer::utils::dataframe::Series> owned_;
+    std::vector<dftu_dataframe*> frames_;
+    bool changed_ = false;
+};
+
 }  // namespace
 
 extern "C" {
@@ -275,6 +347,15 @@ dftu_series* dftu_op_run(const dftu_op_desc* op, const dftu_series* const* in,
     if (n != dftu_op_arity(op->sig)) return nullptr;
     if (n != 0 && !in) return nullptr;
     if (needs_arg(op->sig) && !a) return nullptr;
+    if (is_user_op(op)) {
+        PluginJoin j;
+        std::vector<const dftu_series*> joined(in, in + n);
+        for (auto& s : joined) s = j.series(s);
+        dftu_op_arg ja{};
+        if (a) ja = j.args(op->sig, *a);
+        if (j.changed())
+            return dftu_op_run(op, joined.data(), n, a ? &ja : nullptr);
+    }
     const dftu_op_val* g = a ? a->args : nullptr;
     switch (op->sig) {
         case DFTU_OP_SIG(SERIES, SERIES, NONE, NONE):
@@ -402,6 +483,14 @@ dftu_scalar dftu_op_run_aggregate(const dftu_op_desc* op, const dftu_series* v,
         if (ok) *ok = 0;
         return z;
     }
+    if (is_user_op(op)) {
+        PluginJoin j;
+        const dftu_series* jv = j.series(v);
+        dftu_op_arg ja{};
+        if (a) ja = j.args(op->sig, *a);
+        if (j.changed())
+            return dftu_op_run_aggregate(op, jv, a ? &ja : nullptr, ok);
+    }
     if (ok) *ok = 1;
     const dftu_op_val* g = a ? a->args : nullptr;
     switch (op->sig) {
@@ -459,6 +548,15 @@ dftu_dataframe* dftu_op_run_frame(const dftu_op_desc* op,
     if (!op || !op->fn) return nullptr;
     if (dftu_op_kind_of(op->sig) != DFTU_OP_KIND_FRAME) return nullptr;
     if (n != dftu_op_arity(op->sig)) return nullptr;
+    if (is_user_op(op)) {
+        PluginJoin j;
+        std::vector<const dftu_dataframe*> joined(frames, frames + n);
+        for (auto& f : joined) f = j.frame(f);
+        dftu_op_arg ja{};
+        if (a) ja = j.args(op->sig, *a);
+        if (j.changed())
+            return dftu_op_run_frame(op, joined.data(), n, a ? &ja : nullptr);
+    }
     using CDF = const dftu_dataframe*;
     const dftu_op_val* g = a ? a->args : nullptr;
     CDF df = (n >= 1 && frames) ? frames[0] : nullptr;

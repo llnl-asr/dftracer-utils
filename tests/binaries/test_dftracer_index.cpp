@@ -125,4 +125,27 @@ TEST_SUITE("DFTracerIndex") {
         CHECK(fs::exists(
             dftracer::utils::trace::internal::determine_index_path(f, "")));
     }
+    TEST_CASE("stats share and path budget flags") {
+        auto binary = find_index_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_index binary not found, skipping.");
+            return;
+        }
+
+        dftu_utils_test::TestEnvironment env(100);
+        REQUIRE(env.is_valid());
+
+        auto f = create_pfw_gz(env, 100, 0);
+        REQUIRE(!f.empty());
+
+        CHECK(
+            run_index(binary, {"-d", env.get_dir(), "--force", "--stats-share",
+                               "0.2", "--path-budget", "5"}) == 0);
+        CHECK(fs::exists(
+            dftracer::utils::trace::internal::determine_index_path(f, "")));
+        CHECK(run_index(binary, {"-d", env.get_dir(), "--force",
+                                 "--stats-share", "0"}) != 0);
+        CHECK(run_index(binary, {"-d", env.get_dir(), "--force",
+                                 "--stats-share", "1.5"}) != 0);
+    }
 }

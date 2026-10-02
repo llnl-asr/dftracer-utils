@@ -130,9 +130,34 @@ DFTU_EXPORT dftu_series* dftu_series_new_flat_borrowed(
     dftu_dtype type, const void* data, int64_t n, const uint8_t* validity,
     void (*release)(void* ctx), void* release_ctx);
 
+/** Create a VIEW column (String or Binary) of `n` Arrow 16-byte views, with no
+ * copy of the views or of the data. Each view is an int32 size, then for a size
+ * of at most 12 the bytes inline (zero padded), else a 4-byte prefix, an int32
+ * index into `buffers` and an int32 offset into that buffer. `views` must hold
+ * `n` views and `buffers[k]` `sizes[k]` bytes, all valid until `release(ctx)`
+ * runs. `validity` is an Arrow-layout bitmap (1 = valid) or NULL; it is copied,
+ * and a null row's view is ignored.
+ *
+ * Ownership: the column borrows `views` and every buffer. `release(ctx)` runs
+ * exactly once, when the last column that uses them (this one, or any made from
+ * it by filter, take, slice or share) is freed, or at once if this function
+ * returns NULL; pass NULL `release` for static memory. `release` may run on any
+ * thread. Returns a column owned by the caller, freed with dftu_series_free.
+ * Returns NULL, after running `release`, for a type other than String or
+ * Binary, a negative `n`, `n_buffers` or size, a NULL `views` with `n` > 0, a
+ * NULL `buffers` or `sizes` with `n_buffers` > 0, or a non-null row whose size
+ * is negative, whose buffer index is not below `n_buffers`, or whose offset and
+ * size are not within that buffer. */
+DFTU_EXPORT dftu_series* dftu_series_new_string_view(
+    dftu_dtype type, const void* views, int64_t n, const uint8_t* validity,
+    const void* const* buffers, const int64_t* sizes, int32_t n_buffers,
+    void (*release)(void* ctx), void* ctx);
+
 /** Create a FLAT variable-width column (String or Binary) copying `n` values.
  * `offsets` has n+1 int32 entries into `data`; `data` holds offsets[n] bytes.
- * `validity` is an Arrow-layout bitmap (1 = valid) or NULL for no nulls. */
+ * `validity` is an Arrow-layout bitmap (1 = valid) or NULL for no nulls.
+ * Returns NULL for another dtype or a negative `offsets[n]` (offsets that
+ * wrapped past INT32_MAX). */
 DFTU_EXPORT dftu_series* dftu_series_new_string(dftu_dtype type,
                                                 const int32_t* offsets,
                                                 const void* data, int64_t n,
@@ -152,6 +177,10 @@ DFTU_EXPORT dftu_series* dftu_series_new_list(const int32_t* offsets, int64_t n,
 DFTU_EXPORT void dftu_series_free(dftu_series* col);
 
 DFTU_EXPORT int32_t dftu_series_type(const dftu_series* col);
+/** Storage encoding: 0 flat, 1 constant, 2 dictionary, 3 selection, 4 view,
+ * 5 chunked. `dftu_series_data`, `dftu_series_offsets` and
+ * `dftu_series_offsets64` return NULL for a chunked column;
+ * `dftu_series_materialize` joins it into one column. */
 DFTU_EXPORT int32_t dftu_series_encoding(const dftu_series* col);
 DFTU_EXPORT int64_t dftu_series_length(const dftu_series* col);
 DFTU_EXPORT int64_t dftu_series_null_count(const dftu_series* col);
@@ -160,6 +189,22 @@ DFTU_EXPORT int64_t dftu_series_null_count(const dftu_series* col);
  * all-valid.
  */
 DFTU_EXPORT int32_t dftu_series_is_null(const dftu_series* col, int64_t i);
+
+/** Bytes of row `i` of a String/Binary/LargeString/LargeBinary column, for a
+ * FLAT, VIEW, DICTIONARY or SELECTION column (resolved through its base,
+ * recursing when the base is itself not FLAT). Writes the byte count to `*len`
+ * (`len` must not be NULL) and returns a pointer into a buffer owned by `col`:
+ * no allocation, valid while `col` lives, not NUL-terminated. Returns NULL with
+ * `*len` 0 for a null row, an out-of-range row, or a column of another type.
+ */
+DFTU_EXPORT const char* dftu_series_string_at(const dftu_series* col, int64_t i,
+                                              int64_t* len);
+
+/** Bytes held by `col`'s own buffers (values or codes, offsets, validity, and
+ * for a VIEW column its views and each data buffer once) plus those of its
+ * children, including the base of a DICTIONARY or SELECTION column. An
+ * in-memory estimate for budgeting; 0 for NULL. */
+DFTU_EXPORT int64_t dftu_series_buffer_bytes(const dftu_series* col);
 
 /** Raw FLAT value buffer (or the byte data of a String/Binary column), or NULL
  * when the column is not FLAT. */
@@ -225,12 +270,15 @@ DFTU_EXPORT dftu_series* dftu_series_mark_json(const dftu_series* col);
  */
 DFTU_EXPORT dftu_series* dftu_series_share(const dftu_series* col);
 
-/** A zero-copy view of the rows [offset, offset+len) of `col`: for a FLAT
- * column the result's data pointer is shifted into `col`'s buffer and keeps
- * it alive, so SIMD kernels run on the sub-range with no gather; a SELECTION
- * view slices its index buffer and stays a view over the base; any other view
- * is materialized first. Fixed-width only (the chunked columnar evaluator's
- * inputs); NULL otherwise. */
+/** The rows [offset, offset+len) of `col` (both clamped to the column) as a
+ * view with the values, nulls, type and type parameters of a gather of those
+ * rows. Fixed-width, Bool, String, Binary and their Large forms are windowed
+ * in place; VIEW, DICTIONARY and SELECTION columns keep their layout and share
+ * their blobs, child or base. A string slice copies only its rebased offsets;
+ * a bit-packed Bool or validity range off a byte boundary is repacked. The
+ * result is owned by the caller (free with dftu_series_free) and keeps the
+ * base buffers alive after `col` is freed. NULL for a NULL `col` and for a
+ * LIST, MAP, STRUCT or CONSTANT column. */
 DFTU_EXPORT dftu_series* dftu_series_slice(const dftu_series* col,
                                            int64_t offset, int64_t len);
 
@@ -699,7 +747,9 @@ DFTU_EXPORT int32_t dftu_series_group_by(
     const dftu_series* keys, const dftu_series* values, int32_t op_mask,
     dftu_series** out_keys, dftu_series** out_values, int32_t max_values);
 
-/** Materialize any encoding to a new FLAT column (gather). */
+/** Materialize any encoding to a new FLAT column (gather). A VIEW String or
+ * Binary column becomes a FLAT one with int32 offsets, or with int64 offsets
+ * (LargeString or LargeBinary) when its bytes exceed INT32_MAX. */
 DFTU_EXPORT dftu_series* dftu_series_materialize(const dftu_series* v);
 
 /** Gather `n` rows of `v` at row indices `idx` into a new FLAT column. Handles
@@ -1020,7 +1070,7 @@ DFTU_EXPORT dftu_scalar dftu_series_dot(const dftu_series* v,
 /** Evaluate `q` as a bit-packed Bool mask over a materialized batch of `n`
  * columns named by `names`. Returns an owned column (length == the columns'
  * length), or NULL if the predicate has no columnar lowering (pattern match,
- * ordered string compare, a referenced field absent from the batch) - the
+ * a referenced field absent from the batch) - the
  * caller should fall back to the scan-time evaluator - or on error. */
 DFTU_EXPORT dftu_series* dftu_dataframe_mask(const dftu_duql* q,
                                              const dftu_series* const* columns,

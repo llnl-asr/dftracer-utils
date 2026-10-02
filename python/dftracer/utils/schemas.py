@@ -14,7 +14,7 @@ A class may set ``source``: duql row sets and macros, such as
 ``source = "errors = where status >= 500"``, which ``from errors`` reads.
 
 or as a YAML or JSON spec (``id``, ``extends``, ``fields``,
-``index.path_budget``, ``source``) registered here, loaded from
+``index.path_budget``, ``index.stats_share``, ``source``) registered here, loaded from
 ``$DFTRACER_SCHEMA_PATH``, or placed in ``<index_dir>/schemas/`` next to an
 index. Registered schemas last for the process.
 """
@@ -248,7 +248,7 @@ def load(path: Union[str, "os.PathLike[str]"]) -> List[Dict[str, Any]]:
 
 def list() -> List[Dict[str, Any]]:  # noqa: A001
     """The registered schemas, built-ins first: ``id``, ``decoder``,
-    ``fields``, ``require``, ``path_budget`` and the dictionary names."""
+    ``fields``, ``require``, ``path_budget``, ``stats_share`` and the dictionary names."""
     return json.loads(_ext._schema_list())
 
 

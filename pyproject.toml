@@ -38,7 +38,7 @@ dev = [
   "pytest>=6.0",
   "hypothesis>=6.0",
   "ruff",
-  "pyarrow>=14.0",
+  "pyarrow>=16",
   "numpy",
   "scipy",
   "pandas",

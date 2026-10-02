@@ -208,6 +208,18 @@ inline void capture_extra_field(FoldEvent& ev, simdjson::dom::element root,
 void capture_schema_leaves(FoldEvent& ev, simdjson::dom::element root,
                            dftracer::utils::StringIntern& intern);
 
+/// What one decoding worker learns from its records, valid for one intern and
+/// one record schema: the argument count of the previous record, as the next
+/// record's reserve, and the declared field at each leaf path id.
+struct DecodeHints {
+    static constexpr std::size_t FIELD_CACHE_IDS = std::size_t{1} << 16;
+
+    std::size_t args = 0;
+    const dftracer::utils::index::RecordSchema* schema = nullptr;
+    std::vector<const dftracer::utils::index::FieldSpec*> fields;
+    std::vector<std::uint8_t> known;
+};
+
 /// A record of no known trace format as an owned data event (by_path): every
 /// scalar leaf, by exact path ("op", "io.off", "hosts.1"), in `args`, and,
 /// with `capture_schema`, every leaf in `schema_leaves`. With `paths` (sorted,
@@ -217,14 +229,15 @@ void capture_schema_leaves(FoldEvent& ev, simdjson::dom::element root,
 /// unset. `path_fields`, aligned with `paths`, gives the declared field at
 /// each path so no lookup runs per leaf. With `max_children`, an array or
 /// object below the root with more children is one leaf: its canonical JSON
-/// text at its path.
+/// text at its path. `hints`, when given, is the calling worker's own and is
+/// not shared between threads.
 FoldEvent decode_record(
     simdjson::dom::element root, dftracer::utils::StringIntern& intern,
     bool capture_schema = true, const std::vector<std::string>* paths = nullptr,
     const dftracer::utils::index::RecordSchema* record_schema = nullptr,
     const std::vector<const dftracer::utils::index::FieldSpec*>* path_fields =
         nullptr,
-    std::size_t max_children = 0);
+    std::size_t max_children = 0, DecodeHints* hints = nullptr);
 
 /// The max_children an index build decodes with, so a record of huge arrays
 /// or maps adds a bounded number of catalog paths and zone keys.

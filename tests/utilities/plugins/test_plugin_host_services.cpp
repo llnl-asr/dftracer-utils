@@ -238,11 +238,11 @@ TEST_CASE("plugin host: trace write then read round-trips events") {
             dftu_series_type(name_col) == DFTU_TYPE_STRING) {
             const auto* ts_data =
                 static_cast<const std::uint64_t*>(dftu_series_data(ts_col));
-            const auto* off = dftu_series_offsets(name_col);
-            const char* base =
-                static_cast<const char*>(dftu_series_data(name_col));
-            std::string_view nm(base + off[0],
-                                static_cast<std::size_t>(off[1] - off[0]));
+            std::int64_t len = 0;
+            const char* p = dftu_series_string_at(name_col, 0, &len);
+            const std::string_view nm =
+                p ? std::string_view(p, static_cast<std::size_t>(len))
+                  : std::string_view();
             s->first_ok = ts_data[0] == 1000000 && nm == "write";
         }
         s->count += static_cast<std::uint64_t>(n);

@@ -295,12 +295,33 @@ struct PlainKey {
     const std::int64_t* off64 = nullptr;
     const char* text = nullptr;
     std::int64_t text_size = 0;
+    const std::int32_t* codes = nullptr;
+    std::vector<std::string_view> dvals;
+    const std::uint8_t* views = nullptr;
+    std::vector<const char*> blob_data;
     bool is_str = false;
     bool is_null(std::int64_t i) const { return fixed.is_null(i); }
+    bool by_ref() const { return codes || views; }
     std::int64_t offset(std::int64_t i) const {
         return off64 ? off64[i] : off32[i];
     }
     std::string_view str(std::int64_t i) const {
+        if (codes) return dvals[static_cast<std::size_t>(codes[i])];
+        if (views) {
+            const std::uint8_t* v = views + static_cast<std::size_t>(i) * 16;
+            std::int32_t size;
+            std::memcpy(&size, v, sizeof(size));
+            const auto n = static_cast<std::size_t>(size);
+            if (size <= 12)
+                return std::string_view(reinterpret_cast<const char*>(v + 4),
+                                        n);
+            std::int32_t index, offset;
+            std::memcpy(&index, v + 8, sizeof(index));
+            std::memcpy(&offset, v + 12, sizeof(offset));
+            if (static_cast<std::size_t>(index) >= blob_data.size()) return {};
+            return std::string_view(
+                blob_data[static_cast<std::size_t>(index)] + offset, n);
+        }
         if (off64)
             return std::string_view(
                 text + off64[i],
@@ -314,9 +335,35 @@ bool plain_key(const Series& c, PlainKey& out) {
     if (plain8(c, out.fixed)) return true;
     const dftu_series& h = *c.handle();
     const TypeId narrow = narrow_varwidth_type(h.type);
-    if ((narrow != TypeId::String && narrow != TypeId::Binary) ||
-        h.encoding != Encoding::Flat || !h.data)
+    if ((narrow != TypeId::String && narrow != TypeId::Binary) || !h.data)
         return false;
+    if (h.encoding == Encoding::Dictionary) {
+        const dftu_series* child = h.child().get();
+        if (!child) return false;
+        out.codes = reinterpret_cast<const std::int32_t*>(h.data->data());
+        out.dvals.resize(static_cast<std::size_t>(child->length));
+        for (std::size_t j = 0; j < out.dvals.size(); ++j) {
+            std::int64_t n = 0;
+            const char* p =
+                dftu_series_string_at(child, static_cast<std::int64_t>(j), &n);
+            if (p)
+                out.dvals[j] = std::string_view(p, static_cast<std::size_t>(n));
+        }
+        out.is_str = true;
+        out.fixed.validity = h.validity ? h.validity->data() : nullptr;
+        return true;
+    }
+    if (h.encoding == Encoding::View) {
+        out.views = h.data->data();
+        if (h.blobs)
+            for (const auto& b : *h.blobs)
+                out.blob_data.push_back(
+                    reinterpret_cast<const char*>(b->data()));
+        out.is_str = true;
+        out.fixed.validity = h.validity ? h.validity->data() : nullptr;
+        return true;
+    }
+    if (h.encoding != Encoding::Flat) return false;
     out.is_str = true;
     out.text = reinterpret_cast<const char*>(h.data->data());
     out.text_size = static_cast<std::int64_t>(h.data->size());
@@ -367,6 +414,18 @@ bool key_words(const std::vector<PlainKey>& k, std::int64_t i,
     for (const PlainKey& kk : k) {
         if (!kk.is_str) {
             *w++ = kk.fixed.bits(i);
+            continue;
+        }
+        if (kk.by_ref()) {
+            const std::string_view sv = kk.str(i);
+            const std::size_t n = sv.size();
+            if (n > 16) return false;
+            std::uint64_t a = 0, b = 0;
+            if (n > 0) std::memcpy(&a, sv.data(), std::min<std::size_t>(n, 8));
+            if (n > 8) std::memcpy(&b, sv.data() + 8, n - 8);
+            *w++ = static_cast<std::uint64_t>(n);
+            *w++ = a;
+            *w++ = b;
             continue;
         }
         std::int64_t off, len;
@@ -1019,12 +1078,46 @@ bool accumulate_plain(AggState& st, const std::vector<const Series*>& keys,
             add_batch.template operator()<Moments, Nulls>(b0, m);
         }
     };
+    // One dictionary key: each distinct value finds its group once, the first
+    // time a row shows it, so the groups appear in first-seen row order and the
+    // later rows are one table load. The word table, if open, is kept in step.
+    auto run_dict = [&]<bool Moments, bool Nulls>(bool fast) {
+        const PlainKey& kk = k[0];
+        std::vector<std::int32_t> code_group(kk.dvals.size(), -1);
+        std::uint64_t w[3];
+        for (std::int64_t i = begin; i < end; ++i) {
+            std::int64_t g;
+            if (kk.is_null(i)) {
+                g = slow_group(i);
+            } else {
+                std::int32_t& cg =
+                    code_group[static_cast<std::size_t>(kk.codes[i])];
+                if (cg < 0) {
+                    cg = static_cast<std::int32_t>(slow_group(i));
+                    if (fast &&
+                        static_cast<std::size_t>(cg) == st.fast_hash.size()) {
+                        if (key_words(k, i, w))
+                            fast_add(st, hash_words(w, 3), w);
+                        else
+                            fast_add(st, 0, nullptr);
+                    }
+                }
+                g = cg;
+            }
+            add_row.template operator()<Moments, Nulls>(g, i);
+        }
+    };
     bool nulls = false;
     for (const PlainKey& kk : k) nulls |= kk.fixed.validity != nullptr;
     for (const Plain8& c : v) nulls |= c.validity != nullptr;
     const bool fast = fast_open(st, k);
+    const bool dict_key = k.size() == 1 && k[0].codes != nullptr;
     const std::size_t dk = direct ? nk : 0;
     auto dispatch = [&]<bool Moments, bool Nulls>() {
+        if (dict_key) {
+            run_dict.template operator()<Moments, Nulls>(fast);
+            return;
+        }
         if (fast) {
             run_fast.template operator()<Moments, Nulls>();
             return;

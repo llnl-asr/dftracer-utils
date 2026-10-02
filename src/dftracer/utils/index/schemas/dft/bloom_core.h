@@ -68,8 +68,12 @@ class BloomCore {
         std::array<index::extensions::ScalableBloomFilter, BF_COUNT>
             fixed_blooms;
         std::array<ChunkDimensionStats, FD_COUNT> fixed_dim_stats;
+        /// Blooms of the leading extra dimensions, observed value by value.
         std::vector<index::extensions::ScalableBloomFilter> extra_blooms;
         std::vector<ChunkDimensionStats> extra_dim_stats;
+        /// The values of an extra dimension past extra_blooms, sorted and
+        /// borrowed; write_chunk sizes its bloom for them.
+        std::vector<std::vector<std::string_view>> extra_values;
         /// Nonzero where extra dimension `e` keeps no bloom for this chunk,
         /// so a probe answers "may match"; the file then keeps none for it.
         std::vector<std::uint8_t> extra_bloom_skip;
@@ -174,7 +178,8 @@ class BloomCore {
 
     /// Writes one chunk's records for the extensions in `config` and adds it
     /// to `acc`. `extra_dims` names the chunk's extra blooms and statistics
-    /// in order.
+    /// in order. An extra dimension with no value in the chunk gets a zone
+    /// with `present = 0` and no bloom.
     static void write_chunk(index::store::IndexWrite& w, int file_id,
                             std::uint64_t checkpoint_idx,
                             const ChunkState& chunk,
@@ -182,14 +187,12 @@ class BloomCore {
                             const ChunkIndexerConfig& config,
                             FileAccumulator& acc);
 
-    /// The records a chunk has for an extra dimension it never observed: an
-    /// empty bloom, as write_chunk writes for an initialized, unobserved
-    /// dimension.
+    /// The records a chunk of `observed` data events has for an extra
+    /// dimension it never observed, as write_chunk writes them.
     static void write_absent_extra(index::store::IndexWrite& w, int file_id,
                                    std::uint64_t checkpoint_idx,
-                                   std::string_view dim,
-                                   const ChunkIndexerConfig& config,
-                                   FileAccumulator& acc);
+                                   std::string_view dim, std::uint64_t observed,
+                                   const ChunkIndexerConfig& config);
 
     /// Writes the file-level records, the catalog and the manifest entries
     /// of tier_extensions. `extra_dims` are the dimensions the file keeps.

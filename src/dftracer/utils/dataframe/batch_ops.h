@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_BATCH_OPS_H
 #define DFTRACER_UTILS_DATAFRAME_BATCH_OPS_H
 
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 
 #include <cstdint>
@@ -12,6 +13,18 @@
 // new columns; projection ops (select/rename/with_column) share buffers
 // zero-copy. Pure columnar - no knowledge of any domain schema.
 namespace dftracer::utils::dataframe {
+
+/// The parts of one column, in order, as a CHUNKED column (empty parts
+/// dropped, chunked parts flattened into their chunks), or joined by
+/// `concat_columns` when they differ in type or type parameters or are nested.
+Series chunked_column(std::vector<Series> parts);
+/// `c` with its chunks joined as `concat_columns` joins them (text stays a view
+/// or dictionary column); any other column is shared.
+Series join_chunks(const Series& c);
+/// `f` with every CHUNKED column joined by `join_chunks`, for a caller that
+/// reads one buffer per column. The columns are joined in parallel on the
+/// current executor, if any.
+coro::CoroTask<DataFrame> join_chunks(DataFrame f);
 
 /// Gather the rows of every column at `indices` into a new DataFrame (same
 /// names).
@@ -70,6 +83,31 @@ enum class ConcatHow : std::int32_t {
 /// parts.
 DataFrame concat(const std::vector<const DataFrame*>& parts,
                  ConcatHow how = ConcatHow::Vertical);
+
+/// `concat` split by output column, so the columns of one concat can be built
+/// on different threads. The constructor does `concat`'s schema work and throws
+/// what it throws; `column(c)` is const and safe to call concurrently for
+/// different or equal `c`. The parts must outlive the plan.
+class ConcatPlan {
+   public:
+    ConcatPlan(const std::vector<const DataFrame*>& parts, ConcatHow how);
+
+    const std::vector<std::string>& names() const noexcept { return names_; }
+
+    /// Output column `c`, exactly as `concat(parts, how).columns[c]`.
+    Series column(std::size_t c) const;
+    /// The parts of output column `c` before they are joined, one per part,
+    /// each already of the output type (or the String part a LargeString
+    /// output widens).
+    std::vector<Series> chunks(std::size_t c) const;
+
+   private:
+    std::vector<const DataFrame*> parts_;
+    bool diagonal_ = false;
+    std::vector<std::string> names_;
+    std::vector<TypeId> types_;
+    std::vector<bool> json_;
+};
 
 /// Vertically concatenate columns of the same type into one FLAT column. A
 /// JSON part makes the result JSON, other parts converted by to_json_series.

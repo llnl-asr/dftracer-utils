@@ -31,6 +31,11 @@ std::shared_ptr<Buffer> mask_to_indices(const std::uint8_t* bits,
                                         std::int64_t n, std::int64_t& count);
 /// The same as an Int64 index column, for take().
 Series mask_index_column(const std::uint8_t* bits, std::int64_t n);
+/// The rows where a Bool `mask` in any layout (CHUNKED masks per chunk) is
+/// set, in order.
+std::shared_ptr<Buffer> mask_to_indices(const dftu_series& mask,
+                                        std::int64_t& count);
+Series mask_index_column(const Series& mask);
 
 /// Resolve any encoding to a new FLAT column (gather through the indirection).
 Series materialize(const Series& v);

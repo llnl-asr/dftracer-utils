@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_TRACE_STATISTICS_STATS_VIEW_H
 
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/dataframe/internal/column_read.h>
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/trace/views/view.h>
 
@@ -216,28 +217,13 @@ class StatsView {
     // A rollup source returns integer aggregates (count/sum/min/max) as
     // Float64, while a cold scan returns them as Int64. Read either.
     static std::int64_t i64_at(const dataframe::Series& c, std::int64_t i) {
-        switch (c.type()) {
-            case dataframe::TypeId::Float64:
-                return static_cast<std::int64_t>(c.data<double>()[i]);
-            case dataframe::TypeId::Float32:
-                return static_cast<std::int64_t>(c.data<float>()[i]);
-            case dataframe::TypeId::Int32:
-                return c.data<std::int32_t>()[i];
-            default:
-                return c.data<std::int64_t>()[i];
-        }
+        if (c.type() == dataframe::TypeId::Float64 ||
+            c.type() == dataframe::TypeId::Float32)
+            return static_cast<std::int64_t>(dataframe::read_f64(c, i));
+        return static_cast<std::int64_t>(dataframe::read_u64(c, i));
     }
     static double f64_at(const dataframe::Series& c, std::int64_t i) {
-        switch (c.type()) {
-            case dataframe::TypeId::Int64:
-                return static_cast<double>(c.data<std::int64_t>()[i]);
-            case dataframe::TypeId::Int32:
-                return static_cast<double>(c.data<std::int32_t>()[i]);
-            case dataframe::TypeId::Float32:
-                return static_cast<double>(c.data<float>()[i]);
-            default:
-                return c.data<double>()[i];
-        }
+        return dataframe::read_f64(c, i);
     }
 
     // The scan branches, the View builders, and the count accessors

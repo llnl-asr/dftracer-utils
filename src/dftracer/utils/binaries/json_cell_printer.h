@@ -153,28 +153,28 @@ inline void append_cell_json(std::string& s, const dataframe::Series& c,
             s += dataframe::read_i64(c, i) != 0 ? "true" : "false";
             break;
         case TypeId::Int8:
-            s += std::to_string(c.data<std::int8_t>()[i]);
+            s += std::to_string(dataframe::read_i64(c, i));
             break;
         case TypeId::Int16:
-            s += std::to_string(c.data<std::int16_t>()[i]);
+            s += std::to_string(dataframe::read_i64(c, i));
             break;
         case TypeId::Int32:
-            s += std::to_string(c.data<std::int32_t>()[i]);
+            s += std::to_string(dataframe::read_i64(c, i));
             break;
         case TypeId::Int64:
-            s += std::to_string(c.data<std::int64_t>()[i]);
+            s += std::to_string(dataframe::read_i64(c, i));
             break;
         case TypeId::Uint8:
-            s += std::to_string(c.data<std::uint8_t>()[i]);
+            s += std::to_string(dataframe::read_u64(c, i));
             break;
         case TypeId::Uint16:
-            s += std::to_string(c.data<std::uint16_t>()[i]);
+            s += std::to_string(dataframe::read_u64(c, i));
             break;
         case TypeId::Uint32:
-            s += std::to_string(c.data<std::uint32_t>()[i]);
+            s += std::to_string(dataframe::read_u64(c, i));
             break;
         case TypeId::Uint64:
-            s += std::to_string(c.data<std::uint64_t>()[i]);
+            s += std::to_string(dataframe::read_u64(c, i));
             break;
         case TypeId::Float16:
         case TypeId::Float32:
@@ -196,15 +196,17 @@ inline void append_cell_json(std::string& s, const dataframe::Series& c,
         case TypeId::Decimal128:
             s += '"';
             s += detail::decimal_to_exact_string(
-                c.data<std::uint8_t>() + static_cast<std::size_t>(i) * 16, 16,
-                c.data_type().decimal_scale());
+                reinterpret_cast<const std::uint8_t*>(
+                    dataframe::read_bytes(c, i).data()),
+                16, c.data_type().decimal_scale());
             s += '"';
             break;
         case TypeId::Decimal256:
             s += '"';
             s += detail::decimal_to_exact_string(
-                c.data<std::uint8_t>() + static_cast<std::size_t>(i) * 32, 32,
-                c.data_type().decimal_scale());
+                reinterpret_cast<const std::uint8_t*>(
+                    dataframe::read_bytes(c, i).data()),
+                32, c.data_type().decimal_scale());
             s += '"';
             break;
         case TypeId::List:

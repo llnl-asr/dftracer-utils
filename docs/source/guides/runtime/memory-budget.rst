@@ -76,6 +76,30 @@ unset to rely on the always-on scan-decode default.
 
          spilled = tv.auto_spill().group_by("cat").agg("count").collect()
 
+Collect past the budget
+-----------------------
+
+``LazyFrame::collect`` of a streamed plan holds its result parts in memory
+until they pass the memory budget. Every later part is written to one spill
+file and read back through read-only mappings, so the resident set stays near
+the budget plus one part. The returned frame has the same values, nulls and
+types as a collect with no budget. A nested column (list, struct, map) stays in
+memory. ``NO_SPILL_BUDGET`` never spills.
+
+The spill file is unlinked as soon as it is created, so nothing stays in the
+spill directory while the frame lives or after it is freed. The mappings keep
+the data readable for as long as any column of the frame is alive.
+
+``DFTRACER_UTILS_SPILL_DIR`` names the directory for every spill file: this
+collect file and the run files of a spilling sort, group-by or join. When it is
+unset or empty the system temp directory is used. A directory that cannot be
+created or written fails the run with an error that names the directory and the
+variable. There is no fallback to another directory.
+
+Set the variable on a fast local disk. On an HPC node ``/tmp`` is often a
+tmpfs held in RAM, so spilling there only moves the data from one part of
+memory to another and gives no relief.
+
 Hold a plugin to the budget
 ---------------------------
 

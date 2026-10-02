@@ -19,7 +19,10 @@ using namespace dftracer::utils::dataframe;
 namespace {
 
 DataFrame run(dftracer::utils::coro::CoroTask<DataFrame> t) {
-    return dftracer::utils::default_runtime().submit(std::move(t)).get();
+    DataFrame out =
+        dftracer::utils::default_runtime().submit(std::move(t)).get();
+    for (Series& c : out.columns) c = c.materialize();
+    return out;
 }
 
 DataFrame two_ints(const std::vector<std::int64_t>& a,

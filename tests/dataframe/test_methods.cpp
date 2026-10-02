@@ -8,6 +8,7 @@
 #include <dftracer/utils/duql/query.h>
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -774,6 +775,81 @@ TEST_CASE("DataFrame sort_by_multi lexicographic") {
     CHECK(b[2] == 7);
     CHECK(a[3] == 2);
     CHECK(b[3] == 9);
+}
+
+namespace {
+std::vector<std::int64_t> shuffled(std::int64_t n) {
+    std::vector<std::int64_t> v(static_cast<std::size_t>(n));
+    for (std::int64_t i = 0; i < n; ++i)
+        v[static_cast<std::size_t>(i)] = (i * 389) % n;
+    return v;
+}
+}  // namespace
+
+TEST_CASE("DataFrame sort_by_multi on a permutation key") {
+    const std::int64_t n = 1000;
+    const std::vector<std::int64_t> key = shuffled(n);
+    std::vector<std::int64_t> payload(key.size());
+    for (std::size_t i = 0; i < key.size(); ++i) payload[i] = key[i] * 10 + 1;
+    std::vector<std::uint64_t> ukey(key.begin(), key.end());
+    for (bool desc : {false, true}) {
+        INFO(desc);
+        for (int u = 0; u < 2; ++u) {
+            DataFrame df;
+            df.names = {"k", "p"};
+            df.columns.push_back(
+                u ? Series::flat(dftracer::utils::dataframe::TypeId::Uint64,
+                                 ukey.data(), n)
+                  : i64(key));
+            df.columns.push_back(i64(payload));
+            const DataFrame s = df.sort_by_multi({"k"}, desc);
+            const std::int64_t* p = s.column("p").data<std::int64_t>();
+            for (std::int64_t i = 0; i < n; ++i) {
+                const std::int64_t want = desc ? n - 1 - i : i;
+                REQUIRE(p[i] == want * 10 + 1);
+            }
+            if (!u) {
+                const std::int64_t* k = s.column("k").data<std::int64_t>();
+                CHECK(k[0] == (desc ? n - 1 : 0));
+            }
+        }
+    }
+}
+
+TEST_CASE("DataFrame sort_by_multi on a non-permutation key is stable") {
+    const std::vector<std::vector<std::int64_t>> keys = {
+        {2, 0, 2, 1},   // duplicate
+        {0, 1, 2, 4},   // out of range
+        {0, -1, 2, 1},  // negative
+    };
+    for (const auto& key : keys) {
+        DataFrame df;
+        df.names = {"k", "p"};
+        df.columns.push_back(i64(key));
+        df.columns.push_back(i64({10, 11, 12, 13}));
+        const DataFrame s = df.sort_by_multi({"k"}, false);
+        std::vector<std::int64_t> want_order = {0, 1, 2, 3};
+        std::stable_sort(want_order.begin(), want_order.end(),
+                         [&](std::int64_t a, std::int64_t b) {
+                             return key[static_cast<std::size_t>(a)] <
+                                    key[static_cast<std::size_t>(b)];
+                         });
+        for (std::size_t i = 0; i < 4; ++i)
+            CHECK(s.column("p").data<std::int64_t>()[i] == 10 + want_order[i]);
+    }
+}
+
+TEST_CASE("DataFrame sort_by_multi puts a null key last") {
+    DataFrame df;
+    df.names = {"k", "p"};
+    df.columns.push_back(i64_nullable({1, 0, 2, 0}, {1, 1, 0, 1}));
+    df.columns.push_back(i64({10, 11, 12, 13}));
+    const DataFrame s = df.sort_by_multi({"k"}, false);
+    const std::int64_t* p = s.column("p").data<std::int64_t>();
+    CHECK(p[0] == 11);
+    CHECK(p[1] == 13);
+    CHECK(p[2] == 10);
+    CHECK(p[3] == 12);
 }
 
 TEST_CASE("DataFrame sort_by_multi per-column direction") {

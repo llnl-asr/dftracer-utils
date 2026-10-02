@@ -113,7 +113,8 @@ class Indexer:
         bloom_fields: Optional[Sequence[str]] = None,
         false_positive_rate: float = 0.01,
         expected_entries: int = 1024,
-        path_budget: int = 1024,
+        path_budget: int = 0,
+        stats_share: float = 0.05,
         auto_max_distinct: int = 256,
         extensions: Optional[Sequence[str]] = None,
         memory_budget: int = 0,
@@ -142,8 +143,11 @@ class Indexer:
                 indexed without one is rebuilt.
             false_positive_rate: Bloom false-positive rate, in (0, 1).
             expected_entries: Expected distinct values per chunk.
-            path_budget: Also index each file's N most frequent other args
-                paths; 0 indexes only the fixed fields and bloom_fields.
+            path_budget: Also index each file's other args paths, most
+                frequent first, at most N of them while their evidence fits
+                stats_share; 0 = no count limit.
+            stats_share: The share of a file's compressed size its automatic
+                evidence may use, in (0, 1], at least 8 MiB.
             auto_max_distinct: Per-chunk distinct cap for an auto string
                 field's bloom.
             memory_budget: Bytes the build may hold at once; 0 is about a

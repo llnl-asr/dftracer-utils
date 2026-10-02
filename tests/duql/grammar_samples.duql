@@ -208,6 +208,22 @@ where xs[i] > 1 and xs[$n] == "a"
 derive y = a.b[i - 1]
 ---
 select a[0].b[i], xs[-i], ys[1 + 1]
+---
+select a.*.b, c
+---
+select pid, args.*
+---
+select a.*.b.*
+---
+drop args.*.size, tmp
+---
+unpivot m.*.count as k, v
+---
+where any(args.*.size) > 1
+---
+where all(a.*.b) == 0 and x * 2 > 1
+---
+select a * b, a.b * 2
 ### invalid
 def m = from data | where x;
 ---
@@ -310,3 +326,25 @@ where xs[i].b == 1
 where xs[i][0] == 1
 ---
 session pid gap
+---
+select *
+---
+select *.a
+---
+select a.*.b + 1
+---
+select 2 * a.*
+---
+select a.*.b as x
+---
+select x = a.*.b
+---
+where a.*.b > 1
+---
+where any(1 + a.*) > 1
+---
+select a.*x
+---
+derive y = a.*.b
+---
+group a.*.b { n = count() }

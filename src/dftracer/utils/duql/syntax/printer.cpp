@@ -302,7 +302,9 @@ void put_key(std::string& out, const PathStep& step, bool first) {
 void put_steps(std::string& out, const std::vector<PathStep>& steps) {
     bool first = true;
     for (const PathStep& step : steps) {
-        if (!step.key.empty() || !step.index) {
+        if (step.wildcard()) {
+            out += ".*";
+        } else if (!step.key.empty() || !step.index) {
             if (!first) out += '.';
             put_key(out, step, first);
         }

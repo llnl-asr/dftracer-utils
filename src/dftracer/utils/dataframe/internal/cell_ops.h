@@ -48,6 +48,10 @@ inline std::int64_t floor_to_multiple(std::int64_t x, std::int64_t m) {
 /// String form of a cell, for pivot/to_dummies column naming. Every
 /// value_domain() != None type renders a distinct label.
 inline std::string cell_to_string(const Series& c, std::int64_t i) {
+    if (c.handle()->is_chunked())
+        return at_chunk(c, i, [](const Series& k, std::int64_t j) {
+            return cell_to_string(k, j);
+        });
     switch (c.type()) {
         case TypeId::String:
         case TypeId::Binary:
@@ -104,6 +108,13 @@ inline void append_cell(std::string& key, const Series& c, std::int64_t i) {
                                     "' has no per-row value to key on");
     if (c.is_null(i)) {
         key.push_back('\0');
+        return;
+    }
+    if (c.handle()->is_chunked()) {
+        at_chunk(c, i, [&key](const Series& k, std::int64_t j) {
+            append_cell(key, k, j);
+            return 0;
+        });
         return;
     }
     key.push_back('\1');

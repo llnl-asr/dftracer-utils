@@ -6,6 +6,7 @@
 #include <dftracer/utils/trace/views/stream_row_fold.h>
 
 #include <cstdint>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -15,7 +16,12 @@ std::uint64_t morsel_bytes(const dataframe::Morsel& m) {
     std::uint64_t total = 0;
     for (const dataframe::Series& c : m.columns) {
         const dataframe::TypeId t = c.type();
-        if (t == dataframe::TypeId::String || t == dataframe::TypeId::Binary) {
+        if (c.encoding() == dataframe::Encoding::Dictionary ||
+            c.encoding() == dataframe::Encoding::View) {
+            total += static_cast<std::uint64_t>(
+                dftu_series_buffer_bytes(c.handle()));
+        } else if (t == dataframe::TypeId::String ||
+                   t == dataframe::TypeId::Binary) {
             const std::int32_t* off = c.offsets();
             total += off ? static_cast<std::uint64_t>(off[c.length()] - off[0])
                          : static_cast<std::uint64_t>(c.length()) * 16;
@@ -33,17 +39,28 @@ void StreamRowFold::step(const FoldBatch& batch) {
     if (dropped_ && dropped_->load(std::memory_order_relaxed)) return;
     const RecordPhase target =
         branch_ ? agg_phase_target(*branch_) : RecordPhase::UNKNOWN;
-    std::vector<FoldEvent> events =
-        select_events(batch, [&](const FoldEvent& ev) {
-            if (ev.phase == RecordPhase::UNKNOWN) return false;
-            if (!keep_metadata_ && ev.phase == RecordPhase::METADATA)
-                return false;
-            if (target != RecordPhase::UNKNOWN && ev.phase != target)
-                return false;
-            return !branch_ || !branch_->query ||
-                   pod_matches(*branch_->query, ev, *intern_, qmap_);
-        });
-    if (events.empty()) return;
+    const std::size_t total = batch.events.size();
+    std::vector<std::uint8_t> keep(total);
+    std::size_t kept = 0;
+    for (std::size_t i = 0; i < total; ++i) {
+        const FoldEvent& ev = batch.events[i];
+        const bool k = ev.phase != RecordPhase::UNKNOWN &&
+                       (keep_metadata_ || ev.phase != RecordPhase::METADATA) &&
+                       (target == RecordPhase::UNKNOWN || ev.phase == target) &&
+                       (!branch_ || !branch_->query ||
+                        pod_matches(*branch_->query, ev, *intern_, qmap_));
+        keep[i] = k;
+        kept += k;
+    }
+    if (kept == 0) return;
+    std::vector<FoldEvent> filtered;
+    std::span<const FoldEvent> events = batch.events;
+    if (kept != total) {
+        filtered.reserve(kept);
+        for (std::size_t i = 0; i < total; ++i)
+            if (keep[i]) filtered.push_back(batch.events[i]);
+        events = filtered;
+    }
 
     const ColumnSpec spec{select_, time_scale_, emit_dyn_, by_path_, json_};
     dataframe::Morsel m = events_to_morsel(events, intern_, spec);

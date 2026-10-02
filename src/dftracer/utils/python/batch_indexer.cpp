@@ -84,6 +84,7 @@ static PyObject* Indexer_new(PyTypeObject* type, PyObject*, PyObject*) {
         self->expected_entries =
             ChunkIndexerConfig{}.expected_entries_per_chunk;
         self->path_budget = ChunkIndexerConfig{}.path_budget;
+        self->stats_share = ChunkIndexerConfig{}.stats_share;
         self->auto_max_distinct = ChunkIndexerConfig{}.auto_max_distinct;
         self->time_interval_ms = 5000.0;
         self->group_keys = nullptr;
@@ -119,6 +120,7 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
                                    "false_positive_rate",
                                    "expected_entries",
                                    "path_budget",
+                                   "stats_share",
                                    "auto_max_distinct",
                                    "extensions",
                                    "memory_budget",
@@ -147,6 +149,7 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
     Py_ssize_t expected_entries =
         static_cast<Py_ssize_t>(self->expected_entries);
     Py_ssize_t path_budget = static_cast<Py_ssize_t>(self->path_budget);
+    double stats_share = self->stats_share;
     Py_ssize_t auto_max_distinct =
         static_cast<Py_ssize_t>(self->auto_max_distinct);
     PyObject* extensions_obj = Py_None;
@@ -154,14 +157,15 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
     PyObject* schema_obj = Py_None;
 
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "|sOsppppdOOppnnpOOdnnnOKO", const_cast<char**>(kwlist),
-            &directory, &files_obj, &index_dir, &require_checkpoint,
-            &require_bloom, &build_bloom, &require_aggregation,
-            &time_interval_ms, &group_keys_obj, &custom_metrics_obj,
-            &compute_percentiles, &group_by_file, &checkpoint_size,
-            &parallelism, &force_rebuild, &runtime_arg, &bloom_fields_obj,
-            &false_positive_rate, &expected_entries, &path_budget,
-            &auto_max_distinct, &extensions_obj, &memory_budget, &schema_obj)) {
+            args, kwds, "|sOsppppdOOppnnpOOdnndnOKO",
+            const_cast<char**>(kwlist), &directory, &files_obj, &index_dir,
+            &require_checkpoint, &require_bloom, &build_bloom,
+            &require_aggregation, &time_interval_ms, &group_keys_obj,
+            &custom_metrics_obj, &compute_percentiles, &group_by_file,
+            &checkpoint_size, &parallelism, &force_rebuild, &runtime_arg,
+            &bloom_fields_obj, &false_positive_rate, &expected_entries,
+            &path_budget, &stats_share, &auto_max_distinct, &extensions_obj,
+            &memory_budget, &schema_obj)) {
         return -1;
     }
     if (!(false_positive_rate > 0.0 && false_positive_rate < 1.0)) {
@@ -181,7 +185,12 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
         PyErr_SetString(PyExc_ValueError, "path_budget must be >= 0");
         return -1;
     }
+    if (!(stats_share > 0.0 && stats_share <= 1.0)) {
+        PyErr_SetString(PyExc_ValueError, "stats_share must be in (0, 1]");
+        return -1;
+    }
     self->path_budget = static_cast<std::size_t>(path_budget);
+    self->stats_share = stats_share;
     self->auto_max_distinct = static_cast<std::size_t>(auto_max_distinct);
     if (bloom_fields_obj != Py_None) {
         std::vector<std::string> check;
@@ -361,6 +370,7 @@ static std::optional<dftracer::utils::index::IndexerOptions> indexer_options(
     b.required = self->require_bloom;
     b.false_positive_rate = self->false_positive_rate;
     b.path_budget = self->path_budget;
+    b.stats_share = self->stats_share;
     b.auto_max_distinct = self->auto_max_distinct;
     b.expected_entries_per_chunk = self->expected_entries;
     if (self->extensions) o.extensions.clear();

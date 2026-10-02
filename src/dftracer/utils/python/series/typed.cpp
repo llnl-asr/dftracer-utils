@@ -1,3 +1,4 @@
+#include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/frame_native.h>
 #include <dftracer/utils/python/series_detail.h>
@@ -16,6 +17,8 @@ std::size_t buffer_size(const std::shared_ptr<dataframe::Buffer>& b) {
 }
 
 std::size_t nbytes_of(const dftu_series& c) {
+    if (c.is_chunked())
+        return static_cast<std::size_t>(dftu_series_buffer_bytes(&c));
     std::size_t total =
         buffer_size(c.data) + buffer_size(c.offsets) + buffer_size(c.validity);
     for (const auto& k : c.nested) total += nbytes_of(*k.series);

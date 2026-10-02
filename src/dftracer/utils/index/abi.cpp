@@ -149,7 +149,9 @@ void dftu_indexer_options_init(dftu_indexer_options* out) {
                                 nullptr,
                                 0,
                                 d.memory_budget,
-                                nullptr};
+                                nullptr,
+                                d.bloom ? d.bloom->path_budget : 0,
+                                d.bloom ? d.bloom->stats_share : 0.05};
 }
 
 dftu_indexer_open_result dftu_indexer_open(
@@ -180,6 +182,8 @@ dftu_indexer_open_result dftu_indexer_open(
             opts.checkpoints = options->checkpoints != 0;
             if (options->bloom) {
                 opts.bloom->required = options->bloom_required != 0;
+                opts.bloom->path_budget = options->bloom_path_budget;
+                opts.bloom->stats_share = options->bloom_stats_share;
                 if (options->bloom_field_count && !options->bloom_fields) {
                     r.u.err = invalid(handle_free_error,
                                       "bloom_fields is NULL with a count");

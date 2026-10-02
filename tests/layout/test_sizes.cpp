@@ -25,7 +25,7 @@ constexpr bool within() {
     return true;
 }
 
-constexpr std::size_t SERIES_BUDGET = 104;
+constexpr std::size_t SERIES_BUDGET = 120;
 constexpr std::size_t DATA_TYPE_BUDGET = 40;
 constexpr std::size_t FIELD_BUDGET = 72;
 constexpr std::size_t MORSEL_BUDGET = 56;

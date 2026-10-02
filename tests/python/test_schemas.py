@@ -66,6 +66,7 @@ def test_register_list_and_conflicts():
     assert got["require"] == ["status", "request_time"]
     assert [f["type"] for f in got["fields"]] == ["int", "float"]
     assert got["path_budget"] is None
+    assert got["stats_share"] is None
 
     # The same definition again is fine; another one is not.
     schemas.register(
@@ -326,7 +327,16 @@ def test_schema_path_environment_and_spec_edits(tmp_path):
         d.TraceViewer({trace!r}, index_path={index_dir + "/.dftindex"!r}).collect()
     """
     code, out = _run(read, {"DFTRACER_SCHEMA_PATH": ""})
-    assert code != 0
+    assert code == 1, out
+    assert "Traceback" in out
+    assert "env_nginx" in out and "DFTRACER_SCHEMA_PATH" in out
+
+    # A changed trace is not re-indexed under another schema either.
+    stat = os.stat(trace)
+    os.utime(trace, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+    code, out = _run(read, {"DFTRACER_SCHEMA_PATH": ""})
+    assert code == 1, out
+    assert "Traceback" in out
     assert "env_nginx" in out and "DFTRACER_SCHEMA_PATH" in out
 
 
@@ -353,3 +363,18 @@ def test_old_locations_are_not_read(tmp_path):
     assert code == 0, out
     assert "old_nginx" not in out
     assert "detected generic" in out
+
+
+def test_schema_stats_share_is_listed_and_validated():
+    schemas.register(
+        "id: py_share\nfields: {zz_probe_c: {type: int}}\nindex: {stats_share: 0.2, path_budget: 50}\n",
+        source="share.yaml",
+    )
+    got = next(s for s in schemas.list() if s["id"] == "py_share")
+    assert got["stats_share"] == pytest.approx(0.2)
+    assert got["path_budget"] == 50
+    for bad in ("0", "1.5"):
+        with pytest.raises(dftu.DFTUtilsValueError, match="index.stats_share"):
+            schemas.register(
+                "id: py_share_bad\nindex: {stats_share: %s}\n" % bad, source="bad.yaml"
+            )

@@ -72,8 +72,8 @@ scan: its own ``collect()`` runs the scan and returns the
                      .get();  // blocks; a dataframe::DataFrame
 
        auto cat = df.column("cat");
-       auto count = df.column("count");
-       auto sum_dur = df.column("sum_dur");
+       const auto count = df.column("count").materialize();
+       const auto sum_dur = df.column("sum_dur").materialize();
        for (std::int64_t i = 0; i < df.num_rows(); ++i)
            std::printf("%-6.*s %4lld %8llu\n",
                        static_cast<int>(cat.string_at(i).size()),
@@ -95,7 +95,8 @@ A ``cat`` group key is always folded to lowercase (so ``POSIX`` and ``posix``
 land in the same group even if a producer is inconsistent); the input JSON's
 casing does not survive into the result. ``df.column(name)`` returns a
 ``Series``; there is no ``operator[]`` on ``DataFrame``. ``sum_dur`` here is an
-unsigned 64-bit column (``dur`` is a non-negative field); read it with
+unsigned 64-bit column (``dur`` is a non-negative field). Result columns may be chunked, so call
+``materialize()`` before ``data<T>()``. Read it with
 ``data<std::uint64_t>()``, not ``std::int64_t``. Inside async code,
 ``co_await`` the task in place of ``.get()`` - see
 :doc:`../concepts/coroutine-caveats`.

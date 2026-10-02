@@ -739,8 +739,14 @@ class Batch {
     }
     static std::string_view str_at(const detail::ColBuf& c,
                                    std::int64_t row) noexcept {
-        if (!c.data || !c.offsets || dftu_series_is_null(c.handle, row))
-            return {};
+        if (!c.data || !c.offsets) {
+            if (c.type != DFTU_TYPE_STRING) return {};
+            std::int64_t n = 0;
+            const char* p = dftu_series_string_at(c.handle, row, &n);
+            return p ? std::string_view{p, static_cast<std::size_t>(n)}
+                     : std::string_view{};
+        }
+        if (dftu_series_is_null(c.handle, row)) return {};
         const char* base = static_cast<const char*>(c.data);
         return {base + c.offsets[row],
                 static_cast<std::size_t>(c.offsets[row + 1] - c.offsets[row])};

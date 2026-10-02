@@ -25,6 +25,7 @@ set(TRACE_TEST_SOURCES
     # Views
     views/test_view_definition.cpp
     views/test_view_planner.cpp
+    views/test_view_index_freshness.cpp
     views/test_view_scanner.cpp
     views/test_view_scan.cpp
     views/test_view_duql.cpp
@@ -32,6 +33,7 @@ set(TRACE_TEST_SOURCES
     views/test_view_duql_sources.cpp
     views/test_view_lazy.cpp
     views/test_view_stream_rows.cpp
+    views/test_row_build.cpp
     views/test_dynamic_prune.cpp
     views/test_metadata_query.cpp
     views/test_field_filter.cpp
@@ -66,6 +68,7 @@ set(TRACE_TEST_SOURCES
     views/test_compare_view.cpp
     views/test_view_c_abi.cpp
     views/test_duql_paths.cpp
+    views/test_duql_wildcards.cpp
     views/test_schemaless.cpp
 
     # Statistics

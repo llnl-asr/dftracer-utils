@@ -103,6 +103,7 @@ class Parser {
     std::string_view src_;
     std::vector<Token> toks_;
     std::size_t pos_ = 0;
+    const Token* wild_start_ = nullptr;
 
     const Token& cur() const { return toks_[pos_]; }
     const Token& peek(std::size_t k) const {
@@ -523,12 +524,18 @@ class Parser {
         } else if (kw == "select") {
             Select sel;
             do {
+                wild_start_ = &cur();
                 sel.items.push_back(item());
+                const auto* wp =
+                    std::get_if<Path>(&sel.items.back().value->node);
+                if (wp && has_wildcard(*wp) && !sel.items.back().name.empty())
+                    fail(cur(), "A wildcard path cannot be renamed");
             } while (accept(Tok::COMMA));
             s.node = std::move(sel);
         } else if (kw == "drop") {
             Drop d;
             do {
+                wild_start_ = &cur();
                 d.paths.push_back(path());
             } while (accept(Tok::COMMA));
             s.node = std::move(d);
@@ -589,6 +596,7 @@ class Parser {
         } else if (kw == "unpivot") {
             Unpivot u;
             do {
+                wild_start_ = &cur();
                 u.paths.push_back(path());
             } while (accept(Tok::COMMA));
             expect_word("as");
@@ -1005,7 +1013,10 @@ class Parser {
     // only a plain path may stand.
     Path path_steps(Path p, const Token& first, ExprPtr* out) {
         while (true) {
-            if (at(Tok::NAME)) {
+            if (at(Tok::STAR) && !p.steps.empty() && &first == wild_start_) {
+                advance();
+                p.steps.push_back({"*", false, {}});
+            } else if (at(Tok::NAME)) {
                 if (reserved(cur().text))
                     fail(cur(), "'" + std::string(cur().text) +
                                     "' is a keyword; quote the key as `" +
@@ -1030,7 +1041,8 @@ class Parser {
             if (indexes(p, first, out)) return p;
             if (!(at(Tok::DOT) &&
                   (peek(1).kind == Tok::NAME || peek(1).kind == Tok::QNAME ||
-                   peek(1).kind == Tok::INT || peek(1).kind == Tok::FLOAT)))
+                   peek(1).kind == Tok::INT || peek(1).kind == Tok::FLOAT ||
+                   (peek(1).kind == Tok::STAR && &first == wild_start_))))
                 return p;
             advance();
         }
@@ -1072,7 +1084,27 @@ class Parser {
         return false;
     }
 
+    static bool has_wildcard(const Path& p) {
+        for (const PathStep& st : p.steps)
+            if (st.wildcard()) return true;
+        return false;
+    }
+
     Path path(ExprPtr* out = nullptr) {
+        Path p = path_root(out);
+        if (has_wildcard(p)) {
+            const Tok k = cur().kind;
+            if (k != Tok::COMMA && k != Tok::PIPE && k != Tok::SEMI &&
+                k != Tok::END && k != Tok::RPAREN && k != Tok::RBRACE &&
+                k != Tok::NAME)
+                fail(cur(),
+                     "A wildcard path stands alone in select, drop, unpivot "
+                     "or any()/all()");
+        }
+        return p;
+    }
+
+    Path path_root(ExprPtr* out) {
         const Token& first = cur();
         if (at(Tok::CARET)) {
             advance();
@@ -1100,6 +1132,7 @@ class Parser {
         Call c;
         c.name = std::move(n);
         expect(Tok::LPAREN, "'('");
+        if (c.name == "any" || c.name == "all") wild_start_ = &cur();
         if (!at(Tok::RPAREN)) {
             do {
                 Arg a;

@@ -135,15 +135,15 @@ dftu_series* dftu_series_is_infinite(const dftu_series* v) {
     return predicate_mask(v, 2);
 }
 
-// The validity bitmap as a Bool column (inverted for null_mask). A SELECTION
-// view has no bitmap of its own, so it is read row by row through is_null;
-// on every other layout validity is per row. A column with no bitmap has no
+// The validity bitmap as a Bool column (inverted for null_mask). A SELECTION,
+// and a DICTIONARY with null entries, is read row by row through is_null; on
+// every other layout validity is per row. A column with no bitmap has no
 // nulls.
 dftu_series* dftu_series_valid_mask(const dftu_series* v) {
     if (!v) return nullptr;
-    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_valid_mask(flat_v));
+    DFTU_PER_CHUNK(v, dftu_series_valid_mask);
     dftu_series* out = new_bool(v->length);
-    if (v->encoding == Encoding::Selection) {
+    if (v->rowwise_nulls()) {
         std::uint8_t* dst = out->data->data();
         for (std::int64_t i = 0; i < v->length; ++i)
             if (!dftu_series_is_null(v, i))
@@ -162,9 +162,9 @@ dftu_series* dftu_series_valid_mask(const dftu_series* v) {
 
 dftu_series* dftu_series_null_mask(const dftu_series* v) {
     if (!v) return nullptr;
-    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_null_mask(flat_v));
+    DFTU_PER_CHUNK(v, dftu_series_null_mask);
     dftu_series* out = new_bool(v->length);
-    if (v->encoding == Encoding::Selection) {
+    if (v->rowwise_nulls()) {
         std::uint8_t* dst = out->data->data();
         for (std::int64_t i = 0; i < v->length; ++i)
             if (dftu_series_is_null(v, i))

@@ -100,12 +100,14 @@ struct Roles {
 };
 
 /// What register_schema resolves into a RecordSchema: fields and source
-/// members (by name) and the path budget override the parent's.
+/// members (by name), the path budget and the stats share override the
+/// parent's.
 struct SchemaSpec {
     std::string id;
     std::string extends = "generic";
     std::vector<FieldSpec> fields;
     std::optional<std::size_t> path_budget;
+    std::optional<double> stats_share;
     /// duql source members (`name = pipeline`, `def ...`), `;` separated.
     std::string source;
 };
@@ -128,6 +130,9 @@ struct RecordSchema {
     bool args_fallback = false;
     /// The path budget for files of this schema; the build's when unset.
     std::optional<std::size_t> path_budget;
+    /// The share of a file's size its evidence may use, in (0, 1]; the
+    /// build's when unset.
+    std::optional<double> stats_share;
     /// Paths of the required fields; more paths make a more specific schema.
     std::vector<std::string> require;
     Roles roles;

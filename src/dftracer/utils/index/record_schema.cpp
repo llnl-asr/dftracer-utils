@@ -286,6 +286,14 @@ std::uint64_t RecordSchema::params_hash() const {
         hasher.update(s);
         hasher.update(std::uint8_t{0});
     };
+    auto hash_evidence_overrides = [&] {
+        hasher.update(static_cast<std::uint8_t>(path_budget.has_value()));
+        hasher.update(path_budget.value_or(0));
+        if (stats_share) {
+            hasher.update(std::uint8_t{1});
+            hasher.update(*stats_share);
+        }
+    };
     if (builtin) {
         // The layout the built-ins' indexes were recorded with.
         text(id);
@@ -299,6 +307,7 @@ std::uint64_t RecordSchema::params_hash() const {
             text(*r);
         hasher.update(static_cast<std::uint8_t>(decoder));
         if (!source.empty()) text(source);
+        if (path_budget || stats_share) hash_evidence_overrides();
         return hasher.get_hash().value;
     }
     hasher.update(std::uint8_t{3});
@@ -322,8 +331,7 @@ std::uint64_t RecordSchema::params_hash() const {
     }
     text(roles.phase);
     if (!source.empty()) text(source);
-    hasher.update(static_cast<std::uint8_t>(path_budget.has_value()));
-    hasher.update(path_budget.value_or(0));
+    hash_evidence_overrides();
     return hasher.get_hash().value;
 }
 
@@ -631,6 +639,7 @@ const RecordSchema& Registry::add(const SchemaSpec& spec,
                                        " role");
         }
     if (spec.path_budget) s.path_budget = spec.path_budget;
+    if (spec.stats_share) s.stats_share = spec.stats_share;
     s.source =
         merge_source(s.source, spec.source, source + ", schema " + spec.id);
     s.data = data_condition(s);
@@ -747,13 +756,24 @@ SchemaSpec parse_spec(const YAML::Node& spec, const std::string& source) {
         }
     }
     if (const auto ix = spec["index"]) {
-        check_keys(ix, {"path_budget"}, "index.", source);
+        check_keys(ix, {"path_budget", "stats_share"}, "index.", source);
         if (ix["path_budget"]) {
             try {
                 out.path_budget = ix["path_budget"].as<std::size_t>();
             } catch (const YAML::Exception&) {
                 spec_error(source, "index.path_budget must be a count");
             }
+        }
+        if (ix["stats_share"]) {
+            double share = 0;
+            try {
+                share = ix["stats_share"].as<double>();
+            } catch (const YAML::Exception&) {
+                spec_error(source, "index.stats_share must be in (0, 1]");
+            }
+            if (!(share > 0 && share <= 1))
+                spec_error(source, "index.stats_share must be in (0, 1]");
+            out.stats_share = share;
         }
     }
     if (spec["source"]) out.source = text_of(spec["source"], "source", source);
@@ -923,6 +943,8 @@ std::string schemas_json() {
         list(s->require);
         out += ",\"path_budget\":";
         out += s->path_budget ? std::to_string(*s->path_budget) : "null";
+        out += ",\"stats_share\":";
+        out += s->stats_share ? std::to_string(*s->stats_share) : "null";
         out += ",\"source\":";
         quoted(s->source);
         out += '}';

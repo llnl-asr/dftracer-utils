@@ -26,6 +26,7 @@ struct IndexerObject {
     double false_positive_rate;
     std::size_t expected_entries;
     std::size_t path_budget;
+    double stats_share;
     std::size_t auto_max_distinct;
     // Pruning extensions to build (list of str), or None for the default.
     PyObject* extensions;

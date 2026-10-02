@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -74,6 +75,13 @@ std::string list_token(std::string_view spec, std::string_view path);
 std::string_view window_inner(std::string_view sel);
 bool is_clip_token(std::string_view sel);
 
+/// A String column whose row r holds intern string `ids[r]` (NO_ID is null):
+/// a dictionary over a view child when at most a quarter as many distinct
+/// values as rows, else a view column. Values are views into intern chunks
+/// the column keeps alive, so it may outlive `intern`.
+dataframe::Series interned_column(std::span<const std::uint32_t> ids,
+                                  const dftracer::utils::StringIntern& intern);
+
 /// Build one native DataFrame from `events`: top-level columns plus every arg
 /// (empty `select`) or a projected subset. Arg columns infer their type per key
 /// and null-fill absent rows. `fhash`/`hhash` resolve from their dedicated
@@ -81,7 +89,7 @@ bool is_clip_token(std::string_view sel);
 /// named by its exact path, with no fixed columns. Shared by the materialized
 /// collect and the streaming chunk builder.
 dataframe::DataFrame build_row_frame(
-    const std::vector<FoldEvent>& events,
+    std::span<const FoldEvent> events,
     const dftracer::utils::StringIntern& intern,
     const std::vector<std::string>& select, double time_scale = 1.0,
     bool by_path = false);
@@ -95,7 +103,7 @@ dataframe::DataFrame build_row_frame(
 /// With a window or clip token in `select`, only the events that start in its
 /// window contribute.
 std::vector<std::pair<std::string, dataframe::Series>>
-build_dyn_numeric_columns(const std::vector<FoldEvent>& events,
+build_dyn_numeric_columns(std::span<const FoldEvent> events,
                           const dftracer::utils::StringIntern& intern,
                           const std::vector<std::string>& select);
 

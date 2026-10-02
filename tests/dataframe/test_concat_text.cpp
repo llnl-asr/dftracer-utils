@@ -72,8 +72,9 @@ TEST_CASE("a null row with a non-empty offset range copies no bytes") {
     Series z = build({Row{"z"}});
     Series out = dfops::concat_columns({&odd, &z});
     CHECK(read(out) == Rows{Row{"a"}, Row{}, Row{"d"}, Row{"z"}});
-    REQUIRE(out.offsets() != nullptr);
-    CHECK(out.offsets()[4] ==
+    const Series flat = out.materialize();
+    REQUIRE(flat.offsets() != nullptr);
+    CHECK(flat.offsets()[4] ==
           3);  // "a" + "d" + "z"; the null row's "bc" is not copied
 }
 

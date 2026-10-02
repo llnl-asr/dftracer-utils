@@ -180,7 +180,9 @@ template <class Row, class Fill>
 std::vector<Row> rows_via_collect(const View& v,
                                   const std::vector<std::string>& names,
                                   Fill fill) {
-    const df::DataFrame f = run(v.select(names).collect());
+    df::DataFrame f = run(v.select(names).collect());
+    for (auto& c : f.columns)
+        if (c.type() != df::TypeId::String) c = c.materialize();
     std::vector<std::size_t> at;
     for (const auto& n : names)
         at.push_back(static_cast<std::size_t>(
@@ -438,15 +440,15 @@ int main(int argc, char** argv) {
              const char* order = "__pos";
              std::vector<dftu_window_spec> specs(2);
              for (dftu_window_spec& s : specs) {
-                 s.preceding = DFTU_WINDOW_UNBOUNDED;
-                 s.following = DFTU_WINDOW_UNBOUNDED;
+                 s.param.frame.preceding = DFTU_WINDOW_UNBOUNDED;
+                 s.param.frame.following = DFTU_WINDOW_UNBOUNDED;
              }
              specs[0].func = DFTU_WINDOW_ROW_NUMBER;
              specs[0].out = "r";
              specs[1].func = DFTU_WINDOW_LAG;
              specs[1].value = "dur";
              specs[1].out = "p";
-             specs[1].offset = 1;
+             specs[1].param.offset = 1;
              df::OpArgs a;
              a.strlist(1, &part, 1).strlist(2, &order, 1).winlist(3, specs);
              std::vector<std::string> names = lf.schema();
@@ -466,8 +468,8 @@ int main(int argc, char** argv) {
                        R"(where name == "fwrite" and dur > 495 | select fname)")
                      .collect());
              std::string list;
+             const df::Series c = keys.columns[0].materialize();
              for (std::int64_t r = 0; r < keys.num_rows(); ++r) {
-                 const df::Series c = keys.columns[0].materialize();
                  list += (list.empty() ? "\"" : ", \"") +
                          std::string(c.string_at(r)) + "\"";
              }

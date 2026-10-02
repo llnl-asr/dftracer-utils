@@ -392,8 +392,12 @@ dftu_scalar dftu_series_reduce(const dftu_series* v, dftu_reduce_op op) {
 }
 
 int64_t dftu_series_count(const dftu_series* v) {
-    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_count(flat_v));
-
+    if (v->rowwise_nulls()) {
+        std::int64_t n = 0;
+        for (std::int64_t i = 0; i < v->length; ++i)
+            n += !dftu_series_is_null(v, i);
+        return n;
+    }
     return v->length - v->null_count;
 }
 

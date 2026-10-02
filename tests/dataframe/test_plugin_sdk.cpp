@@ -8,11 +8,13 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/provider_source.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/plugins/plugin/map.h>
 #include <dftracer/utils/plugins/plugin/node.h>
 #include <dftracer/utils/plugins/plugin/source.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -342,5 +344,83 @@ TEST_SUITE("plugin SDK node") {
             CHECK(f.num_rows() == 0);
         }
         CHECK(c->cursors_destroyed == 1);
+    }
+}
+
+TEST_SUITE("plugin sdk batch strings") {
+    TEST_CASE("Event reads dictionary and selection string columns") {
+        const std::vector<std::string_view> cats{"POSIX", "", "STDIO", "POSIX"};
+        const std::uint8_t cat_valid = 0b1101;
+        df::Series cat =
+            df::Series::strings(std::span<const std::string_view>(cats),
+                                &cat_valid)
+                .dictionary_encode();
+        REQUIRE(cat.encoding() == df::Encoding::Dictionary);
+
+        const std::vector<std::string_view> names{"a", "open",  "b", "read",
+                                                  "c", "write", "d", "close"};
+        const std::uint8_t keep_odd = 0b10101010;
+        const df::Series mask =
+            df::Series::flat(df::TypeId::Bool, &keep_odd, 8);
+        df::Series name =
+            df::Series::strings(std::span<const std::string_view>(names))
+                .filter(mask);
+        REQUIRE(name.encoding() == df::Encoding::Selection);
+        REQUIRE(name.length() == 4);
+
+        const char* col_names[] = {"cat", "name"};
+        dftu_series* cols[] = {cat.release(), name.release()};
+        pl::OwnedFrame f(dftu_dataframe_new(col_names, cols, 2));
+        REQUIRE(f.get() != nullptr);
+
+        const pl::Batch batch(f.get());
+        REQUIRE(batch.size() == 4);
+        CHECK(batch[0].cat() == "POSIX");
+        CHECK(batch[1].cat().empty());
+        CHECK(batch[2].cat() == "STDIO");
+        CHECK(batch[3].cat() == "POSIX");
+        CHECK(batch[0].name() == "open");
+        CHECK(batch[1].name() == "read");
+        CHECK(batch[2].name() == "write");
+        CHECK(batch[3].name() == "close");
+    }
+    TEST_CASE("Event reads a view string column inline and out of line") {
+        const std::string long_row = "a view row longer than twelve bytes";
+        std::uint8_t views[3 * 16] = {};
+        const auto put = [&](int row, const std::string& str,
+                             std::int32_t offset) {
+            std::uint8_t* v = views + row * 16;
+            const auto size = static_cast<std::int32_t>(str.size());
+            std::memcpy(v, &size, 4);
+            if (size <= 12) {
+                std::memcpy(v + 4, str.data(), str.size());
+            } else {
+                const std::int32_t index = 0;
+                std::memcpy(v + 4, str.data(), 4);
+                std::memcpy(v + 8, &index, 4);
+                std::memcpy(v + 12, &offset, 4);
+            }
+        };
+        put(0, "open", 0);
+        put(2, long_row, 0);
+        const std::uint8_t valid = 0b101;
+        const void* bufs[1] = {long_row.data()};
+        const std::int64_t sizes[1] = {
+            static_cast<std::int64_t>(long_row.size())};
+        dftu_series* name = dftu_series_new_string_view(
+            static_cast<dftu_dtype>(df::TypeId::String), views, 3, &valid, bufs,
+            sizes, 1, nullptr, nullptr);
+        REQUIRE(name != nullptr);
+
+        const char* col_names[] = {"name"};
+        dftu_series* cols[] = {name};
+        pl::OwnedFrame f(dftu_dataframe_new(col_names, cols, 1));
+        REQUIRE(f.get() != nullptr);
+
+        const pl::Batch batch(f.get());
+        REQUIRE(batch.size() == 3);
+        CHECK(batch[0].name() == "open");
+        CHECK(batch[1].name().empty());
+        CHECK(batch[2].name() == long_row);
     }
 }

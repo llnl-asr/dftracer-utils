@@ -147,7 +147,8 @@ class FinishSource final : public df::Source {
         coro::CoroTask<std::optional<df::Morsel>> next(
             std::int64_t max_rows) override {
             if (!rows_) {
-                df::DataFrame f = finish_(co_await inner_.collect());
+                df::DataFrame f = finish_(
+                    co_await df::join_chunks(co_await inner_.collect()));
                 if (!projection_.empty()) f = f.select(projection_);
                 if (named_) {
                     intern_ = std::make_shared<dftracer::utils::StringIntern>();
@@ -5081,8 +5082,20 @@ std::pair<View, std::vector<std::string>> View::duql_plan(
     Ctx ctx;
     ctx.roles = ix::duql_roles(schema);
     const duql::PluginCatalog plugins = registry_plugins();
+    const duql::LeafPaths leaves = [this] {
+        if (const auto file = detail::scan::file_without_catalog(plan_))
+            refuse(
+                "wildcard paths expand against the index's path catalog, "
+                "which the index of " +
+                *file +
+                " does not hold; build the full index (dftracer_index or "
+                "BatchIndexer) first");
+        std::vector<std::string> out;
+        for (const auto& l : schema_tree()) out.push_back(l.path);
+        return out;
+    };
     auto p = duql::compile_program(text, params, &ctx.roles, schema.source,
-                                   &plugins);
+                                   &plugins, &leaves);
     if (!p) refuse(p.error().format());
     reject_resolved(*p);
     ctx.sides = std::make_shared<Sides>(std::move(*p));

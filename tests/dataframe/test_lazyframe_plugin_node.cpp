@@ -42,7 +42,10 @@ using dftracer::utils::dataframe::TypeId;
 namespace {
 
 DataFrame run(CoroTask<DataFrame> t) {
-    return dftracer::utils::default_runtime().submit(std::move(t)).get();
+    DataFrame out =
+        dftracer::utils::default_runtime().submit(std::move(t)).get();
+    for (Series& c : out.columns) c = c.materialize();
+    return out;
 }
 
 // ---- A resident int64 source, one morsel per collect. ---------------------

@@ -1,6 +1,7 @@
 #include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dataframe/kernels/string_ops.h>
 #include <dftracer/utils/dataframe/mask.h>
 #include <dftracer/utils/duql/errc.h>
@@ -13,7 +14,9 @@
 #include <cstring>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <type_traits>
+#include <unordered_set>
 #include <variant>
 #include <vector>
 
@@ -96,20 +99,26 @@ dataframe::Series compare_mask(const dataframe::Series& col, CompareOp op,
                                const LiteralValue& v) {
     if (!comparable(col, v)) return unknown(col.length());
     const bool eq = op == CompareOp::EQ || op == CompareOp::NE;
-    if (is_string(col) && eq) {
-        dataframe::Series m = dataframe::str_eq(col, std::get<std::string>(v));
-        return op == CompareOp::EQ ? std::move(m) : negate(std::move(m));
+    if (is_string(col)) {
+        const std::string& lit = std::get<std::string>(v);
+        dftu_scalar rhs{};
+        rhs.kind = DFTU_SCALAR_TAG_STR;
+        rhs.len = static_cast<std::uint32_t>(lit.size());
+        rhs.value.s = lit.data();
+        dataframe::Series m{dftu_series_compare(
+            col.handle(), static_cast<dftu_cmp_op>(cmp_code(op)), rhs)};
+        if (!m.handle())
+            unsupported("no comparison kernel for the column type");
+        return m;
     }
     if (is_bool(col) && eq) {
         const bool want = (op == CompareOp::EQ) == std::get<bool>(v);
         return want ? col.share() : negate(col.share());
     }
-    if (is_string(col) || is_bool(col)) {
-        const Expr rhs = is_string(col) ? expr_lit_str(std::get<std::string>(v))
-                                        : expr_lit_bool(std::get<bool>(v));
-        return eval(
-            expr_cmp_expr(static_cast<CmpOp>(cmp_code(op)), expr_col(0), rhs),
-            {&col});
+    if (is_bool(col)) {
+        return eval(expr_cmp_expr(static_cast<CmpOp>(cmp_code(op)), expr_col(0),
+                                  expr_lit_bool(std::get<bool>(v))),
+                    {&col});
     }
     dataframe::Series m{dftu_series_compare(
         col.handle(), static_cast<dftu_cmp_op>(cmp_code(op)),
@@ -122,6 +131,19 @@ dataframe::Series compare_mask(const dataframe::Series& col, CompareOp op,
 // element is comparable, as in the row evaluator.
 dataframe::Series in_mask(const dataframe::Series& col, const ArrayNode& arr,
                           bool negated) {
+    if (is_string(col)) {
+        std::unordered_set<std::string_view> set;
+        for (const LiteralNode& e : arr.elements)
+            if (const auto* lit = std::get_if<std::string>(&e.value))
+                set.insert(*lit);
+        if (set.empty()) return unknown(col.length());
+        dataframe::Series m{dataframe::string_mask(
+            col.handle(),
+            [&set](std::string_view s) { return set.contains(s); })};
+        if (!m.handle())
+            unsupported("no comparison kernel for the column type");
+        return negated ? negate(std::move(m)) : std::move(m);
+    }
     std::optional<dataframe::Series> acc;
     for (const LiteralNode& e : arr.elements) {
         if (!comparable(col, e.value)) continue;

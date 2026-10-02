@@ -150,7 +150,7 @@ void fingerprint_node(detail::Fingerprint& fp, const ExprNode* n) {
     fp.str(n->text);
     fp.str(n->text2);
     const dftu_series* vals = n->values.handle();
-    fp.pod(vals ? dftu_series_data(vals) : nullptr);
+    fp.pod(vals && vals->data ? vals->data->data() : nullptr);
     fp.pod(vals ? n->values.length() : std::int64_t{0});
     fingerprint_node(fp, n->a.get());
     fingerprint_node(fp, n->b.get());
@@ -1806,12 +1806,14 @@ class Compiler {
         memo_;
 };
 
-// dftu_series_slice is FLAT-fixed-width only, so it returns null for
-// String/Binary/List; take()'s gather_column handles those instead.
+// dftu_series_slice returns null for List and Struct; take()'s gather_column
+// handles those instead.
 Series load_slice(const Series& in, std::int64_t offset, std::int64_t len) {
-    const TypeId t = in.type();
-    if (byte_width(t, in.data_type().fixed_size()))
-        return in.slice(offset, len);
+    if (dftu_series* v = dftu_series_slice(in.handle(), offset, len)) {
+        Series s{v};
+        return s.encoding() == Encoding::Chunked ? join_chunks(s)
+                                                 : std::move(s);
+    }
     std::vector<std::int64_t> idx(static_cast<std::size_t>(len));
     for (std::int64_t i = 0; i < len; ++i)
         idx[static_cast<std::size_t>(i)] = offset + i;
@@ -2001,6 +2003,7 @@ class TextCells {
             set_bit(valid_, static_cast<std::int64_t>(off_.size()) - 1);
             ++set_;
         }
+        Series::check_string_bytes(data_.size());
         off_.push_back(static_cast<std::int32_t>(data_.size()));
     }
     void add(std::string_view s) {
@@ -3534,11 +3537,6 @@ void require_evaluated(const std::vector<Series>& outs) {
     }
 }
 
-Series ensure_flat(const Series& c) {
-    if (c.encoding() == Encoding::Flat && c.null_count() == 0) return c.share();
-    return Series{dftu_series_materialize(c.handle())};
-}
-
 constexpr std::int64_t GRAIN = 1 << 16;
 
 }  // namespace
@@ -3581,37 +3579,71 @@ std::vector<Series> eval_many(const std::vector<Expr>& roots,
         finals.push_back(c.column(c.compile(root.node().get())).slot);
     }
 
-    // Pruner: materialize only the inputs the program actually loads.
+    // Inputs are read in place; each chunk's OP_LOAD slices its rows as a
+    // view of the input (a window that spans chunks of a CHUNKED input is
+    // joined there, in parallel).
     std::vector<bool> used(inputs.size(), false);
     for (const SlotOp& op : c.program)
         if (op.opcode == OP_LOAD)
             used[static_cast<std::size_t>(op.param)] = true;
     std::vector<Series> flat(inputs.size());
     for (std::size_t i = 0; i < inputs.size(); ++i)
-        if (used[i]) flat[i] = ensure_flat(*inputs[i]);
+        if (used[i]) flat[i] = inputs[i]->share();
 
     const std::int64_t n = inputs.front()->length();
-    if (n <= GRAIN) {
-        std::vector<Series> outs = eval_chunk(c.program, flat, finals, 0, n);
-        require_evaluated(outs);
-        return outs;
+    // Window starts: a CHUNKED input's own chunks when every chunked input
+    // shares them (each window reads its chunk in place and the results stay
+    // chunks), otherwise GRAIN-row windows.
+    std::vector<std::int64_t> bounds;
+    for (std::size_t i = 0; i < inputs.size(); ++i) {
+        if (!used[i] || !inputs[i]->handle()->is_chunked()) continue;
+        const dftu_series& h = *inputs[i]->handle();
+        const auto* starts =
+            reinterpret_cast<const std::int64_t*>(h.data->data());
+        std::vector<std::int64_t> own(starts, starts + h.nested.size() + 1);
+        if (bounds.empty()) {
+            bounds = std::move(own);
+        } else if (bounds != own) {
+            bounds.clear();
+            break;
+        }
+    }
+    const bool by_chunk = !bounds.empty();
+    if (!by_chunk) {
+        if (n <= GRAIN) {
+            std::vector<Series> outs =
+                eval_chunk(c.program, flat, finals, 0, n);
+            require_evaluated(outs);
+            return outs;
+        }
+        for (std::int64_t lo = 0; lo < n; lo += GRAIN) bounds.push_back(lo);
+        bounds.push_back(n);
     }
 
-    const std::int64_t chunks = (n + GRAIN - 1) / GRAIN;
-    std::vector<std::vector<Series>> parts(static_cast<std::size_t>(chunks));
-    // One task per chunk: without a parallel backend parallel_for runs the
-    // whole range as one call, which must still fill every chunk.
-    parallel_for(chunks, 1, [&](std::int64_t b, std::int64_t e) {
+    const auto windows = static_cast<std::int64_t>(bounds.size() - 1);
+    std::vector<std::vector<Series>> parts(static_cast<std::size_t>(windows));
+    // One task per window: without a parallel backend parallel_for runs the
+    // whole range as one call, which must still fill every window.
+    parallel_for(windows, 1, [&](std::int64_t b, std::int64_t e) {
         for (std::int64_t k = b; k < e; ++k) {
-            const std::int64_t lo = k * GRAIN;
-            parts[static_cast<std::size_t>(k)] = eval_chunk(
-                c.program, flat, finals, lo, std::min(GRAIN, n - lo));
+            const std::int64_t lo = bounds[static_cast<std::size_t>(k)];
+            const std::int64_t hi = bounds[static_cast<std::size_t>(k) + 1];
+            parts[static_cast<std::size_t>(k)] =
+                eval_chunk(c.program, flat, finals, lo, hi - lo);
         }
     });
     for (const std::vector<Series>& part : parts) require_evaluated(part);
     std::vector<Series> outs;
     outs.reserve(finals.size());
     for (std::size_t j = 0; j < finals.size(); ++j) {
+        if (by_chunk) {
+            std::vector<Series> pieces;
+            pieces.reserve(parts.size());
+            for (const std::vector<Series>& part : parts)
+                pieces.push_back(part[j].share());
+            outs.push_back(chunked_column(std::move(pieces)));
+            continue;
+        }
         std::vector<const Series*> ptrs;
         ptrs.reserve(parts.size());
         for (const std::vector<Series>& part : parts) ptrs.push_back(&part[j]);

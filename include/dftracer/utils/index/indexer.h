@@ -24,10 +24,13 @@ struct BloomOptions {
     /// Args fields indexed by name, besides the automatic ones.
     std::vector<std::string> fields;
     double false_positive_rate = 0.01;
-    /// Also index each file's `path_budget` most frequent other args paths,
-    /// a string one while a chunk holds at most `auto_max_distinct` of its
-    /// values; 0 indexes only the fixed fields and `fields`.
-    std::size_t path_budget = 1024;
+    /// Also index each file's other args paths, most frequent first, while
+    /// their evidence fits `stats_share` (in (0, 1]) of the file's size, at
+    /// least 8 MiB, and, when `path_budget` is above 0, at most
+    /// `path_budget` of them; a string one while a chunk holds at most
+    /// `auto_max_distinct` of its values.
+    std::size_t path_budget = 0;
+    double stats_share = 0.05;
     std::size_t auto_max_distinct = 256;
     std::size_t expected_entries_per_chunk = 1024;
 };

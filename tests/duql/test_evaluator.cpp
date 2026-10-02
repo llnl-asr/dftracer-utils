@@ -1,10 +1,15 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/duql/evaluator.h>
+#include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/duql/parser.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
 
+#include <charconv>
+#include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -724,4 +729,100 @@ TEST_CASE("evaluate - regex_replace") {
           Truth::UNKNOWN);
     CHECK(truth(R"(regex_replace(s, "a", "b") == "b")", R"({})") ==
           Truth::UNKNOWN);
+}
+
+namespace {
+
+std::optional<Number> parse_number_with_strtod_only(std::string_view text) {
+    const char* first = text.data();
+    const char* last = first + text.size();
+    if (std::int64_t i = 0;
+        std::from_chars(first, last, i).ptr == last && !text.empty())
+        return Number{i};
+    if (std::uint64_t u = 0;
+        std::from_chars(first, last, u).ptr == last && !text.empty())
+        return Number{u};
+    const std::string copy(text);
+    char* end = nullptr;
+    const double d = std::strtod(copy.c_str(), &end);
+    if (!copy.empty() && end == copy.c_str() + copy.size()) return Number{d};
+    return std::nullopt;
+}
+
+}  // namespace
+
+TEST_CASE("parse_number - same results as strtod on every first character") {
+    const std::vector<std::string> inputs = {
+        "",
+        "0",
+        "007",
+        "-1.5e3",
+        "+5",
+        " 5",
+        "5 ",
+        "\t5",
+        "\n5",
+        ".5",
+        "5.",
+        "-.5",
+        "1e5",
+        "1E5",
+        "1e",
+        "e5",
+        "0x10",
+        "0x1p3",
+        "inf",
+        "-inf",
+        "+inf",
+        "Infinity",
+        "INF",
+        "nan",
+        "NaN",
+        "-nan",
+        "nano",
+        "abc",
+        "f911e308",
+        "n/a",
+        "i",
+        "n",
+        "-",
+        "+",
+        ".",
+        "--5",
+        "9223372036854775807",
+        "9223372036854775808",
+        "18446744073709551615",
+        "18446744073709551616",
+        "-9223372036854775808",
+        "-9223372036854775809",
+        "1,5",
+        ",5",
+        "/UqBWr9S",
+        "true",
+        "null",
+        "_1",
+    };
+    for (const auto& in : inputs) {
+        CAPTURE(in);
+        const auto want = parse_number_with_strtod_only(in);
+        const auto got = parse_number(in);
+        REQUIRE(want.has_value() == got.has_value());
+        if (!want) continue;
+        REQUIRE(want->index() == got->index());
+        if (const auto* d = std::get_if<double>(&*want)) {
+            const double g = std::get<double>(*got);
+            CHECK((g == *d || (g != g && *d != *d)));
+        } else {
+            CHECK(*want == *got);
+        }
+    }
+    for (int c = 1; c < 256; ++c) {
+        const std::string in(1, static_cast<char>(c));
+        CAPTURE(c);
+        CHECK(parse_number_with_strtod_only(in).has_value() ==
+              parse_number(in).has_value());
+        const std::string two = in + "5";
+        CHECK(parse_number_with_strtod_only(two).has_value() ==
+              parse_number(two).has_value());
+    }
 }

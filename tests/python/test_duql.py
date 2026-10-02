@@ -201,8 +201,9 @@ def test_non_pushable_predicate_raises():
 
 
 def test_string_predicates_apply_in_memory():
-    """String match, membership and string == run through the engine's string
-    kernels; only iregex and a bool comparison stay filter-only."""
+    """String match, membership and string compares (ordered by bytes) run
+    through the engine's string kernels; only iregex and a bool comparison stay
+    filter-only."""
     pa = pytest.importorskip("pyarrow")
     from dftracer.utils import F
     from dftracer.utils.dataframe import _dataframe_from_arrow
@@ -230,8 +231,7 @@ def test_string_predicates_apply_in_memory():
     assert mask(F.cat.lower().is_in(["io"])) == [True, False, True, False]
     with pytest.raises(TypeError):
         F.cat.iregex("io").apply(df)
-    with pytest.raises(TypeError):
-        (F.cat > "a").apply(df)
+    assert mask(F.cat > "a") == [True, True, False, False]
     with pytest.raises(TypeError):
         F.cat.is_in([1, "a"])
 

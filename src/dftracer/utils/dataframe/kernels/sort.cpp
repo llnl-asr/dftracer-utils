@@ -2,6 +2,7 @@
 #include <dftracer/utils/dataframe/internal/column_read.h>
 #include <dftracer/utils/dataframe/internal/decimal.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
+#include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dataframe/kernels/sort.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <hwy/contrib/sort/vqsort.h>
@@ -93,7 +94,30 @@ int cmp_row(const Series& v, std::int64_t a, std::int64_t b) {
     }
 }
 
+Series argsort_string(const Series& v, bool descending) {
+    const dftu_series* h = v.handle();
+    const std::int64_t n = v.length();
+    std::vector<std::int64_t> idx(static_cast<std::size_t>(n));
+    std::vector<std::int32_t> ranks;
+    std::int32_t nranks = 0;
+    if (string_ranks(h, ranks, nranks)) {
+        counting_order(ranks, nranks, descending, idx.data());
+        return Series::flat_i64(idx.data(), n);
+    }
+    std::iota(idx.begin(), idx.end(), 0);
+    std::stable_sort(idx.begin(), idx.end(),
+                     [&](std::int64_t a, std::int64_t b) {
+                         std::string_view x, y;
+                         const bool va = str_at(h, a, x);
+                         const bool vb = str_at(h, b, y);
+                         if (!va || !vb) return va && !vb;
+                         return descending ? y < x : x < y;
+                     });
+    return Series::flat_i64(idx.data(), n);
+}
+
 Series argsort_scalar(const Series& v, bool descending) {
+    if (is_string_column(*v.handle())) return argsort_string(v, descending);
     const std::int64_t n = v.length();
     std::vector<std::int64_t> idx(static_cast<std::size_t>(n));
     std::iota(idx.begin(), idx.end(), 0);
@@ -364,6 +388,8 @@ int compare_rows(const Series& v, std::int64_t a, std::int64_t b) {
 }
 
 Series argsort(const Series& v, bool descending) {
+    if (v.encoding() == Encoding::Chunked)
+        return argsort(v.materialize(), descending);
     if (refuse_nested_value("argsort", v.type())) return Series{};
     Series simd = argsort_simd(v, descending, -1);
     if (simd.valid()) return simd;
@@ -371,6 +397,8 @@ Series argsort(const Series& v, bool descending) {
 }
 
 Series topk_indices(const Series& v, std::int64_t k, bool largest) {
+    if (v.encoding() == Encoding::Chunked)
+        return topk_indices(v.materialize(), k, largest);
     if (refuse_nested_value("top_k", v.type())) return Series{};
     const std::int64_t n = v.length();
     k = k < 0 ? 0 : (k > n ? n : k);
@@ -388,7 +416,8 @@ Series topk_indices(const Series& v, std::int64_t k, bool largest) {
 extern "C" dftu_series* dftu_series_argsort(const dftu_series* v,
                                             int32_t descending) {
     if (!v) return nullptr;
-    DFTU_FLAT_INPUT(v, dftu_series_argsort, descending);
+    if (!dftracer::utils::dataframe::is_string_column(*v))
+        DFTU_FLAT_INPUT(v, dftu_series_argsort, descending);
     dftracer::utils::dataframe::Series col{const_cast<dftu_series*>(v)};
     dftracer::utils::dataframe::Series out =
         dftracer::utils::dataframe::argsort(col, descending != 0);

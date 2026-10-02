@@ -102,6 +102,7 @@ Series bytes_key(TypeId type, const std::vector<std::string>& values) {
     std::string data;
     for (std::size_t i = 0; i < values.size(); ++i) {
         data += values[i];
+        Series::check_string_bytes(data.size());
         off[i + 1] = static_cast<std::int32_t>(data.size());
     }
     col->offsets = Buffer::allocate(off.size() * sizeof(std::int32_t));

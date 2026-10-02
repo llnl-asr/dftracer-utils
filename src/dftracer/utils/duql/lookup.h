@@ -30,6 +30,8 @@ void append_int_key(std::string& out, bool negative, std::uint64_t magnitude);
 bool append_double_key(std::string& out, double v);
 void append_string_key(std::string& out, std::string_view v);
 void append_bool_key(std::string& out, bool v);
+/// The decoded text of a key that append_string_key built, else nullopt.
+std::optional<std::string_view> string_key_text(std::string_view key);
 /// `key` as duql text, for messages.
 std::string key_text(std::string_view key);
 

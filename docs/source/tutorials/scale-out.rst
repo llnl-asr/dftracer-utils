@@ -87,8 +87,8 @@ for that pattern used directly (e.g. across MPI ranks):
        auto df = sv.aggregate(configure).get();
 
        auto cat = df.column("cat");
-       auto count = df.column("count");
-       auto sum_dur = df.column("sum_dur");
+       const auto count = df.column("count").materialize();
+       const auto sum_dur = df.column("sum_dur").materialize();
        for (std::int64_t i = 0; i < df.num_rows(); ++i)
            std::printf("%-6.*s %4lld %8llu\n",
                        static_cast<int>(cat.string_at(i).size()),
@@ -108,7 +108,8 @@ No process ever opened both shards' trace files in the same scan, and neither
 shard's index was rebuilt or merged on disk - ``ShardedView`` is fully
 read-only. ``sum_dur`` here comes back as a ``Uint64`` column: the partial
 merge preserves the field's integer domain, so a merged ``Sum`` over a
-non-negative integer field matches a plain ``View::collect()`` - read it with
+non-negative integer field matches a plain ``View::collect()`` - call
+``materialize()`` on the result column (it may be chunked), then read it with
 ``data<std::uint64_t>()``.
 
 What you learned

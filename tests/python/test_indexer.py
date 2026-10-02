@@ -907,7 +907,7 @@ def _member_trace(path):
 
 
 class TestBloomFields:
-    def _index(self, trace, fields, path_budget=0):
+    def _index(self, trace, fields, path_budget=1):
         cfg = dftu_utils.BloomConfig(fields=fields, path_budget=path_budget)
         with dftu_utils.Indexer(files=[trace], require_bloom=cfg, checkpoint_size="4KB") as ix:
             return ix.ensure_indexed()
@@ -940,7 +940,7 @@ class TestBloomFields:
     def test_a_new_field_rebuilds_the_index(self, tmp_path):
         trace = _member_trace(str(tmp_path / "t.pfw.gz"))
         self._index(trace, [])
-        cfg = dftu_utils.BloomConfig(fields=["size"], path_budget=0)
+        cfg = dftu_utils.BloomConfig(fields=["size"], path_budget=1)
         with dftu_utils.Indexer(files=[trace], require_bloom=cfg, checkpoint_size="4KB") as ix:
             assert len(ix.resolve().needs_work) == 1
             assert len(ix.ensure_indexed().ready) == 1
@@ -967,6 +967,35 @@ class TestBloomFields:
         cfg = dftu_utils.BloomConfig()
         with dftu_utils.Indexer(files=[trace], require_bloom=cfg, checkpoint_size="4KB") as ix:
             assert len(ix.resolve().needs_work) == 1
+
+    def test_a_changed_stats_share_rebuilds(self, tmp_path):
+        trace = _member_trace(str(tmp_path / "t.pfw.gz"))
+        cfg = dftu_utils.BloomConfig(stats_share=0.1)
+        with dftu_utils.Indexer(files=[trace], require_bloom=cfg, checkpoint_size="4KB") as ix:
+            assert len(ix.ensure_indexed().ready) == 1
+        with dftu_utils.Indexer(files=[trace], require_bloom=cfg, checkpoint_size="4KB") as ix:
+            assert len(ix.resolve().needs_work) == 0
+        other = dftu_utils.BloomConfig(stats_share=0.2)
+        with dftu_utils.Indexer(files=[trace], require_bloom=other, checkpoint_size="4KB") as ix:
+            assert len(ix.resolve().needs_work) == 1
+
+    def test_evidence_setting_defaults(self):
+        cfg = dftu_utils.BloomConfig()
+        assert cfg.path_budget == 0
+        assert cfg.stats_share == 0.05
+
+    @pytest.mark.parametrize("share", [0, -0.1, 1.5])
+    def test_bad_stats_share_raises(self, tmp_path, share):
+        trace = _member_trace(str(tmp_path / "t.pfw.gz"))
+        with pytest.raises(ValueError, match="stats_share"):
+            dftu_utils.Indexer(
+                files=[trace], require_bloom=dftu_utils.BloomConfig(stats_share=share)
+            )
+
+    def test_negative_path_budget_raises(self, tmp_path):
+        trace = _member_trace(str(tmp_path / "t.pfw.gz"))
+        with pytest.raises(ValueError, match="path_budget"):
+            dftu_utils.Indexer(files=[trace], require_bloom=dftu_utils.BloomConfig(path_budget=-1))
 
     def test_bad_settings_raise(self, tmp_path):
         trace = _member_trace(str(tmp_path / "t.pfw.gz"))

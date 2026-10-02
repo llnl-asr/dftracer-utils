@@ -31,7 +31,15 @@ set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_methods.cpp
                            test_concat_large_string.cpp
                            test_groupby_scale.cpp
                            test_string_simd.cpp test_expr_string_methods.cpp
-                           test_concat_text.cpp)
+                           test_concat_text.cpp test_string_view.cpp
+                           test_groupby_string_encodings.cpp
+                           test_kernels_keep_layouts.cpp
+                           test_collect_concat.cpp
+                           test_slice_views.cpp
+                           test_chunked_columns.cpp
+                           test_collect_spill.cpp
+                           test_eval_inputs_in_place.cpp
+                           test_distinct_on_ids.cpp)
 
 foreach(test_file ${DATAFRAME_TEST_SOURCES})
   string(REPLACE ".cpp" "" bin_exec ${test_file})

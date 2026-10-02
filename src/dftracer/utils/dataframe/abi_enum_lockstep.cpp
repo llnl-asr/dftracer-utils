@@ -10,6 +10,9 @@ constexpr std::int32_t code(E e) {
     return static_cast<std::int32_t>(e);
 }
 
+static_assert(code(Encoding::View) == 4);
+static_assert(code(Encoding::Chunked) == 5);
+
 static_assert(code(CmpOp::Gt) == DFTU_CMP_GT);
 static_assert(code(CmpOp::Ge) == DFTU_CMP_GE);
 static_assert(code(CmpOp::Lt) == DFTU_CMP_LT);

@@ -1,6 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/duql/ast.h>
 #include <dftracer/utils/duql/parser.h>
+#include <dftracer/utils/duql/syntax/parser.h>
+#include <dftracer/utils/duql/syntax/tree.h>
 #include <doctest/doctest.h>
 
 using namespace dftracer::utils::duql;
@@ -179,4 +181,37 @@ TEST_CASE("field_node reads the any form") {
     CHECK_FALSE(field_node("tags").any);
     CHECK_FALSE(field_node("any()").any);
     CHECK(field_text(field_node("any(a.b)")) == "any(a.b)");
+}
+
+TEST_CASE("wildcard paths parse as flagged steps and round-trip") {
+    namespace syn = dftracer::utils::duql::syntax;
+    for (const char* q :
+         {"select a.*.b, c", "select args.*", "drop args.*.size, tmp",
+          "unpivot m.*.count as k, v", "where any(args.*.size) > 1",
+          "where all(a.*.b) == 0 and x * 2 > 1", "select a * b, a.b * 2"}) {
+        INFO(q);
+        auto a = syn::parse(q);
+        REQUIRE_MESSAGE(a.has_value(),
+                        (a ? std::string() : a.error().format()));
+        auto b = syn::parse(syn::to_text(*a));
+        REQUIRE(b.has_value());
+        CHECK(syn::equal(*a, *b));
+    }
+    auto q = syn::parse("select a.*.b");
+    REQUIRE(q.has_value());
+    const auto& sel = std::get<syn::Select>(q->pipeline->stages.front().node);
+    const auto& path = std::get<syn::Path>(sel.items.front().value->node);
+    REQUIRE(path.steps.size() == 3);
+    CHECK_FALSE(path.steps[0].wildcard());
+    CHECK(path.steps[1].wildcard());
+    CHECK_FALSE(path.steps[2].wildcard());
+}
+
+TEST_CASE("wildcard paths outside their places are syntax errors") {
+    namespace syn = dftracer::utils::duql::syntax;
+    for (const char* q :
+         {"select *", "select *.a", "select a.*.b + 1", "select 2 * a.*",
+          "select a.*.b as x", "select x = a.*.b", "where a.*.b > 1",
+          "where any(1 + a.*) > 1", "select a.*x", "derive y = a.*.b"})
+        CHECK_MESSAGE(!syn::parse(q).has_value(), q);
 }

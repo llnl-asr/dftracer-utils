@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/common/memory_budget.h>  // compute_memory_budget
 #include <dftracer/utils/core/coro/task_abi.h>         // task_to_abi
 #include <dftracer/utils/core/coro/when_all.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/dataframe/agg.h>        // streaming group-by state
 #include <dftracer/utils/dataframe/batch_ops.h>  // concat_columns, take, concat
 #include <dftracer/utils/dataframe/field_stat.h>  // FieldStat (describe)
@@ -29,6 +30,7 @@
 #include <cstdint>
 #include <deque>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -37,6 +39,7 @@
 #include <string>
 #include <typeindex>
 #include <typeinfo>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 
@@ -98,9 +101,52 @@ DataFrame frame_from_morsel(
 }
 
 // Drain a chunk generator to a single DataFrame.
-coro::CoroTask<DataFrame> drain_stream(coro::AsyncGenerator<DataFrame> gen) {
+coro::CoroTask<void> column_task(const std::function<void(std::size_t)>* fn,
+                                 std::size_t c) {
+    (*fn)(c);
+    co_return;
+}
+
+// Runs fn(c) for every column c, in parallel on the current executor if any.
+coro::CoroTask<void> each_column(std::size_t n,
+                                 std::function<void(std::size_t)> fn) {
+    if (n < 2 || Executor::current() == nullptr) {
+        for (std::size_t c = 0; c < n; ++c) fn(c);
+        co_return;
+    }
+    co_await run_coro_scope([&fn, n](CoroScope& scope) -> coro::CoroTask<void> {
+        std::vector<coro::SpawnFuture<void>> tasks;
+        tasks.reserve(n);
+        for (std::size_t c = 0; c < n; ++c)
+            tasks.push_back(scope.spawn(
+                [&fn, c](CoroScope&) { return column_task(&fn, c); }));
+        for (auto& task : tasks) co_await task;
+        co_return;
+    });
+}
+
+// Once the parts held in memory pass `budget`, every later part is written to
+// one unlinked spill file and held as mapped columns. The parts reach
+// ConcatPlan as they arrived and it aligns them to the output schema, so
+// a part that needs a type conversion or a null fill is copied back in memory
+// for that column only.
+coro::CoroTask<DataFrame> drain_stream(coro::AsyncGenerator<DataFrame> gen,
+                                       std::uint64_t budget = NO_SPILL_BUDGET) {
     std::vector<DataFrame> parts;
-    while (auto df = co_await gen.next()) parts.push_back(std::move(*df));
+    std::unique_ptr<spill::PartFile> file;
+    std::uint64_t held = 0;
+    std::unordered_set<const void*> seen;
+    while (auto df = co_await gen.next()) {
+        if (budget != NO_SPILL_BUDGET) {
+            if (held > budget) {
+                if (!file) file = std::make_unique<spill::PartFile>();
+                df->columns = file->append(df->columns);
+            } else {
+                held += spill::new_buffer_bytes(df->columns, seen);
+            }
+        }
+        parts.push_back(std::move(*df));
+    }
     if (parts.empty()) co_return DataFrame{};
     // A single chunk needs no merge - concat cannot rejoin a nested
     // (List/Struct) column, which a single already-complete chunk (e.g. a
@@ -124,7 +170,15 @@ coro::CoroTask<DataFrame> drain_stream(coro::AsyncGenerator<DataFrame> gen) {
     std::vector<const DataFrame*> ptrs;
     ptrs.reserve(parts.size());
     for (const DataFrame& p : parts) ptrs.push_back(&p);
-    co_return concat(ptrs, uniform ? ConcatHow::Vertical : ConcatHow::Diagonal);
+    const ConcatPlan plan(ptrs,
+                          uniform ? ConcatHow::Vertical : ConcatHow::Diagonal);
+    DataFrame out;
+    out.names = plan.names();
+    out.columns.resize(out.names.size());
+    co_await each_column(out.columns.size(), [&plan, &out](std::size_t c) {
+        out.columns[c] = chunked_column(plan.chunks(c));
+    });
+    co_return out;
 }
 
 // Drain a Cursor to a single DataFrame: for a pipeline breaker (take, reverse,
@@ -212,7 +266,11 @@ std::size_t morsel_bytes(const std::vector<Series>& cols) {
     for (const Series& c : cols) {
         const std::int64_t n = c.length();
         const TypeId t = c.type();
-        if (is_wide_offset_type(t)) {  // LargeString / LargeBinary
+        if (c.encoding() == Encoding::Dictionary ||
+            c.encoding() == Encoding::View) {
+            total +=
+                static_cast<std::size_t>(dftu_series_buffer_bytes(c.handle()));
+        } else if (is_wide_offset_type(t)) {  // LargeString / LargeBinary
             const std::int64_t* offs = c.offsets64();
             total +=
                 static_cast<std::size_t>(n + 1) * sizeof(std::int64_t) +
@@ -433,7 +491,8 @@ class FilterCursor : public Cursor {
 class FilterMaskCursor : public Cursor {
    public:
     FilterMaskCursor(std::unique_ptr<Cursor> in, Series mask)
-        : in_(std::move(in)), mask_(std::move(mask)) {}
+        : in_(std::move(in)),
+          mask_(mask.is_flat() ? std::move(mask) : mask.materialize()) {}
 
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         while (auto m = co_await in_->next(max_rows)) {
@@ -5870,8 +5929,9 @@ coro::CoroTask<DataFrame> collect_plan(PlanParts plan,
             co_return co_await detail::PlanAccess::run_in_memory(
                 share_frame(*f), std::move(plan.ops));
     }
+    const std::uint64_t budget = resolve_spill_budget(memory_budget);
     co_return co_await drain_stream(
-        stream_plan(std::move(plan), memory_budget, morsel_rows));
+        stream_plan(std::move(plan), memory_budget, morsel_rows), budget);
 }
 
 }  // namespace
@@ -6057,6 +6117,14 @@ coro::CoroTask<DataFrame> collect_owned(LazyFrame plan, std::uint64_t budget,
 }
 
 }  // namespace
+
+coro::CoroTask<DataFrame> join_chunks(DataFrame f) {
+    co_await each_column(f.columns.size(), [&f](std::size_t c) {
+        if (f.columns[c].encoding() == Encoding::Chunked)
+            f.columns[c] = join_chunks(f.columns[c]);
+    });
+    co_return f;
+}
 
 coro::CoroTask<DataFrame> LazyFrame::collect(std::int64_t morsel_rows) const {
     return collect_owned(*this, memory_budget_, morsel_rows);
@@ -6307,7 +6375,7 @@ void fingerprint_op(Fingerprint& fp, const LazyOp& op) {
             },
             [&](const FilterMaskOp& o) {
                 const dftu_series* m = o.mask.handle();
-                fp.pod(m ? dftu_series_data(m) : nullptr);
+                fp.pod(m && m->data ? m->data->data() : nullptr);
                 fp.pod(m ? o.mask.length() : std::int64_t{0});
             },
             [&](const SortByMultiOp& o) {

@@ -57,6 +57,11 @@ void append_string_key(std::string& out, std::string_view v) {
     out += v;
 }
 
+std::optional<std::string_view> string_key_text(std::string_view key) {
+    if (key.size() < 9 || key[0] != STRING_TAG) return std::nullopt;
+    return key.substr(9);
+}
+
 void append_bool_key(std::string& out, bool v) {
     out += BOOL_TAG;
     out += v ? '1' : '0';

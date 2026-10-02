@@ -1,8 +1,14 @@
+#include <dftracer/utils/core/common/bits.h>
+#include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/common/filesystem.h>  // fs:: portability alias
+#include <dftracer/utils/core/common/scoped_fd.h>
+#include <dftracer/utils/core/env.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/spill.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <fcntl.h>
+#include <sys/mman.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -58,12 +64,42 @@ int next_seq() {
 
 }  // namespace
 
+namespace {
+void add_new_bytes(const dftu_series* c, std::unordered_set<const void*>& seen,
+                   std::size_t& total) {
+    auto add = [&](const std::shared_ptr<Buffer>& b) {
+        if (b && seen.insert(b.get()).second) total += b->size();
+    };
+    add(c->data);
+    add(c->offsets);
+    add(c->validity);
+    // A view column's data buffers are not counted: for a scan they are the
+    // string table's blocks, shared by every part and freed by no spill, and
+    // walking their list per part cost a collect 37 ms.
+    for (const auto& n : c->nested)
+        if (n.series) add_new_bytes(n.series.get(), seen, total);
+}
+}  // namespace
+
+std::size_t new_buffer_bytes(const std::vector<Series>& cols,
+                             std::unordered_set<const void*>& seen) {
+    std::size_t total = 0;
+    for (const Series& c : cols)
+        if (c.valid()) add_new_bytes(c.handle(), seen, total);
+    return total;
+}
+
 std::size_t columns_bytes(const std::vector<Series>& cols) {
     std::size_t total = 0;
     for (const Series& c : cols) {
         const std::int64_t n = c.length();
         const TypeId t = c.type();
-        if (is_wide_offset_type(t)) {  // LargeString / LargeBinary
+        if (c.encoding() == Encoding::Dictionary ||
+            c.encoding() == Encoding::View ||
+            c.encoding() == Encoding::Chunked) {
+            total +=
+                static_cast<std::size_t>(dftu_series_buffer_bytes(c.handle()));
+        } else if (is_wide_offset_type(t)) {  // LargeString / LargeBinary
             const std::int64_t* offs = c.offsets64();
             total +=
                 static_cast<std::size_t>(n + 1) * sizeof(std::int64_t) +
@@ -412,12 +448,188 @@ Series get_series_data(const std::uint8_t*& p, const std::uint8_t* end) {
 
 }  // namespace
 
+std::string spill_dir() {
+    const auto env = Env::get(constants::SPILL_DIR_ENV);
+    std::error_code ec;
+    fs::path dir = env && !env->empty() ? fs::path(std::string(*env))
+                                        : fs::temp_directory_path(ec);
+    if (!ec) fs::create_directories(dir, ec);
+    if (!ec && ::access(dir.c_str(), W_OK | X_OK) != 0)
+        ec = std::make_error_code(std::errc::permission_denied);
+    if (ec)
+        throw std::runtime_error("spill: cannot use spill directory '" +
+                                 dir.string() + "' (" + ec.message() +
+                                 "); set " + constants::SPILL_DIR_ENV +
+                                 " to a writable directory");
+    return dir.string();
+}
+
+namespace {
+
+constexpr std::size_t REGION_ALIGN = 64;
+
+bool is_nested(TypeId t) {
+    return t == TypeId::Struct || t == TypeId::List || t == TypeId::LargeList ||
+           t == TypeId::FixedSizeList || t == TypeId::Map;
+}
+
+struct Piece {
+    const void* src = nullptr;
+    std::size_t bytes = 0;
+    std::size_t at = 0;
+    std::vector<std::uint8_t> owned;
+};
+
+struct ColumnPlan {
+    Series flat;
+    Piece validity, offsets, data;
+};
+
+void write_all(int fd, const void* src, std::size_t bytes, std::uint64_t at,
+               const std::string& dir) {
+    const auto* p = static_cast<const std::uint8_t*>(src);
+    while (bytes > 0) {
+        const ssize_t w = ::pwrite(fd, p, bytes, static_cast<off_t>(at));
+        if (w < 0 && errno == EINTR) continue;
+        if (w <= 0)
+            throw std::runtime_error(
+                "spill: cannot write to the spill file in '" + dir + "' (" +
+                std::strerror(errno) + "); set " + constants::SPILL_DIR_ENV +
+                " to a directory with free space");
+        p += w;
+        at += static_cast<std::uint64_t>(w);
+        bytes -= static_cast<std::size_t>(w);
+    }
+}
+
+}  // namespace
+
+PartFile::PartFile() : dir_(spill_dir()) {
+    std::string path = (fs::path(dir_) / "dftu_collect_XXXXXX").string();
+    fd_ = ScopedFd(::mkstemp(path.data()));
+    if (fd_.get() < 0)
+        throw std::runtime_error("spill: cannot create a spill file in '" +
+                                 dir_ + "' (" + std::strerror(errno) +
+                                 "); set " + constants::SPILL_DIR_ENV +
+                                 " to a writable directory");
+    // Unlinked at once so a crash or an early return never leaves the file;
+    // the descriptor and the mappings keep the data.
+    ::unlink(path.c_str());
+}
+
+PartFile::~PartFile() = default;
+
+std::vector<Series> PartFile::append(const std::vector<Series>& cols) {
+    std::vector<ColumnPlan> plans(cols.size());
+    std::size_t at = 0;
+    const auto place = [&at](Piece& p, const void* src, std::size_t bytes) {
+        p.src = src;
+        p.bytes = bytes;
+        p.at = at;
+        at = bits::align_up(at + bytes, REGION_ALIGN);
+    };
+    for (std::size_t i = 0; i < cols.size(); ++i) {
+        const Series& c = cols[i];
+        ColumnPlan& cp = plans[i];
+        if (is_nested(c.type()) || c.length() == 0) continue;
+        cp.flat = c.encoding() == Encoding::Flat ? c.share() : c.materialize();
+        const Series& s = cp.flat;
+        const TypeId t = s.type();
+        const std::int64_t n = s.length();
+        if (s.null_count() > 0) {
+            cp.validity.owned = validity_bitmap(s);
+            place(cp.validity, cp.validity.owned.data(),
+                  cp.validity.owned.size());
+        }
+        std::size_t nbytes;
+        if (is_wide_offset_type(t)) {
+            const std::int64_t* offs = s.offsets64();
+            place(cp.offsets, offs,
+                  static_cast<std::size_t>(n + 1) * sizeof(std::int64_t));
+            nbytes = static_cast<std::size_t>(offs[n]);
+        } else if (!byte_width(t) && t != TypeId::FixedSizeBinary &&
+                   t != TypeId::Decimal128 && t != TypeId::Decimal256) {
+            const std::int32_t* offs = dftu_series_offsets(s.handle());
+            place(cp.offsets, offs,
+                  static_cast<std::size_t>(n + 1) * sizeof(std::int32_t));
+            nbytes = static_cast<std::size_t>(offs[n]);
+        } else if (t == TypeId::FixedSizeBinary) {
+            nbytes =
+                static_cast<std::size_t>(n) *
+                static_cast<std::size_t>(dftu_series_fixed_size(s.handle()));
+        } else {
+            nbytes = buffer_bytes(t, n);
+        }
+        place(cp.data, dftu_series_data(s.handle()), nbytes);
+    }
+
+    const long page_size = ::sysconf(_SC_PAGESIZE);
+    const std::size_t page =
+        page_size > 0 ? static_cast<std::size_t>(page_size) : 4096;
+    const std::size_t region_bytes = bits::align_up(at, page);
+    std::vector<Series> out;
+    out.reserve(cols.size());
+    if (region_bytes == 0) {
+        for (const Series& c : cols) out.push_back(c.share());
+        return out;
+    }
+    const std::uint64_t base = end_;
+    for (const ColumnPlan& cp : plans)
+        for (const Piece* p : {&cp.validity, &cp.offsets, &cp.data})
+            if (p->bytes != 0)
+                write_all(fd_.get(), p->src, p->bytes, base + p->at, dir_);
+    // The last bytes may be padding: extend so the mapped pages exist.
+    if (::ftruncate(fd_.get(), static_cast<off_t>(base + region_bytes)) != 0)
+        throw std::runtime_error("spill: cannot extend the spill file in '" +
+                                 dir_ + "' (" + std::strerror(errno) +
+                                 "); set " + constants::SPILL_DIR_ENV +
+                                 " to a directory with free space");
+    void* map = ::mmap(nullptr, region_bytes, PROT_READ, MAP_SHARED, fd_.get(),
+                       static_cast<off_t>(base));
+    if (map == MAP_FAILED)
+        throw std::runtime_error("spill: cannot map the spill file in '" +
+                                 dir_ + "' (" + std::strerror(errno) +
+                                 "); set " + constants::SPILL_DIR_ENV +
+                                 " to a usable directory");
+    end_ = base + region_bytes;
+    const std::shared_ptr<void> region(
+        map, [region_bytes](void* m) { ::munmap(m, region_bytes); });
+    const auto window = [&](const Piece& p) -> std::shared_ptr<Buffer> {
+        if (p.bytes == 0) return Buffer::allocate(0);
+        return Buffer::wrap(static_cast<std::uint8_t*>(map) + p.at, p.bytes,
+                            [region](void*) {});
+    };
+    for (std::size_t i = 0; i < cols.size(); ++i) {
+        const ColumnPlan& cp = plans[i];
+        if (!cp.flat.valid()) {
+            out.push_back(cols[i].share());
+            continue;
+        }
+        const dftu_series& h = *cp.flat.handle();
+        auto* col = new dftu_series();
+        col->type = h.type;
+        col->encoding = Encoding::Flat;
+        col->length = h.length;
+        col->null_count = h.null_count;
+        col->params = h.params;
+        col->data = window(cp.data);
+        if (cp.offsets.bytes != 0) col->offsets = window(cp.offsets);
+        if (cp.validity.bytes != 0) col->validity = window(cp.validity);
+        out.emplace_back(col);
+    }
+    return out;
+}
+
 Dir::Dir() {
     fs::path base =
-        fs::temp_directory_path() / ("dftu_lazy_" + std::to_string(::getpid()) +
-                                     "_" + std::to_string(next_seq()));
+        fs::path(spill_dir()) / ("dftu_lazy_" + std::to_string(::getpid()) +
+                                 "_" + std::to_string(next_seq()));
     std::error_code ec;
     fs::create_directories(base, ec);
+    if (ec)
+        throw std::runtime_error(
+            "spill: cannot create '" + base.string() + "' (" + ec.message() +
+            "); set " + constants::SPILL_DIR_ENV + " to a writable directory");
     dir_ = base.string();
 }
 

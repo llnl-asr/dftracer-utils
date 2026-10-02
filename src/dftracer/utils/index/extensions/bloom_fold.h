@@ -89,7 +89,7 @@ class BloomFold : public trace::views::detail::Fold {
     /// For a file with runs: writes the rest of its tier and its manifest
     /// entries to one more run and returns every run in ingest order. They
     /// commit only as one ingest in that order, since the last run's range
-    /// deletes drop the paths the path budget did not keep. The caller owns
+    /// deletes drop the evidence the selection did not keep. The caller owns
     /// the files from here on.
     std::vector<index::store::IndexDatabaseSstWriterContext::Artifacts>
     finish_spilled(int file_id);
@@ -116,7 +116,31 @@ class BloomFold : public trace::views::detail::Fold {
     };
     using AutoChunk = ankerl::unordered_dense::map<std::uint32_t, AutoField>;
 
-    using AutoKeys = std::vector<std::pair<std::string, std::uint32_t>>;
+    // A kept auto key; an absence-only one keeps only its absence entries.
+    struct AutoKey {
+        std::string name;
+        std::uint32_t id = 0;
+        bool absence_only = false;
+    };
+    using AutoKeys = std::vector<AutoKey>;
+
+    // One auto key's evidence over the file's finished chunks where it has a
+    // value: what it costs and whether it can rule a chunk out.
+    struct PathEvidence {
+        // The bounds of the first chunk summarized.
+        std::string min;
+        std::string max;
+        std::uint64_t present_chunks = 0;
+        std::uint64_t zone_chunks = 0;
+        std::uint64_t bloom_chunks = 0;
+        // Zone bounds and chunk bloom bits.
+        std::uint64_t payload_bytes = 0;
+        // Values over the chunks with a bloom.
+        std::uint64_t distinct = 0;
+        // Every chunk has the same bounds, so no range or equality test
+        // keeps one of them and skips another.
+        bool same_bounds = true;
+    };
 
     struct SpillState {
         std::optional<std::uint64_t> max_seen;
@@ -128,8 +152,13 @@ class BloomFold : public trace::views::detail::Fold {
         std::uint64_t resident = 0;
         std::uint64_t events = 0;
         std::optional<index::schemas::dft::BloomCore::FileAccumulator> acc;
-        /// Each spilled chunk's own auto keys.
-        std::vector<std::pair<std::uint64_t, std::vector<std::uint32_t>>> keys;
+        struct SpilledChunk {
+            std::uint64_t checkpoint = 0;
+            std::uint64_t events = 0;
+            std::vector<std::uint32_t> keys;
+        };
+        /// Each spilled chunk's data events and own auto keys.
+        std::vector<SpilledChunk> keys;
         ankerl::unordered_dense::set<std::uint32_t> key_union;
         std::vector<index::store::IndexDatabaseSstWriterContext::Artifacts>
             runs;
@@ -144,6 +173,8 @@ class BloomFold : public trace::views::detail::Fold {
         /// The catalog: data-record leaves by interned exact path.
         ankerl::unordered_dense::map<std::uint32_t, index::store::PathStat>
             paths;
+        /// Auto keys of the chunks summarized so far.
+        ankerl::unordered_dense::map<std::uint32_t, PathEvidence> evidence;
         index::schemas::dft::BloomCore::PidTidCache pidtid;
     };
 
@@ -157,31 +188,36 @@ class BloomFold : public trace::views::detail::Fold {
     ankerl::unordered_dense::set<std::uint32_t> auto_skip_;
     std::uint32_t dur_key_ = 0;
 
-    /// Writes the file's tier and manifest entries into `w`, one chunk at a
-    /// time. Consumes `fs`.
-    void write_file(index::store::IndexWrite& w, int file_id, FileState& fs);
+    /// Writes the tier and manifest entries of `file` into `w`, one chunk at
+    /// a time. Consumes `fs`.
+    void write_file(index::store::IndexWrite& w, int file_id,
+                    const std::string& file, FileState& fs);
     static void observe_path(index::store::PathStat& stat, std::uint8_t tag);
     // Nested extra dimensions come from a capture under "args."; records whose
     // every leaf is already a key need none.
     bool captures_nested() const { return !config_.auto_prefix.empty(); }
-    /// Keeps the path_budget auto keys with the most non-null records, ties
-    /// by name.
-    void select_auto_keys(const FileState& fs,
-                          std::map<std::string, std::uint32_t>& keys) const;
+    void summarize(PathEvidence& ev, const AutoField& f) const;
+    /// The auto keys with the most non-null records, ties by name, while
+    /// their estimated evidence over the `data_chunks` chunks holding data
+    /// records fits the cap of `file` and their count fits path_budget; keys
+    /// whose evidence cannot rule out a chunk keep only absence entries, or
+    /// nothing.
+    AutoKeys select_auto_keys(
+        const std::string& file, const FileState& fs, std::uint64_t data_chunks,
+        const std::map<std::string, std::uint32_t>& keys) const;
     Catalog catalog(const FileState& fs) const;
     void observe_auto(AutoChunk& chunk,
                       const trace::views::detail::FoldEvent& e);
     ChunkState assemble_chunk(FileState& fs, std::uint64_t cp,
                               const std::vector<std::string>& dims,
                               const AutoKeys& keys);
-    AutoKeys auto_keys(const FileState& fs, bool select) const;
+    AutoKeys auto_keys(const std::string& file, FileState& fs);
     std::vector<std::string> dims_of(const AutoKeys& keys) const;
     std::uint64_t resident_bytes(const FileState& fs, std::uint64_t cp) const;
     void chunk_started(FileState& fs, std::uint64_t cp);
     void spill(FileState& fs, std::uint64_t upto);
 
     StringViewMap<FileState> files_;
-    std::uint64_t empty_bloom_bytes_ = 0;
     std::uint64_t spill_share_ = 0;
     std::string spill_dir_;
     int spill_file_id_ = -1;

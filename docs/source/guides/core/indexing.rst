@@ -56,23 +56,44 @@ without worrying about redundant work.
              ix.ensure_indexed()  # one fused pass builds all three tiers
 
       The bloom tier always covers ``name``, ``cat``, ``pid``, ``tid`` and the
-      file, host and command hashes. It also indexes the 1024 most frequent
-      other args paths of each file (the path budget): a number gets a
+      file, host and command hashes. It also indexes other paths of each
+      file, most frequent first, while their estimated evidence bytes fit
+      ``stats_share`` (default 0.05, so 5%) of the file's compressed size, at
+      least 8 MiB. ``path_budget`` is an optional count ceiling on top of
+      that; 0 (the default) means no count limit. A number gets a
       per-chunk min/max, which lets range and equality filters
       (``size > 4096``, ``step == 500``) skip chunks, and a string gets a
       per-chunk bloom filter while the chunk holds at most
       ``auto_max_distinct`` (default 256) of its values. A string with more
       values than that keeps no bloom in that chunk, so a filter on it still
       reads the chunk unless its min/max rules the chunk out. A path outside
-      the budget can still be filtered on; it just never skips a chunk.
+      the cap can still be filtered on; it just never skips a chunk.
+
+      Evidence that cannot skip a chunk is not kept: a path whose min and max
+      are the same in every chunk and that has no bloom. A chunk where a kept
+      path has no value is recorded as absent, with no bloom. A test that
+      needs a value of the path (``==``, ``in``, a range, ``exists``) skips
+      that chunk; ``!=``, ``not in``, ``not exists`` and ``is null`` never
+      skip on absence. Each chunk bloom is sized for the chunk's distinct
+      values. Evidence of an args key prunes ``args.<k>`` queries. A bare name
+      that a record may hold at the top level reads no args evidence, so
+      ``id == 5`` on records with both a top-level ``id`` and an ``args.id``
+      is never pruned by ``args.id``. The cap bounds the evidence bytes of the
+      index, not the build's memory, which the memory budget still bounds.
 
       ``BloomConfig`` changes this. ``fields`` names args fields to index
       in full (a bloom filter and min/max per chunk, no cap), including
       nested ones (``"io.off"``), named as a filter names them (``"size"`` or
-      ``"args.size"``). ``path_budget`` sets how many other paths get
-      evidence; ``path_budget=0`` indexes only the fixed fields and
-      ``fields``. An index built without a requested field, or with another
-      budget, is rebuilt once on the next ``ensure_indexed()``:
+      ``"args.size"``). ``stats_share`` and ``path_budget`` set the
+      cap described above; both can also be set per record schema with
+      ``index: {stats_share: 0.2, path_budget: 50}``, and a schema setting
+      overrides the build's. A ``stats_share`` outside (0, 1] or a negative
+      ``path_budget`` is an error. An index built without a requested field,
+      or with other settings, rebuilds its zone map, bloom and count evidence
+      once (postings, stats and the catalog are kept) on the next
+      ``ensure_indexed()``. The new evidence format also rebuilds existing
+      evidence once.
+      Example:
 
       .. code-block:: python
 
@@ -148,10 +169,12 @@ without worrying about redundant work.
          * - ``--memory-budget``
            - Bytes the build may hold at once (default: about a third of
              available memory); accepts units such as ``4GB``
+         * - ``--stats-share``
+           - Fraction of a file's compressed size that automatic evidence
+             may use, in (0, 1] (default 0.05, at least 8 MiB)
          * - ``--path-budget``
-           - How many of each file's most frequent other args paths get
-             evidence (default 1024); 0 indexes only the fixed fields and
-             ``--dimensions``
+           - Optional ceiling on how many other paths get evidence (default
+             0, no count limit)
          * - ``--expected-entries``
            - Expected entries per chunk, for bloom filter sizing (default 1024)
          * - ``--false-positive-rate``
@@ -211,14 +234,14 @@ index records the schema the file was decoded with:
                        .get();
 
 This bootstrap only fires for that clean-first-touch case. Once an index
-exists, a plain query reads it as-is: it does **not** re-check whether the
-underlying trace changed since the index was built. If you might be reading a
-directory whose files get re-indexed, appended to, or replaced, index
-explicitly first (as in the previous section) rather than relying on the
-bootstrap. Two read paths *do* refresh a possibly-stale index automatically
-before every scan: the ``dftracer_view`` CLI (turn it off with
-``--no-auto-index``) and the sharded/distributed read path, both through the
-same ``ensure_indexes_fresh`` entry point used above.
+exists, every View checks it when the View is created: a file whose size or
+modification time differs from the index record, or whose checkpoint size
+changed, is indexed again through the same resolver ``dftracer_index`` uses,
+which replaces all of that file's evidence, before the View reads the index.
+A file already checked in this process with the same size and time costs one
+``stat``. So a View over a trace that was appended to or replaced reads the
+new content; the first View after the change pays the rebuild. A change that
+keeps both the size and the modification time is not seen.
 
 Upgrading the library can also invalidate an index: each on-disk index records
 the ``FORMAT_VERSION`` it was built with, and a build with another version

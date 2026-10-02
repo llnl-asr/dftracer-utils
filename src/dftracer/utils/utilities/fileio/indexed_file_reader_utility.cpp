@@ -45,25 +45,6 @@ IndexedFileReaderUtility::operator()(const IndexedReadInput& input) const {
             dftracer::utils::index::gzip::CheckpointIndexerFactory::create(
                 input.file_path, input.index_path, input.checkpoint_size, true);
         co_await indexer->build_async();
-    } else {
-        // Check if existing index needs rebuild
-        auto indexer =
-            dftracer::utils::index::gzip::CheckpointIndexerFactory::create(
-                input.file_path, input.index_path, input.checkpoint_size,
-                false);
-
-        if (indexer->need_rebuild()) {
-            // Rebuild the index
-            // Drop the cached DB instance before deleting the store.
-            dftracer::utils::index::store::RocksDBManager::instance().reset(
-                normalized_index_path);
-            fs::remove_all(normalized_index_path);
-            auto new_indexer =
-                dftracer::utils::index::gzip::CheckpointIndexerFactory::create(
-                    input.file_path, input.index_path, input.checkpoint_size,
-                    true);
-            co_await new_indexer->build_async();
-        }
     }
 
     // Step 2: Create and return Reader

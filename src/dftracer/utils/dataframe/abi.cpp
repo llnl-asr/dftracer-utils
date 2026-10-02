@@ -1,3 +1,4 @@
+#include <ankerl/unordered_dense.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 
@@ -10,6 +11,9 @@ using dftracer::utils::dataframe::Encoding;
 using dftracer::utils::dataframe::TypeId;
 
 namespace {
+
+constexpr std::int64_t VIEW_BYTES = 16;
+constexpr std::int32_t VIEW_INLINE_BYTES = 12;
 
 std::int64_t validity_bytes(std::int64_t n) { return (n + 7) / 8; }
 
@@ -83,11 +87,70 @@ dftu_series* dftu_series_new_flat_borrowed(dftu_dtype type, const void* data,
     return col;
 }
 
+dftu_series* dftu_series_new_string_view(
+    dftu_dtype type, const void* views, int64_t n, const uint8_t* validity,
+    const void* const* buffers, const int64_t* sizes, int32_t n_buffers,
+    void (*release)(void* ctx), void* ctx) {
+    // Runs `release` once when the last column or buffer using it dies, and
+    // on every early return below.
+    std::shared_ptr<void> owner(nullptr, [release, ctx](void*) {
+        if (release != nullptr) release(ctx);
+    });
+    TypeId t = static_cast<TypeId>(type);
+    if (t != TypeId::String && t != TypeId::Binary) return nullptr;
+    if (n < 0 || n_buffers < 0) return nullptr;
+    if ((n > 0 && views == nullptr) ||
+        (n_buffers > 0 && (buffers == nullptr || sizes == nullptr)))
+        return nullptr;
+    for (std::int32_t k = 0; k < n_buffers; ++k)
+        if (sizes[k] < 0) return nullptr;
+
+    const auto* v = static_cast<const std::uint8_t*>(views);
+    for (std::int64_t i = 0; i < n; ++i) {
+        if (validity != nullptr && !((validity[i >> 3] >> (i & 7)) & 1))
+            continue;
+        std::int32_t size;
+        std::memcpy(&size, v + i * VIEW_BYTES, sizeof(size));
+        if (size < 0) return nullptr;
+        if (size <= VIEW_INLINE_BYTES) continue;
+        std::int32_t index, offset;
+        std::memcpy(&index, v + i * VIEW_BYTES + 8, sizeof(index));
+        std::memcpy(&offset, v + i * VIEW_BYTES + 12, sizeof(offset));
+        if (index < 0 || index >= n_buffers || offset < 0 ||
+            static_cast<std::int64_t>(offset) + size > sizes[index])
+            return nullptr;
+    }
+
+    auto* col = new dftu_series();
+    col->type = t;
+    col->encoding = Encoding::View;
+    col->length = n;
+    col->data = Buffer::wrap(const_cast<std::uint8_t*>(v),
+                             static_cast<std::size_t>(n * VIEW_BYTES),
+                             [owner](void*) {});
+    auto blobs = std::make_shared<std::vector<std::shared_ptr<Buffer>>>();
+    blobs->reserve(static_cast<std::size_t>(n_buffers));
+    for (std::int32_t k = 0; k < n_buffers; ++k)
+        blobs->push_back(Buffer::wrap(
+            static_cast<std::uint8_t*>(const_cast<void*>(buffers[k])),
+            static_cast<std::size_t>(sizes[k]), [owner](void*) {}));
+    col->blobs = std::move(blobs);
+
+    if (validity != nullptr) {
+        std::size_t vbytes = static_cast<std::size_t>(validity_bytes(n));
+        col->validity = Buffer::allocate(vbytes);
+        std::memcpy(col->validity->data(), validity, vbytes);
+        col->null_count = count_nulls(validity, n);
+    }
+    return col;
+}
+
 dftu_series* dftu_series_new_string(dftu_dtype type, const int32_t* offsets,
                                     const void* data, int64_t n,
                                     const uint8_t* validity) {
     TypeId t = static_cast<TypeId>(type);
     if (t != TypeId::String && t != TypeId::Binary) return nullptr;
+    if (offsets != nullptr && offsets[n] < 0) return nullptr;
 
     auto* col = new dftu_series();
     col->type = t;
@@ -188,18 +251,149 @@ const int64_t* dftu_series_offsets64(const dftu_series* col) {
 }
 
 int32_t dftu_series_is_null(const dftu_series* col, int64_t i) {
-    // A SELECTION view carries no bitmap of its own: the row is null when its
-    // index is the outer-fill sentinel or the selected base row is null.
+    if (col->is_chunked()) {
+        std::int64_t local = 0;
+        const dftu_series& c = col->chunk_at(i, local);
+        return dftu_series_is_null(&c, local);
+    }
+    // A SELECTION row is null when its index is the outer-fill sentinel, its
+    // own bitmap (set by an Arrow import) says so, or the base row is null.
     if (col->encoding == dftracer::utils::dataframe::Encoding::Selection &&
         col->child()) {
         const std::int64_t idx =
             reinterpret_cast<const std::int64_t*>(col->data->data())[i];
         if (idx < 0) return 1;
+        if (col->validity && !((col->validity->data()[i >> 3] >> (i & 7)) & 1))
+            return 1;
         return dftu_series_is_null(col->child().get(), idx);
     }
-    if (!col->validity) return 0;
-    const std::uint8_t* bm = col->validity->data();
-    return ((bm[i >> 3] >> (i & 7)) & 1) ? 0 : 1;
+    if (col->validity && !((col->validity->data()[i >> 3] >> (i & 7)) & 1))
+        return 1;
+    // A dictionary entry may itself be null (an Arrow import can carry one).
+    if (col->encoding == dftracer::utils::dataframe::Encoding::Dictionary &&
+        col->child() && col->child()->null_count > 0)
+        return dftu_series_is_null(
+            col->child().get(),
+            reinterpret_cast<const std::int32_t*>(col->data->data())[i]);
+    return 0;
+}
+
+const char* dftu_series_string_at(const dftu_series* col, int64_t i,
+                                  int64_t* len) {
+    *len = 0;
+    if (col == nullptr) return nullptr;
+    switch (col->type) {
+        case TypeId::String:
+        case TypeId::Binary:
+        case TypeId::LargeString:
+        case TypeId::LargeBinary:
+            break;
+        default:
+            return nullptr;
+    }
+    while (true) {
+        if (i < 0 || i >= col->length) return nullptr;
+        switch (col->encoding) {
+            case Encoding::Flat: {
+                if (dftu_series_is_null(col, i) || !col->data || !col->offsets)
+                    return nullptr;
+                const char* d =
+                    reinterpret_cast<const char*>(col->data->data());
+                if (col->wide_offsets()) {
+                    const auto* off = reinterpret_cast<const std::int64_t*>(
+                        col->offsets->data());
+                    *len = off[i + 1] - off[i];
+                    return d + off[i];
+                }
+                const auto* off =
+                    reinterpret_cast<const std::int32_t*>(col->offsets->data());
+                *len = off[i + 1] - off[i];
+                return d + off[i];
+            }
+            case Encoding::Dictionary: {
+                if (dftu_series_is_null(col, i) || !col->child() || !col->data)
+                    return nullptr;
+                i = reinterpret_cast<const std::int32_t*>(col->data->data())[i];
+                col = col->child().get();
+                break;
+            }
+            case Encoding::View: {
+                if (dftu_series_is_null(col, i) || !col->data) return nullptr;
+                const std::uint8_t* view = col->data->data() + i * VIEW_BYTES;
+                std::int32_t size;
+                std::memcpy(&size, view, sizeof(size));
+                *len = size;
+                if (size <= VIEW_INLINE_BYTES)
+                    return reinterpret_cast<const char*>(view + 4);
+                std::int32_t index, offset;
+                std::memcpy(&index, view + 8, sizeof(index));
+                std::memcpy(&offset, view + 12, sizeof(offset));
+                if (!col->blobs ||
+                    static_cast<std::size_t>(index) >= col->blobs->size()) {
+                    *len = 0;
+                    return nullptr;
+                }
+                return reinterpret_cast<const char*>(
+                    (*col->blobs)[static_cast<std::size_t>(index)]->data() +
+                    offset);
+            }
+            case Encoding::Selection: {
+                if (!col->child() || !col->data) return nullptr;
+                const std::int64_t idx =
+                    reinterpret_cast<const std::int64_t*>(col->data->data())[i];
+                if (idx < 0) return nullptr;
+                i = idx;
+                col = col->child().get();
+                break;
+            }
+            case Encoding::Chunked: {
+                std::int64_t local = 0;
+                col = &col->chunk_at(i, local);
+                i = local;
+                break;
+            }
+            default:
+                return nullptr;
+        }
+    }
+}
+
+namespace {
+void buffer_bytes_once(const dftu_series* col,
+                       ankerl::unordered_dense::set<const void*>& seen,
+                       std::int64_t& total) {
+    auto add = [&](const auto& b) {
+        if (b && seen.insert(b.get()).second)
+            total += static_cast<std::int64_t>(b->size());
+    };
+    add(col->data);
+    add(col->offsets);
+    add(col->validity);
+    if (col->blobs)
+        for (const auto& b : *col->blobs) add(b);
+    for (const auto& n : col->nested)
+        if (n.series) buffer_bytes_once(n.series.get(), seen, total);
+}
+}  // namespace
+
+int64_t dftu_series_buffer_bytes(const dftu_series* col) {
+    if (col == nullptr) return 0;
+    std::int64_t total = 0;
+    if (col->is_chunked()) {
+        ankerl::unordered_dense::set<const void*> seen;
+        buffer_bytes_once(col, seen, total);
+        return total;
+    }
+    if (col->data) total += static_cast<std::int64_t>(col->data->size());
+    if (col->offsets) total += static_cast<std::int64_t>(col->offsets->size());
+    if (col->validity)
+        total += static_cast<std::int64_t>(col->validity->size());
+    if (col->blobs)
+        for (const auto& b : *col->blobs)
+            total += static_cast<std::int64_t>(b->size());
+    for (const auto& n : col->nested)
+        if (n.series) total += dftu_series_buffer_bytes(n.series.get());
+    return total;
 }
 
 namespace {
@@ -275,96 +469,140 @@ dftu_series* dftu_series_share(const dftu_series* col) {
     return new dftu_series(*col);
 }
 
+namespace {
+
+// A window of `bytes` bytes at `at` inside `parent`, owned by `parent`.
+std::shared_ptr<Buffer> window(const std::shared_ptr<Buffer>& parent,
+                               std::size_t at, std::size_t bytes) {
+    return Buffer::wrap(parent->data() + at, bytes,
+                        [parent](void*) { /* view: parent owns it */ });
+}
+
+// Bits [offset, offset+len) of `bits` from bit 0: shared when the offset is
+// on a byte boundary (and the end too when `exact`, for Bool values that
+// byte-wise kernels count), repacked otherwise.
+std::shared_ptr<Buffer> window_bits(const std::shared_ptr<Buffer>& bits,
+                                    std::int64_t offset, std::int64_t len,
+                                    bool exact) {
+    const std::size_t nbytes = static_cast<std::size_t>((len + 7) / 8);
+    if (len == 0) return Buffer::allocate(0);
+    if ((offset & 7) == 0 && (!exact || (len & 7) == 0))
+        return window(bits, static_cast<std::size_t>(offset >> 3), nbytes);
+    auto out = Buffer::allocate(nbytes);
+    const std::uint8_t* src = bits->data() + (offset >> 3);
+    const unsigned r = static_cast<unsigned>(offset & 7);
+    // The last source byte holding bit offset+len-1; reading past it would
+    // leave the parent buffer.
+    const std::size_t last =
+        static_cast<std::size_t>(((offset & 7) + len - 1) >> 3);
+    std::uint8_t* dst = out->data();
+    for (std::size_t k = 0; k < nbytes; ++k) {
+        const unsigned hi = k + 1 <= last ? src[k + 1] : 0u;
+        dst[k] = static_cast<std::uint8_t>((src[k] >> r) | (hi << (8 - r)));
+    }
+    if (len & 7)
+        dst[nbytes - 1] &= static_cast<std::uint8_t>((1u << (len & 7)) - 1u);
+    return out;
+}
+
+template <class Off>
+std::shared_ptr<Buffer> rebased_offsets(const dftu_series& col,
+                                        std::int64_t offset, std::int64_t len) {
+    const Off* src = reinterpret_cast<const Off*>(col.offsets->data()) + offset;
+    auto out =
+        Buffer::allocate(static_cast<std::size_t>(len + 1) * sizeof(Off));
+    Off* dst = reinterpret_cast<Off*>(out->data());
+    for (std::int64_t i = 0; i <= len; ++i) dst[i] = src[i] - src[0];
+    return out;
+}
+
+}  // namespace
+
 dftu_series* dftu_series_slice(const dftu_series* col, int64_t offset,
                                int64_t len) {
     if (!col) return nullptr;
-    if (byte_width(col->type, col->fixed_size()).value_or(0) == 0)
-        return nullptr;  // variable-width unsupported
-    if (col->encoding == Encoding::Selection && col->child()) {
-        // A SELECTION slices by its index buffer: still a view over the base.
-        if (offset < 0) offset = 0;
-        if (offset > col->length) offset = col->length;
-        if (len < 0 || len > col->length - offset) len = col->length - offset;
-        auto* out = new dftu_series();
-        dftracer::utils::dataframe::adopt_type_from(*out, *col);
-        out->encoding = Encoding::Selection;
-        out->length = len;
-        out->data = Buffer::allocate(static_cast<std::size_t>(len) *
-                                     sizeof(std::int64_t));
-        std::memcpy(out->data->data(),
-                    col->data->data() +
-                        static_cast<std::size_t>(offset) * sizeof(std::int64_t),
-                    static_cast<std::size_t>(len) * sizeof(std::int64_t));
-        out->set_child(col->child());
-        return out;
-    }
-    if (col->encoding != Encoding::Flat) {
-        dftu_series* flat = dftu_series_materialize(col);
-        if (!flat) return nullptr;
-        dftu_series* out = dftu_series_slice(flat, offset, len);
-        dftu_series_free(flat);
-        return out;
-    }
-    const std::size_t w = byte_width(col->type, col->fixed_size()).value_or(0);
-    if (w == 0 || !col->data) return nullptr;  // variable-width unsupported
     if (offset < 0) offset = 0;
     if (offset > col->length) offset = col->length;
     if (len < 0 || len > col->length - offset) len = col->length - offset;
+    if (col->is_chunked()) {
+        const auto* starts =
+            reinterpret_cast<const std::int64_t*>(col->data->data());
+        std::vector<std::shared_ptr<dftu_series>> parts;
+        for (std::size_t k = 0; k < col->nested.size(); ++k) {
+            const std::int64_t lo = std::max(offset, starts[k]);
+            const std::int64_t hi = std::min(offset + len, starts[k + 1]);
+            if (hi <= lo) continue;
+            dftu_series* part = dftu_series_slice(col->nested[k].series.get(),
+                                                  lo - starts[k], hi - lo);
+            if (!part) return nullptr;
+            parts.emplace_back(part);
+        }
+        if (parts.empty())
+            return dftu_series_slice(col->nested.front().series.get(), 0, 0);
+        if (parts.size() == 1) return new dftu_series(*parts.front());
+        return dftracer::utils::dataframe::make_chunked(std::move(parts));
+    }
+    const std::size_t w = byte_width(col->type, col->fixed_size()).value_or(0);
+    const bool text =
+        col->type == TypeId::String || col->type == TypeId::Binary ||
+        col->type == TypeId::LargeString || col->type == TypeId::LargeBinary;
+    std::size_t index_width = 0;
+    switch (col->encoding) {
+        case Encoding::Selection:
+            index_width = sizeof(std::int64_t);
+            break;
+        case Encoding::Dictionary:
+            index_width = sizeof(std::int32_t);
+            break;
+        case Encoding::View:
+            index_width = 16;
+            break;
+        case Encoding::Flat:
+            if (text ? !col->offsets : (w == 0 || !col->data)) return nullptr;
+            break;
+        default:
+            return nullptr;
+    }
+    if (index_width != 0 && !col->data) return nullptr;
 
     auto* out = new dftu_series();
     dftracer::utils::dataframe::adopt_type_from(*out, *col);
-    out->encoding = Encoding::Flat;
+    out->encoding = col->encoding;
     out->length = len;
-    auto parent = col->data;  // shared_ptr copy keeps the buffer alive
-    if (col->type == TypeId::Bool) {
-        // Bool is bit-packed ((n+7)/8 bytes)
-        const std::size_t nbytes = static_cast<std::size_t>((len + 7) / 8);
-        auto dbuf = Buffer::allocate(nbytes);
-        std::memset(dbuf->data(), 0, nbytes);
-        const std::uint8_t* src = parent->data();
-        std::uint8_t* dst = dbuf->data();
-        for (int64_t i = 0; i < len; ++i) {
-            const int64_t p = offset + i;
-            if ((src[p >> 3] >> (p & 7)) & 1u)
-                dst[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
-        }
-        out->data = std::move(dbuf);
-    } else {
-        std::uint8_t* base =
-            parent->data() + static_cast<std::size_t>(offset) * w;
+    out->nested = col->nested;
+    out->blobs = col->blobs;
+    if (index_width != 0) {
         out->data =
-            Buffer::wrap(base, static_cast<std::size_t>(len) * w,
-                         [parent](void*) { /* view: parent owns it */ });
-    }
-
-    // Carry the validity bitmap so nulls survive into the expression engine.
-    // The bitmap is indexed from bit 0, so a byte-aligned offset can share the
-    // parent buffer at a shifted base; otherwise re-pack the [offset, offset+
-    // len) bits down to bit 0.
-    if (col->validity && len > 0) {
-        const std::uint8_t* src = col->validity->data();
-        std::shared_ptr<Buffer> vbuf;
-        if ((offset & 7) == 0) {
-            auto vparent = col->validity;
-            std::uint8_t* vbase =
-                vparent->data() + static_cast<std::size_t>(offset >> 3);
-            vbuf = Buffer::wrap(vbase, static_cast<std::size_t>((len + 7) / 8),
-                                [vparent](void*) { /* view */ });
+            window(col->data, static_cast<std::size_t>(offset) * index_width,
+                   static_cast<std::size_t>(len) * index_width);
+    } else if (col->type == TypeId::Bool) {
+        out->data = window_bits(col->data, offset, len, true);
+    } else if (text) {
+        const bool wide = col->wide_offsets();
+        std::int64_t lo = 0, hi = 0;
+        if (wide) {
+            const auto* o =
+                reinterpret_cast<const std::int64_t*>(col->offsets->data());
+            lo = o[offset];
+            hi = o[offset + len];
+            out->offsets = rebased_offsets<std::int64_t>(*col, offset, len);
         } else {
-            const std::size_t nbytes = static_cast<std::size_t>((len + 7) / 8);
-            vbuf = Buffer::allocate(nbytes);
-            std::memset(vbuf->data(), 0, nbytes);
-            std::uint8_t* dst = vbuf->data();
-            for (int64_t i = 0; i < len; ++i) {
-                const int64_t p = offset + i;
-                if ((src[p >> 3] >> (p & 7)) & 1u)
-                    dst[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
-            }
+            const auto* o =
+                reinterpret_cast<const std::int32_t*>(col->offsets->data());
+            lo = o[offset];
+            hi = o[offset + len];
+            out->offsets = rebased_offsets<std::int32_t>(*col, offset, len);
         }
-        // Recount nulls in the slice; the parent's count spans the whole
-        // column.
-        out->null_count = count_nulls(vbuf->data(), len);
-        out->validity = std::move(vbuf);
+        out->data = col->data ? window(col->data, static_cast<std::size_t>(lo),
+                                       static_cast<std::size_t>(hi - lo))
+                              : nullptr;
+    } else {
+        out->data = window(col->data, static_cast<std::size_t>(offset) * w,
+                           static_cast<std::size_t>(len) * w);
+    }
+    if (col->validity && len > 0) {
+        out->validity = window_bits(col->validity, offset, len, false);
+        out->null_count = count_nulls(out->validity->data(), len);
     }
     return out;
 }

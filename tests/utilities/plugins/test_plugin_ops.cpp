@@ -11,6 +11,7 @@
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <doctest/doctest.h>
 
@@ -170,4 +171,87 @@ TEST_CASE("plugin agg: a dftu. accumulator name is refused") {
           nullptr);
     CHECK(agg->agg_new(fx.host().h, "com.example.count", nullptr, 0, specs,
                        1) != nullptr);
+}
+
+namespace {
+
+std::int64_t sum_through_data(const dftu_series* v) {
+    const auto* d = static_cast<const std::int64_t*>(dftu_series_data(v));
+    if (!d) return -1;
+    std::int64_t t = 0;
+    for (std::int64_t i = 0; i < dftu_series_length(v); ++i) t += d[i];
+    return t;
+}
+
+dftu_series* doubled_through_data(const dftu_series* v) {
+    const auto* d = static_cast<const std::int64_t*>(dftu_series_data(v));
+    if (!d) return nullptr;
+    std::vector<std::int64_t> out(
+        static_cast<std::size_t>(dftu_series_length(v)));
+    for (std::size_t i = 0; i < out.size(); ++i) out[i] = 2 * d[i];
+    return dftu_series_new_flat(DFTU_TYPE_INT64, out.data(),
+                                static_cast<std::int64_t>(out.size()), nullptr);
+}
+
+std::shared_ptr<dftu_series> flat_chunk(std::vector<std::int64_t> v) {
+    return {dftu_series_new_flat(DFTU_TYPE_INT64, v.data(),
+                                 static_cast<std::int64_t>(v.size()), nullptr),
+            dftu_series_free};
+}
+
+}  // namespace
+
+TEST_CASE("plugin ops: a plugin op over a chunked column equals the joined") {
+    HostFixture fx;
+    const auto* ops = static_cast<const dftu_svc_ops*>(
+        fx.host().get_service(fx.host().h, DFTU_SVC_OPS));
+    REQUIRE(ops);
+
+    static const dftu_op_desc sum_op = {
+        "chunk_join_test.sum", DFTU_OP_SIG(I64, SERIES, NONE, NONE),
+        reinterpret_cast<const void*>(&sum_through_data)};
+    static const dftu_op_desc dbl_op = {
+        "chunk_join_test.double", DFTU_OP_SIG(SERIES, SERIES, NONE, NONE),
+        reinterpret_cast<const void*>(&doubled_through_data)};
+    if (!dftu_op_find(sum_op.name)) REQUIRE(dftu_op_register(&sum_op) == 0);
+    if (!dftu_op_find(dbl_op.name)) REQUIRE(dftu_op_register(&dbl_op) == 0);
+
+    dftracer::utils::dataframe::Series chunked{
+        dftracer::utils::dataframe::make_chunked({flat_chunk({1, 2, 3}),
+                                                  flat_chunk({4, 5}),
+                                                  flat_chunk({6, 7, 8})})};
+    REQUIRE(chunked.handle()->is_chunked());
+    dftracer::utils::dataframe::Series joined = chunked.materialize();
+    REQUIRE_FALSE(joined.handle()->is_chunked());
+
+    const dftu_series* in_c[1] = {chunked.handle()};
+    const dftu_series* in_j[1] = {joined.handle()};
+
+    dftu_result_scalar sc =
+        ops->run_aggregate(fx.host().h, sum_op.name, in_c, 1, nullptr);
+    dftu_result_scalar sj =
+        ops->run_aggregate(fx.host().h, sum_op.name, in_j, 1, nullptr);
+    REQUIRE(DFTU_RESULT_OK(sc));
+    REQUIRE(DFTU_RESULT_OK(sj));
+    CHECK(DFTU_RESULT_VALUE(sc).value.i == 36);
+    CHECK(DFTU_RESULT_VALUE(sc).value.i == DFTU_RESULT_VALUE(sj).value.i);
+
+    dftu_result_series rc =
+        ops->run(fx.host().h, dbl_op.name, in_c, 1, nullptr);
+    dftu_result_series rj =
+        ops->run(fx.host().h, dbl_op.name, in_j, 1, nullptr);
+    REQUIRE(DFTU_RESULT_OK(rc));
+    REQUIRE(DFTU_RESULT_OK(rj));
+    dftu_series* oc = DFTU_RESULT_VALUE(rc);
+    dftu_series* oj = DFTU_RESULT_VALUE(rj);
+    REQUIRE(dftu_series_length(oc) == 8);
+    REQUIRE(dftu_series_length(oj) == 8);
+    const auto* dc = static_cast<const std::int64_t*>(dftu_series_data(oc));
+    const auto* dj = static_cast<const std::int64_t*>(dftu_series_data(oj));
+    for (int i = 0; i < 8; ++i) {
+        CHECK(dc[i] == 2 * (i + 1));
+        CHECK(dc[i] == dj[i]);
+    }
+    dftu_series_free(oc);
+    dftu_series_free(oj);
 }

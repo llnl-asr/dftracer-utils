@@ -401,7 +401,9 @@ fn = _Functions()
 
 def c(path: str) -> Col:
     """A record path as written in duql: ``a.b[0]``, ``.x`` (the current
-    element), ``^.x`` (the enclosing row), backtick keys."""
+    element), ``^.x`` (the enclosing row), backtick keys. A ``*`` key after
+    the first, as in ``args.counters.*.p50``, is a wildcard path, allowed in
+    ``select``, ``drop``, ``unpivot`` and ``fn.any`` / ``fn.all``."""
     return Col(path)
 
 

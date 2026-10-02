@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_doc_guard.h>
@@ -351,15 +352,14 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
                     order.push_back(columns[c]);
                     descending.push_back(names[c] == "dur");
                 }
-        const auto rows =
+        const auto rows = co_await dataframe::join_chunks(
             co_await views::View::from_files(
                 to_view_files(collect_candidate_files(index, params)))
-                .phase(views::Phase::Any)
                 .filter(duql::parse_or_throw(text))
                 .cancel_when([&req]() { return req.cancel_token.cancelled(); })
                 .select(columns)
                 .sort_by_multi(order, descending)
-                .collect();
+                .collect());
         auto& rb = scratch_json_builder();
         rb.append_raw(std::to_string(rows.num_rows()));
         for (std::int64_t r = 0; r < rows.num_rows(); ++r) {

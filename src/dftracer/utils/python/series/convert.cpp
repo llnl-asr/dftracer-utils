@@ -471,8 +471,7 @@ PyObject* type_error(const char* what) {
 
 namespace {
 
-PyObject* strings_to_list(const Series& col, const std::uint8_t* valid,
-                          PyObject* na);  // below
+PyObject* strings_to_list(const Series& col, PyObject* na);  // below
 
 // A flat integer, float, bool or string column as a list, one typed loop with
 // the null test only when the column has nulls. Null when the type has no fast
@@ -580,10 +579,6 @@ bool fast_pylist(const Series& col, PyObject** result) {
             *result = out;
             return true;
         }
-        case TypeId::String:
-        case TypeId::LargeString:
-            *result = strings_to_list(col, valid, Py_None);
-            return true;
         default:
             return false;
     }
@@ -594,6 +589,8 @@ bool fast_pylist(const Series& col, PyObject** result) {
 PyObject* Series_to_pylist(PyObject* self, PyObject*) {
     Series* a = as_series(self);
     if (!a || !datetime_ready()) return nullptr;
+    if (a->type() == TypeId::String || a->type() == TypeId::LargeString)
+        return strings_to_list(*a, Py_None);
     {
         const Series col = a->encoding() == dataframe::Encoding::Flat
                                ? a->share()
@@ -767,51 +764,134 @@ inline std::uint64_t quick_hash(const char* p, std::size_t n) {
 }
 
 // Fill `dst` (n PyObject* slots) with a str per row, null rows holding `na`.
-// Rows with the same text share one str object (a small cache keyed by
-// quick_hash), so a column of repeated names allocates once per distinct name.
-// `drop_old` releases what a slot held (a numpy object array starts as None);
-// a fresh list's slots are empty. False with an exception set on failure.
-bool fill_strings(const Series& col, const std::uint8_t* valid, PyObject* na,
-                  PyObject** dst, bool drop_old) {
-    const std::int64_t n = col.length();
+// Nothing is materialized: a dictionary (and each dictionary chunk of a
+// chunked column) decodes an entry on first use and every row holding it gets
+// a new reference; other layouts share one str per repeated text through a
+// small cache keyed by quick_hash. `drop_old` releases what a slot held (a
+// numpy object array starts as None); a fresh list's slots are empty. False
+// with an exception set on failure.
+class StringFiller {
+   public:
+    StringFiller(PyObject* na, bool drop_old) : na_(na), drop_old_(drop_old) {}
+
+    bool fill(const dftu_series* c, PyObject** dst) {
+        switch (c->encoding) {
+            case dataframe::Encoding::Chunked: {
+                const auto* starts =
+                    reinterpret_cast<const std::int64_t*>(c->data->data());
+                for (std::size_t k = 0; k < c->nested.size(); ++k)
+                    if (!fill(c->nested[k].series.get(), dst + starts[k]))
+                        return false;
+                return true;
+            }
+            case dataframe::Encoding::Constant: {
+                const Series flat = Series{dftu_series_share(c)}.materialize();
+                return fill(flat.handle(), dst);
+            }
+            case dataframe::Encoding::Dictionary:
+                if (c->child()) return fill_dictionary(c, dst);
+                [[fallthrough]];
+            default:
+                return fill_rows(c, dst);
+        }
+    }
+
+   private:
     struct Slot {
         std::string_view text;
-        PyObject* obj =
-            nullptr;  // borrowed: the destination holds the reference
+        PyObject* obj = nullptr;  // borrowed: the destination holds a reference
     };
-    constexpr std::size_t SLOTS = 1U << 16;
-    std::vector<Slot> cache(SLOTS);
-    for (std::int64_t i = 0; i < n; ++i) {
-        PyObject* v;
-        if (valid && !((valid[i >> 3] >> (i & 7)) & 1U)) {
-            v = na;
-            Py_INCREF(v);
-        } else {
-            const std::string_view t = col.string_at(i);
-            Slot& slot = cache[quick_hash(t.data(), t.size()) & (SLOTS - 1)];
-            if (slot.obj && slot.text == t) {
-                v = slot.obj;
-                Py_INCREF(v);
-            } else {
-                v = PyUnicode_DecodeUTF8(
-                    t.data(), static_cast<Py_ssize_t>(t.size()), "strict");
-                if (!v) return false;
-                slot.text = t;
-                slot.obj = v;
-            }
-        }
-        if (drop_old) Py_XDECREF(dst[i]);
+    static constexpr std::size_t SLOTS = 1U << 16;
+
+    void put(PyObject** dst, std::int64_t i, PyObject* v) {
+        if (drop_old_) Py_XDECREF(dst[i]);
         dst[i] = v;
     }
-    return true;
+
+    bool fill_dictionary(const dftu_series* c, PyObject** dst) {
+        const dftu_series* dict = c->child().get();
+        const auto* codes =
+            reinterpret_cast<const std::int32_t*>(c->data->data());
+        std::vector<PyObject*> entries(static_cast<std::size_t>(dict->length),
+                                       nullptr);
+        bool ok = true;
+        for (std::int64_t i = 0; i < c->length && ok; ++i) {
+            PyObject* v;
+            if (dftu_series_is_null(c, i)) {
+                v = na_;
+            } else {
+                PyObject*& e = entries[static_cast<std::size_t>(codes[i])];
+                if (!e) {
+                    std::int64_t n = 0;
+                    const char* p = dftu_series_string_at(dict, codes[i], &n);
+                    e = PyUnicode_DecodeUTF8(
+                        p ? p : "", static_cast<Py_ssize_t>(n), "strict");
+                    if (!e) {
+                        ok = false;
+                        break;
+                    }
+                }
+                v = e;
+            }
+            Py_INCREF(v);
+            put(dst, i, v);
+        }
+        for (PyObject* e : entries) Py_XDECREF(e);
+        return ok;
+    }
+
+    bool fill_rows(const dftu_series* c, PyObject** dst) {
+        if (cache_.empty()) cache_.resize(SLOTS);
+        const bool flat = c->encoding == dataframe::Encoding::Flat;
+        const std::uint8_t* valid = flat && c->null_count > 0 && c->validity
+                                        ? c->validity->data()
+                                        : nullptr;
+        const bool probe = !flat || (c->null_count > 0 && !valid);
+        for (std::int64_t i = 0; i < c->length; ++i) {
+            PyObject* v;
+            const bool null = valid ? !((valid[i >> 3] >> (i & 7)) & 1U)
+                                    : (probe && dftu_series_is_null(c, i));
+            if (null) {
+                v = na_;
+                Py_INCREF(v);
+            } else {
+                std::int64_t n = 0;
+                const char* p = dftu_series_string_at(c, i, &n);
+                const std::string_view t(p ? p : "",
+                                         static_cast<std::size_t>(n));
+                Slot& slot =
+                    cache_[quick_hash(t.data(), t.size()) & (SLOTS - 1)];
+                if (slot.obj && slot.text == t) {
+                    v = slot.obj;
+                    Py_INCREF(v);
+                } else {
+                    v = PyUnicode_DecodeUTF8(
+                        t.data(), static_cast<Py_ssize_t>(t.size()), "strict");
+                    if (!v) return false;
+                    slot.text = t;
+                    slot.obj = v;
+                }
+            }
+            put(dst, i, v);
+        }
+        return true;
+    }
+
+    PyObject* na_;
+    bool drop_old_;
+    std::vector<Slot> cache_;
+};
+
+bool fill_strings(const Series& col, PyObject* na, PyObject** dst,
+                  bool drop_old) {
+    return StringFiller(na, drop_old).fill(col.handle(), dst);
 }
 
-PyObject* strings_to_list(const Series& col, const std::uint8_t* valid,
-                          PyObject* na) {
+PyObject* strings_to_list(const Series& col, PyObject* na) {
     const std::int64_t n = col.length();
     PyObject* out = PyList_New(static_cast<Py_ssize_t>(n));
     if (!out) return nullptr;
-    if (!fill_strings(col, valid, na, &PyList_GET_ITEM(out, 0), false)) {
+    if (!fill_strings(col, na, &PyList_GET_ITEM(out, 0), false)) {
         Py_DECREF(out);  // slots past the failure are still NULL, which a list
                          // tolerates
         return nullptr;
@@ -839,6 +919,8 @@ PyObject* Series_np_parts(PyObject* self, PyObject* args) {
     int nullable = 0;
     PyObject* na = Py_None;
     if (!PyArg_ParseTuple(args, "|pO", &nullable, &na)) return nullptr;
+    if (a->type() == TypeId::String || a->type() == TypeId::LargeString)
+        return tuple3(strings_to_list(*a, na), nullptr, "O");
     const Series col = a->encoding() == dataframe::Encoding::Flat
                            ? a->share()
                            : a->materialize();
@@ -923,9 +1005,6 @@ PyObject* Series_np_parts(PyObject* self, PyObject* args) {
                     bool_bytes(static_cast<const std::uint8_t*>(data), n), m,
                     "u1");
             }
-            case TypeId::String:
-            case TypeId::LargeString:
-                return tuple3(strings_to_list(col, valid, na), nullptr, "O");
             default:
                 PyErr_SetString(PyExc_TypeError,
                                 "column type has no native numpy conversion");
@@ -946,9 +1025,7 @@ PyObject* Series_str_into(PyObject* self, PyObject* args) {
     PyObject* out = nullptr;
     PyObject* na = Py_None;
     if (!PyArg_ParseTuple(args, "O|O", &out, &na)) return nullptr;
-    const Series col = a->encoding() == dataframe::Encoding::Flat
-                           ? a->share()
-                           : a->materialize();
+    const Series& col = *a;
     if (col.type() != TypeId::String && col.type() != TypeId::LargeString) {
         PyErr_SetString(PyExc_TypeError, "str_into needs a String column");
         return nullptr;
@@ -967,11 +1044,8 @@ PyObject* Series_str_into(PyObject* self, PyObject* args) {
             "str_into needs an object array of the column's length");
         return nullptr;
     }
-    const dftu_series* h = col.handle();
-    const std::uint8_t* valid =
-        col.null_count() > 0 && h->validity ? h->validity->data() : nullptr;
     const bool ok =
-        fill_strings(col, valid, na, static_cast<PyObject**>(view.buf), true);
+        fill_strings(col, na, static_cast<PyObject**>(view.buf), true);
     PyBuffer_Release(&view);
     if (!ok) return nullptr;
     Py_RETURN_NONE;
@@ -987,6 +1061,8 @@ PyObject* Series_item(PyObject* self, PyObject* arg) {
         return nullptr;
     }
     try {
+        if (a->encoding() == dataframe::Encoding::Chunked)
+            return cell(build_node(a->slice(i, 1)), 0);
         return cell(build_node(*a), i);
     } catch (const std::invalid_argument& e) {
         PyErr_SetString(PyExc_TypeError, e.what());

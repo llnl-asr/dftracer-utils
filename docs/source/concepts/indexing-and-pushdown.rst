@@ -74,7 +74,7 @@ another schema rebuilds the file.
 
 A generic file's index holds the path catalog and automatic zone maps,
 blooms and value counts for its most frequent paths, top-level or nested
-(``op``, ``io.off``, ``hosts.1``), up to the path budget. A filter on those
+(``op``, ``io.off``, ``hosts.1``), up to the evidence cap. A filter on those
 paths skips chunks the same way a filter on a dftracer args field does.
 
 The path catalog
@@ -90,8 +90,14 @@ so it needs no scan and sees a field even when only a few records carry it.
 
 The catalog also bounds automatic evidence. Besides the fixed fields and the
 fields you name, each file's most frequent args paths get a zone map and a
-bloom, up to the path budget (1024 by default). A path outside the budget can
-still be filtered on; it only cannot skip a chunk.
+bloom, while their estimated evidence bytes fit ``stats_share`` (5% by
+default) of the file's compressed size, at least 8 MiB. ``path_budget`` is an
+optional count ceiling, 0 meaning none. A path outside the cap can still be
+filtered on; it only cannot skip a chunk. A path whose min and max are the same
+in every chunk and that has no bloom is not kept, because it cannot skip a
+chunk. A chunk where a kept path has no value is recorded as absent: a test
+that needs a value (``==``, ``in``, a range, ``exists``) skips it, and ``!=``,
+``not in``, ``not exists`` and ``is null`` never do.
 
 How the store is laid out
 -------------------------

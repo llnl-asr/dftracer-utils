@@ -129,8 +129,6 @@ TEST_SUITE("LookupStore") {
         CHECK(cache::lookup_signature(*plan_of(gz), "side") == before);
 
         create_mixed_trace(env, 40, 20);
-        CHECK_FALSE(cache::lookup_signature(*plan_of(gz), "side"));
-        dftracer::utils::index::Indexer::open({gz}).build();
         const auto after = cache::lookup_signature(*plan_of(gz), "side");
         REQUIRE(after);
         CHECK(*after != *before);

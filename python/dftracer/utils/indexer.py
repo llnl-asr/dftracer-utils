@@ -51,13 +51,18 @@ class BloomConfig:
             ``"args.size"`` or a nested ``"io.size"``). Each gets a bloom
             filter (equality filters) and min/max (range filters) per chunk.
             An existing index without one of these fields is rebuilt.
-        path_budget: Also index each file's ``path_budget`` most frequent
-            other args paths: a number gets a per-chunk min/max, a string a
-            per-chunk bloom while the chunk holds at most ``auto_max_distinct``
-            of its values (else it keeps no bloom there). A path outside the
-            budget is still queryable but never skips a chunk. 0 indexes only
-            the fixed fields and ``fields``; an existing index built with
-            another budget is rebuilt.
+        path_budget: Also index each file's other args paths, most frequent
+            first, while their evidence fits ``stats_share`` and, when this is
+            above 0, at most ``path_budget`` of them: a number gets a
+            per-chunk min/max, a string a per-chunk bloom while the chunk
+            holds at most ``auto_max_distinct`` of its values (else it keeps
+            no bloom there). A path without evidence is still queryable but
+            never skips a chunk. 0 = no count limit; an existing index built
+            with another budget is rebuilt.
+        stats_share: The share of a file's compressed size its automatic
+            evidence may use, in (0, 1], at least 8 MiB. An existing index
+            built with another share is rebuilt. A record schema's
+            ``index.stats_share`` and ``index.path_budget`` override both.
         auto_max_distinct: The per-chunk distinct-value cap for automatic
             string blooms.
         false_positive_rate: Bloom false-positive rate, in (0, 1).
@@ -66,7 +71,8 @@ class BloomConfig:
     """
 
     fields: List[str] = field(default_factory=list)
-    path_budget: int = 1024
+    path_budget: int = 0
+    stats_share: float = 0.05
     auto_max_distinct: int = 256
     false_positive_rate: float = 0.01
     expected_entries: int = 1024
@@ -214,6 +220,7 @@ class Indexer:
             false_positive_rate=bloom.false_positive_rate,
             expected_entries=bloom.expected_entries,
             path_budget=bloom.path_budget,
+            stats_share=bloom.stats_share,
             auto_max_distinct=bloom.auto_max_distinct,
             extensions=list(extensions) if extensions is not None else None,
             memory_budget=coerce_bytes(memory_budget, "memory_budget"),

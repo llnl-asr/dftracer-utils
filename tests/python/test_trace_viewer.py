@@ -3,6 +3,7 @@
 
 import gzip
 import json
+import os
 
 import pytest
 
@@ -1499,3 +1500,27 @@ class TestCollectAll:
 
     def test_empty_list(self):
         assert dftu_utils.collect_all([]) == []
+
+
+def test_rewritten_trace_reads_its_new_content(tmp_path):
+    path = tmp_path / "t.pfw.gz"
+
+    def write(cat, n):
+        with gzip.open(path, "wt") as f:
+            f.write("[\n")
+            for i in range(n):
+                event = {"id": i, "name": "read", "cat": cat, "pid": 1, "tid": 1}
+                event.update({"ts": 1000 + i, "dur": 5, "ph": "X"})
+                f.write(json.dumps(event) + "\n")
+
+    def rows(query):
+        return len(TraceViewer(str(path)).duql(query).collect())
+
+    write("A", 20000)
+    assert rows('cat == "A"') == 20000
+    assert rows('cat == "B"') == 0
+    stat = path.stat()
+    write("B", 15000)
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+    assert rows('cat == "B"') == 15000
+    assert rows('cat == "A"') == 0

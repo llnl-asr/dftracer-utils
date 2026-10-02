@@ -34,7 +34,8 @@ class IndexArgParse : public cli::ArgParse {
     cli::IndexingArgs indexing;
 
     std::string dimensions;
-    std::size_t path_budget = 1024;
+    std::size_t path_budget = 0;
+    double stats_share = 0.05;
     std::uint64_t memory_budget = 0;
     std::string record_schema;
     std::size_t read_batch_size = 4;
@@ -63,10 +64,17 @@ class IndexArgParse : public cli::ArgParse {
             .help(
                 "Also index each file's N most frequent other args paths: "
                 "numbers get a per-chunk min/max, strings a per-chunk bloom up "
-                "to 256 distinct values; 0 indexes only the fixed fields and "
-                "--dimensions (default: 1024)")
+                "to 256 distinct values; 0 = no count limit (default: 0)")
             .scan<'d', std::size_t>()
-            .default_value(static_cast<std::size_t>(1024));
+            .default_value(static_cast<std::size_t>(0));
+
+        parser()
+            .add_argument("--stats-share")
+            .help(
+                "Share of each file's compressed size its automatic evidence "
+                "may use, in (0, 1], at least 8 MiB (default: 0.05)")
+            .scan<'g', double>()
+            .default_value(0.05);
 
         parser()
             .add_argument("--read-batch-size")
@@ -117,6 +125,7 @@ class IndexArgParse : public cli::ArgParse {
     void post_parse() override {
         dimensions = parser().get<std::string>("--dimensions");
         path_budget = parser().get<std::size_t>("--path-budget");
+        stats_share = parser().get<double>("--stats-share");
         memory_budget = cli::get_bytes_arg(parser(), "--memory-budget");
         record_schema = parser().get<std::string>("--schema");
         read_batch_size =
@@ -124,6 +133,15 @@ class IndexArgParse : public cli::ArgParse {
         expected_entries = parser().get<std::size_t>("--expected-entries");
         false_positive_rate = parser().get<double>("--false-positive-rate");
         plugins = parser().get<std::vector<std::string>>("--plugin");
+    }
+
+    bool validate() override {
+        if (!(stats_share > 0 && stats_share <= 1)) {
+            DFTRACER_UTILS_LOG_ERROR("--stats-share must be in (0, 1], got %g",
+                                     stats_share);
+            return false;
+        }
+        return true;
     }
 };
 
@@ -173,6 +191,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     ChunkIndexerConfig indexer_config;
     indexer_config.extra_dimensions = extra_dimensions;
     indexer_config.path_budget = cli->path_budget;
+    indexer_config.stats_share = cli->stats_share;
     indexer_config.expected_entries_per_chunk = expected_entries;
     indexer_config.false_positive_rate = false_positive_rate;
 

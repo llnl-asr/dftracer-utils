@@ -2,6 +2,7 @@
 #include <dftracer/utils/core/common/hash/hex64.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dataframe/internal/string_simd.h>
 #include <dftracer/utils/dataframe/internal/varwidth_offsets.h>
 #include <dftracer/utils/dataframe/kernels/string_ops.h>
@@ -50,7 +51,6 @@ Series str_starts_with(const Series& v, std::string_view prefix) {
 }  // namespace dftracer::utils::dataframe
 
 namespace {
-
 using dftracer::utils::dataframe::Buffer;
 using dftracer::utils::dataframe::buffer_bytes;
 using dftracer::utils::dataframe::Encoding;
@@ -59,6 +59,8 @@ using dftracer::utils::dataframe::narrow_varwidth_type;
 using dftracer::utils::dataframe::offsets_of;
 using dftracer::utils::dataframe::parallel_backend_installed;
 using dftracer::utils::dataframe::parallel_for;
+using dftracer::utils::dataframe::string_int64;
+using dftracer::utils::dataframe::string_mask;
 using dftracer::utils::dataframe::TypeId;
 
 // String or Binary, at either offset width (narrow_varwidth_type folds the
@@ -68,80 +70,12 @@ bool is_string_kind(TypeId t) {
     return n == TypeId::String || n == TypeId::Binary;
 }
 
-// Row `i` of a FLAT String/Binary(/Large) column `c`, reading its offsets at
-// width `Off` - int32_t for String/Binary, int64_t for LargeString/
-// LargeBinary. Callers pick `Off` once (via is_wide_offset_type) and
-// instantiate the whole hot loop at that width, never branching per row.
-template <class Off>
-std::string_view value_at(const dftu_series& c, std::int64_t i) {
-    const Off* off = reinterpret_cast<const Off*>(offsets_of<Off>(c)->data());
-    const char* data = reinterpret_cast<const char*>(c.data->data());
-    return std::string_view(data + off[i],
-                            static_cast<std::size_t>(off[i + 1] - off[i]));
-}
-
-// Row grain for the parallel FLAT predicate loop: a multiple of 8 so every
-// chunk boundary (except the very last) falls on a byte boundary of the
-// bit-packed output, giving disjoint bytes per task with no atomics needed.
-constexpr std::int64_t STRING_PREDICATE_GRAIN = 1 << 15;
-
-// Apply a string predicate at offset width `Off`, returning a Bool column. On
-// a DICTIONARY input (whose dictionary values share `v`'s offset width) the
-// predicate is evaluated once per dictionary entry, then codes are mapped.
-// Every predicate fans out through the parallel_for seam on the FLAT path
-// past one grain: a byte compare over 10M short strings runs at a few GB/s
-// on one core, far under what the memory system gives a pool.
-template <class Off, class Pred>
-dftu_series* string_predicate_w(const dftu_series* v, Pred pred) {
-    auto* out = new dftu_series();
-    out->type = TypeId::Bool;
-    out->encoding = Encoding::Flat;
-    out->length = v->length;
-    out->null_count = v->null_count;
-    out->validity = v->validity;
-    std::size_t bytes = buffer_bytes(TypeId::Bool, v->length);
-    out->data = Buffer::allocate(bytes);
-    std::memset(out->data->data(), 0, bytes);
-    std::uint8_t* bits = out->data->data();
-    auto set = [&](std::int64_t i) {
-        bits[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
-    };
-
-    if (v->encoding == Encoding::Flat) {
-        if (v->length > STRING_PREDICATE_GRAIN &&
-            parallel_backend_installed()) {
-            parallel_for(v->length, STRING_PREDICATE_GRAIN,
-                         [&](std::int64_t b, std::int64_t e) {
-                             for (std::int64_t i = b; i < e; ++i)
-                                 if (pred(value_at<Off>(*v, i))) set(i);
-                         });
-        } else {
-            for (std::int64_t i = 0; i < v->length; ++i)
-                if (pred(value_at<Off>(*v, i))) set(i);
-        }
-    } else if (v->encoding == Encoding::Dictionary && v->child()) {
-        const dftu_series& dict = *v->child();
-        std::vector<char> hit(static_cast<std::size_t>(dict.length));
-        for (std::int64_t k = 0; k < dict.length; ++k)
-            hit[static_cast<std::size_t>(k)] =
-                pred(value_at<Off>(dict, k)) ? 1 : 0;
-        const std::int32_t* codes =
-            reinterpret_cast<const std::int32_t*>(v->data->data());
-        for (std::int64_t i = 0; i < v->length; ++i)
-            if (hit[static_cast<std::size_t>(codes[i])]) set(i);
-    } else {
-        delete out;
-        return nullptr;
-    }
-    return out;
-}
-
-template <class Pred>
-dftu_series* string_predicate(const dftu_series* v, Pred pred) {
-    if (!is_string_kind(v->type)) return nullptr;
-    return is_wide_offset_type(v->type)
-               ? string_predicate_w<std::int64_t>(v, pred)
-               : string_predicate_w<std::int32_t>(v, pred);
+// A VIEW or CHUNKED column, or a DICTIONARY over a non-FLAT base, is read
+// through its FLAT copy.
+bool needs_flat_copy(const dftu_series& v) {
+    return v.encoding == Encoding::View || v.is_chunked() ||
+           (v.encoding == Encoding::Dictionary && v.child() &&
+            v.child()->encoding != Encoding::Flat);
 }
 
 // Per-row byte reader over a String/Binary(/Large) column that transparently
@@ -153,6 +87,11 @@ class RowReader {
    public:
     explicit RowReader(const dftu_series* v) : v_(v) {
         if (!is_string_kind(v->type)) return;
+        if (needs_flat_copy(*v)) {
+            own_.reset(dftu_series_materialize(v));
+            if (!own_) return;
+            v_ = v = own_.get();
+        }
         if (v->encoding == Encoding::Flat && offsets_of<Off>(*v) && v->data) {
             off_ = reinterpret_cast<const Off*>(offsets_of<Off>(*v)->data());
             data_ = reinterpret_cast<const char*>(v->data->data());
@@ -180,6 +119,7 @@ class RowReader {
     }
 
    private:
+    std::shared_ptr<dftu_series> own_;
     const dftu_series* v_;
     const Off* off_ = nullptr;
     const char* data_ = nullptr;
@@ -228,9 +168,13 @@ dftu_series* make_u64(const dftu_series* v,
 // Flat String output column from one string per row (size == v->length); shares
 // v's validity so null rows stay null (their bytes are ignored). Always
 // narrow (int32 offsets): a derived per-row transform's total size is its own
-// fresh sizing question, not a width the source column forces on it.
+// fresh sizing question, not a width the source column forces on it. nullptr
+// when the bytes pass INT32_MAX.
 dftu_series* make_string(const dftu_series* v,
                          const std::vector<std::string>& parts) {
+    std::size_t total = 0;
+    for (const std::string& p : parts) total += p.size();
+    if (!fits_int32_offsets(total)) return nullptr;
     auto* out = new dftu_series();
     out->type = TypeId::String;
     out->encoding = Encoding::Flat;
@@ -240,8 +184,6 @@ dftu_series* make_string(const dftu_series* v,
     std::size_t off_bytes =
         static_cast<std::size_t>(v->length + 1) * sizeof(std::int32_t);
     out->offsets = Buffer::allocate(off_bytes);
-    std::size_t total = 0;
-    for (const std::string& p : parts) total += p.size();
     out->data = Buffer::allocate(total);
     std::int32_t* od = reinterpret_cast<std::int32_t*>(out->offsets->data());
     char* bd =
@@ -379,26 +321,6 @@ dftu_series* string_transform(const dftu_series* v, Fn fn) {
                : string_transform_w<std::int32_t>(v, fn);
 }
 
-// Per-row int64 transform (scalar) at offset width `Off`; null rows keep the
-// shared validity.
-template <class Off, class Fn>
-dftu_series* int_transform_w(const dftu_series* v, Fn fn) {
-    RowReader<Off> r(v);
-    if (!r.ok()) return nullptr;
-    std::vector<std::int64_t> vals(static_cast<std::size_t>(v->length), 0);
-    for (std::int64_t i = 0; i < v->length; ++i) {
-        if (r.is_null(i)) continue;
-        vals[static_cast<std::size_t>(i)] = fn(r.at(i));
-    }
-    return make_i64(v, vals);
-}
-
-template <class Fn>
-dftu_series* int_transform(const dftu_series* v, Fn fn) {
-    return is_wide_offset_type(v->type) ? int_transform_w<std::int64_t>(v, fn)
-                                        : int_transform_w<std::int32_t>(v, fn);
-}
-
 bool is_ascii_ws(char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' ||
            c == '\v';
@@ -445,7 +367,7 @@ class LimitedRows {
     // `out` with every row of `v` whose string is listed made null.
     dftu_series* apply(dftu_series* out, const dftu_series* v) const {
         if (!out || rows_.empty()) return out;
-        dftu_series* ok = string_predicate(v, [this](std::string_view s) {
+        dftu_series* ok = string_mask(v, [this](std::string_view s) {
             return !rows_.contains(std::string(s));
         });
         if (!ok) return out;
@@ -453,7 +375,7 @@ class LimitedRows {
         auto valid = Buffer::allocate(bytes);
         for (std::size_t k = 0; k < bytes; ++k) {
             const std::uint8_t have =
-                v->validity ? v->validity->data()[k] : std::uint8_t{0xFF};
+                out->validity ? out->validity->data()[k] : std::uint8_t{0xFF};
             valid->data()[k] =
                 static_cast<std::uint8_t>(ok->data->data()[k] & have);
         }
@@ -474,22 +396,23 @@ class LimitedRows {
 // Bool mask of `p` over `v`; a row whose match reached the work limit is null.
 dftu_series* pattern_predicate(const dftu_series* v,
                                const duql::CompiledPattern& p) {
+    DFTU_PER_CHUNK(v, pattern_predicate, p);
     // A literal pattern runs inline, with no call per row.
     if (const auto t = duql::literal_test(p); t && !t->icase) {
         const std::string_view lit = t->text;
         switch (t->op) {
             case duql::LiteralTest::Op::EQUALS:
-                return string_predicate(
+                return string_mask(
                     v, [lit](std::string_view s) { return s == lit; });
             case duql::LiteralTest::Op::STARTS_WITH:
-                return string_predicate(v, [lit](std::string_view s) {
+                return string_mask(v, [lit](std::string_view s) {
                     return s.starts_with(lit);
                 });
             case duql::LiteralTest::Op::ENDS_WITH:
-                return string_predicate(
+                return string_mask(
                     v, [lit](std::string_view s) { return s.ends_with(lit); });
             case duql::LiteralTest::Op::CONTAINS:
-                return string_predicate(v, [lit](std::string_view s) {
+                return string_mask(v, [lit](std::string_view s) {
                     return substr_find(
                                s.data(), static_cast<std::int64_t>(s.size()),
                                lit.data(),
@@ -499,17 +422,17 @@ dftu_series* pattern_predicate(const dftu_series* v,
     }
     // Case-sensitive globs run inline too; SEGMENTS search long strings.
     if (!p.icase && p.kind == duql::detail::Kind::GLOB)
-        return string_predicate(v, [toks = p.glob](std::string_view s) {
+        return string_mask(v, [toks = p.glob](std::string_view s) {
             return duql::detail::glob_match_t<false, true>(toks, s);
         });
     if (!p.icase && p.kind == duql::detail::Kind::SEGMENTS)
-        return string_predicate(v, [&p, toks = p.glob](std::string_view s) {
+        return string_mask(v, [&p, toks = p.glob](std::string_view s) {
             return s.size() < duql::detail::SIMD_MIN_HAY
                        ? duql::detail::glob_match_t<false, false>(toks, s)
                        : duql::detail::segments_match(p, s);
         });
     LimitedRows limited;
-    dftu_series* out = string_predicate(v, [&](std::string_view s) {
+    dftu_series* out = string_mask(v, [&](std::string_view s) {
         const auto r = duql::match(p, s);
         if (r == duql::MatchResult::LIMIT) limited.add(s);
         return r == duql::MatchResult::YES;
@@ -523,8 +446,6 @@ namespace dftracer::utils::dataframe {
 
 Series str_pattern(const Series& v, const duql::CompiledPattern& p) {
     if (!v.valid()) return {};
-    if (v.encoding() != Encoding::Flat && v.encoding() != Encoding::Dictionary)
-        return str_pattern(v.materialize(), p);
     return Series{pattern_predicate(v.handle(), p)};
 }
 
@@ -552,6 +473,7 @@ dftu_series* regex_replace_w(const dftu_series* v,
                 duql::MatchResult::LIMIT) {
                 data.append(buf);
                 hit = true;
+                if (!fits_int32_offsets(data.size())) return nullptr;
             }
         }
         if (hit)
@@ -600,19 +522,14 @@ std::string_view pattern_text(const char* pattern, int32_t len) {
 
 dftu_series* dftu_series_str_eq(const dftu_series* v, const char* rhs,
                                 int32_t rhs_len) {
-    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_eq(flat_v, rhs, rhs_len));
-
     std::string_view r(rhs, static_cast<std::size_t>(rhs_len));
-    return string_predicate(v, [r](std::string_view s) { return s == r; });
+    return string_mask(v, [r](std::string_view s) { return s == r; });
 }
 
 dftu_series* dftu_series_str_contains(const dftu_series* v, const char* needle,
                                       int32_t needle_len) {
-    DFTU_FLAT_OPERAND(v, flat_v,
-                      dftu_series_str_contains(flat_v, needle, needle_len));
-
     std::string_view n(needle, static_cast<std::size_t>(needle_len));
-    return string_predicate(v, [n](std::string_view s) {
+    return string_mask(v, [n](std::string_view s) {
         return substr_find(s.data(), static_cast<std::int64_t>(s.size()),
                            n.data(), static_cast<std::int64_t>(n.size())) >= 0;
     });
@@ -621,29 +538,18 @@ dftu_series* dftu_series_str_contains(const dftu_series* v, const char* needle,
 dftu_series* dftu_series_str_starts_with(const dftu_series* v,
                                          const char* prefix,
                                          int32_t prefix_len) {
-    DFTU_FLAT_OPERAND(v, flat_v,
-                      dftu_series_str_starts_with(flat_v, prefix, prefix_len));
-
     std::string_view p(prefix, static_cast<std::size_t>(prefix_len));
-    return string_predicate(
-        v, [p](std::string_view s) { return s.starts_with(p); });
+    return string_mask(v, [p](std::string_view s) { return s.starts_with(p); });
 }
 
 dftu_series* dftu_series_str_ends_with(const dftu_series* v, const char* suffix,
                                        int32_t suffix_len) {
-    DFTU_FLAT_OPERAND(v, flat_v,
-                      dftu_series_str_ends_with(flat_v, suffix, suffix_len));
-
     std::string_view p(suffix, static_cast<std::size_t>(suffix_len));
-    return string_predicate(v,
-                            [p](std::string_view s) { return s.ends_with(p); });
+    return string_mask(v, [p](std::string_view s) { return s.ends_with(p); });
 }
 
 dftu_series* dftu_series_str_matches(const dftu_series* v, const char* pattern,
                                      int32_t pattern_len) {
-    DFTU_FLAT_OPERAND(v, flat_v,
-                      dftu_series_str_matches(flat_v, pattern, pattern_len));
-
     const auto p = compiled(duql::compile_regex(
         pattern_text(pattern, pattern_len), false, /*whole=*/true));
     if (!p) return nullptr;
@@ -672,6 +578,7 @@ dftu_series* str_extract_w(const dftu_series* v,
             if (duql::extract(re, s, group, m) == duql::MatchResult::YES) {
                 data.append(m);
                 hit = true;
+                if (!fits_int32_offsets(data.size())) return nullptr;
             }
         }
         if (hit)
@@ -722,9 +629,6 @@ dftu_series* dftu_series_str_regex_replace(const dftu_series* v,
 
 dftu_series* dftu_series_str_search(const dftu_series* v, const char* pattern,
                                     int32_t pattern_len) {
-    DFTU_FLAT_OPERAND(v, flat_v,
-                      dftu_series_str_search(flat_v, pattern, pattern_len));
-
     const auto p = compiled(
         duql::compile_regex(pattern_text(pattern, pattern_len), false));
     if (!p) return nullptr;
@@ -733,9 +637,6 @@ dftu_series* dftu_series_str_search(const dftu_series* v, const char* pattern,
 
 dftu_series* dftu_series_str_like(const dftu_series* v, const char* pattern,
                                   int32_t pattern_len) {
-    DFTU_FLAT_OPERAND(v, flat_v,
-                      dftu_series_str_like(flat_v, pattern, pattern_len));
-
     const auto p = compiled(
         duql::compile_like(pattern_text(pattern, pattern_len), false, '\\'));
     if (!p) return nullptr;
@@ -743,8 +644,6 @@ dftu_series* dftu_series_str_like(const dftu_series* v, const char* pattern,
 }
 
 dftu_series* dftu_series_str_len_bytes(const dftu_series* v) {
-    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_len_bytes(flat_v));
-
     // FLAT, narrow offsets: adjacent int32 offset difference, vectorized.
     // Every other case (DICTIONARY, or a wide-offset FLAT column) is scalar;
     // a Large* column's row count is bounded by int32 either way, only its
@@ -758,14 +657,12 @@ dftu_series* dftu_series_str_len_bytes(const dftu_series* v) {
         // Null rows keep 0 length regardless; validity marks them null.
         return make_i64(v, vals);
     }
-    return int_transform(v, [](std::string_view s) {
+    return string_int64(v, [](std::string_view s) {
         return static_cast<std::int64_t>(s.size());
     });
 }
 
 dftu_series* dftu_series_str_len_chars(const dftu_series* v) {
-    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_len_chars(flat_v));
-
     // FLAT, narrow offsets: count non-continuation bytes per row with the
     // vectorized scan. DICTIONARY and wide-offset columns take the scalar
     // per-row path.
@@ -780,7 +677,7 @@ dftu_series* dftu_series_str_len_chars(const dftu_series* v) {
                 data + off[i], static_cast<std::size_t>(off[i + 1] - off[i]));
         return make_i64(v, vals);
     }
-    return int_transform(v, [](std::string_view s) {
+    return string_int64(v, [](std::string_view s) {
         std::int64_t count = 0;
         for (unsigned char c : s)
             if ((c & 0xC0) != 0x80) ++count;  // non-continuation byte
@@ -790,11 +687,8 @@ dftu_series* dftu_series_str_len_chars(const dftu_series* v) {
 
 dftu_series* dftu_series_str_find(const dftu_series* v, const char* needle,
                                   int32_t needle_len) {
-    DFTU_FLAT_OPERAND(v, flat_v,
-                      dftu_series_str_find(flat_v, needle, needle_len));
-
     std::string_view n(needle, static_cast<std::size_t>(needle_len));
-    return int_transform(v, [n](std::string_view s) {
+    return string_int64(v, [n](std::string_view s) {
         return substr_find(s.data(), static_cast<std::int64_t>(s.size()),
                            n.data(), static_cast<std::int64_t>(n.size()));
     });
@@ -967,9 +861,13 @@ dftu_series* list_transform_w(const dftu_series* v, Fn fn) {
                                        0);
     for (std::int64_t i = 0; i < v->length; ++i) {
         if (!r.is_null(i)) fn(r.at(i), all_parts);
+        if (!fits_int32_offsets(all_parts.size())) return nullptr;
         list_off[static_cast<std::size_t>(i + 1)] =
             static_cast<std::int32_t>(all_parts.size());
     }
+    std::size_t ctotal = 0;
+    for (const std::string& p : all_parts) ctotal += p.size();
+    if (!fits_int32_offsets(ctotal)) return nullptr;
 
     auto* child = new dftu_series();
     child->type = TypeId::String;
@@ -978,8 +876,6 @@ dftu_series* list_transform_w(const dftu_series* v, Fn fn) {
     std::size_t coff_bytes =
         static_cast<std::size_t>(all_parts.size() + 1) * sizeof(std::int32_t);
     child->offsets = Buffer::allocate(coff_bytes);
-    std::size_t ctotal = 0;
-    for (const std::string& p : all_parts) ctotal += p.size();
     child->data = Buffer::allocate(ctotal);
     std::int32_t* cod = reinterpret_cast<std::int32_t*>(child->offsets->data());
     char* cbd =
@@ -1875,9 +1771,8 @@ dftu_series* dftu_series_str_is(const dftu_series* v, int32_t cls) {
 dftu_series* dftu_series_str_count(const dftu_series* v, const char* pat,
                                    int32_t pat_len) {
     if (!v || !is_string_kind(v->type)) return nullptr;
-    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_count(flat_v, pat, pat_len));
     std::string_view p(pat, static_cast<std::size_t>(pat_len));
-    return int_transform(
+    return string_int64(
         v, [p](std::string_view s) { return count_literal(s, p); });
 }
 

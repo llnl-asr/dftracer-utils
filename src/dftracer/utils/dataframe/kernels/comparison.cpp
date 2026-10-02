@@ -4,6 +4,7 @@
 #include <dftracer/utils/dataframe/internal/compare_simd.h>
 #include <dftracer/utils/dataframe/internal/numeric_dispatch.h>
 #include <dftracer/utils/dataframe/internal/scalar.h>
+#include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dataframe/kernels/comparison.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/series.h>
@@ -11,6 +12,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <string_view>
 #include <type_traits>
 
 namespace dftracer::utils::dataframe {
@@ -275,28 +277,41 @@ void exact_rhs(TypeId phys, std::int32_t& op, dftu_scalar& rhs) {
 
 dftu_series* dftu_series_compare(const dftu_series* v, dftu_cmp_op op,
                                  dftu_scalar rhs) {
+    if (!v) return nullptr;
+    DFTU_PER_CHUNK(v, dftu_series_compare, op, rhs);
+    using dftracer::utils::dataframe::CmpOp;
+    if (rhs.kind == DFTU_SCALAR_TAG_STR) {
+        const std::string_view r(rhs.value.s,
+                                 static_cast<std::size_t>(rhs.len));
+        switch (static_cast<CmpOp>(op)) {
+            case CmpOp::Eq:
+                return dftracer::utils::dataframe::string_mask(
+                    v, [r](std::string_view s) { return s == r; });
+            case CmpOp::Ne:
+                return dftracer::utils::dataframe::string_mask(
+                    v, [r](std::string_view s) { return s != r; });
+            case CmpOp::Lt:
+                return dftracer::utils::dataframe::string_mask(
+                    v, [r](std::string_view s) { return s < r; });
+            case CmpOp::Le:
+                return dftracer::utils::dataframe::string_mask(
+                    v, [r](std::string_view s) { return s <= r; });
+            case CmpOp::Gt:
+                return dftracer::utils::dataframe::string_mask(
+                    v, [r](std::string_view s) { return s > r; });
+            case CmpOp::Ge:
+                return dftracer::utils::dataframe::string_mask(
+                    v, [r](std::string_view s) { return s >= r; });
+        }
+        return nullptr;
+    }
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_compare(flat_v, op, rhs));
 
     using dftracer::utils::dataframe::Buffer;
     using dftracer::utils::dataframe::buffer_bytes;
-    using dftracer::utils::dataframe::CmpOp;
     using dftracer::utils::dataframe::compare_impl;
     using dftracer::utils::dataframe::Encoding;
     using dftracer::utils::dataframe::TypeId;
-    // A STR rhs is a string comparison, which is a different kernel: equality
-    // only, and dictionary-aware (dftu_series_str_eq tests each dictionary
-    // entry once and then compares codes, rather than resolving per row).
-    if (rhs.kind == DFTU_SCALAR_TAG_STR) {
-        if (op != static_cast<int32_t>(CmpOp::Eq) &&
-            op != static_cast<int32_t>(CmpOp::Ne))
-            return nullptr;
-        dftu_series* eq =
-            dftu_series_str_eq(v, rhs.value.s, static_cast<int32_t>(rhs.len));
-        if (eq == nullptr || op == static_cast<int32_t>(CmpOp::Eq)) return eq;
-        dftu_series* ne = dftu_series_logical_not(eq);
-        dftu_series_free(eq);
-        return ne;
-    }
 
     if (v->encoding != Encoding::Flat) return nullptr;
     const TypeId phys = physical_type(v->type);

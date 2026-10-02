@@ -3,6 +3,7 @@
 #include <dftracer/utils/core/common/string_intern.h>
 #include <dftracer/utils/core/common/to_chars.h>
 #include <dftracer/utils/dataframe/agg.h>
+#include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
@@ -1059,7 +1060,8 @@ coro::CoroTask<EnginePrep> prepare_engine_group(const ViewPlan& plan) {
     // in C++ (build_agg_input_frame's transform step over the whole frame),
     // then group over the in-memory frame.
     if (!spec.transforms.empty()) {
-        dataframe::DataFrame frame = co_await lf.collect();
+        dataframe::DataFrame frame =
+            co_await dataframe::join_chunks(co_await lf.collect());
         const dftracer::utils::index::plan::GroupResolver* resolver =
             spec.transform_wants_resolver ? ensure_resolver(plan) : nullptr;
         append_transform_columns(frame, spec.transforms, resolver);
@@ -1173,7 +1175,8 @@ coro::CoroTask<dataframe::DataFrame> run_collect_via_engine(
                                  ->group_by(ep.group_key_names, ep.gaggs,
                                             ep.dyn_specs, ep.dyn_prefix)
                                  .collect();
-    co_return finalize_engine_frame(std::move(r), plan, ep.dyn_specs);
+    co_return finalize_engine_frame(
+        co_await dataframe::join_chunks(std::move(r)), plan, ep.dyn_specs);
 }
 
 coro::CoroTask<dataframe::AggStatePtr> build_engine_agg_state(

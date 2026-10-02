@@ -6,6 +6,8 @@
 
 #include <dftracer/utils/dataframe/dataframe.h>
 
+#include <vector>
+
 struct ArrowSchema;
 struct ArrowArray;
 
@@ -17,6 +19,12 @@ namespace dftracer::utils::dataframe {
 /// dictionary array (indices = the selection, dictionary = the base). The
 /// caller owns both structs and must call their release callbacks.
 void to_arrow(const Series& col, ArrowSchema* schema, ArrowArray* array);
+
+/// Export a struct Series (a DataFrame) as record batches: one per chunk when
+/// every field is a CHUNKED column with identical chunk starts and flat
+/// chunks, else one joined batch. Zero copy; each array keeps its chunks
+/// alive. The caller owns `schema` and every returned array.
+std::vector<ArrowArray> to_arrow_batches(const Series& st, ArrowSchema* schema);
 
 /// Import a FLAT primitive Arrow array as a Series, wrapping its buffers zero
 /// copy. Ownership of `array` moves into the returned Series (the array's

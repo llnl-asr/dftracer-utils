@@ -67,7 +67,7 @@ std::string write_trace(const std::string& dir, const std::string& name,
 build::IndexBuildBatchResult run_build(const std::vector<std::string>& files,
                                        const std::string& index_dir,
                                        std::uint64_t memory_budget,
-                                       std::size_t path_budget = 1024,
+                                       std::size_t path_budget = 0,
                                        std::size_t parallelism = 4) {
     build::IndexBuildBatchResult out;
     Runtime rt(4);
@@ -130,7 +130,7 @@ TEST_SUITE("IndexBuildMemory") {
         const std::vector<std::string> files = {
             write_trace(env.get_dir(), "narrow", 6000, 12),
             write_trace(env.get_dir(), "wide", 6000, 600)};
-        for (std::size_t path_budget : {std::size_t{1024}, std::size_t{40}}) {
+        for (std::size_t path_budget : {std::size_t{0}, std::size_t{40}}) {
             CAPTURE(path_budget);
             const auto big_dir =
                 env.get_dir() + "/big" + std::to_string(path_budget);

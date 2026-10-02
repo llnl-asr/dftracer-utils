@@ -7,6 +7,7 @@
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/fold.h>
+#include <dftracer/utils/trace/views/native_row_fold.h>
 
 #include <cstdint>
 #include <memory>
@@ -114,13 +115,6 @@ class TypedCollectFold : public Fold {
         dftracer::utils::dataframe::DataFrame to_frame(
             const dftracer::utils::StringIntern& intern) && {
             namespace df = dftracer::utils::dataframe;
-            std::vector<std::string_view> names, cats;
-            names.reserve(name_id.size());
-            cats.reserve(cat_id.size());
-            for (std::uint32_t id : name_id)
-                names.push_back(intern.resolve(id));
-            for (std::uint32_t id : cat_id) cats.push_back(intern.resolve(id));
-
             // from_borrowed moves the vector in and borrows its buffer; a
             // vector move keeps that buffer, so data() taken first stays valid.
             // An empty column takes the copy path instead: from_borrowed does
@@ -134,9 +128,9 @@ class TypedCollectFold : public Fold {
             };
             df::DataFrame out;
             out.names.emplace_back("name");
-            out.columns.push_back(df::Series::strings(names));
+            out.columns.push_back(interned_column(name_id, intern));
             out.names.emplace_back("cat");
-            out.columns.push_back(df::Series::strings(cats));
+            out.columns.push_back(interned_column(cat_id, intern));
             out.names.emplace_back("pid");
             out.columns.push_back(column(std::move(pid), df::TypeId::Uint64));
             out.names.emplace_back("tid");

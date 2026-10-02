@@ -438,6 +438,7 @@ Result measure(const Options& opt, const std::string& input,
             r.rows[key] =
                 run(view.duql(text).agg({{AggOp::Count, "", "n"}}).collect())
                     .column("n")
+                    .materialize()
                     .data<std::int64_t>()[0];
         r.query_s[key] = timed(
             [&] {
@@ -446,6 +447,38 @@ Result measure(const Options& opt, const std::string& input,
             opt.warmups, opt.runs);
     }
     if (genesis) {
+        r.query_s["collect"] =
+            timed([&] { run(view.collect()); }, opt.warmups, opt.runs);
+        r.query_s["group_collect"] = timed(
+            [&] {
+                run(view.duql("where gtype == \"counter\" | group metric "
+                              "{ n = count() }")
+                        .collect());
+            },
+            opt.warmups, opt.runs);
+
+        const dataframe::DataFrame frame =
+            run(view.duql("where gtype == \"counter\"").collect());
+        const std::string metric(frame.column("metric").string_at(0));
+        r.rows["frame"] = frame.num_rows();
+        r.query_s["frame_filter"] =
+            timed([&] { frame.filter(frame.column("metric").str_eq(metric)); },
+                  opt.warmups, opt.runs);
+        r.query_s["frame_starts_with"] = timed(
+            [&] {
+                frame.filter(frame.column("metric").str_starts_with("cpu"));
+            },
+            opt.warmups, opt.runs);
+        r.query_s["frame_sort"] =
+            timed([&] { frame.sort_by("metric"); }, opt.warmups, opt.runs);
+        r.query_s["frame_group"] = timed(
+            [&] { frame.group_by(std::vector<std::string>{"metric"}).size(); },
+            opt.warmups, opt.runs);
+        const dataframe::DataFrame runs =
+            frame.group_by(std::vector<std::string>{"run"}).size();
+        r.query_s["frame_join"] =
+            timed([&] { frame.join(runs, std::vector<std::string>{"run"}); },
+                  opt.warmups, opt.runs);
         r.peak_rss = peak_rss_bytes();
         return r;
     }

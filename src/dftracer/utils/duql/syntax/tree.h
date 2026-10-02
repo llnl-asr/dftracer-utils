@@ -48,12 +48,14 @@ struct PathStep {
     std::string key;
     bool quoted = false;
     std::optional<std::int64_t> index;
+    bool wildcard() const { return key == "*" && !quoted; }
     bool operator==(const PathStep&) const = default;
 };
 
 enum class PathRoot : std::uint8_t { RECORD, CURRENT, ENCLOSING };
 
-/// `a.b[0]`, `.name` (current row) or `^.name` (enclosing row).
+/// `a.b[0]`, `.name` (current row) or `^.name` (enclosing row). A step with
+/// key `*` that is not quoted is a wildcard: the path is a pattern.
 struct Path {
     PathRoot root = PathRoot::RECORD;
     std::vector<PathStep> steps;

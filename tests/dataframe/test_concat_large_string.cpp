@@ -1,6 +1,6 @@
 // concat accepts string and large_string columns, alone or mixed: the result is
-// large_string when any part is, nulls and order are kept, and a string next to
-// an integer still fails.
+// a string view column, nulls and order are kept, and a string next to an
+// integer still fails.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/config.h>
@@ -94,15 +94,14 @@ Cells cells_of(const Series& s) {
 }  // namespace
 
 TEST_SUITE("concat string and large_string") {
-    TEST_CASE("two large_string parts concatenate and stay large_string") {
+    TEST_CASE("two large_string parts concatenate into a string view") {
         Series a = make_large_utf8({"a", "bb"});
         Series b = make_large_utf8({"ccc", "dddd"});
         REQUIRE(a.type() == TypeId::LargeString);
         Series out = dfops::concat_columns({&a, &b});
         REQUIRE(out.valid());
-        CHECK(out.type() == TypeId::LargeString);
-        CHECK(out.offsets() == nullptr);
-        CHECK(out.offsets64() != nullptr);
+        CHECK(out.type() == TypeId::String);
+        CHECK(out.encoding() == dftracer::utils::dataframe::Encoding::View);
         CHECK(cells_of(out) == Cells{"a", "bb", "ccc", "dddd"});
     }
 
@@ -111,8 +110,8 @@ TEST_SUITE("concat string and large_string") {
         Series l = make_large_utf8({"zzz"});
         Series sl = dfops::concat_columns({&s, &l});
         Series ls = dfops::concat_columns({&l, &s});
-        CHECK(sl.type() == TypeId::LargeString);
-        CHECK(ls.type() == TypeId::LargeString);
+        CHECK(sl.type() == TypeId::String);
+        CHECK(ls.type() == TypeId::String);
         CHECK(cells_of(sl) == Cells{"x", "yy", "zzz"});
         CHECK(cells_of(ls) == Cells{"zzz", "x", "yy"});
     }

@@ -11,6 +11,7 @@
 #include <dftracer/utils/duql/syntax/parser.h>
 #include <dftracer/utils/duql/syntax/walk.h>
 #include <dftracer/utils/duql/term.h>
+#include <dftracer/utils/duql/wildcard.h>
 
 #include <algorithm>
 #include <charconv>
@@ -2462,6 +2463,10 @@ class Lowering {
 
     std::string steps_text(const Path& p, Span span, std::size_t end) const {
         if (p.root != PathRoot::RECORD) reject_root(p, span);
+        for (const auto& step : p.steps)
+            if (step.wildcard())
+                fail(span,
+                     "a wildcard path needs a source with a field catalog");
         std::string out;
         for (std::size_t i = 0; i < end; ++i) {
             const auto& step = p.steps[i];
@@ -3065,7 +3070,8 @@ dftracer::utils::expected<void, duql::DuqlError> bind_params(
 
 dftracer::utils::expected<duql::Program, duql::DuqlError> compile_program(
     std::string_view text, const duql::Params& params, const duql::Roles* roles,
-    std::string_view source, const duql::PluginCatalog* plugins) {
+    std::string_view source, const duql::PluginCatalog* plugins,
+    const LeafPaths* leaves) {
     auto tree = syntax::parse(text);
     if (!tree) return dftracer::utils::unexpected(tree.error());
     std::vector<Def> defs = duql::take_defs(tree->decls);
@@ -3106,6 +3112,19 @@ dftracer::utils::expected<duql::Program, duql::DuqlError> compile_program(
             return dftracer::utils::unexpected(ok.error());
         if (auto ok = bind_params(*tree->pipeline, params, text); !ok)
             return dftracer::utils::unexpected(ok.error());
+    }
+    if (leaves) {
+        for (auto& d : tree->decls)
+            if (auto* let = std::get_if<Let>(&d))
+                if (auto ok = expand_wildcards(*let->pipeline, *leaves,
+                                               fallback, text);
+                    !ok)
+                    return dftracer::utils::unexpected(ok.error());
+        if (tree->pipeline)
+            if (auto ok =
+                    expand_wildcards(*tree->pipeline, *leaves, fallback, text);
+                !ok)
+                return dftracer::utils::unexpected(ok.error());
     }
     try {
         duql::Program out =

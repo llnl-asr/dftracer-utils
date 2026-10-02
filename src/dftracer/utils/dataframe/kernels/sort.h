@@ -15,6 +15,7 @@ namespace dftracer::utils::dataframe {
 
 /// Three-way order of rows `a` and `b` of `v` (-1/0/1) on the column's own
 /// domain. Only defined for an is_orderable_type() column; 0 for any other.
+/// `v` must not be CHUNKED (join it once first; this runs per compare).
 int compare_rows(const Series& v, std::int64_t a, std::int64_t b);
 
 /// Stable argsort: an Int64 column of row indices ordering `v` ascending, or

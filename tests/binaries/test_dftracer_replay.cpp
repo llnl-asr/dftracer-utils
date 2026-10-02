@@ -436,9 +436,8 @@ TEST_SUITE("DFTracerReplay") {
         std::string trace_file = (temp_dir / "test_trace.pfw.gz").string();
         create_sample_trace(trace_file, 10);
 
-        // Should handle gracefully or fail with error.
-        // The exact behavior depends on argparse validation.
-        run_replay(binary, {"--dry-run", "--sample-rate", "1.5", trace_file});
+        CHECK(run_replay(binary, {"--dry-run", "--sample-rate", "1.5",
+                                  trace_file}) == 1);
 
         std::error_code ec;
         fs::remove_all(temp_dir, ec);
@@ -570,7 +569,7 @@ TEST_SUITE("DFTracerReplay") {
 
         int rc =
             run_replay(binary, {"--dry-run", "/nonexistent/path/trace.pfw"});
-        CHECK(rc != 0);
+        CHECK(rc == 1);
     }
 
     TEST_CASE("invalid trace format") {
@@ -589,9 +588,7 @@ TEST_SUITE("DFTracerReplay") {
         file << "this is not valid JSON";
         file.close();
 
-        // Should handle parse error gracefully.
-        // May exit with error or skip invalid entries.
-        run_replay(binary, {"--dry-run", bad_trace});
+        CHECK(run_replay(binary, {"--dry-run", bad_trace}) == 1);
 
         std::error_code ec;
         fs::remove_all(temp_dir, ec);

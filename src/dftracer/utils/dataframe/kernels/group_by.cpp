@@ -85,7 +85,8 @@ void hash_string_keys(const dftu_series& k, std::vector<std::int32_t>& group_of,
 // string). Returns the assignment and a distinct-key column in first-seen
 // order. A String/Binary key column's distinct-value output is always
 // narrow: the group key set is bounded by the row count, a fresh sizing
-// question independent of the source column's own offset width.
+// question independent of the source column's own offset width. Keys past
+// INT32_MAX bytes return a Groups with null keys.
 Groups build_groups(const dftu_series* keys_in) {
     const dftu_series* k = keys_in;
     dftu_series* materialized = nullptr;
@@ -125,6 +126,10 @@ Groups build_groups(const dftu_series* keys_in) {
         std::string bytes;
         for (const std::string& s : distinct) {
             bytes += s;
+            if (!fits_int32_offsets(bytes.size())) {
+                if (materialized) dftu_series_free(materialized);
+                return Groups{};
+            }
             off.push_back(static_cast<std::int32_t>(bytes.size()));
         }
         g.keys = dftu_series_new_string(static_cast<dftu_dtype>(key_kind),
@@ -214,7 +219,14 @@ int32_t dftu_series_group_by(const dftu_series* keys, const dftu_series* values,
                              dftu_series** out_values, int32_t max_values) {
     *out_keys = nullptr;
     if (keys->length != values->length) return 0;
-    if (values->encoding != Encoding::Flat) return 0;
+    if (values->encoding != Encoding::Flat) {
+        dftu_series* flat = dftu_series_materialize(values);
+        if (!flat) return 0;
+        const int32_t n = dftu_series_group_by(keys, flat, op_mask, out_keys,
+                                               out_values, max_values);
+        dftu_series_free(flat);
+        return n;
+    }
     if (values->type == TypeId::Bool || values->type == TypeId::String ||
         values->type == TypeId::Binary)
         return 0;
@@ -226,6 +238,7 @@ int32_t dftu_series_group_by(const dftu_series* keys, const dftu_series* values,
     }
 
     Groups g = build_groups(keys);
+    if (!g.keys) return 0;
     *out_keys = g.keys;
     std::int32_t n = 0;
     DF_NUMERIC_DISPATCH(values->type, aggregate, *values, g.group_of,

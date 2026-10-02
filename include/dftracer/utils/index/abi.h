@@ -47,6 +47,16 @@ typedef struct dftu_indexer_options {
     uint64_t memory_budget;
     /** A registered schema id; NULL or "" detects each file's schema. */
     const char* schema;
+    /** Also index each file's other args paths, most frequent first, while
+     * their evidence fits `bloom_stats_share`, and, when this is above 0, at
+     * most this many of them; 0 = no count limit. Used when `bloom` is set. */
+    uint64_t bloom_path_budget;
+    /** The share of a file's compressed size its automatic evidence may use,
+     * at least 8 MiB; the default is 0.05. A value outside (0, 1] makes
+     * dftu_indexer_open fail with DFTU_COND_INVALID_ARGUMENT and a message
+     * naming stats_share. A registered schema's index.stats_share and
+     * index.path_budget override both fields. */
+    double bloom_stats_share;
 } dftu_indexer_options;
 
 typedef struct dftu_indexer_report {

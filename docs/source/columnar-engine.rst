@@ -21,8 +21,16 @@ Overview
   vectorizes cleanly.
 - **Encodings**: a column is ``FLAT`` (values contiguous), ``CONSTANT`` (one
   value with a logical length N), ``DICTIONARY`` (values indexed into a base),
-  or ``SELECTION`` (a view over a base with no data movement). Dictionary and
+  ``SELECTION`` (a view over a base with no data movement), or ``VIEW`` (a
+  string or binary column of 16-byte views: values of up to 12 bytes inline,
+  longer ones as a prefix, a buffer index and an offset into buffers the
+  column keeps alive, as Arrow ``string_view``). Dictionary and
   selection keep a repeated string - host, category, file name - stored once.
+  A View scan builds a string column as a dictionary over views when a
+  batch repeats its values (at most a quarter as many distinct values as
+  rows) and as a view column otherwise, both pointing into the scan's
+  string table, and ``concat`` of string columns keeps views and
+  dictionaries over the parts' buffers instead of copying the bytes.
 - **SIMD kernels**: filters, comparisons, and reductions run through
   `Highway <https://github.com/google/highway>`_, so a kernel is written once
   and dispatched at runtime to the widest instruction set the CPU supports

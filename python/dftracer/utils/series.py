@@ -286,6 +286,10 @@ def _native_numpy(native: "_ext._Series") -> "np.ndarray":
         return np.asarray(memoryview(native))  # ty: ignore[invalid-argument-type]
     except (BufferError, TypeError):
         pass
+    if DType(native.type) in (DType.STRING, DType.LARGE_STRING):
+        out = np.empty(native.length, dtype=object)
+        native.str_into(out, None)
+        return out
     if native.encoding != 0:
         native = native.materialize()
     dtype = DType(native.type)
@@ -302,22 +306,75 @@ def _native_numpy(native: "_ext._Series") -> "np.ndarray":
     if dtype == DType.BOOL and not nulls:
         values, _, _ = _parts(native, False)
         return _frombuffer(values, "u1").view(np.bool_)
-    if dtype in (DType.STRING, DType.LARGE_STRING):
-        out = np.empty(native.length, dtype=object)
-        native.str_into(out, None)
-        return out
     if dtype == DType.BOOL or dtype in _NATIVE_OBJECT_TYPES or dtype in _PYTHON_OBJECT_TYPES:
         return _object_numpy(native.to_pylist())
     raise TypeError(f"no native conversion for column type '{dtype.name.lower()}'")
 
 
+_POLARS_NATIVE_ONLY = (DType.FLOAT16, DType.DECIMAL128, DType.DECIMAL256)
+
+
+def _polars_via_arrow(native: "_ext._Series") -> bool:
+    """Whether the Arrow capsule gives polars the dtype the native path does: not
+    for Float16 and decimals, and not for a dictionary column, which Arrow
+    exports as Categorical."""
+    return (
+        hasattr(native, "__arrow_c_array__")
+        and native.encoding != 2
+        and DType(native.type) not in _POLARS_NATIVE_ONLY
+    )
+
+
+def _polars_native(native: "_ext._Series", pl: Any) -> "pl.Series":
+    """The column as a polars Series built natively, with no pyarrow."""
+    dtype = DType(native.type)
+    if dtype in _TEMPORAL_KINDS:
+        values = _temporal_numpy(native, dtype)
+        if values.dtype.name.endswith("[s]"):
+            values = values.astype(values.dtype.name.replace("[s]", "[ms]"))
+        out = pl.Series(values)
+        if dtype == DType.TIMESTAMP and native.timezone:
+            out = out.dt.replace_time_zone("UTC").dt.convert_time_zone(native.timezone)
+        return out
+    if dtype == DType.FLOAT16:
+        import numpy as np  # ty: ignore[unresolved-import]
+
+        return pl.Series(_native_numpy(native).astype(np.float32))  # type: ignore[union-attr]
+    values: Any = native.to_pylist()
+    if dtype == DType.MAP:
+        values = [
+            None if row is None else [{"key": k, "value": v} for k, v in row] for row in values
+        ]
+    polars_dtype = _POLARS_DTYPES.get(dtype)
+    return pl.Series(values, dtype=getattr(pl, polars_dtype) if polars_dtype else None)
+
+
 def _pandas_values(native: "_ext._Series") -> "Union[pd.Series, np.ndarray]":
     """The column as a pandas Series or NumPy array built without pyarrow: a
     zoned timestamp gets its zone, everything else its NumPy array."""
+    import pandas as pd  # ty: ignore[unresolved-import]
+
+    if DType(native.type) in (DType.STRING, DType.LARGE_STRING) and hasattr(
+        native, "__arrow_c_array__"
+    ):
+        import numpy as np  # ty: ignore[unresolved-import]
+
+        string = pd.Series(np.array(["x"], dtype=object)).dtype
+        if isinstance(string, pd.StringDtype) and string.storage == "pyarrow":
+            try:
+                import pyarrow as pa  # ty: ignore[unresolved-import]
+            except ImportError:
+                pass
+            else:
+                arr = pa.array(native)
+                if pa.types.is_dictionary(arr.type):
+                    arr = pa.DictionaryArray.from_arrays(
+                        arr.indices, arr.dictionary.cast(pa.large_string())
+                    )
+                return pd.Series(pd.array(arr, dtype=string))
     values = _native_numpy(native)
     if DType(native.type) != DType.TIMESTAMP or not native.timezone:
         return values
-    import pandas as pd  # ty: ignore[unresolved-import]
 
     return pd.Series(values).dt.tz_localize("UTC").dt.tz_convert(native.timezone)
 
@@ -330,9 +387,16 @@ def _pandas_nullable(native: "_ext._Series") -> "Optional[ExtensionArray]":
     import numpy as np  # ty: ignore[unresolved-import]
     import pandas as pd  # ty: ignore[unresolved-import]
 
+    dtype = DType(native.type)
+    if dtype in (DType.STRING, DType.LARGE_STRING):
+        out = np.empty(native.length, dtype=object)
+        native.str_into(out, pd.NA)
+        string = pd.StringDtype()
+        if getattr(string, "storage", "python") == "python":
+            return cast(Any, string.construct_array_type())(out)
+        return pd.array(out, dtype=string)
     if native.encoding != 0:
         native = native.materialize()
-    dtype = DType(native.type)
     if dtype in _INTEGERS or dtype in _FLOATS:
         values, mask, dt = _parts(native, True)
         arr = _frombuffer(values, dt)
@@ -347,13 +411,6 @@ def _pandas_nullable(native: "_ext._Series") -> "Optional[ExtensionArray]":
         arr = _frombuffer(values, "u1").view(np.bool_)
         m = _frombuffer(mask, "?") if mask is not None else np.zeros(len(arr), dtype=bool)
         return pd.arrays.BooleanArray(arr, m)
-    if dtype in (DType.STRING, DType.LARGE_STRING):
-        out = np.empty(native.length, dtype=object)
-        native.str_into(out, pd.NA)
-        string = pd.StringDtype()
-        if getattr(string, "storage", "python") == "python":
-            return cast(Any, string.construct_array_type())(out)
-        return pd.array(out, dtype=string)
     return None
 
 
@@ -592,35 +649,21 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         return _native_numpy(self._native)
 
     def to_polars(self) -> "pl.Series":
-        """This column as a polars Series, built without pyarrow."""
+        """This column as a polars Series. Where the extension has Arrow
+        support, every column but a Float16, decimal or dictionary one
+        comes through the Arrow PyCapsule interface (polars >= 1.3; an older
+        polars raises its own error), without pyarrow; those, and builds
+        without Arrow, use the native conversion (Float16 becomes Float32, a
+        decimal gets precision 38, a dictionary becomes String)."""
         try:
             import polars as pl  # ty: ignore[unresolved-import]
         except ImportError:
             raise ImportError(
                 "polars is required for to_polars(). Install with: pip install polars"
             ) from None
-        native = self._native
-        dtype = DType(native.type)
-        if dtype in _TEMPORAL_KINDS:
-            values = _temporal_numpy(native, dtype)
-            if values.dtype.name.endswith("[s]"):
-                values = values.astype(values.dtype.name.replace("[s]", "[ms]"))
-            out = pl.Series(values)
-            if dtype == DType.TIMESTAMP and native.timezone:
-                out = out.dt.replace_time_zone("UTC").dt.convert_time_zone(native.timezone)
-            return out
-        if dtype == DType.FLOAT16:
-            import numpy as np  # ty: ignore[unresolved-import]
-
-            return pl.Series(_native_numpy(native).astype(np.float32))  # type: ignore[union-attr]
-        values = native.to_pylist()
-        if dtype == DType.MAP:
-            values = [
-                None if row is None else [{"key": k, "value": v} for k, v in row]
-                for row in values  # type: ignore[union-attr]
-            ]
-        polars_dtype = _POLARS_DTYPES.get(dtype)
-        return pl.Series(values, dtype=getattr(pl, polars_dtype) if polars_dtype else None)
+        if _polars_via_arrow(self._native):
+            return pl.Series(self)  # type: ignore[arg-type]
+        return _polars_native(self._native, pl)
 
     def __array__(
         self, dtype: "Optional[np.dtype]" = None, copy: Optional[bool] = None
@@ -1534,8 +1577,8 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
 
     @property
     def encoding(self) -> int:
-        """(property, not a method) The native storage encoding (flat,
-        dictionary, selection). Read as ``s.encoding``."""
+        """(property, not a method) The native storage encoding: 0 flat,
+        1 constant, 2 dictionary, 3 selection, 4 view, 5 chunked. Read as ``s.encoding``."""
         return self._native.encoding
 
     @property

@@ -9,6 +9,7 @@
 
 #include <functional>
 #include <memory>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -49,14 +50,14 @@ struct ColumnSpec {
 /// `spec.select`, then the auto-numeric dyn columns appended when
 /// `spec.emit_dyn`.
 dataframe::DataFrame events_to_frame(
-    const std::vector<FoldEvent>& events,
+    std::span<const FoldEvent> events,
     const dftracer::utils::StringIntern& intern, const ColumnSpec& spec);
 
 /// The same columns as a morsel: the fixed ones positional, the dyn ones out of
 /// band in Morsel::dyn_* so the fixed layout stays the same batch to batch.
 /// `intern` is shared with the morsel, which keeps it alive.
 dataframe::Morsel events_to_morsel(
-    const std::vector<FoldEvent>& events,
+    std::span<const FoldEvent> events,
     std::shared_ptr<dftracer::utils::StringIntern> intern,
     const ColumnSpec& spec);
 

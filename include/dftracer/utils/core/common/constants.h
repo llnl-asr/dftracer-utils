@@ -6,6 +6,10 @@
 #include <cstdint>
 
 namespace dftracer::utils::constants {
+/// Directory that holds every spill file; the system temp directory when
+/// unset or empty.
+inline constexpr const char* SPILL_DIR_ENV = "DFTRACER_UTILS_SPILL_DIR";
+
 namespace indexer {
 static constexpr std::size_t ZLIB_WINDOW_SIZE = 32768;
 static constexpr int ZLIB_GZIP_WINDOW_BITS = 31;    ///< 15 + 16 for gzip format

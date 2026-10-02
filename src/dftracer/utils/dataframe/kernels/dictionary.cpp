@@ -20,6 +20,19 @@ Series dictionary_encode(const Series& v) {
     return Series{dftu_series_dictionary_encode(v.handle())};
 }
 
+Series dictionary_from_codes(std::span<const std::int32_t> codes,
+                             Series&& values, const std::uint8_t* validity) {
+    Series out =
+        Series::flat(TypeId::Int32, codes.data(),
+                     static_cast<std::int64_t>(codes.size()), validity);
+    dftu_series* h = out.handle();
+    h->type = TypeId::String;
+    h->params = TypeParams{};
+    h->encoding = Encoding::Dictionary;
+    h->set_child(std::shared_ptr<dftu_series>(values.release()));
+    return out;
+}
+
 namespace {
 
 // Rows per parallel_encode chunk; also the threshold below which the plain

@@ -7,7 +7,9 @@
 #include <dftracer/utils/dataframe/types.h>
 
 #include <cstdint>
+#include <limits>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -109,9 +111,21 @@ class Series {
             [](void* ctx) { delete static_cast<Held*>(ctx); }, held)};
     }
 
+    /// Throws std::length_error when `total` bytes do not fit the int32
+    /// offsets of a String column.
+    static void check_string_bytes(std::size_t total) {
+        if (total >
+            static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
+            throw std::length_error("String column exceeds INT32_MAX bytes");
+    }
+
     /// Build a FLAT String column from `values` (offsets + concatenated bytes).
+    /// Throws std::length_error when the total bytes pass INT32_MAX.
     static Series strings(const std::vector<std::string>& values) {
         std::vector<std::int32_t> offsets(values.size() + 1, 0);
+        std::size_t total = 0;
+        for (const auto& v : values) total += v.size();
+        check_string_bytes(total);
         std::string data;
         for (std::size_t i = 0; i < values.size(); ++i) {
             data += values[i];
@@ -129,6 +143,7 @@ class Series {
         std::vector<std::int32_t> offsets(values.size() + 1, 0);
         std::size_t total = 0;
         for (const auto& v : values) total += v.size();
+        check_string_bytes(total);
         std::string data;
         data.reserve(total);
         for (std::size_t i = 0; i < values.size(); ++i) {
@@ -147,6 +162,7 @@ class Series {
         std::vector<std::int32_t> offsets(values.size() + 1, 0);
         std::size_t total = 0;
         for (const auto& v : values) total += v.size();
+        check_string_bytes(total);
         std::string data;
         data.reserve(total);
         for (std::size_t i = 0; i < values.size(); ++i) {
@@ -242,18 +258,18 @@ class Series {
     }
 
     /// Value of a String/Binary/LargeString/LargeBinary column at `i`, valid
-    /// while this column lives.
-    ///
-    /// FLAT only: a DICTIONARY or SELECTION column (what `filter`, `take` and
-    /// the sort/topk kernels return, zero-copy over a base) carries no value
-    /// buffer of its own, so there is nothing to read at `i`. Those return an
-    /// empty view; call `materialize()` first to read them. Empty is therefore
-    /// ambiguous with a genuine empty string - use `is_flat()` when the
-    /// difference matters.
+    /// while this column lives. Reads FLAT, DICTIONARY, SELECTION and VIEW
+    /// columns;
+    /// empty for a null or out-of-range row or a non-string column.
     std::string_view string_at(std::int64_t i) const noexcept {
+        if (!is_flat()) {
+            std::int64_t n = 0;
+            const char* p = dftu_series_string_at(handle_, i, &n);
+            return p != nullptr
+                       ? std::string_view(p, static_cast<std::size_t>(n))
+                       : std::string_view();
+        }
         const char* d = static_cast<const char*>(dftu_series_data(handle_));
-        // dftu_series_data returns NULL for a non-FLAT column; reading through
-        // it produced a segfault rather than a diagnosable result.
         if (d == nullptr) return {};
         if (is_wide_offset_type(type())) {
             const std::int64_t* off = dftu_series_offsets64(handle_);
@@ -267,9 +283,9 @@ class Series {
                                 static_cast<std::size_t>(off[i + 1] - off[i]));
     }
 
-    /// Whether the values live in this column's own buffers, so `data()`,
-    /// `offsets()` and `string_at()` can read them. False for CONSTANT,
-    /// DICTIONARY and SELECTION, which `materialize()` converts.
+    /// Whether the values live in this column's own buffers, so `data()`
+    /// and `offsets()` can read them. False for CONSTANT,
+    /// DICTIONARY, SELECTION and VIEW, which `materialize()` converts.
     bool is_flat() const noexcept { return encoding() == Encoding::Flat; }
 
     /// int32 offset buffer (length+1 entries) of a String/Binary or List
@@ -339,9 +355,9 @@ class Series {
         return Series{dftu_series_mark_json(handle_)};
     }
 
-    /// A view of the FLAT rows [offset, offset+len); invalid unless FLAT and
-    /// fixed-width. Zero-copy for the values; a null bitmap is shared when the
-    /// offset is byte-aligned and re-packed to bit 0 otherwise.
+    /// The rows [offset, offset+len) as a view with a gather's values and
+    /// nulls, keeping the layout and sharing the value buffers (see
+    /// dftu_series_slice). Invalid for a list, map, struct or constant column.
     Series slice(std::int64_t offset, std::int64_t len) const noexcept {
         return Series{dftu_series_slice(handle_, offset, len)};
     }

@@ -61,13 +61,14 @@ void put_file_bloom(index::store::IndexWrite& w, int file_id,
 }
 
 // One dimension's statistics as a zonemap and, when its value dictionary fit
-// the cap, counts. `observed` is the chunk's data events.
+// the cap, counts. `observed` is the chunk's data events. An extra dimension
+// without a value gets an absence zone.
 void put_dimension(index::store::IndexWrite& w, int file_id,
                    std::uint64_t checkpoint_idx,
                    const BloomCore::ChunkDimensionStats& ds,
                    std::uint64_t observed,
                    const BloomCore::ChunkIndexerConfig& config,
-                   const BloomCore::ChunkStatistics& stats) {
+                   const BloomCore::ChunkStatistics& stats, bool extra) {
     const bool zones = config.extensions.has(IndexExtension::ZONEMAP);
     const bool counts = config.extensions.has(IndexExtension::COUNTS);
     if (!zones && !counts) return;
@@ -77,7 +78,8 @@ void put_dimension(index::store::IndexWrite& w, int file_id,
         (ds.dimension == DIM_TS || ds.dimension == DIM_DUR);
     const auto compressed = ds.compress_value_counts(config.value_counts_cap);
     const std::uint64_t present = always_present ? observed : ds.present;
-    if (zones && (!ds.min_value.empty() || !ds.max_value.empty())) {
+    const bool absent = extra && present == 0;
+    if (zones && (absent || !ds.min_value.empty() || !ds.max_value.empty())) {
         kinds::Zone zone;
         zone.value_type = ds.value_type;
         zone.min = ds.min_value;
@@ -139,16 +141,28 @@ void BloomCore::write_chunk(index::store::IndexWrite& w, int file_id,
         acc.fixed_blooms[b].merge_from(chunk.fixed_blooms[b]);
     }
     for (std::size_t e = 0;
-         blooms && e < extra_dims.size() && e < chunk.extra_blooms.size();
+         blooms && e < extra_dims.size() && e < chunk.extra_dim_stats.size();
          ++e) {
+        if (chunk.extra_dim_stats[e].present == 0) continue;
         auto& file_bloom = acc.extra(extra_dims[e]);
         if (e < chunk.extra_bloom_skip.size() && chunk.extra_bloom_skip[e]) {
             file_bloom.skip = true;
             continue;
         }
-        put_bloom(w, file_id, checkpoint_idx, extra_dims[e],
-                  chunk.extra_blooms[e], blob);
-        file_bloom.bloom.merge_from(chunk.extra_blooms[e]);
+        if (e < chunk.extra_blooms.size()) {
+            put_bloom(w, file_id, checkpoint_idx, extra_dims[e],
+                      chunk.extra_blooms[e], blob);
+            file_bloom.bloom.merge_from(chunk.extra_blooms[e]);
+            continue;
+        }
+        const auto& values = chunk.extra_values[e];
+        // One more than the values, so the last add opens no second level.
+        ScalableBloomFilter bf(values.size() + 1, config.false_positive_rate);
+        for (std::string_view v : values) {
+            bf.add(v);
+            file_bloom.bloom.add(v);
+        }
+        put_bloom(w, file_id, checkpoint_idx, extra_dims[e], bf, blob);
     }
 
     records::put_chunk_statistics(w, file_id, checkpoint_idx, chunk.statistics);
@@ -159,10 +173,10 @@ void BloomCore::write_chunk(index::store::IndexWrite& w, int file_id,
     for (const auto& ds : chunk.fixed_dim_stats)
         if (fixed)
             put_dimension(w, file_id, checkpoint_idx, ds, observed, config,
-                          chunk.statistics);
+                          chunk.statistics, false);
     for (const auto& ds : chunk.extra_dim_stats)
         put_dimension(w, file_id, checkpoint_idx, ds, observed, config,
-                      chunk.statistics);
+                      chunk.statistics, true);
     // Event end (ts + dur): the time bounds a time range prunes with. Its
     // min is the first start, a lower bound of every end.
     if (zones && observed > 0 &&
@@ -188,14 +202,12 @@ void BloomCore::write_chunk(index::store::IndexWrite& w, int file_id,
 
 void BloomCore::write_absent_extra(index::store::IndexWrite& w, int file_id,
                                    std::uint64_t checkpoint_idx,
-                                   std::string_view dim,
-                                   const ChunkIndexerConfig& config,
-                                   FileAccumulator& acc) {
-    if (!config.extensions.has(IndexExtension::BLOOM)) return;
-    const ScalableBloomFilter empty(config.expected_entries_per_chunk,
-                                    config.false_positive_rate);
-    put_bloom(w, file_id, checkpoint_idx, dim, empty, acc.blob);
-    acc.extra(dim);
+                                   std::string_view dim, std::uint64_t observed,
+                                   const ChunkIndexerConfig& config) {
+    ChunkDimensionStats ds;
+    ds.dimension = std::string(dim);
+    ds.value_type.clear();
+    put_dimension(w, file_id, checkpoint_idx, ds, observed, config, {}, true);
 }
 
 BloomCore::ChunkStatistics BloomCore::finish_file(
@@ -355,6 +367,7 @@ void BloomCore::init_chunk_state(ChunkState& chunk,
         chunk.extra_dim_stats[e].dimension = extra_dims[e];
         chunk.extra_dim_stats[e].value_type.clear();
     }
+    chunk.extra_values.assign(extra_dims.size(), {});
     chunk.extra_bloom_skip.assign(extra_dims.size(), 0);
 }
 

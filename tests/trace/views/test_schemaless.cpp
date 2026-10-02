@@ -426,6 +426,33 @@ fields:
         CHECK(bnum(b, 0, "bucket") == 1704067200000000.0);
     }
 
+    TEST_CASE(
+        "digit text stays text in a string field and parses in a number "
+        "field") {
+        ix::register_schema(R"(
+id: digits
+fields:
+  at: {type: string, role: time}
+  x: {type: float}
+  label: {type: string}
+)",
+                            "test");
+        TestEnvironment env(10);
+        const std::string gz = write_indexed(
+            env, "digits",
+            {R"({"at":"2024-01-01T00:00:00Z","x":"1e3","label":"007"})",
+             R"({"at":"2024-01-01T00:30:00Z","x":"-1.5","label":"1.50"})"});
+        const View v = View::from_file(gz, determine_index_path(gz, ""))
+                           .record_schema("digits");
+        const df::DataFrame f = run(v.duql("select x, label").lazy().collect());
+        REQUIRE(f.num_rows() == 2);
+        CHECK(f.columns[0].type() == df::TypeId::Float64);
+        CHECK(bnum(f, 0, "x") == 1000);
+        CHECK(bnum(f, 1, "x") == -1.5);
+        CHECK(bstr(f, 0, "label") == "007");
+        CHECK(bstr(f, 1, "label") == "1.50");
+    }
+
     TEST_CASE("bad lines and unconverted values are counted, not lost") {
         ix::register_schema("id: counted\nfields:\n  n: {type: int}\n", "test");
         TestEnvironment env(10);

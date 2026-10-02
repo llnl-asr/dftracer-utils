@@ -61,10 +61,9 @@ double abi_num(dftu_dataframe* df, std::int64_t row, const char* name) {
 std::string abi_str(dftu_dataframe* df, std::int64_t row, const char* name) {
     dftu_series* c = dftu_dataframe_column(df, name);
     REQUIRE(c != nullptr);
-    const int32_t* offs = dftu_series_offsets(c);
-    REQUIRE(offs != nullptr);
-    const char* data = static_cast<const char*>(dftu_series_data(c));
-    std::string s(data + offs[row], data + offs[row + 1]);
+    int64_t len = 0;
+    const char* data = dftu_series_string_at(c, row, &len);
+    std::string s(data ? data : "", static_cast<std::size_t>(len));
     dftu_series_free(c);
     return s;
 }
@@ -613,6 +612,53 @@ TEST_SUITE("View C ABI") {
             dftu_view_free(grouped);
             dftu_view_free(v);
         }
+    }
+
+    TEST_CASE("phase any reads metadata records, the default does not") {
+        TestEnvironment env(50);
+        std::string pfw = env.get_dir() + "/meta.pfw";
+        {
+            std::ofstream ofs(pfw);
+            ofs << R"({"name":"EH","cat":"dftracer","type":1,"pid":1,"tid":1,"ph":4,"args":{"hhash":"ab"}})"
+                << "\n";
+            ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
+                << "\n";
+        }
+        std::string gz = pfw + ".gz";
+        dftu_utils_test::compress_file_to_gzip(pfw, gz);
+        fs::remove(pfw);
+        std::string idx = determine_index_path(gz, "");
+        StringSink sink;
+        View::from_file(gz, idx).sink_json(sink).get();
+
+        const char* paths[1] = {gz.c_str()};
+        const char* idxs[1] = {idx.c_str()};
+        dftu_view* base = dftu_view_from_files(paths, idxs, 1);
+        REQUIRE(base != nullptr);
+        dftu_view* any = dftu_view_phase(base, DFTU_VIEW_PHASE_ANY);
+        dftu_view* all = dftu_view_all(base);
+        dftu_view* meta = dftu_view_phase(base, DFTU_VIEW_PHASE_METADATA);
+        REQUIRE(any != nullptr);
+        REQUIRE(all != nullptr);
+        REQUIRE(meta != nullptr);
+        CHECK(dftu_view_phase(base, 99) == nullptr);
+
+        auto rows = [](dftu_view* v) {
+            dftu_dataframe* df = dftu_view_collect(v, nullptr);
+            REQUIRE(df != nullptr);
+            const auto n = dftu_dataframe_num_rows(df);
+            dftu_dataframe_free(df);
+            return n;
+        };
+        CHECK(rows(base) == 1);
+        CHECK(rows(any) == 2);
+        CHECK(rows(all) == 2);
+        CHECK(rows(meta) == 1);
+
+        dftu_view_free(meta);
+        dftu_view_free(all);
+        dftu_view_free(any);
+        dftu_view_free(base);
     }
 
     TEST_CASE("a builder does not consume its input") {

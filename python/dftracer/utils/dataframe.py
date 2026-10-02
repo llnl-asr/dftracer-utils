@@ -38,6 +38,7 @@ from .series import (
     _indices,
     _pandas_nullable,
     _pandas_values,
+    _polars_via_arrow,
     _register,
     _require_pyarrow,
     _to_pandas,
@@ -616,7 +617,11 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         return out if index is None else _apply_index(out, index)
 
     def to_polars(self) -> "pl.DataFrame":
-        """This frame as a polars DataFrame."""
+        """This frame as a polars DataFrame. Where the extension has Arrow
+        support and no column is Float16, a decimal or a dictionary, the frame
+        comes through the Arrow PyCapsule stream (polars >= 1.3; an older
+        polars raises its own error), without pyarrow; otherwise each column
+        uses the native conversion."""
         try:
             import polars as pl  # ty: ignore[unresolved-import]
         except ImportError:
@@ -625,6 +630,10 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
             ) from None
         if self._native.num_rows == 0:
             return pl.DataFrame()
+        if hasattr(self._native, "__arrow_c_stream__") and all(
+            _polars_via_arrow(self._native[name]) for name in self.columns
+        ):
+            return pl.DataFrame(self)
         return pl.DataFrame({name: self[name].to_polars() for name in self.columns})
 
     def __getitem__(self, key: "Union[str, Sequence[str], Series]") -> "Union[Series, DataFrame]":

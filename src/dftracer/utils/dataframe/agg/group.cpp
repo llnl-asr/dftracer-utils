@@ -42,6 +42,20 @@ constexpr std::int64_t AGG_GRAIN = 1 << 16;
 constexpr std::int64_t MANY_GROUPS = 2048;
 }  // namespace
 
+namespace {
+bool by_ref(const Series& c) {
+    const Encoding e = c.encoding();
+    return (e == Encoding::Dictionary || e == Encoding::View) &&
+           (c.type() == TypeId::String || c.type() == TypeId::Binary);
+}
+
+Series flat_or_ref(const Series& c, bool key) {
+    return c.encoding() == Encoding::Flat || (key && by_ref(c))
+               ? c.share()
+               : c.materialize();
+}
+}  // namespace
+
 AggStatePtr group_agg_state(const std::vector<const Series*>& in_keys,
                             const std::vector<const Series*>& in_values,
                             std::vector<AggSpec> specs) {
@@ -53,7 +67,8 @@ AggStatePtr group_agg_state(const std::vector<const Series*>& in_keys,
         std::vector<const Series*> out;
         out.reserve(cols.size());
         for (const Series* c : cols) {
-            if (c->encoding() == Encoding::Flat) {
+            if (c->encoding() == Encoding::Flat ||
+                (&cols == &in_keys && by_ref(*c))) {
                 out.push_back(c);
             } else {
                 owned.push_back(c->materialize());
@@ -319,6 +334,7 @@ std::optional<DataFrame> finalize_in_place(
                 resolve(i, st, g);
                 total += static_cast<std::int64_t>(
                     st->skey_cols[k][static_cast<std::size_t>(g)].size());
+                Series::check_string_bytes(static_cast<std::size_t>(total));
                 off[i + 1] = static_cast<std::int32_t>(total);
             }
             h->data = Buffer::allocate(static_cast<std::size_t>(total));
@@ -526,20 +542,31 @@ std::optional<DataFrame> group_agg_partitioned(
     const auto PARTITIONS = static_cast<std::size_t>(4 * threads);
     const std::int64_t n = in_keys.empty() ? 0 : in_keys[0]->length();
     if (n <= 16 * AGG_GRAIN) return std::nullopt;
+    if (!order_free(specs, in_values)) return std::nullopt;
+    if (std::none_of(in_keys.begin(), in_keys.end(), [](const Series* c) {
+            switch (c->type()) {
+                case TypeId::String:
+                case TypeId::Binary:
+                case TypeId::LargeString:
+                case TypeId::LargeBinary:
+                    return true;
+                default:
+                    return false;
+            }
+        }))
+        return std::nullopt;
     std::vector<Series> owned;
     owned.reserve(in_keys.size() + in_values.size());
-    auto flat = [&](const std::vector<const Series*>& cols) {
+    auto flat = [&](const std::vector<const Series*>& cols, bool key) {
         std::vector<const Series*> out;
         for (const Series* c : cols) {
-            owned.push_back(c->encoding() == Encoding::Flat ? c->share()
-                                                            : c->materialize());
+            owned.push_back(flat_or_ref(*c, key));
             out.push_back(&owned.back());
         }
         return out;
     };
-    const std::vector<const Series*> keys = flat(in_keys);
-    const std::vector<const Series*> values = flat(in_values);
-    if (!order_free(specs, values)) return std::nullopt;
+    const std::vector<const Series*> keys = flat(in_keys, true);
+    const std::vector<const Series*> values = flat(in_values, false);
     AggPacked shape;
     AggStatePtr probe = agg_new(specs);
     // Integer keys have the direct table, which the scatter cannot beat.
@@ -677,19 +704,25 @@ std::optional<DataFrame> group_agg_by_key_hash(
                 return std::nullopt;
         }
     }
+    {
+        // Order-dependent state (a tie, a bounded counter) would change with
+        // the order the morsels reach a partition.
+        AggStatePtr probe = agg_new(specs);
+        if (probe->has_arg || probe->has_lst || probe->has_ss)
+            return std::nullopt;
+    }
     std::vector<Series> owned;
     owned.reserve(in_keys.size() + in_values.size());
-    auto flat = [&](const std::vector<const Series*>& cols) {
+    auto flat = [&](const std::vector<const Series*>& cols, bool key) {
         std::vector<const Series*> out;
         for (const Series* c : cols) {
-            owned.push_back(c->encoding() == Encoding::Flat ? c->share()
-                                                            : c->materialize());
+            owned.push_back(flat_or_ref(*c, key));
             out.push_back(&owned.back());
         }
         return out;
     };
-    const std::vector<const Series*> keys = flat(in_keys);
-    const std::vector<const Series*> values = flat(in_values);
+    const std::vector<const Series*> keys = flat(in_keys, true);
+    const std::vector<const Series*> values = flat(in_values, false);
     std::size_t groups_hint = 0;
     {
         AggStatePtr probe = agg_new(specs);
@@ -710,13 +743,6 @@ std::optional<DataFrame> group_agg_by_key_hash(
     const auto threads = static_cast<std::int64_t>(
         std::max<std::size_t>(2, dftracer::utils::hardware_concurrency()));
     const auto PARTITIONS = static_cast<std::size_t>(4 * threads);
-    {
-        // Order-dependent state (a tie, a bounded counter) would change with
-        // the order the morsels reach a partition.
-        AggStatePtr probe = agg_new(specs);
-        if (probe->has_arg || probe->has_lst || probe->has_ss)
-            return std::nullopt;
-    }
     std::vector<bool> nullable(keys.size());
     for (std::size_t j = 0; j < keys.size(); ++j)
         nullable[j] = keys[j]->null_count() > 0;
@@ -960,17 +986,14 @@ std::optional<DataFrame> group_agg_in_batches(
         owned.reserve(keys.size());
         std::vector<const Series*> ks;
         for (const Series* c : keys) {
-            owned.push_back(c->encoding() == Encoding::Flat ? c->share()
-                                                            : c->materialize());
+            owned.push_back(flat_or_ref(*c, true));
             ks.push_back(&owned.back());
         }
         std::vector<Series> owned_values;
         owned_values.reserve(values.size());
         std::vector<const Series*> vs;
         for (const Series* c : values) {
-            owned_values.push_back(c->encoding() == Encoding::Flat
-                                       ? c->share()
-                                       : c->materialize());
+            owned_values.push_back(flat_or_ref(*c, false));
             vs.push_back(&owned_values.back());
         }
         AggStatePtr probe = agg_new(specs);
@@ -1053,10 +1076,26 @@ DataFrame group_agg(const std::vector<const Series*>& keys,
                     const std::vector<const Series*>& values,
                     std::vector<AggSpec> specs,
                     const std::vector<std::string>& key_names) {
+    std::vector<Series> joined;
+    joined.reserve(keys.size() + values.size());
+    auto flat = [&](const std::vector<const Series*>& in) {
+        std::vector<const Series*> out;
+        out.reserve(in.size());
+        for (const Series* c : in) {
+            if (c && c->encoding() == Encoding::Chunked) {
+                joined.push_back(join_chunks(*c));
+                c = &joined.back();
+            }
+            out.push_back(c);
+        }
+        return out;
+    };
+    const std::vector<const Series*> flat_keys = flat(keys);
+    const std::vector<const Series*> flat_values = flat(values);
     if (std::optional<DataFrame> out =
-            group_agg_in_batches(keys, values, specs, key_names))
+            group_agg_in_batches(flat_keys, flat_values, specs, key_names))
         return std::move(*out);
-    return group_agg_whole(keys, values, std::move(specs), key_names);
+    return group_agg_whole(flat_keys, flat_values, std::move(specs), key_names);
 }
 
 DataFrame group_agg(const Series& key, const std::vector<const Series*>& values,

@@ -470,6 +470,7 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
                 dftracer::utils::json::RecordParser parser;
                 std::string parse_buf;
                 std::vector<FoldEvent> fold_events;
+                DecodeHints hints;
                 for (;;) {
                     if (produced.load(std::memory_order_relaxed) >= cap) break;
                     if (is_cancelled(plan)) break;
@@ -520,7 +521,7 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
                                                   ? nullptr
                                                   : &vdef.paths,
                                               vdef.record_schema,
-                                              &vdef.path_fields)
+                                              &vdef.path_fields, 0, &hints)
                                         : extract_fold_event(
                                               doc.value_unsafe(), *intern,
                                               any_needs_args, nullptr,

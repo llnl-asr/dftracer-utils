@@ -121,6 +121,9 @@ bool zone_all_match(const Zone& z, duql_ns::CompareOp op,
     }
 }
 
+// A zone recording that no record of its chunk holds a value of the path.
+bool absent(const Zone& z) { return z.present && *z.present == 0; }
+
 // Zero records in the queried range means the chunk can be skipped.
 bool histogram_has_events(const Zone& z, duql_ns::CompareOp op,
                           std::uint64_t ts_val) {
@@ -382,15 +385,22 @@ std::optional<std::string> exists_path(const duql_ns::QueryNode& node) {
     if (!leaf) return std::nullopt;
     const auto* call = std::get_if<duql_ns::TCall>(&leaf->term->node);
     if (!call || call->fn != duql_ns::Fn::EXISTS) return std::nullopt;
-    const auto& base = std::get<duql_ns::TField>(call->args[0]->node).base;
+    const auto* field = std::get_if<duql_ns::TField>(&call->args[0]->node);
+    if (!field) return std::nullopt;
     std::string out;
-    for (const char c : base) {
+    for (const char c : field->base) {
         if (c == '[')
             out += '.';
         else if (c != ']')
             out += c;
     }
     return out;
+}
+
+// Whether `p` lies below `base`.
+bool under(const std::string& p, const std::string& base) {
+    return p.size() > base.size() && p.starts_with(base) &&
+           p[base.size()] == '.';
 }
 
 /// core.catalog, file level: `exists(p)` rules the file out when no catalog
@@ -417,14 +427,6 @@ class CatalogPresence final : public Condition {
             return may_match_file(*o->left) || may_match_file(*o->right);
         const auto path = exists_path(node);
         return !path || may_exist(*path);
-    }
-
-    // The catalog leaves out the fields every record of the trace schema
-    // carries.
-    static bool unrecorded(std::string_view path) {
-        const std::string_view head = path.substr(0, path.find('.'));
-        return head == "pid" || head == "tid" || head == "ts" ||
-               head == "dur" || head == "ph" || head == "id";
     }
 
     bool may_exist(const std::string& path) {
@@ -618,6 +620,8 @@ class Zonemap final : public Condition {
 
     std::optional<ChunkSet> may_match(const duql_ns::QueryNode& leaf,
                                       const ChunkSet& candidates) override {
+        if (const auto path = exists_path(leaf))
+            return exists_chunks(*path, candidates);
         if (const auto* in = std::get_if<duql_ns::InNode>(&leaf.data))
             return in_list(*in, candidates);
         const auto* n = std::get_if<duql_ns::CompareNode>(&leaf.data);
@@ -625,7 +629,7 @@ class Zonemap final : public Condition {
         // Equality is bounded only on the args fields: a fixed field's text
         // may spell a value differently from the query.
         const bool bounds_equality =
-            n->op == duql_ns::CompareOp::EQ && !fixed_dimension(n->field.path);
+            n->op == duql_ns::CompareOp::EQ && !d_.fixed_field(n->field.path);
         if (!is_range_op(n->op) && !bounds_equality) return std::nullopt;
         const auto& zones = d_.zones(n->field.path);
         const auto val = literal_to_string(n->value);
@@ -644,6 +648,7 @@ class Zonemap final : public Condition {
                 continue;
             }
             const auto& z = it->second;
+            if (absent(z)) continue;
             const bool in_range =
                 bounds_equality
                     ? zone_may_match(z, duql_ns::CompareOp::GE, val) &&
@@ -673,7 +678,7 @@ class Zonemap final : public Condition {
     // as equality is, only on the args fields.
     std::optional<ChunkSet> in_list(const duql_ns::InNode& in,
                                     const ChunkSet& candidates) {
-        if (fixed_dimension(in.field.path)) return std::nullopt;
+        if (d_.fixed_field(in.field.path)) return std::nullopt;
         std::vector<std::string> vals;
         vals.reserve(in.values.elements.size());
         for (const auto& elem : in.values.elements)
@@ -686,6 +691,7 @@ class Zonemap final : public Condition {
                 if (!vals.empty()) out.insert(ckpt);
                 continue;
             }
+            if (absent(it->second)) continue;
             for (const auto& v : vals)
                 if (zone_may_match(it->second, duql_ns::CompareOp::GE, v) &&
                     zone_may_match(it->second, duql_ns::CompareOp::LE, v)) {
@@ -696,11 +702,36 @@ class Zonemap final : public Condition {
         return out;
     }
 
-    bool fixed_dimension(const std::string& dim) const {
-        if (d_.by_path) return false;
-        return dim == "name" || dim == "cat" || dim == "pid" || dim == "tid" ||
-               dim == "pid_tid" || dim == "hhash" || dim == "fhash" ||
-               dim == "shash" || dim == "ts" || dim == "dur";
+    // `exists(path)` is false on a chunk whose zone records no value only
+    // when no record of the file holds the path as null, an object or an
+    // array, which the zone does not see.
+    std::optional<ChunkSet> exists_chunks(const std::string& path,
+                                          const ChunkSet& candidates) {
+        if (!absence_is_missing(path)) return std::nullopt;
+        const auto& zones = d_.zones(path);
+        ChunkSet out;
+        for (auto ckpt : candidates) {
+            auto it = zones.find(ckpt);
+            if (it == zones.end() || !absent(it->second)) out.insert(ckpt);
+        }
+        return out;
+    }
+
+    bool absence_is_missing(const std::string& path) {
+        const auto& name = d_.evidence_name(path);
+        if (!name || d_.fixed_field(*name)) return false;
+        const std::string leaf = d_.by_path ? *name : "args." + *name;
+        constexpr auto NULL_BIT =
+            1U << static_cast<unsigned>(index::store::PathType::NULL_VALUE);
+        bool scalar = false;
+        for (const auto& [p, stat] : d_.catalog()) {
+            if (under(p, leaf)) return false;
+            if (p != leaf) continue;
+            scalar = (stat.seen & NULL_BIT) == 0 &&
+                     stat.type != index::store::PathType::NULL_VALUE &&
+                     stat.type < index::store::PathType::MIXED;
+        }
+        return scalar;
     }
 
     FileIndexData& d_;
@@ -747,9 +778,11 @@ class ChunkBloom final : public Condition {
     FileIndexData& d_;
 };
 
-// A leaf the conditions test; an any() leaf left unexpanded (a very wide
-// array) proves nothing, since its path's evidence describes the whole value.
+// A leaf the conditions test, `exists(p)` included; an any() leaf left
+// unexpanded (a very wide array) proves nothing, since its path's evidence
+// describes the whole value.
 bool is_leaf(const duql_ns::QueryNode& node) {
+    if (exists_path(node)) return true;
     const auto* field = leaf_field(node);
     return (std::holds_alternative<duql_ns::CompareNode>(node.data) ||
             std::holds_alternative<duql_ns::InNode>(node.data) ||

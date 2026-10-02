@@ -93,9 +93,9 @@ by name so the output is stable.
                            .get();
 
              auto name = df.column("name");
-             auto count = df.column("count");
-             auto sum_dur = df.column("sum_dur");
-             auto mean_dur = df.column("mean_dur");
+             const auto count = df.column("count").materialize();
+             const auto sum_dur = df.column("sum_dur").materialize();
+             const auto mean_dur = df.column("mean_dur").materialize();
              for (std::int64_t i = 0; i < df.num_rows(); ++i)
                  std::printf("%-6.*s %4lld %8llu %8.1f\n",
                              static_cast<int>(name.string_at(i).size()),
@@ -191,9 +191,9 @@ duration is at least 100 microseconds.
                            .get();
 
              auto name = df.column("name");
-             auto count = df.column("count");
-             auto sum_dur = df.column("sum_dur");
-             auto mean_dur = df.column("mean_dur");
+             const auto count = df.column("count").materialize();
+             const auto sum_dur = df.column("sum_dur").materialize();
+             const auto mean_dur = df.column("mean_dur").materialize();
              for (std::int64_t i = 0; i < df.num_rows(); ++i)
                  std::printf("%-6.*s %4lld %8llu %8.1f\n",
                              static_cast<int>(name.string_at(i).size()),
@@ -289,9 +289,9 @@ see it match.
              df = df.with_column("avg_dur", avg);
 
              auto name = df.column("name");
-             auto count = df.column("count");
-             auto sum_dur = df.column("sum_dur");
-             auto avg_dur = df.column("avg_dur");
+             const auto count = df.column("count").materialize();
+             const auto sum_dur = df.column("sum_dur").materialize();
+             const auto avg_dur = df.column("avg_dur").materialize();
              for (std::int64_t i = 0; i < df.num_rows(); ++i)
                  std::printf("%-6.*s %4lld %8llu %8.1f\n",
                              static_cast<int>(name.string_at(i).size()),
@@ -379,10 +379,10 @@ total duration in milliseconds.
                       .with_column("total_ms", total_ms);
 
              auto name = df.column("name");
-             auto count = df.column("count");
-             auto sum_dur = df.column("sum_dur");
-             auto avg = df.column("avg_dur");
-             auto tms = df.column("total_ms");
+             const auto count = df.column("count").materialize();
+             const auto sum_dur = df.column("sum_dur").materialize();
+             const auto avg = df.column("avg_dur").materialize();
+             const auto tms = df.column("total_ms").materialize();
              for (std::int64_t i = 0; i < df.num_rows(); ++i)
                  std::printf("%-6.*s %4lld %8llu %8.1f %8.1f\n",
                              static_cast<int>(name.string_at(i).size()),
@@ -444,7 +444,7 @@ by total duration, largest first, then reduce a single column to one number.
          DataFrame ranked = df.sort_by("sum_dur", /*descending=*/true);
 
          auto name = ranked.column("name");
-         auto sum_dur = ranked.column("sum_dur");
+         const auto sum_dur = ranked.column("sum_dur").materialize();
          for (std::int64_t i = 0; i < ranked.num_rows(); ++i)
              std::printf("%-6.*s %8llu\n",
                          static_cast<int>(name.string_at(i).size()),
@@ -487,9 +487,9 @@ Expected output:
    DataFrame Table
 
 In C++ there is no edge to cross: ``collect()`` already returns the native
-columnar ``dataframe::DataFrame``, and you read a column's buffer directly with
-``df.column(name).data<T>()`` (as the tabs above do), so no conversion is
-needed.
+columnar ``dataframe::DataFrame``. Result columns may be chunked, so call
+``df.column(name).materialize()`` and read the buffer with ``data<T>()`` (as
+the tabs above do). No conversion is needed.
 
 What you learned
 ----------------

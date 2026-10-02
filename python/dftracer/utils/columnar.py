@@ -1966,8 +1966,6 @@ def _emit_ast(expr: Expr, resolve: Callable[[str], int], ast: List[tuple]) -> No
                 "in-memory comparison needs a number or a string; a bool "
                 "comparison is filter-only (push it down with .filter()/.duql())"
             )
-        if isinstance(expr.rhs, str) and expr.op not in ("eq", "ne"):
-            raise TypeError("an ordered comparison against a string is not supported; use == or !=")
         _emit_ast(expr.left, resolve, ast)
         ast.append((_AST_CMP, _CMP_CODES[expr.op], expr.rhs))
     elif isinstance(expr, _Logical):

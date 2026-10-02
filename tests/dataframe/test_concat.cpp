@@ -9,6 +9,8 @@
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
+#include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dataframe/kernels/dictionary.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <doctest/doctest.h>
@@ -106,9 +108,96 @@ dftu_dataframe* to_abi(const DataFrame& df) {
                               static_cast<int32_t>(names.size()));
 }
 
+std::vector<S> texts(const Series& s) {
+    std::vector<S> out;
+    for (std::int64_t i = 0; i < s.length(); ++i)
+        out.push_back(s.is_null(i) ? std::nullopt
+                                   : std::optional<std::string>(
+                                         std::string(s.string_at(i))));
+    return out;
+}
+
+Series dict_of(const std::vector<std::string>& v) {
+    return Series::strings(v).dictionary_encode();
+}
+
+std::int64_t dict_size(const Series& s) { return s.handle()->child()->length; }
+
 }  // namespace
 
 TEST_SUITE("dataframe concat") {
+    TEST_CASE("dictionary parts merge into one dictionary column") {
+        Series a = dict_of({"a", "b", "a"});
+        Series b = dict_of({"b", "c"});
+        REQUIRE(a.encoding() ==
+                dftracer::utils::dataframe::Encoding::Dictionary);
+        REQUIRE(b.encoding() ==
+                dftracer::utils::dataframe::Encoding::Dictionary);
+        Series out = dftracer::utils::dataframe::concat_columns({&a, &b});
+        CHECK(out.encoding() ==
+              dftracer::utils::dataframe::Encoding::Dictionary);
+        CHECK(texts(out) == std::vector<S>{"a", "b", "a", "b", "c"});
+        CHECK(dict_size(out) == 3);
+
+        Series alone = dftracer::utils::dataframe::concat_columns({&a});
+        CHECK(alone.encoding() ==
+              dftracer::utils::dataframe::Encoding::Dictionary);
+        CHECK(texts(alone) == std::vector<S>{"a", "b", "a"});
+    }
+
+    TEST_CASE("dictionary parts keep nulls and accept an empty part") {
+        const std::int32_t codes[] = {0, 1, 0, 1};
+        const std::uint8_t valid = 0x05;
+        Series va = Series::strings({"p", "q"});
+        Series a = dftracer::utils::dataframe::dictionary_from_codes(
+            codes, std::move(va), &valid);
+        Series e = dict_of({});
+        Series b = dict_of({"q", "r"});
+        Series out = dftracer::utils::dataframe::concat_columns({&a, &e, &b});
+        CHECK(out.encoding() ==
+              dftracer::utils::dataframe::Encoding::Dictionary);
+        CHECK(out.null_count() == 2);
+        CHECK(texts(out) ==
+              std::vector<S>{"p", std::nullopt, "p", std::nullopt, "q", "r"});
+    }
+
+    TEST_CASE("mixed flat and dictionary parts give a view column") {
+        Series a = dict_of({"a", "b", "a"});
+        Series f = Series::strings({"z", "a"});
+        Series out = dftracer::utils::dataframe::concat_columns({&a, &f});
+        CHECK(out.encoding() == dftracer::utils::dataframe::Encoding::View);
+        CHECK(texts(out) == std::vector<S>{"a", "b", "a", "z", "a"});
+    }
+
+    TEST_CASE("a dictionary part with a LargeString part gives a String view") {
+        auto* w = new dftu_series();
+        w->type = TypeId::LargeString;
+        w->encoding = dftracer::utils::dataframe::Encoding::Flat;
+        w->length = 2;
+        w->offsets = dftracer::utils::dataframe::Buffer::allocate(
+            3 * sizeof(std::int64_t));
+        w->data = dftracer::utils::dataframe::Buffer::allocate(3);
+        auto* off = reinterpret_cast<std::int64_t*>(w->offsets->data());
+        off[0] = 0;
+        off[1] = 1;
+        off[2] = 3;
+        std::memcpy(w->data->data(), "xyy", 3);
+        Series wide{w};
+        Series a = dict_of({"a", "b", "a"});
+        Series out = dftracer::utils::dataframe::concat_columns({&a, &wide});
+        CHECK(out.type() == TypeId::String);
+        CHECK(out.encoding() == dftracer::utils::dataframe::Encoding::View);
+        CHECK(texts(out) == std::vector<S>{"a", "b", "a", "x", "yy"});
+    }
+
+    TEST_CASE("a dictionary column marked JSON concatenates with a flat one") {
+        Series d = dict_of({"1", "2", "1"}).as_json();
+        Series f = Series::strings({"3"}).as_json();
+        Series out = dftracer::utils::dataframe::concat_columns({&d, &f});
+        CHECK(out.is_json());
+        CHECK(texts(out) == std::vector<S>{"1", "2", "1", "3"});
+    }
+
     TEST_CASE("eager vertical keeps every row in order, nulls included") {
         DataFrame a = make_a();
         DataFrame b = make_b();

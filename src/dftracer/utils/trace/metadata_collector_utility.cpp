@@ -151,17 +151,6 @@ MetadataCollectorUtility::process_compressed(
                         dftracer::utils::index::gzip::CheckpointIndexerFactory::
                             create(input.file_path, input.index_path,
                                    input.checkpoint_size, false);
-                    if (indexer->need_rebuild()) {
-                        DFTRACER_UTILS_LOG_DEBUG("Index needs rebuild: %s",
-                                                 input.index_path.c_str());
-                        // The root holds other files' indexes and caches,
-                        // and the build replaces this file's records.
-                        indexer = dftracer::utils::index::gzip::
-                            CheckpointIndexerFactory::create(
-                                input.file_path, input.index_path,
-                                input.checkpoint_size, true);
-                        co_await indexer->build_async();
-                    }
                 }
                 total_lines = indexer->get_num_lines();
                 meta.uncompressed_size = indexer->get_max_bytes();

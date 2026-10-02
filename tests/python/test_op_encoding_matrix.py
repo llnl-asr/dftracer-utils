@@ -1,6 +1,7 @@
 """Every registered column op, run through the registry (`op_run`) on every
 column encoding the engine produces: FLAT, a filter's SELECTION view, a
-DICTIONARY view, a view over a view, and the empty and all-null columns. A
+DICTIONARY view, a view over a view, a CHUNKED column (flat, view and
+dictionary chunks), and the empty and all-null columns. A
 kernel reads FLAT buffers, so a view must give the same answer as its
 materialized copy, and no input shape may crash the process. The operands
 are generated from each op's signature tokens, so a new op is covered the
@@ -11,6 +12,7 @@ import re
 import pytest
 
 pa = pytest.importorskip("pyarrow")
+_PA_MAJOR = int(pa.__version__.split(".")[0])
 
 from dftracer.utils import DataFrame, Series  # noqa: E402
 from dftracer.utils import dftracer_utils_ext as _ext  # noqa: E402
@@ -59,6 +61,24 @@ def _views(base):
     yield "sorted", base.sort()
     yield "empty", base.head(0)
     yield "all_null", Series(pa.array([None] * 3, type=_value_type(base)))
+    yield "chunked", _chunked(base)
+    # pyarrow before 25 crashes exporting a string_view array whose strings
+    # are all inline (no data buffer), and before 18 cannot cast to it.
+    if pa.types.is_string(arr.type) and _PA_MAJOR >= 25:
+        yield "chunked_view", _chunked(Series(arr.cast(pa.string_view())))
+        codes = pa.array([0, 1, 2, 3, 4, 0])
+        yield (
+            "chunked_dictionary",
+            _chunked(
+                Series(pa.DictionaryArray.from_arrays(codes, pa.array(["a", "c", "d", "e", "f"])))
+            ),
+        )
+
+
+def _chunked(column):
+    out = DataFrame({"x": column}).lazy().collect(morsel_rows=2)["x"]
+    assert out.encoding == 5
+    return out
 
 
 def _value_type(series):
@@ -125,6 +145,13 @@ def test_every_column_op_reads_a_view_as_its_flat_twin(name, tokens):
             got = _run(name, view, tokens)
             want = _run(name, twin, tokens)
             assert _same(got, want), (name, base_name, view_name, got, want)
+
+
+def test_a_chunked_collect_equals_the_joined_column():
+    for base in _bases().values():
+        chunked = _chunked(base)
+        assert chunked.to_list() == base.to_list()
+        assert chunked.to_arrow().equals(base.to_arrow())
 
 
 def test_frame_ops_over_a_filtered_frame_match_the_flat_frame():

@@ -275,8 +275,10 @@ int main(int argc, char** argv) {
     DataFrame uq_par_out = run(df.lazy().unique().collect());
     bool uq_ok = uq_serial_out.num_rows() == uq_par_out.num_rows();
     {
-        const std::int64_t* uv = uq_serial_out.column("v").data<std::int64_t>();
-        const std::int64_t* pv = uq_par_out.column("v").data<std::int64_t>();
+        const Series uvs = uq_serial_out.column("v").materialize();
+        const Series pvs = uq_par_out.column("v").materialize();
+        const std::int64_t* uv = uvs.data<std::int64_t>();
+        const std::int64_t* pv = pvs.data<std::int64_t>();
         for (std::int64_t i = 0; uq_ok && i < uq_serial_out.num_rows(); ++i)
             uq_ok = uv[i] == pv[i];
     }
@@ -317,8 +319,10 @@ int main(int argc, char** argv) {
     DataFrame uqd_par_out = run(dup_df.lazy().unique().collect());
     bool uqd_ok = uqd_serial_out.num_rows() == uqd_par_out.num_rows();
     {
-        const std::int64_t* uv = uqd_serial_out.column("k").data<std::int64_t>();
-        const std::int64_t* pv = uqd_par_out.column("k").data<std::int64_t>();
+        const Series uvs = uqd_serial_out.column("k").materialize();
+        const Series pvs = uqd_par_out.column("k").materialize();
+        const std::int64_t* uv = uvs.data<std::int64_t>();
+        const std::int64_t* pv = pvs.data<std::int64_t>();
         for (std::int64_t i = 0; uqd_ok && i < uqd_serial_out.num_rows(); ++i)
             uqd_ok = uv[i] == pv[i];
     }
@@ -352,8 +356,8 @@ int main(int argc, char** argv) {
     DataFrame dup_par_out = run(dup_df.lazy().is_duplicated().collect());
     bool dup_ok = dup_serial_out.num_rows() == dup_par_out.num_rows();
     {
-        const Series& sa = dup_serial_out.column("is_duplicated");
-        const Series& sb = dup_par_out.column("is_duplicated");
+        const Series sa = dup_serial_out.column("is_duplicated").materialize();
+        const Series sb = dup_par_out.column("is_duplicated").materialize();
         for (std::int64_t i = 0; dup_ok && i < dup_serial_out.num_rows(); ++i)
             dup_ok = bit_at(sa, i) == bit_at(sb, i);
     }
@@ -370,8 +374,8 @@ int main(int argc, char** argv) {
     DataFrame uni_par_out = run(dup_df.lazy().is_unique().collect());
     bool uni_ok = uni_serial_out.num_rows() == uni_par_out.num_rows();
     {
-        const Series& sa = uni_serial_out.column("is_unique");
-        const Series& sb = uni_par_out.column("is_unique");
+        const Series sa = uni_serial_out.column("is_unique").materialize();
+        const Series sb = uni_par_out.column("is_unique").materialize();
         for (std::int64_t i = 0; uni_ok && i < uni_serial_out.num_rows(); ++i)
             uni_ok = bit_at(sa, i) == bit_at(sb, i);
     }
@@ -1365,8 +1369,10 @@ int main(int argc, char** argv) {
     DataFrame sf_l = lazy_sort_filter();
     bool sf_ok = sf_e.num_rows() == sf_l.num_rows();
     if (sf_ok) {
-        const std::int64_t* es = sf_e.column("s").data<std::int64_t>();
-        const std::int64_t* ls = sf_l.column("s").data<std::int64_t>();
+        const Series ess = sf_e.column("s").materialize();
+        const Series lss = sf_l.column("s").materialize();
+        const std::int64_t* es = ess.data<std::int64_t>();
+        const std::int64_t* ls = lss.data<std::int64_t>();
         for (std::int64_t i = 0; sf_ok && i < sf_e.num_rows(); ++i)
             sf_ok = es[i] == ls[i];
     }
@@ -1404,8 +1410,10 @@ int main(int argc, char** argv) {
     DataFrame mp_l = lazy_map();
     bool mp_ok = mp_e.num_rows() == mp_l.num_rows() && mp_l.num_columns() == 2;
     if (mp_ok) {
-        const std::int64_t* ek = mp_e.column("kv").data<std::int64_t>();
-        const std::int64_t* lk = mp_l.column("kv").data<std::int64_t>();
+        const Series eks = mp_e.column("kv").materialize();
+        const Series lks = mp_l.column("kv").materialize();
+        const std::int64_t* ek = eks.data<std::int64_t>();
+        const std::int64_t* lk = lks.data<std::int64_t>();
         for (std::int64_t i = 0; mp_ok && i < mp_e.num_rows(); ++i)
             mp_ok = ek[i] == lk[i];
     }

@@ -519,9 +519,11 @@ set(DFTRACER_UTILS_VEC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/elementwise.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/predicate.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/select.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/value_ids.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/comparison.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/dictionary.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/filter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/view_builder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/filter_simd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/compare_simd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/reduce_simd.cpp
@@ -627,6 +629,7 @@ set(DFTRACER_UTILS_DUQL_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/lookup_key.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/decorrelate.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/macros.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/wildcard.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/syntax/parser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/syntax/printer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/evaluator.cpp

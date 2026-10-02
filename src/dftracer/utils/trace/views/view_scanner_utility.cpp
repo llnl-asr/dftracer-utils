@@ -82,12 +82,13 @@ std::size_t record_length(const char* line, std::size_t len) {
 // An owned event from a parsed record, with the view's decoder. A fold that
 // captures schema needs every leaf, so it gets no projection.
 detail::FoldEvent decode(simdjson::dom::element root,
-                         const ViewScannerInput& input, bool schema) {
+                         const ViewScannerInput& input, bool schema,
+                         detail::DecodeHints& hints) {
     if (input.view.by_path)
         return detail::decode_record(
             root, *input.fold_intern, schema,
             schema || input.view.paths.empty() ? nullptr : &input.view.paths,
-            input.view.record_schema, &input.view.path_fields);
+            input.view.record_schema, &input.view.path_fields, 0, &hints);
     return detail::extract_fold_event(root, *input.fold_intern,
                                       input.fold_needs_args,
                                       input.fold_extra_fields, schema);
@@ -223,6 +224,7 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
     ViewScannerBatch batch;
 
     dftracer::utils::json::RecordParser parser;
+    detail::DecodeHints hints;
 
     while (!stream->done()) {
         auto chunk = co_await stream->read_async();
@@ -316,7 +318,8 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
                                 // re-parses.
                                 batch.fold_events.push_back(decode(
                                     root, input,
-                                    !metadata && input.fold_capture_schema));
+                                    !metadata && input.fold_capture_schema,
+                                    hints));
                                 batch.values_unconverted +=
                                     batch.fold_events.back().unconverted;
                                 if (!metadata && input.fold_keep_raw)

@@ -40,6 +40,7 @@ struct Indexer::Impl {
             c.extra_dimensions.push_back(build::extra_dimension_name(field));
         c.false_positive_rate = bloom.false_positive_rate;
         c.path_budget = bloom.path_budget;
+        c.stats_share = bloom.stats_share;
         c.auto_max_distinct = bloom.auto_max_distinct;
         c.expected_entries_per_chunk = bloom.expected_entries_per_chunk;
         c.extensions = extensions;
@@ -161,6 +162,7 @@ Indexer Indexer::open(std::vector<std::string> paths, IndexerOptions options) {
                 " (expected zonemap, bloom, counts or postings)");
         impl->extensions.add(*ext);
     }
+    if (impl->options.bloom) impl->bloom_config().validate();
     for (auto& p : paths) {
         std::error_code ec;
         if (!fs::exists(p, ec))

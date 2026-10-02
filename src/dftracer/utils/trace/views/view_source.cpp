@@ -157,7 +157,9 @@ std::optional<Pushable> translate_str_pred(
 
 // The integer value set of `values` as int64, for any integer width; nullopt
 // for a non-integer type or a Uint64 the int64 domain cannot hold.
-std::optional<std::vector<std::int64_t>> int_values(const df::Series& values) {
+std::optional<std::vector<std::int64_t>> int_values(const df::Series& column) {
+    const df::Series values =
+        column.is_flat() ? column.share() : column.materialize();
     switch (values.type()) {
         case df::TypeId::Int8:
         case df::TypeId::Int16:

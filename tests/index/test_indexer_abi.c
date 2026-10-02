@@ -370,6 +370,53 @@ static void test_schema_registry_calls(void) {
     free(trace);
 }
 
+static void test_evidence_settings(void) {
+    char* trace = test_environment_create_dft_gzip_file(g_env, 25);
+    const char* paths[] = {trace};
+    dftu_indexer_options opts;
+    dftu_indexer_options_init(&opts);
+    TEST_ASSERT_EQUAL_UINT64(0, opts.bloom_path_budget);
+    TEST_ASSERT_TRUE(opts.bloom_stats_share == 0.05);
+
+    dftu_indexer_open_result o = dftu_indexer_open(paths, 1, &opts);
+    TEST_ASSERT_TRUE(DFTU_RESULT_OK(o));
+    dftu_indexer* ix = DFTU_RESULT_VALUE(o);
+    TEST_ASSERT_TRUE(DFTU_RESULT_OK(dftu_indexer_build(ix)));
+    dftu_indexer_free(ix);
+
+    opts.bloom_stats_share = 0.5;
+    o = dftu_indexer_open(paths, 1, &opts);
+    TEST_ASSERT_TRUE(DFTU_RESULT_OK(o));
+    ix = DFTU_RESULT_VALUE(o);
+    dftu_indexer_status_result st = dftu_indexer_status(ix);
+    TEST_ASSERT_TRUE(DFTU_RESULT_OK(st));
+    TEST_ASSERT_EQUAL_UINT64(1, DFTU_RESULT_VALUE(st).needs_work);
+    dftu_indexer_free(ix);
+
+    opts.bloom_stats_share = 0.05;
+    opts.bloom_path_budget = 3;
+    o = dftu_indexer_open(paths, 1, &opts);
+    TEST_ASSERT_TRUE(DFTU_RESULT_OK(o));
+    ix = DFTU_RESULT_VALUE(o);
+    st = dftu_indexer_status(ix);
+    TEST_ASSERT_TRUE(DFTU_RESULT_OK(st));
+    TEST_ASSERT_EQUAL_UINT64(1, DFTU_RESULT_VALUE(st).needs_work);
+    dftu_indexer_free(ix);
+
+    opts.bloom_path_budget = 0;
+    const double bad[] = {0.0, -0.5, 1.5};
+    for (int i = 0; i < 3; ++i) {
+        opts.bloom_stats_share = bad[i];
+        dftu_indexer_open_result r = dftu_indexer_open(paths, 1, &opts);
+        TEST_ASSERT_FALSE(DFTU_RESULT_OK(r));
+        TEST_ASSERT_EQUAL_INT(DFTU_COND_INVALID_ARGUMENT,
+                              DFTU_RESULT_ERROR(r).condition);
+        TEST_ASSERT_NOT_NULL(
+            strstr(DFTU_RESULT_ERROR(r).message, "stats_share"));
+    }
+    free(trace);
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_open_with_default_options);
@@ -384,5 +431,6 @@ int main(void) {
     RUN_TEST(test_drop_then_build_extension);
     RUN_TEST(test_schema_option_and_file_field);
     RUN_TEST(test_schema_registry_calls);
+    RUN_TEST(test_evidence_settings);
     return UNITY_END();
 }

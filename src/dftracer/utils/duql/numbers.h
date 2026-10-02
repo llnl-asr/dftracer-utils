@@ -86,6 +86,32 @@ inline std::optional<int> compare_numbers(const Number& a, const Number& b) {
                       b);
 }
 
+/// Whether `c` can begin text that strtod accepts: a blank, a sign, a digit,
+/// a point (a comma in a locale that uses one), or the first letter of inf and
+/// nan. Anything else is not a number, and skipping strtod avoids its locale
+/// lock.
+inline bool may_start_double(char c) {
+    switch (c) {
+        case ' ':
+        case '\t':
+        case '\n':
+        case '\v':
+        case '\f':
+        case '\r':
+        case '+':
+        case '-':
+        case '.':
+        case ',':
+        case 'i':
+        case 'I':
+        case 'n':
+        case 'N':
+            return true;
+        default:
+            return c >= '0' && c <= '9';
+    }
+}
+
 /// `text` as a number when all of it is one: an integer as int64, or uint64
 /// above int64's range, anything else as a double.
 inline std::optional<Number> parse_number(std::string_view text) {
@@ -97,6 +123,7 @@ inline std::optional<Number> parse_number(std::string_view text) {
     if (std::uint64_t u = 0;
         std::from_chars(first, last, u).ptr == last && !text.empty())
         return Number{u};
+    if (text.empty() || !may_start_double(text.front())) return std::nullopt;
     // strtod, not from_chars: the double overload is not on older macOS.
     const std::string copy(text);
     char* end = nullptr;

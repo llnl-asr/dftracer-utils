@@ -375,7 +375,8 @@ TEST_SUITE("Dynamic filter pushdown") {
                                 .collect());
         CHECK(joined_src->narrows == 1);
         REQUIRE(out.num_rows() >= 200);
-        const std::uint64_t* pids = out.columns[0].data<std::uint64_t>();
+        const auto pid_col = out.columns[0].materialize();
+        const std::uint64_t* pids = pid_col.data<std::uint64_t>();
         for (std::int64_t i = 0; i < out.num_rows(); ++i) CHECK(pids[i] == 3);
 
         // Against a plain scan: the join read strictly fewer rows from the
@@ -388,7 +389,8 @@ TEST_SUITE("Dynamic filter pushdown") {
                                  .collect());
         CHECK(full_src->narrows == 0);
         std::int64_t full_pid3 = 0;
-        const std::uint64_t* all = full.columns[0].data<std::uint64_t>();
+        const auto all_col = full.columns[0].materialize();
+        const std::uint64_t* all = all_col.data<std::uint64_t>();
         for (std::int64_t i = 0; i < full.num_rows(); ++i)
             if (all[i] == 3) ++full_pid3;
         CHECK(out.num_rows() == full_pid3);

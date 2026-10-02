@@ -207,7 +207,8 @@ inline bool bhas(const dataframe::DataFrame& b, std::string_view name) {
 // regardless of the column's stored width (Int64/Uint64/Float64).
 inline double bnum(const dataframe::DataFrame& b, std::int64_t row,
                    std::string_view name) {
-    const auto& c = b.columns[static_cast<std::size_t>(bcol(b, name))];
+    const auto c =
+        b.columns[static_cast<std::size_t>(bcol(b, name))].materialize();
     using T = dataframe::TypeId;
     if (c.type() == T::Int64)
         return static_cast<double>(c.data<std::int64_t>()[row]);

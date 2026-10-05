@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace dftracer::utils::utilities::reader::internal {
@@ -197,7 +198,8 @@ class GzipStream : public StreamBase {
         use_member_ = false;
         if (indexer_ && indexer_->find_member(start_bytes_, member_)) {
             use_member_ = co_await inflater_.seek_to_member(
-                fd_, file_offset_, member_, expected_out_bytes());
+                fd_, file_offset_, member_, member_window(),
+                expected_out_bytes());
             if (use_member_)
                 DFTRACER_UTILS_LOG_DEBUG(
                     "Using member %" PRIu64 " at uncompressed offset %" PRIu64
@@ -205,6 +207,13 @@ class GzipStream : public StreamBase {
                     member_.member_idx, member_.uc_offset, start_bytes_);
         }
 
+        if (!use_member_ &&
+            member_.kind !=
+                dftracer::utils::index::gzip::GzipRecordKind::MEMBER) {
+            throw ReaderError(
+                ReaderError::COMPRESSION_ERROR,
+                "Failed to start at a restart point of " + current_gz_path_);
+        }
         if (!use_member_) {
             if (!co_await inflater_.initialize(
                     fd_, file_offset_, 0,
@@ -240,6 +249,13 @@ class GzipStream : public StreamBase {
         return current_position_ >= target_end_bytes_;
     }
 
+    std::string member_window() const {
+        using dftracer::utils::index::gzip::GzipRecordKind;
+        return member_.kind == GzipRecordKind::RESTART
+                   ? indexer_->restart_window(member_.member_idx)
+                   : std::string();
+    }
+
     // Decode-buffer size hint (uncompressed span); 0 for an unbounded end.
     std::size_t expected_out_bytes() const {
         if (target_end_bytes_ <= start_bytes_) return 0;
@@ -252,6 +268,7 @@ class GzipStream : public StreamBase {
         inflater_.reset();
         if (use_member_) {
             if (!co_await inflater_.seek_to_member(fd_, file_offset_, member_,
+                                                   member_window(),
                                                    expected_out_bytes())) {
                 throw ReaderError(ReaderError::COMPRESSION_ERROR,
                                   "Failed to reinitialize from member");

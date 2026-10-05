@@ -45,30 +45,27 @@ std::vector<DataFrame> shared(const std::vector<DataFrame>& parts) {
 
 class PartsCursor : public Cursor {
    public:
-    PartsCursor(std::shared_ptr<const std::vector<DataFrame>> parts,
-                std::size_t leading)
-        : parts_(std::move(parts)), leading_(leading) {}
+    explicit PartsCursor(std::shared_ptr<const std::vector<DataFrame>> parts)
+        : parts_(std::move(parts)) {}
 
     CoroTask<std::optional<Morsel>> next(std::int64_t) override {
         if (next_ >= parts_->size()) co_return std::nullopt;
         const DataFrame& df = (*parts_)[next_++];
         Morsel m;
         m.rows = df.num_rows();
+        auto& dyn = m.dyn_state();
+        dyn.intern = intern_;
         for (std::size_t c = 0; c < df.columns.size(); ++c) {
-            if (c < leading_) {
-                m.columns.push_back(df.columns[c].share());
-            } else {
-                auto& dyn = m.dyn_state();
-                dyn.dyn_names.push_back(df.names[c]);
-                dyn.dyn_columns.push_back(df.columns[c].share());
-            }
+            m.columns.push_back(df.columns[c].share());
+            dyn.name_ids.push_back(intern_->get_or_insert(df.names[c]));
         }
         co_return m;
     }
 
    private:
     std::shared_ptr<const std::vector<DataFrame>> parts_;
-    std::size_t leading_;
+    std::shared_ptr<dftracer::utils::StringIntern> intern_ =
+        std::make_shared<dftracer::utils::StringIntern>();
     std::size_t next_ = 0;
 };
 
@@ -92,7 +89,7 @@ class PartsSource : public Source {
     dftracer::utils::dataframe::ScanResult scan(
         const dftracer::utils::dataframe::ScanRequest& req) const override {
         dftracer::utils::dataframe::ScanResult r;
-        r.cursor = std::make_unique<PartsCursor>(parts_, leading_);
+        r.cursor = std::make_unique<PartsCursor>(parts_);
         r.filters.assign(req.filters.size(),
                          dftracer::utils::dataframe::Pushed::No);
         return r;
@@ -224,7 +221,9 @@ TEST_CASE("an error in one column fails the collect") {
     auto parts = ragged_parts();
     for (std::size_t k = 0; k < parts.size(); ++k) {
         std::vector<Series> field;
-        field.push_back(k == 7 ? words(0, parts[k].num_rows())
+        std::vector<Series> nested;
+        nested.push_back(ints(0, parts[k].num_rows()));
+        field.push_back(k == 7 ? Series::structs({"b"}, std::move(nested))
                                : ints(0, parts[k].num_rows()));
         parts[k].names.push_back("st");
         parts[k].columns.push_back(Series::structs({"a"}, std::move(field)));

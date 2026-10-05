@@ -59,6 +59,9 @@ void put_file_metadata(IndexWrite& w, int file_id,
                        std::uint64_t total_uc_size, bool truncated);
 void put_gzip_member(IndexWrite& w, int file_id,
                      const index::gzip::GzipMemberRecord& member);
+/// The 32 KiB inflate window of the RESTART piece `member_idx`.
+void put_restart_window(IndexWrite& w, int file_id, std::uint64_t member_idx,
+                        std::string_view window);
 
 /// Path-keyed data of the pruning extensions (zonemap, bloom, counts,
 /// postings): the path joins the file's indexed paths.

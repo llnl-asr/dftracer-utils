@@ -45,14 +45,18 @@ class CheckpointIndexer {
     virtual std::uint64_t get_max_bytes() const = 0;
     virtual std::uint64_t get_num_lines() const = 0;
 
-    /// Member containing `target_offset` (uncompressed). A gzip member is a
-    /// self-contained stream, so seeking to one needs neither an inflate
-    /// dictionary nor bit priming.
+    /// Member record (a member or a piece of one) containing `target_offset`
+    /// (uncompressed). A RESTART piece also needs its `restart_window`.
     virtual bool find_member(std::size_t target_offset,
                              GzipMemberRecord &member) const = 0;
 
-    /// Every member in file order. Empty when the file was never indexed.
+    /// Every member record in file order. Empty when the file was never
+    /// indexed.
     virtual std::vector<GzipMemberRecord> get_members() const = 0;
+
+    /// The 32 KiB inflate window of RESTART piece `member_idx`; empty when
+    /// the index has none for it.
+    virtual std::string restart_window(std::uint64_t member_idx) const = 0;
 
     // Archive format identification
     virtual ArchiveFormat get_format_type() const = 0;

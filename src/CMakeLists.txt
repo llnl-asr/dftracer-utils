@@ -163,6 +163,7 @@ set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/source.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/bloom_filter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/bloom_fold.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/catalog_fold.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/chunk_dimension_stats.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/rowset_fold.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/kinds/payloads.cpp

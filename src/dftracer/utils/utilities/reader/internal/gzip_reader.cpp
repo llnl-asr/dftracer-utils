@@ -431,14 +431,15 @@ std::unique_ptr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
             // LineStream then drops [first_line_num, start) and serves
             // [start, end]. Decoding from the containing member avoids
             // re-inflating earlier members.
+            // A restart piece does not start at a line start, so only
+            // whole members and the heads of split members qualify.
             bool found_start = false;
             for (const auto &member : members) {
-                if (member.first_line_num <= start &&
-                    start <= member.last_line_num) {
+                if (member.kind != index::gzip::GzipRecordKind::RESTART &&
+                    member.first_line_num <= start) {
                     start_bytes = member.uc_offset;
                     actual_start_line = member.first_line_num;
                     found_start = true;
-                    break;
                 }
             }
             if (!found_start) {

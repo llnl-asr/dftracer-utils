@@ -218,24 +218,25 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
     auto select = std::make_shared<std::vector<std::string>>(bp.select);
     const double time_scale = bp.time_scale;
     const bool by_path = detail::plan_by_path(bp);
+    const bool keep_metadata = detail::metadata_rows(bp);
     const dftracer::utils::index::RecordSchema* record_schema =
         by_path && !detail::plan_record_schema(bp).fields.empty()
             ? &detail::plan_record_schema(bp)
             : nullptr;
 
-    auto make_consumer = [slots, by_path, record_schema]() {
+    auto make_consumer = [slots, by_path, keep_metadata, record_schema]() {
         auto slot = std::make_shared<Slot>();
         slots->push_back(slot);
-        return [slot, by_path, record_schema](const json::JsonValue& jv,
-                                              std::string_view) {
+        return [slot, by_path, keep_metadata, record_schema](
+                   const json::JsonValue& jv, std::string_view) {
             detail::FoldEvent fe =
                 by_path ? detail::decode_record(jv.element(), slot->intern,
                                                 /*capture_schema=*/false,
                                                 nullptr, record_schema)
                         : detail::extract_fold_event(jv.element(), slot->intern,
                                                      /*needs_args=*/true);
-            if (fe.phase == RecordPhase::METADATA ||
-                fe.phase == RecordPhase::UNKNOWN)
+            if (fe.phase == RecordPhase::UNKNOWN ||
+                (!keep_metadata && fe.phase == RecordPhase::METADATA))
                 return;
             slot->events.push_back(std::move(fe));
         };
@@ -260,10 +261,11 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
     // alone drops it), so a branch's phase() filters in a fused session.
     if (auto eq = detail::effective_query(bp))
         detail::add_fold_branch(*state_, std::move(*eq),
-                                std::move(make_consumer), std::move(finalize));
+                                std::move(make_consumer), std::move(finalize),
+                                keep_metadata);
     else
         detail::add_fold_branch(*state_, std::move(make_consumer),
-                                std::move(finalize));
+                                std::move(finalize), keep_metadata);
     return {out, executed_};
 }
 
@@ -761,14 +763,22 @@ coro::CoroTask<ExportStats> View::run_folds(
 
 std::vector<TraceConfig> View::config() const { return scan::config(plan_); }
 
-std::vector<std::string> View::columns() const { return scan::columns(plan_); }
+std::vector<std::string> View::columns() const {
+    scan::ensure_catalog(plan_);
+    return scan::columns(plan_);
+}
 
 std::vector<ColumnInfo> View::column_info() const {
+    scan::ensure_catalog(plan_);
     return scan::schema(plan_);
 }
 
 std::vector<SchemaLeaf> View::schema_tree() const {
     return scan::schema_tree(plan_);
+}
+
+std::vector<SchemaLeaf> detail::catalog_leaves(const View& v) {
+    return scan::catalog_tree(v.plan_);
 }
 
 std::string schema_tree_json(const std::vector<SchemaLeaf>& leaves) {
@@ -968,11 +978,6 @@ View View::agg_numeric_args(std::vector<AggSpec> reductions) const {
     return reshape("agg_numeric_args", [&](const scan::ScanPlan& v) {
         return scan::agg_numeric_args(v, std::move(reductions));
     });
-}
-
-View View::all() const {
-    return reshape("all",
-                   [&](const scan::ScanPlan& v) { return scan::all(v); });
 }
 
 View View::record_schema(std::string id) const {

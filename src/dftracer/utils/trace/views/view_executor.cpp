@@ -474,7 +474,10 @@ coro::CoroTask<ExportStats> run_folds(const ViewPlan& plan,
                                       DynamicPrune* dyn_prune,
                                       coro::CoroSemaphore* gate) {
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
-    co_return co_await fuse(plan, vdef, folds, intern, /*covered=*/nullptr,
+    auto catalog = select_catalog_fold(plan, vdef, intern);
+    std::vector<Fold*> all(folds.begin(), folds.end());
+    if (catalog) all.push_back(catalog.get());
+    co_return co_await fuse(plan, vdef, all, intern, /*covered=*/nullptr,
                             /*limit=*/0, dyn_prune, gate);
 }
 
@@ -780,7 +783,9 @@ coro::CoroTask<dataframe::DataFrame> run_collect_rows(const ViewPlan& plan) {
     const bool by_path = plan_by_path(plan);
     NativeRowFold fold(intern, plan.select, plan.time_scale,
                        metadata_rows(plan), by_path);
-    std::array<Fold*, 1> folds{&fold};
+    std::vector<Fold*> folds{&fold};
+    auto catalog = select_catalog_fold(plan, vdef, intern);
+    if (catalog) folds.push_back(catalog.get());
     co_await execute(lower_fused_folds(plan, vdef, folds), intern);
     dataframe::DataFrame b = fold.build();
     // sort_col/topk_col name a column the way a caller would select it (bare

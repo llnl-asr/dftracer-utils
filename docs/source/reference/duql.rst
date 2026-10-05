@@ -107,9 +107,12 @@ stands alone in one of these places and is a syntax error anywhere else:
 A pattern expands when the query is planned, to every scalar field path of
 the source with the same number of segments and the same text in each segment
 that is not ``*``. A View reads the paths from the merged index path catalog,
-which the full index holds (``dftracer_index`` or the ``BatchIndexer``); a
-trace whose index has no catalog, such as one indexed only by a query, is
-refused with an error naming the file. Patterns expand against the record
+which the full index holds (``dftracer_index`` or the ``BatchIndexer``) and
+the first unfiltered full scan of a trace writes. A file with no catalog yet
+is scanned once, for its catalog only, before the pattern expands (about
+0.25 s for a 53 MB trace); a file whose catalog cannot be written, because
+another process holds its index for writing, is refused with an error naming
+the file. Patterns expand against the record
 paths, so a column made by ``derive`` or ``group`` in an earlier stage is not
 matched.
 The query then runs as the same query with those paths spelled out, so pruning
@@ -454,9 +457,11 @@ On a View, a query is a pipeline of stages joined by ``|``:
    * - ``derive x = e, y = f``
      - Adds or replaces columns; ``y`` may read ``x``.
    * - ``drop a, b``
-     - All columns but these.
+     - All columns but these. It works on every column the rows carry,
+       including those a trace scan adds that the index does not list.
    * - ``rename x = a``
-     - Column ``a`` named ``x``.
+     - Column ``a`` named ``x``, whether the index lists ``a`` or the scan
+       adds it. Two columns left with one name is an error.
    * - ``distinct a, x = e, e2 as y``
      - One row for each distinct key, in first-occurrence order, with the
        key columns only. A key is named as in ``group``.

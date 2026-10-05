@@ -112,6 +112,14 @@ void put_gzip_member(IndexWrite& w, int file_id,
               enc::encode_gzip_member_value(member));
 }
 
+void put_restart_window(IndexWrite& w, int file_id, std::uint64_t member_idx,
+                        std::string_view window) {
+    put_value(w, Ext::MEMBERS, layout::members::RESTART,
+              layout::granule_key(Ext::MEMBERS, layout::members::RESTART,
+                                  fid(file_id), granule(member_idx)),
+              window);
+}
+
 void put_path(IndexWrite& w, Ext ext, int file_id, std::string_view path) {
     auto key = layout::file_prefix(ext, layout::path_kind::PATHS, fid(file_id));
     key.append(path);

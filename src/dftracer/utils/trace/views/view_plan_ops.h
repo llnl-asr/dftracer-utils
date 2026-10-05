@@ -33,7 +33,14 @@ coro::CoroTask<ScanPlan> from_directory(std::string dir,
 std::vector<TraceConfig> config(const ScanPlan& plan_);
 std::vector<std::string> columns(const ScanPlan& plan_);
 std::vector<ColumnInfo> schema(const ScanPlan& plan_);
+/// Writes the path catalog of each file of `plan_` that has no current one,
+/// by one unfiltered scan of those files only. A catalog that cannot be
+/// written (locked index) stays absent.
+void ensure_catalog(const ScanPlan& plan_);
+/// The leaves of the catalog, built first where missing.
 std::vector<SchemaLeaf> schema_tree(const ScanPlan& plan_);
+/// The leaves of the catalogs as they stand; scans nothing.
+std::vector<SchemaLeaf> catalog_tree(const ScanPlan& plan_);
 /// The first file of the plan whose index holds no path catalog (no index,
 /// or one built without its statistics tier), or nullopt.
 std::optional<std::string> file_without_catalog(const ScanPlan& plan_);
@@ -63,6 +70,8 @@ ScanPlan agg_numeric_args(const ScanPlan& plan_,
 ScanPlan memory_budget(const ScanPlan& plan_, std::uint64_t bytes);
 ScanPlan auto_spill(const ScanPlan& plan_);
 ScanPlan select(const ScanPlan& plan_, std::vector<std::string> cols);
+ScanPlan name_columns(const ScanPlan& plan_,
+                      std::vector<dataframe::Field> columns);
 ScanPlan limit(const ScanPlan& plan_, std::uint64_t n);
 ScanPlan offset(const ScanPlan& plan_, std::uint64_t n);
 ScanPlan sort_by(const ScanPlan& plan_, std::string column,
@@ -71,7 +80,6 @@ ScanPlan topk(const ScanPlan& plan_, std::string column, std::int64_t k,
               bool largest = true);
 ScanPlan materialize(const ScanPlan& plan_, std::uint64_t checkpoint_size,
                      std::uint64_t part_size);
-ScanPlan all(const ScanPlan& plan_);
 /// The plan read by a trace operation: records without a time are skipped.
 ScanPlan timed(const ScanPlan& plan_);
 ScanPlan record_schema(const ScanPlan& plan_, const std::string& id);

@@ -186,15 +186,18 @@ class PartsCursor : public Cursor {
         Morsel m;
         m.rows = df.num_rows();
         auto& dyn = m.dyn_state();
+        dyn.intern = intern_;
         for (std::size_t c = 0; c < df.columns.size(); ++c) {
-            dyn.dyn_names.push_back(df.names[c]);
-            dyn.dyn_columns.push_back(df.columns[c].share());
+            dyn.name_ids.push_back(intern_->get_or_insert(df.names[c]));
+            m.columns.push_back(df.columns[c].share());
         }
         co_return m;
     }
 
    private:
     std::shared_ptr<const std::vector<DataFrame>> parts_;
+    std::shared_ptr<dftracer::utils::StringIntern> intern_ =
+        std::make_shared<dftracer::utils::StringIntern>();
     std::size_t next_ = 0;
 };
 

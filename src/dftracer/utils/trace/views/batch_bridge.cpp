@@ -44,7 +44,7 @@ dataframe::Morsel events_to_morsel(
     std::span<const FoldEvent> events,
     std::shared_ptr<dftracer::utils::StringIntern> intern,
     const ColumnSpec& spec) {
-    dataframe::DataFrame f = base_frame(events, *intern, spec);
+    dataframe::DataFrame f = events_to_frame(events, *intern, spec);
 
     dataframe::Morsel m;
     m.rows = f.num_rows();
@@ -53,16 +53,6 @@ dataframe::Morsel events_to_morsel(
     d.name_ids.reserve(f.names.size());
     for (const std::string& name : f.names)
         d.name_ids.push_back(intern->get_or_insert(name));
-
-    if (spec.emit_dyn) {
-        auto dyn = build_dyn_numeric_columns(events, *intern, spec.select);
-        d.dyn_names.reserve(dyn.size());
-        d.dyn_columns.reserve(dyn.size());
-        for (auto& [name, col] : dyn) {
-            d.dyn_names.push_back(std::move(name));
-            d.dyn_columns.push_back(std::move(col));
-        }
-    }
     d.intern = std::move(intern);
     return m;
 }

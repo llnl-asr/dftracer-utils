@@ -12,6 +12,10 @@ std::string encode_gzip_member_value(
     append_u64(value, member.uc_size);
     append_u64(value, member.first_line_num);
     append_u64(value, member.last_line_num);
+    if (member.kind != index::gzip::GzipRecordKind::MEMBER) {
+        value.push_back(static_cast<char>(member.kind));
+        value.push_back(static_cast<char>(member.bits));
+    }
     return value;
 }
 

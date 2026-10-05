@@ -121,6 +121,27 @@ PyObject* LazyFrame_rename(PyObject* self, PyObject* names) {
     return run_lazy_op([&] { return b->lf.rename(std::move(ns)); });
 }
 
+PyObject* LazyFrame_drop(PyObject* self, PyObject* names) {
+    LazyFrameObject* b = as_lazyframe(self);
+    if (!b) return nullptr;
+    std::vector<std::string> ns;
+    if (!parse_str_list(names, "names", ns)) return nullptr;
+    return run_lazy_op([&] { return b->lf.drop(std::move(ns)); });
+}
+
+PyObject* LazyFrame_rename_columns(PyObject* self, PyObject* args) {
+    LazyFrameObject* b = as_lazyframe(self);
+    if (!b) return nullptr;
+    PyObject* from = nullptr;
+    PyObject* to = nullptr;
+    if (!PyArg_ParseTuple(args, "OO", &from, &to)) return nullptr;
+    std::vector<std::string> f, t;
+    if (!parse_str_list(from, "from", f) || !parse_str_list(to, "to", t))
+        return nullptr;
+    return run_lazy_op(
+        [&] { return b->lf.rename_columns(std::move(f), std::move(t)); });
+}
+
 PyObject* LazyFrame_slice(PyObject* self, PyObject* args) {
     LazyFrameObject* b = as_lazyframe(self);
     if (!b) return nullptr;
@@ -920,6 +941,12 @@ PyMethodDef LazyFrame_methods[] = {
      "select(names) -> LazyFrame projected to the given columns."},
     {"rename", LazyFrame_rename, METH_O,
      "rename(names) -> LazyFrame with columns renamed positionally."},
+    {"drop", LazyFrame_drop, METH_O,
+     "drop(names) -> LazyFrame without the named columns, including those "
+     "a scan adds per batch."},
+    {"rename_columns", LazyFrame_rename_columns, METH_VARARGS,
+     "rename_columns(from, to) -> LazyFrame with each `from` column renamed "
+     "to the `to` name at the same index."},
     {"slice", LazyFrame_slice, METH_VARARGS,
      "slice(offset, len) -> LazyFrame of the row window."},
     {"head", LazyFrame_head, METH_O,

@@ -12,6 +12,7 @@
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
 #include <dftracer/utils/dataframe/internal/frame_native.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
+#include <dftracer/utils/dataframe/internal/rest_column.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/duql/fields.h>
@@ -113,6 +114,31 @@ bool is_number(df::TypeId t) {
            t == df::TypeId::Float64;
 }
 
+// The names of the columns of `f`, a frame a source declaring `declared`
+// hands out: its own when it has every declared column, else the declared
+// ones by position, as the ops above read it, then its own. Columns past the
+// declared ones are those its input returned beyond its schema.
+std::vector<std::uint32_t> frame_ids(const df::DataFrame& f,
+                                     const std::vector<std::string>& declared,
+                                     dftracer::utils::StringIntern& intern) {
+    const bool by_name =
+        std::all_of(declared.begin(), declared.end(), [&](const auto& n) {
+            return std::find(f.names.begin(), f.names.end(), n) !=
+                   f.names.end();
+        });
+    std::vector<std::uint32_t> ids;
+    for (std::size_t i = 0; i < f.names.size(); ++i)
+        ids.push_back(intern.get_or_insert(
+            !by_name && i < declared.size() ? declared[i] : f.names[i]));
+    return ids;
+}
+
+std::vector<std::string> field_names(const df::Schema& s) {
+    std::vector<std::string> out;
+    for (const auto& f : s.fields) out.push_back(f.name);
+    return out;
+}
+
 // Rows of `inner`, collected, then passed through `finish` before any op
 // above reads them.
 class FinishSource final : public df::Source {
@@ -125,12 +151,14 @@ class FinishSource final : public df::Source {
           finish_(std::move(finish)) {}
 
     df::Schema schema() const override { return schema_; }
+    // The rows carry the columns the inner scan returned beyond its schema.
+    bool undeclared_columns() const override { return true; }
 
     df::ScanResult scan(const df::ScanRequest& req) const override {
         df::ScanResult r;
-        auto rows = std::make_unique<Rows>(inner_, finish_, req.projection);
-        rows->named_ = schema_.fields.empty();
-        r.cursor = std::move(rows);
+        r.cursor = std::make_unique<Rows>(
+            inner_, finish_, req.projection,
+            req.projection.empty() ? field_names(schema_) : req.projection);
         r.filters.assign(req.filters.size(), df::Pushed::No);
         return r;
     }
@@ -139,10 +167,12 @@ class FinishSource final : public df::Source {
     class Rows final : public df::Cursor {
        public:
         Rows(df::LazyFrame inner, Finish finish,
-             std::vector<std::string> projection)
+             std::vector<std::string> projection,
+             std::vector<std::string> declared)
             : inner_(std::move(inner)),
               finish_(std::move(finish)),
-              projection_(std::move(projection)) {}
+              projection_(std::move(projection)),
+              declared_(std::move(declared)) {}
 
         coro::CoroTask<std::optional<df::Morsel>> next(
             std::int64_t max_rows) override {
@@ -150,29 +180,23 @@ class FinishSource final : public df::Source {
                 df::DataFrame f = finish_(
                     co_await df::join_chunks(co_await inner_.collect()));
                 if (!projection_.empty()) f = f.select(projection_);
-                if (named_) {
-                    intern_ = std::make_shared<dftracer::utils::StringIntern>();
-                    for (const auto& n : f.names)
-                        ids_.push_back(intern_->get_or_insert(n));
-                }
+                intern_ = std::make_shared<dftracer::utils::StringIntern>();
+                ids_ = frame_ids(f, declared_, *intern_);
                 rows_ = df::InMemorySource(std::move(f)).scan({}).cursor;
             }
             auto m = co_await rows_->next(max_rows);
-            if (m && named_) {
+            if (m) {
                 m->dyn_state().name_ids = ids_;
                 m->dyn->intern = intern_;
             }
             co_return m;
         }
 
-        // Names each morsel's columns, for a result whose columns only the
-        // data gives.
-        bool named_ = false;
-
        private:
         df::LazyFrame inner_;
         Finish finish_;
         std::vector<std::string> projection_;
+        std::vector<std::string> declared_;
         std::unique_ptr<df::Cursor> rows_;
         std::shared_ptr<dftracer::utils::StringIntern> intern_;
         std::vector<std::uint32_t> ids_;
@@ -194,10 +218,14 @@ class MapSource final : public df::Source {
           map_(std::move(map)) {}
 
     df::Schema schema() const override { return schema_; }
+    // The rows carry the columns the inner scan returned beyond its schema.
+    bool undeclared_columns() const override { return true; }
 
     df::ScanResult scan(const df::ScanRequest& req) const override {
         df::ScanResult r;
-        r.cursor = std::make_unique<Rows>(inner_, map_, req.projection);
+        r.cursor = std::make_unique<Rows>(
+            inner_, map_, req.projection,
+            req.projection.empty() ? field_names(schema_) : req.projection);
         r.filters.assign(req.filters.size(), df::Pushed::No);
         return r;
     }
@@ -206,28 +234,39 @@ class MapSource final : public df::Source {
     class Rows final : public df::Cursor {
        public:
         Rows(const df::LazyFrame& inner, Map map,
-             std::vector<std::string> projection)
+             std::vector<std::string> projection,
+             std::vector<std::string> declared)
             : batches_(inner.stream()),
               map_(std::move(map)),
-              projection_(std::move(projection)) {}
+              projection_(std::move(projection)),
+              declared_(std::move(declared)) {}
 
         coro::CoroTask<std::optional<df::Morsel>> next(
             std::int64_t max_rows) override {
             for (;;) {
                 if (rows_)
-                    if (auto m = co_await rows_->next(max_rows)) co_return m;
+                    if (auto m = co_await rows_->next(max_rows)) {
+                        m->dyn_state().name_ids = ids_;
+                        m->dyn->intern = intern_;
+                        co_return m;
+                    }
                 auto batch = co_await batches_.next();
                 if (!batch) co_return std::nullopt;
                 df::DataFrame f = map_(std::move(*batch));
                 if (!projection_.empty()) f = f.select(projection_);
+                ids_ = frame_ids(f, declared_, *intern_);
                 rows_ = df::InMemorySource(std::move(f)).scan({}).cursor;
             }
         }
 
        private:
+        std::shared_ptr<dftracer::utils::StringIntern> intern_ =
+            std::make_shared<dftracer::utils::StringIntern>();
+        std::vector<std::uint32_t> ids_;
         coro::AsyncGenerator<df::DataFrame> batches_;
         Map map_;
         std::vector<std::string> projection_;
+        std::vector<std::string> declared_;
         std::unique_ptr<df::Cursor> rows_;
     };
 
@@ -261,6 +300,13 @@ df::DataFrame aligned(
         out.columns.push_back(
             df::Series::nulls(scalar ? type : df::TypeId::String, n));
     }
+    for (std::size_t i = 0; i < f.names.size(); ++i)
+        if (std::none_of(in.begin(), in.end(), [&](const auto& c) {
+                return c.first == f.names[i];
+            })) {
+            out.names.push_back(f.names[i]);
+            out.columns.push_back(f.columns[i].share());
+        }
     return out;
 }
 
@@ -507,7 +553,8 @@ struct Reads {
 Reads referenced_fields(
     const std::vector<duql::PipelineStage>& stages,
     const std::function<std::vector<std::string>(const duql::PipelineLookup&)>&
-        adds) {
+        adds,
+    bool carried) {
     Reads out;
     std::vector<std::string> defined;
     auto known = [](const std::vector<std::string>& v, const std::string& n) {
@@ -570,7 +617,7 @@ Reads referenced_fields(
                     define(s.items);
                 } else if constexpr (std::is_same_v<T, duql::PipelineRename>) {
                     for (const auto& pair : s.pairs) {
-                        field(pair.second, false);
+                        if (!carried) field(pair.second, false);
                         defined.push_back(pair.first);
                     }
                 } else if constexpr (std::is_same_v<T, duql::PipelinePlugin>) {
@@ -1545,7 +1592,8 @@ class Applier {
         std::visit([this](const auto& s) { this->stage(s); }, stage);
         std::vector<std::string> rest;
         for (const auto& c : cols_)
-            if (!c.quant && !c.lookup && !c.call && !c.index && !c.list)
+            if (!c.quant && !c.lookup && !c.call && !c.index && !c.list &&
+                !c.term)
                 rest.push_back(c.name);
         if (rest.size() != cols_.size()) keep(std::move(rest));
     }
@@ -1598,9 +1646,10 @@ class Applier {
     std::size_t quants_ = 0;
     std::size_t lookups_ = 0;
     std::size_t calls_ = 0;
+    std::size_t typed_ = 0;
 
     const std::vector<SchemaLeaf>& tree() {
-        if (!tree_) tree_ = v_.schema_tree();
+        if (!tree_) tree_ = detail::catalog_leaves(v_);
         return *tree_;
     }
 
@@ -1707,8 +1756,10 @@ class Applier {
             }
         }
         if (narrow && !only.empty()) read = std::move(only);
-        if (read.size() > cols_.size() ||
-            (narrow && read.size() < cols_.size())) {
+        if (!narrow && read.size() > cols_.size() && name_paths(read)) {
+            lines.push_back("scan names: " + joined(read));
+        } else if (read.size() > cols_.size() ||
+                   (narrow && read.size() < cols_.size())) {
             const std::vector<std::string> before = names();
             lines.push_back("scan select: " + joined(read));
             v_ = v_.select(std::move(read));
@@ -1721,6 +1772,25 @@ class Applier {
         blocker_ = stage;
         lines.push_back("scan order: file, then line");
         v_ = ctx_.order(v_);
+    }
+
+    // An open pipeline keeps every column the scan returns, so the fields it
+    // reads beyond the columns become columns of the scan without narrowing
+    // it, as a full index would declare them. Only for plain paths, on a view
+    // that still reads raw events.
+    bool name_paths(const std::vector<std::string>& read) {
+        if (!v_.filters_events()) return false;
+        std::vector<df::Field> named;
+        for (std::size_t i = cols_.size(); i < read.size(); ++i) {
+            if (read[i] != detail::select_source_field(read[i]) ||
+                read[i].starts_with(detail::list_token("", "").substr(0, 2)))
+                return false;
+            named.push_back(
+                df::Field{read[i], df::scalar(observed(read[i])), true});
+        }
+        v_ = detail::with_named_columns(v_, std::move(named));
+        columns_from_view(true);
+        return true;
     }
 
     std::vector<std::string> names() const {
@@ -1784,10 +1854,80 @@ class Applier {
                            "'; the columns here are " + joined(names()));
             });
         const bool fb = schema_.args_fallback;
+        if (untyped(*t)) return per_batch(t, text, condition);
         auto e = condition ? duql::vectorize_condition(*t, cols_, fb)
                            : duql::vectorize(*t, cols_, fb);
         if (!e) refuse(e.error().message + " in '" + text + "'");
         return std::move(*e);
+    }
+
+    // Whether `t` reads a column whose type the plan does not know: one a
+    // scan without a catalog names, which each batch types on its own.
+    bool untyped(const duql::Term& t) const {
+        bool out = false;
+        duql::for_each_term_field(t, [&](const duql::TField& f) {
+            if (f.root != duql::FieldRoot::RECORD) return;
+            for (const auto& c : cols_)
+                if (c.type.id == df::TypeId::Unknown && !c.json &&
+                    (c.name == f.base ||
+                     (schema_.args_fallback && c.name == "args." + f.base) ||
+                     (f.base.size() > c.name.size() &&
+                      f.base.starts_with(c.name) &&
+                      f.base[c.name.size()] == '.')))
+                    out = true;
+        });
+        return out;
+    }
+
+    // `t` computed per batch into a column: each batch gives the untyped
+    // columns its own types, then `t` compiles as it would over a plan that
+    // declared them so, once per distinct set of types.
+    df::Expr per_batch(const duql::TermRef& t, const std::string& text,
+                       bool condition) {
+        const std::string name = "__duql_t_" + std::to_string(typed_++);
+        std::vector<duql::VectorColumn> next = cols_;
+        next.push_back({name, df::scalar(condition ? df::TypeId::Bool
+                                                   : df::TypeId::Unknown)});
+        next.back().term = t.get();
+        struct Cache {
+            std::mutex mu;
+            std::map<std::vector<df::TypeId>, df::Expr> exprs;
+        };
+        map_rows(
+            [t, text, condition, name, cols = cols_, fb = schema_.args_fallback,
+             cache = std::make_shared<Cache>()](df::DataFrame f) {
+                std::vector<duql::VectorColumn> typed = cols;
+                std::vector<df::TypeId> types;
+                for (std::size_t i = 0; i < typed.size(); ++i) {
+                    if (typed[i].type.id == df::TypeId::Unknown)
+                        typed[i].type = f.columns[i].data_type();
+                    types.push_back(typed[i].type.id);
+                }
+                df::Expr e;
+                {
+                    std::lock_guard<std::mutex> lock(cache->mu);
+                    auto it = cache->exprs.find(types);
+                    if (it == cache->exprs.end()) {
+                        auto built =
+                            condition ? duql::vectorize_condition(*t, typed, fb)
+                                      : duql::vectorize(*t, typed, fb);
+                        if (!built)
+                            throw std::invalid_argument(built.error().message +
+                                                        " in '" + text + "'");
+                        it = cache->exprs.emplace(types, std::move(*built))
+                                 .first;
+                    }
+                    e = it->second;
+                }
+                std::vector<const df::Series*> inputs;
+                for (const auto& c : f.columns) inputs.push_back(&c);
+                df::Series out = df::eval(e, inputs);
+                f.names.push_back(name);
+                f.columns.push_back(std::move(out));
+                return f;
+            },
+            std::move(next), "per batch " + name + " = " + text);
+        return df::expr_col(static_cast<std::int32_t>(cols_.size() - 1));
     }
 
     // `next` as the columns, each batch passed through `fn`.
@@ -1949,18 +2089,59 @@ class Applier {
                         : df::infer_type(args.back(), types()));
             }
         }
-        std::optional<df::DataType> type;
-        try {
-            type = duql::call_type(*term, arg_types);
-        } catch (const std::invalid_argument& e) {
-            refuse("'" + text + "': " + e.what());
-        }
         const std::string name = "__duql_c_" + std::to_string(calls_++);
         auto mark = [&](duql::VectorColumn& col) {
             col.call = c;
             col.index = ix;
             col.list = ls;
         };
+        // An operand of no known type: each batch types the call from its
+        // own operand columns, as a plan that declared them so would.
+        std::vector<bool> per_batch(operands.size(), false);
+        for (std::size_t i = 0; i < operands.size() && i < arg_types.size();
+             ++i)
+            per_batch[i] =
+                arg_types[i].id == df::TypeId::Unknown && untyped(*operands[i]);
+        if (std::find(per_batch.begin(), per_batch.end(), true) !=
+            per_batch.end()) {
+            std::vector<duql::VectorColumn> next = cols_;
+            next.push_back({name, df::scalar(df::TypeId::Unknown)});
+            mark(next.back());
+            map_rows(
+                [term, args, keys, arg_types, per_batch, text,
+                 name](df::DataFrame f) {
+                    std::vector<const df::Series*> inputs;
+                    for (const auto& x : f.columns) inputs.push_back(&x);
+                    std::vector<df::Series> values;
+                    std::vector<df::DataType> types = arg_types;
+                    for (std::size_t i = 0; i < args.size(); ++i) {
+                        values.push_back(df::eval(args[i], inputs));
+                        if (per_batch[i]) types[i] = values.back().data_type();
+                    }
+                    std::optional<df::DataType> type;
+                    try {
+                        type = duql::call_type(*term, types);
+                    } catch (const std::invalid_argument& e) {
+                        throw std::invalid_argument("'" + text +
+                                                    "': " + e.what());
+                    }
+                    const std::int64_t rows = f.num_rows();
+                    f.names.push_back(name);
+                    f.columns.push_back(
+                        type ? duql::call_column(*term, values, keys, *type,
+                                                 rows)
+                             : df::Series::nulls(df::TypeId::Bool, rows));
+                    return f;
+                },
+                std::move(next), "call " + name + " per batch = " + text);
+            return;
+        }
+        std::optional<df::DataType> type;
+        try {
+            type = duql::call_type(*term, arg_types);
+        } catch (const std::invalid_argument& e) {
+            refuse("'" + text + "': " + e.what());
+        }
         if (!type) {
             with_column(name, df::expr_lit_null(df::TypeId::Bool), text);
             cols_.back().type = df::scalar(df::TypeId::Unknown);
@@ -2252,7 +2433,9 @@ class Applier {
         lines.push_back("with_column " + name + " = " + text);
     }
 
-    void keep(std::vector<std::string> keep) {
+    // Keeps the `keep` columns. A keep that only drops the stages' own
+    // columns keeps the columns the scan returns beyond the schema too.
+    void keep(std::vector<std::string> keep, bool rest = true) {
         std::vector<duql::VectorColumn> next;
         for (const auto& n : keep) {
             const auto i = index(n);
@@ -2260,6 +2443,7 @@ class Applier {
             next.push_back(cols_[*i]);
         }
         lines.push_back("select " + joined(keep));
+        if (rest) keep.emplace_back(df::REST_COLUMN);
         v_ = v_.with_lazy(v_.lazy().select(std::move(keep)));
         cols_ = std::move(next);
     }
@@ -2303,7 +2487,7 @@ class Applier {
             sources.push_back(std::move(from));
             final_names.push_back(items[i].name);
         }
-        keep(std::move(sources));
+        keep(std::move(sources), false);
         if (names() != final_names) rename(std::move(final_names));
     }
 
@@ -2332,24 +2516,31 @@ class Applier {
 
     void stage(const duql::PipelineDrop& d) {
         leave_scan("drop");
-        std::vector<std::string> rest;
-        for (const auto& n : names()) {
-            bool dropped = false;
-            for (const auto& x : d.names) dropped = dropped || x == n;
-            if (!dropped) rest.push_back(n);
-        }
-        keep(std::move(rest));
+        cols_.erase(
+            std::remove_if(cols_.begin(), cols_.end(),
+                           [&](const duql::VectorColumn& c) {
+                               return std::find(d.names.begin(), d.names.end(),
+                                                c.name) != d.names.end();
+                           }),
+            cols_.end());
+        lines.push_back("drop " + joined(d.names));
+        v_ = v_.with_lazy(v_.lazy().drop(d.names));
     }
 
     void stage(const duql::PipelineRename& r) {
         leave_scan("rename");
-        std::vector<std::string> to = names();
+        std::vector<std::string> from, to;
         for (const auto& [next, old] : r.pairs) {
-            const auto i = index(old);
-            if (!i) refuse("cannot rename '" + old + "': no such column");
-            to[*i] = next;
+            from.push_back(old);
+            to.push_back(next);
         }
-        rename(std::move(to));
+        std::vector<std::string> after = names();
+        for (std::size_t k = 0; k < from.size(); ++k)
+            if (const auto i = index(from[k])) after[*i] = to[k];
+        for (std::size_t i = 0; i < cols_.size(); ++i) cols_[i].name = after[i];
+        lines.push_back("rename_columns " + joined(from) + " -> " + joined(to));
+        v_ = v_.with_lazy(
+            v_.lazy().rename_columns(std::move(from), std::move(to)));
     }
 
     void stage(const duql::PipelineDistinct& d) {
@@ -4301,7 +4492,7 @@ class Applier {
                     df::expr_select(
                         df::expr_unary(df::UnaryOp::IsNan, col(a.name)),
                         df::expr_lit_null(df::TypeId::Float64), col(a.name)));
-        if (out != visible) keep(visible);
+        if (out != visible) keep(visible, false);
         if (!keys.empty()) {
             lines.push_back("sort_by_multi " + joined(keys));
             v_ = v_.sort_by_multi(keys, std::vector<bool>(keys.size(), false));
@@ -4353,7 +4544,7 @@ class Applier {
         scan_ = false;
         blocker_ = "group";
         columns_from_view();
-        keep(std::move(keep_cols));
+        keep(std::move(keep_cols), false);
         // busy() and active() come back in microseconds; the duration role
         // may count in another unit.
         const auto dur_ns = roles_.fields.find(roles_.duration);
@@ -5029,11 +5220,18 @@ Built build(const Ctx& ctx, const duql::Pipeline& p, bool table,
             out.push_back(into->name);
             return out;
         }
+        if (const auto* o = std::get_if<duql::PipelineOverlap>(&l.mode);
+            o && !o->into.empty()) {
+            out.push_back(o->into);
+            return out;
+        }
         if (l.kind == duql::syntax::LookupKind::ANTI) return out;
         for (const auto& c : ctx.sides->columns[l.side]) out.push_back(c.name);
         return out;
     };
-    Reads fields = referenced_fields(p.stages, adds);
+    Reads fields = referenced_fields(
+        p.stages, adds,
+        ctx.schema(v).decoder == dftracer::utils::index::Decoder::PATH);
     if (!p.scan_select.empty()) {
         lines.push_back("scan select: " + joined(p.scan_select));
         std::vector<std::string> select;
@@ -5046,7 +5244,7 @@ Built build(const Ctx& ctx, const duql::Pipeline& p, bool table,
                 select.push_back(f);
                 continue;
             }
-            if (!tree) tree = v.schema_tree();
+            if (!tree) tree = detail::catalog_leaves(v);
             for (auto& r : scan_reads(*tree, f, array, fields.arrays,
                                       ctx.schema(v).args_fallback))
                 select.push_back(std::move(r));
@@ -5076,6 +5274,13 @@ Built build(const Ctx& ctx, const duql::Pipeline& p, bool table,
 
 View detail::view_of(detail::ScanPlan plan) { return View(std::move(plan)); }
 
+View detail::with_named_columns(const View& v,
+                                std::vector<dataframe::Field> columns) {
+    return v.reshape("select", [&](const detail::ScanPlan& p) {
+        return scan::name_columns(p, std::move(columns));
+    });
+}
+
 std::pair<View, std::vector<std::string>> View::duql_plan(
     const std::string& text, const duql::Params& params) const {
     const ix::RecordSchema& schema = detail::plan_record_schema(*plan_);
@@ -5083,6 +5288,7 @@ std::pair<View, std::vector<std::string>> View::duql_plan(
     ctx.roles = ix::duql_roles(schema);
     const duql::PluginCatalog plugins = registry_plugins();
     const duql::LeafPaths leaves = [this] {
+        detail::scan::ensure_catalog(plan_);
         if (const auto file = detail::scan::file_without_catalog(plan_))
             refuse(
                 "wildcard paths expand against the index's path catalog, "

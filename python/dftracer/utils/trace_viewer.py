@@ -195,10 +195,18 @@ class TraceViewer(LazyFrame):
         stages filter events in the scan; later stages run on its columns."""
         return self._trace(self._tv.duql(text, params))
 
+    def query(self, text: str, **params: DuqlParam) -> "TraceViewer":
+        """Same as :meth:`duql`."""
+        return self.duql(text, **params)
+
     def explain_duql(self, text: str, **params: DuqlParam) -> str:
         """The plan :meth:`duql` builds, one step per line, without
         scanning."""
         return self._tv.explain_duql(text, params)
+
+    def explain_query(self, text: str, **params: DuqlParam) -> str:
+        """Same as :meth:`explain_duql`."""
+        return self.explain_duql(text, **params)
 
     def select(self, *items: object) -> "TraceViewer":
         """Project to ``items``, as :meth:`LazyFrame.select`. Names on raw
@@ -216,6 +224,12 @@ class TraceViewer(LazyFrame):
 
     def with_columns(self, *named: object, **columns: Expr) -> "TraceViewer":
         return self._absorbed(LazyFrame.with_columns(self, *named, **columns))
+
+    def _schema_complete(self) -> bool:
+        return False
+
+    def drop(self, *names: Union[str, Sequence[str]]) -> "TraceViewer":
+        return self._absorbed(LazyFrame.drop(self, *names))
 
     def rename(self, names: Any) -> "TraceViewer":
         return self._absorbed(LazyFrame.rename(self, names))
@@ -277,11 +291,6 @@ class TraceViewer(LazyFrame):
     def time_scale(self, ns_ratio: float) -> "TraceViewer":
         return self._trace(self._tv.time_scale(ns_ratio))
 
-    def all(self) -> "TraceViewer":
-        """Read every record, metadata included, instead of the record
-        schema's ``data`` row set."""
-        return self._trace(self._tv.all())
-
     def rollup_root(self, path: str) -> "TraceViewer":
         return self._trace(self._tv.rollup_root(path))
 
@@ -339,6 +348,14 @@ class TraceViewer(LazyFrame):
             )
 
     # -- inspection -------------------------------------------------------------------
+    @property
+    def columns(self) -> List[str]:
+        """Output column names without running the plan. A file whose index
+        holds no path catalog is scanned once first, so every path it holds is
+        listed."""
+        self._tv.columns()
+        return LazyFrame.columns.fget(self)  # type: ignore[attr-defined]
+
     def column_info(self) -> Dict[str, str]:
         """Every column the index knows, mapped to its type name (``"int64"``
         / ``"float64"`` / ``"string"``), with a ``resolved.*`` alias per hash

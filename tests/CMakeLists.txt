@@ -150,6 +150,8 @@ set(TEST_CPP_SOURCES
     index/test_prune_oracle.cpp
     index/test_layout.cpp
     index/test_kinds.cpp
+    index/test_member_pieces.cpp
+    index/test_index_pass_parallel.cpp
     index/test_catalog.cpp
     index/test_build_memory.cpp
     index/test_record_schema.cpp

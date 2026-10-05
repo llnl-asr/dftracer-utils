@@ -88,10 +88,11 @@ detail::FoldEvent decode(simdjson::dom::element root,
         return detail::decode_record(
             root, *input.fold_intern, schema,
             schema || input.view.paths.empty() ? nullptr : &input.view.paths,
-            input.view.record_schema, &input.view.path_fields, 0, &hints);
+            input.view.record_schema, &input.view.path_fields,
+            schema ? detail::INDEX_MAX_CHILDREN : 0, &hints);
     return detail::extract_fold_event(root, *input.fold_intern,
                                       input.fold_needs_args,
-                                      input.fold_extra_fields, schema);
+                                      input.fold_extra_fields, schema, &hints);
 }
 
 }  // namespace
@@ -322,7 +323,7 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
                                     hints));
                                 batch.values_unconverted +=
                                     batch.fold_events.back().unconverted;
-                                if (!metadata && input.fold_keep_raw)
+                                if (input.fold_keep_raw)
                                     batch.events.emplace_back(line_start,
                                                               json_len);
                             } else {

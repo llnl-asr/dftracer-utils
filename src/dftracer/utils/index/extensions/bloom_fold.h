@@ -192,7 +192,6 @@ class BloomFold : public trace::views::detail::Fold {
     /// a time. Consumes `fs`.
     void write_file(index::store::IndexWrite& w, int file_id,
                     const std::string& file, FileState& fs);
-    static void observe_path(index::store::PathStat& stat, std::uint8_t tag);
     // Nested extra dimensions come from a capture under "args."; records whose
     // every leaf is already a key need none.
     bool captures_nested() const { return !config_.auto_prefix.empty(); }

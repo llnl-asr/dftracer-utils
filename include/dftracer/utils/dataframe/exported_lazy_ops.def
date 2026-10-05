@@ -98,4 +98,10 @@ DFTU_LAZY_OP(reduce, dftu_lazyframe_reduce, LAZY, LAZY, I32, NONE, NONE, NONE, N
 /* lazy + keys + transform code + n + rank method + ascending. */
 DFTU_LAZY_OP(group_transform, dftu_lazyframe_group_transform, LAZY, LAZY, STRLIST, I32, I64, I32, I32, NONE)
 
+/* lazy + column names to remove. */
+DFTU_LAZY_OP(drop, dftu_lazyframe_drop, LAZY, LAZY, STRLIST, NONE, NONE, NONE, NONE, NONE)
+
+/* lazy + from names + to names. */
+DFTU_LAZY_OP(rename_columns, dftu_lazyframe_rename_columns, LAZY, LAZY, STRLIST, STRLIST, NONE, NONE, NONE, NONE)
+
 #undef DFTU_LAZY_OP

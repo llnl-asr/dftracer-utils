@@ -61,6 +61,18 @@ scan (``lazy()`` returns it as a ``LazyFrame``), so the steps you add run
 inside the same pull chain as the scan; ``collect()`` on the plan is what reads
 the files.
 
+Drop and rename by name
+-----------------------
+
+``drop(names)`` and ``rename_columns(from, to)`` (``rename({old: new})`` in
+Python) act on columns by name, so they reach every column a stream carries,
+including the columns a trace scan adds per batch that the plan's schema does
+not list. ``select`` keeps only the columns it names and so removes those. A
+name that no column carries is ignored in C++ and C. In Python a plan with a
+complete schema raises ``KeyError`` for it, and a ``TraceViewer`` ignores it.
+A rename that leaves two columns with one name fails: at planning when both
+are in the schema, and on the first batch that carries the other.
+
 Read the plan before it runs
 ----------------------------
 

@@ -32,6 +32,8 @@ struct ScanShape {
     bool filtered = false;
     /// Metadata records reach the folds.
     bool include_metadata = false;
+    /// A time window drops records outside it.
+    bool windowed = false;
 };
 
 std::size_t checkpoint_size_or_default(std::size_t s);
@@ -43,6 +45,13 @@ ScanShape scan_shape(const ViewDefinition& vdef);
 // those the scan can establish, and only while some file still lacks the pruner
 // bloom, so a repeat scan of an already-built index attaches nothing.
 std::vector<std::unique_ptr<Fold>> select_index_folds(
+    const ViewPlan& plan, const ViewDefinition& vdef,
+    dftracer::utils::StringIntern& intern);
+
+// The fold that writes the path catalog of the files that lack one, or null
+// when every file has it or the scan cannot establish it. Its slot is the first
+// full scan of a trace.
+std::unique_ptr<Fold> select_catalog_fold(
     const ViewPlan& plan, const ViewDefinition& vdef,
     dftracer::utils::StringIntern& intern);
 

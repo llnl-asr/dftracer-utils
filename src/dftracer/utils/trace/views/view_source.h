@@ -66,9 +66,9 @@ struct ContainmentArgs {
 /// instead, so collect() never buffers the whole matching set.
 class ViewSource : public dftracer::utils::dataframe::Source {
    public:
-    /// `emit_dyn` makes the streaming cursor attach per-morsel auto-numeric-arg
-    /// dyn columns (the aggregation engine's single-scan dyn feed); it is
-    /// independent of the plan's row-query classification.
+    /// `emit_dyn` makes the streaming cursor add the per-morsel
+    /// auto-numeric-arg columns (the aggregation engine's single-scan dyn
+    /// feed); it is independent of the plan's row-query classification.
 
     explicit ViewSource(detail::ScanPlan plan, bool emit_dyn = false)
         : plan_(std::move(plan)), emit_dyn_(emit_dyn) {}
@@ -104,6 +104,10 @@ class ViewSource : public dftracer::utils::dataframe::Source {
 
     dftracer::utils::dataframe::Schema schema() const override;
     const dftracer::utils::dataframe::DataFrame* as_frame() const override;
+    /// An event scan returns every path a batch decodes, declared or not.
+    bool undeclared_columns() const override {
+        return output_ == TraceOutput::Events;
+    }
 
     /// A row query absorbs a filter (the same translation scan() applies, run
     /// at plan time), a plain column projection, and a group-by on fixed

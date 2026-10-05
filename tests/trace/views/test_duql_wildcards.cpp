@@ -16,8 +16,12 @@ constexpr int RECORDS = 3000;
 // and p75, c with a scalar `meta` one segment short of the pattern) and an
 // array of 12 positions. a.p50 climbs with the record, so only the last
 // chunks hold a value above 92.
-std::string write_counters(TestEnvironment& env) {
-    const std::string plain = env.get_dir() + "/counters.ndjson";
+std::string write_counters(TestEnvironment& env, const std::string& dir = "",
+                           bool build = true) {
+    if (!dir.empty()) fs::create_directories(env.get_dir() + "/" + dir);
+    const std::string plain = env.get_dir() + "/" +
+                              (dir.empty() ? "" : dir + "/") +
+                              "counters.ndjson";
     {
         std::ofstream out(plain);
         for (int i = 0; i < RECORDS; ++i) {
@@ -34,7 +38,7 @@ std::string write_counters(TestEnvironment& env) {
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
     fs::remove(plain);
-    dftracer::utils::index::Indexer::open({gz}).build();
+    if (build) dftracer::utils::index::Indexer::open({gz}).build();
     return gz;
 }
 
@@ -171,22 +175,101 @@ TEST_SUITE("DuqlWildcards") {
         CHECK(sw.events_scanned == ss.events_scanned);
     }
 
-    TEST_CASE("a trace whose index holds no path catalog is refused") {
-        TestEnvironment env;
-        const std::string plain = env.get_dir() + "/bare.ndjson";
+    TEST_CASE("a wildcard on a trace with no catalog builds it first") {
+        TestEnvironment env(10);
+        const std::string plain = env.get_dir() + "/first.ndjson";
         {
             std::ofstream out(plain);
-            for (int i = 0; i < 50; ++i)
+            for (int i = 0; i < 300; ++i)
                 out << R"({"name":"e","args":{"counters":{"a":{"p50":)" << i
-                    << "}}}}\n";
+                    << R"(},"b":{"p50":)" << i % 5 << "}}}}\n";
         }
         const std::string gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
-                                                                   4096));
-        const View v = View::from_file(gz);
-        const std::string err =
-            error_of(v, "where any(args.counters.*.p50) > 1");
-        CHECK(err.find("path catalog") != std::string::npos);
-        CHECK(err.find(gz) != std::string::npos);
+                                                                   2048));
+        const View v = View::from_file(gz, determine_index_path(gz, ""));
+        CHECK(error_of(v, "select args.counters.*.p50").empty());
+        same(v, "select name, args.counters.*.p50 | take 40",
+             "select name, args.counters.a.p50, args.counters.b.p50 | "
+             "take 40");
+    }
+
+    TEST_CASE(
+        "a pattern as the first query on a fresh trace builds the catalog") {
+        TestEnvironment env(10);
+        const auto full = view_of(write_counters(env, "full"));
+        int n = 0;
+        // Each query is the first on its own trace, indexed only by a query.
+        const auto fresh = [&] {
+            const auto gz = write_counters(env, "f" + std::to_string(n++),
+                                           /*build=*/false);
+            (void)view_of(gz).duql("name == \"ev1\"").collect().get();
+            return view_of(gz);
+        };
+        for (const auto& [wild, spelled] :
+             std::vector<std::pair<std::string, std::string>>{
+                 {"select name, args.counters.*.p50 | take 40",
+                  "select name, args.counters.a.p50, args.counters.b.p50, "
+                  "args.counters.c.p50 | take 40"},
+                 {"where any(args.counters.*.p50) > 92 | select name",
+                  "where args.counters.a.p50 > 92 or args.counters.b.p50 > 92 "
+                  "or args.counters.c.p50 > 92 | select name"},
+                 {"select name, args.counters.*.p50 | "
+                  "unpivot args.counters.*.p50 as k, v | take 60",
+                  "select name, args.counters.a.p50, args.counters.b.p50, "
+                  "args.counters.c.p50 | unpivot args.counters.a.p50, "
+                  "args.counters.b.p50, args.counters.c.p50 as k, v | "
+                  "take 60"}}) {
+            CAPTURE(wild);
+            const auto a = frame(fresh().duql(wild));
+            const auto b = frame(full.duql(spelled));
+            REQUIRE(names(a) == names(b));
+            REQUIRE(a.num_rows() == b.num_rows());
+            for (const auto& c : names(a))
+                for (std::int64_t r = 0; r < a.num_rows(); ++r) {
+                    const auto& ca =
+                        a.columns[static_cast<std::size_t>(bcol(a, c))];
+                    if (ca.type() == dataframe::TypeId::String)
+                        CHECK(bstr(a, r, c) == bstr(b, r, c));
+                    else if (!ca.is_null(r))
+                        CHECK(bnum(a, r, c) == bnum(b, r, c));
+                }
+        }
+    }
+
+    TEST_CASE("a pattern on a fresh genesis trace builds the catalog") {
+        TestEnvironment env(10);
+        const auto mk = [&](const std::string& dir, bool build) {
+            fs::create_directories(env.get_dir() + "/" + dir);
+            const std::string plain = env.get_dir() + "/" + dir + "/g.ndjson";
+            {
+                std::ofstream out(plain);
+                for (int i = 0; i < 600; ++i)
+                    out << R"({"gtype":"func","run":"ab","ts":)" << i
+                        << R"(,"v":{"p50":)" << i / 30 << R"(,"p99":)"
+                        << i / 30 + 5 << R"(},"count":)" << i % 7 << "}\n";
+            }
+            const std::string gz = plain + ".gz";
+            REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
+                plain, gz, 2048));
+            fs::remove(plain);
+            if (build) dftracer::utils::index::Indexer::open({gz}).build();
+            return view_of(gz);
+        };
+        const auto full = mk("full", true);
+        const auto fresh = mk("fresh", false);
+        const auto a = frame(fresh.duql("select run, v.* | take 50"));
+        const auto b = frame(full.duql("select run, v.p50, v.p99 | take 50"));
+        REQUIRE(names(a) == names(b));
+        REQUIRE(a.num_rows() == b.num_rows());
+        for (const auto& c : names(a))
+            for (std::int64_t r = 0; r < a.num_rows(); ++r) {
+                const auto& ca =
+                    a.columns[static_cast<std::size_t>(bcol(a, c))];
+                if (ca.type() == dataframe::TypeId::String)
+                    CHECK(bstr(a, r, c) == bstr(b, r, c));
+                else if (!ca.is_null(r))
+                    CHECK(bnum(a, r, c) == bnum(b, r, c));
+            }
     }
 }

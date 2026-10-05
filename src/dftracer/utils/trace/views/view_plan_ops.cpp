@@ -522,7 +522,49 @@ std::optional<std::string> file_without_catalog(const ScanPlan& plan_) {
     return std::nullopt;
 }
 
+void ensure_catalog(const ScanPlan& plan_) {
+    namespace st = dftracer::utils::index::store;
+    ankerl::unordered_dense::map<std::string, std::optional<st::IndexDatabase>>
+        dbs;
+    auto only = std::make_shared<detail::ViewPlan>();
+    for (const auto& f : plan_->files) {
+        if (f.index_path.empty()) continue;
+        bool missing = true;
+        try {
+            auto [it, fresh] = dbs.try_emplace(f.index_path);
+            if (fresh)
+                it->second.emplace(f.index_path, st::IndexOpenMode::ReadOnly);
+            if (it->second) {
+                const int fid = it->second->get_file_info_id(
+                    st::internal::get_logical_path(f.file_path));
+                missing = fid < 0 || !it->second->extension_current(
+                                         fid, st::IndexExtension::CATALOG);
+            }
+        } catch (...) {
+        }
+        if (missing) only->files.push_back(f);
+    }
+    dbs.clear();
+    if (only->files.empty()) return;
+    only->record_schema = plan_->record_schema;
+    only->all_records = true;
+    only->rollup_root = plan_->rollup_root;
+    only->views_root = plan_->views_root;
+    only->memory_budget = plan_->memory_budget;
+    only->cancelled = plan_->cancelled;
+    dftracer::utils::StringIntern intern;
+    default_runtime().run_blocking(
+        "view_ensure_catalog", [&](CoroScope&) -> coro::CoroTask<void> {
+            co_await detail::run_folds(*only, {}, intern, nullptr, nullptr);
+        });
+}
+
 std::vector<SchemaLeaf> schema_tree(const ScanPlan& plan_) {
+    ensure_catalog(plan_);
+    return catalog_tree(plan_);
+}
+
+std::vector<SchemaLeaf> catalog_tree(const ScanPlan& plan_) {
     namespace st = dftracer::utils::index::store;
     std::map<std::string, st::PathStat> merged;
     ankerl::unordered_dense::map<std::string, std::optional<st::IndexDatabase>>
@@ -667,6 +709,7 @@ ScanPlan filter(const ScanPlan& plan_, Query q) {
 ScanPlan phase(const ScanPlan& plan_, Phase p) {
     auto next = clone(plan_);
     next->phase = p;
+    next->all_records = p == Phase::Any;
     return next;
 }
 
@@ -888,6 +931,13 @@ ScanPlan select(const ScanPlan& plan_, std::vector<std::string> cols) {
     return next;
 }
 
+ScanPlan name_columns(const ScanPlan& plan_,
+                      std::vector<dataframe::Field> columns) {
+    auto next = clone(plan_);
+    next->named_columns = std::move(columns);
+    return next;
+}
+
 ScanPlan limit(const ScanPlan& plan_, std::uint64_t n) {
     auto next = clone(plan_);
     next->limit = n;
@@ -922,12 +972,6 @@ ScanPlan materialize(const ScanPlan& plan_, std::uint64_t checkpoint_size,
     next->materialize = true;
     next->mv_checkpoint_size = checkpoint_size;
     next->mv_part_size = part_size;
-    return next;
-}
-
-ScanPlan all(const ScanPlan& plan_) {
-    auto next = clone(plan_);
-    next->all_records = true;
     return next;
 }
 

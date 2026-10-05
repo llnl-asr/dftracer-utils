@@ -88,6 +88,29 @@ integers, doubles, booleans and strings; numbers widen to the wider number,
 and any other mix is ``mixed``. The schema of a View comes from the catalog,
 so it needs no scan and sees a field even when only a few records carry it.
 
+The full index build writes the catalog. So does the first query that reads
+every record of a file indexed only by a query (a collect or a streamed
+query with no filter, time window or row limit): it records each path it
+decodes and writes the catalog when the scan covered the whole file. A
+filtered or limited first query writes none; the next full scan does. A
+scan of a schema that skips some record kinds (the genesis run records) is
+filtered in this sense. ``columns()``, ``column_info()``, ``schema_tree()``
+and a duql wildcard path need the catalog, so on a file without one they
+first scan it once, for the catalog only.
+
+A query on a file without a catalog still returns every column its scan
+decodes. Each batch carries the fields the View does not declare in one
+internal column, which every step that keeps rows (filter, sort, take,
+derive, distinct, window, fill_null, the left side of a join) moves with the
+rest of the row; a collect turns them back into named columns after the
+declared ones, null where a batch lacked one. Steps that build new columns
+(select, group-by, aggregation, pivot) keep only what they name. A field the
+query names becomes a declared column, and its type is read from each batch,
+so an expression on it gives the same result as with a catalog. In a join,
+the right side's undeclared columns take the join suffix when the left side
+has undeclared columns too, so one output column never mixes the two sides.
+A plugin step refuses a plan that carries undeclared columns.
+
 The catalog also bounds automatic evidence. Besides the fixed fields and the
 fields you name, each file's most frequent args paths get a zone map and a
 bloom, while their estimated evidence bytes fit ``stats_share`` (5% by

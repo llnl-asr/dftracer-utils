@@ -17,6 +17,7 @@
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/dataframe/internal/node_registry.h>  // find_node
 #include <dftracer/utils/dataframe/internal/reclaim_registry.h>
+#include <dftracer/utils/dataframe/internal/rest_column.h>
 #include <dftracer/utils/dataframe/internal/schema_types.h>   // dftu_schema
 #include <dftracer/utils/dataframe/internal/spill.h>  // external-merge spill
 #include <dftracer/utils/dataframe/join.h>            // HashJoin (join cursor)
@@ -39,6 +40,7 @@
 #include <string>
 #include <typeindex>
 #include <typeinfo>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -73,6 +75,52 @@ int column_index_of(const std::vector<std::string>& names,
 // Default scan chunk when the caller does not set one (morsel_rows <= 0).
 constexpr std::int64_t DEFAULT_MORSEL_ROWS = 65536;
 
+bool has_rest(const std::vector<std::string>& sch) {
+    return !sch.empty() && sch.back() == REST_COLUMN;
+}
+
+// The fields of a rest column as named columns, flat.
+DataFrame rest_fields(const Series& rest) {
+    const Series flat = rest.materialize();
+    DataFrame out;
+    for (std::int64_t f = 0; f < flat.num_children(); ++f) {
+        out.names.push_back(flat.field_name(f));
+        out.columns.push_back(flat.child(f));
+    }
+    return out;
+}
+
+// Replaces the rest column of `f` with its fields, after the other columns.
+// A field with the name of another column is an error: the plan cannot tell
+// which one the caller means.
+// Moves the rest column of `f`, if any, after the others.
+DataFrame rest_to_back(DataFrame f) {
+    const int at = column_index_of(f.names, std::string(REST_COLUMN));
+    if (at < 0 || static_cast<std::size_t>(at) + 1 == f.names.size()) return f;
+    std::rotate(f.names.begin() + at, f.names.begin() + at + 1, f.names.end());
+    std::rotate(f.columns.begin() + at, f.columns.begin() + at + 1,
+                f.columns.end());
+    return f;
+}
+
+void unpack_rest(DataFrame& f) {
+    const int at = column_index_of(f.names, std::string(REST_COLUMN));
+    if (at < 0) return;
+    const Series rest = std::move(f.columns[static_cast<std::size_t>(at)]);
+    f.names.erase(f.names.begin() + at);
+    f.columns.erase(f.columns.begin() + at);
+    DataFrame fields = rest_fields(rest);
+    for (std::size_t i = 0; i < fields.names.size(); ++i) {
+        if (column_index_of(f.names, fields.names[i]) >= 0)
+            throw std::invalid_argument(
+                "column '" + fields.names[i] +
+                "' is both a plan column and a column the scan returned "
+                "beyond the plan's schema; rename or drop one of them");
+        f.names.push_back(std::move(fields.names[i]));
+        f.columns.push_back(std::move(fields.columns[i]));
+    }
+}
+
 // Build one standalone DataFrame from a morsel. Names come from the morsel's
 // own schema (streaming, self-describing), else the cursor's data-dependent
 // out_names(), else the static plan schema.
@@ -90,13 +138,7 @@ DataFrame frame_from_morsel(
     } else {
         out.names = static_names;
     }
-    // Fold the out-of-band dyn set back in as trailing named columns, so a
-    // DataFrame-terminal consumer sees the per-morsel dyn columns by name.
-    if (m.dyn)
-        for (std::size_t i = 0; i < m.dyn->dyn_columns.size(); ++i) {
-            out.names.push_back(std::move(m.dyn->dyn_names[i]));
-            out.columns.push_back(std::move(m.dyn->dyn_columns[i]));
-        }
+    unpack_rest(out);
     return out;
 }
 
@@ -568,6 +610,14 @@ class SelectCursor : public Cursor {
     SelectCursor(std::unique_ptr<Cursor> in, std::vector<int> idx)
         : in_(std::move(in)), idx_(std::move(idx)) {}
 
+    // Drop mode: the last selected column is the rest column, and its fields
+    // survive except the named ones.
+    SelectCursor(std::unique_ptr<Cursor> in, std::vector<int> idx,
+                 std::unordered_set<std::string> rest_drop)
+        : in_(std::move(in)),
+          idx_(std::move(idx)),
+          rest_drop_(std::move(rest_drop)) {}
+
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         auto m = co_await in_->next(max_rows);
         if (!m) co_return std::nullopt;
@@ -601,6 +651,18 @@ class SelectCursor : public Cursor {
         }
         out.columns.reserve(idx_.size());
         for (int i : idx_) out.columns.push_back(m.columns[i].share());
+        if (rest_drop_) {
+            DataFrame fields = rest_fields(out.columns.back());
+            std::vector<std::string> names;
+            std::vector<Series> kept;
+            for (std::size_t i = 0; i < fields.names.size(); ++i) {
+                if (rest_drop_->count(fields.names[i])) continue;
+                names.push_back(std::move(fields.names[i]));
+                kept.push_back(std::move(fields.columns[i]));
+            }
+            out.columns.back() = struct_of_length(
+                std::move(names), std::move(kept), out.columns.back().length());
+        }
         return out;
     }
 
@@ -617,16 +679,70 @@ class SelectCursor : public Cursor {
    private:
     std::unique_ptr<Cursor> in_;
     std::vector<int> idx_;
+    std::optional<std::unordered_set<std::string>> rest_drop_;
+};
+
+// Renames the fields of the rest column, the last one; the plan columns are
+// renamed by the plan schema alone and pass through untouched.
+class RenameRestCursor : public Cursor {
+   public:
+    RenameRestCursor(std::unique_ptr<Cursor> in,
+                     std::unordered_map<std::string, std::string> map,
+                     std::unordered_set<std::string> plan_out)
+        : in_(std::move(in)),
+          map_(std::move(map)),
+          plan_out_(std::move(plan_out)) {}
+
+    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+        auto m = co_await in_->next(max_rows);
+        if (!m) co_return std::nullopt;
+        apply(*m);
+        co_return std::move(m);
+    }
+
+    bool try_next(std::int64_t max_rows, std::optional<Morsel>& out) override {
+        if (!in_->try_next(max_rows, out)) return false;
+        if (out) apply(*out);
+        return true;
+    }
+
+    coro::CoroTask<bool> narrow(const Expr& predicate) override {
+        co_return co_await in_->narrow(predicate);
+    }
+
+   private:
+    void apply(Morsel& m) const {
+        DataFrame fields = rest_fields(m.columns.back());
+        std::unordered_set<std::string> seen;
+        for (std::string& n : fields.names) {
+            auto it = map_.find(n);
+            if (it != map_.end()) n = it->second;
+            if (plan_out_.count(n) || !seen.insert(n).second)
+                throw std::invalid_argument(
+                    "rename_columns: column name '" + n +
+                    "' is used by two columns after the rename");
+        }
+        m.columns.back() =
+            struct_of_length(std::move(fields.names), std::move(fields.columns),
+                             m.columns.back().length());
+    }
+
+    std::unique_ptr<Cursor> in_;
+    std::unordered_map<std::string, std::string> map_;
+    std::unordered_set<std::string> plan_out_;
 };
 
 // Lays a self-describing source morsel (name_ids set) out as the plan schema,
 // by name, so every positional op above sees column i as schema column i. A
-// column the morsel lacks is null of its declared type; a column the schema
-// does not declare is dropped. A morsel without name_ids is already aligned.
+// column the morsel lacks is null of its declared type. With `rest`, the
+// columns the schema does not declare follow as one rest column, a Struct of
+// them in batch order (no fields for a morsel without any); without it they
+// are dropped. A morsel without name_ids is already aligned.
 class AlignCursor : public Cursor {
    public:
-    AlignCursor(std::unique_ptr<Cursor> in, std::vector<Field> fields)
-        : in_(std::move(in)), fields_(std::move(fields)) {}
+    AlignCursor(std::unique_ptr<Cursor> in, std::vector<Field> fields,
+                bool rest)
+        : in_(std::move(in)), fields_(std::move(fields)), rest_(rest) {}
 
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         auto m = co_await in_->next(max_rows);
@@ -647,18 +763,18 @@ class AlignCursor : public Cursor {
 
    private:
     Morsel apply(Morsel&& m) {
-        if (m.name_ids().empty()) return std::move(m);
+        if (m.name_ids().empty()) {
+            if (rest_) m.columns.push_back(struct_of_length({}, {}, m.rows));
+            return std::move(m);
+        }
         Morsel out;
         out.rows = m.rows;
         out.batch_index = m.batch_index;
         out.ordering =
             m.ordering == Ordering::ByColumn ? Ordering::Unordered : m.ordering;
         const std::vector<std::uint32_t>& ids = m.name_ids();
-        if (!m.dyn->dyn_columns.empty()) {
-            out.dyn_state().dyn_names = std::move(m.dyn->dyn_names);
-            out.dyn->dyn_columns = std::move(m.dyn->dyn_columns);
-        }
-        out.columns.reserve(fields_.size());
+        out.columns.reserve(fields_.size() + (rest_ ? 1 : 0));
+        std::vector<char> used(ids.size(), 0);
         for (std::size_t f = 0; f < fields_.size(); ++f) {
             std::size_t at = ids.size();
             for (std::size_t c = 0; c < ids.size(); ++c)
@@ -673,31 +789,48 @@ class AlignCursor : public Cursor {
                     out.ordered_column = static_cast<std::int32_t>(f);
                     out.ordered_descending = m.ordered_descending;
                 }
+                used[at] = 1;
                 out.columns.push_back(std::move(m.columns[at]));
                 continue;
             }
-            if (fields_[f].type.id == TypeId::Unknown)
-                throw std::logic_error("source morsel lacks column '" +
-                                       fields_[f].name +
-                                       "' and its schema gives no type");
-            out.columns.push_back(Series::nulls(fields_[f].type.id, m.rows));
+            // A column of no known type and no values here: the concat of
+            // the morsels gives it the type of those that have values.
+            const TypeId t = fields_[f].type.id == TypeId::Unknown
+                                 ? TypeId::Int64
+                                 : fields_[f].type.id;
+            out.columns.push_back(Series::nulls(t, m.rows));
+        }
+        if (rest_) {
+            std::vector<std::string> names;
+            std::vector<Series> extra;
+            for (std::size_t c = 0; c < ids.size(); ++c) {
+                if (used[c]) continue;
+                names.emplace_back(m.dyn->intern->resolve(ids[c]));
+                extra.push_back(m.columns[c].materialize());
+            }
+            out.columns.push_back(
+                struct_of_length(std::move(names), std::move(extra), m.rows));
         }
         return out;
     }
 
     std::unique_ptr<Cursor> in_;
     std::vector<Field> fields_;
+    bool rest_;
 };
 
 // Adds or replaces one column from an expr.
 class WithColumnCursor : public Cursor {
    public:
+    // With `rest`, the input's last column is the rest column and a new
+    // column goes before it; `width` counts the columns before it.
     WithColumnCursor(std::unique_ptr<Cursor> in, Expr e, int replace,
-                     std::size_t width)
+                     std::size_t width, bool rest)
         : in_(std::move(in)),
           expr_(std::move(e)),
           replace_(replace),
-          width_(width) {}
+          width_(width),
+          rest_(rest) {}
 
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         auto m = co_await in_->next(max_rows);
@@ -731,6 +864,8 @@ class WithColumnCursor : public Cursor {
         out.dyn = std::move(m.dyn);
         if (replace_ >= 0)
             out.columns[static_cast<std::size_t>(replace_)] = std::move(nc);
+        else if (rest_)
+            out.columns.insert(out.columns.end() - 1, std::move(nc));
         else
             out.columns.push_back(std::move(nc));
         return out;
@@ -753,6 +888,7 @@ class WithColumnCursor : public Cursor {
     Expr expr_;
     int replace_;
     std::size_t width_;
+    bool rest_;
 };
 
 // Slices a morsel's rows [off, off+len) as a fresh FLAT morsel.
@@ -963,11 +1099,11 @@ class DropNullsCursor : public Cursor {
     std::unique_ptr<Cursor> in_;
 };
 
-// Fills nulls per morsel.
+// Fills nulls per morsel; with `rest`, in the fields of the last column too.
 class FillNullCursor : public Cursor {
    public:
-    FillNullCursor(std::unique_ptr<Cursor> in, dftu_scalar value)
-        : in_(std::move(in)), value_(value) {}
+    FillNullCursor(std::unique_ptr<Cursor> in, dftu_scalar value, bool rest)
+        : in_(std::move(in)), value_(value), rest_(rest) {}
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         auto m = co_await in_->next(max_rows);
         if (!m) co_return std::nullopt;
@@ -997,6 +1133,13 @@ class FillNullCursor : public Cursor {
                 0;
         Morsel out = map_frame(
             std::move(m), [&](DataFrame f) { return f.fill_null(value_); });
+        if (rest_) {
+            const std::int64_t rows = out.columns.back().length();
+            DataFrame fields =
+                rest_fields(out.columns.back()).fill_null(value_);
+            out.columns.back() = struct_of_length(
+                std::move(fields.names), std::move(fields.columns), rows);
+        }
         out.batch_index = bi;
         out.ordering = ordered_col_had_nulls ? Ordering::Unordered : ord;
         out.ordered_column = ordered_column;
@@ -1006,6 +1149,7 @@ class FillNullCursor : public Cursor {
 
     std::unique_ptr<Cursor> in_;
     dftu_scalar value_;
+    bool rest_;
 };
 
 // Prepends a global Int64 row-index column.
@@ -1339,14 +1483,16 @@ class GroupByCursor : public Cursor {
             specs_.push_back(std::move(sp));
         }
 
-        // A resident source carries dyn columns in-band (prefix-tagged in
-        // sch_); a streaming source carries them out of band (Morsel::dyn_*).
+        // Dyn columns are the prefix-tagged plan columns, and the
+        // prefix-tagged fields of the rest column.
         std::vector<std::pair<int, std::string>> sch_dyn;
         if (!dyn_specs_.empty() && !dyn_prefix_.empty())
             for (std::size_t i = 0; i < sch_.size(); ++i)
                 if (sch_[i].rfind(dyn_prefix_, 0) == 0)
                     sch_dyn.emplace_back(static_cast<int>(i),
                                          sch_[i].substr(dyn_prefix_.size()));
+        const bool rest_dyn =
+            !dyn_specs_.empty() && !dyn_prefix_.empty() && has_rest(sch_);
 
         AggStatePtr state = agg_new(specs_, dyn_specs_);
         // Bounded parallel sink: pull a batch of morsels, accumulate each into
@@ -1390,18 +1536,16 @@ class GroupByCursor : public Cursor {
                     return;
                 }
                 std::vector<AggDynInput> dyn;
-                const MorselDyn* md = m.dyn.get();
-                dyn.reserve(sch_dyn.size() + (md ? md->dyn_columns.size() : 0));
+                const DataFrame rest =
+                    rest_dyn ? rest_fields(m.columns.back()) : DataFrame{};
+                dyn.reserve(sch_dyn.size() + rest.columns.size());
                 for (const auto& [ci, name] : sch_dyn)
                     dyn.push_back(
                         {name, &m.columns[static_cast<std::size_t>(ci)]});
-                for (std::size_t i = 0; md && i < md->dyn_columns.size(); ++i) {
-                    const std::string& raw = md->dyn_names[i];
-                    std::string name = raw.rfind(dyn_prefix_, 0) == 0
-                                           ? raw.substr(dyn_prefix_.size())
-                                           : raw;
-                    dyn.push_back({std::move(name), &md->dyn_columns[i]});
-                }
+                for (std::size_t i = 0; i < rest.columns.size(); ++i)
+                    if (rest.names[i].rfind(dyn_prefix_, 0) == 0)
+                        dyn.push_back({rest.names[i].substr(dyn_prefix_.size()),
+                                       &rest.columns[i]});
                 agg_accumulate(st, keys, values, dyn);
             };
             if (batch.size() == 1) {
@@ -3132,13 +3276,38 @@ class SortByMultiCursor : public Cursor {
 // unmatched right rows as one final morsel once the left is drained. A right
 // side that outgrows the plan's memory budget is joined by GraceJoin instead,
 // partition by partition, in no particular row order.
+// Whether `lf` can return columns beyond its schema: its source can, or a
+// plan it joins or concatenates can.
+bool can_carry_rest(const LazyFrame& lf);
+
+// The plan `other` as a cursor whose morsels end in a rest column when
+// `rest`, and carry none when not.
+std::unique_ptr<Cursor> concat_side(const LazyFrame& other, bool rest);
+
+// The right side's rest column while it passes through a join, apart from
+// the left one's.
+constexpr std::string_view RIGHT_REST_COLUMN = "__rest_right";
+
+// `cursor`'s morsels as frames named `names`.
+coro::AsyncGenerator<DataFrame> named_frames(std::unique_ptr<Cursor> cursor,
+                                             std::vector<std::string> names,
+                                             std::int64_t rows) {
+    while (auto m = co_await cursor->next(rows)) {
+        DataFrame f;
+        f.names = names;
+        f.columns = std::move(m->columns);
+        co_yield std::move(f);
+    }
+}
+
 class JoinCursor : public Cursor {
    public:
     JoinCursor(std::unique_ptr<Cursor> in, std::vector<std::string> sch,
                std::vector<Field> left_fields, LazyFrame other,
                std::vector<std::string> left_on,
                std::vector<std::string> right_on, JoinHow how,
-               std::string suffix, std::uint64_t budget, bool nulls_equal)
+               std::string suffix, std::uint64_t budget, bool nulls_equal,
+               bool suffix_extras)
         : in_(std::move(in)),
           sch_(std::move(sch)),
           left_fields_(std::move(left_fields)),
@@ -3148,7 +3317,11 @@ class JoinCursor : public Cursor {
           how_(how),
           suffix_(std::move(suffix)),
           nulls_equal_(nulls_equal),
-          budget_(budget) {}
+          budget_(budget),
+          right_rest_(has_rest(sch_) && how_ != JoinHow::Semi &&
+                      how_ != JoinHow::Anti && how_ != JoinHow::Nest &&
+                      can_carry_rest(other_)),
+          suffix_extras_(suffix_extras) {}
 
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         if (!join_ && !grace_) co_await build(max_rows);
@@ -3166,28 +3339,78 @@ class JoinCursor : public Cursor {
                 for (const Series& c : left.columns)
                     templates_.push_back(c.share());
             DataFrame out = join_->probe(left);
-            if (out.num_rows() > 0) co_return morsel_of(std::move(out));
+            if (out.num_rows() > 0) co_return morsel_of(finish(std::move(out)));
         }
         if (flushed_) co_return std::nullopt;
         flushed_ = true;
         if (templates_.empty()) templates_ = null_templates();
         DataFrame rest = join_->flush(sch_, templates_);
         if (rest.num_rows() == 0) co_return std::nullopt;
-        co_return morsel_of(std::move(rest));
+        co_return morsel_of(finish(std::move(rest)));
     }
 
    private:
     // Reads the right plan into memory, or into a GraceJoin once its rows pass
     // the budget.
+    // The right plan's frames. With a right rest column they keep it, as
+    // RIGHT_REST_COLUMN, so every frame has the same columns.
+    coro::AsyncGenerator<DataFrame> right_frames(std::int64_t max_rows) const {
+        if (!right_rest_) return other_.stream(max_rows);
+        std::vector<std::string> names = other_.schema();
+        names.emplace_back(RIGHT_REST_COLUMN);
+        return named_frames(concat_side(other_, true), std::move(names),
+                            max_rows);
+    }
+
+    // A join output with the right rest fields moved into the rest column. A
+    // right field gets the join suffix when the left can carry undeclared
+    // columns (any batch may hold one of that name), else when a left plan
+    // column has its name; a name that is still taken is an error.
+    DataFrame finish(DataFrame f) const {
+        if (!right_rest_) return rest_to_back(std::move(f));
+        const int r = column_index_of(f.names, std::string(RIGHT_REST_COLUMN));
+        if (r < 0) return rest_to_back(std::move(f));
+        const DataFrame right =
+            rest_fields(f.columns[static_cast<std::size_t>(r)]);
+        f.names.erase(f.names.begin() + r);
+        f.columns.erase(f.columns.begin() + r);
+        const auto l = static_cast<std::size_t>(
+            column_index_of(f.names, std::string(REST_COLUMN)));
+        DataFrame fields = rest_fields(f.columns[l]);
+        const std::string sfx = suffix_.empty() ? "_right" : suffix_;
+        auto taken = [&](const std::string& n) {
+            return column_index_of(f.names, n) >= 0 ||
+                   column_index_of(fields.names, n) >= 0;
+        };
+        for (std::size_t i = 0; i < right.names.size(); ++i) {
+            std::string name = right.names[i];
+            if (suffix_extras_ ||
+                std::find(sch_.begin(), sch_.end(), name) != sch_.end())
+                name += sfx;
+            if (taken(name))
+                throw std::invalid_argument(
+                    "join: column '" + name +
+                    "' is taken on the left; rename or drop one of them");
+            fields.names.push_back(std::move(name));
+            fields.columns.push_back(right.columns[i].share());
+        }
+        f.columns[l] =
+            struct_of_length(std::move(fields.names), std::move(fields.columns),
+                             f.columns[l].length());
+        return rest_to_back(std::move(f));
+    }
+
     coro::CoroTask<void> build(std::int64_t max_rows) {
-        if (budget_ == NO_SPILL_BUDGET || how_ == JoinHow::Cross) {
+        if (!right_rest_ &&
+            (budget_ == NO_SPILL_BUDGET || how_ == JoinHow::Cross)) {
             DataFrame right = co_await other_.collect();
             co_await start_in_memory(std::move(right));
             co_return;
         }
+        const bool spill = budget_ != NO_SPILL_BUDGET && how_ != JoinHow::Cross;
         std::vector<DataFrame> parts;
         std::uint64_t bytes = 0;
-        auto gen = other_.stream(max_rows);
+        auto gen = right_frames(max_rows);
         while (auto df = co_await gen.next()) {
             if (grace_) {
                 grace_->add_right(*df);
@@ -3195,7 +3418,7 @@ class JoinCursor : public Cursor {
             }
             bytes += spill::columns_bytes(flat_columns(*df));
             parts.push_back(std::move(*df));
-            if (bytes <= budget_) continue;
+            if (!spill || bytes <= budget_) continue;
             grace_ = std::make_unique<GraceJoin>(
                 sch_, parts.front().names, left_on_, right_on_, how_, suffix_,
                 budget_, nulls_equal_);
@@ -3247,7 +3470,7 @@ class JoinCursor : public Cursor {
         }
         auto out = co_await grace_->next(max_rows);
         if (!out) co_return std::nullopt;
-        co_return morsel_of(std::move(*out));
+        co_return morsel_of(finish(std::move(*out)));
     }
 
     // A left row whose key is not on the build side is dropped by an Inner,
@@ -3316,6 +3539,7 @@ class JoinCursor : public Cursor {
             h->set_fixed_size(dt.fixed_size());
             out.push_back(std::move(s));
         }
+        if (has_rest(sch_)) out.push_back(struct_of_length({}, {}, 1));
         return out;
     }
 
@@ -3334,6 +3558,8 @@ class JoinCursor : public Cursor {
     std::vector<Series> templates_;
     bool flushed_ = false;
     bool started_ = false;
+    bool right_rest_;
+    bool suffix_extras_;
 };
 
 // Vertical concatenation: every morsel of the left plan, then every morsel
@@ -3341,8 +3567,8 @@ class JoinCursor : public Cursor {
 // share a schema (checked when the op is built), so morsels pass through.
 class ConcatCursor : public Cursor {
    public:
-    ConcatCursor(std::unique_ptr<Cursor> in, LazyFrame other)
-        : in_(std::move(in)), other_(std::move(other)) {}
+    ConcatCursor(std::unique_ptr<Cursor> in, LazyFrame other, bool rest)
+        : in_(std::move(in)), other_(std::move(other)), rest_(rest) {}
 
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         if (in_) {
@@ -3351,7 +3577,7 @@ class ConcatCursor : public Cursor {
                 co_return m;
             }
             in_.reset();
-            right_ = other_.open_cursor();
+            right_ = concat_side(other_, rest_);
         }
         if (!right_) co_return std::nullopt;
         auto m = co_await right_->next(max_rows);
@@ -3366,6 +3592,7 @@ class ConcatCursor : public Cursor {
    private:
     std::unique_ptr<Cursor> in_;
     LazyFrame other_;
+    bool rest_;
     std::unique_ptr<Cursor> right_;
 };
 
@@ -3394,6 +3621,7 @@ class TapCursor : public Cursor {
                     f.names.emplace_back(m->dyn->intern->resolve(id));
             }
             for (const Series& c : m->columns) f.columns.push_back(c.share());
+            unpack_rest(f);
             run_.rows(f);
         }
         co_return m;
@@ -3738,6 +3966,14 @@ class FrameOpCursor : public Cursor {
             throw std::runtime_error("lazy frame op '" + name_ +
                                      "' failed: the op returned no frame");
         DataFrame out = dataframe_handle_take(result);
+        if (has_rest(sch_)) {
+            if (column_index_of(out.names, std::string(REST_COLUMN)) < 0)
+                throw std::runtime_error(
+                    "lazy frame op '" + name_ +
+                    "' dropped the columns the scan returned beyond the "
+                    "plan's schema");
+            out = rest_to_back(std::move(out));
+        }
         out_names_ = out.names;
         co_return morsel_of(std::move(out));
     }
@@ -3771,6 +4007,13 @@ struct WithColumnOp {
 };
 struct RenameOp {
     std::vector<std::string> names;
+};
+struct DropOp {
+    std::vector<std::string> names;
+};
+struct RenameColumnsOp {
+    std::vector<std::string> from;
+    std::vector<std::string> to;
 };
 struct SliceOp {
     std::int64_t offset;
@@ -3917,13 +4160,13 @@ Agg from_agg_op(AggOp a) {
 // the LazyFrame plan.
 class LazyOp {
    public:
-    std::variant<FilterOp, SelectOp, WithColumnOp, RenameOp, SliceOp, TailOp,
-                 DropNullsOp, FillNullOp, WithRowIndexOp, NullCountOp,
-                 ExplodeOp, UnpivotOp, TopkOp, GroupByOp, SortByOp, UniqueOp,
-                 SampleOp, HeadByOp, IsDupOp, GroupByDynamicOp, PivotOp,
-                 ToDummiesOp, DescribeOp, ReverseOp, TakeOp, FilterMaskOp,
-                 SortByMultiOp, JoinOp, ConcatOp, UnnestOp, FrameOp, NodeOp,
-                 TapOp>
+    std::variant<FilterOp, SelectOp, WithColumnOp, RenameOp, DropOp,
+                 RenameColumnsOp, SliceOp, TailOp, DropNullsOp, FillNullOp,
+                 WithRowIndexOp, NullCountOp, ExplodeOp, UnpivotOp, TopkOp,
+                 GroupByOp, SortByOp, UniqueOp, SampleOp, HeadByOp, IsDupOp,
+                 GroupByDynamicOp, PivotOp, ToDummiesOp, DescribeOp, ReverseOp,
+                 TakeOp, FilterMaskOp, SortByMultiOp, JoinOp, ConcatOp,
+                 UnnestOp, FrameOp, NodeOp, TapOp>
         node;
 };
 
@@ -4018,6 +4261,47 @@ std::string join_names(const std::vector<std::string>& v) {
     return s;
 }
 
+std::unordered_map<std::string, std::string> rename_map(
+    const std::vector<std::string>& from, const std::vector<std::string>& to) {
+    std::unordered_map<std::string, std::string> map;
+    for (std::size_t i = 0; i < from.size(); ++i) map.emplace(from[i], to[i]);
+    return map;
+}
+
+// The names after a by-name rename. Two columns left sharing a name is an
+// error, not a silent overwrite.
+std::vector<std::string> renamed_names(
+    std::vector<std::string> in,
+    const std::unordered_map<std::string, std::string>& map) {
+    std::unordered_set<std::string> seen;
+    for (std::string& n : in) {
+        auto it = map.find(n);
+        if (it != map.end()) n = it->second;
+        if (!seen.insert(n).second)
+            throw std::invalid_argument(
+                "rename_columns: column name '" + n +
+                "' is used by two columns after the rename");
+    }
+    return in;
+}
+
+std::vector<std::string> dropped_names(std::vector<std::string> in,
+                                       const std::vector<std::string>& drop) {
+    in.erase(std::remove_if(in.begin(), in.end(),
+                            [&](const std::string& n) {
+                                return std::find(drop.begin(), drop.end(), n) !=
+                                       drop.end();
+                            }),
+             in.end());
+    return in;
+}
+
+std::vector<std::string> without_rest(std::vector<std::string> names) {
+    names.erase(std::remove(names.begin(), names.end(), REST_COLUMN),
+                names.end());
+    return names;
+}
+
 std::vector<std::string> out_schema(const LazyOp& op,
                                     std::vector<std::string> in) {
     return std::visit(
@@ -4027,8 +4311,14 @@ std::vector<std::string> out_schema(const LazyOp& op,
             [&](const TailOp&) { return in; },
             [&](const DropNullsOp&) { return in; },
             [&](const FillNullOp&) { return in; },
-            [&](const SelectOp& o) { return o.names; },
+            [&](const SelectOp& o) { return without_rest(o.names); },
             [&](const RenameOp& o) { return o.names; },
+            [&](const DropOp& o) {
+                return dropped_names(std::move(in), o.names);
+            },
+            [&](const RenameColumnsOp& o) {
+                return renamed_names(std::move(in), rename_map(o.from, o.to));
+            },
             [&](const WithColumnOp& o) {
                 if (std::find(in.begin(), in.end(), o.name) == in.end())
                     in.push_back(o.name);
@@ -4164,7 +4454,7 @@ Schema out_types(const LazyOp& op, Schema in) {
             [&](const SelectOp& o) {
                 Schema out;
                 out.fields.reserve(o.names.size());
-                for (const std::string& name : o.names) {
+                for (const std::string& name : without_rest(o.names)) {
                     const Field* f = find_field(in, name);
                     out.fields.push_back(
                         f ? *f : Field{name, scalar(TypeId::Unknown), true});
@@ -4180,6 +4470,27 @@ Schema out_types(const LazyOp& op, Schema in) {
                     out.fields.push_back(Field{o.names[i], t, true});
                 }
                 return out;
+            },
+            [&](const DropOp& o) {
+                in.fields.erase(
+                    std::remove_if(
+                        in.fields.begin(), in.fields.end(),
+                        [&](const Field& f) {
+                            return std::find(o.names.begin(), o.names.end(),
+                                             f.name) != o.names.end();
+                        }),
+                    in.fields.end());
+                return in;
+            },
+            [&](const RenameColumnsOp& o) {
+                std::vector<std::string> names;
+                names.reserve(in.fields.size());
+                for (const Field& f : in.fields) names.push_back(f.name);
+                names =
+                    renamed_names(std::move(names), rename_map(o.from, o.to));
+                for (std::size_t i = 0; i < names.size(); ++i)
+                    in.fields[i].name = std::move(names[i]);
+                return in;
             },
             [&](const WithColumnOp& o) {
                 std::vector<DataType> types;
@@ -4321,6 +4632,13 @@ std::string describe_op(const LazyOp& op) {
             [](const SelectOp& o) {
                 return "select [" + join_names(o.names) + "]";
             },
+            [](const DropOp& o) {
+                return "drop [" + join_names(o.names) + "]";
+            },
+            [](const RenameColumnsOp& o) {
+                return "rename_columns [" + join_names(o.from) + "] -> [" +
+                       join_names(o.to) + "]";
+            },
             [](const WithColumnOp& o) { return "with_column " + o.name; },
             [](const RenameOp& o) {
                 return "rename [" + join_names(o.names) + "]";
@@ -4378,6 +4696,107 @@ std::string describe_op(const LazyOp& op) {
             [](const FrameOp& o) { return "frame_op " + o.name; },
             [](const NodeOp& o) { return "op " + o.name; }},
         op.node);
+}
+
+// What an op does with the rest column. Moves: it keeps the column with the
+// rows it keeps, as any other column. Keys: Moves, and whole-row identity
+// includes it. Omits: its output has none of its input columns but those it
+// names, so the rest column is dropped before it. None: no rule, so a plan
+// that carries the rest column into the op is refused.
+enum class RestRule : std::uint8_t { Moves, Keys, Omits, None };
+
+RestRule rest_rule(const LazyOp& op, const std::vector<std::string>& in) {
+    return std::visit(
+        overloaded{[](const FilterOp&) { return RestRule::Moves; },
+                   [](const SelectOp& o) {
+                       return std::find(o.names.begin(), o.names.end(),
+                                        REST_COLUMN) != o.names.end()
+                                  ? RestRule::Moves
+                                  : RestRule::Omits;
+                   },
+                   [](const WithColumnOp&) { return RestRule::Moves; },
+                   [](const RenameOp&) { return RestRule::Moves; },
+                   [](const DropOp&) { return RestRule::Moves; },
+                   [](const RenameColumnsOp&) { return RestRule::Moves; },
+                   [](const SliceOp&) { return RestRule::Moves; },
+                   [](const TailOp&) { return RestRule::Moves; },
+                   [](const DropNullsOp&) { return RestRule::Moves; },
+                   [](const FillNullOp&) { return RestRule::Moves; },
+                   [](const WithRowIndexOp&) { return RestRule::Moves; },
+                   [](const NullCountOp&) { return RestRule::Omits; },
+                   [](const ExplodeOp&) { return RestRule::Moves; },
+                   [](const UnpivotOp&) { return RestRule::Omits; },
+                   [](const TopkOp&) { return RestRule::Moves; },
+                   [](const GroupByOp&) { return RestRule::Omits; },
+                   [](const SortByOp&) { return RestRule::Moves; },
+                   [](const UniqueOp& o) {
+                       return o.subset.empty() ? RestRule::Keys
+                                               : RestRule::Moves;
+                   },
+                   [](const SampleOp&) { return RestRule::Moves; },
+                   [](const HeadByOp&) { return RestRule::Moves; },
+                   [](const IsDupOp&) { return RestRule::Keys; },
+                   [](const GroupByDynamicOp&) { return RestRule::Omits; },
+                   [](const PivotOp&) { return RestRule::Omits; },
+                   [](const ToDummiesOp&) { return RestRule::Omits; },
+                   [](const DescribeOp&) { return RestRule::Omits; },
+                   [](const ReverseOp&) { return RestRule::Moves; },
+                   [](const TakeOp&) { return RestRule::Moves; },
+                   [](const FilterMaskOp&) { return RestRule::Moves; },
+                   [](const SortByMultiOp&) { return RestRule::Moves; },
+                   [](const JoinOp&) { return RestRule::Moves; },
+                   [](const ConcatOp&) { return RestRule::Moves; },
+                   [](const UnnestOp&) { return RestRule::Moves; },
+                   // A frame op that returns every input column keeps the rest
+                   // column too; one that does not builds its output from what
+                   // it names.
+                   [&](const FrameOp& o) {
+                       for (std::size_t i = 0; i + 1 < in.size(); ++i)
+                           if (std::find(o.out_names.begin(), o.out_names.end(),
+                                         in[i]) == o.out_names.end())
+                               return RestRule::Omits;
+                       return RestRule::Moves;
+                   },
+                   [](const NodeOp&) { return RestRule::None; },
+                   [](const TapOp&) { return RestRule::Moves; }},
+        op.node);
+}
+
+bool can_carry_rest(const LazyFrame& lf) {
+    if (detail::PlanAccess::source(lf).undeclared_columns()) return true;
+    for (const auto& op : detail::PlanAccess::ops(lf)) {
+        if (const auto* j = std::get_if<JoinOp>(&op->node))
+            if (can_carry_rest(j->other)) return true;
+        if (const auto* c = std::get_if<ConcatOp>(&op->node))
+            if (can_carry_rest(c->other)) return true;
+    }
+    return false;
+}
+
+// The plan whose rows `op` adds to its input's columns, when that plan can
+// return columns beyond its schema: then the op's output carries a rest
+// column even when its input has none.
+const LazyFrame* rest_partner(const LazyOp& op) {
+    if (const auto* j = std::get_if<JoinOp>(&op.node))
+        return j->how != JoinHow::Semi && j->how != JoinHow::Anti &&
+                       j->how != JoinHow::Nest && can_carry_rest(j->other)
+                   ? &j->other
+                   : nullptr;
+    if (const auto* c = std::get_if<ConcatOp>(&op.node))
+        return can_carry_rest(c->other) ? &c->other : nullptr;
+    return nullptr;
+}
+
+// The names after `op` over `in`, which ends in the rest column: the op's
+// own output, then the rest column unless the op outputs one column per row
+// (is_duplicated) or names its output only when it runs.
+std::vector<std::string> rest_out_schema(const LazyOp& op,
+                                         const std::vector<std::string>& in) {
+    std::vector<std::string> out =
+        out_schema(op, std::vector<std::string>(in.begin(), in.end() - 1));
+    if (!out.empty() && !std::holds_alternative<IsDupOp>(op.node))
+        out.emplace_back(REST_COLUMN);
+    return out;
 }
 
 int col_index(const std::vector<std::string>& sch, const std::string& name) {
@@ -4807,7 +5226,8 @@ std::optional<DataFrame> try_fuse_map(
             if (sel) return std::nullopt;
             withs.push_back(w);
         } else if (const auto* s = std::get_if<SelectOp>(&n)) {
-            if (sel) return std::nullopt;
+            if (sel || rest_rule(*op, {}) != RestRule::Omits)
+                return std::nullopt;
             sel = s;
         } else {
             return std::nullopt;
@@ -4922,10 +5342,12 @@ std::optional<DataFrame> try_fuse_map(
 
 // Build the cursor for one op over `in`, resolving names against `sch` (the
 // op's input schema).
+// `own_rest`: the rest column of `sch` comes from the input, not from a
+// partner plan of `op`.
 std::unique_ptr<Cursor> make_cursor(const LazyOp& op,
                                     std::unique_ptr<Cursor> in,
                                     const std::vector<std::string>& sch,
-                                    std::uint64_t budget) {
+                                    std::uint64_t budget, bool own_rest) {
     return std::visit(
         overloaded{
             [&](const FilterOp& o) -> std::unique_ptr<Cursor> {
@@ -4934,17 +5356,46 @@ std::unique_ptr<Cursor> make_cursor(const LazyOp& op,
             [&](const SelectOp& o) -> std::unique_ptr<Cursor> {
                 std::vector<int> idx;
                 idx.reserve(o.names.size());
-                for (const std::string& nm : o.names)
+                for (const std::string& nm : without_rest(o.names))
                     idx.push_back(col_index(sch, nm));
+                if (has_rest(sch) && o.names.size() != idx.size())
+                    idx.push_back(static_cast<int>(sch.size()) - 1);
                 return std::make_unique<SelectCursor>(std::move(in),
                                                       std::move(idx));
             },
             [&](const WithColumnOp& o) -> std::unique_ptr<Cursor> {
+                const bool rest = has_rest(sch);
                 return std::make_unique<WithColumnCursor>(
-                    std::move(in), o.expr, col_index(sch, o.name), sch.size());
+                    std::move(in), o.expr, col_index(sch, o.name),
+                    sch.size() - (rest ? 1 : 0), rest);
             },
             [&](const RenameOp&) -> std::unique_ptr<Cursor> {
                 return std::move(in);  // names-only; data passes through
+            },
+            [&](const DropOp& o) -> std::unique_ptr<Cursor> {
+                const bool rest = has_rest(sch);
+                std::vector<int> idx;
+                for (std::size_t i = 0; i + (rest ? 1 : 0) < sch.size(); ++i)
+                    if (std::find(o.names.begin(), o.names.end(), sch[i]) ==
+                        o.names.end())
+                        idx.push_back(static_cast<int>(i));
+                if (!rest)
+                    return std::make_unique<SelectCursor>(std::move(in),
+                                                          std::move(idx));
+                idx.push_back(static_cast<int>(sch.size()) - 1);
+                return std::make_unique<SelectCursor>(
+                    std::move(in), std::move(idx),
+                    std::unordered_set<std::string>(o.names.begin(),
+                                                    o.names.end()));
+            },
+            [&](const RenameColumnsOp& o) -> std::unique_ptr<Cursor> {
+                if (!has_rest(sch)) return std::move(in);
+                auto map = rename_map(o.from, o.to);
+                std::vector<std::string> out = renamed_names(
+                    std::vector<std::string>(sch.begin(), sch.end() - 1), map);
+                return std::make_unique<RenameRestCursor>(
+                    std::move(in), std::move(map),
+                    std::unordered_set<std::string>(out.begin(), out.end()));
             },
             [&](const SliceOp& o) -> std::unique_ptr<Cursor> {
                 return std::make_unique<SliceCursor>(std::move(in), o.offset,
@@ -4957,7 +5408,8 @@ std::unique_ptr<Cursor> make_cursor(const LazyOp& op,
                 return std::make_unique<DropNullsCursor>(std::move(in));
             },
             [&](const FillNullOp& o) -> std::unique_ptr<Cursor> {
-                return std::make_unique<FillNullCursor>(std::move(in), o.value);
+                return std::make_unique<FillNullCursor>(std::move(in), o.value,
+                                                        has_rest(sch));
             },
             [&](const WithRowIndexOp&) -> std::unique_ptr<Cursor> {
                 return std::make_unique<WithRowIndexCursor>(std::move(in));
@@ -5005,10 +5457,12 @@ std::unique_ptr<Cursor> make_cursor(const LazyOp& op,
             [&](const JoinOp& o) -> std::unique_ptr<Cursor> {
                 return std::make_unique<JoinCursor>(
                     std::move(in), sch, o.left_fields, o.other, o.left_on,
-                    o.right_on, o.how, o.suffix, budget, o.nulls_equal);
+                    o.right_on, o.how, o.suffix, budget, o.nulls_equal,
+                    own_rest);
             },
             [&](const ConcatOp& o) -> std::unique_ptr<Cursor> {
-                return std::make_unique<ConcatCursor>(std::move(in), o.other);
+                return std::make_unique<ConcatCursor>(std::move(in), o.other,
+                                                      has_rest(sch));
             },
             [&](const TapOp& o) -> std::unique_ptr<Cursor> {
                 return std::make_unique<TapCursor>(std::move(in), sch, o.tap);
@@ -5131,8 +5585,17 @@ coro::CoroTask<DataFrame> LazyFrame::run_ops_in_memory(
                     return df.with_column(
                         o.name, eval(o.expr, column_ptrs(df.columns)));
                 },
-                [&](const SelectOp& o) { return df.select(o.names); },
+                [&](const SelectOp& o) {
+                    return df.select(without_rest(o.names));
+                },
                 [&](const RenameOp& o) { return df.rename(o.names); },
+                [&](const DropOp& o) {
+                    return df.select(dropped_names(df.names, o.names));
+                },
+                [&](const RenameColumnsOp& o) {
+                    return df.rename(
+                        renamed_names(df.names, rename_map(o.from, o.to)));
+                },
                 [&](const SliceOp& o) { return df.slice(o.offset, o.len); },
                 [&](const TailOp& o) { return df.tail(o.n); },
                 [&](const DropNullsOp&) { return df.drop_nulls(); },
@@ -5213,6 +5676,23 @@ LazyFrame LazyFrame::with_column(std::string name, Expr expr) const {
 LazyFrame LazyFrame::rename(std::vector<std::string> names) const {
     auto ops = ops_;
     ops.push_back(std::make_shared<LazyOp>(LazyOp{RenameOp{std::move(names)}}));
+    return with_ops(std::move(ops));
+}
+
+LazyFrame LazyFrame::drop(std::vector<std::string> names) const {
+    auto ops = ops_;
+    ops.push_back(std::make_shared<LazyOp>(LazyOp{DropOp{std::move(names)}}));
+    return with_ops(std::move(ops));
+}
+
+LazyFrame LazyFrame::rename_columns(std::vector<std::string> from,
+                                    std::vector<std::string> to) const {
+    if (from.size() != to.size())
+        throw std::invalid_argument(
+            "rename_columns: from and to differ in length");
+    auto ops = ops_;
+    ops.push_back(std::make_shared<LazyOp>(
+        LazyOp{RenameColumnsOp{std::move(from), std::move(to)}}));
     return with_ops(std::move(ops));
 }
 
@@ -5762,7 +6242,8 @@ CursorChain lower_cursor_chain(
     std::vector<std::string> projection;
     std::size_t first = 0;
     if (!ops.empty())
-        if (const auto* s = std::get_if<SelectOp>(&ops.front()->node)) {
+        if (const auto* s = std::get_if<SelectOp>(&ops.front()->node);
+            s && rest_rule(*ops.front(), {}) == RestRule::Omits) {
             projection = s->names;
             first = 1;
         }
@@ -5844,15 +6325,46 @@ CursorChain lower_cursor_chain(
             fields.push_back(f ? *f
                                : Field{name, scalar(TypeId::Unknown), true});
         }
+        const bool rest = projection.empty() && source.undeclared_columns();
         chain.cursor = std::make_unique<AlignCursor>(std::move(chain.cursor),
-                                                     std::move(fields));
+                                                     std::move(fields), rest);
         chain.cursor->attach(chain.registry);
+        if (rest) chain.schema.emplace_back(REST_COLUMN);
     }
     for (std::size_t i = 0; i < ops.size(); ++i) {
         if (drop[i]) continue;
-        chain.cursor =
-            make_cursor(*ops[i], std::move(chain.cursor), chain.schema, budget);
-        chain.schema = out_schema(*ops[i], std::move(chain.schema));
+        const bool own_rest = has_rest(chain.schema);
+        if (!chain.schema.empty() && !own_rest && rest_partner(*ops[i])) {
+            std::vector<Field> fields;
+            for (const std::string& name : chain.schema)
+                fields.push_back(Field{name, scalar(TypeId::Unknown), true});
+            chain.cursor = std::make_unique<AlignCursor>(
+                std::move(chain.cursor), std::move(fields), true);
+            chain.cursor->attach(chain.registry);
+            chain.schema.emplace_back(REST_COLUMN);
+        }
+        const bool rest = has_rest(chain.schema);
+        const RestRule rule =
+            rest ? rest_rule(*ops[i], chain.schema) : RestRule::Moves;
+        if (rule == RestRule::None)
+            throw std::invalid_argument(
+                "'" + describe_op(*ops[i]) +
+                "' has no rule for the columns the scan returns beyond the "
+                "plan's schema; select the columns it needs first");
+        const auto* group = std::get_if<GroupByOp>(&ops[i]->node);
+        if (rule == RestRule::Omits && !(group && !group->dyn.empty())) {
+            std::vector<int> idx(chain.schema.size() - 1);
+            std::iota(idx.begin(), idx.end(), 0);
+            chain.cursor = std::make_unique<SelectCursor>(
+                std::move(chain.cursor), std::move(idx));
+            chain.cursor->attach(chain.registry);
+            chain.schema.pop_back();
+        }
+        chain.cursor = make_cursor(*ops[i], std::move(chain.cursor),
+                                   chain.schema, budget, own_rest);
+        chain.schema = has_rest(chain.schema)
+                           ? rest_out_schema(*ops[i], chain.schema)
+                           : out_schema(*ops[i], std::move(chain.schema));
         // A names-only op (rename) hands the same, already enrolled, cursor
         // back; attach re-enrols it once.
         chain.cursor->attach(chain.registry);
@@ -5903,10 +6415,36 @@ coro::AsyncGenerator<DataFrame> LazyFrame::stream(
                        morsel_rows);
 }
 
+namespace {
+
+CursorChain open_chain(const LazyFrame& lf) {
+    PlanParts plan = optimize_parts(detail::PlanAccess::source_ptr(lf),
+                                    detail::PlanAccess::ops(lf));
+    return lower_cursor_chain(
+        std::move(plan.source), plan.ops,
+        resolve_spill_budget(detail::PlanAccess::memory_budget(lf)));
+}
+
+std::unique_ptr<Cursor> without_rest_column(CursorChain chain) {
+    if (!has_rest(chain.schema)) return std::move(chain.cursor);
+    std::vector<int> idx(chain.schema.size() - 1);
+    std::iota(idx.begin(), idx.end(), 0);
+    return std::make_unique<SelectCursor>(std::move(chain.cursor),
+                                          std::move(idx));
+}
+
+std::unique_ptr<Cursor> concat_side(const LazyFrame& other, bool rest) {
+    CursorChain chain = open_chain(other);
+    if (!rest) return without_rest_column(std::move(chain));
+    if (has_rest(chain.schema)) return std::move(chain.cursor);
+    return std::make_unique<AlignCursor>(std::move(chain.cursor),
+                                         other.output_schema().fields, true);
+}
+
+}  // namespace
+
 std::unique_ptr<Cursor> LazyFrame::open_cursor() const {
-    PlanParts plan = optimize_parts(source_, ops_);
-    const std::uint64_t budget = resolve_spill_budget(memory_budget_);
-    return lower_cursor_chain(std::move(plan.source), plan.ops, budget).cursor;
+    return without_rest_column(open_chain(*this));
 }
 
 namespace {
@@ -5979,10 +6517,13 @@ void tree_leaves(PlannedTree& t, std::vector<PlannedTree*>& out) {
 // A source over one cursor a batch already opened; scanned exactly once.
 class OpenedSource final : public Source {
    public:
-    OpenedSource(Schema schema, std::unique_ptr<Cursor> cursor)
-        : schema_(std::move(schema)), cursor_(std::move(cursor)) {}
+    OpenedSource(Schema schema, std::unique_ptr<Cursor> cursor, bool undeclared)
+        : schema_(std::move(schema)),
+          cursor_(std::move(cursor)),
+          undeclared_(undeclared) {}
 
     Schema schema() const override { return schema_; }
+    bool undeclared_columns() const override { return undeclared_; }
 
     ScanResult scan(const ScanRequest& req) const override {
         if (!req.projection.empty() && req.projection != names())
@@ -6001,6 +6542,62 @@ class OpenedSource final : public Source {
     Schema schema_;
     mutable std::mutex mu_;
     mutable std::unique_ptr<Cursor> cursor_;
+    bool undeclared_;
+};
+
+// A frame a source with undeclared columns collected for a batch: the
+// source's schema, and morsels named by the frame's columns, so the columns
+// past that schema reach the plan as they would from the source's own scan.
+class CollectedSource final : public Source {
+   public:
+    CollectedSource(Schema schema, DataFrame frame)
+        : schema_(std::move(schema)),
+          frame_(std::make_shared<const DataFrame>(std::move(frame))) {
+        for (const std::string& n : frame_->names)
+            ids_.push_back(intern_->get_or_insert(n));
+    }
+
+    Schema schema() const override { return schema_; }
+    bool undeclared_columns() const override { return true; }
+
+    ScanResult scan(const ScanRequest& req) const override {
+        ScanResult r;
+        r.filters.assign(req.filters.size(), Pushed::No);
+        r.cursor = std::make_unique<Named>(
+            std::make_unique<InMemoryCursor>(frame_), ids_, intern_);
+        return r;
+    }
+
+   private:
+    class Named final : public Cursor {
+       public:
+        Named(std::unique_ptr<Cursor> in, std::vector<std::uint32_t> ids,
+              std::shared_ptr<dftracer::utils::StringIntern> intern)
+            : in_(std::move(in)),
+              ids_(std::move(ids)),
+              intern_(std::move(intern)) {}
+
+        coro::CoroTask<std::optional<Morsel>> next(
+            std::int64_t max_rows) override {
+            auto m = co_await in_->next(max_rows);
+            if (m) {
+                m->dyn_state().name_ids = ids_;
+                m->dyn->intern = intern_;
+            }
+            co_return m;
+        }
+
+       private:
+        std::unique_ptr<Cursor> in_;
+        std::vector<std::uint32_t> ids_;
+        std::shared_ptr<dftracer::utils::StringIntern> intern_;
+    };
+
+    Schema schema_;
+    std::shared_ptr<const DataFrame> frame_;
+    std::shared_ptr<dftracer::utils::StringIntern> intern_ =
+        std::make_shared<dftracer::utils::StringIntern>();
+    std::vector<std::uint32_t> ids_;
 };
 
 // The tree's own parts with every child op pointing at its rebuilt child.
@@ -6083,7 +6680,8 @@ coro::CoroTask<void> batch_leaves(std::vector<PlannedTree*> leaves,
                         std::to_string(g.members.size()) + " members");
                 for (std::size_t k = 0; k < g.members.size(); ++k)
                     g.members[k]->parts.source = std::make_shared<OpenedSource>(
-                        sources[k]->schema(), std::move((*cursors)[k]));
+                        sources[k]->schema(), std::move((*cursors)[k]),
+                        sources[k]->undeclared_columns());
                 continue;
             }
         }
@@ -6096,7 +6694,11 @@ coro::CoroTask<void> batch_leaves(std::vector<PlannedTree*> leaves,
                 std::to_string(g.members.size()) + " members");
         for (std::size_t k = 0; k < g.members.size(); ++k)
             g.members[k]->parts.source =
-                std::make_shared<InMemorySource>(std::move(frames[k]));
+                sources[k]->undeclared_columns()
+                    ? std::shared_ptr<const Source>(
+                          std::make_shared<CollectedSource>(
+                              sources[k]->schema(), std::move(frames[k])))
+                    : std::make_shared<InMemorySource>(std::move(frames[k]));
     }
 }
 
@@ -6307,6 +6909,11 @@ void fingerprint_op(Fingerprint& fp, const LazyOp& op) {
                 fp.pod(expr_fingerprint(o.expr));
             },
             [&](const RenameOp& o) { fp.strs(o.names); },
+            [&](const DropOp& o) { fp.strs(o.names); },
+            [&](const RenameColumnsOp& o) {
+                fp.strs(o.from);
+                fp.strs(o.to);
+            },
             [&](const SliceOp& o) {
                 fp.pod(o.offset);
                 fp.pod(o.len);

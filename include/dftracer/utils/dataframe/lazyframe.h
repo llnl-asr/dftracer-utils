@@ -39,12 +39,6 @@ struct MorselDyn {
     /// empty means positional alignment with the plan schema.
     std::vector<std::uint32_t> name_ids;
     std::shared_ptr<const dftracer::utils::StringIntern> intern;
-    /// Name-keyed dyn value columns, carried out of band from the columns so
-    /// the positional plan schema stays fixed while the dyn set varies per
-    /// morsel. `dyn_names[i]` (producer-tagged) labels `dyn_columns[i]`; a dyn
-    /// group_by folds these through agg_accumulate's dyn feed.
-    std::vector<std::string> dyn_names;
-    std::vector<Series> dyn_columns;
 };
 
 /// A chunk of columns flowing through the lazy pipeline. Carries no names - the
@@ -54,7 +48,7 @@ struct Morsel {
     std::int64_t rows = 0;
     /// -1 when the producer keeps none.
     std::int64_t batch_index = -1;
-    /// Null for a positional morsel with no dyn columns (the common case).
+    /// Null for a positional morsel (the common case).
     std::unique_ptr<MorselDyn> dyn;
     /// Opt in explicitly; an operation that reorders, drops, or adds rows
     /// must reset this unless it can prove the property still holds.
@@ -269,6 +263,11 @@ class Source {
     /// (rows produced only by streaming). collect() runs a resident source
     /// whole-column, matching the eager path instead of paying the morsel tax.
     virtual const DataFrame* as_frame() const { return nullptr; }
+    /// Whether scan() may return morsels whose name_ids carry columns that
+    /// schema() does not declare. A plan over such a source keeps them through
+    /// every op that keeps rows and returns them, by name, after the declared
+    /// columns; it refuses an op that has no rule for them.
+    virtual bool undeclared_columns() const { return false; }
 
     virtual std::optional<SourceApplication> apply_filter(const Expr&) const {
         return std::nullopt;
@@ -367,6 +366,16 @@ class LazyFrame {
     LazyFrame filter(Expr predicate) const;
     LazyFrame with_column(std::string name, Expr expr) const;
     LazyFrame rename(std::vector<std::string> names) const;
+    /// Removes the named columns, including those a streaming source adds per
+    /// morsel. A name no column carries is ignored.
+    LazyFrame drop(std::vector<std::string> names) const;
+    /// Renames each `from` column to the `to` name at the same index, static or
+    /// per-morsel. A name no column carries is ignored. Throws
+    /// std::invalid_argument when the lengths differ or two columns end up
+    /// with one name (at plan time for static columns, per morsel for added
+    /// ones).
+    LazyFrame rename_columns(std::vector<std::string> from,
+                             std::vector<std::string> to) const;
     LazyFrame slice(std::int64_t offset, std::int64_t len) const;
     LazyFrame head(std::int64_t n) const;
     LazyFrame tail(std::int64_t n) const;
@@ -413,8 +422,8 @@ class LazyFrame {
     /// Group by N key columns (a composite key: hashed and compared
     /// column-by-column, each keeping its own type). Streaming, as the
     /// single-key overload. `dyn` (optional) enables the name-keyed dyn
-    /// side-table: each morsel's dyn columns (its own out-of-band dyn set, or a
-    /// resident source's columns whose name starts with `dyn_prefix`) are
+    /// side-table: each morsel's columns whose name starts with `dyn_prefix`,
+    /// declared or undeclared by the source, are
     /// folded through agg_accumulate's dyn feed, with `dyn_prefix` stripped
     /// from each name. The dyn output columns are appended after the fixed
     /// aggregates.

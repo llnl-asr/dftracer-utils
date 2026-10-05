@@ -206,6 +206,15 @@ index::gzip::GzipMemberRecord decode_gzip_member(std::string_view key,
     member.uc_size = cursor.u64();
     member.first_line_num = cursor.u64();
     member.last_line_num = cursor.u64();
+    if (body.size() >= 6 * sizeof(std::uint64_t) + 2) {
+        const auto kind = cursor.u8();
+        if (kind >
+            static_cast<std::uint8_t>(index::gzip::GzipRecordKind::RESTART))
+            throw DFTUtilsException::cat(ErrorCode::INDEXER,
+                                         "unknown gzip record kind ", kind);
+        member.kind = static_cast<index::gzip::GzipRecordKind>(kind);
+        member.bits = cursor.u8();
+    }
     return member;
 }
 
@@ -836,6 +845,14 @@ std::vector<index::gzip::GzipMemberRecord> IndexDatabase::query_gzip_members(
              members.push_back(decode_gzip_member(key, body));
          });
     return members;
+}
+
+std::optional<std::string> IndexDatabase::query_restart_window(
+    int file_id, std::uint64_t member_idx) const {
+    return get(*impl_->db_, Ext::MEMBERS, layout::members::RESTART,
+               layout::granule_key(Ext::MEMBERS, layout::members::RESTART,
+                                   fid(file_id),
+                                   static_cast<std::uint32_t>(member_idx)));
 }
 
 std::vector<index::gzip::ChunkSpan> IndexDatabase::query_chunk_spans(

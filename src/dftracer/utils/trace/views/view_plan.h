@@ -55,11 +55,11 @@ struct ViewPlan {
 
     std::optional<duql::Query> query;
     std::optional<std::pair<double, double>> time_range;
-    // Default spans all phases so a naive View sees every event; callers that
-    // want only ph="X" events (or only ph="C") say so with .phase().
+    // Default spans every phase of the source's data; callers that want only
+    // ph="X" events (or only ph="C") say so with .phase().
     Phase phase = Phase::Any;
-    /// Metadata records are records like any other: kept, emitted, filtered
-    /// and aggregated (duql's `all`).
+    /// Set by an explicit phase(Any): metadata records are records like any
+    /// other, kept, emitted, filtered and aggregated (duql's `all`).
     bool all_records = false;
 
     std::uint64_t time_bucket_us = 0;
@@ -107,6 +107,9 @@ struct ViewPlan {
     /// intermediate memory only.
     std::uint64_t memory_budget = 0;
     std::vector<std::string> select;
+    /// Paths a row scan with an empty select names as schema columns after
+    /// its own; the scan still returns every path.
+    std::vector<dataframe::Field> named_columns;
 
     /// Pagination. `limit` caps the output (0 = unlimited); `offset` skips that
     /// many leading rows/events first. Applied to collect()'s materialized rows

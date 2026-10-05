@@ -715,6 +715,44 @@ dftu_lazyframe* dftu_lazyframe_rename(const dftu_lazyframe* lf,
     }
 }
 
+dftu_lazyframe* dftu_lazyframe_drop(const dftu_lazyframe* lf,
+                                    const char* const* names, int32_t n) {
+    if (!lf || n < 0 || (n > 0 && !names)) return nullptr;
+    try {
+        std::vector<std::string> v;
+        v.reserve(static_cast<std::size_t>(n));
+        for (int32_t i = 0; i < n; ++i) {
+            if (!names[i]) return nullptr;
+            v.emplace_back(names[i]);
+        }
+        return wrap_lazy(lf->lf.drop(std::move(v)));
+    } catch (const std::exception&) {
+        return nullptr;
+    }
+}
+
+dftu_lazyframe* dftu_lazyframe_rename_columns(const dftu_lazyframe* lf,
+                                              const char* const* from,
+                                              int32_t n_from,
+                                              const char* const* to,
+                                              int32_t n_to) {
+    if (!lf || n_from < 0 || n_from != n_to || (n_from > 0 && (!from || !to)))
+        return nullptr;
+    try {
+        std::vector<std::string> f, t;
+        f.reserve(static_cast<std::size_t>(n_from));
+        t.reserve(static_cast<std::size_t>(n_from));
+        for (int32_t i = 0; i < n_from; ++i) {
+            if (!from[i] || !to[i]) return nullptr;
+            f.emplace_back(from[i]);
+            t.emplace_back(to[i]);
+        }
+        return wrap_lazy(lf->lf.rename_columns(std::move(f), std::move(t)));
+    } catch (const std::exception&) {
+        return nullptr;
+    }
+}
+
 dftu_lazyframe* dftu_lazyframe_slice(const dftu_lazyframe* lf, int64_t offset,
                                      int64_t len) {
     if (!lf) return nullptr;

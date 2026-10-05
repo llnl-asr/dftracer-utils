@@ -1,4 +1,4 @@
-#include <dftracer/utils/query/query.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/trace/provenance/provenance_graph.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <simdjson.h>
@@ -884,7 +884,7 @@ coro::CoroTask<ProvenanceGraph> extract_provenance_graph(
     const SpanIndex spans = index_spans(g.activities);
     views::View io =
         view.phase(views::Phase::Any)
-            .filter(query::parse_or_throw(
+            .filter(duql::parse_or_throw(
                 "cat == \"POSIX\" or cat == \"STDIO\" or name == \"FH\" or "
                 "name == \"SH\" or name == \"start\""));
     auto ios = co_await io.map_batches<IoAcc>(

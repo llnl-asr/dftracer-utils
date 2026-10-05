@@ -50,6 +50,58 @@ inline void append_json_escaped(std::string& out, std::string_view s) {
     }
 }
 
+/// Like append_json_escaped, into `dst` with room for 6 * s.size() bytes.
+/// Returns the end of the written bytes.
+inline char* escape_json_to(char* dst, std::string_view s) {
+    static constexpr char HEX[] = "0123456789abcdef";
+    for (char c : s) {
+        const unsigned char u = static_cast<unsigned char>(c);
+        switch (c) {
+            case '"':
+                *dst++ = '\\';
+                *dst++ = '"';
+                break;
+            case '\\':
+                *dst++ = '\\';
+                *dst++ = '\\';
+                break;
+            case '\b':
+                *dst++ = '\\';
+                *dst++ = 'b';
+                break;
+            case '\f':
+                *dst++ = '\\';
+                *dst++ = 'f';
+                break;
+            case '\n':
+                *dst++ = '\\';
+                *dst++ = 'n';
+                break;
+            case '\r':
+                *dst++ = '\\';
+                *dst++ = 'r';
+                break;
+            case '\t':
+                *dst++ = '\\';
+                *dst++ = 't';
+                break;
+            default:
+                if (u < 0x20) {
+                    *dst++ = '\\';
+                    *dst++ = 'u';
+                    *dst++ = '0';
+                    *dst++ = '0';
+                    *dst++ = HEX[u >> 4];
+                    *dst++ = HEX[u & 15];
+                } else {
+                    *dst++ = c;
+                }
+                break;
+        }
+    }
+    return dst;
+}
+
 /// Escape a string for embedding in a JSON string literal.
 inline std::string escape_json_string(std::string_view s) {
     std::string result;

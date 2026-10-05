@@ -165,7 +165,7 @@ FALSE: "false"
 NAME: /(?!(and|or|not|in|like|ilike|between|is|escape|null|true|false|missing)\b)[A-Za-z_][A-Za-z0-9_]*/
 QKEY: /`[^`]+`/
 PARAM: /\$[A-Za-z_][A-Za-z0-9_]*/
-DURATION.2: /[0-9]+(\.[0-9]+)?(ns|us|ms|s|m|h)(?![A-Za-z0-9_])/
+DURATION.2: /[0-9]+(\.[0-9]+)?(ns|us|ms|s|m|h|d)(?![A-Za-z0-9_])/
 FLOAT: /[0-9]+\.[0-9]+([eE][+-]?[0-9]+)?|[0-9]+[eE][+-]?[0-9]+/
 INT: /[0-9]+/
 INDEX.2: /\[\s*-?\s*[0-9]+\s*\]/

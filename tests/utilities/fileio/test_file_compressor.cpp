@@ -4,6 +4,7 @@
 #include <dftracer/utils/utilities/fileio/file_compressor_utility.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
+#include <zlib.h>
 
 #include <fstream>
 #include <memory>
@@ -54,6 +55,35 @@ TEST_SUITE("FileCompressor") {
             CHECK(result->compression_ratio() > 0.0);
             CHECK(result->compression_ratio() < 1.0);
             CHECK(fs::exists(expected_output));
+        }
+
+        SUBCASE("File without a final newline") {
+            std::string test_file = (test_dir / "no_newline.txt").string();
+            std::string content;
+            for (int i = 0; i < 500; ++i) {
+                content += "line " + std::to_string(i) + " of the file\n";
+            }
+            content += "last line without newline";
+            {
+                std::ofstream ofs(test_file, std::ios::binary);
+                ofs << content;
+            }
+
+            FileCompressorUtility compressor;
+            auto input = FileCompressionUtilityInput::from_file(test_file)
+                             .with_member_size(1000);
+            auto result = compressor(input).get();
+            REQUIRE(result.has_value());
+
+            gzFile g = gzopen(result->output_path.c_str(), "rb");
+            REQUIRE(g != nullptr);
+            std::string decoded;
+            char buf[4096];
+            int n;
+            while ((n = gzread(g, buf, sizeof(buf))) > 0)
+                decoded.append(buf, n);
+            gzclose(g);
+            CHECK(decoded == content);
         }
 
         SUBCASE("Compress with custom output path") {

@@ -42,27 +42,28 @@ class EventAggregator {
                                  std::uint16_t shard_end,
                                  ScanCallback callback) const;
 
-    /// Type-erased raw scan. Use the templated overload below for zero-
-    /// allocation calls.
+    /// Type-erased raw scan. A non-empty `after` resumes right after that key.
+    /// Use the templated overload below for zero- allocation calls.
     using RawScanCallbackFn = bool (*)(void* ctx, std::string_view key_bytes,
                                        std::string_view value_bytes);
     std::size_t scan_shard_range_raw_fn(std::uint16_t shard_begin,
                                         std::uint16_t shard_end,
-                                        RawScanCallbackFn fn, void* ctx) const;
+                                        RawScanCallbackFn fn, void* ctx,
+                                        std::string_view after = {}) const;
 
     /// Template wrapper: forwards any callable `(sv, sv) -> bool` into the
     /// raw scan with zero heap allocations. The adapter lambda is a captureless
     /// `+[]` so it decays to a plain function pointer.
     template <typename F>
     std::size_t scan_shard_range_raw(std::uint16_t shard_begin,
-                                     std::uint16_t shard_end,
-                                     F&& callback) const {
+                                     std::uint16_t shard_end, F&& callback,
+                                     std::string_view after = {}) const {
         auto adapter =
             +[](void* ctx, std::string_view k, std::string_view v) -> bool {
             return (*static_cast<std::decay_t<F>*>(ctx))(k, v);
         };
         return scan_shard_range_raw_fn(shard_begin, shard_end, adapter,
-                                       static_cast<void*>(&callback));
+                                       static_cast<void*>(&callback), after);
     }
 
     /// Merge fresh trackers with any persisted tracker from the DB,

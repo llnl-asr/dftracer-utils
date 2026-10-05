@@ -60,8 +60,11 @@ coro::CoroTask<Result<PruneResult>> prune_data(const PruneRequest& request) {
 
     if (request.query && !request.index_path.empty()) {
         ChunkPruner pruner;
-        auto out = co_await pruner(ChunkPrunerInput{
-            request.index_path, request.file_path, *request.query, request.db});
+        // A temporary built inside the co_await expression is destroyed
+        // twice by GCC 12, so the input is a named local.
+        const ChunkPrunerInput input{request.index_path, request.file_path,
+                                     *request.query, request.db};
+        auto out = co_await pruner(input);
         if (out.success) {
             result.total_chunks = out.total_checkpoints;
             if (!out.file_may_match && out.candidate_checkpoints.empty()) {

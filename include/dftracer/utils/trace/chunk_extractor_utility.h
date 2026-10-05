@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFTRACER_CHUNK_EXTRACTOR_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFTRACER_CHUNK_EXTRACTOR_UTILITY_H
 
+#include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/trace/event_id.h>
 #include <dftracer/utils/trace/internal/chunk_manifest.h>
@@ -25,8 +26,8 @@ struct ChunkExtractorUtilityInput {
     std::string app_name;
     bool compress = false;
     bool compute_hash = true;
-    /// Uncompressed bytes per gzip member (0 = single member per file).
-    std::size_t member_size_bytes = 0;
+    /// Uncompressed bytes per gzip member.
+    std::size_t member_size_bytes = constants::indexer::DEFAULT_CHECKPOINT_SIZE;
 
     ChunkExtractorUtilityInput()
         : chunk_index(0), compress(false), compute_hash(true) {}

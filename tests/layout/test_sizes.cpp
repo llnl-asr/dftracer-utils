@@ -13,6 +13,7 @@
 #include <doctest/doctest.h>
 
 #include <cstddef>
+#include <string>
 
 namespace df = dftracer::utils::dataframe;
 
@@ -27,12 +28,15 @@ constexpr bool within() {
 
 constexpr std::size_t SERIES_BUDGET = 120;
 constexpr std::size_t DATA_TYPE_BUDGET = 40;
-constexpr std::size_t FIELD_BUDGET = 72;
+// std::string is 24 bytes in libc++ and 32 in libstdc++, so a budget counts
+// its strings by sizeof and stays tight on both.
+constexpr std::size_t STR = sizeof(std::string);
+constexpr std::size_t FIELD_BUDGET = 48 + 1 * STR;
 constexpr std::size_t MORSEL_BUDGET = 56;
-constexpr std::size_t AGG_SPEC_BUDGET = 48;
-constexpr std::size_t WINDOW_COLUMN_BUDGET = 120;
+constexpr std::size_t AGG_SPEC_BUDGET = 24 + 1 * STR;
+constexpr std::size_t WINDOW_COLUMN_BUDGET = 48 + 3 * STR;
 constexpr std::size_t FOLD_EVENT_BUDGET = 152;
-constexpr std::size_t LOOKUP_BUDGET = 160;
+constexpr std::size_t LOOKUP_BUDGET = 112 + 2 * STR;
 
 static_assert(within<dftu_series, SERIES_BUDGET, 8>());
 static_assert(within<df::DataType, DATA_TYPE_BUDGET, 8>());

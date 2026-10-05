@@ -208,11 +208,14 @@ coro::AsyncGenerator<Line> read_lines_indexed(
 
     if (query && !index_path.empty() &&
         range_type == internal::RangeType::BYTE_RANGE) {
+        // GCC 12 destroys a temporary built inside co_await twice.
+        dftracer::utils::index::plan::PruneRequest prune_req{
+            .index_path = index_path,
+            .file_path = file_path,
+            .query = &*query,
+            .metadata = dftracer::utils::index::plan::MetadataUse::ALL};
         auto pruned = co_await dftracer::utils::index::plan::prune_file(
-            {.index_path = index_path,
-             .file_path = file_path,
-             .query = &*query,
-             .metadata = dftracer::utils::index::plan::MetadataUse::ALL});
+            std::move(prune_req));
         if (!pruned->file_may_match) co_return;
 
         if (!pruned->all_chunks &&
@@ -341,11 +344,14 @@ coro::AsyncGenerator<std::span<const char>> read_chunks_indexed(
     }
 
     if (query && !index_path.empty() && !config.skip_pruning) {
+        // GCC 12 destroys a temporary built inside co_await twice.
+        dftracer::utils::index::plan::PruneRequest prune_req{
+            .index_path = index_path,
+            .file_path = file_path,
+            .query = &*query,
+            .metadata = dftracer::utils::index::plan::MetadataUse::ALL};
         auto pruned = co_await dftracer::utils::index::plan::prune_file(
-            {.index_path = index_path,
-             .file_path = file_path,
-             .query = &*query,
-             .metadata = dftracer::utils::index::plan::MetadataUse::ALL});
+            std::move(prune_req));
         if (!pruned->file_may_match) co_return;
 
         if (!pruned->all_chunks &&
@@ -754,11 +760,14 @@ coro::AsyncGenerator<std::span<const char>> TraceReader::read_raw(
             range_type == internal::RangeType::BYTE_RANGE) {
             auto parsed = Query::from_string(config.query);
             if (!parsed) throw duql::DuqlParseError(parsed.error());
+            // GCC 12 destroys a temporary built inside co_await twice.
+            dftracer::utils::index::plan::PruneRequest prune_req{
+                .index_path = index_path_,
+                .file_path = config_.file_path,
+                .query = &*parsed,
+                .metadata = dftracer::utils::index::plan::MetadataUse::ALL};
             auto pruned = co_await dftracer::utils::index::plan::prune_file(
-                {.index_path = index_path_,
-                 .file_path = config_.file_path,
-                 .query = &*parsed,
-                 .metadata = dftracer::utils::index::plan::MetadataUse::ALL});
+                std::move(prune_req));
             if (!pruned->file_may_match) co_return;
         }
 

@@ -41,9 +41,6 @@ struct DftracerTraceWriterInput {
     TraceEventFormat format = TraceEventFormat::AGGREGATED;
     /// Workers add their per-shard key count here if non-null.
     std::atomic<std::size_t>* keys_written = nullptr;
-    /// Concatenate shards into `output_path` and unlink them on SHARDED
-    /// layouts (typically NFS). Callers that read shards directly leave false.
-    bool merge_on_sharded = false;
     /// Total shard-prefix range (half-open) this invocation is responsible
     /// for. Defaults cover the whole key space. MPI drivers set a disjoint
     /// range per rank so N ranks collectively cover `[0, AGG_KEY_NUM_SHARDS)`

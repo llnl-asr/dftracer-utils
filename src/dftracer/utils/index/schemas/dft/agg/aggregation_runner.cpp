@@ -346,7 +346,6 @@ coro::CoroTask<Result<AggregationRunResult>> run_aggregation(
                         input.compress_output, input.compression_level,
                         input.event_format);
                     streaming_input.keys_written = &perfetto_keys_written;
-                    streaming_input.merge_on_sharded = true;
                 }
                 {
                     ::dftracer::utils::ScopedTimer _pw(stages,

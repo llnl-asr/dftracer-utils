@@ -78,6 +78,31 @@ std::vector<std::string> gz_lines(const std::string& path) {
     return out;
 }
 
+std::vector<std::size_t> member_sizes(const std::string& path) {
+    const std::string gz = [&] {
+        std::ifstream in(path, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(in), {});
+    }();
+    std::vector<std::size_t> sizes;
+    z_stream zs{};
+    REQUIRE(inflateInit2(&zs, 16 + MAX_WBITS) == Z_OK);
+    zs.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(gz.data()));
+    zs.avail_in = static_cast<uInt>(gz.size());
+    std::vector<unsigned char> out(1 << 16);
+    while (zs.avail_in > 0) {
+        zs.next_out = out.data();
+        zs.avail_out = static_cast<uInt>(out.size());
+        const int rc = inflate(&zs, Z_NO_FLUSH);
+        REQUIRE((rc == Z_OK || rc == Z_STREAM_END));
+        if (rc == Z_STREAM_END) {
+            sizes.push_back(zs.total_out);
+            REQUIRE(inflateReset(&zs) == Z_OK);
+        }
+    }
+    inflateEnd(&zs);
+    return sizes;
+}
+
 std::string slurp(const std::string& path) {
     std::ifstream in(path, std::ios::binary);
     return {std::istreambuf_iterator<char>(in), {}};
@@ -140,6 +165,27 @@ TEST_CASE("output is reproducible and concatenates like one run") {
     std::sort(joined.begin(), joined.end());
     std::sort(together.begin(), together.end());
     CHECK(joined == together);
+}
+
+TEST_CASE("members follow the member size, not the run") {
+    REQUIRE_FALSE(binary().empty());
+    dftu_utils_test::set_test_library_path(binary());
+    ScopedTestDir d("gen_dist_member");
+    write_wide_run(d.path() / "root", "w", 300);
+    const std::string root = (d.path() / "root").string();
+    constexpr std::size_t MEMBER = 2048;
+    CHECK(run({root, "-o", d.file("small.pfw.gz"), "--member-size",
+               std::to_string(MEMBER)}) == 0);
+    CHECK(run({root, "-o", d.file("big.pfw.gz")}) == 0);
+
+    const auto small = gz_lines(d.file("small.pfw.gz"));
+    CHECK(small == gz_lines(d.file("big.pfw.gz")));
+    std::size_t longest = 0;
+    for (const auto& l : small) longest = std::max(longest, l.size() + 1);
+    const auto sizes = member_sizes(d.file("small.pfw.gz"));
+    CHECK(sizes.size() > 1);
+    for (std::size_t n : sizes) CHECK(n <= MEMBER + longest);
+    CHECK(member_sizes(d.file("big.pfw.gz")).size() == 1);
 }
 
 TEST_CASE("records carry the run id and resolve run keys through the index") {

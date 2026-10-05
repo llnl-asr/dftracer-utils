@@ -91,7 +91,10 @@ builddir="build/build-docker-${variant}"
 
 docker build -t "$image" -f "$root/${dockerfile}" "$root"
 
+# Run as the invoking user, not root: tests that make a file unreadable expect
+# the read to fail, and root reads it anyway.
 docker run --rm \
+    --user "$(id -u):$(id -g)" -e HOME=/tmp \
     -v "$root":/work -w /work \
     -e "DFTRACER_UTILS_MONITOR=${monitor}" \
     -e "DFTRACER_UTILS_THREADS=${DFTRACER_UTILS_THREADS:-}" \

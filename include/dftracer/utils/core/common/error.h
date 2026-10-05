@@ -325,6 +325,13 @@ class DFTUtilsException : public std::runtime_error {
     Condition condition_;
 };
 
+/// The value of `r`, or throws DFTUtilsException with its error.
+template <typename T>
+T unwrap(Result<T>&& r) {
+    if (!r) throw DFTUtilsException(r.error());
+    if constexpr (!std::is_void_v<T>) return std::move(*r);
+}
+
 }  // namespace dftracer::utils
 
 /// DFTU_TRY: error-propagation helper for coroutines returning Result<...>.

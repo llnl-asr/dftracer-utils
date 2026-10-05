@@ -17,6 +17,7 @@ Composition and inheritance across the utility types:
 
 .. include:: /cpp_api/_generated/utilities.rst.inc
 .. include:: /cpp_api/_generated/utilities.fileio.rst.inc
+.. include:: /cpp_api/_generated/utilities.fileio.line_format.rst.inc
 .. include:: /cpp_api/_generated/utilities.fileio.compress.rst.inc
 .. include:: /cpp_api/_generated/utilities.fileio.parallel.rst.inc
 .. include:: /cpp_api/_generated/utilities.fileio.lines.rst.inc

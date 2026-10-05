@@ -85,14 +85,24 @@ std::unique_ptr<::rocksdb::Iterator> system_row_iterator(
     const RocksDatabase& db);
 
 /// Calls fn(key, value) for each row of shards [begin, end) in key order
-/// until fn returns false; returns the rows visited. Throws on a read error.
+/// until fn returns false; returns the rows visited. A non-empty `after`
+/// resumes right after that key. Throws on a read error.
 template <class Fn>
 std::size_t for_each_in(std::unique_ptr<::rocksdb::Iterator> it,
-                        std::uint16_t begin, std::uint16_t end, Fn&& fn) {
+                        std::uint16_t begin, std::uint16_t end, Fn&& fn,
+                        std::string_view after = {}) {
     const char seek[2] = {static_cast<char>(begin >> 8),
                           static_cast<char>(begin & 0xFF)};
     std::size_t n = 0;
-    for (it->Seek(::rocksdb::Slice(seek, 2)); it->Valid(); it->Next()) {
+    if (after.empty()) {
+        it->Seek(::rocksdb::Slice(seek, 2));
+    } else {
+        it->Seek(::rocksdb::Slice(after.data(), after.size()));
+        if (it->Valid() &&
+            it->key() == ::rocksdb::Slice(after.data(), after.size()))
+            it->Next();
+    }
+    for (; it->Valid(); it->Next()) {
         const auto k = it->key();
         if (k.size() < 2) continue;
         const auto shard =
@@ -113,8 +123,10 @@ std::size_t for_each_in(std::unique_ptr<::rocksdb::Iterator> it,
 
 template <class Fn>
 std::size_t for_each_row(const RocksDatabase& db, std::uint16_t begin,
-                         std::uint16_t end, Fn&& fn) {
-    return for_each_in(row_iterator(db), begin, end, std::forward<Fn>(fn));
+                         std::uint16_t end, Fn&& fn,
+                         std::string_view after = {}) {
+    return for_each_in(row_iterator(db), begin, end, std::forward<Fn>(fn),
+                       after);
 }
 
 template <class Fn>

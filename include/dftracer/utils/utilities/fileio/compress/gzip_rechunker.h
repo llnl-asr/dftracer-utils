@@ -7,7 +7,7 @@
 #include <dftracer/utils/core/common/scoped_fd.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/io/io.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <zlib.h>
@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace dftracer::utils::utilities::fileio::compress {
@@ -78,9 +79,8 @@ inline coro::CoroTask<bool> gzip_needs_rechunk(int fd, std::uint64_t file_size,
 
 /// Decodes `in_path` (single huge member or otherwise; plain text is read as
 /// is) with zlib in bounded memory and writes an equivalent multi-member gzip
-/// to `out_path`: identical uncompressed bytes, re-framed into libdeflate
-/// members of about `member_size` uncompressed bytes cut at newline
-/// boundaries.
+/// to `out_path`: identical uncompressed bytes, re-framed by GzipLineWriter
+/// into members of about `member_size` uncompressed bytes that end at newlines.
 inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
                                                     const std::string& out_path,
                                                     std::size_t member_size,
@@ -104,45 +104,32 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
     const bool plain = co_await io::pread(in_fd.get(), magic, 2, 0) != 2 ||
                        magic[0] != 0x1f || magic[1] != 0x8b;
 
-    ssize_t out_fd_res =
-        co_await io::open(out_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (out_fd_res < 0) {
-        throw DFTUtilsException(ErrorCode::IO,
-                                "Cannot open output: " + out_path);
-    }
-    ScopedFd out_fd(static_cast<int>(out_fd_res));
-
     z_stream zs{};
     if (!plain && inflateInit2(&zs, 15 + 16) != Z_OK) {
         throw DFTUtilsException(ErrorCode::COMPRESSION,
                                 "inflateInit2 failed for " + in_path);
     }
 
-    GzipMemberCompressor compressor(level);
+    GzipWriterOptions opts;
+    opts.member_size = member_size;
+    opts.level = level;
+    auto writer = unwrap(co_await GzipLineWriter::open(out_path, opts));
+
     std::vector<unsigned char> in(1u << 20);
     std::vector<unsigned char> out(1u << 20);
-    std::vector<char> member;
-    std::vector<std::uint8_t> scratch;
+    std::string carry;
     std::uint64_t off = 0;
 
-    auto emit = [&](std::size_t len) -> coro::CoroTask<void> {
-        if (!compressor.compress_member_into(scratch, member.data(), len)) {
-            throw DFTUtilsException(ErrorCode::COMPRESSION,
-                                    "gzip member compression failed");
+    // Appends the whole lines of `text` and keeps the rest in `carry`.
+    auto feed = [&](std::string_view text) -> coro::CoroTask<void> {
+        const auto nl = text.rfind('\n');
+        if (nl == std::string_view::npos) {
+            carry.append(text);
+            co_return;
         }
-        std::size_t written = 0;
-        while (written < scratch.size()) {
-            ssize_t w =
-                co_await io::write(out_fd.get(), scratch.data() + written,
-                                   scratch.size() - written);
-            if (w <= 0) {
-                throw DFTUtilsException(ErrorCode::IO,
-                                        "write failed: " + out_path);
-            }
-            written += static_cast<std::size_t>(w);
-        }
-        member.erase(member.begin(),
-                     member.begin() + static_cast<std::ptrdiff_t>(len));
+        carry.append(text.substr(0, nl + 1));
+        unwrap(co_await writer.append(carry));
+        carry.assign(text.substr(nl + 1));
     };
 
     bool ok = true;
@@ -156,40 +143,30 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
                                                  static_cast<off_t>(off));
             if (n <= 0) break;
             off += static_cast<std::uint64_t>(n);
-            member.insert(member.end(), in.data(), in.data() + n);
-        } else {
-            if (zs.avail_in == 0) {
-                if (off >= file_size) break;
-                const std::size_t want = static_cast<std::size_t>(
-                    std::min<std::uint64_t>(in.size(), file_size - off));
-                const ssize_t n = co_await io::pread(
-                    in_fd.get(), in.data(), want, static_cast<off_t>(off));
-                if (n <= 0) break;
-                off += static_cast<std::uint64_t>(n);
-                zs.next_in = in.data();
-                zs.avail_in = static_cast<uInt>(n);
-            }
-
-            zs.next_out = out.data();
-            zs.avail_out = static_cast<uInt>(out.size());
-            rc = inflate(&zs, Z_NO_FLUSH);
-            const std::size_t got = out.size() - zs.avail_out;
-            member.insert(member.end(), out.data(), out.data() + got);
+            co_await feed(
+                std::string_view(reinterpret_cast<const char*>(in.data()),
+                                 static_cast<std::size_t>(n)));
+            continue;
+        }
+        if (zs.avail_in == 0) {
+            if (off >= file_size) break;
+            const std::size_t want = static_cast<std::size_t>(
+                std::min<std::uint64_t>(in.size(), file_size - off));
+            const ssize_t n = co_await io::pread(in_fd.get(), in.data(), want,
+                                                 static_cast<off_t>(off));
+            if (n <= 0) break;
+            off += static_cast<std::uint64_t>(n);
+            zs.next_in = in.data();
+            zs.avail_in = static_cast<uInt>(n);
         }
 
-        // Close a member just before a newline once big enough, so the next
-        // member begins with that '\n'. The reader's boundary-aware byte range
-        // drops bytes up to the first newline of a non-initial member, so a
-        // member must lead with the separator (as ChunkWriter emits) or its
-        // first event would be dropped on read.
-        while (member.size() >= member_size) {
-            std::size_t nl = member_size;
-            while (nl < member.size() && member[nl] != '\n') ++nl;
-            if (nl == member.size()) break;
-            co_await emit(nl);
-        }
+        zs.next_out = out.data();
+        zs.avail_out = static_cast<uInt>(out.size());
+        rc = inflate(&zs, Z_NO_FLUSH);
+        co_await feed(
+            std::string_view(reinterpret_cast<const char*>(out.data()),
+                             out.size() - zs.avail_out));
 
-        if (plain) continue;
         if (rc == Z_STREAM_END) {
             if (zs.total_in >= file_size && zs.avail_in == 0) break;
             if (inflateReset2(&zs, 15 + 16) != Z_OK) {
@@ -206,7 +183,7 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
         throw DFTUtilsException(ErrorCode::COMPRESSION,
                                 "decompression failed for " + in_path);
     }
-    if (!member.empty()) co_await emit(member.size());
+    unwrap(co_await writer.close(carry));
 }
 
 /// If `path`'s first gzip member exceeds `member_size` uncompressed (a single

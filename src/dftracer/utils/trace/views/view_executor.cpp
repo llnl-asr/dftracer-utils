@@ -43,7 +43,7 @@
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
 #include <dftracer/utils/utilities/common/serialization/binary_codec.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <dftracer/utils/utilities/fileio/parallel/merge.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
 #include <rocksdb/sst_file_writer.h>
@@ -54,6 +54,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -348,7 +349,6 @@ coro::CoroTask<ExportStats> run_export(const ViewPlan& base_plan,
 coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
                                              const TraceWriteOptions& opts) {
     namespace pfw = utilities::fileio::parallel;
-    namespace cmp = utilities::fileio::compress;
     // Member size defaults to the checkpoint granularity (a member == a chunk).
     constexpr std::size_t DEFAULT_FLUSH_BYTES =
         constants::indexer::DEFAULT_CHECKPOINT_SIZE;
@@ -363,98 +363,80 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
     auto units = co_await gather_units(plan, vdef, skipped);
 
     const std::size_t baseline = std::max<std::size_t>(1, opts.num_workers);
-    auto cw = pfw::make_writer_for_path(
-        {opts.output_path, baseline,
-         opts.member_size ? opts.member_size : DEFAULT_FLUSH_BYTES,
-         BUFFER_HEADROOM_BYTES, opts.compress});
-    const std::size_t num_workers = cw.sizing.num_workers;
-    const std::size_t member_size = cw.sizing.flush_threshold;
-    auto writer = std::move(cw.writer);
+    const auto sizing =
+        pfw::make_writer_for_path(
+            {opts.output_path, baseline,
+             opts.member_size ? opts.member_size : DEFAULT_FLUSH_BYTES,
+             BUFFER_HEADROOM_BYTES, opts.compress})
+            .sizing;
+    const std::size_t num_workers = sizing.num_workers;
+
+    utilities::fileio::GzipWriterOptions wopts;
+    wopts.member_size = sizing.flush_threshold;
+    wopts.level = opts.level;
+    wopts.workers = num_workers;
+    wopts.compress = opts.compress;
+    wopts.ordered = false;
+    wopts.memory_budget = plan.memory_budget;
+    auto opened = co_await utilities::fileio::GzipLineWriter::open(
+        opts.output_path, std::move(wopts));
+    if (!opened) {
+        throw DFTUtilsException(
+            ErrorCode::IO, "export_trace failed writing " + opts.output_path);
+    }
+    auto writer = std::move(*opened);
 
     std::vector<ScanCounts> counts_v(num_workers);
     bool ok = true;
 
-    // One scope owns the writer's internal packer (padded layout) plus the
-    // per-worker producers; close() runs inside it so the packer is drained
-    // before the scope joins.
     co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
-        if (co_await writer->open(opts.output_path, num_workers, opts.compress,
-                                  &scope) != 0) {
-            ok = false;
-            co_return;
-        }
-
-        co_await scope.scope([&](CoroScope& child) -> coro::CoroTask<void> {
-            for (std::size_t w = 0; w < num_workers; ++w) {
-                child.spawn([&, w](CoroScope&) -> coro::CoroTask<void> {
-                    cmp::GzipMemberCompressor comp(opts.level);
-                    std::string buf;
-                    std::vector<std::uint8_t> scratch;
-
-                    // Emit buf[0, cut) as one self-contained member (whole
-                    // lines, so it is valid at any offset). Returns false on
-                    // write failure.
-                    auto emit = [&](std::size_t cut) -> coro::CoroTask<bool> {
-                        ByteView chunk;
-                        if (opts.compress) {
-                            if (!comp.compress_member_into(scratch, buf.data(),
-                                                           cut)) {
-                                co_return false;
-                            }
-                            chunk = ByteView(
-                                reinterpret_cast<const char*>(scratch.data()),
-                                scratch.size());
-                        } else {
-                            chunk = ByteView(buf.data(), cut);
+        for (std::size_t w = 0; w < num_workers; ++w) {
+            scope.spawn([&, w](CoroScope&) -> coro::CoroTask<void> {
+                auto prod = writer.producer();
+                if (!prod) {
+                    ok = false;
+                    co_return;
+                }
+                bool stop = false;
+                for (std::size_t i = w; !stop && i < units.size();
+                     i += num_workers) {
+                    if (is_cancelled(plan)) break;
+                    ViewScannerInput sin =
+                        make_scanner_input(units[i], vdef, vdef.query);
+                    ViewScannerUtility scanner;
+                    auto gen = scanner(sin);
+                    while (auto b = co_await gen.next()) {
+                        if (is_cancelled(plan)) {
+                            stop = true;
+                            break;
                         }
-                        bool wrote =
-                            co_await writer->write_chunk(w, chunk) == 0;
-                        buf.erase(0, cut);
-                        co_return wrote;
-                    };
-
-                    for (std::size_t i = w; i < units.size();
-                         i += num_workers) {
-                        if (is_cancelled(plan)) co_return;
-                        ViewScannerInput sin =
-                            make_scanner_input(units[i], vdef, vdef.query);
-                        ViewScannerUtility scanner;
-                        auto gen = scanner(sin);
-                        while (auto b = co_await gen.next()) {
-                            if (is_cancelled(plan)) co_return;
-                            counts_v[w].add(*b);
-                            for (const auto& ev : b->events) {
-                                buf.append(ev);
-                                buf.push_back('\n');
-                            }
-                            while (buf.size() >= member_size) {
-                                std::size_t cut = member_size;
-                                while (cut < buf.size() && buf[cut] != '\n')
-                                    ++cut;
-                                if (cut >= buf.size()) break;  // no newline yet
-                                ++cut;  // include it: member holds whole lines
-                                if (!co_await emit(cut)) {
-                                    ok = false;
-                                    co_return;
-                                }
-                            }
+                        counts_v[w].add(*b);
+                        std::size_t total = 0;
+                        for (const auto& ev : b->events) total += ev.size() + 1;
+                        if (total == 0) continue;
+                        if (!co_await prod->append_with(
+                                total, [&](char* dst, std::size_t) {
+                                    char* p = dst;
+                                    for (const auto& ev : b->events) {
+                                        std::memcpy(p, ev.data(), ev.size());
+                                        p += ev.size();
+                                        *p++ = '\n';
+                                    }
+                                    return static_cast<std::size_t>(p - dst);
+                                })) {
+                            ok = false;
+                            co_return;
                         }
                     }
-                    if (!buf.empty() && !co_await emit(buf.size())) ok = false;
-                    co_return;
-                });
-            }
-            co_return;
-        });
-
-        if (co_await writer->close() != 0) ok = false;
+                }
+                if (!co_await prod->flush()) ok = false;
+                co_return;
+            });
+        }
+        co_return;
     });
 
-    if (ok && cw.layout.layout == pfw::FileLayout::SHARDED) {
-        auto shards = writer->output_paths();
-        if (co_await pfw::merge_shards(opts.output_path, shards) != 0)
-            ok = false;
-    }
+    if (!co_await writer.close()) ok = false;
 
     if (!ok) {
         throw DFTUtilsException(
@@ -1026,8 +1008,9 @@ void add_fold_factory(
 
 void add_fold_branch(ViewSessionState& state, Query predicate,
                      std::function<BranchConsumer()> make_consumer,
-                     std::function<void()> finalize) {
+                     std::function<void()> finalize, bool wants_metadata) {
     BranchHooks h;
+    h.wants_metadata = wants_metadata;
     h.predicate = std::move(predicate);
     h.make_consumer = std::move(make_consumer);
     h.finalize = std::move(finalize);
@@ -1036,8 +1019,9 @@ void add_fold_branch(ViewSessionState& state, Query predicate,
 
 void add_fold_branch(ViewSessionState& state,
                      std::function<BranchConsumer()> make_consumer,
-                     std::function<void()> finalize) {
+                     std::function<void()> finalize, bool wants_metadata) {
     BranchHooks h;  // predicate unset = match all scanned events
+    h.wants_metadata = wants_metadata;
     h.make_consumer = std::move(make_consumer);
     h.finalize = std::move(finalize);
     add_branch(state, std::move(h));
@@ -1135,15 +1119,17 @@ BranchHooks make_export_branch(ExportSink& sink,
 // between workers; the unsliced fold holds none and only runs finalize.
 class BranchDriverFold : public Fold {
    public:
-    explicit BranchDriverFold(
-        std::shared_ptr<std::vector<const BranchHooks*>> branches)
-        : branches_(std::move(branches)) {}
+    // `gate_metadata`: the scan carries metadata records only for the
+    // branches that read them, so the others must not see them.
+    BranchDriverFold(std::shared_ptr<std::vector<const BranchHooks*>> branches,
+                     bool gate_metadata)
+        : branches_(std::move(branches)), gate_metadata_(gate_metadata) {}
 
     bool accepts(const ScanShape&) const override { return true; }
     bool wants_raw() const override { return true; }
 
     std::unique_ptr<Fold> slice() const override {
-        auto s = std::make_unique<BranchDriverFold>(branches_);
+        auto s = std::make_unique<BranchDriverFold>(branches_, gate_metadata_);
         s->consumers_.reserve(branches_->size());
         for (const auto* br : *branches_)
             s->consumers_.push_back(br->make_consumer());
@@ -1158,8 +1144,12 @@ class BranchDriverFold : public Fold {
             auto root = res.value_unsafe();
             if (!root.is_object()) continue;
             json::JsonValue jv(root);
+            const bool metadata =
+                gate_metadata_ &&
+                trace::read_phase(jv["ph"]) == trace::RecordPhase::METADATA;
             for (std::size_t i = 0; i < branches_->size(); ++i) {
                 const BranchHooks* br = (*branches_)[i];
+                if (metadata && !br->wants_metadata) continue;
                 if (!br->predicate || br->predicate->evaluate(jv))
                     consumers_[i](jv, line);
             }
@@ -1180,6 +1170,7 @@ class BranchDriverFold : public Fold {
 
    private:
     std::shared_ptr<std::vector<const BranchHooks*>> branches_;
+    bool gate_metadata_;
     std::vector<BranchConsumer> consumers_;
     dftracer::utils::json::RecordParser parser_;
     std::string buf_;
@@ -1308,8 +1299,15 @@ coro::CoroTask<ExportStats> run_session(
     if (!raw_b.empty()) {
         auto branches = std::make_shared<std::vector<const BranchHooks*>>();
         branches->reserve(raw_b.size());
-        for (const auto* sb : raw_b) branches->push_back(sb->br);
-        raw_fold = std::make_unique<BranchDriverFold>(std::move(branches));
+        bool any_metadata = false;
+        for (const auto* sb : raw_b) {
+            branches->push_back(sb->br);
+            any_metadata = any_metadata || sb->br->wants_metadata;
+        }
+        const bool gate = any_metadata && !avdef.include_metadata;
+        if (gate) avdef.include_metadata = true;
+        raw_fold =
+            std::make_unique<BranchDriverFold>(std::move(branches), gate);
     }
 
     // Externally-built folds (plugins), constructed with the shared intern so

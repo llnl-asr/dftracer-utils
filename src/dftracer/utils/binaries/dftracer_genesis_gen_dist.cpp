@@ -1,4 +1,5 @@
 #include <dftracer/utils/binaries/common_cli.h>
+#include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/memory_budget.h>
@@ -7,11 +8,10 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 
 #include <algorithm>
 #include <cstdio>
-#include <fstream>
 #include <map>
 #include <string>
 #include <utility>
@@ -19,12 +19,13 @@
 
 using namespace dftracer::utils;
 namespace genesis = dftracer::utils::trace::genesis;
-using dftracer::utils::utilities::fileio::compress::GzipMemberCompressor;
+namespace fileio = dftracer::utils::utilities::fileio;
 
 class GenDistArgParse : public cli::ArgParse {
    public:
     std::vector<std::string> roots;
     std::string output;
+    std::size_t member_size = 0;
     cli::PipelineArgs pipeline;
 
     explicit GenDistArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
@@ -39,13 +40,21 @@ class GenDistArgParse : public cli::ArgParse {
             .nargs(argparse::nargs_pattern::at_least_one);
         parser()
             .add_argument("-o", "--output")
-            .help("Output .pfw.gz file (one gzip member per run)")
+            .help("Output .pfw.gz file")
             .required();
+        parser()
+            .add_argument("--member-size")
+            .help(
+                "Gzip member size (default: the index checkpoint size). "
+                "Accepts units, e.g. 512KB, 32MB")
+            .default_value(
+                std::to_string(constants::indexer::DEFAULT_CHECKPOINT_SIZE));
     }
 
     void post_parse() override {
         roots = parser().get<std::vector<std::string>>("roots");
         output = parser().get<std::string>("--output");
+        member_size = cli::get_bytes_arg(parser(), "--member-size");
     }
 
     bool validate() override {
@@ -68,7 +77,7 @@ namespace {
 
 struct GroupMsg {
     std::size_t index = 0;
-    std::string members;
+    std::string lines;
     std::size_t runs = 0;
     std::vector<genesis::Skip> skips;
 };
@@ -95,8 +104,6 @@ coro::CoroTask<void> group_worker(CoroScope& ctx,
                                   const std::vector<genesis::RunGroup>* groups,
                                   coro::CoroSemaphore* budget) {
     auto guard = out.guard();
-    GzipMemberCompressor gz;
-    std::vector<std::uint8_t> member;
     while (auto i = co_await in.receive()) {
         const genesis::RunGroup& g = (*groups)[*i];
         const std::uint64_t reserve = estimate_per_file_bytes(
@@ -108,14 +115,7 @@ coro::CoroTask<void> group_worker(CoroScope& ctx,
             BudgetPermit permit{*budget, reserve};
             auto result = co_await genesis::process_group(ctx, g);
             for (const auto& run : result.runs) {
-                if (!gz.compress_member_into(member, run.lines.data(),
-                                             run.lines.size())) {
-                    msg.skips.push_back(
-                        {g.dir, run.sort_key, "gzip compression failed"});
-                    continue;
-                }
-                msg.members.append(reinterpret_cast<const char*>(member.data()),
-                                   member.size());
+                msg.lines += run.lines;
                 ++msg.runs;
             }
             msg.skips.insert(msg.skips.end(),
@@ -132,16 +132,21 @@ struct WriteTotals {
     bool io_error = false;
 };
 
-// Writes group members in discovery order as they arrive.
+// Appends group lines to one writer in discovery order as they arrive.
 coro::CoroTask<void> ordered_writer(coro::ChannelConsumer<GroupMsg> in,
                                     const std::string* path,
+                                    std::size_t member_size,
                                     WriteTotals* totals) {
-    std::ofstream ofs(*path, std::ios::binary | std::ios::trunc);
+    fileio::GzipWriterOptions opts;
+    opts.member_size = member_size;
+    auto opened = co_await fileio::GzipLineWriter::open(*path, std::move(opts));
+    if (!opened) totals->io_error = true;
     std::size_t next_expected = 0;
     std::map<std::size_t, GroupMsg> pending;
-    auto write = [&](GroupMsg& m) {
-        ofs.write(m.members.data(),
-                  static_cast<std::streamsize>(m.members.size()));
+    auto write = [&](GroupMsg& m) -> coro::CoroTask<void> {
+        if (!totals->io_error && !m.lines.empty() &&
+            !(co_await opened->append(m.lines)))
+            totals->io_error = true;
         totals->runs += m.runs;
         totals->skips.insert(totals->skips.end(), m.skips.begin(),
                              m.skips.end());
@@ -152,15 +157,15 @@ coro::CoroTask<void> ordered_writer(coro::ChannelConsumer<GroupMsg> in,
             pending.emplace(msg->index, std::move(*msg));
             continue;
         }
-        write(*msg);
+        co_await write(*msg);
         for (auto it = pending.find(next_expected); it != pending.end();
              it = pending.find(next_expected)) {
-            write(it->second);
+            co_await write(it->second);
             pending.erase(it);
         }
     }
-    ofs.close();
-    totals->io_error = !ofs;
+    if (!totals->io_error && !(co_await opened->close()))
+        totals->io_error = true;
 }
 
 coro::CoroTask<int> run_gen_dist(CoroScope& ctx, const GenDistArgParse* cli) {
@@ -175,10 +180,11 @@ coro::CoroTask<int> run_gen_dist(CoroScope& ctx, const GenDistArgParse* cli) {
     auto results = coro::make_channel<GroupMsg>(threads * 2);
     const auto* groups = &discovery.groups;
     const auto* output = &cli->output;
+    const std::size_t member_size = cli->member_size;
     auto* budget_ptr = &budget;
     auto* totals_ptr = &totals;
     co_await ctx.scope([&indices, &results, groups, output, budget_ptr,
-                        totals_ptr,
+                        totals_ptr, member_size,
                         threads](CoroScope& scope) -> coro::CoroTask<void> {
         scope.spawn(
             [ch = indices->producer(), n = groups->size()](CoroScope&) mutable {
@@ -190,8 +196,9 @@ coro::CoroTask<int> run_gen_dist(CoroScope& ctx, const GenDistArgParse* cli) {
                 return group_worker(s, in, std::move(out), groups, budget_ptr);
             });
         }
-        scope.spawn([ch = results->consumer(), output, totals_ptr](CoroScope&) {
-            return ordered_writer(ch, output, totals_ptr);
+        scope.spawn([ch = results->consumer(), output, member_size,
+                     totals_ptr](CoroScope&) {
+            return ordered_writer(ch, output, member_size, totals_ptr);
         });
         co_return;
     });

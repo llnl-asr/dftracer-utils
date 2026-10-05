@@ -538,6 +538,73 @@ class TestTraceViewer:
             assert cdict["parent_id"][order["B"]] == order["A"]
             assert cdict["level"][order["C"]] == 2
 
+    def test_session_metadata_branch_matches_standalone(self):
+        # Every branch of a fused scan returns the rows it returns alone,
+        # whether the metadata records come from all(), phase("metadata") or
+        # the default phase.
+        with Environment(lines=1) as env:
+            meta = [
+                {
+                    "name": n,
+                    "cat": "dftracer",
+                    "type": 1,
+                    "pid": 1,
+                    "tid": 1,
+                    "ph": 4,
+                    "args": {"hhash": "ab"},
+                }
+                for n in ("EH", "EH", "ET")
+            ]
+            events = [
+                {
+                    "name": "w",
+                    "cat": "PROV",
+                    "pid": 1,
+                    "tid": 1,
+                    "ts": 10 + i,
+                    "dur": 2,
+                    "ph": 1,
+                    "args": {"hhash": "ab"},
+                }
+                for i in range(3)
+            ]
+            gz = _make_trace(env, "sess_meta.pfw.gz", meta + events)
+            bases = {
+                "all": lambda: TraceViewer(gz).phase("any"),
+                "metadata": lambda: TraceViewer(gz).phase("metadata"),
+            }
+            for name, base in bases.items():
+                view = base()
+                with view.session() as s:
+                    eh = s.collect(view.filter('name == "EH"'))
+                    et = s.collect(view.filter('name == "ET"'))
+                    prov = s.collect(view.filter('cat == "PROV"'))
+                    agg = s.collect(view.group_by("cat").agg("count"))
+                alone = [
+                    len(base().filter(q).collect())
+                    for q in ('name == "EH"', 'name == "ET"', 'cat == "PROV"')
+                ]
+                got = [len(eh.result()), len(et.result()), len(prov.result())]
+                assert got == alone, name
+                assert alone[:2] == [2, 1]
+                assert (
+                    agg.result().to_dict()
+                    == base().group_by("cat").agg("count").collect().to_dict()
+                )
+
+            view = TraceViewer(gz).phase("any")
+            assert len(view.query('name == "EH"').collect()) == 2
+            assert len(view.query("name == $n", n="ET").collect()) == 1
+            assert view.explain_query("name == $n", n="ET") == view.explain_duql(
+                "name == $n", n="ET"
+            )
+
+            view = TraceViewer(gz)
+            with view.session() as s:
+                eh = s.collect(view.phase("metadata").filter('name == "EH"'))
+                prov = s.collect(view.filter('cat == "PROV"'))
+            assert len(eh.result()) == 2 and len(prov.result()) == 3
+
     def test_containment_schemaless_arg_field(self):
         # Lanes and interval come from arg fields, not the schema: partition by
         # arg "rank", interval from arg "begin"/"span".
@@ -657,6 +724,17 @@ class TestTraceViewer:
             with gzip.open(out, "rt") as fh:
                 events = [json.loads(line) for line in fh if line.strip()]
             assert events and all(e.get("ph") == 2 for e in events)  # ph=C counters
+
+    def test_export_aggregation_gzip_matches_plain(self, tmp_path):
+        with Environment(lines=200) as env:
+            gz = _indexed(env)
+            agg = TraceViewer(gz).group_by("cat").time_bucket(1000).agg("count")
+            packed = str(tmp_path / "agg.pfw.gz")
+            plain = str(tmp_path / "agg.pfw")
+            agg.export_trace(packed)
+            agg.export_trace(plain, compress=False)
+            with gzip.open(packed, "rb") as fh:
+                assert fh.read() == open(plain, "rb").read()
 
     def test_export_plain_ndjson(self, tmp_path):
         with Environment(lines=100) as env:

@@ -11,6 +11,7 @@
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/python/dataframe.h>
+#include <dftracer/utils/python/gzip_sink.h>
 #include <dftracer/utils/python/lazyframe.h>
 #include <dftracer/utils/python/plugin_host.h>
 #include <dftracer/utils/python/py_dict_helpers.h>
@@ -26,7 +27,6 @@
 #include <dftracer/utils/trace/time_metric.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_source.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 
 #include <cctype>
 #include <cstdint>
@@ -144,37 +144,6 @@ class FileSink : public views::ExportSink {
 
    private:
     FILE* f_;
-};
-
-// Buffers writes and flushes whole-line gzip members past MEMBER_TARGET, so
-// the output is a multi-member re-indexable trace.
-class GzipSink : public views::ExportSink {
-   public:
-    GzipSink(FILE* f, int level) : f_(f), comp_(level) {}
-    ~GzipSink() override {
-        if (!buf_.empty()) flush(buf_.size());
-        std::fclose(f_);
-    }
-    void write(std::string_view data) override {
-        buf_.append(data);
-        while (buf_.size() >= MEMBER_TARGET) {
-            std::size_t cut = buf_.rfind('\n', buf_.size());
-            if (cut == std::string::npos || cut + 1 < MEMBER_TARGET) break;
-            flush(cut + 1);
-        }
-    }
-
-   private:
-    static constexpr std::size_t MEMBER_TARGET = 4 * 1024 * 1024;
-    void flush(std::size_t n) {
-        if (comp_.compress_member_into(scratch_, buf_.data(), n))
-            std::fwrite(scratch_.data(), 1, scratch_.size(), f_);
-        buf_.erase(0, n);
-    }
-    FILE* f_;
-    dftracer::utils::utilities::fileio::compress::GzipMemberCompressor comp_;
-    std::string buf_;
-    std::vector<std::uint8_t> scratch_;
 };
 
 // "fn(key)" or "fn(key, 'a', 'b')" -> transform + inner key text; false when
@@ -692,10 +661,6 @@ PyObject* tv_agg_numeric_args(PyObject* self, PyObject* args) {
     });
 }
 
-PyObject* tv_all(PyObject* self, PyObject*) {
-    return build(self, [](const View& t) { return t.all(); });
-}
-
 PyObject* tv_record_schema(PyObject* self, PyObject* arg) {
     const char* id = as_utf8(arg);
     if (!id) return nullptr;
@@ -934,16 +899,23 @@ PyObject* tv_export_trace(PyObject* self, PyObject* args, PyObject* kwds) {
         return nullptr;
     }
     if (aggregates) {
-        FILE* f = std::fopen(path, "wb");
-        if (!f) {
-            PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
-            return nullptr;
-        }
         std::unique_ptr<views::ExportSink> sink;
-        if (compress)
-            sink = std::make_unique<GzipSink>(f, level);
-        else
+        if (compress) {
+            try {
+                sink = std::make_unique<dftracer::utils::python::GzipSink>(
+                    path, level);
+            } catch (const std::exception& e) {
+                py::set_typed_py_error(e);
+                return nullptr;
+            }
+        } else {
+            FILE* f = std::fopen(path, "wb");
+            if (!f) {
+                PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
+                return nullptr;
+            }
             sink = std::make_unique<FileSink>(f);
+        }
         const bool ok =
             run_on(runtime_arg, [&] { return t.sink_counters(*sink); }, stats);
         sink.reset();
@@ -1115,8 +1087,6 @@ PyMethodDef tv_methods[] = {
     {"agg", tv_agg, METH_VARARGS, "Trace aggregate specs."},
     {"agg_numeric_args", tv_agg_numeric_args, METH_VARARGS,
      "Aggregate every discovered numeric arg."},
-    {"all", tv_all, METH_NOARGS,
-     "Read every record, metadata included, instead of the source's data."},
     {"record_schema", tv_record_schema, METH_O,
      "Read the files as the registered record schema `id`."},
     {"rollup_root", tv_rollup_root, METH_O, "Rollup root directory."},

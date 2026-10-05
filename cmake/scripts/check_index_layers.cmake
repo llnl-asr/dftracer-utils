@@ -1,8 +1,8 @@
 # Check the index module's layering: a file in a lower layer must not include
 # a higher layer or the query engine (trace/views), except for the edges in
-# ALLOWED, each of which names the plan stage that removes it. An ALLOWED edge
-# that no longer exists also fails, so fixes cannot leave stale entries. See
-# docs/plans/2026-09-24-extensible-index.md.
+# ALLOWED. Those edges are known debt that no plan stage removes yet. An
+# ALLOWED edge that no longer exists also fails, so fixes cannot leave stale
+# entries. See docs/plans/2026-09-24-extensible-index.md.
 #
 # Usage: cmake -DSOURCE_DIR=<repo root> -P check_index_layers.cmake
 
@@ -28,7 +28,7 @@ set(BASE_PREFIXES
     trace/internal/ trace/parse_inflated.h trace/schema.h)
 
 set(ALLOWED
-  # stage 4 (index core v2) replaces the fixed storage layout
+  # lower layers reach up, and index folds use the View fold interface
   "index/build/chunk_indexer.cpp|utilities/reader/internal/stream_config.h"
   "index/build/index_fold_driver.h|trace/views/fold.h"
   "index/build/index_fold_driver.h|trace/views/fold_event.h"
@@ -55,7 +55,7 @@ set(ALLOWED
   "index/store/queries.h|index/schemas/dft/chunk_statistics.h"
   "index/store/types.h|index/gzip/member.h"
   "index/store/types.h|index/schemas/dft/statistics.h"
-  # stage 10 moves the aggregation tier and cache onto extensions
+  # the aggregation tier and the query cache run View plans and folds
   "index/cache/lookup_store.cpp|trace/views/view_plan.h"
   "index/cache/mv_store.cpp|trace/views/view_plan.h"
   "index/cache/mv_store.h|trace/views/view.h"

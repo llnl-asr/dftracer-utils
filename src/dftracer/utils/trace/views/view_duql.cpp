@@ -177,8 +177,10 @@ class FinishSource final : public df::Source {
         coro::CoroTask<std::optional<df::Morsel>> next(
             std::int64_t max_rows) override {
             if (!rows_) {
-                df::DataFrame f = finish_(
-                    co_await df::join_chunks(co_await inner_.collect()));
+                // GCC 12 destroys a temporary built inside co_await twice.
+                df::DataFrame collected = co_await inner_.collect();
+                df::DataFrame f =
+                    finish_(co_await df::join_chunks(std::move(collected)));
                 if (!projection_.empty()) f = f.select(projection_);
                 intern_ = std::make_shared<dftracer::utils::StringIntern>();
                 ids_ = frame_ids(f, declared_, *intern_);

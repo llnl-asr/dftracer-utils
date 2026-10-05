@@ -91,6 +91,7 @@ set(TRACE_TEST_SOURCES
     aggregators/test_aggregation_augmentation.cpp
     aggregators/test_system_metrics.cpp
     aggregators/test_system_metrics_merge_operator.cpp
+    aggregators/test_dft_trace_writer.cpp
 
     # Comparator
     comparator/test_comparison_result.cpp

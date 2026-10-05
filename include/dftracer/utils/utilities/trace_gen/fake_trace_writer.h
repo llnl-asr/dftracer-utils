@@ -1,16 +1,14 @@
 #ifndef DFTRACER_UTILS_UTILITIES_TRACE_GEN_FAKE_TRACE_WRITER_H
 #define DFTRACER_UTILS_UTILITIES_TRACE_GEN_FAKE_TRACE_WRITER_H
 
-#include <dftracer/utils/core/common/byte_view.h>
 #include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/trace/schema.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
-#include <dftracer/utils/utilities/fileio/streaming_file_writer_utility.h>
+#include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 #include <random>
 #include <string>
 #include <vector>
@@ -21,56 +19,60 @@
 namespace dftracer::utils::utilities::trace_gen {
 
 // ---------------------------------------------------------------------------
-// TraceWriter - compresses each flushed buffer into one gzip member with
-//               libdeflate and writes it via StreamingFileWriterUtility, so
-//               the output is multi-member (parallel-inflatable/indexable).
+// TraceWriter - appends whole lines to a GzipLineWriterBlocking, so the output
+//               is multi-member (parallel-inflatable/indexable) with members
+//               of about flush_threshold bytes.
 // ---------------------------------------------------------------------------
 class TraceWriter {
    public:
     explicit TraceWriter(const std::string& path,
                          std::size_t flush_threshold = 4 * 1024 * 1024)
-        : writer_(path), flush_threshold_(flush_threshold) {
+        : flush_threshold_(flush_threshold) {
+        fileio::GzipWriterOptions opts;
+        opts.member_size = flush_threshold;
+        writer_.emplace(unwrap(
+            fileio::GzipLineWriterBlocking::open(path, std::move(opts))));
         buf_.reserve(flush_threshold * 2);
     }
 
-    ~TraceWriter() { close(); }
+    ~TraceWriter() {
+        try {
+            close();
+        } catch (...) {
+        }
+    }
 
     TraceWriter(const TraceWriter&) = delete;
     TraceWriter& operator=(const TraceWriter&) = delete;
 
+    /// `s` must hold whole lines.
     void write(const std::string& s) {
         buf_ += s;
-        if (buf_.size() >= flush_threshold_) {
-            flush();
-        }
+        if (buf_.size() >= flush_threshold_) drain();
     }
 
     void flush() {
-        if (buf_.empty()) return;
-        if (!compressor_.compress_member_into(scratch_, buf_.data(),
-                                              buf_.size())) {
-            throw DFTUtilsException(ErrorCode::COMPRESSION,
-                                    "gzip member compression failed");
-        }
-        const auto* p = reinterpret_cast<const char*>(scratch_.data());
-        auto len = scratch_.size();
-        [this, p, len]() -> coro::CoroTask<void> {
-            co_await writer_.process(ByteView(p, len));
-        }()
-                                .get();
-        buf_.clear();
+        drain();
+        unwrap(writer_->cut());
     }
 
     void close() {
-        flush();
-        writer_.close();
+        if (!writer_) return;
+        drain();
+        auto w = std::move(*writer_);
+        writer_.reset();
+        unwrap(w.close());
     }
 
    private:
-    fileio::compress::GzipMemberCompressor compressor_;
-    fileio::StreamingFileWriterUtility writer_;
+    void drain() {
+        if (buf_.empty()) return;
+        unwrap(writer_->append(buf_));
+        buf_.clear();
+    }
+
+    std::optional<fileio::GzipLineWriterBlocking> writer_;
     std::string buf_;
-    std::vector<std::uint8_t> scratch_;
     std::size_t flush_threshold_;
 };
 

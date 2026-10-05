@@ -1060,8 +1060,10 @@ coro::CoroTask<EnginePrep> prepare_engine_group(const ViewPlan& plan) {
     // in C++ (build_agg_input_frame's transform step over the whole frame),
     // then group over the in-memory frame.
     if (!spec.transforms.empty()) {
+        // GCC 12 destroys a temporary built inside co_await twice.
+        dataframe::DataFrame collected = co_await lf.collect();
         dataframe::DataFrame frame =
-            co_await dataframe::join_chunks(co_await lf.collect());
+            co_await dataframe::join_chunks(std::move(collected));
         const dftracer::utils::index::plan::GroupResolver* resolver =
             spec.transform_wants_resolver ? ensure_resolver(plan) : nullptr;
         append_transform_columns(frame, spec.transforms, resolver);

@@ -5,6 +5,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/common/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
 // fold_adapter.h transitively pulls nanoarrow (ArrowArray/ArrowSchema); it must
@@ -15,9 +16,11 @@
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/trace/internal/utils.h>
+#include <dirent.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <zlib.h>
 
 // dftu_svc_arrow::batch_to_arrow was removed with the row ABI; the dataframe
 // engine's own Arrow bridge (DataFrame::to_arrow) now builds the test arrays
@@ -255,4 +258,67 @@ TEST_CASE("plugin host: trace write then read round-trips events") {
     CHECK(sink.count == N);
     CHECK(sink.first_ok);
     MESSAGE("trace round-trip: wrote=" << N << " read=" << sink.count);
+}
+
+TEST_CASE("plugin host: trace close writes line-ended members and the tail") {
+    dftu_utils_test::TestEnvironment env(0);
+    HostFixture fx;
+    dftu_plugin_host& host = fx.host();
+    const auto* tr = static_cast<const dftu_svc_trace*>(
+        host.get_service(host.h, DFTU_SVC_TRACE));
+    REQUIRE(tr != nullptr);
+
+    const std::string dir = env.get_dir() + "/tw";
+    ::mkdir(dir.c_str(), 0755);
+    const std::string trace = dir + "/big.pfw.gz";
+    dftu_trace_writer* w = tr->trace_open_write(host.h, trace.c_str());
+    REQUIRE(w != nullptr);
+
+    std::string expected;
+    const std::string line(999, 'x');
+    while (expected.size() <
+           2 * dftracer::utils::constants::indexer::DEFAULT_CHECKPOINT_SIZE +
+               1024) {
+        expected += line + "\n";
+    }
+    expected += "{\"tail\":true}";
+    reinterpret_cast<dftracer::utils::plugins::PluginTraceWriter*>(w)->buffer =
+        expected;
+    REQUIRE(tr->trace_close(host.h, w) == 0);
+
+    std::string decoded, last;
+    {
+        std::ifstream in(trace, std::ios::binary);
+        std::string gz((std::istreambuf_iterator<char>(in)),
+                       std::istreambuf_iterator<char>());
+        z_stream zs{};
+        REQUIRE(inflateInit2(&zs, 15 + 16) == Z_OK);
+        zs.next_in = reinterpret_cast<Bytef*>(gz.data());
+        zs.avail_in = static_cast<uInt>(gz.size());
+        std::vector<char> buf(1 << 16);
+        while (zs.avail_in > 0) {
+            zs.next_out = reinterpret_cast<Bytef*>(buf.data());
+            zs.avail_out = static_cast<uInt>(buf.size());
+            const int rc = inflate(&zs, Z_NO_FLUSH);
+            REQUIRE((rc == Z_OK || rc == Z_STREAM_END));
+            decoded.append(buf.data(), buf.size() - zs.avail_out);
+            if (rc == Z_STREAM_END) {
+                last.push_back(decoded.back());
+                REQUIRE(inflateReset(&zs) == Z_OK);
+            }
+        }
+        inflateEnd(&zs);
+    }
+    CHECK(decoded == expected);
+    CHECK(last.size() > 1);
+    for (std::size_t i = 0; i + 1 < last.size(); ++i) CHECK(last[i] == '\n');
+
+    std::size_t files = 0;
+    for (auto* d = ::opendir(dir.c_str()); d;) {
+        while (auto* e = ::readdir(d))
+            if (e->d_name[0] != '.') ++files;
+        ::closedir(d);
+        break;
+    }
+    CHECK(files == 1);
 }

@@ -216,31 +216,36 @@ class LazyFrame:
                 out = out.with_column(name, expr)
         return out._new(out._native.select([name for name, _ in pairs]))
 
+    def _schema_complete(self) -> bool:
+        """Whether the schema lists every column the plan can produce. A trace
+        scan adds columns per batch, so a name it does not list may still be
+        a column."""
+        return True
+
     def drop(self, *names: Union[str, Sequence[str]]) -> "LazyFrame":
-        """Every column except ``names``."""
-        dropped: set = set()
+        """Every column except ``names``, including the columns a trace scan
+        adds per batch. A name no column carries is a ``KeyError`` when the
+        schema is complete and ignored otherwise."""
+        dropped: List[str] = []
         for n in names:
-            dropped.update([n] if isinstance(n, str) else list(n))
-        schema = self._resolve("drop")
-        for n in dropped:
-            schema(n)
-        return self._new(
-            self._native.select([c for c in self._native.schema() if c not in dropped])
-        )
+            dropped.extend([n] if isinstance(n, str) else list(n))
+        if self._schema_complete():
+            schema = self._resolve("drop")
+            for n in dropped:
+                schema(n)
+        return self._new(self._native.drop(dropped))
 
     def rename(self, names: Union[Sequence[str], Mapping[str, str]]) -> "LazyFrame":
-        """Rename columns: a ``{old: new}`` mapping (pandas / polars), or a full
+        """Rename columns: a ``{old: new}`` mapping (pandas / polars), which
+        also reaches the columns a trace scan adds per batch, or a full
         positional name list."""
         if isinstance(names, Mapping):
-            current = self._native.schema()
-            if not current:
-                raise ValueError(
-                    "rename(): the schema is data-dependent here; pass a full name list"
-                )
-            missing = [k for k in names if k not in current]
-            if missing:
-                raise KeyError(f"rename: no column named {missing[0]!r}")
-            names = [names.get(c, c) for c in current]
+            if self._schema_complete():
+                current = self._native.schema()
+                missing = [k for k in names if k not in current]
+                if missing:
+                    raise KeyError(f"rename: no column named {missing[0]!r}")
+            return self._like(self._native.rename_columns(list(names), list(names.values())))
         return self._like(self._native.rename(list(names)))
 
     def slice(self, offset: int, length: int) -> "LazyFrame":

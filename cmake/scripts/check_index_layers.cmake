@@ -35,6 +35,8 @@ set(ALLOWED
   "index/extensions/bloom_fold.cpp|index/build/index_write_lock.h"
   "index/extensions/bloom_fold.h|index/schemas/dft/bloom_core.h"
   "index/extensions/bloom_fold.h|trace/views/fold.h"
+  "index/extensions/catalog_fold.cpp|index/build/index_write_lock.h"
+  "index/extensions/catalog_fold.h|trace/views/fold.h"
   "index/extensions/rowset_fold.cpp|trace/views/event_source.h"
   "index/extensions/rowset_fold.h|trace/views/fold.h"
   "index/gzip/gzip_indexer.cpp|index/build/index_visitor.h"

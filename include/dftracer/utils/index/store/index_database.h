@@ -214,8 +214,13 @@ class IndexDatabase {
     std::vector<index::gzip::GzipMemberRecord> query_gzip_members(
         int file_id) const;
 
+    /// The 32 KiB inflate window of RESTART piece `member_idx`, or nullopt
+    /// when the file has none for it.
+    std::optional<std::string> query_restart_window(
+        int file_id, std::uint64_t member_idx) const;
+
     /// Chunk spans in chunk-index order: `[i]` describes pruner chunk `i`,
-    /// which is gzip member `i`.
+    /// which is member record `i` (a gzip member or a piece of one).
     std::vector<index::gzip::ChunkSpan> query_chunk_spans(int file_id) const;
 
     // -----------------------------------------------------------------------

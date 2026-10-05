@@ -120,17 +120,47 @@ void enumerate_leaves(std::string& path, simdjson::dom::element v,
                                       leaf_type_tag(v));
 }
 
+std::uint32_t arg_leaf_id(DecodeHints& h, dftracer::utils::StringIntern& intern,
+                          std::uint32_t key_id, std::string_view key) {
+    auto resolve = [&] {
+        std::string path("args.");
+        path.append(key);
+        return intern.get_or_insert(path);
+    };
+    if (key_id < DecodeHints::FIELD_CACHE_IDS) {
+        if (key_id >= h.arg_leaf.size())
+            h.arg_leaf.resize(key_id + 1, dftracer::utils::StringIntern::NO_ID);
+        std::uint32_t& slot = h.arg_leaf[key_id];
+        if (slot == dftracer::utils::StringIntern::NO_ID) slot = resolve();
+        return slot;
+    }
+    auto [it, fresh] = h.arg_leaf_far.try_emplace(key_id, 0);
+    if (fresh) it->second = resolve();
+    return it->second;
+}
+
+void append_arg_leaf(FoldEvent& ev, std::uint32_t key_id, std::string_view key,
+                     simdjson::dom::element v,
+                     dftracer::utils::StringIntern& intern,
+                     DecodeHints* leaves) {
+    append_scalar_arg(ev.args, ev.specials, key_id, v, intern);
+    if (leaves)
+        ev.schema_leaves.emplace_back(arg_leaf_id(*leaves, intern, key_id, key),
+                                      leaf_type_tag(v));
+}
+
 // Flatten a nested arg into dotted scalar keys named as event.h flatten_arg
 // names them: objects "a.b", arrays "a.0". `path` holds the key so far.
 void flatten_nested_arg(std::string& path, simdjson::dom::element v,
-                        dftracer::utils::StringIntern& intern, FoldEvent& ev) {
+                        dftracer::utils::StringIntern& intern, FoldEvent& ev,
+                        DecodeHints* leaves = nullptr) {
     simdjson::dom::object obj;
     if (v.get_object().get(obj) == simdjson::SUCCESS && obj.size() > 0) {
         for (auto kv : obj) {
             const std::size_t base = path.size();
             path.push_back('.');
             path.append(kv.key);
-            flatten_nested_arg(path, kv.value, intern, ev);
+            flatten_nested_arg(path, kv.value, intern, ev, leaves);
             path.resize(base);
         }
         return;
@@ -142,13 +172,12 @@ void flatten_nested_arg(std::string& path, simdjson::dom::element v,
             const std::size_t base = path.size();
             path.push_back('.');
             dftracer::utils::trace::detail::append_index(path, i++);
-            flatten_nested_arg(path, el, intern, ev);
+            flatten_nested_arg(path, el, intern, ev, leaves);
             path.resize(base);
         }
         return;
     }
-    append_scalar_arg(ev.args, ev.specials, intern.get_or_insert(path), v,
-                      intern);
+    append_arg_leaf(ev, intern.get_or_insert(path), path, v, intern, leaves);
 }
 
 }  // namespace
@@ -346,7 +375,8 @@ void FoldPortBus::clear() {
 FoldEvent build_fold_event(const DFTracerEvent& scalars,
                            simdjson::dom::element args, bool has_args,
                            dftracer::utils::StringIntern& intern,
-                           bool needs_args) {
+                           bool needs_args, DecodeHints* leaves) {
+    if (!needs_args) leaves = nullptr;
     FoldEvent ev;
     ev.phase = scalars.phase;
     ev.pid = scalars.pid;
@@ -363,22 +393,26 @@ FoldEvent build_fold_event(const DFTracerEvent& scalars,
     // so they are always harvested; the rest only when a fold asks.
     for (auto field : args.get_object()) {
         std::string_view key = field.key;
-        if (key == "fhash") {
-            ev.fhash_id = intern_string(intern, field.value);
-        } else if (key == "hhash") {
-            ev.hhash_id = intern_string(intern, field.value);
+        if (key == "fhash" || key == "hhash") {
+            const std::uint32_t id = intern_string(intern, field.value);
+            (key == "fhash" ? ev.fhash_id : ev.hhash_id) = id;
+            if (leaves)
+                ev.schema_leaves.emplace_back(
+                    arg_leaf_id(*leaves, intern, intern.get_or_insert(key),
+                                key),
+                    leaf_type_tag(field.value));
         } else if (needs_args) {
             const simdjson::dom::element v = field.value;
             switch (v.type()) {
                 case simdjson::dom::element_type::OBJECT:
                 case simdjson::dom::element_type::ARRAY: {
                     std::string path(key);
-                    flatten_nested_arg(path, v, intern, ev);
+                    flatten_nested_arg(path, v, intern, ev, leaves);
                     break;
                 }
                 default:
-                    append_scalar_arg(ev.args, ev.specials,
-                                      intern.get_or_insert(key), v, intern);
+                    append_arg_leaf(ev, intern.get_or_insert(key), key, v,
+                                    intern, leaves);
             }
         }
     }
@@ -389,18 +423,27 @@ FoldEvent extract_fold_event(simdjson::dom::element root,
                              dftracer::utils::StringIntern& intern,
                              bool needs_args,
                              const std::vector<std::string>* extra_fields,
-                             bool capture_schema) {
+                             bool capture_schema, DecodeHints* hints) {
     DFTracerEvent scalars;
     simdjson::dom::element args;
     bool has_args = false;
     if (!DFTracerEvent::parse_scalars(root, scalars, args, has_args))
         return FoldEvent{};
+    // An empty or non-object args is left to the leaf walk, which records it.
+    simdjson::dom::object args_obj;
+    DecodeHints* leaves =
+        capture_schema && needs_args && has_args &&
+                args.get_object().get(args_obj) == simdjson::SUCCESS &&
+                args_obj.size() > 0
+            ? hints
+            : nullptr;
     FoldEvent ev =
-        build_fold_event(scalars, args, has_args, intern, needs_args);
+        build_fold_event(scalars, args, has_args, intern, needs_args, leaves);
     if (extra_fields)
         for (const auto& name : *extra_fields)
             capture_extra_field(ev, root, intern, name);
-    if (capture_schema) capture_schema_leaves(ev, root, intern);
+    if (capture_schema)
+        capture_schema_leaves(ev, root, intern, leaves != nullptr);
     return ev;
 }
 
@@ -757,7 +800,8 @@ FoldEvent decode_record(
 }
 
 void capture_schema_leaves(FoldEvent& ev, simdjson::dom::element root,
-                           dftracer::utils::StringIntern& intern) {
+                           dftracer::utils::StringIntern& intern,
+                           bool skip_args) {
     // The axis and structural keys are not catalog paths.
     simdjson::dom::object obj;
     if (root.get_object().get(obj) != simdjson::SUCCESS) return;
@@ -765,7 +809,7 @@ void capture_schema_leaves(FoldEvent& ev, simdjson::dom::element root,
     for (auto kv : obj) {
         const std::string_view k = kv.key;
         if (k == "pid" || k == "tid" || k == "ts" || k == "dur" || k == "ph" ||
-            k == "id")
+            k == "id" || (skip_args && k == "args"))
             continue;
         path.assign(k);
         enumerate_leaves(path, kv.value, intern, ev);

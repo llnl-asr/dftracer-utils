@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_FOLD_EVENT_H
 #define DFTRACER_UTILS_TRACE_VIEWS_FOLD_EVENT_H
 
+#include <ankerl/unordered_dense.h>
 #include <dftracer/utils/core/common/field_ref.h>
 #include <dftracer/utils/core/common/string_intern.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -206,7 +207,8 @@ inline void capture_extra_field(FoldEvent& ev, simdjson::dom::element root,
 /// ev.schema_leaves by exact path for the index build's path catalog; the
 /// axis and structural keys (pid/tid/ts/dur/ph/id) are excluded.
 void capture_schema_leaves(FoldEvent& ev, simdjson::dom::element root,
-                           dftracer::utils::StringIntern& intern);
+                           dftracer::utils::StringIntern& intern,
+                           bool skip_args = false);
 
 /// What one decoding worker learns from its records, valid for one intern and
 /// one record schema: the argument count of the previous record, as the next
@@ -218,6 +220,11 @@ struct DecodeHints {
     const dftracer::utils::index::RecordSchema* schema = nullptr;
     std::vector<const dftracer::utils::index::FieldSpec*> fields;
     std::vector<std::uint8_t> known;
+    /// The catalog path id ("args." + key) of each argument key id, so a
+    /// record's args are walked once for both the event and its leaves: by
+    /// index below FIELD_CACHE_IDS, by map above.
+    std::vector<std::uint32_t> arg_leaf;
+    ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> arg_leaf_far;
 };
 
 /// A record of no known trace format as an owned data event (by_path): every
@@ -246,10 +253,12 @@ inline constexpr std::size_t INDEX_MAX_CHILDREN = 256;
 /// Build an owned event from already-parsed scalars + the args element, for
 /// callers (like the index parse) that have run DFTracerEvent::parse_scalars
 /// already. Every string is interned, so the result outlives `args`'s parser.
+/// With `leaves` (and `needs_args`), each argument leaf also goes into
+/// `schema_leaves` as "args.<key>", in the same walk.
 FoldEvent build_fold_event(const DFTracerEvent& scalars,
                            simdjson::dom::element args, bool has_args,
                            dftracer::utils::StringIntern& intern,
-                           bool needs_args);
+                           bool needs_args, DecodeHints* leaves = nullptr);
 
 /// Parse a DOM object into an owned event. Every string is interned, so the
 /// result stays valid after the parser that produced `root` is reused. Args are
@@ -260,7 +269,7 @@ FoldEvent build_fold_event(const DFTracerEvent& scalars,
 FoldEvent extract_fold_event(
     simdjson::dom::element root, dftracer::utils::StringIntern& intern,
     bool needs_args, const std::vector<std::string>* extra_fields = nullptr,
-    bool capture_schema = false);
+    bool capture_schema = false, DecodeHints* hints = nullptr);
 
 }  // namespace dftracer::utils::trace::views::detail
 

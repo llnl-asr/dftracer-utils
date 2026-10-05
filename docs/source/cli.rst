@@ -114,6 +114,14 @@ yields roughly 75 members (300 / 4). Smaller members give more parallelism at
 a small compression-ratio cost (each member resets the deflate dictionary);
 larger members compress slightly better with coarser parallelism.
 
+**Traces in one gzip member.** A file written by plain ``gzip`` or Python
+``gzip`` is one member. Its first index build inflates it once, serially, and
+records a restart point (bit offset and the 32 KiB inflate window) at the
+first deflate block boundary after every ``--checkpoint-size`` of output.
+Each piece between restart points is then its own unit for scans and
+pruning, so later reads run in parallel as for multi-member files. The
+windows add about 32 KiB per checkpoint to the index.
+
 dftracer_info
 -------------
 

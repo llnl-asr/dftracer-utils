@@ -5,6 +5,7 @@
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
+#include <dftracer/utils/index/extensions/catalog_fold.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/plan/rowsets.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -381,6 +382,7 @@ ScanShape scan_shape(const ViewDefinition& vdef) {
     s.filtered = vdef.query.has_value();
     // Path-decoded records have no metadata phase, so none is left out.
     s.include_metadata = vdef.include_metadata || vdef.by_path;
+    s.windowed = vdef.window.has_value();
     return s;
 }
 
@@ -406,6 +408,27 @@ bool any_file_missing_bloom(const ViewPlan& plan) {
     return false;
 }
 
+bool any_file_missing_catalog(const ViewPlan& plan) {
+    for (const auto& f : plan.files) {
+        try {
+            dftracer::utils::index::store::IndexDatabase db(
+                f.index_path,
+                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
+            int fid = db.get_file_info_id(
+                dftracer::utils::index::store::internal::get_logical_path(
+                    f.file_path));
+            if (fid < 0 ||
+                !db.extension_current(
+                    fid,
+                    dftracer::utils::index::store::IndexExtension::CATALOG))
+                return true;
+        } catch (const std::exception&) {
+            return true;
+        }
+    }
+    return false;
+}
+
 }  // namespace
 
 std::vector<std::unique_ptr<Fold>> select_index_folds(
@@ -421,6 +444,18 @@ std::vector<std::unique_ptr<Fold>> select_index_folds(
                         {}, plan_record_schema(plan)));
     if (bloom->accepts(shape)) kept.push_back(std::move(bloom));
     return kept;
+}
+
+std::unique_ptr<Fold> select_catalog_fold(
+    const ViewPlan& plan, const ViewDefinition& vdef,
+    dftracer::utils::StringIntern& intern) {
+    namespace ix = dftracer::utils::index;
+    if (plan.files.empty() || !any_file_missing_catalog(plan)) return nullptr;
+    auto fold = std::make_unique<ix::extensions::CatalogFold>(
+        intern, ix::build::for_schema({}, plan_record_schema(plan))
+                    .params_hash(ix::store::IndexExtension::CATALOG));
+    if (!fold->accepts(scan_shape(vdef))) return nullptr;
+    return fold;
 }
 
 coro::CoroTask<ExportStats> for_each_scanned_batch(
@@ -521,7 +556,11 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
                                                   ? nullptr
                                                   : &vdef.paths,
                                               vdef.record_schema,
-                                              &vdef.path_fields, 0, &hints)
+                                              &vdef.path_fields,
+                                              any_wants_schema
+                                                  ? INDEX_MAX_CHILDREN
+                                                  : 0,
+                                              &hints)
                                         : extract_fold_event(
                                               doc.value_unsafe(), *intern,
                                               any_needs_args, nullptr,

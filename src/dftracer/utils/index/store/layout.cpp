@@ -8,9 +8,10 @@ namespace dftracer::utils::index::store::layout {
 
 namespace {
 
-constexpr std::array<KindSpec, 22> KINDS = {{
+constexpr std::array<KindSpec, 23> KINDS = {{
     {Ext::MEMBERS, members::MEMBER, Family::MEMBERS},
     {Ext::MEMBERS, members::METADATA, Family::REGISTRY},
+    {Ext::MEMBERS, members::RESTART, Family::BLOB},
     {Ext::ZONEMAP, path_kind::PATHS, Family::REGISTRY},
     {Ext::ZONEMAP, path_kind::DATA, Family::GRANULE},
     {Ext::BLOOM, path_kind::PATHS, Family::REGISTRY},

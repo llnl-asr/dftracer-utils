@@ -29,7 +29,8 @@ namespace dftracer::utils::duql {
 /// quantifier's element frame, the element is the column named `.` and a
 /// field of a struct element the column `.<field>`. `call` marks the column
 /// that holds that call's values (see call_column()); `index` and `list` mark
-/// the column of that computed index or list literal, likewise.
+/// the column of that computed index or list literal, likewise. `term` marks
+/// a column that holds the values of that term, computed per batch.
 struct VectorColumn {
     std::string name;
     dataframe::DataType type;
@@ -40,6 +41,7 @@ struct VectorColumn {
     const TCall* call = nullptr;
     const TIndex* index = nullptr;
     const TList* list = nullptr;
+    const Term* term = nullptr;
 };
 
 struct VectorizeError {

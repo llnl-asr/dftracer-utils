@@ -1698,6 +1698,27 @@ DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_rename(const dftu_lazyframe* lf,
                                                   const char* const* names,
                                                   int32_t n);
 
+/** Remove the `n` columns named by `names`, including the columns a streaming
+ * source adds per batch. A name no column carries is ignored. `names` is
+ * borrowed and may be NULL when `n` is 0. Returns a new owned plan the caller
+ * frees with dftu_lazyframe_free. NULL if `lf` is NULL, `n` is negative or a
+ * name is NULL. */
+DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_drop(const dftu_lazyframe* lf,
+                                                const char* const* names,
+                                                int32_t n);
+
+/** Rename each of the `n_from` columns in `from` to the name at the same index
+ * of `to` (`n_to` must equal `n_from`), including columns a streaming source
+ * adds per batch. A `from` name no column carries is ignored. Both arrays are
+ * borrowed and may be NULL when their count is 0. Returns a new owned plan the
+ * caller frees with dftu_lazyframe_free. NULL if `lf` is NULL, a count is
+ * negative or differs from the other, or a name is NULL. A rename that leaves
+ * two columns with one name surfaces as an error when the plan is lowered or
+ * collected, not here. */
+DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_rename_columns(
+    const dftu_lazyframe* lf, const char* const* from, int32_t n_from,
+    const char* const* to, int32_t n_to);
+
 /** Keep `len` rows starting at `offset` (negative `offset` counts from the
  * end, as DataFrame::slice). */
 DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_slice(const dftu_lazyframe* lf,

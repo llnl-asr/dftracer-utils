@@ -11,6 +11,7 @@
 #include <dftracer/utils/dataframe/internal/column_read.h>  // read_u64
 #include <dftracer/utils/dataframe/internal/float16.h>
 #include <dftracer/utils/dataframe/internal/radix_dedup.h>  // parallel dedup
+#include <dftracer/utils/dataframe/internal/rest_column.h>  // struct_of_length
 #include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dataframe/internal/value_ids.h>
 #include <dftracer/utils/dataframe/internal/view_builder.h>
@@ -30,6 +31,7 @@
 #include <limits>
 #include <map>
 #include <numeric>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -247,7 +249,41 @@ DataFrame topk(const DataFrame& b, const std::string& name, std::int64_t k,
     return take(b, ind);
 }
 
-Series concat_columns(const std::vector<const Series*>& parts);
+Series concat_struct_by_name(const std::vector<Series>& mats);
+
+namespace {
+
+bool is_numeric_type(TypeId t) {
+    return t != TypeId::String && t != TypeId::Binary && t != TypeId::Bool &&
+           t != TypeId::List && t != TypeId::Struct;
+}
+
+// The type the same-named column takes across parts. Same type stays; a mix of
+// numeric types widens to Float64; a scalar clash of text with a number or
+// bool, or with a JSON part, is JSON, so each value keeps its JSON type (a
+// row frame's column type is inferred per batch); a nested/scalar clash has no
+// common type and throws.
+struct ColumnKind {
+    TypeId type;
+    bool json;
+};
+
+ColumnKind promote_type(ColumnKind a, ColumnKind b, const std::string& name) {
+    if (a.type == b.type && a.json == b.json) return a;
+    // String and LargeString are one family: the wider one holds both.
+    if (!a.json && !b.json &&
+        (a.type == TypeId::String || a.type == TypeId::LargeString) &&
+        (b.type == TypeId::String || b.type == TypeId::LargeString))
+        return {TypeId::LargeString, false};
+    const bool a_scalar = a.type != TypeId::List && a.type != TypeId::Struct;
+    const bool b_scalar = b.type != TypeId::List && b.type != TypeId::Struct;
+    if (!a.json && !b.json && is_numeric_type(a.type) &&
+        is_numeric_type(b.type))
+        return {TypeId::Float64, false};
+    if (a_scalar && b_scalar) return {TypeId::String, true};
+    throw std::invalid_argument("concat(diagonal): column '" + name +
+                                "' has incompatible types across parts");
+}
 
 // A List or Struct concat: offsets rebased and children concatenated, then
 // the null rows gathered as nulls.
@@ -275,17 +311,7 @@ Series concat_nested(const std::vector<Series>& mats, std::int64_t total,
         for (const Series& k : kids) ptrs.push_back(&k);
         out = Series::list(offs, concat_columns(ptrs));
     } else {
-        std::vector<std::string> names;
-        std::vector<Series> fields;
-        for (std::int64_t f = 0; f < mats.front().num_children(); ++f) {
-            names.push_back(mats.front().field_name(f));
-            std::vector<Series> kids;
-            for (const Series& m : mats) kids.push_back(m.child(f));
-            std::vector<const Series*> ptrs;
-            for (const Series& k : kids) ptrs.push_back(&k);
-            fields.push_back(concat_columns(ptrs));
-        }
-        out = Series::structs(std::move(names), std::move(fields));
+        out = concat_struct_by_name(mats);
     }
     if (!any_null) return out;
     std::vector<std::int64_t> idx;
@@ -296,6 +322,8 @@ Series concat_nested(const std::vector<Series>& mats, std::int64_t total,
                                        : static_cast<std::int64_t>(idx.size()));
     return out.take(idx);
 }
+
+}  // namespace
 
 // One part of a text concatenation: its rows copied into the shared result
 // buffers. Offsets are rebased with one add per row; a part without nulls
@@ -496,7 +524,41 @@ Series concat_columns(const std::vector<const Series*>& parts) {
                       return Series{dftu_series_materialize(s.handle())};
                   }());
 
-    const TypeId t = mats.front().type();
+    // A part with no values takes the type of the parts that have some.
+    auto all_null = [](const Series& m) {
+        return m.length() > 0 && m.null_count() == m.length();
+    };
+    // Parts of different number types widen to Float64, as the diagonal
+    // concat does; any other mix of types stays an error.
+    {
+        bool numbers = true;
+        bool differ = false;
+        const Series* first = nullptr;
+        for (const Series& m : mats) {
+            if (all_null(m)) continue;
+            numbers = numbers && !m.is_json() && is_numeric(m.type());
+            if (first && m.type() != first->type()) differ = true;
+            if (!first) first = &m;
+        }
+        if (differ && numbers) {
+            std::vector<Series> widened;
+            for (const Series& m : mats)
+                widened.push_back(m.type() == TypeId::Float64
+                                      ? m.share()
+                                      : m.cast(TypeId::Float64));
+            std::vector<const Series*> ptrs;
+            for (const Series& w : widened) ptrs.push_back(&w);
+            return concat_columns(ptrs);
+        }
+    }
+    const auto typed =
+        std::find_if(mats.begin(), mats.end(),
+                     [&](const Series& m) { return !all_null(m); });
+    const TypeId t = typed == mats.end() ? mats.front().type() : typed->type();
+    if (typed != mats.end() && t != TypeId::List && t != TypeId::Struct &&
+        !typed->is_json())
+        for (Series& m : mats)
+            if (m.type() != t && all_null(m)) m = Series::nulls(t, m.length());
     // String and LargeString (64-bit offsets, as Dask writes its strings) are
     // one family: a column may hold either, alone or mixed.
     auto is_text = [](TypeId x) {
@@ -1022,58 +1084,35 @@ Series to_json_series(const Series& s) {
 
 namespace {
 
-bool is_numeric_type(TypeId t) {
-    return t != TypeId::String && t != TypeId::Binary && t != TypeId::Bool &&
-           t != TypeId::List && t != TypeId::Struct;
-}
-
-// The type the same-named column takes across parts. Same type stays; a mix of
-// numeric types widens to Float64; a scalar clash of text with a number or
-// bool, or with a JSON part, is JSON, so each value keeps its JSON type (a
-// row frame's column type is inferred per batch); a nested/scalar clash has no
-// common type and throws.
-struct ColumnKind {
-    TypeId type;
-    bool json;
-};
-
-ColumnKind promote_type(ColumnKind a, ColumnKind b, const std::string& name) {
-    if (a.type == b.type && a.json == b.json) return a;
-    // String and LargeString are one family: the wider one holds both.
-    if (!a.json && !b.json &&
-        (a.type == TypeId::String || a.type == TypeId::LargeString) &&
-        (b.type == TypeId::String || b.type == TypeId::LargeString))
-        return {TypeId::LargeString, false};
-    const bool a_scalar = a.type != TypeId::List && a.type != TypeId::Struct;
-    const bool b_scalar = b.type != TypeId::List && b.type != TypeId::Struct;
-    if (!a.json && !b.json && is_numeric_type(a.type) &&
-        is_numeric_type(b.type))
-        return {TypeId::Float64, false};
-    if (a_scalar && b_scalar) return {TypeId::String, true};
-    throw std::invalid_argument("concat(diagonal): column '" + name +
-                                "' has incompatible types across parts");
-}
-
 struct DiagonalSchema {
     std::vector<std::string> names;
     std::vector<TypeId> types;
     std::vector<bool> json;
 };
 
+// A column with no values in a part does not decide its type.
 DiagonalSchema diagonal_schema(const std::vector<const DataFrame*>& parts) {
     std::vector<ColumnKind> kinds;
+    std::vector<char> valued;
     DiagonalSchema out;
     std::unordered_map<std::string, std::size_t> idx;
     for (const DataFrame* p : parts)
         for (std::size_t c = 0; c < p->names.size(); ++c) {
             const std::string& nm = p->names[c];
-            const ColumnKind t{p->columns[c].type(), p->columns[c].is_json()};
+            const Series& col = p->columns[c];
+            const ColumnKind t{col.type(), col.is_json()};
+            const bool has_values =
+                col.length() == 0 || col.null_count() < col.length();
             auto it = idx.find(nm);
             if (it == idx.end()) {
                 idx.emplace(nm, out.names.size());
                 out.names.push_back(nm);
                 kinds.push_back(t);
-            } else {
+                valued.push_back(has_values);
+            } else if (!valued[it->second]) {
+                kinds[it->second] = t;
+                valued[it->second] = has_values;
+            } else if (has_values) {
                 kinds[it->second] = promote_type(kinds[it->second], t, nm);
             }
         }
@@ -1084,12 +1123,13 @@ DiagonalSchema diagonal_schema(const std::vector<const DataFrame*>& parts) {
     return out;
 }
 
-std::vector<Series> diagonal_parts(const std::vector<const DataFrame*>& parts,
-                                   const std::string& name, TypeId target,
-                                   bool json) {
+std::vector<Series> diagonal_parts(
+    const std::vector<const DataFrame*>& parts, const std::string& name,
+    TypeId target, bool json, const std::vector<std::int64_t>* rows = nullptr) {
     std::vector<Series> owned;
     owned.reserve(parts.size());
-    for (const DataFrame* p : parts) {
+    for (std::size_t pi = 0; pi < parts.size(); ++pi) {
+        const DataFrame* p = parts[pi];
         std::int64_t at = -1;
         for (std::size_t j = 0; j < p->names.size(); ++j)
             if (p->names[j] == name) {
@@ -1097,11 +1137,17 @@ std::vector<Series> diagonal_parts(const std::vector<const DataFrame*>& parts,
                 break;
             }
         if (at < 0) {
-            Series nulls = Series::nulls(target, p->num_rows());
+            Series nulls =
+                Series::nulls(target, rows ? (*rows)[pi] : p->num_rows());
             owned.push_back(json ? nulls.as_json() : std::move(nulls));
         } else {
             const Series& src = p->columns[static_cast<std::size_t>(at)];
-            if (json)
+            if (src.length() > 0 && src.null_count() == src.length() &&
+                src.type() != target && target != TypeId::List &&
+                target != TypeId::Struct) {
+                Series nulls = Series::nulls(target, src.length());
+                owned.push_back(json ? nulls.as_json() : std::move(nulls));
+            } else if (json)
                 owned.push_back(to_json_series(src));
             else if (src.type() == target)
                 owned.push_back(src.share());
@@ -1125,6 +1171,31 @@ Series concat_owned(const std::vector<Series>& owned) {
 }
 
 }  // namespace
+
+// Struct parts join by field name, in first-seen order. A field a part lacks
+// is nulls, and a field with different types widens as the diagonal concat
+// does.
+Series concat_struct_by_name(const std::vector<Series>& mats) {
+    std::vector<DataFrame> frames(mats.size());
+    std::vector<const DataFrame*> parts;
+    std::vector<std::int64_t> rows;
+    std::int64_t total = 0;
+    for (std::size_t i = 0; i < mats.size(); ++i) {
+        for (std::int64_t f = 0; f < mats[i].num_children(); ++f) {
+            frames[i].names.push_back(mats[i].field_name(f));
+            frames[i].columns.push_back(mats[i].child(f));
+        }
+        parts.push_back(&frames[i]);
+        rows.push_back(mats[i].length());
+        total += mats[i].length();
+    }
+    DiagonalSchema schema = diagonal_schema(parts);
+    std::vector<Series> fields;
+    for (std::size_t c = 0; c < schema.names.size(); ++c)
+        fields.push_back(concat_owned(diagonal_parts(
+            parts, schema.names[c], schema.types[c], schema.json[c], &rows)));
+    return struct_of_length(std::move(schema.names), std::move(fields), total);
+}
 
 ConcatPlan::ConcatPlan(const std::vector<const DataFrame*>& parts,
                        ConcatHow how)

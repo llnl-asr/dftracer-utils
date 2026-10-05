@@ -26,6 +26,8 @@ struct GzipBuildArtifacts {
     std::uint64_t total_lines = 0;
     std::uint64_t total_uc_size = 0;
     std::vector<GzipMemberRecord> members;
+    /// The 32 KiB inflate window of each RESTART piece, keyed by member_idx.
+    std::vector<std::pair<std::uint64_t, std::string>> restart_windows;
     /// The last member was cut short; `recovered_bytes` of it were kept.
     bool truncated = false;
     std::uint64_t recovered_bytes = 0;
@@ -98,6 +100,7 @@ class GzipIndexer : public CheckpointIndexer {
     bool find_member(std::size_t target_offset,
                      GzipMemberRecord &member) const override;
     std::vector<GzipMemberRecord> get_members() const override;
+    std::string restart_window(std::uint64_t member_idx) const override;
 
     inline ArchiveFormat get_format_type() const override {
         return ArchiveFormat::GZIP;

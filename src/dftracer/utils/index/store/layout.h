@@ -45,6 +45,7 @@ inline constexpr std::uint8_t MANIFEST = 5;
 namespace members {
 inline constexpr std::uint8_t MEMBER = 0;
 inline constexpr std::uint8_t METADATA = 1;
+inline constexpr std::uint8_t RESTART = 2;
 }  // namespace members
 
 /// Kinds of the path-keyed pruning extensions (zonemap, bloom, counts,

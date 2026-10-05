@@ -85,8 +85,11 @@ inline coro::AsyncGenerator<std::string_view> decode_gzip_members(
                 }
                 co_return;
             }
-            const std::size_t want = static_cast<std::size_t>(
-                std::min<std::uint64_t>(READ_CHUNK, file_size - next_read));
+            // Each retry decodes the member from its start, so at least
+            // double the buffered input per retry to stay linear.
+            const std::size_t want =
+                static_cast<std::size_t>(std::min<std::uint64_t>(
+                    std::max(READ_CHUNK, comp.size()), file_size - next_read));
             const std::size_t old = comp.size();
             comp.resize(old + want);
             const ssize_t n = co_await dftracer::utils::io::pread(

@@ -29,7 +29,19 @@ using df::Expr;
 using df::LogicalOp;
 using df::TypeId;
 
-enum class K : std::uint8_t { INT, UINT, FLOAT, STR, BOOL, LIST, NUL, OTHER };
+// ANY: a column whose type the plan does not know (no catalog); each batch
+// gives it its own, and the kernels dispatch on that.
+enum class K : std::uint8_t {
+    INT,
+    UINT,
+    FLOAT,
+    STR,
+    BOOL,
+    LIST,
+    NUL,
+    OTHER,
+    ANY
+};
 
 struct V {
     Expr e;
@@ -39,6 +51,9 @@ struct V {
 };
 
 bool numeric(K k) { return k == K::INT || k == K::UINT || k == K::FLOAT; }
+
+// A value an arithmetic or comparison may take: numeric, or decided per batch.
+bool number_like(K k) { return numeric(k) || k == K::ANY; }
 
 K kind_of(TypeId t) {
     switch (t) {
@@ -69,6 +84,9 @@ K kind_of(TypeId t) {
             return K::OTHER;
     }
 }
+
+// The kind of a column of type `t`; Unknown is decided per batch.
+K column_kind(TypeId t) { return t == TypeId::Unknown ? K::ANY : kind_of(t); }
 
 TypeId type_of(K k) {
     switch (k) {
@@ -186,7 +204,8 @@ class Vectorizer {
         if (!c) return null();
         const VectorColumn& col = columns_[*c];
         if (col.json) fail("'" + col.name + "' is a json field", true);
-        V v{df::expr_col(static_cast<std::int32_t>(*c)), kind_of(col.type.id)};
+        V v{df::expr_col(static_cast<std::int32_t>(*c)),
+            column_kind(col.type.id)};
         const df::DataType* type = &col.type;
         v.elem = element(*type);
         for (std::size_t i = consumed; i < f.steps.size(); ++i) {
@@ -223,7 +242,7 @@ class Vectorizer {
         const V v = (*this)(*u.operand);
         if (u.op == TermOp::NOT)
             return v.k == K::BOOL ? V{df::expr_not(v.e), K::BOOL} : null();
-        if (!numeric(v.k)) return null();
+        if (!number_like(v.k)) return null();
         return {df::expr_neg(v.e), v.k == K::UINT ? K::INT : v.k};
     }
 
@@ -270,7 +289,10 @@ class Vectorizer {
     }
 
     static bool comparable(K a, K b) {
-        if (numeric(a) && numeric(b)) return true;
+        if (number_like(a) && number_like(b)) return true;
+        if ((a == K::ANY && (b == K::STR || b == K::BOOL)) ||
+            (b == K::ANY && (a == K::STR || a == K::BOOL)))
+            return true;
         return a == b && (a == K::STR || a == K::BOOL);
     }
 
@@ -302,6 +324,8 @@ class Vectorizer {
             if (v.k == K::NUL) continue;
             if (out == K::NUL || out == v.k) {
                 out = v.k;
+            } else if (out == K::ANY || v.k == K::ANY) {
+                out = K::ANY;
             } else if (numeric(out) && numeric(v.k)) {
                 out = out == K::FLOAT || v.k == K::FLOAT ? K::FLOAT : K::INT;
             } else {
@@ -328,9 +352,10 @@ class Vectorizer {
                 break;
         }
         if (auto op = cmp_op(b.op)) return compare(*op, l, r);
-        if (!numeric(l.k) || !numeric(r.k)) return null();
+        if (!number_like(l.k) || !number_like(r.k)) return null();
         return {df::expr_arith(arith_op(b.op), l.e, r.e),
-                arith_kind(b.op, l.k, r.k)};
+                l.k == K::ANY || r.k == K::ANY ? K::ANY
+                                               : arith_kind(b.op, l.k, r.k)};
     }
 
     static V coalesce(std::vector<V> vs, std::string_view what) {
@@ -499,7 +524,15 @@ class Vectorizer {
                 K::BOOL};
     }
 
-    V arg(const TCall& c, std::size_t i) { return (*this)(*c.args[i]); }
+    // A function runs on operands of known types only; one the plan types
+    // per batch reaches it through a per-batch compile.
+    V arg(const TCall& c, std::size_t i) {
+        V v = (*this)(*c.args[i]);
+        if (v.k == K::ANY)
+            fail(std::string(fn_name(c)) + "() reads '" +
+                 term_text(*c.args[i]) + "', whose type only each batch gives");
+        return v;
+    }
 
     static const std::string* const_str(const V& v) {
         return v.constant ? std::get_if<std::string>(&v.constant->value)

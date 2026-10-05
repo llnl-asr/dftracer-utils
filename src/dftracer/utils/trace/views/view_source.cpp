@@ -363,31 +363,18 @@ std::shared_future<void> spawn_on_current_executor(coro::CoroTask<void> task) {
 dftracer::utils::dataframe::Morsel slice_morsel(
     const dftracer::utils::dataframe::Morsel& m, std::int64_t offset,
     std::int64_t n) {
-    static const std::vector<dftracer::utils::dataframe::Series> NONE;
-    const auto& dyn_cols = m.dyn ? m.dyn->dyn_columns : NONE;
     dftracer::utils::dataframe::DataFrame tmp;
-    tmp.names.assign(m.columns.size() + dyn_cols.size(), std::string());
+    tmp.names.assign(m.columns.size(), std::string());
     for (const dftracer::utils::dataframe::Series& c : m.columns)
-        tmp.columns.push_back(c.share());
-    for (const dftracer::utils::dataframe::Series& c : dyn_cols)
         tmp.columns.push_back(c.share());
     dftracer::utils::dataframe::DataFrame s = tmp.slice(offset, n);
 
     dftracer::utils::dataframe::Morsel out;
     out.rows = n;
-    const std::size_t nc = m.columns.size();
-    out.columns.assign(
-        std::make_move_iterator(s.columns.begin()),
-        std::make_move_iterator(s.columns.begin() +
-                                static_cast<std::ptrdiff_t>(nc)));
+    out.columns = std::move(s.columns);
     if (!m.dyn) return out;
     out.dyn_state().name_ids = m.dyn->name_ids;
     out.dyn->intern = m.dyn->intern;
-    out.dyn->dyn_names = m.dyn->dyn_names;
-    out.dyn->dyn_columns.assign(
-        std::make_move_iterator(s.columns.begin() +
-                                static_cast<std::ptrdiff_t>(nc)),
-        std::make_move_iterator(s.columns.end()));
     return out;
 }
 
@@ -1229,9 +1216,16 @@ dftracer::utils::dataframe::Schema ViewSource::compute_schema() const {
             }
         } else {
             std::vector<std::string> names = row_schema();
-            s.fields.reserve(names.size());
+            s.fields.reserve(names.size() + plan_->named_columns.size());
             for (const std::string& name : names)
                 s.fields.push_back(df::Field{name, resolve(name), true});
+            for (const df::Field& f : plan_->named_columns) {
+                df::Field named = f;
+                named.name = detail::canonical_row_column_name(f.name, by_path);
+                if (std::find(names.begin(), names.end(), named.name) ==
+                    names.end())
+                    s.fields.push_back(std::move(named));
+            }
         }
         return s;
     }

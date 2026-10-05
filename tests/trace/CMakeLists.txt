@@ -60,7 +60,9 @@ set(TRACE_TEST_SOURCES
     views/test_lookup_store.cpp
     views/test_rowset_fold.cpp
     views/test_bloom_fold.cpp
+    views/test_catalog_fold.cpp
     views/test_raw_gzip_fuse.cpp
+    views/test_restart_scan.cpp
     views/test_event_source.cpp
     views/test_sharded_view.cpp
     views/test_result_join.cpp
@@ -69,6 +71,7 @@ set(TRACE_TEST_SOURCES
     views/test_view_c_abi.cpp
     views/test_duql_paths.cpp
     views/test_duql_wildcards.cpp
+    views/test_drop_rename_views.cpp
     views/test_schemaless.cpp
 
     # Statistics

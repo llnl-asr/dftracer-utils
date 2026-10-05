@@ -598,6 +598,12 @@ coro::CoroTask<void> resolve_into(
 }
 /// A View over `plan` with no ops above the scan, for the C ABI.
 View view_of(ScanPlan plan);
+/// `v`, whose row scan names `columns` as schema columns after its own and
+/// still returns every path. `v` must still read raw events.
+View with_named_columns(const View& v, std::vector<dataframe::Field> columns);
+/// The leaves of `v`'s catalogs as they stand; unlike View::schema_tree it
+/// builds none.
+std::vector<SchemaLeaf> catalog_leaves(const View& v);
 }  // namespace detail
 
 /// Plans registered here run together on execute(), as collect_all() runs
@@ -684,9 +690,19 @@ class View : public dataframe::LazyOps<View> {
             params.emplace(name, value);
         return duql(pipe.raw(), params);
     }
+    /// Same as duql().
+    View query(const std::string& text, const duql::Params& params = {}) const {
+        return duql(text, params);
+    }
+    View query(const duql::Pipe& pipe) const { return duql(pipe); }
     /// The plan duql() builds, one step per line; nothing is scanned.
     std::string explain_duql(const std::string& text,
                              const duql::Params& params = {}) const;
+    /// Same as explain_duql().
+    std::string explain_query(const std::string& text,
+                              const duql::Params& params = {}) const {
+        return explain_duql(text, params);
+    }
     View phase(Phase p) const;
     /// Keep the data events that start in [begin, end) (raw ts). Busy,
     /// concurrency, utilization and active instead take every event that
@@ -711,9 +727,6 @@ class View : public dataframe::LazyOps<View> {
     View agg(std::vector<FieldAggExpr> exprs) const;
     View agg_numeric_args() const;
     View agg_numeric_args(std::vector<AggSpec> reductions) const;
-    /// Read every record, metadata (`ph="M"`) included, as rows the filters
-    /// and aggregations see, instead of the record schema's `data` row set.
-    View all() const;
     /// Read the files as the registered record_schema `id` instead of their
     /// recorded or detected one. Throws DFTUtilsException INVALID_ARGUMENT
     /// for an unregistered id.
@@ -931,6 +944,9 @@ class View : public dataframe::LazyOps<View> {
     /// terminal `method`; throws naming the first op that stays behind.
     detail::ScanPlan absorbed(const char* method, Need need) const;
     friend View detail::view_of(detail::ScanPlan plan);
+    friend View detail::with_named_columns(
+        const View& v, std::vector<dataframe::Field> columns);
+    friend std::vector<SchemaLeaf> detail::catalog_leaves(const View& v);
     std::pair<View, std::vector<std::string>> duql_plan(
         const std::string& text, const duql::Params& params) const;
 

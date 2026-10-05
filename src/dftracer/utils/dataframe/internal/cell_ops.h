@@ -6,9 +6,11 @@
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 // Small per-cell helpers shared by the eager batch ops and the lazy cursors, so
@@ -97,11 +99,43 @@ inline std::string cell_to_string(const Series& c, std::int64_t i) {
     }
 }
 
+inline void append_cell(std::string& key, const Series& c, std::int64_t i);
+
+/// A flat Struct cell keyed by field name, in name order, leaving out null
+/// fields: two cells are equal when every field present in either is equal,
+/// a field one of them lacks counting as null.
+inline void append_struct_cell(std::string& key, const Series& c,
+                               std::int64_t i) {
+    std::vector<std::pair<std::string, Series>> fields;
+    for (std::int64_t f = 0; f < c.num_children(); ++f)
+        fields.emplace_back(c.field_name(f), c.child(f));
+    std::sort(fields.begin(), fields.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+    key.push_back('\2');
+    for (const auto& [name, field] : fields) {
+        if (field.is_null(i)) continue;
+        const auto len = static_cast<std::int32_t>(name.size());
+        key.append(reinterpret_cast<const char*>(&len), sizeof(len));
+        key.append(name);
+        append_cell(key, field, i);
+    }
+    key.push_back('\3');
+}
+
 /// Append an exact byte encoding of cell `i` of `c` to `key`: a null flag then
 /// the raw bytes (length-prefixed for byte-domain cells), so distinct cells
 /// never collide and equal cells always match. The building block for row
-/// dedupe keys. Throws std::invalid_argument for a nested column.
+/// dedupe keys. A flat Struct keys by field name (append_struct_cell). Throws
+/// std::invalid_argument for any other nested column.
 inline void append_cell(std::string& key, const Series& c, std::int64_t i) {
+    if (c.type() == TypeId::Struct && c.is_flat()) {
+        if (c.is_null(i)) {
+            key.push_back('\0');
+            return;
+        }
+        append_struct_cell(key, c, i);
+        return;
+    }
     if (!is_orderable_type(c.type()))
         throw std::invalid_argument(std::string("column type '") +
                                     type_name(c.type()) +

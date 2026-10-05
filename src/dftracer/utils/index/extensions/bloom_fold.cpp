@@ -3,6 +3,7 @@
 #include <dftracer/utils/index/build/index_write_lock.h>
 #include <dftracer/utils/index/extensions/bloom_filter.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
+#include <dftracer/utils/index/extensions/catalog_fold.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/index_write.h>
@@ -67,14 +68,6 @@ BloomFold::BloomFold(dftracer::utils::StringIntern& intern,
         for (std::string_view dim : BV::fixed_dimension_names())
             auto_skip_.insert(intern_->get_or_insert(dim));
     dur_key_ = intern_->get_or_insert("dur");
-}
-
-void BloomFold::observe_path(index::store::PathStat& stat, std::uint8_t tag) {
-    const auto t = static_cast<index::store::PathType>(tag);
-    stat.type = index::store::join(stat.type, t);
-    if (t <= index::store::PathType::MIXED)
-        stat.seen |= static_cast<std::uint8_t>(1U << tag);
-    if (t != index::store::PathType::NULL_VALUE) ++stat.count;
 }
 
 BloomFold::Catalog BloomFold::catalog(const FileState& fs) const {
@@ -486,7 +479,7 @@ void BloomFold::step(const trace::views::detail::FoldBatch& batch) {
         }
 
         for (const auto& [leaf_id, tag] : e.schema_leaves)
-            observe_path(fs.paths[leaf_id], tag);
+            observe_catalog_path(fs.paths[leaf_id], tag);
 
         if (config_.fixed_dimensions) {
             BV::observe_data(chunk, fs.pidtid, name, cat, e.pid, e.tid, e.ts,

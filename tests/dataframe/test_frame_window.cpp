@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <limits>
 #include <numeric>
 #include <optional>
 #include <random>
@@ -1886,8 +1887,12 @@ void run_stat_frames(std::uint64_t seed, bool order_nulls, WindowFrameMode mode,
                         static_cast<std::int64_t>(x.size()) >= fc.min_count)
                         want[k] = quantile_ref(std::move(x), q);
                 }
+                // Linear interpolation may compile to fused multiply-adds
+                // (GCC on ARM), so it differs from the reference by a few ulp
+                // of its operands, which can exceed the result's own ulp.
                 checks.push_back([out, want](const DataFrame& d) {
-                    check_close(d, out, want, 0.0);
+                    check_close(d, out, want,
+                                16 * std::numeric_limits<double>::epsilon());
                 });
             }
         }

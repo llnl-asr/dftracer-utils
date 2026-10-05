@@ -483,12 +483,14 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
         bool any = false;
         for (const ViewFile& f : files_) {
             namespace ip = dftracer::utils::index::plan;
-            auto out = co_await ip::prune_file(
-                {.index_path = f.index_path,
-                 .file_path = f.file_path,
-                 .query = &built.value(),
-                 .metadata = metadata_rows_ ? ip::MetadataUse::RECORDS
-                                            : ip::MetadataUse::NONE});
+            // GCC 12 destroys a temporary built inside co_await twice.
+            ip::PruneRequest prune_req{
+                .index_path = f.index_path,
+                .file_path = f.file_path,
+                .query = &built.value(),
+                .metadata = metadata_rows_ ? ip::MetadataUse::RECORDS
+                                           : ip::MetadataUse::NONE};
+            auto out = co_await ip::prune_file(std::move(prune_req));
             if (!out->file_may_match) {
                 dyn_prune_->exclude_file(f.file_path);
                 any = true;
@@ -1256,12 +1258,17 @@ coro::CoroTask<df::DataFrame> ViewSource::run_alone() const {
         case TraceOutput::Flamegraph:
             co_return co_await scan::flamegraph(plan_, t.partition, t.ts, t.dur,
                                                 t.name, t.group);
-        case TraceOutput::FlamegraphPartial:
-            co_return detail::partial_frame(co_await scan::flamegraph_partial(
-                plan_, t.partition, t.ts, t.dur, t.name, t.group));
-        case TraceOutput::AggregatePartial:
-            co_return detail::partial_frame(
-                co_await scan::aggregate_partial(plan_));
+        // Each awaited result is named first: GCC 12 destroys a temporary
+        // built inside co_await twice.
+        case TraceOutput::FlamegraphPartial: {
+            auto partial = co_await scan::flamegraph_partial(
+                plan_, t.partition, t.ts, t.dur, t.name, t.group);
+            co_return detail::partial_frame(std::move(partial));
+        }
+        case TraceOutput::AggregatePartial: {
+            auto partial = co_await scan::aggregate_partial(plan_);
+            co_return detail::partial_frame(std::move(partial));
+        }
         case TraceOutput::ExportJson: {
             const ExportStats stats = co_await scan::export_json(plan_, *sink_);
             sink_->flush();

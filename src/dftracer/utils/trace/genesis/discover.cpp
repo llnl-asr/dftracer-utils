@@ -283,10 +283,12 @@ coro::CoroTask<Discovery> discover(CoroScope& ctx,
     const utilities::filesystem::PatternDirectoryScannerUtility scan;
     for (const auto& r : roots) {
         const fs::path root = fs::absolute(r);
-        const auto entries = co_await scan(
-            ctx, utilities::filesystem::PatternDirectoryScannerUtilityInput(
-                     root.string(), {".pfw.gz", "summary.json", ".csv"}, true,
-                     true));
+        // A braced list inside the co_await expression crashes GCC 12.
+        const std::vector<std::string> patterns{".pfw.gz", "summary.json",
+                                                ".csv"};
+        utilities::filesystem::PatternDirectoryScannerUtilityInput input(
+            root.string(), patterns, true, true);
+        const auto entries = co_await scan(ctx, input);
         std::map<fs::path, DirFiles> dirs;
         for (const auto& e : entries) {
             const fs::path parent = e.path.parent_path();

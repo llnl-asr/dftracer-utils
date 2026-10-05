@@ -109,6 +109,84 @@ be awaited; ``close()`` is synchronous.
    writer.close();
    std::cout << "Wrote " << writer.total_bytes() << " bytes\n";
 
+GzipLineWriter
+--------------
+
+Writes whole NDJSON lines as a multi-member gzip file, the form every reader
+and index of this library decodes in parallel. A member ends at the first
+line end at or after ``member_size`` (the checkpoint size by default), so a
+line longer than that is a member of its own. Members are compressed on the
+runtime's workers and written in line order; at most ``workers + 2`` members
+are held, and ``append`` waits for a slot. ``on_member`` receives each
+member's offsets and line numbers in order, the same table an index build
+makes, so a writer can build the index without reading its output again.
+``part_size`` rolls to ``<stem>-<k>.pfw.gz`` part files at member boundaries.
+The first error is returned by every later call and the files the writer
+created are removed; destroying a writer without ``close()`` does the same.
+
+.. code-block:: cpp
+
+   GzipWriterOptions opts;
+   opts.on_member = [&](const MemberInfo& m) { members.push_back(m); };
+   auto w = co_await GzipLineWriter::open("/out/trace.pfw.gz", opts);
+   if (!w) co_return w.error();
+   for (const std::string& batch : batches)       // whole lines, '\n'-ended
+       if (auto r = co_await w->append(batch); !r) co_return r.error();
+   auto summary = co_await w->close();
+
+``GzipLineWriterBlocking`` offers the same calls for synchronous code.
+
+The writer holds at most ``memory_budget`` bytes of member buffers and
+in-flight jobs (0 means a third of available memory, as for ``collect``);
+appends wait for room. ``fold`` runs once per member on a compress worker with
+the member's bytes and a ``MemberRef`` naming its part and index in the part,
+so a writer can parse and index members in parallel.
+
+With ``ordered = false`` each compress worker writes the members it
+compressed, so members land in completion order and parallel file systems
+write stripes at once; member reports and parts are not offered in this mode.
+Concurrent producers each take a ``Producer`` (``writer.producer()``), which
+fills and cuts its own members and must be flushed before ``close()``.
+
+``append_with(max_bytes, fill)`` lets a producer format lines straight into
+the member buffer. ``append_fmt`` and ``append_json`` build a line from a
+format, without a temporary string. Only the two characters ``{}`` are a
+placeholder; every other brace is literal text, so JSON braces need no
+doubling, and ``{{}}`` writes a literal ``{}``. The writer adds the line's
+``\n`` itself, so a format must not contain ``\n`` or ``\r`` (a compile error
+in the compile-time form, ``INVALID_ARGUMENT`` in the run-time form). Arguments
+are integers, ``bool``, ``float``, ``double`` and strings; other types do not
+compile. ``append_json`` JSON-escapes strings; ``append_fmt`` copies them.
+
+The compile-time form checks the format, the argument count and the argument
+types when the program is compiled. A raw string literal keeps JSON readable:
+
+.. code-block:: cpp
+
+   co_await w->append_json<R"({"name":"{}","ts":{},"dur":{}})">(
+       name, ts, dur);
+
+The plain form writes strings as they are, for example a CSV-like line:
+
+.. code-block:: cpp
+
+   co_await w->append_fmt<"{},{},{}">(a, b, c);
+
+``LineFormat::parse`` and ``JsonLineFormat::parse`` give a run-time form,
+parsed once and reused; a wrong argument count returns ``INVALID_ARGUMENT``:
+
+.. code-block:: cpp
+
+   auto f = JsonLineFormat::parse(R"({"op":"{}","size":{}})");
+   co_await w->append_json(*f, op, size);
+
+``raw(s)`` writes an already-JSON value without escaping, and ``{{}}`` writes
+an empty object:
+
+.. code-block:: cpp
+
+   co_await w->append_json<R"({"args":{{}},"data":{}})">(raw(json_text));
+
 StreamingLineReader
 -------------------
 

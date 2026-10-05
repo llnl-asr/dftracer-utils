@@ -29,7 +29,10 @@ reads the matrix layout (``summary.json`` with a ``sets`` list and one
 ``summary.json``, each process is matched to a set by its PAPI counters;
 without one, each distinct counter list is a set named by its counters
 joined with ``+``. ``unique_input`` is the input directory name. ``-o``
-must end with ``.pfw.gz``.
+must end with ``.pfw.gz``. The output is multi-member gzip: a member ends at
+the first line end after ``--member-size`` uncompressed bytes (the checkpoint
+size, 32 MiB, by default; units such as ``512KB`` are accepted), so a large
+run spreads over several members that readers decode in parallel.
 
 A run that cannot be used is skipped with one line on stderr naming the run
 directory, the file and the reason, for example a truncated ``.pfw.gz``, a

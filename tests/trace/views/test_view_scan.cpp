@@ -2,7 +2,10 @@
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
+#include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -215,7 +218,7 @@ TEST_SUITE("View") {
     TEST_CASE("View - an indexed sink_trace to an unwritable path fails") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_multimember_trace(env, 3000, 512);
+        std::string gz = create_multimember_trace(env, 300, 512);
         std::string idx = determine_index_path(gz, "");
         TraceWriteOptions opts;
         opts.output_path = env.get_dir() + "/no_such_dir/out.pfw.gz";
@@ -283,6 +286,89 @@ TEST_SUITE("View") {
         CHECK(run(outBgz, idxB, R"(name == "does_not_exist")").empty());
         // Fused full scan returns every written event.
         CHECK(run(outAgz, idxA, nullptr).size() == st.events_matched);
+    }
+
+    // Parts are folded and compressed on parallel workers, so the member
+    // table, the bloom pruning and the columns must still equal a fresh build
+    // of the same bytes.
+    TEST_CASE("View - fused multi-part index matches a lazily-built index") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        std::string gz = create_mixed_trace(env, 400, 400);
+        std::string idx = determine_index_path(gz, "");
+
+        std::string dirA = env.get_dir() + "/a";
+        std::string dirB = env.get_dir() + "/b";
+        fs::create_directories(dirA);
+        fs::create_directories(dirB);
+        TraceWriteOptions opts;
+        opts.output_path = dirA + "/out.pfw.gz";
+        opts.member_size = 512;
+        opts.part_size = 8192;
+        opts.num_workers = 4;
+        opts.build_index = true;
+        View::from_file(gz, idx).sink_trace(opts).get();
+
+        std::vector<std::string> partsA, partsB;
+        for (int i = 0; fs::exists(
+                 utilities::fileio::gzip_part_path(opts.output_path, i, true));
+             ++i) {
+            partsA.push_back(
+                utilities::fileio::gzip_part_path(opts.output_path, i, true));
+            partsB.push_back(dirB + "/" +
+                             fs::path(partsA.back()).filename().string());
+            fs::copy_file(partsA.back(), partsB.back());
+        }
+        REQUIRE(partsA.size() > 2);
+
+        namespace st = dftracer::utils::index::store;
+        const std::string idxA = determine_index_path(partsA[0], "");
+        const std::string idxB = determine_index_path(partsB[0], "");
+        std::uint64_t scannedA = 0, scannedB = 0, matchedA = 0, matchedB = 0;
+        std::vector<std::string> colsA, colsB;
+        for (std::size_t i = 0; i < partsA.size(); ++i) {
+            auto q = [&](const std::string& f, const std::string& ix,
+                         std::uint64_t& sc, std::uint64_t& mt,
+                         std::vector<std::string>& cols) {
+                StringSink sink;
+                auto stt = View::from_file(f, ix)
+                               .duql(R"(cat == "STDIO")")
+                               .sink_json(sink)
+                               .get();
+                sc += stt.events_scanned;
+                mt += stt.events_matched;
+                for (auto& c : View::from_file(f, ix).columns())
+                    cols.push_back(c);
+            };
+            q(partsA[i], idxA, scannedA, matchedA, colsA);
+            q(partsB[i], idxB, scannedB, matchedB, colsB);
+        }
+        CHECK(matchedA == 400);
+        CHECK(matchedA == matchedB);
+        CHECK(scannedA == scannedB);
+        CHECK(colsA == colsB);
+
+        st::IndexDatabase dbA(idxA, st::IndexOpenMode::ReadOnly);
+        st::IndexDatabase dbB(idxB, st::IndexOpenMode::ReadOnly);
+        for (std::size_t i = 0; i < partsA.size(); ++i) {
+            auto ma =
+                dbA.query_gzip_members(static_cast<int>(dbA.get_file_info_id(
+                    st::internal::get_logical_path(partsA[i]))));
+            auto mb =
+                dbB.query_gzip_members(static_cast<int>(dbB.get_file_info_id(
+                    st::internal::get_logical_path(partsB[i]))));
+            REQUIRE(!ma.empty());
+            REQUIRE(ma.size() == mb.size());
+            for (std::size_t k = 0; k < ma.size(); ++k) {
+                CHECK(ma[k].member_idx == mb[k].member_idx);
+                CHECK(ma[k].c_offset == mb[k].c_offset);
+                CHECK(ma[k].c_size == mb[k].c_size);
+                CHECK(ma[k].uc_offset == mb[k].uc_offset);
+                CHECK(ma[k].uc_size == mb[k].uc_size);
+                CHECK(ma[k].first_line_num == mb[k].first_line_num);
+                CHECK(ma[k].last_line_num == mb[k].last_line_num);
+            }
+        }
     }
 
     TEST_CASE("View - group_by + agg (count/sum/min/max/mean)") {

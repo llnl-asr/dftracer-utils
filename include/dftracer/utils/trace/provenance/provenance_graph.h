@@ -61,7 +61,7 @@ struct ProvenanceActivity {
     bool has_main = false;    // false: only PROV_CONT chunks were seen
 };
 
-/// An entity type as described by the producer (prov_type:<type> metadata,
+/// An entity type as described by the producer (prov_type:\<type\> metadata,
 /// value "<role>|<description>"): its role in the workflow and what it is.
 struct ProvenanceType {
     std::string name;         // entity type, e.g. "best_structure"
@@ -161,7 +161,7 @@ coro::CoroTask<ProvenanceGraph> extract_provenance_graph(
     ProvenanceOptions options = {});
 
 /// Split `path` into (mount point, path relative to it) using `table`
-/// (longest prefix wins), then the Rabbit rule (/mnt/nnf/<id>), then the
+/// (longest prefix wins), then the Rabbit rule (/mnt/nnf/\<id\>), then the
 /// first two path components. Exposed for tests.
 std::pair<std::string, std::string> split_mount(
     const std::string& path, const std::vector<ProvenanceMount>& table);

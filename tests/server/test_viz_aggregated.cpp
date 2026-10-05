@@ -8,6 +8,7 @@
 #include <dftracer/utils/server/trace_index.h>
 #include <dftracer/utils/server/viz_api.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_rechunker.h>
+#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
 #include <testing_utilities.h>

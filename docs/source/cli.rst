@@ -296,7 +296,7 @@ dftracer_pgzip
 
 - ``-d, --directory <path>`` - Directory containing .pfw files (default: .)
 - ``-l, --compression-level <0-12>`` - Compression level (default: 6)
-- ``--chunk-size <bytes>`` - Chunk size in bytes for parallel compression (default: 4194304 B / 4 MB)
+- ``--chunk-size <bytes>`` - Gzip member size: a member ends at the first line end after this many uncompressed bytes, and members are compressed in parallel (default: 4194304 B / 4 MB). A last line without a newline is kept as is.
 - ``--executor-threads <count>`` - Number of worker threads for parallel processing (default: number of CPU cores)
 
 **Example:**

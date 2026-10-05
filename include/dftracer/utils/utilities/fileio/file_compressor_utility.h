@@ -7,12 +7,11 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/fileio/binary_file_reader_utility.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
-#include <dftracer/utils/utilities/fileio/streaming_file_writer_utility.h>
+#include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 
 #include <cstdint>
 #include <string>
-#include <vector>
+#include <string_view>
 
 namespace dftracer::utils::utilities::fileio {
 
@@ -141,40 +140,31 @@ class FileCompressorUtility {
 
             int level =
                 input.compression_level < 0 ? 6 : input.compression_level;
-            fileio::compress::GzipMemberCompressor compressor(level);
-            fileio::StreamingFileWriterUtility writer(input.output_path);
-
-            std::vector<char> member;
-            std::vector<std::uint8_t> scratch;
             const std::size_t member_size =
                 input.member_size > 0
                     ? input.member_size
                     : constants::indexer::DEFAULT_CHECKPOINT_SIZE;
 
-            auto flush_member = [&]() -> coro::CoroTask<void> {
-                if (member.empty()) co_return;
-                if (!compressor.compress_member_into(scratch, member.data(),
-                                                     member.size())) {
-                    throw DFTUtilsException(ErrorCode::COMPRESSION,
-                                            "gzip member compression failed");
-                }
-                co_await writer.process(
-                    ByteView(reinterpret_cast<const char*>(scratch.data()),
-                             scratch.size()));
-                member.clear();
-            };
+            GzipWriterOptions opts;
+            opts.member_size = member_size;
+            opts.level = level;
+            auto writer =
+                unwrap(co_await GzipLineWriter::open(input.output_path, opts));
 
+            std::string carry;
             auto gen = fileio::read_binary_file(input.input_path, member_size);
             while (auto chunk = co_await gen.next()) {
-                member.insert(member.end(), chunk->as<char>(),
-                              chunk->as<char>() + chunk->size());
-                if (member.size() >= member_size) {
-                    co_await flush_member();
+                std::string_view block(chunk->as<char>(), chunk->size());
+                const auto nl = block.rfind('\n');
+                if (nl == std::string_view::npos) {
+                    carry.append(block);
+                    continue;
                 }
+                carry.append(block.substr(0, nl + 1));
+                unwrap(co_await writer.append(carry));
+                carry.assign(block.substr(nl + 1));
             }
-            co_await flush_member();
-
-            writer.close();
+            unwrap(co_await writer.close(carry));
 
             // Get final compressed size
             compressed_size = fs::file_size(input.output_path);

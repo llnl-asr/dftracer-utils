@@ -167,7 +167,7 @@ class TypeParams {
     std::int32_t decimal_scale(TypeId id) const noexcept {
         return decimal(id) ? bits_.decimal.scale : 0;
     }
-    std::int32_t fixed_size(TypeId id) const noexcept {
+    constexpr std::int32_t fixed_size(TypeId id) const noexcept {
         return fixed(id) ? bits_.fixed_size : 0;
     }
     bool is_json(TypeId id) const noexcept { return text(id) && bits_.json; }
@@ -212,7 +212,7 @@ class TypeParams {
     static bool decimal(TypeId id) noexcept {
         return id == TypeId::Decimal128 || id == TypeId::Decimal256;
     }
-    static bool fixed(TypeId id) noexcept {
+    static constexpr bool fixed(TypeId id) noexcept {
         return id == TypeId::FixedSizeBinary || id == TypeId::FixedSizeList;
     }
     static bool text(TypeId id) noexcept {
@@ -260,7 +260,9 @@ struct DataType {
     }
     /// FixedSizeBinary (byte width), FixedSizeList (element count); 0
     /// otherwise.
-    std::int32_t fixed_size() const noexcept { return params.fixed_size(id); }
+    constexpr std::int32_t fixed_size() const noexcept {
+        return params.fixed_size(id);
+    }
     /// String and LargeString: each value is canonical JSON text, so a
     /// number, a string and a bool keep their JSON types (`3` and `"3"`
     /// differ).

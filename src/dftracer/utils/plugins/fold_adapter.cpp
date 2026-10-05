@@ -26,7 +26,7 @@
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/utilities/common/statistics/ddsketch.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <dftracer/utils/utilities/fileio/parallel/merge.h>
 #include <simdjson.h>
 #include <sys/stat.h>
@@ -1106,60 +1106,23 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
 int PluginFold::close_trace_writer(::dftu_trace_writer* w) {
     auto* tw = reinterpret_cast<PluginTraceWriter*>(w);
     if (!tw) return -1;
-    namespace pfw = utilities::fileio::parallel;
-    namespace cmp = utilities::fileio::compress;
+    namespace fio = utilities::fileio;
     int result = -1;
     try {
-        constexpr std::size_t DEFAULT_FLUSH =
-            constants::indexer::DEFAULT_CHECKPOINT_SIZE;
-        constexpr std::size_t HEADROOM = 1 * 1024 * 1024;
-        auto cw = pfw::make_writer_for_path(
-            {tw->path, 1, DEFAULT_FLUSH, HEADROOM, /*gzip=*/true});
-        const std::size_t member_size = cw.sizing.flush_threshold;
-        auto writer = std::move(cw.writer);
-        const std::string& buf = tw->buffer;
-        bool ok = true;
-        dftracer::utils::default_runtime().run_blocking(
-            "dft-plugin-trace-write",
-            [&](CoroScope& scope) -> coro::CoroTask<void> {
-                if (co_await writer->open(tw->path, 1, true, &scope) != 0) {
-                    ok = false;
-                    co_return;
-                }
-                cmp::GzipMemberCompressor comp(6);
-                std::vector<std::uint8_t> scratch;
-                auto emit = [&](std::size_t begin,
-                                std::size_t len) -> coro::CoroTask<bool> {
-                    if (!comp.compress_member_into(scratch, buf.data() + begin,
-                                                   len))
-                        co_return false;
-                    co_return co_await writer->write_chunk(
-                        0,
-                        ByteView(reinterpret_cast<const char*>(scratch.data()),
-                                 scratch.size())) == 0;
-                };
-                std::size_t pos = 0;
-                while (buf.size() - pos >= member_size) {
-                    std::size_t cut = pos + member_size;
-                    while (cut < buf.size() && buf[cut] != '\n') ++cut;
-                    if (cut >= buf.size()) break;
-                    ++cut;
-                    if (!co_await emit(pos, cut - pos)) {
-                        ok = false;
-                        co_return;
-                    }
-                    pos = cut;
-                }
-                if (pos < buf.size() && !co_await emit(pos, buf.size() - pos))
-                    ok = false;
-                if (co_await writer->close() != 0) ok = false;
-                if (ok && cw.layout.layout == pfw::FileLayout::SHARDED) {
-                    auto shards = writer->output_paths();
-                    if (co_await pfw::merge_shards(tw->path, shards) != 0)
-                        ok = false;
-                }
-            });
-        result = ok ? 0 : -1;
+        fio::GzipWriterOptions opts;
+        opts.member_size = constants::indexer::DEFAULT_CHECKPOINT_SIZE;
+        auto writer = unwrap(fio::GzipLineWriterBlocking::open(tw->path, opts));
+        const std::string_view buf = tw->buffer;
+        const std::size_t end = buf.rfind('\n') + 1;
+        std::size_t pos = 0;
+        while (pos < end) {
+            std::size_t cut = buf.find('\n', pos + opts.member_size);
+            cut = cut == std::string_view::npos || cut >= end ? end : cut + 1;
+            unwrap(writer.append(buf.substr(pos, cut - pos)));
+            pos = cut;
+        }
+        unwrap(writer.close(buf.substr(end)));
+        result = 0;
     } catch (...) {
         result = -1;
     }

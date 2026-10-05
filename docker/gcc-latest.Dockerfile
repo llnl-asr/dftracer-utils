@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         cmake \
         ninja-build \
+        ragel \
         git \
         pkg-config \
         zlib1g-dev \

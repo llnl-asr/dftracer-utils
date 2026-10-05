@@ -104,6 +104,8 @@ time_range 1s .. 5s overlap | bucket 100ms fill
 ---
 bucket 5s every 1s | agg { n = count() }
 ---
+bucket 1d every 1h | agg { n = count() }
+---
 bucket 2ms at 1ms | agg { n = count() }
 ---
 bucket 5s every 1s at $t0 fill forward from 0 to 10s as w | agg { n = count() }

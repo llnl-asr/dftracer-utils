@@ -89,7 +89,8 @@ coro::CoroTask<void> process_into(CoroScope& ctx, RunGroup g,
 
 coro::CoroTask<void> discover_into(CoroScope& ctx, std::string root,
                                    Discovery* out) {
-    *out = co_await discover(ctx, {std::move(root)});
+    std::vector<std::string> roots{std::move(root)};
+    *out = co_await discover(ctx, std::move(roots));
 }
 
 GroupResult process(RunGroup g) {

@@ -1,20 +1,22 @@
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/coro/coro.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <fstream>
-#include <map>
 #include <mutex>
+#include <stdexcept>
+#include <string_view>
 #include <vector>
 
 using namespace dftracer::utils;
+namespace fileio = dftracer::utils::utilities::fileio;
 
 class PgzipArgParse : public cli::ArgParse {
    public:
@@ -63,101 +65,8 @@ struct FileResult {
     std::string error_message;
 };
 
-struct ChunkWork {
-    std::size_t index;
-    std::string data;
-};
-
-struct CompressedChunk {
-    std::size_t index;
-    std::string data;
-};
-
-static coro::CoroTask<void> chunk_reader(
-    coro::ChannelProducer<ChunkWork> producer, const std::string* file_path,
-    std::size_t chunk_size) {
-    auto guard = producer.guard();
-
-    std::ifstream ifs(*file_path, std::ios::binary);
-    if (!ifs.is_open()) co_return;
-
-    std::string buffer(chunk_size, '\0');
-    std::size_t idx = 0;
-
-    while (ifs) {
-        ifs.read(buffer.data(), static_cast<std::streamsize>(chunk_size));
-        auto bytes_read = static_cast<std::size_t>(ifs.gcount());
-        if (bytes_read == 0) break;
-
-        ChunkWork work;
-        work.index = idx++;
-        work.data.assign(buffer.data(), bytes_read);
-
-        if (!co_await producer.send(std::move(work))) break;
-    }
-    co_return;
-}
-
-static coro::CoroTask<void> chunk_compressor(
-    coro::ChannelConsumer<ChunkWork> input_chan,
-    coro::ChannelProducer<CompressedChunk> out_producer,
-    int compression_level) {
-    auto guard = out_producer.guard();
-
-    namespace compress = dftracer::utils::utilities::fileio::compress;
-    compress::GzipMemberCompressor compressor(compression_level);
-    if (!compressor.valid()) co_return;
-
-    std::vector<std::uint8_t> scratch;
-    while (auto work = co_await input_chan.receive()) {
-        if (!compressor.compress_member_into(scratch, work->data.data(),
-                                             work->data.size()))
-            break;
-
-        CompressedChunk result;
-        result.index = work->index;
-        result.data.assign(reinterpret_cast<const char*>(scratch.data()),
-                           scratch.size());
-
-        if (!co_await out_producer.send(std::move(result))) break;
-    }
-    co_return;
-}
-
-static coro::CoroTask<void> chunk_writer(
-    coro::ChannelConsumer<CompressedChunk> output_chan,
-    const std::string* output_path) {
-    std::ofstream ofs(*output_path, std::ios::binary);
-    if (!ofs.is_open()) co_return;
-
-    std::size_t next_expected = 0;
-    std::map<std::size_t, std::string> pending;
-
-    while (auto chunk = co_await output_chan.receive()) {
-        if (chunk->index == next_expected) {
-            ofs.write(chunk->data.data(),
-                      static_cast<std::streamsize>(chunk->data.size()));
-            ++next_expected;
-
-            while (true) {
-                auto it = pending.find(next_expected);
-                if (it == pending.end()) break;
-                ofs.write(it->second.data(),
-                          static_cast<std::streamsize>(it->second.size()));
-                pending.erase(it);
-                ++next_expected;
-            }
-        } else {
-            pending.emplace(chunk->index, std::move(chunk->data));
-        }
-    }
-
-    ofs.close();
-    co_return;
-}
-
 static coro::CoroTask<FileResult> compress_file_parallel(
-    CoroScope& ctx, const std::string& file_path, int compression_level,
+    const std::string& file_path, int compression_level,
     std::size_t num_workers, std::size_t chunk_size) {
     FileResult result;
     result.input_path = file_path;
@@ -169,67 +78,57 @@ static coro::CoroTask<FileResult> compress_file_parallel(
             co_return result;
         }
 
-        auto file_size = fs::file_size(file_path);
-        result.original_size = file_size;
-
-        if (file_size == 0) {
+        result.original_size = fs::file_size(file_path);
+        if (result.original_size == 0) {
             result.error_message = "Empty file: " + file_path;
             co_return result;
         }
 
-        if (file_size <= chunk_size) {
-            num_workers = 1;
+        std::ifstream ifs(file_path, std::ios::binary);
+        if (!ifs.is_open()) {
+            result.error_message = "Cannot open file: " + file_path;
+            co_return result;
         }
 
-        auto input_chan = coro::make_channel<ChunkWork>(num_workers * 2);
-        auto output_chan = coro::make_channel<CompressedChunk>(num_workers * 2);
+        fileio::GzipWriterOptions opts;
+        opts.member_size = chunk_size;
+        opts.level = compression_level;
+        opts.workers = num_workers;
+        auto writer = unwrap(
+            co_await fileio::GzipLineWriter::open(result.output_path, opts));
 
-        const auto* file_path_ptr = &file_path;
-        const auto* output_path_ptr = &result.output_path;
-
-        co_await ctx.scope([&input_chan, &output_chan, file_path_ptr,
-                            output_path_ptr, compression_level, num_workers,
-                            chunk_size](
-                               CoroScope& scope) -> coro::CoroTask<void> {
-            scope.spawn([ch = input_chan->producer(), file_path_ptr,
-                         chunk_size](
-                            CoroScope&) mutable -> coro::CoroTask<void> {
-                co_await chunk_reader(std::move(ch), file_path_ptr, chunk_size);
-            });
-
-            for (std::size_t w = 0; w < num_workers; ++w) {
-                scope.spawn([in_ch = input_chan->consumer(),
-                             out_ch = output_chan->producer(),
-                             compression_level](
-                                CoroScope&) mutable -> coro::CoroTask<void> {
-                    co_await chunk_compressor(in_ch, std::move(out_ch),
-                                              compression_level);
-                });
+        std::string buf;
+        std::string carry;
+        buf.resize(std::max<std::size_t>(chunk_size, 1 << 20));
+        while (ifs) {
+            ifs.read(buf.data(), static_cast<std::streamsize>(buf.size()));
+            auto n = static_cast<std::size_t>(ifs.gcount());
+            if (n == 0) break;
+            std::string_view block(buf.data(), n);
+            auto nl = block.rfind('\n');
+            if (nl == std::string_view::npos) {
+                carry.append(block);
+                continue;
             }
-
-            scope.spawn([ch = output_chan->consumer(),
-                         output_path_ptr](CoroScope&) -> coro::CoroTask<void> {
-                co_await chunk_writer(ch, output_path_ptr);
-            });
-
-            co_return;
-        });
-
-        if (fs::exists(result.output_path)) {
-            result.compressed_size = fs::file_size(result.output_path);
-            result.success = true;
-        } else {
-            result.error_message = "Output file not created";
+            std::string_view whole = block.substr(0, nl + 1);
+            if (carry.empty()) {
+                unwrap(co_await writer.append(whole));
+            } else {
+                carry.append(whole);
+                unwrap(co_await writer.append(carry));
+                carry.clear();
+            }
+            carry.append(block.substr(nl + 1));
         }
+        if (ifs.bad()) throw std::runtime_error("read error: " + file_path);
 
+        unwrap(co_await writer.close(carry));
+        result.compressed_size = fs::file_size(result.output_path);
+        result.success = true;
     } catch (const std::exception& e) {
         result.error_message = std::string("Compression failed: ") + e.what();
-        if (fs::exists(result.output_path)) {
-            try {
-                fs::remove(result.output_path);
-            } catch (...) {
-            }
-        }
+        std::error_code ec;
+        fs::remove(result.output_path, ec);
     }
 
     co_return result;
@@ -305,12 +204,12 @@ static int run_pgzip(const PgzipArgParse& cli) {
                     scope.spawn([ch = file_chan->consumer(), files_ptr,
                                  results_ptr, mutex_ptr, compression_level,
                                  executor_threads, chunk_size](
-                                    CoroScope& wctx) -> coro::CoroTask<void> {
+                                    CoroScope&) -> coro::CoroTask<void> {
                         while (auto fi_opt = co_await ch.receive()) {
                             const auto& path = (*files_ptr)[*fi_opt];
 
                             auto result = co_await compress_file_parallel(
-                                wctx, path, compression_level, executor_threads,
+                                path, compression_level, executor_threads,
                                 chunk_size);
 
                             if (result.success) {

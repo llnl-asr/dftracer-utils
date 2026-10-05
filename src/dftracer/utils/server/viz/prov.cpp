@@ -25,8 +25,7 @@ coro::CoroTask<HttpResponse> handle_prov_graph(const HttpRequest& req,
     auto files = collect_candidate_files(index, params);
     std::size_t slots = std::max<std::size_t>(1, index.max_concurrent());
     trace::views::View v =
-        trace::views::View::from_files(to_view_files(files),
-                                       &index.bloom_cache())
+        trace::views::View::from_files(to_view_files(files))
             .cancel_when([&req]() { return req.cancel_token.cancelled(); });
     trace::provenance::ProvenanceOptions opts;
     opts.include_io = params.get_int("io", 1) != 0;

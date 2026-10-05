@@ -1,4 +1,3 @@
-#include <dftracer/utils/core/common/byte_view.h>
 #include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
@@ -21,9 +20,7 @@
 #include <dftracer/utils/trace/views/view_executor.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
-#include <dftracer/utils/utilities/fileio/parallel/merge.h>
-#include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
+#include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <simdjson.h>
 
 #include <algorithm>
@@ -32,15 +29,16 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <vector>
 
 // Fused export + index: write the View's events as a new multi-member trace AND
 // build its member+bloom+stats index in one pass (no re-inflate of the output).
-// Scan stays parallel (producer coroutines over a channel); a single in-order
-// consumer frames + writes members and feeds the index visitors, so
-// member_idx == checkpoint_idx and no post-hoc offset remap is needed.
+// Scan stays parallel (producer coroutines over a channel); one consumer cuts
+// members into a GzipLineWriter, whose compress workers parse each member into
+// their own BloomFold slice, so member_idx == checkpoint_idx per part.
 namespace dftracer::utils::trace::views::detail {
 
 namespace {
@@ -54,26 +52,14 @@ struct PartData {
     std::uint64_t total_lines = 0;
 };
 
-// `<stem>-<idx>.pfw[.gz]` from a base like `<stem>.pfw[.gz]`; the base itself
-// when there is no rollover, so single-file callers keep their exact path.
-std::string part_path(const std::string& base, int idx, bool multi) {
-    if (!multi) return base;
-    const std::size_t pos = base.rfind(".pfw");
-    if (pos == std::string::npos) return base + "-" + std::to_string(idx);
-    return base.substr(0, pos) + "-" + std::to_string(idx) + base.substr(pos);
-}
-
 }  // namespace
 
 coro::CoroTask<ExportStats> run_export_trace_indexed(
     const ViewPlan& plan, const TraceWriteOptions& opts,
     const ProgressFn* progress) {
-    namespace pfw = utilities::fileio::parallel;
-    namespace cmp = utilities::fileio::compress;
     // Member size defaults to the checkpoint granularity (a member == a chunk).
     constexpr std::size_t DEFAULT_FLUSH_BYTES =
         constants::indexer::DEFAULT_CHECKPOINT_SIZE;
-    constexpr std::size_t BUFFER_HEADROOM_BYTES = 1 * 1024 * 1024;
     constexpr std::size_t MAX_PRODUCERS = 16;
 
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
@@ -106,158 +92,125 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
     // Set when the consumer fails, so producers stop scanning.
     std::atomic<bool> failed{false};
 
+    // Each fold call takes a slice (parser, scratch and BloomFold slice), so
+    // workers share no state; all slices merge into `bloom` after the writer
+    // closes.
+    struct FoldSlice {
+        std::unique_ptr<Fold> bloom;
+        dftracer::utils::json::RecordParser parser;
+        std::string parse_buf;
+        std::vector<FoldEvent> events;
+    };
+    std::mutex pool_mu;
+    std::vector<std::unique_ptr<FoldSlice>> pool;
+
+    auto fold_member = [&](const utilities::fileio::MemberRef& ref,
+                           std::string_view data) {
+        std::unique_ptr<FoldSlice> sl;
+        {
+            std::lock_guard<std::mutex> lk(pool_mu);
+            if (!pool.empty()) {
+                sl = std::move(pool.back());
+                pool.pop_back();
+            }
+        }
+        if (!sl) {
+            sl = std::make_unique<FoldSlice>();
+            sl->bloom = bloom.slice();
+        }
+        sl->events.clear();
+        for (std::size_t ls = 0, i = 0; i < data.size(); ++i) {
+            if (data[i] != '\n') continue;
+            std::string_view line = data.substr(ls, i - ls);
+            ls = i + 1;
+            if (line.empty()) continue;
+            sl->parse_buf.assign(line);
+            sl->parse_buf.resize(line.size() + simdjson::SIMDJSON_PADDING,
+                                 '\0');
+            auto doc =
+                sl->parser.parse(sl->parse_buf.data(), line.size(), false);
+            if (doc.error()) continue;
+            sl->events.push_back(
+                vdef.by_path ? decode_record(doc.value_unsafe(), intern,
+                                             /*capture_schema=*/true, nullptr,
+                                             vdef.record_schema, nullptr,
+                                             INDEX_MAX_CHILDREN)
+                             : extract_fold_event(doc.value_unsafe(), intern,
+                                                  /*needs_args=*/true,
+                                                  /*extra_fields=*/nullptr,
+                                                  /*capture_schema=*/true));
+        }
+        ScanUnit unit;
+        unit.file_path = utilities::fileio::gzip_part_path(
+            opts.output_path, static_cast<int>(ref.part), multi);
+        unit.index_path = index_path;
+        unit.checkpoint_idx = ref.part_index;
+        FoldBatch fb{std::span<const FoldEvent>(sl->events), unit};
+        sl->bloom->step(fb);
+        sl->bloom->seal_unit(unit);
+        std::lock_guard<std::mutex> lk(pool_mu);
+        pool.push_back(std::move(sl));
+    };
+
+    auto part_at = [&](std::size_t p) -> PartData& {
+        if (parts.size() <= p) parts.resize(p + 1);
+        return parts[p];
+    };
+
+    utilities::fileio::GzipWriterOptions wopts;
+    wopts.member_size = member_size;
+    wopts.level = opts.level;
+    wopts.workers = opts.num_workers;
+    wopts.part_size = part_size;
+    wopts.compress = opts.compress;
+    wopts.part_name = [&](std::size_t i) {
+        return utilities::fileio::gzip_part_path(opts.output_path,
+                                                 static_cast<int>(i), multi);
+    };
+    wopts.on_member = [&](const utilities::fileio::MemberInfo& m) {
+        dftracer::utils::index::gzip::GzipMemberRecord rec;
+        auto& pd = part_at(m.part);
+        rec.member_idx = pd.members.size();
+        rec.c_offset = m.c_offset;
+        rec.c_size = m.c_size;
+        rec.uc_offset = m.uc_offset;
+        rec.uc_size = m.uc_size;
+        rec.first_line_num = m.first_line;
+        rec.last_line_num = rec.first_line_num + (m.lines ? m.lines - 1 : 0);
+        pd.members.push_back(rec);
+    };
+    wopts.on_part = [&](std::size_t part, const std::string& path,
+                        std::uint64_t uc_bytes, std::uint64_t lines) {
+        auto& pd = part_at(part);
+        pd.path = path;
+        pd.total_uc = uc_bytes;
+        pd.total_lines = lines;
+    };
+    wopts.fold = fold_member;
+    auto opened = co_await utilities::fileio::GzipLineWriter::open(
+        opts.output_path, std::move(wopts));
+    if (!opened) {
+        throw DFTUtilsException(
+            ErrorCode::IO, "export_trace failed writing " + opts.output_path);
+    }
+    auto writer = std::move(*opened);
+
     auto ch = coro::make_channel<std::string>(2 * num_producers + 1);
 
     co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
         co_await scope.scope([&](CoroScope& child) -> coro::CoroTask<void> {
-            // Consumer: assemble members in arrival order, write + index each,
-            // rolling to a new part file once the current part fills up.
-            // Members are numbered from 0 within each part, so member_idx
-            // doubles as the checkpoint idx per part with no remap.
-            child.spawn([&](CoroScope& cscope) -> coro::CoroTask<void> {
-                cmp::GzipMemberCompressor comp(opts.level);
-                std::string buf;
-                std::vector<std::uint8_t> scratch;
-                dftracer::utils::json::RecordParser parser;
-                std::string parse_buf;
-                std::vector<FoldEvent> fold_events;
-
-                std::unique_ptr<pfw::ParallelWriter> writer;
-                pfw::FileLayout layout = pfw::FileLayout::STRIPED;
-                std::string cur_path;
-                PartData part;
-
-                auto open_part = [&]() -> coro::CoroTask<bool> {
-                    cur_path = part_path(opts.output_path,
-                                         static_cast<int>(parts.size()), multi);
-                    auto cw = pfw::make_writer_for_path(
-                        {cur_path, /*baseline_workers=*/1, member_size,
-                         BUFFER_HEADROOM_BYTES, opts.compress});
-                    writer = std::move(cw.writer);
-                    layout = cw.layout.layout;
-                    part = PartData{};
-                    part.path = cur_path;
-                    if (co_await writer->open(cur_path, /*num_workers=*/1,
-                                              opts.compress, &cscope) != 0)
-                        co_return false;
-                    co_return true;
-                };
-
-                auto close_part = [&]() -> coro::CoroTask<bool> {
-                    if (!writer) co_return true;
-                    if (co_await writer->close() != 0) co_return false;
-                    if (layout == pfw::FileLayout::SHARDED) {
-                        auto shards = writer->output_paths();
-                        if (co_await pfw::merge_shards(cur_path, shards) != 0)
-                            co_return false;
-                    }
-                    parts.push_back(std::move(part));
-                    writer.reset();
-                    co_return true;
-                };
-
-                auto emit = [&](std::size_t cut) -> coro::CoroTask<bool> {
-                    // Harvest this member's plaintext (buf[0, cut)) into the
-                    // index folds before it is compressed away; the scan buffer
-                    // has no simdjson padding, so parse each line into a reused
-                    // padded buffer and keep owned FoldEvents.
-                    fold_events.clear();
-                    for (std::size_t ls = 0, i = 0; i < cut; ++i) {
-                        if (buf[i] != '\n') continue;
-                        std::string_view line(buf.data() + ls, i - ls);
-                        ls = i + 1;
-                        if (line.empty()) continue;
-                        parse_buf.assign(line);
-                        parse_buf.resize(
-                            line.size() + simdjson::SIMDJSON_PADDING, '\0');
-                        auto doc =
-                            parser.parse(parse_buf.data(), line.size(), false);
-                        if (doc.error()) continue;
-                        // BloomFold is always in the set, so harvest the
-                        // schemaless column leaves in this parse-once pass.
-                        fold_events.push_back(
-                            vdef.by_path
-                                ? decode_record(doc.value_unsafe(), intern,
-                                                /*capture_schema=*/true,
-                                                nullptr, vdef.record_schema,
-                                                nullptr, INDEX_MAX_CHILDREN)
-                                : extract_fold_event(doc.value_unsafe(), intern,
-                                                     /*needs_args=*/true,
-                                                     /*extra_fields=*/nullptr,
-                                                     /*capture_schema=*/true));
-                    }
-                    ScanUnit unit;
-                    unit.file_path = cur_path;
-                    unit.index_path = index_path;
-                    unit.checkpoint_idx = part.members.size();
-                    FoldBatch fb{std::span<const FoldEvent>(fold_events), unit};
-                    for (auto* f : folds) f->step(fb);
-                    for (auto* f : folds) f->seal_unit(unit);
-
-                    std::uint64_t lines = 0;
-                    for (std::size_t i = 0; i < cut; ++i)
-                        if (buf[i] == '\n') ++lines;
-
-                    ByteView chunk;
-                    if (opts.compress) {
-                        if (!comp.compress_member_into(scratch, buf.data(),
-                                                       cut))
-                            co_return false;
-                        chunk = ByteView(
-                            reinterpret_cast<const char*>(scratch.data()),
-                            scratch.size());
-                    } else {
-                        chunk = ByteView(buf.data(), cut);
-                    }
-                    if (co_await writer->write_chunk(0, chunk) != 0)
-                        co_return false;
-                    auto span = writer->last_member(0);
-
-                    dftracer::utils::index::gzip::GzipMemberRecord rec;
-                    rec.member_idx = part.members.size();
-                    rec.c_offset = span ? span->offset : 0;
-                    rec.c_size = span ? span->length : chunk.size();
-                    rec.uc_offset = part.total_uc;
-                    rec.uc_size = cut;
-                    rec.first_line_num = part.total_lines;
-                    rec.last_line_num =
-                        part.total_lines + (lines ? lines - 1 : 0);
-                    part.members.push_back(rec);
-
-                    part.total_uc += cut;
-                    part.total_lines += lines;
-                    buf.erase(0, cut);
-
-                    // Roll at this member boundary once the part is full.
-                    if (multi && part.total_uc >= part_size) {
-                        if (!co_await close_part()) co_return false;
-                        if (!co_await open_part()) co_return false;
-                    }
-                    co_return true;
-                };
-
+            // Consumer: append batches in arrival order; the writer cuts
+            // members and names their parts.
+            child.spawn([&](CoroScope&) -> coro::CoroTask<void> {
                 auto cons = ch->consumer();
-                auto write_items = [&]() -> coro::CoroTask<bool> {
-                    if (!co_await open_part()) co_return false;
-                    while (auto item = co_await cons.receive()) {
-                        buf.append(*item);
-                        while (buf.size() >= member_size) {
-                            std::size_t cut = member_size;
-                            while (cut < buf.size() && buf[cut] != '\n') ++cut;
-                            if (cut >= buf.size()) break;  // no newline yet
-                            ++cut;  // include it: member holds whole lines
-                            if (!co_await emit(cut)) co_return false;
-                        }
+                while (auto item = co_await cons.receive()) {
+                    if (co_await writer.append(*item)) continue;
+                    ok = false;
+                    failed.store(true, std::memory_order_relaxed);
+                    // Drain, so producers blocked on the channel finish.
+                    while (co_await cons.receive()) {
                     }
-                    if (!buf.empty() && !co_await emit(buf.size()))
-                        co_return false;
-                    co_return co_await close_part();
-                };
-                if (co_await write_items()) co_return;
-                ok = false;
-                failed.store(true, std::memory_order_relaxed);
-                // Drain, so producers blocked on the bounded channel finish.
-                while (co_await cons.receive()) {
+                    co_return;
                 }
                 co_return;
             });
@@ -324,10 +277,13 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
         });
     });
 
+    if (ok && !co_await writer.close()) ok = false;
     if (!ok || parts.empty()) {
         throw DFTUtilsException(
             ErrorCode::IO, "export_trace failed writing " + opts.output_path);
     }
+
+    for (auto& sl : pool) bloom.merge(*sl->bloom);
 
     // Persist the index for every part in one transaction. Registering each
     // with its exact mtime/size makes the resolver accept it as fresh; any

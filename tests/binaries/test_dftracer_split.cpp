@@ -155,14 +155,15 @@ TEST_SUITE("DFTracerSplit") {
         REQUIRE(fs::exists(mm));
         CHECK(count_gzip_members(mm) >= 2);
 
-        // A checkpoint larger than the data -> one member per output file.
+        // A checkpoint larger than the data -> one data member per output
+        // file, plus the "[\n" and "]\n" wrapper members.
         std::string sm = env.get_dir() + "/split_sm";
         rc = run_split(
             binary, {"-d", env.get_dir(), "-o", sm, "-f", "--checkpoint-size",
                      "1073741824", "--disable-watchdog"});
         CHECK(rc == 0);
         REQUIRE(fs::exists(sm));
-        CHECK(count_gzip_members(sm) == count_gz_files(sm));
+        CHECK(count_gzip_members(sm) == 3 * count_gz_files(sm));
     }
 
     TEST_CASE("split with verify flag") {

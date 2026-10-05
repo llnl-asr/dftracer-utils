@@ -89,9 +89,12 @@ template <class T, bool kFloat>
 void NonzeroBits(const void* sv, std::uint8_t* bits, std::uint8_t* valid,
                  std::size_t n) {
     const T* s = static_cast<const T*>(sv);
-    const hn::ScalableTag<T> d;
+    // At most 64 lanes, so one vector's mask fits the 64-bit word below.
+    const hn::CappedTag<T, 64> d;
     const std::size_t lanes = hn::Lanes(d);
     const auto zero = hn::Zero(d);
+    const std::uint64_t lane_bits =
+        lanes == 64 ? ~std::uint64_t{0} : (std::uint64_t{1} << lanes) - 1;
     std::size_t i = 0;
     for (; i + 64 <= n; i += 64) {
         std::uint64_t data_word = 0;
@@ -101,10 +104,18 @@ void NonzeroBits(const void* sv, std::uint8_t* bits, std::uint8_t* valid,
             auto nonzero = hn::Ne(v, zero);
             if constexpr (kFloat) {
                 const auto ordered = hn::Eq(v, v);
-                valid_word |= hn::BitsFromMask(d, ordered) << c;
+                std::uint8_t vb[8] = {};
+                hn::StoreMaskBits(d, ordered, vb);
+                std::uint64_t vw = 0;
+                std::memcpy(&vw, vb, 8);
+                valid_word |= (vw & lane_bits) << c;
                 nonzero = hn::And(nonzero, ordered);
             }
-            data_word |= hn::BitsFromMask(d, nonzero) << c;
+            std::uint8_t db[8] = {};
+            hn::StoreMaskBits(d, nonzero, db);
+            std::uint64_t dw = 0;
+            std::memcpy(&dw, db, 8);
+            data_word |= (dw & lane_bits) << c;
         }
         std::memcpy(bits + (i >> 3), &data_word, 8);
         if constexpr (kFloat) std::memcpy(valid + (i >> 3), &valid_word, 8);

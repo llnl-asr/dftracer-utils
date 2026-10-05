@@ -155,16 +155,16 @@ std::size_t EventAggregator::scan(ScanCallback callback) const {
     return scan_shard_range(0, AGG_KEY_NUM_SHARDS, callback);
 }
 
-std::size_t EventAggregator::scan_shard_range_raw_fn(std::uint16_t shard_begin,
-                                                     std::uint16_t shard_end,
-                                                     RawScanCallbackFn fn,
-                                                     void* ctx) const {
+std::size_t EventAggregator::scan_shard_range_raw_fn(
+    std::uint16_t shard_begin, std::uint16_t shard_end, RawScanCallbackFn fn,
+    void* ctx, std::string_view after) const {
     if (!rocksdb_mode_ || !db_) return 0;
     return tier::for_each_row(
         *db_, shard_begin, shard_end,
         [fn, ctx](std::string_view k, std::string_view v) {
             return fn(ctx, k, v);
-        });
+        },
+        after);
 }
 
 std::size_t EventAggregator::scan_shard_range(std::uint16_t shard_begin,

@@ -38,6 +38,17 @@ int run_pgzip(const std::string& binary, const std::vector<std::string>& args) {
     return dftu_utils_test::run_process(binary, args);
 }
 
+std::string gunzip_all(const std::string& path) {
+    gzFile gz = gzopen(path.c_str(), "rb");
+    std::string out;
+    if (!gz) return out;
+    char b[65536];
+    int n;
+    while ((n = gzread(gz, b, sizeof b)) > 0) out.append(b, n);
+    gzclose(gz);
+    return out;
+}
+
 }  // namespace
 
 // ============================================================================
@@ -176,5 +187,53 @@ TEST_SUITE("DFTracerPgzip") {
         // No .pfw files -- binary treats this as success (nothing to do).
         int rc = run_pgzip(binary, {"-d", env.get_dir(), "--disable-watchdog"});
         CHECK(rc == 0);
+    }
+
+    TEST_CASE("last line without trailing newline round trips") {
+        auto binary = find_pgzip_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_pgzip binary not found, skipping.");
+            return;
+        }
+
+        dftu_utils_test::TestEnvironment env(100);
+        REQUIRE(env.is_valid());
+
+        std::string pfw = env.get_dir() + "/tail.pfw";
+        std::string content;
+        for (int i = 0; i < 2000; ++i)
+            content += "{\"id\":" + std::to_string(i) + ",\"name\":\"e\"}\n";
+        content += "{\"id\":-1,\"name\":\"no newline\"}";
+        {
+            std::ofstream f(pfw, std::ios::binary);
+            f << content;
+        }
+
+        int rc = run_pgzip(binary, {"-d", env.get_dir(), "--chunk-size", "4KB",
+                                    "--disable-watchdog"});
+        CHECK(rc == 0);
+        CHECK(gunzip_all(pfw + ".gz") == content);
+        CHECK(!fs::exists(pfw));
+    }
+
+    TEST_CASE("empty file fails and is left in place") {
+        auto binary = find_pgzip_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_pgzip binary not found, skipping.");
+            return;
+        }
+
+        dftu_utils_test::TestEnvironment env(100);
+        REQUIRE(env.is_valid());
+
+        std::string pfw = env.get_dir() + "/empty.pfw";
+        {
+            std::ofstream f(pfw, std::ios::binary);
+        }
+
+        int rc = run_pgzip(binary, {"-d", env.get_dir(), "--disable-watchdog"});
+        CHECK(rc != 0);
+        CHECK(fs::exists(pfw));
+        CHECK(!fs::exists(pfw + ".gz"));
     }
 }

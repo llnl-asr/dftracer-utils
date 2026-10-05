@@ -79,11 +79,18 @@ coro::CoroTask<Result<ViewPlannerOutput>> ViewPlannerUtility::operator()(
                     : input.view.metadata_records ? plan::MetadataUse::ALL
                     : input.view.include_metadata ? plan::MetadataUse::EVERY
                                                   : plan::MetadataUse::NONE;
-                auto pruned = co_await plan::prune_file(plan::PruneRequest{
-                    input.index_path, input.file_path,
-                    input.view.query ? &*input.view.query : nullptr, &idx_db,
-                    input.time_range, total_checkpoints,
-                    !input.view.window_overlap, metadata});
+                // Named, not built inside co_await: GCC 12 destroys such a
+                // temporary twice.
+                plan::PruneRequest request{
+                    input.index_path,
+                    input.file_path,
+                    input.view.query ? &*input.view.query : nullptr,
+                    &idx_db,
+                    input.time_range,
+                    total_checkpoints,
+                    !input.view.window_overlap,
+                    metadata};
+                auto pruned = co_await plan::prune_file(std::move(request));
                 if (!pruned)
                     co_return unexpected<DFTUtilsError>(pruned.error());
                 if (pruned->total_chunks > 0) {

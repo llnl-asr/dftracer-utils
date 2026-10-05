@@ -1007,7 +1007,8 @@ coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
     st.chunks_scanned = units.size();
     if (units.empty() || folds.empty()) {
         st.chunks_skipped = skipped;
-        for (auto* f : folds) co_await f->finalize(CoverageSet{});
+        const CoverageSet none;
+        for (auto* f : folds) co_await f->finalize(none);
         co_return st;
     }
 

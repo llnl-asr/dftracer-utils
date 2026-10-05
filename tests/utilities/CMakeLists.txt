@@ -53,6 +53,9 @@ set(UTILITIES_TEST_SOURCES
     fileio/test_file_compressor.cpp
     fileio/test_file_decompressor.cpp
     fileio/test_truncated_member.cpp
+    fileio/test_gzip_line_writer.cpp
+    fileio/test_line_format.cpp
+    fileio/test_gzip_sink.cpp
 
     # I/O Parallel
     fileio/parallel/test_layout_sizing.cpp

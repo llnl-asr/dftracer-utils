@@ -38,7 +38,7 @@ std::string write_single_member_gz(const std::string& path,
     return path;
 }
 
-// Decode every member; returns (concatenated bytes, per-member first byte).
+// Decode every member; returns (concatenated bytes, per-member last byte).
 std::pair<std::string, std::vector<char>> decode_members(
     const std::string& path) {
     int fd = ::open(path.c_str(), O_RDONLY);
@@ -49,21 +49,21 @@ std::pair<std::string, std::vector<char>> decode_members(
     const auto size = static_cast<std::uint64_t>(st.st_size);
 
     std::string out;
-    std::vector<char> first_bytes;
+    std::vector<char> last_bytes;
     [&]() -> dftracer::utils::coro::CoroTask<void> {
         auto gen = gzc::decode_gzip_members(sfd.get(), size);
         while (auto chunk = co_await gen.next()) {
-            first_bytes.push_back(chunk->empty() ? '\0' : chunk->front());
+            last_bytes.push_back(chunk->empty() ? '\0' : chunk->back());
             out.append(chunk->data(), chunk->size());
         }
     }()
                  .get();
-    return {out, first_bytes};
+    return {out, last_bytes};
 }
 
 std::pair<std::string, int> decode_all(const std::string& path) {
-    auto [bytes, firsts] = decode_members(path);
-    return {bytes, static_cast<int>(firsts.size())};
+    auto [bytes, lasts] = decode_members(path);
+    return {bytes, static_cast<int>(lasts.size())};
 }
 
 bool needs_rechunk(const std::string& path, std::size_t cap) {
@@ -107,13 +107,12 @@ TEST_SUITE("gzip_rechunker") {
                                      /*level=*/6)
             .get();
 
-        auto [content, first_bytes] = decode_members(out);
-        CHECK(content == payload);      // exact byte preservation
-        CHECK(first_bytes.size() > 1);  // now multi-member
-        // Every member after the first must lead with the '\n' separator, so
-        // the reader's boundary-aware byte range does not drop its first event.
-        for (std::size_t i = 1; i < first_bytes.size(); ++i) {
-            CHECK(first_bytes[i] == '\n');
+        auto [content, last_bytes] = decode_members(out);
+        CHECK(content == payload);     // exact byte preservation
+        CHECK(last_bytes.size() > 1);  // now multi-member
+        // Every member but the last ends at a line end.
+        for (std::size_t i = 0; i + 1 < last_bytes.size(); ++i) {
+            CHECK(last_bytes[i] == '\n');
         }
 
         fs::remove_all(dir);

@@ -1,12 +1,12 @@
 #! /bin/bash
 
-clang_format_exe="clang-format"
+clang_format_exe="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )/clang-format.sh"
 if [ $# -ge 1 ]; then
     clang_format_exe="$1"
 fi
 
 if ! command -v "$clang_format_exe" >/dev/null 2>&1; then
-    echo "You must have 'clang-format' in PATH to use 'autoformat.sh'"
+    echo "Cannot run '$clang_format_exe' for 'autoformat.sh'"
     exit 1
 fi
 

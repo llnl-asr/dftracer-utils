@@ -115,8 +115,8 @@ run_pre_commit_cpp() {
   done)"
 
   echo "[pre-commit] formatting staged files"
-  echo "$staged_files" |
-    xargs -I{} clang-format -i "$REPO_ROOT/{}"
+  echo "$staged_files" | sed "s|^|$REPO_ROOT/|" | tr '\n' '\0' |
+    xargs -0 "$REPO_ROOT/scripts/formatting/clang-format.sh" -i
 
   local after_hash
   after_hash="$(echo "$staged_files" | while IFS= read -r f; do
@@ -129,8 +129,8 @@ run_pre_commit_cpp() {
   fi
 
   echo "[pre-commit] checking format of staged files"
-  echo "$staged_files" |
-    xargs -I{} clang-format --dry-run -Werror "$REPO_ROOT/{}"
+  echo "$staged_files" | sed "s|^|$REPO_ROOT/|" | tr '\n' '\0' |
+    xargs -0 "$REPO_ROOT/scripts/formatting/clang-format.sh" --dry-run -Werror
 }
 
 run_pre_commit_python() {

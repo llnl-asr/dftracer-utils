@@ -349,10 +349,10 @@ struct DFTracerEvent {
                         auto fval = field.value();
                         if (fval.error()) continue;
 
-                        auto type = fval.type();
-                        if (type.error()) continue;
+                        auto jtype = fval.type();
+                        if (jtype.error()) continue;
 
-                        switch (type.value_unsafe()) {
+                        switch (jtype.value_unsafe()) {
                             case simdjson::ondemand::json_type::string: {
                                 auto r = fval.get_string();
                                 if (!r.error())

@@ -411,9 +411,12 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
     // budget is released only here - a producer that outlives the cursor parks
     // in acquire() forever. Setting the flag alone cannot wake a parked
     // producer (the semaphore has no shutdown), so release enough permits for
-    // it to run to its next is_cancelled() check and unwind.
+    // it to run to its next is_cancelled() check and unwind. Closing the
+    // channel wakes a producer parked on a full one the same way; left open,
+    // it would hold every frame and morsel behind it until the process ends.
     ~StreamViewCursor() override {
         stop_->store(true, std::memory_order_relaxed);
+        channel_->close();
         budget_->release(std::numeric_limits<std::uint32_t>::max());
         if (gate_) gate_->release(std::numeric_limits<std::uint32_t>::max());
     }

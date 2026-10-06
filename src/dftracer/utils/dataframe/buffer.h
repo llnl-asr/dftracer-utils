@@ -45,7 +45,7 @@ class Buffer {
     }
 
     ~Buffer() {
-        if (release_ && data_ != nullptr) release_(data_);
+        if (release_) release_(data_);
     }
 
     Buffer(const Buffer&) = delete;

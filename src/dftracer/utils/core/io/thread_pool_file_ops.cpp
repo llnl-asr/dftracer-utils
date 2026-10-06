@@ -11,6 +11,13 @@
 
 namespace dftracer::utils::io {
 
+namespace {
+// A socket call may wait on a peer indefinitely, so it is not tracked.
+bool is_file_op(IoOp op) {
+    return op != IoOp::ACCEPT && op != IoOp::RECV && op != IoOp::SEND;
+}
+}  // namespace
+
 ThreadPoolFileOps::ThreadPoolFileOps(Executor& executor, std::size_t pool_size,
                                      unsigned batch_threshold)
     : executor_(executor), pool_(pool_size, batch_threshold) {}
@@ -72,6 +79,7 @@ void ThreadPoolFileOps::submit_pread_callback(int fd, void* buf,
     req->completion = completion;
     req->completion_ctx = context;
     req->pool = &pool_;
+    if (is_file_op(req->op)) pool_.begin_tracked();
     pool_.submit([req] { execute_request(req); });
 }
 
@@ -202,6 +210,7 @@ IoAwaitable ThreadPoolFileOps::submit_sendfile(int out_fd, int in_fd,
 void ThreadPoolFileOps::submit_to_pool(SubmitContext* ctx,
                                        IoAwaitable* awaitable) {
     auto* req = static_cast<IoRequest*>(ctx);
+    if (is_file_op(req->op)) req->pool->begin_tracked();
     // Update the awaitable pointer -- await_suspend passes the real,
     // stable address of the IoAwaitable in the coroutine frame.
     req->awaitable = awaitable;
@@ -280,6 +289,8 @@ void ThreadPoolFileOps::execute_request(IoRequest* req) {
     }
     if (result < 0) result = -errno;
 
+    IoThreadPool* const pool = req->pool;
+    const bool tracked = is_file_op(req->op);
     if (req->awaitable != nullptr) {
         req->awaitable->result_ = result;
         req->executor->enqueue(req->awaitable->handle_);
@@ -287,6 +298,7 @@ void ThreadPoolFileOps::execute_request(IoRequest* req) {
         req->completion(req->completion_ctx, result);
     }
     delete req;
+    if (tracked) pool->end_tracked();
 }
 
 std::size_t ThreadPoolFileOps::poll(int /*timeout_ms*/) {

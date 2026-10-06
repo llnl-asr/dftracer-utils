@@ -155,6 +155,7 @@ void ThreadPoolExecutor::shutdown() {
     }
 
     DFTRACER_UTILS_LOG_DEBUG("%s", "Shutting down executor");
+    quiesce();
     running_ = false;
     wake_all_workers();
 
@@ -199,6 +200,40 @@ void ThreadPoolExecutor::shutdown() {
     drain_thread_local_destroys();
 
     DFTRACER_UTILS_LOG_DEBUG("%s", "Executor shutdown complete");
+}
+
+// Runnable work finishes before the workers stop. A coroutine chain woken to
+// unwind, such as a scan producer whose consumer stopped early, is destroyed
+// mid-chain by the orphan sweep below otherwise, and every frame still
+// awaiting it leaks. Parked coroutines are not waited for: nothing here
+// would wake them. A worker inside a blocking handoff is parked too, not
+// busy: it waits on work the queue carries, or on something that never
+// comes, and either way it holds no run slot.
+void ThreadPoolExecutor::quiesce() {
+    for (;;) {
+        if (live_workers_.load(std::memory_order_acquire) == 0) return;
+        if (io_backend_) io_backend_->flush();
+        bool busy = run_queue_.size_approx() != 0;
+        if (!busy) {
+            std::lock_guard<std::mutex> lock(workers_mutex_);
+            for (const auto& worker : workers_) {
+                if (worker->thread.joinable() &&
+                    !worker->is_idle.load(std::memory_order_seq_cst) &&
+                    worker->blk_state.load(std::memory_order_acquire) ==
+                        BLK_NONE) {
+                    busy = true;
+                    break;
+                }
+            }
+            // A read still in flight resumes its coroutine when it lands.
+            // Counted before the queue is read again: a completion enqueues
+            // before it stops counting.
+            busy = busy || (io_backend_ && io_backend_->in_flight() != 0) ||
+                   run_queue_.size_approx() != 0;
+        }
+        if (!busy) return;
+        std::this_thread::sleep_for(std::chrono::microseconds(200));
+    }
 }
 
 bool ThreadPoolExecutor::spawn_worker(std::size_t cap, bool best_effort) {
@@ -438,10 +473,12 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
 
         // Run queue: coroutine handles from enqueue() and
         // schedule_coroutine_resumption().
+        // Busy before the dequeue, so quiesce() never sees an empty queue
+        // and an idle worker while this worker holds an entry.
+        context->is_idle.store(false, std::memory_order_seq_cst);
         if (run_queue_.try_dequeue(pending_entry)) {
             idle_park = IDLE_PARK_MIN;
             coro::reset_timeslice();
-            context->is_idle.store(false, std::memory_order_relaxed);
             std::coroutine_handle<> pending_resume = pending_entry.handle;
             if (pending_resume && !pending_resume.done()) {
                 // Id comes from the entry, not the promise: foreign promise

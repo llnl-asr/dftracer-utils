@@ -43,7 +43,8 @@ class RunLoop : public Executor {
     io::IoBackend& io_backend() override;
 
     /**
-     * Resume ready coroutines until `done()`.
+     * Resume ready coroutines until `done()`, then run whatever the finished
+     * work left runnable until the queue is empty.
      *
      * Throws when the queue empties with `done()` still false: this loop is
      * the only thing that could resume the awaited work, so waiting longer

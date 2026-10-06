@@ -44,6 +44,19 @@ class IoThreadPool {
     /// Returns number of unflushed items that were pending.
     std::size_t flush();
 
+    /// File operations submitted whose completion has not been delivered. A
+    /// completion is delivered (the waiting coroutine enqueued) before
+    /// end_tracked(), so a zero count means no resumption is still coming.
+    void begin_tracked() noexcept {
+        tracked_.fetch_add(1, std::memory_order_acq_rel);
+    }
+    void end_tracked() noexcept {
+        tracked_.fetch_sub(1, std::memory_order_acq_rel);
+    }
+    std::size_t tracked() const noexcept {
+        return tracked_.load(std::memory_order_acquire);
+    }
+
    private:
     void worker_loop();
     void wake(std::size_t items);
@@ -56,6 +69,7 @@ class IoThreadPool {
     std::mutex mutex_;
     std::condition_variable cv_;
     std::atomic<bool> running_{false};
+    std::atomic<std::size_t> tracked_{0};
 };
 
 }  // namespace dftracer::utils::io

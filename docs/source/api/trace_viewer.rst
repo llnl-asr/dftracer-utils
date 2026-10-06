@@ -52,7 +52,7 @@ Builder methods are lazy and chainable, and every one below returns a
 ``pivot``, ...) returns a plain :class:`~dftracer.utils.LazyFrame`.
 
 The trace builders (``phase``, ``time_range``, ``time_bucket``,
-``resolution``, ``time_unit``, ``time_scale``, ``metadata``, ``rollup_root``,
+``resolution``, ``time_unit``, ``time_scale``, ``all``, ``rollup_root``,
 ``views_root``, ``group_by``, ``agg``, ``agg_numeric_args``, a duql
 ``filter``, a ``select`` of names) may only follow filters. After ``sort_by``,
 ``head``, ``limit``, ``offset``, ``topk``, ``with_column`` and the like they
@@ -67,12 +67,10 @@ aggregated output.
 
    * - Method
      - Effect
-   * - ``filter(pred)`` / ``duql(pred)``
+   * - ``filter(pred)`` / ``duql(pred)`` / ``query(pred)``
      - Keep events matching the :doc:`duql <duql>` (e.g. ``'dur >= 1000 and cat == "POSIX"'``) or a columnar expression (``col("dur") > 1000``). A plain field predicate with only filters before it is pushed to the index; otherwise it filters the plan's rows.
    * - ``phase(name)``
-     - Restrict to a record family: ``"events"`` (``ph="X"``), ``"counters"`` (``ph="C"``), ``"aggregated"`` (rollup records), ``"metadata"`` (``ph="M"``), or ``"any"``.
-   * - ``all()``
-     - Read every record, metadata (``ph="M"``) included, as rows the filters and aggregations see. Without it a viewer reads the record schema's ``data`` row set, which for dftracer traces leaves the metadata records out.
+     - Restrict to a record family: ``"events"`` (``ph="X"``), ``"counters"`` (``ph="C"``), ``"aggregated"`` (rollup records), ``"metadata"`` (``ph="M"``), or ``"any"``, which reads every record, metadata included, as rows the filters and aggregations see. Without a phase a viewer reads the record schema's ``data`` row set, which for dftracer traces leaves the metadata records out.
    * - ``time_range(begin, end)``
      - Keep the events that start in ``[begin, end)``. The occupancy aggregates (``busy``, ``concurrency``, ``utilization``, ``active``) instead take every event that overlaps the window, clipped to it. Metadata records are not windowed.
    * - ``time_bucket(interval_us, normalize_to=None)``
@@ -94,10 +92,10 @@ aggregated output.
    * - ``memory_budget(nbytes)`` / ``auto_spill()``
      - Bound in-memory aggregation state, spilling to disk past the budget. ``nbytes`` takes bytes or a unit string.
 
-Group keys accept the raw event dimensions - ``name``, ``cat``, ``pid``,
+Group keys accept the raw event dimensions (``name``, ``cat``, ``pid``,
 ``tid``, ``io_cat``, ``acc_pat``, ``fhash``, ``hhash``, ``file_path``,
 ``file_name``, ``host_name``, ``rank`` (pid resolved to MPI rank via ``PR``
-metadata), ``arg:<key>`` and any other field - optionally wrapped in a
+metadata), ``arg:<key>`` and any other field), optionally wrapped in a
 transform: ``dirname(...)``, ``basename(...)``, ``lower(...)``, or
 ``bucket(file_path, 'sub1', 'sub2', ...)``, which folds a path to the first
 listed substring it contains (values matching none fold to an empty string).
@@ -151,7 +149,7 @@ the columnar engine (see :doc:`../columnar-engine`):
    )
 
 ``collect_typed`` does a single pass over an aggregation index and returns its
-three record families at once - useful for building several frames from one
+three record families at once, useful for building several frames from one
 scan:
 
 .. code-block:: python
@@ -202,10 +200,16 @@ Inspecting the schema
 
 ``column_info()`` maps every column discoverable from the index to its type
 (``"int64"`` / ``"float64"`` / ``"string"`` / ``"json"``). It reads index
-metadata only - no
-trace scan - so it is cheap and does not need the whole trace materialized the
+metadata, so it is cheap and does not need the whole trace materialized the
 way ``collect().columns`` does (which also only sees the columns present in
-the collected rows).
+the collected rows). ``schema_tree()`` returns the same paths as a nested dict
+with each node's observed ``type``, ``count`` and declared field.
+
+A file whose index holds no path catalog is scanned once for the catalog, and
+the later calls read it. The first full scan of a trace (a ``collect`` or
+``stream`` with no filter, time window or row limit) also writes the catalog,
+so ``columns``, ``schema_tree()`` and duql wildcard paths such as
+``args.counters.*.p50`` see every field without a ``dftracer_index`` build.
 
 As on any :class:`~dftracer.utils.LazyFrame`, the ``columns`` and ``schema``
 properties describe the plan's output instead: its column names, and a
@@ -265,7 +269,7 @@ lane (rows sharing ``partition``, ``("pid", "tid")`` by default; ``ts`` /
 - ``containment(partition, ts, dur, name)`` returns a
   :class:`~dftracer.utils.LazyResult` that buffers one fold; its ``collect()``
   gives a :class:`~dftracer.utils.Containment` whose ``call_tree`` and
-  ``flamegraph`` fields hold both frames from the shared scan - cheaper than
+  ``flamegraph`` fields hold both frames from the shared scan, cheaper than
   collecting both terminals separately.
 
 These terminals take the trace scan and filters only; one after an op they
@@ -279,7 +283,7 @@ result after the terminal instead.
    flame = c.flamegraph          # node_id, parent, name, level, total, self, count
 
 ``flamegraph`` / ``containment`` / ``flamegraph_partial`` also take a ``group``
-key - any field(s) - that roots the tree by that value over the raw events, so
+key, any field(s), that roots the tree by that value over the raw events, so
 each group gets its own top-level subtree named by its value. This is *not* the
 aggregation ``group_by`` (which would collapse the events the tree is built
 from); it is a per-event rooting. ``group=("pid",)`` gives a per-process

@@ -1,13 +1,11 @@
-:description: The duql query language's syntax: tokens, keywords, paths, literals, the grammar, and which constructs the engine evaluates today.
+:description: The duql query language's syntax: tokens, keywords, paths, literals, the grammar, conditions, stages, row sets and limits.
 
 duql syntax
 ===========
 
 duql is the query language of dftracer-utils. Every query string, from
 ``TraceViewer.duql``, ``View::duql``, ``dftracer_view --duql``, the C ABI
-or a plugin, is duql text. This page lists the syntax. The engine evaluates
-only part of it today (see `What the engine evaluates`_); the rest parses and
-fails with an error that names the release stage that adds it.
+or a plugin, is duql text. This page lists the syntax and what each construct does.
 
 The builders in Python (``dftracer.utils.duql``, see :doc:`../api/duql`) and
 C++ (``duql/builder.h``: ``duql::Pipe`` and ``duql::Col``) build the same
@@ -65,7 +63,7 @@ written with backticks: ```null` == 1``.
 Stage names (``where``, ``derive``, ``select``, ``drop``, ``rename``,
 ``distinct``, ``group``, ``agg``, ``window``, ``pivot``, ``unpivot``,
 ``sort``, ``take``, ``skip``, ``sample``, ``expand``, ``parse``, ``lookup``, ``union``,
-``call``, ``time_range``, ``call_tree``, ``bucket``) and ``from`` are
+``call``, ``time_range``, ``call_tree``, ``bucket``, ``session``) and ``from`` are
 keywords only at the start of a stage. Elsewhere they are field names:
 ``where sample == 1`` compares the field ``sample``. A query that starts
 with a stage name is a stage, so a field with that name at the start is
@@ -166,26 +164,32 @@ Comparisons do not chain.
 
    query    = [ "duql" int ] { decl } [ pipeline ]
    decl     = "let" name "=" pipeline ";"
-            | "def" name [ "(" names ")" ] "=" expr ";"
+            | "def" name [ "(" names ")" ] "=" body ";"
             | "source" name "{" [ member { ";" member } [ ";" ] ] "}"
-   member   = name "=" pipeline | "def" name [ "(" names ")" ] "=" expr
+   member   = name "=" pipeline | "def" name [ "(" names ")" ] "=" body
+   body     = expr                               # an expression macro
+            | stage { "|" stage }                # a pipeline macro
+            | expr { "|" stage }                 # a pipeline macro
    pipeline = "from" src { "," src } { "|" stage }
             | stage { "|" stage }
             | expr { "|" stage }                 # an expression means "where expr"
+   stage    = stage-word args | name "(" [ args ] ")"   # a pipeline macro call
    path     = key { "." key | "[" int "]" }
+            | "." [ key { "." key | "[" int "]" } ]      # the current row
+            | "^" "." key { "." key | "[" int "]" }      # the enclosing row
+   indexed  = path "[" expr "]"                   # a computed index ends the path
    pattern  = key "." "*" { "." ( key | "*" ) }   # select, drop, unpivot, any(), all()
 
 A sub-query in an expression starts with ``from``:
 ``run in (from runs | select run)``. The legacy test ``"text" in field`` is
 a case-insensitive substring match; it needs a string on the left.
 
-The stages, arrows, lookups and sources are described in the design
-reference as each release stage lands; the grammar check
-``scripts/check_duql_grammar.py`` holds the complete grammar and runs as the
-``duql_grammar`` test.
+``scripts/duql.lark`` holds the complete grammar, with the argument forms
+of each stage. The ``duql_grammar`` test checks it against the samples in
+``tests/duql/grammar_samples.duql``.
 
-What the engine evaluates
--------------------------
+Conditions
+----------
 
 A View (``View::duql``, ``TraceViewer.duql``, ``dftu_view_duql``,
 ``dftracer_view --duql``) runs a pipeline: the stages in `Pipelines`_. Every
@@ -214,10 +218,8 @@ no ``from``, no stage after the first. A condition may use:
 - ``any(path)`` in place of a field, compared with a literal;
 - ``and``, ``or``, ``not`` and parentheses.
 
-Arrows, sub-queries, ``from`` and the stages of later releases fail with an
-error that names them and the release that adds them. A duration and the
-time functions need a View, which knows the record schema's time roles (see
-`Durations and time`_).
+A duration and the time functions need a View, which knows the record
+schema's time roles (see `Durations and time`_).
 
 Only a comparison, ``in`` list or pattern of one field against literals or
 parameters, or ``any(path)``, can skip chunks through the index or the raw
@@ -1102,7 +1104,7 @@ Unpivot
    unpivot read_bytes, write_bytes as kind, bytes
 
 For each input row, ``unpivot`` gives one row for each listed field, in list
-order. ``key`` holds the field name and ``value`` its value. The other
+order. The first name after ``as`` holds the field name and the second its value. The other
 columns are kept.
 
 The listed fields must fit one value type:

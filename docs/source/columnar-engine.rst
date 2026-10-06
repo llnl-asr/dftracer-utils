@@ -1,4 +1,4 @@
-:description: How the native columnar engine works: typed columns, flat/constant/dictionary/selection encodings, Highway SIMD kernels, and zero-copy Arrow export.
+:description: How the native columnar engine works: typed columns, flat/constant/dictionary/selection/view/chunked encodings, Highway SIMD kernels, and zero-copy Arrow export.
 
 Columnar Engine
 ===============
@@ -24,7 +24,8 @@ Overview
   ``SELECTION`` (a view over a base with no data movement), or ``VIEW`` (a
   string or binary column of 16-byte views: values of up to 12 bytes inline,
   longer ones as a prefix, a buffer index and an offset into buffers the
-  column keeps alive, as Arrow ``string_view``). Dictionary and
+  column keeps alive, as Arrow ``string_view``), or ``CHUNKED`` (the rows of several columns of
+  the same type, each in any other encoding, in order). Dictionary and
   selection keep a repeated string - host, category, file name - stored once.
   A View scan builds a string column as a dictionary over views when a
   batch repeats its values (at most a quarter as many distinct values as
@@ -125,7 +126,8 @@ int/float promotes to ``double`` via a cast. Arithmetic (``+ - * /``) and scalar
 broadcast run over numeric columns; the numeric primitives (``ilog2``,
 ``bit_width``, ``popcount``, ``clz``, ``ctz``, ``mix64``) are unary methods over
 a 64-bit integer column, sharing ``prims.h`` with the JIT/plugin path so they
-compute identically. First-cut inputs are single-chunk, non-null columns.
+compute identically. A chunked column is evaluated chunk by chunk and the
+result stays chunked.
 
 Comparisons against a scalar (``F.dur > lit(1000)``) lower to ``dftu_series_compare``
 and produce a boolean column; combine them with ``&`` / ``|`` / ``~``

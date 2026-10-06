@@ -24,7 +24,7 @@ Encodings: not every column pays for its own storage
 ----------------------------------------------------------
 
 A ``Series`` is not always materialized as a flat buffer. ``types.h`` defines
-four encodings a column can carry:
+six encodings a column can carry:
 
 - **FLAT** - values contiguous in memory, the default and the only encoding a
   raw buffer view is valid over.
@@ -38,21 +38,28 @@ four encodings a column can carry:
   no data movement. Filtering, sorting, and slicing frequently return a
   SELECTION rather than copying matched rows, so a chain of row operations
   does not repeatedly reallocate the whole column.
+- **VIEW** - a string or binary column of 16-byte Arrow views. A value of up
+  to 12 bytes sits inline and a longer one points into a buffer the column
+  keeps alive, so ``filter`` and ``take`` copy no string bytes.
+- **CHUNKED** - the rows of several columns of the same type, each in any
+  other encoding, in order. A streamed ``collect`` returns chunked columns
+  (the morsels it read) instead of copying them into one buffer.
 
 An operator picks the cheapest encoding that is still correct for what it
 is producing; string predicates, for instance, evaluate directly against a
-DICTIONARY without decoding it back to FLAT first. The four encodings are why
+DICTIONARY without decoding it back to FLAT first. The six encodings are why
 the columnar engine can hold a trace-sized amount of string-heavy data
 without collapsing it all to raw bytes up front.
 
-Every kernel reads every encoding. A kernel is written against flat
-buffers, and every C entry point materializes a view once before the kernel
-runs (``dftu_series_materialize``, or the ``DFTU_FLAT_INPUT`` macro that
-wraps it), so a SELECTION or a DICTIONARY never reaches raw pointer
+Every kernel reads every encoding. Expressions, ``unique``, ``value_counts``,
+``is_in``, ``filter``, ``take``, ``sort``, joins and ``group_by`` read view,
+dictionary and selection columns in place, and run string predicates once
+per dictionary entry. A chunked column is evaluated chunk by chunk and the
+result stays chunked. A kernel that still needs flat buffers materializes
+its input first (``dftu_series_materialize``, or the ``DFTU_FLAT_INPUT``
+macro that wraps it), so a non-flat column never reaches raw pointer
 arithmetic that assumes FLAT. A view over a view composes into one
-selection rather than nesting. The rule costs one copy per kernel over a
-view; a chain of row selections stays a view until the first kernel that
-needs the values, and that kernel pays once.
+selection rather than nesting.
 
 Any type, like Parquet
 ----------------------
@@ -62,7 +69,9 @@ parameters: a ``Timestamp`` its unit and timezone, a ``Decimal128`` /
 ``Decimal256`` its precision and scale, a ``FixedSizeBinary`` /
 ``FixedSizeList`` its width, and ``List`` / ``LargeList`` / ``Struct`` /
 ``Map`` their child fields. The set mirrors Arrow's, so a column crosses
-the Arrow C Data Interface without loss in either direction, and a plugin
+the Arrow C Data Interface without loss in either direction (``string_view``
+and ``binary_view`` arrays included, which need ``pyarrow>=16`` on the Python
+side), and a plugin
 source declares a nested column the same way (``dftu_schema_add_field`` /
 ``add_child_field``).
 
@@ -94,7 +103,9 @@ The DataFrame is not a wrapper around Arrow's ``RecordBatch`` - it is its own
 in-memory representation, purpose-built for the encodings above and for
 kernels that operate directly on those encodings. Arrow, and by extension
 pandas, NumPy, and polars, only enter at the boundary: a ``DataFrame`` exports
-through the Arrow C Data Interface with no cell rebuilt and no copy, which is
+through the Arrow C Data Interface with no cell rebuilt and no copy. The
+string columns of a View export as ``string_view`` arrays, or as dictionaries
+of ``string_view`` values. That is
 what makes it free to hand a query result to a Python caller or a plugin. The
 alternative - compute in Arrow's own kernels, or convert to pandas before
 doing anything - would mean every filter or aggregation paid a conversion
@@ -106,7 +117,7 @@ aggregate, sort) from materializing an intermediate at every step.
 .. mermaid::
 
    graph LR
-       Series["Series<br/>(FLAT/CONSTANT/DICTIONARY/SELECTION)"]
+       Series["Series<br/>(FLAT/CONSTANT/DICTIONARY/SELECTION/VIEW/CHUNKED)"]
        Kernels["SIMD kernels<br/>(Highway)"]
        DF["DataFrame"]
        Arrow["Arrow C Data Interface<br/>(zero-copy)"]

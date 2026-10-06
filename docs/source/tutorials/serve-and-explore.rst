@@ -4,7 +4,7 @@ Serve a trace and explore it over HTTP
 =======================================
 
 By the end of this lesson you will have started ``dftracer_server`` over a
-directory of ``.pfw.gz`` traces and queried it with plain ``curl`` - no
+directory of ``.pfw.gz`` traces and queried it with plain ``curl``, with no
 Python, no C++ compiler. It assumes :doc:`first-analysis`; the server answers
 the same kind of query, over HTTP instead of a library call.
 
@@ -54,8 +54,10 @@ Every route returns one JSON response. Start with ``/api/info`` and
 .. code-block:: console
 
    $ curl 'http://127.0.0.1:8099/api/info'
-   {"file_count":1,"time_range":{"min_timestamp_us":1000,"max_timestamp_us":2008},
-    "files":[{"path":"./traces/trace-0.pfw.gz","has_bloom_data":true,
+   {"file_count":1,"schema":{"id":"dftracer","decoder":"dftracer","fields":{
+    "time":"ts","duration":"dur","entity":"pid","lane":"tid","label":"name",
+    "entity_name":"pid"}},"time_range":{"min_timestamp_us":1000,
+    "max_timestamp_us":2008},"files":[{"path":"./traces/trace-0.pfw.gz","has_bloom_data":true,
     "has_checkpoint_index":true,"min_timestamp_us":1000,"max_timestamp_us":2008}]}
 
    $ curl 'http://127.0.0.1:8099/api/files'
@@ -63,7 +65,9 @@ Every route returns one JSON response. Start with ``/api/info`` and
     "has_checkpoint_index":true}],"count":1}
 
 The trace's timestamps run from 1000 to 2008 (microseconds); you will use that
-window next.
+window next. ``schema`` names the record schema the server read the trace with
+and the field that plays each role. The server serves any JSON trace through
+its schema, so the viewer's time, lane and name fields follow it.
 
 4. Fetch events for a timeline
 ---------------------------------
@@ -71,7 +75,7 @@ window next.
 ``/api/viz/events`` is the workhorse behind the trace viewer's timeline:
 time-windowed, level-of-detail-aggregated events. ``begin``, ``end``, and
 ``summary`` are required; ``summary=1`` is full detail. Give it a window that
-actually covers the trace's short duration - a huge ``end`` (like
+actually covers the trace's short duration. A huge ``end`` (like
 ``999999999``) makes the server compute a coarse duration floor sized for that
 whole span, which drops every sub-millisecond event in a demo this small:
 
@@ -101,7 +105,7 @@ Narrow it with ``cat`` or a ``duql`` predicate:
 5. Ask for a per-name summary
 --------------------------------
 
-``/api/viz/stats`` aggregates by event name over the same time window - the
+``/api/viz/stats`` aggregates by event name over the same time window. It is the
 data behind the trace viewer's Analyze tab:
 
 .. code-block:: console
@@ -125,9 +129,9 @@ What you learned
 See also
 ----------
 
-- :doc:`../guides/serving/http-server` - every flag, the access token, and the
+- :doc:`../guides/serving/http-server`, every flag, the access token, and the
   full data-route table (``/api/files/info``, ``/api/rowset``,
   ``/api/cancel``).
-- :doc:`../guides/serving/viz-api` - every ``/api/viz/*`` route, its extra
+- :doc:`../guides/serving/viz-api`, every ``/api/viz/*`` route, its extra
   parameters, and the level-of-detail model behind ``summary``.
-- :doc:`../trace-viewer` - the web UI the same server hosts at ``/``.
+- :doc:`../trace-viewer`, the web UI the same server hosts at ``/``.

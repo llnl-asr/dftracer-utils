@@ -38,6 +38,7 @@ File I/O
 
 The ``fileio`` utilities support both synchronous and asynchronous file operations:
 
+- **Gzip line writer**: ``GzipLineWriter`` (and the blocking ``GzipLineWriterBlocking``) is the single gzip writer. Members end at line ends and compress in parallel
 - **Synchronous readers**: Full in-memory or streaming chunk-based reading of plain files
 - **Async generators**: Non-blocking line/byte generators over gzip-compressed (``.pfw.gz``) archives, using ``co_await`` and coroutines
 - **Indexed and streaming access**: indexed random access via a ``.dftindex`` sidecar, or single-pass streaming decompression when no index is present

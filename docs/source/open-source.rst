@@ -66,9 +66,20 @@ Runtime dependencies
    * - tl::expected
      - ``CC0-1.0``
      - https://github.com/TartanLlama/expected
+   * - PCRE2
+     - ``BSD-3-Clause WITH PCRE2-exception``
+     - https://github.com/PCRE2Project/pcre2
+   * - Vectorscan (optional)
+     - ``BSD-3-Clause``
+     - https://github.com/VectorCamp/vectorscan
    * - ghc::filesystem
      - ``MIT``
      - https://github.com/gulrak/filesystem
+
+PCRE2 and Vectorscan are the regex engines of duql, and Vectorscan also
+prefilters raw lines. Vectorscan is built unless you configure with
+``-DDFTRACER_UTILS_ENABLE_VECTORSCAN=OFF``, and it needs ``ragel`` at build
+time.
 
 Test-only dependencies
 ----------------------

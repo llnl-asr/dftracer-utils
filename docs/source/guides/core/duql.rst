@@ -106,8 +106,10 @@ Operators
 ---------
 
 Every field supports the full set. In Python they are methods on ``Field``/``F``
-(and operators for the comparisons); in C++ they are methods on ``Field`` (and
-``&&`` / ``||`` / ``!``).
+(and operators for the comparisons); in C++ they are methods on
+``dftracer::utils::duql::Field`` (and ``&&`` / ``||`` / ``!``). The
+``dataframe::field`` ``F`` of the C++ tab above is a different type and has no
+``any()``.
 
 .. list-table::
    :header-rows: 1
@@ -166,6 +168,7 @@ operator above.
 
       .. code-block:: cpp
 
+         using dftracer::utils::duql::Field;
          auto q = (Field("tags").any() == "gpu").build();
          // C ABI: dftu_duql_cmp_str("any(tags)", DFTU_DUQL_CMP_EQ, "gpu")
 

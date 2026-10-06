@@ -1312,9 +1312,10 @@ DFTU_EXPORT dftu_dataframe* dftu_dataframe_pivot(const dftu_dataframe* df,
                                                  const char* values,
                                                  const char* agg);
 
-/** One aggregate for dftu_dataframe_group_by_dynamic: `op` is
- * sum|min|max|count|mean, `column` the value column (ignored / may be NULL for
- * count), `out` the result column name. */
+/** One aggregate for the group_by and group_by_dynamic calls: `op` is any
+ * aggregate name in agg_ops.def (an unknown name fails the call), `column` the
+ * value column (ignored / may be NULL for count), `out` the result column name.
+ */
 typedef struct dftu_group_agg {
     const char* op;
     const char* column;

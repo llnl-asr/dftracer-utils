@@ -48,7 +48,7 @@ repeated in each tool's section.
 
 **duql** (``DuqlArgs``)
 
-- ``--duql <duql>`` - duql filter
+- ``--duql <duql>`` (alias ``--query``) - duql filter
   (e.g., ``'cat == "POSIX" and dur > 1000'``)
 - ``--duql-path PATH`` - Load the ``.duql`` macro file or directory PATH
   (repeatable), after ``$DFTRACER_DUQL_PATH``
@@ -378,7 +378,7 @@ dftracer_stats
 - ``--report <type>`` - Report type: summary, categories, names, pid_tids, time_range, duration, top-names, top-categories, detailed (default: summary)
 - ``--top-n <count>`` - Number of results for top-N queries (0=show all, default: 0)
 - ``--top-n-pid-tid <count>`` - Max PID:TID pairs to display (0=show all, default: 10)
-- ``--duql <duql>`` - duql filter (e.g., ``'cat == "POSIX" and dur > 1000'``)
+- ``--duql <duql>`` (alias ``--query``) - duql filter (e.g., ``'cat == "POSIX" and dur > 1000'``)
 - ``--duql-path PATH`` - Load the ``.duql`` macro file or directory PATH (repeatable), after ``$DFTRACER_DUQL_PATH``
 - ``--group-by <dims...>`` - Group-by dimensions: name, cat, pid, tid, fhash, hhash, pid_tid (default: name for detailed)
 - ``--filter-names <names...>`` - Filter by event names
@@ -422,14 +422,13 @@ dftracer_view
 - ``--preset <name>`` - Predefined view: io, compute, dlio
 - ``--recipe <path>`` - Custom view JSON file path
 - ``--save-recipe <path>`` - Save the constructed view to a JSON file
-- ``--duql <duql>`` - duql filter or pipeline (e.g., ``'cat == "POSIX" | derive ms = dur / 1000 | sort -ms | take 5'``). A pipeline with stages after the scan prints a table and does not combine with aggregation, counters, typed, materialize, call-tree, flamegraph or merge output, nor with ``--save-recipe``
+- ``--duql <duql>`` (alias ``--query``) - duql filter or pipeline (e.g., ``'cat == "POSIX" | derive ms = dur / 1000 | sort -ms | take 5'``). A pipeline with stages after the scan prints a table and does not combine with aggregation, counters, typed, materialize, call-tree, flamegraph or merge output, nor with ``--save-recipe``
 - ``--param <name=value>`` - Bind a ``--duql`` parameter; the value is a duql literal such as ``5``, ``1.5``, ``'"read"'`` or ``true`` (repeatable)
 - ``--explain`` - Print the plan of ``--duql`` and exit without scanning
 - ``--time-range <min,max>`` - Keep events starting in ``[min, max)``, in microseconds (e.g., 1000000,2000000)
 - ``--min-duration <us>`` - Minimum event duration in microseconds
 - ``--max-duration <us>`` - Maximum event duration in microseconds
 - ``-o, --output <path>`` - Output file path (default: stdout)
-- ``--all`` - Read every record, metadata (ph=M) included, instead of the source's ``data``
 - ``--duql-path PATH`` - Load the ``.duql`` macro file or directory PATH (repeatable), after ``$DFTRACER_DUQL_PATH``
 - ``--index-dir <path>`` - Directory where ``.dftindex`` stores are created
 - ``--no-auto-index`` - Disable automatic index building for files missing ``.dftindex``
@@ -458,7 +457,7 @@ dftracer_view
 - ``--counters`` - Emit the aggregation as ``ph=C`` counter events
 - ``--phase <phase>`` - Select events by phase: ``events`` (ph=X),
   ``counters`` (ph=C), ``aggregated`` (rollup records), ``metadata`` (ph=M),
-  ``any``
+  ``any`` (every record, metadata included)
 - ``--schema <id>`` - Read records as this registered record schema instead of the one recorded for each file
 - ``--select <cols>`` - Project the result to these columns, comma-separated
 - ``--limit <n>`` - Cap the output to N rows/events (0 = unlimited)
@@ -526,6 +525,7 @@ dftracer_index
 - ``--expected-entries <count>`` - Expected entries per chunk for bloom filter sizing (default: 1024)
 - ``--false-positive-rate <rate>`` - Bloom filter false positive rate (default: 0.01)
 - ``--read-batch-size <MB>`` - Batch read size in MB for stream processing (default: 4)
+- ``--plugin <path>`` - Plugin shared library to load for the build. Its index extensions are built for every file (repeatable)
 
 This binary also accepts the shared :ref:`cli-shared-flags` (Pipeline,
 Indexing).
@@ -694,14 +694,6 @@ that differ need an entry.
       preprocess_time:
         # same structure
 
-**Comparing against an external generator:** ``scripts/compare_dlio_yamls.py``
-diffs two DLIO YAMLs with a tolerance check on parameters and a two-sample
-Kolmogorov-Smirnov check on samples drawn from each fit. Run via ``uv run
-scripts/compare_dlio_yamls.py --python <a.yaml> --cpp <b.yaml>`` (the inline
-PEP-723 metadata installs ``pyyaml`` and ``numpy`` automatically). Same model
-family + small KS = the two YAMLs would produce indistinguishable DLIO sample
-streams.
-
 dftracer_replay
 ---------------
 
@@ -814,7 +806,7 @@ dftracer_comparator
 - ``--variant <path>`` - Variant trace file or directory [required unless ``--config``]
 - ``--config <path>`` - JSON config file for hierarchical comparison (replaces ``--baseline``/``--variant``)
 - ``--preset <name>`` - Built-in comparison preset (see **Presets** below). Requires ``--baseline`` and ``--variant``
-- ``--duql <duql>`` - duql filter. With ``--preset``, ANDed into every top-level node query to narrow results without replacing the preset structure (default: ``'cat == "POSIX" OR cat == "STDIO"'`` for plain mode)
+- ``--duql <duql>`` (alias ``--query``) - duql filter. With ``--preset``, ANDed into every top-level node query to narrow results without replacing the preset structure (default: ``'cat == "POSIX" OR cat == "STDIO"'`` for plain mode)
 - ``--duql-path PATH`` - Load the ``.duql`` macro file or directory PATH (repeatable), after ``$DFTRACER_DUQL_PATH``
 - ``--group-by <keys>`` - Comma-separated group keys (default: cat,name)
 - ``--format <fmt>`` - Output format: ``table`` (default) or ``json``
@@ -921,3 +913,31 @@ and ``--variant``.
         ]
     }
 
+dftracer_genesis_gen_dist
+-------------------------
+
+**Description:** Build per-call-path duration and counter distributions from genesis sweep traces into one combined ``.pfw.gz`` trace
+
+**Usage:**
+
+.. code-block:: bash
+
+   dftracer_genesis_gen_dist [OPTIONS] --output <file> <roots...>
+
+**Options:**
+
+- ``<roots...>`` - Genesis trace roots to walk for ``nodes_<N>/ppn_<M>`` runs
+- ``-o, --output <file>`` - Output ``.pfw.gz`` file (required)
+- ``--member-size <bytes>`` - Gzip member size (default: 33554432 B / 32 MB, the index checkpoint size). Accepts units such as ``512KB`` or ``32MB``
+
+The output holds one record per run (``gtype`` ``run``), per call path
+(``func``) and per call path and counter (``counter``). Each distribution
+carries its quantiles and its DDSketch as base64 ``sketch``, so distributions
+merge exactly. The records match the built-in ``genesis`` record schema. This
+binary also accepts the shared :ref:`cli-shared-flags` (Pipeline, Logging).
+
+**Example:**
+
+.. code-block:: bash
+
+   dftracer_genesis_gen_dist ./sweep_a ./sweep_b -o dist.pfw.gz

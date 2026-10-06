@@ -27,7 +27,7 @@ to extensions, each with a manifest entry per file:
   and of context records (thread and process names, ``PR``, ``CM``), built
   with the pruning extensions
 - ``core.rowset`` - the rows of each row set of the file's record schema
-  source that the build evaluates, one Arrow IPC frame per row set (for
+  source that the build evaluates, one native frame per row set (for
   dftracer: ``files``, ``hosts``, ``strings`` and ``ranks``)
 
 A file's data and its manifest entries are written in one atomic write, so an
@@ -224,6 +224,10 @@ Python API
 ``Indexer`` takes ``directory`` (scanned for trace files) or an explicit
 ``files`` list; at least one must be given. ``ensure_indexed()`` resolves
 which files need work and builds them (checkpoint + bloom tiers by default).
+``extensions`` picks the pruning extensions and ``schema`` names the record
+schema. ``manifest()`` and ``explain(duql)`` inspect the index,
+``rebuild_extension(name)`` and ``drop_extension(name)`` act on one extension,
+and ``rowset(name)`` returns a stored row set as a DataFrame.
 
 .. code-block:: python
 
@@ -259,8 +263,8 @@ which files need work and builds them (checkpoint + bloom tiers by default).
 
 **TraceViewer:**
 
-The Python bindings read trace data through ``TraceViewer`` (a lazy,
-Arrow-native builder over the index), not through a Python ``TraceReader``
+The Python bindings read trace data through ``TraceViewer`` (a lazy
+builder over the index), not through a Python ``TraceReader``
 - ``TraceReader`` is a C++-only class (see above).
 
 .. code-block:: python

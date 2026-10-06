@@ -23,7 +23,9 @@ static variant (``src/CMakeLists.txt``), aggregated behind
 - ``dftracer_utils_duql`` is the duql filter language: the predicate IR, the string
   codec, and the evaluator.
 - ``dftracer_utils_dataframe`` is the columnar SIMD engine: ``Series`` /
-  ``DataFrame``, the Highway kernels, and the Arrow bridge.
+  ``DataFrame``, the Highway kernels, and the Arrow bridge. It also holds the
+  duql parts that call the dataframe (``vectorize``, ``lookup``, ``overlap``
+  and ``group_fold``), so it links ``dftracer_utils_duql``.
 - ``dftracer_utils_utilities`` depends on the four libraries above and
   holds the top domain logic: trace reading, indexing, aggregation,
   comparison, statistics, plugins, and replay.
@@ -47,6 +49,7 @@ active.
        Query --> Core
        Query --> Json
        DF --> Core
+       DF --> Query
        Util --> Core
        Util --> Json
        Util --> Query

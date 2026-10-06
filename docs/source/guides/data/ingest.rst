@@ -109,10 +109,13 @@ show in their zone), durations ``timedelta64``, with ``NaT`` for null; text,
 bytes, decimals, times, lists, structs and maps are object arrays of Python
 objects. ``to_list()`` gives ``datetime``, ``date``, ``time``, ``timedelta``
 and ``decimal.Decimal`` objects (nanoseconds truncate to microseconds there
-only). ``to_pandas(arrow=True)`` keeps the Arrow-backed dtypes and needs
-pyarrow. ``DataFrame`` has no ``to_numpy()`` - convert the column you want
-with ``df["dur"].to_numpy()``, or go through ``to_pandas()`` for the whole
-frame. A ``Series`` and a ``DataFrame`` pickle in the native frame format.
+only). ``to_polars()`` reads the native Arrow stream through polars' Arrow import
+(polars 1.3 or later, no pyarrow). ``to_pandas()`` builds a string column from
+its Arrow array when pandas keeps strings in Arrow (pandas 3 with pyarrow).
+Float16, decimal and dictionary columns keep the native conversion, which gives
+them a different dtype than Arrow does. ``to_pandas(arrow=True)`` keeps the Arrow-backed dtypes and needs
+pyarrow. ``df.to_numpy()`` gives the 2-D array of the whole frame, and
+``df["dur"].to_numpy()`` gives one column. A ``Series`` and a ``DataFrame`` pickle in the native frame format.
 
 ``np.asarray(series)`` also works directly (``Series`` implements the NumPy
 array protocol), and Series arithmetic (``+ - * /``) and comparisons against

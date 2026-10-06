@@ -69,6 +69,11 @@ Server flags
    * - ``--executor-threads``
      - hardware concurrency
      - Worker threads for concurrent request handling.
+   * - ``--timeout``
+     - ``0`` (disabled)
+     - Shut the server down after this much uptime. Accepts units such as
+       ``30s``, ``10m`` or ``1.5h``. It stops a lingering server when a client
+       closes without killing it.
 
 Access token
 ~~~~~~~~~~~~
@@ -144,8 +149,8 @@ Visualization routes
 The ``/api/viz/*`` routes back the trace viewer. Most take a shared time window
 - ``begin`` and ``end`` (required; pass ``0``/``999999999`` for the whole
 trace) - and a ``summary`` level-of-detail knob (``1`` = full detail).
-``/api/viz/breaks`` and ``/api/viz/proctree`` need no time window; they look at
-the whole trace.
+``/api/viz/breaks``, ``/api/viz/proctree`` and ``/api/viz/untimed`` need no time
+window; they look at the whole trace.
 
 .. list-table::
    :header-rows: 1
@@ -178,6 +183,18 @@ the whole trace.
        ``duql``.
    * - ``/api/viz/layers``
      - Operation-name to category map. No params.
+   * - ``/api/viz/untimed``
+     - Records written without a clock (``ts`` 0) that the timeline cannot
+       place, longest first. Params: ``duql``, ``file``, ``offset`` and
+       ``limit`` (default ``1000``, at most ``10000``). No time window.
+
+The provenance route ``GET /api/prov/graph`` returns the graph of entities,
+activities and cause and effect edges that the server assembles from dftracer
+provenance-mode records. Params: ``file`` (limit to one trace file), ``io``
+(default ``1``, attribute POSIX and STDIO I/O to activities), ``all_files``
+(default ``0``, keep interpreter and system files such as ``.py``, ``.so`` and
+``/proc``) and ``mounts`` (extra mount points, comma-separated). The viewer's
+Provenance tab reads it.
 
 A machine-readable OpenAPI 3.1 spec is served at ``/api/openapi.json``, and an
 interactive explorer at ``/api``.

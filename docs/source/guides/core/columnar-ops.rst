@@ -43,9 +43,9 @@ Derived columns
 Build a column expression from ``F.<name>`` and evaluate it with ``.apply`` - no
 wrapper needed. Mix columns and scalars; ``+ - * /``, comparisons, and the
 numeric prims (``ilog2``, ``popcount``, ...) all lower to SIMD kernels. This
-``F`` / ``.apply`` expression layer is **Python-only**; from C++, build the same
-derived column directly with ``Series`` arithmetic and ``with_column`` (see
-:doc:`../data/series`).
+``F`` / ``.apply`` expression layer also exists in C++ as
+``dftracer::utils::dataframe::field::F`` (``F("dur").apply(df)``); see
+:doc:`duql` and :doc:`../data/dataframe`.
 
 .. code-block:: python
 

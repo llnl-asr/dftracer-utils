@@ -128,9 +128,9 @@ view with ``collect()`` - each call returns a ``Deferred<T>`` handle - then
 
    run.execute().get();          // the single shared scan
 
-   df::DataFrame cat_df = *by_cat;   // Deferred<T>::get() / operator* / ->
+   const df::DataFrame& cat_df = *by_cat;   // Deferred<T>::get() / operator* / ->
    std::size_t total  = small->n;
-   df::DataFrame tree_df = *tree;
+   const df::DataFrame& tree_df = *tree;
 
 Reading a ``Deferred`` before ``execute()`` resolves it throws.
 

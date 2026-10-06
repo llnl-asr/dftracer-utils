@@ -7,7 +7,7 @@ A guided path from your first query to writing your own engine plugin. Unlike
 the :doc:`Guides <../guides/index>` (which answer "how do I do X?"), these
 lessons hold your hand: each one is a single sequence that is meant to be read
 and typed top to bottom, and each is guaranteed to end somewhere real. Work them
-in order - every lesson assumes the one before it.
+in order, since every lesson assumes the one before it.
 
 If you have not built the library yet, do :doc:`../getting-started/installation`
 first.
@@ -19,15 +19,15 @@ first.
       :link: first-analysis
       :link-type: doc
 
-      **Easy.** Point at a directory of traces, filter to the events you care
-      about, aggregate them, and read the result as a pandas DataFrame. The
-      whole round trip in a dozen lines.
+      **Easy.** Index a trace, point at a directory of traces, filter to the
+      events you care about, aggregate them, and read the result as a pandas
+      DataFrame. The whole round trip in a dozen lines.
 
    .. grid-item-card:: 2. Analysis in depth
       :link: analysis-in-depth
       :link-type: doc
 
-      **Intermediate.** Go beyond one query: derived columns, duql filters,
+      **Intermediate.** Go beyond one query: derived columns, duql text and the Python duql builder,
       DataFrame and Series operations, and exporting. You build
       a small real analysis end to end.
 
@@ -35,8 +35,8 @@ first.
       :link: extending-the-engine
       :link-type: doc
 
-      **Advanced.** Write your own analytic that rides the one fused scan - first
-      as a Python JIT plugin, then the C++ / C ABI equivalent - and run it over a
+      **Advanced.** Write your own analytic that rides the one fused scan. First
+      write it as a Python JIT plugin, then as the C++ / C ABI equivalent, and run it over a
       trace.
 
    .. grid-item-card:: 4. Find a regression
@@ -83,7 +83,7 @@ compiled plugins.
       :link-type: doc
 
       Scaffold, build, and run a compiled plugin that rides the fused scan,
-      using the ``Batch``/``Event``/``Map`` SDK wrappers.
+      using ``Host::agg`` and the ``agg::`` factories.
 
 .. toctree::
    :hidden:

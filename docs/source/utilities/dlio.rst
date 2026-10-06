@@ -23,7 +23,7 @@ distributions.
 Pipeline overview
 -----------------
 
-End-to-end the module composes four pieces:
+End-to-end the module composes five pieces:
 
 1. **trace_loader** opens an existing RocksDB read-only (with the AGGREGATION
    merge operator re-attached), iterates the ``AGGREGATION`` column family,

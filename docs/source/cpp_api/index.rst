@@ -1,4 +1,4 @@
-:description: Index of the C++20 engine API: the coroutine runtime, columnar DataFrame, query builder, trace-analysis layer, and plugin SDK.
+:description: Index of the C++20 engine API: the coroutine runtime, columnar DataFrame, duql builder, trace-analysis layer, and plugin SDK.
 
 C++ API Reference
 =================

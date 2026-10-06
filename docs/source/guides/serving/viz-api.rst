@@ -12,9 +12,10 @@ Query the visualization API
    ``dftracer_server`` is already running; see :doc:`http-server` for how to
    start it, the shared ``/api/*`` data routes, and the access token.
 
-Every route below returns one JSON response and takes ``begin``/``end`` as a
+Every route below returns one JSON response. Most take ``begin``/``end`` as a
 required microsecond time window (a request missing either one gets a
-``400 Bad Request``); pass ``0``/``999999999`` to mean "the whole trace" in
+``400 Bad Request``). ``breaks``, ``proctree``, ``columns``, ``layers`` and
+``untimed`` take none. Pass ``0``/``999999999`` to mean "the whole trace" in
 practice. ``summary`` is the level-of-detail knob: ``1`` is full detail, and
 higher values apply a coarser duration floor so a zoomed-out view returns
 fewer, larger events instead of every sub-pixel one.
@@ -123,6 +124,13 @@ Other visualization routes
    * - ``/api/viz/layers``
      - The whole-trace operation-name to category map, plus declared vs.
        I/O-touched file counts. No params.
+   * - ``/api/viz/untimed``
+     - Records written without a clock (``ts`` 0, such as CUDA activity), which
+       the timeline cannot place. Longest first, paged. Extra: ``duql``,
+       ``file``, ``offset`` (default ``0``) and ``limit`` (default ``1000``,
+       at most ``10000``). No time window. The server sorts the matches once
+       and serves later pages from its result cache. The response carries
+       ``events``, ``count`` (every match), ``offset`` and ``limit``.
 
 A couple of worked requests
 -----------------------------
@@ -156,6 +164,36 @@ A flamegraph, grouped by process:
    # {"truncated":false,"tree":{"name":"all","total":5000,"self":0,
    #  "count":0,"children":[{"name":"read","total":2500,"self":2500,
    #  "count":50,"children":[]}]}}
+
+Provenance graph
+----------------
+
+``/api/prov/graph`` is not under ``/api/viz`` and takes no time window. It
+assembles entities, activities and their cause and effect edges from dftracer
+provenance-mode records.
+
+.. code-block:: bash
+
+   curl 'http://127.0.0.1:8080/api/prov/graph?io=1'
+   # {"entities":[...],"activities":[...],"stats":{"entities":1,
+   #  "activities":1,"dangling_hashes":0}}
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 78
+
+   * - Param
+     - Meaning
+   * - ``file``
+     - Limit the graph to one trace file.
+   * - ``io``
+     - ``1`` (default) attributes POSIX and STDIO I/O to activities, which adds
+       files and mounts. ``0`` leaves it out.
+   * - ``all_files``
+     - ``0`` (default) drops interpreter and system files (``.py``, ``.so``,
+       ``/proc``). ``1`` keeps them.
+   * - ``mounts``
+     - Extra mount points, comma-separated, such as compute-node mounts.
 
 Requests are cancellable and cacheable the same way as any other route; see
 :doc:`http-server` for the ``X-Request-Id`` / ``/api/cancel`` flow and the

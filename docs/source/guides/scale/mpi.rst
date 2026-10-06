@@ -1,4 +1,4 @@
-:description: Build a folded flamegraph over a trace set too large for one process by folding an arena partial per MPI rank with dftracer_view --flamegraph.
+:description: Distribute dftracer_view --flamegraph, --counters and --group-by/--agg over MPI ranks by folding an arena partial per rank.
 
 Run across ranks with MPI
 =========================
@@ -6,14 +6,15 @@ Run across ranks with MPI
 .. admonition:: Goal
    :class: goal
 
-   Build a folded flamegraph over a trace set too large for one process by
-   spreading the work across MPI ranks. Under ``mpirun`` each rank folds an
-   arena partial over its slice of the input, ranks all-gather the partials,
-   and rank 0 merges them into the final output.
+   Run a flamegraph, a counter extraction or an aggregation over a trace set
+   too large for one process by spreading the work across MPI ranks. Under
+   ``mpirun`` each rank folds a partial over its slice of the input, the
+   partials are gathered, and rank 0 merges them into the final output.
 
-This is CLI-only and requires an MPI build (see below). The flamegraph fold is
-the one distributed binary; the aggregation and view engines scale within a node
-instead (see :doc:`distributed-index` for cross-node indexing via dask).
+This is CLI-only and requires an MPI build (see below). ``dftracer_view``
+distributes ``--flamegraph``, ``--counters`` and the aggregate modes
+(``--group-by`` and ``--agg``). Every other mode, such as ``--call-tree``, runs
+on rank 0 only. See :doc:`distributed-index` for cross-node indexing via dask.
 
 Build with MPI enabled
 ----------------------
@@ -31,16 +32,19 @@ The same ``dftracer_view`` binary distributes under MPI; there is no separate
 Invoke it
 ---------
 
-Launch ``dftracer_view --flamegraph`` under ``mpirun`` (or your scheduler's
-launcher) with the rank count:
+Launch ``dftracer_view`` under ``mpirun`` (or your scheduler's launcher) with
+the rank count:
 
 .. code-block:: bash
 
    mpirun -n 32 dftracer_view --flamegraph --files ./traces/*.pfw.gz -o flamegraph.ndjson
 
-Each rank folds an arena partial over its slice of the input; the ranks
-all-gather the partials and rank 0 merges them into the final folded flamegraph
-(NDJSON). The output path must live on a filesystem visible to rank 0.
+Each rank indexes and folds its slice of the input into a partial; rank 0
+gathers the partials and merges them into the final folded flamegraph (NDJSON).
+``--counters`` emits the merged counter events and ``--group-by``/``--agg``
+print the merged table in the same way. The output path must live on a
+filesystem visible to rank 0. ``--no-auto-index`` skips the per-rank index
+build.
 
 See also
 --------

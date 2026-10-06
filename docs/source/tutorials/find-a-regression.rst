@@ -3,7 +3,7 @@
 Find a regression between two runs
 ====================================
 
-This lesson builds two traces - a baseline and a slower variant - and compares
+This lesson builds two traces, a baseline and a slower variant, and compares
 them to find where the slowdown lives. It assumes you have finished
 :doc:`first-analysis`. It takes about five minutes.
 
@@ -15,7 +15,7 @@ Create a baseline and a slower variant
 
 Both are the same shape as the lesson-1 trace (500 events, alternating
 ``POSIX``/``STDIO``), but the variant adds 150 microseconds to every
-``POSIX`` event - a regression confined to one category, the kind a real
+``POSIX`` event, a regression confined to one category, the kind a real
 comparison needs to surface. Write both, in Python:
 
 .. code-block:: python
@@ -43,7 +43,7 @@ Index both
 -----------
 
 Indexing is idempotent and keyed by each trace's own path, so building it for
-both files is one call each - see :doc:`../guides/core/indexing` for the full
+both files is one call each. See :doc:`../guides/core/indexing` for the full
 picture.
 
 .. code-block:: python
@@ -106,38 +106,39 @@ The comparison keeps the group key (``cat``) and, for each aggregate, adds an
 ``l_<m>`` / ``r_<m>`` pair (left = baseline, right = variant) plus the derived
 ``delta_<m>`` (variant minus baseline) and ``pct_<m>`` (percent change). With
 ``count`` and ``mean_dur`` as the aggregates, that is ``l_count``,
-``r_count``, ``l_mean_dur``, ``r_mean_dur``, ``delta_count``, ``pct_count``,
+``l_mean_dur``, ``r_count``, ``r_mean_dur``, ``delta_count``, ``pct_count``,
 ``delta_mean_dur``, ``pct_mean_dur``.
 
 Print it (``cmp.to_pandas()`` in Python; walk ``cmp.column(...)`` by name in
-C++, as in lesson 1) and you get, for each group:
+C++, as in lesson 1) and you get, for each group. The key is lowercase because
+``group_by`` canonicalizes ``cat``, as in lesson 1:
 
 .. list-table::
    :header-rows: 1
-   :widths: 14 12 12 16 16 14 14 18 18
+   :widths: 14 12 16 12 16 14 14 18 18
 
    * - cat
      - l_count
-     - r_count
      - l_mean_dur
+     - r_count
      - r_mean_dur
      - delta_count
      - pct_count
      - delta_mean_dur
      - pct_mean_dur
-   * - POSIX
-     - 250
+   * - posix
      - 250
      - 260.0
+     - 250
      - 410.0
      - 0
      - 0.0
      - 150.0
      - 57.69
-   * - STDIO
-     - 250
+   * - stdio
      - 250
      - 259.0
+     - 250
      - 259.0
      - 0
      - 0.0
@@ -154,7 +155,7 @@ This comparison DataFrame has no statistical-significance or pass/fail
 column: it is baseline/variant deltas, nothing more. For a threshold-based
 "only show me changes above N%" report, or a hierarchical breakdown, reach for
 the ``dftracer_comparator`` CLI (``--threshold``, ``--group-by``, ``--format
-json``) - see :doc:`../guides/analysis/comparison` for the full flag
+json``). See :doc:`../guides/analysis/comparison` for the full flag
 reference and what a hierarchical comparison adds.
 
 What you learned

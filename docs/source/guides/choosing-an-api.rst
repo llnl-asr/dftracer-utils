@@ -51,8 +51,9 @@ Decision table
    * - Serve query results over HTTP, or open the interactive timeline UI
      - ``dftracer_server``
      - :doc:`serving/http-server`, :doc:`../trace-viewer`
-   * - Run indexing or aggregation across many nodes / MPI ranks
-     - the MPI binaries
+   * - Run a flamegraph, counters or an aggregation across many nodes / MPI
+       ranks
+     - ``dftracer_view`` under ``mpirun``
      - :doc:`scale/mpi`
 
 How to read the table

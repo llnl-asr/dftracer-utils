@@ -27,7 +27,7 @@ Command line
    # Analyze only, do no I/O
    dftracer_replay ./traces --dry-run
 
-The inputs are one or more ``.pfw.gz`` files or directories.
+The inputs are one or more ``.pfw`` or ``.pfw.gz`` files or directories.
 
 Selected flags
 ~~~~~~~~~~~~~~

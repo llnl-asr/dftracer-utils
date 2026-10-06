@@ -51,9 +51,9 @@ Full detail: :doc:`analysis/views`.
 You do not have to index explicitly before querying: the first aggregation
 query against a genuinely fresh directory builds the index (checkpoints,
 bloom filters) as a byproduct of answering itself. Index explicitly instead
-when you want to warm the index ahead of a user-facing query, or when the
-directory's files may have been replaced or appended to since it was last
-indexed (a plain query does not detect that on its own).
+when you want to warm the index ahead of a user-facing query. Creating a view
+rebuilds the index of a file that was replaced or appended to since it was
+last indexed, so explicit indexing only warms it.
 
 .. tab-set::
 

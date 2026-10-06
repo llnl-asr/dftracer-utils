@@ -74,7 +74,7 @@ precondition portable SIMD needs to be worth using at all.
 
    graph LR
        Scan["Fused scan<br/>(parse once)"] --> Batch["POD batch<br/>(no per-row dispatch)"]
-       Batch --> Series["Series<br/>(FLAT/CONSTANT/DICTIONARY/SELECTION)"]
+       Batch --> Series["Series<br/>(FLAT/CONSTANT/DICTIONARY/SELECTION/VIEW/CHUNKED)"]
        Series --> Kernel["Highway kernel<br/>(one body, runtime-dispatched)"]
        Kernel --> ISA["SSE4 / AVX2 / AVX-512 / NEON<br/>(picked at load time)"]
 
@@ -94,7 +94,7 @@ carrying per-architecture kernel code.
 See also
 --------
 
-- :doc:`dataframe-model` for ``Series``/``DataFrame`` and the four column
+- :doc:`dataframe-model` for ``Series``/``DataFrame`` and the six column
   encodings.
 - :doc:`fused-scan` for the one-pass, batch-grained scan that feeds the
   engine.

@@ -49,16 +49,16 @@ build dirs land under ``build/build-<preset>/``).
 
 The build produces five layered component libraries, each as shared and static:
 
-- ``dftracer_utils_core`` - the async runtime (coroutines, tasks, I/O backend,
+- ``dftracer_utils_core``, the async runtime (coroutines, tasks, I/O backend,
   pipelines, RocksDB wrappers, common primitives).
-- ``dftracer_utils_json`` - JSON parsing (simdjson-backed).
-- ``dftracer_utils_duql`` - the duql filter language (predicate IR, string codec, evaluator).
-- ``dftracer_utils_dataframe`` - the columnar SIMD engine (``Series`` /
+- ``dftracer_utils_json``, JSON parsing (simdjson-backed).
+- ``dftracer_utils_duql``, the duql filter language (predicate IR, string codec, evaluator).
+- ``dftracer_utils_dataframe``, the columnar SIMD engine (``Series`` /
   ``DataFrame``, Highway kernels, the Arrow bridge, query execution / masking).
-- ``dftracer_utils_utilities`` - the domain layer (trace readers, indexer,
+- ``dftracer_utils_utilities``, the domain layer (trace readers, indexer,
   aggregation, comparison, statistics, plugins, DLIO, replay).
 
-You do not link these individually - ``find_package(dftracer_utils)`` and the
+You do not link these individually, ``find_package(dftracer_utils)`` and the
 ``dftracer::utils`` target pull the whole set transitively (see below).
 
 Prerequisites
@@ -214,7 +214,7 @@ Pass with ``-D`` at configure time, for example
        ``CXXFLAGS``), not a CMake cache variable.
 
 The sanitizer, coverage, and test toggles all have matching presets (``asan``,
-``ubsan``, ``tsan``, ``asan-ubsan``, ``tests``) - prefer those over setting the
+``ubsan``, ``tsan``, ``asan-ubsan``, ``tests``), prefer those over setting the
 options by hand.
 
 Dependencies (RocksDB, simdjson, nanoarrow, Highway, zstd, lz4, and others) are
@@ -260,7 +260,7 @@ The exported targets are ``dftracer::utils`` (the default alias: shared, falling
 back to static), ``dftracer_utils::shared``, and ``dftracer_utils::static``.
 Linking any of them pulls in all five component libraries and their include
 directories transitively, so no manual ``-I`` / ``-l`` is needed. The stable C ABI (``dftu_dataframe_*``,
-``dftu_duql_*``, and the plugin ``abi.h``) ships in the same libraries - a C
+``dftu_duql_*``, and the plugin ``abi.h``) ships in the same libraries, a C
 consumer links the same target and includes the C headers.
 
 For non-CMake build systems, a pkg-config file is installed for each library

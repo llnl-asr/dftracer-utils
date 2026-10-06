@@ -138,4 +138,4 @@ Reference
 ---------
 
 .. automodule:: dftracer.utils.duql
-   :members: Pipe, Col, c, lit, param, duration, tup, sub, source, rowset, load_path
+   :members: Pipe, Source, Col, c, lit, param, duration, tup, sub, case_, source, rowset, load_path

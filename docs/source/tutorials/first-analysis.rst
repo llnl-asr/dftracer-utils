@@ -31,9 +31,12 @@ in Python.
 1. Create a trace
 ~~~~~~~~~~~~~~~~~
 
-DFTracer traces are gzip-compressed line-delimited JSON (``.pfw.gz``). Plain
-``.pfw`` is not supported; every trace you read must be gzip-compressed. Write a
-tiny one so the rest of the lesson has something to read:
+DFTracer traces are line-delimited JSON, usually gzip-compressed
+(``.pfw.gz``). The Python ``Indexer`` and ``TraceViewer`` read gzip files only,
+whether the file has one member or many. ``dftracer_index``, ``dftracer_view``
+and ``dftracer_run`` also accept a plain ``.pfw``, ``.jsonl`` or ``.ndjson``
+file. They write a gzip copy under ``split/`` and read that. Write a tiny
+gzip trace so the rest of the lesson has something to read:
 
 .. code-block:: python
 
@@ -64,7 +67,8 @@ Python and C++ analysis paths both use it.
    with dft.Indexer(files=["trace.pfw.gz"]) as ix:
        ix.ensure_indexed()
 
-The CLI does the same without Python: ``dftracer_index trace.pfw.gz``.
+The CLI does the same without Python. It indexes every trace under a directory,
+so run ``dftracer_index -d .`` in the folder that holds ``trace.pfw.gz``.
 
 3. Group and aggregate
 ----------------------
@@ -109,13 +113,28 @@ spec: ``count``, ``sum_dur``, ``mean_dur``.
       ``cat == "POSIX"`` filter still matches the raw events but the grouped
       output key is ``posix``.
 
+      The same query reads as one duql text. A duql ``group`` keeps the
+      value as stored, so the keys come back as ``POSIX`` and ``STDIO``:
+
+      .. code-block:: python
+
+         df = (
+             TraceViewer("trace.pfw.gz")
+             .duql("group cat { count(), sum(dur), mean(dur) } | sort cat")
+             .collect()
+         )
+
+      The unnamed entries give the columns ``count``, ``sum_dur`` and
+      ``mean_dur``. Lesson 2 uses duql text and the Python duql builder in
+      more depth.
+
    .. tab-item:: C++
 
       ``View`` is the C++ entry point (namespace
       ``dftracer::utils::trace::views``). The builder methods chain the same
       way; ``View`` is itself a ``LazyFrame`` over the trace scan
       (``dataframe::LazyOps<View>``), so its own ``collect()`` runs the scan
-      directly and returns a ``coro::CoroTask<DataFrame>`` - ``.get()`` drives
+      directly and returns a ``coro::CoroTask<DataFrame>``. ``.get()`` drives
       that to completion for a non-coroutine caller like ``main()``.
 
       .. code-block:: cpp
@@ -163,7 +182,7 @@ spec: ``count``, ``sum_dur``, ``mean_dur``.
       ``DataFrame`` has no ``operator[]``). ``sum_dur`` is an unsigned 64-bit
       column (``dur`` is a non-negative field). Result columns may be chunked,
       so call ``materialize()`` before ``data<std::uint64_t>()``. Inside async code, ``co_await`` the task
-      instead of ``.get()`` - see :doc:`../concepts/coroutine-caveats`.
+      instead of ``.get()``. See :doc:`../concepts/coroutine-caveats`.
 
 4. Filter before aggregating
 ----------------------------
@@ -331,13 +350,14 @@ Now read the folder.
 What you learned
 ----------------
 
-- A trace is gzip JSON (``.pfw.gz``); **index** it once
-  (``Indexer.ensure_indexed()`` or ``dftracer_index``) and both languages read
-  the same index.
+- A trace is JSON lines, gzip-compressed for the Python reader (``.pfw.gz``);
+  **index** it once
+  (``Indexer.ensure_indexed()`` or ``dftracer_index -d <dir>``) and both
+  languages read the same index.
 - **Query** it with ``TraceViewer`` (Python) or ``View`` (C++): ``group_by`` +
   ``agg`` + ``collect``, with aggregate columns named ``count`` / ``sum_dur`` /
   ``mean_dur``.
-- **Filter** with a ``Field`` predicate - ``str(...)`` in Python,
+- **Filter** with a ``Field`` predicate: ``str(...)`` in Python,
   ``.to_string()`` in C++.
 - Point at a **directory** to scan a whole tree in parallel.
 

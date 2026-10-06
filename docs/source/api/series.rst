@@ -34,12 +34,11 @@ How Series relates to its wrapper base:
    :undoc-members:
    :show-inheritance:
 
-Comparisons (``<``, ``<=``, ``>``, ``>=``, plus the named ``gt``/``ge``/
-``lt``/``le``/``eq``/``ne`` methods) return a boolean mask ``Series``.
-``__eq__``/``__ne__`` are intentionally not operator-overloaded (doing so
-would break hashing and Python's ``in``); use ``.eq()`` / ``.ne()`` instead -
-the native C++ ``Series`` has no ``operator==``/``!=`` either, for the same
-reason.
+Comparisons (``<``, ``<=``, ``>``, ``>=``, ``==``, ``!=``, plus the named
+``gt``/``ge``/``lt``/``le``/``eq``/``ne`` methods) return a boolean mask
+``Series``, as in pandas and polars. A ``Series`` is therefore unhashable. The
+native C++ ``Series`` has no ``operator==``/``!=``, so use ``eq()`` / ``ne()``
+there.
 
 See also
 --------

@@ -169,7 +169,7 @@ The shard-set format
 
 A shard set is a directory holding a ``shards.json`` manifest
 (written by ``IndexShardManifest``, which is internal to the index module):
-a ``schema_version`` plus a list of ``IndexShardEntry`` records, each naming
+a ``format_version`` plus a list of ``IndexShardEntry`` records, each naming
 one shard's ``path`` (relative to the manifest's directory), its closed
 ``file_id_min``/``file_id_max`` range, ``num_files``, and ``num_events``. Every
 shard's file-id range is disjoint from every other shard's, so a merge reader
@@ -219,5 +219,5 @@ See also
 - :doc:`distributed-aggregation` - the partial-aggregate fan-in pattern
   ``ShardedView`` runs in-process, and the pattern to use when reducing
   partials yourself (e.g. across MPI ranks).
-- :doc:`mpi` - the MPI flamegraph driver, the other cross-node path.
+- :doc:`mpi` - the MPI modes of ``dftracer_view``, the other cross-node path.
 - :doc:`../io/compression` - ``checkpoint_size`` is the gzip member size.

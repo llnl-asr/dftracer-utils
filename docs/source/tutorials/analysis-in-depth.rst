@@ -153,8 +153,37 @@ duration is at least 100 microseconds.
           0    read    100    10000     100.0
           1   write    100    20000     200.0
 
+      The same filter and aggregation read as one duql text, and the Python
+      duql builder gives the same query as values. Both run on the viewer
+      through ``duql(...)`` or ``on(...)``:
+
+      .. code-block:: python
+
+         from dftracer.utils.duql import Pipe, c, fn
+
+         text = TraceViewer("app.pfw.gz").duql(
+             'where name like "%r%" and dur >= 100 '
+             "| group name { n = count(), total = sum(dur) } | sort name"
+         )
+         built = (
+             Pipe()
+             .where(c("name").like("%r%") & (c("dur") >= 100))
+             .group("name", n=fn.count(), total=c("dur").sum())
+             .sort("name")
+             .on(TraceViewer("app.pfw.gz"))
+         )
+         print(built.collect().to_pandas())
+
+      Expected output (``text.collect()`` gives the same rows):
+
+      .. code-block:: text
+
+               name    n  total
+          0    read  100  10000
+          1   write  100  20000
+
       duql also reads names that a trace stores by hash through row sets
-      of the record schema's source - for example
+      of the record schema's source, for example
       ``fhash -> files.path like "%/scratch/%"`` or
       ``hhash -> hosts.name == "node01"`` in ``TraceViewer.duql``. Those
       need traces that carry the matching metadata, so they are not part of
@@ -256,6 +285,20 @@ see it match.
           0    open    100     5000     50.0
           1    read    100    10000    100.0
           2   write    100    20000    200.0
+
+      A duql query can also derive the column before ``collect()``, so the
+      frame arrives with it:
+
+      .. code-block:: python
+
+         df = (
+             TraceViewer("app.pfw.gz")
+             .duql(
+                 "group name { n = count(), total = sum(dur) } "
+                 "| derive avg = total / n | sort name"
+             )
+             .collect()
+         )
 
    .. tab-item:: C++
 
@@ -435,7 +478,7 @@ by total duration, largest first, then reduce a single column to one number.
    .. tab-item:: C++
 
       ``sort_by`` takes a ``descending`` flag; the ``Series`` reducers return a
-      typed ``Scalar`` - read it with ``.i64()`` / ``.f64()`` / ``.as<T>()``,
+      typed ``Scalar``. Read it with ``.i64()`` / ``.f64()`` / ``.as<T>()``,
       never a raw union member.
 
       .. code-block:: cpp
@@ -486,6 +529,21 @@ Expected output:
 
    DataFrame Table
 
+To write rows back out as a trace, use the viewer instead of the frame.
+``export_trace`` writes the selected events as a gzip trace and ``sink_json``
+writes them as NDJSON. Both return the scan stats:
+
+.. code-block:: python
+
+   stats = TraceViewer("app.pfw.gz").filter('name == "read"').export_trace("reads.pfw.gz")
+   print(stats["events_matched"])
+
+Expected output:
+
+.. code-block:: text
+
+   100
+
 In C++ there is no edge to cross: ``collect()`` already returns the native
 columnar ``dataframe::DataFrame``. Result columns may be chunked, so call
 ``df.column(name).materialize()`` and read the buffer with ``data<T>()`` (as
@@ -499,8 +557,11 @@ What you learned
 - Build a derived column: ``df.apply(F...)`` in Python, ``Series`` arithmetic +
   ``with_column`` in C++.
 - Reshape with ``sort_by`` and reduce a ``Series`` to a scalar.
-- Convert to pandas / Arrow at the edge in Python; C++ already holds the native
-  frame.
+- Write the query as duql text or with the Python duql builder, and derive
+  columns inside the query.
+- Convert to pandas / Arrow at the edge in Python, or write the selected
+  events with ``export_trace``.
+  C++ already holds the native frame.
 
 For the full frame and column reference, see :doc:`../guides/data/dataframe` and
 :doc:`../guides/core/columnar-ops`. Next, :doc:`extending-the-engine` shows how

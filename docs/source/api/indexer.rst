@@ -21,7 +21,7 @@ How the indexer types relate:
 
 .. mermaid:: /_generated/py_indexer.mmd
 
-.. autoclass:: dftracer.utils.Indexer(directory: str = '', files: list[str] | None = None, index_dir: str = '', require_checkpoint: bool = True, require_bloom: bool = True, build_bloom: bool = True, require_aggregation: bool | AggregationConfig | None = None, checkpoint_size: int = 33554432, parallelism: int = 0, force_rebuild: bool = False, runtime: Runtime | None = None)
+.. autoclass:: dftracer.utils.Indexer
    :members: resolve, build, ensure_indexed, get_checkpoint_indexer, rowset, query_file_pids, query_all_file_pids, query_file_info
    :undoc-members:
    :show-inheritance:
@@ -32,6 +32,15 @@ Aggregation is enabled by passing ``require_aggregation=True`` (defaults) or
 ``compute_percentiles``, ``group_by_file``) are fields of
 :class:`~dftracer.utils.AggregationConfig`, not direct ``Indexer`` arguments.
 
+Three arguments steer what the build keeps. ``extensions`` picks the pruning
+extensions from ``"zonemap"``, ``"bloom"``, ``"counts"`` and ``"postings"``
+(all four by default). ``schema`` names the record schema of every trace, as a
+registered id or a ``RecordSchema`` class, and ``None`` detects it per file.
+``memory_budget`` takes bytes or a size such as ``"4GB"`` and bounds what the
+build holds at once. ``require_bloom`` takes ``True`` or a
+:class:`~dftracer.utils.BloomConfig`, and ``checkpoint_size`` takes bytes or a
+size string.
+
 AggregationConfig
 -----------------
 
@@ -40,6 +49,17 @@ Configuration for the aggregation tier, passed via
 ``dftracer.utils``.
 
 .. autoclass:: dftracer.utils.AggregationConfig
+   :members:
+   :no-index:
+   :undoc-members:
+
+BloomConfig
+-----------
+
+Configuration for the bloom tier, passed via ``require_bloom=BloomConfig(...)``.
+Exported from ``dftracer.utils``.
+
+.. autoclass:: dftracer.utils.BloomConfig
    :members:
    :no-index:
    :undoc-members:
@@ -68,15 +88,15 @@ CheckpointIndexer Class
 Distributed Index (SST-based)
 -----------------------------
 
-The distributed-index path lets a coordinator pre-register files, hand out
-``file_id`` ranges to Dask workers, and bulk-ingest worker-produced SST
-artifacts back into the unified ``.dftindex`` store. The public entry point is
-:func:`~dftracer.utils.dask.distributed_index`; it pre-registers files, fans
-one indexing task per worker, and ingests the resulting SSTs. The scan,
+The distributed-index path lets a coordinator assign file ids, fan one
+indexing task per Dask worker, and bulk-ingest worker-produced SST artifacts
+back into the unified ``.dftindex`` store. The public entry point is
+:func:`~dftracer.utils.dask.distributed_index`; it assigns file ids on the
+coordinator, fans one indexing task per worker, and ingests the resulting SSTs. The scan,
 LPT-partition, and SST-registry primitives it drives are internal to the
 native extension and have no public Python path.
 
 .. autofunction:: dftracer.utils.dask.distributed_index
 
-Dask is an optional dependency -- this module is only importable when
+Dask is an optional dependency. This module is only importable when
 ``dask.distributed`` is installed.

@@ -3,6 +3,8 @@
 // Copy fetches it from the same origin - so it works with a private source repo
 // and behind a firewall, where an external agent could not reach it. Download is
 // a native <a download>, so the reader hands the .md to any agent's file upload.
+// "Copy for agent" copies a short prompt with the absolute URLs of this page's
+// Markdown and of llms.txt, for an agent that can fetch the web.
 (function () {
   "use strict";
 
@@ -42,6 +44,35 @@
       );
   }
 
+  function copyForAgent(root) {
+    var md = root.getAttribute("data-md");
+    if (!md || !(navigator.clipboard && navigator.clipboard.writeText)) {
+      flash(root, "Copy unavailable");
+      return;
+    }
+    var base = document.documentElement.getAttribute("data-content_root") || "./";
+    var page = new URL(md, window.location.href).href;
+    var index = new URL("llms.txt", new URL(base, window.location.href)).href;
+    var h1 = document.querySelector("h1");
+    var title = h1 ? h1.textContent.replace(/[#\u00b6]/g, "").trim() : document.title;
+    var text =
+      'I am using dftracer-utils. Read the documentation page "' +
+      title +
+      '" first:\n' +
+      page +
+      "\n\nThe index of the whole documentation is at " +
+      index +
+      ".\nFetch more pages from it when you need them.\n";
+    navigator.clipboard.writeText(text).then(
+      function () {
+        flash(root, "Copied");
+      },
+      function () {
+        flash(root, "Copy failed");
+      }
+    );
+  }
+
   function setMenu(root, open) {
     var menu = root.querySelector(".dftu-copy-page-menu");
     var toggle = root.querySelector(".dftu-copy-page-toggle");
@@ -75,6 +106,11 @@
     if (action && action.getAttribute("data-action") === "copy") {
       setMenu(root, false);
       copyPage(root);
+      return;
+    }
+    if (action && action.getAttribute("data-action") === "agent") {
+      setMenu(root, false);
+      copyForAgent(root);
       return;
     }
     // Download is a native <a download>; just let it through and close the menu.

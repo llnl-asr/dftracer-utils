@@ -103,6 +103,13 @@ files, output writers, trace files and Arrow IPC.
 .. doxygenfile:: dftracer/utils/plugins/abi/arrow.h
    :project: dftracer-utils
 
+``dftu.svc.index``: register an index extension. The host hands its builder
+every record line of a file during an index build and asks it, per filter
+leaf, which chunks may hold a match.
+
+.. doxygenfile:: dftracer/utils/plugins/abi/index.h
+   :project: dftracer-utils
+
 ``dftu.svc.duql`` and ``dftu.svc.sketch``: duql filters against events, and
 quantile sketches.
 

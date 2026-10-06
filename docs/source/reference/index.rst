@@ -29,7 +29,7 @@ why, see :doc:`Concepts <../concepts/index>`.
       :link-type: doc
 
       The stable ``dftu_`` C ABI for C consumers, FFI, and hand-written
-      plugins: the DataFrame, duql, and plugin interfaces.
+      plugins: the DataFrame, indexer, duql, View and plugin interfaces.
 
 .. toctree::
    :hidden:

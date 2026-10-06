@@ -65,6 +65,12 @@ named after the time column, then one column per aggregate.
          dftu_dataframe* windows = dftu_dataframe_group_by_dynamic(
              df, "ts", /*every=*/1000000, /*period=*/0, aggs, 2);
 
+      ``op`` is the same lowercase name the C++ ``Agg`` enumerators have
+      (``"sum"``, ``"min"``, ``"max"``, ``"count"``, ``"mean"``, ``"var"``,
+      ``"std"``, ``"skew"``, ``"kurt"``). The header comment on
+      ``dftu_group_agg`` lists only the first five. An unknown name returns
+      ``NULL``.
+
 The result of a 1-second (``every = 1'000'000`` us) tumbling window over a trace
 is one row per second of wall time, each with the event count and mean duration
 in that second.

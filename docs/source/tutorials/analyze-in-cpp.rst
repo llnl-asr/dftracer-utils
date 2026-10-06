@@ -8,7 +8,7 @@ is the opposite: everything from the query onward is C++, start to finish,
 against the ``View`` engine (namespace ``dftracer::utils::trace::views``,
 header ``dftracer/utils/trace/views/view.h``). It assumes
 :doc:`first-analysis`, so the concepts (index, group-by, aggregate) are not
-re-explained here - only the C++ surface.
+re-explained here, only the C++ surface.
 
 Compile every snippet below against the installed headers, linking
 ``dftracer::utils`` (``find_package(dftracer_utils REQUIRED)`` +
@@ -98,13 +98,13 @@ casing does not survive into the result. ``df.column(name)`` returns a
 unsigned 64-bit column (``dur`` is a non-negative field). Result columns may be chunked, so call
 ``materialize()`` before ``data<T>()``. Read it with
 ``data<std::uint64_t>()``, not ``std::int64_t``. Inside async code,
-``co_await`` the task in place of ``.get()`` - see
+``co_await`` the task in place of ``.get()``. See
 :doc:`../concepts/coroutine-caveats`.
 
 3. Reduce a column to a scalar
 -------------------------------
 
-A ``Series`` has its own reducers - ``sum()``, ``min()``, ``max()`` - each
+A ``Series`` has its own reducers (``sum()``, ``min()`` and ``max()``), each
 returning a ``Scalar`` (header ``dftracer/utils/dataframe/scalar.h``). Read it
 back typed with ``.f64()`` or ``.i64()``:
 
@@ -134,7 +134,58 @@ Expected output (the full, unfiltered trace: POSIX 65000 + STDIO 64750):
 
    total dur across both categories: 129750.0
 
-4. A custom fold with View::branch
+4. Write the query as duql
+--------------------------
+
+``View::duql`` takes a duql text, and the filter, the grouping and the sort
+read as one query. The ``duql::Pipe`` builder (header
+``dftracer/utils/duql/builder.h``) builds the same text from C++ values, and
+``View::duql(const duql::Pipe&)`` runs it:
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/duql/builder.h>
+   #include <dftracer/utils/trace/views/view.h>
+
+   #include <cstdint>
+   #include <cstdio>
+
+   using namespace dftracer::utils::trace::views;
+   using namespace dftracer::utils::duql;
+
+   int main() {
+       // The text form: "where dur < 300 | group cat { n = count(), total = sum(dur) } | sort cat"
+       auto pipe = Pipe()
+                       .where(c("dur") < 300)
+                       .group({"cat"}, {{"n", fn("count")},
+                                        {"total", fn("sum", {c("dur")})}})
+                       .sort({c("cat")});
+
+       auto df = View::from_file("trace.pfw.gz").duql(pipe).collect().get();
+
+       auto cat = df.column("cat");
+       const auto n = df.column("n").materialize();
+       const auto total = df.column("total").materialize();
+       for (std::int64_t i = 0; i < df.num_rows(); ++i)
+           std::printf("%-6.*s %4lld %8lld\n",
+                       static_cast<int>(cat.string_at(i).size()),
+                       cat.string_at(i).data(),
+                       static_cast<long long>(n.data<std::int64_t>()[i]),
+                       static_cast<long long>(total.data<std::int64_t>()[i]));
+   }
+
+Expected output:
+
+.. code-block:: text
+
+   POSIX   145    22475
+   STDIO   145    22330
+
+A duql ``group`` keeps ``cat`` as stored, so the keys keep their case. The
+``group_by`` of step 2 folds ``cat`` to lowercase. The aggregates of a duql
+``group`` are ``Int64`` columns here, so read them with ``data<std::int64_t>()``.
+
+5. A custom fold with View::branch
 ------------------------------------
 
 The built-in ``AggSpec`` ops cover common reductions, but sometimes you want a
@@ -190,7 +241,7 @@ does in step 2: ``F("cat") == "POSIX"`` only matches events whose ``cat`` field
 is literally ``"POSIX"``. ``fold`` accepts the ``F`` predicate directly (it
 derives the pushdown ``Query`` via ``.to_duql()``); a predicate that mixes in
 value ops is not pushable and throws. Reading the ``Deferred<P>`` the callback
-returns (via ``get()``/``*``/``->``) before the branch's scan has run throws -
+returns (via ``get()``/``*``/``->``) before the branch's scan has run throws.
 ``posix_dur_sum_plan.collect()`` is what runs that scan and resolves it, so the
 ``.collect()`` above is a hard prerequisite, not an optimization.
 
@@ -205,6 +256,8 @@ What you learned
   column with ``df.column(name)`` and reduce it with ``Series::sum()`` /
   ``min()`` / ``max()``, each returning a ``Scalar`` read back with ``.f64()``
   / ``.i64()``.
+- ``View::duql(text)`` or ``View::duql(duql::Pipe)`` runs a whole filter,
+  group and sort query, and the duql ``group`` keeps the key as stored.
 - For a one-off computation the built-in ``AggOp`` set does not cover, use
   ``View::branch<T>`` with a callback that registers a ``ViewSession::fold<P>``
   op; ``.collect()`` on the returned ``LazyResult<T>`` runs the scan and

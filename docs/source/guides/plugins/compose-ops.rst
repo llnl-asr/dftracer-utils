@@ -94,7 +94,8 @@ finalize hook (``Task on_finalize(Host h)``, detected automatically by
        }
    };
 
-   dftu_plugin* dftracer_plugin(const dftu_value* config) {
+   extern "C" DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h, const dftu_value* config) {
+       (void)h;
        return dftracer::utils::plugins::make_plugin<MySlice>(config);
    }
 

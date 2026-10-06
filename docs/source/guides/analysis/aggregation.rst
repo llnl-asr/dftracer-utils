@@ -84,7 +84,7 @@ top-level and ``args.*`` alike (``F("args.level").mean()``).
 
          auto df = View::from_file("trace.pfw.gz")
                        .group_by({GroupKey::cat()})
-                       .agg(F("dur").sum(), F("dur").mean(), F.any.count())
+                       .agg({F("dur").sum(), F("dur").mean(), F.any.count()})
                        .collect()
                        .get();
 

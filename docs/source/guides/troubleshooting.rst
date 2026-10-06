@@ -56,17 +56,17 @@ Results look stale after re-running a trace or replacing files
 directory, but a query against that directory still returns the old data (or
 errors in a way that suggests a shape mismatch).
 
-**Cause**: once a ``.dftindex`` exists for a file, a plain query trusts it
-as-is - it does not re-check whether the underlying trace changed since the
-index was built. The bootstrap in the entry above only fires for a clean
-first touch, not for a file that already has a (now-stale) index.
+**Cause**: the index of a file depends on the file's mtime and size. A view
+checks both when it is created and rebuilds a stale index before the first
+scan. If the rebuild fails, creating the view raises an error that names the
+file (``index of <file> is stale and its rebuild failed``). A stale result
+usually means a view that was created before the files changed and then kept.
 
-**Fix**: index explicitly before querying a directory that may have been
-mutated (``ix.ensure_indexed()`` with ``force_rebuild=True`` if the files
-were replaced in place, not just added to). Two read paths refresh a
-possibly-stale index automatically before every scan instead: the
-``dftracer_view`` CLI (disable with ``--no-auto-index``) and the
-sharded/distributed read path. See :doc:`core/indexing`.
+**Fix**: create the view again after the files change. To rebuild ahead of
+time, call ``ix.ensure_indexed()`` (``force_rebuild=True`` if the files were
+replaced in place). ``dftracer_view --no-auto-index`` only refuses to build a
+*missing* index, so it does not stop the refresh of a stale one. See
+:doc:`core/indexing`.
 
 The process gets killed, or memory climbs during a large group-by
 ------------------------------------------------------------------------

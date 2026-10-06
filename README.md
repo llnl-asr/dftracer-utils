@@ -70,25 +70,23 @@ See [docs/README.md](docs/README.md) for detailed documentation building instruc
 ### Prerequisites
 
 - CMake 3.20 or higher
-- C++20 compatible compiler (GCC 11+, Clang 14+)
+- C++20 compatible compiler (GCC 12 or later, Clang 14 or later)
 - zlib development library
 - pkg-config
 
 ### Build
 
 ```bash
-mkdir build && cd build
-cmake ..
-make
+cmake --preset release
+cmake --build --preset release
 ```
 
 ## Installation
 
 ```bash
-mkdir build && cd build
-cmake .. -DCMAKE_INSTALL_PREFIX=<LOCATION>
-make
-make install
+cmake --preset release -DCMAKE_INSTALL_PREFIX=<LOCATION>
+cmake --build --preset release
+cmake --install build/build-release
 ```
 
 ## Developers Guide

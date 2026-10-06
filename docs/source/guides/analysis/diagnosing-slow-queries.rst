@@ -58,10 +58,8 @@ served from the index.
   :doc:`../core/duql` and the pruning mechanics in
   :doc:`../../concepts/indexing-and-pushdown`.
 - If the directory's files were replaced or appended to after the index was
-  built, a plain query reads the (now stale) index as-is rather than
-  detecting the change - see the staleness note in :doc:`../core/indexing`.
-  A query that looks fast but returns wrong-looking results, rather than one
-  that is simply slow, points here instead.
+  built, creating the view rebuilds the stale index, so the first query after
+  such a change pays for a rebuild.
 
 2. Narrow with a more selective predicate
 -----------------------------------------------
@@ -148,7 +146,6 @@ spill instead of scaling threads further:
                             .group_by({GroupKey::cat()})
                             .agg({{AggOp::Sum, "dur", "sum_dur"}})
                             .collect()
-                            .collect()
                             .get();
 
 Check a footprint before committing to a run with ``memory_budget_advice`` -
@@ -165,8 +162,8 @@ repeatedly - a dashboard re-running the same shape, or a batch job re-deriving
 the same rollup - stop paying the scan cost every time. ``.materialize()``
 persists a query's result (a filtered trace for a row query, a rollup for an
 aggregation) so a later matching query is served from it instead of
-rescanning; ``.run()`` (C++) is the build-only form when you only want the side
-effect. This trades one-time build cost for repeated-query speed - reach for
+rescanning. ``View::materialize(group_by, agg)`` (C++) is the build-only form
+when you only want the side effect. This trades one-time build cost for repeated-query speed. Reach for
 it once step 1-4 confirm the per-query cost itself is already as low as it
 can go, not as a first move. Results live in ``.dftindex-cache`` beside the
 index, capped per store by ``DFTRACER_CACHE_MAX_BYTES`` (least recently used

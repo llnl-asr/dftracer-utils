@@ -80,9 +80,16 @@ Verified options:
    * - ``--format``
      - ``table`` (default) or ``json``
    * - ``-t`` / ``--time-interval``
-     - Time bucket width in milliseconds (default: 5000)
+     - Time bucket width (default: 5000). A bare number is milliseconds. A
+       suffix such as ``5s`` converts
    * - ``--threshold``
      - Hide changes below this percentage
+   * - ``--duql``
+     - duql filter applied to both sides (default: all events)
+   * - ``--duql-path``
+     - A ``.duql`` macro file or a directory of them (repeatable)
+   * - ``-f`` / ``--force``
+     - Force an index rebuild
    * - ``--config``
      - JSON config file for a hierarchical comparison
    * - ``--preset``

@@ -11,7 +11,9 @@ Query traces with the View engine
    data. ``View`` (C++, ``dftracer/utils/trace/views/view.h``) is the engine;
    ``TraceViewer`` (Python) is its wrapper. Trace inputs are gzip-compressed
    ``.pfw.gz`` files, or gzipped JSON lines of any other format (read by path,
-   see :doc:`../core/indexing`); plain ``.pfw`` is not supported.
+   see :doc:`../core/indexing`). A ``View`` does not read a plain-text
+   ``.pfw``, but ``dftracer_view`` writes a gzip copy under ``split/`` and reads
+   that.
 
 For the group-by/aggregate vocabulary in depth, see :doc:`aggregation`; this
 page covers building a view, its terminals, and the lower-level escape
@@ -21,7 +23,12 @@ Build a view
 ------------
 
 Builder methods (``filter``, ``duql``, ``phase``, ``time_range``, ...) are
-lazy and return a new view; they do no I/O until a terminal runs.
+lazy and return a new view; they do no I/O until a terminal runs. Creating a
+view is the exception. ``from_file``, ``from_files`` and ``from_directory``
+check each file's index (mtime, size and checkpoint size) and rebuild a stale
+one, so the view never reads an outdated index. If the rebuild fails, the call
+throws an error that names the file. ``.record_schema(id)`` reads the files as
+another registered record schema instead of the one detected from them.
 
 .. tab-set::
 
@@ -37,14 +44,14 @@ lazy and return a new view; they do no I/O until a terminal runs.
          // One file, with an explicit index path (empty = sidecar convention).
          View v = View::from_file("trace.pfw.gz");
 
-         // Or scan a directory recursively for .pfw, .jsonl
-         // and .ndjson files (a coroutine).
+         // Or scan a directory recursively for .pfw, .jsonl and .ndjson
+         // files, plain or gzip (a coroutine).
          View v = View::from_directory("traces/").get();
 
          // The unified F: filter() takes the expression directly (pushdown).
          View filtered = v.filter((F("cat") == "POSIX") && (F("dur") >= 1000));
          // or a Query built from a duql string:
-         View also = v.filter(duql::Query::from_string(R"(cat == "POSIX")").value());
+         View also = v.filter(Query::from_string(R"(cat == "POSIX")").value());
          // or the duql string form:
          View str_form = v.duql(R"(cat == "POSIX" and dur >= 1000)");
 
@@ -72,9 +79,9 @@ links no dataframe engine. See :doc:`../core/duql` for the builder surface.
 Row-shaping builders: ``.phase(p)`` restricts to one ``Phase`` value -
 ``Phase::Events`` (``ph="X"`` events), ``Phase::Counters`` (``ph="C"``
 counters), ``Phase::Aggregated`` (rollup records), ``Phase::Metadata``
-(``ph="M"``), or ``Phase::Any``; ``.all()`` reads every record, metadata
-included (a View reads the record schema's ``data`` by default, which leaves
-the dftracer metadata records out); ``.time_range(begin,
+(``ph="M"``), or ``Phase::Any``, which reads every record, metadata included
+(a View without a phase reads the record schema's ``data``, which leaves the
+dftracer metadata records out); ``.time_range(begin,
 end)`` keeps the events that start in ``[begin, end)`` and
 ``.time_bucket(interval_us, origin)`` keys each event by the bucket of its
 start (``origin`` anchors the windows; Python's ``normalize_to="min"`` anchors
@@ -303,8 +310,8 @@ each call returns a ``Deferred<T>`` handle that resolves only once - then call
 
    run.execute().get();   // runs the one shared scan
 
-   df::DataFrame posix_df = *posix;   // Deferred<T>::get() (or operator*/->)
-   df::DataFrame tree_df  = *tree_h;
+   const df::DataFrame& posix_df = *posix;   // Deferred<T>::get() (or operator*/->)
+   const df::DataFrame& tree_df  = *tree_h;
 
 Reading a ``Deferred`` handle before ``execute()`` resolves it throws. A
 custom fold that needs its own per-event accumulator, or a join/compare of

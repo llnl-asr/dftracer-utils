@@ -105,14 +105,31 @@ the other columns repeated. An empty or null list yields one null row.
 
          dftu_dataframe* rows = dftu_dataframe_explode(df, "args");
 
-``explode`` handles one ``List`` column. Its Python-only companion ``unnest``
+``explode`` handles one ``List`` column. Its companion ``unnest``
 also flattens a ``list<struct<...>>`` (each struct field becomes its own column,
 named by the field) and can keep empty/null lists:
 
-.. code-block:: python
+.. tab-set::
 
-   rows = df.unnest("args")                    # list<struct> -> one column per field
-   rows = df.unnest("args", keep_empty=True)   # empty/null list -> one null row
+   .. tab-item:: C++
+
+      .. code-block:: cpp
+
+         DataFrame rows = df.unnest("args");        // list<struct> -> one column per field
+         rows = df.unnest("args", /*keep_empty=*/true);
+
+   .. tab-item:: Python
+
+      .. code-block:: python
+
+         rows = df.unnest("args")                    # list<struct> -> one column per field
+         rows = df.unnest("args", keep_empty=True)   # empty/null list -> one null row
+
+   .. tab-item:: C
+
+      .. code-block:: c
+
+         dftu_dataframe* rows = dftu_dataframe_unnest(df, "args", /*keep_empty=*/1);
 
 One-hot encode
 --------------

@@ -503,6 +503,32 @@ property of the name, so fetched once), plus ``total_files`` (declared via
     {"layers": {"read": "POSIX", "write": "POSIX"},
      "total_files": 2, "io_files": 2}
 
+GET /api/prov/graph
++++++++++++++++++++
+
+The provenance graph (entities, activities and cause/effect edges), assembled
+from dftracer provenance-mode records.
+
+Query parameters (all optional):
+
+- ``file`` (string) - limit to one trace file
+- ``io`` (int, default ``1``) - attribute POSIX and STDIO I/O to activities (files, mounts)
+- ``all_files`` (int, default ``0``) - keep interpreter and system files (``.py``, ``.so``, ``/proc``)
+- ``mounts`` (string) - extra mount points, comma-separated
+
+.. code-block:: bash
+
+    curl "http://localhost:8080/api/prov/graph"
+
+.. code-block:: json
+
+    {"entities": [{"hash": "f0f014be4d558b8f", "type": "structure",
+                   "id": "out.pdb", "store": "file", "uri": "out.pdb", "pids": [1]}],
+     "activities": [{"aid": "1-a-1", "name": "fold", "activity": "compute",
+                     "pid": 1, "ts": 0, "dur": 5, "used": [],
+                     "generated": ["f0f014be4d558b8f"]}],
+     "stats": {"entities": 1, "activities": 1, "dangling_hashes": 0}}
+
 GET / , /api, and /api/openapi.json
 +++++++++++++++++++++++++++++++++++
 

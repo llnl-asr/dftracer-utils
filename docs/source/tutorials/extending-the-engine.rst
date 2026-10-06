@@ -9,7 +9,7 @@ offer. A **plugin** is your own fold over the single fused scan the engine
 already runs: you see every event once, accumulate into a mergeable state, and
 the host handles the parallelism, merging, and materialization for you.
 
-In this lesson you author one plugin - in Python or C++, your choice of tab -
+In this lesson you author one plugin, in Python or C++ (your choice of tab),
 run it, and read its result. This lesson assumes you have finished lessons 1
 and 2.
 
@@ -42,7 +42,7 @@ That is 100 events for ``pid`` 2 (every third event) and 200 for ``pid`` 1.
 
 The state is the same in both languages: an accumulator grouped by ``pid``
 counting the events in each group. The host runs a copy of the plugin per
-worker, merges the accumulators, and materializes the result - you never write
+worker, merges the accumulators, and materializes the result. You never write
 reduce or threading code.
 
 .. tab-set::
@@ -50,7 +50,7 @@ reduce or threading code.
    .. tab-item:: Python
 
       A JIT plugin is a class decorated with ``@jit.plugin``. It declares one or
-      more maps - a tuple key and an aggregate value - and a single
+      more maps (a tuple key and an aggregate value) and a single
       ``@jit.each_event`` method that updates them per event. The key is a
       1-tuple ``(jit.i64,)`` because ``pid`` is one integer:
 
@@ -71,8 +71,8 @@ reduce or threading code.
 
    .. tab-item:: C++
 
-      A batch arrives as one ``dftu_dataframe`` - N rows in scan order is N
-      events - and an accumulator eats columns straight from it. Save this as
+      A batch arrives as one ``dftu_dataframe``, where N rows in scan order are N
+      events. An accumulator eats columns straight from it. Save this as
       ``events_per_pid.cpp``:
 
       .. code-block:: cpp
@@ -85,7 +85,7 @@ reduce or threading code.
              explicit EventsPerPid(const Config&) {}
 
              void step(const dftu_dataframe* df, Host h) {
-                 const auto hits = h.agg("hits", {"pid"}, {agg::count("hits")});
+                 const auto hits = h.agg("hits", {"pid"}, {agg::count("events")});
                  if (hits) hits.accumulate(df);
              }
 
@@ -101,7 +101,7 @@ reduce or threading code.
 
       ``Host::agg`` names the accumulator, its key columns, and its aggregates;
       the ``agg::`` factories take exactly the fields each op uses, so you never
-      spell a ``DFTU_AGG_*`` code or mis-fill a spec. ``agg_new`` is
+      spell a ``DFTU_AGG_*`` code or mis-fill a spec. ``Host::agg`` is
       get-or-create, so calling it every batch is the normal shape.
       ``accumulate(df)`` folds the batch's ``pid`` column into the host-owned
       state: ``merge`` stays empty and per-worker copies are combined by the
@@ -128,18 +128,18 @@ reduce or threading code.
          run = plugins.run("plugin_trace.pfw.gz")
 
          table = run.results["hits"].to_pandas()
-         print(table.sort_values("pid").reset_index(drop=True))
+         print(table.sort_values("k0").reset_index(drop=True))
          print("scanned:", run.stats["events_scanned"])
 
-      Expected output. The key column is ``pid`` and the aggregate column is
-      ``hits`` (the count):
+      Expected output. A JIT map names its key columns ``k0``, ``k1``, ...
+      and a single aggregate ``value``:
 
       .. code-block:: text
 
-              pid  hits
-           0    1   200
-           1    2   100
-           scanned: 300
+             k0  value
+          0   1    200
+          1   2    100
+          scanned: 300
 
       Pass a directory to ``run()`` and it folds over every ``.pfw.gz`` beneath
       it, exactly like ``TraceViewer``.
@@ -147,7 +147,7 @@ reduce or threading code.
    .. tab-item:: C++
 
       Compile the plugin to a shared library, then fold it over the trace with
-      the ``dftracer_run`` binary - no Python involved. Point ``-I`` at the
+      the ``dftracer_run`` binary with no Python involved. Point ``-I`` at the
       installed headers:
 
       .. code-block:: console
@@ -165,9 +165,24 @@ reduce or threading code.
 
       The 300 scanned events are the fold's input; the per-``pid`` accumulator
       is merged in-process by the host. Use ``-d <directory>`` in place of
-      ``--files`` to fold over a whole tree. To consume the merged values
-      programmatically (as the Python tab does), load the same ``.so`` through
-      Python's ``Plugins``; see :doc:`../plugins`.
+      ``--files`` to fold over a whole tree. To read the merged values, load
+      the same ``.so`` through Python's ``Plugins``. The key column keeps the
+      name ``pid`` and the aggregate is named ``events``:
+
+      .. code-block:: python
+
+         from dftracer.utils.plugins import Plugins
+
+         run = Plugins(["./events_per_pid.so"]).run("plugin_trace.pfw.gz")
+         print(run.results["hits"].to_pandas().sort_values("pid").reset_index(drop=True))
+
+      .. code-block:: text
+
+            pid  events
+         0    1     200
+         1    2     100
+
+      See :doc:`../plugins`.
 
 What you learned
 ----------------
@@ -177,7 +192,7 @@ What you learned
 - Author it in Python with ``@jit.plugin`` + ``jit.map`` + ``@jit.each_event``,
   or in C++ against the ABI with a ``step``/``on_batch`` over the batch's
   ``dftu_dataframe`` and ``Host::agg``, exported by the ``dftracer_plugin``
-  factory - both compile to the same ABI.
+  factory. Both compile to the same ABI.
 - Run it in Python with ``Plugins([...]).run(...)``, or compile the ``.so`` and
   fold it with ``dftracer_run --plugin``.
 

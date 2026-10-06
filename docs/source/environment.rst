@@ -7,8 +7,8 @@ Environment variables dftracer-utils reads at runtime: from the C++ core, the
 CLI binaries, the plugin/JIT build backend, and the Python bindings. Each row
 gives the effect and the value when the variable is unset.
 
-These are runtime knobs, read with ``getenv``/``os.environ`` while a process
-runs. They are not the same as the ``DFTRACER_UTILS_*`` CMake configure
+These are runtime knobs, read through ``Env::get`` (C++) or ``os.environ``
+(Python) while a process runs. They are not the same as the ``DFTRACER_UTILS_*`` CMake configure
 options (``-D...=ON/OFF``) baked into the binary at build time - see
 :ref:`build-options` for those, including ``DFTRACER_UTILS_VALGRIND_MODE``,
 which despite the name-space overlap is a compile-time macro, not something
@@ -43,6 +43,63 @@ Runtime and scheduler
      - Set to ``0``, ``false``, or ``off`` to disable elastic (work-stealing,
        load-scaled) scheduling for a default ``Runtime``. Any other value, or
        leaving it unset, keeps elastic scheduling on.
+
+Memory and kernels
+-------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 32 14 54
+
+   * - Variable
+     - Default
+     - Effect
+   * - ``DFTRACER_UTILS_SPILL_DIR``
+     - system temp directory
+     - Directory for every spill file of a collect, sort, group-by or join. A
+       directory that cannot be created or written fails the run. See
+       :doc:`guides/runtime/memory-budget`.
+   * - ``DFTRACER_UTILS_STRING_PREDICATE``
+     - ``auto``
+     - Scan used by the string class predicates (``isalpha``, ``isdigit`` and
+       so on): ``bits`` or ``rows``. Any other value picks per column from the
+       mean string length. Both give the same result. A test and benchmark
+       hook.
+   * - ``DFTRACER_UTILS_STRING_SCALAR``
+     - unset
+     - Any value runs the byte-at-a-time reference instead of the vector
+       string kernels. A test and benchmark hook.
+   * - ``DFTRACER_UTILS_GROUPBY_STITCH``
+     - unset
+     - Any value makes ``group_by`` build its result through the stitch path
+       instead of writing it in place. A test switch.
+
+duql
+-----
+
+.. list-table::
+   :header-rows: 1
+   :widths: 32 14 54
+
+   * - Variable
+     - Default
+     - Effect
+   * - ``DFTRACER_DUQL_PATH``
+     - unset
+     - ``.duql`` macro files or directories, ``:``-separated. Loaded after the
+       query's own macros and ``--duql-path``. See :doc:`guides/core/duql`.
+   * - ``DUQL_LOOKUP_MAX_ROWS``
+     - ``1000000``
+     - Row cap of an in-memory lookup side. A larger side fails the query.
+   * - ``DUQL_LOOKUP_MAX_BYTES``
+     - ``268435456``
+     - Byte cap of an in-memory lookup side.
+   * - ``DUQL_FILL_MAX_ROWS``
+     - ``10000000``
+     - Row cap of the grid a ``fill`` builds. See :doc:`reference/duql`.
+   * - ``DUQL_PIVOT_MAX_COLUMNS``
+     - ``1024``
+     - Column cap of a ``pivot`` with no ``in`` list.
 
 RocksDB and indexing
 ----------------------

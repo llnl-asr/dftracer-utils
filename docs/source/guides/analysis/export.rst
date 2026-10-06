@@ -55,6 +55,11 @@ which pandas and polars read through Arrow as a categorical column;
 A view column exports as an Arrow ``string_view`` or ``binary_view`` array
 with zero copy (pyarrow 16 or later), and ``from_arrow`` imports such arrays
 the same way.
+``to_polars`` reads the native Arrow stream through polars' own Arrow import
+(polars 1.3 or later) and needs no pyarrow. ``to_pandas`` builds a string
+column from its Arrow array when pandas keeps strings in Arrow (pandas 3 with
+pyarrow). ``to_list``, ``to_numpy`` and the pandas string columns decode each
+dictionary value once, not once per row.
 ``benchmarks/groupby_analyzer_bench.py --ops to_pandas`` measures it.
 
 Write Parquet with ``to_parquet`` (or the polars-shaped ``write_parquet``), or

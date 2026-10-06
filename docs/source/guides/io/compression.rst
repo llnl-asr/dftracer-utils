@@ -41,7 +41,8 @@ members.
      - Compression level (0-12).
    * - ``--chunk-size``
      - ``4194304`` (4 MB)
-     - Bytes per parallel chunk. Each chunk becomes one gzip member.
+     - Gzip member size in bytes. A member is cut at the first line end at or
+       after this size, so a member is never split inside an event line.
 
 Split a trace with dftracer_split
 ---------------------------------
@@ -73,7 +74,8 @@ processing.
      - Application name used in output filenames.
    * - ``-s``, ``--chunk-size``
      - ``4``
-     - Output file size in MB (approximate on-disk size).
+     - Output file size, approximate on-disk size. A bare number is MB. A
+       suffixed value such as ``512KB`` is absolute.
    * - ``-c``, ``--compress``
      - on
      - Compress output with gzip.
@@ -114,8 +116,8 @@ indexed in parallel.
 
 To write trace events out as a rotating series of multi-member chunks, use
 ``ChunkWriter``. ``ChunkWriterConfig`` controls the chunk size, the per-member
-byte size, and compression; a positive ``member_size_bytes`` gives multi-member
-gzip closed at line boundaries, ``0`` gives one member per chunk.
+byte size, and compression. ``member_size_bytes`` must be positive. It gives
+multi-member gzip closed at line boundaries.
 
 .. code-block:: cpp
 
@@ -133,6 +135,75 @@ gzip closed at line boundaries, ``0`` gives one member per chunk.
    co_await writer.open();
    for (auto& line : lines) co_await writer.write_line(line);
    co_await writer.close();
+
+GzipLineWriter
+~~~~~~~~~~~~~~
+
+``GzipLineWriter`` (header ``utilities/fileio/gzip_line_writer.h``) is the one
+writer behind ``ChunkWriter`` and ``FileCompressorUtility``. The View, indexed
+and aggregate exports, the Python export sink, the rechunker, the plugin trace
+writer, ``dftracer_split``, ``dftracer_pgzip``, ``dftracer_genesis_gen_dist``
+and the fake trace writer write through it as well.
+
+The writer turns appended lines into gzip members of at least ``member_size``
+bytes. A member is cut at the first ``\n`` at or after that size. Members are
+compressed in parallel. In ordered mode (the default) they reach the file in
+line order. With ``ordered = false`` each worker writes its own members in no
+total order, which suits parallel file systems. Unordered mode takes
+``producer()`` handles so several coroutines append without sharing state.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 20 50
+
+   * - ``GzipWriterOptions`` field
+     - Default
+     - Meaning
+   * - ``member_size``
+     - the checkpoint size
+     - Minimum bytes per member. Must be positive.
+   * - ``level``
+     - ``6``
+     - Compression level.
+   * - ``workers``
+     - ``0``
+     - Compress workers. ``0`` uses the machine's parallelism.
+   * - ``memory_budget``
+     - ``0``
+     - Bytes the writer may hold. ``0`` is a third of available memory.
+       A call that would pass the budget waits.
+   * - ``ordered``
+     - ``true``
+     - ``false`` lets each worker write its own members.
+
+``append`` takes whole lines that end with ``\n``. ``append_fmt`` and
+``append_json`` format one line in place. The ``{}`` characters are a
+placeholder that takes the next argument. Every other brace is literal, so JSON
+braces need no doubling, and ``{{}}`` writes an empty object ``{}``. The writer
+adds the newline, so a format has none. ``append_json`` escapes string
+arguments for JSON and ``append_fmt`` copies them.
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
+   using namespace dftracer::utils::utilities::fileio;
+
+   GzipWriterOptions opts;
+   opts.member_size = 16 * 1024 * 1024;
+   opts.memory_budget = 512ull * 1024 * 1024;
+
+   auto writer = (co_await GzipLineWriter::open("out.pfw.gz", opts)).value();
+   co_await writer.append_json<R"({"name":{},"dur":{},"args":{{}}})">(
+       "read", 42);
+   auto summary = (co_await writer.close()).value();
+
+``close()`` returns a ``WriteSummary`` with the member and line counts.
+``close(tail)`` appends final bytes that need no newline. The first error is
+kept and returned by every later call. ``GzipLineWriterBlocking`` offers
+``append``, ``append_with``, ``cut`` and ``close`` without coroutines.
+
+``dftracer_genesis_gen_dist`` takes ``--member-size`` (default the checkpoint
+size, units allowed such as ``32MB``) for its output members.
 
 The low-level codec is ``GzipMemberCompressor`` (namespace
 ``dftracer::utils::utilities::fileio::compress``, header

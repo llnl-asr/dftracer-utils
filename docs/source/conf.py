@@ -413,7 +413,8 @@ def _inject_mermaid_theme(app, doctree, docname):
 
 def _inject_copy_page(app, pagename, templatename, context, doctree):
     """Write the page's Markdown to a sibling <page>.md and inject a "Copy page"
-    / "Download page" control that reads it from the same origin. No fetch to an
+    / "Copy for agent" / "Download page" control that reads it from the same
+    origin. No fetch to an
     external host, so it works with a private repo and behind a firewall, and the
     Markdown lives in its own file rather than bloating the HTML. Same rendering
     as llms-full.txt (see copy-page.js)."""
@@ -445,6 +446,8 @@ def _inject_copy_page(app, pagename, templatename, context, doctree):
         "</div>"
         '<div class="dftu-copy-page-menu" role="menu" hidden>'
         '<button type="button" role="menuitem" data-action="copy">Copy page</button>'
+        '<button type="button" role="menuitem" data-action="agent">'
+        "Copy for agent</button>"
         f'<a role="menuitem" href="{name}" download>Download page</a>'
         "</div>"
         "</div>"

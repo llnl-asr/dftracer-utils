@@ -6,8 +6,8 @@ Query a set of index shards
 .. admonition:: Goal
    :class: goal
 
-   Build two independent indexes - as if two workers had each indexed their
-   own slice of a trace set - and query both as one logical index without merging
+   Build two independent indexes, as if two workers had each indexed their
+   own slice of a trace set, and query both as one logical index without merging
    them into a single store first. This is the in-process shape of the pattern a
    real cluster job uses: each worker aggregates its own shard, and a coordinator
    reduces the partials. It assumes :doc:`first-analysis`.
@@ -43,7 +43,7 @@ A shard here is just a directory holding its own trace(s) and its own
 -------------------------------------
 
 ``dftracer_index -d <dir>`` builds ``<dir>/.dftindex`` for everything under
-``<dir>``. Run it once per shard - this is exactly what each worker in a real
+``<dir>``. Run it once per shard. This is exactly what each worker in a real
 job would do to its own slice, with no coordination between them:
 
 .. code-block:: console
@@ -61,7 +61,7 @@ merged store. ``write_shard_set(root, shard_dirs)`` catalogs the shards into a
 ``shards.json`` manifest at ``root``; ``ShardedView::from_manifest(root)``
 reads that catalog back. Under the hood, ``aggregate()`` runs each shard's
 ``aggregate_partial()`` and reduces the partials with
-``merge_partials()`` - see :doc:`../guides/scale/distributed-aggregation`
+``merge_partials()``. See :doc:`../guides/scale/distributed-aggregation`
 for that pattern used directly (e.g. across MPI ranks):
 
 .. code-block:: cpp
@@ -105,10 +105,10 @@ partials into one row):
    posix   500    68250
 
 No process ever opened both shards' trace files in the same scan, and neither
-shard's index was rebuilt or merged on disk - ``ShardedView`` is fully
+shard's index was rebuilt or merged on disk, since ``ShardedView`` is fully
 read-only. ``sum_dur`` here comes back as a ``Uint64`` column: the partial
 merge preserves the field's integer domain, so a merged ``Sum`` over a
-non-negative integer field matches a plain ``View::collect()`` - call
+non-negative integer field matches a plain ``View::collect()``. Call
 ``materialize()`` on the result column (it may be chunked), then read it with
 ``data<std::uint64_t>()``.
 
@@ -129,12 +129,12 @@ What you learned
 See also
 ----------
 
-- :doc:`../guides/scale/distributed-index` - the full shard-set format
+- :doc:`../guides/scale/distributed-index`, the full shard-set format
   (``IndexShardManifest``), ``dftracer_view``'s shard-set autodetection, and
   ``distributed_index()`` (Python, ``dftracer.utils.dask``) for building shards
   across a real dask cluster instead of by hand.
-- :doc:`../guides/scale/distributed-aggregation` - the ``aggregate_partial`` /
+- :doc:`../guides/scale/distributed-aggregation`, the ``aggregate_partial`` /
   ``merge_partials`` fan-out/fan-in pattern ``ShardedView`` runs
   in-process, spelled out for a caller-owned transport (MPI, dask, ...).
-- :doc:`../guides/scale/mpi` - the one distributed CLI binary in the tree,
+- :doc:`../guides/scale/mpi`, the one distributed CLI binary in the tree,
   for the cluster case this tutorial's two-shard example stands in for.

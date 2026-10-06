@@ -98,6 +98,8 @@ class ThreadPoolFileOps : public IoBackend {
     /// Flush pending batched submissions.
     int flush() override;
 
+    std::size_t in_flight() const override { return pool_.tracked(); }
+
     /// Called by await_suspend via SubmitContext::submit.
     /// Submits the IoRequest to the thread pool.
     static void submit_to_pool(SubmitContext* ctx, IoAwaitable* awaitable);

@@ -107,6 +107,11 @@ class IoBackend {
     /// Returns number of operations flushed.
     virtual int flush() { return 0; }
 
+    /// File operations still in flight. The executor waits for zero before it
+    /// stops, so a read that finishes after the workers are gone does not
+    /// resume into a destroyed queue.
+    virtual std::size_t in_flight() const { return 0; }
+
     /// Accept a connection on a listening socket.
     /// Returns the new client fd via IoAwaitable::result_.
     virtual IoAwaitable submit_accept(int listen_fd, struct sockaddr *addr,

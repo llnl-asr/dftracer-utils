@@ -35,6 +35,11 @@ void RunLoop::drive_until(const std::function<bool()>& done) {
             throw_stalled();
         }
     }
+    // Work the finished task left runnable (a producer woken to unwind after
+    // its consumer stopped early) has only this loop to run on; dropping it
+    // here would leak every frame it still holds.
+    while (run_one()) {
+    }
     drain_thread_local_destroys();
     drain_destroys();
 }

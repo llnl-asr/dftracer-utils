@@ -224,6 +224,7 @@ class ThreadPoolExecutor : public TaskExecutor {
     TimerService& get_timer_service() override { return timer_service_; }
 
     bool is_running() const override { return running_.load(); }
+    void quiesce();
 
     std::size_t get_num_threads() const override { return num_threads_; }
 

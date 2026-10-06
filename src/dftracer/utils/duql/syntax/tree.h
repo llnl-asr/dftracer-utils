@@ -1,6 +1,8 @@
 #ifndef DFTRACER_UTILS_DUQL_SYNTAX_TREE_H
 #define DFTRACER_UTILS_DUQL_SYNTAX_TREE_H
 
+#include <dftracer/utils/core/common/versions.h>
+
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -10,7 +12,8 @@
 
 namespace dftracer::utils::duql::syntax {
 
-inline constexpr int DUQL_VERSION = 1;
+inline constexpr int DUQL_VERSION_MAJOR = DFTRACER_UTILS_DUQL_VERSION_MAJOR;
+inline constexpr int DUQL_VERSION_MINOR = DFTRACER_UTILS_DUQL_VERSION_MINOR;
 
 struct Expr;
 using ExprPtr = std::unique_ptr<Expr>;
@@ -408,7 +411,6 @@ struct SourceDecl {
 using Decl = std::variant<Let, Def, SourceDecl>;
 
 struct Program {
-    int version = DUQL_VERSION;
     std::vector<Decl> decls;
     /// Absent when the text holds only declarations.
     PipelinePtr pipeline;
@@ -417,7 +419,8 @@ struct Program {
 /// Structural equality, ignoring spans.
 bool equal(const Program& a, const Program& b);
 
-/// Canonical text: `duql 1`, then one declaration or stage per line.
+/// Canonical text: the engine's `duql MAJOR.MINOR`, then one declaration or
+/// stage per line.
 std::string to_text(const Program& query);
 std::string to_text(const Expr& expr);
 /// A pipeline on one line, stages joined by ` | `.

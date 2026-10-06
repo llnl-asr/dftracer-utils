@@ -374,7 +374,7 @@ QueryFrame cat_name_frame(const std::vector<std::string>& cats,
 TEST_CASE("plugin ABI: on_batch hands the batch as columns") {
     g_col_state = {};
     dftu_plugin p{};
-    p.abi_version = DFTRACER_PLUGIN_ABI_VERSION;
+    p.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
     p.plan_duql = col_plan_duql;
     p.make_slice = col_make_slice;
     p.merge = col_merge;

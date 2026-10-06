@@ -330,15 +330,16 @@ Result<Plugins::Impl::Loaded> load_plugin(const std::string& path,
                           "plugin '" + path + "' factory returned null");
     }
 
-    if (plugin->abi_version != DFTRACER_PLUGIN_ABI_VERSION) {
+    if (plugin->abi_version != DFTRACER_UTILS_PLUGIN_ABI_VERSION) {
         const std::uint32_t got = plugin->abi_version;
         if (plugin->destroy) plugin->destroy(plugin->self);
         unregister_all();
         dlclose(handle);
-        return make_error(ErrorCode::INVALID_ARGUMENT,
-                          "plugin '" + path + "' ABI version " +
-                              std::to_string(got) + " does not match host " +
-                              std::to_string(DFTRACER_PLUGIN_ABI_VERSION));
+        return make_error(
+            ErrorCode::INVALID_ARGUMENT,
+            "plugin '" + path + "' ABI version " + std::to_string(got) +
+                " does not match host " +
+                std::to_string(DFTRACER_UTILS_PLUGIN_ABI_VERSION));
     }
 
     if (std::string bad = config_violation(plugin, config); !bad.empty()) {

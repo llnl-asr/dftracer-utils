@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_INDEX_STORE_INDEX_DATABASE_H
 
 #include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/core/common/versions.h>
 #include <dftracer/utils/index/store/file.h>
 #include <dftracer/utils/index/store/types.h>
 
@@ -56,7 +57,8 @@ class IndexDatabase {
    public:
     /// On-disk layout version. An index with another stored version is
     /// rebuilt, never read.
-    static constexpr std::uint32_t FORMAT_VERSION = 1;
+    static constexpr std::uint32_t FORMAT_VERSION =
+        DFTRACER_UTILS_INDEX_FORMAT_VERSION;
 
     explicit IndexDatabase(const std::string& index_path,
                            IndexOpenMode open_mode = IndexOpenMode::ReadWrite);

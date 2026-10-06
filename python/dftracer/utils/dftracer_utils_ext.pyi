@@ -31,6 +31,8 @@ _T = TypeVar("_T")
 # The suffixes directory discovery lists as traces: .pfw, .jsonl and
 # .ndjson, plain or gzip.
 TRACE_FILE_PATTERNS: Tuple[str, ...]
+# The plugin ABI version this extension accepts: (major << 16) | (minor << 8) | patch.
+PLUGIN_ABI_VERSION: int
 
 # A run() map result value: emitted bytes, or an eager/streamed pyarrow object.
 _RunResultValue = Union[bytes, "pa.Table", "pa.RecordBatchReader"]

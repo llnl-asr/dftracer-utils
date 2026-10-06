@@ -23,7 +23,7 @@ namespace dftracer::utils::index::build {
 inline constexpr std::uint64_t STATS_FLOOR_BYTES = 8ULL << 20;
 /// Version of the zonemap, bloom and counts records a build writes; a change
 /// in what they mean bumps it so existing evidence rebuilds.
-inline constexpr std::uint32_t EVIDENCE_FORMAT_VERSION = 2;
+inline constexpr std::uint32_t EVIDENCE_FORMAT_VERSION = 1;
 
 struct ChunkIndexerConfig {
     bool index_name = true;

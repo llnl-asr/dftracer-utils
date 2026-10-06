@@ -126,9 +126,12 @@ where name in $names and name not in $skip and path like $p and path not ilike $
 ---
 time_range $t0 .. $t0 + 10s | time_range 1s .. | time_range .. 5s overlap | bucket 1s fill as sec | sample $n seed $s | union runs | union "b.pfw.gz"
 ---
-duql 1
+duql 0.1
 let runs = where type == "run";
 where run -> runs.app == "laghos"
+---
+duql 0
+where a == 1
 ---
 def ms(x) = x / 1000;
 def big = dur > 1s;
@@ -226,6 +229,10 @@ where any(args.*.size) > 1
 where all(a.*.b) == 0 and x * 2 > 1
 ---
 select a * b, a.b * 2
+---
+missing == "x"
+---
+any(missing) == "a" and x is missing
 ### invalid
 def m = from data | where x;
 ---

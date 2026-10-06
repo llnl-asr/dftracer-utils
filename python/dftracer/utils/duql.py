@@ -12,7 +12,7 @@ give the same plan and rows::
         .sort(-c("total"))
         .take(10)
     )
-    q.text()      # 'duql 1\\nfrom "trace.pfw.gz"\\n| where ...'
+    q.text()      # 'duql 0.1\\nfrom "trace.pfw.gz"\\n| where ...'
     q.collect()   # a DataFrame
 
 Every builder call only builds; ``collect``, ``count``, ``first``, ``stream``
@@ -526,7 +526,7 @@ class Pipe:
         return "".join(d + ";\n" for d in self._decls) + self._inline()
 
     def text(self) -> str:
-        """The canonical duql text, ``duql 1`` first. Raises
+        """The canonical duql text, with the engine's ``duql MAJOR.MINOR`` first. Raises
         DFTUtilsValueError with the parser's message when it does not parse."""
         return duql_canonical(self.raw())
 

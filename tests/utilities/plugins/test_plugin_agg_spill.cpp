@@ -88,7 +88,7 @@ constexpr std::uint64_t TINY_BUDGET = 4096;
 dftu_plugin make_plugin(::dftu_task* (*on_columns)(void*, const dftu_dataframe*,
                                                    const dftu_plugin_host*)) {
     dftu_plugin p{};
-    p.abi_version = DFTRACER_PLUGIN_ABI_VERSION;
+    p.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
     p.plan_duql = [](void*) -> const char* { return nullptr; };
     p.make_slice = [](void*) -> void* {
         static int sentinel;

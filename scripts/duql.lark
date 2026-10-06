@@ -3,7 +3,7 @@
 
 start: pragma? decl* pipeline?
 
-pragma: "duql" INT
+pragma: "duql" (INT | FLOAT)
 
 decl: "let" NAME "=" pipeline ";"                    -> let_decl
     | "def" NAME params? "=" def_body ";"            -> def_decl
@@ -162,7 +162,7 @@ TRUE: "true"
 FALSE: "false"
 
 // Reserved in expressions: never a NAME. Backticks quote such a key.
-NAME: /(?!(and|or|not|in|like|ilike|between|is|escape|null|true|false|missing)\b)[A-Za-z_][A-Za-z0-9_]*/
+NAME: /(?!(and|or|not|in|like|ilike|between|is|escape|null|true|false)\b)[A-Za-z_][A-Za-z0-9_]*/
 QKEY: /`[^`]+`/
 PARAM: /\$[A-Za-z_][A-Za-z0-9_]*/
 DURATION.2: /[0-9]+(\.[0-9]+)?(ns|us|ms|s|m|h|d)(?![A-Za-z0-9_])/

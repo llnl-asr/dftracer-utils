@@ -2,6 +2,7 @@
 
 import gzip
 import json
+import re
 
 import pytest
 
@@ -321,7 +322,7 @@ CASES = [
 @pytest.mark.parametrize("built,text", CASES, ids=[t for _, t in CASES])
 def test_builder_equals_text_tree(built, text):
     assert built.text() == duql_canonical(text)
-    assert built.text().startswith("duql 1\n")
+    assert re.match(r"duql [0-9]+\.[0-9]+\n", built.text())
 
 
 ARRAY_CASES = [

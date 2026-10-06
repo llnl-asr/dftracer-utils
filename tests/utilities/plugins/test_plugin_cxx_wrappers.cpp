@@ -86,7 +86,7 @@ FoldEvent evt(StringIntern& intern, std::uint64_t pid, std::uint64_t dur,
 
 dftu_plugin make_wrappers_plugin() {
     dftu_plugin p{};
-    p.abi_version = DFTRACER_PLUGIN_ABI_VERSION;
+    p.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
     p.plan_duql = [](void*) -> const char* { return nullptr; };
     p.make_slice = [](void*) -> void* {
         static int sentinel;

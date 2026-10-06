@@ -305,7 +305,7 @@ set_target_properties(${cabi_target} PROPERTIES OUTPUT_NAME test_plugin_c_abi
 add_test(NAME utilities/plugins/test_plugin_c_abi COMMAND ${cabi_target})
 
 # +++++++++++++++++++++++++++++++++++++++++
-# ABI version gate: a real .so stamped with a wrong DFTRACER_PLUGIN_ABI_VERSION,
+# ABI version gate: a real .so stamped with a wrong DFTRACER_UTILS_PLUGIN_ABI_VERSION,
 # loaded by utilities/plugins/test_plugin_abi_gate through a real dlopen.
 # +++++++++++++++++++++++++++++++++++++++++
 

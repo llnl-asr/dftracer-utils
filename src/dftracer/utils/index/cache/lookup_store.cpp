@@ -1,6 +1,7 @@
 #include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/hash/fnv1a.h>
+#include <dftracer/utils/core/common/versions.h>
 #include <dftracer/utils/duql/syntax/tree.h>
 #include <dftracer/utils/index/cache/lookup_store.h>
 #include <dftracer/utils/index/cache/lru.h>
@@ -50,7 +51,7 @@ std::optional<std::uint64_t> lookup_signature(
         sig.push_back('\0');
     };
     add(side_text);
-    add(std::to_string(duql::syntax::DUQL_VERSION));
+    add(DFTRACER_UTILS_DUQL_VERSION_STRING);
     add(std::to_string(plan.record_schema->params_hash()));
     std::vector<const trace::views::ViewFile*> files;
     files.reserve(plan.files.size());

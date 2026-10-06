@@ -204,13 +204,28 @@ TEST_CASE("lex - call adjacency") {
 }
 
 TEST_CASE("parse - duql pragma") {
-    auto q = duql::syntax::parse("duql 1\nwhere a == 1");
+    using duql::syntax::DUQL_VERSION_MAJOR;
+    using duql::syntax::DUQL_VERSION_MINOR;
+    const auto with = [](int major, int minor) {
+        return "duql " + std::to_string(major) + "." + std::to_string(minor) +
+               "\nwhere a == 1";
+    };
+    auto q = duql::syntax::parse(with(DUQL_VERSION_MAJOR, DUQL_VERSION_MINOR));
     REQUIRE(q.has_value());
-    CHECK(q->version == 1);
     CHECK(q->pipeline);
-    auto bad = duql::syntax::parse("duql 2\nwhere a == 1");
-    REQUIRE_FALSE(bad.has_value());
-    CHECK(bad.error().line == 1);
+
+    auto major_only = duql::syntax::parse(
+        "duql " + std::to_string(DUQL_VERSION_MAJOR) + "\nwhere a == 1");
+    REQUIRE(major_only.has_value());
+
+    for (const auto& text : {with(DUQL_VERSION_MAJOR + 1, 0),
+                             with(DUQL_VERSION_MAJOR, DUQL_VERSION_MINOR + 1),
+                             std::string("duql 1e2\nwhere a == 1")}) {
+        CAPTURE(text);
+        auto bad = duql::syntax::parse(text);
+        REQUIRE_FALSE(bad.has_value());
+        CHECK(bad.error().line == 1);
+    }
 }
 
 TEST_CASE("parse - a computed index round-trips and ends the path") {
@@ -949,7 +964,9 @@ TEST_CASE("round trip - grammar samples") {
         if (!a) continue;
         const std::string printed = duql::syntax::to_text(*a);
         INFO("printed:\n", printed);
-        CHECK(printed.rfind("duql 1", 0) == 0);
+        CHECK(printed.rfind(
+                  std::string("duql " DFTRACER_UTILS_DUQL_VERSION_STRING), 0) ==
+              0);
         auto b = duql::syntax::parse(printed);
         CHECK_MESSAGE(b.has_value(), (b ? std::string() : b.error().format()));
         if (!b) continue;
@@ -985,7 +1002,9 @@ TEST_CASE("parse - syntax, printing and errors") {
         INFO(text);
         const auto q = parsed(text);
         const std::string printed = duql::syntax::to_text(q);
-        CHECK(printed == std::string("duql 1\n") + text + "\n");
+        CHECK(printed ==
+              std::string("duql " DFTRACER_UTILS_DUQL_VERSION_STRING) + "\n" +
+                  text + "\n");
         CHECK(duql::syntax::equal(q, parsed(printed)));
     }
     const auto dotted = parsed(R"re(parse args.fname ~ "(?<a>x)")re");

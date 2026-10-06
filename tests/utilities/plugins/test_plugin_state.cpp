@@ -183,7 +183,7 @@ dftu_state_desc make_desc(bool spillable) {
 // run produces came through the tier-2 path.
 dftu_plugin state_only_plugin() {
     dftu_plugin p{};
-    p.abi_version = DFTRACER_PLUGIN_ABI_VERSION;
+    p.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
     p.make_slice = [](void*) -> void* {
         static int sentinel;
         return &sentinel;
@@ -291,7 +291,7 @@ SliceRun* g_slice_sink = nullptr;
 
 dftu_plugin growing_plugin(bool reclaimable) {
     dftu_plugin p{};
-    p.abi_version = DFTRACER_PLUGIN_ABI_VERSION;
+    p.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
     p.make_slice = [](void*) -> void* { return new GrowingSlice{}; };
     p.on_batch = [](void* slice, const dftu_dataframe* df,
                     const dftu_plugin_host*) -> dftu_task* {

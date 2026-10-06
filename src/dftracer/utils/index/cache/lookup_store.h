@@ -20,9 +20,9 @@ namespace dftracer::utils::index::cache {
 std::string lookup_cache_path(const trace::views::detail::ViewPlan& plan);
 
 /// A lookup side's identity: a hash of `side_text` (the side's canonical
-/// text), DUQL_VERSION, the record schema params hash, and each file's index
-/// registry record (content hash, mtime, size). Nullopt when a file is not
-/// fresh in its index, so the side must not be cached. Throws
+/// text), the duql version, the record schema params hash, and each file's
+/// index registry record (content hash, mtime, size). Nullopt when a file is
+/// not fresh in its index, so the side must not be cached. Throws
 /// INVALID_ARGUMENT until the plan's record schema is resolved
 /// (plan_record_schema).
 std::optional<std::uint64_t> lookup_signature(

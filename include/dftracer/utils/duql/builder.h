@@ -547,9 +547,10 @@ class Pipe {
 
     /// The builder's duql text, not canonical.
     std::string raw() const;
-    /// The canonical duql text, `duql 1` first. Throws std::invalid_argument
-    /// with the parser's message when the text does not parse (a malformed
-    /// path or call). Defined in the duql library, not in this header.
+    /// The canonical duql text, the engine's `duql MAJOR.MINOR` first. Throws
+    /// std::invalid_argument with the parser's message when the text does not
+    /// parse (a malformed path or call). Defined in the duql library, not in
+    /// this header.
     std::string text() const;
     /// The bound parameters, by name without the `$`.
     const std::vector<std::pair<std::string, ParamValue>>& bound() const {

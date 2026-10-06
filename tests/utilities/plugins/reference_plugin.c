@@ -1169,7 +1169,7 @@ DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
     }
 
     memset(&g_plugin, 0, sizeof(g_plugin));
-    g_plugin.abi_version = DFTRACER_PLUGIN_ABI_VERSION;
+    g_plugin.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
     g_plugin.self = cfg;
     g_plugin.make_slice = make_slice;
     g_plugin.on_batch = on_batch;

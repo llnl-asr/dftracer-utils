@@ -1156,7 +1156,7 @@ PluginFold::PluginFold(const dftu_plugin* plugin,
                 std::make_unique<StateAccum>(reg, memory_budget_));
     }
 
-    host_.abi_version = DFTRACER_PLUGIN_ABI_VERSION;
+    host_.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
     host_.h = this;
     host_.get_service = host_get_service;
     host_.resolve = host_resolve;

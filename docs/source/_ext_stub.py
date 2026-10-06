@@ -819,6 +819,7 @@ def install_extension_stub() -> None:
 
     # Module constants accessed by name.
     ext.NUM_SHARDS = 0
+    ext.PLUGIN_ABI_VERSION = 0
 
     # Fallback: any other native symbol (the _Native*/_TraceViewer handles, the
     # arrow ops _join/_window/..., future additions) resolves to a permissive

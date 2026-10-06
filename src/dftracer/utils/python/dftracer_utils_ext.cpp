@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/memory_budget.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_serialization.h>
+#include <dftracer/utils/plugins/abi_version.h>
 #include <dftracer/utils/python/batch_indexer.h>
 #include <dftracer/utils/python/columnar_eval.h>
 #include <dftracer/utils/python/dataframe.h>
@@ -139,6 +140,11 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     PyModule_AddIntConstant(
         m, "NUM_SHARDS",
         dftracer::utils::index::schemas::dft::agg::AGG_KEY_NUM_SHARDS);
+    // A JIT plugin built in a source tree stamps this version, so it matches
+    // the host it is loaded into.
+    if (PyModule_AddIntConstant(m, "PLUGIN_ABI_VERSION",
+                                DFTRACER_UTILS_PLUGIN_ABI_VERSION) < 0)
+        return NULL;
     {
         const auto& patterns =
             dftracer::utils::utilities::filesystem::trace_file_patterns();

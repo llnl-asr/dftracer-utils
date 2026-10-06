@@ -19,7 +19,7 @@ language itself is in :doc:`../reference/duql`.
        .sort(-c("total"))
        .take(10)
    )
-   print(q.text())   # duql 1 / from "trace.pfw.gz" / | where ... on separate lines
+   print(q.text())   # duql 0.1 / from "trace.pfw.gz" / | where ... on separate lines
    df = q.collect()  # a DataFrame
 
    slow = source("trace.pfw.gz").where(c("name") == param("n")).bind(n="read")

@@ -5,6 +5,7 @@
 #include <cctype>
 #include <charconv>
 #include <string>
+#include <system_error>
 
 namespace dftracer::utils::duql::syntax {
 
@@ -54,17 +55,30 @@ class Parser {
 
     Program program() {
         Program q;
-        if (word("duql") && peek(1).kind == Tok::INT) {
+        if (word("duql") &&
+            (peek(1).kind == Tok::INT || peek(1).kind == Tok::FLOAT)) {
             advance();
             const Token& v = advance();
-            int version = 0;
-            std::from_chars(v.text.data(), v.text.data() + v.text.size(),
-                            version);
-            if (version != DUQL_VERSION)
+            const char* end = v.text.data() + v.text.size();
+            int major = 0;
+            int minor = 0;
+            auto [p, ec] = std::from_chars(v.text.data(), end, major);
+            bool ok = ec == std::errc{};
+            if (ok && p != end) {
+                ok = *p == '.';
+                if (ok) {
+                    auto [p2, ec2] = std::from_chars(p + 1, end, minor);
+                    ok = ec2 == std::errc{} && p2 == end;
+                }
+            }
+            if (!ok)
+                fail(v, "duql version must be MAJOR or MAJOR.MINOR, not " +
+                            std::string(v.text));
+            if (major != DUQL_VERSION_MAJOR || minor > DUQL_VERSION_MINOR)
                 fail(v, "Unsupported duql version " + std::string(v.text) +
-                            "; this build reads version " +
-                            std::to_string(DUQL_VERSION));
-            q.version = version;
+                            "; this build reads duql " +
+                            std::to_string(DUQL_VERSION_MAJOR) + "." +
+                            std::to_string(DUQL_VERSION_MINOR));
         }
         while (true) {
             if (word("let") && peek(1).kind == Tok::NAME &&

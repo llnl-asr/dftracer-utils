@@ -78,7 +78,7 @@ void count_destroy(void*) {}
 
 dftu_plugin make_count_plugin(CountState* st) {
     dftu_plugin p{};
-    p.abi_version = DFTRACER_PLUGIN_ABI_VERSION;
+    p.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
     p.self = st;
     p.plan_duql = count_plan_duql;
     p.make_slice = count_make_slice;

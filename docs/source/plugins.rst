@@ -121,10 +121,10 @@ synchronously, or a ``dftu_task`` the host awaits for async work (section 9).
 The delivered ``dftu_dataframe`` is owned by the host and valid only for the
 call - N rows in scan order is N events, never retain the pointer.
 
-``DFTRACER_PLUGIN_ABI_VERSION`` is not a number anyone bumps: it is a hash
-over the ABI headers, computed when the host is built. A plugin compiled
-against any other version of the headers is refused at load with a version
-message, never called into. Rebuild the plugin against the host you run.
+``DFTRACER_UTILS_PLUGIN_ABI_VERSION`` comes from the ``abi`` line of the
+``VERSION`` file, packed as ``(major << 16) | (minor << 8) | patch``. A plugin
+built against another ABI version is refused at load with a version message and
+is never called into. Rebuild the plugin against the host you run.
 
 .. tab-set::
 
@@ -159,7 +159,7 @@ message, never called into. Rebuild the plugin against the host you run.
    .. tab-item:: C (raw ABI)
 
       Fill the ``dftu_plugin`` struct by hand. ``abi_version`` must be set to
-      ``DFTRACER_PLUGIN_ABI_VERSION``; ``self`` is the read-only config shared
+      ``DFTRACER_UTILS_PLUGIN_ABI_VERSION``; ``self`` is the read-only config shared
       across slices.
 
       .. code-block:: c
@@ -184,7 +184,7 @@ message, never called into. Rebuild the plugin against the host you run.
 
          dftu_plugin* dftracer_plugin(dftu_plugin_host* h, const dftu_value* config) {
              (void)h; (void)config;
-             g_plugin.abi_version   = DFTRACER_PLUGIN_ABI_VERSION;
+             g_plugin.abi_version   = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
              g_plugin.self          = NULL;
              g_plugin.plan_duql    = plan_duql;
              g_plugin.make_slice    = make_slice;

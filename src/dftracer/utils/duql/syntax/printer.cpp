@@ -229,8 +229,7 @@ static bool eq(const SourceDecl& a, const SourceDecl& b) {
 }
 
 bool equal(const Program& a, const Program& b) {
-    return a.version == b.version && eq(a.decls, b.decls) &&
-           eq(a.pipeline, b.pipeline);
+    return eq(a.decls, b.decls) && eq(a.pipeline, b.pipeline);
 }
 
 namespace {
@@ -1010,9 +1009,7 @@ std::string to_text(const Pipeline& pipeline) {
 
 std::string to_text(const Program& query) {
     Printer p;
-    p.out += "duql ";
-    p.out += std::to_string(query.version);
-    p.out += '\n';
+    p.out += "duql " DFTRACER_UTILS_DUQL_VERSION_STRING "\n";
     for (const Decl& decl : query.decls) {
         if (const auto* let = std::get_if<Let>(&decl)) {
             p.out += "let ";

@@ -59,6 +59,8 @@ In expressions these words are reserved, in any letter case: ``and``,
 ``or``, ``not``, ``in``, ``like``, ``ilike``, ``between``, ``is``,
 ``escape``, ``null``, ``true``, ``false``. A field with such a name is
 written with backticks: ```null` == 1``.
+``missing`` is a keyword only after ``is``, so ``missing == "x"`` reads a field
+named ``missing``.
 
 Stage names (``where``, ``derive``, ``select``, ``drop``, ``rename``,
 ``distinct``, ``group``, ``agg``, ``window``, ``pivot``, ``unpivot``,
@@ -70,8 +72,10 @@ with a stage name is a stage, so a field with that name at the start is
 written with backticks: ```sample` == 1``. After a ``|``, a name followed
 by ``(`` that is not a stage name is a pipeline macro call (see `Macros`_).
 
-The first line may be ``duql 1``, the language version. Printed queries
-always carry it.
+The first line may declare the language version, as ``duql 0.1`` or
+``duql 0``. A query runs when its major version equals the engine's and its
+minor version is not greater. A missing minor counts as ``0``. Printed queries
+always carry the engine's version.
 
 Paths
 -----
@@ -1253,7 +1257,8 @@ released.
 Explain
 ~~~~~~~
 
-``View::explain_duql``, ``TraceViewer.explain_duql``,
+``View::explain_duql``, ``TraceViewer.explain_duql`` (also
+``explain_query``),
 ``dftu_view_explain_duql`` and ``dftracer_view --duql ... --explain`` print
 the plan without scanning, one step per line:
 

@@ -193,7 +193,7 @@ void build_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
 
 BuildHost::BuildHost(std::string plugin_name)
     : plugin_name_(plugin_name.empty() ? "plugin" : std::move(plugin_name)) {
-    host_.abi_version = DFTRACER_PLUGIN_ABI_VERSION;
+    host_.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
     host_.h = this;
     host_.get_service = build_get_service;
     host_.resolve = build_resolve;

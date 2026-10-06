@@ -43,7 +43,7 @@ dftu_task* no_finalize(void*, const dftu_plugin_host*) { return nullptr; }
 
 dftu_plugin make_bare_plugin(void* self) {
     dftu_plugin p{};
-    p.abi_version = DFTRACER_PLUGIN_ABI_VERSION;
+    p.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
     p.self = self;
     p.make_slice = make_empty_slice;
     p.merge = no_merge;

@@ -12,6 +12,6 @@ dftu_plugin* dftracer_plugin(dftu_plugin_host* h, const dftu_value* config) {
     (void)h;
     (void)config;
     memset(&g_plugin, 0, sizeof(g_plugin));
-    g_plugin.abi_version = DFTRACER_PLUGIN_ABI_VERSION ^ 0xFFFFFFFFu;
+    g_plugin.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION ^ 0xFFFFFFFFu;
     return &g_plugin;
 }

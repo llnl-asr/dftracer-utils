@@ -367,7 +367,7 @@ dftu_plugin* make_plugin(const dftu_value* config) {
     hd->plan = std::string(hd->config.get("duql"));
 
     dftu_plugin& vt = hd->vt;
-    vt.abi_version = DFTRACER_PLUGIN_ABI_VERSION;
+    vt.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
     vt.self = hd;
 
     vt.plan_duql = [](void* self) -> const char* {

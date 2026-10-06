@@ -91,7 +91,7 @@ FoldEvent evt(StringIntern& intern, const char* cat, const char* name,
 
 dftu_plugin make_agg_factory_plugin() {
     dftu_plugin p{};
-    p.abi_version = DFTRACER_PLUGIN_ABI_VERSION;
+    p.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
     p.plan_duql = [](void*) -> const char* { return nullptr; };
     p.make_slice = [](void*) -> void* {
         static int sentinel;
@@ -109,7 +109,7 @@ dftu_plugin make_agg_factory_plugin() {
 
 dftu_plugin make_agg_plugin() {
     dftu_plugin p{};
-    p.abi_version = DFTRACER_PLUGIN_ABI_VERSION;
+    p.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
     p.plan_duql = [](void*) -> const char* { return nullptr; };
     // This plugin holds no per-slice state (the accumulator lives in the host's
     // PluginFold), so a non-null sentinel is all PluginFold::step needs - no
@@ -267,7 +267,7 @@ dftu_plugin make_columns_plugin(
                                const dftu_plugin_host*),
     ::dftu_task* (*on_final)(void*, const dftu_plugin_host*) = no_finalize) {
     dftu_plugin p{};
-    p.abi_version = DFTRACER_PLUGIN_ABI_VERSION;
+    p.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
     p.plan_duql = [](void*) -> const char* { return nullptr; };
     p.make_slice = [](void*) -> void* {
         static int sentinel;

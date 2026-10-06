@@ -1,4 +1,4 @@
-// A plugin built against a different DFTRACER_PLUGIN_ABI_VERSION must be
+// A plugin built against a different DFTRACER_UTILS_PLUGIN_ABI_VERSION must be
 // refused with a clear error at load, never crash. build_injected_plugins()
 // (used by the other plugin tests) skips dlopen and the ABI gate entirely, so
 // this drives Plugins::Builder against a real .so stamped with a wrong

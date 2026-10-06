@@ -508,11 +508,20 @@ Series rolling(const Series& v, std::int64_t window, RollingOp op) {
     const std::int64_t grain = std::max(GRAIN_ROWS, window * 4);
     if (op == RollingOp::Sum || op == RollingOp::Mean) {
         parallel_for(n, grain, [&](std::int64_t b, std::int64_t e) {
-            double run = 0.0;
+            // Kahan-compensated adds and removes, as pandas' rolling sum:
+            // a plain running sum drifts by the window's magnitude on a
+            // long series and no longer rounds like a fresh sum would.
+            double run = 0.0, add_c = 0.0, sub_c = 0.0;
+            const auto kahan = [&run](double x, double& c) {
+                const double y = x - c;
+                const double t = run + y;
+                c = (t - run) - y;
+                run = t;
+            };
             const std::int64_t i0 = std::max<std::int64_t>(0, b - window + 1);
             for (std::int64_t i = i0; i < e; ++i) {
-                run += p[i];
-                if (i - window >= i0) run -= p[i - window];
+                kahan(p[i], add_c);
+                if (i - window >= i0) kahan(-p[i - window], sub_c);
                 if (i >= b) {
                     if (i >= window - 1)
                         out[i] = op == RollingOp::Mean

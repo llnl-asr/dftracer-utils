@@ -1,14 +1,14 @@
 #! /bin/bash
 
-clang_format_exe="clang-format"
+clang_format_exe="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )/clang-format.sh"
 if [ $# -ge 1 ]; then
     clang_format_exe="$1"
 fi
 
-SUPPORTED_CLANG_FORMAT_VERSION="19.1.7"
+SUPPORTED_CLANG_FORMAT_MAJOR="19"
 
 if ! command -v "$clang_format_exe" >/dev/null 2>&1; then
-    echo "You must have 'clang-format' in PATH to use 'check-formatting.sh'"
+    echo "Cannot run '$clang_format_exe' for 'check-formatting.sh'"
     exit 1
 fi
 
@@ -18,8 +18,8 @@ clang_format_version_str=$($clang_format_exe --version)
 # suffixes like "14.0.0-1ubuntu1".
 clang_format_version=$(echo "$clang_format_version_str" | sed -n 's/.*clang-format version \([0-9][0-9.]*\).*/\1/p')
 
-if [ "$clang_format_version" != "$SUPPORTED_CLANG_FORMAT_VERSION" ]; then
-    echo "WARNING: the .clang-format file in this repo is designed for version $SUPPORTED_CLANG_FORMAT_VERSION."
+if [ "${clang_format_version%%.*}" != "$SUPPORTED_CLANG_FORMAT_MAJOR" ]; then
+    echo "WARNING: the .clang-format file in this repo is designed for version $SUPPORTED_CLANG_FORMAT_MAJOR."
     echo "         You are running with clang-format v$clang_format_version."
     echo "         The resulting check is highly likely to be incorrect."
 fi

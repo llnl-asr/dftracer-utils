@@ -78,7 +78,8 @@
       "cacheVariables": {
         "DFTRACER_UTILS_TESTS": "ON",
         "DFTRACER_UTILS_DEBUG": "ON",
-        "DFTRACER_UTILS_BUILD_PYTHON": "ON"
+        "DFTRACER_UTILS_BUILD_PYTHON": "ON",
+        "DFTRACER_UTILS_BUILD_STATIC": "OFF"
       }
     },
     {

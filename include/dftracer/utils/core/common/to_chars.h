@@ -4,6 +4,9 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <string>
 #include <system_error>
 
@@ -13,8 +16,13 @@
 // 13.3+; fall back to snprintf on older deployment targets (cibuildwheel
 // arm64 default is 11.0).
 #define DFTRACER_UTILS_FP_TO_CHARS_UNAVAILABLE 1
-#include <cstdio>
-#include <cstdlib>
+#endif
+
+// libc++ has no floating-point std::from_chars before LLVM 20, whatever the
+// deployment target.
+#if defined(DFTRACER_UTILS_FP_TO_CHARS_UNAVAILABLE) || \
+    (defined(_LIBCPP_VERSION) && _LIBCPP_VERSION < 200000)
+#define DFTRACER_UTILS_FP_FROM_CHARS_UNAVAILABLE 1
 #endif
 
 namespace dftracer::utils {
@@ -26,10 +34,19 @@ namespace dftracer::utils {
 inline char* to_chars_double(char* first, char* last, double v) noexcept {
     if (last <= first) return nullptr;
 #ifdef DFTRACER_UTILS_FP_TO_CHARS_UNAVAILABLE
+    // The shortest of %.15g, %.16g and %.17g that reads back as `v`: the
+    // same digits std::to_chars gives.
     const std::size_t cap = static_cast<std::size_t>(last - first);
-    const int n = std::snprintf(first, cap, "%.17g", v);
-    if (n <= 0 || static_cast<std::size_t>(n) >= cap) return nullptr;
-    return first + n;
+    for (int digits = 15; digits <= 17; ++digits) {
+        char buf[32];
+        const int n = std::snprintf(buf, sizeof(buf), "%.*g", digits, v);
+        if (n <= 0 || static_cast<std::size_t>(n) >= cap) return nullptr;
+        if (digits == 17 || std::strtod(buf, nullptr) == v) {
+            std::memcpy(first, buf, static_cast<std::size_t>(n));
+            return first + n;
+        }
+    }
+    return nullptr;
 #else
     auto [p, ec] = std::to_chars(first, last, v);
     return ec == std::errc{} ? p : nullptr;
@@ -47,10 +64,14 @@ inline std::string double_text(double v) {
 inline std::string float_text(float v) {
     char buf[32];
 #ifdef DFTRACER_UTILS_FP_TO_CHARS_UNAVAILABLE
-    const int n =
-        std::snprintf(buf, sizeof(buf), "%.9g", static_cast<double>(v));
-    return n > 0 ? std::string(buf, static_cast<std::size_t>(n))
-                 : std::string();
+    for (int digits = 6; digits <= 9; ++digits) {
+        const int n = std::snprintf(buf, sizeof(buf), "%.*g", digits,
+                                    static_cast<double>(v));
+        if (n <= 0) return std::string();
+        if (digits == 9 || std::strtof(buf, nullptr) == v)
+            return std::string(buf, static_cast<std::size_t>(n));
+    }
+    return std::string();
 #else
     auto [p, ec] = std::to_chars(buf, buf + sizeof(buf), v);
     return ec == std::errc{} ? std::string(buf, p) : std::string();
@@ -74,12 +95,12 @@ inline char* to_chars_i64(char* first, char* last, std::int64_t v) noexcept {
 
 /// Parse a double from [first, last) like std::from_chars: no leading
 /// whitespace or '+', `ptr` at the first byte not consumed, `ec` set when no
-/// number starts there. Falls back to strtod on a copy where libc++
-/// availability-gates the floating-point overload.
+/// number starts there. Falls back to strtod on a copy where libc++ lacks the
+/// floating-point overload.
 inline std::from_chars_result from_chars_double(const char* first,
                                                 const char* last,
                                                 double& out) noexcept {
-#ifdef DFTRACER_UTILS_FP_TO_CHARS_UNAVAILABLE
+#ifdef DFTRACER_UTILS_FP_FROM_CHARS_UNAVAILABLE
     if (first == last || *first == ' ' || *first == '+')
         return {first, std::errc::invalid_argument};
     char buf[64];

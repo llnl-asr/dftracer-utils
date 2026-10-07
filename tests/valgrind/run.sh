@@ -482,6 +482,8 @@ run_py_one() {
   [[ "$py_timeout" != "0" ]] && py_tmo_cmd=(timeout --kill-after=30 "$py_timeout")
 
   log "Python ▶ $fname"
+  local start_ts
+  start_ts="$(now_s)"
   (PYTHONMALLOC=malloc PYTHONDONTWRITEBYTECODE=1 \
     "${py_tmo_cmd[@]}" \
     valgrind --tool=memcheck --num-callers=20 --fair-sched=yes "${tc_opts[@]}" ${VALGRIND_EXTRA_OPTS:-} \
@@ -493,6 +495,9 @@ run_py_one() {
     "$VENV_DIR/bin/python" -m pytest "$file" \
     -p no:cacheprovider -q >"$logf" 2>&1) || rc=$?
   printf '%s\t%s\n' "$rc" "$fname" >"$rdir/${fname}.rc"
+  printf '%s\t%s\n' "$fname" \
+    "$(awk -v a="$start_ts" -v b="$(now_s)" 'BEGIN { printf "%.1f", b - a }')" \
+    >"$rdir/${fname}.dur"
   if ((rc == 0)); then
     log "Python ✓ $fname"
   elif ((rc == 5)); then
@@ -587,6 +592,24 @@ PY
     run_py_one "$file" "$results_dir" "$xmldir" "$py_timeout" &
   done
   wait || true
+
+  if [[ "${VALGRIND_EMIT_DURATIONS:-0}" == "1" ]]; then
+    local out="$SUPP_DIR/py-durations.tsv"
+    if [[ -n "${VALGRIND_PYTEST_FILES:-}" || "${VALGRIND_SHARD:-1/1}" != "1/1" ]]; then
+      out="$LOG_DIR/py-durations-partial.tsv"
+      err "Partial run: writing partial durations to $out (run every file unsharded for a full manifest)"
+    fi
+    local dur_files=("$results_dir"/*.dur)
+    {
+      echo "# Valgrind wall time per Python test file, seconds. A hint for shard balancing"
+      echo "# only (VALGRIND_SHARD); a missing entry costs balance, never correctness."
+      echo "# Regenerate: VALGRIND_EMIT_DURATIONS=1 make valgrind-py"
+      if [[ -e "${dur_files[0]}" ]]; then
+        cat "${dur_files[@]}" | sort -t"$(printf '\t')" -k2 -rn
+      fi
+    } >"$out"
+    log "Wrote $out"
+  fi
 
   local failed=0 failed_names=()
   local f rc fname

@@ -21,20 +21,25 @@
 extern "C" {
 #endif
 
+// `n`, or under Valgrind `n / d` but at least `floor`.
 #ifdef __cplusplus
 #ifdef DFTRACER_UTILS_VALGRIND_MODE
-#define DFTRACER_UTILS_VALGRIND_SCALE(n, d) \
-    ((size_t)(n) / (size_t)(d) < 10 ? (size_t)10 : (size_t)(n) / (size_t)(d))
+#define DFTRACER_UTILS_VALGRIND_SCALE_MIN(n, d, floor)             \
+    ((size_t)(n) / (size_t)(d) < (size_t)(floor) ? (size_t)(floor) \
+                                                 : (size_t)(n) / (size_t)(d))
 #else
-#define DFTRACER_UTILS_VALGRIND_SCALE(n, d) ((size_t)(n))
+#define DFTRACER_UTILS_VALGRIND_SCALE_MIN(n, d, floor) ((size_t)(n))
 #endif
 #else
-#define DFTRACER_UTILS_VALGRIND_SCALE(n, d)                             \
-    (getenv("DFTRACER_UTILS_VALGRIND")                                  \
-         ? ((size_t)(n) / (size_t)(d) < 10 ? (size_t)10                 \
-                                           : (size_t)(n) / (size_t)(d)) \
+#define DFTRACER_UTILS_VALGRIND_SCALE_MIN(n, d, floor)  \
+    (getenv("DFTRACER_UTILS_VALGRIND")                  \
+         ? ((size_t)(n) / (size_t)(d) < (size_t)(floor) \
+                ? (size_t)(floor)                       \
+                : (size_t)(n) / (size_t)(d))            \
          : (size_t)(n))
 #endif
+#define DFTRACER_UTILS_VALGRIND_SCALE(n, d) \
+    DFTRACER_UTILS_VALGRIND_SCALE_MIN(n, d, 10)
 
 // C API for testing utilities
 typedef struct test_environment* test_environment_handle_t;

@@ -108,6 +108,7 @@ def test_exported_from_dask_module():
     assert ExportedDaskFrame is DaskFrame
 
 
+@pytest.mark.valgrind
 def test_map_partitions_adds_a_column(client):
     f = DaskFrame.from_function(make_small, range(4), client)
     out = f.map_partitions(lambda p: p.with_columns(y=col("x") * 2))
@@ -167,6 +168,7 @@ def test_agg_refuses_a_non_combining_aggregate(client):
     f.close()
 
 
+@pytest.mark.valgrind
 def test_reduce_is_a_tree(client):
     f = DaskFrame.from_function(make_small, range(5), client)
     assert f.reduce(len, sum, split_every=2) == 5000
@@ -236,6 +238,7 @@ def test_join_equals_the_single_frame_join(client, strategy):
     fact.close()
 
 
+@pytest.mark.valgrind
 @pytest.mark.parametrize("strategy", ["broadcast", "shuffle"])
 def test_left_join_keeps_unmatched_rows(client, strategy):
     left = DaskFrame.from_function(make_small, range(3), client)
@@ -267,6 +270,7 @@ def shift1(frame):
     return frame.with_column("r", frame["x"].shift(1))
 
 
+@pytest.mark.valgrind
 @pytest.mark.parametrize(("fn", "k"), [(roll, 4), (diff1, 1), (shift1, 1)])
 def test_overlap_makes_seams_exact(client, fn, k):
     f = DaskFrame.from_function(make_series, [1, 2], client)
@@ -290,6 +294,7 @@ def test_a_worker_error_reaches_the_caller(client):
     f.close()
 
 
+@pytest.mark.valgrind
 def test_an_empty_partition_keeps_its_types(client):
     low = DataFrame.from_pandas(pd.DataFrame({"a": [1, 2], "x": [10, 20]}))
     high = DataFrame.from_pandas(pd.DataFrame({"a": [7, 8, 8], "x": [30, 40, 50]}))
@@ -358,6 +363,7 @@ def test_agg_var_std_are_accurate_with_a_large_offset(client, offset):
     f.close()
 
 
+@pytest.mark.valgrind
 def test_agg_var_of_a_group_with_one_value_is_null(client):
     f = DaskFrame.from_frames(
         [
@@ -461,6 +467,7 @@ def three_series_parts(client):
     return DaskFrame.from_frames(parts, client)
 
 
+@pytest.mark.valgrind
 def test_overlap_next_makes_a_lead_exact_across_seams(client):
     f = three_series_parts(client)
     want = lead2(f.to_frame()).to_pandas()
@@ -530,6 +537,7 @@ def test_exact_agg_accepts_a_quantile_agg_and_stays_partitioned(client):
     f.close()
 
 
+@pytest.mark.valgrind
 def test_exact_agg_set_union_equals_the_whole(client):
     f = DaskFrame.from_function(lambda i: make_keyed(i, 20_000, 500), range(4), client)
     got = f.group_by("k").agg(exact=True, u=("s", "set_union")).to_frame().to_pandas()

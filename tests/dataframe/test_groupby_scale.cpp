@@ -30,6 +30,10 @@ const std::int64_t ROWS =
     static_cast<std::int64_t>(DFTRACER_UTILS_VALGRIND_SCALE(1'200'000, 4));
 const std::int64_t GROUPS =
     static_cast<std::int64_t>(DFTRACER_UTILS_VALGRIND_SCALE(150'000, 4));
+// Repeats of one group-by that must give the same bits. The point is the
+// scheduling, which Valgrind does not check, so it runs only two.
+const int REPEATS =
+    static_cast<int>(DFTRACER_UTILS_VALGRIND_SCALE_MIN(20, 10, 2));
 
 // Value columns, by index in `values`.
 enum : std::int32_t { X = 0, Y = 1, S = 2, U = 3 };
@@ -258,14 +262,14 @@ bool bit_equal(const DataFrame& a, const DataFrame& b, std::string* why) {
     return true;
 }
 
-// The same group-by 20 times on the thread pool and once serial: the bits
+// The same group-by REPEATS times on the thread pool and once serial: the bits
 // must not change with the scheduling or with the number of threads.
 void expect_deterministic(const std::vector<const Series*>& keys,
                           const Input& in, const std::vector<AggSpec>& with,
                           const std::vector<std::string>& names) {
     const DataFrame first = df::group_agg(keys, in.values(), with, names);
     std::string why;
-    for (int run = 0; run < 20; ++run) {
+    for (int run = 0; run < REPEATS; ++run) {
         const DataFrame again = df::group_agg(keys, in.values(), with, names);
         INFO("run " << run << ": " << why);
         REQUIRE(bit_equal(first, again, &why));

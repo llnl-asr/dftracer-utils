@@ -137,7 +137,12 @@ build_with_coverage() {
 run_tests() {
 	log_info "Running tests..."
 
-	if ! ctest --test-dir "$BUILD_DIR" --output-on-failure --timeout 300; then
+	# CTEST_ARGS selects a shard of the tests, such as "-I 2,,4".
+	local extra=()
+	if [ -n "${CTEST_ARGS:-}" ]; then read -r -a extra <<<"$CTEST_ARGS"; fi
+
+	if ! ctest --test-dir "$BUILD_DIR" --output-on-failure --timeout 300 \
+		${extra[@]+"${extra[@]}"}; then
 		log_error "Tests failed"
 		exit 1
 	fi
@@ -150,6 +155,10 @@ run_tests() {
 # ============================================================================
 
 run_python_tests() {
+	if [ "${COVERAGE_PYTHON:-1}" = "0" ]; then
+		log_info "Skipping the Python tests (COVERAGE_PYTHON=0)"
+		return
+	fi
 	log_info "Running Python tests against coverage-instrumented build..."
 
 	# The coverage build places the gcov-instrumented .so under

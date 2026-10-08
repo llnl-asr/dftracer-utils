@@ -1,0 +1,225 @@
+name: Test
+
+on:
+  workflow_call:
+    inputs:
+      os:
+        type: string
+        required: true
+      shard_list:
+        type: string
+        required: true
+      shards:
+        type: number
+        required: true
+      rocksdb_version:
+        type: string
+        required: true
+
+jobs:
+  test:
+    permissions:
+      contents: read
+      actions: write
+    name: test (${{ inputs.os }}, shard ${{ matrix.shard }}/${{ inputs.shards }})
+    env:
+      ROCKSDB_VERSION: ${{ inputs.rocksdb_version }}
+      CMAKE_POLICY_VERSION_MINIMUM: 3.5
+      CMAKE_C_COMPILER_LAUNCHER: sccache
+      CMAKE_CXX_COMPILER_LAUNCHER: sccache
+      CMAKE_ASM_COMPILER_LAUNCHER: sccache
+      DFTRACER_UTILS_DEPS_PREFIX: ${{ github.workspace }}/.deps
+      CTEST_ARGS: -I ${{ matrix.shard }},,${{ inputs.shards }}
+      COVERAGE_PYTHON: ${{ matrix.shard == 1 && '1' || '0' }}
+      SCCACHE_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+      SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+      SCCACHE_REGION: auto
+      SCCACHE_IDLE_TIMEOUT: "0"
+      SCCACHE_S3_USE_SSL: "true"
+      AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_SECRET_ACCESS_KEY }}
+
+    runs-on: ${{ inputs.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(inputs.shard_list) }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Prepare deps dir
+        run: |
+          sudo mkdir -p /opt/dftracer-deps
+          sudo chown "$(id -u):$(id -g)" /opt/dftracer-deps
+
+      - name: Restore RocksDB
+        run: scripts/ci/deps_cache.sh restore rocksdb /opt/dftracer-deps
+
+      - name: Use prebuilt RocksDB
+        run: |
+          prefix="/opt/dftracer-deps/rocksdb-${ROCKSDB_VERSION}"
+          if [ -x "${prefix}/bin/ldb" ]; then
+            echo "DFTRACER_UTILS_ROCKSDB_PREFIX=${prefix}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::no prebuilt RocksDB at ${prefix}; building from source"
+          fi
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - name: Restore dependency installs
+        run: scripts/ci/deps_cache.sh restore "ci-RelWithDebInfo" "$DFTRACER_UTILS_DEPS_PREFIX"
+
+      - name: Cache CPM dependency sources
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.cpmsource
+          key: cpmsource-lite-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
+          restore-keys: |
+            cpmsource-lite-v1-
+
+      - name: Install dependencies (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake lcov zlib1g-dev libsqlite3-dev pkg-config ninja-build
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          for f in cmake lcov zlib sqlite pkg-config ninja; do
+            if brew list --versions "$f" >/dev/null; then
+              echo "$f already installed"
+            else
+              brew install "$f"
+            fi
+          done
+
+      # Route cores to a known dir (overrides apport/systemd-coredump) so a
+      # crash in a test binary or a spawned server yields a gdb-able core.
+      # %E is the full executable path with '/' -> '!' (not truncated like %e).
+      - name: Enable core dumps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo mkdir -p /tmp/cores
+          sudo chmod 1777 /tmp/cores
+          echo '/tmp/cores/core.%p.%E' | sudo tee /proc/sys/kernel/core_pattern
+
+      # macOS cores land in /cores/core.<pid> (no path expansion); lldb reads
+      # the binary path from the Mach-O core itself.
+      - name: Enable core dumps (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          sudo sysctl -w kern.coredump=1 || true
+          sudo chmod 1777 /cores || true
+
+      - name: Run coverage
+        if: inputs.os == 'ubuntu-22.04' || inputs.os == 'macos-latest'
+        run: |
+          ulimit -c unlimited || true
+          make coverage
+
+      - name: Run test (Unix)
+        if: "!(inputs.os == 'ubuntu-22.04' || inputs.os == 'macos-latest')"
+        run: |
+          ulimit -c unlimited || true
+          make test
+
+      - name: Run Python tests (with venv)
+        if: "matrix.shard == 1 && !(inputs.os == 'ubuntu-22.04' || inputs.os == 'macos-latest')"
+        run: |
+          ulimit -c unlimited || true
+          if [ "${{ runner.os }}" = "Linux" ] && [ "3.12" = "3.12" ]; then
+            make test-py RUN_TY=1
+          else
+            make test-py
+          fi
+
+      - name: Backtraces from core dumps (Linux)
+        if: failure() && runner.os == 'Linux'
+        run: |
+          shopt -s nullglob
+          cores=(/tmp/cores/core.*)
+          if [ ${#cores[@]} -eq 0 ]; then
+            echo "no core dumps captured"
+            exit 0
+          fi
+          sudo apt-get install -y gdb >/dev/null 2>&1 || true
+          mkdir -p /tmp/backtraces
+          for c in "${cores[@]}"; do
+            enc=$(basename "$c")
+            enc=${enc#core.*.}
+            exe=$(printf '%s' "$enc" | tr '!' '/')
+            echo "==================================================================="
+            echo "core: $c"
+            echo "exe:  $exe"
+            echo "==================================================================="
+            gdb -q -batch \
+              -ex "set pagination off" \
+              -ex "thread apply all bt full" \
+              "$exe" "$c" 2>&1 | tee "/tmp/backtraces/$(basename "$c").txt" | tail -200
+          done
+
+      - name: Backtraces from core dumps (macOS)
+        if: failure() && runner.os == 'macOS'
+        run: |
+          shopt -s nullglob
+          cores=(/cores/core.*)
+          if [ ${#cores[@]} -eq 0 ]; then
+            echo "no core dumps captured"
+            exit 0
+          fi
+          mkdir -p /tmp/backtraces
+          for c in "${cores[@]}"; do
+            echo "==================================================================="
+            echo "core: $c"
+            echo "==================================================================="
+            lldb --batch -c "$c" \
+              -o "thread backtrace all" \
+              -o "quit" 2>&1 | tee "/tmp/backtraces/$(basename "$c").txt" | tail -200
+          done
+
+      # Upload only the symbolized text traces (KB), not the cores (100s of MB);
+      # cores stay on the ephemeral runner. Full trace is in each .txt file,
+      # the log shows the tail. Short retention keeps storage negligible.
+      - name: Upload backtraces
+        if: failure()
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: backtraces-${{ inputs.os }}-${{ matrix.shard }}
+          path: /tmp/backtraces
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Trust Coveralls Homebrew tap (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew tap coverallsapp/coveralls || true
+          brew trust coverallsapp/coveralls \
+            || brew trust --formula coverallsapp/coveralls/coveralls || true
+
+      - name: Upload coverage reports to Coveralls
+        if: inputs.os == 'ubuntu-22.04' || inputs.os == 'macos-latest'
+        uses: coverallsapp/github-action@v2.3.6
+        continue-on-error: true
+        with:
+          file: coverage/coverage_filtered.info
+          format: lcov
+          flag-name: ${{ inputs.os }}-${{ matrix.shard }}
+          parallel: true
+        env:
+          COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
+
+      - name: Save dependency installs
+        if: success()
+        run: scripts/ci/deps_cache.sh save "ci-RelWithDebInfo" "$DFTRACER_UTILS_DEPS_PREFIX"
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true

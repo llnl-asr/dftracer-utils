@@ -1,0 +1,430 @@
+name: Valgrind
+
+on:
+  workflow_call:
+    inputs:
+      rocksdb_version:
+        type: string
+        required: true
+
+jobs:
+  valgrind-cpp-warm:
+    permissions:
+      contents: read
+      actions: write
+    name: Valgrind (C++ warm-up)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      VALGRIND_BUILD_ONLY: "1"
+      ROCKSDB_VERSION: ${{ inputs.rocksdb_version }}
+      CMAKE_POLICY_VERSION_MINIMUM: 3.5
+      VALGRIND_COMPILER_LAUNCHER: sccache
+      DFTRACER_UTILS_DEPS_PREFIX: ${{ github.workspace }}/.deps
+      SCCACHE_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+      SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+      SCCACHE_REGION: auto
+      SCCACHE_IDLE_TIMEOUT: "0"
+      SCCACHE_S3_USE_SSL: "true"
+      AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_SECRET_ACCESS_KEY }}
+      CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpmsource
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Prepare deps dir
+        run: |
+          sudo mkdir -p /opt/dftracer-deps
+          sudo chown "$(id -u):$(id -g)" /opt/dftracer-deps
+
+      - name: Restore RocksDB
+        run: scripts/ci/deps_cache.sh restore rocksdb /opt/dftracer-deps
+
+      - name: Use prebuilt RocksDB
+        run: |
+          prefix="/opt/dftracer-deps/rocksdb-${ROCKSDB_VERSION}"
+          if [ -x "${prefix}/bin/ldb" ]; then
+            echo "DFTRACER_UTILS_ROCKSDB_PREFIX=${prefix}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::no prebuilt RocksDB at ${prefix}; building from source"
+          fi
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - name: Restore dependency installs
+        run: scripts/ci/deps_cache.sh restore "ci-RelWithDebInfo" "$DFTRACER_UTILS_DEPS_PREFIX"
+
+      - name: Cache CPM dependency sources
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.cpmsource
+          key: cpmsource-lite-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
+          restore-keys: |
+            cpmsource-lite-v1-
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build valgrind gdb \
+            zlib1g-dev libsqlite3-dev pkg-config libopenmpi-dev openmpi-bin
+
+      - name: Build the C++ tests
+        run: make valgrind-cpp
+
+      - name: Save dependency installs
+        if: success()
+        run: scripts/ci/deps_cache.sh save "ci-RelWithDebInfo" "$DFTRACER_UTILS_DEPS_PREFIX"
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true
+
+  valgrind-cpp:
+    permissions:
+      contents: read
+      actions: write
+    needs: valgrind-cpp-warm
+    name: Valgrind (C++ ${{ matrix.shard }}/6)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    env:
+      VALGRIND_SHARD: ${{ matrix.shard }}/6
+      ROCKSDB_VERSION: ${{ inputs.rocksdb_version }}
+      CMAKE_POLICY_VERSION_MINIMUM: 3.5
+      VALGRIND_COMPILER_LAUNCHER: sccache
+      DFTRACER_UTILS_DEPS_PREFIX: ${{ github.workspace }}/.deps
+      SCCACHE_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+      SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+      SCCACHE_REGION: auto
+      SCCACHE_IDLE_TIMEOUT: "0"
+      SCCACHE_S3_USE_SSL: "true"
+      AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_SECRET_ACCESS_KEY }}
+      CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpmsource
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Prepare deps dir
+        run: |
+          sudo mkdir -p /opt/dftracer-deps
+          sudo chown "$(id -u):$(id -g)" /opt/dftracer-deps
+
+      - name: Restore RocksDB
+        run: scripts/ci/deps_cache.sh restore rocksdb /opt/dftracer-deps
+
+      - name: Use prebuilt RocksDB
+        run: |
+          prefix="/opt/dftracer-deps/rocksdb-${ROCKSDB_VERSION}"
+          if [ -x "${prefix}/bin/ldb" ]; then
+            echo "DFTRACER_UTILS_ROCKSDB_PREFIX=${prefix}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::no prebuilt RocksDB at ${prefix}; building from source"
+          fi
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - name: Restore dependency installs
+        run: scripts/ci/deps_cache.sh restore "ci-RelWithDebInfo" "$DFTRACER_UTILS_DEPS_PREFIX"
+
+      - name: Cache CPM dependency sources
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.cpmsource
+          key: cpmsource-lite-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
+          restore-keys: |
+            cpmsource-lite-v1-
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build valgrind gdb \
+            zlib1g-dev libsqlite3-dev pkg-config libopenmpi-dev openmpi-bin
+
+      - name: C++ tests under Valgrind
+        run: make valgrind-cpp
+
+      - name: Save dependency installs
+        if: success()
+        run: scripts/ci/deps_cache.sh save "ci-RelWithDebInfo" "$DFTRACER_UTILS_DEPS_PREFIX"
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true
+
+      - name: Upload Valgrind logs
+        if: failure()
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: valgrind-cpp-logs-${{ matrix.shard }}
+          path: build/valgrind-logs/
+          if-no-files-found: ignore
+
+  valgrind-mpi:
+    permissions:
+      contents: read
+      actions: write
+    name: Valgrind (MPI)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      ROCKSDB_VERSION: ${{ inputs.rocksdb_version }}
+      CMAKE_POLICY_VERSION_MINIMUM: 3.5
+      VALGRIND_COMPILER_LAUNCHER: sccache
+      DFTRACER_UTILS_DEPS_PREFIX: ${{ github.workspace }}/.deps
+      SCCACHE_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+      SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+      SCCACHE_REGION: auto
+      SCCACHE_IDLE_TIMEOUT: "0"
+      SCCACHE_S3_USE_SSL: "true"
+      AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_SECRET_ACCESS_KEY }}
+      CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpmsource
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Prepare deps dir
+        run: |
+          sudo mkdir -p /opt/dftracer-deps
+          sudo chown "$(id -u):$(id -g)" /opt/dftracer-deps
+
+      - name: Restore RocksDB
+        run: scripts/ci/deps_cache.sh restore rocksdb /opt/dftracer-deps
+
+      - name: Use prebuilt RocksDB
+        run: |
+          prefix="/opt/dftracer-deps/rocksdb-${ROCKSDB_VERSION}"
+          if [ -x "${prefix}/bin/ldb" ]; then
+            echo "DFTRACER_UTILS_ROCKSDB_PREFIX=${prefix}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::no prebuilt RocksDB at ${prefix}; building from source"
+          fi
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - name: Restore dependency installs
+        run: scripts/ci/deps_cache.sh restore "ci-RelWithDebInfo" "$DFTRACER_UTILS_DEPS_PREFIX"
+
+      - name: Cache CPM dependency sources
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.cpmsource
+          key: cpmsource-lite-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
+          restore-keys: |
+            cpmsource-lite-v1-
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build valgrind gdb \
+            zlib1g-dev libsqlite3-dev pkg-config libopenmpi-dev openmpi-bin
+
+      - name: MPI tests under Valgrind
+        run: make valgrind-mpi
+
+      - name: Save dependency installs
+        if: success()
+        run: scripts/ci/deps_cache.sh save "ci-RelWithDebInfo" "$DFTRACER_UTILS_DEPS_PREFIX"
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true
+
+
+      - name: Upload Valgrind logs
+        if: failure()
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: valgrind-mpi-logs
+          path: build/valgrind-logs/
+          if-no-files-found: ignore
+
+  valgrind-python-warm:
+    permissions:
+      contents: read
+      actions: write
+    name: Valgrind (Python warm-up)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      VALGRIND_BUILD_ONLY: "1"
+      ROCKSDB_VERSION: ${{ inputs.rocksdb_version }}
+      CMAKE_POLICY_VERSION_MINIMUM: 3.5
+      VALGRIND_COMPILER_LAUNCHER: sccache
+      DFTRACER_UTILS_DEPS_PREFIX: ${{ github.workspace }}/.deps
+      SCCACHE_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+      SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+      SCCACHE_REGION: auto
+      SCCACHE_IDLE_TIMEOUT: "0"
+      SCCACHE_S3_USE_SSL: "true"
+      AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_SECRET_ACCESS_KEY }}
+      CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpmsource
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6.1.0
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: "pyproject.toml"
+
+      - name: Prepare deps dir
+        run: |
+          sudo mkdir -p /opt/dftracer-deps
+          sudo chown "$(id -u):$(id -g)" /opt/dftracer-deps
+
+      - name: Restore RocksDB
+        run: scripts/ci/deps_cache.sh restore rocksdb /opt/dftracer-deps
+
+      - name: Use prebuilt RocksDB
+        run: |
+          prefix="/opt/dftracer-deps/rocksdb-${ROCKSDB_VERSION}"
+          if [ -x "${prefix}/bin/ldb" ]; then
+            echo "DFTRACER_UTILS_ROCKSDB_PREFIX=${prefix}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::no prebuilt RocksDB at ${prefix}; building from source"
+          fi
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - name: Restore dependency installs
+        run: scripts/ci/deps_cache.sh restore "ci-RelWithDebInfo" "$DFTRACER_UTILS_DEPS_PREFIX"
+
+      - name: Cache CPM dependency sources
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.cpmsource
+          key: cpmsource-lite-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
+          restore-keys: |
+            cpmsource-lite-v1-
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build valgrind \
+            zlib1g-dev libsqlite3-dev pkg-config python3-dev
+
+      - name: Build the Python extension
+        run: make valgrind-py
+
+      - name: Save dependency installs
+        if: success()
+        run: scripts/ci/deps_cache.sh save "ci-RelWithDebInfo" "$DFTRACER_UTILS_DEPS_PREFIX"
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true
+
+  valgrind-python:
+    permissions:
+      contents: read
+      actions: write
+    needs: valgrind-python-warm
+    name: Valgrind (Python ${{ matrix.shard }}/3)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    env:
+      VALGRIND_SHARD: ${{ matrix.shard }}/3
+      ROCKSDB_VERSION: ${{ inputs.rocksdb_version }}
+      CMAKE_POLICY_VERSION_MINIMUM: 3.5
+      VALGRIND_COMPILER_LAUNCHER: sccache
+      DFTRACER_UTILS_DEPS_PREFIX: ${{ github.workspace }}/.deps
+      SCCACHE_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+      SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+      SCCACHE_REGION: auto
+      SCCACHE_IDLE_TIMEOUT: "0"
+      SCCACHE_S3_USE_SSL: "true"
+      AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_SECRET_ACCESS_KEY }}
+      CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpmsource
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6.1.0
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: "pyproject.toml"
+
+      - name: Prepare deps dir
+        run: |
+          sudo mkdir -p /opt/dftracer-deps
+          sudo chown "$(id -u):$(id -g)" /opt/dftracer-deps
+
+      - name: Restore RocksDB
+        run: scripts/ci/deps_cache.sh restore rocksdb /opt/dftracer-deps
+
+      - name: Use prebuilt RocksDB
+        run: |
+          prefix="/opt/dftracer-deps/rocksdb-${ROCKSDB_VERSION}"
+          if [ -x "${prefix}/bin/ldb" ]; then
+            echo "DFTRACER_UTILS_ROCKSDB_PREFIX=${prefix}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::no prebuilt RocksDB at ${prefix}; building from source"
+          fi
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - name: Restore dependency installs
+        run: scripts/ci/deps_cache.sh restore "ci-RelWithDebInfo" "$DFTRACER_UTILS_DEPS_PREFIX"
+
+      - name: Cache CPM dependency sources
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.cpmsource
+          key: cpmsource-lite-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
+          restore-keys: |
+            cpmsource-lite-v1-
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build valgrind \
+            zlib1g-dev libsqlite3-dev pkg-config python3-dev
+
+      - name: Python tests under Valgrind
+        run: make valgrind-py
+
+      - name: Save dependency installs
+        if: success()
+        run: scripts/ci/deps_cache.sh save "ci-RelWithDebInfo" "$DFTRACER_UTILS_DEPS_PREFIX"
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true
+
+
+      - name: Upload Valgrind logs
+        if: failure()
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: valgrind-python-logs-${{ matrix.shard }}
+          path: build/valgrind-logs/
+          if-no-files-found: ignore

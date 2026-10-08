@@ -1,0 +1,102 @@
+name: Dependencies
+
+on:
+  workflow_call:
+    inputs:
+      os:
+        type: string
+        required: true
+      rocksdb_version:
+        type: string
+        required: true
+      build_type:
+        description: Build type of vectorscan and RocksDB.
+        type: string
+        default: RelWithDebInfo
+
+jobs:
+  # Tier 1: the dependency installs that every later job restores. CMake checks
+  # a stored install against its own fingerprint, so a mismatch costs a rebuild
+  # and nothing else. Tier 2 warms the compiled objects, tier 3 runs the tests.
+  deps:
+    permissions:
+      contents: read
+    name: Dependencies
+    runs-on: ${{ inputs.os }}
+    env:
+      CMAKE_POLICY_VERSION_MINIMUM: 3.5
+      CMAKE_C_COMPILER_LAUNCHER: sccache
+      CMAKE_CXX_COMPILER_LAUNCHER: sccache
+      CMAKE_ASM_COMPILER_LAUNCHER: sccache
+      DFTRACER_UTILS_DEPS_PREFIX: ${{ github.workspace }}/.deps
+      CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpmsource
+      ROCKSDB_VERSION: ${{ inputs.rocksdb_version }}
+      DEPS_BUILD_TYPE: ${{ inputs.build_type }}
+      SCCACHE_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+      SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+      SCCACHE_REGION: auto
+      SCCACHE_IDLE_TIMEOUT: "0"
+      SCCACHE_S3_USE_SSL: "true"
+      AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - name: Cache CPM dependency sources
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.cpmsource
+          key: cpmsource-lite-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
+          restore-keys: |
+            cpmsource-lite-v1-
+
+      - name: Install build tools (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake zlib1g-dev libzstd-dev libsqlite3-dev pkg-config ninja-build
+
+      - name: Install build tools (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          for f in cmake zlib zstd sqlite pkg-config ninja; do
+            brew list --versions "$f" >/dev/null || brew install "$f"
+          done
+
+      - name: Restore dependency installs
+        run: scripts/ci/deps_cache.sh restore "ci-${{ inputs.build_type }}" "$DFTRACER_UTILS_DEPS_PREFIX"
+
+      # The same configure as the consumers: the compilers are what the
+      # fingerprint depends on.
+      - name: Build the dependency installs
+        run: |
+          cmake --preset tests -B build/deps -DDFTRACER_UTILS_TESTS=OFF -DDFTRACER_UTILS_BUILD_PYTHON=OFF \
+            -DDFTRACER_UTILS_DEPS_BUILD_TYPE=${{ inputs.build_type }}
+          if ninja -C build/deps -t targets all | grep -q dftracer_utils_vectorscan_ep; then
+            cmake --build build/deps --target dftracer_utils_vectorscan_ep
+          fi
+
+      - name: Save dependency installs
+        if: success()
+        run: scripts/ci/deps_cache.sh save "ci-${{ inputs.build_type }}" "$DFTRACER_UTILS_DEPS_PREFIX"
+
+      # One install per platform. The prefix is absolute and identical in every
+      # consumer: the PCH embeds <rocksdb/*.h>, so a differing -I path would
+      # invalidate the compiler cache for the whole project. Valgrind jobs use
+      # the same install.
+      - name: Restore and build RocksDB
+        run: |
+          sudo mkdir -p /opt/dftracer-deps
+          sudo chown "$(id -u):$(id -g)" /opt/dftracer-deps
+          scripts/ci/deps_cache.sh restore rocksdb /opt/dftracer-deps
+          scripts/ci/build_rocksdb.sh
+          scripts/ci/deps_cache.sh save rocksdb /opt/dftracer-deps
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true

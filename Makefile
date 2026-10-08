@@ -61,7 +61,7 @@ test:
 	@echo "Building and running tests..."
 	@cmake --preset tests
 	@cmake --build --preset tests
-	@ctest --preset tests
+	@ctest --preset tests $(CTEST_ARGS)
 
 # Run tests with coverage (requires coverage build)
 test-coverage:

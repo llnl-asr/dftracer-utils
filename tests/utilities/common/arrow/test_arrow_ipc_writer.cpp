@@ -11,6 +11,7 @@
 
 #include <cstdio>
 #include <string>
+#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::coro;
@@ -113,6 +114,51 @@ TEST_CASE("IpcWriter - close without writing batches") {
 }
 
 #ifdef DFTRACER_UTILS_ENABLE_ZSTD
+// With no pooled slot every batch takes the overflow slot, which the writer
+// must own and free; the file is the same as with the pool.
+TEST_CASE("IpcWriter - batches without a pooled slot match the pooled file") {
+    auto write_file = [&](const std::string& path, IpcCompression compression,
+                          std::size_t pool_slots) {
+        std::remove(path.c_str());
+        Runtime runtime(2);
+        auto task = [&]() -> CoroTask<int> {
+            IpcWriter writer;
+            if (co_await writer.open(path, compression, pool_slots) != 0)
+                co_return 1;
+            RecordBatchBuilder builder;
+            builder.declare_schema(
+                {{"x", ColumnType::INT64}, {"y", ColumnType::DOUBLE}});
+            for (int b = 0; b < 4; ++b) {
+                builder.reserve(50);
+                for (int i = 0; i < 50; ++i) {
+                    builder.append_int64(0, b * 50 + i);
+                    builder.append_double(1, i * 0.5);
+                    builder.end_row();
+                }
+                auto batch = builder.finish();
+                if (co_await writer.write_batch(batch) != 0) co_return 2;
+                builder.reset(true);
+            }
+            if (co_await writer.close() != 0) co_return 3;
+            co_return 0;
+        };
+        return runtime.submit(task(), "test").get();
+    };
+    std::vector<IpcCompression> modes{IpcCompression::NONE};
+#ifdef DFTRACER_UTILS_ENABLE_ZSTD
+    modes.push_back(IpcCompression::ZSTD);
+#endif
+    for (const IpcCompression mode : modes) {
+        const std::string pooled = tmp_path("test_ipc_pooled.arrows");
+        const std::string bare = tmp_path("test_ipc_bare.arrows");
+        REQUIRE(write_file(pooled, mode, 4) == 0);
+        REQUIRE(write_file(bare, mode, 0) == 0);
+        CHECK(fs::file_size(bare) == fs::file_size(pooled));
+        fs::remove(pooled);
+        fs::remove(bare);
+    }
+}
+
 TEST_CASE("IpcWriter - explicit ZSTD compression") {
     std::string path = tmp_path("test_ipc_zstd_compression.arrows");
     std::remove(path.c_str());

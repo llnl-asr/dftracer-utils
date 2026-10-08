@@ -7,11 +7,14 @@
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
+#include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -30,10 +33,12 @@ using dftracer::utils::dataframe::DataFrame;
 using dftracer::utils::dataframe::eval;
 using dftracer::utils::dataframe::Expr;
 using dftracer::utils::dataframe::GroupAgg;
+using dftracer::utils::dataframe::GroupwiseOp;
 using dftracer::utils::dataframe::LazyFrame;
 using dftracer::utils::dataframe::Morsel;
 using dftracer::utils::dataframe::Series;
 using dftracer::utils::dataframe::Source;
+using dftracer::utils::dataframe::TypeId;
 
 namespace {
 
@@ -879,6 +884,399 @@ TEST_SUITE("lazyframe") {
         }
     }
 
+    TEST_CASE(
+        "sort_by merges many spilled runs in passes and keeps ties stable") {
+        // 30000 rows under a 4 KiB budget make far more runs than one merge
+        // reads at once, so the runs are merged in groups first. Equal keys
+        // must keep their input order.
+        const std::int64_t n = 30000;
+        std::vector<std::int64_t> k(n), v(n);
+        for (std::int64_t i = 0; i < n; ++i) {
+            k[static_cast<std::size_t>(i)] = (i * 7919) % 97;
+            v[static_cast<std::size_t>(i)] = i;
+        }
+        DataFrame df;
+        df.names = {"k", "v"};
+        df.columns.push_back(Series::flat_i64(k.data(), n));
+        df.columns.push_back(Series::flat_i64(v.data(), n));
+        DataFrame lz =
+            run(df.lazy().memory_budget(4096).sort_by("k").collect(512));
+        REQUIRE(lz.num_rows() == n);
+        const Series lk = lz.column("k").materialize();
+        const Series lv = lz.column("v").materialize();
+        for (std::int64_t i = 1; i < n; ++i) {
+            const std::int64_t a = lk.data<std::int64_t>()[i - 1];
+            const std::int64_t b = lk.data<std::int64_t>()[i];
+            REQUIRE(a <= b);
+            if (a == b)
+                REQUIRE(lv.data<std::int64_t>()[i - 1] <
+                        lv.data<std::int64_t>()[i]);
+        }
+    }
+
+    TEST_CASE("a spilled sort orders every key type like the eager sort") {
+        // Date, Timestamp and Float32 keys with nulls, NaN and signed zeros,
+        // under a budget that makes several runs, in both directions, and
+        // for empty and one-row inputs.
+        const std::int64_t n = 600;
+        std::vector<std::int32_t> date(n);
+        std::vector<std::int64_t> ts(n), id(n);
+        std::vector<float> fl(n);
+        std::vector<std::uint8_t> valid((n + 7) / 8, 0);
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        const float pool[6] = {-1.5f, -0.0f,
+                               0.0f,  2.0f,
+                               nan,   std::numeric_limits<float>::infinity()};
+        for (std::int64_t i = 0; i < n; ++i) {
+            const auto z = static_cast<std::size_t>(i);
+            date[z] = static_cast<std::int32_t>((i * 389) % n) - 300;
+            ts[z] = ((i * 389) % n) * 1000003LL - 123456789LL;
+            fl[z] = pool[(i * 5) % 6];
+            id[z] = i;
+            if (i % 13 != 0)
+                valid[z >> 3] |= static_cast<std::uint8_t>(1u << (z & 7));
+        }
+        DataFrame df;
+        df.names = {"d", "t", "f", "id"};
+        df.columns.push_back(
+            Series::flat(TypeId::Date32, date.data(), n, valid.data()));
+        df.columns.push_back(
+            Series::flat(TypeId::Timestamp, ts.data(), n, valid.data()));
+        df.columns.push_back(Series::flat(TypeId::Float32, fl.data(), n));
+        df.columns.push_back(Series::flat_i64(id.data(), n));
+        for (const char* key : {"d", "t", "f"}) {
+            for (const bool desc : {false, true}) {
+                INFO("key=" << key << " desc=" << desc);
+                const DataFrame want = df.sort_by(key, desc);
+                const DataFrame got = run(
+                    df.lazy().memory_budget(2048).sort_by(key, desc).collect(
+                        32));
+                REQUIRE(got.num_rows() == n);
+                const Series gi = got.column("id").materialize();
+                const Series wi = want.column("id").materialize();
+                for (std::int64_t i = 0; i < n; ++i)
+                    REQUIRE(gi.data<std::int64_t>()[i] ==
+                            wi.data<std::int64_t>()[i]);
+            }
+        }
+        for (const std::int64_t rows : {std::int64_t{0}, std::int64_t{1}}) {
+            DataFrame small;
+            small.names = {"t", "id"};
+            small.columns.push_back(
+                Series::flat(TypeId::Timestamp, ts.data(), rows));
+            small.columns.push_back(Series::flat_i64(id.data(), rows));
+            const DataFrame got =
+                run(small.lazy().memory_budget(1).sort_by("t").collect(8));
+            CHECK(got.num_rows() == rows);
+        }
+    }
+
+    TEST_CASE("native group transforms match a row-by-row reference") {
+        const std::int64_t n = 4000;
+        std::vector<std::int64_t> k(n), v(n);
+        std::vector<double> f(n);
+        std::vector<std::int32_t> u(n);
+        std::vector<std::uint64_t> w(n);
+        std::vector<std::uint8_t> vv((n + 7) / 8, 0), fv((n + 7) / 8, 0),
+            wv((n + 7) / 8, 0);
+        for (std::int64_t i = 0; i < n; ++i) {
+            const auto z = static_cast<std::size_t>(i);
+            k[z] = (i * 31) % 29;
+            v[z] = (i * 17) % 101 - 40;
+            f[z] = static_cast<double>((i * 7) % 53) * 0.5 - 12.0;
+            u[z] = static_cast<std::int32_t>((i * 13) % 59) - 20;
+            w[z] = static_cast<std::uint64_t>((i * 11) % 97);
+            if (i % 7 != 0)
+                vv[z >> 3] |= static_cast<std::uint8_t>(1u << (z & 7));
+            if (i % 11 != 0)
+                fv[z >> 3] |= static_cast<std::uint8_t>(1u << (z & 7));
+            if (i % 5 != 0)
+                wv[z >> 3] |= static_cast<std::uint8_t>(1u << (z & 7));
+        }
+        DataFrame df;
+        df.names = {"k", "v", "f", "u", "w"};
+        df.columns.push_back(Series::flat_i64(k.data(), n));
+        df.columns.push_back(Series::flat_i64(v.data(), n, vv.data()));
+        df.columns.push_back(Series::flat_f64(f.data(), n, fv.data()));
+        df.columns.push_back(Series::flat(TypeId::Int32, u.data(), n));
+        df.columns.push_back(
+            Series::flat(TypeId::Uint64, w.data(), n, wv.data()));
+
+        using Cell = std::optional<double>;
+        struct Col {
+            std::string name;
+            std::vector<Cell> cells;
+        };
+        std::vector<Col> cols(4);
+        cols[0] = {"v", {}};
+        cols[1] = {"f", {}};
+        cols[2] = {"u", {}};
+        cols[3] = {"w", {}};
+        for (std::int64_t i = 0; i < n; ++i) {
+            const auto z = static_cast<std::size_t>(i);
+            cols[0].cells.push_back(i % 7 != 0 ? Cell(static_cast<double>(v[z]))
+                                               : Cell());
+            cols[1].cells.push_back(i % 11 != 0 ? Cell(f[z]) : Cell());
+            cols[2].cells.push_back(Cell(static_cast<double>(u[z])));
+            cols[3].cells.push_back(i % 5 != 0 ? Cell(static_cast<double>(w[z]))
+                                               : Cell());
+        }
+        auto read = [](const Series& s0, std::int64_t i) -> Cell {
+            const Series s = s0.materialize();
+            if (s.is_null(i)) return Cell();
+            switch (s.type()) {
+                case TypeId::Int64:
+                    return static_cast<double>(s.data<std::int64_t>()[i]);
+                case TypeId::Int32:
+                    return static_cast<double>(s.data<std::int32_t>()[i]);
+                case TypeId::Uint64:
+                    return static_cast<double>(s.data<std::uint64_t>()[i]);
+                case TypeId::Float64:
+                    return s.data<double>()[i];
+                default:
+                    throw std::runtime_error("unexpected result type");
+            }
+        };
+        // The reference: walk each group's rows in input order.
+        auto reference = [&](GroupwiseOp op, std::int64_t shift, bool keyed,
+                             const Col& col) {
+            std::vector<Cell> want(static_cast<std::size_t>(n));
+            std::map<std::int64_t, std::vector<std::int64_t>> rows;
+            for (std::int64_t i = 0; i < n; ++i)
+                rows[keyed ? k[static_cast<std::size_t>(i)] : 0].push_back(i);
+            for (const auto& [key, idx] : rows) {
+                double sum = 0.0, prod = 1.0;
+                Cell ext, last_present;
+                for (std::size_t j = 0; j < idx.size(); ++j) {
+                    const std::int64_t i = idx[j];
+                    const Cell& c = col.cells[static_cast<std::size_t>(i)];
+                    Cell out;
+                    switch (op) {
+                        case GroupwiseOp::CumSum:
+                            if (c) {
+                                sum += *c;
+                                out = sum + (*c - *c);
+                            }
+                            break;
+                        case GroupwiseOp::CumProd:
+                            if (c) {
+                                prod *= *c;
+                                out = prod + (*c - *c);
+                            }
+                            break;
+                        case GroupwiseOp::CumMax:
+                            if (c) {
+                                if (!ext || *c > *ext) ext = c;
+                                out = *ext + (*c - *c);
+                            }
+                            break;
+                        case GroupwiseOp::CumMin:
+                            if (c) {
+                                if (!ext || *c < *ext) ext = c;
+                                out = *ext + (*c - *c);
+                            }
+                            break;
+                        case GroupwiseOp::Shift:
+                            if (static_cast<std::int64_t>(j) >= shift)
+                                out = col.cells[static_cast<std::size_t>(
+                                    idx[j - static_cast<std::size_t>(shift)])];
+                            break;
+                        case GroupwiseOp::Diff:
+                            if (j > 0 && c) {
+                                const Cell& p =
+                                    col.cells[static_cast<std::size_t>(
+                                        idx[j - 1])];
+                                if (p) out = *c - *p;
+                            }
+                            break;
+                        case GroupwiseOp::FFill:
+                            if (c) last_present = c;
+                            out = last_present;
+                            break;
+                        default:
+                            break;
+                    }
+                    want[static_cast<std::size_t>(i)] = out;
+                }
+            }
+            return want;
+        };
+        struct Case {
+            GroupwiseOp op;
+            std::int64_t shift;
+        };
+        const std::vector<Case> cases = {
+            {GroupwiseOp::CumSum, 0}, {GroupwiseOp::CumProd, 0},
+            {GroupwiseOp::CumMax, 0}, {GroupwiseOp::CumMin, 0},
+            {GroupwiseOp::Shift, 0},  {GroupwiseOp::Shift, 1},
+            {GroupwiseOp::Shift, 4},  {GroupwiseOp::Diff, 0},
+            {GroupwiseOp::FFill, 0},
+        };
+        for (const bool keyed : {true, false}) {
+            for (const std::uint64_t budget :
+                 {std::uint64_t{0}, std::uint64_t{4096}}) {
+                for (const Case& c : cases) {
+                    INFO("op=" << static_cast<int>(c.op) << " shift=" << c.shift
+                               << " keyed=" << keyed << " budget=" << budget);
+                    LazyFrame lf = df.lazy();
+                    if (budget) lf = lf.memory_budget(budget);
+                    const std::vector<std::string> keys =
+                        keyed ? std::vector<std::string>{"k"}
+                              : std::vector<std::string>{};
+                    DataFrame got = run(
+                        lf.group_by(keys)
+                            .transform(
+                                c.op, c.shift,
+                                dftracer::utils::dataframe::RankMethod::Average,
+                                true)
+                            .collect(64));
+                    for (const Col& col : cols) {
+                        const auto at = std::find(got.names.begin(),
+                                                  got.names.end(), col.name);
+                        if (at == got.names.end()) continue;
+                        const Series& out =
+                            got.columns[static_cast<std::size_t>(
+                                at - got.names.begin())];
+                        REQUIRE(out.length() == n);
+                        const std::vector<Cell> want =
+                            reference(c.op, c.shift, keyed, col);
+                        for (std::int64_t i = 0; i < n; ++i) {
+                            const Cell have = read(out, i);
+                            const Cell& expect =
+                                want[static_cast<std::size_t>(i)];
+                            REQUIRE(have.has_value() == expect.has_value());
+                            if (have) REQUIRE(*have == *expect);
+                        }
+                    }
+                }
+                {
+                    LazyFrame lf = df.lazy();
+                    if (budget) lf = lf.memory_budget(budget);
+                    const std::vector<std::string> keys =
+                        keyed ? std::vector<std::string>{"k"}
+                              : std::vector<std::string>{};
+                    DataFrame got = run(
+                        lf.group_by(keys)
+                            .transform(
+                                GroupwiseOp::CumCount, 0,
+                                dftracer::utils::dataframe::RankMethod::Average,
+                                true)
+                            .collect(64));
+                    REQUIRE(got.names == std::vector<std::string>{"cumcount"});
+                    const Series cc = got.columns[0].materialize();
+                    std::map<std::int64_t, std::int64_t> seen;
+                    for (std::int64_t i = 0; i < n; ++i)
+                        REQUIRE(
+                            cc.data<std::int64_t>()[i] ==
+                            seen[keyed ? k[static_cast<std::size_t>(i)] : 0]++);
+                }
+            }
+        }
+    }
+
+    TEST_CASE(
+        "group transform under a tiny budget matches the in-memory plan") {
+        // Chunks of about 1 KiB cut every partition (about 130 rows) several
+        // times, so the carry of each function across a cut is exercised:
+        // seed rows (running sum/min/max, fill), context rows (shift, diff,
+        // rolling), shifted counts and ranks, and the partition-aligned
+        // fallback (average and max rank, float rolling sums).
+        const std::int64_t n = 6000;
+        auto frame = [&](std::int64_t groups) {
+            std::vector<std::int64_t> k(n), v(n);
+            std::vector<double> f(n);
+            std::vector<std::int32_t> u(n);
+            std::vector<std::uint8_t> vv((n + 7) / 8, 0), fv((n + 7) / 8, 0);
+            for (std::int64_t i = 0; i < n; ++i) {
+                const auto z = static_cast<std::size_t>(i);
+                k[z] = (i * 31) % groups;
+                v[z] = (i * 17) % 101 - 40;
+                f[z] = static_cast<double>(i) * 0.37 - 100.0;
+                u[z] = static_cast<std::int32_t>((i * 13) % 59) - 20;
+                if (i % 7 != 0)
+                    vv[z >> 3] |= static_cast<std::uint8_t>(1u << (z & 7));
+                if (i % 11 != 0)
+                    fv[z >> 3] |= static_cast<std::uint8_t>(1u << (z & 7));
+            }
+            DataFrame df;
+            df.names = {"k", "v", "f", "u"};
+            df.columns.push_back(Series::flat_i64(k.data(), n));
+            df.columns.push_back(Series::flat_i64(v.data(), n, vv.data()));
+            df.columns.push_back(Series::flat_f64(f.data(), n, fv.data()));
+            df.columns.push_back(Series::flat(TypeId::Int32, u.data(), n));
+            return df;
+        };
+        using dftracer::utils::dataframe::RankMethod;
+        struct Case {
+            GroupwiseOp op;
+            std::int64_t n;
+            RankMethod method;
+        };
+        const std::vector<Case> cases = {
+            {GroupwiseOp::CumSum, 0, RankMethod::Average},
+            {GroupwiseOp::CumMax, 0, RankMethod::Average},
+            {GroupwiseOp::CumMin, 0, RankMethod::Average},
+            {GroupwiseOp::CumProd, 0, RankMethod::Average},
+            {GroupwiseOp::CumCount, 0, RankMethod::Average},
+            {GroupwiseOp::Shift, 1, RankMethod::Average},
+            {GroupwiseOp::Shift, -2, RankMethod::Average},
+            {GroupwiseOp::Shift, 3, RankMethod::Average},
+            {GroupwiseOp::Diff, 0, RankMethod::Average},
+            {GroupwiseOp::PctChange, 0, RankMethod::Average},
+            {GroupwiseOp::FFill, 0, RankMethod::Average},
+            {GroupwiseOp::BFill, 0, RankMethod::Average},
+            {GroupwiseOp::RollingSum, 3, RankMethod::Average},
+            {GroupwiseOp::RollingMin, 4, RankMethod::Average},
+            {GroupwiseOp::RollingMax, 2, RankMethod::Average},
+            {GroupwiseOp::Rank, 0, RankMethod::Min},
+            {GroupwiseOp::Rank, 0, RankMethod::Dense},
+            {GroupwiseOp::Rank, 0, RankMethod::Ordinal},
+            {GroupwiseOp::Rank, 0, RankMethod::Average},
+            {GroupwiseOp::Rank, 0, RankMethod::Max},
+            {GroupwiseOp::Head, 2, RankMethod::Average},
+            {GroupwiseOp::Tail, 2, RankMethod::Average},
+            {GroupwiseOp::Nth, 1, RankMethod::Average},
+        };
+        auto same = [](const DataFrame& a, const DataFrame& b) {
+            REQUIRE(a.names == b.names);
+            REQUIRE(a.num_rows() == b.num_rows());
+            for (std::size_t c = 0; c < a.columns.size(); ++c) {
+                std::vector<Series> x, y;
+                x.push_back(a.columns[c].materialize());
+                y.push_back(b.columns[c].materialize());
+                REQUIRE(x[0].type() == y[0].type());
+                for (std::int64_t r = 0; r < a.num_rows(); ++r)
+                    REQUIRE(dftracer::utils::dataframe::row_key(x, r) ==
+                            dftracer::utils::dataframe::row_key(y, r));
+            }
+        };
+        const std::vector<std::vector<std::string>> key_sets = {{"k"}, {}};
+        for (const std::int64_t groups : {std::int64_t{47}, std::int64_t{1}}) {
+            const DataFrame df = frame(groups);
+            for (const std::vector<std::string>& keys : key_sets) {
+                if (keys.empty() && groups != 47) continue;
+                for (const Case& c : cases) {
+                    INFO("op=" << static_cast<int>(c.op) << " n=" << c.n
+                               << " method=" << static_cast<int>(c.method)
+                               << " groups=" << groups
+                               << " keys=" << keys.size());
+                    DataFrame want =
+                        run(df.lazy()
+                                .group_by(keys)
+                                .transform(c.op, c.n, c.method, true)
+                                .collect(64));
+                    DataFrame got =
+                        run(df.lazy()
+                                .memory_budget(4096)
+                                .group_by(keys)
+                                .transform(c.op, c.n, c.method, true)
+                                .collect(64));
+                    same(got, want);
+                }
+            }
+        }
+    }
+
     TEST_CASE("lazy take matches the eager path") {
         DataFrame df = make_df();
         std::vector<std::int64_t> idx{4, 0, 2, 2, 5};
@@ -888,6 +1286,73 @@ TEST_SUITE("lazyframe") {
         const std::int64_t* la = lz.column("a").data<std::int64_t>();
         const std::int64_t* ea = eg.column("a").data<std::int64_t>();
         for (std::int64_t i = 0; i < lz.num_rows(); ++i) CHECK(la[i] == ea[i]);
+    }
+
+    TEST_CASE("reverse and take stay exact when the budget forces spilling") {
+        std::vector<std::int64_t> a, s_idx;
+        std::vector<std::string> names;
+        for (std::int64_t i = 0; i < 5000; ++i) {
+            a.push_back(i * 3);
+            names.push_back("n" + std::to_string(i % 17));
+        }
+        DataFrame df;
+        df.names = {"a", "s"};
+        df.columns.push_back(Series::flat_i64(a.data(), 5000));
+        df.columns.push_back(Series::strings(names));
+
+        DataFrame rev = run(df.lazy().memory_budget(1).reverse().collect(64));
+        DataFrame erev = df.reverse();
+        REQUIRE(rev.num_rows() == 5000);
+        for (std::int64_t i = 0; i < 5000; ++i)
+            REQUIRE(rev.column("a").data<std::int64_t>()[i] ==
+                    erev.column("a").data<std::int64_t>()[i]);
+
+        std::vector<std::int64_t> idx{4999, 0, 2500, 2500, 17, 4998, 3};
+        DataFrame tk = run(df.lazy().memory_budget(1).take(idx).collect(64));
+        DataFrame etk = df.take(idx);
+        REQUIRE(tk.num_rows() == etk.num_rows());
+        for (std::int64_t i = 0; i < tk.num_rows(); ++i)
+            CHECK(tk.column("a").data<std::int64_t>()[i] ==
+                  etk.column("a").data<std::int64_t>()[i]);
+    }
+
+    TEST_CASE(
+        "a spilled sort orders int64 keys that doubles cannot tell apart") {
+        constexpr std::int64_t N = 4000;
+        constexpr std::int64_t BASE = std::int64_t{1} << 60;
+        std::vector<std::int64_t> k(N), v(N);
+        std::uint64_t x = 88172645463325252ULL;
+        for (std::int64_t i = 0; i < N; ++i) {
+            k[i] = BASE + i;
+            v[i] = i;
+        }
+        for (std::int64_t i = N - 1; i > 0; --i) {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            const std::int64_t j = static_cast<std::int64_t>(x % (i + 1));
+            std::swap(k[i], k[j]);
+        }
+        DataFrame df;
+        df.names = {"k", "v"};
+        df.columns.push_back(Series::flat_i64(k.data(), N));
+        df.columns.push_back(Series::flat_i64(v.data(), N));
+        for (bool descending : {false, true}) {
+            CAPTURE(descending);
+            DataFrame out = run(df.lazy()
+                                    .memory_budget(1)
+                                    .sort_by("k", descending)
+                                    .collect(32));
+            REQUIRE(out.num_rows() == N);
+            const std::int64_t* got = out.column("k").data<std::int64_t>();
+            for (std::int64_t i = 0; i < N; ++i)
+                REQUIRE(got[i] == (descending ? BASE + N - 1 - i : BASE + i));
+        }
+    }
+
+    TEST_CASE("take reports an index past the end") {
+        DataFrame df = make_df();
+        CHECK_THROWS(run(df.lazy().memory_budget(1).take({1, 99}).collect(2)));
     }
 
     TEST_CASE("lazy filter_mask matches the eager DataFrame::filter(mask)") {
@@ -1256,6 +1721,46 @@ TEST_SUITE("lazyframe") {
             const std::int64_t* a = p.column(cn).data<std::int64_t>();
             const std::int64_t* b = pe.column(cn).data<std::int64_t>();
             for (std::int64_t r = 0; r < p.num_rows(); ++r) CHECK(a[r] == b[r]);
+        }
+    }
+
+    TEST_CASE(
+        "pivot under a tiny budget matches eager over many index values") {
+        const std::int64_t n = 3000;
+        std::vector<std::int64_t> k(n), v(n);
+        std::vector<std::string> i(n);
+        for (std::int64_t r = 0; r < n; ++r) {
+            const std::int64_t h = (r * 2654435761LL) % 1009;
+            i[static_cast<std::size_t>(r)] = "row" + std::to_string(h);
+            k[static_cast<std::size_t>(r)] = (r * 7 + h) % 5;
+            v[static_cast<std::size_t>(r)] = r;
+        }
+        DataFrame pf;
+        pf.names = {"i", "k", "v"};
+        pf.columns.push_back(Series::strings(i));
+        pf.columns.push_back(Series::flat_i64(k.data(), n));
+        pf.columns.push_back(Series::flat_i64(v.data(), n));
+        for (const char* agg : {"first", "last", "sum", "max"}) {
+            DataFrame p = run(pf.lazy()
+                                  .memory_budget(1)
+                                  .pivot("i", "k", "v", agg)
+                                  .collect(7));
+            DataFrame pe = pf.pivot("i", "k", "v", agg);
+            REQUIRE(p.names == pe.names);
+            REQUIRE(p.num_rows() == pe.num_rows());
+            for (std::int64_t r = 0; r < p.num_rows(); ++r)
+                CHECK(p.column("i").string_at(r) ==
+                      pe.column("i").string_at(r));
+            for (std::size_t c = 1; c < p.names.size(); ++c) {
+                const Series& a = p.columns[c];
+                const Series& b = pe.columns[c];
+                for (std::int64_t r = 0; r < p.num_rows(); ++r) {
+                    REQUIRE(a.is_null(r) == b.is_null(r));
+                    if (!a.is_null(r))
+                        CHECK(a.data<std::int64_t>()[r] ==
+                              b.data<std::int64_t>()[r]);
+                }
+            }
         }
     }
 

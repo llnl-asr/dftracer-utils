@@ -384,6 +384,35 @@ TEST_CASE("AggState dyn: a Pct reduction round-trips its per-name sketch") {
     CHECK(r.column("p90_x").data<double>()[0] == doctest::Approx(q));
 }
 
+TEST_CASE(
+    "compact serialization round-trips like the full one, in fewer bytes") {
+    Sample s(4096);
+    auto st = df::group_agg_state(s.keys1, s.values, mixed_specs());
+    df::agg_sort_groups(*st);
+    const std::string full = df::agg_serialize(*st);
+    const std::string compact = df::agg_serialize(*st, true);
+    CHECK(compact.size() < full.size());
+
+    DataFrame a = df::agg_finalize(*df::agg_deserialize(full), "k1");
+    DataFrame b = df::agg_finalize(*df::agg_deserialize(compact, true), "k1");
+    REQUIRE(a.names == b.names);
+    REQUIRE(a.num_rows() == b.num_rows());
+    for (std::int64_t r = 0; r < a.num_rows(); ++r) {
+        CHECK(a.column("sum").data<std::int64_t>()[r] ==
+              b.column("sum").data<std::int64_t>()[r]);
+        CHECK(a.column("cnt").data<std::int64_t>()[r] ==
+              b.column("cnt").data<std::int64_t>()[r]);
+        CHECK(a.column("mean").data<double>()[r] ==
+              b.column("mean").data<double>()[r]);
+        CHECK(a.column("p50").data<double>()[r] ==
+              b.column("p50").data<double>()[r]);
+        CHECK(std::string(a.column("tags").string_at(r)) ==
+              std::string(b.column("tags").string_at(r)));
+        CHECK(std::string(a.column("argmax").string_at(r)) ==
+              std::string(b.column("argmax").string_at(r)));
+    }
+}
+
 TEST_CASE("agg_regroup over serialize/deserialize round-trip is exact") {
     Sample s(3000);
     auto fine = df::group_agg_state(s.keys2, s.values, mixed_specs());

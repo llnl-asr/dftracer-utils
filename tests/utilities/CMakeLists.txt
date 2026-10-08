@@ -480,3 +480,10 @@ if(DFTRACER_UTILS_ENABLE_ARROW)
     add_dependencies(utilities_plugins_test_plugin_reference reference_plugin)
   endif()
 endif()
+
+# libstdc++'s std::to_chars, inlined through core/common/to_chars.h, trips
+# GCC's optimizer-based -Wstrict-overflow=2 inside the system header, which
+# -isystem cannot suppress; the rest of the tests keep =2.
+set_source_files_properties(
+  ${CMAKE_CURRENT_SOURCE_DIR}/fileio/test_line_format.cpp
+  PROPERTIES COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:GNU>:-Wno-strict-overflow>")

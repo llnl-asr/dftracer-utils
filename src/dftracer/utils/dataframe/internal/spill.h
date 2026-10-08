@@ -83,11 +83,17 @@ class Dir {
 class Writer {
    public:
     explicit Writer(const std::string& path);
+    Writer(Writer&&) noexcept;
+    Writer& operator=(Writer&&) noexcept;
+    ~Writer();
     void write(const std::vector<Series>& cols, std::int64_t rows);
     void close();
 
    private:
+    struct Codec;
     std::ofstream os_;
+    std::string blob_;
+    std::unique_ptr<Codec> codec_;
 };
 
 /// Reads morsels back from a run file. The max_rows hint is ignored: chunks
@@ -95,10 +101,17 @@ class Writer {
 class Reader : public Cursor {
    public:
     explicit Reader(const std::string& path);
+    ~Reader() override;
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override;
 
    private:
+    struct Codec;
     std::ifstream is_;
+    std::unique_ptr<char[]> raw_;
+    std::size_t raw_cap_ = 0;
+    std::unique_ptr<char[]> stored_;
+    std::size_t stored_cap_ = 0;
+    std::unique_ptr<Codec> codec_;
 };
 
 /// One aggregation run file: the groups of an AggState sorted by composite

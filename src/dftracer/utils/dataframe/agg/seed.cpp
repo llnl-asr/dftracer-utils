@@ -104,7 +104,8 @@ void agg_permute_groups(AggState& st, const std::vector<std::int64_t>& perm) {
     st.next_in_bucket.swap(next);
 }
 
-AggStatePtr agg_extract_group(const AggState& st_in, std::int64_t g) {
+AggStatePtr agg_extract_groups(const AggState& st_in,
+                               const std::vector<std::int64_t>& groups) {
     const AggState& st = settled(st_in);
     AggStatePtr out(new AggState());
     out->specs = st.specs;
@@ -124,98 +125,110 @@ AggStatePtr agg_extract_group(const AggState& st_in, std::int64_t g) {
     out->nkey_cols.assign(out->nkeys, {});
     out->field_domain = st.field_domain;
     out->field_is_str = st.field_is_str;
-    for (std::size_t k = 0; k < st.nkeys; ++k) {
-        if (st.key_is_bytes[k])
-            out->skey_cols[k].push_back(
-                st.skey_cols[k][static_cast<std::size_t>(g)]);
-        else
-            out->ikey_cols[k].push_back(
-                st.ikey_cols[k][static_cast<std::size_t>(g)]);
-        out->nkey_cols[k].push_back(
-            st.nkey_cols[k][static_cast<std::size_t>(g)]);
-    }
-    out->grow_group();
-    out->inited = true;
+    for (std::size_t o = 0; o < groups.size(); ++o) {
+        const std::int64_t g = groups[o];
+        for (std::size_t k = 0; k < st.nkeys; ++k) {
+            if (st.key_is_bytes[k])
+                out->skey_cols[k].push_back(
+                    st.skey_cols[k][static_cast<std::size_t>(g)]);
+            else
+                out->ikey_cols[k].push_back(
+                    st.ikey_cols[k][static_cast<std::size_t>(g)]);
+            out->nkey_cols[k].push_back(
+                st.nkey_cols[k][static_cast<std::size_t>(g)]);
+        }
+        out->grow_group();
 
-    out->counts[0] = st.counts[static_cast<std::size_t>(g)];
-    const std::size_t base = static_cast<std::size_t>(g) * st.nf;
-    for (std::size_t fj = 0; fj < st.nf; ++fj)
-        out->fstats[fj] = st.fstats[base + fj];
-    if (st.has_fl) {
-        for (std::size_t fj = 0; fj < st.nf; ++fj) {
-            out->fl_first[fj] = st.fl_first[base + fj];
-            out->fl_last[fj] = st.fl_last[base + fj];
-            out->fl_first_s[fj] = st.fl_first_s[base + fj];
-            out->fl_last_s[fj] = st.fl_last_s[base + fj];
-            out->fl_first_idx[fj] = st.fl_first_idx[base + fj];
-            out->fl_last_idx[fj] = st.fl_last_idx[base + fj];
+        out->counts[o] = st.counts[static_cast<std::size_t>(g)];
+        const std::size_t base = static_cast<std::size_t>(g) * st.nf;
+        for (std::size_t fj = 0; fj < st.nf; ++fj)
+            out->fstats[o * st.nf + fj] = st.fstats[base + fj];
+        if (st.has_fl) {
+            for (std::size_t fj = 0; fj < st.nf; ++fj) {
+                out->fl_first[o * st.nf + fj] = st.fl_first[base + fj];
+                out->fl_last[o * st.nf + fj] = st.fl_last[base + fj];
+                out->fl_first_s[o * st.nf + fj] = st.fl_first_s[base + fj];
+                out->fl_last_s[o * st.nf + fj] = st.fl_last_s[base + fj];
+                out->fl_first_idx[o * st.nf + fj] = st.fl_first_idx[base + fj];
+                out->fl_last_idx[o * st.nf + fj] = st.fl_last_idx[base + fj];
+            }
+        }
+        if (st.has_sketch) {
+            const std::size_t sbase = static_cast<std::size_t>(g) * st.n_sketch;
+            for (std::size_t sk = 0; sk < st.n_sketch; ++sk)
+                out->sketches[o * st.n_sketch + sk] = st.sketches[sbase + sk];
+        }
+        if (st.has_arg) {
+            const std::size_t abase = static_cast<std::size_t>(g) * st.n_arg;
+            for (std::size_t slot = 0; slot < st.n_arg; ++slot) {
+                out->arg_by[o * st.n_arg + slot] = st.arg_by[abase + slot];
+                out->arg_has[o * st.n_arg + slot] = st.arg_has[abase + slot];
+            }
+            const std::size_t rbase =
+                static_cast<std::size_t>(g) * st.n_arg_repr;
+            for (std::size_t ri = 0; ri < st.n_arg_repr; ++ri)
+                out->arg_repr[o * st.n_arg_repr + ri] = st.arg_repr[rbase + ri];
+        }
+        if (st.has_bitor) {
+            const std::size_t bbase = static_cast<std::size_t>(g) * st.n_bitor;
+            for (std::size_t slot = 0; slot < st.n_bitor; ++slot)
+                out->bitor_acc[o * st.n_bitor + slot] =
+                    st.bitor_acc[bbase + slot];
+        }
+        if (st.has_prod) {
+            const std::size_t pbase = static_cast<std::size_t>(g) * st.n_prod;
+            for (std::size_t slot = 0; slot < st.n_prod; ++slot)
+                out->prod_acc[o * st.n_prod + slot] = st.prod_acc[pbase + slot];
+        }
+        if (st.has_kmv) {
+            const std::size_t kbase = static_cast<std::size_t>(g) * st.n_kmv;
+            for (std::size_t slot = 0; slot < st.n_kmv; ++slot)
+                out->kmv[o * st.n_kmv + slot] = st.kmv[kbase + slot];
+        }
+        if (st.has_lst) {
+            const std::size_t lbase = static_cast<std::size_t>(g) * st.n_lst;
+            for (std::size_t slot = 0; slot < st.n_lst; ++slot)
+                out->lst[o * st.n_lst + slot] = st.lst[lbase + slot];
+        }
+        if (st.has_ss) {
+            const std::size_t sbase = static_cast<std::size_t>(g) * st.n_ss;
+            for (std::size_t slot = 0; slot < st.n_ss; ++slot)
+                out->ss_counters[o * st.n_ss + slot] =
+                    st.ss_counters[sbase + slot];
+        }
+        if (st.has_co) {
+            const std::size_t cbase = static_cast<std::size_t>(g) * st.n_co;
+            for (std::size_t slot = 0; slot < st.n_co; ++slot)
+                out->co[o * st.n_co + slot] = st.co[cbase + slot];
+        }
+        if (st.has_set) {
+            const std::size_t setbase = static_cast<std::size_t>(g) * st.n_set;
+            for (std::size_t slot = 0; slot < st.n_set; ++slot)
+                out->sets[o * st.n_set + slot] = st.sets[setbase + slot];
+        }
+        if (st.has_occ) {
+            const std::size_t obase = static_cast<std::size_t>(g) * st.n_occ;
+            for (std::size_t slot = 0; slot < st.n_occ; ++slot) {
+                out->occ_deltas[o * st.n_occ + slot] =
+                    st.occ_deltas[obase + slot];
+                out->occ_total[o * st.n_occ + slot] =
+                    st.occ_total[obase + slot];
+                out->occ_ts[o * st.n_occ + slot] = st.occ_ts[obase + slot];
+                out->occ_te[o * st.n_occ + slot] = st.occ_te[obase + slot];
+            }
+        }
+        if (st.has_dyn) {
+            out->dyn_fs[o] = st.dyn_fs[static_cast<std::size_t>(g)];
+            if (st.dyn_has_sketch)
+                out->dyn_sketch[o] = st.dyn_sketch[static_cast<std::size_t>(g)];
         }
     }
-    if (st.has_sketch) {
-        const std::size_t sbase = static_cast<std::size_t>(g) * st.n_sketch;
-        for (std::size_t sk = 0; sk < st.n_sketch; ++sk)
-            out->sketches[sk] = st.sketches[sbase + sk];
-    }
-    if (st.has_arg) {
-        const std::size_t abase = static_cast<std::size_t>(g) * st.n_arg;
-        for (std::size_t slot = 0; slot < st.n_arg; ++slot) {
-            out->arg_by[slot] = st.arg_by[abase + slot];
-            out->arg_has[slot] = st.arg_has[abase + slot];
-        }
-        const std::size_t rbase = static_cast<std::size_t>(g) * st.n_arg_repr;
-        for (std::size_t ri = 0; ri < st.n_arg_repr; ++ri)
-            out->arg_repr[ri] = st.arg_repr[rbase + ri];
-    }
-    if (st.has_bitor) {
-        const std::size_t bbase = static_cast<std::size_t>(g) * st.n_bitor;
-        for (std::size_t slot = 0; slot < st.n_bitor; ++slot)
-            out->bitor_acc[slot] = st.bitor_acc[bbase + slot];
-    }
-    if (st.has_prod) {
-        const std::size_t pbase = static_cast<std::size_t>(g) * st.n_prod;
-        for (std::size_t slot = 0; slot < st.n_prod; ++slot)
-            out->prod_acc[slot] = st.prod_acc[pbase + slot];
-    }
-    if (st.has_kmv) {
-        const std::size_t kbase = static_cast<std::size_t>(g) * st.n_kmv;
-        for (std::size_t slot = 0; slot < st.n_kmv; ++slot)
-            out->kmv[slot] = st.kmv[kbase + slot];
-    }
-    if (st.has_lst) {
-        const std::size_t lbase = static_cast<std::size_t>(g) * st.n_lst;
-        for (std::size_t slot = 0; slot < st.n_lst; ++slot)
-            out->lst[slot] = st.lst[lbase + slot];
-    }
-    if (st.has_ss) {
-        const std::size_t sbase = static_cast<std::size_t>(g) * st.n_ss;
-        for (std::size_t slot = 0; slot < st.n_ss; ++slot)
-            out->ss_counters[slot] = st.ss_counters[sbase + slot];
-    }
-    if (st.has_co) {
-        const std::size_t cbase = static_cast<std::size_t>(g) * st.n_co;
-        for (std::size_t slot = 0; slot < st.n_co; ++slot)
-            out->co[slot] = st.co[cbase + slot];
-    }
-    if (st.has_set) {
-        const std::size_t setbase = static_cast<std::size_t>(g) * st.n_set;
-        for (std::size_t slot = 0; slot < st.n_set; ++slot)
-            out->sets[slot] = st.sets[setbase + slot];
-    }
-    if (st.has_occ) {
-        const std::size_t obase = static_cast<std::size_t>(g) * st.n_occ;
-        for (std::size_t slot = 0; slot < st.n_occ; ++slot) {
-            out->occ_deltas[slot] = st.occ_deltas[obase + slot];
-            out->occ_total[slot] = st.occ_total[obase + slot];
-            out->occ_ts[slot] = st.occ_ts[obase + slot];
-            out->occ_te[slot] = st.occ_te[obase + slot];
-        }
-    }
-    if (st.has_dyn) {
-        out->dyn_fs[0] = st.dyn_fs[static_cast<std::size_t>(g)];
-        if (st.dyn_has_sketch)
-            out->dyn_sketch[0] = st.dyn_sketch[static_cast<std::size_t>(g)];
-    }
+    out->inited = true;
     return out;
+}
+
+AggStatePtr agg_extract_group(const AggState& st, std::int64_t g) {
+    return agg_extract_groups(st, {g});
 }
 
 // The seed path rebuilds a group only from a FieldStat + optional DDSketch;

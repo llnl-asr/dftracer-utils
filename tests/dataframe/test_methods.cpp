@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -850,6 +851,113 @@ TEST_CASE("DataFrame sort_by_multi puts a null key last") {
     CHECK(p[1] == 13);
     CHECK(p[2] == 10);
     CHECK(p[3] == 12);
+}
+
+TEST_CASE(
+    "DataFrame sort_by_multi over mixed keys matches a stable reference") {
+    const std::int64_t n = 4000;
+    std::vector<std::int64_t> a(n), id(n);
+    std::vector<std::int32_t> c(n);
+    std::vector<std::string> words(n);
+    std::vector<std::string_view> views(n);
+    std::vector<std::uint8_t> valid((n + 7) / 8, 0);
+    std::vector<char> is_valid(n);
+    for (std::int64_t i = 0; i < n; ++i) {
+        const auto u = static_cast<std::size_t>(i);
+        a[u] = (i * 7919) % 5;
+        c[u] = static_cast<std::int32_t>((i * 31) % 4) - 2;
+        words[u] = "w" + std::to_string((i * 13) % 6);
+        views[u] = words[u];
+        id[u] = i;
+        is_valid[u] = (i % 11) != 0;
+        if (is_valid[u])
+            valid[u >> 3] |= static_cast<std::uint8_t>(1u << (u & 7));
+    }
+    DataFrame df;
+    df.names = {"a", "w", "c", "id"};
+    df.columns.push_back(i64(a));
+    df.columns.push_back(Series::strings(views, valid.data()));
+    df.columns.push_back(
+        Series::flat(dftracer::utils::dataframe::TypeId::Int32, c.data(), n));
+    df.columns.push_back(i64(id));
+    const std::vector<bool> desc{false, true, true};
+    const DataFrame s = df.sort_by_multi({"a", "w", "c"}, desc);
+
+    std::vector<std::int64_t> want(static_cast<std::size_t>(n));
+    std::iota(want.begin(), want.end(), std::int64_t{0});
+    std::stable_sort(want.begin(), want.end(),
+                     [&](std::int64_t x, std::int64_t y) {
+                         const auto ux = static_cast<std::size_t>(x);
+                         const auto uy = static_cast<std::size_t>(y);
+                         if (a[ux] != a[uy]) return a[ux] < a[uy];
+                         if (is_valid[ux] != is_valid[uy])
+                             return is_valid[ux] != 0;  // nulls last
+                         if (is_valid[ux] && words[ux] != words[uy])
+                             return words[ux] > words[uy];
+                         if (c[ux] != c[uy]) return c[ux] > c[uy];
+                         return false;
+                     });
+    const std::int64_t* got = s.column("id").data<std::int64_t>();
+    for (std::int64_t i = 0; i < n; ++i)
+        REQUIRE(got[i] == want[static_cast<std::size_t>(i)]);
+}
+
+TEST_CASE("float keys sort as one total order: NaN last, -0.0 equals 0.0") {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double inf = std::numeric_limits<double>::infinity();
+    const std::vector<double> pool = {-1.5, -0.0, 0.0,  2.0,
+                                      nan,  inf,  -inf, 2.0};
+    const std::int64_t n = 3000;
+    std::vector<double> f(n);
+    std::vector<std::int64_t> g(n), id(n);
+    for (std::int64_t i = 0; i < n; ++i) {
+        const auto z = static_cast<std::size_t>(i);
+        f[z] = pool[static_cast<std::size_t>((i * 5) % 8)];
+        g[z] = (i * 3) % 4;
+        id[z] = i;
+    }
+    DataFrame df;
+    df.names = {"f", "g", "id"};
+    df.columns.push_back(Series::flat_f64(f.data(), n));
+    df.columns.push_back(i64(g));
+    df.columns.push_back(i64(id));
+    auto less = [&](double a, double b) {
+        if (std::isnan(a) || std::isnan(b))
+            return !std::isnan(a) && std::isnan(b);
+        return a < b;
+    };
+    auto equal = [&](double a, double b) { return !less(a, b) && !less(b, a); };
+    for (bool desc : {false, true}) {
+        // One key, then two keys with the float first and second.
+        std::vector<std::int64_t> want(static_cast<std::size_t>(n));
+        std::iota(want.begin(), want.end(), std::int64_t{0});
+        std::stable_sort(want.begin(), want.end(),
+                         [&](std::int64_t x, std::int64_t y) {
+                             const double a = f[static_cast<std::size_t>(x)];
+                             const double b = f[static_cast<std::size_t>(y)];
+                             return desc ? less(b, a) : less(a, b);
+                         });
+        const DataFrame one = df.sort_by_multi({"f"}, desc);
+        const DataFrame single = df.sort_by("f", desc);
+        for (std::int64_t i = 0; i < n; ++i) {
+            REQUIRE(one.column("id").data<std::int64_t>()[i] ==
+                    want[static_cast<std::size_t>(i)]);
+            REQUIRE(single.column("id").data<std::int64_t>()[i] ==
+                    want[static_cast<std::size_t>(i)]);
+        }
+        std::stable_sort(
+            want.begin(), want.end(), [&](std::int64_t x, std::int64_t y) {
+                const auto ux = static_cast<std::size_t>(x);
+                const auto uy = static_cast<std::size_t>(y);
+                if (g[ux] != g[uy]) return g[ux] < g[uy];
+                if (equal(f[ux], f[uy])) return x < y;
+                return desc ? less(f[uy], f[ux]) : less(f[ux], f[uy]);
+            });
+        const DataFrame two = df.sort_by_multi({"g", "f"}, {false, desc});
+        for (std::int64_t i = 0; i < n; ++i)
+            REQUIRE(two.column("id").data<std::int64_t>()[i] ==
+                    want[static_cast<std::size_t>(i)]);
+    }
 }
 
 TEST_CASE("DataFrame sort_by_multi per-column direction") {

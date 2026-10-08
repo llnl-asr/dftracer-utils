@@ -1,6 +1,8 @@
 #include <dftracer/utils/core/common/bits.h>
+#include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/common/filesystem.h>  // fs:: portability alias
+#include <dftracer/utils/core/common/filesystem_info.h>
 #include <dftracer/utils/core/common/scoped_fd.h>
 #include <dftracer/utils/core/common/spill_dir.h>
 #include <dftracer/utils/core/env.h>
@@ -11,6 +13,9 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#ifdef DFTRACER_UTILS_ENABLE_ZSTD
+#include <zstd.h>
+#endif
 
 #include <atomic>
 #include <cstring>
@@ -629,25 +634,133 @@ std::string Dir::run_path(int id) const {
     return (fs::path(dir_) / ("run_" + std::to_string(id) + ".bin")).string();
 }
 
+namespace {
+
+bool spill_compression_on(const std::string& path) {
+#ifdef DFTRACER_UTILS_ENABLE_ZSTD
+    const auto v = Env::get(constants::SPILL_COMPRESS_ENV);
+    if (v && (*v == "off" || *v == "0")) return false;
+    if (v && (*v == "on" || *v == "1" || *v == "zstd")) return true;
+    return is_network_filesystem(filesystem_kind(path));
+#else
+    (void)path;
+    return false;
+#endif
+}
+
+// A morsel smaller than this is not worth a compression call.
+constexpr std::size_t COMPRESS_MIN_BYTES = 4096;
+
+}  // namespace
+
+#ifdef DFTRACER_UTILS_ENABLE_ZSTD
+struct Writer::Codec {
+    ZSTD_CCtx* ctx = ZSTD_createCCtx();
+    std::string out;
+    ~Codec() { ZSTD_freeCCtx(ctx); }
+};
+struct Reader::Codec {
+    ZSTD_DCtx* ctx = ZSTD_createDCtx();
+    ~Codec() { ZSTD_freeDCtx(ctx); }
+};
+#else
+struct Writer::Codec {};
+struct Reader::Codec {};
+#endif
+
 Writer::Writer(const std::string& path)
     : os_(path, std::ios::binary | std::ios::trunc) {
     if (!os_) throw std::runtime_error("spill: cannot open run file " + path);
+    if (spill_compression_on(path)) codec_ = std::make_unique<Codec>();
 }
 
+Writer::Writer(Writer&&) noexcept = default;
+Writer& Writer::operator=(Writer&&) noexcept = default;
+Writer::~Writer() = default;
+
+// Each morsel is [stored bytes][raw bytes][payload]; the payload is zstd when
+// the two differ.
 void Writer::write(const std::vector<Series>& cols, std::int64_t rows) {
-    std::string blob;
-    put_pod<std::int64_t>(blob, rows);
-    put_pod<std::int32_t>(blob, static_cast<std::int32_t>(cols.size()));
-    for (const Series& c : cols) put_series(blob, c);
-    const std::int64_t len = static_cast<std::int64_t>(blob.size());
-    os_.write(reinterpret_cast<const char*>(&len), sizeof(len));
-    os_.write(blob.data(), static_cast<std::streamsize>(blob.size()));
+    blob_.clear();
+    put_pod<std::int64_t>(blob_, rows);
+    put_pod<std::int32_t>(blob_, static_cast<std::int32_t>(cols.size()));
+    for (const Series& c : cols) put_series(blob_, c);
+    const char* payload = blob_.data();
+    std::int64_t stored = static_cast<std::int64_t>(blob_.size());
+    const std::int64_t raw = stored;
+#ifdef DFTRACER_UTILS_ENABLE_ZSTD
+    if (codec_ && blob_.size() >= COMPRESS_MIN_BYTES) {
+        codec_->out.resize(ZSTD_compressBound(blob_.size()));
+        const std::size_t n = ZSTD_compressCCtx(codec_->ctx, codec_->out.data(),
+                                                codec_->out.size(),
+                                                blob_.data(), blob_.size(), 1);
+        if (!ZSTD_isError(n) && n < blob_.size()) {
+            payload = codec_->out.data();
+            stored = static_cast<std::int64_t>(n);
+        }
+    }
+#endif
+    os_.write(reinterpret_cast<const char*>(&stored), sizeof(stored));
+    os_.write(reinterpret_cast<const char*>(&raw), sizeof(raw));
+    os_.write(payload, static_cast<std::streamsize>(stored));
+    if (!os_)
+        throw std::runtime_error("spill: cannot write a run file (disk full?)");
 }
 
-void Writer::close() { os_.close(); }
+void Writer::close() {
+    os_.close();
+    if (!os_)
+        throw std::runtime_error(
+            "spill: cannot finish a run file (disk full?)");
+}
 
 Reader::Reader(const std::string& path) : is_(path, std::ios::binary) {
     if (!is_) throw std::runtime_error("spill: cannot open run file " + path);
+}
+
+Reader::~Reader() = default;
+
+coro::CoroTask<std::optional<Morsel>> Reader::next(std::int64_t /*max_rows*/) {
+    std::int64_t sizes[2] = {0, 0};
+    is_.read(reinterpret_cast<char*>(sizes), sizeof(sizes));
+    if (is_.gcount() == 0) co_return std::nullopt;
+    if (is_.gcount() != static_cast<std::streamsize>(sizeof(sizes)))
+        throw std::runtime_error("spill: short run read");
+    const auto stored = static_cast<std::size_t>(sizes[0]);
+    const auto raw = static_cast<std::size_t>(sizes[1]);
+    const auto grow = [](std::unique_ptr<char[]>& buf, std::size_t& cap,
+                         std::size_t need) {
+        if (need <= cap) return;
+        buf = std::make_unique_for_overwrite<char[]>(need);
+        cap = need;
+    };
+    grow(raw_, raw_cap_, raw);
+    if (stored == raw) {
+        is_.read(raw_.get(), static_cast<std::streamsize>(raw));
+    } else {
+#ifdef DFTRACER_UTILS_ENABLE_ZSTD
+        if (!codec_) codec_ = std::make_unique<Codec>();
+        grow(stored_, stored_cap_, stored);
+        is_.read(stored_.get(), static_cast<std::streamsize>(stored));
+        if (static_cast<std::size_t>(is_.gcount()) == stored &&
+            ZSTD_decompressDCtx(codec_->ctx, raw_.get(), raw, stored_.get(),
+                                stored) != raw)
+            throw std::runtime_error("spill: corrupt compressed morsel");
+#else
+        throw std::runtime_error("spill: compressed morsel without zstd");
+#endif
+    }
+    if (static_cast<std::size_t>(is_.gcount()) != stored)
+        throw std::runtime_error("spill: short run read");
+    const auto* p = reinterpret_cast<const std::uint8_t*>(raw_.get());
+    const std::uint8_t* pend = p + raw;
+    Morsel m;
+    m.rows = get_pod<std::int64_t>(p, pend);
+    const std::int32_t ncols = get_pod<std::int32_t>(p, pend);
+    m.columns.reserve(static_cast<std::size_t>(ncols));
+    for (std::int32_t c = 0; c < ncols; ++c)
+        m.columns.push_back(get_series(p, pend));
+    co_return m;
 }
 
 Spool::Spool(std::uint64_t budget, std::shared_ptr<Dir> dir)
@@ -687,51 +800,44 @@ std::unique_ptr<Cursor> Spool::reader() {
     return std::make_unique<SpoolReader>(&mem_, run_);
 }
 
-coro::CoroTask<std::optional<Morsel>> Reader::next(std::int64_t /*max_rows*/) {
-    std::int64_t len = 0;
-    is_.read(reinterpret_cast<char*>(&len), sizeof(len));
-    if (!is_ || is_.gcount() == 0) co_return std::nullopt;
-    std::string blob(static_cast<std::size_t>(len), '\0');
-    is_.read(blob.data(), static_cast<std::streamsize>(len));
-    if (is_.gcount() != len) throw std::runtime_error("spill: short run read");
-    const auto* p = reinterpret_cast<const std::uint8_t*>(blob.data());
-    const std::uint8_t* pend = p + blob.size();
-    Morsel m;
-    m.rows = get_pod<std::int64_t>(p, pend);
-    const std::int32_t ncols = get_pod<std::int32_t>(p, pend);
-    m.columns.reserve(static_cast<std::size_t>(ncols));
-    for (std::int32_t c = 0; c < ncols; ++c)
-        m.columns.push_back(get_series(p, pend));
-    co_return m;
-}
-
 void write_agg_run(AggState& state, const std::string& path) {
     agg_sort_groups(state);
     std::ofstream os(path, std::ios::binary);
     if (!os) throw std::runtime_error("agg spill: cannot open run " + path);
     const std::int64_t ng = agg_num_groups(state);
     for (std::int64_t g = 0; g < ng; ++g) {
-        const std::string blob = agg_serialize(*agg_extract_group(state, g));
+        const std::string blob =
+            agg_serialize(*agg_extract_group(state, g), true);
         const std::uint32_t len = static_cast<std::uint32_t>(blob.size());
         os.write(reinterpret_cast<const char*>(&len), sizeof(len));
         os.write(blob.data(), static_cast<std::streamsize>(blob.size()));
+        if (!os)
+            throw std::runtime_error("agg spill: cannot write run " + path);
     }
+    os.close();
+    if (!os) throw std::runtime_error("agg spill: cannot write run " + path);
 }
 
 AggRunReader::AggRunReader(const std::string& path)
     : is_(path, std::ios::binary) {
+    if (!is_) throw std::runtime_error("agg spill: cannot open run " + path);
     advance();
 }
 
 void AggRunReader::advance() {
     std::uint32_t len = 0;
-    if (!is_.read(reinterpret_cast<char*>(&len), sizeof(len))) {
+    is_.read(reinterpret_cast<char*>(&len), sizeof(len));
+    if (is_.gcount() == 0) {
         valid_ = false;
         return;
     }
+    if (is_.gcount() != static_cast<std::streamsize>(sizeof(len)))
+        throw std::runtime_error("agg spill: truncated run");
     std::string blob(len, '\0');
     is_.read(blob.data(), static_cast<std::streamsize>(len));
-    cur_ = agg_deserialize(blob);
+    if (is_.gcount() != static_cast<std::streamsize>(len))
+        throw std::runtime_error("agg spill: truncated run");
+    cur_ = agg_deserialize(blob, true);
     valid_ = true;
 }
 

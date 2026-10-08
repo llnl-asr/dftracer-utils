@@ -39,25 +39,21 @@ BufferPool::BufferPool(std::size_t num_slots, std::size_t initial_capacity) {
     }
 }
 
-BufferPool::Slot* BufferPool::acquire(std::size_t min_capacity) {
+BufferPool::Lease BufferPool::acquire(std::size_t min_capacity) {
+    Lease lease;
     for (auto& slot : slots_) {
         bool expected = false;
         if (slot->in_use.compare_exchange_strong(expected, true,
                                                  std::memory_order_acquire)) {
-            if (slot->data.capacity() < min_capacity) {
-                slot->data.reserve(min_capacity);
-            }
-            slot->data.clear();
-            return slot.get();
+            lease.pooled_ = slot.get();
+            break;
         }
     }
-    return nullptr;  // All slots in use
-}
-
-void BufferPool::release(Slot* slot) {
-    if (slot) {
-        slot->in_use.store(false, std::memory_order_release);
-    }
+    if (!lease.pooled_) lease.owned_ = std::make_unique<Slot>();
+    auto& data = lease.data();
+    if (data.capacity() < min_capacity) data.reserve(min_capacity);
+    data.clear();
+    return lease;
 }
 
 // ---------------------------------------------------------------------------
@@ -431,18 +427,15 @@ coro::CoroTask<IpcWriter::CompressedBatch> IpcWriter::compress_batch(
     CompressedBatch result{};
 
     if (compression_ == IpcCompression::NONE) {
-        result.body_slot = buffer_pool_.acquire(64 * 1024);
-        if (!result.body_slot) {
-            result.body_slot = new BufferPool::Slot();
-        }
+        result.body = buffer_pool_.acquire(64 * 1024);
 
-        int rc = encode_batch_uncompressed(batch, result.header,
-                                           result.body_slot->data);
+        int rc =
+            encode_batch_uncompressed(batch, result.header, result.body.data());
         if (rc != 0) {
             co_return result;
         }
 
-        result.body_size = result.body_slot->data.size();
+        result.body_size = result.body.data().size();
         result.body_length = static_cast<std::int64_t>(result.body_size);
         result.metadata_length =
             static_cast<std::int32_t>(result.header.size());
@@ -471,21 +464,17 @@ coro::CoroTask<IpcWriter::CompressedBatch> IpcWriter::compress_batch(
         estimated_size += ZSTD_compressBound(buf.size_bytes) + 8;
     }
 
-    result.body_slot = buffer_pool_.acquire(estimated_size);
-    if (!result.body_slot) {
-        result.body_slot = new BufferPool::Slot();
-        result.body_slot->data.reserve(estimated_size);
-    }
+    result.body = buffer_pool_.acquire(estimated_size);
 
     // Compress into pooled buffer
     std::vector<BufferInfo> buffer_info;
-    rc = build_compressed_body(&view, result.body_slot->data, buffer_info);
+    rc = build_compressed_body(&view, result.body.data(), buffer_info);
     if (rc != 0) {
         ArrowArrayViewReset(&view);
         co_return result;
     }
 
-    result.body_size = result.body_slot->data.size();
+    result.body_size = result.body.data().size();
     result.body_length = static_cast<std::int64_t>(result.body_size);
 
     // Build message header
@@ -521,14 +510,13 @@ coro::CoroTask<int> IpcWriter::write_compressed(CompressedBatch& cb) {
     struct iovec iov[2];
     iov[0].iov_base = cb.header.data();
     iov[0].iov_len = cb.header.size();
-    iov[1].iov_base = cb.body_slot->data.data();
+    iov[1].iov_base = cb.body.data().data();
     iov[1].iov_len = cb.body_size;
 
     auto result = co_await io::pwritev(fd_, iov, 2, write_offset_);
 
     // Release pooled buffer
-    buffer_pool_.release(cb.body_slot);
-    cb.body_slot = nullptr;
+    cb.body.reset();
 
     if (result < 0) {
         co_return static_cast<int>(result);

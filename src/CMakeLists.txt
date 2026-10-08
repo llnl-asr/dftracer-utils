@@ -791,6 +791,22 @@ foreach(variant shared static)
                             PRIVATE $<BUILD_INTERFACE:hwy>)
     endif()
     add_stdfs_if_needed(dftracer_utils_dataframe_${variant})
+    # Spill files compress each morsel with zstd (spill.cpp).
+    if(DFTRACER_UTILS_ENABLE_ZSTD)
+      if(TARGET zstd::libzstd_shared)
+        target_link_libraries(dftracer_utils_dataframe_${variant}
+                              PRIVATE zstd::libzstd_shared)
+      elseif(TARGET zstd::libzstd_static)
+        target_link_libraries(dftracer_utils_dataframe_${variant}
+                              PRIVATE zstd::libzstd_static)
+      elseif(TARGET libzstd_shared)
+        target_link_libraries(dftracer_utils_dataframe_${variant}
+                              PRIVATE libzstd_shared)
+      elseif(TARGET libzstd_static)
+        target_link_libraries(dftracer_utils_dataframe_${variant}
+                              PRIVATE libzstd_static)
+      endif()
+    endif()
     if(DFTRACER_UTILS_ENABLE_PCH)
       use_precompiled_header(dftracer_utils_dataframe_${variant})
     endif()

@@ -41,7 +41,7 @@ class MemoryPool {
     std::atomic<std::uint64_t> used_{0};
 };
 
-/// Bytes held from a MemoryPool, returned on destruction or shrink.
+/// Bytes held from a MemoryPool, returned on destruction or reset.
 class Reservation {
    public:
     Reservation() noexcept = default;
@@ -66,12 +66,6 @@ class Reservation {
         if (!pool_ || !pool_->try_reserve(n)) return false;
         bytes_ += n;
         return true;
-    }
-
-    void shrink(std::uint64_t n) noexcept {
-        if (n > bytes_) n = bytes_;
-        pool_->release(n);
-        bytes_ -= n;
     }
 
     void reset() noexcept {

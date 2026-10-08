@@ -141,11 +141,18 @@ Series argsort_scalar(const Series& v, bool descending) {
 // Descending inverts the key bits and keeps the index ascending, stable both
 // ways.
 
+// A total order on floats: every NaN is one value above +infinity, and -0.0
+// is the same value as +0.0, so ties keep input order (stable) and the order
+// is a valid strict weak order, which `<` over NaN is not.
 std::uint32_t sortable_f32(float f) {
+    if (f != f) return 0xFFFFFFFFu;
+    if (f == 0.0f) f = 0.0f;
     std::uint32_t u = std::bit_cast<std::uint32_t>(f);
     return u ^ ((u >> 31) ? 0xFFFFFFFFu : 0x80000000u);
 }
 std::uint64_t sortable_f64(double f) {
+    if (f != f) return ~0ULL;
+    if (f == 0.0) f = 0.0;
     std::uint64_t u = std::bit_cast<std::uint64_t>(f);
     return u ^ ((u >> 63) ? ~0ULL : 0x8000000000000000ULL);
 }

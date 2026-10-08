@@ -1,4 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/utilities/common/statistics/ddsketch.h>
 #include <doctest/doctest.h>
 
@@ -207,6 +208,50 @@ TEST_SUITE("DDSketch") {
 
         for (int i = 1; i <= 1000; ++i) sketch.add(static_cast<double>(i));
         CHECK(sketch.memory_usage() == sizeof(DDSketch));
+    }
+
+    TEST_CASE("DDSketch - a large store holds only the bins in use") {
+        using Big = dftracer::utils::dataframe::BasicDDSketch<2048>;
+        Big narrow(0.01);
+        CHECK(narrow.store_bins() == 0);
+        for (int i = 0; i < 1000; ++i) narrow.add(100.0 + i % 10);
+        CHECK(narrow.store_bins() < 64);
+        CHECK(narrow.memory_usage() < sizeof(Big) + 64 * sizeof(std::uint32_t));
+    }
+
+    TEST_CASE("DDSketch - a large store grows the same way up and down") {
+        using Big = dftracer::utils::dataframe::BasicDDSketch<2048>;
+        // Up grows the store at its end, down shifts it at its start; both
+        // must hold the same bins, also after a merge and a round trip.
+        Big up(0.01), down(0.01), half_a(0.01), half_b(0.01);
+        std::vector<double> v;
+        for (int i = 1; i <= 3000; ++i) v.push_back(i * 0.37);
+        for (double x : v) up.add(x);
+        for (auto it = v.rbegin(); it != v.rend(); ++it) down.add(*it);
+        for (std::size_t i = 0; i < v.size(); ++i)
+            (i % 2 ? half_a : half_b).add(v[i]);
+        half_a.merge(half_b);
+        const auto bytes = up.serialize();
+        const Big back = Big::deserialize(bytes.data(), bytes.size());
+        const auto want = up.bins();
+        CHECK(want.size() > 100);
+        for (const Big* s : std::vector<const Big*>{&down, &half_a, &back}) {
+            const auto got = s->bins();
+            REQUIRE(got.size() == want.size());
+            for (std::size_t i = 0; i < want.size(); ++i)
+                CHECK(got[i].count == want[i].count);
+            CHECK(s->quantile(0.5) == up.quantile(0.5));
+        }
+        CHECK(down.serialize() == bytes);
+    }
+
+    TEST_CASE("DDSketch - a large store collapses past its bin limit") {
+        using Big = dftracer::utils::dataframe::BasicDDSketch<2048>;
+        Big wide(0.001);
+        for (int e = -40; e <= 40; ++e) wide.add(std::pow(10.0, e));
+        CHECK(wide.store_bins() == 2048);
+        CHECK(wide.count() == 81);
+        CHECK(wide.quantile(0.99) > 1e30);
     }
 
     TEST_CASE("DDSketch - Relative accuracy") {

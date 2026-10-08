@@ -929,12 +929,20 @@ dftracer_genesis_gen_dist
 - ``<roots...>`` - Genesis trace roots to walk for ``nodes_<N>/ppn_<M>`` runs
 - ``-o, --output <file>`` - Output ``.pfw.gz`` file (required)
 - ``--member-size <bytes>`` - Gzip member size (default: 33554432 B / 32 MB, the index checkpoint size). Accepts units such as ``512KB`` or ``32MB``
+- ``--memory-budget <bytes>`` - Most memory the tool holds (default ``0``: a third of the memory available to the process, which respects a cgroup limit). Accepts units such as ``64GB``; must be at least 64 MB when set. Calls beyond the budget are written to ``DFTRACER_UTILS_SPILL_DIR``; when it is unset, to the writable node-local disk mount with the most free space (never RAM-backed or network), else a per-user directory under ``/var/tmp`` or ``~/.cache`` on a local disk, else the system temp directory (with a warning when that is RAM-backed)
 
 The output holds one record per run (``gtype`` ``run``), per call path
 (``func``) and per call path and counter (``counter``). Each distribution
 carries its quantiles and its DDSketch as base64 ``sketch``, so distributions
 merge exactly. The records match the built-in ``genesis`` record schema. This
 binary also accepts the shared :ref:`cli-shared-flags` (Pipeline, Logging).
+
+The budget is split evenly between the run groups that run at once, and each
+group's share bounds what it holds: its open readers, its decoded calls, its
+sort buffer, and its counter series and path records. The output lines of a
+finished run are not counted. A run whose counter series or path records alone
+do not fit its share is skipped with a reason that names the share; raise
+``--memory-budget`` for it.
 
 **Example:**
 

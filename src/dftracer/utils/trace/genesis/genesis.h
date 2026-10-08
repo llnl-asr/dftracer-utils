@@ -63,6 +63,10 @@ struct RunOutput {
 struct GroupResult {
     std::vector<RunOutput> runs;
     std::vector<Skip> skips;
+    /// Bytes of call chunks the group wrote to its spill file, and sorted runs
+    /// of calls the sort wrote; both are zero when the share held everything.
+    std::uint64_t spilled_bytes = 0;
+    std::uint64_t sort_runs = 0;
 };
 
 /// Walk `roots` for `nodes_<N>/ppn_<M>` run directories and describe their
@@ -76,9 +80,18 @@ coro::CoroTask<Discovery> discover(CoroScope& ctx,
 std::string run_id(const RunKeys& keys);
 
 /// Read one group's traces (files in parallel) and build each complete set's
-/// output (sets in parallel), in set order. A set that fails a completeness or
-/// consistency check is reported in `skips` instead.
-coro::CoroTask<GroupResult> process_group(CoroScope& ctx, RunGroup group);
+/// output, in set order. A set that fails a completeness or consistency check
+/// is reported in `skips` instead.
+///
+/// `memory_share` bytes bound what the group holds: open readers, calls kept
+/// between reading and sorting, the sort buffer, and the counter series and
+/// path records. Calls beyond their quarter go to a spill file in spill_dir().
+/// A group whose counter series or path records alone exceed their quarter is
+/// skipped with a reason that names the share; the rest of the output is not
+/// counted. A share below MIN_MEMORY_BUDGET_BYTES works, but the open readers
+/// then hold more than the share.
+coro::CoroTask<GroupResult> process_group(CoroScope& ctx, RunGroup group,
+                                          std::uint64_t memory_share);
 
 }  // namespace dftracer::utils::trace::genesis
 

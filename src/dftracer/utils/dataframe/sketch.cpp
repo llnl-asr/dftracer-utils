@@ -14,9 +14,7 @@ BasicDDSketch<BINS>::BasicDDSketch(double relative_accuracy)
       min_(std::numeric_limits<double>::infinity()),
       max_(-std::numeric_limits<double>::infinity()),
       count_(0),
-      zero_count_(0) {
-    store_.fill(0);
-}
+      zero_count_(0) {}
 
 template <int BINS>
 double BasicDDSketch<BINS>::bin_lower_bound(int index) const {
@@ -31,6 +29,7 @@ double BasicDDSketch<BINS>::bin_upper_bound(int index) const {
 template <int BINS>
 void BasicDDSketch<BINS>::add_to_bin(int index, std::uint32_t count) {
     if (!initialized_) {
+        ensure_bins(1);
         offset_ = index;
         min_key_ = index;
         max_key_ = index;
@@ -58,6 +57,7 @@ void BasicDDSketch<BINS>::add_to_bin(int index, std::uint32_t count) {
         num_bins_ = max_key_ - min_key_ + 1;
         int pos = index - offset_;
         if (pos >= 0 && pos < MAX_BINS) {
+            ensure_bins(pos + 1);
             std::uint32_t old = store_[pos];
             store_[pos] = (old > UINT32_MAX - count) ? UINT32_MAX : old + count;
         }
@@ -80,6 +80,7 @@ void BasicDDSketch<BINS>::add_to_bin(int index, std::uint32_t count) {
     }
 
     int shift = min_key_ - index;
+    ensure_bins(needed);
     if (shift > 0 && num_bins_ > 0) {
         std::memmove(
             &store_[shift], &store_[0],
@@ -97,6 +98,7 @@ void BasicDDSketch<BINS>::add_to_bin(int index, std::uint32_t count) {
 template <int BINS>
 void BasicDDSketch<BINS>::collapse_to_fit(int new_max_key) {
     int new_min_key = new_max_key - MAX_BINS + 1;
+    ensure_bins(MAX_BINS);
 
     if (new_min_key >= max_key_) {
         std::uint32_t total = 0;
@@ -104,7 +106,7 @@ void BasicDDSketch<BINS>::collapse_to_fit(int new_max_key) {
             total = (total > UINT32_MAX - store_[i]) ? UINT32_MAX
                                                      : total + store_[i];
         }
-        store_.fill(0);
+        std::fill(store_.begin(), store_.end(), 0u);
         store_[0] = total;
         offset_ = new_min_key;
         min_key_ = new_min_key;
@@ -248,6 +250,7 @@ void BasicDDSketch<BINS>::merge(const BasicDDSketch& other) {
 
     int merged_min = std::min(min_key_, other.min_key_);
     int merged_max = std::max(max_key_, other.max_key_);
+    ensure_bins(std::min(merged_max - merged_min + 1, MAX_BINS));
 
     if (merged_max - merged_min + 1 > MAX_BINS) {
         collapse_to_fit(merged_max);
@@ -325,7 +328,7 @@ double BasicDDSketch<BINS>::quantile(double q) const {
 
 template <int BINS>
 void BasicDDSketch<BINS>::reset() {
-    store_.fill(0);
+    store_ = {};
     offset_ = 0;
     min_key_ = 0;
     max_key_ = 0;
@@ -340,6 +343,9 @@ void BasicDDSketch<BINS>::reset() {
 
 template <int BINS>
 std::size_t BasicDDSketch<BINS>::memory_usage() const {
+    if constexpr (GROWS)
+        return sizeof(BasicDDSketch) +
+               store_.capacity() * sizeof(std::uint32_t);
     return sizeof(BasicDDSketch);
 }
 
@@ -379,7 +385,7 @@ void BasicDDSketch<BINS>::serialize_into(std::vector<std::uint8_t>& buf) const {
     std::memcpy(p, &num, sizeof(std::uint32_t));
     p += sizeof(std::uint32_t);
 
-    std::memcpy(p, store_.data(), num * sizeof(std::uint32_t));
+    if (num > 0) std::memcpy(p, store_.data(), num * sizeof(std::uint32_t));
 }
 
 template <int BINS>
@@ -422,8 +428,8 @@ BasicDDSketch<BINS> BasicDDSketch<BINS>::deserialize(const std::uint8_t* data,
         return BasicDDSketch{};
     }
 
-    s.store_.fill(0);
-    std::memcpy(s.store_.data(), p, num * sizeof(std::uint32_t));
+    s.ensure_bins(static_cast<int>(num));
+    if (num > 0) std::memcpy(s.store_.data(), p, num * sizeof(std::uint32_t));
     s.min_key_ = s.offset_;
     s.max_key_ = s.offset_ + static_cast<int>(num) - 1;
     s.num_bins_ = static_cast<int>(num);

@@ -295,6 +295,27 @@ struct FilesArgs : CliSchema {
     }
 };
 
+/// --memory-budget, shared by every tool that bounds its memory. 0 means auto:
+/// resolve_spill_budget turns it into a third of the memory available to the
+/// process.
+struct MemoryArgs : CliSchema {
+    std::uint64_t memory_budget = 0;
+
+    void register_on(argparse::ArgumentParser& p) override {
+        p.add_group("Memory");
+        p.add_argument("--memory-budget")
+            .help(
+                "Most memory the tool holds, with units (e.g. 64GB). Work "
+                "beyond it spills to DFTRACER_UTILS_SPILL_DIR. 0 means a "
+                "third of the available memory")
+            .default_value(std::string("0"));
+    }
+
+    void parse_from(const argparse::ArgumentParser& p) override {
+        memory_budget = get_bytes_arg(p, "--memory-budget");
+    }
+};
+
 struct PipelineArgs : CliSchema {
     std::size_t executor_threads = 0;
     std::size_t io_threads = 0;

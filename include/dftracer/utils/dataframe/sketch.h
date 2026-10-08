@@ -12,9 +12,11 @@
 //   - Python: https://github.com/DataDog/sketches-py (Apache 2.0)
 //   - Java:   https://github.com/DataDog/sketches-java (Apache 2.0)
 //
-// The store uses a fixed-size dense array with an offset. When the
-// key range exceeds the bin limit, the lowest bins are collapsed
-// (summed into the first bin) to bound memory usage.
+// The store is a dense array with an offset. When the key range exceeds the
+// bin limit, the lowest bins are collapsed (summed into the first bin) to
+// bound memory usage. A store of more than GROWING_STORE_BINS bins starts
+// empty and grows with the key range in use, so a sketch that sees a narrow
+// range does not hold the whole limit.
 //
 // This is the one mergeable quantile/histogram sketch for the whole codebase:
 // it lives at the dataframe layer so the columnar aggregation engine can feed
@@ -22,10 +24,12 @@
 // reaches it through the compatibility alias in
 // utilities/common/statistics/ddsketch.h.
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <type_traits>
 #include <vector>
 
 namespace dftracer::utils::dataframe {
@@ -41,10 +45,13 @@ struct HistogramBin {
 /// `BINS` bounds memory (4 bytes per bin) and the covered value range: at
 /// relative accuracy a, values within a ratio of ((1+a)/(1-a))^BINS keep that
 /// accuracy; smaller values collapse into the lowest bin.
+constexpr int GROWING_STORE_BINS = 256;
+
 template <int BINS>
 class BasicDDSketch {
    public:
     static constexpr int MAX_BINS = BINS;
+    static constexpr bool GROWS = BINS > GROWING_STORE_BINS;
 
     explicit BasicDDSketch(double relative_accuracy = 0.01);
 
@@ -67,6 +74,8 @@ class BasicDDSketch {
     double min() const { return min_; }
     double max() const { return max_; }
     std::size_t memory_usage() const;
+    /// Bins the store holds now; it only grows, up to MAX_BINS.
+    std::size_t store_bins() const noexcept { return store_.size(); }
 
     std::vector<std::uint8_t> serialize() const;
     void serialize_into(std::vector<std::uint8_t>& buf) const;
@@ -84,7 +93,9 @@ class BasicDDSketch {
     /// Logical bin index `k` maps to store_[k - offset_].
     /// When the key range exceeds MAX_BINS, lowest bins are
     /// collapsed into store_[0]. A bin saturates at UINT32_MAX.
-    std::array<std::uint32_t, MAX_BINS> store_{};
+    std::conditional_t<GROWS, std::vector<std::uint32_t>,
+                       std::array<std::uint32_t, MAX_BINS>>
+        store_{};
     int offset_ = 0;
     int min_key_ = 0;
     int max_key_ = 0;
@@ -92,6 +103,15 @@ class BasicDDSketch {
     bool collapsed_ = false;
     int num_bins_ = 0;
 
+    void ensure_bins(int n) {
+        if constexpr (GROWS) {
+            const auto want = static_cast<std::size_t>(n);
+            if (store_.size() >= want) return;
+            store_.resize(std::min<std::size_t>(
+                MAX_BINS,
+                std::max<std::size_t>({want, store_.size() * 2, 16})));
+        }
+    }
     void add_to_bin(int index, std::uint32_t count);
     double bin_lower_bound(int index) const;
     double bin_upper_bound(int index) const;

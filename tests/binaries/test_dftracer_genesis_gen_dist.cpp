@@ -144,7 +144,8 @@ TEST_CASE("the output path must end with .pfw.gz") {
     CHECK_FALSE(fs::exists(d.file("out.jsonl")));
 }
 
-TEST_CASE("output is reproducible and concatenates like one run") {
+TEST_CASE(
+    "output holds the same lines every time and concatenates like one run") {
     REQUIRE_FALSE(binary().empty());
     dftu_utils_test::set_test_library_path(binary());
     ScopedTestDir d("gen_dist_det");
@@ -154,7 +155,13 @@ TEST_CASE("output is reproducible and concatenates like one run") {
     const std::string b = (d.path() / "b").string();
     CHECK(run({a, b, "-o", d.file("ab1.pfw.gz")}) == 0);
     CHECK(run({a, b, "-o", d.file("ab2.pfw.gz")}) == 0);
-    CHECK(slurp(d.file("ab1.pfw.gz")) == slurp(d.file("ab2.pfw.gz")));
+    // Workers write their runs as they finish, so only the set of lines is
+    // fixed, not their order in the file.
+    auto first = gz_lines(d.file("ab1.pfw.gz"));
+    auto second = gz_lines(d.file("ab2.pfw.gz"));
+    std::sort(first.begin(), first.end());
+    std::sort(second.begin(), second.end());
+    CHECK(first == second);
 
     CHECK(run({a, "-o", d.file("a.pfw.gz")}) == 0);
     CHECK(run({b, "-o", d.file("b.pfw.gz")}) == 0);
@@ -178,8 +185,11 @@ TEST_CASE("members follow the member size, not the run") {
                std::to_string(MEMBER)}) == 0);
     CHECK(run({root, "-o", d.file("big.pfw.gz")}) == 0);
 
-    const auto small = gz_lines(d.file("small.pfw.gz"));
-    CHECK(small == gz_lines(d.file("big.pfw.gz")));
+    auto small = gz_lines(d.file("small.pfw.gz"));
+    auto big = gz_lines(d.file("big.pfw.gz"));
+    std::sort(small.begin(), small.end());
+    std::sort(big.begin(), big.end());
+    CHECK(small == big);
     std::size_t longest = 0;
     for (const auto& l : small) longest = std::max(longest, l.size() + 1);
     const auto sizes = member_sizes(d.file("small.pfw.gz"));

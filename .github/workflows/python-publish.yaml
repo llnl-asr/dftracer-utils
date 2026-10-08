@@ -14,6 +14,9 @@ on:
       - 'include/**'
       - 'python/**'
       - 'web/**'
+      - 'VERSION'
+  # A manual run skips the path filter above, so a CI-only fix can be run. From
+  # develop it also publishes; from another branch it only builds.
   workflow_dispatch:
 permissions:
   contents: read
@@ -38,105 +41,74 @@ jobs:
             echo "publish=false" >> "$GITHUB_OUTPUT"
           fi
 
-  build_wheels:
-    name: Build wheels on ${{ matrix.os }} (cp${{ matrix.python }})
+  # The wheels build with Release dependencies, restored from the R2 bucket
+  # that the CI wheel jobs fill.
+  wheel-linux:
     needs: check
     if: needs.check.outputs.publish == 'true'
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-22.04, ubuntu-22.04-arm, macos-14]
-        python: ["38", "39", "310", "311", "312", "313", "314"]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/wheel.yml
+    secrets: inherit
+    with:
+      os: ubuntu-22.04
+      publish: true
 
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
+  wheel-linux-arm:
+    needs: check
+    if: needs.check.outputs.publish == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/wheel.yml
+    secrets: inherit
+    with:
+      os: ubuntu-22.04-arm
+      publish: true
 
-      - name: Select newer Xcode (macOS)
-        if: runner.os == 'macOS'
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: "16.2"
+  wheel-macos:
+    needs: check
+    if: needs.check.outputs.publish == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/wheel.yml
+    secrets: inherit
+    with:
+      os: macos-14
+      publish: true
 
-      - name: Prepare ccache dir
-        run: mkdir -p "${{ github.workspace }}/.ccache"
+  # The C and C++ install layout per platform, for the GitHub pre-release.
+  package-linux:
+    needs: check
+    if: needs.check.outputs.publish == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/package.yml
+    secrets: inherit
+    with:
+      os: ubuntu-22.04
+      name: linux-x86_64
 
-      - name: Restore ccache
-        uses: actions/cache/restore@v5
-        with:
-          path: .ccache
-          key: ccache-wheel-v2-${{ matrix.os }}-${{ github.run_id }}
-          restore-keys: |
-            ccache-wheel-v2-${{ matrix.os }}-
+  package-linux-arm:
+    needs: check
+    if: needs.check.outputs.publish == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/package.yml
+    secrets: inherit
+    with:
+      os: ubuntu-22.04-arm
+      name: linux-aarch64
 
-      - name: Cache CPM dependency sources
-        uses: actions/cache@v5
-        with:
-          path: .cpmsource
-          key: cpmsource-full-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
-          restore-keys: |
-            cpmsource-full-v1-
-
-      # Build the web UI on the host (needs Node) so cibuildwheel's CMake embed
-      # step bakes the real page into dftracer_server instead of a placeholder.
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-
-      - name: Build web UI
-        working-directory: web
-        run: |
-          npm ci
-          npm run build
-
-      - name: Resolve the pre-release version
-        # scikit-build-core never runs setup.py, so the .postN.dev0 scheme the
-        # sibling repos set there cannot be expressed in pyproject: a custom
-        # version_scheme needs a registered entry point. Hand it over instead.
-        run: |
-          described=$(git describe --tags --long --match 'v*')
-          tag=${described%-*-g*}
-          distance=${described#"$tag"-}
-          distance=${distance%-g*}
-          tag=${tag#v}
-          if [ "$distance" = "0" ]; then v="$tag"; else v="$tag.post$distance.dev0"; fi
-          echo "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DFTRACER_UTILS=$v" >> "$GITHUB_ENV"
-          echo "building version $v"
-
-      - name: Build wheels
-        uses: pypa/cibuildwheel@v3.3.0
-        env:
-          CIBW_BUILD: cp${{ matrix.python }}-*
-          CIBW_SKIP: "*-win32 *-manylinux_i686 *-musllinux_* *-manylinux_ppc64le *-manylinux_s390x"
-          CIBW_CONFIG_SETTINGS: "cmake.define.DFTRACER_UTILS_LOCAL_PACKAGES=OFF"
-          CIBW_BEFORE_ALL_LINUX: "yum install -y epel-release ccache || dnf install -y epel-release ccache || true"
-          CIBW_BEFORE_ALL_MACOS: "brew install ccache || true"
-          CIBW_CONTAINER_ENGINE: "docker; create_args: --volume=${{ github.workspace }}/.ccache:/ccache"
-          # The container does not inherit the host env, so the version must be passed in.
-          CIBW_ENVIRONMENT_PASS_LINUX: SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DFTRACER_UTILS
-          CIBW_ENVIRONMENT_LINUX: >-
-            SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DFTRACER_UTILS=$SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DFTRACER_UTILS CCACHE_DIR=/ccache CCACHE_BASEDIR=/project
-            CCACHE_COMPILERCHECK=content CCACHE_NOHASHDIR=true CCACHE_MAXSIZE=900M
-            CCACHE_SLOPPINESS=time_macros,include_file_mtime,include_file_ctime,pch_defines,system_headers,locale
-          CIBW_ENVIRONMENT_MACOS: >-
-            SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DFTRACER_UTILS=$SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DFTRACER_UTILS CCACHE_DIR=$GITHUB_WORKSPACE/.ccache CCACHE_BASEDIR=$GITHUB_WORKSPACE
-            CCACHE_COMPILERCHECK=content CCACHE_NOHASHDIR=true CCACHE_MAXSIZE=900M
-            CCACHE_SLOPPINESS=time_macros,include_file_mtime,include_file_ctime,pch_defines,system_headers,locale
-
-      - name: Check wheel payload
-        run: |
-          python3 -m venv /tmp/wheelcheck
-          /tmp/wheelcheck/bin/pip install --quiet pytest
-          /tmp/wheelcheck/bin/pytest tests/python/test_wheel_contents.py -q
-
-      - uses: actions/upload-artifact@v6.0.0
-        with:
-          name: cibw-wheels-${{ matrix.os }}-${{ strategy.job-index }}
-          path: ./wheelhouse/*.whl
+  package-macos:
+    needs: check
+    if: needs.check.outputs.publish == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/package.yml
+    secrets: inherit
+    with:
+      os: macos-14
+      name: macos-arm64
 
   build_sdist:
     name: Build source distribution
@@ -193,7 +165,7 @@ jobs:
 
   deploy:
     name: Publish to PyPI
-    needs: [build_wheels, build_sdist]
+    needs: [wheel-linux, wheel-linux-arm, wheel-macos, build_sdist]
     runs-on: ubuntu-latest
     if: github.event_name == 'release' || github.ref == 'refs/heads/develop'
 
@@ -211,3 +183,93 @@ jobs:
           password: ${{ secrets.PYPI_TOKEN }}
           # A re-run of the same commit would otherwise fail on an existing file.
           skip-existing: true
+
+  # A develop push publishes a GitHub pre-release for its commit, and moves the
+  # "develop-latest" pre-release to it. GitHub needs a tag per release, so only
+  # the ten newest "pre-" releases are kept and their tags go with them. No tag
+  # starts with "v": the version scheme runs git describe on v* tags. GITHUB_TOKEN events do not start other workflows, so
+  # this does not trigger the release event.
+  github-prerelease:
+    name: Publish a GitHub pre-release
+    needs: [deploy, package-linux, package-linux-arm, package-macos]
+    runs-on: ubuntu-latest
+    if: github.event_name != 'release' && github.ref == 'refs/heads/develop'
+    permissions:
+      contents: write
+    concurrency:
+      group: github-prerelease
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: cibw-*
+          path: dist
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: package-*
+          path: package
+          merge-multiple: true
+
+      - name: Create the pre-release
+        run: |
+          described=$(git describe --tags --long --match 'v*')
+          tag=${described%-*-g*}
+          distance=${described#"$tag"-}
+          distance=${distance%-g*}
+          version="${tag#v}.post$distance.dev0"
+          (cd package && sha256sum *.tar.gz > SHA256SUMS)
+          gh release create "pre-$version" dist/* package/* \
+            --target "$GITHUB_SHA" --prerelease \
+            --title "$version (${GITHUB_SHA::8})" \
+            --notes "Built from $GITHUB_SHA on develop. PyPI version: $version."
+
+      - name: Move develop-latest to this commit
+        run: |
+          described=$(git describe --tags --long --match 'v*')
+          tag=${described%-*-g*}
+          distance=${described#"$tag"-}
+          distance=${distance%-g*}
+          version="${tag#v}.post$distance.dev0"
+          gh release delete develop-latest --cleanup-tag --yes || true
+          gh release create develop-latest dist/* package/* \
+            --target "$GITHUB_SHA" --prerelease \
+            --title "develop-latest: $version (${GITHUB_SHA::8})" \
+            --notes "Latest build of develop, from $GITHUB_SHA. PyPI version: $version."
+
+      - name: Delete pre-releases beyond the ten newest
+        run: |
+          gh release list --limit 200 --json tagName,isPrerelease,createdAt \
+            --jq '[.[] | select(.isPrerelease and (.tagName | startswith("pre-")))] | sort_by(.createdAt) | reverse | .[10:] | .[].tagName' |
+            while read -r old; do gh release delete "$old" --cleanup-tag --yes; done
+
+  # A published release gets the C and C++ packages too. SHA256SUMS lets the
+  # VS Code extension verify its download.
+  release-assets:
+    name: Attach the C/C++ packages to the release
+    needs: [package-linux, package-linux-arm, package-macos]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: package-*
+          path: package
+          merge-multiple: true
+
+      - name: Upload to the release
+        run: |
+          (cd package && sha256sum *.tar.gz > SHA256SUMS)
+          gh release upload "${{ github.event.release.tag_name }}" package/* --clobber \
+            --repo "$GITHUB_REPOSITORY"

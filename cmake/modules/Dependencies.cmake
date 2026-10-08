@@ -361,6 +361,7 @@ set(DFTRACER_UTILS_ROCKSDB_PREFIX
 
 # Consume a RocksDB install tree built by scripts/ci/build_rocksdb.sh.
 function(_use_prebuilt_rocksdb PREFIX)
+  list(PREPEND CMAKE_PREFIX_PATH "${PREFIX}")
   find_package(
     RocksDB
     ${DFTRACER_UTILS_ROCKSDB_VERSION}
@@ -2009,8 +2010,13 @@ function(need_vectorscan)
   endif()
   foreach(lang C CXX)
     if(CMAKE_${lang}_COMPILER_LAUNCHER)
-      list(APPEND hs_args
-           "-DCMAKE_${lang}_COMPILER_LAUNCHER=${CMAKE_${lang}_COMPILER_LAUNCHER}")
+      set(hs_launcher "${CMAKE_${lang}_COMPILER_LAUNCHER}")
+      get_filename_component(hs_launcher_name "${hs_launcher}" NAME)
+      if(hs_launcher_name STREQUAL "sccache")
+        set(hs_launcher
+            "${PROJECT_SOURCE_DIR}/cmake/scripts/sccache_launcher.sh")
+      endif()
+      list(APPEND hs_args "-DCMAKE_${lang}_COMPILER_LAUNCHER=${hs_launcher}")
     endif()
     if(CMAKE_${lang}_COMPILER_ID STREQUAL "GNU")
       list(APPEND hs_args "-DCMAKE_${lang}_FLAGS=-Wno-psabi")

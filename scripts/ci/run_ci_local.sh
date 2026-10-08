@@ -214,7 +214,9 @@ CONTAINER_NAME="dftracer-utils-ci-local-$$"
 run_flags=(--name "${CONTAINER_NAME}" -v "${REPO_ROOT}:/work" -w /work)
 [ "${KEEP}" -eq 0 ] && run_flags=(--rm "${run_flags[@]}")
 cleanup() {
-  [ "${KEEP}" -eq 1 ] && log "container '${CONTAINER_NAME}' kept; remove: ${ENGINE} rm -f ${CONTAINER_NAME}"
+  if [ "${KEEP}" -eq 1 ]; then
+    log "container '${CONTAINER_NAME}' kept; remove: ${ENGINE} rm -f ${CONTAINER_NAME}"
+  fi
 }
 trap cleanup EXIT
 

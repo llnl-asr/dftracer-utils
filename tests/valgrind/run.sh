@@ -33,6 +33,7 @@ export ARROW_USER_SIMD_LEVEL="${ARROW_USER_SIMD_LEVEL:-AVX2}"
 
 SUPP_DIR="$REPO_ROOT/tests/valgrind"
 BUILD_DIR="${VALGRIND_BUILD_DIR:-$REPO_ROOT/build/build-valgrind}"
+COMPILER_LAUNCHER="${VALGRIND_COMPILER_LAUNCHER:-ccache}"
 LOG_DIR="$REPO_ROOT/build/valgrind-logs"
 VENV_DIR="$REPO_ROOT/.venv_valgrind"
 
@@ -101,16 +102,23 @@ configure_and_build_cpp() {
     -DDFTRACER_UTILS_BUILD_STATIC=OFF \
     -DDFTRACER_UTILS_ROCKSDB_PREFIX="${DFTRACER_UTILS_ROCKSDB_PREFIX:-}" \
     -DDFTRACER_UTILS_VALGRIND_MODE=ON \
-    -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-    -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+    -DCMAKE_C_COMPILER_LAUNCHER=$COMPILER_LAUNCHER \
+    -DCMAKE_CXX_COMPILER_LAUNCHER=$COMPILER_LAUNCHER
   local jobs
   jobs="$(build_jobs)"
   log "Building C++ tests (-j $jobs)"
   cmake --build "$BUILD_DIR" -j "$jobs"
 }
 
+# A warm-up job builds the tests so the shards start with a full cache.
+build_only() {
+  [[ -n "${VALGRIND_BUILD_ONLY:-}" ]] || return 1
+  log "Built; skipping the run (VALGRIND_BUILD_ONLY)"
+}
+
 run_cpp() {
   configure_and_build_cpp
+  build_only && return 0
 
   mkdir -p "$LOG_DIR/cpp"
 
@@ -435,8 +443,8 @@ run_mpi() {
     -DDFTRACER_UTILS_ROCKSDB_PREFIX="${DFTRACER_UTILS_ROCKSDB_PREFIX:-}" \
     -DDFTRACER_UTILS_VALGRIND_MODE=ON \
     -DMPIEXEC_EXECUTABLE="$wrapper" \
-    -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-    -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+    -DCMAKE_C_COMPILER_LAUNCHER=$COMPILER_LAUNCHER \
+    -DCMAKE_CXX_COMPILER_LAUNCHER=$COMPILER_LAUNCHER
 
   local jobs
   jobs="$(build_jobs)"
@@ -463,8 +471,8 @@ setup_python() {
     "$VENV_DIR/bin/pip" install --quiet -e ".[dev]" \
     --config-settings=cmake.build-type=RelWithDebInfo \
     --config-settings=cmake.define.DFTRACER_UTILS_VALGRIND_MODE=ON \
-    --config-settings=cmake.define.CMAKE_C_COMPILER_LAUNCHER=ccache \
-    --config-settings=cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=ccache
+    --config-settings=cmake.define.CMAKE_C_COMPILER_LAUNCHER=$COMPILER_LAUNCHER \
+    --config-settings=cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=$COMPILER_LAUNCHER
 }
 
 # Run one pytest file under its own Valgrind process, recording exit code.
@@ -514,6 +522,7 @@ run_py_one() {
 
 run_py() {
   setup_python
+  build_only && return 0
   mkdir -p "$LOG_DIR"
 
   local files=()

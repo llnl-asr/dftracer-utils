@@ -16,18 +16,19 @@ TEST_CASE("a reserve above the capacity fails and is not clamped") {
     CHECK_FALSE(pool.try_reserve(1));
 }
 
-TEST_CASE("a reservation returns its bytes on destruction and shrink") {
+TEST_CASE("a reservation returns its bytes on destruction and reset") {
     MemoryPool pool(100);
     {
         Reservation r(pool);
         CHECK(r.try_grow(60));
         CHECK_FALSE(r.try_grow(41));
         CHECK(pool.used() == 60);
-        r.shrink(10);
-        CHECK(pool.used() == 50);
         Reservation moved = std::move(r);
         CHECK(r.bytes() == 0);
-        CHECK(moved.bytes() == 50);
+        CHECK(moved.bytes() == 60);
+        CHECK(pool.used() == 60);
+        moved.reset();
+        CHECK(pool.used() == 0);
     }
     CHECK(pool.used() == 0);
 }

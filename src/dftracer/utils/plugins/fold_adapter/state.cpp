@@ -1,5 +1,6 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/memory_budget.h>
+#include <dftracer/utils/core/common/spill_dir.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/fold_adapter/state.h>
 #include <unistd.h>
@@ -41,8 +42,14 @@ SpillDir::~SpillDir() {
 const std::string& SpillDir::path() {
     if (!path_.empty()) return path_;
     std::error_code ec;
+    const Result<std::string> root = dftracer::utils::spill_dir();
+    if (!root) {
+        DFTRACER_UTILS_LOG_ERROR("Plugin state spill directory: %s",
+                                 root.error().format().c_str());
+        return path_;
+    }
     for (int attempt = 0; attempt < 64; ++attempt) {
-        fs::path p = fs::temp_directory_path(ec) /
+        fs::path p = fs::path(*root) /
                      ("dftu_state_" + std::to_string(::getpid()) + "_" +
                       std::to_string(reinterpret_cast<std::uintptr_t>(this)) +
                       "_" + std::to_string(attempt));

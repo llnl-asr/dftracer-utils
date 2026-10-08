@@ -9,6 +9,7 @@
 #include <dftracer/utils/trace/views/result_join.h>
 #include <doctest/doctest.h>
 
+#include <initializer_list>
 #include <set>
 #include <string>
 #include <vector>
@@ -60,11 +61,20 @@ bool is_null(const dataframe::DataFrame& b, const std::string& col,
 }
 
 // left = cat -> count over {a,b,c}; right = cat -> sum over {b,c,d}.
+std::vector<std::string> cats_of(std::initializer_list<const char*> names) {
+    std::vector<std::string> out;
+    out.reserve(names.size());
+    for (const char* n : names) out.emplace_back(n);
+    return out;
+}
+
 dataframe::DataFrame build_left() {
-    return make({"a", "b", "c"}, "count", {10, 25, 30});
+    const std::vector<std::string> cats = cats_of({"a", "b", "c"});
+    return make(cats, "count", {10, 25, 30});
 }
 dataframe::DataFrame build_right() {
-    return make({"b", "c", "d"}, "sum", {2.5, 3.5, 4.0});
+    const std::vector<std::string> cats = cats_of({"b", "c", "d"});
+    return make(cats, "sum", {2.5, 3.5, 4.0});
 }
 
 }  // namespace

@@ -11,7 +11,7 @@
 
 namespace dftracer::utils::plugins {
 
-/// A self-cleaning temp directory holding one state's spill runs.
+/// A self-cleaning directory under spill_dir() holding one state's spill runs.
 class SpillDir {
    public:
     SpillDir() = default;

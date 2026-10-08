@@ -1453,6 +1453,63 @@ bool permutation_order(const Series& c, bool descending, std::int64_t n,
     return true;
 }
 
+// The row order of a multi-key sort as one stable argsort per key, last key
+// first: each pass sorts the key as the previous passes left it, so ties keep
+// the order the later keys gave. A pass uses the single-key argsort, which is
+// the radix/SIMD kernel for numbers. Integer, Bool and dictionary-ranked text
+// keys qualify, floats too (NaN is one value above infinity and -0.0 equals
+// +0.0); false means a key does not, and `order` is then unusable.
+bool radix_order(const std::vector<const Series*>& keys,
+                 const std::vector<bool>& desc, std::int64_t n,
+                 std::vector<std::int64_t>& order) {
+    std::vector<Series> passes(keys.size());
+    for (std::size_t i = 0; i < keys.size(); ++i) {
+        const Series& c = *keys[i];
+        if (is_string_column(*c.handle())) {
+            std::vector<std::int32_t> ranks;
+            std::int32_t nranks = 0;
+            if (!string_ranks(c.handle(), ranks, nranks)) return false;
+            // Nulls sort last in both directions.
+            const std::int32_t null_rank =
+                desc[i] ? std::numeric_limits<std::int32_t>::min()
+                        : std::numeric_limits<std::int32_t>::max();
+            for (std::int32_t& r : ranks)
+                if (r < 0) r = null_rank;
+            passes[i] = Series::flat(TypeId::Int32, ranks.data(), n);
+            continue;
+        }
+        switch (physical_type(c.type())) {
+            case TypeId::Bool:
+            case TypeId::Int8:
+            case TypeId::Int16:
+            case TypeId::Int32:
+            case TypeId::Int64:
+            case TypeId::Uint8:
+            case TypeId::Uint16:
+            case TypeId::Uint32:
+            case TypeId::Uint64:
+            case TypeId::Float32:
+            case TypeId::Float64:
+                break;
+            default:
+                return false;
+        }
+        passes[i] = c.share();
+    }
+    std::iota(order.begin(), order.end(), std::int64_t{0});
+    std::vector<std::int64_t> next(order.size());
+    for (std::size_t i = keys.size(); i-- > 0;) {
+        const Series gathered = passes[i].take(order);
+        const Series perm = gathered.argsort(desc[i]);
+        const std::int64_t* p = perm.data<std::int64_t>();
+        for (std::int64_t j = 0; j < n; ++j)
+            next[static_cast<std::size_t>(j)] =
+                order[static_cast<std::size_t>(p[j])];
+        order.swap(next);
+    }
+    return true;
+}
+
 }  // namespace
 
 DataFrame sort_by_multi(const DataFrame& b,
@@ -1505,17 +1562,17 @@ DataFrame sort_by_multi(const DataFrame& b,
         kr.h = keys[i]->handle();
         kr.desc = broadcast ? descending[0] : descending[i];
         kr.text = is_string_column(*kr.h);
-        if (kr.text) {
-            if (keys.size() == 1)
-                string_ranks(kr.h, kr.ranks, kr.nranks);
-            else
-                dictionary_ranks(kr.h, kr.ranks, kr.nranks);
-        }
+        if (kr.text) string_ranks(kr.h, kr.ranks, kr.nranks);
     }
     if (reads.size() == 1 && !reads[0].ranks.empty()) {
         counting_order(reads[0].ranks, reads[0].nranks, reads[0].desc,
                        order.data());
         return take(b, order);
+    }
+    {
+        std::vector<bool> desc(keys.size());
+        for (std::size_t i = 0; i < keys.size(); ++i) desc[i] = reads[i].desc;
+        if (radix_order(keys, desc, n, order)) return take(b, order);
     }
     for (std::int64_t i = 0; i < n; ++i) order[static_cast<std::size_t>(i)] = i;
     parallel_stable_sort_indices(order, [&](std::int64_t a, std::int64_t bb) {

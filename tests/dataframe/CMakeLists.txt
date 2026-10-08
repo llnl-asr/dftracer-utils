@@ -8,7 +8,7 @@ set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_methods.cpp
                            test_arrow_types_matrix.cpp test_arrow_types_tail.cpp
                            test_arrow_types_lazy.cpp
                            test_arrow_types_windowed.cpp test_arrow_types_reshape.cpp
-                           test_field.cpp test_op_registry.cpp test_op_parity.cpp
+                           test_field.cpp test_op_registry.cpp test_op_parity.cpp test_op_peak_memory.cpp
                            test_lazyframe.cpp test_join.cpp test_concat.cpp test_lazy_frame_ops.cpp
                            test_lazyframe_abi.cpp test_drop_rename_by_name.cpp test_lazy_ops.cpp test_lazy_plan.cpp test_source_hooks.cpp test_plugin_sdk.cpp test_spill.cpp test_native_frame.cpp test_join_spill.cpp test_agg_state.cpp
                            test_agg_extended_ops.cpp test_host_ops.cpp
@@ -91,6 +91,16 @@ foreach(test_file ${DATAFRAME_TEST_SOURCES})
       set(scale_timeout 1800)
     endif()
     set_tests_properties(dataframe/${bin_exec} PROPERTIES TIMEOUT ${scale_timeout})
+  endif()
+  # Runs every op in a child process at several budgets: about 30 s alone, 65 s
+  # under coverage, and it is CPU-bound, so a loaded machine multiplies that.
+  if(bin_exec STREQUAL "test_op_peak_memory")
+    set(peak_timeout 300)
+    if(DFTRACER_UTILS_COVERAGE OR DFTRACER_UTILS_ENABLE_TSAN
+       OR DFTRACER_UTILS_ENABLE_ASAN)
+      set(peak_timeout 900)
+    endif()
+    set_tests_properties(dataframe/${bin_exec} PROPERTIES TIMEOUT ${peak_timeout})
   endif()
 endforeach()
 

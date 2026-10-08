@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -138,23 +139,72 @@ TEST_SUITE("lazy frame ops") {
                         std::invalid_argument);
     }
 
-    TEST_CASE("compare_agg: data-dependent schema, matches the eager op") {
+    TEST_CASE(
+        "compare_agg: a typed plan joins, sorts and matches the eager op") {
         LazyFrame plan = scan(make_base()).compare_agg(scan(make_variant()), 1);
+        CHECK(plan.schema() ==
+              std::vector<std::string>{"k", "l_n", "r_n", "delta_n", "pct_n"});
+        CHECK(plan.explain().find("frame_op") == std::string::npos);
+        DataFrame eager = make_base().compare_agg(make_variant(), 1);
+        for (std::int64_t morsel : std::vector<std::int64_t>{0, 1}) {
+            DataFrame out = run(plan.collect(morsel));
+            CHECK(out.names == eager.names);
+            CHECK(i64_col(out, "k") == std::vector<I>{1, 2, 3});
+            CHECK(i64_col(out, "delta_n") == std::vector<I>{-5, NI, NI});
+            const Series pct = out.column("pct_n").materialize();
+            const Series want = eager.column("pct_n").materialize();
+            REQUIRE(pct.length() == want.length());
+            for (std::int64_t r = 0; r < pct.length(); ++r) {
+                REQUIRE(pct.is_null(r) == want.is_null(r));
+                if (!pct.is_null(r))
+                    CHECK(pct.data<double>()[r] == want.data<double>()[r]);
+            }
+        }
+        DataFrame spilled = run(plan.memory_budget(1).collect(1));
+        CHECK(spilled.names == eager.names);
+        CHECK(i64_col(spilled, "delta_n") == std::vector<I>{-5, NI, NI});
+        CHECK_THROWS_AS(scan(make_base()).compare_agg(scan(make_variant()), 0),
+                        std::invalid_argument);
+        CHECK_THROWS_AS(
+            scan(make_base())
+                .compare_agg(scan(make_variant().rename({"j", "n"})), 1),
+            std::invalid_argument);
+    }
+
+    TEST_CASE("compare_agg: a plan with unknown columns is collected") {
+        auto top = [](DataFrame df) {
+            OpArgs args;
+            args.str(1, "n").i64(2, 2).i32(3, 1);
+            return scan(std::move(df)).frame_op("dftu.frame.topk", args);
+        };
+        LazyFrame wide = top(make_base());
+        CHECK(wide.schema().empty());
+        LazyFrame plan = wide.compare_agg(top(make_variant()), 1);
         CHECK(plan.schema().empty());
         CHECK(plan.explain().find("frame_op dftu.frame.compare_agg") !=
               std::string::npos);
         DataFrame out = run(plan.collect(1));
-        DataFrame eager = make_base().compare_agg(make_variant(), 1);
+        DataFrame eager = make_base().topk("n", 2).compare_agg(
+            make_variant().topk("n", 2), 1);
         CHECK(out.names == eager.names);
-        CHECK(i64_col(out, "k") == std::vector<I>{1, 2, 3});
-        CHECK(i64_col(out, "delta_n") == std::vector<I>{-5, NI, NI});
-        CHECK_THROWS_AS(scan(make_base()).compare_agg(scan(make_variant()), 0),
-                        std::invalid_argument);
-        // A key mismatch is a collect-time error, not a build-time one.
-        LazyFrame bad =
-            scan(make_base())
-                .compare_agg(scan(make_variant().rename({"j", "n"})), 1);
-        CHECK_THROWS(run(bad.collect()));
+        CHECK(i64_col(out, "k") == i64_col(eager, "k"));
+        CHECK(i64_col(out, "delta_n") == i64_col(eager, "delta_n"));
+        // Under a budget the same plan runs as a spilled join over two
+        // spools, with the names and types read off them.
+        DataFrame spilled = run(plan.memory_budget(1).collect(1));
+        CHECK(spilled.names == eager.names);
+        CHECK(i64_col(spilled, "k") == i64_col(eager, "k"));
+        CHECK(i64_col(spilled, "l_n") == i64_col(eager, "l_n"));
+        CHECK(i64_col(spilled, "r_n") == i64_col(eager, "r_n"));
+        CHECK(i64_col(spilled, "delta_n") == i64_col(eager, "delta_n"));
+        const Series pct = spilled.column("pct_n").materialize();
+        const Series want = eager.column("pct_n").materialize();
+        REQUIRE(pct.length() == want.length());
+        for (std::int64_t r = 0; r < pct.length(); ++r) {
+            REQUIRE(pct.is_null(r) == want.is_null(r));
+            if (!pct.is_null(r))
+                CHECK(pct.data<double>()[r] == want.data<double>()[r]);
+        }
     }
 
     TEST_CASE(
@@ -434,6 +484,59 @@ TEST_SUITE("lazy frame ops") {
                     .sort_by("k")
                     .collect(1));
         CHECK(i64_col(spilled, "s") == want);
+    }
+
+    TEST_CASE("head_by and unique give the same rows past the budget") {
+        constexpr int N = 3000;
+        std::vector<std::int64_t> k(N), j(N), v(N);
+        std::vector<std::uint8_t> valid((N + 7) / 8, 0xFF);
+        for (int i = 0; i < N; ++i) {
+            k[i] = (i * 7919) % 211;
+            j[i] = i % 3;
+            v[i] = i;
+            if (i % 11 == 0)
+                valid[i / 8] &= static_cast<std::uint8_t>(~(1u << (i % 8)));
+        }
+        auto frame = [&] {
+            DataFrame df;
+            df.names = {"k", "j", "v"};
+            df.columns.push_back(Series::flat_i64(k.data(), N, valid.data()));
+            df.columns.push_back(Series::flat_i64(j.data(), N));
+            df.columns.push_back(Series::flat_i64(v.data(), N));
+            return df;
+        };
+        auto reference = [&](bool use_j, int keep) {
+            std::map<std::pair<std::int64_t, std::int64_t>, int> seen;
+            std::vector<I> out;
+            for (int i = 0; i < N; ++i) {
+                const bool null = i % 11 == 0;
+                const auto key = std::make_pair(null ? -1 : k[i],
+                                                use_j ? j[i] : std::int64_t{0});
+                if (seen[key]++ < keep) out.push_back(v[i]);
+            }
+            return out;
+        };
+        for (std::int64_t morsel : std::vector<std::int64_t>{7, 64, 1000}) {
+            CAPTURE(morsel);
+            for (int keep : {1, 3}) {
+                CAPTURE(keep);
+                CHECK(i64_col(run(scan(frame())
+                                      .memory_budget(1)
+                                      .head_by({"k"}, keep)
+                                      .collect(morsel)),
+                              "v") == reference(false, keep));
+                CHECK(i64_col(run(scan(frame())
+                                      .memory_budget(1)
+                                      .head_by({"k", "j"}, keep)
+                                      .collect(morsel)),
+                              "v") == reference(true, keep));
+            }
+            CHECK(i64_col(run(scan(frame())
+                                  .memory_budget(1)
+                                  .unique({"k", "j"})
+                                  .collect(morsel)),
+                          "v") == reference(true, 1));
+        }
     }
 
     TEST_CASE("head_by: first n rows per key, in input order") {

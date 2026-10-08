@@ -2,6 +2,7 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
+#include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
 
@@ -247,8 +248,14 @@ LazyFrame positional(const LazyFrame& plan,
 
 }  // namespace
 
-LazyFrame LazyGroupBy::transform(GroupwiseOp kind, std::int64_t n,
-                                 RankMethod method, bool ascending) const {
+namespace {
+
+// The window plan of a group-wise transform. The parameters carry the names
+// of the LazyGroupBy members the cases below read.
+LazyFrame composed_transform(const LazyFrame& plan_,
+                             const std::vector<std::string>& keys_,
+                             GroupwiseOp kind, std::int64_t n,
+                             RankMethod method, bool ascending) {
     switch (kind) {
         case GroupwiseOp::CumSum:
             return per_column(
@@ -339,6 +346,18 @@ LazyFrame LazyGroupBy::transform(GroupwiseOp kind, std::int64_t n,
     }
     throw std::invalid_argument("group_by transform: unknown transform " +
                                 std::to_string(static_cast<int>(kind)));
+}
+
+}  // namespace
+
+LazyFrame LazyGroupBy::transform(GroupwiseOp kind, std::int64_t n,
+                                 RankMethod method, bool ascending) const {
+    LazyFrame composed =
+        composed_transform(plan_, keys_, kind, n, method, ascending);
+    if (auto native = native_group_transform(plan_, keys_, kind, n,
+                                             composed.output_schema()))
+        return std::move(*native);
+    return composed;
 }
 
 DataFrame GroupBy::transform(GroupwiseOp kind, std::int64_t n,

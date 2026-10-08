@@ -1,8 +1,10 @@
 #include <ankerl/unordered_dense.h>
+#include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/hash/hash.h>
 #include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/memory_budget.h>  // compute_memory_budget
-#include <dftracer/utils/core/coro/task_abi.h>         // task_to_abi
+#include <dftracer/utils/core/common/memory_budget.h>
+#include <dftracer/utils/core/common/transparent_string_hash.h>  // compute_memory_budget
+#include <dftracer/utils/core/coro/task_abi.h>                   // task_to_abi
 #include <dftracer/utils/core/coro/when_all.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/dataframe/agg.h>        // streaming group-by state
@@ -11,10 +13,14 @@
 #include <dftracer/utils/dataframe/grace_join.h>  // GraceJoin (join cursor)
 #include <dftracer/utils/dataframe/internal/cell_ops.h>  // row_key, cell_to_string
 #include <dftracer/utils/dataframe/internal/column_data.h>  // dftu_series (typed null templates)
+#include <dftracer/utils/dataframe/internal/column_read.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>  // dataframe_handle_wrap/take
+#include <dftracer/utils/dataframe/internal/decimal.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>  // expr_handle_wrap/unwrap
 #include <dftracer/utils/dataframe/internal/fingerprint.h>
+#include <dftracer/utils/dataframe/internal/float16.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
+#include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/internal/node_registry.h>  // find_node
 #include <dftracer/utils/dataframe/internal/reclaim_registry.h>
 #include <dftracer/utils/dataframe/internal/rest_column.h>
@@ -29,6 +35,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <fstream>
 #include <functional>
@@ -36,6 +43,8 @@
 #include <memory>
 #include <mutex>
 #include <numeric>
+#include <optional>
+#include <queue>
 #include <stdexcept>
 #include <string>
 #include <typeindex>
@@ -255,53 +264,6 @@ Morsel morsel_of(DataFrame&& f) {
     return out;
 }
 
-// Read a numeric cell as a double for key comparison (FLAT columns only).
-double read_num(const Series& c, std::int64_t i) {
-    switch (c.type()) {
-        case TypeId::Bool:
-            return (c.data<std::uint8_t>()[i >> 3] >> (i & 7)) & 1;
-        case TypeId::Int8:
-            return c.data<std::int8_t>()[i];
-        case TypeId::Int16:
-            return c.data<std::int16_t>()[i];
-        case TypeId::Int32:
-            return c.data<std::int32_t>()[i];
-        case TypeId::Int64:
-            return static_cast<double>(c.data<std::int64_t>()[i]);
-        case TypeId::Uint8:
-            return c.data<std::uint8_t>()[i];
-        case TypeId::Uint16:
-            return c.data<std::uint16_t>()[i];
-        case TypeId::Uint32:
-            return c.data<std::uint32_t>()[i];
-        case TypeId::Uint64:
-            return static_cast<double>(c.data<std::uint64_t>()[i]);
-        case TypeId::Float32:
-            return static_cast<double>(c.data<float>()[i]);
-        case TypeId::Float64:
-            return c.data<double>()[i];
-        default:
-            return 0.0;
-    }
-}
-
-// Three-way compare of two key cells for a merge, honoring `descending`. Nulls
-// always sort last (both directions), matching argsort.
-int cmp_cell(const Series& a, std::int64_t ia, const Series& b, std::int64_t ib,
-             bool descending) {
-    const bool na = a.is_null(ia), nb = b.is_null(ib);
-    if (na || nb) return na && nb ? 0 : (na ? 1 : -1);
-    int c;
-    if (narrow_varwidth_type(a.type()) == TypeId::String) {
-        const std::string_view x = a.string_at(ia), y = b.string_at(ib);
-        c = x < y ? -1 : (x > y ? 1 : 0);
-    } else {
-        const double x = read_num(a, ia), y = read_num(b, ib);
-        c = x < y ? -1 : (x > y ? 1 : 0);
-    }
-    return descending ? -c : c;
-}
-
 // Approximate in-memory byte size of a set of FLAT columns (spill trigger).
 std::size_t morsel_bytes(const std::vector<Series>& cols) {
     std::size_t total = 0;
@@ -391,22 +353,12 @@ constexpr std::int64_t UNIQUE_SPILL_MIN_LEAF_ROWS = 64;
 // Depth-salted hash of a row key: depth 0 matches the plain hash so the first
 // pass agrees with any caller hashing the same key; deeper passes mix in the
 // depth so a key that collided at one depth spreads differently at the next.
-std::size_t unique_spill_hash(const std::string& key, int depth) {
-    const std::size_t h = std::hash<std::string>{}(key);
+std::size_t unique_spill_hash(std::string_view key, int depth) {
+    const std::size_t h = std::hash<std::string_view>{}(key);
     if (depth == 0) return h;
     return static_cast<std::size_t>(hash::splitmix64(
         static_cast<std::uint64_t>(h) ^
         (static_cast<std::uint64_t>(depth) * hash::GOLDEN_RATIO)));
-}
-
-// All columns but the first (the row-id helper column prepended by the
-// unique() spill path), as cheap shared views.
-std::vector<Series> drop_first_column(const std::vector<Series>& cols) {
-    std::vector<Series> out;
-    out.reserve(cols.size() - 1);
-    for (std::size_t i = 1; i < cols.size(); ++i)
-        out.push_back(cols[i].share());
-    return out;
 }
 
 // ---- cursors ----------------------------------------------------------------
@@ -1401,6 +1353,22 @@ class TopkCursor : public Cursor {
     bool done_ = false;
 };
 
+constexpr std::size_t MAX_ACCUMULATE_BATCH = 32;
+constexpr std::size_t GROUP_SPILL_PARTS = 64;
+constexpr int GROUP_SPILL_MAX_DEPTH = 3;
+
+// How many morsels to accumulate at once into separate partial states: the
+// partials together stay within a quarter of the budget. `partial_bytes` is the
+// measured size of one (agg_approx_bytes leaves out the group index, so it is
+// doubled); 0 means not measured yet.
+std::size_t accumulate_batch(std::uint64_t budget,
+                             std::uint64_t partial_bytes) {
+    if (partial_bytes == 0) return 2;
+    if (budget == NO_SPILL_BUDGET) return MAX_ACCUMULATE_BATCH;
+    return std::clamp<std::size_t>(budget / 4 / (2 * partial_bytes), 1,
+                                   MAX_ACCUMULATE_BATCH);
+}
+
 // One run: single-group AggState blobs (agg_extract_group + agg_serialize),
 // length-prefixed, in ascending composite-key order (agg_sort_groups). The
 // on-disk unit a bounded k-way merge reads back one group at a time.
@@ -1499,16 +1467,15 @@ class GroupByCursor : public Cursor {
         // its own partial AggState in parallel (the mergeable agg IR), then
         // merge the partials into the running state. Memory stays bounded to
         // one batch; a serial-pull single morsel skips the fan-out.
-        constexpr std::size_t BATCH = 32;
+        std::size_t cap = accumulate_batch(budget_, 0);
         std::vector<Morsel> batch;
-        batch.reserve(BATCH);
+        batch.reserve(MAX_ACCUMULATE_BATCH);
         bool eof = false;
-        int run_id = 0;
         std::int64_t rows_seen = 0;
         std::vector<std::int64_t> row_base;
         while (!eof) {
             batch.clear();
-            for (std::size_t b = 0; b < BATCH; ++b) {
+            for (std::size_t b = 0; b < cap; ++b) {
                 auto m = co_await in_->next(max_rows);
                 if (!m) {
                     eof = true;
@@ -1562,84 +1529,209 @@ class GroupByCursor : public Cursor {
                                          std::move(st);
                                  }
                              });
+                std::uint64_t partial_bytes = 0;
+                for (auto& p : partials)
+                    if (p) partial_bytes += agg_approx_bytes(*p);
+                cap =
+                    accumulate_batch(budget_, partial_bytes / partials.size());
                 for (auto& p : partials)
                     if (p) agg_merge(*state, *p);
             }
-            if (budget_ > 0 && agg_approx_bytes(*state) > budget_) {
-                spill::write_agg_run(*state, dir_.run_path(run_id++));
+            if (budget_ > 0 && agg_approx_bytes(*state) > budget_ / 2) {
+                spill_state(*state);
                 state = agg_new(specs_, dyn_specs_);
             }
         }
 
-        if (run_id == 0) {
+        if (!spilled_) {
             DataFrame r = agg_finalize(*state, keys_);
             out_names_ = r.names;
             result_ = to_morsel(r);
-            spilled_ = false;
         } else {
-            if (agg_num_groups(*state) > 0)
-                spill::write_agg_run(*state, dir_.run_path(run_id++));
-            runs_.reserve(static_cast<std::size_t>(run_id));
-            for (int i = 0; i < run_id; ++i)
-                runs_.push_back(
-                    std::make_unique<spill::AggRunReader>(dir_.run_path(i)));
-            spilled_ = true;
+            if (agg_num_groups(*state) > 0) spill_state(*state);
+            for (std::size_t p = 0; p < part_out_.size(); ++p) {
+                part_out_[p].close();
+                if (!part_out_[p])
+                    throw DFTUtilsException::cat(
+                        ErrorCode::IO,
+                        "group_by spill: cannot write a part file");
+                if (part_bytes_[p])
+                    todo_.push_back({part_paths_[p], part_bytes_[p], 0});
+            }
         }
         built_ = true;
     }
 
-    // Merge every run sharing the smallest composite key into `merged`;
-    // distinct keys arrive ascending, so groups append in order. One
-    // agg_finalize at the end (not per group + concat_columns) lets a nested
-    // Hist column, which concat_columns cannot rejoin, survive spill.
+    // A spilled state is cut into hash parts, each appended to its part file as
+    // one blob, so equal keys from every flush end up in the same part and a
+    // part can later be merged in memory on its own.
+    void spill_state(const AggState& state) {
+        if (!spilled_) {
+            spilled_ = true;
+            for (std::size_t p = 0; p < GROUP_SPILL_PARTS; ++p) {
+                part_paths_.push_back(dir_.run_path(dir_.next_run()));
+                part_out_.emplace_back(part_paths_.back(), std::ios::binary);
+                part_bytes_.push_back(0);
+            }
+        }
+        write_split(state, part_out_, part_bytes_, 0);
+    }
+
+    void write_split(const AggState& state, std::vector<std::ofstream>& out,
+                     std::vector<std::uint64_t>& bytes, int salt) const {
+        const auto split = agg_split_groups(state, out.size(), salt);
+        for (std::size_t p = 0; p < split.size(); ++p) {
+            if (split[p].empty()) continue;
+            const std::string blob =
+                agg_serialize(*agg_extract_groups(state, split[p]), true);
+            const auto len = static_cast<std::uint32_t>(blob.size());
+            out[p].write(reinterpret_cast<const char*>(&len), sizeof len);
+            out[p].write(blob.data(),
+                         static_cast<std::streamsize>(blob.size()));
+            if (!out[p])
+                throw DFTUtilsException::cat(
+                    ErrorCode::IO, "group_by spill: cannot write a part file");
+            bytes[p] += sizeof len + blob.size();
+        }
+    }
+
+    // Reads blobs in batches of about `limit` bytes, deserializes each batch
+    // in parallel and calls `fn` on it until it returns false.
+    template <class F>
+    static void read_batches(const std::string& path, std::uint64_t limit,
+                             F&& fn) {
+        std::ifstream is(path, std::ios::binary);
+        if (!is)
+            throw DFTUtilsException::cat(
+                ErrorCode::IO, "group_by spill: cannot open part file ", path);
+        std::vector<std::string> raw;
+        std::uint64_t have = 0;
+        auto flush = [&] {
+            if (raw.empty()) return true;
+            std::vector<AggStatePtr> states(raw.size());
+            parallel_for(
+                static_cast<std::int64_t>(raw.size()), 1,
+                [&](std::int64_t b, std::int64_t e) {
+                    for (std::int64_t j = b; j < e; ++j)
+                        states[static_cast<std::size_t>(j)] = agg_deserialize(
+                            raw[static_cast<std::size_t>(j)], true);
+                });
+            raw.clear();
+            have = 0;
+            return fn(states);
+        };
+        std::uint32_t len = 0;
+        while (is.read(reinterpret_cast<char*>(&len), sizeof len)) {
+            std::string blob(len, '\0');
+            if (!is.read(blob.data(), static_cast<std::streamsize>(len)))
+                throw DFTUtilsException::cat(
+                    ErrorCode::IO, "group_by spill: truncated part file");
+            have += len;
+            raw.push_back(std::move(blob));
+            if (have >= limit && !flush()) return;
+        }
+        flush();
+    }
+
+    AggStatePtr fold(AggStatePtr acc, std::vector<AggStatePtr>& batch) const {
+        for (const AggStatePtr& st : batch) agg_merge(*acc, *st);
+        return acc;
+    }
+
+    std::uint64_t batch_bytes() const {
+        return std::max<std::uint64_t>(budget_ / 8, 1 << 16);
+    }
+
+    struct Part {
+        std::string path;
+        std::uint64_t bytes;
+        int depth;
+    };
+
+    // A part whose merged state does not fit the budget is split again by a
+    // salted hash, so the same keys spread over new parts. Blobs are folded
+    // into one state first, so the pieces written are as large as a flush.
+    void split_part(const Part& part) {
+        std::vector<std::string> paths;
+        std::vector<std::ofstream> out;
+        std::vector<std::uint64_t> bytes(GROUP_SPILL_PARTS, 0);
+        for (std::size_t p = 0; p < GROUP_SPILL_PARTS; ++p) {
+            paths.push_back(dir_.run_path(dir_.next_run()));
+            out.emplace_back(paths.back(), std::ios::binary);
+        }
+        AggStatePtr acc = agg_new(specs_, dyn_specs_);
+        read_batches(part.path, batch_bytes(),
+                     [&](std::vector<AggStatePtr>& batch) {
+                         acc = fold(std::move(acc), batch);
+                         if (agg_approx_bytes(*acc) > budget_ / 2) {
+                             write_split(*acc, out, bytes, part.depth + 1);
+                             acc = agg_new(specs_, dyn_specs_);
+                         }
+                         return true;
+                     });
+        if (agg_num_groups(*acc) > 0)
+            write_split(*acc, out, bytes, part.depth + 1);
+        for (std::size_t p = 0; p < out.size(); ++p) {
+            out[p].close();
+            if (!out[p])
+                throw DFTUtilsException::cat(
+                    ErrorCode::IO, "group_by spill: cannot write a part file");
+            if (bytes[p]) todo_.push_back({paths[p], bytes[p], part.depth + 1});
+        }
+        std::error_code ec;
+        fs::remove(part.path, ec);
+    }
+
+    // Merges one part of the spill at a time and emits its groups. With dyn
+    // columns the column set is the union over every group, so all parts merge
+    // into one state that is finalized once.
     std::optional<Morsel> merge_next(std::int64_t max_rows) {
-        // The dyn column set is the global name union, so a k-way streamed
-        // emission would give per-batch-varying dyn columns that cannot
-        // vertically concat. Merge all runs into one state, finalize once.
         if (!dyn_specs_.empty()) {
             if (dyn_drained_) return std::nullopt;
             dyn_drained_ = true;
             AggStatePtr merged = agg_new(specs_, dyn_specs_);
-            for (auto& run : runs_)
-                while (run->valid()) {
-                    agg_merge(*merged, run->state());
-                    run->advance();
-                }
+            for (const Part& part : todo_)
+                read_batches(part.path, batch_bytes(),
+                             [&](std::vector<AggStatePtr>& batch) {
+                                 merged = fold(std::move(merged), batch);
+                                 return true;
+                             });
             if (agg_num_groups(*merged) == 0) return std::nullopt;
             DataFrame r = agg_finalize(*merged, keys_);
             out_names_ = r.names;
             return to_morsel(r);
         }
-        AggStatePtr merged = agg_new(specs_, dyn_specs_);
-        std::int64_t produced = 0;
-        while (produced < max_rows) {
-            int best = -1;
-            for (std::size_t i = 0; i < runs_.size(); ++i) {
-                if (!runs_[i]->valid()) continue;
-                if (best < 0 ||
-                    agg_key_cmp(runs_[i]->state(), 0,
-                                runs_[static_cast<std::size_t>(best)]->state(),
-                                0) < 0)
-                    best = static_cast<int>(i);
+        while (true) {
+            if (emit_ && emit_at_ < emit_->num_rows()) {
+                const std::int64_t len =
+                    std::min(max_rows, emit_->num_rows() - emit_at_);
+                Morsel out = to_morsel(emit_->slice(emit_at_, len));
+                emit_at_ += len;
+                return out;
             }
-            if (best < 0) break;
-            // Snapshot the winning key before merging: advancing `best`'s own
-            // reader mid-loop would otherwise mutate the very state later
-            // iterations compare against.
-            const AggStatePtr win_key = agg_extract_group(
-                runs_[static_cast<std::size_t>(best)]->state(), 0);
-            for (auto& run : runs_) {
-                if (!run->valid()) continue;
-                if (agg_key_cmp(run->state(), 0, *win_key, 0) != 0) continue;
-                agg_merge(*merged, run->state());
-                run->advance();
+            emit_.reset();
+            if (todo_.empty()) return std::nullopt;
+            const Part part = std::move(todo_.back());
+            todo_.pop_back();
+            AggStatePtr merged = agg_new(specs_, dyn_specs_);
+            bool too_big = false;
+            read_batches(part.path, batch_bytes(),
+                         [&](std::vector<AggStatePtr>& batch) {
+                             merged = fold(std::move(merged), batch);
+                             too_big = part.depth < GROUP_SPILL_MAX_DEPTH &&
+                                       agg_approx_bytes(*merged) > budget_;
+                             return !too_big;
+                         });
+            if (too_big) {
+                merged.reset();
+                split_part(part);
+                continue;
             }
-            ++produced;
+            if (agg_num_groups(*merged) == 0) continue;
+            emit_ = agg_finalize(*merged, keys_);
+            out_names_ = emit_->names;
+            emit_at_ = 0;
         }
-        if (produced == 0) return std::nullopt;
-        DataFrame r = agg_finalize(*merged, keys_);
-        out_names_ = r.names;
-        return to_morsel(r);
     }
 
     std::unique_ptr<Cursor> in_;
@@ -1657,7 +1749,12 @@ class GroupByCursor : public Cursor {
     bool dyn_drained_ = false;
     Morsel result_;
     spill::Dir dir_;
-    std::vector<std::unique_ptr<spill::AggRunReader>> runs_;
+    std::vector<std::string> part_paths_;
+    std::vector<std::ofstream> part_out_;
+    std::vector<std::uint64_t> part_bytes_;
+    std::vector<Part> todo_;
+    std::optional<DataFrame> emit_;
+    std::int64_t emit_at_ = 0;
 };
 
 // Streaming tumbling/sliding time-window aggregation over an ascending Int64
@@ -1909,71 +2006,456 @@ void append_value_key(std::string& key, const Series& c, std::int64_t i) {
     put('i', static_cast<std::int64_t>(read_u64(c, i)));
 }
 
-// Keeps the first n rows of each distinct key tuple, in input order. Streams:
-// holds one counter per distinct key. A null key is its own key.
-class HeadByCursor : public Cursor {
-   public:
-    HeadByCursor(std::unique_ptr<Cursor> in, std::vector<std::int64_t> key_idx,
-                 std::int64_t n)
-        : in_(std::move(in)), key_idx_(std::move(key_idx)), n_(n) {}
+constexpr std::size_t SURVIVOR_CHUNK = 512;
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
-        if (n_ <= 0) co_return std::nullopt;
-        while (auto m = co_await in_->next(max_rows)) {
-            const std::int64_t rows = m->rows;
-            std::vector<std::string> keys(static_cast<std::size_t>(rows));
-            parallel_for(
-                rows, std::int64_t{1} << 13,
-                [&](std::int64_t b, std::int64_t e) {
-                    for (std::int64_t i = b; i < e; ++i) {
-                        std::string& k = keys[static_cast<std::size_t>(i)];
-                        for (std::int64_t c : key_idx_)
-                            append_value_key(
-                                k, m->columns[static_cast<std::size_t>(c)], i);
-                    }
-                });
+// The part of "keep the first `keep` rows of each key" that runs past the
+// memory budget. The rows still to come are spooled in order; only their
+// (row id, key) pairs are hash-partitioned to disk, so a partition holds ids in
+// ascending order and the first `keep` it sees per key are the survivors, which
+// come out already sorted. An oversized partition is split again with a
+// salted hash. The spool is then replayed and only the surviving rows are
+// emitted, so no row data is merged and every file is read in sequence.
+class FirstRowsSpill {
+   public:
+    using Already = std::function<std::int64_t(const std::string&)>;
+
+    FirstRowsSpill(std::uint64_t budget, std::int64_t keep,
+                   std::int64_t first_id, Already already)
+        : budget_(budget),
+          keep_(keep),
+          next_id_(first_id),
+          replay_id_(first_id),
+          already_(std::move(already)),
+          spool_(budget / 4) {
+        for (int p = 0; p < UNIQUE_SPILL_FANOUT; ++p) {
+            paths_.push_back(dir_.run_path(dir_.next_run()));
+            writers_.emplace_back(paths_.back());
+        }
+        bytes_.assign(UNIQUE_SPILL_FANOUT, 0);
+        rows_.assign(UNIQUE_SPILL_FANOUT, 0);
+    }
+
+    void add(Morsel&& m, std::vector<std::string> keys) {
+        const std::int64_t n = m.rows;
+        std::vector<std::vector<std::int64_t>> ids(UNIQUE_SPILL_FANOUT);
+        std::vector<std::vector<std::string>> ks(UNIQUE_SPILL_FANOUT);
+        for (std::int64_t i = 0; i < n; ++i) {
+            std::string& key = keys[static_cast<std::size_t>(i)];
+            if (already_(key) >= keep_) continue;
+            const std::size_t p =
+                unique_spill_hash(key, 0) % UNIQUE_SPILL_FANOUT;
+            ids[p].push_back(next_id_ + i);
+            ks[p].push_back(std::move(key));
+        }
+        for (std::size_t p = 0; p < UNIQUE_SPILL_FANOUT; ++p) {
+            if (ids[p].empty()) continue;
+            const auto count = static_cast<std::int64_t>(ids[p].size());
+            std::vector<Series> cols;
+            cols.push_back(Series::flat_i64(ids[p].data(), count));
+            cols.push_back(Series::strings(ks[p]));
+            bytes_[p] += spill::columns_bytes(cols);
+            rows_[p] += count;
+            writers_[p].write(cols, count);
+        }
+        next_id_ += n;
+        spool_.add(std::move(m.columns), n);
+    }
+
+    coro::CoroTask<void> finish() {
+        for (spill::Writer& w : writers_) w.close();
+        for (int p = 0; p < UNIQUE_SPILL_FANOUT; ++p)
+            co_await settle(paths_[static_cast<std::size_t>(p)],
+                            bytes_[static_cast<std::size_t>(p)],
+                            rows_[static_cast<std::size_t>(p)], 0);
+        for (const std::string& path : survivor_paths_)
+            runs_.emplace_back(std::make_unique<spill::Reader>(path));
+        replay_ = spool_.reader();
+    }
+
+    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) {
+        if (runs_.empty()) co_return std::nullopt;
+        while (auto m = co_await replay_->next(max_rows)) {
+            const std::int64_t lo = replay_id_;
+            const std::int64_t hi = lo + m->rows;
+            replay_id_ = hi;
             std::vector<std::int64_t> keep;
-            keep.reserve(static_cast<std::size_t>(rows));
-            for (std::int64_t i = 0; i < rows; ++i) {
-                std::int64_t& seen =
-                    counts_[std::move(keys[static_cast<std::size_t>(i)])];
-                if (seen < n_) {
-                    ++seen;
-                    keep.push_back(i);
+            for (Run& r : runs_) {
+                while (!r.done) {
+                    if (!r.cur || r.pos >= r.cur->rows) {
+                        r.cur = co_await r.reader->next(SURVIVOR_CHUNK);
+                        r.pos = 0;
+                        if (!r.cur) {
+                            r.done = true;
+                            break;
+                        }
+                    }
+                    const std::int64_t id =
+                        r.cur->columns[0].data<std::int64_t>()[r.pos];
+                    if (id >= hi) break;
+                    keep.push_back(id - lo);
+                    ++r.pos;
                 }
             }
             if (keep.empty()) continue;
-            if (static_cast<std::int64_t>(keep.size()) == rows) co_return m;
+            std::sort(keep.begin(), keep.end());
             DataFrame mf;
             mf.names.assign(m->columns.size(), std::string());
             mf.columns = std::move(m->columns);
-            Morsel out = morsel_of(take(mf, keep));
-            out.ordering = m->ordering;
-            out.ordered_column = m->ordered_column;
-            out.ordered_descending = m->ordered_descending;
-            co_return out;
+            co_return morsel_of(take(mf, keep));
         }
         co_return std::nullopt;
     }
 
    private:
+    struct Run {
+        explicit Run(std::unique_ptr<spill::Reader> r) : reader(std::move(r)) {}
+        std::unique_ptr<spill::Reader> reader;
+        std::optional<Morsel> cur;
+        std::int64_t pos = 0;
+        bool done = false;
+    };
+
+    // A partition that fits a fraction of the budget is counted in memory; a
+    // larger one is split again (until the depth limit or too few rows).
+    coro::CoroTask<void> settle(const std::string& path, std::size_t bytes,
+                                std::int64_t rows, int depth) {
+        if (depth < UNIQUE_SPILL_MAX_DEPTH && bytes > budget_ / 8 &&
+            rows > UNIQUE_SPILL_MIN_LEAF_ROWS) {
+            std::vector<std::string> sub_paths;
+            std::vector<spill::Writer> writers;
+            for (int p = 0; p < UNIQUE_SPILL_FANOUT; ++p) {
+                sub_paths.push_back(dir_.run_path(dir_.next_run()));
+                writers.emplace_back(sub_paths.back());
+            }
+            std::vector<std::size_t> sub_bytes(UNIQUE_SPILL_FANOUT, 0);
+            std::vector<std::int64_t> sub_rows(UNIQUE_SPILL_FANOUT, 0);
+            spill::Reader reader(path);
+            while (auto m = co_await reader.next(DEFAULT_MORSEL_ROWS)) {
+                std::vector<std::vector<std::int64_t>> pick(
+                    UNIQUE_SPILL_FANOUT);
+                for (std::int64_t i = 0; i < m->rows; ++i)
+                    pick[unique_spill_hash(m->columns[1].string_at(i),
+                                           depth + 1) %
+                         UNIQUE_SPILL_FANOUT]
+                        .push_back(i);
+                DataFrame mf;
+                mf.names.assign(m->columns.size(), std::string());
+                mf.columns = std::move(m->columns);
+                for (std::size_t p = 0; p < UNIQUE_SPILL_FANOUT; ++p) {
+                    if (pick[p].empty()) continue;
+                    DataFrame part = take(mf, pick[p]);
+                    sub_bytes[p] += morsel_bytes(part.columns);
+                    sub_rows[p] += part.num_rows();
+                    writers[p].write(part.columns, part.num_rows());
+                }
+            }
+            for (spill::Writer& w : writers) w.close();
+            for (std::size_t p = 0; p < UNIQUE_SPILL_FANOUT; ++p)
+                co_await settle(sub_paths[p], sub_bytes[p], sub_rows[p],
+                                depth + 1);
+            co_return;
+        }
+        StringViewMap<std::int64_t> emitted;
+        const std::string out_path = dir_.run_path(dir_.next_run());
+        spill::Writer out(out_path);
+        std::vector<std::int64_t> ids;
+        ids.reserve(SURVIVOR_CHUNK);
+        bool any = false;
+        auto flush = [&] {
+            if (ids.empty()) return;
+            const auto n = static_cast<std::int64_t>(ids.size());
+            std::vector<Series> cols;
+            cols.push_back(Series::flat_i64(ids.data(), n));
+            out.write(cols, n);
+            ids.clear();
+            any = true;
+        };
+        spill::Reader reader(path);
+        while (auto m = co_await reader.next(DEFAULT_MORSEL_ROWS)) {
+            const std::int64_t* row_ids = m->columns[0].data<std::int64_t>();
+            for (std::int64_t i = 0; i < m->rows; ++i) {
+                const std::string_view key = m->columns[1].string_at(i);
+                auto it = emitted.find(key);
+                if (it == emitted.end())
+                    it = emitted
+                             .emplace(std::string(key),
+                                      already_(std::string(key)))
+                             .first;
+                if (it->second >= keep_) continue;
+                ++it->second;
+                ids.push_back(row_ids[i]);
+                if (ids.size() == SURVIVOR_CHUNK) flush();
+            }
+        }
+        flush();
+        out.close();
+        if (any) survivor_paths_.push_back(out_path);
+    }
+
+    std::uint64_t budget_;
+    std::int64_t keep_;
+    std::int64_t next_id_;
+    std::int64_t replay_id_;
+    Already already_;
+    spill::Spool spool_;
+    spill::Dir dir_;
+    std::vector<std::string> paths_;
+    std::vector<spill::Writer> writers_;
+    std::vector<std::size_t> bytes_;
+    std::vector<std::int64_t> rows_;
+    std::vector<std::string> survivor_paths_;
+    std::vector<Run> runs_;
+    std::unique_ptr<Cursor> replay_;
+};
+
+// Keeps the first n rows of each distinct key tuple, in input order. Streams:
+// holds one counter per distinct key. A null key is its own key.
+class HeadByCursor : public Cursor {
+   public:
+    HeadByCursor(std::unique_ptr<Cursor> in, std::vector<std::int64_t> key_idx,
+                 std::int64_t n, std::uint64_t budget)
+        : in_(std::move(in)),
+          key_idx_(std::move(key_idx)),
+          n_(n),
+          budget_(budget) {}
+
+    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+        if (n_ <= 0) co_return std::nullopt;
+        if (!spilling_) {
+            while (auto m = co_await in_->next(max_rows)) {
+                const std::int64_t rows = m->rows;
+                std::vector<std::string> keys = keys_of(*m);
+                std::vector<std::int64_t> keep;
+                keep.reserve(static_cast<std::size_t>(rows));
+                for (std::int64_t i = 0; i < rows; ++i) {
+                    std::string& key = keys[static_cast<std::size_t>(i)];
+                    const std::size_t key_bytes =
+                        key.size() + DEDUP_ENTRY_OVERHEAD;
+                    auto [it, fresh] = counts_.try_emplace(std::move(key), 0);
+                    if (fresh) fast_bytes_ += key_bytes;
+                    if (it->second < n_) {
+                        ++it->second;
+                        keep.push_back(i);
+                    }
+                }
+                next_row_id_ += rows;
+                if (budget_ > 0 && fast_bytes_ > budget_ / 2) spilling_ = true;
+                if (keep.empty()) {
+                    if (spilling_) break;
+                    continue;
+                }
+                if (static_cast<std::int64_t>(keep.size()) == rows) co_return m;
+                DataFrame mf;
+                mf.names.assign(m->columns.size(), std::string());
+                mf.columns = std::move(m->columns);
+                Morsel out = morsel_of(take(mf, keep));
+                out.ordering = m->ordering;
+                out.ordered_column = m->ordered_column;
+                out.ordered_descending = m->ordered_descending;
+                co_return out;
+            }
+            if (!spilling_) co_return std::nullopt;
+        }
+        if (!external_) {
+            external_ = std::make_unique<FirstRowsSpill>(
+                budget_, n_, next_row_id_, [this](const std::string& key) {
+                    const auto it = counts_.find(key);
+                    return it == counts_.end() ? std::int64_t{0} : it->second;
+                });
+            while (auto m = co_await in_->next(max_rows)) {
+                std::vector<std::string> keys = keys_of(*m);
+                external_->add(std::move(*m), std::move(keys));
+            }
+            co_await external_->finish();
+        }
+        co_return co_await external_->next(max_rows);
+    }
+
+   private:
+    std::vector<std::string> keys_of(const Morsel& m) const {
+        std::vector<std::string> keys(static_cast<std::size_t>(m.rows));
+        parallel_for(
+            m.rows, std::int64_t{1} << 13, [&](std::int64_t b, std::int64_t e) {
+                for (std::int64_t i = b; i < e; ++i) {
+                    std::string& k = keys[static_cast<std::size_t>(i)];
+                    for (std::int64_t c : key_idx_)
+                        append_value_key(
+                            k, m.columns[static_cast<std::size_t>(c)], i);
+                }
+            });
+        return keys;
+    }
+
     std::unique_ptr<Cursor> in_;
     std::vector<std::int64_t> key_idx_;
     std::int64_t n_;
+    std::uint64_t budget_;
     ankerl::unordered_dense::map<std::string, std::int64_t> counts_;
+    std::size_t fast_bytes_ = 0;
+    std::int64_t next_row_id_ = 0;
+    bool spilling_ = false;
+    std::unique_ptr<FirstRowsSpill> external_;
 };
 
-// External merge sort. Generates sorted runs bounded by `budget` bytes (spilled
-// to disk; budget 0 keeps one in-memory run), then k-way range-merges them into
-// a sorted stream. Peak memory is O(budget + one output morsel) when spilling.
+// The key cells of one run morsel read once into typed arrays, so a merge
+// compares plain values instead of calling the column ABI for every cell.
+// Integers compare exactly (an unsigned 64-bit value has its sign bit flipped
+// to keep its order as a signed one), floats as doubles, strings as views into
+// the morsel; nulls sort last in both directions, as in cmp_cell.
+struct KeyData {
+    enum class Kind { INT, FLOAT, BYTES, DEC128, DEC256 };
+    Kind kind = Kind::INT;
+    std::vector<std::int64_t> ints;
+    std::vector<double> floats;
+    std::vector<std::string_view> bytes;  // strings, binary and decimal cells
+    std::vector<std::uint8_t> nulls;
+
+    // The key is read by its physical type, so a Date, Timestamp, Time or
+    // Duration orders as the integer it is stored as.
+    explicit KeyData(const Series& c) {
+        const std::int64_t n = c.length();
+        const auto size = static_cast<std::size_t>(n);
+        if (c.null_count() > 0) {
+            nulls.resize(size);
+            for (std::int64_t i = 0; i < n; ++i)
+                nulls[static_cast<std::size_t>(i)] = c.is_null(i) ? 1 : 0;
+        }
+        const TypeId t = narrow_varwidth_type(physical_type(c.type()));
+        switch (t) {
+            case TypeId::String:
+            case TypeId::Binary:
+            case TypeId::FixedSizeBinary:
+                kind = Kind::BYTES;
+                bytes.resize(size);
+                for (std::int64_t i = 0; i < n; ++i)
+                    if (!null_at(i))
+                        bytes[static_cast<std::size_t>(i)] = read_bytes(c, i);
+                break;
+            case TypeId::Decimal128:
+            case TypeId::Decimal256: {
+                const std::size_t width = t == TypeId::Decimal128 ? 16 : 32;
+                kind = t == TypeId::Decimal128 ? Kind::DEC128 : Kind::DEC256;
+                bytes.resize(size);
+                const char* base =
+                    reinterpret_cast<const char*>(c.data<std::uint8_t>());
+                for (std::size_t i = 0; i < size; ++i)
+                    bytes[i] = std::string_view(base + i * width, width);
+                break;
+            }
+            case TypeId::Float16:
+                kind = Kind::FLOAT;
+                floats.resize(size);
+                for (std::int64_t i = 0; i < n; ++i)
+                    floats[static_cast<std::size_t>(i)] = static_cast<double>(
+                        half_to_float(c.data<std::uint16_t>()[i]));
+                break;
+            case TypeId::Float32:
+                kind = Kind::FLOAT;
+                floats.resize(size);
+                for (std::int64_t i = 0; i < n; ++i)
+                    floats[static_cast<std::size_t>(i)] =
+                        static_cast<double>(c.data<float>()[i]);
+                break;
+            case TypeId::Float64:
+                kind = Kind::FLOAT;
+                floats.resize(size);
+                for (std::int64_t i = 0; i < n; ++i)
+                    floats[static_cast<std::size_t>(i)] = c.data<double>()[i];
+                break;
+            default:
+                kind = Kind::INT;
+                ints.resize(size);
+                for (std::int64_t i = 0; i < n; ++i)
+                    ints[static_cast<std::size_t>(i)] = int_cell(c, t, i);
+        }
+    }
+
+    bool null_at(std::int64_t i) const {
+        return !nulls.empty() && nulls[static_cast<std::size_t>(i)];
+    }
+
+    // Negative when row `i` sorts before row `j` of `o`, ascending. Floats
+    // order as the sort kernels do: every NaN equal and above infinity.
+    int compare(std::int64_t i, const KeyData& o, std::int64_t j) const {
+        const auto a = static_cast<std::size_t>(i);
+        const auto b = static_cast<std::size_t>(j);
+        switch (kind) {
+            case Kind::INT:
+                return ints[a] < o.ints[b] ? -1 : (ints[a] > o.ints[b] ? 1 : 0);
+            case Kind::BYTES:
+                return bytes[a] < o.bytes[b] ? -1
+                                             : (bytes[a] > o.bytes[b] ? 1 : 0);
+            case Kind::DEC128:
+                return compare_decimal128(bytes[a].data(), o.bytes[b].data());
+            case Kind::DEC256:
+                return compare_decimal256(bytes[a].data(), o.bytes[b].data());
+            case Kind::FLOAT:
+                break;
+        }
+        const double x = floats[a];
+        const double y = o.floats[b];
+        const bool nx = x != x;
+        const bool ny = y != y;
+        if (nx || ny) return nx == ny ? 0 : (nx ? 1 : -1);
+        return x < y ? -1 : (x > y ? 1 : 0);
+    }
+
+    static bool is_integer_key(TypeId t) {
+        return t == TypeId::Bool || t == TypeId::Int8 || t == TypeId::Int16 ||
+               t == TypeId::Int32 || t == TypeId::Int64 || t == TypeId::Uint8 ||
+               t == TypeId::Uint16 || t == TypeId::Uint32 ||
+               t == TypeId::Uint64;
+    }
+
+    static std::int64_t int_cell(const Series& c, TypeId t, std::int64_t i) {
+        switch (t) {
+            case TypeId::Bool:
+                return (c.data<std::uint8_t>()[i >> 3] >> (i & 7)) & 1;
+            case TypeId::Int8:
+                return c.data<std::int8_t>()[i];
+            case TypeId::Int16:
+                return c.data<std::int16_t>()[i];
+            case TypeId::Int32:
+                return c.data<std::int32_t>()[i];
+            case TypeId::Int64:
+                return c.data<std::int64_t>()[i];
+            case TypeId::Uint8:
+                return c.data<std::uint8_t>()[i];
+            case TypeId::Uint16:
+                return c.data<std::uint16_t>()[i];
+            case TypeId::Uint32:
+                return c.data<std::uint32_t>()[i];
+            case TypeId::Uint64:
+                return static_cast<std::int64_t>(c.data<std::uint64_t>()[i] ^
+                                                 (std::uint64_t{1} << 63));
+            default:
+                throw std::invalid_argument(
+                    "sort: a key of this type has no order");
+        }
+    }
+};
+
+// External merge sort by one or several keys (lexicographic, each ascending or
+// descending). Generates sorted runs bounded by `budget` bytes (spilled to
+// disk; budget 0 keeps one in-memory run), then k-way range-merges them into a
+// sorted stream. Peak memory is O(budget + one output morsel) when spilling.
+// The merge prefers the earlier run on a tie, so the sort is stable.
 class SortMergeCursor : public Cursor {
    public:
+    // Sorting a run holds its concatenated rows, its sorted copy and the sort
+    // permutation at once, and the allocator does not hand the freed morsels
+    // back to the sort (measured: one run peaks at about 3.5 times its data),
+    // so a run is cut at this fraction of the budget.
+    static constexpr std::uint64_t RUN_COPIES = 4;
+    static constexpr std::uint64_t RUN_MORSEL_BYTES = 128 * 1024;
+
     SortMergeCursor(std::unique_ptr<Cursor> in, std::vector<std::string> sch,
-                    std::string key, bool descending, std::uint64_t budget)
+                    std::vector<std::string> keys, std::vector<bool> descending,
+                    std::uint64_t budget)
         : in_(std::move(in)),
           sch_(std::move(sch)),
-          key_(std::move(key)),
-          descending_(descending),
+          keys_(std::move(keys)),
+          descending_(std::move(descending)),
           budget_(budget) {}
 
     // Sorting commutes with a row-wise narrowing, and the input is untouched
@@ -1986,85 +2468,155 @@ class SortMergeCursor : public Cursor {
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         if (!built_) co_await build(max_rows);
 
-        std::vector<std::vector<Series>> pieces;
+        // A heap over the run heads picks the next row; the rows taken from one
+        // run morsel are gathered once, and one more gather puts the pieces in
+        // order, so the cost per row is a few comparisons, not a morsel.
+        const auto after = [&](int a, int b) {
+            const auto ia = static_cast<std::size_t>(a);
+            const auto ib = static_cast<std::size_t>(b);
+            const int c = cmp_rows(ia, pos_[ia], ib, pos_[ib]);
+            return c > 0 || (c == 0 && a > b);
+        };
+        std::priority_queue<int, std::vector<int>, decltype(after)> heap(after);
+        for (std::size_t k = 0; k < cur_.size(); ++k)
+            if (cur_[k] && pos_[k] < cur_[k]->rows)
+                heap.push(static_cast<int>(k));
+
+        std::vector<std::vector<Series>> segments;
+        std::vector<std::int64_t> segment_rows;
+        std::vector<std::int32_t> out_segment;
+        std::vector<std::int64_t> out_at;
+        std::vector<std::int64_t> open_rows;
+        std::vector<int> open_segment(cur_.size(), -1);
+        std::vector<std::vector<std::int64_t>> picked(cur_.size());
         std::int64_t out_rows = 0;
-        while (out_rows < max_rows) {
-            const int winner = pick(-1, false);
-            if (winner < 0) break;
-            const int bnd = pick(winner, true);
-            Morsel& wm = *cur_[static_cast<std::size_t>(winner)];
-            const Series& kw = wm.columns[static_cast<std::size_t>(key_idx_)];
-            std::int64_t pos = pos_[static_cast<std::size_t>(winner)];
-            const std::int64_t end =
-                std::min(wm.rows, pos + (max_rows - out_rows));
-            std::int64_t limit;
-            if (bnd < 0) {
-                limit = end;
-            } else {
-                const Morsel& bm = *cur_[static_cast<std::size_t>(bnd)];
-                const Series& kb =
-                    bm.columns[static_cast<std::size_t>(key_idx_)];
-                const std::int64_t bpos = pos_[static_cast<std::size_t>(bnd)];
-                limit = pos;
-                while (limit < end &&
-                       cmp_cell(kw, limit, kb, bpos, descending_) <= 0)
-                    ++limit;
+
+        const auto close_segment = [&](std::size_t k) {
+            std::vector<Series> cols;
+            cols.reserve(cur_[k]->columns.size());
+            for (const Series& c : cur_[k]->columns)
+                cols.push_back(c.take(picked[k]));
+            segments[static_cast<std::size_t>(open_segment[k])] =
+                std::move(cols);
+            segment_rows[static_cast<std::size_t>(open_segment[k])] =
+                static_cast<std::int64_t>(picked[k].size());
+            picked[k].clear();
+            open_segment[k] = -1;
+        };
+
+        while (out_rows < max_rows && !heap.empty()) {
+            const int w = heap.top();
+            heap.pop();
+            const auto k = static_cast<std::size_t>(w);
+            if (open_segment[k] < 0) {
+                open_segment[k] = static_cast<int>(segments.size());
+                segments.emplace_back();
+                segment_rows.push_back(0);
             }
-            Morsel piece = slice_morsel(wm, pos, limit - pos);
-            pieces.push_back(std::move(piece.columns));
-            out_rows += limit - pos;
-            pos_[static_cast<std::size_t>(winner)] = limit;
-            if (limit >= wm.rows) co_await advance(winner, max_rows);
+            // The winner keeps going while its rows still sort before the
+            // best head of the other runs (ties go to the earlier run).
+            const std::int64_t stop =
+                std::min(cur_[k]->rows, pos_[k] + (max_rows - out_rows));
+            std::int64_t take_n = 1;
+            if (heap.empty()) {
+                take_n = stop - pos_[k];
+            } else {
+                const auto t = static_cast<std::size_t>(heap.top());
+                const int allowed = w < heap.top() ? 1 : 0;
+                while (pos_[k] + take_n < stop &&
+                       cmp_rows(k, pos_[k] + take_n, t, pos_[t]) < allowed)
+                    ++take_n;
+            }
+            for (std::int64_t i = 0; i < take_n; ++i) {
+                out_segment.push_back(open_segment[k]);
+                out_at.push_back(static_cast<std::int64_t>(picked[k].size()));
+                picked[k].push_back(pos_[k] + i);
+            }
+            pos_[k] += take_n;
+            out_rows += take_n;
+            if (pos_[k] >= cur_[k]->rows) {
+                close_segment(k);
+                co_await advance(w, max_rows);
+                if (cur_[k] && cur_[k]->rows > 0) heap.push(w);
+            } else {
+                heap.push(w);
+            }
         }
-        if (pieces.empty()) co_return std::nullopt;
+        for (std::size_t k = 0; k < cur_.size(); ++k)
+            if (open_segment[k] >= 0) close_segment(k);
+        if (out_rows == 0) co_return std::nullopt;
+
         Morsel out;
         out.rows = out_rows;
-        const std::size_t ncols = pieces.front().size();
-        out.columns.reserve(ncols);
-        for (std::size_t c = 0; c < ncols; ++c) {
-            std::vector<const Series*> parts;
-            parts.reserve(pieces.size());
-            for (auto& pc : pieces) parts.push_back(&pc[c]);
-            out.columns.push_back(concat_columns(parts));
+        const std::size_t ncols = segments.front().size();
+        if (segments.size() == 1) {
+            out.columns = std::move(segments.front());
+        } else {
+            std::vector<std::int64_t> offset(segments.size(), 0);
+            for (std::size_t sg = 1; sg < segments.size(); ++sg)
+                offset[sg] = offset[sg - 1] + segment_rows[sg - 1];
+            std::vector<std::int64_t> order(static_cast<std::size_t>(out_rows));
+            for (std::size_t j = 0; j < order.size(); ++j)
+                order[j] = offset[static_cast<std::size_t>(out_segment[j])] +
+                           out_at[j];
+            out.columns.reserve(ncols);
+            for (std::size_t c = 0; c < ncols; ++c) {
+                std::vector<const Series*> parts;
+                parts.reserve(segments.size());
+                for (auto& seg : segments) parts.push_back(&seg[c]);
+                out.columns.push_back(concat_columns(parts).take(order));
+            }
         }
-        // The k-way merge always picks the globally smallest key across the
-        // whole call sequence (pos_/cur_ persist between next() calls), so
-        // the concatenation of every morsel this cursor ever returns is
-        // sorted by key_, not just each one in isolation.
+        // The merge always takes the globally smallest key across the whole
+        // call sequence (pos_/cur_ persist between next() calls), so the
+        // concatenation of every morsel this cursor returns is sorted. The
+        // leading key is the one ordering claim a morsel carries.
         out.ordering = Ordering::ByColumn;
-        out.ordered_column = key_idx_;
-        out.ordered_descending = descending_;
+        out.ordered_column = key_idx_.front();
+        out.ordered_descending = descending_.front();
         co_return out;
     }
 
    private:
-    // Index of the active run whose current key is most "before" the rest;
-    // `exclude` skips one run (for the boundary), returns -1 if none active.
-    int pick(int exclude, bool /*is_boundary*/) const {
-        int best = -1;
-        for (std::size_t k = 0; k < cur_.size(); ++k) {
-            if (static_cast<int>(k) == exclude) continue;
-            if (!cur_[k] || pos_[k] >= cur_[k]->rows) continue;
-            if (best < 0) {
-                best = static_cast<int>(k);
-                continue;
+    // Lexicographic over the keys: negative when the head row `ia` of run `a`
+    // sorts before row `ib` of run `b`. A null sorts last in both directions.
+    int cmp_rows(std::size_t a, std::int64_t ia, std::size_t b,
+                 std::int64_t ib) const {
+        for (std::size_t i = 0; i < key_idx_.size(); ++i) {
+            const KeyData& x = run_keys_[a][i];
+            const KeyData& y = run_keys_[b][i];
+            const bool nx = x.null_at(ia);
+            const bool ny = y.null_at(ib);
+            if (nx || ny) {
+                if (nx && ny) continue;
+                return nx ? 1 : -1;
             }
-            const Series& kk =
-                cur_[k]->columns[static_cast<std::size_t>(key_idx_)];
-            const Series& kb =
-                cur_[static_cast<std::size_t>(best)]
-                    ->columns[static_cast<std::size_t>(key_idx_)];
-            if (cmp_cell(kk, pos_[k], kb, pos_[static_cast<std::size_t>(best)],
-                         descending_) < 0)
-                best = static_cast<int>(k);
+            const int r =
+                descending_[i] ? -x.compare(ia, y, ib) : x.compare(ia, y, ib);
+            if (r != 0) return r;
         }
-        return best;
+        return 0;
+    }
+
+    DataFrame sort_rows(DataFrame df) const {
+        return keys_.size() == 1
+                   ? df.sort_by(keys_.front(), descending_.front())
+                   : df.sort_by_multi(keys_, descending_);
+    }
+
+    void load(std::size_t k, std::optional<Morsel> m) {
+        cur_[k] = std::move(m);
+        pos_[k] = 0;
+        run_keys_[k].clear();
+        if (!cur_[k]) return;
+        for (int idx : key_idx_)
+            run_keys_[k].emplace_back(
+                cur_[k]->columns[static_cast<std::size_t>(idx)]);
     }
 
     coro::CoroTask<void> advance(int k, std::int64_t max_rows) {
-        cur_[static_cast<std::size_t>(k)] =
-            co_await runs_[static_cast<std::size_t>(k)]->next(max_rows);
-        pos_[static_cast<std::size_t>(k)] = 0;
+        const auto i = static_cast<std::size_t>(k);
+        load(i, co_await runs_[i]->next(max_rows));
     }
 
     DataFrame concat_pending(std::vector<std::vector<Series>>& pending) const {
@@ -2082,25 +2634,77 @@ class SortMergeCursor : public Cursor {
 
     void spill_run(std::vector<std::vector<Series>>& pending, int id,
                    std::int64_t chunk) {
-        DataFrame sorted = concat_pending(pending).sort_by(key_, descending_);
+        DataFrame joined = concat_pending(pending);
+        pending.clear();
+        DataFrame sorted = sort_rows(std::move(joined));
         spill::Writer w(dir_.run_path(id));
         const std::int64_t total = sorted.num_rows();
+        // Morsels of about RUN_MORSEL_BYTES, so a merge can read many runs.
+        if (total > 0) {
+            const std::uint64_t bytes = spill::columns_bytes(sorted.columns);
+            const std::uint64_t per_row = std::max<std::uint64_t>(
+                1, bytes / static_cast<std::uint64_t>(total));
+            chunk = std::min(chunk, std::max<std::int64_t>(
+                                        256, static_cast<std::int64_t>(
+                                                 RUN_MORSEL_BYTES / per_row)));
+        }
         for (std::int64_t off = 0; off < total; off += chunk) {
             const std::int64_t len = std::min(chunk, total - off);
             DataFrame s = sorted.slice(off, len);
             std::vector<Series> cols;
             cols.reserve(s.columns.size());
             for (const Series& c : s.columns) cols.push_back(c.materialize());
+            run_morsel_bytes_ = std::max<std::uint64_t>(
+                run_morsel_bytes_, spill::columns_bytes(cols));
             w.write(cols, len);
         }
         w.close();
     }
 
+    // A merge holds one morsel per run it reads (measured: about three and a
+    // half times the morsel with its keys and read buffers), so when there are
+    // more runs than fit the budget, consecutive groups of runs are merged
+    // into longer ones first. Consecutive groups keep ties in input order.
+    std::size_t merge_fan_in() const {
+        const std::uint64_t per_run =
+            std::max<std::uint64_t>(run_morsel_bytes_ * 2, 1);
+        return static_cast<std::size_t>(
+            std::max<std::uint64_t>(4, budget_ / per_run));
+    }
+
+    coro::CoroTask<int> merge_runs(const std::vector<int>& ids, int out_id,
+                                   std::int64_t max_rows) {
+        SortMergeCursor merger(nullptr, sch_, keys_, descending_, budget_);
+        merger.key_idx_ = key_idx_;
+        for (int id : ids)
+            merger.runs_.push_back(
+                std::make_unique<spill::Reader>(dir_.run_path(id)));
+        merger.cur_.resize(ids.size());
+        merger.pos_.assign(ids.size(), 0);
+        merger.run_keys_.resize(ids.size());
+        for (std::size_t k = 0; k < ids.size(); ++k)
+            merger.load(k, co_await merger.runs_[k]->next(max_rows));
+        merger.built_ = true;
+        spill::Writer w(dir_.run_path(out_id));
+        while (auto m = co_await merger.next(max_rows)) {
+            run_morsel_bytes_ = std::max<std::uint64_t>(
+                run_morsel_bytes_, spill::columns_bytes(m->columns));
+            w.write(m->columns, m->rows);
+        }
+        w.close();
+        merger.runs_.clear();
+        std::error_code ec;
+        for (int id : ids) fs::remove(dir_.run_path(id), ec);
+        co_return out_id;
+    }
+
     coro::CoroTask<void> build(std::int64_t max_rows) {
-        key_idx_ = static_cast<int>(std::distance(
-            sch_.begin(), std::find(sch_.begin(), sch_.end(), key_)));
-        if (key_idx_ >= static_cast<int>(sch_.size()))
-            throw std::out_of_range("sort_by: no column named " + key_);
+        for (const std::string& key : keys_) {
+            const int idx = column_index_of(sch_, key);
+            if (idx < 0)
+                throw std::out_of_range("sort_by: no column named " + key);
+            key_idx_.push_back(idx);
+        }
 
         std::vector<std::vector<Series>> pending;
         std::size_t pend_bytes = 0;
@@ -2108,7 +2712,7 @@ class SortMergeCursor : public Cursor {
         while (auto m = co_await in_->next(max_rows)) {
             pend_bytes += morsel_bytes(m->columns);
             pending.push_back(std::move(m->columns));
-            if (budget_ > 0 && pend_bytes > budget_) {
+            if (budget_ > 0 && pend_bytes > budget_ / RUN_COPIES) {
                 spill_run(pending, run_id++, max_rows);
                 pending.clear();
                 pend_bytes = 0;
@@ -2119,47 +2723,62 @@ class SortMergeCursor : public Cursor {
             DataFrame buf =
                 pending.empty() ? DataFrame{} : concat_pending(pending);
             if (pending.empty()) buf.names = sch_;
-            DataFrame sorted = buf.num_rows() ? buf.sort_by(key_, descending_)
-                                              : std::move(buf);
+            DataFrame sorted =
+                buf.num_rows() ? sort_rows(std::move(buf)) : std::move(buf);
             runs_.push_back(std::make_unique<InMemoryCursor>(
                 std::make_shared<const DataFrame>(std::move(sorted))));
         } else {
             if (!pending.empty()) spill_run(pending, run_id++, max_rows);
-            for (int id = 0; id < run_id; ++id)
+            std::vector<int> ids(static_cast<std::size_t>(run_id));
+            std::iota(ids.begin(), ids.end(), 0);
+            const std::size_t fan_in = merge_fan_in();
+            while (ids.size() > fan_in) {
+                std::vector<int> next_ids;
+                for (std::size_t at = 0; at < ids.size(); at += fan_in) {
+                    const std::size_t end = std::min(ids.size(), at + fan_in);
+                    if (end - at == 1) {
+                        next_ids.push_back(ids[at]);
+                        continue;
+                    }
+                    const std::vector<int> group(ids.begin() + at,
+                                                 ids.begin() + end);
+                    next_ids.push_back(
+                        co_await merge_runs(group, run_id++, max_rows));
+                }
+                ids = std::move(next_ids);
+            }
+            for (int id : ids)
                 runs_.push_back(
                     std::make_unique<spill::Reader>(dir_.run_path(id)));
         }
         cur_.resize(runs_.size());
         pos_.assign(runs_.size(), 0);
+        run_keys_.resize(runs_.size());
         for (std::size_t k = 0; k < runs_.size(); ++k)
-            cur_[k] = co_await runs_[k]->next(max_rows);
+            load(k, co_await runs_[k]->next(max_rows));
         built_ = true;
     }
 
+    std::uint64_t run_morsel_bytes_ = 0;
     std::unique_ptr<Cursor> in_;
     std::vector<std::string> sch_;
-    std::string key_;
-    bool descending_;
+    std::vector<std::string> keys_;
+    std::vector<bool> descending_;
     std::uint64_t budget_;
     bool built_ = false;
-    int key_idx_ = 0;
+    std::vector<int> key_idx_;
     spill::Dir dir_;
     std::vector<std::unique_ptr<Cursor>> runs_;
     std::vector<std::optional<Morsel>> cur_;
+    std::vector<std::vector<KeyData>> run_keys_;
     std::vector<std::int64_t> pos_;
 };
 
-// Streaming distinct (keep first occurrence, original order). Fast path holds
-// only the set of distinct row keys - which is the result itself, materialized
-// by collect anyway - and streams input and output morsel by morsel. When that
-// key state would exceed `budget_`, switches to a grace-hash-distinct spill:
-// every row still to come gets a global row-id, is hash-partitioned by key to
-// disk (skipping any key already resolved by the fast path), each partition is
-// deduped independently keeping the row with the minimum row-id (recursing
-// with a depth-salted hash if a partition itself does not fit budget), and the
-// survivors are k-way merged back into row-id order so the fast-emitted prefix
-// and the spilled remainder together reproduce one globally first-occurrence,
-// input-order stream.
+// Streaming distinct (keep first occurrence, original order). The fast path
+// holds only the set of distinct row keys - which is the result itself,
+// materialized by collect anyway - and streams input and output morsel by
+// morsel. When that set outgrows a quarter of `budget_`, the rest of the input
+// goes through FirstRowsSpill with one row kept per key.
 class UniqueCursor : public Cursor {
    public:
     UniqueCursor(std::unique_ptr<Cursor> in, std::vector<std::string> sch,
@@ -2202,7 +2821,7 @@ class UniqueCursor : public Cursor {
                                    DEDUP_ENTRY_OVERHEAD;
                 }
                 next_row_id_ += n;
-                if (budget_ > 0 && fast_bytes_ > budget_) spilling_ = true;
+                if (budget_ > 0 && fast_bytes_ > budget_ / 2) spilling_ = true;
                 if (!keep.empty()) {
                     DataFrame mf;
                     mf.names = sch_;
@@ -2213,8 +2832,27 @@ class UniqueCursor : public Cursor {
             }
             if (!spilling_) co_return std::nullopt;
         }
-        if (!drained_) co_await drain_and_finalize(max_rows);
-        co_return co_await merge_next(max_rows);
+        if (!external_) {
+            external_ = std::make_unique<FirstRowsSpill>(
+                budget_, 1, next_row_id_, [this](const std::string& key) {
+                    return already_seen(key) ? std::int64_t{1}
+                                             : std::int64_t{0};
+                });
+            while (auto m = co_await in_->next(max_rows)) {
+                std::vector<std::string> keys(
+                    static_cast<std::size_t>(m->rows));
+                const std::vector<Series> kc = key_cols(m->columns);
+                parallel_for(m->rows, std::int64_t{1} << 13,
+                             [&](std::int64_t b, std::int64_t e) {
+                                 for (std::int64_t i = b; i < e; ++i)
+                                     keys[static_cast<std::size_t>(i)] =
+                                         row_key(kc, i);
+                             });
+                external_->add(std::move(*m), std::move(keys));
+            }
+            co_await external_->finish();
+        }
+        co_return co_await external_->next(max_rows);
     }
 
    private:
@@ -2240,243 +2878,6 @@ class UniqueCursor : public Cursor {
         return seen_.contains(key);
     }
 
-    std::vector<std::string> rowid_schema() const {
-        std::vector<std::string> out;
-        out.reserve(sch_.size() + 1);
-        out.emplace_back("__row_id");
-        for (const std::string& n : sch_) out.push_back(n);
-        return out;
-    }
-
-    // Hash-partitions `cols` (row-id column first, then `data_cols` for the
-    // key) into `fanout` on-disk runs by `unique_spill_hash(key, depth)`,
-    // tracking each partition's approximate bytes and row count for the
-    // recurse-or-leaf decision at finalize.
-    void partition_rows(const std::vector<Series>& tagged_cols,
-                        const std::vector<Series>& data_cols, std::int64_t n,
-                        int depth, int fanout,
-                        std::vector<spill::Writer>& writers,
-                        std::vector<std::size_t>& bytes,
-                        std::vector<std::int64_t>& rows) {
-        std::vector<std::string> keys(static_cast<std::size_t>(n));
-        const std::vector<Series> kc = key_cols(data_cols);
-        parallel_for(n, std::int64_t{1} << 13,
-                     [&](std::int64_t b, std::int64_t e) {
-                         for (std::int64_t i = b; i < e; ++i)
-                             keys[static_cast<std::size_t>(i)] = row_key(kc, i);
-                     });
-        std::vector<std::vector<std::int64_t>> buckets(
-            static_cast<std::size_t>(fanout));
-        for (std::int64_t i = 0; i < n; ++i) {
-            if (depth == 0 && already_seen(keys[static_cast<std::size_t>(i)]))
-                continue;  // already emitted by the fast phase
-            const std::size_t p =
-                unique_spill_hash(keys[static_cast<std::size_t>(i)], depth) %
-                static_cast<std::size_t>(fanout);
-            buckets[p].push_back(i);
-        }
-        DataFrame mf;
-        mf.names = rowid_schema();
-        mf.columns.reserve(tagged_cols.size());
-        for (const Series& c : tagged_cols) mf.columns.push_back(c.share());
-        for (int p = 0; p < fanout; ++p) {
-            if (buckets[static_cast<std::size_t>(p)].empty()) continue;
-            DataFrame sel = take(mf, buckets[static_cast<std::size_t>(p)]);
-            bytes[static_cast<std::size_t>(p)] += morsel_bytes(sel.columns);
-            rows[static_cast<std::size_t>(p)] += sel.num_rows();
-            writers[static_cast<std::size_t>(p)].write(sel.columns,
-                                                       sel.num_rows());
-        }
-    }
-
-    // Dedups one spilled partition (rows whose key was not already resolved
-    // by the fast phase, hash-partitioned to land here), keeping the row with
-    // the minimum row-id per key. If the partition itself would still exceed
-    // budget and is large enough that splitting helps, re-partitions it with
-    // a depth-salted hash instead of loading it whole (bounded recursion: a
-    // single hot key always lands in the same sub-partition however deep, so
-    // depth alone cannot force it smaller - the row-count floor stops the
-    // recursion once further splitting cannot shrink it).
-    coro::CoroTask<void> finalize_partition(const std::string& path,
-                                            std::size_t bytes,
-                                            std::int64_t rows, int depth) {
-        if (depth < UNIQUE_SPILL_MAX_DEPTH && budget_ > 0 && bytes > budget_ &&
-            rows > UNIQUE_SPILL_MIN_LEAF_ROWS) {
-            constexpr int FANOUT = UNIQUE_SPILL_FANOUT;
-            std::vector<spill::Writer> writers;
-            writers.reserve(static_cast<std::size_t>(FANOUT));
-            std::vector<int> ids(static_cast<std::size_t>(FANOUT));
-            for (int p = 0; p < FANOUT; ++p) {
-                ids[static_cast<std::size_t>(p)] = next_run_id_++;
-                writers.emplace_back(
-                    dir_.run_path(ids[static_cast<std::size_t>(p)]));
-            }
-            std::vector<std::size_t> sub_bytes(static_cast<std::size_t>(FANOUT),
-                                               0);
-            std::vector<std::int64_t> sub_rows(static_cast<std::size_t>(FANOUT),
-                                               0);
-            spill::Reader reader(path);
-            while (auto m = co_await reader.next(DEFAULT_MORSEL_ROWS)) {
-                std::vector<Series> data_cols = drop_first_column(m->columns);
-                partition_rows(m->columns, data_cols, m->rows, depth + 1,
-                               FANOUT, writers, sub_bytes, sub_rows);
-            }
-            for (spill::Writer& w : writers) w.close();
-            for (int p = 0; p < FANOUT; ++p)
-                co_await finalize_partition(
-                    dir_.run_path(ids[static_cast<std::size_t>(p)]),
-                    sub_bytes[static_cast<std::size_t>(p)],
-                    sub_rows[static_cast<std::size_t>(p)], depth + 1);
-            co_return;
-        }
-
-        // Leaf: small enough to fit budget (or recursion bottomed out) - load
-        // fully, dedupe by minimum row-id, sort survivors by row-id, and write
-        // one run for the final k-way merge.
-        std::vector<std::vector<Series>> parts;
-        std::int64_t total = 0;
-        {
-            spill::Reader reader(path);
-            while (auto m = co_await reader.next(DEFAULT_MORSEL_ROWS)) {
-                total += m->rows;
-                parts.push_back(std::move(m->columns));
-            }
-        }
-        if (total == 0) co_return;
-
-        const std::size_t ncols = parts.front().size();
-        std::vector<Series> whole;
-        whole.reserve(ncols);
-        for (std::size_t c = 0; c < ncols; ++c) {
-            std::vector<const Series*> pcs;
-            pcs.reserve(parts.size());
-            for (auto& pc : parts) pcs.push_back(&pc[c]);
-            whole.push_back(concat_columns(pcs));
-        }
-        const std::vector<Series> data_cols =
-            key_cols(drop_first_column(whole));
-        const std::int64_t* rowid = whole[0].data<std::int64_t>();
-
-        ankerl::unordered_dense::map<std::string, std::int64_t> best;
-        for (std::int64_t i = 0; i < total; ++i) {
-            std::string k = row_key(data_cols, i);
-            auto it = best.find(k);
-            if (it == best.end())
-                best.emplace(std::move(k), i);
-            else if (rowid[i] < rowid[it->second])
-                it->second = i;
-        }
-        std::vector<std::int64_t> survivors;
-        survivors.reserve(best.size());
-        for (const auto& kv : best) survivors.push_back(kv.second);
-        std::sort(survivors.begin(), survivors.end(),
-                  [&](std::int64_t a, std::int64_t b) {
-                      return rowid[a] < rowid[b];
-                  });
-
-        DataFrame mf;
-        mf.names = rowid_schema();
-        mf.columns = std::move(whole);
-        DataFrame sorted = take(mf, survivors);
-
-        const std::string run_path = dir_.run_path(next_run_id_++);
-        spill::Writer w(run_path);
-        w.write(sorted.columns, sorted.num_rows());
-        w.close();
-        survivor_runs_.push_back(std::make_unique<spill::Reader>(run_path));
-    }
-
-    // Fully drains the remaining input into UNIQUE_SPILL_FANOUT partitions
-    // (skipping rows whose key the fast phase already resolved), then dedupes
-    // and orders every partition's survivors for the k-way merge in
-    // merge_next.
-    coro::CoroTask<void> drain_and_finalize(std::int64_t max_rows) {
-        constexpr int FANOUT = UNIQUE_SPILL_FANOUT;
-        std::vector<spill::Writer> writers;
-        writers.reserve(static_cast<std::size_t>(FANOUT));
-        std::vector<int> ids(static_cast<std::size_t>(FANOUT));
-        for (int p = 0; p < FANOUT; ++p) {
-            ids[static_cast<std::size_t>(p)] = next_run_id_++;
-            writers.emplace_back(
-                dir_.run_path(ids[static_cast<std::size_t>(p)]));
-        }
-        std::vector<std::size_t> bytes(static_cast<std::size_t>(FANOUT), 0);
-        std::vector<std::int64_t> rows(static_cast<std::size_t>(FANOUT), 0);
-
-        while (auto m = co_await in_->next(max_rows)) {
-            const std::int64_t n = m->rows;
-            std::vector<std::int64_t> rowid(static_cast<std::size_t>(n));
-            for (std::int64_t i = 0; i < n; ++i)
-                rowid[static_cast<std::size_t>(i)] = next_row_id_ + i;
-            next_row_id_ += n;
-            std::vector<Series> tagged;
-            tagged.reserve(m->columns.size() + 1);
-            tagged.push_back(Series::flat_i64(rowid.data(), n));
-            for (Series& c : m->columns) tagged.push_back(std::move(c));
-            partition_rows(tagged, drop_first_column(tagged), n, 0, FANOUT,
-                           writers, bytes, rows);
-        }
-        for (spill::Writer& w : writers) w.close();
-
-        for (int p = 0; p < FANOUT; ++p)
-            co_await finalize_partition(
-                dir_.run_path(ids[static_cast<std::size_t>(p)]),
-                bytes[static_cast<std::size_t>(p)],
-                rows[static_cast<std::size_t>(p)], 0);
-
-        cur_.resize(survivor_runs_.size());
-        pos_.assign(survivor_runs_.size(), 0);
-        for (std::size_t k = 0; k < survivor_runs_.size(); ++k)
-            cur_[k] = co_await survivor_runs_[k]->next(max_rows);
-        drained_ = true;
-    }
-
-    // K-way merges the row-id-sorted survivor runs into ascending row-id
-    // order (rows are globally unique row-ids, so a one-row-at-a-time pick is
-    // fine here - this spill-finalize path is rare, not the streaming fast
-    // path), dropping the row-id helper column before emitting.
-    coro::CoroTask<std::optional<Morsel>> merge_next(std::int64_t max_rows) {
-        std::vector<std::vector<Series>> pieces;
-        std::int64_t out_rows = 0;
-        while (out_rows < max_rows) {
-            int winner = -1;
-            for (std::size_t k = 0; k < cur_.size(); ++k) {
-                if (!cur_[k] || pos_[k] >= cur_[k]->rows) continue;
-                if (winner < 0) {
-                    winner = static_cast<int>(k);
-                    continue;
-                }
-                const std::size_t wk = static_cast<std::size_t>(winner);
-                const std::int64_t cand =
-                    cur_[k]->columns[0].data<std::int64_t>()[pos_[k]];
-                const std::int64_t best =
-                    cur_[wk]->columns[0].data<std::int64_t>()[pos_[wk]];
-                if (cand < best) winner = static_cast<int>(k);
-            }
-            if (winner < 0) break;
-            const std::size_t wk = static_cast<std::size_t>(winner);
-            Morsel piece = slice_morsel(*cur_[wk], pos_[wk], 1);
-            piece.columns.erase(piece.columns.begin());
-            pieces.push_back(std::move(piece.columns));
-            ++out_rows;
-            ++pos_[wk];
-            if (pos_[wk] >= cur_[wk]->rows)
-                cur_[wk] = co_await survivor_runs_[wk]->next(max_rows);
-        }
-        if (pieces.empty()) co_return std::nullopt;
-        Morsel out;
-        out.rows = out_rows;
-        const std::size_t ncols = pieces.front().size();
-        out.columns.reserve(ncols);
-        for (std::size_t c = 0; c < ncols; ++c) {
-            std::vector<const Series*> parts;
-            parts.reserve(pieces.size());
-            for (auto& pc : pieces) parts.push_back(&pc[c]);
-            out.columns.push_back(concat_columns(parts));
-        }
-        co_return out;
-    }
-
     std::unique_ptr<Cursor> in_;
     std::vector<std::string> sch_;
     std::vector<std::int64_t> key_idx_;
@@ -2486,12 +2887,7 @@ class UniqueCursor : public Cursor {
     std::size_t fast_bytes_ = 0;
     std::int64_t next_row_id_ = 0;
     bool spilling_ = false;
-    bool drained_ = false;
-    spill::Dir dir_;
-    int next_run_id_ = 0;
-    std::vector<std::unique_ptr<Cursor>> survivor_runs_;
-    std::vector<std::optional<Morsel>> cur_;
-    std::vector<std::int64_t> pos_;
+    std::unique_ptr<FirstRowsSpill> external_;
 };
 
 // A plugin-registered plan node (dftu_node_register): vt/self captured at the
@@ -2780,6 +3176,96 @@ class NodeCursor final : public Cursor {
     const ::dftu_cursor_vt* out_vt_ = nullptr;
 };
 
+class RowKeyCursor : public Cursor {
+   public:
+    explicit RowKeyCursor(std::unique_ptr<Cursor> in) : in_(std::move(in)) {}
+
+    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+        auto m = co_await in_->next(max_rows);
+        if (!m) co_return std::nullopt;
+        std::vector<std::string> keys(static_cast<std::size_t>(m->rows));
+        for (std::int64_t i = 0; i < m->rows; ++i)
+            keys[static_cast<std::size_t>(i)] = row_key(m->columns, i);
+        Morsel out;
+        out.rows = m->rows;
+        out.columns.push_back(Series::strings(keys));
+        co_return out;
+    }
+
+   private:
+    std::unique_ptr<Cursor> in_;
+};
+
+// Over rows sorted by (key, row_index) as (row_index, key), emits
+// (row_index, flag) where the flag says whether the row's key occurs more than
+// once (or exactly once, with `unique`). One row of lookahead is the only
+// state, so a key repeated across the whole input costs nothing extra.
+class RunFlagCursor : public Cursor {
+   public:
+    RunFlagCursor(std::unique_ptr<Cursor> in, bool unique)
+        : in_(std::move(in)), unique_(unique) {}
+
+    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+        std::vector<std::int64_t> idx;
+        std::vector<bool> dup;
+        while (!eof_ && static_cast<std::int64_t>(idx.size()) < max_rows) {
+            auto m = co_await in_->next(max_rows);
+            if (!m) {
+                eof_ = true;
+                if (has_prev_ && !prev_emitted_) {
+                    idx.push_back(prev_idx_);
+                    dup.push_back(false);
+                }
+                break;
+            }
+            const std::int64_t* ids = m->columns[0].data<std::int64_t>();
+            for (std::int64_t i = 0; i < m->rows; ++i) {
+                const std::string_view key = m->columns[1].string_at(i);
+                if (has_prev_ && key == prev_key_) {
+                    if (!prev_emitted_) {
+                        idx.push_back(prev_idx_);
+                        dup.push_back(true);
+                    }
+                    idx.push_back(ids[i]);
+                    dup.push_back(true);
+                    prev_emitted_ = true;
+                } else {
+                    if (has_prev_ && !prev_emitted_) {
+                        idx.push_back(prev_idx_);
+                        dup.push_back(false);
+                    }
+                    prev_key_.assign(key);
+                    prev_emitted_ = false;
+                }
+                has_prev_ = true;
+                prev_idx_ = ids[i];
+            }
+        }
+        if (idx.empty()) co_return std::nullopt;
+        const auto n = static_cast<std::int64_t>(idx.size());
+        std::vector<std::uint8_t> bits(static_cast<std::size_t>((n + 7) / 8),
+                                       0);
+        for (std::int64_t i = 0; i < n; ++i)
+            if (dup[static_cast<std::size_t>(i)] != unique_)
+                bits[static_cast<std::size_t>(i / 8)] |=
+                    static_cast<std::uint8_t>(1u << (i % 8));
+        Morsel out;
+        out.rows = n;
+        out.columns.push_back(Series::flat_i64(idx.data(), n));
+        out.columns.push_back(Series::flat(TypeId::Bool, bits.data(), n));
+        co_return out;
+    }
+
+   private:
+    std::unique_ptr<Cursor> in_;
+    bool unique_;
+    bool eof_ = false;
+    bool has_prev_ = false;
+    bool prev_emitted_ = false;
+    std::int64_t prev_idx_ = 0;
+    std::string prev_key_;
+};
+
 // Two-pass per-row mask: pass 1 counts each row key while spooling the input
 // (RAM up to the budget, overflow to disk); pass 2 replays the spool in order,
 // emitting count>1 (is_duplicated) or count==1 (is_unique) as one Bool column
@@ -2797,10 +3283,14 @@ class NodeCursor final : public Cursor {
 class IsDupCursor : public Cursor {
    public:
     IsDupCursor(std::unique_ptr<Cursor> in, std::uint64_t budget, bool unique)
-        : first_(std::move(in)), spool_(budget), unique_(unique) {}
+        : first_(std::move(in)),
+          spool_(budget / 4),
+          budget_(budget),
+          unique_(unique) {}
 
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         if (!counted_) co_await count(max_rows);
+        if (external_) co_return co_await external_->next(max_rows);
         while (auto m = co_await pass2_->next(max_rows)) {
             const std::int64_t n = m->rows;
             const std::int64_t nbytes = (n + 7) / 8;
@@ -2837,9 +3327,9 @@ class IsDupCursor : public Cursor {
         specs[0].op = AggOp::Count;
         specs[0].out = "count";
         AggStatePtr state = agg_new(specs);
-        constexpr std::size_t BATCH = 32;
+        std::size_t cap = accumulate_batch(budget_, 0);
         std::vector<Morsel> batch;
-        batch.reserve(BATCH);
+        batch.reserve(MAX_ACCUMULATE_BATCH);
         auto key_series = [](const Morsel& m) {
             std::vector<std::string> keys(static_cast<std::size_t>(m.rows));
             for (std::int64_t i = 0; i < m.rows; ++i)
@@ -2849,7 +3339,7 @@ class IsDupCursor : public Cursor {
         bool eof = false;
         while (!eof) {
             batch.clear();
-            for (std::size_t b = 0; b < BATCH; ++b) {
+            for (std::size_t b = 0; b < cap; ++b) {
                 auto m = co_await first_->next(max_rows);
                 if (!m) {
                     eof = true;
@@ -2858,7 +3348,8 @@ class IsDupCursor : public Cursor {
                 batch.push_back(std::move(*m));
             }
             if (batch.empty()) break;
-            if (batch.size() == 1) {
+            if (spilled_) {
+            } else if (batch.size() == 1) {
                 Series key = key_series(batch[0]);
                 agg_accumulate(*state, key, {});
             } else {
@@ -2874,12 +3365,43 @@ class IsDupCursor : public Cursor {
                                          std::move(st);
                                  }
                              });
+                std::uint64_t partial_bytes = 0;
+                for (auto& p : partials)
+                    if (p) partial_bytes += agg_approx_bytes(*p);
+                cap =
+                    accumulate_batch(budget_, partial_bytes / partials.size());
                 for (auto& p : partials)
                     if (p) agg_merge(*state, *p);
             }
             for (auto& m : batch) spool_.add(std::move(m.columns), m.rows);
+            if (!spilled_ && budget_ > 0 &&
+                agg_approx_bytes(*state) > budget_ / 2) {
+                spilled_ = true;
+                state.reset();
+            }
         }
         first_.reset();
+        if (spilled_) {
+            auto keyed = std::make_unique<RowKeyCursor>(spool_.reader());
+            auto numbered =
+                std::make_unique<WithRowIndexCursor>(std::move(keyed));
+            auto by_key = std::make_unique<SortMergeCursor>(
+                std::move(numbered),
+                std::vector<std::string>{"row_index", "key"},
+                std::vector<std::string>{"key", "row_index"},
+                std::vector<bool>{false, false}, budget_);
+            auto flagged =
+                std::make_unique<RunFlagCursor>(std::move(by_key), unique_);
+            auto by_row = std::make_unique<SortMergeCursor>(
+                std::move(flagged),
+                std::vector<std::string>{"row_index", "flag"},
+                std::vector<std::string>{"row_index"}, std::vector<bool>{false},
+                budget_);
+            external_ = std::make_unique<SelectCursor>(std::move(by_row),
+                                                       std::vector<int>{1});
+            counted_ = true;
+            co_return;
+        }
         DataFrame r = agg_finalize(*state, "key");
         const Series& kc = r.columns[0];
         const Series& cc = r.columns[1];
@@ -2892,9 +3414,11 @@ class IsDupCursor : public Cursor {
         counted_ = true;
     }
 
-    std::unique_ptr<Cursor> first_, pass2_;
+    std::unique_ptr<Cursor> first_, pass2_, external_;
     spill::Spool spool_;
+    std::uint64_t budget_;
     bool unique_;
+    bool spilled_ = false;
     bool counted_ = false;
     ankerl::unordered_dense::map<std::string, std::int64_t> counts_;
 };
@@ -3001,11 +3525,13 @@ class ToDummiesCursor : public Cursor {
     std::vector<std::string> produced_;
 };
 
-// Two-pass long->wide pivot, matching DataFrame::pivot. Pass 1 discovers the
-// distinct index rows and `on` columns (both ascending via Series::unique);
-// pass 2 aggregates each (index, on) cell through the mergeable agg IR keyed by
-// row*C+col (first/last/sum/min/max/mean all map to an AggOp), so state is
-// bounded by the output (R*C) not the input. Output columns are data-dependent,
+// Long->wide pivot, matching DataFrame::pivot. Pass 1 spools (index, on,
+// value) and collects the distinct `on` values (the output columns, ascending
+// as in the eager op). The spooled rows then go through the spilling group-by
+// on (index, on) and the spilling sort on index, and the sorted cells are
+// widened a batch of index values at a time, so memory is the budget plus one
+// batch of output rows, not the input or the output. Rows with a null index are
+// dropped; a null `on` makes a row of nulls. Output columns are data-dependent,
 // reported via out_names().
 class PivotCursor : public Cursor {
    public:
@@ -3013,7 +3539,8 @@ class PivotCursor : public Cursor {
                 std::vector<std::string> sch, std::string index, std::string on,
                 std::string values, std::string agg)
         : first_(std::move(in)),
-          spool_(budget),
+          spool_(budget / 4),
+          budget_(budget),
           sch_(std::move(sch)),
           index_(std::move(index)),
           on_(std::move(on)),
@@ -3021,96 +3548,77 @@ class PivotCursor : public Cursor {
           agg_(std::move(agg)) {}
 
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
-        if (done_) co_return std::nullopt;
-        done_ = true;
-        const int ii = idx_of(index_), ci = idx_of(on_), vi = idx_of(values_);
-        if (ii < 0) throw std::out_of_range("pivot: no column named " + index_);
-        if (ci < 0) throw std::out_of_range("pivot: no column named " + on_);
-        if (vi < 0)
-            throw std::out_of_range("pivot: no column named " + values_);
-
-        // Pass 1: distinct index and `on` values (ascending, matching eager).
-        ankerl::unordered_dense::set<std::string> seen_i, seen_c;
-        std::vector<Series> ich, cch;
-        while (auto m = co_await first_->next(max_rows)) {
-            distinct_into(m->columns[static_cast<std::size_t>(ii)], seen_i,
-                          ich);
-            distinct_into(m->columns[static_cast<std::size_t>(ci)], seen_c,
-                          cch);
-            spool_.add(std::move(m->columns), m->rows);
-        }
-        first_.reset();
-        Series uniq_idx =
-            ich.empty()
-                ? Series{}
-                : concat_columns(column_ptrs(ich)).unique().materialize();
-        Series uniq_col =
-            cch.empty()
-                ? Series{}
-                : concat_columns(column_ptrs(cch)).unique().materialize();
-        const std::int64_t R = uniq_idx.length(), C = uniq_col.length();
-        ankerl::unordered_dense::map<std::string, std::int64_t> row_of, col_of;
-        key_index(uniq_idx, R, row_of);
-        key_index(uniq_col, C, col_of);
-        const std::int64_t sentinel = R * C;
-
-        // Pass 2: aggregate each cell through the agg IR keyed by row*C+col.
-        std::vector<AggSpec> specs;
-        AggSpec sp;
-        sp.op = to_agg_op(agg_from_string(agg_));
-        sp.value_col = 0;
-        sp.out = "v";
-        specs.push_back(std::move(sp));
-        AggStatePtr state = agg_new(std::move(specs));
-        auto p2 = spool_.reader();
-        std::int64_t rows_seen = 0;
-        while (auto m = co_await p2->next(max_rows)) {
-            const Series& ic = m->columns[static_cast<std::size_t>(ii)];
-            const Series& cc = m->columns[static_cast<std::size_t>(ci)];
-            const Series& vc = m->columns[static_cast<std::size_t>(vi)];
-            const std::int64_t n = m->rows;
-            std::vector<Series> oi, oc;
-            oi.push_back(ic.share());
-            oc.push_back(cc.share());
-            std::vector<std::int64_t> keyv(static_cast<std::size_t>(n),
-                                           sentinel);
-            for (std::int64_t i = 0; i < n; ++i) {
-                if (ic.is_null(i) || cc.is_null(i)) continue;
-                auto ri = row_of.find(row_key(oi, i));
-                auto rc = col_of.find(row_key(oc, i));
-                if (ri != row_of.end() && rc != col_of.end())
-                    keyv[static_cast<std::size_t>(i)] =
-                        ri->second * C + rc->second;
+        if (!built_) co_await build(max_rows);
+        const std::int64_t C = static_cast<std::int64_t>(col_of_.size());
+        // One output row costs C cells of up to 16 bytes (the source value and
+        // its take index), so a batch holds at most a fraction of the budget.
+        const std::int64_t cap =
+            budget_ == 0 ? std::int64_t{1} << 20
+                         : std::max<std::int64_t>(
+                               1, static_cast<std::int64_t>(budget_ / 4) /
+                                      std::max<std::int64_t>(1, C * 16));
+        const std::int64_t pull = max_rows > 0 ? std::min(max_rows, cap) : cap;
+        while (true) {
+            // `m` is the next sorted morsel and `ahead_` the one after it, so
+            // an index value that continues into the next morsel is held
+            // back and every other one leaves with this batch.
+            std::optional<Morsel> m = std::move(ahead_);
+            ahead_.reset();
+            if (!m && !eof_) {
+                m = co_await sorted_->next(pull);
+                if (!m) eof_ = true;
             }
-            Series keyc = Series::flat_i64(keyv.data(), n);
-            std::vector<const Series*> values{&vc};
-            agg_set_row_base(*state, rows_seen);
-            rows_seen += n;
-            agg_accumulate(*state, keyc, values);
+            if (m && !eof_) {
+                ahead_ = co_await sorted_->next(pull);
+                if (!ahead_) eof_ = true;
+            }
+            if (!m && pending_rows_ == 0) co_return std::nullopt;
+            std::vector<Series> idx, on, val;
+            if (pending_rows_ > 0) {
+                idx.push_back(pending_[0].share());
+                on.push_back(pending_[1].share());
+                val.push_back(pending_[2].share());
+            }
+            if (m) {
+                idx.push_back(m->columns[0].share());
+                on.push_back(m->columns[1].share());
+                val.push_back(m->columns[2].share());
+            }
+            Series ic = (idx.size() == 1 ? idx[0].share()
+                                         : concat_columns(column_ptrs(idx)))
+                            .materialize();
+            Series oc = (on.size() == 1 ? on[0].share()
+                                        : concat_columns(column_ptrs(on)))
+                            .materialize();
+            Series vc = (val.size() == 1 ? val[0].share()
+                                         : concat_columns(column_ptrs(val)))
+                            .materialize();
+            const std::int64_t n = ic.length();
+            std::int64_t done = n;
+            if (ahead_) {
+                std::vector<Series> one;
+                one.push_back(ic.share());
+                const std::string last = row_key(one, n - 1);
+                std::vector<Series> next_idx;
+                next_idx.push_back(ahead_->columns[0].share());
+                if (row_key(next_idx, 0) == last) {
+                    done = n - 1;
+                    while (done > 0 && row_key(one, done - 1) == last) --done;
+                }
+            }
+            const std::int64_t rest = n - done;
+            pending_.clear();
+            if (rest > 0) {
+                std::vector<std::int64_t> tail(static_cast<std::size_t>(rest));
+                std::iota(tail.begin(), tail.end(), done);
+                pending_.push_back(ic.take(tail));
+                pending_.push_back(oc.take(tail));
+                pending_.push_back(vc.take(tail));
+            }
+            pending_rows_ = rest;
+            if (done == 0) continue;
+            co_return widen(ic, oc, vc, done);
         }
-        DataFrame agg_res = agg_finalize(*state, "cell");
-        Series source = agg_res.column("v");
-        Series cells_col = agg_res.column("cell");
-        const std::int64_t* cells = cells_col.data<std::int64_t>();
-        std::vector<std::int64_t> cell_src(static_cast<std::size_t>(R * C), -1);
-        for (std::int64_t p = 0; p < cells_col.length(); ++p) {
-            const std::int64_t cell = cells[p];
-            if (cell != sentinel) cell_src[static_cast<std::size_t>(cell)] = p;
-        }
-
-        DataFrame out;
-        out.names.push_back(index_);
-        out.columns.push_back(uniq_idx.share());
-        for (std::int64_t c = 0; c < C; ++c) {
-            std::vector<std::int64_t> ti(static_cast<std::size_t>(R));
-            for (std::int64_t r = 0; r < R; ++r)
-                ti[static_cast<std::size_t>(r)] =
-                    cell_src[static_cast<std::size_t>(r * C + c)];
-            out.names.push_back(cell_to_string(uniq_col, c));
-            out.columns.push_back(source.take(ti));
-        }
-        produced_ = out.names;
-        co_return morsel_of(std::move(out));
     }
 
     std::optional<std::vector<std::string>> out_names() const override {
@@ -3122,6 +3630,107 @@ class PivotCursor : public Cursor {
         auto it = std::find(sch_.begin(), sch_.end(), name);
         return it == sch_.end() ? -1 : static_cast<int>(it - sch_.begin());
     }
+
+    coro::CoroTask<void> build(std::int64_t max_rows) {
+        const int ii = idx_of(index_), ci = idx_of(on_), vi = idx_of(values_);
+        if (ii < 0) throw std::out_of_range("pivot: no column named " + index_);
+        if (ci < 0) throw std::out_of_range("pivot: no column named " + on_);
+        if (vi < 0)
+            throw std::out_of_range("pivot: no column named " + values_);
+
+        ankerl::unordered_dense::set<std::string> seen;
+        std::vector<Series> distinct;
+        while (auto m = co_await first_->next(max_rows)) {
+            const Series& ic = m->columns[static_cast<std::size_t>(ii)];
+            const Series& oc = m->columns[static_cast<std::size_t>(ci)];
+            const Series& vc = m->columns[static_cast<std::size_t>(vi)];
+            distinct_into(oc, seen, distinct);
+            std::vector<std::int64_t> keep;
+            keep.reserve(static_cast<std::size_t>(m->rows));
+            for (std::int64_t i = 0; i < m->rows; ++i)
+                if (!ic.is_null(i)) keep.push_back(i);
+            std::vector<Series> cols;
+            if (static_cast<std::int64_t>(keep.size()) == m->rows) {
+                cols.push_back(ic.share());
+                cols.push_back(oc.share());
+                cols.push_back(vc.share());
+            } else {
+                cols.push_back(ic.take(keep));
+                cols.push_back(oc.take(keep));
+                cols.push_back(vc.take(keep));
+            }
+            spool_.add(std::move(cols), static_cast<std::int64_t>(keep.size()));
+        }
+        first_.reset();
+
+        uniq_col_ =
+            distinct.empty()
+                ? Series{}
+                : concat_columns(column_ptrs(distinct)).unique().materialize();
+        const std::int64_t C = uniq_col_.length();
+        std::vector<Series> one;
+        one.push_back(uniq_col_.share());
+        for (std::int64_t c = 0; c < C; ++c)
+            col_of_.emplace(row_key(one, c), c);
+        produced_.push_back(index_);
+        for (std::int64_t c = 0; c < C; ++c)
+            produced_.push_back(cell_to_string(uniq_col_, c));
+
+        const std::string i_name = "__dftu_pivot_index__";
+        const std::string o_name = "__dftu_pivot_on__";
+        const std::string v_name = "__dftu_pivot_value__";
+        auto grouped = std::make_unique<GroupByCursor>(
+            spool_.reader(), std::vector<std::string>{i_name, o_name, v_name},
+            std::vector<std::string>{i_name, o_name},
+            std::vector<GroupAgg>{GroupAgg{agg_from_string(agg_), v_name, "v"}},
+            budget_ / 4);
+        sorted_ = std::make_unique<SortMergeCursor>(
+            std::move(grouped), std::vector<std::string>{i_name, o_name, "v"},
+            std::vector<std::string>{i_name}, std::vector<bool>{false},
+            budget_ / 4);
+        built_ = true;
+    }
+
+    // `rows` leading rows of the three sorted cell columns hold whole index
+    // values; each distinct index value becomes one output row.
+    Morsel widen(const Series& ic, const Series& oc, const Series& vc,
+                 std::int64_t rows) const {
+        const std::int64_t C = static_cast<std::int64_t>(col_of_.size());
+        std::vector<Series> ione, cone;
+        ione.push_back(ic.share());
+        cone.push_back(oc.share());
+        std::vector<std::int64_t> first_row;
+        std::vector<std::int64_t> cell_src;
+        std::string prev;
+        for (std::int64_t i = 0; i < rows; ++i) {
+            std::string key = row_key(ione, i);
+            if (first_row.empty() || key != prev) {
+                first_row.push_back(i);
+                cell_src.resize(cell_src.size() + static_cast<std::size_t>(C),
+                                -1);
+                prev = std::move(key);
+            }
+            if (oc.is_null(i)) continue;
+            auto it = col_of_.find(row_key(cone, i));
+            if (it != col_of_.end())
+                cell_src[(first_row.size() - 1) * static_cast<std::size_t>(C) +
+                         static_cast<std::size_t>(it->second)] = i;
+        }
+        const std::size_t R = first_row.size();
+        DataFrame out;
+        out.names.push_back(index_);
+        out.columns.push_back(ic.take(first_row).materialize());
+        std::vector<std::int64_t> ti(R);
+        for (std::int64_t c = 0; c < C; ++c) {
+            for (std::size_t r = 0; r < R; ++r)
+                ti[r] = cell_src[r * static_cast<std::size_t>(C) +
+                                 static_cast<std::size_t>(c)];
+            out.names.push_back(produced_[static_cast<std::size_t>(c) + 1]);
+            out.columns.push_back(vc.take(ti).materialize());
+        }
+        return morsel_of(std::move(out));
+    }
+
     // Append the first-occurrence non-null cells of `col` to `chunks`.
     static void distinct_into(const Series& col,
                               ankerl::unordered_dense::set<std::string>& seen,
@@ -3134,140 +3743,84 @@ class PivotCursor : public Cursor {
                 keep.push_back(i);
         if (!keep.empty()) chunks.push_back(col.take(keep));
     }
-    static void key_index(
-        const Series& uniq, std::int64_t n,
-        ankerl::unordered_dense::map<std::string, std::int64_t>& out) {
-        std::vector<Series> one;
-        one.push_back(uniq.share());
-        for (std::int64_t i = 0; i < n; ++i) out.emplace(row_key(one, i), i);
-    }
 
-    std::unique_ptr<Cursor> first_;
+    std::unique_ptr<Cursor> first_, sorted_;
     spill::Spool spool_;
+    std::uint64_t budget_;
     std::vector<std::string> sch_;
     std::string index_, on_, values_, agg_;
-    bool done_ = false;
+    bool built_ = false;
+    bool eof_ = false;
+    Series uniq_col_;
+    ankerl::unordered_dense::map<std::string, std::int64_t> col_of_;
+    std::vector<Series> pending_;
+    std::int64_t pending_rows_ = 0;
+    std::optional<Morsel> ahead_;
     std::vector<std::string> produced_;
 };
 
-// Reverses row order. Buffers the whole input through a Spool (bounded memory,
-// spills past budget), then applies DataFrame::reverse once and emits one
-// morsel - there is no incremental reverse.
-class ReverseCursor : public Cursor {
-   public:
-    ReverseCursor(std::unique_ptr<Cursor> in, std::vector<std::string> sch,
-                  std::uint64_t budget)
-        : in_(std::move(in)), spool_(budget), sch_(std::move(sch)) {}
-
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
-        if (done_) co_return std::nullopt;
-        done_ = true;
-        bool any = false;
-        while (auto m = co_await in_->next(max_rows)) {
-            spool_.add(std::move(m->columns), m->rows);
-            any = true;
-        }
-        in_.reset();
-        if (!any) co_return std::nullopt;
-        std::unique_ptr<Cursor> reader = spool_.reader();
-        DataFrame df = co_await drain_cursor(*reader, sch_, max_rows);
-        co_return morsel_of(df.reverse());
-    }
-
-   private:
-    std::unique_ptr<Cursor> in_;
-    spill::Spool spool_;
-    std::vector<std::string> sch_;
-    bool done_ = false;
-};
-
-// Keeps the rows at `indices_` (arbitrary order, repeats allowed). Buffers the
-// whole input as ReverseCursor does: the requested indices are positions
-// against the fully assembled frame, so every row must be resident first.
+// Gathers the rows at `indices` in one pass: each input morsel yields the
+// wanted rows it holds, and the pieces are put in index order at the end, so
+// memory is the result (the size of `indices`), not the input.
 class TakeCursor : public Cursor {
    public:
-    TakeCursor(std::unique_ptr<Cursor> in, std::vector<std::string> sch,
-               std::vector<std::int64_t> indices, std::uint64_t budget)
-        : in_(std::move(in)),
-          spool_(budget),
-          sch_(std::move(sch)),
-          indices_(std::move(indices)) {}
-
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
-        if (done_) co_return std::nullopt;
-        done_ = true;
-        while (auto m = co_await in_->next(max_rows))
-            spool_.add(std::move(m->columns), m->rows);
-        in_.reset();
-        std::unique_ptr<Cursor> reader = spool_.reader();
-        DataFrame df = co_await drain_cursor(*reader, sch_, max_rows);
-        co_return morsel_of(df.take(indices_));
-    }
-
-   private:
-    std::unique_ptr<Cursor> in_;
-    spill::Spool spool_;
-    std::vector<std::string> sch_;
-    std::vector<std::int64_t> indices_;
-    bool done_ = false;
-};
-
-// Stable lexicographic sort by several key columns. Buffers the whole input as
-// ReverseCursor does: DataFrame::sort_by_multi has no external-merge form
-// (unlike the single-key SortMergeCursor), so this holds the full frame rather
-// than reimplementing one.
-class SortByMultiCursor : public Cursor {
-   public:
-    SortByMultiCursor(std::unique_ptr<Cursor> in, std::vector<std::string> sch,
-                      std::vector<std::string> by, std::vector<bool> descending,
-                      std::uint64_t budget)
-        : in_(std::move(in)),
-          spool_(budget),
-          sch_(std::move(sch)),
-          by_(std::move(by)),
-          descending_(std::move(descending)) {}
-
-    coro::CoroTask<bool> narrow(const Expr& predicate) override {
-        if (done_) co_return false;
-        co_return co_await in_->narrow(predicate);
+    TakeCursor(std::unique_ptr<Cursor> in, std::vector<std::int64_t> indices)
+        : in_(std::move(in)), indices_(std::move(indices)) {
+        order_.resize(indices_.size());
+        std::iota(order_.begin(), order_.end(), std::int64_t{0});
+        std::stable_sort(order_.begin(), order_.end(),
+                         [&](std::int64_t a, std::int64_t b) {
+                             return indices_[a] < indices_[b];
+                         });
     }
 
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         if (done_) co_return std::nullopt;
         done_ = true;
-        bool any = false;
+        std::vector<std::vector<Series>> pieces;
+        std::vector<std::int64_t> where;
+        std::size_t at = 0;
+        std::int64_t base = 0;
         while (auto m = co_await in_->next(max_rows)) {
-            spool_.add(std::move(m->columns), m->rows);
-            any = true;
+            const std::int64_t end = base + m->rows;
+            std::vector<std::int64_t> local;
+            std::vector<std::int64_t> slots;
+            for (; at < order_.size() && indices_[order_[at]] < end; ++at) {
+                if (indices_[order_[at]] < base) continue;
+                local.push_back(indices_[order_[at]] - base);
+                slots.push_back(order_[at]);
+            }
+            base = end;
+            if (local.empty()) continue;
+            std::vector<Series> piece;
+            piece.reserve(m->columns.size());
+            for (const Series& c : m->columns) piece.push_back(c.take(local));
+            pieces.push_back(std::move(piece));
+            where.insert(where.end(), slots.begin(), slots.end());
         }
         in_.reset();
-        if (!any) co_return std::nullopt;
-        std::unique_ptr<Cursor> reader = spool_.reader();
-        DataFrame df = co_await drain_cursor(*reader, sch_, max_rows);
-        Morsel out = morsel_of(df.sort_by_multi(by_, descending_));
-        // A stable sort keeps the leading key's values non-decreasing (or
-        // non-increasing) across the whole output regardless of how ties are
-        // broken by the trailing keys, so that alone is a true claim.
-        // Recording every key would need a per-morsel vector instead of one
-        // int - real weight on the hot struct for a multi-column claim no
-        // consumer reads yet.
-        if (!by_.empty()) {
-            const int key_idx = column_index_of(sch_, by_.front());
-            if (key_idx >= 0) {
-                out.ordering = Ordering::ByColumn;
-                out.ordered_column = key_idx;
-                out.ordered_descending = descending_.front();
-            }
+        if (where.size() != indices_.size())
+            throw std::out_of_range("take: index out of range");
+        if (pieces.empty()) co_return std::nullopt;
+        std::vector<std::int64_t> back(where.size());
+        for (std::size_t j = 0; j < where.size(); ++j)
+            back[static_cast<std::size_t>(where[j])] =
+                static_cast<std::int64_t>(j);
+        Morsel out;
+        out.rows = static_cast<std::int64_t>(back.size());
+        for (std::size_t c = 0; c < pieces.front().size(); ++c) {
+            std::vector<const Series*> parts;
+            parts.reserve(pieces.size());
+            for (auto& pc : pieces) parts.push_back(&pc[c]);
+            out.columns.push_back(concat_columns(parts).take(back));
         }
         co_return out;
     }
 
    private:
     std::unique_ptr<Cursor> in_;
-    spill::Spool spool_;
-    std::vector<std::string> sch_;
-    std::vector<std::string> by_;
-    std::vector<bool> descending_;
+    std::vector<std::int64_t> indices_;
+    std::vector<std::int64_t> order_;
     bool done_ = false;
 };
 
@@ -3770,6 +4323,16 @@ class OwnedFrameOpArgs {
 
     const std::vector<LazyFrame>& frames() const noexcept { return frames_; }
 
+    // The strings of operand `i` (a STR or STRLIST operand).
+    const std::vector<std::string>& strings_at(std::size_t i) const {
+        return slots_[i].strings;
+    }
+
+    // The value of operand `i` (an I64 operand).
+    std::int64_t i64_at(std::size_t i) const { return slots_[i].val.i64; }
+    // The value of operand `i` (an I32 operand).
+    std::int32_t i32_at(std::size_t i) const { return slots_[i].val.i32; }
+
     // The same operands over other frame plans; `frames` must match the
     // frame operand count.
     std::shared_ptr<const OwnedFrameOpArgs> with_frames(
@@ -3916,6 +4479,51 @@ class OwnedFrameOpArgs {
     std::vector<LazyFrame> frames_;
 };
 
+// The registry op that applies per partition: its second operand lists the
+// partition columns.
+constexpr const char* WINDOW_OP = "dftu.frame.window";
+
+// Runs the registry op `op` over `primary`, collecting each further frame
+// operand's plan, and returns its result.
+coro::CoroTask<DataFrame> run_frame_op(const dftu_op_desc* op,
+                                       const OwnedFrameOpArgs& args,
+                                       DataFrame primary,
+                                       const std::string& name,
+                                       const std::vector<std::string>& sch) {
+    std::vector<dftu_dataframe*> handles;
+    struct Free {
+        std::vector<dftu_dataframe*>& h;
+        ~Free() {
+            for (dftu_dataframe* p : h) dftu_dataframe_free(p);
+        }
+    } guard{handles};
+    handles.push_back(dataframe_handle_wrap(std::move(primary)));
+    for (const LazyFrame& other : args.frames()) {
+        DataFrame f = co_await other.collect();
+        handles.push_back(dataframe_handle_wrap(std::move(f)));
+    }
+    std::vector<std::vector<const char*>> cstrs;
+    std::vector<std::vector<dftu_window_spec>> wins;
+    std::vector<std::vector<dftu_group_agg>> aggs;
+    const dftu_op_arg bag = args.bind(cstrs, wins, aggs);
+    std::vector<const dftu_dataframe*> frames(handles.begin(), handles.end());
+    dftu_dataframe* result = dftu_op_run_frame(
+        op, frames.data(), static_cast<uint32_t>(frames.size()), &bag);
+    if (!result)
+        throw std::runtime_error("lazy frame op '" + name +
+                                 "' failed: the op returned no frame");
+    DataFrame out = dataframe_handle_take(result);
+    if (has_rest(sch)) {
+        if (column_index_of(out.names, std::string(REST_COLUMN)) < 0)
+            throw std::runtime_error(
+                "lazy frame op '" + name +
+                "' dropped the columns the scan returned beyond the "
+                "plan's schema");
+        out = rest_to_back(std::move(out));
+    }
+    co_return out;
+}
+
 // Runs a registry frame op (dftu.frame.*) over the whole input: buffers every
 // morsel through a Spool, collects each further frame operand's plan, runs
 // the op once through dftu_op_run_frame and emits the result as one morsel.
@@ -3938,42 +4546,16 @@ class FrameOpCursor : public Cursor {
         done_ = true;
         while (auto m = co_await in_->next(max_rows))
             spool_.add(std::move(m->columns), m->rows);
+        // A plan whose columns are only known once it runs has no static
+        // schema; its cursor names them.
+        std::vector<std::string> names = sch_;
+        if (auto produced = in_->out_names(); produced && !produced->empty())
+            names = std::move(*produced);
         in_.reset();
         std::unique_ptr<Cursor> reader = spool_.reader();
-        DataFrame primary = co_await drain_cursor(*reader, sch_, max_rows);
-
-        std::vector<dftu_dataframe*> handles;
-        struct Free {
-            std::vector<dftu_dataframe*>& h;
-            ~Free() {
-                for (dftu_dataframe* p : h) dftu_dataframe_free(p);
-            }
-        } guard{handles};
-        handles.push_back(dataframe_handle_wrap(std::move(primary)));
-        for (const LazyFrame& other : args_->frames()) {
-            DataFrame f = co_await other.collect();
-            handles.push_back(dataframe_handle_wrap(std::move(f)));
-        }
-        std::vector<std::vector<const char*>> cstrs;
-        std::vector<std::vector<dftu_window_spec>> wins;
-        std::vector<std::vector<dftu_group_agg>> aggs;
-        const dftu_op_arg bag = args_->bind(cstrs, wins, aggs);
-        std::vector<const dftu_dataframe*> frames(handles.begin(),
-                                                  handles.end());
-        dftu_dataframe* result = dftu_op_run_frame(
-            op_, frames.data(), static_cast<uint32_t>(frames.size()), &bag);
-        if (!result)
-            throw std::runtime_error("lazy frame op '" + name_ +
-                                     "' failed: the op returned no frame");
-        DataFrame out = dataframe_handle_take(result);
-        if (has_rest(sch_)) {
-            if (column_index_of(out.names, std::string(REST_COLUMN)) < 0)
-                throw std::runtime_error(
-                    "lazy frame op '" + name_ +
-                    "' dropped the columns the scan returned beyond the "
-                    "plan's schema");
-            out = rest_to_back(std::move(out));
-        }
+        DataFrame primary = co_await drain_cursor(*reader, names, max_rows);
+        DataFrame out = co_await run_frame_op(op_, *args_, std::move(primary),
+                                              name_, names);
         out_names_ = out.names;
         co_return morsel_of(std::move(out));
     }
@@ -3991,6 +4573,1317 @@ class FrameOpCursor : public Cursor {
     std::shared_ptr<const OwnedFrameOpArgs> args_;
     std::optional<std::vector<std::string>> out_names_;
     bool done_ = false;
+};
+
+// compare_agg as a plan: the metrics of each side are prefixed `l_` / `r_`,
+// the sides are outer joined on the key columns and sorted by them, and each
+// metric both sides carry and that is numeric gets `delta_` and `pct_` columns.
+LazyFrame compose_compare_agg(const LazyFrame& base, const LazyFrame& variant,
+                              const std::vector<Field>& lhs,
+                              const std::vector<Field>& rhs, std::size_t nk) {
+    if (nk > lhs.size() || nk > rhs.size())
+        throw std::invalid_argument(
+            "compare_agg: n_key exceeds a frame's column count");
+    std::vector<std::string> keys;
+    for (std::size_t i = 0; i < nk; ++i) {
+        if (lhs[i].name != rhs[i].name)
+            throw std::invalid_argument(
+                "compare_agg: key column " + std::to_string(i) + " is '" +
+                lhs[i].name + "' vs '" + rhs[i].name + "'");
+        keys.push_back(lhs[i].name);
+    }
+    std::vector<std::string> from_l, to_l, from_r, to_r;
+    for (std::size_t i = nk; i < lhs.size(); ++i) {
+        from_l.push_back(lhs[i].name);
+        to_l.push_back("l_" + lhs[i].name);
+    }
+    for (std::size_t i = nk; i < rhs.size(); ++i) {
+        from_r.push_back(rhs[i].name);
+        to_r.push_back("r_" + rhs[i].name);
+    }
+    LazyFrame out = base.rename_columns(from_l, to_l)
+                        .join(variant.rename_columns(from_r, to_r), keys, keys,
+                              JoinHow::Outer, "_right")
+                        .sort_by_multi(keys, false);
+    const Schema joined = out.output_schema();
+    auto index_of = [&](const std::string& name) {
+        for (std::size_t i = 0; i < joined.fields.size(); ++i)
+            if (joined.fields[i].name == name)
+                return static_cast<std::int32_t>(i);
+        return std::int32_t{-1};
+    };
+    for (std::size_t i = nk; i < lhs.size(); ++i) {
+        const std::string& m = lhs[i].name;
+        const std::int32_t li = index_of("l_" + m), ri = index_of("r_" + m);
+        if (ri < 0 || !is_numeric_dispatchable(joined.fields[li].type.id) ||
+            !is_numeric_dispatchable(joined.fields[ri].type.id))
+            continue;
+        const Expr delta = expr_col(ri) - expr_col(li);
+        out = out.with_column("delta_" + m, delta)
+                  .with_column("pct_" + m, (delta * lit(1.0)) /
+                                               (expr_col(li) * lit(1.0)) *
+                                               lit(100.0));
+    }
+    return out;
+}
+
+constexpr const char* COMPARE_AGG_OP = "dftu.frame.compare_agg";
+
+// The columns of `in` picked by index, in that order.
+class ProjectCursor : public Cursor {
+   public:
+    ProjectCursor(std::unique_ptr<Cursor> in, std::vector<std::size_t> pick)
+        : in_(std::move(in)), pick_(std::move(pick)) {}
+
+    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+        auto m = co_await in_->next(max_rows);
+        if (!m) co_return std::nullopt;
+        Morsel out;
+        out.rows = m->rows;
+        for (std::size_t i : pick_)
+            out.columns.push_back(m->columns[i].share());
+        co_return out;
+    }
+
+   private:
+    std::unique_ptr<Cursor> in_;
+    std::vector<std::size_t> pick_;
+};
+
+// A plan source over a spool: the rows a cursor produced, with the schema
+// read off its first morsel, replayable and spilled past the budget.
+class SpoolSource : public Source {
+   public:
+    SpoolSource(std::shared_ptr<spill::Spool> spool, Schema schema)
+        : spool_(std::move(spool)), schema_(std::move(schema)) {}
+
+    Schema schema() const override { return schema_; }
+
+    ScanResult scan(const ScanRequest& req) const override {
+        ScanResult r;
+        std::unique_ptr<Cursor> reader = spool_->reader();
+        if (req.projection.empty()) {
+            r.cursor = std::move(reader);
+        } else {
+            std::vector<std::size_t> pick;
+            for (const std::string& name : req.projection) {
+                const auto it = std::find_if(
+                    schema_.fields.begin(), schema_.fields.end(),
+                    [&](const Field& f) { return f.name == name; });
+                if (it == schema_.fields.end())
+                    throw std::out_of_range("scan: no column named " + name);
+                pick.push_back(
+                    static_cast<std::size_t>(it - schema_.fields.begin()));
+            }
+            r.cursor = std::make_unique<ProjectCursor>(std::move(reader),
+                                                       std::move(pick));
+        }
+        r.filters.assign(req.filters.size(), Pushed::No);
+        return r;
+    }
+
+   private:
+    std::shared_ptr<spill::Spool> spool_;
+    Schema schema_;
+};
+
+// compare_agg over two plans whose columns are only known once they run: both
+// sides are spooled (and spill past the budget), their names and types are read
+// off the spooled morsels, and the typed plan of compose_compare_agg runs over
+// the two spools.
+class CompareAggCursor : public Cursor {
+   public:
+    CompareAggCursor(std::unique_ptr<Cursor> in, std::vector<std::string> sch,
+                     LazyFrame other, std::int64_t n_key, std::uint64_t budget)
+        : in_(std::move(in)),
+          sch_(std::move(sch)),
+          other_(std::move(other)),
+          n_key_(n_key),
+          budget_(budget) {}
+
+    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+        if (!built_) co_await build(max_rows);
+        auto df = co_await gen_->next();
+        if (!df) co_return std::nullopt;
+        out_names_ = df->names;
+        co_return morsel_of(std::move(*df));
+    }
+
+    std::optional<std::vector<std::string>> out_names() const override {
+        return out_names_;
+    }
+
+   private:
+    static std::uint64_t share_of(std::uint64_t budget) {
+        return budget == 0 || budget == NO_SPILL_BUDGET ? NO_SPILL_BUDGET
+                                                        : budget / 4;
+    }
+
+    static std::vector<Field> fields_of(const std::vector<std::string>& names,
+                                        const std::vector<DataType>& types) {
+        if (!types.empty() && types.size() != names.size())
+            throw std::runtime_error(
+                "compare_agg: a plan names " + std::to_string(names.size()) +
+                " columns and returns " + std::to_string(types.size()));
+        std::vector<Field> out;
+        for (std::size_t i = 0; i < names.size(); ++i)
+            out.push_back(
+                Field{names[i], types.empty() ? DataType{} : types[i], true});
+        return out;
+    }
+
+    coro::CoroTask<void> build(std::int64_t max_rows) {
+        auto lspool = std::make_shared<spill::Spool>(share_of(budget_));
+        auto rspool = std::make_shared<spill::Spool>(share_of(budget_));
+        std::vector<std::string> lnames = sch_;
+        std::vector<DataType> ltypes;
+        while (auto m = co_await in_->next(max_rows)) {
+            if (ltypes.empty())
+                for (const Series& c : m->columns)
+                    ltypes.push_back(c.data_type());
+            lspool->add(std::move(m->columns), m->rows);
+        }
+        if (auto produced = in_->out_names(); produced && !produced->empty())
+            lnames = std::move(*produced);
+        in_.reset();
+
+        const LazyFrame& other = other_;
+        std::vector<std::string> rnames;
+        std::vector<DataType> rtypes;
+        auto gen = other.stream(max_rows);
+        while (auto df = co_await gen.next()) {
+            if (rtypes.empty()) {
+                rnames = df->names;
+                for (const Series& c : df->columns)
+                    rtypes.push_back(c.data_type());
+            }
+            std::vector<Series> cols;
+            for (const Series& c : df->columns)
+                cols.push_back(c.encoding() == Encoding::Flat
+                                   ? c.share()
+                                   : c.materialize());
+            rspool->add(std::move(cols), df->num_rows());
+        }
+
+        const std::vector<Field> lf = fields_of(lnames, ltypes);
+        const std::vector<Field> rf = fields_of(rnames, rtypes);
+        const LazyFrame left =
+            LazyFrame::scan(std::make_shared<SpoolSource>(lspool, Schema{lf}));
+        const LazyFrame right =
+            LazyFrame::scan(std::make_shared<SpoolSource>(rspool, Schema{rf}));
+        LazyFrame composed = compose_compare_agg(
+            left, right, lf, rf, static_cast<std::size_t>(n_key_));
+        if (budget_ != 0 && budget_ != NO_SPILL_BUDGET)
+            composed = composed.memory_budget(budget_);
+        plan_.emplace(std::move(composed));
+        gen_.emplace(plan_->stream(max_rows));
+        built_ = true;
+    }
+
+    std::unique_ptr<Cursor> in_;
+    std::vector<std::string> sch_;
+    LazyFrame other_;
+    std::int64_t n_key_;
+    std::uint64_t budget_;
+    std::optional<LazyFrame> plan_;
+    std::optional<coro::AsyncGenerator<DataFrame>> gen_;
+    std::optional<std::vector<std::string>> out_names_;
+    bool built_ = false;
+};
+
+// One window function of a streaming window, as the cursor needs it: the
+// column it reads, its output name, and how many rows around a row it reads.
+struct WindowSpecInfo {
+    dftu_window_func func = DFTU_WINDOW_ROW_NUMBER;
+    int value = -1;
+    std::string out;
+    std::int64_t before = 0;
+    std::int64_t after = 0;
+    bool unbounded = false;  // a frame the cursor cannot cut inside
+};
+
+std::vector<WindowSpecInfo> window_specs(const OwnedFrameOpArgs& args,
+                                         const std::vector<std::string>& sch) {
+    std::vector<std::vector<const char*>> cstrs;
+    std::vector<std::vector<dftu_window_spec>> wins;
+    std::vector<std::vector<dftu_group_agg>> aggs;
+    const dftu_op_arg bag = args.bind(cstrs, wins, aggs);
+    const auto& list = bag.args[3].winlist;
+    std::vector<WindowSpecInfo> out;
+    for (std::int32_t k = 0; k < list.n; ++k) {
+        const dftu_window_spec& w = list.items[k];
+        WindowSpecInfo i;
+        i.func = w.func;
+        i.out = w.out ? w.out : "";
+        if (w.value) {
+            const auto it = std::find(sch.begin(), sch.end(), w.value);
+            if (it != sch.end()) i.value = static_cast<int>(it - sch.begin());
+        }
+        switch (w.func) {
+            case DFTU_WINDOW_LAG:
+                i.before = w.param.offset;
+                i.unbounded = w.param.offset < 0;
+                break;
+            case DFTU_WINDOW_LEAD:
+                i.after = w.param.offset;
+                i.unbounded = w.param.offset < 0;
+                break;
+            case DFTU_WINDOW_DELTA:
+                i.before = 1;
+                break;
+            case DFTU_WINDOW_FRAME_SUM:
+            case DFTU_WINDOW_FRAME_MIN:
+            case DFTU_WINDOW_FRAME_MAX:
+            case DFTU_WINDOW_FRAME_COUNT: {
+                const auto& f = w.param.frame;
+                i.unbounded = f.mode == DFTU_WINDOW_FRAME_RANGE ||
+                              f.preceding == DFTU_WINDOW_UNBOUNDED ||
+                              f.following == DFTU_WINDOW_UNBOUNDED ||
+                              f.preceding < 0 || f.following < 0;
+                if (!i.unbounded) {
+                    i.before = f.preceding;
+                    i.after = f.following;
+                }
+                break;
+            }
+            default:
+                break;
+        }
+        out.push_back(std::move(i));
+    }
+    return out;
+}
+
+// Runs the window over a stream sorted by (partition, order), a chunk of about
+// `chunk_bytes` at a time. When every function can continue across a cut, a
+// chunk may end inside a partition and the next one is given what the
+// functions need from the rows before it, so memory is a chunk and its
+// result, whatever the size of a partition:
+//   running functions (sum, product, min, max, forward fill) get a seed row
+//   that holds their value so far; counts and ranks are shifted by the rows
+//   already emitted; lag, lead, delta and bounded row frames get the rows
+//   around the cut as context, and a chunk holds back the rows that still
+//   lack their following context.
+// Any other function (ntile, percent_rank, cume_dist, a frame without a bound
+// or over a range, distinct and collect frames, sessionize, a float sum or
+// mean over a frame) needs its whole partition, so a chunk then ends at a
+// partition boundary and a partition larger than a chunk is held whole.
+// The window kernel is the same in every case: the chunk's rows leave in the
+// kernel's own (partition, order) order, which the sort has already given.
+class WindowStreamCursor : public Cursor {
+   public:
+    WindowStreamCursor(std::unique_ptr<Cursor> sorted,
+                       std::vector<std::string> sch,
+                       std::vector<std::size_t> part,
+                       std::vector<WindowSpecInfo> specs, std::string name,
+                       const dftu_op_desc* op,
+                       std::shared_ptr<const OwnedFrameOpArgs> args,
+                       std::uint64_t chunk_bytes)
+        : in_(std::move(sorted)),
+          sch_(std::move(sch)),
+          part_(std::move(part)),
+          name_(std::move(name)),
+          op_(op),
+          args_(std::move(args)),
+          chunk_bytes_(chunk_bytes) {
+        for (WindowSpecInfo& w : specs) {
+            SpecState s;
+            s.info = std::move(w);
+            specs_.push_back(std::move(s));
+        }
+    }
+
+    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+        while (true) {
+            while (!eof_ && (held_rows_ <= after_ ||
+                             held_bytes_ < chunk_bytes_ || need_more_)) {
+                need_more_ = false;
+                auto m = co_await in_->next(max_rows);
+                if (!m) {
+                    eof_ = true;
+                    break;
+                }
+                if (!planned_) {
+                    plan(m->columns);
+                    planned_ = true;
+                }
+                held_bytes_ += spill::columns_bytes(m->columns);
+                held_rows_ += m->rows;
+                held_.push_back(std::move(*m));
+            }
+            if (held_rows_ == 0) co_return std::nullopt;
+
+            const std::size_t ncols = sch_.size();
+            std::vector<Series> cols;
+            cols.reserve(ncols);
+            for (std::size_t c = 0; c < ncols; ++c) {
+                std::vector<Series> parts;
+                for (const Morsel& m : held_)
+                    parts.push_back(m.columns[c].share());
+                cols.push_back((parts.size() == 1
+                                    ? parts[0].share()
+                                    : concat_columns(column_ptrs(parts)))
+                                   .materialize());
+            }
+            held_.clear();
+            const std::int64_t n = held_rows_;
+            std::vector<Series> pk;
+            for (std::size_t c : part_) pk.push_back(cols[c].share());
+            const auto key = [&](std::int64_t i) { return row_key(pk, i); };
+
+            std::int64_t emit = n;
+            if (mode_ == Carry::ALIGNED) {
+                if (!eof_) {
+                    const std::string last = key(n - 1);
+                    emit = n - 1;
+                    while (emit > 0 && key(emit - 1) == last) --emit;
+                }
+            } else if (!eof_) {
+                emit = n - after_;
+            }
+            if (emit <= 0) {
+                Morsel all;
+                all.rows = n;
+                all.columns = std::move(cols);
+                held_.push_back(std::move(all));
+                need_more_ = true;
+                continue;
+            }
+
+            const std::int64_t ctx_n = ctx_rows_;
+            const std::int64_t take_n = mode_ == Carry::ALIGNED ? emit : n;
+            std::vector<Series> fcols;
+            fcols.reserve(ncols);
+            for (std::size_t c = 0; c < ncols; ++c) {
+                Series body = cols[c].share();
+                if (take_n < n) {
+                    std::vector<std::int64_t> head(
+                        static_cast<std::size_t>(take_n));
+                    std::iota(head.begin(), head.end(), std::int64_t{0});
+                    body = cols[c].take(head).materialize();
+                }
+                fcols.push_back(
+                    ctx_n > 0 ? concat_columns({&ctx_[c], &body}).materialize()
+                              : std::move(body));
+            }
+            DataFrame frame;
+            frame.names = sch_;
+            for (const Series& c : fcols) frame.columns.push_back(c.share());
+            DataFrame out = co_await run_frame_op(op_, *args_, std::move(frame),
+                                                  name_, sch_);
+            DataFrame res = out.slice(ctx_n, emit);
+            for (Series& c : res.columns) c = c.materialize();
+
+            if (mode_ != Carry::ALIGNED) carry(cols, fcols, res, key, n, emit);
+
+            held_rows_ = n - emit;
+            held_bytes_ = 0;
+            if (n > emit) {
+                std::vector<std::int64_t> tail(
+                    static_cast<std::size_t>(n - emit));
+                std::iota(tail.begin(), tail.end(), emit);
+                Morsel rest;
+                rest.rows = n - emit;
+                for (std::size_t c = 0; c < ncols; ++c)
+                    rest.columns.push_back(cols[c].take(tail).materialize());
+                held_bytes_ = spill::columns_bytes(rest.columns);
+                held_.push_back(std::move(rest));
+            }
+            out_names_ = res.names;
+            co_return morsel_of(std::move(res));
+        }
+    }
+
+    std::optional<std::vector<std::string>> out_names() const override {
+        return out_names_;
+    }
+
+   private:
+    enum class Carry { ALIGNED, SEED, HALO };
+    enum class Acc { NONE, SEED, POST_ADD };
+
+    struct SpecState {
+        WindowSpecInfo info;
+        Acc acc = Acc::NONE;
+        bool is_count = false;
+        bool is_rank = false;
+        bool is_dense = false;
+        std::int64_t last_i = 0;
+        std::uint64_t last_u = 0;
+    };
+
+    static bool narrow_int(TypeId t) {
+        return t == TypeId::Int8 || t == TypeId::Int16 || t == TypeId::Int32 ||
+               t == TypeId::Uint8 || t == TypeId::Uint16 || t == TypeId::Uint32;
+    }
+    static bool any_int(TypeId t) {
+        return narrow_int(t) || t == TypeId::Int64 || t == TypeId::Uint64;
+    }
+
+    // Chooses how a cut may fall from the functions and the column types.
+    void plan(const std::vector<Series>& cols) {
+        mode_ = Carry::ALIGNED;
+        bool acc = false, halo = false, rank = false;
+        std::int64_t before = 0, after = 0;
+        std::vector<int> acc_cols;
+        for (SpecState& s : specs_) {
+            const WindowSpecInfo& w = s.info;
+            const TypeId vt =
+                w.value >= 0 ? cols[static_cast<std::size_t>(w.value)].type()
+                             : TypeId::Unknown;
+            if (w.unbounded) return;
+            switch (w.func) {
+                case DFTU_WINDOW_ROW_NUMBER:
+                case DFTU_WINDOW_RUNNING_COUNT:
+                    s.is_count = true;
+                    break;
+                case DFTU_WINDOW_RANK:
+                    s.is_rank = true;
+                    rank = true;
+                    before = std::max<std::int64_t>(before, 1);
+                    break;
+                case DFTU_WINDOW_DENSE_RANK:
+                    s.is_dense = true;
+                    rank = true;
+                    before = std::max<std::int64_t>(before, 1);
+                    break;
+                case DFTU_WINDOW_RUNNING_SUM:
+                    if (vt == TypeId::Int64 || vt == TypeId::Uint64 ||
+                        vt == TypeId::Float64)
+                        s.acc = Acc::SEED;
+                    else if (narrow_int(vt))
+                        s.acc = Acc::POST_ADD;
+                    else
+                        return;
+                    acc = true;
+                    acc_cols.push_back(w.value);
+                    break;
+                case DFTU_WINDOW_RUNNING_PROD:
+                    if (vt != TypeId::Float64) return;
+                    s.acc = Acc::SEED;
+                    acc = true;
+                    acc_cols.push_back(w.value);
+                    break;
+                case DFTU_WINDOW_RUNNING_MIN:
+                case DFTU_WINDOW_RUNNING_MAX:
+                case DFTU_WINDOW_FILL_FORWARD:
+                    s.acc = Acc::SEED;
+                    acc = true;
+                    acc_cols.push_back(w.value);
+                    break;
+                case DFTU_WINDOW_FRAME_SUM:
+                    if (!any_int(vt)) return;
+                    [[fallthrough]];
+                case DFTU_WINDOW_LAG:
+                case DFTU_WINDOW_LEAD:
+                case DFTU_WINDOW_DELTA:
+                case DFTU_WINDOW_FRAME_MIN:
+                case DFTU_WINDOW_FRAME_MAX:
+                case DFTU_WINDOW_FRAME_COUNT:
+                    halo = true;
+                    before = std::max(before, w.before);
+                    after = std::max(after, w.after);
+                    break;
+                default:
+                    return;
+            }
+        }
+        if (acc && (halo || rank)) return;
+        if (rank && before > 1) return;
+        std::sort(acc_cols.begin(), acc_cols.end());
+        if (std::adjacent_find(acc_cols.begin(), acc_cols.end()) !=
+            acc_cols.end())
+            return;
+        mode_ = acc ? Carry::SEED : Carry::HALO;
+        before_ = before;
+        after_ = after;
+    }
+
+    template <class F>
+    static Series patched(const Series& col, std::int64_t run, F f) {
+        const std::int64_t n = col.length();
+        if (col.type() == TypeId::Uint64) {
+            std::vector<std::uint64_t> v(col.data<std::uint64_t>(),
+                                         col.data<std::uint64_t>() + n);
+            for (std::int64_t i = 0; i < run; ++i)
+                v[static_cast<std::size_t>(i)] =
+                    f(v[static_cast<std::size_t>(i)]);
+            return Series::flat(TypeId::Uint64, v.data(), n);
+        }
+        std::vector<std::int64_t> v(col.data<std::int64_t>(),
+                                    col.data<std::int64_t>() + n);
+        for (std::int64_t i = 0; i < run; ++i)
+            v[static_cast<std::size_t>(i)] = f(v[static_cast<std::size_t>(i)]);
+        return Series::flat_i64(v.data(), n);
+    }
+
+    // The state after a chunk: the rows of the continuing partition are
+    // corrected for the rows before the cut, then the context for the next
+    // chunk is taken. `cols` are the chunk's rows, `fcols` the kernel input
+    // (context first), `res` the emitted result.
+    template <class Key>
+    void carry(const std::vector<Series>& cols,
+               const std::vector<Series>& fcols, DataFrame& res, const Key& key,
+               std::int64_t n, std::int64_t emit) {
+        (void)n;
+        const std::int64_t ctx_n = ctx_rows_;
+        const bool continuing = E_ > 0 && key(0) == last_key_;
+        std::int64_t run = 0;
+        if (continuing) {
+            if (key(emit - 1) == last_key_) {
+                run = emit;
+            } else {
+                std::int64_t lo = 0, hi = emit - 1;
+                while (hi - lo > 1) {
+                    const std::int64_t mid = lo + (hi - lo) / 2;
+                    (key(mid) == last_key_ ? lo : hi) = mid;
+                }
+                run = hi;
+            }
+        }
+        std::int64_t k_same = 0;
+        if (continuing) {
+            if (mode_ == Carry::SEED) {
+                k_same = 1;
+            } else if (ctx_n > 0) {
+                std::vector<Series> ck;
+                for (std::size_t c : part_) ck.push_back(ctx_[c].share());
+                while (k_same < ctx_n &&
+                       row_key(ck, ctx_n - 1 - k_same) == last_key_)
+                    ++k_same;
+            }
+        }
+        const std::int64_t shift = E_ - k_same;
+
+        for (SpecState& s : specs_) {
+            const int oc = column_index_of(res.names, s.info.out);
+            if (oc < 0) continue;
+            Series& col = res.columns[static_cast<std::size_t>(oc)];
+            if (continuing && run > 0) {
+                if (s.is_count && shift != 0) {
+                    col = patched(col, run,
+                                  [&](std::int64_t v) { return v + shift; });
+                } else if (s.is_rank) {
+                    col = patched(col, run, [&](std::int64_t v) {
+                        return v == 1 ? s.last_i : v + shift;
+                    });
+                } else if (s.is_dense) {
+                    col = patched(col, run, [&](std::int64_t v) {
+                        return v - 1 + s.last_i;
+                    });
+                } else if (s.acc == Acc::POST_ADD) {
+                    if (col.type() == TypeId::Uint64)
+                        col = patched(col, run, [&](std::uint64_t v) {
+                            std::uint64_t r = 0;
+                            if (__builtin_add_overflow(v, s.last_u, &r))
+                                throw std::overflow_error(
+                                    "window: RUNNING_SUM overflows uint64");
+                            return r;
+                        });
+                    else
+                        col = patched(col, run, [&](std::int64_t v) {
+                            std::int64_t r = 0;
+                            if (__builtin_add_overflow(v, s.last_i, &r))
+                                throw std::overflow_error(
+                                    "window: RUNNING_SUM overflows int64");
+                            return r;
+                        });
+                }
+            }
+            if (s.is_rank || s.is_dense || s.acc == Acc::POST_ADD) {
+                if (col.type() == TypeId::Uint64)
+                    s.last_u = col.data<std::uint64_t>()[emit - 1];
+                else
+                    s.last_i = col.data<std::int64_t>()[emit - 1];
+            }
+        }
+
+        const std::vector<std::int64_t> last_row{emit - 1};
+        const std::vector<std::int64_t> null_row{-1};
+        ctx_.clear();
+        if (mode_ == Carry::SEED) {
+            for (std::size_t c = 0; c < cols.size(); ++c) {
+                const SpecState* acc = nullptr;
+                for (const SpecState& s : specs_)
+                    if (s.acc != Acc::NONE &&
+                        s.info.value == static_cast<int>(c))
+                        acc = &s;
+                if (!acc)
+                    ctx_.push_back(cols[c].take(last_row).materialize());
+                else if (acc->acc == Acc::POST_ADD)
+                    ctx_.push_back(cols[c].take(null_row).materialize());
+                else
+                    ctx_.push_back(
+                        res.columns[static_cast<std::size_t>(column_index_of(
+                                        res.names, acc->info.out))]
+                            .take(last_row)
+                            .materialize());
+            }
+            ctx_rows_ = 1;
+        } else {
+            const std::int64_t total = ctx_n + emit;
+            const std::int64_t keep = std::min(before_, total);
+            ctx_rows_ = keep;
+            if (keep > 0) {
+                std::vector<std::int64_t> idx(static_cast<std::size_t>(keep));
+                std::iota(idx.begin(), idx.end(), total - keep);
+                for (const Series& c : fcols)
+                    ctx_.push_back(c.take(idx).materialize());
+            }
+        }
+
+        const std::string new_last = key(emit - 1);
+        std::int64_t start = 0;
+        if (key(0) != new_last) {
+            std::int64_t lo = 0, hi = emit - 1;
+            while (hi - lo > 1) {
+                const std::int64_t mid = lo + (hi - lo) / 2;
+                (key(mid) == new_last ? hi : lo) = mid;
+            }
+            start = hi;
+        }
+        E_ = (start == 0 && continuing) ? E_ + emit : emit - start;
+        last_key_ = new_last;
+    }
+
+    std::unique_ptr<Cursor> in_;
+    std::vector<std::string> sch_;
+    std::vector<std::size_t> part_;
+    std::string name_;
+    const dftu_op_desc* op_;
+    std::shared_ptr<const OwnedFrameOpArgs> args_;
+    std::uint64_t chunk_bytes_;
+    std::vector<SpecState> specs_;
+    Carry mode_ = Carry::ALIGNED;
+    std::int64_t before_ = 0;
+    std::int64_t after_ = 0;
+    bool planned_ = false;
+    std::vector<Morsel> held_;
+    std::int64_t held_rows_ = 0;
+    std::uint64_t held_bytes_ = 0;
+    std::vector<Series> ctx_;
+    std::int64_t ctx_rows_ = 0;
+    std::int64_t E_ = 0;
+    std::string last_key_;
+    bool eof_ = false;
+    bool need_more_ = false;
+    std::optional<std::vector<std::string>> out_names_;
+};
+
+// ---- native group-wise transforms ------------------------------------------
+
+constexpr const char* GROUP_TRANSFORM_OP = "dftu.frame.group_transform";
+constexpr std::int64_t NATIVE_SHIFT_MAX = 1024;
+
+enum class NumClass { SIGNED, UNSIGNED, FLOAT };
+
+bool num_class(TypeId t, NumClass& cls) {
+    switch (t) {
+        case TypeId::Int8:
+        case TypeId::Int16:
+        case TypeId::Int32:
+        case TypeId::Int64:
+            cls = NumClass::SIGNED;
+            return true;
+        case TypeId::Uint8:
+        case TypeId::Uint16:
+        case TypeId::Uint32:
+        case TypeId::Uint64:
+            cls = NumClass::UNSIGNED;
+            return true;
+        case TypeId::Float32:
+        case TypeId::Float64:
+            cls = NumClass::FLOAT;
+            return true;
+        default:
+            return false;
+    }
+}
+
+std::uint64_t double_bits(double d) {
+    std::uint64_t u;
+    std::memcpy(&u, &d, sizeof u);
+    return u;
+}
+double bits_double(std::uint64_t u) {
+    double d;
+    std::memcpy(&d, &u, sizeof d);
+    return d;
+}
+
+// The cells of a numeric column as 64-bit patterns (an int64, a uint64 or a
+// double by the column's class) and whether each is present.
+struct NumCells {
+    std::vector<std::uint64_t> bits;
+    std::vector<std::uint8_t> ok;
+};
+
+NumCells read_cells(const Series& col) {
+    const Series s = col.is_flat() ? col.share() : col.materialize();
+    const std::int64_t n = s.length();
+    NumCells c;
+    c.bits.resize(static_cast<std::size_t>(n));
+    c.ok.assign(static_cast<std::size_t>(n), 1);
+    auto fill = [&](auto at) {
+        for (std::int64_t i = 0; i < n; ++i)
+            c.bits[static_cast<std::size_t>(i)] = at(i);
+    };
+    switch (s.type()) {
+        case TypeId::Int8:
+            fill([&](std::int64_t i) {
+                return static_cast<std::uint64_t>(
+                    static_cast<std::int64_t>(s.data<std::int8_t>()[i]));
+            });
+            break;
+        case TypeId::Int16:
+            fill([&](std::int64_t i) {
+                return static_cast<std::uint64_t>(
+                    static_cast<std::int64_t>(s.data<std::int16_t>()[i]));
+            });
+            break;
+        case TypeId::Int32:
+            fill([&](std::int64_t i) {
+                return static_cast<std::uint64_t>(
+                    static_cast<std::int64_t>(s.data<std::int32_t>()[i]));
+            });
+            break;
+        case TypeId::Int64:
+            fill([&](std::int64_t i) {
+                return static_cast<std::uint64_t>(s.data<std::int64_t>()[i]);
+            });
+            break;
+        case TypeId::Uint8:
+            fill([&](std::int64_t i) {
+                return std::uint64_t{s.data<std::uint8_t>()[i]};
+            });
+            break;
+        case TypeId::Uint16:
+            fill([&](std::int64_t i) {
+                return std::uint64_t{s.data<std::uint16_t>()[i]};
+            });
+            break;
+        case TypeId::Uint32:
+            fill([&](std::int64_t i) {
+                return std::uint64_t{s.data<std::uint32_t>()[i]};
+            });
+            break;
+        case TypeId::Uint64:
+            fill([&](std::int64_t i) { return s.data<std::uint64_t>()[i]; });
+            break;
+        case TypeId::Float32:
+            fill([&](std::int64_t i) {
+                return double_bits(static_cast<double>(s.data<float>()[i]));
+            });
+            break;
+        case TypeId::Float64:
+            fill([&](std::int64_t i) {
+                return double_bits(s.data<double>()[i]);
+            });
+            break;
+        default:
+            throw std::logic_error("group transform: a non-numeric column");
+    }
+    if (s.null_count() > 0)
+        for (std::int64_t i = 0; i < n; ++i)
+            if (s.is_null(i)) c.ok[static_cast<std::size_t>(i)] = 0;
+    return c;
+}
+
+// A column of 64-bit patterns of class `cls`, narrowed or widened to the type
+// the plan declares, with a null where `ok` is zero.
+Series make_numeric(const std::vector<std::uint64_t>& bits,
+                    const std::vector<std::uint8_t>& ok, NumClass cls,
+                    TypeId out) {
+    const auto n = static_cast<std::int64_t>(bits.size());
+    bool any_null = false;
+    std::vector<std::uint8_t> bitmap((bits.size() + 7) / 8, 0);
+    for (std::size_t i = 0; i < bits.size(); ++i) {
+        if (ok[i])
+            bitmap[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
+        else
+            any_null = true;
+    }
+    const std::uint8_t* validity = any_null ? bitmap.data() : nullptr;
+    auto as = [&](auto tag) {
+        using T = decltype(tag);
+        std::vector<T> v(bits.size());
+        for (std::size_t i = 0; i < bits.size(); ++i) {
+            switch (cls) {
+                case NumClass::SIGNED:
+                    v[i] = static_cast<T>(static_cast<std::int64_t>(bits[i]));
+                    break;
+                case NumClass::UNSIGNED:
+                    v[i] = static_cast<T>(bits[i]);
+                    break;
+                case NumClass::FLOAT:
+                    v[i] = static_cast<T>(bits_double(bits[i]));
+                    break;
+            }
+        }
+        return Series::flat(out, v.data(), n, validity);
+    };
+    switch (out) {
+        case TypeId::Int8:
+            return as(std::int8_t{});
+        case TypeId::Int16:
+            return as(std::int16_t{});
+        case TypeId::Int32:
+            return as(std::int32_t{});
+        case TypeId::Int64:
+            return as(std::int64_t{});
+        case TypeId::Uint8:
+            return as(std::uint8_t{});
+        case TypeId::Uint16:
+            return as(std::uint16_t{});
+        case TypeId::Uint32:
+            return as(std::uint32_t{});
+        case TypeId::Uint64:
+            return as(std::uint64_t{});
+        case TypeId::Float32:
+            return as(float{});
+        case TypeId::Float64:
+            return as(double{});
+        default:
+            throw std::logic_error("group transform: a non-numeric output");
+    }
+}
+
+// The state of one value column in one group.
+struct TransformCell {
+    std::uint64_t acc = 0;   // running sum, extreme or last present value
+    std::uint64_t last = 0;  // the previous row's value
+    double prod = 1.0;
+    std::int64_t seen = 0;   // rows of the group so far
+    bool has = false;        // `acc` holds a value
+    bool last_ok = false;    // the previous row is present
+};
+
+// The group-wise transforms over numeric columns, one morsel at a time: each
+// group keeps its state (an accumulator, the previous row, a ring of the last
+// `n` rows) across morsels. The results are those of the window plan the
+// transform otherwise composes, including its null handling (a null input
+// gives a null output for the running ops, the running ops skip nulls) and its
+// `x + (c - c)` that turns an infinite or NaN input into NaN.
+class GroupTransformCore {
+   public:
+    GroupTransformCore(GroupwiseOp kind, std::int64_t shift,
+                       std::vector<std::size_t> in,
+                       std::vector<TypeId> declared)
+        : kind_(kind),
+          shift_(shift),
+          in_(std::move(in)),
+          declared_(std::move(declared)) {}
+
+    // `gid[r]` is the group of row r; `starts[r]`, when given, restarts that
+    // group's state before the row (a sorted stream reuses one group id).
+    std::vector<Series> run(const std::vector<Series>& cols, std::int64_t rows,
+                            const std::int32_t* gid,
+                            const std::uint8_t* starts) {
+        std::vector<Series> out;
+        const auto n = static_cast<std::size_t>(rows);
+        if (kind_ == GroupwiseOp::CumCount) {
+            std::vector<std::int64_t> v(n);
+            for (std::size_t r = 0; r < n; ++r) {
+                const auto g = static_cast<std::size_t>(gid[r]);
+                ensure(g);
+                if (starts && starts[r]) counts_[g] = 0;
+                v[r] = counts_[g]++;
+            }
+            out.push_back(Series::flat_i64(v.data(), rows));
+            return out;
+        }
+        for (std::size_t c = 0; c < in_.size(); ++c) {
+            NumClass cls = NumClass::SIGNED;
+            if (!num_class(cols[in_[c]].type(), cls))
+                throw std::logic_error("group transform: a non-numeric column");
+            const NumCells cells = read_cells(cols[in_[c]]);
+            std::vector<std::uint64_t> ob(n);
+            std::vector<std::uint8_t> ook(n, 1);
+            NumClass produced = cls;
+            for (std::size_t r = 0; r < n; ++r) {
+                const auto g = static_cast<std::size_t>(gid[r]);
+                ensure(g);
+                TransformCell& st = cell(g, c);
+                if (starts && starts[r]) {
+                    st = TransformCell{};
+                    if (shift_ > 0) ring_of(g, c).clear();
+                }
+                produced = step(st, g, c, cls, cells.bits[r], cells.ok[r] != 0,
+                                ob[r], ook[r]);
+            }
+            out.push_back(make_numeric(ob, ook, produced, declared_[c]));
+        }
+        return out;
+    }
+
+   private:
+    struct RingCell {
+        std::uint64_t bits = 0;
+        std::uint8_t ok = 0;
+    };
+
+    static bool less_than(NumClass cls, std::uint64_t a, std::uint64_t b) {
+        switch (cls) {
+            case NumClass::SIGNED:
+                return static_cast<std::int64_t>(a) <
+                       static_cast<std::int64_t>(b);
+            case NumClass::UNSIGNED:
+                return a < b;
+            case NumClass::FLOAT:
+                return bits_double(a) < bits_double(b);
+        }
+        return false;
+    }
+
+    void ensure(std::size_t g) {
+        if (g < counts_.size()) return;
+        counts_.resize(g + 1, 0);
+        cells_.resize((g + 1) * in_.size());
+        if (shift_ > 0) rings_.resize((g + 1) * in_.size());
+    }
+    TransformCell& cell(std::size_t g, std::size_t c) {
+        return cells_[g * in_.size() + c];
+    }
+    std::vector<RingCell>& ring_of(std::size_t g, std::size_t c) {
+        return rings_[g * in_.size() + c];
+    }
+
+    // One row of one column; returns the class of the value it produced.
+    NumClass step(TransformCell& st, std::size_t g, std::size_t c, NumClass cls,
+                  std::uint64_t b, bool ok, std::uint64_t& out,
+                  std::uint8_t& out_ok) {
+        const double x = cls == NumClass::FLOAT ? bits_double(b) : 0.0;
+        switch (kind_) {
+            case GroupwiseOp::CumSum: {
+                if (!ok) {
+                    out_ok = 0;
+                    return cls;
+                }
+                if (cls == NumClass::SIGNED) {
+                    std::int64_t s = static_cast<std::int64_t>(st.acc);
+                    if (__builtin_add_overflow(s, static_cast<std::int64_t>(b),
+                                               &s))
+                        throw std::overflow_error(
+                            "window: RUNNING_SUM overflows int64");
+                    st.acc = static_cast<std::uint64_t>(s);
+                    out = st.acc;
+                } else if (cls == NumClass::UNSIGNED) {
+                    if (__builtin_add_overflow(st.acc, b, &st.acc))
+                        throw std::overflow_error(
+                            "window: RUNNING_SUM overflows uint64");
+                    out = st.acc;
+                } else {
+                    const double s = bits_double(st.acc) + x;
+                    st.acc = double_bits(s);
+                    out = double_bits(s + (x - x));
+                }
+                return cls;
+            }
+            case GroupwiseOp::CumProd: {
+                if (!ok) {
+                    out_ok = 0;
+                    return NumClass::FLOAT;
+                }
+                const double v = cls == NumClass::FLOAT
+                                     ? x
+                                     : (cls == NumClass::SIGNED
+                                            ? static_cast<double>(
+                                                  static_cast<std::int64_t>(b))
+                                            : static_cast<double>(b));
+                st.prod *= v;
+                const double d = cls == NumClass::FLOAT ? (x - x) : 0.0;
+                out = double_bits(st.prod + d);
+                return NumClass::FLOAT;
+            }
+            case GroupwiseOp::CumMax:
+            case GroupwiseOp::CumMin: {
+                if (!ok) {
+                    out_ok = 0;
+                    return cls;
+                }
+                const bool smallest = kind_ == GroupwiseOp::CumMin;
+                if (!st.has || (smallest ? less_than(cls, b, st.acc)
+                                         : less_than(cls, st.acc, b))) {
+                    st.acc = b;
+                    st.has = true;
+                }
+                out = cls == NumClass::FLOAT
+                          ? double_bits(bits_double(st.acc) + (x - x))
+                          : st.acc;
+                return cls;
+            }
+            case GroupwiseOp::Shift: {
+                if (shift_ == 0) {
+                    out = b;
+                    out_ok = ok ? 1 : 0;
+                    return cls;
+                }
+                std::vector<RingCell>& ring = ring_of(g, c);
+                if (ring.empty()) ring.resize(static_cast<std::size_t>(shift_));
+                RingCell& slot =
+                    ring[static_cast<std::size_t>(st.seen % shift_)];
+                if (st.seen >= shift_ && slot.ok) {
+                    out = slot.bits;
+                } else {
+                    out_ok = 0;
+                }
+                slot.bits = b;
+                slot.ok = ok ? 1 : 0;
+                ++st.seen;
+                return cls;
+            }
+            case GroupwiseOp::Diff: {
+                const bool have = st.seen > 0 && st.last_ok && ok;
+                const std::uint64_t prev = st.last;
+                st.last = b;
+                st.last_ok = ok;
+                ++st.seen;
+                if (!have) {
+                    out_ok = 0;
+                    return cls == NumClass::FLOAT ? NumClass::FLOAT
+                                                  : NumClass::SIGNED;
+                }
+                if (cls == NumClass::FLOAT) {
+                    out = double_bits(x - bits_double(prev));
+                    return NumClass::FLOAT;
+                }
+                std::int64_t d = 0;
+                bool bad = false;
+                if (cls == NumClass::SIGNED) {
+                    bad = __builtin_sub_overflow(
+                        static_cast<std::int64_t>(b),
+                        static_cast<std::int64_t>(prev), &d);
+                } else if (b >= prev) {
+                    const std::uint64_t m = b - prev;
+                    bad = m > static_cast<std::uint64_t>(
+                                  std::numeric_limits<std::int64_t>::max());
+                    d = static_cast<std::int64_t>(m);
+                } else {
+                    const std::uint64_t m = prev - b;
+                    bad = m > (std::uint64_t{1} << 63);
+                    d = static_cast<std::int64_t>(0 - m);
+                }
+                if (bad)
+                    throw std::overflow_error("window: DELTA overflows int64");
+                out = static_cast<std::uint64_t>(d);
+                return NumClass::SIGNED;
+            }
+            case GroupwiseOp::FFill: {
+                if (ok) {
+                    st.acc = b;
+                    st.has = true;
+                }
+                if (st.has)
+                    out = st.acc;
+                else
+                    out_ok = 0;
+                return cls;
+            }
+            default:
+                throw std::logic_error("group transform: an unsupported kind");
+        }
+    }
+
+    GroupwiseOp kind_;
+    std::int64_t shift_;
+    std::vector<std::size_t> in_;
+    std::vector<TypeId> declared_;
+    std::vector<std::int64_t> counts_;
+    std::vector<TransformCell> cells_;
+    std::vector<std::vector<RingCell>> rings_;
+};
+
+// Runs a GroupTransformCore over a stream. Rows are grouped by a hash of the
+// key columns, or, when the stream is sorted by them, by runs of equal keys
+// that keep one group's state; with `keep_row` the last input column (the row
+// number) follows the results.
+class TransformPassCursor : public Cursor {
+   public:
+    TransformPassCursor(std::unique_ptr<Cursor> in,
+                        std::vector<std::size_t> keys, bool sorted,
+                        bool keep_row, GroupTransformCore core)
+        : in_(std::move(in)),
+          keys_(std::move(keys)),
+          sorted_(sorted),
+          keep_row_(keep_row),
+          core_(std::move(core)) {}
+
+    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+        while (true) {
+            auto m = co_await in_->next(max_rows);
+            if (!m) co_return std::nullopt;
+            if (m->rows == 0) continue;
+            const auto n = static_cast<std::size_t>(m->rows);
+            std::vector<std::int32_t> gid(n, 0);
+            std::vector<std::uint8_t> starts;
+            if (!keys_.empty()) {
+                std::vector<Series> kc;
+                for (std::size_t k : keys_)
+                    kc.push_back(m->columns[k].is_flat()
+                                     ? m->columns[k].share()
+                                     : m->columns[k].materialize());
+                if (sorted_) {
+                    starts.assign(n, 0);
+                    for (std::size_t r = 0; r < n; ++r) {
+                        std::string key =
+                            row_key(kc, static_cast<std::int64_t>(r));
+                        if (!have_last_ || key != last_key_) starts[r] = 1;
+                        last_key_ = std::move(key);
+                        have_last_ = true;
+                    }
+                } else {
+                    for (std::size_t r = 0; r < n; ++r) {
+                        const std::string key =
+                            row_key(kc, static_cast<std::int64_t>(r));
+                        auto it = ids_.find(key);
+                        if (it == ids_.end())
+                            it = ids_.emplace(key, static_cast<std::int32_t>(
+                                                       ids_.size()))
+                                     .first;
+                        gid[r] = it->second;
+                    }
+                }
+            }
+            Morsel out;
+            out.rows = m->rows;
+            out.columns = core_.run(m->columns, m->rows, gid.data(),
+                                    starts.empty() ? nullptr : starts.data());
+            if (keep_row_) out.columns.push_back(m->columns.back().share());
+            co_return out;
+        }
+    }
+
+   private:
+    std::unique_ptr<Cursor> in_;
+    std::vector<std::size_t> keys_;
+    bool sorted_;
+    bool keep_row_;
+    GroupTransformCore core_;
+    ankerl::unordered_dense::map<std::string, std::int32_t> ids_;
+    std::string last_key_;
+    bool have_last_ = false;
+};
+
+// The native group transform of a plan step. Unbounded budgets stream through
+// the hash pass. Under a budget the input is spooled first; when it stays in
+// memory and its groups fit a quarter of the budget, the hash pass runs over
+// the spool in input order. Otherwise the spool is sorted by (keys, row),
+// streamed through a pass that keeps one group's state, and the results are
+// sorted back by row, so memory is the budget however many groups there are.
+class NativeTransformCursor : public Cursor {
+   public:
+    NativeTransformCursor(std::unique_ptr<Cursor> in,
+                          std::vector<std::string> sch,
+                          std::vector<std::size_t> keys, GroupwiseOp kind,
+                          std::int64_t shift, std::vector<std::size_t> value,
+                          std::vector<TypeId> declared,
+                          std::vector<std::string> out_names,
+                          std::uint64_t budget)
+        : in_(std::move(in)),
+          sch_(std::move(sch)),
+          keys_(std::move(keys)),
+          kind_(kind),
+          shift_(shift),
+          value_(std::move(value)),
+          declared_(std::move(declared)),
+          out_names_(std::move(out_names)),
+          budget_(budget) {}
+
+    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+        if (!tail_) co_await build(max_rows);
+        co_return co_await tail_->next(max_rows);
+    }
+
+    std::optional<std::vector<std::string>> out_names() const override {
+        return out_names_;
+    }
+
+   private:
+    GroupTransformCore core() const {
+        return GroupTransformCore(kind_, shift_, value_, declared_);
+    }
+
+    coro::CoroTask<void> build(std::int64_t max_rows) {
+        const bool bounded = budget_ != NO_SPILL_BUDGET && budget_ > 0;
+        if (!bounded || keys_.empty()) {
+            tail_ = std::make_unique<TransformPassCursor>(std::move(in_), keys_,
+                                                          false, false, core());
+            co_return;
+        }
+        // Per-group state: a cell per value column and a counter, and the
+        // ring of a shift, doubled for the table around them.
+        const std::uint64_t per_group =
+            2 *
+            (sizeof(TransformCell) * std::max<std::size_t>(1, value_.size()) +
+             sizeof(std::int64_t) +
+             static_cast<std::uint64_t>(shift_) * 16 * value_.size() + 48);
+        const std::uint64_t cap_groups =
+            std::max<std::uint64_t>(1, (budget_ / 4) / per_group);
+        spool_ = std::make_shared<spill::Spool>(budget_ / 2);
+        spill::Spool& spool = *spool_;
+        ankerl::unordered_dense::set<std::string> groups;
+        bool too_many = false;
+        std::int64_t row = 0;
+        while (auto m = co_await in_->next(max_rows)) {
+            if (m->rows == 0) continue;
+            if (!too_many && !spool.spilled()) {
+                std::vector<Series> kc;
+                for (std::size_t k : keys_)
+                    kc.push_back(m->columns[k].is_flat()
+                                     ? m->columns[k].share()
+                                     : m->columns[k].materialize());
+                for (std::int64_t r = 0; r < m->rows && !too_many; ++r) {
+                    groups.insert(row_key(kc, r));
+                    too_many = groups.size() > cap_groups;
+                }
+            }
+            std::vector<std::int64_t> idx(static_cast<std::size_t>(m->rows));
+            std::iota(idx.begin(), idx.end(), row);
+            row += m->rows;
+            std::vector<Series> cols = std::move(m->columns);
+            cols.push_back(Series::flat_i64(idx.data(), m->rows));
+            spool.add(std::move(cols), m->rows);
+        }
+        in_.reset();
+        if (!spool.spilled() && !too_many) {
+            tail_ = std::make_unique<TransformPassCursor>(spool.reader(), keys_,
+                                                          false, false, core());
+            co_return;
+        }
+        std::vector<std::string> names = sch_;
+        names.emplace_back(ROW_COLUMN);
+        std::vector<std::string> sort_keys;
+        for (std::size_t k : keys_) sort_keys.push_back(sch_[k]);
+        sort_keys.emplace_back(ROW_COLUMN);
+        auto sorted = std::make_unique<SortMergeCursor>(
+            spool.reader(), names, sort_keys,
+            std::vector<bool>(sort_keys.size(), false), budget_);
+        std::vector<std::string> pass_names = out_names_;
+        pass_names.emplace_back(ROW_COLUMN);
+        auto pass = std::make_unique<TransformPassCursor>(
+            std::move(sorted), keys_, true, true, core());
+        auto restored = std::make_unique<SortMergeCursor>(
+            std::move(pass), pass_names, std::vector<std::string>{ROW_COLUMN},
+            std::vector<bool>{false}, budget_);
+        std::vector<std::size_t> pick(out_names_.size());
+        std::iota(pick.begin(), pick.end(), std::size_t{0});
+        tail_ = std::make_unique<ProjectCursor>(std::move(restored),
+                                                std::move(pick));
+    }
+
+    static constexpr const char* ROW_COLUMN = "__dftu_trow__";
+
+    std::unique_ptr<Cursor> in_;
+    std::vector<std::string> sch_;
+    std::vector<std::size_t> keys_;
+    GroupwiseOp kind_;
+    std::int64_t shift_;
+    std::vector<std::size_t> value_;
+    std::vector<TypeId> declared_;
+    std::vector<std::string> out_names_;
+    std::uint64_t budget_;
+    std::shared_ptr<spill::Spool> spool_;
+    std::unique_ptr<Cursor> tail_;
 };
 
 // ---- plan ops (tagged union) ------------------------------------------------
@@ -4049,6 +5942,9 @@ struct FrameOp {
     // (a window keeps its input and appends its specs); empty means
     // data-dependent, known at collect.
     std::vector<std::string> out_names;
+    // The output types when the step knows them; else those of the input
+    // columns with the same names.
+    std::vector<DataType> out_types;
 };
 struct UnpivotOp {
     std::vector<std::string> id_vars;
@@ -4614,7 +6510,12 @@ Schema out_types(const LazyOp& op, Schema in) {
             },
             [&](const FrameOp& o) {
                 Schema out;
-                for (const std::string& name : o.out_names) {
+                for (std::size_t i = 0; i < o.out_names.size(); ++i) {
+                    const std::string& name = o.out_names[i];
+                    if (i < o.out_types.size()) {
+                        out.fields.push_back(Field{name, o.out_types[i], true});
+                        continue;
+                    }
                     const Field* f = find_field(in, name);
                     out.fields.push_back(
                         f ? *f : Field{name, scalar(TypeId::Unknown), true});
@@ -5436,29 +7337,44 @@ std::unique_ptr<Cursor> make_cursor(const LazyOp& op,
             },
             [&](const SortByOp& o) -> std::unique_ptr<Cursor> {
                 return std::make_unique<SortMergeCursor>(
-                    std::move(in), sch, o.name, o.descending, budget);
+                    std::move(in), sch, std::vector<std::string>{o.name},
+                    std::vector<bool>{o.descending}, budget);
             },
             [&](const SortByMultiOp& o) -> std::unique_ptr<Cursor> {
-                return std::make_unique<SortByMultiCursor>(
+                return std::make_unique<SortMergeCursor>(
                     std::move(in), sch, o.by, o.descending, budget);
             },
             [&](const ReverseOp&) -> std::unique_ptr<Cursor> {
-                return std::make_unique<ReverseCursor>(std::move(in), sch,
-                                                       budget);
+                std::vector<std::string> numbered{"row_index"};
+                numbered.insert(numbered.end(), sch.begin(), sch.end());
+                std::vector<int> keep(sch.size());
+                std::iota(keep.begin(), keep.end(), 1);
+                return std::make_unique<SelectCursor>(
+                    std::make_unique<SortMergeCursor>(
+                        std::make_unique<WithRowIndexCursor>(std::move(in)),
+                        std::move(numbered),
+                        std::vector<std::string>{"row_index"},
+                        std::vector<bool>{true}, budget),
+                    std::move(keep));
             },
             [&](const TakeOp& o) -> std::unique_ptr<Cursor> {
-                return std::make_unique<TakeCursor>(std::move(in), sch,
-                                                    o.indices, budget);
+                return std::make_unique<TakeCursor>(std::move(in), o.indices);
             },
             [&](const FilterMaskOp& o) -> std::unique_ptr<Cursor> {
                 return std::make_unique<FilterMaskCursor>(std::move(in),
                                                           o.mask.share());
             },
             [&](const JoinOp& o) -> std::unique_ptr<Cursor> {
+                // The right plan runs under the budget of this plan unless it
+                // sets its own.
+                LazyFrame other = o.other;
+                if (budget != NO_SPILL_BUDGET && budget > 0 &&
+                    detail::PlanAccess::memory_budget(other) == 0)
+                    other = other.memory_budget(budget);
                 return std::make_unique<JoinCursor>(
-                    std::move(in), sch, o.left_fields, o.other, o.left_on,
-                    o.right_on, o.how, o.suffix, budget, o.nulls_equal,
-                    own_rest);
+                    std::move(in), sch, o.left_fields, std::move(other),
+                    o.left_on, o.right_on, o.how, o.suffix, budget,
+                    o.nulls_equal, own_rest);
             },
             [&](const ConcatOp& o) -> std::unique_ptr<Cursor> {
                 return std::make_unique<ConcatCursor>(std::move(in), o.other,
@@ -5472,6 +7388,70 @@ std::unique_ptr<Cursor> make_cursor(const LazyOp& op,
                                                       o.column, o.keep_empty);
             },
             [&](const FrameOp& o) -> std::unique_ptr<Cursor> {
+                if (o.name == GROUP_TRANSFORM_OP) {
+                    std::vector<std::size_t> keys, value;
+                    for (const std::string& name : o.args->strings_at(1)) {
+                        const int k = col_index(sch, name);
+                        if (k < 0)
+                            throw std::out_of_range(
+                                "group_by: no column named " + name);
+                        keys.push_back(static_cast<std::size_t>(k));
+                    }
+                    const auto kind =
+                        static_cast<GroupwiseOp>(o.args->i32_at(2));
+                    std::vector<TypeId> declared;
+                    for (std::size_t i = 0; i < o.out_names.size(); ++i) {
+                        declared.push_back(o.out_types[i].id);
+                        if (kind == GroupwiseOp::CumCount) continue;
+                        const int k = col_index(sch, o.out_names[i]);
+                        if (k < 0)
+                            throw std::out_of_range(
+                                "group_by: no column named " + o.out_names[i]);
+                        value.push_back(static_cast<std::size_t>(k));
+                    }
+                    return std::make_unique<NativeTransformCursor>(
+                        std::move(in), sch, std::move(keys), kind,
+                        o.args->i64_at(3), std::move(value),
+                        std::move(declared), o.out_names, budget);
+                }
+                if (o.name == WINDOW_OP && budget != NO_SPILL_BUDGET &&
+                    budget > 0) {
+                    const std::vector<std::string>& part =
+                        o.args->strings_at(1);
+                    std::vector<std::string> sort_keys = part;
+                    for (const std::string& name : o.args->strings_at(2))
+                        sort_keys.push_back(name);
+                    std::vector<std::size_t> idx;
+                    for (const std::string& name : part) {
+                        const int k = col_index(sch, name);
+                        if (k < 0)
+                            throw std::out_of_range("window: no column named " +
+                                                    name);
+                        idx.push_back(static_cast<std::size_t>(k));
+                    }
+                    for (const std::string& name : sort_keys)
+                        if (col_index(sch, name) < 0)
+                            throw std::out_of_range("window: no column named " +
+                                                    name);
+                    std::unique_ptr<Cursor> sorted = std::move(in);
+                    if (!sort_keys.empty())
+                        sorted = std::make_unique<SortMergeCursor>(
+                            std::move(sorted), sch, sort_keys,
+                            std::vector<bool>(sort_keys.size(), false), budget);
+                    return std::make_unique<WindowStreamCursor>(
+                        std::move(sorted), sch, std::move(idx),
+                        window_specs(*o.args, sch), o.name, o.op, o.args,
+                        budget / 4);
+                }
+                if (o.name == COMPARE_AGG_OP && budget != NO_SPILL_BUDGET &&
+                    budget > 0 && o.args->frames().size() == 1) {
+                    LazyFrame other = o.args->frames().front();
+                    if (detail::PlanAccess::memory_budget(other) == 0)
+                        other = other.memory_budget(budget);
+                    return std::make_unique<CompareAggCursor>(
+                        std::move(in), sch, std::move(other), o.args->i64_at(2),
+                        budget);
+                }
                 return std::make_unique<FrameOpCursor>(
                     std::move(in), sch, o.name, o.op, o.args, budget);
             },
@@ -5501,8 +7481,8 @@ std::unique_ptr<Cursor> make_cursor(const LazyOp& op,
                                                 name);
                     key_idx.push_back(k);
                 }
-                return std::make_unique<HeadByCursor>(std::move(in),
-                                                      std::move(key_idx), o.n);
+                return std::make_unique<HeadByCursor>(
+                    std::move(in), std::move(key_idx), o.n, budget);
             },
             [&](const IsDupOp& o) -> std::unique_ptr<Cursor> {
                 return std::make_unique<IsDupCursor>(std::move(in), budget,
@@ -6073,16 +8053,88 @@ LazyFrame LazyFrame::frame_op(std::string name, OpArgs args,
     auto owned =
         std::make_shared<const OwnedFrameOpArgs>(*op, args, std::move(others));
     auto ops = ops_;
-    ops.push_back(std::make_shared<LazyOp>(LazyOp{
-        FrameOp{std::move(name), op, std::move(owned), std::move(out_names)}}));
+    ops.push_back(std::make_shared<LazyOp>(LazyOp{FrameOp{
+        std::move(name), op, std::move(owned), std::move(out_names), {}}}));
     return with_ops(std::move(ops));
+}
+
+std::optional<LazyFrame> native_group_transform(
+    const LazyFrame& plan, const std::vector<std::string>& keys,
+    GroupwiseOp kind, std::int64_t n, const Schema& typed) {
+    switch (kind) {
+        case GroupwiseOp::CumSum:
+        case GroupwiseOp::CumMax:
+        case GroupwiseOp::CumMin:
+        case GroupwiseOp::CumProd:
+        case GroupwiseOp::CumCount:
+        case GroupwiseOp::Diff:
+        case GroupwiseOp::FFill:
+            break;
+        case GroupwiseOp::Shift:
+            if (n < 0 || n > NATIVE_SHIFT_MAX) return std::nullopt;
+            break;
+        default:
+            return std::nullopt;
+    }
+    const Schema in = plan.output_schema();
+    if (in.fields.empty() || typed.fields.empty()) return std::nullopt;
+    for (const Field& f : in.fields)
+        if (f.type.id == TypeId::Unknown || f.name == REST_COLUMN)
+            return std::nullopt;
+    for (const std::string& k : keys)
+        if (!find_field(in, k)) return std::nullopt;
+    std::vector<std::string> out_names;
+    std::vector<DataType> out_types;
+    for (const Field& f : typed.fields) {
+        NumClass cls = NumClass::SIGNED;
+        if (!num_class(f.type.id, cls)) return std::nullopt;
+        if (kind != GroupwiseOp::CumCount) {
+            const Field* src = find_field(in, f.name);
+            if (!src || !num_class(src->type.id, cls)) return std::nullopt;
+        }
+        out_names.push_back(f.name);
+        out_types.push_back(f.type);
+    }
+    const dftu_op_desc* op = dftu_op_find(GROUP_TRANSFORM_OP);
+    if (!op) return std::nullopt;
+    std::vector<const char*> key_ptrs;
+    for (const std::string& k : keys) key_ptrs.push_back(k.c_str());
+    OpArgs args;
+    args.strlist(1, key_ptrs.data(), static_cast<std::int32_t>(key_ptrs.size()))
+        .i32(2, static_cast<std::int32_t>(kind))
+        .i64(3, n)
+        .i32(4, 0)
+        .i32(5, 1);
+    auto owned = std::make_shared<const OwnedFrameOpArgs>(
+        *op, args, std::vector<LazyFrame>{});
+    auto ops = detail::PlanAccess::ops(plan);
+    ops.push_back(std::make_shared<LazyOp>(
+        LazyOp{FrameOp{GROUP_TRANSFORM_OP, op, std::move(owned),
+                       std::move(out_names), std::move(out_types)}}));
+    return detail::PlanAccess::make(detail::PlanAccess::source_ptr(plan),
+                                    std::move(ops),
+                                    detail::PlanAccess::memory_budget(plan));
 }
 
 LazyFrame LazyFrame::compare_agg(LazyFrame variant, std::int64_t n_key) const {
     if (n_key < 1) throw std::invalid_argument("compare_agg: n_key < 1");
-    OpArgs args;
-    args.i64(2, n_key);
-    return frame_op("dftu.frame.compare_agg", args, {std::move(variant)});
+    const std::vector<Field> lhs = output_schema().fields;
+    const std::vector<Field> rhs = variant.output_schema().fields;
+    const auto nk = static_cast<std::size_t>(n_key);
+    auto typed = [](const std::vector<Field>& fs) {
+        return !fs.empty() &&
+               std::none_of(fs.begin(), fs.end(), [](const Field& f) {
+                   return f.type.id == TypeId::Unknown;
+               });
+    };
+    // A plan whose columns or types are only known after it runs cannot name
+    // its delta columns here, so it is collected as the eager op does.
+    if (!typed(lhs) || !typed(rhs)) {
+        OpArgs args;
+        args.i64(2, n_key);
+        return frame_op("dftu.frame.compare_agg", args, {std::move(variant)});
+    }
+    return compose_compare_agg(*this, variant, lhs, rhs, nk);
 }
 
 LazyFrame LazyFrame::concat(LazyFrame other) const {

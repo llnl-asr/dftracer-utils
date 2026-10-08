@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/hash/splitmix64.h>
 #include <dftracer/utils/core/common/to_chars.h>
 #include <dftracer/utils/dataframe/agg/detail.h>
 
@@ -42,16 +43,26 @@ std::vector<std::string> agg_group_key(const AggState& st, std::int64_t g) {
 std::size_t agg_approx_bytes(const AggState& st) {
     std::size_t total = 0;
     for (std::size_t k = 0; k < st.nkeys; ++k) {
-        if (st.key_is_bytes[k])
+        if (st.key_is_bytes[k]) {
+            total += st.skey_cols[k].capacity() * sizeof(std::string);
             for (const std::string& v : st.skey_cols[k])
-                total += v.size() + sizeof(std::string);
-        else
-            total += st.ikey_cols[k].size() * sizeof(std::int64_t);
-        total += st.nkey_cols[k].size();
+                total += v.capacity() > 15 ? v.capacity() : 0;
+        } else {
+            total += st.ikey_cols[k].capacity() * sizeof(std::int64_t);
+        }
+        total += st.nkey_cols[k].capacity();
     }
-    total += st.counts.size() * sizeof(std::uint64_t);
-    total += st.fstats.size() * sizeof(FieldStat);
-    total += st.light.size() * sizeof(std::uint64_t);
+    total += st.key_buckets.values().capacity() *
+             sizeof(std::pair<std::uint64_t, std::int64_t>);
+    total += st.key_buckets.bucket_count() * 8;
+    total += st.next_in_bucket.capacity() * sizeof(std::int64_t);
+    total += st.direct_groups.capacity() * sizeof(std::int64_t);
+    total += (st.fast_slots.capacity() + st.fast_words.capacity() +
+              st.fast_hash.capacity()) *
+             sizeof(std::uint64_t);
+    total += st.counts.capacity() * sizeof(std::uint64_t);
+    total += st.fstats.capacity() * sizeof(FieldStat);
+    total += st.light.capacity() * sizeof(std::uint64_t);
     if (st.has_fl) {
         total +=
             (st.fl_first.size() + st.fl_last.size()) * sizeof(std::uint64_t);
@@ -101,6 +112,30 @@ std::size_t agg_approx_bytes(const AggState& st) {
                     total += name.size() + sk.bins().size() * 24 + 64;
     }
     return total;
+}
+
+std::vector<std::vector<std::int64_t>> agg_split_groups(const AggState& st,
+                                                        std::size_t parts,
+                                                        int salt) {
+    std::vector<std::vector<std::int64_t>> out(parts);
+    const std::int64_t groups = agg_num_groups(st);
+    for (std::int64_t g = 0; g < groups; ++g) {
+        std::size_t h = static_cast<std::size_t>(salt);
+        for (std::size_t k = 0; k < st.nkeys; ++k) {
+            std::size_t cell = dftracer::utils::hash::GOLDEN_RATIO;
+            if (!st.nkey_cols[k][static_cast<std::size_t>(g)])
+                cell = st.key_is_bytes[k]
+                           ? std::hash<std::string_view>{}(
+                                 st.skey_cols[k][static_cast<std::size_t>(g)])
+                           : std::hash<std::int64_t>{}(
+                                 st.ikey_cols[k][static_cast<std::size_t>(g)]);
+            dftracer::utils::hash_combine(h, cell);
+        }
+        h = static_cast<std::size_t>(
+            dftracer::utils::hash::splitmix64(static_cast<std::uint64_t>(h)));
+        out[h % parts].push_back(g);
+    }
+    return out;
 }
 
 DataType set_union_element_type(TypeId t) {

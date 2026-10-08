@@ -110,17 +110,37 @@ streaming source runs morsel by morsel. ``stream()`` yields the morsels instead,
 frame, so a consumer can stop early: dropping the generator is the scan's
 early-out.
 
-``memory_budget(bytes)`` bounds every breaker (sort, unique, group-by, the
-spools behind reverse / take / pivot): past the budget their state spills to
-sorted temporary runs and is merged back at the end, so peak memory is the
-budget plus one morsel. ``0`` is auto (about a third of available memory);
-``auto_spill()`` says that at the call site. The same budget reaches a
-plugin node in the plan and a plugin's fold slice, see
+``memory_budget(bytes)`` bounds every breaker (sort, unique, group-by, join,
+pivot, the spools behind reverse / take, the group-wise window and
+``compare_agg``): past the budget their state spills to temporary runs and is
+merged back at the end, so peak memory stays near the budget, a small multiple
+of it for a plan that chains several breakers, and does not grow with the
+input. A sort that writes more runs than it can read at once merges groups of
+runs into longer ones first. The right plan of a join runs under the budget of
+the plan that joins it unless it sets its own. ``0`` is auto (about a third of
+available memory); ``auto_spill()`` says that at the call site. The same
+budget reaches a plugin node in the plan and a plugin's fold slice, see
 :doc:`../runtime/memory-budget`.
 
-.. code-block:: python
-
-   out = plan.memory_budget(2 * 1024**3).collect(morsel_rows=65536)  # or collect(): auto
+Window functions stream under a budget: a chunk of the sorted input may end
+inside a partition, so a partition larger than the budget is fine for running
+sum, product, min and max, forward fill, ``row_number``, ``rank`` and
+``dense_rank``, and for ``lag``, ``lead``, ``delta`` and bounded row frames
+(min, max, count, and sums over integers). That covers ``cumsum``, ``cummax``,
+``cummin``, ``cumcount``, ``cumprod``, ``shift``, ``diff``, ``pct_change``,
+``ffill``, ``bfill``, ``rolling_min``, ``rolling_max``, the min, dense and
+ordinal ranks, and ``head``, ``tail`` and ``nth``, with or without partition
+columns. Two limits remain. A window with any other function (``ntile``,
+``percent_rank``, ``cume_dist``, a frame with no bound or over a range,
+distinct or collect frames, ``sessionize``, a float sum or mean over a frame,
+the average and max ranks) holds one whole partition in memory, so a single
+partition larger than the budget needs that much memory, and with no partition
+columns that is the whole input. And ``compare_agg`` over plans whose column
+names are only known after they run spools both plans and builds its join at
+run time; it reads the column types off the first morsel, so an empty side
+gets no ``delta_`` or ``pct_`` columns. The spill directory is
+``DFTRACER_UTILS_SPILL_DIR`` or a node-local disk, see
+:doc:`../runtime/memory-budget`.
 
 Bring your own source
 ---------------------

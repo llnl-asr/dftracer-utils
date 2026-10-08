@@ -38,6 +38,51 @@ void put(std::string& s, const FieldStat& f) {
     put(s, f.cm3);
     put(s, f.cm4);
 }
+// The 8-byte words of a FieldStat in a fixed order. A 16-bit mask says which
+// are nonzero and only those are written: most states leave the higher moments
+// at zero. Field by field, because a raw copy would write the padding after
+// `domain`.
+constexpr std::size_t STAT_WORDS = 12;
+
+void stat_words(const FieldStat& f, std::uint64_t (&w)[STAT_WORDS]) {
+    auto bits = [](double d) {
+        std::uint64_t u;
+        std::memcpy(&u, &d, sizeof u);
+        return u;
+    };
+    w[0] = f.n;
+    w[1] = bits(f.sum);
+    w[2] = bits(f.min);
+    w[3] = bits(f.max);
+    w[4] = static_cast<std::uint64_t>(f.esum);
+    w[5] = static_cast<std::uint64_t>(f.emin);
+    w[6] = static_cast<std::uint64_t>(f.emax);
+    w[7] = bits(f.shift);
+    w[8] = bits(f.cmean);
+    w[9] = bits(f.cm2);
+    w[10] = bits(f.cm3);
+    w[11] = bits(f.cm4);
+}
+
+void put_compact(std::string& s, const FieldStat& f) {
+    put(s, static_cast<std::uint8_t>(static_cast<std::uint8_t>(f.domain) |
+                                     (f.ecarry ? HAS_ECARRY : 0)));
+    if (f.ecarry) put(s, f.ecarry);
+    std::uint64_t w[STAT_WORDS];
+    stat_words(f, w);
+    std::uint16_t mask = 0;
+    for (std::size_t i = 0; i < STAT_WORDS; ++i)
+        if (w[i]) mask = static_cast<std::uint16_t>(mask | (1u << i));
+    put(s, mask);
+    for (std::size_t i = 0; i < STAT_WORDS; ++i)
+        if (w[i]) put(s, w[i]);
+}
+void put_stat(std::string& s, const FieldStat& f, bool compact) {
+    if (compact)
+        put_compact(s, f);
+    else
+        put(s, f);
+}
 void put_bytes(std::string& s, std::string_view b) {
     put(s, static_cast<std::uint64_t>(b.size()));
     s.append(b);
@@ -86,6 +131,40 @@ struct Reader {
         f.cm4 = get<double>();
         return f;
     }
+    FieldStat get_compact_stat() {
+        FieldStat f;
+        const std::uint8_t b = get<std::uint8_t>();
+        const std::uint8_t d = b & static_cast<std::uint8_t>(~HAS_ECARRY);
+        if (d > static_cast<std::uint8_t>(FieldStatDomain::F64)) truncated();
+        f.domain = static_cast<FieldStatDomain>(d);
+        if (b & HAS_ECARRY) f.ecarry = get<std::int64_t>();
+        const std::uint16_t mask = get<std::uint16_t>();
+        if (mask >> STAT_WORDS) truncated();
+        std::uint64_t w[STAT_WORDS] = {};
+        for (std::size_t i = 0; i < STAT_WORDS; ++i)
+            if (mask & (1u << i)) w[i] = get<std::uint64_t>();
+        auto dbl = [](std::uint64_t u) {
+            double x;
+            std::memcpy(&x, &u, sizeof x);
+            return x;
+        };
+        f.n = w[0];
+        f.sum = dbl(w[1]);
+        f.min = dbl(w[2]);
+        f.max = dbl(w[3]);
+        f.esum = static_cast<std::int64_t>(w[4]);
+        f.emin = static_cast<std::int64_t>(w[5]);
+        f.emax = static_cast<std::int64_t>(w[6]);
+        f.shift = dbl(w[7]);
+        f.cmean = dbl(w[8]);
+        f.cm2 = dbl(w[9]);
+        f.cm3 = dbl(w[10]);
+        f.cm4 = dbl(w[11]);
+        return f;
+    }
+    FieldStat get_stat(bool compact) {
+        return compact ? get_compact_stat() : get_stat();
+    }
     std::string get_bytes() {
         std::uint64_t n = get<std::uint64_t>();
         count(n);
@@ -101,7 +180,7 @@ struct Reader {
 
 }  // namespace
 
-std::string agg_serialize(const AggState& st_in) {
+std::string agg_serialize(const AggState& st_in, bool compact) {
     const AggState& st = settled(st_in);
     std::string s;
     put(s, static_cast<std::uint32_t>(st.specs.size()));
@@ -158,7 +237,7 @@ std::string agg_serialize(const AggState& st_in) {
         for (std::uint8_t v : st.nkey_cols[k]) put(s, v);
     }
     for (std::uint64_t c : st.counts) put(s, c);
-    for (const FieldStat& f : st.fstats) put(s, f);
+    for (const FieldStat& f : st.fstats) put_stat(s, f, compact);
     if (st.has_fl) {
         for (std::uint64_t b : st.fl_first) put(s, b);
         for (std::uint64_t b : st.fl_last) put(s, b);
@@ -224,7 +303,7 @@ std::string agg_serialize(const AggState& st_in) {
             put(s, static_cast<std::uint64_t>(gmap.size()));
             for (const auto& [name, fs] : gmap) {
                 put_bytes(s, name);
-                put(s, fs);
+                put_stat(s, fs, compact);
             }
         }
         if (st.dyn_has_sketch) {
@@ -297,7 +376,7 @@ std::string agg_serialize(const AggState& st_in) {
     return s;
 }
 
-AggStatePtr agg_deserialize(const std::string& blob) {
+AggStatePtr agg_deserialize(const std::string& blob, bool compact) {
     Reader r{blob.data(), blob.data() + blob.size()};
     AggStatePtr st(new AggState());
     const std::uint32_t ns = r.get<std::uint32_t>();
@@ -408,7 +487,7 @@ AggStatePtr agg_deserialize(const std::string& blob) {
     r.count(static_cast<std::size_t>(ng) * nf);
     st->fstats.resize(static_cast<std::size_t>(ng) * nf);
     for (std::size_t i = 0; i < st->fstats.size(); ++i)
-        st->fstats[i] = r.get_stat();
+        st->fstats[i] = r.get_stat(compact);
     if (st->has_fl) {
         const std::size_t sz = static_cast<std::size_t>(ng) * nf;
         r.count(sz);
@@ -534,8 +613,8 @@ AggStatePtr agg_deserialize(const std::string& blob) {
             const std::uint64_t cnt = r.get<std::uint64_t>();
             for (std::uint64_t j = 0; j < cnt; ++j) {
                 std::string name = r.get_bytes();
-                st->dyn_fs[static_cast<std::size_t>(g)].emplace(std::move(name),
-                                                                r.get_stat());
+                st->dyn_fs[static_cast<std::size_t>(g)].emplace(
+                    std::move(name), r.get_stat(compact));
             }
         }
         if (st->dyn_has_sketch) {

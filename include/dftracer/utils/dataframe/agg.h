@@ -253,8 +253,13 @@ DataFrame agg_finalize(const AggState& state, const std::string& key_name);
 
 /// Serialize a partial to a portable byte blob (distributed partials / spill)
 /// and reconstruct it; round-trips exactly.
-std::string agg_serialize(const AggState& state);
-AggStatePtr agg_deserialize(const std::string& blob);
+///
+/// `compact` writes each field statistic as a bit mask plus its nonzero words
+/// (about a third of the bytes for a sum or a count). It is for blobs that live
+/// for one query, such as a spill; a blob that is stored keeps the default,
+/// and a reader must pass the same `compact` as the writer.
+std::string agg_serialize(const AggState& state, bool compact = false);
+AggStatePtr agg_deserialize(const std::string& blob, bool compact = false);
 
 /// Number of groups currently held by `state`.
 std::int64_t agg_num_groups(const AggState& state);
@@ -272,6 +277,14 @@ std::vector<std::string> agg_group_key(const AggState& state, std::int64_t g);
 /// Approximate in-memory bytes held by `state` (spill trigger; not exact).
 std::size_t agg_approx_bytes(const AggState& state);
 
+/// The groups of `state` split by key hash into `parts` lists of group
+/// indices, in ascending order. Equal keys always share a list, so merging each
+/// list separately loses nothing; a different `salt` splits the same groups
+/// differently, so a list that is still too big can be split again.
+std::vector<std::vector<std::int64_t>> agg_split_groups(const AggState& state,
+                                                        std::size_t parts,
+                                                        int salt);
+
 /// Three-way compare of the composite key of group `ga` in `a` against group
 /// `gb` in `b`. `a` and `b` must share the same key layout (same group_by
 /// keys, e.g. two states built from the same specs).
@@ -286,6 +299,12 @@ void agg_sort_groups(AggState& state);
 /// layout - serializable via agg_serialize and mergeable via agg_merge into
 /// another state. The unit written to and read back from a spill run.
 AggStatePtr agg_extract_group(const AggState& state, std::int64_t g);
+
+/// Like agg_extract_group for several groups, in the order given. The result
+/// has no key index, so it is for serializing or finalizing, not for
+/// accumulating more rows.
+AggStatePtr agg_extract_groups(const AggState& state,
+                               const std::vector<std::int64_t>& groups);
 
 /// Like group_agg but returns the mergeable partial instead of finalizing: the
 /// same one-pass parallel accumulate over `keys`/`values`, stopping before

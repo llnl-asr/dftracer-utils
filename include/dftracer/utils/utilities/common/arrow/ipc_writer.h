@@ -53,8 +53,47 @@ class BufferPool {
     BufferPool(BufferPool&&) = default;
     BufferPool& operator=(BufferPool&&) = default;
 
-    Slot* acquire(std::size_t min_capacity = 0);
-    void release(Slot* slot);
+    // A slot on loan. The destructor returns a pooled slot to the pool and
+    // frees an overflow slot, so every path out of the holder releases it.
+    class Lease {
+       public:
+        Lease() = default;
+        Lease(Lease&& o) noexcept
+            : pooled_(o.pooled_), owned_(std::move(o.owned_)) {
+            o.pooled_ = nullptr;
+        }
+        Lease& operator=(Lease&& o) noexcept {
+            if (this != &o) {
+                reset();
+                pooled_ = o.pooled_;
+                owned_ = std::move(o.owned_);
+                o.pooled_ = nullptr;
+            }
+            return *this;
+        }
+        Lease(const Lease&) = delete;
+        Lease& operator=(const Lease&) = delete;
+        ~Lease() { reset(); }
+
+        explicit operator bool() const { return pooled_ || owned_; }
+        std::vector<uint8_t>& data() {
+            return pooled_ ? pooled_->data : owned_->data;
+        }
+        void reset() noexcept {
+            if (pooled_)
+                pooled_->in_use.store(false, std::memory_order_release);
+            pooled_ = nullptr;
+            owned_.reset();
+        }
+
+       private:
+        friend class BufferPool;
+        Slot* pooled_ = nullptr;
+        std::unique_ptr<Slot> owned_;
+    };
+
+    // Never empty: when every pooled slot is busy the lease owns a new slot.
+    Lease acquire(std::size_t min_capacity = 0);
     std::size_t size() const { return slots_.size(); }
 
    private:
@@ -105,7 +144,7 @@ class IpcWriter {
 
     struct CompressedBatch {
         std::vector<uint8_t> header;
-        BufferPool::Slot* body_slot;
+        BufferPool::Lease body;
         std::size_t body_size;
         std::int32_t metadata_length;
         std::int64_t body_length;

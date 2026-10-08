@@ -471,7 +471,7 @@ def test_lazy_relational_ops_match_eager():
     base = _df({"k": [2, 1], "n": [10, 20]})
     variant = _df({"k": [1, 3], "n": [15, 7]})
     cmp_lazy = base.lazy().compare_agg(variant.lazy(), "k")
-    assert "frame_op dftu.frame.compare_agg" in cmp_lazy.explain()
+    assert "join outer" in cmp_lazy.explain()
     assert _dict(cmp_lazy.collect()) == _dict(base.compare_agg(variant, "k"))
     with pytest.raises(ValueError):
         base.lazy().compare_agg(variant.lazy(), 0)

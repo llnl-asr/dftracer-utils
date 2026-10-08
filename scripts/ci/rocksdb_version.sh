@@ -7,13 +7,13 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-deps="${root}/cmake/modules/Dependencies.cmake"
+cmake_lists="${root}/CMakeLists.txt"
 
-version=$(grep -A2 'set(DFTRACER_UTILS_ROCKSDB_VERSION' "$deps" |
+version=$(grep -A2 'set(DFTRACER_UTILS_ROCKSDB_VERSION' "$cmake_lists" |
 	grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
 
 [ -n "$version" ] || {
-	echo "ERROR: no DFTRACER_UTILS_ROCKSDB_VERSION in $deps" >&2
+	echo "ERROR: no DFTRACER_UTILS_ROCKSDB_VERSION in $cmake_lists" >&2
 	exit 1
 }
 echo "$version"

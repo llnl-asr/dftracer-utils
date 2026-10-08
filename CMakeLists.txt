@@ -96,6 +96,18 @@ option(DFTRACER_UTILS_VALGRIND_MODE
 if(DFTRACER_UTILS_VALGRIND_MODE)
   add_compile_definitions(DFTRACER_UTILS_VALGRIND_MODE=1)
 endif()
+set(DFTRACER_UTILS_ROCKSDB_VERSION
+    "11.1.2"
+    CACHE STRING "RocksDB version to find or build")
+set(DFTRACER_UTILS_ROCKSDB_PREFIX
+    "$ENV{DFTRACER_UTILS_ROCKSDB_PREFIX}"
+    CACHE PATH "Install prefix of a prebuilt RocksDB to use instead of source")
+set(DFTRACER_UTILS_DEPS_BUILD_TYPE
+    "RelWithDebInfo"
+    CACHE STRING "Build type of the dependencies built as installs (vectorscan)")
+set(DFTRACER_UTILS_DEPS_PREFIX
+    "$ENV{DFTRACER_UTILS_DEPS_PREFIX}"
+    CACHE PATH "Directory that keeps dependency installs between builds")
 option(DFTRACER_UTILS_ENABLE_MPI "Enable MPI support for call tree" OFF)
 option(DFTRACER_USE_ZLIB_NG "Use zlib-ng (compat) instead of madler/zlib; falls back to madler on failure" ON)
 option(DFTRACER_UTILS_ENABLE_ARROW "Enable Arrow C Data Interface via nanoarrow" ON)

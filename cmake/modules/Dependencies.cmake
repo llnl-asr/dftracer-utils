@@ -352,15 +352,6 @@ endfunction()
 # RocksDB
 # ==============================================================================
 
-set(DFTRACER_UTILS_ROCKSDB_VERSION
-    "11.1.2"
-    CACHE STRING "RocksDB version to find or build")
-set(DFTRACER_UTILS_ROCKSDB_PREFIX
-    "$ENV{DFTRACER_UTILS_ROCKSDB_PREFIX}"
-    CACHE PATH "Install prefix of a prebuilt RocksDB to use instead of source")
-set(DFTRACER_UTILS_DEPS_PREFIX
-    "$ENV{DFTRACER_UTILS_DEPS_PREFIX}"
-    CACHE PATH "Directory that keeps dependency installs between builds")
 
 # Consume a RocksDB install tree built by scripts/ci/build_rocksdb.sh.
 function(_use_prebuilt_rocksdb PREFIX)

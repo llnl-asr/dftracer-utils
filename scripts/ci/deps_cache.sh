@@ -7,8 +7,9 @@
 #   deps_cache.sh save <kind> <dir>
 #
 # The object is named by <kind>, the runner image and the content of
-# Dependencies.cmake and build_rocksdb.sh. That key only picks a candidate: CMake reuses an install
-# only when its own fingerprint matches, so a wrong candidate is rebuilt.
+# Dependencies.cmake, build_rocksdb.sh and the RocksDB version. That key only
+# picks a candidate: CMake reuses an install only when its own fingerprint
+# matches, so a wrong candidate is rebuilt.
 # A cache problem is never an error, since the build then makes the install.
 
 set -uo pipefail
@@ -29,7 +30,7 @@ export AWS_REQUEST_CHECKSUM_CALCULATION=when_required
 export AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-hash="$(cat "$root/cmake/modules/Dependencies.cmake" "$root/scripts/ci/build_rocksdb.sh" | git hash-object --stdin | cut -c1-16)"
+hash="$({ cat "$root/cmake/modules/Dependencies.cmake" "$root/scripts/ci/build_rocksdb.sh"; "$root/scripts/ci/rocksdb_version.sh"; } | git hash-object --stdin | cut -c1-16)"
 name="deps/${kind}-${ImageOS:-${RUNNER_OS:-local}}-${RUNNER_ARCH:-$(uname -m)}-${hash}.tar.gz"
 s3() { aws --endpoint-url "$SCCACHE_ENDPOINT" "$@"; }
 tmp="$(mktemp)"

@@ -2,6 +2,7 @@
 #include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/common/filesystem.h>  // fs:: portability alias
 #include <dftracer/utils/core/common/scoped_fd.h>
+#include <dftracer/utils/core/common/spill_dir.h>
 #include <dftracer/utils/core/env.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
@@ -448,22 +449,6 @@ Series get_series_data(const std::uint8_t*& p, const std::uint8_t* end) {
 
 }  // namespace
 
-std::string spill_dir() {
-    const auto env = Env::get(constants::SPILL_DIR_ENV);
-    std::error_code ec;
-    fs::path dir = env && !env->empty() ? fs::path(std::string(*env))
-                                        : fs::temp_directory_path(ec);
-    if (!ec) fs::create_directories(dir, ec);
-    if (!ec && ::access(dir.c_str(), W_OK | X_OK) != 0)
-        ec = std::make_error_code(std::errc::permission_denied);
-    if (ec)
-        throw std::runtime_error("spill: cannot use spill directory '" +
-                                 dir.string() + "' (" + ec.message() +
-                                 "); set " + constants::SPILL_DIR_ENV +
-                                 " to a writable directory");
-    return dir.string();
-}
-
 namespace {
 
 constexpr std::size_t REGION_ALIGN = 64;
@@ -504,7 +489,7 @@ void write_all(int fd, const void* src, std::size_t bytes, std::uint64_t at,
 
 }  // namespace
 
-PartFile::PartFile() : dir_(spill_dir()) {
+PartFile::PartFile() : dir_(unwrap(spill_dir())) {
     std::string path = (fs::path(dir_) / "dftu_collect_XXXXXX").string();
     fd_ = ScopedFd(::mkstemp(path.data()));
     if (fd_.get() < 0)
@@ -621,9 +606,9 @@ std::vector<Series> PartFile::append(const std::vector<Series>& cols) {
 }
 
 Dir::Dir() {
-    fs::path base =
-        fs::path(spill_dir()) / ("dftu_lazy_" + std::to_string(::getpid()) +
-                                 "_" + std::to_string(next_seq()));
+    fs::path base = fs::path(unwrap(spill_dir())) /
+                    ("dftu_lazy_" + std::to_string(::getpid()) + "_" +
+                     std::to_string(next_seq()));
     std::error_code ec;
     fs::create_directories(base, ec);
     if (ec)

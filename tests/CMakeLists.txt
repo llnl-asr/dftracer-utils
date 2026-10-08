@@ -93,6 +93,9 @@ set(TEST_CPP_SOURCES
     core/test_eviction_policy.cpp
     core/test_filesystem_info.cpp
     core/test_memory_budget.cpp
+    core/test_memory_pool.cpp
+    core/test_external_sort.cpp
+    core/test_spill_dir.cpp
     core/test_str_format.cpp
     core/test_object_pool.cpp
     # Pipeline tests

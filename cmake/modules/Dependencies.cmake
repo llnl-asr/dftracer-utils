@@ -358,6 +358,9 @@ set(DFTRACER_UTILS_ROCKSDB_VERSION
 set(DFTRACER_UTILS_ROCKSDB_PREFIX
     "$ENV{DFTRACER_UTILS_ROCKSDB_PREFIX}"
     CACHE PATH "Install prefix of a prebuilt RocksDB to use instead of source")
+set(DFTRACER_UTILS_DEPS_PREFIX
+    "$ENV{DFTRACER_UTILS_DEPS_PREFIX}"
+    CACHE PATH "Directory that keeps dependency installs between builds")
 
 # Consume a RocksDB install tree built by scripts/ci/build_rocksdb.sh.
 function(_use_prebuilt_rocksdb PREFIX)
@@ -1920,6 +1923,82 @@ function(need_vectorscan)
   endif()
   include(ExternalProject)
 
+  set(hs_version 5.4.12)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES
+                                            "x86_64|AMD64")
+    set(hs_fat ON)
+  else()
+    set(hs_fat OFF)
+  endif()
+  # RelWithDebInfo by default, so Valgrind reports name hs_scan and the
+  # suppression for Vectorscan's deliberate over-reads can match it. Wheels
+  # set DFTRACER_UTILS_DEPS_BUILD_TYPE=Release.
+  set(hs_build_type ${DFTRACER_UTILS_DEPS_BUILD_TYPE})
+  set(hs_args "")
+  if(CMAKE_OSX_DEPLOYMENT_TARGET)
+    list(APPEND hs_args
+         "-DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}")
+  endif()
+  if(CMAKE_OSX_ARCHITECTURES)
+    list(APPEND hs_args
+         "-DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}")
+  endif()
+  foreach(lang C CXX)
+    if(CMAKE_${lang}_COMPILER_ID STREQUAL "GNU")
+      list(APPEND hs_args "-DCMAKE_${lang}_FLAGS=-Wno-psabi")
+    endif()
+  endforeach()
+  set(hs_fixed_args
+      -Wno-dev
+      -DCMAKE_BUILD_TYPE=${hs_build_type}
+      -DCMAKE_INSTALL_LIBDIR=lib
+      -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+      -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+      -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+      -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+      -DBUILD_STATIC_LIBS=ON
+      -DBUILD_SHARED_LIBS=OFF
+      -DBUILD_UNIT=OFF
+      -DBUILD_TOOLS=OFF
+      -DBUILD_EXAMPLES=OFF
+      -DBUILD_BENCHMARKS=OFF
+      -DBUILD_DOC=OFF
+      -DBUILD_CHIMERA=OFF
+      -DFAT_RUNTIME=${hs_fat})
+
+  # Everything that changes the installed library. An existing install is
+  # reused only when the fingerprint stored beside it equals this one, so a
+  # copy built with other flags, another compiler or another version is
+  # rebuilt, never used.
+  string(
+    SHA256 hs_fingerprint
+    "vectorscan ${hs_version}|${CMAKE_SYSTEM_NAME} ${CMAKE_SYSTEM_PROCESSOR}|${CMAKE_C_COMPILER} ${CMAKE_C_COMPILER_VERSION}|${CMAKE_CXX_COMPILER} ${CMAKE_CXX_COMPILER_VERSION}|${hs_fixed_args}|${hs_args}"
+  )
+  string(SUBSTRING "${hs_fingerprint}" 0 16 hs_fingerprint_short)
+  if(DFTRACER_UTILS_DEPS_PREFIX)
+    set(hs_prefix
+        "${DFTRACER_UTILS_DEPS_PREFIX}/vectorscan-${hs_fingerprint_short}")
+  else()
+    set(hs_prefix "${CMAKE_BINARY_DIR}/_deps/vectorscan-install")
+  endif()
+  set(hs_lib "${hs_prefix}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}hs${CMAKE_STATIC_LIBRARY_SUFFIX}")
+  set(hs_stamp "${hs_prefix}/.dftracer-fingerprint")
+
+  add_library(dftracer_utils_hs STATIC IMPORTED GLOBAL)
+  set_target_properties(
+    dftracer_utils_hs PROPERTIES IMPORTED_LOCATION "${hs_lib}"
+                                 INTERFACE_INCLUDE_DIRECTORIES
+                                 "${hs_prefix}/include/hs")
+
+  if(EXISTS "${hs_lib}" AND EXISTS "${hs_stamp}")
+    file(READ "${hs_stamp}" hs_stored)
+    string(STRIP "${hs_stored}" hs_stored)
+    if(hs_stored STREQUAL hs_fingerprint)
+      dftracer_utils_ok("Vectorscan ${hs_version} reused from ${hs_prefix}")
+      return()
+    endif()
+  endif()
+
   find_program(RAGEL ragel)
   if(NOT RAGEL)
     cpmaddpackage(
@@ -1981,33 +2060,10 @@ function(need_vectorscan)
     NAME
     vectorscan
     URL
-    https://github.com/VectorCamp/vectorscan/archive/refs/tags/vectorscan/5.4.12.tar.gz
+    https://github.com/VectorCamp/vectorscan/archive/refs/tags/vectorscan/${hs_version}.tar.gz
     DOWNLOAD_ONLY
     YES)
 
-  if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES
-                                            "x86_64|AMD64")
-    set(hs_fat ON)
-  else()
-    set(hs_fat OFF)
-  endif()
-  set(hs_prefix "${CMAKE_BINARY_DIR}/_deps/vectorscan-install")
-  set(hs_lib "${hs_prefix}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}hs${CMAKE_STATIC_LIBRARY_SUFFIX}")
-  set(hs_args "")
-  # Debug symbols under Valgrind, so its reports name hs_scan and the
-  # suppression for Vectorscan's deliberate over-reads can match it.
-  set(hs_build_type Release)
-  if(DFTRACER_UTILS_VALGRIND_MODE)
-    set(hs_build_type RelWithDebInfo)
-  endif()
-  if(CMAKE_OSX_DEPLOYMENT_TARGET)
-    list(APPEND hs_args
-         "-DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}")
-  endif()
-  if(CMAKE_OSX_ARCHITECTURES)
-    list(APPEND hs_args
-         "-DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}")
-  endif()
   foreach(lang C CXX)
     if(CMAKE_${lang}_COMPILER_LAUNCHER)
       set(hs_launcher "${CMAKE_${lang}_COMPILER_LAUNCHER}")
@@ -2018,9 +2074,6 @@ function(need_vectorscan)
       endif()
       list(APPEND hs_args "-DCMAKE_${lang}_COMPILER_LAUNCHER=${hs_launcher}")
     endif()
-    if(CMAKE_${lang}_COMPILER_ID STREQUAL "GNU")
-      list(APPEND hs_args "-DCMAKE_${lang}_FLAGS=-Wno-psabi")
-    endif()
   endforeach()
   file(MAKE_DIRECTORY "${hs_prefix}/include/hs")
 
@@ -2029,36 +2082,25 @@ function(need_vectorscan)
     SOURCE_DIR "${vectorscan_SOURCE_DIR}"
     BINARY_DIR "${CMAKE_BINARY_DIR}/_deps/vectorscan-build"
     INSTALL_DIR "${hs_prefix}"
-    CMAKE_ARGS -Wno-dev
-               -DCMAKE_BUILD_TYPE=${hs_build_type}
+    CMAKE_ARGS ${hs_fixed_args}
                -DCMAKE_INSTALL_PREFIX=${hs_prefix}
-               -DCMAKE_INSTALL_LIBDIR=lib
-               -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
-               -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
-               -DCMAKE_POSITION_INDEPENDENT_CODE=ON
-               -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-               -DBUILD_STATIC_LIBS=ON
-               -DBUILD_SHARED_LIBS=OFF
-               -DBUILD_UNIT=OFF
-               -DBUILD_TOOLS=OFF
-               -DBUILD_EXAMPLES=OFF
-               -DBUILD_BENCHMARKS=OFF
-               -DBUILD_DOC=OFF
-               -DBUILD_CHIMERA=OFF
-               -DFAT_RUNTIME=${hs_fat}
                -DRAGEL=${RAGEL}
                ${boost_args}
                ${hs_args}
     BUILD_BYPRODUCTS "${hs_lib}"
     USES_TERMINAL_BUILD ON)
+  # Written only after the install step succeeded, so an interrupted build
+  # never leaves a prefix that looks complete.
+  file(WRITE "${CMAKE_BINARY_DIR}/_deps/vectorscan.fingerprint"
+       "${hs_fingerprint}")
+  ExternalProject_Add_Step(
+    dftracer_utils_vectorscan_ep fingerprint
+    COMMAND ${CMAKE_COMMAND} -E copy
+            "${CMAKE_BINARY_DIR}/_deps/vectorscan.fingerprint" "${hs_stamp}"
+    DEPENDEES install)
 
-  add_library(dftracer_utils_hs STATIC IMPORTED GLOBAL)
-  set_target_properties(
-    dftracer_utils_hs PROPERTIES IMPORTED_LOCATION "${hs_lib}"
-                                 INTERFACE_INCLUDE_DIRECTORIES
-                                 "${hs_prefix}/include/hs")
   add_dependencies(dftracer_utils_hs dftracer_utils_vectorscan_ep)
-  dftracer_utils_ok("Vectorscan 5.4.12 external static build (${hs_lib})")
+  dftracer_utils_ok("Vectorscan ${hs_version} external static build (${hs_lib})")
 endfunction()
 
 # ==============================================================================

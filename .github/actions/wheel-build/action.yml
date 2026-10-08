@@ -1,0 +1,155 @@
+name: Build and test one wheel
+description: Build and test the wheel of one Python version, with sccache.
+
+inputs:
+  python:
+    description: The Python tag without the dot, such as 312.
+    required: true
+  sccache-bucket:
+    required: true
+  sccache-endpoint:
+    required: true
+  sccache-access-key-id:
+    required: true
+  sccache-secret-access-key:
+    required: true
+  publish:
+    description: Embed the built web UI and upload the wheel as an artifact.
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Select newer Xcode (macOS)
+      if: runner.os == 'macOS'
+      uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: "16.2"
+
+    - name: Set up sccache (macOS host)
+      if: runner.os == 'macOS'
+      uses: mozilla-actions/sccache-action@v0.0.11
+
+    - name: Set up Node (publish)
+      if: inputs.publish == 'true'
+      uses: actions/setup-node@v6
+      with:
+        node-version: "20"
+        cache: npm
+        cache-dependency-path: web/package-lock.json
+
+    - name: Build web UI (publish)
+      if: inputs.publish == 'true'
+      shell: bash
+      working-directory: web
+      run: |
+        npm ci
+        npm run build
+
+    - name: Cache CPM dependency sources
+      uses: actions/cache@v5
+      with:
+        path: .cpmsource
+        key: cpmsource-full-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
+        restore-keys: |
+          cpmsource-full-v1-
+
+    - name: Resolve the pre-release version
+      # scikit-build-core never runs setup.py, so the .postN.dev0 scheme the
+      # sibling repos set there cannot be expressed in pyproject: a custom
+      # version_scheme needs a registered entry point. Hand it over instead.
+      shell: bash
+      run: |
+        described=$(git describe --tags --long --match 'v*')
+        tag=${described%-*-g*}
+        distance=${described#"$tag"-}
+        distance=${distance%-g*}
+        tag=${tag#v}
+        if [ "$distance" = "0" ]; then v="$tag"; else v="$tag.post$distance.dev0"; fi
+        echo "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DFTRACER_UTILS=$v" >> "$GITHUB_ENV"
+        echo "building version $v"
+
+    - name: Restore dependency installs
+      shell: bash
+      env:
+        SCCACHE_BUCKET: ${{ inputs.sccache-bucket }}
+        SCCACHE_ENDPOINT: ${{ inputs.sccache-endpoint }}
+        AWS_ACCESS_KEY_ID: ${{ inputs.sccache-access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.sccache-secret-access-key }}
+      run: |
+        mkdir -p .deps
+        scripts/ci/deps_cache.sh restore wheel .deps
+
+    - name: Build the RocksDB install (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "11.0"
+        DEPS_BUILD_TYPE: Release
+        ZSTD_STATIC: "1"
+      run: |
+        for f in cmake ninja; do brew list --versions "$f" >/dev/null || brew install "$f"; done
+        ROCKSDB_PREFIX="$GITHUB_WORKSPACE/.deps/rocksdb-$(scripts/ci/rocksdb_version.sh)" scripts/ci/build_rocksdb.sh
+
+    - name: Resolve the RocksDB version
+      shell: bash
+      run: echo "ROCKSDB_VERSION=$(scripts/ci/rocksdb_version.sh)" >> "$GITHUB_ENV"
+
+    - name: Build and test wheel
+      uses: pypa/cibuildwheel@v3.3.0
+      env:
+        CIBW_BUILD: cp${{ inputs.python }}-*
+        CIBW_SKIP: "*-win32 *-manylinux_i686 *-musllinux_* *-manylinux_ppc64le *-manylinux_s390x"
+        # build-dir is fixed, not build/{wheel_tag}: the path appears in the
+        # compiler input, so one per Python version would never hit.
+        CIBW_CONFIG_SETTINGS: "cmake.define.DFTRACER_UTILS_LOCAL_PACKAGES=OFF cmake.define.DFTRACER_UTILS_DEPS_BUILD_TYPE=Release build-dir=build/ci"
+        CIBW_BEFORE_ALL_LINUX: "sh /project/scripts/ci/install_sccache.sh && sh /project/scripts/ci/prebuild_wheel_deps.sh /deps"
+        CIBW_CONTAINER_ENGINE: "docker; create_args: --volume=${{ github.workspace }}/.deps:/deps"
+        # The container does not inherit the host env, so the version and the
+        # cache settings must be passed in.
+        CIBW_ENVIRONMENT_PASS_LINUX: SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DFTRACER_UTILS ROCKSDB_VERSION SCCACHE_BUCKET SCCACHE_ENDPOINT AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+        CIBW_ENVIRONMENT_LINUX: >-
+          SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DFTRACER_UTILS=$SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DFTRACER_UTILS
+          CMAKE_C_COMPILER_LAUNCHER=sccache CMAKE_CXX_COMPILER_LAUNCHER=sccache CMAKE_ASM_COMPILER_LAUNCHER=sccache
+          SCCACHE_REGION=auto SCCACHE_S3_USE_SSL=true DFTRACER_UTILS_DEPS_PREFIX=/deps
+          DFTRACER_UTILS_ROCKSDB_PREFIX=/deps/rocksdb-$ROCKSDB_VERSION
+        CIBW_ENVIRONMENT_MACOS: >-
+          SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DFTRACER_UTILS=$SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DFTRACER_UTILS
+          CMAKE_C_COMPILER_LAUNCHER=sccache CMAKE_CXX_COMPILER_LAUNCHER=sccache CMAKE_ASM_COMPILER_LAUNCHER=sccache
+          SCCACHE_REGION=auto SCCACHE_S3_USE_SSL=true DFTRACER_UTILS_DEPS_PREFIX=$GITHUB_WORKSPACE/.deps
+          DFTRACER_UTILS_ROCKSDB_PREFIX=$GITHUB_WORKSPACE/.deps/rocksdb-$ROCKSDB_VERSION
+        SCCACHE_BUCKET: ${{ inputs.sccache-bucket }}
+        SCCACHE_ENDPOINT: ${{ inputs.sccache-endpoint }}
+        AWS_ACCESS_KEY_ID: ${{ inputs.sccache-access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.sccache-secret-access-key }}
+
+    - name: Save dependency installs
+      shell: bash
+      env:
+        SCCACHE_BUCKET: ${{ inputs.sccache-bucket }}
+        SCCACHE_ENDPOINT: ${{ inputs.sccache-endpoint }}
+        AWS_ACCESS_KEY_ID: ${{ inputs.sccache-access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.sccache-secret-access-key }}
+      run: |
+        # The container wrote them as root.
+        sudo chown -R "$(id -u):$(id -g)" .deps || true
+        scripts/ci/deps_cache.sh save wheel .deps
+
+    - name: Check wheel payload
+      shell: bash
+      run: |
+        python3 -m venv /tmp/wheelcheck
+        /tmp/wheelcheck/bin/pip install --quiet pytest
+        /tmp/wheelcheck/bin/pytest tests/python/test_wheel_contents.py -q
+
+    - name: Upload wheel (publish)
+      if: inputs.publish == 'true'
+      uses: actions/upload-artifact@v6.0.0
+      with:
+        name: cibw-wheels-${{ runner.os }}-${{ runner.arch }}-cp${{ inputs.python }}
+        path: ./wheelhouse/*.whl
+
+    - name: sccache stats (macOS host)
+      if: always() && runner.os == 'macOS'
+      shell: bash
+      run: sccache --show-stats || true

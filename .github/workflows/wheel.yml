@@ -1,0 +1,58 @@
+name: Wheel
+
+# Called once per platform. The cp312 wheel builds first and fills the
+# compiler cache, so the other Python versions of that platform start warm.
+on:
+  workflow_call:
+    inputs:
+      os:
+        description: The runner label of the platform.
+        required: true
+        type: string
+      publish:
+        description: Build for PyPI, with the web UI, and upload the wheels.
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  warm:
+    name: Wheel build (deps from source) on ${{ inputs.os }} (cp312)
+    runs-on: ${{ inputs.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/wheel-build
+        with:
+          python: "312"
+          sccache-bucket: ${{ secrets.SCCACHE_BUCKET }}
+          sccache-endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
+          sccache-access-key-id: ${{ secrets.SCCACHE_ACCESS_KEY_ID }}
+          sccache-secret-access-key: ${{ secrets.SCCACHE_SECRET_ACCESS_KEY }}
+          publish: ${{ inputs.publish }}
+
+  rest:
+    needs: warm
+    name: Wheel build (deps from source) on ${{ inputs.os }} (cp${{ matrix.python }})
+    runs-on: ${{ inputs.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["38", "39", "310", "311", "313", "314"]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/wheel-build
+        with:
+          python: ${{ matrix.python }}
+          sccache-bucket: ${{ secrets.SCCACHE_BUCKET }}
+          sccache-endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
+          sccache-access-key-id: ${{ secrets.SCCACHE_ACCESS_KEY_ID }}
+          sccache-secret-access-key: ${{ secrets.SCCACHE_SECRET_ACCESS_KEY }}
+          publish: ${{ inputs.publish }}

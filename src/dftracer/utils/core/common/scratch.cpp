@@ -101,6 +101,8 @@ std::string compute_scratch_root(std::uint64_t needed) {
     return best;
 }
 
+std::string compute_local_spill_root();
+
 std::string current_user() {
     std::string u = env_str("USER");
     if (u.empty()) u = env_str("LOGNAME");
@@ -113,10 +115,53 @@ std::string current_user() {
 
 std::atomic<std::uint64_t> g_session_counter{0};
 
+std::string compute_local_spill_root() {
+    std::string best;
+    std::uintmax_t best_avail = 0;
+    for (const auto& m : list_mounts()) {
+        if (m.kind != FilesystemKind::LOCAL) continue;
+        if (!writable_dir(m.mountpoint)) continue;
+        std::error_code ec;
+        const auto space = fs::space(m.mountpoint, ec);
+        if (ec || space.available <= best_avail) continue;
+        best_avail = space.available;
+        best = m.mountpoint;
+    }
+    // No mount root is writable by an ordinary user (the usual case: users
+    // own directories under a mount, not the mount itself), so try the
+    // per-user places that live on disk: /var/tmp, then ~/.cache.
+    if (best.empty()) {
+        std::vector<std::string> candidates{"/var/tmp"};
+        const std::string home = env_str("HOME");
+        if (!home.empty()) candidates.push_back(home + "/.cache");
+        for (const auto& c : candidates) {
+            if (filesystem_kind(c) == FilesystemKind::LOCAL &&
+                writable_dir(c)) {
+                best = c;
+                break;
+            }
+        }
+    }
+    if (best.empty()) return {};
+    const std::string dir =
+        (fs::path(best) / current_user() / "dftracer-utils" / "spill")
+            .lexically_normal()
+            .string();
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    if (ec || !fs::is_directory(dir, ec)) return {};
+    return dir;
+}
+
 }  // namespace
 
 const std::string& scratch_root() noexcept {
     static const std::string root = compute_scratch_root(0);
+    return root;
+}
+
+const std::string& local_spill_root() noexcept {
+    static const std::string root = compute_local_spill_root();
     return root;
 }
 

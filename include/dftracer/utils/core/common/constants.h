@@ -6,8 +6,8 @@
 #include <cstdint>
 
 namespace dftracer::utils::constants {
-/// Directory that holds every spill file; the system temp directory when
-/// unset or empty.
+/// Directory that holds every spill file; when unset or empty, a writable
+/// node-local disk mount, else the system temp directory (spill_dir()).
 inline constexpr const char* SPILL_DIR_ENV = "DFTRACER_UTILS_SPILL_DIR";
 
 namespace indexer {

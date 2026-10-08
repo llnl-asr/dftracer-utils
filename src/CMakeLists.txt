@@ -49,6 +49,8 @@ set(DFTRACER_UTILS_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/filesystem_info.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/scratch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/memory_budget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/spill_dir.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/spill_file.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/base64.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/env.cpp
     # Utilities

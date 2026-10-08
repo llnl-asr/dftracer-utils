@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <fstream>
 #include <random>
 #include <sstream>
@@ -82,9 +83,11 @@ fs::path matrix_run(const ScopedTestDir& d, std::int64_t ppn,
     return dir;
 }
 
+constexpr std::uint64_t TEST_SHARE = 256ULL * 1024 * 1024;
+
 coro::CoroTask<void> process_into(CoroScope& ctx, RunGroup g,
-                                  GroupResult* out) {
-    *out = co_await process_group(ctx, std::move(g));
+                                  std::uint64_t share, GroupResult* out) {
+    *out = co_await process_group(ctx, std::move(g), share);
 }
 
 coro::CoroTask<void> discover_into(CoroScope& ctx, std::string root,
@@ -93,10 +96,11 @@ coro::CoroTask<void> discover_into(CoroScope& ctx, std::string root,
     *out = co_await discover(ctx, std::move(roots));
 }
 
-GroupResult process(RunGroup g) {
+GroupResult process(RunGroup g, std::uint64_t share = TEST_SHARE) {
     GroupResult out;
-    dftu_utils_test::run_coro(
-        [&](CoroScope& ctx) { return process_into(ctx, std::move(g), &out); });
+    dftu_utils_test::run_coro([&](CoroScope& ctx) {
+        return process_into(ctx, std::move(g), share, &out);
+    });
     return out;
 }
 
@@ -693,4 +697,93 @@ TEST_CASE("a trace file name that matches no layout is reported") {
     CHECK(disc.groups.empty());
     REQUIRE(disc.skips.size() == 1);
     CHECK(disc.skips[0].reason == "unrecognized trace file name");
+}
+
+namespace {
+
+constexpr std::uint64_t TINY_SHARE = 4ULL * 1024 * 1024;
+
+// Two ranks, nested calls and per-rank counters: enough calls that a tiny
+// share keeps no chunk in memory and the sort writes several runs.
+std::string busy_trace() {
+    std::string t =
+        rank(1, 0, 4000000) + rank(2, 0, 4000000) +
+        papi(1, 0, "PAPI_TOT_CYC", 0) + papi(1, 2000000, "PAPI_TOT_CYC", 7) +
+        host("io", "nvme0n1", 0, R"("bytes_read":0)") +
+        host("io", "nvme0n1", 2000000, R"("bytes_read":64)") +
+        call(1, 1, "main", 0, 3900000) + call(2, 2, "main", 0, 3900000);
+    for (int i = 0; i < 30000; ++i)
+        for (int pid = 1; pid <= 2; ++pid)
+            t += call(pid, pid, "w" + std::to_string(i % 7), 100 + i * 100,
+                      50 + i % 13);
+    return t;
+}
+
+struct SpillDirGuard {
+    explicit SpillDirGuard(const std::string& dir) {
+        ::setenv("DFTRACER_UTILS_SPILL_DIR", dir.c_str(), 1);
+    }
+    ~SpillDirGuard() { ::unsetenv("DFTRACER_UTILS_SPILL_DIR"); }
+};
+
+}  // namespace
+
+TEST_CASE("a share that keeps nothing in memory gives the same output") {
+    ScopedTestDir d("genesis_share");
+    ScopedTestDir spill("genesis_share_spill");
+    SpillDirGuard guard(spill.str());
+    matrix_run(d, 2, busy_trace());
+    auto disc = discover_dir(d);
+    REQUIRE(disc.groups.size() == 1);
+    auto big = process(disc.groups[0], TEST_SHARE);
+    auto tiny = process(disc.groups[0], TINY_SHARE);
+    REQUIRE(big.runs.size() == 1);
+    REQUIRE(tiny.runs.size() == 1);
+    CHECK(big.skips.empty());
+    CHECK(tiny.skips.empty());
+    CHECK(big.runs[0].lines == tiny.runs[0].lines);
+    // The tiny share really went to disk, the big one did not.
+    CHECK(tiny.spilled_bytes > 0);
+    CHECK(tiny.sort_runs > 1);
+    CHECK(big.spilled_bytes == 0);
+    CHECK(big.sort_runs == 0);
+}
+
+TEST_CASE("a group that must spill names the spill directory when it fails") {
+    ScopedTestDir d("genesis_nospill");
+    matrix_run(d, 2, busy_trace());
+    const fs::path blocked = d.path() / "blocked";
+    std::ofstream(blocked) << "not a directory";
+    SpillDirGuard guard(blocked.string());
+    auto disc = discover_dir(d);
+    REQUIRE(disc.groups.size() == 1);
+    auto r = process(disc.groups[0], TINY_SHARE);
+    CHECK(r.runs.empty());
+    REQUIRE(r.skips.size() == 1);
+    CHECK(r.skips[0].reason.find("DFTRACER_UTILS_SPILL_DIR") !=
+          std::string::npos);
+}
+
+TEST_CASE(
+    "path records beyond the state share skip the run and name the share") {
+    ScopedTestDir d("genesis_state");
+    // About 200 bytes per path record, so 20000 paths pass the state quarter
+    // of the tiny share and fit that of the test share.
+    constexpr int PATHS = 20000;
+    std::string t = rank(1, 0, PATHS * 100);
+    for (int i = 0; i < PATHS; ++i)
+        t += call(1, 1, "f" + std::to_string(i), i * 100, 50);
+    matrix_run(d, 1, t);
+    auto disc = discover_dir(d);
+    REQUIRE(disc.groups.size() == 1);
+    auto tiny = process(disc.groups[0], TINY_SHARE);
+    CHECK(tiny.runs.empty());
+    REQUIRE(tiny.skips.size() == 1);
+    CHECK(tiny.skips[0].reason.find("memory budget exceeded") !=
+          std::string::npos);
+    CHECK(tiny.skips[0].reason.find(std::to_string(TINY_SHARE)) !=
+          std::string::npos);
+    auto big = process(disc.groups[0], TEST_SHARE);
+    CHECK(big.skips.empty());
+    CHECK(big.runs.size() == 1);
 }

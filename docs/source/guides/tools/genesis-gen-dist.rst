@@ -34,6 +34,45 @@ the first line end after ``--member-size`` uncompressed bytes (the checkpoint
 size, 32 MiB, by default; units such as ``512KB`` are accepted), so a large
 run spreads over several members that readers decode in parallel.
 
+Memory
+~~~~~~
+
+The tool holds at most ``--memory-budget`` bytes (default: a third of the
+memory available to the process, so a cgroup limit is respected) however large
+a run is. An eighth of it goes to the gzip writer, and the rest is shared by
+the runs that are processed at the same time, as long as each has a share of
+at least 64 MB. Within a run, the decoded calls stay in memory up to their
+share; the rest go to a temporary file, are sorted there in runs of the
+share's size, and are merged back in order. Each worker writes a run as soon
+as it is done, and the members are compressed and written in parallel, so no
+run waits for another. The output holds the same lines whatever the budget
+and the thread count, but not in the same order: runs, and the members of one
+run, appear in the order they finish.
+
+The temporary file goes to ``DFTRACER_UTILS_SPILL_DIR`` when it is set. When it
+is not, the tool picks the writable node-local disk mount with the most free
+space, never a RAM-backed or network one. When no mount root is writable by
+you, it uses a per-user directory under ``/var/tmp`` or ``~/.cache`` on a local
+disk, and as a last resort the system temp directory, with a warning when that
+is RAM-backed. The file is removed as soon as it is created, so
+nothing is left behind.
+
+.. code-block:: bash
+
+   # Keep the tool under 64 GB; name the spill directory only to override it
+   dftracer_genesis_gen_dist ./laghos -o genesis.pfw.gz --memory-budget 64GB
+
+A spill directory that sits in memory counts against the memory limit, so
+only set ``DFTRACER_UTILS_SPILL_DIR`` to a disk. Memory beyond the budget is still used by the process itself (threads,
+libraries, I/O buffers, about 50 MB), by the output lines of each run being
+written, and by the decoded size of one gzip member per open reader: a
+trace written as a single huge gzip member is decoded whole, so split it first
+with ``dftracer_split``.
+
+A run whose counter series or path records alone exceed its share is skipped
+with a reason that names the share, and the exit status is 1. Raise
+``--memory-budget`` for it.
+
 A run that cannot be used is skipped with one line on stderr naming the run
 directory, the file and the reason, for example a truncated ``.pfw.gz``, a
 process without its ``start`` or ``end`` event, missing time slices or a
@@ -93,9 +132,8 @@ JSON paths does not grow with the number of counters. ``dur`` has ``min``,
 ``max``, ``sum``, ``avg``, ``p25``, ``p50``, ``p75``, ``p90``, ``p99`` and
 ``sketch``. ``v`` has ``n`` (the calls that received a value), ``min``,
 ``max``, ``avg``, the same percentiles and ``sketch``, plus ``sum`` for
-``delta`` counters only. Within a run the ``run`` line comes first, then
-for each path, in order, its ``func`` line and its ``counter`` lines by
-``metric``.
+``delta`` counters only. Every record carries its ``run``, so a reader groups
+records by it and does not depend on their order in the file.
 
 ``sketch`` is the DDSketch behind the percentiles, as base64 text of its
 serialized form. A reader can decode and merge the sketches of several

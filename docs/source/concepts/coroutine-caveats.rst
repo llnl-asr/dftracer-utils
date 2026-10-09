@@ -135,6 +135,26 @@ pipeline coroutine (with one minimal public entry point that just moves its
 arguments and returns) was the fix. Which approach wins is code-dependent; the
 guiding metric is *fewer live non-trivial locals across suspension points.*
 
+Symmetric transfer and the stack
+-------------------------------
+
+Returning a coroutine handle from ``await_suspend`` (symmetric transfer) keeps
+the stack flat only when the compiler makes the resume a tail call. GCC does
+that only with sibling-call optimization, which ``-O0``, ``-Og`` and ``-O1``
+leave off (GCC 11 to 15, bug 100897). Without it, each awaited task that ends
+at once adds stack frames, and a loop of such awaits overflows the 8 MiB
+thread stack: a spilling join in a GCC Debug build did that after about
+50,000 frames.
+
+So ``CoroTask``, ``AsyncGenerator::next()`` and ``YieldCheckAwaitable`` do not
+return a handle to continue. The awaiter resumes the child on its own stack
+and returns ``bool``. The child's final suspend (or ``co_yield``) and the
+awaiter both exchange the promise's ``handoff_`` flag, and the second to arrive
+continues the awaiter: the awaiter, by not suspending, when the child ended at
+once, or the child, by resuming the awaiter, when it suspended first. Do not
+change these back to ``return handle``. ``tests/coro/test_async_generator.cpp``
+awaits a million tasks that end at once to catch it.
+
 Thread safety
 -------------
 

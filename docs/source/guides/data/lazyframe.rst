@@ -124,23 +124,171 @@ budget reaches a plugin node in the plan and a plugin's fold slice, see
 
 Window functions stream under a budget: a chunk of the sorted input may end
 inside a partition, so a partition larger than the budget is fine for running
-sum, product, min and max, forward fill, ``row_number``, ``rank`` and
-``dense_rank``, and for ``lag``, ``lead``, ``delta`` and bounded row frames
-(min, max, count, and sums over integers). That covers ``cumsum``, ``cummax``,
-``cummin``, ``cumcount``, ``cumprod``, ``shift``, ``diff``, ``pct_change``,
-``ffill``, ``bfill``, ``rolling_min``, ``rolling_max``, the min, dense and
-ordinal ranks, and ``head``, ``tail`` and ``nth``, with or without partition
-columns. Two limits remain. A window with any other function (``ntile``,
-``percent_rank``, ``cume_dist``, a frame with no bound or over a range,
-distinct or collect frames, ``sessionize``, a float sum or mean over a frame,
-the average and max ranks) holds one whole partition in memory, so a single
-partition larger than the budget needs that much memory, and with no partition
-columns that is the whole input. And ``compare_agg`` over plans whose column
-names are only known after they run spools both plans and builds its join at
-run time; it reads the column types off the first morsel, so an empty side
-gets no ``delta_`` or ``pct_`` columns. The spill directory is
-``DFTRACER_UTILS_SPILL_DIR`` or a node-local disk, see
-:doc:`../runtime/memory-budget`.
+sum, product, min, max and forward fill, ``row_number``, ``rank``,
+``dense_rank``, ``lag``, ``lead``, ``delta`` and ``rate``, for row frames and
+range frames of min, max, count, integer sum, quantile, distinct count and arg
+min and max, for float sums and means of row frames, and for ``sessionize``.
+``ntile``, ``percent_rank``, ``cume_dist`` and frames over a whole partition
+(count, min, max, integer sum) are answered from per-partition figures
+collected while the sort reads its input. That covers ``cumsum``, ``cummax``,
+``cummin``, ``cumcount``, ``cumprod``, ``shift``, ``diff``, ``ffill``,
+``bfill``, ``rolling_*``, ``rank``, ``head``, ``tail`` and ``nth`` of a
+group-by, with or without partition columns. The simple cumulative functions
+(``cumsum``, ``cummax``, ``cummin``, ``cumprod``, ``cumcount``, ``shift``,
+``diff`` and ``ffill`` over numeric columns) are one native step: a hash pass in
+input order when their groups fit the budget, a spilled sort by group and
+back by row otherwise.
+
+Frames from the partition start (count, integer sum, min and max over a row or
+range frame, float sums, means, variance and standard deviation over a row
+frame), variance and standard deviation frames, float sums and means over a
+range frame, collect frames, ``first_value``, ``nth_value`` and ``last_value``
+stream too, from state carried across the cut. ``last_value`` and the shift a
+variance centers on depend on the sorted order of the whole partition, and a
+window with more partitions than the figures table holds (an eighth of the
+budget) has no table: for these the sorted stream is written once to a spool
+(a quarter of the budget in memory, the rest on disk) while the figures of each
+partition are collected in sorted order, and the window then reads the spool
+and the figures back in step. ``nth_value`` holds back the ``n - 1`` rows
+before the row it reads, so a large ``n`` needs that many rows.
+
+A frame that ends at the partition end starts each partition from its figures,
+which hold every row entered in the window's order, and drops the rows behind
+it one by one, keeping at most the rows the frame reaches back. This covers
+count, sum and mean over a row frame or a range frame, and min, max, variance
+and standard deviation over a row frame. The sum, mean, variance and standard
+deviation over a whole partition come from the figures too. A variance reads the
+spool a second time, because the Welford steps start from the shift the first
+pass ends with. A min or max to the end needs the best of the rows still ahead,
+and a variance needs to know whether the rows left are all equal, so the sorted
+spool is also read backwards once and a column per function is written in the
+morsels of the rows and read back with them; the chunk keeps those values for
+the rows the frame reaches back. A range frame to the end gives the rows whose
+order value is missing (null or NaN, which sort last) one frame of their own;
+the float sum or mean of that frame depends on the order the kernel adds and
+subtracts in, so the second pass over the spool replays it once per partition.
+A min or max of a text column from the partition start to the row or a few rows
+after it carries its best value across the cut. Range and row frames, and
+running functions, may share a window as long as each stays within the limits
+below.
+
+Four limits remain. A window with any other function holds one whole partition
+in memory, so a single partition larger than the budget needs that much memory,
+and with no partition columns that is the whole input: a quantile, distinct
+count, arg min, arg max or collect frame from the partition start or to the
+partition end (their state or result grows with the partition); a min, max,
+variance, standard deviation or order statistic over a range frame that ends at
+the partition end; a float sum, mean or variance over a range frame from the
+partition start (rows with a null order value would drop the whole prefix, in
+float order); and running functions that are mixed with ranks, ``lag``,
+``lead``, ``delta``, ``rate`` or a frame the kernel answers from the rows
+around the cut, or that read one column twice (a running sum and a running min
+of the same column), because they are continued from one seed row that holds a
+single value per column. ``nth_value`` holds back ``n - 1`` rows. A range frame
+needs one numeric order column, and in a range frame that does not end at the
+partition end the rows whose order value is missing sort last and are held
+until their partition ends. ``compare_agg`` over plans whose column types are
+only known after they run reads the types off the first morsel, so an empty
+side gets no ``delta_`` or ``pct_`` columns.
+
+An op that makes more rows than it reads hands them on in morsels that fit a
+quarter of the budget: ``join`` (a left morsel that matches many right rows,
+and the unmatched right rows of a right or outer join), ``explode``,
+``unpivot``, ``to_dummies``, and the results of ``take``,
+``group_by_dynamic`` and a ``group_by`` with aggregates that name their own
+columns. One input row whose list or matches alone are larger than
+that share still comes out whole. ``unpivot`` lists each slice of its input by
+value column, so the order of its rows follows the morsels: with a budget the
+slices are smaller, and the rows of one value column come out in input order but
+interleaved with the other columns differently. A cross join keeps a right side that fits a
+quarter of the budget in memory and spools a larger one, joining it chunk by
+chunk against each slice of the left, so the rows of one left slice come out by
+right chunk, not by left row.
+
+A join whose right side passes the budget is split on the key into partitions
+on disk. A partition that one key fills cannot be split, so its right side is
+read in blocks that fit the budget and the whole left partition is probed
+against each block: a left or outer join emits a left row that no block
+matched once, at the end, a semi join emits a matched left row once, and an
+anti join the rows that no block matched. A lookup join reads such a partition
+in blocks too and keeps, per key, only its first right row and whether the
+rows of the key differ, then probes the left partition once; it throws what
+the in-memory join throws. That per-key state (a row and the key text for each
+distinct key of the partition) is held in memory. A nest join packs the keys
+of such a partition into groups that fit a block and joins one group per pass
+over the right side: a left row leaves with its list in the pass of its key,
+and a left row with no match at the end with an empty list. The list of a row
+holds its key's right rows in right order, as in memory, so one key whose rows
+pass the budget still makes one list that passes it. Each probe takes as many
+left rows as the output share allows from what the last probes made.
+
+``asof`` and ``interval`` stream under a budget. Both plans are sorted by
+(``by`` keys, time) with the spilling sort and merged, so the join holds only
+what the merge is on: for ``asof`` the right rows around the current left time
+(the first and last row of the latest run of equal times), and for ``interval``
+the ranges that are open at the current point, copied out of their morsels so a
+long range does not keep a whole morsel. The rows come out ordered by (``by``,
+time) with ties in input order, the order of the eager ops, in morsels of a
+quarter of the budget; the pairs of one point that lies in more ranges than
+fit that share are cut into several morsels. A plan with no budget runs under
+the automatic one. When a plan's columns are only known after it runs (a
+``pivot``, a ``to_dummies``), both plans are collected and the eager op runs. A range that is open at a
+point is held in memory whatever the budget: ``interval`` over ranges that
+all contain one point needs that many rows.
+
+Some ops do not follow the budget. The registry frame ops (``gap_fill``, and
+a window with no budget) take their input as
+one frame, so the whole input and the whole result are in memory at once. A
+frame op that has a native lazy op of the same name (``unique``, ``sort_by``,
+``group_by``, ``join``, ``topk`` and the like) runs as that op, so it follows
+the budget; so do ``filter`` by a mask column (``filter_mask``),
+``sort_by_multi_per_col`` (``sort_by_multi``) and ``group_by_dynamic``. A
+``column_op`` runs one morsel at a time when its op gives each row
+from the same row of its operands (arithmetic, comparison, ``cast``, the string
+and date ops). Under a budget, ``cumsum``, ``cum_prod``, ``cummax`` and
+``cummin`` of an integer column and ``ffill``, ``diff`` and ``shift`` (by 0 to
+1024 rows) of a numeric column also run one morsel at a time, with the running
+value or the last rows of the morsel before carried over, so the result is the
+op over the whole column, nulls and wrap-around included; the same ops over a
+float column (a float sum depends on its order), ``rolling_*`` and any other
+sorting, ranking or reducing column op need the whole column. A ``with_column``
+of a column takes the matching rows of the column one morsel at a time. Any
+other registry frame op (``union``, ``concat``, ``gap_fill``) holds its input
+in memory up to a quarter of the budget and maps the rest from a spill file. The
+mapped part costs memory only while the op reads it, but an op that needs one
+contiguous column (a sort, a rank, a running op) copies that column back into
+memory, and the op makes its whole result in memory: such an op holds one
+column and its whole result. One group
+larger than the budget stays whole: a group is never split, and a ``group_by``
+that is still too large after three rounds of splitting its spill parts keeps
+the part in memory. ``list_sorted`` and ``set_union`` keep every value of a
+group, and their result for the group is as large as the group, so the budget
+cannot bound them (``distinct`` and ``pct`` keep a sketch of fixed size). A
+``group_by`` with dyn aggregates finalizes each spill part under the dyn column
+names of all of them. A plugin node gets the plan's budget, but the host can
+only ask it for bytes to give back: it cannot make the node stay under the
+budget.
+
+A resident in-memory source with no budget and no ``morsel_rows`` runs each op
+over whole columns, as the eager API does, when the frame takes at most half of
+the automatic budget. A plan with an op that can make more
+than it reads (``join``, ``explode``, ``unpivot``, ``pivot``, ``to_dummies``,
+``unnest``, ``concat``, ``take``, a ``group_by_dynamic`` whose period is longer
+than its step, a registry frame op or a plugin node) streams under the automatic
+budget instead. Group transforms, windows and column ops keep their input rows
+and stay whole-column. A ``topk`` whose ``k`` rows, at the width of the first
+morsel, do not fit half of the budget is cut from the spilling sort.
+
+``group_by_dynamic`` needs an ascending time column, as the eager op does: a
+window is final once a time past its end has been seen, so it leaves then and
+the op holds only the open windows (about ``period / every`` of them). A time
+below the one before raises ``ValueError`` (``std::invalid_argument``) in both
+the lazy and the eager op, which before put such a row in a wrong window or
+dropped it. ``to_dummies`` holds one entry and one output column
+per distinct value. ``tail(n)``, ``topk(k)``,
+``sample(n)`` and ``describe`` hold at most ``n`` or ``k`` rows or one figure
+per column. The spill directory is ``DFTRACER_UTILS_SPILL_DIR`` or a
+node-local disk, see :doc:`../runtime/memory-budget`.
 
 Bring your own source
 ---------------------

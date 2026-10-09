@@ -1686,6 +1686,13 @@ The other sides have no such cap:
   partition. The row order of a spilled join is not the order of the rows,
   and a side too large for the caps is not stored in the lookup cache.
 
+A stage that needs all its input rows at once runs on one collected frame:
+``pivot``, ``bucket ... fill``, the partition aggregates of ``group`` and the
+``overlap`` lookup. The plan below it spills past the memory budget, but the
+frame the stage reads is then whole in memory, so its size is bounded by the
+rows that reach the stage, not by the budget. Put a ``where``, a ``group`` or a
+``select`` before such a stage to keep that small.
+
 A term that joins runs after the scan, so the query cannot be exported with
 ``sink_json``; the other terms of its ``where`` still filter the scan.
 

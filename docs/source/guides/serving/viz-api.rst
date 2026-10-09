@@ -128,8 +128,9 @@ Other visualization routes
      - Records written without a clock (``ts`` 0, such as CUDA activity), which
        the timeline cannot place. Longest first, paged. Extra: ``duql``,
        ``file``, ``offset`` (default ``0``) and ``limit`` (default ``1000``,
-       at most ``10000``). No time window. The server sorts the matches once
-       and serves later pages from its result cache. The response carries
+       at most ``10000``). No time window. Each uncached page streams the
+       sorted matches and keeps only its own rows, so memory is bounded by
+       ``limit``; the page is then held in the result cache. The response carries
        ``events``, ``count`` (every match), ``offset`` and ``limit``.
 
 A couple of worked requests

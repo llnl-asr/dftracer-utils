@@ -1139,12 +1139,16 @@ may not push a filter or projection through the node, and ``explain`` names
 it. ``LazyFrame::op(name, args)`` / ``dftu_lazyframe_op`` stacks it on a
 plan like any built-in step. The cursor's optional slots let it take part in
 the plan's machinery: ``narrow`` forwards a join's key set to its input,
-``bytes`` / ``reclaim`` hold it to the memory budget
+``open`` receives the plan's memory budget in bytes, and ``bytes`` /
+``reclaim`` hold it to that budget
 (:doc:`guides/runtime/memory-budget`).
 
 In C++, ``plugins/plugin/node.h`` does the same for a node class:
 ``output_schema(SchemaView in, OpArgs args, SchemaBuilder& out)`` and
-``open(InputCursor in, OpArgs args)`` returning a cursor like a source's.
+``open(InputCursor in, OpArgs args, std::uint64_t memory_budget)`` returning
+a cursor like a source's. ``memory_budget`` is the plan's budget in bytes,
+never 0; a node that holds state sizes its spill threshold and its output
+frames from it.
 ``InputCursor`` owns the upstream: ``next()`` pulls it (running an upstream
 task to completion when it has to) and it is destroyed exactly once, by the
 node when ``open`` succeeds and by the host when it fails.
@@ -1158,7 +1162,8 @@ node when ``open`` succeeds and by the host when it fails.
            pl::InputCursor in;
            std::optional<pl::OwnedFrame> next(std::int64_t rows);  // pull, transform
        };
-       std::unique_ptr<Cursor> open(pl::InputCursor in, const pl::OpArgs&) const {
+       std::unique_ptr<Cursor> open(pl::InputCursor in, const pl::OpArgs&,
+                                    std::uint64_t) const {
            return std::make_unique<Cursor>(Cursor{std::move(in)});
        }
    };

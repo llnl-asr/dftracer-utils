@@ -5,6 +5,7 @@
 #include <dftracer/utils/core/common/spill_dir.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
+#include <unistd.h>
 
 #include <cstdlib>
 #include <fstream>
@@ -58,4 +59,25 @@ TEST_CASE("an unset variable gives a writable directory that is not RAM") {
     CHECK(out.good());
     out.close();
     fs::remove(probe);
+}
+
+TEST_CASE("the sweep removes dead directories of this host only") {
+    ScopedTestDir root("sweep_host");
+    EnvGuard env(root.path().c_str());
+    char host[256] = {};
+    ::gethostname(host, sizeof(host) - 1);
+    std::string tag(host);
+    for (char& c : tag)
+        if (c == '/' || c == '_') c = '-';
+    const auto dead_pid = "2147483646";
+    const auto mine =
+        root.path() / ("sweeptest_" + tag + "_" + dead_pid + "_0");
+    const auto other =
+        root.path() / (std::string("sweeptest_otherhost_") + dead_pid + "_0");
+    std::filesystem::create_directories(mine);
+    std::filesystem::create_directories(other);
+    auto sub = dftracer::utils::ScopedSpillSubdir::create("sweeptest");
+    REQUIRE(sub);
+    CHECK_FALSE(std::filesystem::exists(mine));
+    CHECK(std::filesystem::exists(other));
 }

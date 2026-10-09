@@ -101,8 +101,6 @@ std::string compute_scratch_root(std::uint64_t needed) {
     return best;
 }
 
-std::string compute_local_spill_root();
-
 std::string current_user() {
     std::string u = env_str("USER");
     if (u.empty()) u = env_str("LOGNAME");

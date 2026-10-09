@@ -9,10 +9,11 @@ namespace dftracer::utils::constants {
 /// Directory that holds every spill file; when unset or empty, a writable
 /// node-local disk mount, else the system temp directory (spill_dir()).
 inline constexpr const char* SPILL_DIR_ENV = "DFTRACER_UTILS_SPILL_DIR";
-/// "off" or "0" stores spilled morsels raw, "on" compresses each one with zstd
-/// level 1 (stored raw when that does not shrink it), and unset or "auto"
-/// compresses only when the spill file is on a network file system, where the
-/// bytes written cost more than the compression.
+/// "off" or "0" stores spilled morsels raw, "on", "1" or "zstd" compresses each
+/// one with zstd level 1 (stored raw when that does not shrink it), and unset,
+/// "auto" or any other value compresses only when the spill file is on a
+/// network file system, where the bytes written cost more than the
+/// compression.
 inline constexpr const char* SPILL_COMPRESS_ENV =
     "DFTRACER_UTILS_SPILL_COMPRESS";
 

@@ -55,10 +55,22 @@ Memory and kernels
      - Default
      - Effect
    * - ``DFTRACER_UTILS_SPILL_DIR``
-     - system temp directory
-     - Directory for every spill file of a collect, sort, group-by or join. A
-       directory that cannot be created or written fails the run. See
-       :doc:`guides/runtime/memory-budget`.
+     - a node-local disk
+     - Directory for every spill file of a collect, sort, group-by, join,
+       window or plugin state. When it is unset the writable node-local disk
+       mount with the most free space is used (never RAM-backed or network),
+       else the system temp directory. A directory that cannot be created or
+       written fails the run. Each query makes a ``dftu_lazy_<host>_<pid>_<n>``
+       directory in it and removes it when it ends; the first query of a
+       process also removes such directories of the same host left by processes that no
+       longer exist. See :doc:`guides/runtime/memory-budget`.
+   * - ``DFTRACER_UTILS_SPILL_COMPRESS``
+     - ``auto``
+     - ``on``, ``1`` or ``zstd`` compresses every spilled morsel with zstd
+       level 1 (a morsel that does not shrink is stored raw); ``off`` or ``0``
+       stores them raw. ``auto``, unset or any other value compresses only
+       when the spill file is on a network file system, where the bytes
+       written cost more than the compression.
    * - ``DFTRACER_UTILS_STRING_PREDICATE``
      - ``auto``
      - Scan used by the string class predicates (``isalpha``, ``isdigit`` and

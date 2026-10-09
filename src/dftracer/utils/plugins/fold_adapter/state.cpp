@@ -33,32 +33,17 @@ const char* err_text(const ::dftu_error& e) {
 
 }  // namespace
 
-SpillDir::~SpillDir() {
-    if (path_.empty()) return;
-    std::error_code ec;
-    fs::remove_all(path_, ec);
-}
-
 const std::string& SpillDir::path() {
-    if (!path_.empty()) return path_;
-    std::error_code ec;
-    const Result<std::string> root = dftracer::utils::spill_dir();
-    if (!root) {
-        DFTRACER_UTILS_LOG_ERROR("Plugin state spill directory: %s",
-                                 root.error().format().c_str());
-        return path_;
-    }
-    for (int attempt = 0; attempt < 64; ++attempt) {
-        fs::path p = fs::path(*root) /
-                     ("dftu_state_" + std::to_string(::getpid()) + "_" +
-                      std::to_string(reinterpret_cast<std::uintptr_t>(this)) +
-                      "_" + std::to_string(attempt));
-        if (fs::create_directory(p, ec)) {
-            path_ = p.string();
-            break;
+    if (!dir_) {
+        auto made = dftracer::utils::ScopedSpillSubdir::create("dftu_state");
+        if (!made) {
+            DFTRACER_UTILS_LOG_ERROR("Plugin state spill directory: %s",
+                                     made.error().format().c_str());
+            return empty_;
         }
+        dir_.emplace(std::move(*made));
     }
-    return path_;
+    return dir_->path();
 }
 
 const std::string& StateAccum::dir_path() {

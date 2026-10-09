@@ -1,11 +1,13 @@
 #ifndef DFTRACER_UTILS_PLUGINS_FOLD_ADAPTER_STATE_H
 #define DFTRACER_UTILS_PLUGINS_FOLD_ADAPTER_STATE_H
 
+#include <dftracer/utils/core/common/spill_dir.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/state_registry.h>
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -15,7 +17,6 @@ namespace dftracer::utils::plugins {
 class SpillDir {
    public:
     SpillDir() = default;
-    ~SpillDir();
     SpillDir(const SpillDir&) = delete;
     SpillDir& operator=(const SpillDir&) = delete;
 
@@ -23,7 +24,8 @@ class SpillDir {
     const std::string& path();
 
    private:
-    std::string path_;
+    std::optional<dftracer::utils::ScopedSpillSubdir> dir_;
+    std::string empty_;
 };
 
 /// One live instance of a plugin-registered dftu_state_desc: this slice's

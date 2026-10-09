@@ -89,6 +89,7 @@ set(TEST_CPP_SOURCES
     core/test_task_abi.cpp
     core/test_logging.cpp
     core/test_string_intern.cpp
+    core/test_hash_partition.cpp
     core/test_hex64.cpp
     core/test_eviction_policy.cpp
     core/test_filesystem_info.cpp

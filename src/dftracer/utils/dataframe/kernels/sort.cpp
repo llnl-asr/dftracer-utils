@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/internal/decimal.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
 #include <dftracer/utils/dataframe/internal/string_reader.h>
+#include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dataframe/kernels/sort.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <hwy/contrib/sort/vqsort.h>
@@ -116,6 +117,25 @@ Series argsort_string(const Series& v, bool descending) {
     return Series::flat_i64(idx.data(), n);
 }
 
+// The order of a sort: a float is ordered by compare_doubles (NaN greatest and
+// equal to NaN, -0.0 equal to +0.0), which is a strict weak order; `<` is not,
+// once a NaN is among the values. Every other type is ordered by cmp_row.
+int cmp_sort_row(const Series& v, std::int64_t a, std::int64_t b) {
+    switch (physical_type(v.type())) {
+        case TypeId::Float16:
+            return compare_doubles(
+                static_cast<double>(half_to_float(v.data<std::uint16_t>()[a])),
+                static_cast<double>(half_to_float(v.data<std::uint16_t>()[b])));
+        case TypeId::Float32:
+            return compare_doubles(static_cast<double>(v.data<float>()[a]),
+                                   static_cast<double>(v.data<float>()[b]));
+        case TypeId::Float64:
+            return compare_doubles(v.data<double>()[a], v.data<double>()[b]);
+        default:
+            return cmp_row(v, a, b);
+    }
+}
+
 Series argsort_scalar(const Series& v, bool descending) {
     if (is_string_column(*v.handle())) return argsort_string(v, descending);
     const std::int64_t n = v.length();
@@ -128,7 +148,7 @@ Series argsort_scalar(const Series& v, bool descending) {
                              bool na = v.is_null(a), nb = v.is_null(b);
                              if (na || nb) return nb && !na;  // nulls last
                          }
-                         int c = cmp_row(v, a, b);
+                         int c = cmp_sort_row(v, a, b);
                          return descending ? c > 0 : c < 0;
                      });
     return Series::flat_i64(idx.data(), n);

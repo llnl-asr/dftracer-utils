@@ -2,6 +2,7 @@
 #include <dftracer/utils/core/coro/async_generator.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 
 #include <chrono>
 #include <string>
@@ -58,6 +59,28 @@ static CoroTask<std::vector<std::string>> consume_string_generator(
         result.push_back(*value);
     }
     co_return result;
+}
+
+static CoroTask<int> parity(int i) { co_return i & 1; }
+
+static AsyncGenerator<int> ready_range(int n) {
+    for (int i = 0; i < n; ++i) co_yield co_await parity(i);
+}
+
+static CoroTask<long> sum_ready(int n) {
+    long sum = 0;
+    for (int i = 0; i < n; ++i) sum += co_await parity(i);
+    auto gen = ready_range(n);
+    while (auto v = co_await gen.next()) sum += *v;
+    co_return sum;
+}
+
+// Each await below ends at once. If one added stack frames, as a symmetric
+// transfer does when GCC does not make it a tail call, this would overflow
+// the stack long before the end.
+TEST_CASE("AsyncGenerator - awaits that end at once keep the stack flat") {
+    const int n = static_cast<int>(DFTRACER_UTILS_VALGRIND_SCALE(1000000, 10));
+    CHECK(sum_ready(n).get() == n);
 }
 
 TEST_CASE("AsyncGenerator - Basic async range generation") {

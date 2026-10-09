@@ -324,7 +324,8 @@ Series set_list_column(const AggState& st, std::size_t spec, std::int64_t ng) {
 // out, for a caller that writes them itself (the in-place group-by).
 static DataFrame finalize_impl(const AggState& st_in,
                                const std::vector<std::string>& key_names,
-                               bool with_keys) {
+                               bool with_keys,
+                               const AggDynLayout* layout = nullptr) {
     // A light state is read cell by cell, never expanded into field stats.
     const AggState& st =
         st_in.has_sketch || st_in.has_dyn ? settled(st_in) : st_in;
@@ -808,13 +809,12 @@ static DataFrame finalize_impl(const AggState& st_in,
         // Union of discovered argument names, sorted (std::set) so the dyn
         // column order is deterministic and matches the GroupMap path. Columns
         // are laid out name-outer, reduction-inner.
-        std::set<std::string> names;
-        for (const std::map<std::string, FieldStat>& gmap : st.dyn_fs)
-            for (const auto& [name, fs] : gmap) names.insert(name);
-        for (const std::string& name : names) {
-            const auto dit = st.dyn_domain.find(name);
-            const FieldStatDomain dom =
-                dit != st.dyn_domain.end() ? dit->second : FieldStatDomain::I64;
+        AggDynLayout own;
+        if (!layout) {
+            agg_dyn_layout_add(own, st);
+            layout = &own;
+        }
+        for (const auto& [name, dom] : *layout) {
             for (const AggDynSpec& d : st.dyn_specs) {
                 out.names.push_back(d.out_prefix + name);
                 auto fs_of = [&](std::int64_t g) -> const FieldStat* {
@@ -929,6 +929,24 @@ static DataFrame finalize_impl(const AggState& st_in,
 DataFrame agg_finalize(const AggState& st,
                        const std::vector<std::string>& key_names) {
     return finalize_impl(st, key_names, true);
+}
+
+void agg_dyn_layout_add(AggDynLayout& layout, const AggState& in) {
+    if (!in.has_dyn) return;
+    const AggState& state = settled(in);
+    for (const std::map<std::string, FieldStat>& gmap : state.dyn_fs)
+        for (const auto& [name, fs] : gmap) {
+            const auto dit = state.dyn_domain.find(name);
+            layout.emplace(name, dit != state.dyn_domain.end()
+                                     ? dit->second
+                                     : FieldStatDomain::I64);
+        }
+}
+
+DataFrame agg_finalize(const AggState& st,
+                       const std::vector<std::string>& key_names,
+                       const AggDynLayout& layout) {
+    return finalize_impl(st, key_names, true, &layout);
 }
 
 DataFrame agg_finalize_values(const AggState& st) {

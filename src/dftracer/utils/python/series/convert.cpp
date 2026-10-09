@@ -1,4 +1,5 @@
 // clang-format off
+#include <dftracer/utils/core/common/int128.h>
 #include <dftracer/utils/python/series_detail.h>  // Python.h first
 #include <datetime.h>
 // clang-format on
@@ -1359,7 +1360,7 @@ PyObject* build_deltas(PyObject** items, Py_ssize_t n, Bits& bits) {
                                      dataframe::TimeUnit::Micro, "", 0, 0, 0));
 }
 
-__extension__ typedef unsigned __int128 U128;
+using U128 = ::dftracer::utils::uint128_t;
 
 constexpr int MAX_DECIMAL_DIGITS = 38;
 

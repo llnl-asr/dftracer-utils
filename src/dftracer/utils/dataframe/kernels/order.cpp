@@ -43,13 +43,6 @@ int three_way(T a, T b) {
     return a < b ? -1 : (a > b ? 1 : 0);
 }
 
-int compare_doubles(double a, double b) {
-    const bool na = std::isnan(a);
-    const bool nb = std::isnan(b);
-    if (na || nb) return na == nb ? 0 : (na ? 1 : -1);
-    return three_way(a, b);
-}
-
 }  // namespace
 
 bool ColumnView::supports(TypeId t) noexcept { return kind_of(t).has_value(); }

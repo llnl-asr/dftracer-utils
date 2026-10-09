@@ -6,6 +6,7 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dataframe/grace_join.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <doctest/doctest.h>
 
@@ -13,6 +14,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -128,7 +130,7 @@ std::vector<std::string> reference(const Table& l, const Table& r,
 }
 
 DataFrame join(const DataFrame& l, const DataFrame& r, JoinHow how,
-               std::uint64_t budget) {
+               std::uint64_t budget, const std::string& suffix = "") {
     const LazyFrame left =
         LazyFrame::scan(std::make_shared<InMemorySource>(
                             DataFrame{l.names,
@@ -145,7 +147,58 @@ DataFrame join(const DataFrame& l, const DataFrame& r, JoinHow how,
                       for (const auto& s : r.columns) c.push_back(s.share());
                       return c;
                   }()}));
-    return run(left.join(right, {"lk"}, {"rk"}, how).collect(200));
+    return run(left.join(right, {"lk"}, {"rk"}, how, suffix).collect(200));
+}
+
+// One row per left row: its two columns and the list of (rk, rv) cells, in
+// the list's order; the rows sorted.
+std::vector<std::string> nest_rows_of(const DataFrame& f) {
+    const Series lk = f.column("lk").materialize();
+    const Series lv = f.column("lv").materialize();
+    const Series m = f.column("m").materialize();
+    const Series rows = m.child(0);
+    const Series rk = rows.child(0).materialize();
+    const Series rv = rows.child(1).materialize();
+    std::vector<std::string> out;
+    for (std::int64_t i = 0; i < f.num_rows(); ++i) {
+        std::string row =
+            (lk.is_null(i) ? std::string("n")
+                           : std::to_string(lk.data<std::int64_t>()[i])) +
+            "," + std::to_string(lv.data<std::int64_t>()[i]) + ":";
+        for (std::int32_t j = m.offsets()[i]; j < m.offsets()[i + 1]; ++j)
+            row += std::to_string(rk.data<std::int64_t>()[j]) + "=" +
+                   std::to_string(rv.data<std::int64_t>()[j]) + ";";
+        out.push_back(row);
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+// Left rows over null keys, key 3 and a few others; right rows in which the
+// value is a function of the key (a lookup needs that), key 3 holding most.
+void block_tables(Table& l, Table& r) {
+    for (int i = 0; i < 400; ++i) {
+        l.key.push_back(i % 7 == 0   ? Cell()
+                        : i % 3 == 0 ? Cell(i % 11)
+                                     : Cell(3));
+        l.value.push_back(i);
+    }
+    for (int i = 0; i < 1500; ++i) {
+        r.key.push_back(i % 13 == 0  ? Cell()
+                        : i % 9 == 0 ? Cell(i % 17)
+                                     : Cell(3));
+        r.value.push_back(r.key.back() ? *r.key.back() * 10 : i);
+    }
+}
+
+std::string error_of(const DataFrame& l, const DataFrame& r, JoinHow how,
+                     std::uint64_t budget) {
+    try {
+        (void)join(l, r, how, budget);
+    } catch (const std::invalid_argument& e) {
+        return e.what();
+    }
+    return "";
 }
 
 const JoinHow HOWS[] = {JoinHow::Inner, JoinHow::Left, JoinHow::Right,
@@ -181,6 +234,107 @@ TEST_SUITE("join spill") {
         const DataFrame rf = frame_of(r, "rk", "rv");
         for (const JoinHow how : {JoinHow::Inner, JoinHow::Outer})
             CHECK(rows_of(join(lf, rf, how, 512)) == reference(l, r, how));
+    }
+
+    TEST_CASE(
+        "one key that most rows of both sides hold joins block by block") {
+        Table l, r;
+        for (int i = 0; i < 400; ++i) {
+            l.key.push_back(i % 7 == 0   ? Cell()
+                            : i % 3 == 0 ? Cell(i % 11)
+                                         : Cell(3));
+            l.value.push_back(i);
+        }
+        for (int i = 0; i < 1500; ++i) {
+            r.key.push_back(i % 13 == 0  ? Cell()
+                            : i % 9 == 0 ? Cell(i % 17)
+                                         : Cell(3));
+            r.value.push_back(i * 10);
+        }
+        const DataFrame lf = frame_of(l, "lk", "lv");
+        const DataFrame rf = frame_of(r, "rk", "rv");
+        for (const JoinHow how : HOWS)
+            for (const std::uint64_t budget :
+                 {std::uint64_t{512}, std::uint64_t{4096}}) {
+                CAPTURE(static_cast<int>(how));
+                CAPTURE(budget);
+                const std::uint64_t before =
+                    dftracer::utils::dataframe::grace_join_blocks();
+                CHECK(rows_of(join(lf, rf, how, budget)) ==
+                      reference(l, r, how));
+                CHECK(dftracer::utils::dataframe::grace_join_blocks() >
+                      before + 1);
+            }
+    }
+
+    TEST_CASE("a lookup joins a partition that one key fills block by block") {
+        Table l, r;
+        block_tables(l, r);
+        const DataFrame lf = frame_of(l, "lk", "lv");
+        const DataFrame rf = frame_of(r, "rk", "rv");
+        const auto want =
+            rows_of(join(lf, rf, JoinHow::Lookup, NO_SPILL_BUDGET));
+        REQUIRE(want.size() == l.key.size());
+        for (const std::uint64_t budget :
+             {std::uint64_t{512}, std::uint64_t{4096}}) {
+            CAPTURE(budget);
+            const std::uint64_t before =
+                dftracer::utils::dataframe::grace_join_blocks();
+            CHECK(rows_of(join(lf, rf, JoinHow::Lookup, budget)) == want);
+            CHECK(dftracer::utils::dataframe::grace_join_blocks() > before + 1);
+        }
+    }
+
+    TEST_CASE("a lookup block by block refuses the conflict the join refuses") {
+        Table l, r;
+        block_tables(l, r);
+        r.value[1400] += 1;
+        r.key[1400] = 3;
+        const DataFrame lf = frame_of(l, "lk", "lv");
+        const DataFrame rf = frame_of(r, "rk", "rv");
+        const std::string want =
+            error_of(lf, rf, JoinHow::Lookup, NO_SPILL_BUDGET);
+        REQUIRE_FALSE(want.empty());
+        for (const std::uint64_t budget :
+             {std::uint64_t{512}, std::uint64_t{4096}})
+            CHECK(error_of(lf, rf, JoinHow::Lookup, budget) == want);
+    }
+
+    TEST_CASE("a nest joins a partition that one key fills block by block") {
+        Table l, r;
+        block_tables(l, r);
+        for (std::size_t i = 0; i < r.value.size(); ++i)
+            r.value[i] = static_cast<std::int64_t>(i);
+        const DataFrame lf = frame_of(l, "lk", "lv");
+        const DataFrame rf = frame_of(r, "rk", "rv");
+        const auto want =
+            nest_rows_of(join(lf, rf, JoinHow::Nest, NO_SPILL_BUDGET, "m"));
+        REQUIRE(want.size() == l.key.size());
+        for (const std::uint64_t budget :
+             {std::uint64_t{512}, std::uint64_t{4096}}) {
+            CAPTURE(budget);
+            const std::uint64_t before =
+                dftracer::utils::dataframe::grace_join_blocks();
+            CHECK(nest_rows_of(join(lf, rf, JoinHow::Nest, budget, "m")) ==
+                  want);
+            CHECK(dftracer::utils::dataframe::grace_join_blocks() > before);
+        }
+    }
+
+    TEST_CASE("a nest over a partition of null keys gives empty lists") {
+        Table l, r;
+        for (int i = 0; i < 100; ++i) {
+            l.key.push_back(i % 2 ? Cell() : Cell(i));
+            l.value.push_back(i);
+        }
+        for (int i = 0; i < 600; ++i) {
+            r.key.push_back(Cell());
+            r.value.push_back(i);
+        }
+        const DataFrame lf = frame_of(l, "lk", "lv");
+        const DataFrame rf = frame_of(r, "rk", "rv");
+        CHECK(nest_rows_of(join(lf, rf, JoinHow::Nest, 256, "m")) ==
+              nest_rows_of(join(lf, rf, JoinHow::Nest, NO_SPILL_BUDGET, "m")));
     }
 
     TEST_CASE("an empty side and no matching key") {

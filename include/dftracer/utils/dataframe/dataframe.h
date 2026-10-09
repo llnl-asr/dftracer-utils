@@ -282,7 +282,8 @@ struct DataFrame {
     /// `time_col`: windows start at the first time floored to a multiple of
     /// `every`, stride by `every`, and each covers `[start, start + period)`
     /// (`period <= 0` means "= every"). One row per non-empty window, a leading
-    /// Int64 `time_col` window-start column plus each aggregate.
+    /// Int64 `time_col` window-start column plus each aggregate. Throws
+    /// std::invalid_argument when a non-null time is below the one before.
     DataFrame group_by_dynamic(const std::string& time_col, std::int64_t every,
                                std::int64_t period,
                                const std::vector<GroupAgg>& aggs,

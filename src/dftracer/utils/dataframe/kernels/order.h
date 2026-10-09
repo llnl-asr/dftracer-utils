@@ -4,11 +4,21 @@
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
 
+#include <cmath>
 #include <cstdint>
 #include <string_view>
 #include <vector>
 
 namespace dftracer::utils::dataframe {
+
+/// The one order of doubles in the window kernels, sorts and merges: by value,
+/// NaN greatest and equal to NaN, -0.0 equal to +0.0.
+inline int compare_doubles(double a, double b) noexcept {
+    const bool na = std::isnan(a);
+    const bool nb = std::isnan(b);
+    if (na || nb) return na == nb ? 0 : (na ? 1 : -1);
+    return a < b ? -1 : (a > b ? 1 : 0);
+}
 
 /// A column resolved once for typed per-row reads, so a kernel's inner loop
 /// does pointer arithmetic instead of a call per cell. Holds its own reference

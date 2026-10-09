@@ -83,6 +83,12 @@ DFTU_LAZY_OP(join, dftu_lazyframe_join, LAZY, LAZY, LAZY, STRLIST, STRLIST, I32,
 DFTU_LAZY_OP(concat, dftu_lazyframe_concat, LAZY, LAZY, LAZY, NONE, NONE, NONE, NONE, NONE)
 DFTU_LAZY_OP(compare_agg, dftu_lazyframe_compare_agg, LAZY, LAZY, LAZY, I64, NONE, NONE, NONE, NONE)
 
+/* lazy + lazy + time column + by keys + direction + tolerance. */
+DFTU_LAZY_OP(asof, dftu_lazyframe_asof, LAZY, LAZY, LAZY, STR, STRLIST, I32, F64, NONE)
+
+/* lazy + lazy + point + lo + hi + by keys + outer. */
+DFTU_LAZY_OP(interval, dftu_lazyframe_interval, LAZY, LAZY, LAZY, STR, STR, STR, STRLIST, I32)
+
 /* lazy + column name + keep_empty. */
 DFTU_LAZY_OP(unnest, dftu_lazyframe_unnest, LAZY, LAZY, STR, I32, NONE, NONE, NONE, NONE)
 

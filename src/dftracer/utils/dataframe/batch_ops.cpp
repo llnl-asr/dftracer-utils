@@ -57,6 +57,15 @@ std::int64_t index_of(const DataFrame& b, const std::string& name) {
     return -1;
 }
 
+// The index of column `name`; a missing one is the error of op `who`.
+std::int64_t require_index(const DataFrame& b, const std::string& name,
+                           const char* who) {
+    const std::int64_t i = index_of(b, name);
+    if (i < 0)
+        throw std::out_of_range(std::string(who) + ": no column named " + name);
+    return i;
+}
+
 AggOp agg_op_of(const std::string& op) {
 #define DFTU_AGG_OP(id, code, str) \
     if (op == str) return AggOp::id;
@@ -192,8 +201,7 @@ DataFrame select(const DataFrame& b, const std::vector<std::string>& names) {
     out.names = names;
     out.columns.reserve(names.size());
     for (const std::string& name : names) {
-        std::int64_t i = index_of(b, name);
-        if (i < 0) throw std::out_of_range("select: no column named " + name);
+        std::int64_t i = require_index(b, name, "select");
         out.columns.push_back(b.columns[static_cast<std::size_t>(i)].share());
     }
     return out;
@@ -228,8 +236,7 @@ DataFrame with_column(const DataFrame& b, const std::string& name,
 
 DataFrame sort_by(const DataFrame& b, const std::string& name,
                   bool descending) {
-    std::int64_t k = index_of(b, name);
-    if (k < 0) throw std::out_of_range("sort_by: no column named " + name);
+    std::int64_t k = require_index(b, name, "sort_by");
     Series order = argsort(b.columns[static_cast<std::size_t>(k)], descending);
     if (!order.valid())
         throw std::invalid_argument("sort_by: column " + name +
@@ -239,8 +246,7 @@ DataFrame sort_by(const DataFrame& b, const std::string& name,
 
 DataFrame topk(const DataFrame& b, const std::string& name, std::int64_t k,
                bool largest) {
-    std::int64_t j = index_of(b, name);
-    if (j < 0) throw std::out_of_range("topk: no column named " + name);
+    std::int64_t j = require_index(b, name, "topk");
     Series ind =
         topk_indices(b.columns[static_cast<std::size_t>(j)], k, largest);
     if (!ind.valid())
@@ -816,8 +822,7 @@ DataFrame group_by(const DataFrame& b, const std::vector<std::string>& keys,
     std::vector<const Series*> key_cols;
     key_cols.reserve(keys.size());
     for (const std::string& key : keys) {
-        std::int64_t ki = index_of(b, key);
-        if (ki < 0) throw std::out_of_range("group_by: no column named " + key);
+        std::int64_t ki = require_index(b, key, "group_by");
         key_cols.push_back(&b.columns[static_cast<std::size_t>(ki)]);
     }
 
@@ -828,9 +833,7 @@ DataFrame group_by(const DataFrame& b, const std::vector<std::string>& keys,
     auto resolve = [&](const std::string& name) -> std::int32_t {
         auto it = col_idx.find(name);
         if (it != col_idx.end()) return it->second;
-        std::int64_t vi = index_of(b, name);
-        if (vi < 0)
-            throw std::out_of_range("group_by: no column named " + name);
+        std::int64_t vi = require_index(b, name, "group_by");
         const std::int32_t idx = static_cast<std::int32_t>(values.size());
         values.push_back(&b.columns[static_cast<std::size_t>(vi)]);
         col_idx.emplace(name, idx);
@@ -895,9 +898,7 @@ Series partition_id(const DataFrame& b, const std::vector<std::string>& keys,
     std::vector<Series> joined;
     joined.reserve(keys.size());
     for (const std::string& k : keys) {
-        std::int64_t ki = index_of(b, k);
-        if (ki < 0)
-            throw std::out_of_range("partition_id: no column named " + k);
+        std::int64_t ki = require_index(b, k, "partition_id");
         const Series& c = b.columns[static_cast<std::size_t>(ki)];
         if (c.encoding() == Encoding::Chunked && c.type() != TypeId::String) {
             joined.push_back(c.materialize());
@@ -1332,8 +1333,7 @@ DataFrame unique(const DataFrame& b, const std::vector<std::string>& subset) {
         for (const Series& c : b.columns) cols.push_back(&c);
     } else {
         for (const std::string& s : subset) {
-            std::int64_t k = index_of(b, s);
-            if (k < 0) throw std::out_of_range("unique: no column named " + s);
+            std::int64_t k = require_index(b, s, "unique");
             cols.push_back(&b.columns[static_cast<std::size_t>(k)]);
         }
     }
@@ -1526,9 +1526,7 @@ DataFrame sort_by_multi(const DataFrame& b,
     std::vector<Series> joined;
     joined.reserve(names.size());
     for (const std::string& name : names) {
-        std::int64_t k = index_of(b, name);
-        if (k < 0)
-            throw std::out_of_range("sort_by_multi: no column named " + name);
+        std::int64_t k = require_index(b, name, "sort_by_multi");
         const Series& key = b.columns[static_cast<std::size_t>(k)];
         if (key.encoding() == Encoding::Chunked) {
             joined.push_back(join_chunks(key));
@@ -1841,14 +1839,11 @@ DataFrame unpivot(const DataFrame& b, const std::vector<std::string>& id_vars,
     if (value_vars.empty())
         throw std::invalid_argument("unpivot: value_vars must be non-empty");
 
-    for (const std::string& name : id_vars)
-        if (index_of(b, name) < 0)
-            throw std::out_of_range("unpivot: no column named " + name);
+    for (const std::string& name : id_vars) require_index(b, name, "unpivot");
     std::vector<std::int64_t> val_idx;
     val_idx.reserve(value_vars.size());
     for (const std::string& name : value_vars) {
-        std::int64_t i = index_of(b, name);
-        if (i < 0) throw std::out_of_range("unpivot: no column named " + name);
+        std::int64_t i = require_index(b, name, "unpivot");
         val_idx.push_back(i);
     }
 
@@ -1966,9 +1961,7 @@ DataFrame unnest(const DataFrame& b, const std::string& column,
 }
 
 DataFrame to_dummies(const DataFrame& b, const std::string& column) {
-    std::int64_t ci = index_of(b, column);
-    if (ci < 0)
-        throw std::out_of_range("to_dummies: no column named " + column);
+    std::int64_t ci = require_index(b, column, "to_dummies");
     Series mat = flat_copy(b.columns[static_cast<std::size_t>(ci)]);
     if (!is_orderable_type(mat.type()))
         throw std::invalid_argument(
@@ -2040,14 +2033,9 @@ PivotMode pivot_mode_of(const std::string& agg, AggOp& op) {
 DataFrame pivot(const DataFrame& b, const std::string& index_name,
                 const std::string& columns_name, const std::string& values_name,
                 const std::string& agg) {
-    std::int64_t ii = index_of(b, index_name);
-    std::int64_t ci = index_of(b, columns_name);
-    std::int64_t vi = index_of(b, values_name);
-    if (ii < 0) throw std::out_of_range("pivot: no column named " + index_name);
-    if (ci < 0)
-        throw std::out_of_range("pivot: no column named " + columns_name);
-    if (vi < 0)
-        throw std::out_of_range("pivot: no column named " + values_name);
+    std::int64_t ii = require_index(b, index_name, "pivot");
+    std::int64_t ci = require_index(b, columns_name, "pivot");
+    std::int64_t vi = require_index(b, values_name, "pivot");
 
     AggOp reduce_op = AggOp::Sum;
     PivotMode mode = pivot_mode_of(agg, reduce_op);
@@ -2162,16 +2150,28 @@ DataFrame group_by_dynamic(const DataFrame& b, const std::string& time_col,
         throw std::invalid_argument("group_by_dynamic: every must be > 0");
     if (period <= 0) period = every;
 
-    std::int64_t ti = index_of(b, time_col);
-    if (ti < 0)
-        throw std::out_of_range("group_by_dynamic: no column named " +
-                                time_col);
+    std::int64_t ti = require_index(b, time_col, "group_by_dynamic");
     Series tcol = flat_copy(b.columns[static_cast<std::size_t>(ti)]);
     if (tcol.type() != TypeId::Int64)
         throw std::invalid_argument("group_by_dynamic: " + time_col +
                                     " must be an Int64 column");
     const std::int64_t n = tcol.length();
     const std::int64_t* t = tcol.data<std::int64_t>();
+    // The grid is anchored on the first time, so a time below the one before
+    // would fall before the first window or into the wrong one.
+    {
+        bool seen = false;
+        std::int64_t last = 0;
+        for (std::int64_t i = 0; i < n; ++i) {
+            if (tcol.is_null(i)) continue;
+            if (seen && t[i] < last)
+                throw std::invalid_argument(
+                    "group_by_dynamic: " + time_col + " must ascend, " +
+                    std::to_string(t[i]) + " follows " + std::to_string(last));
+            last = t[i];
+            seen = true;
+        }
+    }
 
     // `origin_min` aligns the grid to the minimum time value (buckets begin
     // exactly at min ts), the frame-native analogue of time_bucket("min").
@@ -2220,10 +2220,7 @@ DataFrame group_by_dynamic(const DataFrame& b, const std::string& time_col,
         auto resolve = [&](const std::string& name) -> std::int32_t {
             auto it = col_idx.find(name);
             if (it != col_idx.end()) return it->second;
-            std::int64_t vidx = index_of(b, name);
-            if (vidx < 0)
-                throw std::out_of_range("group_by_dynamic: no column named " +
-                                        name);
+            std::int64_t vidx = require_index(b, name, "group_by_dynamic");
             const std::int32_t idx = static_cast<std::int32_t>(values.size());
             values.push_back(&b.columns[static_cast<std::size_t>(vidx)]);
             col_idx.emplace(name, idx);
@@ -2272,10 +2269,7 @@ DataFrame group_by_dynamic(const DataFrame& b, const std::string& time_col,
     auto resolve = [&](const std::string& name) -> std::int32_t {
         auto it = col_idx.find(name);
         if (it != col_idx.end()) return it->second;
-        std::int64_t vidx = index_of(b, name);
-        if (vidx < 0)
-            throw std::out_of_range("group_by_dynamic: no column named " +
-                                    name);
+        std::int64_t vidx = require_index(b, name, "group_by_dynamic");
         const std::int32_t idx = static_cast<std::int32_t>(gathered.size());
         gathered.push_back(
             b.columns[static_cast<std::size_t>(vidx)].take(rowsv));

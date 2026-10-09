@@ -3,8 +3,10 @@
 #include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/common/filesystem.h>  // fs:: portability alias
 #include <dftracer/utils/core/common/filesystem_info.h>
+#include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/scoped_fd.h>
 #include <dftracer/utils/core/common/spill_dir.h>
+#include <dftracer/utils/core/common/str_format.h>
 #include <dftracer/utils/core/env.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
@@ -17,6 +19,7 @@
 #include <zstd.h>
 #endif
 
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <stdexcept>
@@ -60,12 +63,6 @@ std::vector<std::uint8_t> validity_bitmap(const Series& s) {
             bits[static_cast<std::size_t>(i >> 3)] |=
                 static_cast<std::uint8_t>(1u << (i & 7));
     return bits;
-}
-
-// Atomic sequence so many spilling sinks in one process pick distinct dirs.
-int next_seq() {
-    static std::atomic<int> seq{0};
-    return seq.fetch_add(1);
 }
 
 }  // namespace
@@ -161,6 +158,37 @@ class SpoolReader : public Cursor {
    private:
     const std::vector<Morsel>* mem_;
     std::size_t pos_ = 0;
+    std::unique_ptr<Reader> disk_;
+};
+
+// Cursor replaying a Spool backwards: the spilled morsels from the last, then
+// the in-memory ones from the last.
+class SpoolReverseReader : public Cursor {
+   public:
+    SpoolReverseReader(const std::vector<Morsel>* mem, std::string spill_path,
+                       std::vector<std::uint64_t> offsets)
+        : mem_(mem), offsets_(std::move(offsets)), left_(mem->size()) {
+        if (!spill_path.empty()) disk_ = std::make_unique<Reader>(spill_path);
+    }
+    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+        if (!offsets_.empty()) {
+            disk_->seek(offsets_.back());
+            offsets_.pop_back();
+            co_return co_await disk_->next(max_rows);
+        }
+        if (left_ == 0) co_return std::nullopt;
+        const Morsel& m = (*mem_)[--left_];
+        Morsel o;
+        o.rows = m.rows;
+        o.columns.reserve(m.columns.size());
+        for (const Series& c : m.columns) o.columns.push_back(c.share());
+        co_return o;
+    }
+
+   private:
+    const std::vector<Morsel>* mem_;
+    std::vector<std::uint64_t> offsets_;
+    std::size_t left_;
     std::unique_ptr<Reader> disk_;
 };
 
@@ -475,37 +503,9 @@ struct ColumnPlan {
     Piece validity, offsets, data;
 };
 
-void write_all(int fd, const void* src, std::size_t bytes, std::uint64_t at,
-               const std::string& dir) {
-    const auto* p = static_cast<const std::uint8_t*>(src);
-    while (bytes > 0) {
-        const ssize_t w = ::pwrite(fd, p, bytes, static_cast<off_t>(at));
-        if (w < 0 && errno == EINTR) continue;
-        if (w <= 0)
-            throw std::runtime_error(
-                "spill: cannot write to the spill file in '" + dir + "' (" +
-                std::strerror(errno) + "); set " + constants::SPILL_DIR_ENV +
-                " to a directory with free space");
-        p += w;
-        at += static_cast<std::uint64_t>(w);
-        bytes -= static_cast<std::size_t>(w);
-    }
-}
-
 }  // namespace
 
-PartFile::PartFile() : dir_(unwrap(spill_dir())) {
-    std::string path = (fs::path(dir_) / "dftu_collect_XXXXXX").string();
-    fd_ = ScopedFd(::mkstemp(path.data()));
-    if (fd_.get() < 0)
-        throw std::runtime_error("spill: cannot create a spill file in '" +
-                                 dir_ + "' (" + std::strerror(errno) +
-                                 "); set " + constants::SPILL_DIR_ENV +
-                                 " to a writable directory");
-    // Unlinked at once so a crash or an early return never leaves the file;
-    // the descriptor and the mappings keep the data.
-    ::unlink(path.c_str());
-}
+PartFile::PartFile() : file_(unwrap(SpillFile::create())) {}
 
 PartFile::~PartFile() = default;
 
@@ -563,25 +563,24 @@ std::vector<Series> PartFile::append(const std::vector<Series>& cols) {
         for (const Series& c : cols) out.push_back(c.share());
         return out;
     }
-    const std::uint64_t base = end_;
+    const std::uint64_t base = file_->reserve(region_bytes, page);
     for (const ColumnPlan& cp : plans)
         for (const Piece* p : {&cp.validity, &cp.offsets, &cp.data})
             if (p->bytes != 0)
-                write_all(fd_.get(), p->src, p->bytes, base + p->at, dir_);
+                unwrap(file_->write_at(base + p->at, p->src, p->bytes));
     // The last bytes may be padding: extend so the mapped pages exist.
-    if (::ftruncate(fd_.get(), static_cast<off_t>(base + region_bytes)) != 0)
-        throw std::runtime_error("spill: cannot extend the spill file in '" +
-                                 dir_ + "' (" + std::strerror(errno) +
-                                 "); set " + constants::SPILL_DIR_ENV +
+    if (::ftruncate(file_->fd(), static_cast<off_t>(base + region_bytes)) != 0)
+        throw std::runtime_error("spill: cannot extend the spill file (" +
+                                 std::string(std::strerror(errno)) + "); set " +
+                                 constants::SPILL_DIR_ENV +
                                  " to a directory with free space");
-    void* map = ::mmap(nullptr, region_bytes, PROT_READ, MAP_SHARED, fd_.get(),
-                       static_cast<off_t>(base));
+    void* map = ::mmap(nullptr, region_bytes, PROT_READ, MAP_SHARED,
+                       file_->fd(), static_cast<off_t>(base));
     if (map == MAP_FAILED)
-        throw std::runtime_error("spill: cannot map the spill file in '" +
-                                 dir_ + "' (" + std::strerror(errno) +
-                                 "); set " + constants::SPILL_DIR_ENV +
+        throw std::runtime_error("spill: cannot map the spill file (" +
+                                 std::string(std::strerror(errno)) + "); set " +
+                                 constants::SPILL_DIR_ENV +
                                  " to a usable directory");
-    end_ = base + region_bytes;
     const std::shared_ptr<void> region(
         map, [region_bytes](void* m) { ::munmap(m, region_bytes); });
     const auto window = [&](const Piece& p) -> std::shared_ptr<Buffer> {
@@ -610,28 +609,15 @@ std::vector<Series> PartFile::append(const std::vector<Series>& cols) {
     return out;
 }
 
-Dir::Dir() {
-    fs::path base = fs::path(unwrap(spill_dir())) /
-                    ("dftu_lazy_" + std::to_string(::getpid()) + "_" +
-                     std::to_string(next_seq()));
-    std::error_code ec;
-    fs::create_directories(base, ec);
-    if (ec)
-        throw std::runtime_error(
-            "spill: cannot create '" + base.string() + "' (" + ec.message() +
-            "); set " + constants::SPILL_DIR_ENV + " to a writable directory");
-    dir_ = base.string();
-}
+Dir::Dir() : dir_(unwrap(ScopedSpillSubdir::create("dftu_lazy"))) {}
 
-Dir::~Dir() {
-    std::error_code ec;
-    fs::remove_all(dir_, ec);
-}
+Dir::~Dir() = default;
 
 int Dir::next_run() { return runs_.fetch_add(1); }
 
 std::string Dir::run_path(int id) const {
-    return (fs::path(dir_) / ("run_" + std::to_string(id) + ".bin")).string();
+    return (fs::path(dir_.path()) / ("run_" + std::to_string(id) + ".bin"))
+        .string();
 }
 
 namespace {
@@ -639,11 +625,29 @@ namespace {
 bool spill_compression_on(const std::string& path) {
 #ifdef DFTRACER_UTILS_ENABLE_ZSTD
     const auto v = Env::get(constants::SPILL_COMPRESS_ENV);
-    if (v && (*v == "off" || *v == "0")) return false;
-    if (v && (*v == "on" || *v == "1" || *v == "zstd")) return true;
+    const auto is = [&](std::string_view a, std::string_view b = {},
+                        std::string_view c = {}) {
+        return v &&
+               (::dftracer::utils::detail::iequals(*v, a) ||
+                (!b.empty() && ::dftracer::utils::detail::iequals(*v, b)) ||
+                (!c.empty() && ::dftracer::utils::detail::iequals(*v, c)));
+    };
+    if (is("off", "0")) return false;
+    if (is("on", "1", "zstd")) return true;
     return is_network_filesystem(filesystem_kind(path));
 #else
     (void)path;
+    static const bool warned = [] {
+        const auto v = Env::get(constants::SPILL_COMPRESS_ENV);
+        if (v && (::dftracer::utils::detail::iequals(*v, "on") || *v == "1" ||
+                  ::dftracer::utils::detail::iequals(*v, "zstd")))
+            DFTRACER_UTILS_LOG_WARN(
+                "%s is set but this build has no zstd; spilled runs are not "
+                "compressed",
+                constants::SPILL_COMPRESS_ENV);
+        return true;
+    }();
+    (void)warned;
     return false;
 #endif
 }
@@ -705,6 +709,8 @@ void Writer::write(const std::vector<Series>& cols, std::int64_t rows) {
     os_.write(payload, static_cast<std::streamsize>(stored));
     if (!os_)
         throw std::runtime_error("spill: cannot write a run file (disk full?)");
+    written_ +=
+        sizeof(stored) + sizeof(raw) + static_cast<std::uint64_t>(stored);
 }
 
 void Writer::close() {
@@ -714,11 +720,56 @@ void Writer::close() {
             "spill: cannot finish a run file (disk full?)");
 }
 
+std::uint64_t write_run(Writer& w, const std::vector<Series>& cols,
+                        std::int64_t rows, std::int64_t rows_per_morsel) {
+    std::uint64_t largest = 0;
+    rows_per_morsel = std::max<std::int64_t>(rows_per_morsel, 1);
+    for (std::int64_t off = 0; off < rows; off += rows_per_morsel) {
+        const std::int64_t len = std::min(rows_per_morsel, rows - off);
+        std::vector<Series> piece;
+        piece.reserve(cols.size());
+        for (const Series& c : cols)
+            piece.push_back(c.slice(off, len).materialize());
+        largest = std::max<std::uint64_t>(largest, columns_bytes(piece));
+        w.write(piece, len);
+    }
+    return largest;
+}
+
+HashPartitions::HashPartitions(Dir& dir, std::size_t parts)
+    : bytes_(parts, 0), rows_(parts, 0) {
+    paths_.reserve(parts);
+    writers_.reserve(parts);
+    for (std::size_t p = 0; p < parts; ++p) {
+        paths_.push_back(dir.run_path(dir.next_run()));
+        writers_.emplace_back(paths_.back());
+    }
+}
+
+void HashPartitions::write(std::size_t p, const std::vector<Series>& cols,
+                           std::int64_t rows) {
+    bytes_[p] += columns_bytes(cols);
+    rows_[p] += rows;
+    writers_[p].write(cols, rows);
+}
+
+void HashPartitions::close() {
+    for (Writer& w : writers_) w.close();
+}
+
 Reader::Reader(const std::string& path) : is_(path, std::ios::binary) {
     if (!is_) throw std::runtime_error("spill: cannot open run file " + path);
+    std::error_code ec;
+    size_ = fs::file_size(path, ec);
+    if (ec) throw std::runtime_error("spill: cannot stat run file " + path);
 }
 
 Reader::~Reader() = default;
+
+void Reader::seek(std::uint64_t pos) {
+    is_.clear();
+    is_.seekg(static_cast<std::streamoff>(pos));
+}
 
 coro::CoroTask<std::optional<Morsel>> Reader::next(std::int64_t /*max_rows*/) {
     std::int64_t sizes[2] = {0, 0};
@@ -726,6 +777,10 @@ coro::CoroTask<std::optional<Morsel>> Reader::next(std::int64_t /*max_rows*/) {
     if (is_.gcount() == 0) co_return std::nullopt;
     if (is_.gcount() != static_cast<std::streamsize>(sizeof(sizes)))
         throw std::runtime_error("spill: short run read");
+    const auto at = static_cast<std::uint64_t>(is_.tellg());
+    if (sizes[0] < 0 || sizes[1] < 0 ||
+        static_cast<std::uint64_t>(sizes[0]) > size_ - at)
+        throw std::runtime_error("spill: corrupt run file (bad morsel size)");
     const auto stored = static_cast<std::size_t>(sizes[0]);
     const auto raw = static_cast<std::size_t>(sizes[1]);
     const auto grow = [](std::unique_ptr<char[]>& buf, std::size_t& cap,
@@ -734,16 +789,21 @@ coro::CoroTask<std::optional<Morsel>> Reader::next(std::int64_t /*max_rows*/) {
         buf = std::make_unique_for_overwrite<char[]>(need);
         cap = need;
     };
-    grow(raw_, raw_cap_, raw);
     if (stored == raw) {
+        grow(raw_, raw_cap_, raw);
         is_.read(raw_.get(), static_cast<std::streamsize>(raw));
     } else {
 #ifdef DFTRACER_UTILS_ENABLE_ZSTD
         if (!codec_) codec_ = std::make_unique<Codec>();
         grow(stored_, stored_cap_, stored);
         is_.read(stored_.get(), static_cast<std::streamsize>(stored));
-        if (static_cast<std::size_t>(is_.gcount()) == stored &&
-            ZSTD_decompressDCtx(codec_->ctx, raw_.get(), raw, stored_.get(),
+        if (static_cast<std::size_t>(is_.gcount()) != stored)
+            throw std::runtime_error("spill: short run read");
+        if (ZSTD_getFrameContentSize(stored_.get(), stored) != raw)
+            throw std::runtime_error(
+                "spill: corrupt run file (bad compressed size)");
+        grow(raw_, raw_cap_, raw);
+        if (ZSTD_decompressDCtx(codec_->ctx, raw_.get(), raw, stored_.get(),
                                 stored) != raw)
             throw std::runtime_error("spill: corrupt compressed morsel");
 #else
@@ -775,6 +835,8 @@ Spool::~Spool() {
 }
 
 void Spool::add(std::vector<Series> columns, std::int64_t rows) {
+    if (read_)
+        throw std::logic_error("spool: a morsel was added after a reader");
     if (!spilling_) {
         const std::size_t bytes = columns_bytes(columns);
         bytes_ += bytes;
@@ -792,12 +854,27 @@ void Spool::add(std::vector<Series> columns, std::int64_t rows) {
         return;
     }
     total_bytes_ += columns_bytes(columns);
+    offsets_.push_back(writer_->bytes());
     writer_->write(columns, rows);
 }
 
 std::unique_ptr<Cursor> Spool::reader() {
-    if (writer_) writer_->close();
+    // The run is closed by the first reader; any number of readers may follow.
+    read_ = true;
+    if (writer_) {
+        writer_->close();
+        writer_.reset();
+    }
     return std::make_unique<SpoolReader>(&mem_, run_);
+}
+
+std::unique_ptr<Cursor> Spool::reverse_reader() {
+    read_ = true;
+    if (writer_) {
+        writer_->close();
+        writer_.reset();
+    }
+    return std::make_unique<SpoolReverseReader>(&mem_, run_, offsets_);
 }
 
 void write_agg_run(AggState& state, const std::string& path) {
@@ -808,6 +885,8 @@ void write_agg_run(AggState& state, const std::string& path) {
     for (std::int64_t g = 0; g < ng; ++g) {
         const std::string blob =
             agg_serialize(*agg_extract_group(state, g), true);
+        if (blob.size() > std::numeric_limits<std::uint32_t>::max())
+            throw std::runtime_error("agg spill: a group state is over 4 GiB");
         const std::uint32_t len = static_cast<std::uint32_t>(blob.size());
         os.write(reinterpret_cast<const char*>(&len), sizeof(len));
         os.write(blob.data(), static_cast<std::streamsize>(blob.size()));
@@ -821,6 +900,9 @@ void write_agg_run(AggState& state, const std::string& path) {
 AggRunReader::AggRunReader(const std::string& path)
     : is_(path, std::ios::binary) {
     if (!is_) throw std::runtime_error("agg spill: cannot open run " + path);
+    std::error_code ec;
+    size_ = fs::file_size(path, ec);
+    if (ec) throw std::runtime_error("agg spill: cannot stat run " + path);
     advance();
 }
 
@@ -833,6 +915,10 @@ void AggRunReader::advance() {
     }
     if (is_.gcount() != static_cast<std::streamsize>(sizeof(len)))
         throw std::runtime_error("agg spill: truncated run");
+    pos_ += sizeof(len);
+    if (len > size_ - pos_)
+        throw std::runtime_error("agg spill: corrupt run (bad state size)");
+    pos_ += len;
     std::string blob(len, '\0');
     is_.read(blob.data(), static_cast<std::streamsize>(len));
     if (is_.gcount() != static_cast<std::streamsize>(len))

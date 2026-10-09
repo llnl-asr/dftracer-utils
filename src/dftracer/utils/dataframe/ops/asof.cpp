@@ -2,7 +2,6 @@
 #include <dftracer/utils/dataframe/kernels/order.h>
 
 #include <algorithm>
-#include <cmath>
 #include <stdexcept>
 
 #include "ops_common.h"
@@ -10,60 +9,6 @@
 namespace dftracer::utils::dataframe {
 
 namespace {
-
-// |left - right| <= tol in the column's own units; a negative tol rejects.
-// Integer distances compare against floor(tol), exact for any tol.
-bool within(const ColumnView& l, std::int64_t il, const ColumnView& r,
-            std::int64_t ir, double tol) {
-    if (!(tol >= 0)) return false;
-    const bool unbounded = tol >= 18446744073709551616.0;
-    const std::uint64_t itol =
-        unbounded ? 0 : static_cast<std::uint64_t>(std::floor(tol));
-    switch (l.kind()) {
-        case ColumnView::Kind::Unsigned: {
-            const std::uint64_t x = l.get_uint(il), y = r.get_uint(ir);
-            return unbounded || (x >= y ? x - y : y - x) <= itol;
-        }
-        case ColumnView::Kind::Float:
-            return std::fabs(l.get_double(il) - r.get_double(ir)) <= tol;
-        default: {
-            const std::int64_t x = l.get_int(il), y = r.get_int(ir);
-            const std::uint64_t d = x >= y ? static_cast<std::uint64_t>(x) -
-                                                 static_cast<std::uint64_t>(y)
-                                           : static_cast<std::uint64_t>(y) -
-                                                 static_cast<std::uint64_t>(x);
-            return unbounded || d <= itol;
-        }
-    }
-}
-
-// |left - r[a]| <= |left - r[b]|.
-bool closer_or_equal(const ColumnView& l, std::int64_t il, const ColumnView& r,
-                     std::int64_t a, std::int64_t b) {
-    switch (l.kind()) {
-        case ColumnView::Kind::Unsigned: {
-            const std::uint64_t x = l.get_uint(il);
-            const std::uint64_t ya = r.get_uint(a), yb = r.get_uint(b);
-            return (x >= ya ? x - ya : ya - x) <= (x >= yb ? x - yb : yb - x);
-        }
-        case ColumnView::Kind::Float: {
-            const double x = l.get_double(il);
-            return std::fabs(x - r.get_double(a)) <=
-                   std::fabs(x - r.get_double(b));
-        }
-        default: {
-            const std::int64_t x = l.get_int(il);
-            const std::int64_t ya = r.get_int(a), yb = r.get_int(b);
-            const auto d = [&](std::int64_t y) {
-                return x >= y ? static_cast<std::uint64_t>(x) -
-                                    static_cast<std::uint64_t>(y)
-                              : static_cast<std::uint64_t>(y) -
-                                    static_cast<std::uint64_t>(x);
-            };
-            return d(ya) <= d(yb);
-        }
-    }
-}
 
 struct RightPartition {
     std::int64_t rep;
@@ -159,16 +104,16 @@ DataFrame asof(const DataFrame& left, const DataFrame& right,
                 else if (fwd < 0)
                     cand = back;
                 else
-                    cand =
-                        closer_or_equal(lts, lr, rts,
-                                        rorder[static_cast<std::size_t>(back)],
-                                        rorder[static_cast<std::size_t>(fwd)])
-                            ? back
-                            : fwd;
+                    cand = ops::closer_or_equal(
+                               lts, lr, rts,
+                               rorder[static_cast<std::size_t>(back)], rts,
+                               rorder[static_cast<std::size_t>(fwd)])
+                               ? back
+                               : fwd;
             }
             if (cand < 0) continue;
             const std::int64_t rr = rorder[static_cast<std::size_t>(cand)];
-            if (!has_tol || within(lts, lr, rts, rr, *tolerance))
+            if (!has_tol || ops::within(lts, lr, rts, rr, *tolerance))
                 match[static_cast<std::size_t>(lr)] = rr;
         }
         li = lj;

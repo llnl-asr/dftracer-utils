@@ -325,6 +325,7 @@ TEST_CASE("PartitionRouter - COLUMN mode single column") {
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
-TEST_CASE("IpcWriter - disabled") { CHECK(true); }
+// Nothing to test without the writer: reported as skipped, not as a pass.
+TEST_CASE("IpcWriter - the Arrow IPC writer is not built" * doctest::skip()) {}
 
 #endif  // DFTRACER_UTILS_ENABLE_ARROW_IPC

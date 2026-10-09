@@ -19,8 +19,8 @@ set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_methods.cpp
                            test_lazyframe_output_schema.cpp
                            test_lazyframe_plugin_node.cpp
                            test_morsel_ordering.cpp
-                           test_order.cpp test_frame_window.cpp
-                           test_frame_gap_fill.cpp test_frame_asof.cpp
+                           test_order.cpp test_frame_window.cpp test_output_morsels.cpp
+                           test_frame_gap_fill.cpp test_frame_asof.cpp test_lazy_asof_interval.cpp
                            test_frame_ops.cpp test_reduce_types.cpp
                            test_count_nulls.cpp test_set_union.cpp test_cast_pairs.cpp
                            test_filter_columns.cpp test_rank_pct.cpp test_rank_nan.cpp test_cut_flags.cpp test_fillna_bool_string.cpp test_cast_followups.cpp
@@ -73,6 +73,7 @@ foreach(test_file ${DATAFRAME_TEST_SOURCES})
     target_compile_options(${target_name} PRIVATE --coverage -fprofile-arcs
                                                    -ftest-coverage)
     target_link_libraries(${target_name} PRIVATE --coverage)
+    target_compile_definitions(${target_name} PRIVATE DFTRACER_UTILS_COVERAGE_BUILD)
   endif()
 
   set(test_working_directory

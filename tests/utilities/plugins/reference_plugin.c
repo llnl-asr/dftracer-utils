@@ -327,10 +327,12 @@ static void node_output_schema(void* self, const dftu_schema* in,
 
 static void* node_open(void* self, void* in_cursor_self,
                        const dftu_cursor_vt* in_vt, const dftu_op_arg* args,
-                       void** out_cursor_self, const dftu_cursor_vt** out_vt) {
+                       uint64_t memory_budget, void** out_cursor_self,
+                       const dftu_cursor_vt** out_vt) {
     NodeCursor* nc;
     (void)self;
     (void)args;
+    (void)memory_budget;
     nc = (NodeCursor*)malloc(sizeof(NodeCursor));
     nc->in_self = in_cursor_self;
     nc->in_vt = in_vt;

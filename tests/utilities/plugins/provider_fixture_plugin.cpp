@@ -247,9 +247,9 @@ class DoubleVal {
         dftracer::utils::plugins::InputCursor in_;
     };
 
-    std::unique_ptr<Cursor> open(
-        dftracer::utils::plugins::InputCursor in,
-        const dftracer::utils::plugins::OpArgs&) const {
+    std::unique_ptr<Cursor> open(dftracer::utils::plugins::InputCursor in,
+                                 const dftracer::utils::plugins::OpArgs&,
+                                 std::uint64_t) const {
         return std::make_unique<Cursor>(std::move(in));
     }
 };

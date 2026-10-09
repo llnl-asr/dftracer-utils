@@ -77,7 +77,22 @@ class HashJoin {
     /// std::invalid_argument if a key pair's types differ (not for Lookup or
     /// Nest), or for a Lookup key whose right rows differ or a filled left
     /// cell that holds a value.
-    DataFrame probe(const DataFrame& left);
+    ///
+    /// With `left_matched`, the probe of one block of a right side that is
+    /// joined block by block: it sets `(*left_matched)[left_base + i]` for each
+    /// left row i that matches, and leaves out the rows that depend on no block
+    /// matching (the unmatched left rows of Left, Outer, Anti and Nest, and
+    /// every Semi row), which the caller emits once all blocks are probed. Not
+    /// for Lookup.
+    DataFrame probe(const DataFrame& left,
+                    std::vector<std::uint8_t>* left_matched = nullptr,
+                    std::int64_t left_base = 0);
+
+    /// Lookup over a right side that holds one row per key (the first right
+    /// row of each key): `per_row[i]` is -1, or the value column in which some
+    /// right row of the key of row i differs from row i, as conflicts() would
+    /// have found over all the right rows. Call before the first probe.
+    void set_lookup_conflicts(std::vector<std::int64_t> per_row);
 
     /// The unmatched right rows of a Right / Outer join: a left column is
     /// null, except a key sharing its right key's name, which carries the
@@ -95,7 +110,9 @@ class HashJoin {
         const std::vector<std::string>& left_names) const;
     /// Lookup and Nest: the probe, rows matched by value.
     DataFrame probe_values(const DataFrame& left,
-                           const std::vector<std::int64_t>& key_idx);
+                           const std::vector<std::int64_t>& key_idx,
+                           std::vector<std::uint8_t>* left_matched,
+                           std::int64_t left_base);
     /// The first right row of each group of equal keys, per left row, -1
     /// when none; by the typed index when every key pair shares an exact
     /// type, else by value keys.
@@ -133,6 +150,7 @@ class HashJoin {
     // Lookup and Nest by value: the rows of each value key, in order.
     StringViewMap<std::vector<std::int64_t>> by_value_;
     bool value_index_ = false;
+    bool conflicts_given_ = false;
     std::vector<std::int64_t> typed_conflicts_;
     std::vector<std::int64_t> value_conflicts_;
     std::unique_ptr<std::atomic<std::uint8_t>[]> right_matched_;

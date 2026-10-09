@@ -247,8 +247,8 @@ LazyFrame lookup_side() {
 
 void node_schema(void*, const dftu_schema*, const dftu_op_arg*, dftu_schema*) {}
 
-void* node_open(void*, void*, const dftu_cursor_vt*, const dftu_op_arg*, void**,
-                const dftu_cursor_vt**) {
+void* node_open(void*, void*, const dftu_cursor_vt*, const dftu_op_arg*,
+                std::uint64_t, void**, const dftu_cursor_vt**) {
     return nullptr;
 }
 

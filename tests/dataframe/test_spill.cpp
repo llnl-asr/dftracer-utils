@@ -207,4 +207,106 @@ TEST_SUITE("spill errors") {
         spill::AggRunReader empty(path);
         CHECK_FALSE(empty.valid());
     }
+
+    TEST_CASE("a morsel size that is not in the file is an error") {
+        spill::Dir dir;
+        const std::string path = dir.run_path(0);
+        {
+            std::ofstream os(path, std::ios::binary);
+            const std::int64_t sizes[2] = {std::int64_t{1} << 40,
+                                           std::int64_t{1} << 40};
+            os.write(reinterpret_cast<const char*>(sizes), sizeof(sizes));
+            os.write("abcd", 4);
+        }
+        spill::Reader big(path);
+        CHECK_THROWS(run(big.next(0)));
+        {
+            std::ofstream os(path, std::ios::binary);
+            const std::int64_t sizes[2] = {-5, -5};
+            os.write(reinterpret_cast<const char*>(sizes), sizeof(sizes));
+        }
+        spill::Reader negative(path);
+        CHECK_THROWS(run(negative.next(0)));
+    }
+
+    TEST_CASE("an aggregate state length past the file is an error") {
+        spill::Dir dir;
+        const std::string path = dir.run_path(0);
+        std::ofstream os(path, std::ios::binary);
+        const std::uint32_t len = 0xFFFFFFF0u;
+        os.write(reinterpret_cast<const char*>(&len), sizeof(len));
+        os.write("abcdefgh", 8);
+        os.close();
+        CHECK_THROWS(spill::AggRunReader(path));
+    }
+
+    TEST_CASE("write_run with a zero morsel size still writes every row") {
+        std::vector<std::int64_t> a{1, 2, 3};
+        std::vector<Series> cols;
+        cols.push_back(Series::flat_i64(a.data(), 3));
+        spill::Dir dir;
+        const std::string path = dir.run_path(0);
+        std::uint64_t largest = 0;
+        {
+            spill::Writer w(path);
+            largest = spill::write_run(w, cols, 3, 0);
+            w.close();
+        }
+        CHECK(largest > 0);
+        spill::Reader r(path);
+        std::int64_t rows = 0;
+        while (auto m = run(r.next(0))) rows += m->rows;
+        CHECK(rows == 3);
+    }
+
+    TEST_CASE("a spool takes no morsel after a reader, in memory or on disk") {
+        for (const std::uint64_t budget :
+             {std::uint64_t{1} << 20, std::uint64_t{1}}) {
+            std::vector<std::int64_t> a{1, 2, 3};
+            spill::Spool spool(budget);
+            std::vector<Series> cols;
+            cols.push_back(Series::flat_i64(a.data(), 3));
+            spool.add(std::move(cols), 3);
+            std::unique_ptr<dftracer::utils::dataframe::Cursor> first =
+                spool.reader();
+            std::unique_ptr<dftracer::utils::dataframe::Cursor> second =
+                spool.reader();
+            std::vector<Series> more;
+            more.push_back(Series::flat_i64(a.data(), 3));
+            CHECK_THROWS_AS(spool.add(std::move(more), 3), std::logic_error);
+            // Both readers read the three rows.
+            for (auto* r : {first.get(), second.get()}) {
+                auto m = run(r->next(0));
+                REQUIRE(m);
+                CHECK(m->rows == 3);
+            }
+        }
+    }
+
+    TEST_CASE("a spool read backwards returns the morsels last first") {
+        // A budget of one byte puts the first morsel in memory and the rest on
+        // disk; a large one keeps all of them in memory.
+        for (const std::uint64_t budget :
+             {std::uint64_t{1} << 20, std::uint64_t{1}}) {
+            spill::Spool spool(budget);
+            for (std::int64_t m = 0; m < 5; ++m) {
+                std::vector<std::int64_t> a{m * 10, m * 10 + 1, m * 10 + 2};
+                std::vector<Series> cols;
+                cols.push_back(Series::flat_i64(a.data(), 3));
+                spool.add(std::move(cols), 3);
+            }
+            for (int pass = 0; pass < 2; ++pass) {
+                auto back = spool.reverse_reader();
+                std::vector<std::int64_t> firsts;
+                while (auto m = run(back->next(0))) {
+                    REQUIRE(m->rows == 3);
+                    const Series c = m->columns[0].materialize();
+                    CHECK(c.data<std::int64_t>()[1] ==
+                          c.data<std::int64_t>()[0] + 1);
+                    firsts.push_back(c.data<std::int64_t>()[0]);
+                }
+                CHECK(firsts == std::vector<std::int64_t>{40, 30, 20, 10, 0});
+            }
+        }
+    }
 }

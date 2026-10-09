@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/kernels/order.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -66,6 +67,61 @@ inline int compare_keys(const std::vector<ColumnView>& left, std::int64_t a,
         if (c != 0) return c;
     }
     return 0;
+}
+
+// |left - right| <= tol in the column's own units; a negative tol rejects.
+// Integer distances compare against floor(tol), exact for any tol.
+inline bool within(const ColumnView& l, std::int64_t il, const ColumnView& r,
+                   std::int64_t ir, double tol) {
+    if (!(tol >= 0)) return false;
+    const bool unbounded = tol >= 18446744073709551616.0;
+    const std::uint64_t itol =
+        unbounded ? 0 : static_cast<std::uint64_t>(std::floor(tol));
+    switch (l.kind()) {
+        case ColumnView::Kind::Unsigned: {
+            const std::uint64_t x = l.get_uint(il), y = r.get_uint(ir);
+            return unbounded || (x >= y ? x - y : y - x) <= itol;
+        }
+        case ColumnView::Kind::Float:
+            return std::fabs(l.get_double(il) - r.get_double(ir)) <= tol;
+        default: {
+            const std::int64_t x = l.get_int(il), y = r.get_int(ir);
+            const std::uint64_t d = x >= y ? static_cast<std::uint64_t>(x) -
+                                                 static_cast<std::uint64_t>(y)
+                                           : static_cast<std::uint64_t>(y) -
+                                                 static_cast<std::uint64_t>(x);
+            return unbounded || d <= itol;
+        }
+    }
+}
+
+// |left - ra[a]| <= |left - rb[b]|.
+inline bool closer_or_equal(const ColumnView& l, std::int64_t il,
+                            const ColumnView& ra, std::int64_t a,
+                            const ColumnView& rb, std::int64_t b) {
+    switch (l.kind()) {
+        case ColumnView::Kind::Unsigned: {
+            const std::uint64_t x = l.get_uint(il);
+            const std::uint64_t ya = ra.get_uint(a), yb = rb.get_uint(b);
+            return (x >= ya ? x - ya : ya - x) <= (x >= yb ? x - yb : yb - x);
+        }
+        case ColumnView::Kind::Float: {
+            const double x = l.get_double(il);
+            return std::fabs(x - ra.get_double(a)) <=
+                   std::fabs(x - rb.get_double(b));
+        }
+        default: {
+            const std::int64_t x = l.get_int(il);
+            const std::int64_t ya = ra.get_int(a), yb = rb.get_int(b);
+            const auto d = [&](std::int64_t y) {
+                return x >= y ? static_cast<std::uint64_t>(x) -
+                                    static_cast<std::uint64_t>(y)
+                              : static_cast<std::uint64_t>(y) -
+                                    static_cast<std::uint64_t>(x);
+            };
+            return d(ya) <= d(yb);
+        }
+    }
 }
 
 /// A frame of `left`'s columns gathered at `left_rows` followed by the columns

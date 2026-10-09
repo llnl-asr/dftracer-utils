@@ -1,5 +1,6 @@
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
+#include <dftracer/utils/dataframe/kernels/running.h>
 
 #include <algorithm>
 #include <cmath>
@@ -60,26 +61,10 @@ Series pass_through(const Series& column,
     return column.take(source);
 }
 
-__extension__ typedef __int128 Wide;
-
-[[noreturn]] void overflow(const char* func, const char* type) {
-    throw std::overflow_error(std::string("window: ") + func + " overflows " +
-                              type);
-}
-
-std::int64_t to_int64(Wide v, const char* func) {
-    if (v < std::numeric_limits<std::int64_t>::min() ||
-        v > std::numeric_limits<std::int64_t>::max())
-        overflow(func, "int64");
-    return static_cast<std::int64_t>(v);
-}
-
-std::uint64_t to_uint64(Wide v, const char* func) {
-    if (v < 0 ||
-        v > static_cast<Wide>(std::numeric_limits<std::uint64_t>::max()))
-        overflow(func, "uint64");
-    return static_cast<std::uint64_t>(v);
-}
+using steps::overflow;
+using steps::to_int64;
+using steps::to_uint64;
+using steps::Wide;
 
 const ColumnView& numeric(const ColumnView& v, const char* what) {
     if (v.is_bytes())
@@ -196,17 +181,28 @@ Series positional(const Layout& lay, const Series& column,
                   const WindowColumn& w) {
     std::vector<std::int64_t> source(static_cast<std::size_t>(lay.n), -1);
     for (const auto& [p, q] : lay.parts) {
-        std::int64_t last = -1;
+        steps::FillForward<std::int64_t> fill;
+        steps::Lag<std::int64_t> lag;
         for (std::int64_t r = p; r < q; ++r) {
             const std::int64_t local = r - p;
             std::int64_t from = -1;
             switch (w.func) {
                 case WindowFunc::Lag:
                 case WindowFunc::Lead: {
-                    const std::int64_t s = w.func == WindowFunc::Lag
-                                               ? local - w.params.offset
-                                               : local + w.params.offset;
-                    if (s >= 0 && s < q - p) from = lay.row(p + s);
+                    const std::int64_t offset = w.params.offset;
+                    if (w.func == WindowFunc::Lag && offset >= 0) {
+                        // A lag past the partition has no row to read; the
+                        // ring would only hold rows that never come back.
+                        std::int64_t back = -1;
+                        if (offset < q - p &&
+                            lag.step(offset, lay.row(r), back))
+                            from = back;
+                        break;
+                    }
+                    const std::int64_t at = steps::offset_position(
+                        local, q - p,
+                        w.func == WindowFunc::Lag ? -offset : offset);
+                    if (at >= 0) from = lay.row(p + at);
                     break;
                 }
                 case WindowFunc::FirstValue:
@@ -221,8 +217,7 @@ Series positional(const Layout& lay, const Series& column,
                     break;
                 }
                 default: {  // FillForward
-                    if (!column.is_null(lay.row(r))) last = lay.row(r);
-                    from = last;
+                    fill.step(!column.is_null(lay.row(r)), lay.row(r), from);
                     break;
                 }
             }
@@ -240,11 +235,11 @@ Series running(const Layout& lay, const Series& column, const WindowColumn& w) {
             if (v.kind() == Kind::Float) {
                 Column<double> out(lay.n);
                 for (const auto& [p, q] : lay.parts) {
-                    double sum = 0.0;
+                    steps::SumF64 sum;
                     for (std::int64_t r = p; r < q; ++r) {
                         const std::int64_t g = lay.row(r);
-                        if (!v.is_null(g)) sum += v.get_double(g);
-                        out.set(r, sum);
+                        if (!v.is_null(g)) sum.add(v.get_double(g));
+                        out.set(r, sum.acc);
                     }
                 }
                 return out.series(TypeId::Float64);
@@ -252,26 +247,22 @@ Series running(const Layout& lay, const Series& column, const WindowColumn& w) {
             if (v.kind() == Kind::Unsigned) {
                 Column<std::uint64_t> out(lay.n);
                 for (const auto& [p, q] : lay.parts) {
-                    std::uint64_t sum = 0;
+                    steps::SumU64 sum;
                     for (std::int64_t r = p; r < q; ++r) {
                         const std::int64_t g = lay.row(r);
-                        if (!v.is_null(g) &&
-                            __builtin_add_overflow(sum, v.get_uint(g), &sum))
-                            overflow("RUNNING_SUM", "uint64");
-                        out.set(r, sum);
+                        if (!v.is_null(g)) sum.add(v.get_uint(g));
+                        out.set(r, sum.acc);
                     }
                 }
                 return out.series(TypeId::Uint64);
             }
             Column<std::int64_t> out(lay.n);
             for (const auto& [p, q] : lay.parts) {
-                std::int64_t sum = 0;
+                steps::SumI64 sum;
                 for (std::int64_t r = p; r < q; ++r) {
                     const std::int64_t g = lay.row(r);
-                    if (!v.is_null(g) &&
-                        __builtin_add_overflow(sum, v.get_int(g), &sum))
-                        overflow("RUNNING_SUM", "int64");
-                    out.set(r, sum);
+                    if (!v.is_null(g)) sum.add(v.get_int(g));
+                    out.set(r, sum.acc);
                 }
             }
             return out.series(TypeId::Int64);
@@ -280,11 +271,11 @@ Series running(const Layout& lay, const Series& column, const WindowColumn& w) {
             numeric(v, "running aggregate");
             Column<double> out(lay.n);
             for (const auto& [p, q] : lay.parts) {
-                double prod = 1.0;
+                steps::Prod prod;
                 for (std::int64_t r = p; r < q; ++r) {
                     const std::int64_t g = lay.row(r);
-                    if (!v.is_null(g)) prod *= v.get_double(g);
-                    out.set(r, prod);
+                    if (!v.is_null(g)) prod.mul(v.get_double(g));
+                    out.set(r, prod.acc);
                 }
             }
             return out.series(TypeId::Float64);
@@ -293,15 +284,40 @@ Series running(const Layout& lay, const Series& column, const WindowColumn& w) {
             std::vector<std::int64_t> source(static_cast<std::size_t>(lay.n),
                                              -1);
             const bool smallest = w.func == WindowFunc::RunningMin;
-            for (const auto& [p, q] : lay.parts) {
-                std::int64_t ext = -1;
-                for (std::int64_t r = p; r < q; ++r) {
-                    const std::int64_t g = lay.row(r);
-                    if (!v.is_null(g) &&
-                        (ext < 0 || better(v, g, ext, smallest)))
-                        ext = g;
-                    source[static_cast<std::size_t>(r)] = ext;
+            // The kind of the column is chosen once; each row is then one call.
+            const auto scan = [&](auto&& offer) {
+                for (const auto& [p, q] : lay.parts) {
+                    steps::Extreme ext;
+                    std::int64_t best = -1;
+                    for (std::int64_t r = p; r < q; ++r) {
+                        const std::int64_t g = lay.row(r);
+                        if (!v.is_null(g) && offer(ext, g, best)) best = g;
+                        source[static_cast<std::size_t>(r)] = best;
+                    }
                 }
+            };
+            switch (v.kind()) {
+                case Kind::Signed:
+                    scan([&](steps::Extreme& e, std::int64_t g, std::int64_t) {
+                        return e.offer_i(v.get_int(g), smallest);
+                    });
+                    break;
+                case Kind::Unsigned:
+                    scan([&](steps::Extreme& e, std::int64_t g, std::int64_t) {
+                        return e.offer_u(v.get_uint(g), smallest);
+                    });
+                    break;
+                case Kind::Float:
+                    scan([&](steps::Extreme& e, std::int64_t g, std::int64_t) {
+                        return e.offer_f(v.get_double(g), smallest);
+                    });
+                    break;
+                default:
+                    scan([&](steps::Extreme&, std::int64_t g,
+                             std::int64_t best) {
+                        return best < 0 || better(v, g, best, smallest);
+                    });
+                    break;
             }
             return pass_through(column, source);
         }
@@ -326,15 +342,12 @@ Series delta(const Layout& lay, const Series& column) {
                 continue;
             }
             if (floating)
-                fout.set(r, v.get_double(g) - v.get_double(prev));
+                fout.set(r,
+                         steps::delta_f64(v.get_double(g), v.get_double(prev)));
             else if (v.kind() == Kind::Unsigned)
-                iout.set(r, to_int64(static_cast<Wide>(v.get_uint(g)) -
-                                         static_cast<Wide>(v.get_uint(prev)),
-                                     "DELTA"));
+                iout.set(r, steps::delta_u64(v.get_uint(g), v.get_uint(prev)));
             else
-                iout.set(r, to_int64(static_cast<Wide>(v.get_int(g)) -
-                                         static_cast<Wide>(v.get_int(prev)),
-                                     "DELTA"));
+                iout.set(r, steps::delta_i64(v.get_int(g), v.get_int(prev)));
         }
     }
     return floating ? fout.series(TypeId::Float64) : iout.series(TypeId::Int64);
@@ -465,9 +478,9 @@ Series frame(const Layout& lay, const Series& column, const WindowColumn& w) {
     for (const auto& [p, q] : lay.parts) {
         const std::int64_t sz = q - p;
         std::int64_t win_lo = 0, win_hi = -1, count = 0, first_missing = -1;
-        Wide sum_i = 0;
-        double sum_d = 0.0;
-        std::deque<std::int64_t> dq;
+        steps::FrameSumInt sum_i;
+        steps::FrameSumF64 sum_d;
+        steps::SlidingExtreme dq;
         const auto position_row = [&](std::int64_t pos) {
             return lay.row(p + pos);
         };
@@ -477,21 +490,16 @@ Series frame(const Layout& lay, const Series& column, const WindowColumn& w) {
             ++count;
             if (counting) return;
             if (min_max) {
-                while (!dq.empty()) {
-                    const std::int64_t back = position_row(dq.back());
-                    const int c = vv->compare(g, back);
-                    if (smallest ? c <= 0 : c >= 0)
-                        dq.pop_back();
-                    else
-                        break;
-                }
-                dq.push_back(pos);
+                dq.enter(pos, [&](std::int64_t back) {
+                    const int c = vv->compare(g, position_row(back));
+                    return smallest ? c <= 0 : c >= 0;
+                });
             } else if (w.func == WindowFunc::FrameMean || sum_double) {
-                sum_d += vv->get_double(g);
+                sum_d.enter(vv->get_double(g));
             } else if (vv->kind() == Kind::Unsigned) {
-                sum_i += static_cast<Wide>(vv->get_uint(g));
+                sum_i.enter_u(vv->get_uint(g));
             } else {
-                sum_i += static_cast<Wide>(vv->get_int(g));
+                sum_i.enter_i(vv->get_int(g));
             }
         };
         const auto leave = [&](std::int64_t pos) {
@@ -500,11 +508,11 @@ Series frame(const Layout& lay, const Series& column, const WindowColumn& w) {
             --count;
             if (counting || min_max) return;
             if (w.func == WindowFunc::FrameMean || sum_double)
-                sum_d -= vv->get_double(g);
+                sum_d.leave(vv->get_double(g));
             else if (vv->kind() == Kind::Unsigned)
-                sum_i -= static_cast<Wide>(vv->get_uint(g));
+                sum_i.leave_u(vv->get_uint(g));
             else
-                sum_i -= static_cast<Wide>(vv->get_int(g));
+                sum_i.leave_i(vv->get_int(g));
         };
         for (std::int64_t r = p; r < q; ++r) {
             const std::int64_t local = r - p;
@@ -554,7 +562,7 @@ Series frame(const Layout& lay, const Series& column, const WindowColumn& w) {
             }
             for (std::int64_t pos = win_hi + 1; pos <= hi; ++pos) enter(pos);
             for (std::int64_t pos = win_lo; pos < lo; ++pos) leave(pos);
-            while (!dq.empty() && dq.front() < lo) dq.pop_front();
+            dq.drop_before(lo);
             win_lo = lo;
             win_hi = hi;
 
@@ -565,7 +573,7 @@ Series frame(const Layout& lay, const Series& column, const WindowColumn& w) {
                     source[static_cast<std::size_t>(r)] = -1;
                 else
                     source[static_cast<std::size_t>(r)] =
-                        position_row(dq.front());
+                        position_row(dq.best());
             } else if (count == 0 || count < f.min_count) {
                 if (as_double)
                     doubles.null(r);
@@ -574,13 +582,13 @@ Series frame(const Layout& lay, const Series& column, const WindowColumn& w) {
                 else
                     ints.null(r);
             } else if (w.func == WindowFunc::FrameMean) {
-                doubles.set(r, sum_d / static_cast<double>(count));
+                doubles.set(r, sum_d.mean(count));
             } else if (sum_double) {
-                doubles.set(r, sum_d);
+                doubles.set(r, sum_d.sum);
             } else if (unsigned_sum) {
-                uints.set(r, to_uint64(sum_i, "FRAME_SUM"));
+                uints.set(r, sum_i.u64());
             } else {
-                ints.set(r, to_int64(sum_i, "FRAME_SUM"));
+                ints.set(r, sum_i.i64());
             }
         }
     }
@@ -898,9 +906,9 @@ Series frame_arg(const FrameCtx& c, const Series& column, const Series& by,
                  bool smallest, std::int64_t min_count) {
     const ColumnView b = view_of(by, "FRAME_ARG_MAX/FRAME_ARG_MIN");
     std::vector<std::int64_t> source(static_cast<std::size_t>(c.lay.n), -1);
-    std::deque<std::int64_t> dq;
+    steps::SlidingExtreme dq;
     for (const auto& [p, q] : c.lay.parts) {
-        dq.clear();
+        dq.candidates.clear();
         std::int64_t n = 0;
         walk_frame(
             c, p, q,
@@ -908,23 +916,19 @@ Series frame_arg(const FrameCtx& c, const Series& column, const Series& by,
                 const std::int64_t g = c.lay.row(p + pos);
                 if (b.is_null(g)) return;
                 ++n;
-                while (!dq.empty()) {
-                    const int cmp = b.compare(g, c.lay.row(p + dq.back()));
-                    if (smallest ? cmp < 0 : cmp > 0)
-                        dq.pop_back();
-                    else
-                        break;
-                }
-                dq.push_back(pos);
+                dq.enter(pos, [&](std::int64_t back) {
+                    const int cmp = b.compare(g, c.lay.row(p + back));
+                    return smallest ? cmp < 0 : cmp > 0;
+                });
             },
             [&](std::int64_t pos) {
                 if (!b.is_null(c.lay.row(p + pos))) --n;
             },
             [&](std::int64_t r, std::int64_t lo, std::int64_t) {
-                while (!dq.empty() && dq.front() < lo) dq.pop_front();
+                dq.drop_before(lo);
                 if (!dq.empty() && n >= min_count)
                     source[static_cast<std::size_t>(r)] =
-                        c.lay.row(p + dq.front());
+                        c.lay.row(p + dq.best());
             });
     }
     return pass_through(column, source);

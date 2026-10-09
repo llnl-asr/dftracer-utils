@@ -1053,6 +1053,46 @@ dftu_lazyframe* dftu_lazyframe_join(const dftu_lazyframe* lf,
     }
 }
 
+dftu_lazyframe* dftu_lazyframe_asof(const dftu_lazyframe* lf,
+                                    const dftu_lazyframe* other, const char* on,
+                                    const char* const* by, int32_t n_by,
+                                    dftu_asof_direction direction,
+                                    double tolerance) {
+    if (!lf || !other || !on || n_by < 0 || (n_by > 0 && !by)) return nullptr;
+    if (direction != DFTU_ASOF_BACKWARD && direction != DFTU_ASOF_FORWARD &&
+        direction != DFTU_ASOF_NEAREST)
+        return nullptr;
+    try {
+        std::vector<std::string> keys;
+        for (int32_t i = 0; i < n_by; ++i) keys.emplace_back(by[i]);
+        std::optional<double> tol;
+        if (tolerance >= 0) tol = tolerance;
+        return wrap_lazy(lf->lf.asof(
+            other->lf, on, std::move(keys),
+            static_cast<dftracer::utils::dataframe::AsofDirection>(direction),
+            tol));
+    } catch (const std::exception&) {
+        return nullptr;
+    }
+}
+
+dftu_lazyframe* dftu_lazyframe_interval(const dftu_lazyframe* lf,
+                                        const dftu_lazyframe* other,
+                                        const char* point, const char* lo,
+                                        const char* hi, const char* const* by,
+                                        int32_t n_by, int32_t outer) {
+    if (!lf || !other || !point || !lo || !hi || n_by < 0 || (n_by > 0 && !by))
+        return nullptr;
+    try {
+        std::vector<std::string> keys;
+        for (int32_t i = 0; i < n_by; ++i) keys.emplace_back(by[i]);
+        return wrap_lazy(lf->lf.interval(other->lf, point, lo, hi,
+                                         std::move(keys), outer != 0));
+    } catch (const std::exception&) {
+        return nullptr;
+    }
+}
+
 dftu_lazyframe* dftu_lazyframe_concat(const dftu_lazyframe* lf,
                                       const dftu_lazyframe* other) {
     if (!lf || !other) return nullptr;

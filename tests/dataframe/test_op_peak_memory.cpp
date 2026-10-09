@@ -13,18 +13,25 @@
 #include <dftracer/utils/core/coro/async_generator.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dataframe/op.h>
 #include <doctest/doctest.h>
+#include <poll.h>
+#include <signal.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <map>
 #include <memory>
@@ -72,11 +79,13 @@ std::uint64_t mix(std::uint64_t x) {
 }
 
 // Columns: k (a key with about `keys` distinct values), t (increasing), v
-// (pseudo-random), s (a short string), g (64 distinct values).
+// (pseudo-random), s (a short string, or one of about `pad` more bytes, unique
+// per row), g (64 distinct values).
 class GenCursor : public Cursor {
    public:
-    GenCursor(std::int64_t rows, std::int64_t keys, std::uint64_t seed)
-        : rows_(rows), keys_(keys), seed_(seed) {}
+    GenCursor(std::int64_t rows, std::int64_t keys, std::uint64_t seed,
+              std::size_t pad)
+        : rows_(rows), keys_(keys), seed_(seed), pad_(pad) {}
 
     CoroTask<std::optional<Morsel>> next(std::int64_t) override {
         if (at_ >= rows_) co_return std::nullopt;
@@ -90,7 +99,8 @@ class GenCursor : public Cursor {
                                              static_cast<std::uint64_t>(keys_));
             t[i] = at_ + i;
             v[i] = static_cast<std::int64_t>(h >> 20) % 1000003;
-            s[i] = "s" + std::to_string(h % 977);
+            s[i] = pad_ ? std::string(pad_, 'x') + std::to_string(h)
+                        : "s" + std::to_string(h % 977);
             g[i] = static_cast<std::int64_t>((h >> 40) % 64);
         }
         at_ += n;
@@ -108,13 +118,15 @@ class GenCursor : public Cursor {
     std::int64_t rows_;
     std::int64_t keys_;
     std::uint64_t seed_;
+    std::size_t pad_;
     std::int64_t at_ = 0;
 };
 
 class GenSource : public Source {
    public:
-    GenSource(std::int64_t rows, std::int64_t keys, std::uint64_t seed)
-        : rows_(rows), keys_(keys), seed_(seed) {}
+    GenSource(std::int64_t rows, std::int64_t keys, std::uint64_t seed,
+              std::size_t pad)
+        : rows_(rows), keys_(keys), seed_(seed), pad_(pad) {}
 
     Schema schema() const override {
         const std::int64_t zero = 0;
@@ -130,7 +142,7 @@ class GenSource : public Source {
 
     ScanResult scan(const ScanRequest& req) const override {
         ScanResult r;
-        r.cursor = std::make_unique<GenCursor>(rows_, keys_, seed_);
+        r.cursor = std::make_unique<GenCursor>(rows_, keys_, seed_, pad_);
         r.filters.assign(req.filters.size(), Pushed::No);
         return r;
     }
@@ -139,6 +151,7 @@ class GenSource : public Source {
     std::int64_t rows_;
     std::int64_t keys_;
     std::uint64_t seed_;
+    std::size_t pad_;
 };
 
 // Columns: pid (increasing) and tk, a list of two {value, count} structs per
@@ -214,8 +227,9 @@ LazyFrame gen_list(std::int64_t rows) {
     return LazyFrame::scan(std::make_shared<ListSource>(rows));
 }
 
-LazyFrame gen(std::int64_t rows, std::int64_t keys, std::uint64_t seed = 1) {
-    return LazyFrame::scan(std::make_shared<GenSource>(rows, keys, seed));
+LazyFrame gen(std::int64_t rows, std::int64_t keys, std::uint64_t seed = 1,
+              std::size_t pad = 0) {
+    return LazyFrame::scan(std::make_shared<GenSource>(rows, keys, seed, pad));
 }
 
 using Recipe = std::function<LazyFrame(const LazyFrame& base)>;
@@ -233,6 +247,8 @@ const std::map<std::string, Recipe>& recipes() {
         {"tail", [](const LazyFrame& b) { return b.tail(1000); }},
         {"sample", [](const LazyFrame& b) { return b.sample(1000, 7); }},
         {"topk", [](const LazyFrame& b) { return b.topk("v", 1000); }},
+        // k rows far past the budget: cut from the spilling sort.
+        {"topk_wide", [](const LazyFrame& b) { return b.topk("v", ROWS / 2); }},
         {"drop_nulls", [](const LazyFrame& b) { return b.drop_nulls(); }},
         {"with_row_index",
          [](const LazyFrame& b) { return b.with_row_index("i"); }},
@@ -247,6 +263,7 @@ const std::map<std::string, Recipe>& recipes() {
         {"unique", [](const LazyFrame& b) { return b.unique({"k", "v"}); }},
         {"drop_duplicates",
          [](const LazyFrame& b) { return b.drop_duplicates({"k", "v"}); }},
+        // unique_by is unique(subset) in the lazy ABI, the same plan op.
         {"unique_by", [](const LazyFrame& b) { return b.unique({"k", "v"}); }},
         {"is_duplicated",
          [](const LazyFrame& b) {
@@ -261,6 +278,14 @@ const std::map<std::string, Recipe>& recipes() {
          }},
         {"reduce",
          [](const LazyFrame& b) { return b.select({"v"}).reduce(Agg::Sum); }},
+        // Dyn columns over nearly unique keys: a spilled part merges alone.
+        {"group_by_dyn",
+         [](const LazyFrame& b) {
+             return b.rename_columns({"t", "v"}, {"arg.t", "arg.v"})
+                 .group_by(std::vector<std::string>{"k"},
+                           {GroupAgg{Agg::Count, "", "n"}},
+                           {AggDynSpec{AggOp::Sum, 0.0, "sum_"}}, "arg.");
+         }},
         {"head_by", [](const LazyFrame& b) { return b.head_by({"k"}, 2); }},
         {"join",
          [](const LazyFrame& b) {
@@ -291,12 +316,203 @@ const std::map<std::string, Recipe>& recipes() {
          [](const LazyFrame& b) { return b.pivot("k", "g", "v", "sum"); }},
         {"group_transform",
          [](const LazyFrame& b) { return b.group_by({"s"}).cumsum(); }},
+        // Strings of about 200 bytes, unique per row: 50 MB of keys.
+        {"sort_by_long_strings",
+         [](const LazyFrame&) {
+             return gen(ROWS / 4, ROWS, 1, 200).sort_by("s");
+         }},
+        // One key on both sides: the matches of a single key outgrow the
+        // budget, so the side that is built cannot be split by key.
+        {"join_skewed",
+         [](const LazyFrame&) {
+             return gen(4, 1, 5).join(gen(ROWS / 2, 1, 2), {"k"}, {"k"},
+                                      JoinHow::Inner);
+         }},
+        // One key on both sides of a lookup, whose right rows all agree: the
+        // right side is read in blocks and only its first row is kept.
+        {"join_lookup_skewed",
+         [](const LazyFrame&) {
+             return gen(4, 1, 5).join(
+                 gen(ROWS, 1, 2)
+                     .select({"k"})
+                     .with_column("c", lit(std::int64_t{7})),
+                 {"k"}, {"k"}, JoinHow::Lookup);
+         }},
+        // Sixteen dyn names over nearly unique keys.
+        {"group_by_dyn_wide",
+         [](const LazyFrame& b) {
+             LazyFrame w = b.select({"k", "v"});
+             for (int i = 0; i < 16; ++i)
+                 w = w.with_column("arg.c" + std::to_string(i),
+                                   col(1) + lit(std::int64_t{i}));
+             return w.group_by(std::vector<std::string>{"k"},
+                               {GroupAgg{Agg::Count, "", "n"}},
+                               {AggDynSpec{AggOp::Sum, 0.0, "sum_"}}, "arg.");
+         }},
+        // A registry column op that needs the whole column: its input past a
+        // quarter of the budget is mapped from a spill file.
+        {"column_op_whole",
+         [](const LazyFrame& b) {
+             dftu_scalar zero{};
+             zero.kind = DFTU_SCALAR_TAG_I64;
+             OpArgs args;
+             args.str(1, "v")
+                 .str(2, "dftu.series.cumsum")
+                 .str(3, "")
+                 .scalar(4, zero)
+                 .scalar(5, zero)
+                 .str(6, "");
+             const LazyFrame in = b.select({"k", "t", "v", "g"});
+             return in.frame_op("dftu.frame.column_op", args, {}, in.schema());
+         }},
+        // A positional column op: each morsel carries the last rows of the
+        // one before it.
+        {"column_op_shift",
+         [](const LazyFrame& b) {
+             dftu_scalar three{};
+             three.kind = DFTU_SCALAR_TAG_I64;
+             three.value.i = 3;
+             dftu_scalar zero{};
+             zero.kind = DFTU_SCALAR_TAG_I64;
+             OpArgs args;
+             args.str(1, "v")
+                 .str(2, "dftu.series.shift")
+                 .str(3, "")
+                 .scalar(4, three)
+                 .scalar(5, zero)
+                 .str(6, "");
+             const LazyFrame in = b.select({"k", "t", "v", "g"});
+             return in.frame_op("dftu.frame.column_op", args, {}, in.schema());
+         }},
+        // The frame op with one direction per key runs as the spilling sort.
+        {"sort_by_multi_per_col",
+         [](const LazyFrame& b) {
+             const char* by[] = {"k", "v"};
+             const std::int32_t descending[] = {1, 0};
+             OpArgs args;
+             args.strlist(1, by, 2).i32list(2, descending);
+             return b.frame_op("dftu.frame.sort_by_multi_per_col", args);
+         }},
+        // One partition far past the budget, with the functions that used to
+        // hold a whole partition: variance, a frame from the partition start,
+        // first and last value.
+        {"window_whole",
+         [](const LazyFrame& b) {
+             dftu_window_spec var{};
+             var.func = DFTU_WINDOW_FRAME_VAR;
+             var.value = "v";
+             var.out = "var";
+             var.param.frame = {0, 2, 1, DFTU_WINDOW_FRAME_ROWS, 0.5, nullptr};
+             dftu_window_spec run{};
+             run.func = DFTU_WINDOW_FRAME_SUM;
+             run.value = "v";
+             run.out = "run";
+             run.param.frame = {0,   DFTU_WINDOW_UNBOUNDED,
+                                1,   DFTU_WINDOW_FRAME_ROWS,
+                                0.5, nullptr};
+             dftu_window_spec first{};
+             first.func = DFTU_WINDOW_FIRST_VALUE;
+             first.value = "s";
+             first.out = "first";
+             dftu_window_spec last{};
+             last.func = DFTU_WINDOW_LAST_VALUE;
+             last.value = "v";
+             last.out = "last";
+             const std::vector<dftu_window_spec> specs{var, run, first, last};
+             const char* order[] = {"t"};
+             OpArgs args;
+             args.strlist(1, nullptr, 0).strlist(2, order, 1).winlist(3, specs);
+             std::vector<std::string> names = b.schema();
+             for (const dftu_window_spec& w : specs) names.emplace_back(w.out);
+             return b.frame_op("dftu.frame.window", args, {}, names);
+         }},
+        // One partition far past the budget, with the frames that read to its
+        // end or over all of it, and a text minimum from its start.
+        {"window_end",
+         [](const LazyFrame& b) {
+             const auto frame = [](dftu_window_func func, const char* value,
+                                   const char* out, std::int64_t pre,
+                                   std::int64_t fol) {
+                 dftu_window_spec w{};
+                 w.func = func;
+                 w.value = value;
+                 w.out = out;
+                 w.param.frame = {0,   pre,    fol, DFTU_WINDOW_FRAME_ROWS,
+                                  0.5, nullptr};
+                 return w;
+             };
+             const std::int64_t ALL = DFTU_WINDOW_UNBOUNDED;
+             const std::vector<dftu_window_spec> specs{
+                 frame(DFTU_WINDOW_FRAME_VAR, "v", "var", ALL, ALL),
+                 frame(DFTU_WINDOW_FRAME_SUM, "v", "rest", 3, ALL),
+                 frame(DFTU_WINDOW_FRAME_COUNT, "v", "left", 0, ALL),
+                 frame(DFTU_WINDOW_FRAME_MIN, "s", "lo", ALL, 0)};
+             const char* order[] = {"t"};
+             OpArgs args;
+             args.strlist(1, nullptr, 0).strlist(2, order, 1).winlist(3, specs);
+             std::vector<std::string> names = b.schema();
+             for (const dftu_window_spec& w : specs) names.emplace_back(w.out);
+             return b.frame_op("dftu.frame.window", args, {}, names);
+         }},
+        // One partition far past the budget, with the frames that read to its
+        // end and need the rows ahead: a min and a max (text too) from each
+        // row on, a variance, a range frame whose float mean follows the
+        // kernel's steps, and a text maximum that reads rows ahead.
+        {"window_suffix",
+         [](const LazyFrame& b) {
+             const auto frame = [](dftu_window_func func, const char* value,
+                                   const char* out, std::int64_t pre,
+                                   std::int64_t fol, bool range = false) {
+                 dftu_window_spec w{};
+                 w.func = func;
+                 w.value = value;
+                 w.out = out;
+                 w.param.frame = {
+                     0,
+                     pre,
+                     fol,
+                     range ? DFTU_WINDOW_FRAME_RANGE : DFTU_WINDOW_FRAME_ROWS,
+                     0.5,
+                     nullptr};
+                 return w;
+             };
+             const std::int64_t ALL = DFTU_WINDOW_UNBOUNDED;
+             const std::vector<dftu_window_spec> specs{
+                 frame(DFTU_WINDOW_FRAME_MIN, "v", "lo", 3, ALL),
+                 frame(DFTU_WINDOW_FRAME_MAX, "s", "hi", 2, ALL),
+                 frame(DFTU_WINDOW_FRAME_VAR, "v", "var", 1, ALL),
+                 frame(DFTU_WINDOW_FRAME_COUNT, "v", "near", 50, ALL, true),
+                 frame(DFTU_WINDOW_FRAME_MEAN, "v", "avg", 10, ALL, true),
+                 frame(DFTU_WINDOW_FRAME_MAX, "s", "ahead", ALL, 2)};
+             const char* order[] = {"t"};
+             OpArgs args;
+             args.strlist(1, nullptr, 0).strlist(2, order, 1).winlist(3, specs);
+             std::vector<std::string> names = b.schema();
+             for (const dftu_window_spec& w : specs) names.emplace_back(w.out);
+             return b.frame_op("dftu.frame.window", args, {}, names);
+         }},
         {"compare_agg",
          [](const LazyFrame& b) {
              const std::vector<GroupAgg> aggs{GroupAgg{Agg::Sum, "v", "v"}};
              const std::vector<std::string> by{"k"};
              return b.group_by(by, aggs).compare_agg(
                  gen(ROWS, ROWS, 2).group_by(by, aggs), 1);
+         }},
+        // 125000 right rows over 64 groups against 1M left rows: both sides
+        // are sorted and merged, and the output is one row per left row.
+        {"asof",
+         [](const LazyFrame& b) {
+             return b.asof(gen(ROWS / 4, ROWS, 2), "t", {"g"},
+                           AsofDirection::Nearest);
+         }},
+        // Each right range holds 41 points of t, and the groups cut the
+        // matches to about one per left row.
+        {"interval",
+         [](const LazyFrame& b) {
+             const LazyFrame ranges =
+                 gen(ROWS / 4, ROWS, 2)
+                     .with_column("hi", col(1) + lit(std::int64_t{40}));
+             return b.interval(ranges, "t", "t", "hi", {"g"}, true);
          }},
         {"explode",
          [](const LazyFrame&) {
@@ -314,10 +530,24 @@ const std::map<std::string, Recipe>& recipes() {
                  Series::flat(TypeId::Bool, bits.data(), ROWS));
          }},
         {"to_dummies", [](const LazyFrame& b) { return b.to_dummies("s"); }},
+        // 100 left rows meet 100000 right rows: a right side over the budget
+        // and ten million output rows.
+        {"cross_join",
+         [](const LazyFrame& b) {
+             return b.head(100).join(gen(ROWS / 10, ROWS, 3), {}, {},
+                                     JoinHow::Cross);
+         }},
         {"group_by_dynamic",
          [](const LazyFrame& b) {
              return b.group_by_dynamic("t", 1000, 1000,
                                        {GroupAgg{Agg::Sum, "v", "v_sum"}});
+         }},
+        // Sliding windows of two rows every two rows: half a million windows.
+        {"group_by_dynamic_many",
+         [](const LazyFrame& b) {
+             return b.group_by_dynamic("t", 2, 4,
+                                       {GroupAgg{Agg::Sum, "v", "v_sum"},
+                                        GroupAgg{Agg::Count, "", "n"}});
          }},
     };
     return r;
@@ -357,7 +587,9 @@ const std::map<std::string, Expect>& expectations() {
         {"tail", {Kind::STREAMING, "bounded by n"}},
         {"sample", {Kind::STREAMING, "bounded by n"}},
         {"topk", {Kind::STREAMING, "bounded by k"}},
+        {"topk_wide", {Kind::SPILLS, "k past the budget"}},
         {"join", {Kind::SPILLS, ""}},
+        {"cross_join", {Kind::SPILLS, "the right side is spooled"}},
         // Spill triggers exist, but memory stays far above the budget.
         {"sort_by", {Kind::SPILLS, ""}},
         {"sort_by_multi", {Kind::SPILLS, ""}},
@@ -367,6 +599,7 @@ const std::map<std::string, Expect>& expectations() {
         {"is_duplicated", {Kind::SPILLS, ""}},
         {"is_unique", {Kind::SPILLS, ""}},
         {"group_by", {Kind::SPILLS, ""}},
+        {"group_by_dyn", {Kind::SPILLS, ""}},
         {"reverse", {Kind::SPILLS, ""}},
         {"take", {Kind::STREAMING, "holds its result"}},
         {"head_by", {Kind::SPILLS, ""}},
@@ -381,9 +614,25 @@ const std::map<std::string, Expect>& expectations() {
         {"unpivot", {Kind::STREAMING, ""}},
         {"melt", {Kind::STREAMING, ""}},
         {"pivot", {Kind::SPILLS, ""}},
-        {"group_by_dynamic", {Kind::STREAMING, "one window per group"}},
+        {"group_by_dynamic", {Kind::STREAMING, "the open windows"}},
+        {"group_by_dynamic_many", {Kind::STREAMING, "the open windows"}},
+        {"sort_by_long_strings", {Kind::SPILLS, ""}},
+        {"join_skewed", {Kind::SPILLS, ""}},
+        {"join_lookup_skewed", {Kind::SPILLS, ""}},
+        {"group_by_dyn_wide", {Kind::SPILLS, ""}},
         {"compare_agg", {Kind::SPILLS, "two group-bys, a join and a sort", 2}},
         {"group_transform", {Kind::SPILLS, "two sorts and a window chunk", 2}},
+        {"window_whole", {Kind::SPILLS, "a sort, a spool and a window chunk"}},
+        {"window_end", {Kind::SPILLS, "a sort, two spool passes and a chunk"}},
+        {"window_suffix",
+         {Kind::SPILLS, "a sort, a spool read both ways and a chunk"}},
+        {"asof", {Kind::SPILLS, "two sorts and a merge window"}},
+        {"interval", {Kind::SPILLS, "two sorts and the open ranges"}},
+        // cumsum over an integer column runs one morsel at a time with the
+        // running total carried over; no input or result is held whole.
+        {"column_op_whole", {Kind::STREAMING, ""}},
+        {"column_op_shift", {Kind::STREAMING, ""}},
+        {"sort_by_multi_per_col", {Kind::SPILLS, "the spilling sort"}},
         {"rename_columns", {Kind::STREAMING, ""}},
     };
     return e;
@@ -427,6 +676,24 @@ struct ChildResult {
     std::string out;
 };
 
+// A child that takes longer than this is killed and fails the test.
+constexpr std::chrono::seconds CHILD_TIMEOUT{300};
+
+// Peak RSS under a sanitizer or Valgrind is the tool's shadow memory, not the
+// engine's, so the bounds mean nothing there.
+bool under_instrumentation() {
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+    return true;
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer) || \
+    __has_feature(memory_sanitizer)
+    return true;
+#endif
+#endif
+    const char* preload = std::getenv("LD_PRELOAD");
+    return preload && std::strstr(preload, "vgpreload") != nullptr;
+}
+
 ChildResult run_child(const std::string& op) {
     const auto started = std::chrono::steady_clock::now();
     int fds[2];
@@ -444,8 +711,33 @@ ChildResult run_child(const std::string& op) {
     ::close(fds[1]);
     ChildResult r;
     char buf[256];
-    ssize_t k;
-    while ((k = ::read(fds[0], buf, sizeof buf)) > 0) r.out.append(buf, k);
+    bool timed_out = false;
+    for (;;) {
+        const auto left =
+            CHILD_TIMEOUT - (std::chrono::steady_clock::now() - started);
+        if (left <= std::chrono::steady_clock::duration::zero()) {
+            timed_out = true;
+            break;
+        }
+        struct pollfd pfd{fds[0], POLLIN, 0};
+        const int ready = ::poll(
+            &pfd, 1,
+            static_cast<int>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(left)
+                    .count()));
+        if (ready == 0) {
+            timed_out = true;
+            break;
+        }
+        if (ready < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        const ssize_t k = ::read(fds[0], buf, sizeof buf);
+        if (k <= 0) break;
+        r.out.append(buf, static_cast<std::size_t>(k));
+    }
+    if (timed_out) ::kill(pid, SIGKILL);
     ::close(fds[0]);
     int status = 0;
     struct rusage ru{};
@@ -454,6 +746,7 @@ ChildResult run_child(const std::string& op) {
                                               started)
                     .count();
     r.status = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+    if (timed_out) r.status = -2;
 #if defined(__APPLE__)
     r.peak_bytes = static_cast<std::uint64_t>(ru.ru_maxrss);
 #else
@@ -469,15 +762,35 @@ TEST_CASE("every lazy op is in the expectation table") {
     for (const auto& name : ops)
         CHECK_MESSAGE(expectations().count(name) == 1,
                       "lazy op not classified in test_op_peak_memory: ", name);
-    for (const auto& [name, e] : expectations())
-        CHECK_MESSAGE(ops.count(name) == 1,
-                      "classified op is not in the registry: ", name);
+    // A recipe that runs a registry op another way, to measure that way too.
+    const std::map<std::string, std::string> variants = {
+        {"cross_join", "join"},
+        {"topk_wide", "topk"},
+        {"group_by_dyn", "group_by"},
+        {"column_op_whole", "with_column"},
+        {"column_op_shift", "with_column"},
+        {"sort_by_multi_per_col", "sort_by_multi"},
+        {"window_whole", "sort_by"},
+        {"window_end", "sort_by"},
+        {"window_suffix", "sort_by"},
+        {"group_by_dynamic_many", "group_by_dynamic"},
+        {"sort_by_long_strings", "sort_by"},
+        {"join_skewed", "join"},
+        {"join_lookup_skewed", "join"},
+        {"group_by_dyn_wide", "group_by"}};
+    for (const auto& [name, e] : expectations()) {
+        const auto v = variants.find(name);
+        const bool known = ops.count(name) == 1 ||
+                           (v != variants.end() && ops.count(v->second) == 1);
+        CHECK_MESSAGE(known, "classified op is not in the registry: ", name);
+    }
     for (const auto& [name, r] : recipes())
         CHECK_MESSAGE(expectations().count(name) == 1,
                       "recipe without an expectation: ", name);
 }
 
-TEST_CASE("each op stays within its bound at a small budget") {
+TEST_CASE("each op stays within its bound at a small budget" *
+          doctest::skip(under_instrumentation())) {
     const bool report = std::getenv("DFTU_OP_PEAK_REPORT") != nullptr;
     const ChildResult base = run_child("input_only");
     REQUIRE(base.status == 0);
@@ -490,6 +803,8 @@ TEST_CASE("each op stays within its bound at a small budget") {
     for (const auto& [name, recipe] : recipes()) {
         const Expect& want = expectations().at(name);
         const ChildResult r = run_child(name);
+        REQUIRE_MESSAGE(r.status != -2, name, " ran past ",
+                        CHILD_TIMEOUT.count(), " s");
         REQUIRE_MESSAGE(r.status == 0, name, " exited with ", r.status);
         const std::uint64_t extra =
             r.peak_bytes > base.peak_bytes ? r.peak_bytes - base.peak_bytes : 0;
@@ -503,6 +818,12 @@ TEST_CASE("each op stays within its bound at a small budget") {
                         want.note);
             continue;
         }
+#if defined(DFTRACER_UTILS_COVERAGE_BUILD)
+        // The coverage build is Debug and counts every branch, so its peaks
+        // run above a bound set for an optimized build; the child must still
+        // finish.
+        (void)extra;
+#else
         if (want.kind == Kind::DEBT) {
             CHECK_MESSAGE(extra > bound, name,
                           " now meets its bound; remove it from the debt "
@@ -514,6 +835,7 @@ TEST_CASE("each op stays within its bound at a small budget") {
                 " MiB above the streaming baseline; bound is ", bound >> 20,
                 " MiB at a ", BUDGET >> 20, " MiB budget");
         }
+#endif
     }
 }
 

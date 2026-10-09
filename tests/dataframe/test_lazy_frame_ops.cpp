@@ -8,10 +8,12 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
+#include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -94,6 +96,26 @@ LazyFrame scan(DataFrame df) {
     return LazyFrame::scan(std::make_shared<InMemorySource>(std::move(df)));
 }
 
+// A plan step whose columns are only known once it runs: a registry op with no
+// native lazy twin (a frame op that has one runs as that op, with a schema).
+// It adds the column "rn", the row number.
+LazyFrame row_numbered(DataFrame df) {
+    std::vector<dftu_window_spec> specs(1);
+    specs[0] = dftu_window_spec{};
+    specs[0].func = DFTU_WINDOW_ROW_NUMBER;
+    specs[0].out = "rn";
+    OpArgs args;
+    args.strlist(1, nullptr, 0).strlist(2, nullptr, 0).winlist(3, specs);
+    return scan(std::move(df)).frame_op("dftu.frame.window", args);
+}
+
+DataFrame row_numbered_eager(const DataFrame& df) {
+    dftracer::utils::dataframe::WindowColumn w{};
+    w.func = dftracer::utils::dataframe::WindowFunc::RowNumber;
+    w.out = "rn";
+    return dftracer::utils::dataframe::window(df, {}, {}, {w});
+}
+
 dftu_dataframe* to_abi(const DataFrame& df) {
     std::vector<const char*> names;
     std::vector<dftu_series*> cols;
@@ -172,20 +194,16 @@ TEST_SUITE("lazy frame ops") {
     }
 
     TEST_CASE("compare_agg: a plan with unknown columns is collected") {
-        auto top = [](DataFrame df) {
-            OpArgs args;
-            args.str(1, "n").i64(2, 2).i32(3, 1);
-            return scan(std::move(df)).frame_op("dftu.frame.topk", args);
-        };
-        LazyFrame wide = top(make_base());
+        LazyFrame wide = row_numbered(make_base());
         CHECK(wide.schema().empty());
-        LazyFrame plan = wide.compare_agg(top(make_variant()), 1);
+        LazyFrame plan = wide.compare_agg(row_numbered(make_variant()), 1);
         CHECK(plan.schema().empty());
         CHECK(plan.explain().find("frame_op dftu.frame.compare_agg") !=
               std::string::npos);
         DataFrame out = run(plan.collect(1));
-        DataFrame eager = make_base().topk("n", 2).compare_agg(
-            make_variant().topk("n", 2), 1);
+        DataFrame eager =
+            row_numbered_eager(make_base())
+                .compare_agg(row_numbered_eager(make_variant()), 1);
         CHECK(out.names == eager.names);
         CHECK(i64_col(out, "k") == i64_col(eager, "k"));
         CHECK(i64_col(out, "delta_n") == i64_col(eager, "delta_n"));
@@ -213,15 +231,31 @@ TEST_SUITE("lazy frame ops") {
         // The operands go out of scope before the plan runs: the plan must
         // hold its own copies.
         LazyFrame plan = [] {
-            std::string name = "n";
+            std::string out = "rn";
+            std::vector<dftu_window_spec> specs(1);
+            specs[0] = dftu_window_spec{};
+            specs[0].func = DFTU_WINDOW_ROW_NUMBER;
+            specs[0].out = out.c_str();
+            std::vector<const char*> order = {"n"};
             OpArgs args;
-            args.str(1, name).i64(2, 1).i32(3, 1);
-            return scan(make_base()).frame_op("dftu.frame.topk", args);
+            args.strlist(1, nullptr, 0)
+                .strlist(2, order.data(), 1)
+                .winlist(3, specs);
+            return scan(make_base()).frame_op("dftu.frame.window", args);
         }();
-        CHECK(plan.explain().find("frame_op dftu.frame.topk") !=
+        CHECK(plan.explain().find("frame_op dftu.frame.window") !=
               std::string::npos);
         DataFrame out = run(plan.collect(1));
-        CHECK(i64_col(out, "n") == std::vector<I>{20});
+        std::vector<I> rn = i64_col(out, "rn");
+        std::sort(rn.begin(), rn.end());
+        CHECK(rn == std::vector<I>{1, 2});
+
+        // A frame op that has a native lazy twin runs as that op.
+        OpArgs topk;
+        topk.str(1, "n").i64(2, 1).i32(3, 1);
+        LazyFrame native = scan(make_base()).frame_op("dftu.frame.topk", topk);
+        CHECK(native.explain().find("frame_op") == std::string::npos);
+        CHECK(i64_col(run(native.collect(1)), "n") == std::vector<I>{20});
 
         OpArgs none;
         CHECK_THROWS_WITH_AS(

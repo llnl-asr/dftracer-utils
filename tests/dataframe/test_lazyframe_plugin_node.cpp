@@ -183,7 +183,7 @@ const dftu_cursor_vt DOUBLE_CURSOR_VT = {
     double_cursor_next, double_cursor_destroy, nullptr, nullptr, nullptr};
 
 void* double_node_open(void*, void* in_self, const dftu_cursor_vt* in_vt,
-                       const dftu_op_arg*, void** out_self,
+                       const dftu_op_arg*, std::uint64_t, void** out_self,
                        const dftu_cursor_vt** out_vt) {
     auto* st = new DoubleCursorState{in_self, in_vt};
     *out_self = st;
@@ -213,7 +213,7 @@ dftu_node_vt make_double_vt() {
 
 void*  // NOLINT(readability-non-const-parameter)
 failing_node_open(void*, void*, const dftu_cursor_vt*, const dftu_op_arg*,
-                  void**, const dftu_cursor_vt**) {
+                  std::uint64_t, void**, const dftu_cursor_vt**) {
     return nullptr;
 }
 
@@ -224,6 +224,7 @@ void failing_node_schema(void*, const dftu_schema*, const dftu_op_arg*,
 
 struct RecordingNode {
     bool opened = false;
+    std::uint64_t budget = 0;
 };
 
 void recording_node_schema(void*, const dftu_schema* in, const dftu_op_arg*,
@@ -237,8 +238,10 @@ void recording_node_schema(void*, const dftu_schema* in, const dftu_op_arg*,
 // not the values.
 void* recording_node_open(void* self, void* in_self,
                           const dftu_cursor_vt* in_vt, const dftu_op_arg*,
-                          void** out_self, const dftu_cursor_vt** out_vt) {
+                          std::uint64_t memory_budget, void** out_self,
+                          const dftu_cursor_vt** out_vt) {
     static_cast<RecordingNode*>(self)->opened = true;
+    static_cast<RecordingNode*>(self)->budget = memory_budget;
     auto* st = new DoubleCursorState{in_self, in_vt};
     *out_self = st;
     *out_vt = &DOUBLE_CURSOR_VT;
@@ -281,7 +284,7 @@ void probe_node_schema(void*, const dftu_schema* in, const dftu_op_arg*,
 }
 
 void* probe_node_open(void* self, void* in_self, const dftu_cursor_vt* in_vt,
-                      const dftu_op_arg*, void** out_self,
+                      const dftu_op_arg*, std::uint64_t, void** out_self,
                       const dftu_cursor_vt** out_vt) {
     auto* flags = static_cast<std::vector<bool>*>(self);
     auto* st = new ProbeCursorState{in_self, in_vt, flags};
@@ -446,7 +449,7 @@ void forward_node_schema(void*, const dftu_schema* in, const dftu_op_arg*,
 }
 
 void* forward_node_open(void* self, void* in_self, const dftu_cursor_vt* in_vt,
-                        const dftu_op_arg*, void** out_self,
+                        const dftu_op_arg*, std::uint64_t, void** out_self,
                         const dftu_cursor_vt** out_vt) {
     auto* st =
         new ForwardCursorState{in_self, in_vt, static_cast<ForwardLog*>(self)};
@@ -847,6 +850,28 @@ TEST_SUITE("lazyframe plugin node") {
         CHECK(dftu_node_unregister("test.double.f") == 0);
     }
 
+    TEST_CASE("a node's open gets the plan's memory budget") {
+        RecordingNode rec;
+        dftu_node_vt vt{};
+        vt.output_schema = recording_node_schema;
+        vt.open = recording_node_open;
+        REQUIRE(dftu_node_register("test.double.budget", &vt, &rec) == 0);
+
+        IntSource fx{{"val"}, {10, 20}};
+        LazyFrame base = LazyFrame::scan(make_int_source(fx, false))
+                             .op("test.double.budget", OpArgs());
+
+        constexpr std::uint64_t BUDGET = 3u << 20;
+        REQUIRE(run(base.memory_budget(BUDGET).collect()).num_rows() == 2);
+        CHECK(rec.budget == BUDGET);
+
+        rec.budget = 0;
+        REQUIRE(run(base.collect()).num_rows() == 2);
+        CHECK(rec.budget > 0);
+
+        CHECK(dftu_node_unregister("test.double.budget") == 0);
+    }
+
     TEST_CASE("a breaker node drains its input and emits one frame") {
         struct CountState {
             void* in_self;
@@ -911,8 +936,8 @@ TEST_SUITE("lazyframe plugin node") {
                                       DFTU_TIME_UNIT_MICRO, nullptr, 0, 0, 0);
             }
             static void* open(void*, void* in_self, const dftu_cursor_vt* in_vt,
-                              const dftu_op_arg*, void** out_self,
-                              const dftu_cursor_vt** out_vt) {
+                              const dftu_op_arg*, std::uint64_t,
+                              void** out_self, const dftu_cursor_vt** out_vt) {
                 auto* st = new CountState{in_self, in_vt};
                 *out_self = st;
                 *out_vt = &COUNT_VT;

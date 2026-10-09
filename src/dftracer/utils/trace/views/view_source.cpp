@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/field_ref.h>
 #include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/core/coro/async_semaphore.h>
@@ -1408,8 +1409,25 @@ df::DataFrame partial_frame(std::string_view partial) {
     return f;
 }
 
+namespace {
+
+// The column `name` of a one-row terminal frame. A frame without it, or with
+// no row, did not come from that terminal.
+df::Series terminal_cell(const df::DataFrame& frame, const char* name) {
+    const std::int64_t at = frame.column_index(name);
+    if (at < 0 || static_cast<std::size_t>(at) >= frame.columns.size() ||
+        frame.columns[static_cast<std::size_t>(at)].length() < 1)
+        throw DFTUtilsException::cat(ErrorCode::INTERNAL,
+                                     "view terminal: the result has no '", name,
+                                     "' row (", frame.columns.size(),
+                                     " columns, ", frame.num_rows(), " rows)");
+    return frame.columns[static_cast<std::size_t>(at)].materialize();
+}
+
+}  // namespace
+
 std::string partial_of(const df::DataFrame& frame) {
-    return std::string(frame.column("partial").materialize().string_at(0));
+    return std::string(terminal_cell(frame, "partial").string_at(0));
 }
 
 df::DataFrame stats_frame(const ExportStats& stats) {
@@ -1440,9 +1458,11 @@ df::DataFrame stats_frame(const ExportStats& stats) {
 ExportStats stats_of(const df::DataFrame& frame) {
     auto count = [&](const char* name) {
         return static_cast<std::uint64_t>(
-            frame.column(name).materialize().data<std::int64_t>()[0]);
+            terminal_cell(frame, name).data<std::int64_t>()[0]);
     };
-    auto flag = [&](const char* name) { return frame.column(name).any(); };
+    auto flag = [&](const char* name) {
+        return terminal_cell(frame, name).any();
+    };
     ExportStats s;
     s.events_matched = count("events_matched");
     s.events_scanned = count("events_scanned");

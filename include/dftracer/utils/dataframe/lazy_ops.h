@@ -148,6 +148,18 @@ class LazyOps {
     LazyFrame compare_agg(LazyFrame variant, std::int64_t n_key) const {
         return lf().compare_agg(std::move(variant), n_key);
     }
+    LazyFrame asof(LazyFrame other, std::string on, std::vector<std::string> by,
+                   AsofDirection direction,
+                   std::optional<double> tolerance = std::nullopt) const {
+        return lf().asof(std::move(other), std::move(on), std::move(by),
+                         direction, tolerance);
+    }
+    LazyFrame interval(LazyFrame other, std::string point, std::string lo,
+                       std::string hi, std::vector<std::string> by,
+                       bool outer = false) const {
+        return lf().interval(std::move(other), std::move(point), std::move(lo),
+                             std::move(hi), std::move(by), outer);
+    }
     LazyFrame frame_op(std::string name, OpArgs args,
                        std::vector<LazyFrame> others = {},
                        std::vector<std::string> out_names = {}) const {

@@ -683,8 +683,8 @@ std::optional<DataFrame> group_agg_by_key_hash(
     const std::vector<const Series*>& in_values,
     const std::vector<AggSpec>& specs,
     const std::vector<std::string>& key_names, std::size_t drop_keys = 0) {
-    // ponytail: threshold set from benchmarks/groupby_analyzer_bench.py; below
-    // it the per-thread partials win, raise it if a mid-size case regresses.
+    // Threshold set from benchmarks/groupby_analyzer_bench.py; below it the
+    // per-thread partials win.
     constexpr std::int64_t MIN_ROWS = 4 * AGG_GRAIN;
     const std::int64_t n = in_keys.empty() ? 0 : in_keys[0]->length();
     if (n <= MIN_ROWS) return std::nullopt;
@@ -961,8 +961,8 @@ std::optional<DataFrame> group_agg_in_batches(
     const std::vector<const Series*>& keys,
     const std::vector<const Series*>& values, const std::vector<AggSpec>& specs,
     const std::vector<std::string>& key_names) {
-    // ponytail: the state one batch may hold; raise it for speed, lower it
-    // for memory. The passes over the keys grow as columns / batch width.
+    // The state one batch may hold. The passes over the keys grow as columns /
+    // batch width.
     constexpr std::int64_t BATCH_STATE_BYTES = 8 << 20;
     constexpr std::size_t FIRST_BATCH = 1;
     const std::int64_t n = keys.empty() ? 0 : keys[0]->length();

@@ -280,7 +280,8 @@ class DoubleVal {
         std::optional<pl::InputCursor> in_;
     };
 
-    std::unique_ptr<Cursor> open(pl::InputCursor in, const pl::OpArgs&) const {
+    std::unique_ptr<Cursor> open(pl::InputCursor in, const pl::OpArgs&,
+                                 std::uint64_t) const {
         if (mode_ == OpenMode::Throw) throw std::runtime_error("no open");
         if (mode_ == OpenMode::DropInput)
             return std::make_unique<Cursor>(std::nullopt);

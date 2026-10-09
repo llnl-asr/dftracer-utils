@@ -19,12 +19,13 @@
  * N provides:
  *   void output_schema(const SchemaView& in, const OpArgs& args,
  *                      SchemaBuilder& out) const;
- *   std::unique_ptr<C> open(InputCursor in, const OpArgs& args) const;
+ *   std::unique_ptr<C> open(InputCursor in, const OpArgs& args,
+ *                           std::uint64_t memory_budget) const;
  * where C is a cursor type as in plugin/source.h (next, and optionally
  * narrow / resident_bytes / reclaim). The cursor owns `in` and pulls it with
- * in.next(). A throwing or empty open() leaves the upstream cursor with the
- * host, as dftu_node_vt::open requires; a throwing next() surfaces as a scan
- * error. */
+ * in.next(). `memory_budget` is the plan's budget in bytes, never 0. A throwing
+ * or empty open() leaves the upstream cursor with the host, as
+ * dftu_node_vt::open requires; a throwing next() surfaces as a scan error. */
 
 namespace dftracer::utils::plugins {
 
@@ -149,12 +150,12 @@ struct NodeVt {
     }
 
     static void* open(void* self, void* in_self, const dftu_cursor_vt* in_vt,
-                      const dftu_op_arg* args, void** out_cursor_self,
-                      const dftu_cursor_vt** out_vt) {
+                      const dftu_op_arg* args, std::uint64_t memory_budget,
+                      void** out_cursor_self, const dftu_cursor_vt** out_vt) {
         auto own = std::make_shared<InputOwnership>();
         try {
             auto cursor = static_cast<NodeBox<N>*>(self)->node->open(
-                InputCursor(in_self, in_vt, own), OpArgs(args));
+                InputCursor(in_self, in_vt, own), OpArgs(args), memory_budget);
             if (!cursor) return nullptr;
             using C = typename decltype(cursor)::element_type;
             auto* box = new CursorBox<C>{std::move(cursor), {}};

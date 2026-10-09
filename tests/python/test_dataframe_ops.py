@@ -412,6 +412,85 @@ def test_lazy_concat_and_union_match_eager():
         a.lazy().concat(b)
 
 
+def _random_frames(seed, n_left, n_right):
+    import random
+
+    rng = random.Random(seed)
+
+    def key():
+        return None if rng.random() < 0.1 else rng.randrange(4)
+
+    def time():
+        return None if rng.random() < 0.05 else rng.randrange(60)
+
+    left = _df(
+        {
+            "g": [key() for _ in range(n_left)],
+            "ts": [time() for _ in range(n_left)],
+            "v": list(range(n_left)),
+        }
+    )
+    right = _df(
+        {
+            "g": [key() for _ in range(n_right)],
+            "ts": [time() for _ in range(n_right)],
+            "v": list(range(n_right)),
+            "w": [None if rng.random() < 0.2 else i * 10 for i in range(n_right)],
+        }
+    )
+    return left, right
+
+
+@pytest.mark.parametrize("direction", ["backward", "forward", "nearest"])
+@pytest.mark.parametrize("tolerance", [None, 0, 3])
+@pytest.mark.parametrize("by", [None, "g"])
+def test_lazy_asof_under_a_budget_matches_eager(direction, tolerance, by):
+    left, right = _random_frames(7, 3000, 2000)
+    eager = left.asof(right, "ts", by, direction, tolerance)
+    plan = left.lazy().memory_budget(1 << 15).asof(right.lazy(), "ts", by, direction, tolerance)
+    assert _dict(plan.collect()) == _dict(eager)
+    # Sorted and merged, the result leaves in morsels cut by the budget; a
+    # collect of both sides followed by the eager op hands it over whole.
+    assert sum(1 for _ in plan.stream(1_000_000)) > 1
+
+
+@pytest.mark.parametrize("outer", [False, True])
+@pytest.mark.parametrize("by", [None, "g"])
+def test_lazy_interval_under_a_budget_matches_eager(outer, by):
+    import random
+
+    rng = random.Random(11)
+    pts = _df(
+        {
+            "g": [None if rng.random() < 0.1 else rng.randrange(3) for _ in range(2000)],
+            "p": [None if rng.random() < 0.05 else rng.randrange(100) for _ in range(2000)],
+        }
+    )
+    los = [None if rng.random() < 0.05 else rng.randrange(100) for _ in range(500)]
+    spans = _df(
+        {
+            "g": [None if rng.random() < 0.1 else rng.randrange(3) for _ in range(500)],
+            "lo": los,
+            "hi": [None if rng.random() < 0.05 else (x or 0) + rng.randrange(30) for x in los],
+            "tag": list(range(500)),
+        }
+    )
+    eager = pts.interval(spans, "p", "lo", "hi", by, outer)
+    plan = pts.lazy().memory_budget(1 << 15).interval(spans.lazy(), "p", "lo", "hi", by, outer)
+    assert _dict(plan.collect()) == _dict(eager)
+    assert sum(1 for _ in plan.stream(1_000_000)) > 1
+
+
+def test_lazy_asof_and_interval_errors():
+    left, right = _random_frames(1, 10, 10)
+    with pytest.raises(ValueError, match="tolerance"):
+        left.lazy().asof(right.lazy(), "ts", "g", "backward", -1)
+    with pytest.raises((KeyError, IndexError, ValueError)):
+        left.lazy().asof(right.lazy(), "nope", "g", "backward")
+    with pytest.raises(ValueError):
+        left.lazy().interval(right.lazy(), "ts", "ts", "nope")
+
+
 def test_lazy_relational_ops_match_eager():
     ev = _df({"pid": [1, 1, 1, 2], "ts": [10, 20, 30, 5], "dur": [1, 2, 3, 4]})
     specs = [("row_number", "rn"), ("running_sum", "dur", "cum"), ("lag", "dur", 1, "prev")]

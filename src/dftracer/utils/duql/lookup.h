@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_DUQL_LOOKUP_H
 #define DFTRACER_UTILS_DUQL_LOOKUP_H
 
+#include <dftracer/utils/core/common/int128.h>
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/numbers.h>
@@ -44,7 +45,7 @@ using Ordered =
 /// by value within a kind. NaN is not an Ordered.
 int compare_ordered(const Ordered& a, const Ordered& b);
 
-__extension__ typedef __int128 RangeWide;
+using RangeWide = ::dftracer::utils::int128_t;
 
 /// A range lookup's rows: each key's rows sorted by range value, and over
 /// them a segment tree of the RangeRead's aggregate.

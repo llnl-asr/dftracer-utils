@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_SPILL_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_SPILL_H
 
-#include <dftracer/utils/core/common/scoped_fd.h>
 #include <dftracer/utils/core/common/spill_dir.h>
+#include <dftracer/utils/core/common/spill_file.h>
 #include <dftracer/utils/dataframe/agg.h>        // AggState, AggStatePtr
 #include <dftracer/utils/dataframe/lazyframe.h>  // Cursor, Morsel
 #include <dftracer/utils/dataframe/series.h>
@@ -57,12 +57,10 @@ class PartFile {
     std::vector<Series> append(const std::vector<Series>& cols);
 
    private:
-    ScopedFd fd_;
-    std::uint64_t end_ = 0;
-    std::string dir_;
+    std::unique_ptr<SpillFile> file_;
 };
 
-/// A self-cleaning temp directory holding one query's spill runs.
+/// A self-cleaning spill directory holding one query's spill runs.
 class Dir {
    public:
     Dir();
@@ -75,7 +73,7 @@ class Dir {
     int next_run();
 
    private:
-    std::string dir_;
+    ScopedSpillSubdir dir_;
     std::atomic<int> runs_{0};
 };
 
@@ -88,12 +86,44 @@ class Writer {
     ~Writer();
     void write(const std::vector<Series>& cols, std::int64_t rows);
     void close();
+    /// The bytes written so far: where the next morsel starts.
+    std::uint64_t bytes() const noexcept { return written_; }
 
    private:
     struct Codec;
     std::ofstream os_;
+    std::uint64_t written_ = 0;
     std::string blob_;
     std::unique_ptr<Codec> codec_;
+};
+
+/// Writes `cols` (`rows` rows each) to `w` in morsels of at most
+/// `rows_per_morsel` rows (at least 1). Returns the bytes of the largest morsel
+/// written.
+std::uint64_t write_run(Writer& w, const std::vector<Series>& cols,
+                        std::int64_t rows, std::int64_t rows_per_morsel);
+
+/// The run files of a hash fan-out: `parts` files of one Dir, a Writer on each,
+/// and the bytes and rows written to each, so the owner can split a partition
+/// again that came out too big.
+class HashPartitions {
+   public:
+    HashPartitions(Dir& dir, std::size_t parts);
+    std::size_t size() const noexcept { return paths_.size(); }
+    /// Appends one morsel to partition `p`.
+    void write(std::size_t p, const std::vector<Series>& cols,
+               std::int64_t rows);
+    /// Flushes and closes every partition's file.
+    void close();
+    const std::string& path(std::size_t p) const { return paths_[p]; }
+    std::uint64_t bytes(std::size_t p) const { return bytes_[p]; }
+    std::int64_t rows(std::size_t p) const { return rows_[p]; }
+
+   private:
+    std::vector<std::string> paths_;
+    std::vector<Writer> writers_;
+    std::vector<std::uint64_t> bytes_;
+    std::vector<std::int64_t> rows_;
 };
 
 /// Reads morsels back from a run file. The max_rows hint is ignored: chunks
@@ -103,10 +133,14 @@ class Reader : public Cursor {
     explicit Reader(const std::string& path);
     ~Reader() override;
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override;
+    /// Moves to `pos`, the start of a morsel (a value of Writer::bytes()), so
+    /// the next call of next() reads that morsel.
+    void seek(std::uint64_t pos);
 
    private:
     struct Codec;
     std::ifstream is_;
+    std::uint64_t size_ = 0;
     std::unique_ptr<char[]> raw_;
     std::size_t raw_cap_ = 0;
     std::unique_ptr<char[]> stored_;
@@ -132,6 +166,8 @@ class AggRunReader {
 
    private:
     std::ifstream is_;
+    std::uint64_t size_ = 0;
+    std::uint64_t pos_ = 0;
     AggStatePtr cur_;
     bool valid_ = false;
 };
@@ -153,6 +189,9 @@ class Spool {
     /// A fresh cursor replaying every added morsel, in order. Call after all
     /// add()s; may be called more than once.
     std::unique_ptr<Cursor> reader();
+    /// A cursor replaying every added morsel from the last to the first; the
+    /// rows of one morsel stay in their order. The same rules as reader().
+    std::unique_ptr<Cursor> reverse_reader();
     /// Whether the overflow went to disk.
     bool spilled() const noexcept { return spilling_; }
     /// The bytes of every morsel added, in memory or on disk.
@@ -163,7 +202,9 @@ class Spool {
     std::size_t bytes_ = 0;
     std::uint64_t total_bytes_ = 0;
     bool spilling_ = false;
+    bool read_ = false;  // reader() ran: the spool no longer takes morsels
     std::vector<Morsel> mem_;
+    std::vector<std::uint64_t> offsets_;  // where each spilled morsel starts
     std::shared_ptr<Dir> dir_;
     std::string run_;
     std::unique_ptr<Writer> writer_;

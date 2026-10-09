@@ -331,21 +331,21 @@ class TraceViewer(LazyFrame):
 
     def rows(self, cls: Type[_S]) -> Iterator[_S]:
         """One ``cls`` instance per selected record, each field set from the
-        column at its path (``None`` when absent). Collects first, so it holds
-        every row; use :meth:`collect` for bulk work."""
+        column at its path (``None`` when absent). Streams :meth:`stream` chunks,
+        so only one chunk of rows is held at a time."""
         paths = cls._paths
-        frame = self.select(*dict.fromkeys(paths.values())).collect()
-        data = frame.to_dict()
-        # A Json field is its JSON text, not the parsed value.
-        for name in cls._json:
-            path = paths[name]
-            if path in data:
-                data[path] = frame[path]._native.to_pylist()
-        columns = {name: data.get(path) for name, path in paths.items()}
-        for i in range(len(frame)):
-            yield cls(
-                **{name: (col[i] if col is not None else None) for name, col in columns.items()}
-            )
+        for frame in self.select(*dict.fromkeys(paths.values())).stream():
+            data = frame.to_dict()
+            # A Json field is its JSON text, not the parsed value.
+            for name in cls._json:
+                path = paths[name]
+                if path in data:
+                    data[path] = frame[path]._native.to_pylist()
+            columns = {name: data.get(path) for name, path in paths.items()}
+            for i in range(len(frame)):
+                yield cls(
+                    **{name: (col[i] if col is not None else None) for name, col in columns.items()}
+                )
 
     # -- inspection -------------------------------------------------------------------
     @property

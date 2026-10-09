@@ -279,11 +279,12 @@ TEST_SUITE("distinct on ids") {
         REQUIRE(u.length() == 5);
         CHECK(s.nunique() == 5);
         const double* d = u.values<double>().data();
-        CHECK(std::isnan(d[0]));
-        CHECK(std::isnan(d[1]));
-        CHECK(d[2] == 0.0);
-        CHECK(!std::signbit(d[2]));
-        CHECK(d[3] == 1.0);
-        CHECK(d[4] == 7.0);
+        // The sorted order puts NaN last, with or without nulls in the column.
+        CHECK(d[0] == 0.0);
+        CHECK(!std::signbit(d[0]));
+        CHECK(d[1] == 1.0);
+        CHECK(d[2] == 7.0);
+        CHECK(std::isnan(d[3]));
+        CHECK(std::isnan(d[4]));
     }
 }

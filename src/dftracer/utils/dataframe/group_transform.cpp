@@ -350,6 +350,13 @@ LazyFrame composed_transform(const LazyFrame& plan_,
 
 }  // namespace
 
+LazyFrame composed_group_transform(const LazyFrame& plan,
+                                   const std::vector<std::string>& keys,
+                                   GroupwiseOp kind, std::int64_t n,
+                                   RankMethod method, bool ascending) {
+    return composed_transform(plan, keys, kind, n, method, ascending);
+}
+
 LazyFrame LazyGroupBy::transform(GroupwiseOp kind, std::int64_t n,
                                  RankMethod method, bool ascending) const {
     LazyFrame composed =

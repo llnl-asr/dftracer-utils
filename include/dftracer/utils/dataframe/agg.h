@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/sketch.h>
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -250,6 +251,18 @@ DataFrame agg_finalize(const AggState& state,
                        const std::vector<std::string>& key_names);
 /// Single-key convenience: forwards to the vector form with `{key_name}`.
 DataFrame agg_finalize(const AggState& state, const std::string& key_name);
+
+/// The dyn argument names of a result with the value domain of each. A result
+/// built from several states (spill parts) finalizes each under the layout of
+/// all of them, so every part has the same columns.
+using AggDynLayout = std::map<std::string, FieldStatDomain>;
+/// Adds the names `state` discovered to `layout`; a name already in it keeps
+/// its domain.
+void agg_dyn_layout_add(AggDynLayout& layout, const AggState& state);
+/// agg_finalize with the dyn columns of `layout` in place of the state's own.
+DataFrame agg_finalize(const AggState& state,
+                       const std::vector<std::string>& key_names,
+                       const AggDynLayout& layout);
 
 /// Serialize a partial to a portable byte blob (distributed partials / spill)
 /// and reconstruct it; round-trips exactly.

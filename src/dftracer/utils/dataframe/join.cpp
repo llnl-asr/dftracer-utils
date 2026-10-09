@@ -492,9 +492,18 @@ std::vector<Field> join_out_fields(const std::vector<Field>& left,
     return out;
 }
 
-DataFrame HashJoin::probe(const DataFrame& left) {
+DataFrame HashJoin::probe(const DataFrame& left,
+                          std::vector<std::uint8_t>* left_matched,
+                          std::int64_t left_base) {
     const std::vector<std::int64_t> key_idx = left_key_indices(left.names);
-    if (by_value(how_)) return probe_values(left, key_idx);
+    if (by_value(how_)) {
+        if (left_matched && how_ == JoinHow::Lookup)
+            throw std::invalid_argument(
+                "join: a lookup join cannot be probed block by block");
+        return probe_values(left, key_idx, left_matched, left_base);
+    }
+    std::uint8_t* matched =
+        left_matched ? left_matched->data() + left_base : nullptr;
     std::vector<Series> left_keys;
     left_keys.reserve(key_idx.size());
     for (std::size_t p = 0; p < key_idx.size(); ++p) {
@@ -558,6 +567,7 @@ DataFrame HashJoin::probe(const DataFrame& left) {
                             r = next_[static_cast<std::size_t>(r)];
                     }
                     if (r < 0) {
+                        if (matched) continue;
                         if (how_ == JoinHow::Anti) lp.push(static_cast<Idx>(i));
                         if (keeps_unmatched_left(how_)) {
                             lp.push(static_cast<Idx>(i));
@@ -565,8 +575,9 @@ DataFrame HashJoin::probe(const DataFrame& left) {
                         }
                         continue;
                     }
+                    if (matched) matched[i] = 1;
                     if (how_ == JoinHow::Semi) {
-                        lp.push(static_cast<Idx>(i));
+                        if (!matched) lp.push(static_cast<Idx>(i));
                         continue;
                     }
                     if (how_ == JoinHow::Anti) continue;
@@ -710,8 +721,19 @@ void HashJoin::build_value_index() {
     std::string key;
     for (std::int64_t r = 0; r < n; ++r)
         if (value_key(key, right_keys_, r)) by_value_[key].push_back(r);
-    if (how_ == JoinHow::Lookup) value_conflicts_ = conflicts(false);
+    if (how_ == JoinHow::Lookup && !conflicts_given_)
+        value_conflicts_ = conflicts(false);
     value_index_ = true;
+}
+
+void HashJoin::set_lookup_conflicts(std::vector<std::int64_t> per_row) {
+    if (how_ != JoinHow::Lookup ||
+        per_row.size() != static_cast<std::size_t>(right_.num_rows()))
+        throw std::invalid_argument(
+            "join: lookup conflicts do not match the right rows");
+    typed_conflicts_ = per_row;
+    value_conflicts_ = std::move(per_row);
+    conflicts_given_ = true;
 }
 
 std::vector<std::int64_t> HashJoin::conflicts(bool typed) const {
@@ -808,7 +830,9 @@ void HashJoin::members(std::int64_t head, bool typed,
 }
 
 DataFrame HashJoin::probe_values(const DataFrame& left,
-                                 const std::vector<std::int64_t>& key_idx) {
+                                 const std::vector<std::int64_t>& key_idx,
+                                 std::vector<std::uint8_t>* left_matched,
+                                 std::int64_t left_base) {
     std::vector<Series> left_keys;
     bool typed = true;
     for (std::size_t p = 0; p < key_idx.size(); ++p) {
@@ -827,11 +851,19 @@ DataFrame HashJoin::probe_values(const DataFrame& left,
     if (how_ == JoinHow::Nest) {
         std::vector<std::int32_t> offsets{0};
         std::vector<std::int64_t> rows;
+        std::vector<std::int64_t> kept;
         for (std::int64_t i = 0; i < n; ++i) {
-            if (hs[static_cast<std::size_t>(i)] >= 0)
-                members(hs[static_cast<std::size_t>(i)], typed, rows);
+            const std::int64_t h = hs[static_cast<std::size_t>(i)];
+            if (left_matched) {
+                if (h < 0) continue;
+                (*left_matched)[static_cast<std::size_t>(left_base + i)] = 1;
+                kept.push_back(i);
+            }
+            if (h >= 0) members(h, typed, rows);
             offsets.push_back(static_cast<std::int32_t>(rows.size()));
         }
+        if (left_matched)
+            for (Series& c : out.columns) c = c.take(kept);
         std::vector<Series> parts;
         for (const Series& c : right_.columns) parts.push_back(c.take(rows));
         out.names.push_back(suffix_);

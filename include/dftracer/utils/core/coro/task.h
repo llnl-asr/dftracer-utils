@@ -33,6 +33,9 @@ struct PromiseBase {
     /// Set (release) when the coroutine reaches its final suspend, so a thread
     /// blocking on it sees its result through the matching acquire.
     std::atomic<bool> finished_{false};
+    /// Set by the first of the awaiter (once the child returned to it) and
+    /// the child's final suspend; the second one continues the awaiter.
+    std::atomic<bool> handoff_{false};
     std::coroutine_handle<> continuation_{nullptr};
     TaskIndex awaited_task_id_{-1};
     Scheduler* scheduler_{nullptr};
@@ -140,13 +143,15 @@ class CoroTask {
 
         struct FinalAwaiter {
             bool await_ready() noexcept { return false; }
-            std::coroutine_handle<> await_suspend(
-                std::coroutine_handle<promise_type> h) noexcept {
-                // Read before the release: once it is set, a blocked get() may
-                // return and destroy this frame.
-                std::coroutine_handle<> next = h.promise().continuation_;
-                h.promise().finished_.store(true, std::memory_order_release);
-                return next ? next : std::noop_coroutine();
+            void await_suspend(std::coroutine_handle<promise_type> h) noexcept {
+                // Nothing reads the frame after the release or the exchange:
+                // a blocked get() or the awaiter may destroy it from then on.
+                auto& p = h.promise();
+                std::coroutine_handle<> next = p.continuation_;
+                p.finished_.store(true, std::memory_order_release);
+                if (next &&
+                    p.handoff_.exchange(true, std::memory_order_acq_rel))
+                    next.resume();
             }
             void await_resume() noexcept {}
         };
@@ -234,36 +239,38 @@ class CoroTask {
      */
     bool await_ready() const noexcept { return coro_handle_.done(); }
 
+    // The child runs on this stack, not by symmetric transfer: GCC makes that
+    // transfer a tail call only with sibling-call optimization, and without
+    // it each child that ends at once would add frames until the stack
+    // overflows. A child that suspends continues the awaiter itself.
     template <typename Promise>
-    std::coroutine_handle<> await_suspend(
-        std::coroutine_handle<Promise> awaiting_coro) noexcept {
-        coro_handle_.promise().continuation_ = awaiting_coro;
+    bool await_suspend(std::coroutine_handle<Promise> awaiting_coro) noexcept {
+        auto& p = coro_handle_.promise();
+        p.continuation_ = awaiting_coro;
 
         if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
             auto* awaiting_root = awaiting_coro.promise().get_root_promise();
-            coro_handle_.promise().set_root_promise(awaiting_root);
+            p.set_root_promise(awaiting_root);
         }
 
-        // Deep mode: capture this co_await'd child (reached by symmetric
-        // transfer, so it never passes through the executor queue) and make it
+        // Deep mode: capture this co_await'd child (run on the awaiter's
+        // stack, so it never passes through the executor queue) and make it
         // the current coroutine so its own awaits nest under it.
         if (utilities::monitor_deep_enabled()) {
             utilities::monitor_resume_begin(utilities::monitor_enqueue(
                 coro_handle_.address(), utilities::CoroKind::Sync));
         }
 
-        if (coro_handle_.done()) {
-            return awaiting_coro;
-        }
+        if (coro_handle_.done()) return false;
 
 #if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
         if (logger::detail::enabled(logger::Level::Trace)) [[unlikely]] {
-            auto& p = coro_handle_.promise();
             p.trace_handle_ = logger::detail::coro_trace_enter(
                 coro_handle_.address(), p.trace_file_, p.trace_line_);
         }
 #endif
-        return coro_handle_;
+        coro_handle_.resume();
+        return !p.handoff_.exchange(true, std::memory_order_acq_rel);
     }
 
     T await_resume() {

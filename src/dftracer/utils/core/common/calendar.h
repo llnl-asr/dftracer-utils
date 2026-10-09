@@ -1,6 +1,8 @@
 #ifndef DFTRACER_UTILS_CORE_COMMON_CALENDAR_H
 #define DFTRACER_UTILS_CORE_COMMON_CALENDAR_H
 
+#include <dftracer/utils/core/common/int128.h>
+
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
@@ -14,7 +16,7 @@
 
 namespace dftracer::utils {
 
-__extension__ typedef __int128 CalendarWide;
+using CalendarWide = int128_t;
 
 constexpr std::int64_t NS_PER_SECOND = 1'000'000'000;
 constexpr std::int64_t NS_PER_DAY = 86'400 * NS_PER_SECOND;

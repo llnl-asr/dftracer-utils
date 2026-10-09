@@ -2049,6 +2049,30 @@ DFTU_EXPORT dftu_dataframe* dftu_dataframe_interval(
     const char* lo, const char* hi, const char* const* by, int32_t n_by,
     int32_t outer);
 
+/** dftu_dataframe_asof over the two plans. Under a memory budget both sides
+ * are sorted by (by, `on`) with the spilling sort and merged, so the plan
+ * holds only the right rows of the current `by` group window and leaves in
+ * morsels within the budget; without one both are collected. The output is
+ * the same as dftu_dataframe_asof. `other` is borrowed: the returned plan holds
+ * its own copy. The returned plan is owned by the caller and released with
+ * dftu_lazyframe_free. NULL on a NULL handle, `on` or `by` (when `n_by` > 0),
+ * a bad `direction`, or a column the schemas show absent or of mismatched or
+ * non-numeric type; the same errors found only when the plan runs surface at
+ * collect. `tolerance` is as in dftu_dataframe_asof. */
+DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_asof(
+    const dftu_lazyframe* lf, const dftu_lazyframe* other, const char* on,
+    const char* const* by, int32_t n_by, dftu_asof_direction direction,
+    double tolerance);
+
+/** dftu_dataframe_interval over the two plans, streamed under a memory budget
+ * as dftu_lazyframe_asof is: the ranges open at the current point stay in
+ * memory and the pairs of one point leave in morsels within the budget.
+ * Ownership and error behavior are those of dftu_lazyframe_asof. */
+DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_interval(
+    const dftu_lazyframe* lf, const dftu_lazyframe* other, const char* point,
+    const char* lo, const char* hi, const char* const* by, int32_t n_by,
+    int32_t outer);
+
 /* ---- Provider registry --------------------------------------------------- */
 /* One name-keyed registry of Source vtables, so a LazyFrame can be built by
  * name over a provider registered from anywhere in the process - a plugin
@@ -2679,10 +2703,12 @@ typedef struct dftu_node_vt {
        whenever the node's own output cursor is destroyed (or earlier, once
        fully drained); on failure (returning the NULL sentinel) the node must
        not have taken that ownership - the caller still owns and destroys the
-       input cursor. */
+       input cursor. `memory_budget` is the plan's memory budget in bytes,
+       already resolved, so never 0: a node that holds state sizes its spill
+       threshold and its output frames from it. */
     void* (*open)(void* self, void* in_cursor_self, const dftu_cursor_vt* in_vt,
-                  const dftu_op_arg* args, void** out_cursor_self,
-                  const dftu_cursor_vt** out_vt);
+                  const dftu_op_arg* args, uint64_t memory_budget,
+                  void** out_cursor_self, const dftu_cursor_vt** out_vt);
     /** Release the node; called once, after every cursor opened against it
        has been destroyed. May be NULL for a stateless node. */
     void (*destroy)(void* self);

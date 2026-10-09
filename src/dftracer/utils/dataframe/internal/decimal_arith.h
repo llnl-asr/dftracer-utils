@@ -1,6 +1,8 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_DECIMAL_ARITH_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_DECIMAL_ARITH_H
 
+#include <dftracer/utils/core/common/int128.h>
+
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -20,8 +22,8 @@ constexpr std::int32_t DECIMAL256_MAX_PRECISION = 76;
 /// scale plus this fixed increment, rather than an unbounded exact fraction.
 constexpr std::int32_t DECIMAL_DIVIDE_SCALE_INCREMENT = 4;
 
-__extension__ typedef __int128 i128;
-__extension__ typedef unsigned __int128 u128;
+using i128 = ::dftracer::utils::int128_t;
+using u128 = ::dftracer::utils::uint128_t;
 
 inline i128 load_i128(const void* bytes) noexcept {
     i128 v;

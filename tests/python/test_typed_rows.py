@@ -49,6 +49,25 @@ def test_rows_follow_filters(tmp_path):
     assert {r.op for r in rows} == {"read"}
 
 
+def test_rows_stream_in_chunks(tmp_path, monkeypatch):
+    tv = dftu.TraceViewer(_access(tmp_path / "a.ndjson.gz"), record_schema=RowsAccess)
+    expect = list(tv.rows(RowsAccess))
+    pulled = []
+    stream = dftu.TraceViewer.stream
+
+    def small_chunks(self, batch_size=65536):
+        for chunk in stream(self, 40):
+            pulled.append(len(chunk))
+            yield chunk
+
+    monkeypatch.setattr(dftu.TraceViewer, "stream", small_chunks)
+    rows = tv.rows(RowsAccess)
+    first = next(rows)
+    assert len(pulled) == 1 and pulled[0] < 300
+    assert [first, *rows] == expect
+    assert len(pulled) > 1 and sum(pulled) == 300
+
+
 def test_rows_of_a_dftracer_subclass(tmp_path):
     class RowsDft(schemas.DFTracer, id="rows_dft"):
         size: Optional[int] = field(path="args.size")

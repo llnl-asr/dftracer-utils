@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/core/common/exception_helpers.h>
 
+#include <atomic>
 #include <coroutine>
 #include <cstddef>
 #include <exception>
@@ -155,6 +156,8 @@ class AsyncGenerator {
         bool has_value_ = false;
         std::exception_ptr exception_;
         std::coroutine_handle<> continuation_{};
+        /// The CoroTask handoff, once per next(): see CoroTask::await_suspend.
+        std::atomic<bool> handoff_{false};
 
         T* value_ptr() noexcept {
             return std::launder(reinterpret_cast<T*>(value_storage_));
@@ -178,35 +181,27 @@ class AsyncGenerator {
             clear_value();
             ::new (static_cast<void*>(value_storage_)) T(std::move(value));
             has_value_ = true;
-            struct YieldToConsumer {
-                std::coroutine_handle<> continuation;
-                bool await_ready() noexcept { return false; }
-                std::coroutine_handle<> await_suspend(
-                    std::coroutine_handle<>) noexcept {
-                    return continuation;
-                }
-                void await_resume() noexcept {}
-            };
-            return YieldToConsumer{continuation_};
+            return ToConsumer{};
         }
 
-        auto final_suspend() noexcept {
-            struct FinalToConsumer {
-                std::coroutine_handle<> continuation;
-                bool await_ready() noexcept { return false; }
-                std::coroutine_handle<> await_suspend(
-                    std::coroutine_handle<>) noexcept {
-                    if (continuation) return continuation;
-                    return std::noop_coroutine();
-                }
-                void await_resume() noexcept {}
-            };
-            return FinalToConsumer{continuation_};
-        }
+        auto final_suspend() noexcept { return ToConsumer{}; }
 
         void return_void() noexcept {}
 
         void unhandled_exception() { exception_ = std::current_exception(); }
+
+        // The consumer may destroy the frame once the exchange is done.
+        struct ToConsumer {
+            bool await_ready() noexcept { return false; }
+            void await_suspend(std::coroutine_handle<promise_type> h) noexcept {
+                auto& p = h.promise();
+                std::coroutine_handle<> next = p.continuation_;
+                if (next &&
+                    p.handoff_.exchange(true, std::memory_order_acq_rel))
+                    next.resume();
+            }
+            void await_resume() noexcept {}
+        };
     };
 
     class NextAwaitable {
@@ -219,13 +214,13 @@ class AsyncGenerator {
 
         bool await_ready() const noexcept { return !handle_ || handle_.done(); }
 
-        std::coroutine_handle<> await_suspend(
-            std::coroutine_handle<> awaiting) noexcept {
-            if (!handle_ || handle_.done()) {
-                return awaiting;
-            }
-            handle_.promise().continuation_ = awaiting;
-            return handle_;
+        bool await_suspend(std::coroutine_handle<> awaiting) noexcept {
+            if (!handle_ || handle_.done()) return false;
+            auto& p = handle_.promise();
+            p.continuation_ = awaiting;
+            p.handoff_.store(false, std::memory_order_relaxed);
+            handle_.resume();
+            return !p.handoff_.exchange(true, std::memory_order_acq_rel);
         }
 
         std::optional<T> await_resume() {

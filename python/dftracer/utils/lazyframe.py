@@ -341,7 +341,11 @@ class LazyFrame:
         direction: Literal["backward", "forward", "nearest"] = "backward",
         tolerance: Optional[float] = None,
     ) -> "LazyFrame":
-        """:meth:`DataFrame.asof` over the two collected plans."""
+        """:meth:`DataFrame.asof` over the two plans. Both sides are sorted by
+        ``(by, on)`` with the spilling sort and merged under the plan's budget
+        (:meth:`memory_budget`, else the automatic one), holding only the right
+        rows of the current ``by`` group window, so neither plan is collected.
+        Rows come out ordered by ``(by, on)``, as the eager join returns them."""
         return self._like(self._native.asof(other._native, on, _names(by), direction, tolerance))
 
     def interval(
@@ -353,7 +357,9 @@ class LazyFrame:
         by: Optional[Union[str, Sequence[str]]] = None,
         outer: bool = False,
     ) -> "LazyFrame":
-        """:meth:`DataFrame.interval` over the two collected plans."""
+        """:meth:`DataFrame.interval` over the two plans. Both sides are sorted
+        and merged under the plan's budget, holding the ranges open at the
+        current point and leaving in morsels within the budget."""
         return self._new(
             self._native.interval(other._native, point, lo, hi, _names(by), bool(outer))
         )

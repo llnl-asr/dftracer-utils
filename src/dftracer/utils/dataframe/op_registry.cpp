@@ -781,6 +781,16 @@ dftu_lazyframe* dftu_op_run_lazy(const dftu_op_desc* op,
         case DFTU_OP_SIG(LAZY, LAZY, LAZY, I64):
             return as_op<DFTU_OP_SIG(LAZY, LAZY, LAZY, I64)>(op->fn)(lf, in[1],
                                                                      g[2].i64);
+        case DFTU_OP_SIG8(LAZY, LAZY, LAZY, STR, STRLIST, I32, F64, NONE):
+            return as_op<DFTU_OP_SIG8(LAZY, LAZY, LAZY, STR, STRLIST, I32, F64,
+                                      NONE)>(op->fn)(
+                lf, in[1], g[2].str.ptr, g[3].list.items, g[3].list.n,
+                static_cast<dftu_asof_direction>(g[4].i32), g[5].f64);
+        case DFTU_OP_SIG8(LAZY, LAZY, LAZY, STR, STR, STR, STRLIST, I32):
+            return as_op<DFTU_OP_SIG8(LAZY, LAZY, LAZY, STR, STR, STR, STRLIST,
+                                      I32)>(op->fn)(
+                lf, in[1], g[2].str.ptr, g[3].str.ptr, g[4].str.ptr,
+                g[5].list.items, g[5].list.n, g[6].i32);
         default:
             return nullptr;
     }

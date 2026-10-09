@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/hash/partition.h>
 #include <dftracer/utils/core/common/hash/splitmix64.h>
 #include <dftracer/utils/core/common/to_chars.h>
 #include <dftracer/utils/dataframe/agg/detail.h>
@@ -40,13 +41,16 @@ std::vector<std::string> agg_group_key(const AggState& st, std::int64_t g) {
     return out;
 }
 
+// A string up to this long lives inside the std::string object.
+static const std::size_t SSO_CAPACITY = std::string().capacity();
+
 std::size_t agg_approx_bytes(const AggState& st) {
     std::size_t total = 0;
     for (std::size_t k = 0; k < st.nkeys; ++k) {
         if (st.key_is_bytes[k]) {
             total += st.skey_cols[k].capacity() * sizeof(std::string);
             for (const std::string& v : st.skey_cols[k])
-                total += v.capacity() > 15 ? v.capacity() : 0;
+                total += v.capacity() > SSO_CAPACITY ? v.capacity() : 0;
         } else {
             total += st.ikey_cols[k].capacity() * sizeof(std::int64_t);
         }
@@ -117,10 +121,12 @@ std::size_t agg_approx_bytes(const AggState& st) {
 std::vector<std::vector<std::int64_t>> agg_split_groups(const AggState& st,
                                                         std::size_t parts,
                                                         int salt) {
+    if (parts == 0)
+        throw std::invalid_argument("agg_split_groups: parts must be > 0");
     std::vector<std::vector<std::int64_t>> out(parts);
     const std::int64_t groups = agg_num_groups(st);
     for (std::int64_t g = 0; g < groups; ++g) {
-        std::size_t h = static_cast<std::size_t>(salt);
+        std::size_t h = 0;
         for (std::size_t k = 0; k < st.nkeys; ++k) {
             std::size_t cell = dftracer::utils::hash::GOLDEN_RATIO;
             if (!st.nkey_cols[k][static_cast<std::size_t>(g)])
@@ -131,9 +137,9 @@ std::vector<std::vector<std::int64_t>> agg_split_groups(const AggState& st,
                                  st.ikey_cols[k][static_cast<std::size_t>(g)]);
             dftracer::utils::hash_combine(h, cell);
         }
-        h = static_cast<std::size_t>(
-            dftracer::utils::hash::splitmix64(static_cast<std::uint64_t>(h)));
-        out[h % parts].push_back(g);
+        out[dftracer::utils::hash::partition_of(static_cast<std::uint64_t>(h),
+                                                parts, salt)]
+            .push_back(g);
     }
     return out;
 }

@@ -347,29 +347,10 @@ PyObject* LazyFrame_compare_agg(PyObject* self, PyObject* args) {
     });
 }
 
-// The output names of a two-frame kernel that keeps every left column and
-// appends the right's columns other than `dropped` (the join keys), suffixing
-// a right name that collides with a left one by "_right": the asof_join and
-// interval_join contract. Empty when either schema is unknown.
-std::vector<std::string> two_frame_out_names(
-    const LazyFrame& left, const LazyFrame& right,
-    const std::vector<std::string>& dropped) {
-    std::vector<std::string> names = left.schema();
-    const std::vector<std::string> rnames = right.schema();
-    if (names.empty() || rnames.empty()) return {};
-    for (const std::string& r : rnames) {
-        if (std::find(dropped.begin(), dropped.end(), r) != dropped.end())
-            continue;
-        const bool collides =
-            std::find(names.begin(), names.end(), r) != names.end();
-        names.push_back(collides ? r + "_right" : r);
-    }
-    return names;
-}
-
-// The four Arrow-layer relational kernels as plan steps: each builds the C
-// operand bag its dftu.frame.* row takes and appends it through frame_op,
-// which copies every operand into the plan.
+// The Arrow-layer relational kernels as plan steps: window and gap_fill build
+// the C operand bag their dftu.frame.* row takes and append it through
+// frame_op, which copies every operand into the plan; asof and interval are
+// LazyFrame methods.
 PyObject* LazyFrame_window(PyObject* self, PyObject* args, PyObject* kwds) {
     LazyFrameObject* b = as_lazyframe(self);
     if (!b) return nullptr;
@@ -509,7 +490,7 @@ PyObject* LazyFrame_asof(PyObject* self, PyObject* args, PyObject* kwds) {
         return nullptr;
     std::vector<std::string> equi;
     if (!parse_string_seq(by, "asof: by must be names", equi)) return nullptr;
-    double tol = -1;
+    std::optional<double> tol;
     if (tol_obj != Py_None) {
         const double t = PyFloat_AsDouble(tol_obj);
         if (PyErr_Occurred()) return nullptr;
@@ -520,18 +501,9 @@ PyObject* LazyFrame_asof(PyObject* self, PyObject* args, PyObject* kwds) {
         }
         tol = t;
     }
-    std::vector<const char*> ec;
-    for (const std::string& s : equi) ec.push_back(s.c_str());
-    dataframe::OpArgs a;
-    a.str(2, on)
-        .strlist(3, ec.data(), static_cast<std::int32_t>(ec.size()))
-        .i32(4, static_cast<std::int32_t>(dir))
-        .f64(5, tol);
     return run_lazy_op([&] {
-        std::vector<std::string> dropped = equi;
-        dropped.emplace_back(on);
-        return b->lf.frame_op("dftu.frame.asof", a, {o->lf},
-                              two_frame_out_names(b->lf, o->lf, dropped));
+        return b->lf.asof(o->lf, on, std::move(equi),
+                          static_cast<dataframe::AsofDirection>(dir), tol);
     });
 }
 
@@ -555,20 +527,9 @@ PyObject* LazyFrame_interval(PyObject* self, PyObject* args, PyObject* kwds) {
     std::vector<std::string> equi;
     if (!parse_string_seq(by, "interval: by must be names", equi))
         return nullptr;
-    std::vector<const char*> ec;
-    for (const std::string& s : equi) ec.push_back(s.c_str());
-    dataframe::OpArgs a;
-    a.str(2, point)
-        .str(3, lo)
-        .str(4, hi)
-        .strlist(5, ec.data(), static_cast<std::int32_t>(ec.size()))
-        .i32(6, outer != 0 ? 1 : 0);
     return run_lazy_op([&] {
-        std::vector<std::string> dropped = equi;
-        dropped.emplace_back(lo);
-        dropped.emplace_back(hi);
-        return b->lf.frame_op("dftu.frame.interval", a, {o->lf},
-                              two_frame_out_names(b->lf, o->lf, dropped));
+        return b->lf.interval(o->lf, point, lo, hi, std::move(equi),
+                              outer != 0);
     });
 }
 
@@ -995,11 +956,13 @@ PyMethodDef LazyFrame_methods[] = {
      "end=None) -> LazyFrame: a regular time grid over the collected plan."},
     {"asof", DFTU_PYCFUNCTION(LazyFrame_asof), METH_VARARGS | METH_KEYWORDS,
      "asof(other, on, by, direction, tolerance) -> LazyFrame: temporal "
-     "nearest-match join of the two collected plans."},
+     "nearest-match join; under a memory budget both plans are sorted and "
+     "merged without being collected."},
     {"interval", DFTU_PYCFUNCTION(LazyFrame_interval),
      METH_VARARGS | METH_KEYWORDS,
      "interval(other, point, lo, hi, by, outer) -> LazyFrame: point-in-range "
-     "join of the two collected plans."},
+     "join; under a memory budget both plans are sorted and merged without "
+     "being collected."},
     {"unpivot", LazyFrame_unpivot, METH_VARARGS,
      "unpivot(id_vars, value_vars) -> LazyFrame reshaped wide to long."},
     {"melt", LazyFrame_unpivot, METH_VARARGS, "melt(...) -> alias of unpivot."},

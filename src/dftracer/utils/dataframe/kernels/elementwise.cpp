@@ -552,8 +552,7 @@ dftu_series* fillna_bool(const dftu_series* a, dftu_scalar fill) {
 }
 
 // fillna over a String column: each null row becomes the fill text. Only the
-// narrow-offset String type is handled (ponytail: LargeString returns null
-// until a caller needs it).
+// narrow-offset String type is handled; LargeString returns null.
 dftu_series* fillna_string(const dftu_series* a, dftu_scalar fill) {
     if (fill.kind != DFTU_SCALAR_TAG_STR || a->type != TypeId::String)
         return nullptr;

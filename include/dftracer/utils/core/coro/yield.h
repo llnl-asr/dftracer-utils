@@ -123,26 +123,29 @@ struct YieldCheckAwaitable {
         return inner_ready;
     }
 
+    // Keeps the inner return type: turning a bool into a handle back to h
+    // would be a symmetric transfer, which grows the stack without
+    // sibling-call optimization (see CoroTask::await_suspend).
     template <typename Handle>
-    std::coroutine_handle<> await_suspend(Handle h) noexcept(
-        noexcept(inner_.await_suspend(h))) {
-        if (yielding_) {
-            yield_to_executor(h);
-            return std::noop_coroutine();
-        }
-        // Delegate to inner awaitable.
-        // Handle all three await_suspend return types.
+    auto await_suspend(Handle h) noexcept(noexcept(inner_.await_suspend(h))) {
         using R = decltype(inner_.await_suspend(h));
-        if constexpr (std::is_void_v<R>) {
-            inner_.await_suspend(h);
-            return std::noop_coroutine();
-        } else if constexpr (std::is_same_v<R, bool>) {
-            if (inner_.await_suspend(h)) {
-                return std::noop_coroutine();
+        if constexpr (std::is_void_v<R> || std::is_same_v<R, bool>) {
+            if (yielding_) {
+                yield_to_executor(h);
+                return true;
             }
-            return h;  // Resume immediately
+            if constexpr (std::is_void_v<R>) {
+                inner_.await_suspend(h);
+                return true;
+            } else {
+                return inner_.await_suspend(h);
+            }
         } else {
-            return inner_.await_suspend(h);
+            if (yielding_) {
+                yield_to_executor(h);
+                return std::coroutine_handle<>{std::noop_coroutine()};
+            }
+            return std::coroutine_handle<>{inner_.await_suspend(h)};
         }
     }
 

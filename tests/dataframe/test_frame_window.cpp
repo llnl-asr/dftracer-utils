@@ -2365,3 +2365,45 @@ TEST_CASE("window - frame variance of values drifting past 1e9 stays close") {
     MESSAGE("drift max relative error: " << max_rel_error);
     CHECK(max_rel_error <= 1e-9);
 }
+
+TEST_CASE("lag and lead read the row `offset` back or ahead in the partition") {
+    const std::vector<std::int64_t> k = {1, 1, 1, 1, 2, 2, 2};
+    const std::vector<std::int64_t> ord = {0, 1, 2, 3, 0, 1, 2};
+    const std::vector<std::int64_t> v = {10, 11, 12, 13, 20, 21, 22};
+    DataFrame frame;
+    frame.names = {"k", "ord", "v"};
+    frame.columns.push_back(Series::flat_i64(k.data(), 7));
+    frame.columns.push_back(Series::flat_i64(ord.data(), 7));
+    frame.columns.push_back(Series::flat_i64(v.data(), 7));
+    const std::vector<std::int64_t> offsets = {0, 1, 3, 4, 100, -2};
+    std::vector<WindowColumn> specs;
+    for (std::int64_t n : offsets) {
+        specs.push_back(
+            offset_spec(WindowFunc::Lag, "v", "lag" + std::to_string(n), n));
+        specs.push_back(
+            offset_spec(WindowFunc::Lead, "v", "lead" + std::to_string(n), n));
+    }
+    const DataFrame out = df::window(frame, {"k"}, {"ord"}, specs);
+    const auto start_of = [&](std::size_t r) { return r < 4 ? 0 : 4; };
+    const auto size_of = [&](std::size_t r) { return r < 4 ? 4 : 3; };
+    for (std::int64_t n : offsets) {
+        for (const char* dir : {"lag", "lead"}) {
+            const Series col =
+                out.column(dir + std::to_string(n)).materialize();
+            for (std::size_t r = 0; r < 7; ++r) {
+                const std::int64_t local =
+                    static_cast<std::int64_t>(r) - start_of(r);
+                const std::int64_t at =
+                    std::string(dir) == "lag" ? local - n : local + n;
+                INFO(dir << " " << n << " row " << r);
+                if (at < 0 || at >= size_of(r)) {
+                    CHECK(col.is_null(static_cast<std::int64_t>(r)));
+                } else {
+                    REQUIRE_FALSE(col.is_null(static_cast<std::int64_t>(r)));
+                    CHECK(col.data<std::int64_t>()[r] ==
+                          v[static_cast<std::size_t>(start_of(r) + at)]);
+                }
+            }
+        }
+    }
+}

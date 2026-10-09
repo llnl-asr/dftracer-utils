@@ -215,6 +215,12 @@ DFTU_OP_FN(DFTU_OP_SIG8(LAZY, LAZY, LAZY, STRLIST, STRLIST, I32, STR, I32),
                   dftu_join_how, const char*, int32_t))
 DFTU_OP_FN(DFTU_OP_SIG(LAZY, LAZY, LAZY, NONE), LF (*)(CLF, CLF))
 DFTU_OP_FN(DFTU_OP_SIG(LAZY, LAZY, LAZY, I64), LF (*)(CLF, CLF, int64_t))
+DFTU_OP_FN(DFTU_OP_SIG8(LAZY, LAZY, LAZY, STR, STRLIST, I32, F64, NONE),
+           LF (*)(CLF, CLF, const char*, const char* const*, int32_t,
+                  dftu_asof_direction, double))
+DFTU_OP_FN(DFTU_OP_SIG8(LAZY, LAZY, LAZY, STR, STR, STR, STRLIST, I32),
+           LF (*)(CLF, CLF, const char*, const char*, const char*,
+                  const char* const*, int32_t, int32_t))
 
 #undef DFTU_OP_FN
 

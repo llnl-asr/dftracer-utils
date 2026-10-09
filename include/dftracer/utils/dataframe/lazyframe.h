@@ -489,8 +489,9 @@ class LazyFrame {
     /// is_duplicated.
     LazyFrame is_unique() const;
     /// Tumbling/sliding time-window aggregation over an ascending Int64 time
-    /// column. Streaming: holds one agg state per open window (bounded by the
-    /// window count, not the input). Requires ascending time.
+    /// column, as DataFrame::group_by_dynamic. Streaming: a window leaves once
+    /// a time past its end is seen, so it holds only the open windows. Throws
+    /// std::invalid_argument when the time goes back.
     LazyFrame group_by_dynamic(std::string time_col, std::int64_t every,
                                std::int64_t period, std::vector<GroupAgg> aggs,
                                std::int64_t origin = 0,
@@ -530,6 +531,33 @@ class LazyFrame {
     /// data-dependent, so schema() is empty until collect(). Runs through
     /// frame_op("dftu.frame.compare_agg").
     LazyFrame compare_agg(LazyFrame variant, std::int64_t n_key) const;
+    /// DataFrame::asof over the two plans: each row of this plan takes the one
+    /// row of `other` nearest in the numeric time column `on` within the `by`
+    /// partition (Backward, Forward or Nearest; a null or NaN time or one past
+    /// `tolerance`, in the units of `on`, matches nothing). The output keeps
+    /// every column of this plan, then those of `other` but `on` and `by`
+    /// (a clash gets "_right"), rows ordered by (by, time) with ties in input
+    /// order. Both sides are sorted by (by, time) with the spilling sort and
+    /// merged under the plan's budget (the automatic one when none is set),
+    /// holding only the right rows of the current by-group window; over a plan
+    /// whose columns are only known once it runs, both are collected. Throws
+    /// std::invalid_argument for a negative or NaN `tolerance`, unequal or
+    /// non-numeric key types or a second name clash, and std::out_of_range
+    /// for a missing column, when the schemas are known here.
+    LazyFrame asof(LazyFrame other, std::string on, std::vector<std::string> by,
+                   AsofDirection direction,
+                   std::optional<double> tolerance = std::nullopt) const;
+    /// DataFrame::interval over the two plans: each point of `point` pairs with
+    /// every row of `other` whose closed range [`lo`, `hi`] holds it within
+    /// the `by` partition, ordered by (by, point) then (lo, hi, input order);
+    /// `outer` keeps an unmatched row once with null right values. The output
+    /// keeps every column of this plan, then those of `other` but `lo`, `hi`
+    /// and `by`. Runs as asof does: sorted and merged under the plan's budget,
+    /// holding the ranges that are open at the current point (the output of
+    /// one point is cut into morsels within the budget).
+    LazyFrame interval(LazyFrame other, std::string point, std::string lo,
+                       std::string hi, std::vector<std::string> by,
+                       bool outer = false) const;
     /// Any registry table -> table op (a `dftu.frame.*` row, or one another
     /// library registered, such as `dftu.frame.window`) as a plan step: this
     /// plan is collected and passed as the op's first FRAME operand, each

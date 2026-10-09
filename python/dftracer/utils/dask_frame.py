@@ -482,8 +482,8 @@ class DaskFrame:
             raise ValueError("overlap and overlap_next must be 0 or more")
         if overlap == 0 and overlap_next == 0:
             return self._like([self._submit(fn, p, *args) for p in self._parts])
-        # ponytail: the overlap comes from the neighbouring partition only, so a window that
-        # reaches past a neighbour shorter than the overlap is wrong; chain them if that happens.
+        # The overlap comes from the neighbouring partition only, so a window that
+        # reaches past a neighbour shorter than the overlap is wrong.
         n = len(self._parts)
         prevs: List[Optional[DataFrame]] = [None] * n
         nexts: List[Optional[DataFrame]] = [None] * n

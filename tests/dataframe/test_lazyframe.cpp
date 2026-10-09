@@ -3,12 +3,16 @@
 #include <dftracer/utils/core/coro/async_generator.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
+#include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
+#include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dataframe/op.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -36,6 +40,7 @@ using dftracer::utils::dataframe::GroupAgg;
 using dftracer::utils::dataframe::GroupwiseOp;
 using dftracer::utils::dataframe::LazyFrame;
 using dftracer::utils::dataframe::Morsel;
+using dftracer::utils::dataframe::OpArgs;
 using dftracer::utils::dataframe::Series;
 using dftracer::utils::dataframe::Source;
 using dftracer::utils::dataframe::TypeId;
@@ -47,6 +52,49 @@ DataFrame run(CoroTask<DataFrame> t) {
         dftracer::utils::default_runtime().submit(std::move(t)).get();
     for (Series& c : out.columns) c = c.materialize();
     return out;
+}
+
+// Same names, row count, column types, nulls and values. A NaN equals a NaN:
+// its sign and payload depend on the arithmetic path.
+void expect_frames_equal(const DataFrame& a, const DataFrame& b) {
+    REQUIRE(a.names == b.names);
+    REQUIRE(a.num_rows() == b.num_rows());
+    for (std::size_t c = 0; c < a.columns.size(); ++c) {
+        std::vector<Series> x, y;
+        x.push_back(a.columns[c].materialize());
+        y.push_back(b.columns[c].materialize());
+        REQUIRE(x[0].type() == y[0].type());
+        if (x[0].type() == TypeId::List) {
+            const std::int32_t* xo = x[0].offsets();
+            const std::int32_t* yo = y[0].offsets();
+            std::vector<Series> xe, ye;
+            xe.push_back(x[0].child(0).materialize());
+            ye.push_back(y[0].child(0).materialize());
+            for (std::int64_t r = 0; r < a.num_rows(); ++r) {
+                REQUIRE(x[0].is_null(r) == y[0].is_null(r));
+                REQUIRE(xo[r + 1] - xo[r] == yo[r + 1] - yo[r]);
+                for (std::int32_t k = 0; k < xo[r + 1] - xo[r]; ++k)
+                    REQUIRE(
+                        dftracer::utils::dataframe::row_key(xe, xo[r] + k) ==
+                        dftracer::utils::dataframe::row_key(ye, yo[r] + k));
+            }
+            continue;
+        }
+        for (std::int64_t r = 0; r < a.num_rows(); ++r) {
+            REQUIRE(x[0].is_null(r) == y[0].is_null(r));
+            if (x[0].is_null(r)) continue;
+            if (x[0].type() == TypeId::Float64 &&
+                std::isnan(x[0].data<double>()[r]) &&
+                std::isnan(y[0].data<double>()[r]))
+                continue;
+            if (x[0].type() == TypeId::Float32 &&
+                std::isnan(x[0].data<float>()[r]) &&
+                std::isnan(y[0].data<float>()[r]))
+                continue;
+            REQUIRE(dftracer::utils::dataframe::row_key(x, r) ==
+                    dftracer::utils::dataframe::row_key(y, r));
+        }
+    }
 }
 
 // Drains a Cursor to one positional DataFrame (columns keep no names). A large
@@ -79,6 +127,19 @@ std::pair<std::vector<std::int64_t>, DataFrame> run_stream_probe(
     dftracer::utils::coro::AsyncGenerator<DataFrame> gen) {
     return dftracer::utils::default_runtime()
         .submit(probe_stream(std::move(gen)))
+        .get();
+}
+
+CoroTask<std::vector<DataFrame>> stream_parts(
+    dftracer::utils::coro::AsyncGenerator<DataFrame> gen) {
+    std::vector<DataFrame> parts;
+    while (auto df = co_await gen.next()) parts.push_back(std::move(*df));
+    co_return parts;
+}
+
+std::vector<DataFrame> run_stream(const LazyFrame& lf, std::int64_t rows) {
+    return dftracer::utils::default_runtime()
+        .submit(stream_parts(lf.stream(rows)))
         .get();
 }
 
@@ -530,6 +591,64 @@ TEST_SUITE("lazyframe") {
         }
     }
 
+    TEST_CASE("group_by dyn that spills gives every part all dyn columns") {
+        using dftracer::utils::dataframe::AggDynSpec;
+        using dftracer::utils::dataframe::AggOp;
+        constexpr std::int64_t N = 4000;
+        // arg.z has values only in the last rows, so only the last flushes of
+        // the spill see the name; every part must still carry sum_z.
+        constexpr std::int64_t Z_FROM = N - 100;
+        std::vector<std::int64_t> k(static_cast<std::size_t>(N));
+        std::vector<double> x(static_cast<std::size_t>(N)),
+            z(static_cast<std::size_t>(N), 0.0);
+        std::vector<std::uint8_t> z_valid((N + 7) / 8, 0);
+        for (std::int64_t i = 0; i < N; ++i) {
+            k[static_cast<std::size_t>(i)] = i;
+            x[static_cast<std::size_t>(i)] = static_cast<double>(i);
+            if (i >= Z_FROM) {
+                z[static_cast<std::size_t>(i)] = static_cast<double>(i * 3);
+                z_valid[static_cast<std::size_t>(i >> 3)] |=
+                    static_cast<std::uint8_t>(1u << (i & 7));
+            }
+        }
+        DataFrame df;
+        df.names = {"k", "arg.x", "arg.z"};
+        df.columns.push_back(Series::flat_i64(k.data(), N));
+        df.columns.push_back(Series::flat_f64(x.data(), N));
+        df.columns.push_back(Series::flat_f64(z.data(), N, z_valid.data()));
+        std::vector<GroupAgg> aggs{{Agg::Count, "", "n", 0.0}};
+        std::vector<AggDynSpec> dyn{{AggOp::Sum, 0.0, "sum_"}};
+        const std::vector<std::string> keys{"k"};
+        const DataFrame in_mem =
+            run(df.lazy().group_by(keys, aggs, dyn, "arg.").collect(256))
+                .sort_by_multi(keys);
+        REQUIRE(in_mem.column_index("sum_z") >= 0);
+
+        const LazyFrame spill_plan =
+            df.lazy().memory_budget(2000).group_by(keys, aggs, dyn, "arg.");
+        std::vector<DataFrame> parts = run_stream(spill_plan, 16);
+        REQUIRE(parts.size() > 1);
+        for (const DataFrame& part : parts) REQUIRE(part.names == in_mem.names);
+        std::vector<const DataFrame*> ptrs;
+        for (const DataFrame& part : parts) ptrs.push_back(&part);
+        const DataFrame spilled =
+            dftracer::utils::dataframe::concat(
+                ptrs, dftracer::utils::dataframe::ConcatHow::Vertical)
+                .sort_by_multi(keys);
+        REQUIRE(spilled.num_rows() == N);
+        const Series& sz = spilled.column("sum_z");
+        const Series& mz = in_mem.column("sum_z");
+        for (std::int64_t i = 0; i < N; ++i) {
+            CHECK(spilled.column("n").data<std::int64_t>()[i] ==
+                  in_mem.column("n").data<std::int64_t>()[i]);
+            CHECK(spilled.column("sum_x").data<double>()[i] ==
+                  in_mem.column("sum_x").data<double>()[i]);
+            REQUIRE(sz.is_null(i) == mz.is_null(i));
+            if (!mz.is_null(i))
+                CHECK(sz.data<double>()[i] == mz.data<double>()[i]);
+        }
+    }
+
     TEST_CASE(
         "group_by spill with high-cardinality keys triggers multiple "
         "flushes, matches eager") {
@@ -971,6 +1090,524 @@ TEST_SUITE("lazyframe") {
         }
     }
 
+    TEST_CASE(
+        "window functions under a tiny budget match the in-memory kernel") {
+        // Chunks of about 1 KiB cut every partition several times, so each
+        // function is answered across cuts: from carried state, context rows,
+        // the figures collected while the sort read its input, or native
+        // state. The reference is the same window over the whole input.
+        const std::int64_t n = 2400;
+        auto make = [&](std::int64_t parts) {
+            std::vector<std::int64_t> p(n), o(n), v(n);
+            std::vector<double> f(n), t(n);
+            std::vector<std::int32_t> u(n);
+            std::vector<std::uint8_t> vv((n + 7) / 8, 0), fv((n + 7) / 8, 0);
+            for (std::int64_t i = 0; i < n; ++i) {
+                const auto z = static_cast<std::size_t>(i);
+                p[z] = (i * 7) % parts;
+                o[z] = (i * 13) % 40;
+                v[z] = (i * 17) % 53 - 20;
+                f[z] = static_cast<double>((i * 11) % 97) * 0.25 - 9.0;
+                t[z] = static_cast<double>((i * 5) % 31) * 1.5;
+                u[z] = static_cast<std::int32_t>((i * 3) % 7);
+                if (i % 7 != 0)
+                    vv[z >> 3] |= static_cast<std::uint8_t>(1u << (z & 7));
+                if (i % 11 != 0)
+                    fv[z >> 3] |= static_cast<std::uint8_t>(1u << (z & 7));
+            }
+            DataFrame df;
+            df.names = {"p", "o", "v", "f", "t", "u"};
+            df.columns.push_back(Series::flat_i64(p.data(), n));
+            df.columns.push_back(Series::flat_i64(o.data(), n));
+            df.columns.push_back(Series::flat_i64(v.data(), n, vv.data()));
+            df.columns.push_back(Series::flat_f64(f.data(), n, fv.data()));
+            df.columns.push_back(Series::flat_f64(t.data(), n));
+            df.columns.push_back(Series::flat(TypeId::Int32, u.data(), n));
+            return df;
+        };
+        auto offset_spec = [](dftu_window_func func, const char* value,
+                              const char* out, std::int64_t offset) {
+            dftu_window_spec s{};
+            s.func = func;
+            s.value = value;
+            s.out = out;
+            s.param.offset = offset;
+            return s;
+        };
+        auto frame_spec = [](dftu_window_func func, const char* value,
+                             const char* out, std::int64_t pre,
+                             std::int64_t fol, bool range = false,
+                             std::int64_t min_count = 0, double q = 0.5,
+                             const char* by = nullptr) {
+            dftu_window_spec s{};
+            s.func = func;
+            s.value = value;
+            s.out = out;
+            s.param.frame = {
+                min_count,
+                pre,
+                fol,
+                range ? DFTU_WINDOW_FRAME_RANGE : DFTU_WINDOW_FRAME_ROWS,
+                q,
+                by};
+            return s;
+        };
+        auto session_spec = [](const char* out, const char* time,
+                               const char* end, double gap, double span) {
+            dftu_window_spec s{};
+            s.func = DFTU_WINDOW_SESSIONIZE;
+            s.out = out;
+            s.param.session = {time, end, gap, span};
+            return s;
+        };
+        const std::int64_t ALL = DFTU_WINDOW_UNBOUNDED;
+        using Specs = std::vector<dftu_window_spec>;
+        const std::vector<std::pair<std::string, Specs>> groups = {
+            {"ranks",
+             {offset_spec(DFTU_WINDOW_NTILE, nullptr, "nt", 4),
+              offset_spec(DFTU_WINDOW_ROW_NUMBER, nullptr, "rn", 0),
+              offset_spec(DFTU_WINDOW_RANK, nullptr, "rk", 0),
+              offset_spec(DFTU_WINDOW_DENSE_RANK, nullptr, "dr", 0),
+              offset_spec(DFTU_WINDOW_PERCENT_RANK, nullptr, "pr", 0),
+              offset_spec(DFTU_WINDOW_CUME_DIST, nullptr, "cd", 0)}},
+            {"whole",
+             {frame_spec(DFTU_WINDOW_FRAME_COUNT, "v", "wc", ALL, ALL),
+              frame_spec(DFTU_WINDOW_FRAME_MIN, "u", "wmin", ALL, ALL),
+              frame_spec(DFTU_WINDOW_FRAME_MAX, "v", "wmax", ALL, ALL),
+              frame_spec(DFTU_WINDOW_FRAME_SUM, "v", "wsum", ALL, ALL),
+              frame_spec(DFTU_WINDOW_FRAME_SUM, "u", "wusum", ALL, ALL, false,
+                         3)}},
+            {"sessions",
+             {session_spec("s1", "t", nullptr, 3.0, 0.0),
+              session_spec("s2", "t", "f", 1.0, 20.0)}},
+            {"float frames",
+             {frame_spec(DFTU_WINDOW_FRAME_SUM, "f", "fs", 2, 1),
+              frame_spec(DFTU_WINDOW_FRAME_MEAN, "v", "vm", 3, 0),
+              frame_spec(DFTU_WINDOW_FRAME_MEAN, "f", "fm", 1, 2),
+              frame_spec(DFTU_WINDOW_FRAME_SUM, "f", "fs2", 5, 5, false, 3)}},
+            {"row frames",
+             {frame_spec(DFTU_WINDOW_FRAME_QUANTILE, "v", "q", 3, 1, false, 0,
+                         0.3),
+              frame_spec(DFTU_WINDOW_FRAME_COUNT_DISTINCT, "u", "cdist", 2, 2),
+              frame_spec(DFTU_WINDOW_FRAME_ARG_MAX, "v", "amax", 2, 1, false, 0,
+                         0.5, "f"),
+              frame_spec(DFTU_WINDOW_FRAME_ARG_MIN, "v", "amin", 1, 1, false, 0,
+                         0.5, "f"),
+              frame_spec(DFTU_WINDOW_FRAME_MIN, "v", "fmin", 2, 2),
+              frame_spec(DFTU_WINDOW_FRAME_MAX, "f", "fmax", 0, 3),
+              frame_spec(DFTU_WINDOW_FRAME_COUNT, "v", "fcnt", 2, 0),
+              frame_spec(DFTU_WINDOW_FRAME_SUM, "u", "fusum", 2, 2)}},
+            {"range frames",
+             {frame_spec(DFTU_WINDOW_FRAME_SUM, "v", "rs", 3, 1, true),
+              frame_spec(DFTU_WINDOW_FRAME_MIN, "u", "rmin", 2, 2, true),
+              frame_spec(DFTU_WINDOW_FRAME_COUNT, "v", "rc", 1, 0, true),
+              frame_spec(DFTU_WINDOW_FRAME_QUANTILE, "v", "rq", 4, 2, true, 0,
+                         0.7),
+              frame_spec(DFTU_WINDOW_FRAME_COUNT_DISTINCT, "u", "rd", 5, 0,
+                         true)}},
+            {"neighbours",
+             {offset_spec(DFTU_WINDOW_LAG, "v", "lag", 2),
+              offset_spec(DFTU_WINDOW_LEAD, "f", "lead", 3),
+              offset_spec(DFTU_WINDOW_DELTA, "v", "delta", 0)}},
+        };
+        const auto same = expect_frames_equal;
+        struct Layout {
+            std::int64_t parts;
+            std::vector<std::string> by;
+        };
+        const std::vector<Layout> layouts = {{6, {"p"}}, {1, {"p"}}, {6, {}}};
+        for (const Layout& layout : layouts) {
+            const DataFrame df = make(layout.parts);
+            for (const auto& [label, specs] : groups) {
+                INFO("group=" << label << " parts=" << layout.parts
+                              << " keys=" << layout.by.size());
+                std::vector<const char*> pc;
+                for (const std::string& s : layout.by) pc.push_back(s.c_str());
+                const char* oc[] = {"o"};
+                OpArgs args;
+                args.strlist(1, pc.data(), static_cast<std::int32_t>(pc.size()))
+                    .strlist(2, oc, 1)
+                    .winlist(3, specs);
+                std::vector<std::string> names = df.names;
+                for (const dftu_window_spec& s : specs)
+                    names.emplace_back(s.out);
+                const LazyFrame plan =
+                    df.lazy().frame_op("dftu.frame.window", args, {}, names);
+                const DataFrame want = run(plan.collect(64));
+                const DataFrame got = run(plan.memory_budget(4096).collect(64));
+                same(got, want);
+            }
+        }
+    }
+
+    TEST_CASE(
+        "window functions that need a whole partition stream under a tiny "
+        "budget") {
+        // Variance, frames from the partition start or to its end, float sums
+        // over a range, collect frames and first, last and nth value used to
+        // hold a whole partition. Each is compared bit for bit with the
+        // window over the whole input; one partition must leave in several
+        // morsels, or the path that holds it whole ran. The groups marked as
+        // not streaming still hold a partition whole.
+        const std::int64_t n = 3000;
+        auto make = [&](std::int64_t parts) {
+            std::vector<std::int64_t> p(n), o(n), v(n);
+            std::vector<double> f(n), g(n);
+            std::vector<float> h(n);
+            std::vector<std::int32_t> u(n);
+            std::vector<std::uint64_t> w(n);
+            std::vector<std::string> s(n);
+            std::vector<std::uint8_t> vv((n + 7) / 8, 0), fv((n + 7) / 8, 0),
+                gv((n + 7) / 8, 0), wv((n + 7) / 8, 0);
+            for (std::int64_t i = 0; i < n; ++i) {
+                const auto z = static_cast<std::size_t>(i);
+                p[z] = (i * 7) % parts;
+                o[z] = (i * 13) % 40;
+                v[z] = (i * 17) % 53 - 20;
+                double x = static_cast<double>((i * 11) % 97) * 0.25 - 9.0;
+                if (i % 53 == 0) x = 1e16;
+                if (i % 59 == 0) x = 1e-3 * static_cast<double>(i);
+                if (i % 97 == 5) x = std::nan("");
+                if (i % 101 == 7) x = std::numeric_limits<double>::infinity();
+                if (i % 103 == 9) x = -std::numeric_limits<double>::infinity();
+                if (i % 107 == 11) x = -0.0;
+                f[z] = x;
+                g[z] = static_cast<double>((i * 13) % 40) * 0.5;
+                h[z] = static_cast<float>((i * 19) % 83) * 0.125f - 4.0f;
+                if (i % 23 == 4) g[z] = std::nan("");
+                u[z] = static_cast<std::int32_t>((i * 3) % 7);
+                w[z] = static_cast<std::uint64_t>((i * 29) % 1000);
+                s[z] = "s" + std::to_string((i * 5) % 13);
+                if (i % 7 != 0)
+                    vv[z >> 3] |= static_cast<std::uint8_t>(1u << (z & 7));
+                if (i % 11 != 0)
+                    fv[z >> 3] |= static_cast<std::uint8_t>(1u << (z & 7));
+                if (i % 17 != 3)
+                    gv[z >> 3] |= static_cast<std::uint8_t>(1u << (z & 7));
+                if (i % 5 != 0)
+                    wv[z >> 3] |= static_cast<std::uint8_t>(1u << (z & 7));
+            }
+            DataFrame df;
+            df.names = {"p", "o", "v", "f", "g", "u", "w", "s", "h"};
+            df.columns.push_back(Series::flat_i64(p.data(), n));
+            df.columns.push_back(Series::flat_i64(o.data(), n));
+            df.columns.push_back(Series::flat_i64(v.data(), n, vv.data()));
+            df.columns.push_back(Series::flat_f64(f.data(), n, fv.data()));
+            df.columns.push_back(Series::flat_f64(g.data(), n, gv.data()));
+            df.columns.push_back(Series::flat(TypeId::Int32, u.data(), n));
+            df.columns.push_back(
+                Series::flat(TypeId::Uint64, w.data(), n, wv.data()));
+            df.columns.push_back(Series::strings(s));
+            df.columns.push_back(Series::flat(TypeId::Float32, h.data(), n));
+            return df;
+        };
+        auto offset_spec = [](dftu_window_func func, const char* value,
+                              const char* out, std::int64_t offset) {
+            dftu_window_spec s{};
+            s.func = func;
+            s.value = value;
+            s.out = out;
+            s.param.offset = offset;
+            return s;
+        };
+        auto frame_spec = [](dftu_window_func func, const char* value,
+                             const char* out, std::int64_t pre,
+                             std::int64_t fol, bool range = false,
+                             std::int64_t min_count = 0) {
+            dftu_window_spec s{};
+            s.func = func;
+            s.value = value;
+            s.out = out;
+            s.param.frame = {
+                min_count,
+                pre,
+                fol,
+                range ? DFTU_WINDOW_FRAME_RANGE : DFTU_WINDOW_FRAME_ROWS,
+                0.5,
+                nullptr};
+            return s;
+        };
+        const std::int64_t ALL = DFTU_WINDOW_UNBOUNDED;
+        using Specs = std::vector<dftu_window_spec>;
+        struct Group {
+            std::string label;
+            const char* order;
+            bool streams;
+            Specs specs;
+        };
+        const std::vector<Group> groups = {
+            {"from the start, by rows",
+             "o",
+             true,
+             {frame_spec(DFTU_WINDOW_FRAME_COUNT, "v", "c1", ALL, 0),
+              frame_spec(DFTU_WINDOW_FRAME_COUNT, "s", "c2", ALL, 2),
+              frame_spec(DFTU_WINDOW_FRAME_SUM, "v", "s1", ALL, 2),
+              frame_spec(DFTU_WINDOW_FRAME_SUM, "u", "s2", ALL, 0, false, 3),
+              frame_spec(DFTU_WINDOW_FRAME_SUM, "w", "s3", ALL, 1),
+              frame_spec(DFTU_WINDOW_FRAME_SUM, "f", "s4", ALL, 1),
+              frame_spec(DFTU_WINDOW_FRAME_MEAN, "f", "m1", ALL, 3),
+              frame_spec(DFTU_WINDOW_FRAME_MEAN, "v", "m2", ALL, 0),
+              frame_spec(DFTU_WINDOW_FRAME_MIN, "v", "n1", ALL, 1),
+              frame_spec(DFTU_WINDOW_FRAME_MAX, "f", "x1", ALL, 2),
+              frame_spec(DFTU_WINDOW_FRAME_MIN, "u", "n2", ALL, 0, false, 2),
+              frame_spec(DFTU_WINDOW_FRAME_MAX, "w", "x2", ALL, 0),
+              frame_spec(DFTU_WINDOW_FRAME_MAX, "h", "x3", ALL, 1),
+              frame_spec(DFTU_WINDOW_FRAME_SUM, "h", "s5", ALL, 2),
+              frame_spec(DFTU_WINDOW_FRAME_VAR, "h", "v4", 2, 1)}},
+            {"from the start, by range",
+             "g",
+             true,
+             {frame_spec(DFTU_WINDOW_FRAME_COUNT, "v", "rc", ALL, 1, true),
+              frame_spec(DFTU_WINDOW_FRAME_SUM, "u", "rs", ALL, 2, true),
+              frame_spec(DFTU_WINDOW_FRAME_MIN, "v", "rn", ALL, 0, true),
+              frame_spec(DFTU_WINDOW_FRAME_MAX, "w", "rx", ALL, 3, true)}},
+            {"float sums over a range",
+             "g",
+             true,
+             {frame_spec(DFTU_WINDOW_FRAME_SUM, "f", "fs", 3, 1, true),
+              frame_spec(DFTU_WINDOW_FRAME_MEAN, "v", "fm", 2, 2, true),
+              frame_spec(DFTU_WINDOW_FRAME_SUM, "f", "fs2", 0, 0, true, 2)}},
+            {"variance by rows",
+             "o",
+             true,
+             {frame_spec(DFTU_WINDOW_FRAME_VAR, "v", "v1", 3, 1),
+              frame_spec(DFTU_WINDOW_FRAME_STD, "f", "d1", 2, 2),
+              frame_spec(DFTU_WINDOW_FRAME_VAR, "f", "v2", ALL, 2),
+              frame_spec(DFTU_WINDOW_FRAME_STD, "u", "d2", 4, 0, false, 3),
+              frame_spec(DFTU_WINDOW_FRAME_VAR, "w", "v3", 1, 1)}},
+            {"variance by range",
+             "g",
+             true,
+             {frame_spec(DFTU_WINDOW_FRAME_VAR, "f", "rv", 2, 1, true),
+              frame_spec(DFTU_WINDOW_FRAME_STD, "v", "rd", 1, 3, true)}},
+            {"collect",
+             "o",
+             true,
+             {frame_spec(DFTU_WINDOW_FRAME_COLLECT, "v", "k1", 2, 1),
+              frame_spec(DFTU_WINDOW_FRAME_COLLECT, "f", "k2", 1, 2),
+              frame_spec(DFTU_WINDOW_FRAME_COLLECT, "s", "k3", 3, 0)}},
+            {"collect by range",
+             "g",
+             true,
+             {frame_spec(DFTU_WINDOW_FRAME_COLLECT, "v", "kr", 2, 1, true)}},
+            {"first, last and nth value",
+             "o",
+             true,
+             {offset_spec(DFTU_WINDOW_FIRST_VALUE, "v", "fv", 0),
+              offset_spec(DFTU_WINDOW_FIRST_VALUE, "s", "fs", 0),
+              offset_spec(DFTU_WINDOW_NTH_VALUE, "f", "n3", 3),
+              offset_spec(DFTU_WINDOW_NTH_VALUE, "s", "n7", 7),
+              offset_spec(DFTU_WINDOW_NTH_VALUE, "v", "n40", 40),
+              offset_spec(DFTU_WINDOW_NTH_VALUE, "v", "nzero", 0),
+              offset_spec(DFTU_WINDOW_LAST_VALUE, "v", "lv", 0),
+              offset_spec(DFTU_WINDOW_LAST_VALUE, "s", "ls", 0),
+              offset_spec(DFTU_WINDOW_LAST_VALUE, "f", "lf", 0)}},
+            {"together",
+             "o",
+             true,
+             {frame_spec(DFTU_WINDOW_FRAME_VAR, "f", "tv", 2, 1),
+              frame_spec(DFTU_WINDOW_FRAME_SUM, "v", "ts", ALL, 1),
+              offset_spec(DFTU_WINDOW_NTH_VALUE, "s", "tn", 4),
+              offset_spec(DFTU_WINDOW_LAST_VALUE, "f", "tl", 0),
+              offset_spec(DFTU_WINDOW_NTILE, nullptr, "tt", 5),
+              offset_spec(DFTU_WINDOW_ROW_NUMBER, nullptr, "tr", 0)}},
+            {"text extremes from the start",
+             "o",
+             true,
+             {frame_spec(DFTU_WINDOW_FRAME_MIN, "s", "x1", ALL, 0),
+              frame_spec(DFTU_WINDOW_FRAME_MAX, "s", "x2", ALL, 0, false, 3)}},
+            {"whole variance",
+             "o",
+             true,
+             {frame_spec(DFTU_WINDOW_FRAME_VAR, "f", "wv", ALL, ALL),
+              frame_spec(DFTU_WINDOW_FRAME_STD, "v", "ws", ALL, ALL),
+              frame_spec(DFTU_WINDOW_FRAME_VAR, "v", "wv3", ALL, ALL, false,
+                         3)}},
+            {"to the partition end",
+             "o",
+             true,
+             {frame_spec(DFTU_WINDOW_FRAME_SUM, "v", "e1", 3, ALL),
+              frame_spec(DFTU_WINDOW_FRAME_SUM, "f", "e2", 0, ALL),
+              frame_spec(DFTU_WINDOW_FRAME_MEAN, "f", "e3", 5, ALL),
+              frame_spec(DFTU_WINDOW_FRAME_COUNT, "f", "e4", 2, ALL),
+              frame_spec(DFTU_WINDOW_FRAME_MEAN, "v", "e5", 1, ALL)}},
+            {"whole float sums and means",
+             "o",
+             true,
+             {frame_spec(DFTU_WINDOW_FRAME_SUM, "f", "wf", ALL, ALL),
+              frame_spec(DFTU_WINDOW_FRAME_MEAN, "f", "wm", ALL, ALL),
+              frame_spec(DFTU_WINDOW_FRAME_MEAN, "v", "wmv", ALL, ALL)}},
+            {"min and max to the partition end",
+             "o",
+             true,
+             {frame_spec(DFTU_WINDOW_FRAME_MIN, "v", "z1", 3, ALL),
+              frame_spec(DFTU_WINDOW_FRAME_MAX, "f", "z2", 0, ALL),
+              frame_spec(DFTU_WINDOW_FRAME_MIN, "f", "z3", 2, ALL, false, 3),
+              frame_spec(DFTU_WINDOW_FRAME_MAX, "s", "z4", 4, ALL),
+              frame_spec(DFTU_WINDOW_FRAME_MIN, "s", "z5", 0, ALL, false, 2),
+              frame_spec(DFTU_WINDOW_FRAME_MIN, "w", "z6", 1, ALL),
+              frame_spec(DFTU_WINDOW_FRAME_MAX, "h", "z7", 5, ALL),
+              frame_spec(DFTU_WINDOW_FRAME_MIN, "u", "z8", 2, ALL, false, 2),
+              frame_spec(DFTU_WINDOW_FRAME_MAX, "g", "z9", 40, ALL)}},
+            {"variance to the partition end",
+             "o",
+             true,
+             {frame_spec(DFTU_WINDOW_FRAME_VAR, "v", "y1", 3, ALL),
+              frame_spec(DFTU_WINDOW_FRAME_STD, "f", "y2", 0, ALL),
+              frame_spec(DFTU_WINDOW_FRAME_VAR, "u", "y3", 2, ALL, false, 3),
+              frame_spec(DFTU_WINDOW_FRAME_STD, "w", "y4", 5, ALL),
+              frame_spec(DFTU_WINDOW_FRAME_VAR, "h", "y5", 1, ALL),
+              frame_spec(DFTU_WINDOW_FRAME_VAR, "g", "y6", 200, ALL)}},
+            {"text extremes reading ahead",
+             "o",
+             true,
+             {frame_spec(DFTU_WINDOW_FRAME_MIN, "s", "a1", ALL, 3),
+              frame_spec(DFTU_WINDOW_FRAME_MAX, "s", "a2", ALL, 1, false, 2),
+              frame_spec(DFTU_WINDOW_FRAME_MAX, "s", "a3", ALL, 0)}},
+            {"range frames to the partition end",
+             "g",
+             true,
+             {frame_spec(DFTU_WINDOW_FRAME_COUNT, "v", "t1", 1, ALL, true),
+              frame_spec(DFTU_WINDOW_FRAME_SUM, "v", "t2", 2, ALL, true),
+              frame_spec(DFTU_WINDOW_FRAME_SUM, "u", "t3", 0, ALL, true, 3),
+              frame_spec(DFTU_WINDOW_FRAME_MEAN, "v", "t4", 3, ALL, true),
+              frame_spec(DFTU_WINDOW_FRAME_SUM, "f", "t5", 2, ALL, true),
+              frame_spec(DFTU_WINDOW_FRAME_MEAN, "f", "t6", 1, ALL, true),
+              frame_spec(DFTU_WINDOW_FRAME_SUM, "h", "t7", 0, ALL, true),
+              frame_spec(DFTU_WINDOW_FRAME_SUM, "w", "t8", 4, ALL, true),
+              frame_spec(DFTU_WINDOW_FRAME_COUNT, "s", "t9", 2, ALL, true)}},
+            {"range frames to the end, ordered by an integer",
+             "o",
+             true,
+             {frame_spec(DFTU_WINDOW_FRAME_SUM, "f", "q1", 3, ALL, true),
+              frame_spec(DFTU_WINDOW_FRAME_COUNT, "v", "q2", 0, ALL, true),
+              frame_spec(DFTU_WINDOW_FRAME_MEAN, "w", "q3", 5, ALL, true)}},
+            {"range and row frames together",
+             "g",
+             true,
+             {frame_spec(DFTU_WINDOW_FRAME_COUNT, "v", "m1", 2, 0, true),
+              frame_spec(DFTU_WINDOW_FRAME_SUM, "u", "m2", 2, 1),
+              frame_spec(DFTU_WINDOW_FRAME_MIN, "w", "m3", 1, 2),
+              frame_spec(DFTU_WINDOW_FRAME_SUM, "f", "m4", 2, 1),
+              frame_spec(DFTU_WINDOW_FRAME_MAX, "v", "m5", 1, 1, true),
+              offset_spec(DFTU_WINDOW_LAG, "v", "m6", 3)}},
+            {"still whole",
+             "g",
+             false,
+             {frame_spec(DFTU_WINDOW_FRAME_SUM, "f", "w1", ALL, 2, true),
+              frame_spec(DFTU_WINDOW_FRAME_MIN, "v", "w2", 2, ALL, true),
+              frame_spec(DFTU_WINDOW_FRAME_VAR, "v", "w3", 1, ALL, true),
+              frame_spec(DFTU_WINDOW_FRAME_QUANTILE, "v", "w4", ALL, 1),
+              frame_spec(DFTU_WINDOW_FRAME_COLLECT, "v", "w5", ALL, 0),
+              offset_spec(DFTU_WINDOW_NTH_VALUE, "v", "w6", 100000)}},
+            {"running functions with a look-around",
+             "o",
+             false,
+             {offset_spec(DFTU_WINDOW_RUNNING_SUM, "v", "r1", 0),
+              offset_spec(DFTU_WINDOW_LAG, "f", "r2", 2)}},
+            {"two running functions on one column",
+             "o",
+             false,
+             {offset_spec(DFTU_WINDOW_RUNNING_SUM, "v", "r3", 0),
+              offset_spec(DFTU_WINDOW_RUNNING_MIN, "v", "r4", 0)}},
+        };
+        struct Layout {
+            std::int64_t parts;
+            std::vector<std::string> by;
+        };
+        const std::vector<Layout> layouts = {{7, {"p"}}, {1, {"p"}}, {7, {}}};
+        for (const Layout& layout : layouts) {
+            const DataFrame df = make(layout.parts);
+            for (const Group& group : groups) {
+                INFO("group=" << group.label << " parts=" << layout.parts
+                              << " keys=" << layout.by.size());
+                std::vector<const char*> pc;
+                for (const std::string& s : layout.by) pc.push_back(s.c_str());
+                const char* oc[] = {group.order};
+                OpArgs args;
+                args.strlist(1, pc.data(), static_cast<std::int32_t>(pc.size()))
+                    .strlist(2, oc, 1)
+                    .winlist(3, group.specs);
+                std::vector<std::string> names = df.names;
+                for (const dftu_window_spec& s : group.specs)
+                    names.emplace_back(s.out);
+                const LazyFrame plan =
+                    df.lazy().frame_op("dftu.frame.window", args, {}, names);
+                const DataFrame want = run(plan.collect(64));
+                auto [chunk_rows, got] =
+                    run_stream_probe(plan.memory_budget(4096).stream(64));
+                expect_frames_equal(got, want);
+                if (group.streams && layout.parts == 1 && !layout.by.empty()) {
+                    // One partition of n rows: held whole it leaves as one
+                    // morsel.
+                    REQUIRE(chunk_rows.size() > 1);
+                    CHECK(*std::max_element(chunk_rows.begin(),
+                                            chunk_rows.end()) < n / 4);
+                }
+            }
+        }
+    }
+
+    TEST_CASE("a window with more partitions than the figures table holds") {
+        // Half the rows are one partition and the rest are one row each, so
+        // the table of figures overflows and the big partition must still be
+        // cut.
+        const std::int64_t n = 30000;
+        std::vector<std::int64_t> p(n), o(n), v(n);
+        std::vector<std::string> s(n);
+        for (std::int64_t i = 0; i < n; ++i) {
+            const auto z = static_cast<std::size_t>(i);
+            p[z] = i % 2 == 0 ? 0 : i;
+            o[z] = (i * 13) % 977;
+            v[z] = (i * 17) % 53 - 20;
+            s[z] = "s" + std::to_string(i % 31);
+        }
+        DataFrame df;
+        df.names = {"p", "o", "v", "s"};
+        df.columns.push_back(Series::flat_i64(p.data(), n));
+        df.columns.push_back(Series::flat_i64(o.data(), n));
+        df.columns.push_back(Series::flat_i64(v.data(), n));
+        df.columns.push_back(Series::strings(s));
+        auto spec = [](dftu_window_func func, const char* value,
+                       const char* out, std::int64_t offset) {
+            dftu_window_spec w{};
+            w.func = func;
+            w.value = value;
+            w.out = out;
+            w.param.offset = offset;
+            return w;
+        };
+        dftu_window_spec whole{};
+        whole.func = DFTU_WINDOW_FRAME_SUM;
+        whole.value = "v";
+        whole.out = "total";
+        whole.param.frame = {0,
+                             DFTU_WINDOW_UNBOUNDED,
+                             DFTU_WINDOW_UNBOUNDED,
+                             DFTU_WINDOW_FRAME_ROWS,
+                             0.5,
+                             nullptr};
+        const std::vector<dftu_window_spec> specs = {
+            spec(DFTU_WINDOW_NTILE, nullptr, "nt", 4),
+            spec(DFTU_WINDOW_PERCENT_RANK, nullptr, "pr", 0),
+            spec(DFTU_WINDOW_CUME_DIST, nullptr, "cd", 0),
+            spec(DFTU_WINDOW_ROW_NUMBER, nullptr, "rn", 0), whole};
+        const char* pc[] = {"p"};
+        const char* oc[] = {"o"};
+        OpArgs args;
+        args.strlist(1, pc, 1).strlist(2, oc, 1).winlist(3, specs);
+        std::vector<std::string> names = df.names;
+        for (const dftu_window_spec& w : specs) names.emplace_back(w.out);
+        const LazyFrame plan =
+            df.lazy().frame_op("dftu.frame.window", args, {}, names);
+        const DataFrame want = run(plan.collect(64));
+        auto [chunk_rows, got] =
+            run_stream_probe(plan.memory_budget(4096).stream(64));
+        expect_frames_equal(got, want);
+        REQUIRE(chunk_rows.size() > 1);
+        CHECK(*std::max_element(chunk_rows.begin(), chunk_rows.end()) < n / 4);
+    }
+
     TEST_CASE("native group transforms match a row-by-row reference") {
         const std::int64_t n = 4000;
         std::vector<std::int64_t> k(n), v(n);
@@ -1174,6 +1811,395 @@ TEST_SUITE("lazyframe") {
         }
     }
 
+    TEST_CASE("native group transforms equal the composed window plan") {
+        using dftracer::utils::dataframe::composed_group_transform;
+        using dftracer::utils::dataframe::RankMethod;
+        const std::int64_t n = 300;
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        const double inf = std::numeric_limits<double>::infinity();
+        std::vector<std::int64_t> k(n);
+        std::vector<std::int32_t> k2(n);
+        std::vector<std::string> names(n);
+        std::vector<std::uint8_t> kv((n + 7) / 8, 0), vv((n + 7) / 8, 0);
+        std::vector<std::int64_t> base(n);
+        std::vector<double> fbase(n);
+        for (std::int64_t i = 0; i < n; ++i) {
+            const auto z = static_cast<std::size_t>(i);
+            k[z] = (i * 5) % 7;
+            k2[z] = static_cast<std::int32_t>(i % 3);
+            names[z] = std::string(1, static_cast<char>('a' + i % 4)) +
+                       (i % 5 == 0 ? "-long-key-over-the-sso-limit" : "");
+            if (i % 23 != 0)
+                kv[z >> 3] |= static_cast<std::uint8_t>(1u << (z & 7));
+            if (i % 9 != 0)
+                vv[z >> 3] |= static_cast<std::uint8_t>(1u << (z & 7));
+            base[z] = (i * 37) % 61;
+            fbase[z] = static_cast<double>(base[z]) * 0.5 - 7.25;
+            if (i % 31 == 5) fbase[z] = nan;
+            if (i % 31 == 11) fbase[z] = inf;
+            if (i % 31 == 17) fbase[z] = -0.0;
+        }
+        auto typed = [&](TypeId t) {
+            auto as = [&](auto tag, bool floating) {
+                using T = decltype(tag);
+                std::vector<T> v(static_cast<std::size_t>(n));
+                for (std::size_t i = 0; i < v.size(); ++i)
+                    v[i] = floating ? static_cast<T>(fbase[i])
+                                    : static_cast<T>(base[i]);
+                return Series::flat(t, v.data(), n, vv.data());
+            };
+            switch (t) {
+                case TypeId::Int8:
+                    return as(std::int8_t{}, false);
+                case TypeId::Int16:
+                    return as(std::int16_t{}, false);
+                case TypeId::Int32:
+                    return as(std::int32_t{}, false);
+                case TypeId::Int64:
+                    return as(std::int64_t{}, false);
+                case TypeId::Uint8:
+                    return as(std::uint8_t{}, false);
+                case TypeId::Uint16:
+                    return as(std::uint16_t{}, false);
+                case TypeId::Uint32:
+                    return as(std::uint32_t{}, false);
+                case TypeId::Uint64:
+                    return as(std::uint64_t{}, false);
+                case TypeId::Float32:
+                    return as(float{}, true);
+                default:
+                    return as(double{}, true);
+            }
+        };
+        struct Case {
+            GroupwiseOp op;
+            std::int64_t n;
+        };
+        const std::vector<Case> cases = {
+            {GroupwiseOp::CumSum, 0},   {GroupwiseOp::CumMax, 0},
+            {GroupwiseOp::CumMin, 0},   {GroupwiseOp::CumProd, 0},
+            {GroupwiseOp::CumCount, 0}, {GroupwiseOp::Shift, 1},
+            {GroupwiseOp::Shift, 3},    {GroupwiseOp::Diff, 0},
+            {GroupwiseOp::FFill, 0}};
+        const std::vector<TypeId> types = {
+            TypeId::Int8,    TypeId::Int16,  TypeId::Int32,  TypeId::Int64,
+            TypeId::Uint8,   TypeId::Uint16, TypeId::Uint32, TypeId::Uint64,
+            TypeId::Float32, TypeId::Float64};
+        for (const TypeId t : types) {
+            DataFrame num;
+            num.names = {"k", "v", "k2"};
+            num.columns.push_back(Series::flat_i64(k.data(), n, kv.data()));
+            num.columns.push_back(typed(t));
+            num.columns.push_back(Series::flat(TypeId::Int32, k2.data(), n));
+            DataFrame str;
+            str.names = {"s", "v"};
+            str.columns.push_back(Series::strings(names));
+            str.columns.push_back(typed(t));
+            struct Plan {
+                const DataFrame* df;
+                std::vector<std::string> keys;
+            };
+            const std::vector<Plan> plans = {
+                {&num, {"k"}}, {&num, {}}, {&num, {"k", "k2"}}, {&str, {"s"}}};
+            for (const Plan& plan : plans) {
+                const DataFrame& df = *plan.df;
+                const std::vector<std::string>& keys = plan.keys;
+                for (const Case& c : cases) {
+                    INFO("type=" << static_cast<int>(t)
+                                 << " op=" << static_cast<int>(c.op)
+                                 << " n=" << c.n << " keys=" << keys.size());
+                    const LazyFrame fast = df.lazy().group_by(keys).transform(
+                        c.op, c.n, RankMethod::Average, true);
+                    REQUIRE(fast.explain().find("group_transform") !=
+                            std::string::npos);
+                    const DataFrame want =
+                        run(composed_group_transform(df.lazy(), keys, c.op, c.n,
+                                                     RankMethod::Average, true)
+                                .collect(64));
+                    for (const std::uint64_t budget :
+                         {std::uint64_t{0}, std::uint64_t{4096}}) {
+                        const DataFrame got =
+                            run(fast.memory_budget(budget).collect(64));
+                        expect_frames_equal(got, want);
+                    }
+                }
+            }
+        }
+    }
+
+    TEST_CASE("head_by with many hash leaves equals the in-memory result") {
+        const std::int64_t n = 60000;
+        std::vector<std::int64_t> k(n), v(n);
+        for (std::int64_t i = 0; i < n; ++i) {
+            k[static_cast<std::size_t>(i)] = (i * 7919) % 15000;
+            v[static_cast<std::size_t>(i)] = i;
+        }
+        DataFrame df;
+        df.names = {"k", "v"};
+        df.columns.push_back(Series::flat_i64(k.data(), n));
+        df.columns.push_back(Series::flat_i64(v.data(), n));
+        const DataFrame want = run(
+            df.lazy().head_by(std::vector<std::string>{"k"}, 2).collect(4096));
+        const DataFrame got = run(df.lazy()
+                                      .memory_budget(32768)
+                                      .head_by(std::vector<std::string>{"k"}, 2)
+                                      .collect(4096));
+        REQUIRE(got.num_rows() == want.num_rows());
+        const Series a = got.columns[1].materialize();
+        const Series b = want.columns[1].materialize();
+        for (std::int64_t r = 0; r < a.length(); ++r)
+            REQUIRE(a.data<std::int64_t>()[r] == b.data<std::int64_t>()[r]);
+    }
+
+    TEST_CASE("native group transforms: empty, one row, float keys, overflow") {
+        using dftracer::utils::dataframe::composed_group_transform;
+        using dftracer::utils::dataframe::RankMethod;
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        auto frame = [&](std::vector<double> k, std::vector<std::int64_t> v) {
+            const auto n = static_cast<std::int64_t>(k.size());
+            DataFrame df;
+            df.names = {"k", "v"};
+            df.columns.push_back(Series::flat_f64(k.data(), n));
+            df.columns.push_back(Series::flat_i64(v.data(), n));
+            return df;
+        };
+        const std::vector<std::string> keys = {"k"};
+        const std::vector<GroupwiseOp> ops = {
+            GroupwiseOp::CumSum,   GroupwiseOp::CumMax, GroupwiseOp::CumMin,
+            GroupwiseOp::CumCount, GroupwiseOp::Diff,   GroupwiseOp::FFill};
+        std::vector<DataFrame> frames;
+        frames.push_back(frame({}, {}));
+        frames.push_back(frame({1.5}, {7}));
+        frames.push_back(
+            frame({0.0, -0.0, nan, nan, 1.0, 0.0}, {1, 2, 3, 4, 5, 6}));
+        for (const DataFrame& df : frames) {
+            for (const GroupwiseOp op : ops) {
+                INFO("rows=" << df.num_rows()
+                             << " op=" << static_cast<int>(op));
+                const LazyFrame fast = df.lazy().group_by(keys).transform(
+                    op, 0, RankMethod::Average, true);
+                REQUIRE(fast.explain().find("group_transform") !=
+                        std::string::npos);
+                expect_frames_equal(
+                    run(fast.collect(64)),
+                    run(composed_group_transform(df.lazy(), keys, op, 0,
+                                                 RankMethod::Average, true)
+                            .collect(64)));
+            }
+        }
+        const std::int64_t big = std::numeric_limits<std::int64_t>::max();
+        const DataFrame wide = frame({1.0, 1.0}, {big, 1});
+        CHECK_THROWS_AS(run(wide.lazy()
+                                .group_by(keys)
+                                .transform(GroupwiseOp::CumSum, 0,
+                                           RankMethod::Average, true)
+                                .collect(64)),
+                        std::overflow_error);
+        // The window plan reports the same overflow, but through the op ABI,
+        // which drops the message.
+        CHECK_THROWS(
+            run(composed_group_transform(wide.lazy(), keys, GroupwiseOp::CumSum,
+                                         0, RankMethod::Average, true)
+                    .collect(64)));
+        // A transform the native step does not cover is composed.
+        CHECK(frames[2]
+                  .lazy()
+                  .group_by(keys)
+                  .transform(GroupwiseOp::Rank, 0, RankMethod::Min, true)
+                  .explain()
+                  .find("group_transform") == std::string::npos);
+    }
+
+    TEST_CASE(
+        "window op and native transform fail with the same overflow text") {
+        using dftracer::utils::dataframe::RankMethod;
+        using dftracer::utils::dataframe::WindowColumn;
+        using dftracer::utils::dataframe::WindowFunc;
+        const std::int64_t big = std::numeric_limits<std::int64_t>::max();
+        const std::int64_t small = std::numeric_limits<std::int64_t>::min();
+        const std::uint64_t ubig = std::numeric_limits<std::uint64_t>::max();
+        const std::vector<std::int64_t> k = {1, 1}, ord = {0, 1};
+        struct Case {
+            const char* name;
+            DataFrame df;
+            WindowFunc func;
+            GroupwiseOp op;
+            const char* text;
+        };
+        auto frame = [&](TypeId t, const void* v) {
+            DataFrame df;
+            df.names = {"k", "ord", "v"};
+            df.columns.push_back(Series::flat_i64(k.data(), 2));
+            df.columns.push_back(Series::flat_i64(ord.data(), 2));
+            df.columns.push_back(Series::flat(t, v, 2));
+            return df;
+        };
+        const std::vector<std::int64_t> sum_i = {big, 1};
+        const std::vector<std::uint64_t> sum_u = {ubig, 1};
+        const std::vector<std::int64_t> diff_i = {1, small};
+        std::vector<Case> cases;
+        cases.push_back({"cumsum int64", frame(TypeId::Int64, sum_i.data()),
+                         WindowFunc::RunningSum, GroupwiseOp::CumSum,
+                         "window: RUNNING_SUM overflows int64"});
+        cases.push_back({"cumsum uint64", frame(TypeId::Uint64, sum_u.data()),
+                         WindowFunc::RunningSum, GroupwiseOp::CumSum,
+                         "window: RUNNING_SUM overflows uint64"});
+        cases.push_back({"diff int64", frame(TypeId::Int64, diff_i.data()),
+                         WindowFunc::Delta, GroupwiseOp::Diff,
+                         "window: DELTA overflows int64"});
+        for (const Case& c : cases) {
+            INFO(c.name);
+            WindowColumn w{};
+            w.func = c.func;
+            w.out = "out";
+            w.set_value("v");
+            CHECK_THROWS_WITH_AS(
+                dftracer::utils::dataframe::window(c.df, {"k"}, {"ord"}, {w}),
+                c.text, std::overflow_error);
+            const LazyFrame fast =
+                c.df.lazy()
+                    .select({"k", "v"})
+                    .group_by(std::vector<std::string>{"k"})
+                    .transform(c.op, 0, RankMethod::Average, true);
+            REQUIRE(fast.explain().find("group_transform") !=
+                    std::string::npos);
+            CHECK_THROWS_WITH_AS(run(fast.collect(64)), c.text,
+                                 std::overflow_error);
+        }
+    }
+
+    TEST_CASE(
+        "a spilled group transform groups one numeric key without strings") {
+        using dftracer::utils::dataframe::composed_group_transform;
+        using dftracer::utils::dataframe::native_transform_single_key_rows;
+        using dftracer::utils::dataframe::RankMethod;
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        const double inf = std::numeric_limits<double>::infinity();
+        const std::int64_t n = 2000;
+        std::vector<std::int64_t> k(n), v(n);
+        std::vector<double> kf(n);
+        std::vector<std::uint8_t> kv((n + 7) / 8, 0);
+        std::vector<std::string> names(n);
+        const double float_keys[] = {0.0, -0.0, nan, inf, -inf, 1.5, -1.5, 2.5};
+        for (std::int64_t i = 0; i < n; ++i) {
+            const auto z = static_cast<std::size_t>(i);
+            k[z] = (i * 7) % 37;
+            kf[z] = float_keys[(i * 5) % 8];
+            v[z] = i % 101 - 50;
+            names[z] = "g" + std::to_string(k[z]);
+            if (i % 19 != 0)
+                kv[z >> 3] |= static_cast<std::uint8_t>(1u << (z & 7));
+        }
+        DataFrame num;
+        num.names = {"k", "v"};
+        num.columns.push_back(Series::flat_i64(k.data(), n, kv.data()));
+        num.columns.push_back(Series::flat_i64(v.data(), n));
+        // Float keys: negative zero and zero are one group, every NaN is one.
+        DataFrame flt;
+        flt.names = {"k", "v"};
+        flt.columns.push_back(Series::flat_f64(kf.data(), n, kv.data()));
+        flt.columns.push_back(Series::flat_i64(v.data(), n));
+        DataFrame str;
+        str.names = {"s", "v"};
+        str.columns.push_back(Series::strings(names));
+        str.columns.push_back(Series::flat_i64(v.data(), n));
+        const std::vector<std::string> by_k = {"k"};
+        const std::vector<std::string> by_s = {"s"};
+        for (const DataFrame* keyed : {&num, &flt}) {
+            for (const GroupwiseOp op :
+                 {GroupwiseOp::CumSum, GroupwiseOp::Diff, GroupwiseOp::Shift}) {
+                INFO("float key=" << (keyed == &flt)
+                                  << " op=" << static_cast<int>(op));
+                const LazyFrame fast = keyed->lazy().group_by(by_k).transform(
+                    op, 1, RankMethod::Average, true);
+                REQUIRE(fast.explain().find("group_transform") !=
+                        std::string::npos);
+                // The default budget keeps it in memory: a counting pass over
+                // every row for the group count, then the hash pass over every
+                // row.
+                const std::uint64_t first = native_transform_single_key_rows();
+                run(fast.collect(64));
+                CHECK(native_transform_single_key_rows() - first ==
+                      static_cast<std::uint64_t>(2 * n));
+                // This budget spools the input after a few morsels, and the
+                // sorted pass then reads every row.
+                const std::uint64_t before = native_transform_single_key_rows();
+                const DataFrame got = run(fast.memory_budget(4096).collect(64));
+                CHECK(native_transform_single_key_rows() - before >=
+                      static_cast<std::uint64_t>(n));
+                expect_frames_equal(got, run(composed_group_transform(
+                                                 keyed->lazy(), by_k, op, 1,
+                                                 RankMethod::Average, true)
+                                                 .collect(64)));
+            }
+        }
+        // A string key takes the other path and does not count.
+        const std::uint64_t mid = native_transform_single_key_rows();
+        run(str.lazy()
+                .group_by(by_s)
+                .transform(GroupwiseOp::CumSum, 1, RankMethod::Average, true)
+                .memory_budget(4096)
+                .collect(64));
+        CHECK(native_transform_single_key_rows() == mid);
+    }
+
+    TEST_CASE("group transforms order NaN last and group -0.0 with 0.0") {
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        const std::vector<double> k = {0.0, -0.0, 0.0, nan, nan, 1.0, 1.0};
+        const std::vector<double> v = {1.0, nan, 5.0, 2.0, 7.0, 3.0, 4.0};
+        const std::vector<double> w = {5.0, nan, 1.0, 2.0, 7.0, 3.0, 4.0};
+        const auto n = static_cast<std::int64_t>(k.size());
+        DataFrame df;
+        df.names = {"k", "v", "w"};
+        df.columns.push_back(Series::flat_f64(k.data(), n));
+        df.columns.push_back(Series::flat_f64(v.data(), n));
+        df.columns.push_back(Series::flat_f64(w.data(), n));
+        const auto column = [](const DataFrame& f, const char* name) {
+            const auto at =
+                std::find(f.names.begin(), f.names.end(), std::string(name));
+            REQUIRE(at != f.names.end());
+            const Series s =
+                f.columns[static_cast<std::size_t>(at - f.names.begin())]
+                    .materialize();
+            return std::vector<double>(s.data<double>(),
+                                       s.data<double>() + s.length());
+        };
+        for (const std::uint64_t budget :
+             {std::uint64_t{0}, std::uint64_t{4096}}) {
+            INFO("budget=" << budget);
+            const DataFrame mx = run(
+                df.lazy()
+                    .memory_budget(budget)
+                    .group_by(std::vector<std::string>{"k"})
+                    .transform(GroupwiseOp::CumMax, 0,
+                               dftracer::utils::dataframe::RankMethod::Average,
+                               true)
+                    .collect(64));
+            const std::vector<double> vmax = column(mx, "v");
+            CHECK(vmax[0] == 1.0);
+            CHECK(std::isnan(vmax[1]));
+            CHECK(std::isnan(vmax[2]));
+            CHECK(vmax[3] == 2.0);
+            CHECK(vmax[4] == 7.0);
+            CHECK(vmax[5] == 3.0);
+            CHECK(vmax[6] == 4.0);
+            const DataFrame mn = run(
+                df.lazy()
+                    .memory_budget(budget)
+                    .group_by(std::vector<std::string>{"k"})
+                    .transform(GroupwiseOp::CumMin, 0,
+                               dftracer::utils::dataframe::RankMethod::Average,
+                               true)
+                    .collect(64));
+            const std::vector<double> wmin = column(mn, "w");
+            CHECK(wmin[0] == 5.0);
+            CHECK(std::isnan(wmin[1]));
+            CHECK(wmin[2] == 1.0);
+            CHECK(wmin[3] == 2.0);
+            CHECK(wmin[4] == 2.0);
+        }
+    }
+
     TEST_CASE(
         "group transform under a tiny budget matches the in-memory plan") {
         // Chunks of about 1 KiB cut every partition (about 130 rows) several
@@ -1237,19 +2263,7 @@ TEST_SUITE("lazyframe") {
             {GroupwiseOp::Tail, 2, RankMethod::Average},
             {GroupwiseOp::Nth, 1, RankMethod::Average},
         };
-        auto same = [](const DataFrame& a, const DataFrame& b) {
-            REQUIRE(a.names == b.names);
-            REQUIRE(a.num_rows() == b.num_rows());
-            for (std::size_t c = 0; c < a.columns.size(); ++c) {
-                std::vector<Series> x, y;
-                x.push_back(a.columns[c].materialize());
-                y.push_back(b.columns[c].materialize());
-                REQUIRE(x[0].type() == y[0].type());
-                for (std::int64_t r = 0; r < a.num_rows(); ++r)
-                    REQUIRE(dftracer::utils::dataframe::row_key(x, r) ==
-                            dftracer::utils::dataframe::row_key(y, r));
-            }
-        };
+        const auto same = expect_frames_equal;
         const std::vector<std::vector<std::string>> key_sets = {{"k"}, {}};
         for (const std::int64_t groups : {std::int64_t{47}, std::int64_t{1}}) {
             const DataFrame df = frame(groups);

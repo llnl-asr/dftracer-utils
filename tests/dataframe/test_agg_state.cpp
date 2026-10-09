@@ -384,6 +384,21 @@ TEST_CASE("AggState dyn: a Pct reduction round-trips its per-name sketch") {
     CHECK(r.column("p90_x").data<double>()[0] == doctest::Approx(q));
 }
 
+TEST_CASE("splitting groups into zero parts is an error") {
+    Sample s(64);
+    auto st = df::group_agg_state(s.keys1, s.values, mixed_specs());
+    CHECK_THROWS(df::agg_split_groups(*st, 0, 0));
+    CHECK(df::agg_split_groups(*st, 3, 0).size() == 3);
+}
+
+TEST_CASE("a blob read in the other format is an error, not misread bytes") {
+    Sample s(64);
+    auto st = df::group_agg_state(s.keys1, s.values, mixed_specs());
+    df::agg_sort_groups(*st);
+    CHECK_THROWS(df::agg_deserialize(df::agg_serialize(*st, true), false));
+    CHECK_THROWS(df::agg_deserialize(df::agg_serialize(*st), true));
+}
+
 TEST_CASE(
     "compact serialization round-trips like the full one, in fewer bytes") {
     Sample s(4096);

@@ -300,6 +300,9 @@ void append_cell(simdjson::builder::string_builder& b,
 
 }  // namespace
 
+// The text of every untimed match kept and cached for paging; past it a
+// request keeps and caches only its page.
+constexpr std::size_t UNTIMED_TEXT_BYTES = VIZ_RESULT_CACHE_BYTES / 16;
 // Records written without a clock (ts 0, such as CUDA activity, or a path
 // schema's records without a time): events and aggregated records the
 // timeline cannot place. `count` covers every match; `events` is the page at
@@ -321,58 +324,110 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
         text = "(" + text + ") and (" + std::string(user) + ")";
     }
 
-    // Every match of a query, sorted once and cached as "<count>\n" plus one
-    // row object per line, so paging slices lines instead of rescanning. A
+    // Every match, sorted once, is cached as "<count>\n" plus one row object
+    // per line while that text fits UNTIMED_TEXT_BYTES, and a page slices
+    // lines. Past it only the requested page is kept and cached under its own
+    // offset and limit, so memory follows the page, not the match count. A
     // path schema's rows name its label, entity and duration fields as the
     // trace fields they play.
-    const std::string cache_key = std::string("untimed\n") +
-                                  std::string(params.get("file")) + "\n" + text;
-    std::string all;
-    if (auto hit = index.viz_cache().get(cache_key)) {
-        all = std::move(*hit);
-    } else {
-        std::vector<std::string> columns;
-        std::vector<std::string> names;
-        auto add = [&](const std::string& field, const char* name) {
-            if (field.empty()) return;
-            columns.push_back(field);
-            names.emplace_back(name);
-        };
-        add(fields.label, "name");
-        if (!fields.by_path) add("cat", "cat");
-        add(fields.entity, "pid");
-        add(fields.lane, "tid");
-        add(fields.duration, "dur");
-        if (!fields.by_path) add("ph", "ph");
-        std::vector<std::string> order;
-        std::vector<bool> descending;
-        for (const char* key : {"dur", "pid", "tid", "name"})
-            for (std::size_t c = 0; c < names.size(); ++c)
-                if (names[c] == key) {
-                    order.push_back(columns[c]);
-                    descending.push_back(names[c] == "dur");
-                }
-        const auto rows = co_await dataframe::join_chunks(
-            co_await views::View::from_files(
-                to_view_files(collect_candidate_files(index, params)))
-                .filter(duql::parse_or_throw(text))
-                .cancel_when([&req]() { return req.cancel_token.cancelled(); })
-                .select(columns)
-                .sort_by_multi(order, descending)
-                .collect());
+    const auto respond = [&](const std::string& page, std::uint64_t count) {
+        auto& b = scratch_json_builder();
+        b.start_object();
+        b.escape_and_append_with_quotes("events");
+        b.append_colon();
+        b.append_raw("[" + page + "]");
+        b.append_comma();
+        b.append_key_value("count", count);
+        b.append_comma();
+        b.append_key_value("offset", offset);
+        b.append_comma();
+        b.append_key_value("limit", limit);
+        b.end_object();
+        return std::string(b);
+    };
+    const std::string all_key = std::string("untimed\n") +
+                                std::string(params.get("file")) + "\n" + text;
+    const std::string page_key =
+        all_key + "\n" + std::to_string(offset) + "\n" + std::to_string(limit);
+    if (auto hit = index.viz_cache().get(all_key)) {
+        const std::string_view text_rows(*hit);
+        const std::size_t head = text_rows.find('\n');
+        const std::uint64_t count = std::strtoull(hit->c_str(), nullptr, 10);
+        // Rows [offset, offset + limit): skip `offset` lines, keep `limit`.
+        std::size_t pos =
+            head == std::string_view::npos ? text_rows.size() : head;
+        for (int i = 0; i < offset && pos < text_rows.size(); ++i) {
+            const std::size_t nl = text_rows.find('\n', pos + 1);
+            pos = nl == std::string_view::npos ? text_rows.size() : nl;
+        }
+        std::size_t end = pos;
+        for (int i = 0; i < limit && end < text_rows.size(); ++i) {
+            const std::size_t nl = text_rows.find('\n', end + 1);
+            end = nl == std::string_view::npos ? text_rows.size() : nl;
+        }
+        std::string page;
+        if (end > pos) {
+            page.assign(text_rows.substr(pos + 1, end - pos - 1));
+            std::replace(page.begin(), page.end(), '\n', ',');
+        }
+        co_return HttpResponse::ok(respond(page, count));
+    }
+    if (auto hit = index.viz_cache().get(page_key))
+        co_return HttpResponse::ok(std::move(*hit));
+
+    std::vector<std::string> columns;
+    std::vector<std::string> names;
+    auto add = [&](const std::string& field, const char* name) {
+        if (field.empty()) return;
+        columns.push_back(field);
+        names.emplace_back(name);
+    };
+    add(fields.label, "name");
+    if (!fields.by_path) add("cat", "cat");
+    add(fields.entity, "pid");
+    add(fields.lane, "tid");
+    add(fields.duration, "dur");
+    if (!fields.by_path) add("ph", "ph");
+    std::vector<std::string> order;
+    std::vector<bool> descending;
+    for (const char* key : {"dur", "pid", "tid", "name"})
+        for (std::size_t c = 0; c < names.size(); ++c)
+            if (names[c] == key) {
+                order.push_back(columns[c]);
+                descending.push_back(names[c] == "dur");
+            }
+    dataframe::LazyFrame sorted =
+        views::View::from_files(
+            to_view_files(collect_candidate_files(index, params)))
+            .filter(duql::parse_or_throw(text))
+            .cancel_when([&req]() { return req.cancel_token.cancelled(); })
+            .select(columns)
+            .sort_by_multi(order, descending);
+    std::string all_rows;
+    bool whole = true;  // all_rows still holds every row so far
+    std::string page;
+    std::uint64_t count = 0;
+    const std::uint64_t first = static_cast<std::uint64_t>(offset);
+    const std::uint64_t last = first + static_cast<std::uint64_t>(limit);
+    auto morsels = sorted.stream();
+    while (auto part = co_await morsels.next()) {
+        const dataframe::DataFrame rows =
+            co_await dataframe::join_chunks(std::move(*part));
+        // The builder is per thread: no co_await until its text is out.
         auto& rb = scratch_json_builder();
-        rb.append_raw(std::to_string(rows.num_rows()));
-        for (std::int64_t r = 0; r < rows.num_rows(); ++r) {
-            rb.append_raw("\n");
+        for (std::int64_t r = 0; r < rows.num_rows(); ++r, ++count) {
+            const bool in_page = count >= first && count < last;
+            if (!whole && !in_page) continue;
+            const std::size_t at = std::string_view(rb).size();
             rb.start_object();
             for (std::size_t c = 0; c < rows.names.size(); ++c) {
                 if (c > 0) rb.append_comma();
-                const auto at =
+                const auto it =
                     std::find(columns.begin(), columns.end(), rows.names[c]);
                 const std::string& name =
-                    at == columns.end()
+                    it == columns.end()
                         ? rows.names[c]
-                        : names[static_cast<std::size_t>(at - columns.begin())];
+                        : names[static_cast<std::size_t>(it - columns.begin())];
                 rb.escape_and_append_with_quotes(name);
                 rb.append_colon();
                 append_cell(rb, rows.columns[c], r, index, name == "dur",
@@ -383,45 +438,30 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
                 rb.append_raw(R"(,"cat":null,"ph":1)");
             }
             rb.end_object();
+            const std::string_view row = std::string_view(rb).substr(at);
+            if (whole) {
+                all_rows += '\n';
+                all_rows += row;
+                if (all_rows.size() > UNTIMED_TEXT_BYTES) {
+                    whole = false;
+                    std::string().swap(all_rows);
+                }
+            }
+            if (in_page) {
+                if (!page.empty()) page += ',';
+                page += row;
+            }
         }
-        all = std::string(rb);
-        if (!req.cancel_token.cancelled())
-            index.viz_cache().put(cache_key, all);
     }
-
-    const std::string_view text_rows(all);
-    const std::size_t head = text_rows.find('\n');
-    const std::uint64_t count = std::strtoull(all.c_str(), nullptr, 10);
-    // Rows [offset, offset + limit): skip `offset` lines, keep `limit`.
-    std::size_t pos = head == std::string_view::npos ? text_rows.size() : head;
-    for (int i = 0; i < offset && pos < text_rows.size(); ++i) {
-        const std::size_t nl = text_rows.find('\n', pos + 1);
-        pos = nl == std::string_view::npos ? text_rows.size() : nl;
+    std::string body = respond(page, count);
+    if (!req.cancel_token.cancelled()) {
+        if (whole)
+            index.viz_cache().put(all_key,
+                                  std::to_string(count) + std::move(all_rows));
+        else
+            index.viz_cache().put(page_key, body);
     }
-    std::size_t end = pos;
-    for (int i = 0; i < limit && end < text_rows.size(); ++i) {
-        const std::size_t nl = text_rows.find('\n', end + 1);
-        end = nl == std::string_view::npos ? text_rows.size() : nl;
-    }
-    std::string page;
-    if (end > pos) {
-        page.assign(text_rows.substr(pos + 1, end - pos - 1));
-        std::replace(page.begin(), page.end(), '\n', ',');
-    }
-
-    auto& b = scratch_json_builder();
-    b.start_object();
-    b.escape_and_append_with_quotes("events");
-    b.append_colon();
-    b.append_raw("[" + page + "]");
-    b.append_comma();
-    b.append_key_value("count", count);
-    b.append_comma();
-    b.append_key_value("offset", offset);
-    b.append_comma();
-    b.append_key_value("limit", limit);
-    b.end_object();
-    co_return HttpResponse::ok(std::string(b));
+    co_return HttpResponse::ok(std::move(body));
 }
 
 }  // namespace dftracer::utils::server

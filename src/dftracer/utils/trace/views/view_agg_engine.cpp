@@ -2,6 +2,7 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/string_intern.h>
 #include <dftracer/utils/core/common/to_chars.h>
+#include <dftracer/utils/core/coro/async_generator.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/expr.h>
@@ -436,13 +437,18 @@ dataframe::DataFrame finalize_engine_frame(
             ++n_plan_value;
     }
     if (plan.agg.empty()) n_plan_value = 1;
+    const std::size_t fixed = off + ng + n_plan_value + n_plan_text;
+    if (r.columns.size() < fixed || r.names.size() != r.columns.size())
+        throw DFTUtilsException::cat(
+            ErrorCode::INTERNAL, "agg engine: the grouped result has ",
+            r.columns.size(), " columns and ", r.names.size(),
+            " names, the plan needs at least ", fixed);
 
     // agg_finalize appends dyn last; the canonical layout slots it between the
     // value and text columns. Rotate the [value..end) tail so [text, dyn]
     // becomes [dyn,
     // text], then build the post-finalize dyn fixes from the reductions.
-    const std::size_t dyn_count =
-        r.columns.size() - (off + ng) - (n_plan_value + n_plan_text);
+    const std::size_t dyn_count = r.columns.size() - fixed;
     const std::size_t dyn_at = off + ng + n_plan_value;
     if (dyn_count && n_plan_text) {
         const auto first = static_cast<std::ptrdiff_t>(dyn_at);
@@ -913,6 +919,88 @@ static void append_transform_columns(
     }
 }
 
+namespace {
+
+// Rows of `inner` with the group-key transform columns appended to each morsel
+// as it streams. Row-local, so the result equals transforming the whole frame.
+class TransformSource final : public dataframe::Source {
+   public:
+    TransformSource(
+        dataframe::LazyFrame inner, std::vector<AggInputSpec::Transform> tfs,
+        std::shared_ptr<const dftracer::utils::index::plan::GroupResolver>
+            resolver)
+        : inner_(std::move(inner)),
+          tfs_(std::move(tfs)),
+          resolver_(std::move(resolver)) {
+        schema_ = inner_.output_schema();
+        for (const AggInputSpec::Transform& t : tfs_)
+            schema_.fields.push_back(dataframe::Field{
+                t.out_col, dataframe::scalar(dataframe::TypeId::String), true});
+    }
+
+    dataframe::Schema schema() const override { return schema_; }
+    bool undeclared_columns() const override { return true; }
+
+    dataframe::ScanResult scan(
+        const dataframe::ScanRequest& req) const override {
+        dataframe::ScanResult r;
+        r.cursor = std::make_unique<Rows>(*this, req.projection);
+        r.filters.assign(req.filters.size(), dataframe::Pushed::No);
+        return r;
+    }
+
+   private:
+    class Rows final : public dataframe::Cursor {
+       public:
+        Rows(const TransformSource& src, std::vector<std::string> projection)
+            : batches_(src.inner_.stream()),
+              tfs_(src.tfs_),
+              resolver_(src.resolver_),
+              projection_(std::move(projection)) {}
+
+        coro::CoroTask<std::optional<dataframe::Morsel>> next(
+            std::int64_t max_rows) override {
+            for (;;) {
+                if (rows_)
+                    if (auto m = co_await rows_->next(max_rows)) {
+                        m->dyn_state().name_ids = ids_;
+                        m->dyn->intern = intern_;
+                        co_return m;
+                    }
+                auto batch = co_await batches_.next();
+                if (!batch) co_return std::nullopt;
+                dataframe::DataFrame f = std::move(*batch);
+                append_transform_columns(f, tfs_, resolver_.get());
+                if (!projection_.empty()) f = f.select(projection_);
+                ids_.clear();
+                for (const std::string& n : f.names)
+                    ids_.push_back(intern_->get_or_insert(n));
+                rows_ = dataframe::InMemorySource(std::move(f)).scan({}).cursor;
+            }
+        }
+
+       private:
+        std::shared_ptr<dftracer::utils::StringIntern> intern_ =
+            std::make_shared<dftracer::utils::StringIntern>();
+        std::vector<std::uint32_t> ids_;
+        coro::AsyncGenerator<dataframe::DataFrame> batches_;
+        std::vector<AggInputSpec::Transform> tfs_;
+        std::shared_ptr<const dftracer::utils::index::plan::GroupResolver>
+            resolver_;
+        std::vector<std::string> projection_;
+        std::unique_ptr<dataframe::Cursor> rows_;
+    };
+
+    dataframe::LazyFrame inner_;
+    std::vector<AggInputSpec::Transform> tfs_;
+    // Shared, so the plan can run after the ViewPlan that built it is gone.
+    std::shared_ptr<const dftracer::utils::index::plan::GroupResolver>
+        resolver_;
+    dataframe::Schema schema_;
+};
+
+}  // namespace
+
 dataframe::DataFrame build_agg_input_frame(
     const std::vector<FoldEvent>& events,
     const dftracer::utils::StringIntern& intern, const AggInputSpec& spec,
@@ -1056,19 +1144,14 @@ coro::CoroTask<EnginePrep> prepare_engine_group(const ViewPlan& plan) {
             .memory_budget(plan.memory_budget);
 
     // Group-key transforms: the engine has no dirname/basename/bucket string
-    // expr, so materialize the raw scan and build each transformed key column
-    // in C++ (build_agg_input_frame's transform step over the whole frame),
-    // then group over the in-memory frame.
+    // expr, so each streamed morsel gets its transformed key columns in C++.
     if (!spec.transforms.empty()) {
-        // GCC 12 destroys a temporary built inside co_await twice.
-        dataframe::DataFrame collected = co_await lf.collect();
-        dataframe::DataFrame frame =
-            co_await dataframe::join_chunks(std::move(collected));
-        const dftracer::utils::index::plan::GroupResolver* resolver =
-            spec.transform_wants_resolver ? ensure_resolver(plan) : nullptr;
-        append_transform_columns(frame, spec.transforms, resolver);
-        lf =
-            dataframe::lazy(std::move(frame)).memory_budget(plan.memory_budget);
+        if (spec.transform_wants_resolver) ensure_resolver(plan);
+        lf = dataframe::LazyFrame::scan(
+                 std::make_shared<TransformSource>(
+                     std::move(lf), spec.transforms,
+                     spec.transform_wants_resolver ? plan.resolver : nullptr))
+                 .memory_budget(plan.memory_budget);
     }
 
     for (const AggInputSpec::Computed& c : spec.computed)

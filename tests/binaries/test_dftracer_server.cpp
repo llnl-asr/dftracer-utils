@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <zlib.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
@@ -17,6 +18,7 @@
 #include <cstring>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 // ============================================================================
@@ -1058,6 +1060,93 @@ TEST_CASE(
     CHECK(page.find("\"dur\":9") == std::string::npos);
     CHECK(get("/api/viz/untimed?duql=cat%20%3D%3D%20%22POSIX%22")
               .find("\"count\":0") != std::string::npos);
+}
+
+// A page of many untimed records is cut from the sorted stream: count stays
+// exact, each page holds its own rows in dur order, and a repeat is identical.
+TEST_CASE("DFTracer Server - untimed pages of many records") {
+    auto binary = find_server_binary();
+    if (binary.empty()) {
+        MESSAGE("dftracer_server binary not found, skipping.");
+        return;
+    }
+    if (!can_bind_local_tcp_socket()) {
+        MESSAGE("local TCP bind is unavailable in this environment, skipping.");
+        return;
+    }
+
+    // 300 records stay in the cached text of every match; 400000 (about
+    // 24 MB of rows) pass its limit, so each page is streamed and cached alone.
+    for (const int UNTIMED : {300, 400000}) {
+        CAPTURE(UNTIMED);
+        dftu_utils_test::TestEnvironment env(1);
+        REQUIRE(env.is_valid());
+        std::string path = env.get_dir() + "/many_untimed.pfw.gz";
+        gzFile f = gzopen(path.c_str(), "wb");
+        REQUIRE(f != nullptr);
+        gzputs(f, "[\n");
+        gzputs(f,
+               "{\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":1,"
+               "\"ts\":5000,\"dur\":10,\"ph\":\"X\",\"args\":{}}\n");
+        for (int i = 1; i <= UNTIMED; ++i) {
+            std::string ev =
+                "{\"name\":\"k\",\"cat\":\"CUDA\",\"pid\":1,\"tid\":2,"
+                "\"ts\":0,\"dur\":" +
+                std::to_string(i) + ",\"ph\":\"X\",\"args\":{}}\n";
+            gzputs(f, ev.c_str());
+        }
+        gzputs(f, "]\n");
+        gzclose(f);
+
+        int port = pick_port();
+        ServerProcess server;
+        REQUIRE(server.start(binary, env.get_dir(), port));
+        REQUIRE(wait_for_http(port));
+
+        auto get = [&](const std::string& target) {
+            auto resp =
+                http_request(port, "GET " + target +
+                                       " HTTP/1.1\r\nHost: localhost\r\n"
+                                       "Connection: close\r\n\r\n");
+            REQUIRE(!resp.empty());
+            CHECK(extract_status_code(resp) == 200);
+            return extract_body(resp);
+        };
+        const std::string count = "\"count\":" + std::to_string(UNTIMED);
+        auto dur = [](int d) { return "\"dur\":" + std::to_string(d) + ","; };
+
+        // Longest first: row i of the sorted order has dur UNTIMED - i.
+        for (auto [offset, limit] : {std::pair<int, int>{0, 3},
+                                     {5, 3},
+                                     {UNTIMED - 2, 10},
+                                     {UNTIMED + 5, 10},
+                                     {0, 0}}) {
+            const auto url =
+                "/api/viz/untimed?offset=" + std::to_string(offset) +
+                "&limit=" + std::to_string(limit);
+            const auto page = get(url);
+            CHECK(page.find(count) != std::string::npos);
+            CHECK(page.find("\"offset\":" + std::to_string(offset)) !=
+                  std::string::npos);
+            std::size_t at = 0;
+            int rows = 0;
+            for (int i = offset; i < std::min(offset + limit, UNTIMED); ++i) {
+                const auto hit = page.find(dur(UNTIMED - i), at);
+                REQUIRE(hit != std::string::npos);
+                at = hit;
+                ++rows;
+            }
+            std::size_t objects = 0;
+            for (std::size_t p = page.find("\"name\""); p != std::string::npos;
+                 p = page.find("\"name\"", p + 1))
+                ++objects;
+            CHECK(objects == static_cast<std::size_t>(rows));
+            CHECK(page.find(",,") == std::string::npos);
+            CHECK(page.find("[,") == std::string::npos);
+            CHECK(page.find(",]") == std::string::npos);
+            CHECK(get(url) == page);
+        }
+    }
 }
 
 // The viz summary is cached to disk so a restart skips the full rescan, and the

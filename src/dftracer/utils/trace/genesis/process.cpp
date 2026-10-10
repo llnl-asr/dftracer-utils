@@ -3,18 +3,22 @@
 #include <dftracer/utils/core/common/external_sort.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/memory_pool.h>
+#include <dftracer/utils/core/common/scoped_fd.h>
 #include <dftracer/utils/core/common/spill_file.h>
 #include <dftracer/utils/core/common/str_format.h>
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/async_semaphore.h>
 #include <dftracer/utils/core/coro/when_all.h>
 #include <dftracer/utils/core/coro/yield.h>
+#include <dftracer/utils/core/io/io.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
+#include <fcntl.h>
 #include <simdjson.h>
+#include <sys/stat.h>
 
 #include <algorithm>
 #include <cmath>
@@ -139,8 +143,8 @@ struct PathRec {
     std::vector<std::unique_ptr<CounterAcc>> counters;
 };
 
-// Calls per chunk, and the bytes one open reader holds besides its chunk
-// (parser, inflate buffers, line buffers).
+// Calls per chunk, and the bytes one open reader holds besides its chunk and
+// its decoded gzip member (parser, input buffer, line buffers).
 constexpr std::size_t CHUNK_CALLS = 16384;
 constexpr std::uint64_t READER_BYTES = 8ULL * 1024 * 1024;
 constexpr std::uint64_t CHARGE_STEP = 64ULL * 1024;
@@ -247,6 +251,56 @@ std::optional<double> get_number(simdjson::dom::element e) {
     if (e.is_number() && e.get(d) == simdjson::SUCCESS) return d;
     return std::nullopt;
 }
+
+// The fields handle_line reads, each from the first key of its name.
+struct Fields {
+    std::optional<simdjson::dom::element> ph, pid, ts, tid, dur, arg_tid;
+    std::string_view cat, name, hhash;
+    simdjson::dom::object args;
+    bool has_args = false;
+    bool correlation_id = false;
+    std::uint16_t seen = 0;
+
+    // Whether `bit` is new, marking it seen.
+    bool first(std::uint16_t bit) {
+        if (seen & bit) return false;
+        seen = static_cast<std::uint16_t>(seen | bit);
+        return true;
+    }
+    static std::string_view str(simdjson::dom::element v) {
+        std::string_view s;
+        return v.get(s) == simdjson::SUCCESS ? s : std::string_view{};
+    }
+
+    void top(std::string_view k, simdjson::dom::element v) {
+        if (k == "ph") {
+            if (first(1)) ph = v;
+        } else if (k == "ts") {
+            if (first(2)) ts = v;
+        } else if (k == "cat") {
+            if (first(4)) cat = str(v);
+        } else if (k == "pid") {
+            if (first(8)) pid = v;
+        } else if (k == "tid") {
+            if (first(16)) tid = v;
+        } else if (k == "dur") {
+            if (first(32)) dur = v;
+        } else if (k == "name") {
+            if (first(64)) name = str(v);
+        } else if (k == "args") {
+            if (first(128)) has_args = v.get(args) == simdjson::SUCCESS;
+        }
+    }
+    void arg(std::string_view k, simdjson::dom::element v) {
+        if (k == "hhash") {
+            if (first(256)) hhash = str(v);
+        } else if (k == "tid") {
+            if (first(512)) arg_tid = v;
+        } else if (k == "correlation_id") {
+            correlation_id = true;
+        }
+    }
+};
 
 std::string_view get_sv(simdjson::dom::object o, std::string_view key) {
     std::string_view v;
@@ -611,19 +665,22 @@ class GroupReader {
         simdjson::dom::object o;
         if (parser_.parse(line.data(), line.size()).get(o) != simdjson::SUCCESS)
             return fail(file, "invalid JSON line");
-        simdjson::dom::element ph_el;
-        if (o["ph"].get(ph_el) != simdjson::SUCCESS) return {};
-        const RecordPhase ph = read_phase(ph_el);
-        const std::string_view cat = get_sv(o, "cat");
-        const std::string_view name = get_sv(o, "name");
-        simdjson::dom::object args;
-        const bool has_args = o["args"].get(args) == simdjson::SUCCESS;
-        const std::string_view hhash = has_args ? get_sv(args, "hhash") : "";
-        simdjson::dom::element e;
-        const std::int64_t pid =
-            o["pid"].get(e) == simdjson::SUCCESS ? get_i64(e) : 0;
-        const std::int64_t ts =
-            o["ts"].get(e) == simdjson::SUCCESS ? get_i64(e) : 0;
+        // One pass over the keys of the record and one over its args, instead
+        // of a lookup per key that scans the fields from the start each time.
+        // The first of a repeated key wins, as with a lookup.
+        Fields f;
+        for (auto [k, v] : o) f.top(k, v);
+        if (!f.ph) return {};
+        const RecordPhase ph = read_phase(*f.ph);
+        const std::string_view cat = f.cat;
+        const std::string_view name = f.name;
+        const bool has_args = f.has_args;
+        simdjson::dom::object args = f.args;
+        if (has_args)
+            for (auto [k, v] : args) f.arg(k, v);
+        const std::string_view hhash = f.hhash;
+        const std::int64_t pid = f.pid ? get_i64(*f.pid) : 0;
+        const std::int64_t ts = f.ts ? get_i64(*f.ts) : 0;
 
         switch (ph) {
             case RecordPhase::COMPLETE: {
@@ -633,16 +690,11 @@ class GroupReader {
                     if (name == "end") procs_[p].end = ts;
                     return {};
                 }
-                const std::int64_t tid =
-                    o["tid"].get(e) == simdjson::SUCCESS ? get_i64(e) : 0;
-                std::int64_t host_tid = -1;
-                if (has_args && args["tid"].get(e) == simdjson::SUCCESS)
-                    host_tid = get_i64(e);
-                const bool gpu = host_tid >= 0 ||
-                                 (has_args && args["correlation_id"].error() ==
-                                                  simdjson::SUCCESS);
-                const std::int64_t dur =
-                    o["dur"].get(e) == simdjson::SUCCESS ? get_i64(e) : 0;
+                const std::int64_t tid = f.tid ? get_i64(*f.tid) : 0;
+                const std::int64_t host_tid =
+                    f.arg_tid ? get_i64(*f.arg_tid) : -1;
+                const bool gpu = host_tid >= 0 || f.correlation_id;
+                const std::int64_t dur = f.dur ? get_i64(*f.dur) : 0;
                 procs_[p].active = true;
                 if (gpu) gpu_threads_.emplace(p, tid);
                 if (cur_.capacity() == 0) cur_.reserve(CHUNK_CALLS);
@@ -1039,16 +1091,43 @@ struct FilePart {
 // Holds one of a group's reader slots until it goes out of scope.
 struct SlotGuard {
     coro::CoroSemaphore& slots;
-    explicit SlotGuard(coro::CoroSemaphore& s) : slots(s) {}
-    ~SlotGuard() { slots.release(1); }
+    std::uint64_t n;
+    SlotGuard(coro::CoroSemaphore& s, std::uint64_t taken)
+        : slots(s), n(taken) {}
+    ~SlotGuard() { slots.release(n); }
     SlotGuard(const SlotGuard&) = delete;
     SlotGuard& operator=(const SlotGuard&) = delete;
 };
 
+// The READER_BYTES slots a reader of `file` takes: one for its buffers and as
+// many as its decoded gzip member needs, the size the decoder takes from the
+// file's last trailer. A file that cannot be read takes one slot and fails in
+// its read.
+coro::CoroTask<std::uint64_t> reader_slots(const std::string& file) {
+    const ssize_t fd = co_await io::open(file.c_str(), O_RDONLY);
+    if (fd < 0) co_return 1;
+    ScopedFd guard(static_cast<int>(fd));
+    struct stat st{};
+    if (::fstat(guard.get(), &st) != 0 || st.st_size < 18) co_return 1;
+    unsigned char trailer[4];
+    if (co_await io::pread(guard.get(), trailer, sizeof trailer,
+                           st.st_size - static_cast<off_t>(sizeof trailer)) !=
+        static_cast<ssize_t>(sizeof trailer))
+        co_return 1;
+    const std::uint64_t isize = static_cast<std::uint64_t>(trailer[0]) |
+                                static_cast<std::uint64_t>(trailer[1]) << 8 |
+                                static_cast<std::uint64_t>(trailer[2]) << 16 |
+                                static_cast<std::uint64_t>(trailer[3]) << 24;
+    co_return 1 + (isize + isize / 16 + READER_BYTES - 1) / READER_BYTES;
+}
+
 coro::CoroTask<FilePart> read_file(std::string file, GroupMem* mem,
-                                   coro::CoroSemaphore* slots) {
-    co_await slots->acquire(1);
-    SlotGuard guard(*slots);
+                                   coro::CoroSemaphore* slots,
+                                   std::uint64_t total_slots) {
+    const std::uint64_t want =
+        std::min(co_await reader_slots(file), total_slots);
+    co_await slots->acquire(want);
+    SlotGuard guard(*slots, want);
     FilePart part;
     part.reader = std::make_unique<GroupReader>(*mem);
     auto st = co_await part.reader->read(std::move(file));
@@ -1159,14 +1238,15 @@ coro::CoroTask<GroupResult> process_group(CoroScope& ctx, RunGroup g,
     };
 
     GroupMem mem(memory_share);
-    coro::CoroSemaphore slots(
-        std::max<std::uint64_t>(1, (memory_share / 4) / READER_BYTES));
+    const std::uint64_t total_slots =
+        std::max<std::uint64_t>(1, (memory_share / 4) / READER_BYTES);
+    coro::CoroSemaphore slots(total_slots);
     std::vector<coro::SpawnFuture<FilePart>> reads;
     reads.reserve(g.files.size());
     for (const auto& f : g.files)
-        reads.push_back(
-            ctx.spawn([f, mem_ptr = &mem, slots_ptr = &slots](CoroScope&) {
-                return read_file(f, mem_ptr, slots_ptr);
+        reads.push_back(ctx.spawn(
+            [f, mem_ptr = &mem, slots_ptr = &slots, total_slots](CoroScope&) {
+                return read_file(f, mem_ptr, slots_ptr, total_slots);
             }));
     std::vector<FilePart> parts = co_await coro::when_all(std::move(reads));
 

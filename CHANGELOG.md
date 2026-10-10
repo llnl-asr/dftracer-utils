@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.0.14] - 2026-10-10
+
 ### Changed
 
 - Make the 2048-bin DDSketch of `dftracer_genesis_gen_dist` and the duql percentile folds grow its store with the key range it sees instead of holding all 2048 bins (8 KB) from the start: on 60 runs of 2000 call paths with 8 counters the tool peaks at 0.72 GB instead of 1.7 GB, runs that needed a 4 GB budget fit in 2 GB, and creating a sketch is 4.7 times faster. The sketch serializes to the same bytes. The genesis state pool now counts each growth of a store, and the 128-bin sketch of the aggregation engine keeps its inline array.
@@ -1435,7 +1437,8 @@ Initial release.
 - Add gzip block-boundary-aware reading with prefix-based hashes and checkpointing.
 - Add Python packaging and Sphinx documentation with a C++ API reference.
 
-[Unreleased]: https://github.com/llnl-asr/dftracer-utils/compare/v0.0.13...HEAD
+[Unreleased]: https://github.com/llnl-asr/dftracer-utils/compare/v0.0.14...HEAD
+[0.0.14]: https://github.com/llnl-asr/dftracer-utils/compare/v0.0.13...v0.0.14
 [0.0.13]: https://github.com/llnl-asr/dftracer-utils/compare/v0.0.12...v0.0.13
 [0.0.12]: https://github.com/llnl-asr/dftracer-utils/compare/v0.0.11...v0.0.12
 [0.0.11]: https://github.com/llnl-asr/dftracer-utils/compare/v0.0.10...v0.0.11

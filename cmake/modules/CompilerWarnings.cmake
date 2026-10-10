@@ -119,14 +119,18 @@ function(target_set_warnings TARGET_NAME)
         target_compile_options(${TARGET_NAME} PRIVATE -Wno-restrict)
       endif()
 
-      # GCC 12+ has false-positive -Wnull-dereference, -Warray-bounds,
-      # -Wstringop-overflow, and -Wstringop-overread in libstdc++ (streambuf,
-      # exception_ptr, char_traits, vector copy/move). Disable for affected
-      # versions.
+      # GCC reports -Wnull-dereference from inlined libstdc++ code with no
+      # pointer of ours involved: GCC 11 in the destructors and moves of
+      # duql::compile_program, even for an empty Program, and GCC 12+ in
+      # streambuf, exception_ptr, char_traits and vector copy/move. Clang keeps
+      # the check.
+      target_compile_options(${TARGET_NAME} PRIVATE -Wno-null-dereference)
+      # GCC 12+ also has false-positive -Warray-bounds, -Wstringop-overflow and
+      # -Wstringop-overread in the same libstdc++ code.
       if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "12")
         target_compile_options(
-          ${TARGET_NAME} PRIVATE -Wno-null-dereference -Wno-array-bounds
-                                 -Wno-stringop-overflow -Wno-stringop-overread)
+          ${TARGET_NAME} PRIVATE -Wno-array-bounds -Wno-stringop-overflow
+                                 -Wno-stringop-overread)
       endif()
     endif()
 

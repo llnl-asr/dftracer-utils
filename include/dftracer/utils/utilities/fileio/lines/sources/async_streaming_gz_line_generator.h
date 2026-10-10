@@ -59,14 +59,17 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
                 if (nl) {
                     const std::size_t nl_pos = static_cast<std::size_t>(
                         static_cast<const char*>(nl) - data);
-                    if (nl_pos > pos) {
-                        line_buffer.append(data + pos, nl_pos - pos);
+                    // A line inside the member is yielded in place; only one
+                    // cut by a member boundary is put together in line_buffer.
+                    std::string_view line(data + pos, nl_pos - pos);
+                    if (!line_buffer.empty()) {
+                        line_buffer.append(line);
+                        line = line_buffer;
                     }
                     current_line++;
                     if ((start_line == 0 || current_line >= start_line) &&
                         (end_line == 0 || current_line <= end_line)) {
-                        co_yield Line(std::string_view(line_buffer),
-                                      current_line);
+                        co_yield Line(line, current_line);
                     }
                     if (end_line > 0 && current_line >= end_line) {
                         fd.reset();

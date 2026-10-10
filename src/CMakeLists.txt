@@ -1388,6 +1388,11 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
   if(DFTRACER_UTILS_ENABLE_MPI AND TARGET dftracer_view)
     target_link_libraries(dftracer_view PRIVATE MPI::MPI_CXX)
   endif()
+  # dftracer_genesis_gen_dist splits its run groups between MPI ranks and
+  # joins their parts under DFTRACER_UTILS_ENABLE_MPI.
+  if(DFTRACER_UTILS_ENABLE_MPI AND TARGET dftracer_genesis_gen_dist)
+    target_link_libraries(dftracer_genesis_gen_dist PRIVATE MPI::MPI_CXX)
+  endif()
 
   # ----------------------------------------------------------------------------
   # Embed the single-file web UI into dftracer_server.

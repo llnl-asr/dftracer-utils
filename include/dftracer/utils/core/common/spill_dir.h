@@ -12,9 +12,11 @@ namespace dftracer::utils {
 /// The directory every spill file goes to: DFTRACER_UTILS_SPILL_DIR when set;
 /// else the node-local disk mount with the most free space that the user can
 /// write (local_spill_root(), never RAM-backed or network); else the system
-/// temp directory. Created if missing. A set variable that cannot be used is an
-/// IO error naming the directory and the variable, with no fallback to another
-/// directory.
+/// temp directory, then ~/.cache/dftracer-utils/spill, whichever is first
+/// writable and not RAM-backed (a network file system qualifies). Created if
+/// missing. A set variable that cannot be used is an IO error naming the
+/// directory and the variable, with no fallback to another directory; when no
+/// directory off RAM exists, an IO error names the variable.
 Result<std::string> spill_dir();
 
 /// A directory under spill_dir() that one owner fills with its spill files,

@@ -928,8 +928,9 @@ dftracer_genesis_gen_dist
 
 - ``<roots...>`` - Genesis trace roots to walk for ``nodes_<N>/ppn_<M>`` runs
 - ``-o, --output <file>`` - Output ``.pfw.gz`` file (required)
-- ``--member-size <bytes>`` - Gzip member size (default: 33554432 B / 32 MB, the index checkpoint size). Accepts units such as ``512KB`` or ``32MB``
-- ``--memory-budget <bytes>`` - Most memory the tool holds (default ``0``: a third of the memory available to the process, which respects a cgroup limit). Accepts units such as ``64GB``; must be at least 64 MB when set. Calls beyond the budget are written to ``DFTRACER_UTILS_SPILL_DIR``; when it is unset, to the writable node-local disk mount with the most free space (never RAM-backed or network), else a per-user directory under ``/var/tmp`` or ``~/.cache`` on a local disk, else the system temp directory (with a warning when that is RAM-backed)
+- ``--member-size <bytes>`` - Gzip member size (default: 33554432 B / 32 MB, the index checkpoint size). Accepts units such as ``512KB`` or ``32MB``. Lowered, to no less than 1 MiB, until each worker's member fits a quarter of its part of the writer's eighth of the budget
+- ``--shard <i/N>`` - Process only part ``i`` of ``N`` of the run groups (``0 <= i < N``), split so the parts hold about the same trace bytes; discovery skips are reported by part 0 only, and the parts concatenate into one file. An MPI build splits between its ranks by default and refuses ``--shard`` with more than one rank
+- ``--memory-budget <bytes>`` - Most memory the tool holds (default ``0``: a third of the memory available to the process, which respects a cgroup limit). Accepts units such as ``64GB``; must be at least 64 MB when set. Calls beyond the budget are written to ``DFTRACER_UTILS_SPILL_DIR``; when it is unset, to the writable node-local disk mount with the most free space (never RAM-backed or network), else a per-user directory under ``/var/tmp`` or ``~/.cache`` on a local disk, else the system temp directory or ``~/.cache/dftracer-utils/spill`` when not RAM-backed; never a RAM-backed directory, so with none of these the run fails and names the variable
 
 The output holds one record per run (``gtype`` ``run``), per call path
 (``func``) and per call path and counter (``counter``). Each distribution
@@ -937,12 +938,16 @@ carries its quantiles and its DDSketch as base64 ``sketch``, so distributions
 merge exactly. The records match the built-in ``genesis`` record schema. This
 binary also accepts the shared :ref:`cli-shared-flags` (Pipeline, Logging).
 
-The budget is split evenly between the run groups that run at once, and each
-group's share bounds what it holds: its open readers, its decoded calls, its
-sort buffer, and its counter series and path records. The output lines of a
-finished run are not counted. A run whose counter series or path records alone
-do not fit its share is skipped with a reason that names the share; raise
-``--memory-budget`` for it.
+The run groups share one pool, largest group first. A group takes its part of
+the pool by trace bytes, at least an even split, and its share bounds what it
+holds: its open readers, its decoded calls, its sort buffer, and its counter
+series and path records, which it keeps until its runs are written; a run's
+output lines are made 1 MiB at a time as they are written. A
+group whose counter series or path records do not fit its share runs again
+with four times the share; only a run that does not fit the whole pool is
+skipped, with a reason that names the share (raise ``--memory-budget`` for
+it). The exit status is 0 when runs are skipped and 1 only when the output
+cannot be written.
 
 **Example:**
 

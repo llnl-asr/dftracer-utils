@@ -139,6 +139,39 @@ TEST_SUITE("ReaderInflater") {
         CHECK(read_members(f.path) == text);
     }
 
+    // The decoder sizes its buffer from the last member's trailer: a small
+    // last member makes it grow for a large one before it, a large last
+    // member covers every smaller one.
+    TEST_CASE(
+        "the member line reader decodes members larger and smaller "
+        "than the last") {
+        const auto big = hex_lines(9u << 20, 8);
+        const auto small = hex_lines(4000, 9);
+        for (const bool big_first : {true, false}) {
+            CAPTURE(big_first);
+            const auto& first = big_first ? big : small;
+            const auto& last = big_first ? small : big;
+            std::vector<std::uint8_t> comp;
+            for (const auto* t : {&first, &small, &last}) {
+                const auto m = gzip(*t);
+                comp.insert(comp.end(), m.begin(), m.end());
+            }
+            TempFile f(comp);
+            CHECK(read_members(f.path) == first + small + last);
+        }
+    }
+
+    TEST_CASE("the member line reader keeps the lines of a cut file") {
+        const auto text = hex_lines(6u << 20, 10);
+        auto comp = gzip(text);
+        comp.resize(comp.size() * 6 / 10);
+        TempFile f(comp);
+        const auto got = read_members(f.path);
+        REQUIRE(!got.empty());
+        CHECK(got.back() == '\n');
+        CHECK(got == text.substr(0, got.size()));
+    }
+
     TEST_CASE("the index build counts one large member") {
         const auto text = hex_lines(12u << 20, 7);
         TempFile f(gzip(text));

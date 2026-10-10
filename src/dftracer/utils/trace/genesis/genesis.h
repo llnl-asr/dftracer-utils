@@ -4,7 +4,11 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -54,10 +58,38 @@ struct Discovery {
     std::vector<Skip> skips;
 };
 
-/// One finished run: its sort key and its JSON lines (run record first).
-struct RunOutput {
-    std::string sort_key;
-    std::string lines;
+/// One finished run. Its JSON lines (run record first) are made on demand from
+/// the state of its group, which stays in memory, counted in the group's share,
+/// until the last RunOutput of the group is destroyed. Not thread-safe.
+class RunOutput {
+   public:
+    class Source {
+       public:
+        virtual ~Source() = default;
+        virtual std::size_t items() const = 0;
+        /// The run and func lines of `item` go to `head`, its counter lines
+        /// to `body`; both may be the same string.
+        virtual void append(std::size_t item, std::string& head,
+                            std::string& body) const = 0;
+    };
+
+    explicit RunOutput(std::unique_ptr<Source> source);
+    RunOutput(RunOutput&&) noexcept;
+    RunOutput& operator=(RunOutput&&) noexcept;
+    ~RunOutput();
+
+    /// Appends the next run and func lines to `head` and counter lines to
+    /// `body`, whole lines of at least `bytes` in all unless the run ends
+    /// first; false once no lines are left.
+    bool next(std::string& head, std::string& body, std::size_t bytes);
+
+    /// Every line of the run, from the start, each func line followed by its
+    /// counter lines; does not move next().
+    std::string lines() const;
+
+   private:
+    std::unique_ptr<Source> source_;
+    std::size_t next_item_ = 0;
 };
 
 struct GroupResult {
@@ -67,6 +99,50 @@ struct GroupResult {
     /// of calls the sort wrote; both are zero when the share held everything.
     std::uint64_t spilled_bytes = 0;
     std::uint64_t sort_runs = 0;
+    /// A skip came from the share: the same group may succeed with a larger
+    /// one.
+    bool over_budget = false;
+};
+
+/// Live counters of one group, for a progress display. process_group updates
+/// them from worker threads, once per file read or chunk of calls, and calls
+/// `on_update` after each update, so `on_update` must be thread-safe and
+/// quick. The caller resets them before each group.
+struct GroupProgress {
+    /// WAIT: the caller waits for its memory share. READ: its files are read.
+    /// SORT: its calls go into the sort. WALK: the sorted calls are walked.
+    /// WRITE: the caller writes its runs.
+    enum class Phase : std::uint8_t { WAIT, READ, SORT, WALK, WRITE };
+
+    std::atomic<Phase> phase{Phase::WAIT};
+    /// steady_clock time, in nanoseconds, when `phase` was entered.
+    std::atomic<std::int64_t> phase_since_ns{0};
+    /// Compressed bytes of the files read so far.
+    std::atomic<std::uint64_t> read_bytes{0};
+    /// Calls of the group, known once its files are read.
+    std::atomic<std::uint64_t> calls{0};
+    std::atomic<std::uint64_t> sorted{0};
+    std::atomic<std::uint64_t> walked{0};
+    std::function<void()> on_update;
+
+    void enter(Phase p) noexcept {
+        phase_since_ns.store(
+            std::chrono::steady_clock::now().time_since_epoch().count(),
+            std::memory_order_relaxed);
+        phase.store(p, std::memory_order_relaxed);
+    }
+
+    void reset() noexcept {
+        read_bytes.store(0, std::memory_order_relaxed);
+        calls.store(0, std::memory_order_relaxed);
+        sorted.store(0, std::memory_order_relaxed);
+        walked.store(0, std::memory_order_relaxed);
+        enter(Phase::WAIT);
+    }
+
+    void updated() const {
+        if (on_update) on_update();
+    }
 };
 
 /// Walk `roots` for `nodes_<N>/ppn_<M>` run directories and describe their
@@ -86,12 +162,27 @@ std::string run_id(const RunKeys& keys);
 /// `memory_share` bytes bound what the group holds: open readers, calls kept
 /// between reading and sorting, the sort buffer, and the counter series and
 /// path records. Calls beyond their quarter go to a spill file in spill_dir().
-/// A group whose counter series or path records alone exceed their quarter is
-/// skipped with a reason that names the share; the rest of the output is not
-/// counted. A share below MIN_MEMORY_BUDGET_BYTES works, but the open readers
-/// then hold more than the share.
+/// A set whose counter series or path records alone exceed their quarter is
+/// skipped with a reason that names the share, and `over_budget` is set; the
+/// rest of the output is not counted. A share below MIN_MEMORY_BUDGET_BYTES
+/// works, but the open readers then hold more than the share.
+///
+/// `progress`, when given, is updated as the group goes and must outlive the
+/// call.
+/// Asked for `bytes` beyond the share when the group's counter series, path
+/// records or counter statistics run short; returns the bytes it grants, 0
+/// when it has none to spare. It must not wait and must be thread-safe; the
+/// caller keeps track of the bytes it granted and gets them back once the
+/// group's runs are done.
+using BorrowFn = std::function<std::uint64_t(std::uint64_t bytes)>;
+
+/// `borrow`, when given, is asked before a set is failed for its share, so a
+/// group whose state outgrows the share takes free memory of the budget
+/// instead of being run again with a larger share.
 coro::CoroTask<GroupResult> process_group(CoroScope& ctx, RunGroup group,
-                                          std::uint64_t memory_share);
+                                          std::uint64_t memory_share,
+                                          GroupProgress* progress = nullptr,
+                                          const BorrowFn* borrow = nullptr);
 
 }  // namespace dftracer::utils::trace::genesis
 

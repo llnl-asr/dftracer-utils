@@ -18,7 +18,9 @@ class MemoryPool {
     MemoryPool(const MemoryPool&) = delete;
     MemoryPool& operator=(const MemoryPool&) = delete;
 
-    std::uint64_t capacity() const noexcept { return capacity_; }
+    std::uint64_t capacity() const noexcept {
+        return capacity_.load(std::memory_order_relaxed);
+    }
     std::uint64_t used() const noexcept {
         return used_.load(std::memory_order_relaxed);
     }
@@ -26,7 +28,8 @@ class MemoryPool {
     bool try_reserve(std::uint64_t n) noexcept {
         std::uint64_t cur = used_.load(std::memory_order_relaxed);
         do {
-            if (n > capacity_ - cur) return false;
+            const std::uint64_t cap = capacity_.load(std::memory_order_relaxed);
+            if (cur > cap || n > cap - cur) return false;
         } while (!used_.compare_exchange_weak(cur, cur + n,
                                               std::memory_order_relaxed));
         return true;
@@ -36,8 +39,14 @@ class MemoryPool {
         used_.fetch_sub(n, std::memory_order_relaxed);
     }
 
+    /// Raises the capacity by `n`, for memory handed over from elsewhere; a
+    /// pool never shrinks.
+    void add_capacity(std::uint64_t n) noexcept {
+        capacity_.fetch_add(n, std::memory_order_relaxed);
+    }
+
    private:
-    const std::uint64_t capacity_;
+    std::atomic<std::uint64_t> capacity_;
     std::atomic<std::uint64_t> used_{0};
 };
 
@@ -71,6 +80,17 @@ class Reservation {
     void reset() noexcept {
         if (pool_ && bytes_) pool_->release(bytes_);
         bytes_ = 0;
+    }
+
+    /// Moves up to `n` of `o`'s bytes into this reservation without touching
+    /// the pool; both must hold bytes of the same pool. Returns the bytes
+    /// moved.
+    std::uint64_t take_from(Reservation& o, std::uint64_t n) noexcept {
+        const std::uint64_t moved = n < o.bytes_ ? n : o.bytes_;
+        if (!pool_) pool_ = o.pool_;
+        o.bytes_ -= moved;
+        bytes_ += moved;
+        return moved;
     }
 
    private:

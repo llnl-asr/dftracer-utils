@@ -45,6 +45,11 @@ std::optional<std::int64_t> slice_index(const std::string& file_name) {
 struct DirFiles {
     bool summary = false;
     std::vector<std::pair<std::string, std::uint64_t>> traces;
+    // Traces directly in the run directory, used when it has no compacted/.
+    std::vector<std::pair<std::string, std::uint64_t>> run_traces;
+    // raw/<set>/*.pfw.gz, used for a set whose compacted file is missing.
+    std::map<std::string, std::vector<std::pair<std::string, std::uint64_t>>>
+        raw;
     std::map<std::string, std::vector<std::string>> gpu_csvs;
 };
 
@@ -151,13 +156,17 @@ void discover_v1(const fs::path& dir, const DirFiles& files,
         const auto it =
             std::find_if(files.traces.begin(), files.traces.end(),
                          [&](const auto& t) { return t.first == file; });
-        if (it == files.traces.end()) {
+        const auto raw = files.raw.find(set);
+        if (it == files.traces.end() && raw == files.raw.end()) {
             out.skips.push_back(
                 {base.dir, file, "set listed but file missing"});
             continue;
         }
         RunGroup g = base;
-        set_files(g, {*it});
+        if (it != files.traces.end())
+            set_files(g, {*it});
+        else
+            set_files(g, raw->second);
         SetSpec spec;
         spec.keys = k;
         spec.keys.papi_set = set;
@@ -297,6 +306,17 @@ coro::CoroTask<Discovery> discover(CoroScope& ctx,
             } else if (parent.filename() == "compacted") {
                 dirs[parent.parent_path()].traces.emplace_back(e.path.string(),
                                                                e.size);
+            } else if (e.path.extension() == ".gz" &&
+                       parent.filename().string().rfind("ppn_", 0) == 0) {
+                // <run>/<stem>-<k>_chunk<c>.pfw.gz: slices kept in the run
+                // directory itself rather than in compacted/.
+                dirs[parent].run_traces.emplace_back(e.path.string(), e.size);
+            } else if (e.path.extension() == ".gz" &&
+                       parent.parent_path().filename() == "raw") {
+                // <run>/raw/<set>/<file>.pfw.gz
+                dirs[parent.parent_path().parent_path()]
+                    .raw[parent.filename().string()]
+                    .emplace_back(e.path.string(), e.size);
             } else if (parent.filename() == "dftracer_service" &&
                        e.path.filename().string().rfind("gpu_power_", 0) == 0) {
                 // <run>/raw/<set>/dftracer_service/gpu_power_<host>.csv
@@ -307,7 +327,10 @@ coro::CoroTask<Discovery> discover(CoroScope& ctx,
             }
         }
         for (auto& [dir, files] : dirs) {
+            if (files.traces.empty())
+                files.traces = std::move(files.run_traces);
             std::sort(files.traces.begin(), files.traces.end());
+            for (auto& [_, raw] : files.raw) std::sort(raw.begin(), raw.end());
             for (auto& [_, csvs] : files.gpu_csvs)
                 std::sort(csvs.begin(), csvs.end());
             discover_dir(root, dir, files, out);

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <random>
+#include <thread>
 #include <vector>
 
 using dftracer::utils::ExternalSorter;
@@ -89,4 +90,29 @@ TEST_CASE("a spill file returns what was appended at the returned offsets") {
     REQUIRE(f.read(oa, buf, 6).has_value());
     CHECK(std::string(buf, 6) == "abcdef");
     CHECK_FALSE(f.read(ob, buf, 7).has_value());
+}
+
+TEST_CASE("runs added from several threads merge to the sorted order") {
+    const auto in = shuffled(20000);
+    ExternalSorter<Rec, Less> s(Less{}, 1 << 20);
+    std::vector<std::thread> threads;
+    for (std::size_t t = 0; t < 4; ++t) {
+        threads.emplace_back([&, t] {
+            std::vector<Rec> run;
+            for (std::size_t i = t; i < in.size(); i += 4) {
+                run.push_back(in[i]);
+                if (run.size() == 1000) REQUIRE(s.add_run(run).has_value());
+            }
+            if (!run.empty()) REQUIRE(s.add_run(run).has_value());
+        });
+    }
+    for (auto& th : threads) th.join();
+    CHECK(s.runs() == 20);
+    std::vector<Rec> out;
+    REQUIRE(s.drain([&](const Rec& r) { out.push_back(r); }).has_value());
+    auto want = in;
+    std::sort(want.begin(), want.end(), Less{});
+    REQUIRE(out.size() == want.size());
+    for (std::size_t i = 0; i < out.size(); ++i)
+        CHECK(out[i].seq == want[i].seq);
 }

@@ -46,3 +46,28 @@ TEST_CASE("concurrent reserves never exceed the capacity") {
     CHECK(granted.load() == pool.used());
     CHECK(pool.used() <= 1000);
 }
+
+TEST_CASE("added capacity admits reserves that did not fit") {
+    MemoryPool pool(100);
+    CHECK(pool.try_reserve(80));
+    CHECK_FALSE(pool.try_reserve(40));
+    pool.add_capacity(50);
+    CHECK(pool.capacity() == 150);
+    CHECK(pool.try_reserve(40));
+    CHECK_FALSE(pool.try_reserve(31));
+}
+
+TEST_CASE("bytes moved between reservations are returned once") {
+    MemoryPool pool(100);
+    Reservation a(pool);
+    Reservation b(pool);
+    REQUIRE(a.try_grow(60));
+    CHECK(b.take_from(a, 40) == 40);
+    CHECK(b.take_from(a, 100) == 20);
+    CHECK(a.bytes() == 0);
+    CHECK(b.bytes() == 60);
+    CHECK(pool.used() == 60);
+    b.reset();
+    a.reset();
+    CHECK(pool.used() == 0);
+}

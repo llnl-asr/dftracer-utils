@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/scratch.h>
 #include <dftracer/utils/core/common/spill_dir.h>
+#include <dftracer/utils/core/common/spill_dir_internal.h>
 #include <dftracer/utils/core/env.h>
 #include <signal.h>
 #include <unistd.h>
@@ -15,46 +16,81 @@
 #include <set>
 #include <string>
 #include <system_error>
+#include <vector>
 
 namespace dftracer::utils {
 
+namespace detail {
+
+Result<std::string> choose_spill_dir(
+    const std::string& env, const std::string& local_root,
+    const std::vector<std::string>& fallbacks) {
+    std::error_code ec;
+    if (!env.empty()) {
+        fs::create_directories(env, ec);
+        if (!ec && ::access(env.c_str(), W_OK | X_OK) != 0)
+            ec = std::make_error_code(std::errc::permission_denied);
+        if (ec)
+            return make_error(
+                ErrorCode::IO,
+                str_cat("spill: cannot use spill directory '", env, "' (",
+                        ec.message(), "); set ", constants::SPILL_DIR_ENV,
+                        " to a writable directory"));
+        return env;
+    }
+    // The root is found once, so check it again: a cleaner may have removed it
+    // since.
+    if (!local_root.empty()) {
+        fs::create_directories(local_root, ec);
+        if (!ec && ::access(local_root.c_str(), W_OK | X_OK) == 0)
+            return local_root;
+    }
+    // Spilled bytes on a RAM-backed file system stay in memory, which is what
+    // spilling is meant to avoid, so such a directory is never chosen; a
+    // network file system is slower but holds them outside memory.
+    for (const auto& dir : fallbacks) {
+        if (dir.empty()) continue;
+        const fs::path parent = fs::path(dir).parent_path();
+        const std::string probe =
+            fs::exists(dir, ec) ? dir
+                                : (parent.empty() ? dir : parent.string());
+        if (is_memory_filesystem(filesystem_kind(probe))) continue;
+        ec.clear();
+        fs::create_directories(dir, ec);
+        if (ec || ::access(dir.c_str(), W_OK | X_OK) != 0) continue;
+        return dir;
+    }
+    return make_error(
+        ErrorCode::IO,
+        str_cat("spill: no spill directory off RAM (no writable local disk, "
+                "and the temp and cache directories are RAM-backed or not "
+                "writable); set ",
+                constants::SPILL_DIR_ENV,
+                " to a directory on a disk or a parallel file system"));
+}
+
+}  // namespace detail
+
 Result<std::string> spill_dir() {
     const auto env = Env::get(constants::SPILL_DIR_ENV);
-    if (!env || env->empty()) {
-        // The root is found once, so check it again: a cleaner may have
-        // removed it since.
-        const std::string& local = local_spill_root();
-        if (!local.empty()) {
-            std::error_code lec;
-            fs::create_directories(local, lec);
-            if (!lec && ::access(local.c_str(), W_OK | X_OK) == 0) return local;
-        }
-    }
+    std::vector<std::string> fallbacks;
     std::error_code ec;
-    fs::path dir = env && !env->empty() ? fs::path(std::string(*env))
-                                        : fs::temp_directory_path(ec);
-    if ((!env || env->empty()) && !ec &&
-        is_memory_filesystem(filesystem_kind(dir.string()))) {
-        static const bool warned = [&] {
-            DFTRACER_UTILS_LOG_WARN(
-                "spill directory %s is RAM-backed, so spilled data counts "
-                "against the memory limit; set %s to a directory on a local "
-                "disk",
-                dir.c_str(), constants::SPILL_DIR_ENV);
+    const fs::path tmp = fs::temp_directory_path(ec);
+    if (!ec) fallbacks.push_back(tmp.string());
+    if (const auto home = Env::get("HOME"); home && !home->empty())
+        fallbacks.push_back((fs::path(std::string(*home)) / ".cache" /
+                             "dftracer-utils" / "spill")
+                                .string());
+    auto dir = detail::choose_spill_dir(env ? std::string(*env) : std::string(),
+                                        local_spill_root(), fallbacks);
+    if (dir) {
+        static const bool logged = [&] {
+            DFTRACER_UTILS_LOG_INFO("spill directory: %s", dir->c_str());
             return true;
         }();
-        (void)warned;
+        (void)logged;
     }
-    if (!ec) fs::create_directories(dir, ec);
-    if (!ec && ::access(dir.c_str(), W_OK | X_OK) != 0)
-        ec = std::make_error_code(std::errc::permission_denied);
-    if (ec)
-        return make_error(
-            ErrorCode::IO,
-            str_cat("spill: cannot use spill directory '", dir.string(), "' (",
-                    ec.message(), "); set ", constants::SPILL_DIR_ENV,
-                    " to a writable directory"));
-    return dir.string();
+    return dir;
 }
 
 namespace {

@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <queue>
 #include <type_traits>
 #include <utility>
@@ -41,6 +42,31 @@ class ExternalSorter {
                 cap_, std::max<std::size_t>(1024, buf_.capacity() * 2)));
         buf_.push_back(r);
         if (buf_.size() >= cap_) return flush();
+        return {};
+    }
+
+    /// Sorts `run` and writes it as a run of its own, then clears it, for a
+    /// caller that fills buffers on several threads. Calls of add_run() may
+    /// overlap each other, not add() or drain().
+    Result<void> add_run(std::vector<Rec>& run) {
+        std::sort(run.begin(), run.end(), less_);
+        SpillFile* file = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            if (!file_) {
+                auto created = SpillFile::create();
+                if (!created) return unexpected(created.error());
+                file_ = std::move(*created);
+            }
+            file = file_.get();
+        }
+        auto at = file->append(run.data(), run.size() * sizeof(Rec));
+        if (!at) return unexpected(at.error());
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            runs_.push_back({*at, run.size()});
+        }
+        run.clear();
         return {};
     }
 
@@ -145,6 +171,7 @@ class ExternalSorter {
     std::vector<Rec> buf_;
     std::vector<Run> runs_;
     std::unique_ptr<SpillFile> file_;
+    std::mutex mu_;
 };
 
 }  // namespace dftracer::utils

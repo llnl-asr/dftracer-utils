@@ -9,10 +9,66 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Write the `run` and `func` records of `dftracer_genesis_gen_dist` after every `counter` record, in gzip members of their own, so a query on `func` or `run` records reads a few chunks instead of most of the file.
+  On the 20.7 GB sweep, a `gtype == "func" and name == "main"` query takes 1.3 s instead of 44 s, and the amg scaling read takes 1 s instead of 13 s ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Make `dftracer_genesis_gen_dist` sort and walk a run group in parallel.
+  The calls of a group too large for its sort buffer are read back from the spill file, mapped and sorted by 16 tasks at once.
+  The processes of a group are walked in up to 64 parts at once, process p in part p modulo the parts, and the partial records are merged in part order (exact sketch merges, counts, minima and maxima).
+  A group of 10.3 billion calls from 64 processes takes 54 min on one 96-core node with a 56.6 GB peak, where the single-threaded walk alone ran at 130 K calls/s, about 22 h.
+  Two small groups take 11 s instead of 1 min 44 s.
+  The split depends on the group alone, so the output is the same for any thread count.
+  The `sum` and `avg` of a group with several processes per set differ from the single-threaded walk in the last digits (at most 4e-12 relative on amg), and every other value is the same ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Make `dftracer_genesis_gen_dist` count the decoded gzip member that each open trace reader holds against the reader quarter of a run's share, sized from the file's last gzip trailer, instead of 8 MB per reader.
+  A run of many files with large members now opens as many at once as its share holds, so the tool stays near `--memory-budget`.
+  Four runs of 40 files with 20 MB members peak at 518 MB under a 512 MB budget ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Decode a gzip member into a buffer sized from the file's last gzip trailer, and grow both decode buffers without zero-filling them or copying bytes that are decoded again.
+  Each line inside a member is now yielded in place instead of copied.
+  This read path serves `dftracer_genesis_gen_dist` and every unindexed trace read.
+  One 932 MB member reads in 0.92 s instead of 1.29 s with a third less peak memory and page faults, and a file of 16 MB members peaks at 113 MB instead of 147 MB ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 - Keep on PyPI only the newest `<tag>.postN.devX` prerelease of the previous release when a release is published, and delete the older ones, so the project stays under its PyPI storage limit.
+
+### Added
+
+- Add `--shard i/N` to `dftracer_genesis_gen_dist`, so that a process takes part `i` of `N` of the run groups.
+  The groups are split largest first so the parts hold about the same trace bytes, and the parts concatenate into one file.
+  A build with `DFTRACER_UTILS_ENABLE_MPI=ON` splits the groups between its ranks by default, and the ranks copy their parts into `-o` at their offsets at the same time ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Print the progress of `dftracer_genesis_gen_dist` to stderr.
+  At the start it prints the run groups, their trace bytes, the shares and the member size.
+  Then at most every 10 s it prints one line with the elapsed time, the groups done, how many groups wait for memory, read, sort, walk or write, the trace bytes read, the calls sorted and walked with their rates, the peak RSS against the budget and an estimate of the time left.
+  At most every 60 s, each group that has run for a minute or more gets a line of its own with its step, its progress in that step and its time there ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 
 ### Fixed
 
+- Fill every stripe of the padded striped writer with whole gzip members.
+  When the space left after the data of a stripe was a little more than one full padding member, the last 1 to 24 bytes stayed zero, too few for another member, and `gzip`, `zcat` and zlib stopped reading the file there.
+  Files written to striped Lustre, such as the output of `dftracer_genesis_gen_dist`, now read to their end with any gzip reader.
+  Four of the 12 parts of an 8-node genesis sweep had such gaps, so `zcat` saw 146 of its 9,615 runs ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Make `dftracer_genesis_gen_dist` let a run group borrow memory of the budget that no group holds, 256 MB at a time, before it runs the group again with a larger share, and give the walk of a group the readers' and calls' parts of its share once its calls are sorted.
+  On a full 8-node sweep each shard ran 74 to 154 groups again, and the last restart of the largest group threw away 25 minutes of reading and sorting, so 3 of 8 shards missed a 2 h limit ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Make `dftracer_genesis_gen_dist` run a group again with four times its share, up to the whole budget, when its counter statistics or path records do not fit, instead of skipping it.
+  These grow with call paths times counters, not with trace bytes, so a 10 MB trace could need more than its 777 MB share, and a full run on 8 nodes skipped about 1,150 runs this way.
+  The groups now share one memory pool, largest group first, and each group starts with its part of the pool by trace bytes, so one large group reads many files at once instead of one at a time.
+  The tool now exits with 0 when it skips runs, and with 1 only when the output cannot be written ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Keep `dftracer_genesis_gen_dist` under `--memory-budget` on runs of thousands of trace files.
+  Every file of every group opened at once to read the size of its decoded gzip member, so most opens failed with too many open files, and each such file was counted as an 8 MB reader while it decoded up to 120 MB.
+  On 8 nodes this took the tool to 120 GB under an 80 GB budget, and one run of 6 groups to 20 GB under an 8 GB budget.
+  At most 256 files are now opened for their size at once, and a file whose size cannot be read takes all reader slots of its group.
+  The same run peaks at 4.1 GB and reads 10 times faster ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Keep `dftracer_genesis_gen_dist` under `--memory-budget` while it writes.
+  Each run held all its output lines in one string and each worker held a whole 32 MB member, and neither was counted.
+  The lines of a run are now made 1 MiB at a time from its records as they are written, and the group keeps its share until then.
+  The member size is lowered until one member per worker fits the part of the budget for the writer.
+  Under a 512 MB budget, 96 runs of 4000 call paths with 24 counters peak at 302 MB instead of 903 MB, in 29 s instead of 28 s, with the same lines ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Fix a hang at the end of every unordered `GzipLineWriter` that writes to a striped Lustre directory (stripe of 1 MB or more), such as `dftracer_genesis_gen_dist -o` on Lustre.
+  The padded striped writer started its packer in the scope of the writer.
+  The writer joins that scope before it closes the channel of the packer, and the packer ends only when that channel closes, so the join never returned and the output lost its last stripe.
+  The packer now runs in a scope of its own ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Never spill to a RAM-backed directory.
+  With `DFTRACER_UTILS_SPILL_DIR` unset and no writable node-local disk, the spill went to the system temp directory even when it was a tmpfs, so on a diskless compute node every spilled byte stayed in memory and `dftracer_genesis_gen_dist` was killed by the kernel at about 94 GB of 251 GB.
+  The fallback is now the temp directory or `~/.cache/dftracer-utils/spill`, whichever is writable and not RAM-backed (a network file system qualifies).
+  With neither, the first spill fails with an error that names the variable ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Make `dftracer_genesis_gen_dist` read runs that keep their time slices directly in the run directory (`nodes_<N>/ppn_<M>/<stem>-<k>_chunk<c>.pfw.gz`, without `compacted/`), which it skipped without a message.
+  It also reads `raw/<set>/*.pfw.gz` for a set whose `compacted/<set>.pfw.gz` is missing instead of skipping the set ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 - Build the static zlib-ng archive as position-independent code, so a shared library links it when zlib-ng made no shared target (`BUILD_SHARED_LIBS` off) ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 - Grow an elastic runtime for a burst of tasks sent before its parked worker starts to run. The burst stayed on one worker for up to one `elastic_keepalive` (250 ms by default) before the pool grew.
 

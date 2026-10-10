@@ -92,9 +92,13 @@ the data readable for as long as any column of the frame is alive.
 
 ``DFTRACER_UTILS_SPILL_DIR`` names the directory for every spill file: this
 collect file and the run files of a spilling sort, group-by or join. When it is
-unset or empty the system temp directory is used. A directory that cannot be
-created or written fails the run with an error that names the directory and the
-variable. There is no fallback to another directory.
+unset or empty, the writable node-local disk with the most free space is used,
+else the system temp directory or ``~/.cache/dftracer-utils/spill``, whichever
+is writable and not RAM-backed. A RAM-backed directory is never chosen, since
+the spilled data would stay in memory; with nothing else usable the first spill
+fails with an error naming the variable. A set directory that cannot be created
+or written fails the run with an error that names the directory and the
+variable, with no fallback to another directory.
 
 Set the variable on a fast local disk. On an HPC node ``/tmp`` is often a
 tmpfs held in RAM, so spilling there only moves the data from one part of

@@ -59,8 +59,11 @@ Memory and kernels
      - Directory for every spill file of a collect, sort, group-by, join,
        window or plugin state. When it is unset the writable node-local disk
        mount with the most free space is used (never RAM-backed or network),
-       else the system temp directory. A directory that cannot be created or
-       written fails the run. Each query makes a ``dftu_lazy_<host>_<pid>_<n>``
+       else the system temp directory or ``~/.cache/dftracer-utils/spill``,
+       whichever is writable and not RAM-backed (a network file system
+       qualifies). A RAM-backed directory is never chosen: with nothing else
+       usable, or a set directory that cannot be created or written, the run
+       fails. Each query makes a ``dftu_lazy_<host>_<pid>_<n>``
        directory in it and removes it when it ends; the first query of a
        process also removes such directories of the same host left by processes that no
        longer exist. See :doc:`guides/runtime/memory-budget`.

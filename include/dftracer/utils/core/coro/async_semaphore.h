@@ -64,6 +64,16 @@ class CoroSemaphore {
     /// Acquire `n` permits (co_await). `n` above capacity is clamped.
     AcquireOperation acquire(std::uint64_t n) noexcept { return {*this, n}; }
 
+    /// Takes `n` permits only if they are free now, ahead of any waiters;
+    /// false, without waiting, when they are not. For a holder that needs a
+    /// little more to finish rather than a new unit of work.
+    bool try_acquire(std::uint64_t n) noexcept {
+        std::lock_guard<std::mutex> lock(mtx_);
+        if (available_ < n) return false;
+        available_ -= n;
+        return true;
+    }
+
     /// Return `n` permits and wake any waiters that now fit, in FIFO order.
     void release(std::uint64_t n) {
         Waiter wake_local[8];

@@ -9,6 +9,7 @@
 #include <testing_utilities.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
@@ -86,8 +87,9 @@ fs::path matrix_run(const ScopedTestDir& d, std::int64_t ppn,
 constexpr std::uint64_t TEST_SHARE = 256ULL * 1024 * 1024;
 
 coro::CoroTask<void> process_into(CoroScope& ctx, RunGroup g,
-                                  std::uint64_t share, GroupResult* out) {
-    *out = co_await process_group(ctx, std::move(g), share);
+                                  std::uint64_t share, GroupResult* out,
+                                  const BorrowFn* borrow) {
+    *out = co_await process_group(ctx, std::move(g), share, nullptr, borrow);
 }
 
 coro::CoroTask<void> discover_into(CoroScope& ctx, std::string root,
@@ -96,10 +98,11 @@ coro::CoroTask<void> discover_into(CoroScope& ctx, std::string root,
     *out = co_await discover(ctx, std::move(roots));
 }
 
-GroupResult process(RunGroup g, std::uint64_t share = TEST_SHARE) {
+GroupResult process(RunGroup g, std::uint64_t share = TEST_SHARE,
+                    const BorrowFn* borrow = nullptr) {
     GroupResult out;
     dftu_utils_test::run_coro([&](CoroScope& ctx) {
-        return process_into(ctx, std::move(g), share, &out);
+        return process_into(ctx, std::move(g), share, &out, borrow);
     });
     return out;
 }
@@ -132,7 +135,7 @@ std::string find_line(const GroupResult& r, const std::string& type,
                       const std::vector<std::string>& needles) {
     REQUIRE(r.runs.size() == 1);
     const std::string prefix = R"({"gtype":")" + type + R"(",)";
-    for (const auto& l : lines_of(r.runs[0].lines)) {
+    for (const auto& l : lines_of(r.runs[0].lines())) {
         if (l.rfind(prefix, 0) != 0) continue;
         if (std::all_of(needles.begin(), needles.end(), [&](const auto& n) {
                 return l.find(n) != std::string::npos;
@@ -289,6 +292,62 @@ TEST_CASE("discover reads the path-only layout as one sliced group") {
     CHECK(k.ppn == 2);
 }
 
+TEST_CASE("discover reads path-only slices kept in the run directory") {
+    ScopedTestDir d("genesis_run_dir");
+    const fs::path run =
+        d.path() / "amg" / "tuolumne" / "p2_n8x8x4" / "nodes_1" / "ppn_2";
+    write_gz(run / "app-1_chunk0.pfw.gz", "[\n");
+    write_gz(run / "app-2_chunk0.pfw.gz", "[\n");
+    write_text(run / "compacted_check.json", "{}");
+    auto disc = discover_dir(d);
+    REQUIRE(disc.skips.empty());
+    REQUIRE(disc.groups.size() == 1);
+    CHECK(disc.groups[0].sets_from_counters);
+    CHECK(disc.groups[0].files ==
+          std::vector<std::string>{(run / "app-1_chunk0.pfw.gz").string(),
+                                   (run / "app-2_chunk0.pfw.gz").string()});
+}
+
+TEST_CASE("compacted slices win over traces beside them in the run directory") {
+    ScopedTestDir d("genesis_run_dir_both");
+    const fs::path run =
+        d.path() / "minife" / "tioga" / "input_50" / "nodes_1" / "ppn_1";
+    write_gz(run / "compacted" / "nx-1_chunk0.pfw.gz", "[\n");
+    write_gz(run / "stray-1_chunk0.pfw.gz", "[\n");
+    auto disc = discover_dir(d);
+    REQUIRE(disc.skips.empty());
+    REQUIRE(disc.groups.size() == 1);
+    CHECK(disc.groups[0].files ==
+          std::vector<std::string>{
+              (run / "compacted" / "nx-1_chunk0.pfw.gz").string()});
+}
+
+TEST_CASE("a matrix set without its compacted file reads its raw traces") {
+    ScopedTestDir d("genesis_raw");
+    const fs::path dir =
+        d.path() / "laghos" / "matrix" / "p1" / "nodes_1" / "ppn_2";
+    write_text(dir / "summary.json",
+               R"({"ok":true,"app":"laghos","system":"matrix","input":"p1",)"
+               R"("nodes":1,"ppn":2,"sets":["s1","s2","s3"]})");
+    write_gz(dir / "compacted" / "s1.pfw.gz", "[\n");
+    write_gz(dir / "raw" / "s1" / "a-app.pfw.gz", "[\n");
+    write_gz(dir / "raw" / "s2" / "b-app.pfw.gz", "[\n");
+    write_gz(dir / "raw" / "s2" / "service_h1.pfw.gz", "[\n");
+    write_gz(dir / "raw" / "s2" / "dftracer_service" / "other.pfw.gz", "[\n");
+    auto disc = discover_dir(d);
+    REQUIRE(disc.groups.size() == 2);
+    CHECK(disc.groups[0].files ==
+          std::vector<std::string>{(dir / "compacted" / "s1.pfw.gz").string()});
+    CHECK(disc.groups[1].sets.at(0).keys.papi_set == "s2");
+    CHECK(disc.groups[1].files ==
+          std::vector<std::string>{
+              (dir / "raw" / "s2" / "b-app.pfw.gz").string(),
+              (dir / "raw" / "s2" / "service_h1.pfw.gz").string()});
+    REQUIRE(disc.skips.size() == 1);
+    CHECK(disc.skips[0].reason == "set listed but file missing");
+    CHECK(disc.skips[0].file == (dir / "compacted" / "s3.pfw.gz").string());
+}
+
 TEST_CASE("path-only sets come from each process's PAPI counters") {
     ScopedTestDir d("genesis_derive");
     const fs::path c = d.path() / "minife" / "tioga" / "tioga" / "in" /
@@ -300,9 +359,11 @@ TEST_CASE("path-only sets come from each process's PAPI counters") {
     auto r = process_only(d);
     REQUIRE(r.skips.empty());
     REQUIRE(r.runs.size() == 2);
-    CHECK(r.runs[0].lines.find(R"("papi_set":"PAPI_A")") != std::string::npos);
-    CHECK(r.runs[0].lines.find(R"("path":"b")") != std::string::npos);
-    CHECK(r.runs[1].lines.find(R"("papi_set":"PAPI_B")") != std::string::npos);
+    CHECK(r.runs[0].lines().find(R"("papi_set":"PAPI_A")") !=
+          std::string::npos);
+    CHECK(r.runs[0].lines().find(R"("path":"b")") != std::string::npos);
+    CHECK(r.runs[1].lines().find(R"("papi_set":"PAPI_B")") !=
+          std::string::npos);
 }
 
 TEST_CASE("a matrix summary without app and system takes them from the path") {
@@ -518,6 +579,7 @@ TEST_CASE("a truncated trace file skips the run and names the file") {
     auto r = process_only(d);
     CHECK(r.runs.empty());
     CHECK(skipped_with(r, f.string()));
+    CHECK_FALSE(r.over_budget);
 }
 
 TEST_CASE("missing process markers or processes skip the run") {
@@ -538,6 +600,27 @@ TEST_CASE("a child that ends after its parent skips the run") {
         d, 1,
         rank(1, 0, 1000) + call(1, 1, "p", 0, 100) + call(1, 1, "c", 50, 100));
     CHECK(skipped_with(process_only(d), "ends after its parent"));
+}
+
+TEST_CASE("an overlap in any process skips the run, naming the first") {
+    // The two processes are walked in parts of their own and merged.
+    ScopedTestDir one("genesis_overlap_second");
+    matrix_run(one, 2,
+               rank(1, 0, 1000) + rank(2, 0, 1000) + call(1, 1, "p1", 0, 100) +
+                   call(1, 1, "k1", 10, 20) + call(2, 2, "p2", 0, 100) +
+                   call(2, 2, "c2", 50, 100));
+    const auto second = process_only(one);
+    CHECK(second.runs.empty());
+    CHECK(skipped_with(second, "call c2 at ts 50 ends after its parent p2"));
+
+    ScopedTestDir both("genesis_overlap_both");
+    matrix_run(both, 2,
+               rank(1, 0, 1000) + rank(2, 0, 1000) + call(1, 1, "p1", 0, 100) +
+                   call(1, 1, "c1", 60, 100) + call(2, 2, "p2", 0, 100) +
+                   call(2, 2, "c2", 50, 100));
+    const auto first = process_only(both);
+    CHECK(first.runs.empty());
+    CHECK(skipped_with(first, "call c1 at ts 60 ends after its parent p1"));
 }
 
 TEST_CASE("tioga v2 processes are assigned to sets by PAPI counters") {
@@ -561,9 +644,9 @@ TEST_CASE("tioga v2 processes are assigned to sets by PAPI counters") {
     auto r = process(disc.groups[0]);
     REQUIRE(r.skips.empty());
     REQUIRE(r.runs.size() == 2);
-    CHECK(r.runs[0].lines.find(R"("papi_set":"sA")") != std::string::npos);
-    CHECK(r.runs[0].lines.find(R"("path":"a")") != std::string::npos);
-    CHECK(r.runs[1].lines.find(R"("path":"b")") != std::string::npos);
+    CHECK(r.runs[0].lines().find(R"("papi_set":"sA")") != std::string::npos);
+    CHECK(r.runs[0].lines().find(R"("path":"a")") != std::string::npos);
+    CHECK(r.runs[1].lines().find(R"("path":"b")") != std::string::npos);
 
     ScopedTestDir bad("genesis_sets_bad");
     make(bad, rank(3, 0, 10) + papi(3, 0, "PAPI_C", 0));
@@ -596,7 +679,7 @@ TEST_CASE("the run record carries keys, settings and the summary") {
     matrix_run(d, 1, rank(1, 0, 10) + call(1, 1, "m", 0, 5));
     auto r = process_only(d);
     REQUIRE(r.runs.size() == 1);
-    const auto first = lines_of(r.runs[0].lines).at(0);
+    const auto first = lines_of(r.runs[0].lines()).at(0);
     CHECK(str(first, "/gtype") == "run");
     CHECK(num(first, "/version") == 1);
     CHECK(first.rfind(R"({"gtype":"run","version":1,)", 0) == 0);
@@ -619,7 +702,7 @@ TEST_CASE("records have a gtype and no dftracer envelope or metric keys") {
                    call(1, 1, "main", 0, 900) + call(1, 1, "x", 10, 20));
     auto r = process_only(d);
     REQUIRE(r.runs.size() == 1);
-    const auto lines = lines_of(r.runs[0].lines);
+    const auto lines = lines_of(r.runs[0].lines());
     std::vector<std::string> types;
     for (const auto& l : lines) {
         types.push_back(str(l, "/gtype"));
@@ -677,7 +760,7 @@ TEST_CASE("processing the same group twice gives identical output") {
     auto a = process_only(d);
     auto b = process_only(d);
     REQUIRE(a.runs.size() == 1);
-    CHECK(a.runs[0].lines == b.runs[0].lines);
+    CHECK(a.runs[0].lines() == b.runs[0].lines());
 }
 
 TEST_CASE("an unknown host counter category skips the run") {
@@ -741,7 +824,7 @@ TEST_CASE("a share that keeps nothing in memory gives the same output") {
     REQUIRE(tiny.runs.size() == 1);
     CHECK(big.skips.empty());
     CHECK(tiny.skips.empty());
-    CHECK(big.runs[0].lines == tiny.runs[0].lines);
+    CHECK(big.runs[0].lines() == tiny.runs[0].lines());
     // The tiny share really went to disk, the big one did not.
     CHECK(tiny.spilled_bytes > 0);
     CHECK(tiny.sort_runs > 1);
@@ -783,7 +866,27 @@ TEST_CASE(
           std::string::npos);
     CHECK(tiny.skips[0].reason.find(std::to_string(TINY_SHARE)) !=
           std::string::npos);
+    CHECK(tiny.over_budget);
     auto big = process(disc.groups[0], TEST_SHARE);
     CHECK(big.skips.empty());
     CHECK(big.runs.size() == 1);
+    CHECK_FALSE(big.over_budget);
+
+    // A lender with memory to spare saves the tiny share; one without leaves
+    // it over budget, for the caller to run the group again.
+    std::atomic<std::uint64_t> lent{0};
+    const BorrowFn spare = [&](std::uint64_t n) -> std::uint64_t {
+        lent += n;
+        return n;
+    };
+    auto borrowed = process(disc.groups[0], TINY_SHARE, &spare);
+    CHECK(borrowed.skips.empty());
+    CHECK_FALSE(borrowed.over_budget);
+    REQUIRE(borrowed.runs.size() == 1);
+    CHECK(borrowed.runs[0].lines() == big.runs[0].lines());
+    CHECK(lent > 0);
+    const BorrowFn none = [](std::uint64_t) -> std::uint64_t { return 0; };
+    auto refused = process(disc.groups[0], TINY_SHARE, &none);
+    CHECK(refused.runs.empty());
+    CHECK(refused.over_budget);
 }

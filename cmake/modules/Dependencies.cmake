@@ -976,10 +976,13 @@ function(_try_zlib_ng OUT_VAR)
     else()
       set(_zng_static zlib-ng-static)
     endif()
+    # PIC: link_zlib falls back to this archive for a shared library when
+    # zlib-ng made no shared target (BUILD_SHARED_LIBS off).
     set_target_properties(
       ${_zng_static}
-      PROPERTIES OUTPUT_NAME dftracer_zlib ARCHIVE_OUTPUT_DIRECTORY
-                                           ${CMAKE_BINARY_DIR}/lib)
+      PROPERTIES OUTPUT_NAME dftracer_zlib
+                 ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
+                 POSITION_INDEPENDENT_CODE ON)
     target_include_directories(
       ${_zng_static} PUBLIC $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
     if(NOT TARGET dftracer_zlib_static)

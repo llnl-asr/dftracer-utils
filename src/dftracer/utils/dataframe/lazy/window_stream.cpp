@@ -2170,8 +2170,11 @@ class WindowStreamCursor : public Cursor {
             const std::int64_t local = row.pos[r] - 1;
             const std::int64_t to =
                 local + std::min(w.after, row.run_last[r] - ri);
-            for (std::int64_t q = hi + 1; q <= to; ++q) {
-                const std::int64_t at = ri + (q - local);
+            // Rows (hi, to]; written without hi + 1, which GCC 12 reports
+            // under -Wstrict-overflow when it folds the bound with the max.
+            for (; hi < to;) {
+                ++hi;
+                const std::int64_t at = ri + (hi - local);
                 if (vcol.is_null(at)) continue;
                 ++count;
                 const int c = !have       ? 0
@@ -2182,7 +2185,6 @@ class WindowStreamCursor : public Cursor {
                     have = true;
                 }
             }
-            hi = std::max(hi, to);
             if (have && count >= w.min_count) src[r] = best >= 0 ? 1 + best : 0;
         }
         const Series all = concat_columns({&carried, &vcol}).materialize();

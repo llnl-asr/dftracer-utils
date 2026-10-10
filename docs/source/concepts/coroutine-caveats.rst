@@ -136,7 +136,7 @@ arguments and returns) was the fix. Which approach wins is code-dependent; the
 guiding metric is *fewer live non-trivial locals across suspension points.*
 
 Symmetric transfer and the stack
--------------------------------
+--------------------------------
 
 Returning a coroutine handle from ``await_suspend`` (symmetric transfer) keeps
 the stack flat only when the compiler makes the resume a tail call. GCC does

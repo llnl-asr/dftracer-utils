@@ -84,7 +84,9 @@ TEST_SUITE("spill") {
             x ^= x << 17;
             a[i] = i < N / 2 ? i % 97 : static_cast<std::int64_t>(x);
             s[i] = "name" + std::to_string(i % 31);
-            if (i % 13 == 0) valid[i / 8] &= ~(1u << (i % 8));
+            if (i % 13 == 0)
+                valid[i / 8] =
+                    static_cast<std::uint8_t>(valid[i / 8] & ~(1u << (i % 8)));
         }
         std::vector<Series> cols;
         cols.push_back(Series::flat_i64(a.data(), N, valid.data()));

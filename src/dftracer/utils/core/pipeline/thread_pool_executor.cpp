@@ -621,9 +621,14 @@ void ThreadPoolExecutor::schedule_coroutine_resumption(
 void ThreadPoolExecutor::signal_global_work() {
     work_signal_.fetch_add(1, std::memory_order_acq_rel);
     wake_one_worker();
-    if (min_workers_ < num_threads_ &&
-        idle_workers_.load(std::memory_order_acquire) == 0 &&
-        live_workers_.load(std::memory_order_relaxed) < num_threads_) {
+    if (min_workers_ >= num_threads_ ||
+        live_workers_.load(std::memory_order_relaxed) >= num_threads_) {
+        return;
+    }
+    // A woken worker counts as idle until it runs, so a burst sent before it
+    // runs never sees zero idle workers; compare the backlog with them too.
+    const std::size_t idle = idle_workers_.load(std::memory_order_acquire);
+    if (idle == 0 || run_queue_.size_approx() > idle) {
         {
             std::lock_guard<std::mutex> lock(coord_mutex_);
             grow_pending_ = true;

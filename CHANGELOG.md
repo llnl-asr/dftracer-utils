@@ -11,6 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 - Keep on PyPI only the newest `<tag>.postN.devX` prerelease of the previous release when a release is published, and delete the older ones, so the project stays under its PyPI storage limit.
 
+### Fixed
+
+- Grow an elastic runtime for a burst of tasks sent before its parked worker starts to run. The burst stayed on one worker for up to one `elastic_keepalive` (250 ms by default) before the pool grew.
+
 ## [0.0.14] - 2026-10-10
 
 ### Changed

@@ -25,13 +25,29 @@ coro::CoroTask<void> bump(std::atomic<int>* done) {
     co_return;
 }
 
-// A few microseconds of work so a burst keeps the pool under pressure long
-// enough for the elastic monitor (2ms tick) to grow it.
-coro::CoroTask<void> spin(std::atomic<int>* done) {
-    volatile int x = 0;
-    for (int i = 0; i < 4000; ++i) x = x + i;
+// Holds its worker until *go, so a burst is a real backlog. A short task let
+// one worker keep up with a submitter slowed by a loaded CI runner, and the
+// pool then rightly never grew.
+coro::CoroTask<void> gated(std::atomic<bool>* go, std::atomic<int>* done) {
+    while (!go->load(std::memory_order_acquire)) std::this_thread::yield();
     done->fetch_add(1, std::memory_order_relaxed);
     co_return;
+}
+
+// Submits a gated burst and returns the largest pool seen before the release.
+std::size_t peak_under_backlog(Runtime& rt, ThreadPoolExecutor* exec,
+                               std::atomic<int>* done, int n) {
+    std::atomic<bool> go{false};
+    for (int i = 0; i < n; ++i) rt.submit(gated(&go, done));
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    std::size_t peak = exec->live_workers();
+    while (peak <= 1 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        peak = std::max(peak, exec->live_workers());
+    }
+    go.store(true, std::memory_order_release);
+    rt.wait_all();
+    return peak;
 }
 
 }  // namespace
@@ -110,18 +126,9 @@ TEST_SUITE("DynamicWorkers") {
         REQUIRE(exec->live_workers() == 1);  // starts at the floor
 
         std::atomic<int> done{0};
-        const int N = 40000;
-        for (int i = 0; i < N; ++i) rt.submit(spin(&done));
-
-        // While the burst drains, the monitor grows the pool toward the cap.
-        std::size_t peak = exec->live_workers();
-        while (done.load() < N) {
-            peak = std::max(peak, exec->live_workers());
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        rt.wait_all();
+        const int N = 64;
+        CHECK(peak_under_backlog(rt, exec, &done, N) > 1);
         CHECK(done.load() == N);
-        CHECK(peak > 1);  // grew above the floor under load
 
         // Idle now: the monitor idle-retires back down to the floor.
         auto deadline =
@@ -143,15 +150,7 @@ TEST_SUITE("DynamicWorkers") {
         auto* exec = static_cast<ThreadPoolExecutor*>(rt.executor());
 
         std::atomic<int> done{0};
-        const int N = 40000;
-        for (int i = 0; i < N; ++i) rt.submit(spin(&done));
-        std::size_t peak = exec->live_workers();
-        while (done.load() < N) {
-            peak = std::max(peak, exec->live_workers());
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        rt.wait_all();
-        REQUIRE(peak > 1);  // grew under load
+        REQUIRE(peak_under_backlog(rt, exec, &done, 64) > 1);
 
         // Idle well under the keep-alive: workers must not have retired yet.
         std::this_thread::sleep_for(std::chrono::milliseconds(500));

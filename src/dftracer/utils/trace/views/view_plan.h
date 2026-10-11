@@ -48,6 +48,10 @@ struct BuildStep {
     std::function<std::optional<duql::Query>(std::optional<duql::Query>)> run;
 };
 
+struct ViewPlan;
+/// `st`, after adding it to the plan's scan counter.
+ExportStats counted(const ViewPlan& plan, ExportStats st);
+
 /// The logical plan a `View` carries. The ops form a linear pipeline, so a flat
 /// struct captures it; each builder copies and mutates one field.
 struct ViewPlan {
@@ -106,6 +110,8 @@ struct ViewPlan {
     /// collect() still materializes the final table, so this bounds
     /// intermediate memory only.
     std::uint64_t memory_budget = 0;
+    /// Where the scans of this plan add their counts; null counts nothing.
+    std::shared_ptr<ScanCounter> scan_counter;
     std::vector<std::string> select;
     /// Paths a row scan with an empty select names as schema columns after
     /// its own; the scan still returns every path.

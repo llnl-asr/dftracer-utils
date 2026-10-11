@@ -53,6 +53,9 @@ struct ViewScannerInput {
     /// FoldEvent::schema_leaves for schemaless column discovery (the index
     /// build). Ignored when fold_intern is null.
     bool fold_capture_schema = false;
+    /// With fold_capture_schema, leave the values at `never_index` paths out
+    /// of the decoded events; set only when no fold reads them.
+    bool fold_skip_never_indexed = false;
 
     ViewScannerInput& with_file_path(const std::string& path);
     ViewScannerInput& with_index_path(const std::string& path);

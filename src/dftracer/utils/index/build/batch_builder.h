@@ -30,9 +30,24 @@ namespace dftracer::utils::index::gzip {
 struct GzipMember;
 }  // namespace dftracer::utils::index::gzip
 
+namespace dftracer::utils::index::store {
+class IndexDatabase;
+}  // namespace dftracer::utils::index::store
+
 namespace dftracer::utils::index::build {
 
 using dftracer::utils::CoroScope;
+
+/// Removes the directory of one file's BloomFold spill runs, for a write that
+/// failed before it could ingest them.
+void remove_spill_runs(
+    const std::vector<store::IndexDatabaseSstWriterContext::Artifacts>& runs);
+
+/// Ingests one file's BloomFold spill runs into `db` as one ingest, in run
+/// order, then removes their directory, also when the ingest throws.
+void ingest_spill_runs(
+    store::IndexDatabase& db,
+    std::vector<store::IndexDatabaseSstWriterContext::Artifacts> runs);
 
 inline constexpr std::array<std::string_view, 7> DEFAULT_BLOOM_DIMENSIONS = {
     "name", "cat", "pid", "tid", "hhash", "fhash", "shash",

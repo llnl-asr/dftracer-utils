@@ -1004,6 +1004,12 @@ View View::cancel_when(std::function<bool()> pred) const {
     });
 }
 
+View View::count_scans(std::shared_ptr<ScanCounter> counter) const {
+    scan::ScanPlan next = scan::count_scans(plan_, std::move(counter));
+    return View(next, dataframe::detail::rebase(
+                          lf_, std::make_shared<ViewSource>(next)));
+}
+
 View View::memory_budget(std::uint64_t bytes) const {
     scan::ScanPlan next = scan::memory_budget(plan_, bytes);
     dataframe::LazyFrame lf =

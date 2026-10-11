@@ -331,6 +331,7 @@ std::uint64_t RecordSchema::params_hash() const {
     }
     text(roles.phase);
     if (!source.empty()) text(source);
+    for (const auto& path : never_index) text(path);
     hash_evidence_overrides();
     return hasher.get_hash().value;
 }
@@ -458,6 +459,7 @@ std::vector<RecordSchema> builtins() {
     RecordSchema genesis;
     genesis.id = "genesis";
     genesis.builtin = true;
+    genesis.never_index = {"dur.sketch", "v.sketch"};
     genesis.fields = {
         builtin_field("gtype", FieldType::STRING, false, Role::NONE),
         builtin_field("run", FieldType::STRING, false, Role::NONE),
@@ -638,6 +640,27 @@ const RecordSchema& Registry::add(const SchemaSpec& spec,
                                        std::string(role_name(a.role)) +
                                        " role");
         }
+    for (const auto& path : spec.never_index) {
+        const auto it =
+            std::find_if(s.fields.begin(), s.fields.end(),
+                         [&](const FieldSpec& x) { return x.path == path; });
+        const FieldSpec* f = it == s.fields.end() ? nullptr : &*it;
+        if (f && f->role != Role::NONE)
+            spec_error(source, "index.never_index lists " + path +
+                                   ", which has the " +
+                                   std::string(role_name(f->role)) + " role");
+        if (f && f->always_index)
+            spec_error(source, "index.never_index lists " + path +
+                                   ", which is always_index");
+        if (s.decoder != Decoder::PATH)
+            spec_error(source,
+                       "index.never_index needs a schema that decodes "
+                       "records by path");
+        s.never_index.push_back(path);
+    }
+    std::sort(s.never_index.begin(), s.never_index.end());
+    s.never_index.erase(std::unique(s.never_index.begin(), s.never_index.end()),
+                        s.never_index.end());
     if (spec.path_budget) s.path_budget = spec.path_budget;
     if (spec.stats_share) s.stats_share = spec.stats_share;
     s.source =
@@ -756,7 +779,19 @@ SchemaSpec parse_spec(const YAML::Node& spec, const std::string& source) {
         }
     }
     if (const auto ix = spec["index"]) {
-        check_keys(ix, {"path_budget", "stats_share"}, "index.", source);
+        check_keys(ix, {"path_budget", "stats_share", "never_index"}, "index.",
+                   source);
+        if (ix["never_index"]) {
+            const auto list = ix["never_index"];
+            if (!list.IsSequence())
+                spec_error(source, "index.never_index must be a list of paths");
+            for (const auto& item : list) {
+                if (!item.IsScalar() || item.Scalar().empty())
+                    spec_error(source,
+                               "index.never_index must be a list of paths");
+                out.never_index.push_back(item.Scalar());
+            }
+        }
         if (ix["path_budget"]) {
             try {
                 out.path_budget = ix["path_budget"].as<std::size_t>();
@@ -945,6 +980,8 @@ std::string schemas_json() {
         out += s->path_budget ? std::to_string(*s->path_budget) : "null";
         out += ",\"stats_share\":";
         out += s->stats_share ? std::to_string(*s->stats_share) : "null";
+        out += ",\"never_index\":";
+        list(s->never_index);
         out += ",\"source\":";
         quoted(s->source);
         out += '}';

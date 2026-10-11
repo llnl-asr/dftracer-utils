@@ -48,8 +48,12 @@ struct GzipMemberSlice {
 
 /// Build gzip index artifacts (member table, dispatched visitor events).
 ///
-/// The inflate pass is parallelised across `scope`'s executor, one task per
-/// gzip member (single-member input runs as a single task).
+/// The inflate pass runs on `scope`'s executor in up to `ways` workers (0:
+/// the available parallelism, at most 16), each on a run of members of at
+/// least `ckpt_size / 4` uncompressed bytes. At most `ways + 2` runs are
+/// inflated ahead of the visitors, so a file holds about `2 * ways + 2` runs
+/// of plaintext. A caller that indexes several files at once divides its
+/// cores between them with `ways`.
 ///
 /// When `slice` is non-null, only the specified member range is
 /// processed. The caller is responsible for ensuring `slice->members`
@@ -57,7 +61,7 @@ struct GzipMemberSlice {
 coro::CoroTask<std::optional<GzipBuildArtifacts>> build_gzip_index_artifacts(
     const std::string &gz_path, std::uint64_t ckpt_size,
     const CheckpointIndexer::VisitorList &visitors, CoroScope *scope = nullptr,
-    const GzipMemberSlice *slice = nullptr);
+    const GzipMemberSlice *slice = nullptr, std::size_t ways = 0);
 
 /// Replace the file's `core.members` data (members and metadata) and write
 /// its manifest entry into `w`.

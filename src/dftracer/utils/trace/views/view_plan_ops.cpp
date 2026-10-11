@@ -36,6 +36,15 @@
 #include <unordered_set>
 #include <utility>
 
+namespace dftracer::utils::trace::views::detail {
+
+ExportStats counted(const ViewPlan& plan, ExportStats st) {
+    if (plan.scan_counter) plan.scan_counter->add(st);
+    return st;
+}
+
+}  // namespace dftracer::utils::trace::views::detail
+
 namespace dftracer::utils::trace::views::detail::scan {
 
 namespace {
@@ -913,6 +922,13 @@ ScanPlan agg_numeric_args(const ScanPlan& plan_,
 ScanPlan memory_budget(const ScanPlan& plan_, std::uint64_t bytes) {
     auto next = clone(plan_);
     next->memory_budget = bytes;
+    return next;
+}
+
+ScanPlan count_scans(const ScanPlan& plan_,
+                     std::shared_ptr<ScanCounter> counter) {
+    auto next = clone(plan_);
+    next->scan_counter = std::move(counter);
     return next;
 }
 

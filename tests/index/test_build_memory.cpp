@@ -30,7 +30,8 @@ namespace {
 // `paths` distinct args keys (numbers and strings), names from a small set,
 // and a time jump halfway, so chunks differ in every kind.
 std::string write_trace(const std::string& dir, const std::string& name,
-                        int events, int paths) {
+                        int events, int paths,
+                        std::size_t member_bytes = 16 * 1024) {
     std::ostringstream out;
     out << "[\n";
     std::uint64_t ts = 1000000;
@@ -59,7 +60,7 @@ std::string write_trace(const std::string& dir, const std::string& name,
     }
     const auto gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
-                                                               16 * 1024));
+                                                               member_bytes));
     fs::remove(plain);
     return gz;
 }
@@ -123,6 +124,49 @@ TEST_SUITE("IndexBuildMemory") {
         CHECK(r.indexed == 4);
         CHECK(r.failed == 0);
         CHECK(r.metrics.max_files_in_flight == 1);
+    }
+
+    TEST_CASE("parsing ahead writes the same index as one parse at a time") {
+        dftu_utils_test::TestEnvironment env(10);
+        // Small members are one parse piece each; a 6 MB member is several
+        // pieces of one checkpoint.
+        const std::vector<std::string> files = {
+            write_trace(env.get_dir(), "small", 6000, 600),
+            write_trace(env.get_dir(), "large", 60000, 600, 6u << 20)};
+        for (const auto& file : files) {
+            for (std::uint64_t budget :
+                 {NO_SPILL_BUDGET, std::uint64_t{64 << 10}}) {
+                CAPTURE(file);
+                CAPTURE(budget);
+                const auto tag = fs::path(file).stem().string() +
+                                 std::to_string(budget == NO_SPILL_BUDGET);
+                const auto serial_dir = env.get_dir() + "/serial" + tag;
+                const auto ahead_dir = env.get_dir() + "/ahead" + tag;
+                const auto serial = run_build({file}, serial_dir, budget, 0, 1);
+                const auto ahead = run_build({file}, ahead_dir, budget, 0, 4);
+                REQUIRE(serial.indexed == 1);
+                REQUIRE(ahead.indexed == 1);
+                CHECK(contents(index_of(file, serial_dir)) ==
+                      contents(index_of(file, ahead_dir)));
+            }
+        }
+    }
+
+    TEST_CASE("a spill of thousands of chunks writes the same index") {
+        // 2 KB members give about 1200 chunks, so the last spill writes them
+        // into several runs at once.
+        dftu_utils_test::TestEnvironment env(10);
+        const std::vector<std::string> files = {
+            write_trace(env.get_dir(), "many", 12000, 600, 2048)};
+        const auto big_dir = env.get_dir() + "/big";
+        const auto small_dir = env.get_dir() + "/small";
+        const auto big = run_build(files, big_dir, NO_SPILL_BUDGET);
+        const auto small = run_build(files, small_dir, 1 << 20);
+        REQUIRE(big.indexed == 1);
+        REQUIRE(small.indexed == 1);
+        CHECK(small.metrics.files_spilled == 1);
+        CHECK(contents(index_of(files[0], big_dir)) ==
+              contents(index_of(files[0], small_dir)));
     }
 
     TEST_CASE("a spilled build writes the same index as an unbounded one") {

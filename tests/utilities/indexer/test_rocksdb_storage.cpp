@@ -184,6 +184,34 @@ TEST_SUITE("RocksDBStorage") {
             doctest::Contains("still in use"), std::runtime_error);
     }
 
+    TEST_CASE("manager upgrade waits for a writer that still holds the lock") {
+        auto root =
+            dftu_utils_test::make_unique_test_path("rocksdb_manager_closing");
+        fs::create_directories(root);
+        const auto path = (root / ".dftindex").string();
+        auto& manager = RocksDBManager::instance();
+
+        // A rebuild resets the entry while a reader still holds the writer.
+        auto writer =
+            manager.get_or_open(path, RocksDatabase::OpenMode::ReadWrite);
+        REQUIRE(writer != nullptr);
+        manager.reset(path);
+        manager.get_or_open(path, RocksDatabase::OpenMode::ReadOnly).reset();
+
+        std::thread closer([&writer] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            writer.reset();
+        });
+        std::shared_ptr<RocksDatabase> upgraded;
+        CHECK_NOTHROW(upgraded = manager.get_or_open(
+                          path, RocksDatabase::OpenMode::ReadWrite));
+        closer.join();
+        REQUIRE(upgraded != nullptr);
+        CHECK_FALSE(upgraded->is_read_only());
+        upgraded.reset();
+        manager.reset(path);
+    }
+
     TEST_CASE("custom filesystem supports async read polling") {
         auto root =
             dftu_utils_test::make_unique_test_path("rocksdb_async_read");

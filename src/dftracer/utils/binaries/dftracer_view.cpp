@@ -816,8 +816,13 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     // every ingest path); index and reader both use the returned split copies.
     std::vector<std::pair<std::string, std::string>> auto_split;
     if (!no_auto_index) {
-        auto norm = co_await dftracer::utils::index::build::
-            normalize_members_for_ingest(std::move(files), checkpoint_size);
+        dftracer::utils::index::build::MemberNormalizeResult norm;
+        cli::run_on_pool(cli->pipeline, "dftracer_view normalize",
+                         [&](CoroScope&) -> coro::CoroTask<void> {
+                             norm = co_await dftracer::utils::index::build::
+                                 normalize_members_for_ingest(std::move(files),
+                                                              checkpoint_size);
+                         });
         files = std::move(norm.files);
         auto_split = std::move(norm.split);
     }
@@ -841,11 +846,12 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         // built before the query compiles. A distributed aggregation builds
         // its shards' indexes itself.
         if (!no_auto_index && !aggregate && !counters && !fg_mode)
-            co_await dftracer::utils::run_coro_scope(
-                [&](CoroScope& scope) -> coro::CoroTask<void> {
-                    co_await dftracer::utils::index::build::
-                        ensure_indexes_fresh(&scope, "", files, index_dir);
-                });
+            cli::run_on_pool(cli->pipeline, "dftracer_view index",
+                             [&](CoroScope& scope) -> coro::CoroTask<void> {
+                                 co_await dftracer::utils::index::build::
+                                     ensure_indexes_fresh(&scope, "", files,
+                                                          index_dir);
+                             });
         std::string plan;
         try {
             View probe = View::from_files(view_files);
@@ -940,10 +946,13 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     Pipeline pipeline(pipeline_config);
 
     ExportStats stats;
+    // collect() returns only its table, so its scans count here.
+    auto scans = std::make_shared<ScanCounter>();
     // Apply the parsed view options to a base View; shared by the single-node
     // and distributed paths so both aggregate identically. The projection and
     // row window (--select/--offset/--limit) are applied by `windowed`.
     auto configure = [&](View v) {
+        v = v.count_scans(scans);
         if (!cli->record_schema.empty())
             v = v.record_schema(cli->record_schema);
         if (view.query) v = v.filter(*view.query);
@@ -1196,14 +1205,13 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                     tr.counters.num_rows());
             } else if (counters) {
                 stats = co_await base.sink_counters(sink);
-            } else if (aggregate) {
+            } else if (aggregate || duql_rows) {
                 dataframe::DataFrame table = co_await v.collect();
                 print_table(out_target, table);
                 stats.events_matched = table.num_rows();
-            } else if (duql_rows) {
-                dataframe::DataFrame table = co_await v.collect();
-                print_table(out_target, table);
-                stats.events_matched = table.num_rows();
+                stats.events_scanned = scans->events_scanned.load();
+                stats.chunks_scanned = scans->chunks_scanned.load();
+                stats.chunks_skipped = scans->chunks_skipped.load();
             } else if (write_trace) {
                 // Fused: export_trace builds the index during the write (no
                 // re-inflate of the output) unless --no-index opts out.

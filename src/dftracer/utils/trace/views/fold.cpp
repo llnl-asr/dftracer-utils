@@ -466,6 +466,7 @@ struct LeafDecode {
     bool json;
     std::size_t max_children;
     DecodeHints* hints;
+    bool skip_never;
 
     // The declared field at `path`, found at `pos` in `paths` when set, or
     // remembered by the leaf's path id in `hints`.
@@ -755,6 +756,10 @@ void decode_leaves(std::string& path, simdjson::dom::element v, LeafDecode& d) {
         d.ev.specials.push_back({id, FoldEvent::Special::NULL_VALUE});
         return;
     }
+    if (d.skip_never && d.schema && d.record_schema &&
+        std::binary_search(d.record_schema->never_index.begin(),
+                           d.record_schema->never_index.end(), path))
+        return;
     if (d.record_schema)
         if (const auto* f = d.field(path, pos, id)) {
             bind_field(*f, id, v, d);
@@ -770,7 +775,7 @@ FoldEvent decode_record(
     bool capture_schema, const std::vector<std::string>* paths,
     const dftracer::utils::index::RecordSchema* record_schema,
     const std::vector<const dftracer::utils::index::FieldSpec*>* path_fields,
-    std::size_t max_children, DecodeHints* hints) {
+    std::size_t max_children, DecodeHints* hints, bool skip_never_indexed) {
     namespace ix = dftracer::utils::index;
     FoldEvent ev;
     ev.phase = RecordPhase::COMPLETE;
@@ -791,7 +796,8 @@ FoldEvent decode_record(
                  fields,
                  json,
                  max_children,
-                 hints};
+                 hints,
+                 skip_never_indexed};
     if (hints) ev.args.reserve(hints->args);
     std::string path;
     decode_leaves(path, root, d);
@@ -868,6 +874,7 @@ struct FuseWorkerCtx {
     bool any_wants_raw;
     bool any_wants_fold_event;
     bool any_wants_schema;
+    bool skip_never_indexed;
     DynamicPrune* dyn_prune;
     coro::CoroSemaphore* gate;
 };
@@ -933,6 +940,7 @@ coro::CoroTask<void> fuse_worker(FuseWorkerCtx ctx, std::size_t w) {
         sin.fold_needs_args = ctx.any_needs_args;
         sin.fold_keep_raw = ctx.any_wants_raw && ctx.any_wants_fold_event;
         sin.fold_capture_schema = ctx.any_wants_schema;
+        sin.fold_skip_never_indexed = ctx.skip_never_indexed;
         if (!ctx.extra_fields.empty())
             sin.fold_extra_fields = &ctx.extra_fields;
         ViewScannerUtility scanner;
@@ -1009,16 +1017,18 @@ coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
         st.chunks_skipped = skipped;
         const CoverageSet none;
         for (auto* f : folds) co_await f->finalize(none);
-        co_return st;
+        co_return counted(plan, st);
     }
 
     bool any_needs_args = false;
     bool any_wants_raw = false;
     bool any_wants_fold_event = false;
     bool any_wants_schema = false;
+    bool skip_never_indexed = true;
     for (auto* f : folds) {
         any_needs_args |= f->needs_args();
         any_wants_schema |= f->wants_schema();
+        skip_never_indexed &= !f->reads_never_indexed();
         if (f->wants_raw())
             any_wants_raw = true;
         else
@@ -1073,6 +1083,7 @@ coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
                       any_wants_raw,
                       any_wants_fold_event,
                       any_wants_schema,
+                      skip_never_indexed,
                       dyn_prune,
                       gate};
     co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
@@ -1112,7 +1123,7 @@ coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
 
     for (const auto& c : counts_v) c.add_to(st);
     st.truncated = produced.load(std::memory_order_relaxed) >= cap;
-    co_return st;
+    co_return counted(plan, st);
 }
 
 }  // namespace dftracer::utils::trace::views::detail

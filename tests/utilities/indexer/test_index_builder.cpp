@@ -15,10 +15,12 @@
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
+#include <fcntl.h>
 #include <index_test_helpers.h>
 #include <simdjson.h>
 #include <testing_runtime.h>
 #include <testing_utilities.h>
+#include <unistd.h>
 
 #include <memory>
 
@@ -250,6 +252,53 @@ TEST_SUITE("IndexBuilder") {
         }
         CHECK(members.back().c_offset + members.back().c_size == file_size);
         CHECK(members.back().last_line_num == 100);
+    }
+
+    TEST_CASE("Member scan finds every member across scan windows") {
+        // Hex text compresses to about half, so the members span several
+        // scan windows and many headers sit near a window edge.
+        std::vector<std::string> texts;
+        std::uint64_t state = 0x9E3779B97F4A7C15ULL;
+        while (texts.size() < 400) {
+            std::string t;
+            const std::size_t lines = 600 + texts.size() % 97;
+            for (std::size_t l = 0; l < lines; ++l) {
+                for (int k = 0; k < 6; ++k) {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    static constexpr char HEX[] = "0123456789abcdef";
+                    for (int b = 0; b < 16; ++b)
+                        t += HEX[(state >> (b * 4)) & 0xF];
+                }
+                t += '\n';
+            }
+            texts.push_back(std::move(t));
+        }
+        auto [gz_file, c_offsets] = write_multi_member_gz(texts);
+        const std::uint64_t file_size = fs::file_size(gz_file);
+        REQUIRE(file_size >
+                2 * dftracer::utils::index::gzip::MEMBER_SCAN_WINDOW);
+
+        std::vector<dftracer::utils::index::gzip::GzipMember> found;
+        bool ok = false;
+        const int fd = ::open(gz_file.c_str(), O_RDONLY);
+        REQUIRE(fd >= 0);
+        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+            ok = co_await dftracer::utils::index::gzip::
+                enumerate_gzip_member_candidates(fd, file_size, found);
+        });
+        ::close(fd);
+        REQUIRE(ok);
+        REQUIRE(found.size() == c_offsets.size());
+        for (std::size_t i = 0; i < found.size(); ++i) {
+            CAPTURE(i);
+            CHECK(found[i].c_offset == c_offsets[i]);
+            CHECK(found[i].isize == texts[i].size());
+            const std::uint64_t next =
+                i + 1 < found.size() ? c_offsets[i + 1] : file_size;
+            CHECK(found[i].c_size == next - c_offsets[i]);
+        }
     }
 
     TEST_CASE("Pruner chunks are gzip members") {

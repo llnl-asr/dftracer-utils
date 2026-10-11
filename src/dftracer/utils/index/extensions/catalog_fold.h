@@ -34,6 +34,7 @@ class CatalogFold : public trace::views::detail::Fold {
         return !shape.filtered && !shape.windowed;
     }
     bool wants_schema() const override { return true; }
+    bool reads_never_indexed() const override { return false; }
     bool wants_metadata() const override { return false; }
 
     std::unique_ptr<trace::views::detail::Fold> slice() const override {

@@ -108,6 +108,8 @@ struct SchemaSpec {
     std::vector<FieldSpec> fields;
     std::optional<std::size_t> path_budget;
     std::optional<double> stats_share;
+    /// Added to the parent's `never_index` paths.
+    std::vector<std::string> never_index;
     /// duql source members (`name = pipeline`, `def ...`), `;` separated.
     std::string source;
 };
@@ -139,6 +141,10 @@ struct RecordSchema {
     /// Paths indexed past the path budget: `always_index` fields and, for
     /// path-decoded records, the time field.
     std::vector<std::string> always_index;
+    /// Paths the index build lists in the path catalog but keeps no evidence
+    /// for and interns no value of (`index.never_index`); sorted and unique.
+    /// Queries still read them.
+    std::vector<std::string> never_index;
     /// The library's own definition (dftracer, generic, genesis).
     bool builtin = false;
     /// Whether a field has the JSON type.
@@ -177,9 +183,9 @@ const RecordSchema& register_schema(const SchemaSpec& spec,
 
 /// Registers the schema the YAML or JSON spec `text` describes. Keys: id,
 /// extends, fields (name -> type, path, optional, role, unit, always_index),
-/// index.path_budget and source (duql source members).
-/// Throws as the SchemaSpec overload, and for an unknown key or a value of
-/// the wrong type.
+/// index.path_budget, index.never_index (a list of paths) and source (duql
+/// source members). Throws as the SchemaSpec overload, and for an unknown key
+/// or a value of the wrong type.
 const RecordSchema& register_schema(std::string_view text,
                                     std::string_view source);
 

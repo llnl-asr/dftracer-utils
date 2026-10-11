@@ -5,6 +5,7 @@
 #include <dftracer/utils/duql/term.h>
 #include <dftracer/utils/index/source.h>
 
+#include <algorithm>
 #include <utility>
 #include <vector>
 
@@ -129,6 +130,18 @@ void check_source(const RecordSchema& schema, std::string_view origin) {
     const duql::Roles roles = duql_roles(schema);
     auto p = duql::compile_program("where true", {}, &roles, schema.source);
     if (!p) bad(origin, "schema " + schema.id + ": " + p.error().format());
+    if (schema.never_index.empty()) return;
+    // A stored row set reads values from the decoded events, which a
+    // listed path does not keep.
+    for (const auto& r : indexed_rowsets(schema))
+        for (const auto& path : schema.never_index) {
+            const bool selected =
+                std::any_of(r.columns.begin(), r.columns.end(),
+                            [&](const auto& c) { return c.second == path; });
+            if (selected || (r.filter && r.filter->references(path)))
+                bad(origin, "schema " + schema.id + ": row set " + r.name +
+                                " reads " + path + ", which is never_index");
+        }
 }
 
 std::string data_condition(const RecordSchema& schema) {

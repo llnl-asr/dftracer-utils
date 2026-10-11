@@ -237,14 +237,17 @@ struct DecodeHints {
 /// each path so no lookup runs per leaf. With `max_children`, an array or
 /// object below the root with more children is one leaf: its canonical JSON
 /// text at its path. `hints`, when given, is the calling worker's own and is
-/// not shared between threads.
+/// not shared between threads. With `capture_schema` and `skip_never_indexed`,
+/// a scalar at a `never_index` path of `record_schema` is listed in
+/// `schema_leaves` and its value is not decoded.
 FoldEvent decode_record(
     simdjson::dom::element root, dftracer::utils::StringIntern& intern,
     bool capture_schema = true, const std::vector<std::string>* paths = nullptr,
     const dftracer::utils::index::RecordSchema* record_schema = nullptr,
     const std::vector<const dftracer::utils::index::FieldSpec*>* path_fields =
         nullptr,
-    std::size_t max_children = 0, DecodeHints* hints = nullptr);
+    std::size_t max_children = 0, DecodeHints* hints = nullptr,
+    bool skip_never_indexed = false);
 
 /// The max_children an index build decodes with, so a record of huge arrays
 /// or maps adds a bounded number of catalog paths and zone keys.

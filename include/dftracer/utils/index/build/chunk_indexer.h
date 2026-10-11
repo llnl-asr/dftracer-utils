@@ -124,8 +124,8 @@ inline std::string extra_dimension_name(std::string_view field) {
 
 /// The settings files of `schema` are indexed with: path-decoded records get
 /// no dftracer fixed dimensions or name postings; the schema's always-indexed
-/// paths join the extra dimensions and its path budget and stats share replace
-/// the build's.
+/// paths join the extra dimensions, its never-indexed paths leave them, and
+/// its path budget and stats share replace the build's.
 inline ChunkIndexerConfig for_schema(ChunkIndexerConfig config,
                                      const RecordSchema& schema) {
     const bool by_path = schema.decoder == Decoder::PATH;
@@ -146,6 +146,8 @@ inline ChunkIndexerConfig for_schema(ChunkIndexerConfig config,
                       dim) == config.extra_dimensions.end())
             config.extra_dimensions.push_back(std::move(dim));
     }
+    for (const auto& path : schema.never_index)
+        std::erase(config.extra_dimensions, path);
     if (schema.path_budget) config.path_budget = *schema.path_budget;
     if (schema.stats_share) config.stats_share = *schema.stats_share;
     return config;

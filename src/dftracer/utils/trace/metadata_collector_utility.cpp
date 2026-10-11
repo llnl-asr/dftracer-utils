@@ -6,6 +6,7 @@
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/json/line.h>
+#include <dftracer/utils/trace/internal/index_root.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/fileio/indexed_file_reader_utility.h>
@@ -20,37 +21,6 @@ namespace dftracer::utils::trace {
 
 namespace hash = dftracer::utils::utilities::hash;
 using namespace utilities::fileio::lines;
-
-namespace {
-
-// What this process knows of the index at one root, by canonical path: the lock
-// that serializes building it, and the files it built or found current, by
-// modification time and size. Held under the lock.
-struct IndexedFile {
-    std::pair<std::int64_t, std::uint64_t> stamp;
-    std::size_t num_lines = 0;
-    std::uint64_t max_bytes = 0;
-    std::uint64_t checkpoint_size = 0;
-    std::size_t num_checkpoints = 0;
-};
-
-struct IndexRoot {
-    coro::AsyncMutex building;
-    StringViewMap<IndexedFile> current;
-};
-
-std::shared_ptr<IndexRoot> index_root(const std::string& index_path) {
-    static std::mutex guard;
-    static StringViewMap<std::shared_ptr<IndexRoot>> roots;
-    std::error_code ec;
-    const fs::path canonical = fs::weakly_canonical(index_path, ec);
-    const std::lock_guard<std::mutex> lock(guard);
-    auto& r = roots[ec ? index_path : canonical.string()];
-    if (!r) r = std::make_shared<IndexRoot>();
-    return r;
-}
-
-}  // namespace
 
 coro::CoroTask<MetadataCollectorUtilityOutput>
 MetadataCollectorUtility::operator()(
@@ -103,7 +73,8 @@ MetadataCollectorUtility::process_compressed(
 
         // Scans of one file that start together would each build or
         // rebuild its index and remove the other's files.
-        const std::shared_ptr<IndexRoot> root = index_root(input.index_path);
+        const std::shared_ptr<internal::IndexRoot> root =
+            internal::index_root(input.index_path);
         std::size_t total_lines = 0;
         {
             co_await root->building.lock();
@@ -151,14 +122,18 @@ MetadataCollectorUtility::process_compressed(
                         dftracer::utils::index::gzip::CheckpointIndexerFactory::
                             create(input.file_path, input.index_path,
                                    input.checkpoint_size, false);
+                    // The root can exist without this file in it, as when a
+                    // concurrent first-touch bootstrap reserved the file id.
+                    // The build returns at once for a fresh record.
+                    co_await indexer->build_async();
                 }
                 total_lines = indexer->get_num_lines();
                 meta.uncompressed_size = indexer->get_max_bytes();
                 meta.checkpoint_size = indexer->get_checkpoint_size();
                 meta.num_checkpoints = indexer->get_members().size();
-                root->current[file_key] =
-                    IndexedFile{stamp, total_lines, meta.uncompressed_size,
-                                meta.checkpoint_size, meta.num_checkpoints};
+                root->current[file_key] = internal::IndexedFile{
+                    stamp, total_lines, meta.uncompressed_size,
+                    meta.checkpoint_size, meta.num_checkpoints};
             }
             meta.index_valid = true;
             meta.num_lines = total_lines;

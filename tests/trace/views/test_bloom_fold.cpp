@@ -18,6 +18,9 @@
 #include <testing_runtime.h>
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
+#include <random>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -125,7 +128,8 @@ TEST_SUITE("BloomFold") {
                             R"(,"dur":1,"args":{"k":"v"}})");
         auto events = events_of(lines, intern);
         auto drive = [&](BloomFold& fold) {
-            for (std::uint64_t cp = 0; cp < 4; ++cp) {
+            // A chunk spills once SPILL_LAG later checkpoints have started.
+            for (std::uint64_t cp = 0; cp < 4 + BloomFold::SPILL_LAG; ++cp) {
                 ScanUnit unit;
                 unit.file_path = "f.pfw.gz";
                 unit.index_path = env.get_dir() + "/.dftindex";
@@ -151,7 +155,8 @@ TEST_SUITE("BloomFold") {
             drive(fold);
             runs = fold.finish_spilled(1).size();
         }
-        CHECK(runs == 4);
+        // Three spilled runs, one with the chunks left and one closing run.
+        CHECK(runs == 5);
         CHECK(fs::exists(kept));
     }
 
@@ -576,5 +581,67 @@ TEST_SUITE("BloomFold - auto fields") {
         CHECK(dftu_utils_test::has_file_bloom(db, fid, "mode"));
         CHECK(dftu_utils_test::bloom_chunks(db, fid, "fname") < size.size());
         CHECK_FALSE(dftu_utils_test::has_file_bloom(db, fid, "fname"));
+    }
+}
+
+TEST_CASE("numeric bounds keep the min and max text of the text path") {
+    using dftracer::utils::index::schemas::dft::BloomCore;
+    // Zeros of either sign print differently but compare equal.
+    for (const auto& values : std::vector<std::vector<double>>{
+             {0.0, -1e-7}, {1e-7, -1e-7}, {-1e-7, 1e-7}, {-1e-7, 0.0, 2e-7}}) {
+        ChunkDimensionStats text_path;
+        ChunkDimensionStats typed;
+        text_path.value_type.clear();
+        typed.value_type.clear();
+        BloomCore::NumericBounds bounds;
+        for (double v : values) {
+            BloomCore::observe_value(text_path, v);
+            BloomCore::observe_value(typed, bounds, v);
+        }
+        CHECK(typed.min_value == text_path.min_value);
+        CHECK(typed.max_value == text_path.max_value);
+    }
+    std::mt19937_64 rng(7);
+    std::uniform_real_distribution<double> real(-1e3, 1e3);
+    for (int round = 0; round < 200; ++round) {
+        CAPTURE(round);
+        ChunkDimensionStats text_path;
+        ChunkDimensionStats typed;
+        text_path.value_type.clear();
+        typed.value_type.clear();
+        BloomCore::NumericBounds bounds;
+        for (int i = 0; i < 300; ++i) {
+            // Doubles that print to the same 6 decimals, integers, a
+            // double between two integers, and the odd non-finite value.
+            const int kind = static_cast<int>(rng() % 8);
+            if (kind < 3) {
+                const double base = std::floor(real(rng) * 1e3) / 1e3;
+                const double v = base + static_cast<double>(rng() % 5) * 1e-7;
+                BloomCore::observe_value(text_path, v);
+                BloomCore::observe_value(typed, bounds, v);
+            } else if (kind < 5) {
+                const auto v = static_cast<std::int64_t>(rng() % 2001) - 1000;
+                BloomCore::observe_value(text_path, v);
+                BloomCore::observe_value(typed, bounds, v);
+            } else if (kind < 6) {
+                const auto v = static_cast<std::uint64_t>(rng() % 1000);
+                BloomCore::observe_value(text_path, v);
+                BloomCore::observe_value(typed, bounds, v);
+            } else if (kind < 7) {
+                const double v = static_cast<double>(rng() % 2001) - 1000.5;
+                BloomCore::observe_value(text_path, v);
+                BloomCore::observe_value(typed, bounds, v);
+            } else if (round % 10 == 0) {
+                const double v = rng() % 2
+                                     ? std::numeric_limits<double>::infinity()
+                                     : std::nan("");
+                BloomCore::observe_value(text_path, v);
+                BloomCore::observe_value(typed, bounds, v);
+            }
+            REQUIRE(typed.value_type == text_path.value_type);
+            REQUIRE(typed.present == text_path.present);
+            REQUIRE(typed.min_value == text_path.min_value);
+            REQUIRE(typed.max_value == text_path.max_value);
+        }
     }
 }

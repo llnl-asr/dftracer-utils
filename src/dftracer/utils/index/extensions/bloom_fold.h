@@ -50,12 +50,37 @@ class BloomFold : public trace::views::detail::Fold {
     /// Enumerate every scalar leaf (nested included) so the harvested column
     /// set is schemaless: a nested-object arg surfaces as dotted leaf columns.
     bool wants_schema() const override { return true; }
+    bool reads_never_indexed() const override { return false; }
 
     std::unique_ptr<trace::views::detail::Fold> slice() const override {
         return std::make_unique<BloomFold>(*intern_, config_);
     }
 
     void step(const trace::views::detail::FoldBatch& batch) override;
+
+    /// step() in two parts, so batches of different checkpoints can be
+    /// observed at once. open() runs on one thread in checkpoint order and may
+    /// spill the chunks SPILL_LAG or more checkpoints before the batch's,
+    /// which must be observed by then. The observe() calls of one checkpoint
+    /// run in order, each after its open().
+    static constexpr std::uint64_t SPILL_LAG = 16;
+    /// finish_spilled writes the chunks and absence entries it has left into
+    /// up to FINISH_PARTS runs of at least FINISH_PART_CHUNKS chunks each.
+    static constexpr std::uint64_t FINISH_PARTS = 8;
+    static constexpr std::uint64_t FINISH_PART_CHUNKS = 256;
+    class Lane;
+    Lane open(const trace::views::detail::FoldBatch& batch);
+    void observe(const Lane& lane,
+                 const trace::views::detail::FoldBatch& batch);
+    bool spills() const { return !spill_dir_.empty(); }
+    /// Whether finish_spilled writes the tier rather than write(): spill is
+    /// enabled and the fold holds chunks or runs. write() writes nothing for
+    /// a file without records.
+    bool writes_runs() const {
+        if (spill_dir_.empty() || files_.empty()) return false;
+        const FileState& fs = files_.begin()->second;
+        return !fs.spill.runs.empty() || !fs.chunks.empty();
+    }
     void seal_unit(const trace::views::detail::ScanUnit& /*unit*/) override {}
     void drop_unit(const trace::views::detail::ScanUnit& unit) override;
     void merge(trace::views::detail::Fold& slice) override;
@@ -86,10 +111,11 @@ class BloomFold : public trace::views::detail::Fold {
     void enable_spill(std::uint64_t share, std::string dir, int file_id);
     /// Runs written so far; 0 means the file is still wholly in memory.
     std::size_t spill_runs() const;
-    /// For a file with runs: writes the rest of its tier and its manifest
-    /// entries to one more run and returns every run in ingest order. They
-    /// commit only as one ingest in that order, since the last run's range
-    /// deletes drop the evidence the selection did not keep. The caller owns
+    /// For a file with spill enabled, with or without runs so far: writes the
+    /// rest of its tier and its manifest entries to more runs and returns
+    /// every run in ingest order. They commit only as one ingest in that
+    /// order, since the range deletes of the first new run drop the evidence
+    /// of the runs before it that the selection did not keep. The caller owns
     /// the files from here on.
     std::vector<index::store::IndexDatabaseSstWriterContext::Artifacts>
     finish_spilled(int file_id);
@@ -111,11 +137,20 @@ class BloomFold : public trace::views::detail::Fold {
     struct AutoField {
         AutoField() { stats.value_type.clear(); }
         index::schemas::dft::BloomCore::ChunkDimensionStats stats;
+        index::schemas::dft::BloomCore::NumericBounds bounds;
         ankerl::unordered_dense::set<std::uint32_t> values;
         bool overflow = false;
     };
     using AutoChunk = ankerl::unordered_dense::map<std::uint32_t, AutoField>;
 
+   public:
+    class Lane {
+        friend class BloomFold;
+        ChunkState* chunk_ = nullptr;
+        AutoChunk* auto_chunk_ = nullptr;
+    };
+
+   private:
     // A kept auto key; an absence-only one keeps only its absence entries.
     struct AutoKey {
         std::string name;
@@ -175,7 +210,6 @@ class BloomFold : public trace::views::detail::Fold {
             paths;
         /// Auto keys of the chunks summarized so far.
         ankerl::unordered_dense::map<std::uint32_t, PathEvidence> evidence;
-        index::schemas::dft::BloomCore::PidTidCache pidtid;
     };
 
     dftracer::utils::StringIntern* intern_;

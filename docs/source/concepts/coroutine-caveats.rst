@@ -113,8 +113,14 @@ GCC's coroutine frontend (versions 12-13 especially) has miscalculated the frame
 layout for locals, causing silent memory corruption: a segfault in
 ``std::_Hash_bytes`` reading an ``unordered_map`` key, a crash in
 ``shared_ptr::_M_release`` during coroutine destruction, a bug that appears or
-vanishes when you add or remove a single local. The codebase hit this in
-``scope.spawn`` paths, which is the origin of several of the patterns above.
+vanishes when you add or remove a single local. It can also show as
+``SIGILL`` (illegal instruction): for ``if (co_await try_collect_bootstrap(...))``
+GCC 12.1 on x86_64 compiled a path into a trap (``ud2``), so the first
+``dftracer_view`` aggregate of a file died, while GCC 12.3 on aarch64 ran the
+same code. Naming the awaited result first (``const bool served = co_await
+...; if (served)``) removed the trap. The codebase hit these bugs in
+``scope.spawn`` and bootstrap paths, which is the origin of several of the
+patterns above.
 
 What triggers it: non-trivial types (containers with destructors) on the frame,
 many locals alive across ``co_await``, lambda coroutines with many captures, and
@@ -185,6 +191,9 @@ Practical rules for this codebase
    reference to caller-owned memory.
 #. Use **named functions**, not lambda coroutines, for anything non-trivial.
 #. Keep frames small - few non-trivial locals alive across ``co_await``.
+#. Name an awaited result before you test it, and build arguments of an
+   awaited call as named locals, not inside the ``co_await``: GCC 12 destroys
+   such temporaries twice and has trapped on an awaited call in a condition.
 #. **Heap-allocate** large containers that must live on a frame.
 #. For read-only data shared across parallel coroutines, rely on **structural
    lifetime** (parent outlives children) with raw pointers.

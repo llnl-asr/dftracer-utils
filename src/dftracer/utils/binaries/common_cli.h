@@ -12,6 +12,7 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
+#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/duql/macros.h>
@@ -508,6 +509,18 @@ struct WatchdogArgs : CliSchema {
                 std::chrono::seconds(deadlock_timeout));
     }
 };
+
+// A CLI's run coroutine is driven by CoroTask::get() on main, whose RunLoop is
+// one thread, so work it awaits outside its Pipeline runs serially. A heavy
+// step there runs here instead, on the CLI's threads, and blocks until done.
+template <typename Func>
+void run_on_pool(const PipelineArgs& pipeline, const char* name, Func&& func) {
+    ExecutorConfig config;
+    config.num_threads = pipeline.executor_threads;
+    config.io_pool_size = pipeline.io_threads;
+    Runtime pool(config, /*enable_watchdog=*/false);
+    pool.run_blocking(name, std::forward<Func>(func));
+}
 
 inline PipelineConfig build_pipeline_config(const std::string& name,
                                             const PipelineArgs& pipeline) {

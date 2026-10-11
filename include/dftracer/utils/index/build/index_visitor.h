@@ -5,6 +5,10 @@
 
 #include <cstddef>
 
+namespace dftracer::utils {
+class CoroScope;
+}  // namespace dftracer::utils
+
 namespace dftracer::utils::index::store {
 class IndexDatabaseWriterContext;
 }  // namespace dftracer::utils::index::store
@@ -16,6 +20,11 @@ class IndexVisitor {
     virtual ~IndexVisitor() = default;
 
     virtual void begin(std::size_t num_checkpoints) = 0;
+
+    /// The scope the indexer runs this file in, called after begin(). A
+    /// visitor may spawn work there that it awaits by flush(); the scope
+    /// outlives the file's chunks. Default: ignored.
+    virtual void bind_scope(CoroScope* /*scope*/) {}
 
     virtual coro::CoroTask<void> on_checkpoint(std::size_t checkpoint_idx) = 0;
 

@@ -55,6 +55,26 @@ def test_above_the_mean_of_its_own_name(tmp_path, seed):
     assert 0 < len(want) < len(events)
 
 
+@pytest.mark.parametrize("outer", ["", 'ph == "X" and ', 'cat == "POSIX" and ', "pid >= 1 and "])
+def test_first_touch_with_an_outer_filter(tmp_path, outer):
+    events = _events(1, 400)
+    mean = {}
+    for name in {e["name"] for e in events}:
+        durs = [e["dur"] for e in events if e["name"] == name]
+        mean[name] = sum(durs) / len(durs)
+    got = (
+        _viewer(tmp_path, events)
+        .duql(
+            f"where {outer}dur > (from data | where name == ^.name | agg {{ m = mean(dur) }}) | select tid"
+        )
+        .collect()
+        .to_dict()
+    )
+    want = {e["tid"] for e in events if e["dur"] > mean[e["name"]]}
+    assert set(got["tid"]) == want and len(got["tid"]) == len(want)
+    assert 0 < len(want) < len(events)
+
+
 @pytest.mark.parametrize("seed", [1, 2])
 def test_count_per_key_and_per_pair(tmp_path, seed):
     events = _events(seed, 1500)

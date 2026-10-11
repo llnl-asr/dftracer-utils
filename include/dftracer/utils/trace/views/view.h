@@ -12,6 +12,7 @@
 #include <dftracer/utils/trace/views/result_join.h>
 #include <dftracer/utils/utilities/common/statistics/ddsketch.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -210,6 +211,21 @@ struct ExportStats {
     /// This read was served from a materialized view instead of the base
     /// traces (the scan ran over a subsuming filtered-trace MV).
     bool served_from_mv = false;
+};
+
+/// The counts of every scan a View runs, added up, for a caller that reads its
+/// result through collect(), which returns only a table. Scans that run at the
+/// same time may share one counter.
+struct ScanCounter {
+    std::atomic<std::uint64_t> events_scanned{0};
+    std::atomic<std::uint64_t> chunks_scanned{0};
+    std::atomic<std::uint64_t> chunks_skipped{0};
+
+    void add(const ExportStats& st) {
+        events_scanned.fetch_add(st.events_scanned, std::memory_order_relaxed);
+        chunks_scanned.fetch_add(st.chunks_scanned, std::memory_order_relaxed);
+        chunks_skipped.fetch_add(st.chunks_skipped, std::memory_order_relaxed);
+    }
 };
 
 /// Options for sink_trace(): write the view's events as a new
@@ -736,6 +752,9 @@ class View : public dataframe::LazyOps<View> {
     View cancel_when(std::function<bool()> pred) const;
     /// Spill budget for both the trace aggregation and the LazyFrame ops.
     View memory_budget(std::uint64_t bytes) const;
+    /// Add the counts of every scan this View, and each View derived from it,
+    /// runs to `counter`, which must outlive those scans.
+    View count_scans(std::shared_ptr<ScanCounter> counter) const;
 
     /// Index metadata only; no trace event is decoded.
     std::vector<std::string> columns() const;

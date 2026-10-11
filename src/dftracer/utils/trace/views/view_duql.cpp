@@ -5333,6 +5333,7 @@ std::pair<View, std::vector<std::string>> View::duql_plan(
                 all->views_root = plan_->views_root;
                 all->memory_budget = plan_->memory_budget;
                 all->cancelled = plan_->cancelled;
+                all->scan_counter = plan_->scan_counter;
                 all->all_records = true;
                 return detail::view_of(std::move(all));
             }

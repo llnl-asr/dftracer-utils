@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_BLOOM_CORE_H
 
 #include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/extensions/chunk_dimension_stats.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
@@ -10,6 +11,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -121,6 +123,22 @@ class BloomCore {
     static void observe_extra(ChunkState& chunk, std::size_t e,
                               std::string_view value);
 
+    /// The parsed min and max text of a dimension that one caller alone
+    /// observes. `valid` is false until they are parsed, and must be reset
+    /// when anything else writes the dimension's bounds.
+    struct NumericBounds {
+        std::optional<duql::Number> min;
+        std::optional<duql::Number> max;
+        bool valid = false;
+    };
+    /// As observe_value, with the same min and max text, but a value that
+    /// moves no bound is compared as a number and never formatted.
+    static void observe_value(ChunkDimensionStats& stats, NumericBounds& bounds,
+                              std::int64_t value);
+    static void observe_value(ChunkDimensionStats& stats, NumericBounds& bounds,
+                              std::uint64_t value);
+    static void observe_value(ChunkDimensionStats& stats, NumericBounds& bounds,
+                              double value);
     /// observe_extra's min/max and type rule, without the bloom.
     static void observe_value(ChunkDimensionStats& stats, std::int64_t value);
     static void observe_value(ChunkDimensionStats& stats, std::uint64_t value);

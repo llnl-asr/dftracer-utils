@@ -104,9 +104,15 @@ std::shared_ptr<RocksDatabase> RocksDBManager::get_or_open(
                         return current;
                     }
 
-                    if (opening_.contains(db_path)) {
-                        cv_.wait(lock,
-                                 [&] { return !opening_.contains(db_path); });
+                    // A writer whose last handle is gone still holds the
+                    // RocksDB lock until its close ends, so an upgrade waits
+                    // for it as a fresh read-write open does.
+                    if (opening_.contains(db_path) ||
+                        writers_.contains(db_path)) {
+                        cv_.wait(lock, [&] {
+                            return !opening_.contains(db_path) &&
+                                   !writers_.contains(db_path);
+                        });
                         continue;
                     }
 

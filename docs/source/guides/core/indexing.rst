@@ -465,6 +465,8 @@ give the same schema (see :doc:`../../reference/record-schema`):
 
          ix::register_schema<AccessLog>("myapp");
 
+List a path, such as a unique blob, under ``index: {never_index: [...]}`` to keep it out of the index while queries still read it.
+
 Register the schema before the files are indexed, then index and read them
 as usual:
 

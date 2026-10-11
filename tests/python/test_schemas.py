@@ -109,6 +109,21 @@ def test_a_class_registers_the_same_schema_as_a_spec():
     )
 
 
+def test_a_spec_lists_never_indexed_paths():
+    schemas.register(
+        "id: py_never_index\n"
+        "fields:\n"
+        "  zz_py_status: {type: int}\n"
+        "index: {never_index: [zz_py_blob]}\n"
+    )
+    got = next(s for s in schemas.list() if s["id"] == "py_never_index")
+    assert got["never_index"] == ["zz_py_blob"]
+    genesis = next(s for s in schemas.list() if s["id"] == "genesis")
+    assert genesis["never_index"] == ["dur.sketch", "v.sketch"]
+    with pytest.raises(Exception, match="list of paths"):
+        schemas.register("id: py_never_bad\nindex: {never_index: abc}\n")
+
+
 def test_a_class_source_row_set_runs_from(tmp_path):
     class PyWeb(RecordSchema, id="py_web"):
         status: int

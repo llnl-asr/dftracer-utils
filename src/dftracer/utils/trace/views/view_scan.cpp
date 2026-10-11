@@ -480,7 +480,9 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
     bool any_needs_args = false;
     bool any_wants_schema = false;
     bool any_reads_every_field = false;
+    bool skip_never_indexed = true;
     for (auto* f : folds) {
+        skip_never_indexed &= !f->reads_never_indexed();
         any_needs_args |= f->needs_args();
         any_wants_schema |= f->wants_schema();
         any_reads_every_field |= f->reads_every_field();
@@ -560,7 +562,9 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
                                               any_wants_schema
                                                   ? INDEX_MAX_CHILDREN
                                                   : 0,
-                                              &hints)
+                                              &hints,
+                                              any_wants_schema &&
+                                                  skip_never_indexed)
                                         : extract_fold_event(
                                               doc.value_unsafe(), *intern,
                                               any_needs_args, nullptr,
@@ -624,7 +628,7 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
     st.truncated = produced.load(std::memory_order_relaxed) >= cap;
     for (auto* f : folds)
         if (co_await f->finalize(covered)) st.artifacts_committed = true;
-    co_return st;
+    co_return counted(plan, st);
 }
 
 }  // namespace dftracer::utils::trace::views::detail

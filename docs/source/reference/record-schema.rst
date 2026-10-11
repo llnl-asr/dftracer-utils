@@ -41,6 +41,15 @@ Spec keys
      - Optional ceiling on how many other paths are indexed, most frequent
        first (default 0, no limit); replaces the parent's and the build's
        value. A negative count is an error.
+   * - ``index.never_index``
+     - list of paths
+     - Paths to keep out of the index. The index build lists each path in
+       the path catalog, but keeps no bloom, min and max or absence entries
+       for it and interns none of its values. Queries still read the path
+       from the trace. Added to the parent's list. A path that has a role or
+       ``always_index``, a path that a stored row set of the source reads,
+       and a schema that does not decode records by path are errors. The
+       built-in ``genesis`` schema lists ``dur.sketch`` and ``v.sketch``.
    * - ``source``
      - string
      - duql text: the row sets (``name = pipeline``) and macros

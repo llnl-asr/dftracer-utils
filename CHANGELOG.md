@@ -9,8 +9,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Find the gzip members of a trace with 16 reads in flight instead of one, and keep the `sketch` strings of genesis records out of the index build.
+  The member scan of the 20.7 GB genesis sweep took about 45 s on one core, and its sketches filled the string table to about 36 GB.
+  The index of the regrouped 17 GB sweep now builds in 313 to 338 s at a 5 to 8 GB peak instead of 385 s at 42 GB ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 - Write the `run` and `func` records of `dftracer_genesis_gen_dist` after every `counter` record, in gzip members of their own, so a query on `func` or `run` records reads a few chunks instead of most of the file.
   On the 20.7 GB sweep, a `gtype == "func" and name == "main"` query takes 1.3 s instead of 44 s, and the amg scaling read takes 1 s instead of 13 s ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Keep the bloom index that a first `dftracer_view` query builds for each file within that file's share of `--memory-budget`.
+  Past it, finished chunks go to sorted runs next to the index and are ingested with the rest of the file, as `dftracer_index` already did, and the index is the same ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Write the bloom index of a file as sorted runs that are built at the same time and ingested, also when nothing spilled, instead of one write batch into the database or one last run on one thread.
+  The first `dftracer_view` count over one genesis part of 160 million counter records takes 172 s instead of 190 s, and over 12 parts 222 s instead of 242 s.
+  `--no-spill` keeps the write batch ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Keep the min and max of each auto-indexed args key of an index chunk as numbers while the chunk is built, and format a value as text only when it moves a bound, instead of formatting every value and parsing both bounds again for each comparison.
+  The stored bounds are the same text.
+  The first `dftracer_view` count over one genesis part of 160 million counter records takes 397 s instead of 760 s on one node, at the same 12.4 GB peak ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Build the index of a gzip trace on all the cores it is given, in bounded memory, and give the same index.
+  The members are inflated in runs of about 8 MB, which up to 16 workers take in order into reused buffers, with at most two runs past the workers ahead of the parse.
+  The plaintext is parsed ahead of the index folds in 4 MB pieces, and every fold steps on its own task in file order.
+  The bloom index of different chunks is built at the same time, each chunk from its records in file order.
+  A first `dftracer_view` query over several files divides the cores between the files it indexes at once.
+  Before, one file was inflated and its index built on about one core, and the workers ahead buffered up to 160 MB each without bound.
+  Over the 12 parts (20.7 GB) of a genesis sweep on one 48-core node, the first `dftracer_view --group-by gtype --agg count` takes 222 s at a 36.9 GB peak instead of 863 s with 52 GB resident, and one part of 160 million counter records takes 172 s instead of 397 s ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 - Make `dftracer_genesis_gen_dist` sort and walk a run group in parallel.
   The calls of a group too large for its sort buffer are read back from the spill file, mapped and sorted by 16 tasks at once.
   The processes of a group are walked in up to 64 parts at once, process p in part p modulo the parts, and the partial records are merged in part order (exact sketch merges, counts, minima and maxima).
@@ -29,6 +47,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add the record schema setting `index.never_index`, a list of paths that the index build puts in the path catalog without evidence or interned values.
+  Queries still read these paths.
+  The built-in `genesis` schema lists `dur.sketch` and `v.sketch`, so the index build of a genesis file no longer interns the unique sketch of every function and counter record.
+  A schema refuses a listed path that has a role or `always_index` or that a stored row set reads ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 - Add `--shard i/N` to `dftracer_genesis_gen_dist`, so that a process takes part `i` of `N` of the run groups.
   The groups are split largest first so the parts hold about the same trace bytes, and the parts concatenate into one file.
   A build with `DFTRACER_UTILS_ENABLE_MPI=ON` splits the groups between its ranks by default, and the ranks copy their parts into `-o` at their offsets at the same time ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
@@ -39,6 +61,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix the first query or build on a new index failing with `lock hold by current process` when a read-write open of the index ran while an older read-write handle of it was still closing.
+  It happened on an index that a rebuild had reset while a reader still held it, such as the first `TraceViewer` read of 29 files with relative paths ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Leave the `run` records out of the first aggregate over a genesis file that has no index yet.
+  The first-touch pass counted them, so `--group-by gtype` showed a `run` group that later queries did not ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Fix a correlated duql sub-query on a trace with no index yet returning an empty frame when the outer filter could not be answered while the first-touch index was built, such as `where ph == "X" and dur > (from data | where name == ^.name | agg { m = mean(dur) })`.
+  The side query reserved the file in the index root while the scan took that root for a built index and read zero bytes.
+  The first build of a root now finishes before a scan reads the metadata of its files, and a root that does not hold the file is built ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Build the index that `dftracer_view` and `dftracer_index` need before their query or build on all their threads, not on the one thread that drives the command.
+  The first `dftracer_view --query` on a genesis part of 197 MB takes 5 s instead of 31 s on a 48-core corona node, and a single file of 20.7 GB indexes in 584 s with 14 cores busy instead of 1 ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Print the chunks that a `dftracer_view` aggregation or `--query` read and skipped, which showed as `scanned=0 skipped=0`.
+  A query for one run of a 20.7 GB genesis file reads 34 of 73,340 chunks ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Index every gzip member of a trace that has zero bytes between two members, as the padded striped writer left before this release.
+  The inflate worker stopped at the zeros, so the rest of its part of the file was missing from the index and from every count served from it.
+  `dftracer_view` counted 9,547 of the 9,615 runs and 702,657,406 of the 710,692,194 counters of the 12 parts of an 8-node genesis sweep, and it now counts all of them.
+  The zeros now belong to the compressed size of the member before them ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Fail an index build when a visitor fails, for example when a line does not parse, instead of returning the part of the index built so far as if it were complete.
+  The error now ends the inflate workers and reaches the caller ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Fix `dftracer_view` dying with SIGILL (illegal instruction) on the first aggregate of a file when built with GCC 12.1 on x86_64.
+  GCC compiled the call that builds the file's index on the way, awaited inside an `if` condition, into a trap.
+  The awaited result is now named before it is tested, here and on the export path.
+  GCC 12.3 on aarch64 and Clang were not affected ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 - Fill every stripe of the padded striped writer with whole gzip members.
   When the space left after the data of a stripe was a little more than one full padding member, the last 1 to 24 bytes stayed zero, too few for another member, and `gzip`, `zcat` and zlib stopped reading the file there.
   Files written to striped Lustre, such as the output of `dftracer_genesis_gen_dist`, now read to their end with any gzip reader.

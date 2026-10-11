@@ -154,18 +154,27 @@ static std::string basename_of(const std::string& path) {
     return pos == std::string::npos ? path : path.substr(pos + 1);
 }
 
-// One file's spill runs as one ingest in run order, then their files.
-static void ingest_runs(
+static fs::path spill_runs_dir(
+    const std::vector<index::store::IndexDatabaseSstWriterContext::Artifacts>&
+        runs) {
+    for (const auto& run : runs)
+        for (const auto& sst : run.sst)
+            if (sst) return fs::path(*sst).parent_path().parent_path();
+    return {};
+}
+
+void remove_spill_runs(
+    const std::vector<index::store::IndexDatabaseSstWriterContext::Artifacts>&
+        runs) {
+    const fs::path dir = spill_runs_dir(runs);
+    std::error_code ec;
+    if (!dir.empty()) fs::remove_all(dir, ec);
+}
+
+void ingest_spill_runs(
     index::store::IndexDatabase& db,
     std::vector<index::store::IndexDatabaseSstWriterContext::Artifacts> runs) {
-    fs::path dir;
-    index::store::SstArtifactRegistry registry;
-    for (auto& run : runs) {
-        for (const auto& sst : run.sst)
-            if (sst && dir.empty())
-                dir = fs::path(*sst).parent_path().parent_path();
-        registry.append(std::move(run));
-    }
+    const fs::path dir = spill_runs_dir(runs);
     struct Cleanup {
         const fs::path& dir;
         ~Cleanup() {
@@ -173,6 +182,8 @@ static void ingest_runs(
             if (!dir.empty()) fs::remove_all(dir, ec);
         }
     } cleanup{dir};
+    index::store::SstArtifactRegistry registry;
+    for (auto& run : runs) registry.append(std::move(run));
     db.bulk_ingest(registry);
 }
 
@@ -185,7 +196,7 @@ static coro::CoroTask<void> parse_and_emit_worker(
     index::build::ChunkIndexerConfig bloom_config,
     std::atomic<std::uint64_t>* parse_ns_ptr,
     const IndexBuildBatchConfig::AggFoldFactory* agg_fold_factory_ptr,
-    bool build_bloom, bool tier_only,
+    bool build_bloom, bool tier_only, std::size_t parse_ahead,
     const IndexBuildBatchConfig::ProgressFn* progress_ptr, Admission* admission,
     coro::ChannelProducer<index::build::ParsedIndexJob> ch) {
     namespace gzip_indexer = index::gzip;
@@ -257,6 +268,7 @@ static coro::CoroTask<void> parse_and_emit_worker(
                 driver.emplace(*job.intern, fold_ptrs, pf.file_path,
                                pf.index_path);
                 driver->set_record_schema(schema);
+                driver->set_parse_ahead(parse_ahead);
                 // A slice sees part of the chunks, and a file payload built
                 // from them could rule out the whole file.
                 if (build_bloom && pf.slice.members == nullptr) {
@@ -281,7 +293,8 @@ static coro::CoroTask<void> parse_and_emit_worker(
                 slice_ptr = &slice_arg;
             }
             auto arts = co_await gzip_indexer::build_gzip_index_artifacts(
-                pf.file_path, checkpoint_size, visitors, scope, slice_ptr);
+                pf.file_path, checkpoint_size, visitors, scope, slice_ptr,
+                parse_ahead);
             if (!arts) {
                 result.error_message = "Failed to build gzip index artifacts";
             } else {
@@ -415,6 +428,9 @@ static coro::CoroTask<void> parse_and_emit_worker(
 static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
                                                    BatchWriteState* state) {
     static constexpr std::size_t WRITE_BATCH_SIZE = 64;
+    // Chunks a file parses ahead of its folds at most; each holds its
+    // plaintext and its events.
+    static constexpr std::size_t MAX_PARSE_AHEAD = 16;
     const auto parse_workers = state->parallelism;
     // Write workers are decoupled from parse workers to control SST count.
     // Floor (parse_workers / 3) reflects the empirical write-vs-parse CPU
@@ -492,27 +508,34 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
     auto* sink_commit_ptr = &state->sink_commit;
     auto* spill_commit_ptr = &state->spill_commit;
 
+    // Workers outnumber the files when there are few: the cores left over parse
+    // a file's chunks ahead of its folds.
+    const std::size_t parse_ahead = std::clamp<std::size_t>(
+        parse_workers /
+            std::max<std::size_t>(1, std::min(state->num_files, parse_workers)),
+        1, MAX_PARSE_AHEAD);
     co_await scope->scope([parse_workers, write_workers, next_index_ptr,
                            done_ptr, parse_ns_ptr, results_ptr, parsed_jobs_ptr,
                            prepared_ptr, checkpoint_size, bloom_config_ptr,
                            agg_fold_factory_ptr, build_bloom, tier_only,
-                           admission_ptr, write_chan_ptr, db_ptr, metrics_ptr,
-                           sink_factory_ptr, sink_commit_ptr, spill_commit_ptr,
-                           progress_ptr](
+                           parse_ahead, admission_ptr, write_chan_ptr, db_ptr,
+                           metrics_ptr, sink_factory_ptr, sink_commit_ptr,
+                           spill_commit_ptr, progress_ptr](
                               CoroScope& child) -> coro::CoroTask<void> {
         for (std::size_t w = 0; w < parse_workers; ++w) {
             child.spawn(
                 [next_index_ptr, done_ptr, parse_ns_ptr, results_ptr,
                  parsed_jobs_ptr, prepared_ptr, checkpoint_size,
                  bloom_config_ptr, agg_fold_factory_ptr, build_bloom, tier_only,
-                 progress_ptr, admission_ptr, ch = write_chan_ptr->producer()](
+                 parse_ahead, progress_ptr, admission_ptr,
+                 ch = write_chan_ptr->producer()](
                     CoroScope& own_scope) mutable -> coro::CoroTask<void> {
                     co_await parse_and_emit_worker(
                         &own_scope, next_index_ptr, done_ptr, results_ptr,
                         parsed_jobs_ptr, prepared_ptr, checkpoint_size,
                         *bloom_config_ptr, parse_ns_ptr, agg_fold_factory_ptr,
-                        build_bloom, tier_only, progress_ptr, admission_ptr,
-                        std::move(ch));
+                        build_bloom, tier_only, parse_ahead, progress_ptr,
+                        admission_ptr, std::move(ch));
                 });
         }
 
@@ -537,7 +560,7 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
                                  index::store::IndexDatabaseSstWriterContext::
                                      Artifacts>
                                      runs) {
-                            ingest_runs(*db_ptr, std::move(runs));
+                            ingest_spill_runs(*db_ptr, std::move(runs));
                         });
                 }
             });

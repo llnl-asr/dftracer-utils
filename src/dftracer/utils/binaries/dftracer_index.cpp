@@ -245,8 +245,12 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     // Normalize single-member inputs to bounded multi-member gzip so the build
     // never OOMs; readers use the same split/ copies.
     {
-        auto norm = co_await normalize_members_for_ingest(
-            std::move(input_files), checkpoint_size);
+        MemberNormalizeResult norm;
+        cli::run_on_pool(cli->pipeline, "dftracer_index normalize",
+                         [&](CoroScope&) -> coro::CoroTask<void> {
+                             norm = co_await normalize_members_for_ingest(
+                                 std::move(input_files), checkpoint_size);
+                         });
         input_files = std::move(norm.files);
         for (const auto& [src, dst] : norm.split)
             DFTRACER_UTILS_LOG_WARN(

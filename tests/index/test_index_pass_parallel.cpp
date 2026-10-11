@@ -7,10 +7,12 @@
 #include <testing_runtime.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <optional>
 #include <random>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -138,6 +140,97 @@ TEST_SUITE("index pass without visitors") {
     TEST_CASE("one large member gives the same pieces") {
         const auto text = hex_lines(6u << 20, 99);
         check_file(gzip(text), text);
+    }
+
+    TEST_CASE("zero bytes between members are skipped") {
+        std::string text;
+        std::vector<std::uint8_t> comp;
+        for (std::uint32_t i = 0; i < 40; ++i) {
+            const auto part = hex_lines(200u << 10, 300 + i);
+            const auto m = gzip(part);
+            comp.insert(comp.end(), m.begin(), m.end());
+            text += part;
+            // An older padded striped writer left up to 24 zero bytes
+            // before a stripe boundary.
+            if (i % 7 == 3) comp.insert(comp.end(), 11 + i % 13, 0);
+        }
+        check_file(comp, text);
+        TempFile f(comp);
+        const auto arts = build(f.path, nullptr);
+        REQUIRE(arts.members.size() == 40);
+        for (std::size_t i = 0; i + 1 < arts.members.size(); ++i) {
+            CAPTURE(i);
+            const auto& m = arts.members[i];
+            CHECK(m.c_offset + m.c_size == arts.members[i + 1].c_offset);
+            CHECK(comp[arts.members[i + 1].c_offset] == 0x1F);
+        }
+    }
+
+    TEST_CASE("a header inside a stored member does not split it") {
+        // A stored (level 0) member copies its text verbatim, so a gzip
+        // header in the text is a member candidate that starts a range.
+        static const char FAKE[] = "\x10\0\0\0\x1f\x8b\x08\0\0\0\0\0\0\x03";
+        const std::string head = hex_lines(CKPT + (100u << 10), 1);
+        const std::string fake =
+            std::string("x") + std::string(FAKE, sizeof(FAKE) - 1) + "\n";
+        const std::string tail = hex_lines(100u << 10, 2);
+        std::string text = hex_lines(CKPT + (200u << 10), 0);
+        std::vector<std::uint8_t> comp = gzip(text);
+        gz::GzipMemberCompressor stored(0);
+        const std::string mid = head + fake + tail;
+        std::vector<std::uint8_t> m(stored.bound(mid.size()));
+        auto n = stored.compress(mid.data(), mid.size(), m.data(), m.size());
+        REQUIRE(n.has_value());
+        m.resize(*n);
+        comp.insert(comp.end(), m.begin(), m.end());
+        text += mid;
+        for (std::uint32_t i = 0; i < 2; ++i) {
+            const auto part = hex_lines(300u << 10, 10 + i);
+            const auto g = gzip(part);
+            comp.insert(comp.end(), g.begin(), g.end());
+            text += part;
+        }
+        check_file(comp, text);
+        const auto* header = reinterpret_cast<const std::uint8_t*>(FAKE) + 4;
+        const std::uint64_t fake_at = static_cast<std::uint64_t>(
+            std::search(comp.begin() + 1, comp.end(), header,
+                        header + sizeof(FAKE) - 5) -
+            comp.begin());
+        REQUIRE(fake_at < comp.size());
+        TempFile f(comp);
+        for (const auto& rec : build(f.path, nullptr).members)
+            CHECK(rec.c_offset != fake_at);
+    }
+
+    TEST_CASE("a visitor that throws ends the pass with its error") {
+        class Thrower : public Recorder {
+           public:
+            coro::CoroTask<void> on_chunk(const char*, std::size_t,
+                                          std::size_t) override {
+                if (++chunks == 5) throw std::runtime_error("bad chunk");
+                co_return;
+            }
+            int chunks = 0;
+        };
+        std::vector<std::uint8_t> comp;
+        for (std::uint32_t i = 0; i < 60; ++i) {
+            const auto m = gzip(hex_lines(200u << 10, 500 + i));
+            comp.insert(comp.end(), m.begin(), m.end());
+        }
+        TempFile f(comp);
+        Thrower thrower;
+        bool threw = false;
+        run_coro([&](CoroScope& scope) -> coro::CoroTask<void> {
+            index::gzip::CheckpointIndexer::VisitorList visitors;
+            visitors.emplace_back(thrower);
+            try {
+                co_await index::gzip::build_gzip_index_artifacts(
+                    f.path, CKPT, visitors, &scope);
+            } catch (const std::runtime_error& e) {
+                threw = std::string(e.what()) == "bad chunk";
+            }
+        });
+        CHECK(threw);
     }
 
     TEST_CASE("a cut file gives the same table") {

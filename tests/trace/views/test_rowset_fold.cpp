@@ -54,7 +54,8 @@ std::vector<std::string> trace_lines() {
 }
 
 std::string write_trace(TestEnvironment& env,
-                        const std::vector<std::string>& lines) {
+                        const std::vector<std::string>& lines,
+                        bool build = true) {
     const std::string pfw = env.get_dir() + "/rows.pfw";
     {
         std::ofstream o(pfw);
@@ -63,7 +64,7 @@ std::string write_trace(TestEnvironment& env,
     const std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
     fs::remove(pfw);
-    ix::Indexer::open({gz}).build();
+    if (build) ix::Indexer::open({gz}).build();
     return gz;
 }
 
@@ -93,6 +94,12 @@ std::vector<std::string> rows_of(const df::DataFrame& f) {
     for (std::int64_t r = 0; r < f.num_rows(); ++r)
         out.push_back(row_text(f, r));
     return out;
+}
+
+bool interned(const StringIntern& intern, std::string_view text) {
+    for (std::size_t i = 0; i < intern.entry_count(); ++i)
+        if (intern.resolve(intern.entry_id(i)) == text) return true;
+    return false;
 }
 
 }  // namespace
@@ -161,6 +168,24 @@ TEST_SUITE("RowSetFold") {
         CHECK(row_text(stored, 1).find("app=lulesh;") != std::string::npos);
     }
 
+    TEST_CASE("the first genesis aggregate leaves out the run records") {
+        TestEnvironment env(10);
+        std::vector<std::string> lines = {
+            R"({"gtype":"run","run":"ab","app":"laghos","nodes":4})"};
+        for (int i = 0; i < 30; ++i)
+            lines.push_back(
+                R"({"gtype":"func","run":"ab","path":"main;f","ts":1,"depth":1,"count":2})");
+        const std::string gz = write_trace(env, lines, /*build=*/false);
+        const View v = View::from_file(gz, determine_index_path(gz, ""))
+                           .group_by({GroupKey::field("gtype")})
+                           .agg({{AggOp::Count, "", "n"}});
+        for (int touch = 0; touch < 2; ++touch) {
+            CAPTURE(touch);
+            const df::DataFrame f = v.collect().get();
+            CHECK(rows_of(f) == std::vector<std::string>{"gtype=func;n=30;"});
+        }
+    }
+
     TEST_CASE("a distinct row set keeps each row once across units") {
         StringIntern intern;
         auto lines = trace_lines();
@@ -203,5 +228,57 @@ TEST_SUITE("RowSetFold") {
         fold.step(FoldBatch{std::span<const FoldEvent>(events), unit});
         fold.seal_unit(unit);
         CHECK(fold.entry_count() == 5);
+    }
+
+    TEST_CASE("a never_index leaf is cataloged but its value is not interned") {
+        const std::string line =
+            R"({"gtype":"func","run":"ab","path":"main;f","ts":1,)"
+            R"("dur":{"sketch":"UNIQUE_SKETCH_BLOB","count":2}})";
+        const auto& genesis = ix::get_schema("genesis");
+        for (const bool skip : {true, false}) {
+            CAPTURE(skip);
+            StringIntern intern;
+            simdjson::dom::parser parser;
+            std::string buf = padded(line);
+            auto doc = parser.parse(buf.data(), line.size(), false);
+            REQUIRE_FALSE(doc.error());
+            const FoldEvent ev = decode_record(
+                doc.value_unsafe(), intern, true, nullptr, &genesis, nullptr,
+                INDEX_MAX_CHILDREN, nullptr, skip);
+            const std::uint32_t id = intern.get_or_insert("dur.sketch");
+            bool cataloged = false;
+            for (const auto& [leaf, tag] : ev.schema_leaves)
+                cataloged |= leaf == id;
+            bool kept = false;
+            for (const auto& [key, value] : ev.args) kept |= key == id;
+            CHECK(cataloged);
+            CHECK(kept == !skip);
+            CHECK(interned(intern, "UNIQUE_SKETCH_BLOB") == !skip);
+            CHECK(interned(intern, "main;f"));
+        }
+    }
+
+    TEST_CASE("an index build skips never_index values and queries find them") {
+        TestEnvironment env(10);
+        std::vector<std::string> lines;
+        for (int i = 0; i < 30; ++i)
+            lines.push_back(
+                R"({"gtype":"func","run":"ab","path":"main;f","ts":1,"dur":{"sketch":"SK)" +
+                std::to_string(i) + R"(","count":2}})");
+        const std::string gz = write_trace(env, lines);
+        const auto ixr = ix::Indexer::open({gz});
+        const View v = View::from_file(gz, determine_index_path(gz, ""));
+        const df::DataFrame f =
+            v.duql("where dur.sketch == \"SK7\" | select path, dur.count")
+                .collect()
+                .get();
+        REQUIRE(f.num_rows() == 1);
+        const df::DataFrame all =
+            v.duql("where dur.sketch in [\"SK7\", \"SK8\", \"SK99\"]")
+                .group_by({GroupKey::field("gtype")})
+                .agg({{AggOp::Count, "", "n"}})
+                .collect()
+                .get();
+        CHECK(rows_of(all) == std::vector<std::string>{"gtype=func;n=2;"});
     }
 }

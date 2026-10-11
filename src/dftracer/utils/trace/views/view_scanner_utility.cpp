@@ -84,12 +84,13 @@ std::size_t record_length(const char* line, std::size_t len) {
 detail::FoldEvent decode(simdjson::dom::element root,
                          const ViewScannerInput& input, bool schema,
                          detail::DecodeHints& hints) {
+    const bool skip_never = schema && input.fold_skip_never_indexed;
     if (input.view.by_path)
         return detail::decode_record(
             root, *input.fold_intern, schema,
             schema || input.view.paths.empty() ? nullptr : &input.view.paths,
             input.view.record_schema, &input.view.path_fields,
-            schema ? detail::INDEX_MAX_CHILDREN : 0, &hints);
+            schema ? detail::INDEX_MAX_CHILDREN : 0, &hints, skip_never);
     return detail::extract_fold_event(root, *input.fold_intern,
                                       input.fold_needs_args,
                                       input.fold_extra_fields, schema, &hints);

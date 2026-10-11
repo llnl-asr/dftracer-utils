@@ -68,6 +68,8 @@ ScanPlan agg_numeric_args(const ScanPlan& plan_);
 ScanPlan agg_numeric_args(const ScanPlan& plan_,
                           std::vector<AggSpec> reductions);
 ScanPlan memory_budget(const ScanPlan& plan_, std::uint64_t bytes);
+ScanPlan count_scans(const ScanPlan& plan_,
+                     std::shared_ptr<ScanCounter> counter);
 ScanPlan auto_spill(const ScanPlan& plan_);
 ScanPlan select(const ScanPlan& plan_, std::vector<std::string> cols);
 ScanPlan name_columns(const ScanPlan& plan_,

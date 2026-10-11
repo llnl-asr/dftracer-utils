@@ -86,6 +86,11 @@ class Fold {
     /// path pays nothing.
     virtual bool wants_schema() const { return false; }
 
+    /// Whether the fold reads the values at `never_index` paths. When no fold
+    /// of a schema-capturing scan does, the path decoder records such a leaf
+    /// in `schema_leaves` only and interns no value.
+    virtual bool reads_never_indexed() const { return true; }
+
     /// Whether the fold reads fields it cannot name up front, so a
     /// path-decoded scan decodes every path for it. ORed across folds.
     virtual bool reads_every_field() const { return false; }

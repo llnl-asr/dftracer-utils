@@ -1,4 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/core/common/memory_budget.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
@@ -8,19 +9,27 @@
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/source.h>
+#include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/trace/views/aggfold.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
+#include <rocksdb/iterator.h>
+#include <zlib.h>
 
 #include <array>
+#include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "groupmap_oracle.h"
 #include "test_view_common.h"
@@ -351,4 +360,224 @@ TEST_SUITE("RawGzipFuse") {
                        .get();
         CHECK(rows_equal(got, ref));  // correctly filtered via the fallback
     }
+}
+
+namespace {
+
+// Logs every step as "checkpoint:name:ts" per event, by name so the log does
+// not depend on the order the intern assigned ids in.
+class RecordingFold final : public Fold {
+   public:
+    explicit RecordingFold(const StringIntern& intern) : intern_(&intern) {}
+    bool accepts(const ScanShape&) const override { return true; }
+    std::unique_ptr<Fold> slice() const override {
+        return std::make_unique<RecordingFold>(*intern_);
+    }
+    void step(const FoldBatch& batch) override {
+        for (const auto& e : batch.events)
+            log.push_back(std::to_string(batch.unit.checkpoint_idx) + ":" +
+                          std::string(intern_->resolve(e.name_id)) + ":" +
+                          std::to_string(e.ts));
+    }
+    void seal_unit(const ScanUnit&) override {}
+    void drop_unit(const ScanUnit&) override {}
+    void merge(Fold&) override {}
+    dftracer::utils::coro::CoroTask<bool> finalize(
+        const CoverageSet&) override {
+        co_return false;
+    }
+    std::vector<std::string> log;
+
+   private:
+    const StringIntern* intern_;
+};
+
+// `members` gzip members of `events` events each; every fifth member ends
+// inside a line that the next member finishes.
+std::string write_multi_member(const std::string& dir, int members = 40,
+                               int events = 300) {
+    const std::string path = dir + "/multi.pfw.gz";
+    std::string carry;
+    int ts = 0;
+    for (int m = 0; m < members; ++m) {
+        std::string text = carry;
+        carry.clear();
+        if (m == 0) text += "[\n";
+        for (int i = 0; i < events; ++i, ++ts)
+            text += R"({"id":)" + std::to_string(ts) + R"(,"name":"op)" +
+                    std::to_string(ts % 7) +
+                    R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" +
+                    std::to_string(ts * 10) + R"(,"dur":5,"ph":"X"})" + "\n";
+        if (m % 5 == 4 && m + 1 < members) {
+            const std::string tail = R"({"id":)" + std::to_string(ts) +
+                                     R"(,"name":"cut","cat":"POSIX","pid":1,)"
+                                     R"("tid":1,"ts":)" +
+                                     std::to_string(ts * 10) +
+                                     R"(,"dur":5,"ph":"X"})" + "\n";
+            ++ts;
+            text += tail.substr(0, tail.size() / 2);
+            carry = tail.substr(tail.size() / 2);
+        }
+        gzFile g = gzopen(path.c_str(), m == 0 ? "wb" : "ab");
+        REQUIRE(g != nullptr);
+        REQUIRE(gzwrite(g, text.data(), static_cast<unsigned>(text.size())) ==
+                static_cast<int>(text.size()));
+        gzclose(g);
+    }
+    return path;
+}
+
+std::vector<std::string> record_index_pass(const std::string& gz,
+                                           const std::string& idx,
+                                           std::size_t parse_ahead) {
+    StringIntern intern;
+    RecordingFold rec(intern);
+    std::array<Fold*, 1> folds{&rec};
+    IndexFoldDriver driver(intern, folds, gz, idx);
+    driver.set_parse_ahead(parse_ahead);
+    run_coro(
+        [&](CoroScope& scope) -> dftracer::utils::coro::CoroTask<void> {
+            dftracer::utils::index::gzip::CheckpointIndexer::VisitorList vl;
+            vl.emplace_back(driver);
+            auto a = co_await gzi::build_gzip_index_artifacts(
+                gz,
+                dftracer::utils::index::gzip::CheckpointIndexer::
+                    DEFAULT_CHECKPOINT_SIZE,
+                vl, &scope);
+            REQUIRE(a.has_value());
+            co_return;
+        },
+        "parse-ahead");
+    driver.seal();
+    return rec.log;
+}
+
+}  // namespace
+
+class ThrowingFold final : public Fold {
+   public:
+    bool accepts(const ScanShape&) const override { return true; }
+    std::unique_ptr<Fold> slice() const override {
+        return std::make_unique<ThrowingFold>();
+    }
+    void step(const FoldBatch&) override {
+        if (++batches == 12) throw std::runtime_error("bad batch");
+    }
+    void seal_unit(const ScanUnit&) override {}
+    void drop_unit(const ScanUnit&) override {}
+    void merge(Fold&) override {}
+    dftracer::utils::coro::CoroTask<bool> finalize(
+        const CoverageSet&) override {
+        co_return false;
+    }
+    int batches = 0;
+};
+
+// Every live key and value of every family of an index, in order.
+std::vector<std::pair<std::string, std::string>> index_contents(
+    const std::string& index_path) {
+    namespace store = dftracer::utils::index::store;
+    store::RocksDBManager::instance().reset(index_path);
+    store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
+    std::vector<std::pair<std::string, std::string>> out;
+    for (std::size_t f = 0; f < store::layout::FAMILY_COUNT; ++f) {
+        const auto family = static_cast<store::layout::Family>(f);
+        auto it = db.db()->new_iterator(store::layout::family_name(family));
+        if (!it) continue;
+        for (it->SeekToFirst(); it->Valid(); it->Next())
+            out.emplace_back(std::string(store::layout::family_name(family)) +
+                                 "|" + it->key().ToString(),
+                             it->value().ToString());
+    }
+    return out;
+}
+
+TEST_CASE("a first-touch query under a small budget spills the same index") {
+    TestEnvironment env(10);
+    REQUIRE(env.is_valid());
+    const std::string gz = write_multi_member(env.get_dir());
+    auto count = [&](const std::string& idx, std::uint64_t budget) {
+        return View::from_file(gz, idx)
+            .memory_budget(budget)
+            .group_by({GroupKey::cat()})
+            .agg({{AggOp::Count, "", "n"}})
+            .collect()
+            .get()
+            .num_rows();
+    };
+    const std::string held = determine_index_path(gz, env.get_dir() + "/held");
+    const std::string spilled =
+        determine_index_path(gz, env.get_dir() + "/spilled");
+    // The default budget holds every chunk, and the tier is still written
+    // as sorted runs.
+    const std::string runs = determine_index_path(gz, env.get_dir() + "/runs");
+    CHECK(count(held, dftracer::utils::NO_SPILL_BUDGET) ==
+          count(spilled, 4096));
+    CHECK(count(runs, 0) == count(held, dftracer::utils::NO_SPILL_BUDGET));
+    CHECK_FALSE(fs::exists(spilled + ".spill"));
+    CHECK_FALSE(fs::exists(runs + ".spill"));
+    const auto expected = index_contents(held);
+    CHECK(expected == index_contents(spilled));
+    CHECK(expected == index_contents(runs));
+}
+
+TEST_CASE("a fold that throws while parsing ahead ends the index pass") {
+    TestEnvironment env(10);
+    REQUIRE(env.is_valid());
+    const std::string gz = write_multi_member(env.get_dir());
+    StringIntern intern;
+    dftracer::utils::index::extensions::BloomFold bloom(intern);
+    ThrowingFold thrower;
+    std::array<Fold*, 2> folds{&bloom, &thrower};
+    IndexFoldDriver driver(intern, folds, gz, env.get_dir() + "/idx");
+    driver.set_parse_ahead(8);
+    bool threw = false;
+    run_coro(
+        [&](CoroScope& scope) -> dftracer::utils::coro::CoroTask<void> {
+            dftracer::utils::index::gzip::CheckpointIndexer::VisitorList vl;
+            vl.emplace_back(driver);
+            try {
+                co_await gzi::build_gzip_index_artifacts(
+                    gz,
+                    dftracer::utils::index::gzip::CheckpointIndexer::
+                        DEFAULT_CHECKPOINT_SIZE,
+                    vl, &scope);
+            } catch (const std::runtime_error& e) {
+                threw = std::string(e.what()) == "bad batch";
+            }
+        },
+        "fold-throws");
+    CHECK(threw);
+    CHECK(thrower.batches == 12);
+}
+
+TEST_CASE("parsing ahead steps the folds with the same events in order") {
+    TestEnvironment env(10);
+    REQUIRE(env.is_valid());
+    const std::string gz = write_multi_member(env.get_dir());
+    const auto inline_log =
+        record_index_pass(gz, env.get_dir() + "/idx_inline", 0);
+    const auto ahead_log =
+        record_index_pass(gz, env.get_dir() + "/idx_ahead", 8);
+    // 40 * 300 events plus the 7 that straddle a member boundary.
+    CHECK(inline_log.size() == 40 * 300 + 7);
+    CHECK(ahead_log == inline_log);
+    std::size_t straddled = 0;
+    for (const auto& l : ahead_log)
+        if (l.find(":cut:") != std::string::npos) ++straddled;
+    CHECK(straddled == 7);
+}
+
+TEST_CASE(
+    "parsing ahead in pieces keeps the events of a large member in order") {
+    TestEnvironment env(10);
+    REQUIRE(env.is_valid());
+    // Each member inflates to about 7 MB, above the driver's parse piece.
+    const std::string gz = write_multi_member(env.get_dir(), 6, 60000);
+    const auto inline_log =
+        record_index_pass(gz, env.get_dir() + "/idx_inline", 0);
+    const auto ahead_log =
+        record_index_pass(gz, env.get_dir() + "/idx_ahead", 8);
+    CHECK(inline_log.size() == 6 * 60000 + 1);
+    CHECK(ahead_log == inline_log);
 }

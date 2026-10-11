@@ -23,7 +23,8 @@ struct FixedString {
     constexpr std::string_view view() const { return {value, N - 1}; }
 };
 
-/// Field options: index past the path budget, or play a trace role.
+/// Field options: index past the path budget, or play a trace
+/// role.
 struct AlwaysIndex {};
 template <TimeUnit UNIT = TimeUnit::US>
 struct TimeRole {};

@@ -819,6 +819,7 @@ ViewSession ViewSource::base_session(const detail::ViewPlan& p) {
     base->views_root = p.views_root;
     base->memory_budget = p.memory_budget;
     base->time_range = p.time_range;
+    base->scan_counter = p.scan_counter;
     return ViewSession(std::move(base));
 }
 

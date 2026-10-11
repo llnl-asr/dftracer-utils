@@ -12,6 +12,7 @@
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
+#include <sys/resource.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 #include <zlib.h>
@@ -375,6 +376,33 @@ TEST_SUITE("Truncated") {
             CHECK(got.truncated);
             CHECK(got.members_end == fs::file_size(cut));
         }
+        rt.shutdown();
+    }
+
+    TEST_CASE("a cut trace whose tail reads as a 4 GiB ISIZE stays small") {
+        Runtime rt(4);
+        TestEnvironment env(10);
+        const auto full = multimember_trace(env, 4000, "full.pfw.gz");
+        const auto cut = write_prefix(
+            full, (fs::path(env.get_dir()) / "cut.pfw.gz").string(), 0.5);
+        {
+            std::fstream f(cut,
+                           std::ios::in | std::ios::out | std::ios::binary);
+            f.seekp(-4, std::ios::end);
+            f.write("\xfe\xff\xff\xff", 4);
+        }
+        Indexer::open({cut}, with_runtime(rt)).build();
+        rusage ru{};
+        getrusage(RUSAGE_SELF, &ru);
+#if defined(__APPLE__)
+        const auto peak = static_cast<std::uint64_t>(ru.ru_maxrss);
+#else
+        const auto peak = static_cast<std::uint64_t>(ru.ru_maxrss) * 1024;
+#endif
+        CHECK(peak < (std::uint64_t{1} << 30));
+        const auto got = indexed(cut);
+        CHECK(got.lines == zlib_prefix(cut).lines);
+        CHECK(got.truncated);
         rt.shutdown();
     }
 

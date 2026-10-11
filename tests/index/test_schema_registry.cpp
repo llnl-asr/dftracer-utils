@@ -102,6 +102,86 @@ TEST_SUITE("SchemaRegistry") {
         CHECK(s.params_hash() != ix::get_schema("generic").params_hash());
     }
 
+    TEST_CASE(
+        "index.never_index is derived, hashed and refused where it "
+        "conflicts") {
+        const auto& s = ix::register_schema(
+            "id: yaml_never\n"
+            "fields:\n"
+            "  zz_nv_status: {type: int}\n"
+            "index: {never_index: [zz_nv_z, zz_nv_blob, zz_nv_z]}\n",
+            "yaml_never.yaml");
+        CHECK(s.never_index ==
+              std::vector<std::string>{"zz_nv_blob", "zz_nv_z"});
+        CHECK(ix::schemas_json().find("\"never_index\":[\"zz_nv_blob\"") !=
+              std::string::npos);
+        auto cfg = ix::build::ChunkIndexerConfig{};
+        cfg.extra_dimensions = {"zz_nv_blob", "zz_nv_status"};
+        CHECK(ix::build::for_schema(cfg, s).extra_dimensions ==
+              std::vector<std::string>{"zz_nv_status"});
+
+        ix::RecordSchema fewer = s;
+        fewer.never_index.pop_back();
+        CHECK(fewer.params_hash() != s.params_hash());
+
+        const auto& child = ix::register_schema(
+            "id: yaml_never_child\nextends: yaml_never\n"
+            "index: {never_index: [zz_nv_a]}\n",
+            "yaml_never_child.yaml");
+        CHECK(child.never_index ==
+              std::vector<std::string>{"zz_nv_a", "zz_nv_blob", "zz_nv_z"});
+
+        CHECK(mentions(error_of([] {
+                           ix::register_schema(
+                               "id: never_role\nfields: {x: {type: int, role: "
+                               "entity}}\nindex: {never_index: [x]}\n",
+                               "never_role.yaml");
+                       }),
+                       "entity role"));
+        CHECK(mentions(
+            error_of([] {
+                ix::register_schema(
+                    "id: never_always\nfields: {x: {type: string, "
+                    "always_index: true}}\nindex: {never_index: [x]}\n",
+                    "never_always.yaml");
+            }),
+            "always_index"));
+        CHECK(mentions(error_of([] {
+                           ix::register_schema(
+                               "id: never_dft\nextends: dftracer\n"
+                               "index: {never_index: [args.x]}\n",
+                               "never_dft.yaml");
+                       }),
+                       "decodes records by path"));
+        CHECK(mentions(error_of([] {
+                           ix::register_schema(
+                               "id: never_text\nindex: {never_index: abc}\n",
+                               "never_text.yaml");
+                       }),
+                       "list of paths"));
+        CHECK(
+            mentions(error_of([] {
+                         ix::register_schema(
+                             "id: never_empty\nindex: {never_index: [\"\"]}\n",
+                             "never_empty.yaml");
+                     }),
+                     "list of paths"));
+        CHECK(mentions(error_of([] {
+                           ix::register_schema(
+                               "id: never_rowset\nfields: {y: {type: int}}\n"
+                               "index: {never_index: [x]}\n"
+                               "source: |\n  xs = where y > 0 | select x\n",
+                               "never_rowset.yaml");
+                       }),
+                       "never_index"));
+    }
+
+    TEST_CASE("the genesis built-in never indexes its sketches") {
+        const auto& g = ix::get_schema("genesis");
+        CHECK(g.never_index ==
+              std::vector<std::string>{"dur.sketch", "v.sketch"});
+    }
+
     TEST_CASE("index.stats_share and index.path_budget override the build") {
         const auto& s = ix::register_schema(
             "id: yaml_share\nfields: {zz_probe_a: {type: int}}\n"

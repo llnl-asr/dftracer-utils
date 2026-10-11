@@ -154,6 +154,53 @@ TEST_SUITE("View duql joins") {
         CHECK(frame(v.duql(R"(where ph == "M")")).num_rows() == 0);
     }
 
+    TEST_CASE("a correlated sub-query on a trace with no index yet") {
+        const std::vector<std::string> outers = {
+            "", "ph == \"X\" and ", "cat == \"POSIX\" and ", "pid == 1 and "};
+        for (const auto& outer : outers) {
+            CAPTURE(outer);
+            TestEnvironment env(10);
+            const std::string pfw = env.get_dir() + "/fresh.pfw";
+            double sum[2] = {0, 0};
+            int cnt[2] = {0, 0};
+            std::vector<int> name_of;
+            std::vector<int> dur_of;
+            {
+                std::ofstream o(pfw);
+                for (int i = 0; i < 60; ++i) {
+                    const int k = (i * 7 + i / 3) % 2;
+                    const int dur = (i * 37) % 101;
+                    name_of.push_back(k);
+                    dur_of.push_back(dur);
+                    sum[k] += dur;
+                    ++cnt[k];
+                    o << R"({"ph":"X","name":")" << (k ? "write" : "read")
+                      << R"(","cat":"POSIX","pid":1,"tid":)" << i << R"(,"ts":)"
+                      << i << R"(,"dur":)" << dur << R"(,"args":{}})" << "\n";
+                }
+            }
+            const std::string gz = pfw + ".gz";
+            dftu_utils_test::compress_file_to_gzip(pfw, gz);
+            fs::remove(pfw);
+            REQUIRE_FALSE(fs::exists(determine_index_path(gz, "")));
+            std::vector<std::string> want;
+            for (int i = 0; i < 60; ++i) {
+                const auto k = static_cast<std::size_t>(name_of[i]);
+                if (dur_of[i] > sum[k] / cnt[k])
+                    want.push_back(std::to_string(i));
+            }
+            REQUIRE_FALSE(want.empty());
+            const auto f = frame(view_of(gz).duql(
+                "where " + outer +
+                "dur > (from data | where name == ^.name | agg { m = "
+                "mean(dur) }) | select tid"));
+            auto got = column(f, "tid");
+            std::sort(got.begin(), got.end());
+            std::sort(want.begin(), want.end());
+            CHECK(got == want);
+        }
+    }
+
     TEST_CASE("unknown names, self and forward references fail to compile") {
         TestEnvironment env(10);
         const View v = view_of(write_records(env, "r", runs_and_events()));

@@ -134,7 +134,8 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
                 vdef.by_path ? decode_record(doc.value_unsafe(), intern,
                                              /*capture_schema=*/true, nullptr,
                                              vdef.record_schema, nullptr,
-                                             INDEX_MAX_CHILDREN)
+                                             INDEX_MAX_CHILDREN, nullptr,
+                                             /*skip_never_indexed=*/true)
                              : extract_fold_event(doc.value_unsafe(), intern,
                                                   /*needs_args=*/true,
                                                   /*extra_fields=*/nullptr,

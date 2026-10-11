@@ -272,17 +272,25 @@ std::string join_value_types(const std::string& a, const std::string& b) {
     return num_a && num_b ? "double" : "mixed";
 }
 
-void observe_stats(index::extensions::ChunkDimensionStats& ds,
-                   const std::string& text, const char* type) {
+// Counts a value of `type` and joins its type in; false when the dimension
+// is mixed and keeps no bounds.
+bool observe_type(index::extensions::ChunkDimensionStats& ds,
+                  const char* type) {
     ++ds.present;
-    if (ds.value_type == "mixed") return;
+    if (ds.value_type == "mixed") return false;
+    if (ds.value_type == type) return true;
     const std::string joined = join_value_types(ds.value_type, type);
     if (joined != ds.value_type) ds.value_type = joined;
     if (joined == "mixed") {
         ds.min_value.clear();
         ds.max_value.clear();
-        return;
+        return false;
     }
+    return true;
+}
+
+void observe_bounds(index::extensions::ChunkDimensionStats& ds,
+                    const std::string& text) {
     if (ds.min_value.empty() || index::extensions::dimension_value_less(
                                     text, ds.min_value, ds.value_type))
         ds.min_value = text;
@@ -291,10 +299,82 @@ void observe_stats(index::extensions::ChunkDimensionStats& ds,
         ds.max_value = text;
 }
 
+void observe_stats(index::extensions::ChunkDimensionStats& ds,
+                   const std::string& text, const char* type) {
+    if (observe_type(ds, type)) observe_bounds(ds, text);
+}
+
+std::string number_text(std::int64_t v) { return std::to_string(v); }
+std::string number_text(std::uint64_t v) { return std::to_string(v); }
+std::string number_text(double v) {
+    return index::extensions::canonical_number_text(v);
+}
+
+// parse(text(v)) grows with v and parse(text(min)) is min, so the text path's
+// parse(text(v)) < min holds only when v < min. A value that does not move a
+// bound as a number is never formatted; one that does is checked as text.
+template <class T>
+void observe_number(index::extensions::ChunkDimensionStats& ds,
+                    BloomCore::NumericBounds& b, T v, const char* type) {
+    if (!observe_type(ds, type)) {
+        b.valid = false;
+        return;
+    }
+    if (!b.valid) {
+        b.min.reset();
+        b.max.reset();
+        if (!ds.min_value.empty()) b.min = duql::parse_number(ds.min_value);
+        if (!ds.max_value.empty()) b.max = duql::parse_number(ds.max_value);
+        if ((!ds.min_value.empty() && !b.min) ||
+            (!ds.max_value.empty() && !b.max)) {
+            observe_bounds(ds, number_text(v));
+            return;
+        }
+        b.valid = true;
+    }
+    const auto less = [](const duql::Number& x, const duql::Number& y) {
+        return duql::compare_numbers(x, y).value_or(0) < 0;
+    };
+    const duql::Number n{v};
+    if (b.min && !less(n, *b.min) && b.max && !less(*b.max, n)) return;
+    const std::string text = number_text(v);
+    const auto parsed = duql::parse_number(text);
+    if (!parsed) {
+        b.valid = false;
+        observe_bounds(ds, text);
+        return;
+    }
+    const bool lo = !b.min || less(*parsed, *b.min);
+    const bool hi = !b.max || less(*b.max, *parsed);
+    if (lo) {
+        ds.min_value = text;
+        b.min = parsed;
+    }
+    if (hi) {
+        ds.max_value = text;
+        b.max = parsed;
+    }
+}
+
 }  // namespace
 
 std::span<const std::string_view> BloomCore::fixed_dimension_names() {
     return FIXED_DIM_NAMES;
+}
+
+void BloomCore::observe_value(ChunkDimensionStats& stats, NumericBounds& bounds,
+                              std::int64_t value) {
+    observe_number(stats, bounds, value, "int");
+}
+
+void BloomCore::observe_value(ChunkDimensionStats& stats, NumericBounds& bounds,
+                              std::uint64_t value) {
+    observe_number(stats, bounds, value, "uint");
+}
+
+void BloomCore::observe_value(ChunkDimensionStats& stats, NumericBounds& bounds,
+                              double value) {
+    observe_number(stats, bounds, value, "double");
 }
 
 void BloomCore::observe_value(ChunkDimensionStats& stats, std::int64_t value) {

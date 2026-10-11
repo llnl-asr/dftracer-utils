@@ -250,6 +250,15 @@ jobs:
             --jq '[.[] | select(.isPrerelease and (.tagName | startswith("pre-")))] | sort_by(.createdAt) | reverse | .[10:] | .[].tagName' |
             while read -r old; do gh release delete "$old" --cleanup-tag --yes; done
 
+  # A published release keeps only the newest <previous tag>.postN.devX on PyPI.
+  pypi-cleanup:
+    needs: deploy
+    if: github.event_name == 'release'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/pypi-cleanup.yml
+    secrets: inherit
+
   # A published release gets the C and C++ packages too. SHA256SUMS lets the
   # VS Code extension verify its download.
   release-assets:

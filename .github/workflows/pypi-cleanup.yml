@@ -1,0 +1,66 @@
+name: PyPI prerelease cleanup
+
+# Keeps only the newest <version>.postN.devX of one release on PyPI, to bound
+# the project's storage. python-publish calls it for each published release
+# with the tag before it. PyPI has no API to delete a release, so a login runs
+# with an owner's password and TOTP secret.
+on:
+  workflow_call:
+    inputs:
+      mode:
+        type: string
+        default: do-it
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release whose prereleases go, e.g. 0.0.14
+        type: string
+        required: true
+      mode:
+        description: query-only lists the plan, dry-run also logs in, do-it deletes
+        type: choice
+        options: [query-only, dry-run, do-it]
+        default: dry-run
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    name: Delete all but the newest prerelease of a release
+    runs-on: ubuntu-latest
+    concurrency:
+      group: pypi-cleanup
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install pypi-cleanup
+        run: python -m pip install pypi-cleanup==0.1.11 pyotp==2.10.0
+
+      - name: Clean up
+        env:
+          VERSION: ${{ inputs.version }}
+          MODE: ${{ inputs.mode }}
+          TAG: ${{ github.event.release.tag_name }}
+          PYPI_CLEANUP_USERNAME: ${{ secrets.PYPI_CLEANUP_USERNAME }}
+          PYPI_CLEANUP_PASSWORD: ${{ secrets.PYPI_CLEANUP_PASSWORD }}
+          PYPI_CLEANUP_TOTP_SECRET: ${{ secrets.PYPI_CLEANUP_TOTP_SECRET }}
+        run: |
+          if [ -z "$VERSION" ]; then
+            previous=$(git describe --tags --abbrev=0 --match 'v*' "$TAG^")
+            VERSION=${previous#v}
+          fi
+          case "$MODE" in
+            query-only) flag=--query-only ;;
+            dry-run) flag= ;;
+            do-it) flag=--do-it ;;
+            *) echo "unknown mode $MODE"; exit 1 ;;
+          esac
+          python scripts/ci/pypi_cleanup_prereleases.py \
+            --package dftracer-utils --version "$VERSION" $flag

@@ -84,6 +84,9 @@ std::size_t agg_approx_bytes(const AggState& st) {
     }
     if (st.has_bitor) total += st.bitor_acc.size() * sizeof(std::uint64_t);
     if (st.has_prod) total += st.prod_acc.size() * sizeof(double);
+    if (st.has_msk)
+        for (const MergeSketch& sk : st.msk)
+            total += sk.bins().size() * 24 + 64;
     if (st.has_kmv)
         for (const KmvMap& m : st.kmv)
             for (const auto& [h, v] : m)
@@ -210,6 +213,7 @@ DataType agg_output_type(AggOp op, TypeId value_type, double param) {
         case AggOp::RegrIntercept:
         case AggOp::RegrR2:
         case AggOp::Prod:
+        case AggOp::SketchQuantile:
             return scalar(TypeId::Float64);
         case AggOp::SetUnion:
             if (param != 0.0)

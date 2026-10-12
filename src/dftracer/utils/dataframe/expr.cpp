@@ -719,6 +719,68 @@ bool expr_as_col_is_in(const Expr& e, std::int32_t* col, Series* values) {
 
 namespace {
 
+// The (from, to) columns of StrFn::Translate's text operands: `text` is the
+// keys, one codepoint each; `text2` is one entry per key, a codepoint L then
+// the value's codepoints, L = 1 + their count, or L = 0 for a deletion. False
+// when either does not parse.
+bool decode_translate_table(std::string_view text, std::string_view text2,
+                            Series& from, Series& to) {
+    const auto step = [](std::string_view s, std::size_t pos,
+                         std::uint32_t& cp) -> std::size_t {
+        const auto c = static_cast<unsigned char>(s[pos]);
+        const std::size_t n = c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
+        if (c >= 0x80 && c < 0xC0) return 0;
+        if (pos + n > s.size()) return 0;
+        cp = n == 1 ? c : c & (0x7F >> n);
+        for (std::size_t k = 1; k < n; ++k)
+            cp = (cp << 6) | (static_cast<unsigned char>(s[pos + k]) & 0x3F);
+        return n;
+    };
+    std::vector<std::int32_t> koff{0}, voff{0};
+    std::vector<std::uint8_t> valid;
+    std::string vdata;
+    std::size_t pos = 0;
+    std::size_t vpos = 0;
+    bool any_null = false;
+    while (pos < text.size()) {
+        std::uint32_t cp;
+        const std::size_t n = step(text, pos, cp);
+        if (n == 0) return false;
+        pos += n;
+        koff.push_back(static_cast<std::int32_t>(pos));
+        std::uint32_t count;
+        const std::size_t ln =
+            vpos < text2.size() ? step(text2, vpos, count) : 0;
+        if (ln == 0) return false;
+        vpos += ln;
+        const std::size_t row = koff.size() - 2;
+        if (valid.size() * 8 <= row) valid.push_back(0);
+        if (count == 0) {
+            any_null = true;
+        } else {
+            valid[row >> 3] |= static_cast<std::uint8_t>(1u << (row & 7));
+            const std::size_t begin = vpos;
+            for (std::uint32_t k = 1; k < count; ++k) {
+                std::uint32_t ignored;
+                const std::size_t m =
+                    vpos < text2.size() ? step(text2, vpos, ignored) : 0;
+                if (m == 0) return false;
+                vpos += m;
+            }
+            vdata.append(text2.substr(begin, vpos - begin));
+        }
+        voff.push_back(static_cast<std::int32_t>(vdata.size()));
+    }
+    if (vpos != text2.size()) return false;
+    const auto rows = static_cast<std::int64_t>(koff.size() - 1);
+    from = Series{dftu_series_new_string(DFTU_TYPE_STRING, koff.data(),
+                                         text.data(), rows, nullptr)};
+    to = Series{dftu_series_new_string(DFTU_TYPE_STRING, voff.data(),
+                                       vdata.data(), rows,
+                                       any_null ? valid.data() : nullptr)};
+    return from.handle() != nullptr && to.handle() != nullptr;
+}
+
 // Slot-IR opcodes.
 enum {
     OP_LOAD,
@@ -1566,6 +1628,28 @@ class Compiler {
             }
             case StrFn::Join:
                 break;
+            case StrFn::Normalize:
+                if (n->scalar.value.i < 0 || n->scalar.value.i > 3)
+                    throw std::invalid_argument(
+                        "expr: normalize form must be NFC, NFKC, NFD or NFKD");
+                return col_val(emit_str_fn(n, a.slot, -1), TypeId::String);
+            case StrFn::Translate: {
+                Series from, to;
+                const Series probe = Series::nulls(TypeId::String, 1);
+                if (!decode_translate_table(n->text, n->text2, from, to) ||
+                    !Series{dftu_series_str_translate(
+                                probe.handle(), from.handle(), to.handle())}
+                         .handle())
+                    throw std::invalid_argument(
+                        "expr: translate table is not one distinct codepoint "
+                        "per key");
+                return col_val(emit_str_fn(n, a.slot, -1), TypeId::String);
+            }
+            case StrFn::Wrap:
+                if (n->scalar.value.i < 1)
+                    throw std::invalid_argument(
+                        "expr: wrap width must be at least 1");
+                return col_val(emit_str_fn(n, a.slot, -1), TypeId::String);
             default:
                 return col_val(emit_str_fn(n, a.slot, -1), TypeId::String);
         }
@@ -3161,6 +3245,19 @@ Series str_fn_eval(const SlotOp& op, const Series& a, const Series* b,
             return Series{dftu_series_str_regex_replace(
                 h, t, tn, op.text2.data(),
                 static_cast<std::int32_t>(op.text2.size()))};
+        case StrFn::Normalize:
+            return Series{
+                dftu_series_str_normalize(h, static_cast<std::int32_t>(i0))};
+        case StrFn::Translate: {
+            Series from, to;
+            if (!decode_translate_table(op.text, op.text2, from, to))
+                return Series{};
+            return Series{
+                dftu_series_str_translate(h, from.handle(), to.handle())};
+        }
+        case StrFn::Wrap:
+            return Series{
+                dftu_series_str_wrap(h, i0, static_cast<std::int32_t>(i1))};
         case StrFn::Rfind:
             return Series{dftu_series_str_rfind(h, t, tn)};
         case StrFn::Index:
@@ -3829,8 +3926,8 @@ dftu_expr* dftu_expr_str_fn(int32_t fn, const dftu_expr* a, const dftu_expr* b,
                             const char* text, int32_t text_len,
                             const char* text2, int32_t text2_len, int64_t i0,
                             int64_t i1) {
-    if (!a || fn < 0 || fn > DFTU_STR_FN_REGEX_REPLACE ||
-        (text_len > 0 && !text) || (text2_len > 0 && !text2))
+    if (!a || fn < 0 || fn > DFTU_STR_FN_WRAP || (text_len > 0 && !text) ||
+        (text2_len > 0 && !text2))
         return nullptr;
     const dataframe::Expr other = b ? unwrap(b) : dataframe::Expr{};
     return wrap(dataframe::expr_str_fn(

@@ -32,7 +32,6 @@ _TRANSFORM_KINDS: Dict[str, str] = {
     "dftu.series.cum_prod": "cumprod",
     "dftu.series.cummax": "cummax",
     "dftu.series.cummin": "cummin",
-    "dftu.series.cum_count": "cumcount",
     "dftu.series.shift": "shift",
     "dftu.series.diff": "diff",
     "dftu.series.pct_change": "pct_change",
@@ -243,7 +242,12 @@ def _eager_agg_over(columns: Dict[str, Series], spec: ColumnOp) -> Series:
         first = next(iter(columns.values()))
         return first.full_like(float(v))
     row = "__dftu_over_row__"
-    joined = frame.with_row_index(row).join(grouped, on=keys).sort_values(row)
+    # A null key is a group of its own, as in polars, so its rows match it.
+    joined = (
+        frame.with_row_index(row)
+        .join(grouped, on=keys, how="left", nulls_equal=True)
+        .sort_values(row)
+    )
     return Series(joined._native[value])
 
 
@@ -297,16 +301,29 @@ def lower_column_ops(plan: "LazyFrame", expr: "Expr") -> "Tuple[LazyFrame, Expr,
 
 
 def _lazy_agg_over(plan: "LazyFrame", name: str, spec: ColumnOp) -> "LazyFrame":
+    import copy
+
+    from .columnar import _Col
     from .lazyframe import LazyGroupBy
 
     assert spec.agg is not None
     keys = spec.over or []
-    row = "__dftu_over_row__"
-    indexed = plan.with_row_index(row)
-    grouped = LazyGroupBy(indexed, keys).agg(spec.agg.alias(name))
     if not keys:
         raise TypeError("over: an aggregate's over() needs keys on a plan")
-    return indexed.join(grouped, on=keys).sort_by(row).drop(row)
+    row = "__dftu_over_row__"
+    indexed = plan.with_row_index(row)
+    agg = spec.agg
+    # The streaming group-by aggregates columns by name, so a computed value
+    # becomes a column first.
+    value = f"{name}_value"
+    computed = agg.value is not None and not isinstance(agg.value, _Col)
+    if computed:
+        indexed = indexed.with_column(value, agg.value)
+        agg = copy.copy(agg)
+        agg.value = _Col(value)
+    grouped = LazyGroupBy(indexed, keys, dropna=False).agg(agg.alias(name))
+    joined = indexed.join(grouped, on=keys, how="left", nulls_equal=True).sort_by(row)
+    return joined.drop(row, value) if computed else joined.drop(row)
 
 
 def _lazy_over(plan: "LazyFrame", name: str, spec: ColumnOp) -> "LazyFrame":
@@ -318,7 +335,8 @@ def _lazy_over(plan: "LazyFrame", name: str, spec: ColumnOp) -> "LazyFrame":
     row = "__dftu_over_row__"
     indexed = plan.with_row_index(row)
     part = indexed.select(*(keys + [row, name]))
-    valued = LazyGroupBy(part.select(*(keys + [name])), keys)._transform(
+    # Null keys stay a group: the result lines up with the input by position.
+    valued = LazyGroupBy(part.select(*(keys + [name])), keys, dropna=False)._transform(
         spec.kind, spec.n, _rank_name(spec), _ascending(spec)
     )
     # The transform keeps input order, so the row index lines up positionally.

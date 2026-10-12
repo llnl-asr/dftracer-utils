@@ -243,4 +243,10 @@ DFTU_SERIES_OP(dftu.series.compare_series, dftu_series_compare_series, SERIES, S
 DFTU_SERIES_OP(dftu.series.str_regex_replace, dftu_series_str_regex_replace, SERIES, SERIES, STR, STR)
 DFTU_SERIES_OP(dftu.series.dt_format, dftu_series_dt_format, SERIES, SERIES, STR, I32)
 
+/* Unicode normalization by form code, per-codepoint translation by a
+ * (from, to) pair of String columns, and textwrap by width and flag bits. */
+DFTU_SERIES_OP(dftu.series.str_normalize, dftu_series_str_normalize, SERIES, SERIES, I32, NONE)
+DFTU_SERIES_OP(dftu.series.str_translate, dftu_series_str_translate, SERIES, SERIES, SERIES, SERIES)
+DFTU_SERIES_OP(dftu.series.str_wrap, dftu_series_str_wrap, SERIES, SERIES, I64, I32)
+
 #undef DFTU_SERIES_OP

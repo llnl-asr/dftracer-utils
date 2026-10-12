@@ -48,7 +48,8 @@ typedef enum {
     DFTU_AGG_REGR_SLOPE = 32,
     DFTU_AGG_REGR_INTERCEPT = 33,
     DFTU_AGG_REGR_R2 = 34,
-    DFTU_AGG_PROD = 35
+    DFTU_AGG_PROD = 35,
+    DFTU_AGG_SKETCH_QUANTILE = 36
 } dftu_agg_op;
 
 #ifdef __cplusplus

@@ -1908,6 +1908,43 @@ function(need_pcre2)
 endfunction()
 
 # ==============================================================================
+# utf8proc (MIT); the Unicode tables behind Series.str.normalize
+# ==============================================================================
+
+function(need_utf8proc)
+  if(NOT TARGET utf8proc_static)
+    if(NOT utf8proc_ADDED)
+      # The pinned release always builds from source, never a system copy.
+      set(CPM_USE_LOCAL_PACKAGES OFF)
+      cpmaddpackage(
+        NAME
+        utf8proc
+        GITHUB_REPOSITORY
+        JuliaStrings/utf8proc
+        VERSION
+        2.9.0
+        GIT_TAG
+        v2.9.0
+        DOWNLOAD_ONLY
+        YES)
+    endif()
+    if(NOT utf8proc_SOURCE_DIR)
+      message(FATAL_ERROR "need_utf8proc: utf8proc sources were not fetched")
+    endif()
+    # utf8proc.c includes utf8proc_data.c itself. The static archive links into
+    # our shared libraries, so it must be PIC.
+    add_library(utf8proc_static STATIC ${utf8proc_SOURCE_DIR}/utf8proc.c)
+    target_include_directories(utf8proc_static SYSTEM
+                               PUBLIC ${utf8proc_SOURCE_DIR})
+    target_compile_definitions(utf8proc_static PUBLIC UTF8PROC_STATIC)
+    target_compile_options(utf8proc_static PRIVATE -w)
+    set_target_properties(utf8proc_static PROPERTIES POSITION_INDEPENDENT_CODE
+                                                     ON)
+    dftracer_utils_ok("Built utf8proc ${utf8proc_VERSION} with CPM")
+  endif()
+endfunction()
+
+# ==============================================================================
 # Vectorscan (static, external build); Ragel and Boost headers are build-only
 # ==============================================================================
 

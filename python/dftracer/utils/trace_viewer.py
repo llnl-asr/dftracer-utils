@@ -301,11 +301,17 @@ class TraceViewer(LazyFrame):
         """Spill budget for the scan and the plan; bytes or a unit string."""
         return self._trace(self._tv.memory_budget(coerce_bytes(nbytes, "nbytes")))
 
-    def group_by(self, *keys: str) -> "TraceViewer":  # ty: ignore[invalid-method-override]
+    def group_by(  # ty: ignore[invalid-method-override]
+        self, *keys: "Union[str, Sequence[str]]"
+    ) -> "TraceViewer":
         """Trace group keys: ``name``/``cat``/``pid``/``tid``/``fhash``/
         ``hhash``/``arg:<key>``, any other field, or a transform call such as
-        ``basename(fname)``. No keys folds every event into one row."""
-        return self._trace(self._tv.group_by(*keys))
+        ``basename(fname)``, as separate arguments or one list. No keys folds
+        every event into one row."""
+        flat: List[str] = []
+        for k in keys:
+            flat.extend([k] if isinstance(k, str) else k)
+        return self._trace(self._tv.group_by(*flat))
 
     def agg(self, *specs: Union[str, Agg]) -> "TraceViewer":  # ty: ignore[invalid-method-override]
         """Trace aggregates: spec strings (``"count"``, ``"mean:dur"``,

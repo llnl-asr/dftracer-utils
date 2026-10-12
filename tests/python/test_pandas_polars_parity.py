@@ -50,7 +50,7 @@ def test_dataframe_pandas_spellings_match_native():
     df = _df({"a": [3, 1, 2, 1], "b": [1.5, None, 3.5, 4.0], "c": ["x", "y", "x", "z"]})
     assert _dict(df.dropna()) == _dict(df.drop_nulls())
     assert _dict(df.fillna(0)) == _dict(df.fill_null(0))
-    assert _lst(df.duplicated()) == _lst(df.is_duplicated())
+    assert _lst(df.duplicated(keep=False)) == _lst(df.is_duplicated())
     assert _dict(df.drop("b")) == _dict(df.select("a", "c"))
     assert _dict(df.drop(columns=["a", "b"])) == {"c": ["x", "y", "x", "z"]}
     with pytest.raises(KeyError):
@@ -153,8 +153,7 @@ def test_series_statistics_and_windows():
     assert _lst(s.clip(upper=4)) == [1.0, 2.0, 4.0, 4.0]
     with pytest.raises(TypeError):
         s.clip()
-    with pytest.raises(NotImplementedError):
-        s.round(2)
+    assert _lst(s.round(2)) == _lst(s)
 
 
 def test_series_str_accessor():

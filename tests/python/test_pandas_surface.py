@@ -3,6 +3,7 @@ and group-by mixins), each value checked against pandas 2.x on the same
 data."""
 
 import math
+import textwrap
 from datetime import datetime, timedelta
 
 import pytest
@@ -1064,9 +1065,9 @@ def test_group_by_null_keys_and_view_columns():
     # A null key: dropped as pandas by default, its own group with dropna=False.
     g = DataFrame({"k": ["a", None, "a", ""], "y": [1.0, 3.0, 5.0, 7.0]})
     assert _d(g.group_by("k").sum()) == {"k": ["a", ""], "y": [6.0, 7.0]}
-    assert g.to_pandas().groupby("k").sum().reset_index().sort_values("k", ascending=False).to_dict(
-        "list"
-    ) == _d(g.groupby("k").sum())
+    assert g.to_pandas().groupby("k").sum().reset_index().to_dict("list") == _d(
+        g.groupby("k").sum()
+    )
     assert _d(g.group_by("k", dropna=False).sum()) == {"k": ["a", None, ""], "y": [6.0, 3.0, 7.0]}
     assert _d(g.lazy().group_by("k").size().collect()) == {"k": ["a", ""], "size": [2, 1]}
     assert _d(g.lazy().group_by("k", dropna=False).size().collect()) == {
@@ -1120,12 +1121,484 @@ def test_groupby_column_selection_and_series_key_match_pandas():
     assert ours == {"k": ["x", "y"], "sum": ref["sum"].tolist(), "mean": ref["mean"].tolist()}
     assert _d(df.groupby("k")["b"].sum())["b"] == pdf.groupby("k")["b"].sum().tolist()
     assert list(df.groupby("k")[["a"]].agg("max").columns) == ["k", "a"]
-    # A Series key: the group column is named `key`; groups in first-seen
-    # order (pandas sorts them), so compare by key.
+    # A Series key: the group column is named `key`, groups sorted as pandas.
     ours = _d(df.groupby(df["a"] // 2)["b"].agg(["count", "sum"]))
     ref = pdf.groupby(pdf["a"] // 2)["b"].agg(["count", "sum"])
-    assert ours["key"] == [1, 0, 2]
+    assert ours["key"] == [0, 1, 2]
     assert dict(zip(ours["key"], ours["count"])) == ref["count"].to_dict()
     assert dict(zip(ours["key"], ours["sum"])) == ref["sum"].to_dict()
     # A non-name is simply not in the frame.
     assert (df["a"] in df) is False
+
+
+def test_frame_repr_small():
+    df = DataFrame({"a": [1, 22, None], "f": [1.5, 2.25, None], "s": ["x", "yy", None]})
+    assert repr(df) == (
+        "      a     f     s\n0     1  1.50     x\n1    22  2.25    yy\n2  None   NaN  None"
+    )
+    assert str(df) == repr(df)
+
+
+def test_frame_repr_floats_follow_pandas_notation():
+    big = DataFrame({"a": [150870205377.018188, 1.0]})
+    assert repr(big) == "              a\n0  1.508702e+11\n1  1.000000e+00"
+    tiny = DataFrame({"a": [1e-05, 2.0]})
+    assert repr(tiny) == "         a\n0  0.00001\n1  2.00000"
+    finer = DataFrame({"a": [1e-07, 2.0]})
+    assert repr(finer) == "              a\n0  1.000000e-07\n1  2.000000e+00"
+
+
+def test_frame_html_matches_repr_cells():
+    df = DataFrame({"a": [1, 22], "s": ["<x>", None]})
+    out = df._repr_html_()
+    assert out.startswith('<table border="1" class="dataframe">')
+    assert "<th></th><th>a</th><th>s</th>" in out
+    assert "<tr><th>0</th><td>1</td><td>&lt;x&gt;</td></tr>" in out
+    assert "<tr><th>1</th><td>22</td><td>None</td></tr>" in out
+    assert "rows x" not in out
+
+
+def test_frame_html_cuts_rows_like_repr():
+    df = DataFrame({"a": list(range(100))})
+    out = df._repr_html_()
+    assert out.count("<tr>") == 11
+    assert "<td>...</td>" in out
+    assert out.endswith("<p>100 rows x 1 columns</p>")
+
+
+def test_frame_html_empty_shows_columns():
+    df = DataFrame({"a": [1, 2]}).head(0)
+    assert df._repr_html_() == "<pre>Empty DataFrame\nColumns: [a]\nIndex: []</pre>"
+
+
+def test_frame_repr_empty_shows_columns():
+    df = DataFrame({"a": [1, 2], "b": ["x", "y"]}).head(0)
+    assert repr(df) == "Empty DataFrame\nColumns: [a, b]\nIndex: []"
+
+
+def test_frame_repr_long_cuts_rows():
+    n = 100
+    df = DataFrame({"a": list(range(n)), "b": [float(i) for i in range(n)]})
+    lines = repr(df).split("\n")
+    assert lines[0].split() == ["a", "b"]
+    assert [ln.split()[0] for ln in lines[1:12]] == [
+        "0", "1", "2", "3", "4", "...", "95", "96", "97", "98", "99",
+    ]  # fmt: skip
+    assert lines[-1] == "[100 rows x 2 columns]"
+    assert len(lines) == 14
+
+
+def test_frame_repr_exactly_sixty_rows_is_whole():
+    df = DataFrame({"a": list(range(60))})
+    out = repr(df)
+    assert "..." not in out and "rows x" not in out
+    assert len(out.split("\n")) == 61
+
+
+def test_series_repr():
+    s = Series.from_list([1, 22, 3])
+    assert repr(s) == "0     1\n1    22\n2     3\ndtype: int64"
+    long = repr(Series.from_list(list(range(100))))
+    lines = long.split("\n")
+    assert lines[5].split() == ["...", "..."]
+    assert lines[-1] == "Length: 100, dtype: int64"
+    assert len(lines) == 12
+
+
+def _sort_frame():
+    return DataFrame(
+        {
+            "app": ["b", "a", "b", None, "a", "c"],
+            "n": [3, 1, 3, 9, 2, 1],
+            "v": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        }
+    )
+
+
+def test_groupby_sorts_by_default():
+    df = _sort_frame()
+    gb = df.groupby("app")
+    assert gb.size()["app"].to_list() == ["a", "b", "c"]
+    assert gb.size()["size"].to_list() == [2, 2, 1]
+    assert gb.sum()["v"].to_list() == [7.0, 4.0, 6.0]
+    assert gb.agg(total=("v", "sum"))["app"].to_list() == ["a", "b", "c"]
+    assert gb.median()["app"].to_list() == ["a", "b", "c"]
+    keep = df.groupby("app", dropna=False).size()
+    assert keep["app"].to_list() == ["a", "b", "c", None]
+
+
+def test_groupby_sorts_numeric_and_composite_keys():
+    df = _sort_frame()
+    out = df.groupby(["app", "n"]).size()
+    assert list(zip(out["app"].to_list(), out["n"].to_list())) == [
+        ("a", 1),
+        ("a", 2),
+        ("b", 3),
+        ("c", 1),
+    ]
+    assert df.groupby("n").sum()["n"].to_list() == [1, 2, 3, 9]
+    assert df.groupby("n").agg(total=("v", "sum"))["n"].to_list() == [1, 2, 3, 9]
+
+
+def test_groupby_sort_false_keeps_engine_order():
+    df = _sort_frame()
+    expected = df.group_by("app").size()
+    for sort_false in (df.groupby("app", sort=False).size(), df.groupby("app", sort=False).sum()):
+        assert sort_false["app"].to_list() == expected["app"].to_list()
+    assert df.group_by("app").size()["app"].to_list() == expected["app"].to_list()
+
+
+def test_groupby_median_of_an_empty_frame_keeps_its_columns():
+    df = DataFrame.from_dict({"k": [1, 1, 2], "v": [1.0, 3.0, 5.0]})
+    empty = df[df["k"] == 9]
+    out = empty.groupby("k").median()
+    assert out.shape == (0, 2)
+    assert out.columns == ["k", "v"]
+    assert empty.groupby("k").quantile(0.9).shape == (0, 2)
+
+
+def test_expression_takes_the_pandas_names():
+    from dftracer.utils import col
+
+    df = DataFrame.from_dict({"a": ["MPI_x", "ab", None], "n": [1, 5, 3]})
+    same = [
+        (col("n").isin([1, 3]), col("n").is_in([1, 3])),
+        (col("a").startswith("MPI_"), col("a").starts_with("MPI_")),
+        (col("a").str.startswith("MPI_"), col("a").str.starts_with("MPI_")),
+        (col("a").str.endswith("b"), col("a").str.ends_with("b")),
+        (col("n").between(2, 5), col("n").is_between(2, 5)),
+        (col("a").isnull(), col("a").is_null()),
+        (col("a").notnull(), col("a").is_not_null()),
+    ]
+    for pandas_name, polars_name in same:
+        assert df.filter(pandas_name).to_dict() == df.filter(polars_name).to_dict()
+    out = df.with_columns(
+        u=col("a").str.upper(),
+        k=col("a").str.len(),
+        c=col("n").cumsum(),
+        f=col("n").astype("float64"),
+    )
+    assert out["u"].to_list() == ["MPI_X", "AB", None]
+    assert out["k"].to_list() == [5, 2, None]
+    assert out["c"].to_list() == [1, 6, 9]
+    assert out["f"].to_list() == [1.0, 5.0, 3.0]
+
+
+def test_series_round_with_decimals_matches_numpy():
+    import numpy as np
+
+    rng = np.random.default_rng(4)
+    xs = list(rng.uniform(-1e4, 1e4, 5000)) + [2.675, 1.005, 0.125, -0.125, 2.5]
+    s = DataFrame.from_dict({"x": xs})["x"]
+    for d in [-2, -1, 0, 1, 2, 3]:
+        assert s.round(d).to_list() == np.round(np.array(xs), d).tolist()
+    i = DataFrame.from_dict({"i": [1, 25, 35, 149, -151]})
+    assert i["i"].round(-1).to_list() == [0, 20, 40, 150, -150]
+    assert i["i"].round(2).to_list() == [1, 25, 35, 149, -151]
+    assert i.round(-1)["i"].dtype == i["i"].dtype
+
+
+def test_pivot_table_takes_several_keys_and_a_median():
+    import numpy as np
+
+    pd = pytest.importorskip("pandas")
+    rng = np.random.default_rng(5)
+    rows = {
+        "s": list(rng.choice(["x", "y", "z"], 300)),
+        "n": [int(v) for v in rng.choice([1, 2, 4], 300)],
+        "p": [int(v) for v in rng.choice([1, 2, 8], 300)],
+        "v": list(rng.random(300)),
+    }
+    df, pdf = DataFrame.from_dict(rows), pd.DataFrame(rows)
+    for agg in ["median", "mean", "count", "first"]:
+        got = df.pivot_table(values="v", index=["s", "n"], columns="p", aggfunc=agg).to_pandas()
+        want = pdf.pivot_table(values="v", index=["s", "n"], columns="p", aggfunc=agg).reset_index()
+        assert [str(c) for c in got.columns] == [str(c) for c in want.columns]
+        assert got[["s", "n"]].values.tolist() == want[["s", "n"]].values.tolist()
+        assert np.allclose(
+            got.iloc[:, 2:].astype(float).values,
+            want.iloc[:, 2:].astype(float).values,
+            equal_nan=True,
+        )
+
+
+def test_duplicated_matches_pandas():
+    rows = {"k": [1, 2, 1, None, 2, None, 1], "s": ["a", "b", "a", "c", "x", "c", "a"]}
+    df, pdf = DataFrame.from_dict(rows), pd.DataFrame(rows)
+    for keep in ["first", "last", False]:
+        assert df.duplicated(keep=keep).to_list() == pdf.duplicated(keep=keep).tolist()
+        assert df.duplicated("k", keep=keep).to_list() == pdf.duplicated("k", keep=keep).tolist()
+        got = df.with_columns(d=col("k").duplicated(keep=keep))["d"].to_list()
+        assert got == pdf["k"].duplicated(keep=keep).tolist()
+
+
+def test_over_keeps_rows_with_a_null_key():
+    df = DataFrame.from_dict({"k": ["a", None, "a", None, "b"], "v": [1, 2, 3, 4, 5]})
+    exprs = {
+        "s": col("v").sum().over("k"),
+        "c": col("v").cum_sum().over("k"),
+        "n": col("v").cum_count().over("k"),
+        "m": (col("v") * 2).max().over("k"),
+    }
+    want = {"s": [4, 6, 4, 6, 5], "c": [1, 2, 4, 6, 5], "n": [1, 1, 2, 2, 1], "m": [6, 8, 6, 8, 10]}
+    eager = df.with_columns(**exprs)
+    lazy = df.lazy().with_columns(**exprs).collect()
+    for name, values in want.items():
+        assert eager[name].to_list() == values
+        assert lazy[name].to_list() == values
+
+
+def test_isascii_matches_python():
+    v = ["abc", "café", "", None]
+    s = DataFrame.from_dict({"a": v})["a"]
+    want = [None if x is None else x.isascii() for x in v]
+    assert s.str.isascii().to_list() == want
+    assert (
+        DataFrame.from_dict({"a": v}).with_columns(b=col("a").str.isascii())["b"].to_list() == want
+    )
+
+
+def test_encode_and_decode_round_trip_utf8():
+    v = ["ab", "é", "", None]
+    df = DataFrame.from_dict({"a": v})
+    b = df["a"].str.encode("utf-8")
+    assert b.to_list() == [None if x is None else x.encode() for x in v]
+    assert b.str.decode("utf-8").to_list() == v
+    out = df.with_columns(e=col("a").str.encode()).with_columns(d=col("e").str.decode())
+    assert out["e"].to_list() == b.to_list()
+    assert out["d"].to_list() == v
+    bad = DataFrame.from_dict({"b": [b"ok", b"\xff\xfe", None]})["b"]
+    assert bad.str.decode(errors="null").to_list() == ["ok", None, None]
+    with pytest.raises(ValueError, match="not valid utf-8"):
+        bad.str.decode()
+    with pytest.raises(ValueError, match="only utf-8"):
+        df["a"].str.encode("latin-1")
+
+
+def test_extractall_matches_pandas():
+    v = ["a1b22", None, "xyz", "c333"]
+    s = DataFrame.from_dict({"a": v})["a"]
+    for pat in [r"([a-z])(\d+)", r"(?P<letter>[a-z])(?P<num>\d+)?"]:
+        got = s.str.extractall(pat).to_pandas()
+        want = pd.Series(v).str.extractall(pat).reset_index()
+        want.columns = ["row", "match"] + [str(c) for c in want.columns[2:]]
+        assert got.columns.tolist() == want.columns.tolist()
+        assert got[["row", "match"]].values.tolist() == want[["row", "match"]].values.tolist()
+        for c in want.columns[2:]:
+            assert _clean(got[c].tolist()) == _clean(want[c].tolist())
+    none = DataFrame.from_dict({"a": ["xyz", None]})["a"].str.extractall(r"(\d)")
+    assert none.shape == (0, 3)
+    with pytest.raises(ValueError, match="no capture group"):
+        s.str.extractall(r"\d")
+
+
+_UNICODE_ROWS = [
+    "café au lait",
+    "café",
+    "ﬁnal ﬂow ﬃx",
+    "ＡＢＣ １２３",
+    "가나다 가",
+    "Å angstrom Å Å",
+    "x² + y³ = ½",
+    "ạ̇ and ạ̇",
+    "plain ascii",
+    "",
+    None,
+]
+
+
+@pytest.mark.parametrize("form", ["NFC", "NFKC", "NFD", "NFKD"])
+def test_str_normalize_matches_pandas(form):
+    s = Series.from_list(_UNICODE_ROWS)
+    want = _clean(pd.Series(_UNICODE_ROWS).str.normalize(form).tolist())
+    assert s.str.normalize(form).to_list() == want
+    df = DataFrame.from_dict({"a": _UNICODE_ROWS})
+    assert df.with_columns(b=col("a").str.normalize(form))["b"].to_list() == want
+    assert df.lazy().with_columns(b=col("a").str.normalize(form)).collect()["b"].to_list() == want
+
+
+def test_str_normalize_rejects_a_bad_form():
+    s = Series.from_list(["a"])
+    with pytest.raises(ValueError):
+        s.str.normalize("NFX")  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        col("a").str.normalize("nfc")  # type: ignore[arg-type]
+
+
+def _translate_rows():
+    return [
+        "hello world",
+        "café € 5",
+        "ééé",
+        "",
+        None,
+        "tab\there\nnew",
+        "\U0001f600 smile \U0001f600",
+        "aAbB",
+    ]
+
+
+_TRANSLATE_TABLES = [
+    {ord("l"): None, ord("o"): "0", ord("w"): "vv"},
+    {"l": None, "o": "0", "w": "vv"},
+    {"é": "e", "€": "EUR", "5": None, ord("a"): 65},
+    {0x1F600: ":)", ord("\t"): "    ", ord("\n"): None},
+    {ord("a"): "", ord("A"): None, ord("b"): "éé"},
+    {},
+]
+
+
+@pytest.mark.parametrize("table", _TRANSLATE_TABLES)
+def test_str_translate_matches_pandas(table):
+    rows = _translate_rows()
+    ref = {(ord(k) if isinstance(k, str) else k): v for k, v in table.items()}
+    want = _clean(pd.Series(rows).str.translate(ref).tolist())
+    assert Series.from_list(rows).str.translate(table).to_list() == want
+    df = DataFrame.from_dict({"a": rows})
+    assert df.with_columns(b=col("a").str.translate(table))["b"].to_list() == want
+    assert df.lazy().with_columns(b=col("a").str.translate(table)).collect()["b"].to_list() == want
+
+
+def test_str_translate_rejects_a_bad_table():
+    s = Series.from_list(["abc"])
+    with pytest.raises(ValueError):
+        s.str.translate({"ab": "x"})
+    with pytest.raises(ValueError):
+        s.str.translate({"a": "x", 97: "y"})
+    with pytest.raises(TypeError):
+        s.str.translate({"a": 1.5})  # type: ignore[dict-item]
+    with pytest.raises(ValueError):
+        col("a").str.translate({"ab": "x"})
+
+
+def _wrap_corpus():
+    import random
+
+    rng = random.Random(20261012)
+    words = [
+        "a",
+        "an",
+        "the",
+        "quick",
+        "brown",
+        "supercalifragilistic",
+        "goof-ball",
+        "well-known-fact",
+        "-b",
+        "x--y",
+        "end--",
+        "--start",
+        "a-b-c-d",
+        "dash-",
+        "pneumonoultramicroscopic",
+        "foo.bar",
+        "e-mail",
+        "-",
+        "--",
+        "---",
+        "a--",
+        "1-2-3",
+        "ab-cd--ef",
+    ]
+    seps = [" ", " ", " ", "  ", "\t", "\n", " \n ", "\r", "\x0b", "\x0c"]
+    rows = []
+    for _ in range(80):
+        n = rng.randrange(0, 14)
+        text = ""
+        for i in range(n):
+            text += rng.choice(words)
+            if i < n - 1 or rng.random() < 0.3:
+                text += rng.choice(seps)
+        if rng.random() < 0.15:
+            text = rng.choice(seps) + text
+        rows.append(text)
+    rows += ["", "   ", "\t\t", "a", " a ", "x" * 80, "ab" * 40 + " " + "-".join(["q"] * 20)]
+    rows.insert(5, None)
+    return rows
+
+
+_WRAP_VARIANTS = [
+    {},
+    {"expand_tabs": False},
+    {"replace_whitespace": False},
+    {"expand_tabs": False, "replace_whitespace": False},
+    {"drop_whitespace": False},
+    {"break_long_words": False},
+    {"break_on_hyphens": False},
+    {"break_long_words": False, "break_on_hyphens": False, "drop_whitespace": False},
+]
+
+
+# CPython 3.13.10 and 3.14.1 stopped putting an empty piece of a long word on
+# a full line; pandas wraps with the host textwrap, and str.wrap follows the
+# newer rule.
+_WRAP_AS_HOST = pytest.mark.skipif(
+    textwrap.wrap(" abc", 1) != ["a", "b", "c"],
+    reason="the host textwrap predates CPython 3.13.10 and 3.14.1",
+)
+
+
+@_WRAP_AS_HOST
+@pytest.mark.parametrize("opts", _WRAP_VARIANTS, ids=lambda o: ",".join(o) or "default")
+def test_str_wrap_matches_pandas(opts):
+    rows = _wrap_corpus()
+    s = Series.from_list(rows)
+    ps = pd.Series(rows)
+    for width in range(1, 31):
+        want = _clean(ps.str.wrap(width, **opts).tolist())
+        assert s.str.wrap(width, **opts).to_list() == want, (width, opts)
+
+
+@_WRAP_AS_HOST
+def test_str_wrap_expression_matches_pandas():
+    rows = _wrap_corpus()
+    df = DataFrame.from_dict({"a": rows})
+    for width, opts in [
+        (7, {}),
+        (12, {"break_on_hyphens": False}),
+        (20, {"drop_whitespace": False}),
+    ]:
+        want = _clean(pd.Series(rows).str.wrap(width, **opts).tolist())
+        assert df.with_columns(b=col("a").str.wrap(width, **opts))["b"].to_list() == want
+        lazy = df.lazy().with_columns(b=col("a").str.wrap(width, **opts)).collect()
+        assert lazy["b"].to_list() == want
+
+
+def test_str_wrap_rejects_a_bad_width():
+    for width in (0, -1):
+        with pytest.raises(ValueError):
+            Series.from_list(["a b"]).str.wrap(width)
+        with pytest.raises(ValueError):
+            col("a").str.wrap(width)
+
+
+def test_sketch_quantile_matches_duql_merge(tmp_path):
+    import gzip
+    import random
+
+    from dftracer.utils import TraceViewer
+
+    trace = str(tmp_path / "t.pfw.gz")
+    rng = random.Random(3)
+    with gzip.open(trace, "wt") as f:
+        for i in range(3000):
+            f.write(
+                '{"ph":"X","name":"%s","cat":"c","pid":%d,"tid":1,"ts":%d,"dur":%d,"args":{}}\n'
+                % ("abc"[i % 3], i % 7, i, rng.randint(1, 10**6))
+            )
+    tv = TraceViewer(trace, str(tmp_path / "idx"))
+    parts = tv.duql("group name, pid { s = sketch(dur) }").collect()
+    want = tv.duql(
+        "group name, pid { s = sketch(dur) }"
+        " | group name { q50 = quantile(merge(s), 0.5), q99 = quantile(merge(s), 0.99) }"
+        " | sort name"
+    ).collect()
+    aggs = {"q50": col("s").sketch_quantile(0.5), "q99": col("s").sketch_quantile(0.99)}
+    eager = parts.groupby("name").agg(**aggs)
+    lazy = parts.lazy().group_by("name").agg(**aggs).sort("name").collect()
+    assert eager.to_dict() == want.to_dict()
+    assert lazy.to_dict() == want.to_dict()
+    bad = DataFrame.from_dict({"k": [1, 1, 2], "s": [None, "not a sketch", None]})
+    assert bad.groupby("k").agg(q=col("s").sketch_quantile(0.5))["q"].to_list() == [None, None]
+    with pytest.raises(ValueError, match="q must be in"):
+        col("s").sketch_quantile(1.5)

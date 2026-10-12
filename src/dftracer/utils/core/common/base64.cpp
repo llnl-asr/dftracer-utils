@@ -25,7 +25,7 @@ std::string base64_encode(const void* data, std::size_t len) {
     return out;
 }
 
-std::optional<std::string> base64_decode(std::string_view sv) {
+bool base64_decode_into(std::string_view sv, std::string& out) {
     static constexpr unsigned char DEC_TABLE[256] = {
         // clang-format off
         64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,
@@ -47,15 +47,15 @@ std::optional<std::string> base64_decode(std::string_view sv) {
         // clang-format on
     };
 
-    if (sv.size() % 4 != 0) return std::nullopt;
-    std::string out;
+    out.clear();
+    if (sv.size() % 4 != 0) return false;
     out.reserve(sv.size() / 4 * 3);
     for (std::size_t i = 0; i < sv.size(); i += 4) {
         auto a = DEC_TABLE[static_cast<unsigned char>(sv[i])];
         auto b = DEC_TABLE[static_cast<unsigned char>(sv[i + 1])];
         auto c = DEC_TABLE[static_cast<unsigned char>(sv[i + 2])];
         auto d = DEC_TABLE[static_cast<unsigned char>(sv[i + 3])];
-        if (a == 64 || b == 64) return std::nullopt;
+        if (a == 64 || b == 64) return false;
         unsigned val = (a << 18) | (b << 12);
         out.push_back(static_cast<char>(val >> 16));
         if (c != 64) {
@@ -67,6 +67,12 @@ std::optional<std::string> base64_decode(std::string_view sv) {
             out.push_back(static_cast<char>(val & 0xFF));
         }
     }
+    return true;
+}
+
+std::optional<std::string> base64_decode(std::string_view sv) {
+    std::string out;
+    if (!base64_decode_into(sv, out)) return std::nullopt;
     return out;
 }
 

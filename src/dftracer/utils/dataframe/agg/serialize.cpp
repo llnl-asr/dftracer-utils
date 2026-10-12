@@ -247,6 +247,14 @@ std::string agg_serialize(const AggState& st_in, bool compact) {
             s.append(reinterpret_cast<const char*>(blob.data()), blob.size());
         }
     }
+    if (st.has_msk) {
+        std::vector<std::uint8_t> blob;
+        for (const MergeSketch& sk : st.msk) {
+            sk.serialize_into(blob);
+            put(s, static_cast<std::uint32_t>(blob.size()));
+            s.append(reinterpret_cast<const char*>(blob.data()), blob.size());
+        }
+    }
     put(s, static_cast<std::uint8_t>(st.has_arg ? 1 : 0));
     if (st.has_arg) {
         for (double b : st.arg_by) put(s, b);
@@ -430,7 +438,7 @@ AggStatePtr agg_deserialize(const std::string& blob, bool compact) {
     st->specs.resize(ns);
     for (std::uint32_t i = 0; i < ns; ++i) {
         const std::int32_t op = r.get<std::int32_t>();
-        if (op < 0 || op > static_cast<std::int32_t>(AggOp::Prod))
+        if (op < 0 || op > static_cast<std::int32_t>(AggOp::SketchQuantile))
             Reader::truncated();
         st->specs[i].op = static_cast<AggOp>(op);
         st->specs[i].value_col = r.get<std::int32_t>();
@@ -526,6 +534,18 @@ AggStatePtr agg_deserialize(const std::string& blob, bool compact) {
             r.p += blen;
         }
     }
+    if (st->has_msk) {
+        const std::size_t sz = static_cast<std::size_t>(ng) * st->n_msk;
+        r.count(sz);
+        st->msk.reserve(sz);
+        for (std::size_t i = 0; i < sz; ++i) {
+            const std::uint32_t blen = r.get<std::uint32_t>();
+            r.count(blen);
+            st->msk.push_back(MergeSketch::deserialize(
+                reinterpret_cast<const std::uint8_t*>(r.p), blen));
+            r.p += blen;
+        }
+    }
     if (st->has_arg != (r.get<std::uint8_t>() != 0)) Reader::truncated();
     if (st->has_arg) {
         const std::size_t sz = static_cast<std::size_t>(ng) * st->n_arg;
@@ -590,7 +610,7 @@ AggStatePtr agg_deserialize(const std::string& blob, bool compact) {
         st->dyn_specs.resize(nd);
         for (std::uint32_t i = 0; i < nd; ++i) {
             const std::int32_t op = r.get<std::int32_t>();
-            if (op < 0 || op > static_cast<std::int32_t>(AggOp::Prod))
+            if (op < 0 || op > static_cast<std::int32_t>(AggOp::SketchQuantile))
                 Reader::truncated();
             st->dyn_specs[i].op = static_cast<AggOp>(op);
             st->dyn_specs[i].param = r.get<double>();

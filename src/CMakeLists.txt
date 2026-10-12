@@ -28,6 +28,7 @@ if(DFTRACER_UTILS_ENABLE_ARROW)
 endif()
 need_highway()
 need_pcre2()
+need_utf8proc()
 if(DFTRACER_UTILS_ENABLE_VECTORSCAN)
   need_vectorscan()
 endif()
@@ -800,6 +801,8 @@ foreach(variant shared static)
       target_link_libraries(dftracer_utils_dataframe_${variant}
                             PRIVATE $<BUILD_INTERFACE:hwy>)
     endif()
+    target_link_libraries(dftracer_utils_dataframe_${variant}
+                          PRIVATE $<BUILD_INTERFACE:utf8proc_static>)
     add_stdfs_if_needed(dftracer_utils_dataframe_${variant})
     # Spill files compress each morsel with zstd (spill.cpp).
     if(DFTRACER_UTILS_ENABLE_ZSTD)

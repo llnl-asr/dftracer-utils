@@ -375,6 +375,157 @@ TEST_SUITE("vec") {
         CHECK_FALSE(s.list_join("+").valid());
     }
 
+    TEST_CASE("str_normalize: the four forms, nulls and invalid UTF-8") {
+        // e + combining acute, the precomposed e-acute, the ligature fi,
+        // a full-width A, a Hangul syllable, ASCII, a null, a bad byte.
+        const std::string composed = "\xC3\xA9";
+        const std::string decomposed = "e\xCC\x81";
+        const std::string lig = "\xEF\xAC\x81";
+        const std::string fullwidth = "\xEF\xBC\xA1";
+        const std::string hangul = "\xEA\xB0\x80";
+        const std::string jamo = "\xE1\x84\x80\xE1\x85\xA1";
+        const std::vector<std::string_view> rows{
+            decomposed, composed, lig, fullwidth, hangul, "plain", "", "a\xFF"};
+        const std::uint8_t valid[1] = {0x7F};  // the last row is null
+        Series s = Series::strings(rows, valid);
+        Series nfc = s.str_normalize(DFTU_NORM_NFC);
+        REQUIRE(nfc.valid());
+        CHECK(nfc.string_at(0) == composed);
+        CHECK(nfc.string_at(1) == composed);
+        CHECK(nfc.string_at(2) == lig);
+        CHECK(nfc.string_at(5) == "plain");
+        CHECK(nfc.is_null(7));
+        Series nfkc = s.str_normalize(DFTU_NORM_NFKC);
+        CHECK(nfkc.string_at(2) == "fi");
+        CHECK(nfkc.string_at(3) == "A");
+        CHECK(nfkc.string_at(0) == composed);
+        Series nfd = s.str_normalize(DFTU_NORM_NFD);
+        CHECK(nfd.string_at(1) == decomposed);
+        CHECK(nfd.string_at(2) == lig);
+        CHECK(nfd.string_at(4) == jamo);
+        Series nfkd = s.str_normalize(DFTU_NORM_NFKD);
+        CHECK(nfkd.string_at(2) == "fi");
+        CHECK(nfkd.string_at(1) == decomposed);
+        CHECK(nfc.string_at(4) == hangul);
+        // A bad byte in a valid row makes that row null.
+        const std::vector<std::string_view> bad{"ok", "a\xFF", "\xC3",
+                                                "\xED\xA0\x80"};
+        Series b = Series::strings(bad).str_normalize(DFTU_NORM_NFC);
+        REQUIRE(b.valid());
+        CHECK(b.string_at(0) == "ok");
+        CHECK(b.is_null(1));
+        CHECK(b.is_null(2));
+        CHECK(b.is_null(3));
+        CHECK_FALSE(s.str_normalize(4).valid());
+        CHECK_FALSE(s.str_normalize(-1).valid());
+        const std::int64_t ints[2] = {1, 2};
+        CHECK_FALSE(Series::flat_i64(ints, 2).str_normalize(0).valid());
+    }
+
+    TEST_CASE(
+        "str_translate: deletes, replacements, non-ASCII keys, bad tables") {
+        Series s = Series::strings(
+            {"hello world", "caf\xC3\xA9 \xE2\x82\xAC", "", "x"});
+        // l deleted, o -> 0 (a letter and a digit), e-acute -> "e" and the
+        // euro sign -> "EUR", w -> two codepoints.
+        Series from =
+            Series::strings({"l", "o", "\xC3\xA9", "\xE2\x82\xAC", "w"});
+        const std::vector<std::string_view> to_rows{"", "0", "e", "EUR", "vv"};
+        const std::uint8_t to_valid[1] = {0x1E};  // row 0 (l) is null: delete
+        Series to = Series::strings(to_rows, to_valid);
+        Series out = s.str_translate(from, to);
+        REQUIRE(out.valid());
+        CHECK(out.string_at(0) == "he0 vv0rd");
+        CHECK(out.string_at(1) == "cafe EUR");
+        CHECK(out.string_at(2) == "");
+        CHECK(out.string_at(3) == "x");
+        // An empty replacement deletes as well; an empty table keeps every row.
+        Series del =
+            s.str_translate(Series::strings({"x"}), Series::strings({""}));
+        CHECK(del.string_at(3) == "");
+        const std::vector<std::string> no_keys;
+        Series same =
+            s.str_translate(Series::strings(no_keys), Series::strings(no_keys));
+        REQUIRE(same.valid());
+        CHECK(same.string_at(0) == "hello world");
+        // Nulls stay null; a row that is not valid UTF-8 is null.
+        const std::vector<std::string_view> rows{"abc", "", "a\xFF"};
+        const std::uint8_t valid[1] = {0x05};
+        Series n =
+            Series::strings(rows, valid)
+                .str_translate(Series::strings({"a"}), Series::strings({"A"}));
+        REQUIRE(n.valid());
+        CHECK(n.string_at(0) == "Abc");
+        CHECK(n.is_null(1));
+        CHECK(n.is_null(2));
+        // Invalid tables: a duplicate key, a key of two codepoints, an empty
+        // key, a null key, a length mismatch, a bad replacement.
+        CHECK_FALSE(s.str_translate(Series::strings({"a", "a"}),
+                                    Series::strings({"b", "c"}))
+                        .valid());
+        CHECK_FALSE(
+            s.str_translate(Series::strings({"ab"}), Series::strings({"c"}))
+                .valid());
+        CHECK_FALSE(
+            s.str_translate(Series::strings({""}), Series::strings({"c"}))
+                .valid());
+        const std::uint8_t none[1] = {0};
+        const std::vector<std::string_view> one{"a"};
+        CHECK_FALSE(
+            s.str_translate(Series::strings(one, none), Series::strings({"c"}))
+                .valid());
+        CHECK_FALSE(
+            s.str_translate(Series::strings({"a", "b"}), Series::strings({"c"}))
+                .valid());
+        CHECK_FALSE(
+            s.str_translate(Series::strings({"a"}), Series::strings({"\xFF"}))
+                .valid());
+    }
+
+    TEST_CASE("str_wrap: textwrap.wrap lines joined by newlines") {
+        Series s =
+            Series::strings({"The quick brown fox jumps over the lazy dog", "",
+                             "   ", "a-very-long-hyphenated-word and more",
+                             "tab\there  x", "supercalifragilistic"});
+        Series w = s.str_wrap(
+            10, DFTU_WRAP_EXPAND_TABS | DFTU_WRAP_REPLACE_WHITESPACE |
+                    DFTU_WRAP_DROP_WHITESPACE | DFTU_WRAP_BREAK_LONG_WORDS |
+                    DFTU_WRAP_BREAK_ON_HYPHENS);
+        REQUIRE(w.valid());
+        CHECK(w.string_at(0) ==
+              "The quick\nbrown fox\njumps over\nthe lazy\ndog");
+        CHECK(w.string_at(1) == "");
+        CHECK(w.string_at(2) == "");
+        CHECK(w.string_at(3) == "a-very-\nlong-hyphe\nnated-word\nand more");
+        CHECK(w.string_at(4) == "tab\nhere  x");
+        CHECK(w.string_at(5) == "supercalif\nragilistic");
+        // Without break_long_words the long word stays whole; without
+        // drop_whitespace the spaces at a break stay.
+        Series k = s.str_wrap(10, DFTU_WRAP_EXPAND_TABS |
+                                      DFTU_WRAP_REPLACE_WHITESPACE |
+                                      DFTU_WRAP_DROP_WHITESPACE);
+        CHECK(k.string_at(5) == "supercalifragilistic");
+        Series keep = Series::strings({"aaa bbb ccc"})
+                          .str_wrap(4, DFTU_WRAP_BREAK_LONG_WORDS);
+        CHECK(keep.string_at(0) == "aaa \nbbb \nccc");
+        const std::vector<std::string_view> rows{"ab cd", "", "a\xFF"};
+        const std::uint8_t valid[1] = {0x05};
+        Series n = Series::strings(rows, valid).str_wrap(2, 0);
+        CHECK(n.string_at(0) == "ab\n \ncd");
+        CHECK(n.is_null(1));
+        CHECK(n.is_null(2));
+        CHECK_FALSE(s.str_wrap(0, 31).valid());
+        CHECK_FALSE(s.str_wrap(-3, 31).valid());
+        CHECK_FALSE(s.str_wrap(10, 32).valid());
+    }
+
+    TEST_CASE("str_wrap: a full line moves a long word on, as CPython does") {
+        Series s = Series::strings({" abc", "ab cdefgh"});
+        CHECK(s.str_wrap(1, 31).string_at(0) == "a\nb\nc");
+        CHECK(s.str_wrap(3, 31 & ~DFTU_WRAP_BREAK_ON_HYPHENS).string_at(1) ==
+              "ab\ncde\nfgh");
+    }
+
     TEST_CASE("dt_part and dt_round: calendar parts and bucket rounding") {
         // 2023-11-14 22:13:20.123456 UTC (a Tuesday), the epoch, one
         // microsecond before it, 2024-02-29.

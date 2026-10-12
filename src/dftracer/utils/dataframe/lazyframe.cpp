@@ -2244,7 +2244,24 @@ class JoinCursor : public Cursor {
             parts.clear();
         }
         if (grace_) co_return;
+        if (parts.empty()) parts.push_back(empty_right());
         co_await start_in_memory(merge_morsels(parts));
+    }
+
+    // The right side of no rows, typed from the right plan, for a right plan
+    // that sent no frame to take the columns from.
+    DataFrame empty_right() const {
+        DataFrame f;
+        for (const Field& field : other_.output_schema().fields) {
+            f.names.push_back(field.name);
+            f.columns.push_back(null_column_of(
+                field, 0, "join", "the right side produced no rows"));
+        }
+        if (right_rest_) {
+            f.names.emplace_back(RIGHT_REST_COLUMN);
+            f.columns.push_back(struct_of_length({}, {}, 0));
+        }
+        return f;
     }
 
     static std::vector<Series> flat_columns(const DataFrame& f) {
@@ -2294,6 +2311,7 @@ class JoinCursor : public Cursor {
             cross_right_->add(flat_columns(*df), df->num_rows());
         }
         if (!cross_) {
+            if (parts.empty()) parts.push_back(empty_right());
             co_await start_in_memory(merge_morsels(parts));
             co_return;
         }

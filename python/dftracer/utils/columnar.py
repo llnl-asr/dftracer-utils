@@ -34,17 +34,27 @@ from typing import (
     Dict,
     List,
     Literal,
+    Mapping,
     NamedTuple,
     Optional,
     Sequence,
     Tuple,
     Union,
+    cast,
 )
 
 from . import dftracer_utils_ext as _ext
 from .dataframe import DataFrame
 from .enums import DType
-from .series import Series, _arrow_native, _unwrap
+from .series import (
+    Series,
+    _arrow_native,
+    _norm_form_code,
+    _NormForm,
+    _translate_pairs,
+    _unwrap,
+    _wrap_flag_bits,
+)
 
 if TYPE_CHECKING:
     import pyarrow as pa  # ty: ignore[unresolved-import]
@@ -89,15 +99,23 @@ _FLOAT32 = int(DType.FLOAT32)
 _FLOAT64 = int(DType.FLOAT64)
 _BOOL = int(DType.BOOL)
 _STRING = int(DType.STRING)
+_BINARY = int(DType.BINARY)
 _FLOAT_TYPES = (_FLOAT32, _FLOAT64)
 
+
 # TypeId codes the .cast() method accepts.
+def _require_utf8(op: str, encoding: str) -> None:
+    if encoding.lower().replace("_", "-") not in ("utf-8", "utf8"):
+        raise ValueError(f"{op}: only utf-8 is supported, not {encoding!r}")
+
+
 _CAST_CODES = {
     "int64": _INT64,
     "uint64": _UINT64,
     "float64": _FLOAT64,
     "bool": _BOOL,
     "string": _STRING,
+    "binary": _BINARY,
 }
 
 # vec::Prim codes (kernels/prims.h). Exposed as methods, e.g. F.dur.ilog2().
@@ -178,6 +196,9 @@ _STR_FN_CODES = {
     "get": 26,
     "cat": 27,
     "regex_replace": 28,
+    "normalize": 29,
+    "translate": 30,
+    "wrap": 31,
 }
 _STR_NO_STOP = -(1 << 63)  # slice_replace without a stop (INT64_MIN)
 
@@ -239,6 +260,7 @@ _AGG_CODE = {
     "regr_intercept": 33,
     "regr_r2": 34,
     "prod": 35,
+    "sketch_quantile": 36,
 }
 
 _NOT_PUSHABLE = (
@@ -373,7 +395,9 @@ class Expr:
         """Clamp each value to ``[lo, hi]`` (elementwise, SIMD)."""
         return _Clip(self, lo, hi)
 
-    def cast(self, dtype: "Literal['int64', 'uint64', 'float64', 'bool', 'string']") -> "Expr":
+    def cast(
+        self, dtype: "Literal['int64', 'uint64', 'float64', 'bool', 'string', 'binary']"
+    ) -> "Expr":
         """Cast each value to ``dtype``. ``'string'`` gives the decimal digits of an
         integer, the shortest text of a float that shows a point or exponent
         (``2.0``, ``1e+21``) and ``true`` / ``false`` for a bool, the engine's
@@ -442,6 +466,50 @@ class Expr:
 
     def cum_count(self) -> "Expr":
         return self._op("dftu.series.cum_count")
+
+    # pandas names of the methods above.
+    def cumsum(self) -> "Expr":
+        return self.cum_sum()
+
+    def cumprod(self) -> "Expr":
+        return self.cum_prod()
+
+    def cummax(self) -> "Expr":
+        return self.cum_max()
+
+    def cummin(self) -> "Expr":
+        return self.cum_min()
+
+    def ffill(self) -> "Expr":
+        return self.forward_fill()
+
+    def bfill(self) -> "Expr":
+        return self.backward_fill()
+
+    def isin(self, values: Sequence[Value]) -> "Expr":
+        return self.is_in(values)
+
+    def startswith(self, prefix: "Union[str, Expr]") -> "Expr":
+        return self.starts_with(prefix)
+
+    def endswith(self, suffix: "Union[str, Expr]") -> "Expr":
+        return self.ends_with(suffix)
+
+    def isnull(self) -> "Expr":
+        return self.is_null()
+
+    def notnull(self) -> "Expr":
+        return self.is_not_null()
+
+    def between(self, left: Union[int, float], right: Union[int, float]) -> "Expr":
+        """Bool mask of ``left <= x <= right``, both ends included as pandas'
+        default ``inclusive="both"``."""
+        return self.is_between(left, right)
+
+    def astype(
+        self, dtype: "Literal['int64', 'uint64', 'float64', 'bool', 'string', 'binary']"
+    ) -> "Expr":
+        return self.cast(dtype)
 
     def shift(self, n: int = 1) -> "Expr":
         return self._op("dftu.series.shift", a=int(n), n=int(n))
@@ -531,6 +599,24 @@ class Expr:
     def is_duplicated(self) -> "Expr":
         return self._op("dftu.series.is_duplicated")
 
+    def duplicated(self, keep: "Union[Literal['first', 'last'], bool]" = "first") -> "Expr":
+        """Bool mask of the values that repeat an earlier one (pandas
+        ``Series.duplicated``): ``keep="first"`` leaves the first of equal
+        values unmarked, ``"last"`` the last, ``False`` marks every one
+        (:meth:`is_duplicated`). Nulls compare equal. ``"first"`` and
+        ``"last"`` need a bare column, as ``col("x").duplicated()``."""
+        if keep is False:
+            return self.is_duplicated()
+        if keep not in ("first", "last"):
+            raise ValueError(f"duplicated: keep must be 'first', 'last' or False, not {keep!r}")
+        if not isinstance(self, _Col):
+            raise TypeError("duplicated(keep=...): use a bare column, as col('x').duplicated()")
+        one = self.is_null().cast("int64") * 0 + 1
+        nth = one.cum_sum().over(self.name)
+        if keep == "first":
+            return nth > 1
+        return nth < one.sum().over(self.name)
+
     def is_unique(self) -> "Expr":
         return self._op("dftu.series.is_unique")
 
@@ -565,6 +651,9 @@ class Expr:
                 "over: only a column op (cum_sum, shift, rank, rolling_*, ...) takes over()"
             )
         spec = self.spec
+        if spec.op == "dftu.series.cum_count":
+            # The running count of present values within each group.
+            return self.arg.is_not_null().cast("int64").cum_sum().over(keys)
         kind = spec.kind or _TRANSFORM_KINDS.get(spec.op)
         if kind is None:
             raise TypeError(f"over: {spec.op} has no group-wise form")
@@ -628,6 +717,23 @@ class Expr:
         """duql regex matching the whole value (pandas ``str.fullmatch``).
         In-memory only: duql has no anchored form."""
         return _StrPred("fullmatch", self, pattern)
+
+    def encode(self, encoding: str = "utf-8") -> "Expr":
+        """The UTF-8 bytes of each string, as a binary column (pandas
+        ``str.encode``). Only UTF-8, the engine's text encoding."""
+        _require_utf8("encode", encoding)
+        return self.cast("binary")
+
+    def decode(self, encoding: str = "utf-8") -> "Expr":
+        """Each binary value read as UTF-8 text (pandas ``str.decode``); a
+        value that is not valid UTF-8 is null. Only UTF-8."""
+        _require_utf8("decode", encoding)
+        return self.cast("string")
+
+    def isascii(self) -> "Expr":
+        """True where every character is ASCII, as ``str.isascii`` (an empty
+        string too)."""
+        return self.fullmatch("[\\x00-\\x7f]*")
 
     def is_in(self, values: Sequence[Value]) -> "Expr":
         """Membership predicate: the value is one of ``values`` (all ints or all
@@ -802,6 +908,42 @@ class Expr:
         """Every regex match as a ``list<string>``."""
         return _StrFn("findall", self, text=pat)
 
+    def normalize(self, form: _NormForm) -> "Expr":
+        """Each value in the Unicode normalization ``form``; null for a value
+        that is not valid UTF-8."""
+        return _StrFn("normalize", self, i0=_norm_form_code(form))
+
+    def translate(self, table: Mapping[Union[int, str], Union[str, int, None]]) -> "Expr":
+        """Each codepoint replaced by ``table``, as ``str.translate``: a key is
+        a codepoint or one character, a value a string, a codepoint or ``None``
+        to delete it."""
+        keys, values = _translate_pairs(table)
+        if any(v is not None and len(v) + 1 >= 0xD800 for v in values):
+            raise ValueError("translate value is too long")
+        # StrFn::Translate: text = keys, text2 = per key chr(1 + len) + value,
+        # or chr(0) to delete it.
+        text2 = "".join(chr(0) if v is None else chr(len(v) + 1) + v for v in values)
+        return _StrFn("translate", self, text="".join(keys), text2=text2)
+
+    def wrap(
+        self,
+        width: int,
+        expand_tabs: bool = True,
+        replace_whitespace: bool = True,
+        drop_whitespace: bool = True,
+        break_long_words: bool = True,
+        break_on_hyphens: bool = True,
+    ) -> "Expr":
+        """Each value wrapped to lines of at most ``width`` codepoints, joined
+        by newlines (``textwrap.TextWrapper`` of CPython 3.13.10, 3.14.1 and later with these
+        options)."""
+        if width < 1:
+            raise ValueError(f"invalid width {width!r} (must be > 0)")
+        flags = _wrap_flag_bits(
+            expand_tabs, replace_whitespace, drop_whitespace, break_long_words, break_on_hyphens
+        )
+        return _StrFn("wrap", self, i0=int(width), i1=flags)
+
     def match(self, pat: str) -> "Expr":
         """Regex anchored at the start (pandas ``str.match``)."""
         return _StrPred("regex", self, "^(?:" + pat + ")")
@@ -888,6 +1030,16 @@ class Expr:
         :class:`Agg`). Mergeable, so the parallel/distributed path is exact to
         the sketch's relative accuracy."""
         return Agg("pct", self, param=q)
+
+    def sketch_quantile(self, q: float) -> "Agg":
+        """The ``q`` quantile in [0, 1] of the merge of a group's stored
+        DDSketches (base64 text, such as ``dur.sketch``), clamped to the
+        merged minimum and maximum. Null cells, text that is not a sketch and
+        sketches of another accuracy than the default are skipped; a group
+        with none left is null."""
+        if not 0.0 <= q <= 1.0:
+            raise ValueError(f"sketch_quantile: q must be in [0, 1], not {q!r}")
+        return Agg("sketch_quantile", self, param=q)
 
     def percentile(self, p: float) -> "Agg":
         """A percentile ``p`` in [0, 100], per group (numpy-style);
@@ -1245,12 +1397,13 @@ class _StrPred(Expr):
     def _dsl(self) -> str:
         field = _field_name(self.arg)
         p = self.pattern
-        if self.op == "contains":
-            return f"{field} like {_format_value('%' + _escape_like(p) + '%')}"
-        if self.op == "starts_with":
-            return f"{field} like {_format_value(_escape_like(p) + '%')}"
-        if self.op == "ends_with":
-            return f"{field} like {_format_value('%' + _escape_like(p))}"
+        if self.op in ("contains", "starts_with", "ends_with"):
+            body = _escape_like(p)
+            head = "" if self.op == "starts_with" else "%"
+            tail = "" if self.op == "ends_with" else "%"
+            text = f"{field} like {_format_value(head + body + tail)}"
+            # A duql like pattern has no escape character unless it names one.
+            return text if body == p else text + " escape " + _format_value("\\")
         if self.op == "like":
             return f"{field} like {_format_value(p)}"
         if self.op == "regex":
@@ -1578,6 +1731,175 @@ class _ExprStr:
 
     def extract(self, pattern: str, group_index: int = 1) -> Expr:
         return self._e._op("dftu.series.str_extract", a=int(group_index), text=pattern)
+
+    # The pandas names of the methods above, and of the expression's own
+    # string methods.
+    def startswith(self, prefix: "Union[str, Expr]") -> Expr:
+        return self.starts_with(prefix)
+
+    def endswith(self, suffix: "Union[str, Expr]") -> Expr:
+        return self.ends_with(suffix)
+
+    def len(self) -> Expr:
+        return self.len_chars()
+
+    def isascii(self) -> Expr:
+        return self._e.isascii()
+
+    def encode(self, encoding: str = "utf-8") -> Expr:
+        return self._e.encode(encoding)
+
+    def decode(self, encoding: str = "utf-8") -> Expr:
+        return self._e.decode(encoding)
+
+    def capitalize(self) -> Expr:
+        return self._e.capitalize()
+
+    def casefold(self) -> Expr:
+        return self._e.casefold()
+
+    def cat(self, others: "Optional[Expr]" = None, sep: str = "") -> Expr:
+        return self._e.cat(others, sep)
+
+    def center(self, width: int, fillchar: str = " ") -> Expr:
+        return self._e.center(width, fillchar)
+
+    def count(self, pat: str) -> Expr:
+        return self.count_matches(pat)
+
+    def findall(self, pat: str) -> Expr:
+        return self._e.findall(pat)
+
+    def normalize(self, form: _NormForm) -> Expr:
+        return self._e.normalize(form)
+
+    def translate(self, table: Mapping[Union[int, str], Union[str, int, None]]) -> Expr:
+        return self._e.translate(table)
+
+    def wrap(
+        self,
+        width: int,
+        expand_tabs: bool = True,
+        replace_whitespace: bool = True,
+        drop_whitespace: bool = True,
+        break_long_words: bool = True,
+        break_on_hyphens: bool = True,
+    ) -> Expr:
+        return self._e.wrap(
+            width,
+            expand_tabs,
+            replace_whitespace,
+            drop_whitespace,
+            break_long_words,
+            break_on_hyphens,
+        )
+
+    def fullmatch(self, pattern: str) -> Expr:
+        return self._e.fullmatch(pattern)
+
+    def get(self, i: int) -> Expr:
+        return self._e.get(i)
+
+    def get_dummies(self, sep: str = "|") -> Expr:
+        return self._e.get_dummies(sep)
+
+    def index(self, sub: str) -> Expr:
+        return self._e.index(sub)
+
+    def isalnum(self) -> Expr:
+        return self._e.isalnum()
+
+    def isalpha(self) -> Expr:
+        return self._e.isalpha()
+
+    def isdecimal(self) -> Expr:
+        return self._e.isdecimal()
+
+    def isdigit(self) -> Expr:
+        return self._e.isdigit()
+
+    def islower(self) -> Expr:
+        return self._e.islower()
+
+    def isnumeric(self) -> Expr:
+        return self._e.isnumeric()
+
+    def isspace(self) -> Expr:
+        return self._e.isspace()
+
+    def istitle(self) -> Expr:
+        return self._e.istitle()
+
+    def isupper(self) -> Expr:
+        return self._e.isupper()
+
+    def join(self, sep: str) -> Expr:
+        return self._e.join(sep)
+
+    def ljust(self, width: int, fillchar: str = " ") -> Expr:
+        return self._e.ljust(width, fillchar)
+
+    def lower(self) -> Expr:
+        return self._e.lower()
+
+    def lstrip(self) -> Expr:
+        return self._e.lstrip()
+
+    def match(self, pat: str) -> Expr:
+        return self._e.match(pat)
+
+    def pad(
+        self, width: int, side: "Literal['left', 'right']" = "left", fillchar: str = " "
+    ) -> Expr:
+        return self._e.pad(width, side, fillchar)
+
+    def partition(self, sep: str = " ") -> Expr:
+        return self._e.partition(sep)
+
+    def removeprefix(self, prefix: str) -> Expr:
+        return self._e.removeprefix(prefix)
+
+    def removesuffix(self, suffix: str) -> Expr:
+        return self._e.removesuffix(suffix)
+
+    def repeat(self, repeats: int) -> Expr:
+        return self._e.repeat(repeats)
+
+    def rfind(self, sub: str) -> Expr:
+        return self._e.rfind(sub)
+
+    def rindex(self, sub: str) -> Expr:
+        return self._e.rindex(sub)
+
+    def rjust(self, width: int, fillchar: str = " ") -> Expr:
+        return self._e.rjust(width, fillchar)
+
+    def rpartition(self, sep: str = " ") -> Expr:
+        return self._e.rpartition(sep)
+
+    def rsplit(self, pat: str) -> Expr:
+        return self._e.rsplit(pat)
+
+    def rstrip(self) -> Expr:
+        return self._e.rstrip()
+
+    def slice_replace(self, start: int = 0, stop: "Optional[int]" = None, repl: str = "") -> Expr:
+        return self._e.slice_replace(start, stop, repl)
+
+    def split(self, pat: str) -> Expr:
+        return self._e.split(pat)
+
+    def strip(self) -> Expr:
+        return self._e.strip()
+
+    def swapcase(self) -> Expr:
+        return self._e.swapcase()
+
+    def title(self) -> Expr:
+        return self._e.title()
+
+    def upper(self) -> Expr:
+        return self._e.upper()
 
 
 class _ExprDt:
@@ -2344,9 +2666,16 @@ class GroupBy:
             frame.select(self._keys + [c for c in picked if c not in self._keys]), self._keys
         )
         out._single = picked[0] if len(picked) == 1 else None
+        out._sort = self._sort
         return out
 
     _single: "Optional[str]" = None
+    _sort: bool = False
+
+    def _sorted(self, out: DataFrame) -> DataFrame:
+        if self._sort and self._keys:
+            return out.sort_by_multi(self._keys)
+        return out
 
     def agg(self, *specs: object, **named: object) -> DataFrame:
         frame = self._batch if isinstance(self._batch, DataFrame) else DataFrame(self._batch)
@@ -2386,7 +2715,7 @@ class GroupBy:
         if self._single is not None and any(isinstance(sp, (list, tuple)) for sp in specs):
             prefix = f"{self._single}_"
             out = out.rename({c: c[len(prefix) :] for c in out.columns if c.startswith(prefix)})
-        return out
+        return self._sorted(out)
 
     aggregate = agg
 
@@ -2396,7 +2725,9 @@ class GroupBy:
         native = _unwrap(self._batch)
         if not self._keys:
             return DataFrame(native.reduce(agg))
-        return DataFrame(native.group_by(*self._keys, *native.reduce_specs(agg, self._keys)))
+        return self._sorted(
+            DataFrame(native.group_by(*self._keys, *native.reduce_specs(agg, self._keys)))
+        )
 
     # The pandas ``groupby(...).sum()`` family.
     def sum(self) -> DataFrame:
@@ -2507,7 +2838,14 @@ class GroupBy:
         from .lazyframe import group_quantile
 
         frame = self._frame()
-        return group_quantile(frame.lazy(), self._keys, self._value_columns(), float(q)).collect()
+        columns = self._value_columns()
+        if frame.num_rows == 0:
+            if not 0.0 <= q <= 1.0:
+                raise ValueError(f"quantile: q must be in [0, 1], not {q!r}")
+            picked = cast(DataFrame, frame[self._keys + columns])
+            return picked.astype({c: "float64" for c in columns})
+        out = group_quantile(frame.lazy(), self._keys, columns, float(q)).collect()
+        return self._sorted(out)
 
     def ffill(self) -> DataFrame:
         """Each non-key column's nulls filled from the nearest present value
@@ -2680,7 +3018,7 @@ class GroupBy:
             out = counts if out is None else out.join(counts, on=self._keys)
         if out is None:
             raise ValueError("nunique: no columns besides the keys")
-        return out
+        return self._sorted(out)
 
     def sem(self) -> DataFrame:
         """Standard error of the mean per group: ``std / sqrt(count)``."""
@@ -2710,7 +3048,7 @@ class GroupBy:
         out = GroupBy(frame, self._keys).reduce(agg)
         for c in cols:
             out = out.with_column(c, self._col(out, c).ne(0))
-        return out
+        return self._sorted(out)
 
     def idxmax(self) -> DataFrame:
         """Per group and numeric column: the row position of the maximum
@@ -2737,7 +3075,7 @@ class GroupBy:
         if dtype != DType.STRING:
             for c in cols:
                 out = out.with_column(c, self._col(out, c).astype(dtype))
-        return out
+        return self._sorted(out)
 
     def ohlc(self) -> DataFrame:
         """Per group and numeric column: ``<c>_open`` / ``_high`` / ``_low`` /
@@ -2775,7 +3113,7 @@ class GroupBy:
             order += [
                 f"{c}_{s}" for s in ("count", "mean", "std", "min", "25%", "50%", "75%", "max")
             ]
-        return out.select(*order)
+        return self._sorted(out.select(*order))
 
     def value_counts(self, ascending: bool = False) -> DataFrame:
         """Distinct rows of the non-key columns within each group with their

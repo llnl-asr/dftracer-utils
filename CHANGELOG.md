@@ -47,6 +47,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Take the pandas names `col(...).isin`, `startswith`, `endswith`, `between`, `isnull`, `notnull`, `cumsum`, `cummax`, `cummin`, `cumprod`, `ffill`, `bfill` and `astype` in column expressions.
+  `col(...).str` takes every pandas string method that the engine has, such as `startswith`, `lower`, `strip`, `len` and `split` ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Round to any number of places with `Series.round(decimals)` and `DataFrame.round(decimals)`, with halves to even as numpy and pandas do.
+  A negative `decimals` rounds to the left of the decimal point, and an integer column stays integer ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Pivot on several keys and with any group-by reduction, such as `median`, in `DataFrame.pivot_table(values, index=[...], columns, aggfunc)` ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Take the keys of `TraceViewer.group_by` as one list as well as separate arguments ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Add `col(...).duplicated(keep=...)`, which marks the copies after the first (or before the last) as pandas does ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Add `str.isascii`, `str.encode` and `str.decode` for UTF-8 on a Series and on `col(...)`.
+  `decode` raises on bytes that are not UTF-8, or gives null with `errors="null"` ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Add `Series.str.extractall`, which gives one row per regex match with the columns `row`, `match` and one per capture group ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Add `col(...).sketch_quantile(q)`, a group-by aggregate that merges the stored DDSketches of each group, such as `dur.sketch`, and reads the quantile `q`.
+  It runs eager and lazy, and it gives what duql `quantile(merge(dur.sketch), q)` gives ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Add `str.normalize` (NFC, NFKC, NFD or NFKD, with utf8proc), `str.translate` (a table of codepoints to strings, integers or `None`) and `str.wrap` (`textwrap` of CPython 3.13.10, 3.14.1 and later, with the width in codepoints) on a Series and on `col(...)`.
+  A row that is not valid UTF-8 gives null ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 - Add the record schema setting `index.never_index`, a list of paths that the index build puts in the path catalog without evidence or interned values.
   Queries still read these paths.
   The built-in `genesis` schema lists `dur.sketch` and `v.sketch`, so the index build of a genesis file no longer interns the unique sketch of every function and counter record.
@@ -58,11 +72,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   At the start it prints the run groups, their trace bytes, the shares and the member size.
   Then at most every 10 s it prints one line with the elapsed time, the groups done, how many groups wait for memory, read, sort, walk or write, the trace bytes read, the calls sorted and walked with their rates, the peak RSS against the budget and an estimate of the time left.
   At most every 60 s, each group that has run for a minute or more gets a line of its own with its step, its progress in that step and its time there ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Print a `DataFrame` or a `Series` the way pandas does, with the row index, right-aligned values and a common number of decimals for each float column.
+  Past 60 rows it prints the first 5 and the last 5 rows with a `...` row and a `[N rows x M columns]` footer, and it reads only the rows that it shows ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Show a `DataFrame` as an HTML table in Jupyter, with the same rows and cells as its printed form ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 
 ### Fixed
 
 - Fix the first query or build on a new index failing with `lock hold by current process` when a read-write open of the index ran while an older read-write handle of it was still closing.
   It happened on an index that a rebuild had reset while a reader still held it, such as the first `TraceViewer` read of 29 files with relative paths ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Match `_` and `%` literally in a `TraceViewer.filter` of `col(...).str.starts_with`, `ends_with` and `contains`.
+  The filter escaped them without naming the escape character, so `starts_with("MPI_")` matched no record ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Keep the columns of an empty right side in a lazy join under a memory budget.
+  A right plan that sent no rows failed with `join: no right column named <key>` ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Fix duql `quantile(merge(x), q)` keeping the accuracy of the first sketch it read.
+  A sketch of another accuracy than the default is now always skipped, so the result no longer depends on the order of the rows ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Reject a stored DDSketch with a bad accuracy or an out-of-range bin offset instead of reading it, which could loop forever in a merge ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Fix `DataFrame.duplicated` marking every copy.
+  It now marks only the copies after the first, as pandas does ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Keep the rows with a null key in `col(...).<agg>().over(key)`, eager and lazy.
+  The result came back shorter than its frame, `cum_count().over(key)` failed, a lazy transform put values on the wrong rows after a null key and a lazy aggregate of a computed value was refused ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Return an empty frame from `GroupBy.median` and `GroupBy.quantile` of an empty frame instead of failing in the join of the quantile plan ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 - Leave the `run` records out of the first aggregate over a genesis file that has no index yet.
   The first-touch pass counted them, so `--group-by gtype` showed a `run` group that later queries did not ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 - Fix a correlated duql sub-query on a trace with no index yet returning an empty frame when the outer filter could not be answered while the first-touch index was built, such as `where ph == "X" and dur > (from data | where name == ^.name | agg { m = mean(dur) })`.
@@ -72,6 +101,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   The first `dftracer_view --query` on a genesis part of 197 MB takes 5 s instead of 31 s on a 48-core corona node, and a single file of 20.7 GB indexes in 584 s with 14 cores busy instead of 1 ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 - Print the chunks that a `dftracer_view` aggregation or `--query` read and skipped, which showed as `scanned=0 skipped=0`.
   A query for one run of a 20.7 GB genesis file reads 34 of 73,340 chunks ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Sort the result of `DataFrame.groupby` by the key columns, nulls last, as pandas does by default.
+  `size`, `sum`, `agg` and the other aggregates came back in hash order.
+  `sort=False` keeps that order, and `group_by` is not changed ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 - Index every gzip member of a trace that has zero bytes between two members, as the padded striped writer left before this release.
   The inflate worker stopped at the zeros, so the rest of its part of the file was missing from the index and from every count served from it.
   `dftracer_view` counted 9,547 of the 9,615 runs and 702,657,406 of the 710,692,194 counters of the 12 parts of an 8-node genesis sweep, and it now counts all of them.

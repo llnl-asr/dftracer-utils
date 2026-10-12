@@ -305,6 +305,37 @@ TEST_SUITE("string view") {
         CHECK(bits_of(dict.str_eq("pear")) == std::vector<int>{0, 0, 1, 0, 0});
     }
 
+    TEST_CASE("normalize, translate and wrap read a view and a dictionary") {
+        int released = 0;
+        const Rows values = {
+            Row("cafe\xCC\x81 au lait, a value longer than 12"), Row(),
+            Row("\xEF\xAC\x81sh and chips"), Row("bad \xFF byte")};
+        const Series view = make_view(values, &released);
+        const std::int32_t codes[5] = {2, 0, 1, 3, 0};
+        auto* d = new dftu_series();
+        d->type = TypeId::String;
+        d->encoding = Encoding::Dictionary;
+        d->length = 5;
+        d->data = Buffer::allocate(sizeof(codes));
+        std::memcpy(d->data->data(), codes, sizeof(codes));
+        d->set_child(std::make_shared<dftu_series>(*view.handle()));
+        const Series dict{d};
+        const Series from = Series::strings({"a", "\xC3\xA9"});
+        const Series to = Series::strings({"A", "e"});
+        for (const Series* in : {&view, &dict}) {
+            const Series ref = make_flat(rows_of(in->materialize()));
+            CHECK(rows_of(in->str_normalize(DFTU_NORM_NFKC)) ==
+                  rows_of(ref.str_normalize(DFTU_NORM_NFKC)));
+            CHECK(rows_of(in->str_translate(from, to)) ==
+                  rows_of(ref.str_translate(from, to)));
+            CHECK(rows_of(in->str_wrap(8, 31)) == rows_of(ref.str_wrap(8, 31)));
+        }
+        const Rows nfc = rows_of(view.str_normalize(DFTU_NORM_NFC));
+        CHECK(nfc[0] == Row("caf\xC3\xA9 au lait, a value longer than 12"));
+        CHECK_FALSE(nfc[1].has_value());
+        CHECK_FALSE(nfc[3].has_value());
+    }
+
     TEST_CASE("a selection over a view column reads and materializes") {
         int released = 0;
         Series base = make_view(SAMPLE, &released);

@@ -124,6 +124,9 @@ static_assert(code(StrFn::Join) == DFTU_STR_FN_JOIN);
 static_assert(code(StrFn::Get) == DFTU_STR_FN_GET);
 static_assert(code(StrFn::Cat) == DFTU_STR_FN_CAT);
 static_assert(code(StrFn::RegexReplace) == DFTU_STR_FN_REGEX_REPLACE);
+static_assert(code(StrFn::Normalize) == DFTU_STR_FN_NORMALIZE);
+static_assert(code(StrFn::Translate) == DFTU_STR_FN_TRANSLATE);
+static_assert(code(StrFn::Wrap) == DFTU_STR_FN_WRAP);
 
 static_assert(code(ConcatHow::Vertical) == DFTU_CONCAT_VERTICAL);
 static_assert(code(ConcatHow::Diagonal) == DFTU_CONCAT_DIAGONAL);

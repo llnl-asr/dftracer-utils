@@ -92,7 +92,13 @@ enum class AggOp {
     RegrR2 = 34,
     /// Product of the present values of `value_col` (Float64; 1 for a group
     /// with none, as pandas).
-    Prod = 35
+    Prod = 35,
+    /// `param` quantile (clamped to the merged min and max) of the merge of the
+    /// base64 serialized DDSketch cells of a String `value_col`, Float64. A
+    /// null or undecodable cell, an empty sketch and a sketch of another
+    /// accuracy than the group's first are skipped; a group with no valid
+    /// sketch is null.
+    SketchQuantile = 36
 };
 
 /// Ops taking a second input through `by_col`: the extremum ArgMax/ArgMin
@@ -116,7 +122,7 @@ inline bool agg_uses_raw_value(AggOp op) {
            op == AggOp::SetUnion || op == AggOp::Distinct ||
            op == AggOp::ListSorted || op == AggOp::TopK ||
            op == AggOp::BottomK || op == AggOp::ApproxTopK ||
-           op == AggOp::Sample;
+           op == AggOp::Sample || op == AggOp::SketchQuantile;
 }
 
 /// The DataType agg_finalize actually writes for `op` over a value column of

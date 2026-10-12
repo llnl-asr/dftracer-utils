@@ -606,6 +606,13 @@ class Series {
     Series str_cat(const Series& other) const;
     Series str_findall(std::string_view pattern) const;
     Series str_partition(std::string_view sep, bool from_right = false) const;
+    /// Unicode normalization (dftu_norm_form), the codepoint table of
+    /// `from` -> `to` (see dftu_series_str_translate) and textwrap by
+    /// `width` codepoints with dftu_wrap_flag bits; a row that is not valid
+    /// UTF-8 is null.
+    Series str_normalize(std::int32_t form) const;
+    Series str_translate(const Series& from, const Series& to) const;
+    Series str_wrap(std::int64_t width, std::int32_t flags) const;
     /// A calendar part (dftu_dt_part) as Int64, `unit` (dftu_time_unit) for
     /// an Int64 input; each instant rounded to a bucket of `every` units by
     /// dftu_dt_round_mode.

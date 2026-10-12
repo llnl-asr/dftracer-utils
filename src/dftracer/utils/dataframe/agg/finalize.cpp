@@ -561,6 +561,19 @@ static DataFrame finalize_impl(const AggState& st_in,
                     st.prod_acc[static_cast<std::size_t>(g) * st.n_prod +
                                 static_cast<std::size_t>(slot)];
             out.columns.push_back(Series::flat_f64(v.data(), ng));
+        } else if (sp.op == AggOp::SketchQuantile) {
+            const int slot = st.spec_msk[s];
+            const auto n = static_cast<std::size_t>(ng);
+            std::vector<double> v(n, 0.0);
+            std::vector<std::uint8_t> valid((n + 7) / 8, 0);
+            for (std::size_t g = 0; g < n && slot >= 0; ++g) {
+                const MergeSketch& m =
+                    st.msk[g * st.n_msk + static_cast<std::size_t>(slot)];
+                if (m.empty()) continue;
+                v[g] = std::clamp(m.quantile(sp.param), m.min(), m.max());
+                valid[g >> 3] |= static_cast<std::uint8_t>(1u << (g & 7));
+            }
+            out.columns.push_back(Series::flat_f64(v.data(), ng, valid.data()));
         } else if (sp.op == AggOp::Distinct) {
             const int slot = st.spec_kmv[s];
             std::vector<std::int64_t> v(static_cast<std::size_t>(ng), 0);

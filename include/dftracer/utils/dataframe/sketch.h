@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -119,6 +120,22 @@ class BasicDDSketch {
 };
 
 using DDSketch = BasicDDSketch<128>;
+
+/// The sketch that stored sketches merge into: wide enough that a sketch
+/// written with any bin count merges without a collapse.
+using MergeSketch = BasicDDSketch<2048>;
+
+/// Merges `src` into `dst` only when `src` has the default relative accuracy.
+/// Sketches of another accuracy do not merge without loss, so they are
+/// skipped; a fixed accuracy keeps the result independent of merge order.
+template <int BINS>
+void merge_default_accuracy(BasicDDSketch<BINS>& dst,
+                            const BasicDDSketch<BINS>& src) {
+    static const double DEFAULT_LOG_GAMMA = BasicDDSketch<BINS>{}.log_gamma();
+    if (src.empty() || std::abs(src.log_gamma() - DEFAULT_LOG_GAMMA) > 1e-12)
+        return;
+    dst.merge(src);
+}
 
 /// Exact-zero sentinel produced by `sketch_bucket_keys` and consumed by
 /// `DDSketch::add_key`; a zero value has no logarithmic bucket.

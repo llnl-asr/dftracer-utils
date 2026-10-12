@@ -398,6 +398,15 @@ Series Series::str_partition(std::string_view sep, bool from_right) const {
     return Series{dftu_series_str_partition(handle_, sep.data(), sv_len(sep),
                                             from_right ? 1 : 0)};
 }
+Series Series::str_normalize(std::int32_t form) const {
+    return Series{dftu_series_str_normalize(handle_, form)};
+}
+Series Series::str_translate(const Series& from, const Series& to) const {
+    return Series{dftu_series_str_translate(handle_, from.handle_, to.handle_)};
+}
+Series Series::str_wrap(std::int64_t width, std::int32_t flags) const {
+    return Series{dftu_series_str_wrap(handle_, width, flags)};
+}
 Series Series::dt_part(std::int32_t part, std::int32_t unit) const {
     return Series{dftu_series_dt_part(handle_, part, unit)};
 }

@@ -68,7 +68,9 @@ enum class Agg {
     RegrSlope,   ///< least-squares slope of `column` on `by`, Float64
     RegrIntercept,  ///< least-squares intercept of `column` on `by`, Float64
     RegrR2,  ///< coefficient of determination of `column` on `by`, Float64
-    Prod     ///< product of `column`'s present values, Float64
+    Prod,    ///< product of `column`'s present values, Float64
+    SketchQuantile  ///< `param` quantile of the merged base64 DDSketch cells
+                    ///< of a String `column`, Float64
 };
 
 /// Canonical lowercase name of `agg` (the string the C ABI accepts).
@@ -91,7 +93,8 @@ struct GroupAgg {
     Agg op = Agg::Count;
     std::string column;
     std::string out;
-    double param = 0.0;  ///< Pct: quantile q in [0, 1]; occupancy: occ_cell_us;
+    double param = 0.0;  ///< Pct, SketchQuantile: quantile q in [0, 1];
+                         ///< occupancy: occ_cell_us;
                          ///< Distinct/TopK/BottomK/ApproxTopK/Sample: k;
                          ///< SetUnion: nonzero asks for the typed list
     std::string by{};    ///< the second input column for the ops

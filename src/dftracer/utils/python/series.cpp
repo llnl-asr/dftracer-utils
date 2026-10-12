@@ -508,6 +508,17 @@ PyMethodDef Series_methods[] = {
      METH_VARARGS | METH_KEYWORDS,
      "str_partition(sep, from_right=False) -> List<String> of (head, sep, "
      "tail) per row at the first (last) occurrence."},
+    {"str_normalize", Series_str_normalize, METH_O,
+     "str_normalize(form) -> each row in the Unicode form (0 NFC, 1 NFKC, "
+     "2 NFD, 3 NFKD); null for a row that is not valid UTF-8."},
+    {"str_translate", Series_str_translate, METH_VARARGS,
+     "str_translate(from, to) -> each codepoint of every row replaced by the "
+     "String Series pair: from holds one codepoint per row, to the "
+     "replacement (null deletes)."},
+    {"str_wrap", Series_str_wrap, METH_VARARGS,
+     "str_wrap(width, flags) -> each row as textwrap.wrap lines joined by a "
+     "newline; flags is an OR of 1 expand_tabs, 2 replace_whitespace, "
+     "4 drop_whitespace, 8 break_long_words, 16 break_on_hyphens."},
     {"dt_part", Series_dt_part, METH_VARARGS,
      "dt_part(code, unit=2) -> Int64 calendar part (0 year .. 16 epoch days) "
      "of a Timestamp / Date / Duration column, or an Int64 column read in "

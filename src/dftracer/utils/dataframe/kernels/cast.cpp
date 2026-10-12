@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/internal/numeric_dispatch.h>
 #include <dftracer/utils/dataframe/internal/varwidth_offsets.h>
 #include <dftracer/utils/dataframe/kernels/cast.h>
+#include <simdjson.h>
 
 #include <cctype>
 #include <cstddef>
@@ -299,6 +300,41 @@ dftu_series* parse_numbers(const dftu_series& v, TypeId mid) {
                                        : parse_numbers_w<std::int32_t>(v, mid);
 }
 
+// `v` (Binary or LargeBinary) as `text` (String or LargeString): the same
+// buffers, with each row that is not valid UTF-8 made null.
+template <typename Off>
+dftu_series* bytes_to_text_w(const dftu_series& v, TypeId text) {
+    const std::size_t n = static_cast<std::size_t>(v.length);
+    const auto* bytes = reinterpret_cast<const char*>(v.data->data());
+    const Off* off = reinterpret_cast<const Off*>(offsets_of<Off>(v)->data());
+    const std::uint8_t* valid = v.validity ? v.validity->data() : nullptr;
+    std::vector<std::uint8_t> bits((n + 7) / 8, 0);
+    std::int64_t nulls = 0;
+    for (std::size_t i = 0; i < n; ++i) {
+        const bool present = !valid || ((valid[i >> 3] >> (i & 7)) & 1);
+        const auto len = static_cast<std::size_t>(off[i + 1] - off[i]);
+        if (present && simdjson::validate_utf8(bytes + off[i], len))
+            bits[i >> 3] |= static_cast<std::uint8_t>(1U << (i & 7));
+        else
+            ++nulls;
+    }
+    dftu_series* out = dftu_series_share(&v);
+    out->type = text;
+    out->null_count = nulls;
+    if (nulls == 0) {
+        out->validity.reset();
+    } else {
+        out->validity = Buffer::allocate(bits.size());
+        std::memcpy(out->validity->data(), bits.data(), bits.size());
+    }
+    return out;
+}
+
+dftu_series* bytes_to_text(const dftu_series& v, TypeId text) {
+    return is_wide_offset_type(v.type) ? bytes_to_text_w<std::int64_t>(v, text)
+                                       : bytes_to_text_w<std::int32_t>(v, text);
+}
+
 }  // namespace
 
 Series cast(const Series& v, TypeId target) {
@@ -344,6 +380,17 @@ dftu_series* dftu_series_cast(const dftu_series* v, dftu_dtype target) {
     // String, Bool or temporal column casts to its own type.
     if (src == dst && !dftracer::utils::dataframe::is_numeric(src))
         return dftu_series_share(v);
+    // String and Binary share one layout: text to bytes re-tags the buffers,
+    // and bytes to text keeps the rows that are valid UTF-8, the rest null.
+    if ((src == TypeId::String && dst == TypeId::Binary) ||
+        (src == TypeId::LargeString && dst == TypeId::LargeBinary)) {
+        dftu_series* out = dftu_series_share(v);
+        out->type = dst;
+        return out;
+    }
+    if ((src == TypeId::Binary && dst == TypeId::String) ||
+        (src == TypeId::LargeBinary && dst == TypeId::LargeString))
+        return dftracer::utils::dataframe::bytes_to_text(*v, dst);
     if (dst == TypeId::String &&
         (src == TypeId::Bool ||
          dftracer::utils::dataframe::is_plain_number(src)))

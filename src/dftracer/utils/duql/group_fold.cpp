@@ -432,12 +432,9 @@ void GroupFold::sketches(std::size_t a, const df::Series& in,
         if (one.empty()) continue;
         auto& s =
             state[static_cast<std::size_t>(gid[static_cast<std::size_t>(r)])];
-        // Sketches of another accuracy do not merge; they count as unknown.
-        if (s && std::abs(s->log_gamma() - one.log_gamma()) > 1e-12) continue;
-        if (!s)
-            s = std::make_unique<Sketch>(std::move(one));
-        else
-            s->merge(one);
+        if (!s) s = std::make_unique<Sketch>();
+        dataframe::merge_default_accuracy(*s, one);
+        if (s->empty()) s.reset();
     }
 }
 

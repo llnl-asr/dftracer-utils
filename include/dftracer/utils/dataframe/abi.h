@@ -623,6 +623,46 @@ DFTU_EXPORT dftu_series* dftu_series_str_partition(const dftu_series* v,
                                                    const char* sep,
                                                    int32_t sep_len,
                                                    int32_t from_right);
+
+/** The Unicode normalization forms of dftu_series_str_normalize (Python's
+ * unicodedata.normalize). */
+typedef enum {
+    DFTU_NORM_NFC = 0,
+    DFTU_NORM_NFKC = 1,
+    DFTU_NORM_NFD = 2,
+    DFTU_NORM_NFKD = 3
+} dftu_norm_form;
+/** Each row of a String column in the normalization `form` (a
+ * dftu_norm_form). A row that is not valid UTF-8 is null, as a null row stays.
+ * NULL for another input type or a bad `form`. */
+DFTU_EXPORT dftu_series* dftu_series_str_normalize(const dftu_series* v,
+                                                   int32_t form);
+/** Each codepoint of every row of a String column replaced as the table says
+ * (Python's str.translate): `from` is a String column whose rows are each one
+ * codepoint, all distinct and none null; `to` is a String column of the same
+ * length, where a null row deletes that codepoint and any other row (possibly
+ * empty, possibly several codepoints) replaces it. A codepoint not in the
+ * table is kept. A row that is not valid UTF-8 is null, as a null row stays.
+ * NULL for another input type or an invalid table. */
+DFTU_EXPORT dftu_series* dftu_series_str_translate(const dftu_series* v,
+                                                   const dftu_series* from,
+                                                   const dftu_series* to);
+/** The flag bits of dftu_series_str_wrap, the keyword arguments of Python's
+ * textwrap.TextWrapper. */
+typedef enum {
+    DFTU_WRAP_EXPAND_TABS = 1,
+    DFTU_WRAP_REPLACE_WHITESPACE = 2,
+    DFTU_WRAP_DROP_WHITESPACE = 4,
+    DFTU_WRAP_BREAK_LONG_WORDS = 8,
+    DFTU_WRAP_BREAK_ON_HYPHENS = 16
+} dftu_wrap_flag;
+/** Each row of a String column as "\n".join(textwrap.wrap(row, width)) of
+ * CPython 3.13.10, 3.14.1 and later, with the options in `flags` (an OR of
+ * dftu_wrap_flag); `width` counts codepoints.
+ * A row that is not valid UTF-8 is null, as a null row stays. NULL for another
+ * input type or a `width` below 1. */
+DFTU_EXPORT dftu_series* dftu_series_str_wrap(const dftu_series* v,
+                                              int64_t width, int32_t flags);
 /** The calendar parts of dftu_series_dt_part (the pandas .dt accessor):
  * DAY_OF_WEEK is Monday = 0, DAY_OF_YEAR and ISO_WEEK are 1-based, IS_LEAP_YEAR
  * is 0 / 1, EPOCH_DAYS the day number since 1970-01-01. */
@@ -936,7 +976,12 @@ typedef enum {
 
 /** A string method with text, integer or second-column operands, evaluated
  * by the Series function the eager Series.str method of the same name calls
- * (dftu_expr_str_fn). 0-8 are the dftu_series_str_is classes in order. */
+ * (dftu_expr_str_fn). 0-8 are the dftu_series_str_is classes in order.
+ * NORMALIZE takes the form in `i0`, WRAP the width in `i0` and the flag bits
+ * in `i1`. TRANSLATE takes its table in the two texts: `text` holds the keys,
+ * one codepoint each, and `text2` holds one entry per key, a codepoint L and
+ * then the value's codepoints (L is 1 + their count, or 0 to delete the key).
+ */
 typedef enum {
     DFTU_STR_FN_ISALNUM = 0,
     DFTU_STR_FN_ISALPHA = 1,
@@ -966,7 +1011,10 @@ typedef enum {
     DFTU_STR_FN_JOIN = 25,
     DFTU_STR_FN_GET = 26,
     DFTU_STR_FN_CAT = 27,
-    DFTU_STR_FN_REGEX_REPLACE = 28
+    DFTU_STR_FN_REGEX_REPLACE = 28,
+    DFTU_STR_FN_NORMALIZE = 29,
+    DFTU_STR_FN_TRANSLATE = 30,
+    DFTU_STR_FN_WRAP = 31
 } dftu_str_fn;
 
 /** Rolling-window reduction (`op` is a dftu_rolling_op:

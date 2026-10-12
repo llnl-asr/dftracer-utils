@@ -25,6 +25,7 @@ from typing import (
     Tuple,
     Union,
     cast,
+    get_args,
 )
 
 from . import dftracer_utils_ext as _ext
@@ -208,6 +209,24 @@ JoinHow = Literal[
 ]
 PivotAgg = Literal[
     "first", "last", "sum", "min", "max", "mean", "count", "var", "std", "skew", "kurt"
+]
+# The pivot_table aggregates: the native pivot ones and the group-by
+# methods that reduce a group to one value.
+PivotTableAgg = Literal[
+    "first",
+    "last",
+    "sum",
+    "min",
+    "max",
+    "mean",
+    "count",
+    "var",
+    "std",
+    "skew",
+    "kurt",
+    "median",
+    "prod",
+    "nunique",
 ]
 
 
@@ -651,6 +670,17 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
     def __len__(self) -> int:
         return self._native.num_rows
 
+    def __repr__(self) -> str:
+        from ._repr import frame_repr
+
+        return frame_repr(self)
+
+    def _repr_html_(self) -> str:
+        """The table that Jupyter shows for ``display(df)``: the rows of ``repr``."""
+        from ._repr import frame_html
+
+        return frame_html(self)
+
     # -- pandas / polars spellings ---------------------------------------------
     @property
     def columns(self) -> List[str]:
@@ -783,8 +813,26 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
     def fillna(self, value: Union[int, float]) -> "DataFrame":
         return self._like(self._native.fill_null(_unwrap(value)))
 
-    def duplicated(self) -> "Series":
-        return self._like(self._native.is_duplicated())
+    def duplicated(
+        self,
+        subset: "Union[str, Sequence[str], None]" = None,
+        keep: "Union[Literal['first', 'last'], bool]" = "first",
+    ) -> "Series":
+        """Bool mask of the rows that repeat an earlier row (pandas
+        ``DataFrame.duplicated``), compared on ``subset`` or every column:
+        ``keep="first"`` leaves the first of equal rows unmarked, ``"last"``
+        the last, and ``False`` marks every one of them. Nulls compare
+        equal."""
+        cols = list(self.columns) if subset is None else _names(subset)
+        frame = cast("DataFrame", self[cols])
+        if keep is False:
+            return cast("Series", _wrap(frame._native.is_duplicated()))
+        if keep == "last":
+            back = list(range(frame.num_rows - 1, -1, -1))
+            return frame.take(back).duplicated(keep="first").take(back)
+        if keep != "first":
+            raise ValueError(f"duplicated: keep must be 'first', 'last' or False, not {keep!r}")
+        return frame.groupby(cols, dropna=False).cumcount()["cumcount"] > 0
 
     def gather(self, indices: "Union[Series, Sequence[int]]") -> "DataFrame":
         return self.take(indices)
@@ -794,9 +842,23 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         by: "Union[str, Series, Sequence[Union[str, Series]]]",
         *aggs: "Union[str, Agg]",
         dropna: bool = True,
+        sort: bool = True,
     ) -> "Any":
-        """The pandas spelling of :meth:`group_by`."""
-        return self.group_by(by, *aggs, dropna=dropna)
+        """The pandas spelling of :meth:`group_by`. With ``sort`` (the pandas
+        default) every aggregate result is ordered ascending by the key
+        columns, nulls last; ``sort=False`` keeps the engine's group order."""
+        out = self.group_by(by, *aggs, dropna=dropna)
+        if not sort:
+            return out
+        if isinstance(out, DataFrame):
+            given = [by] if isinstance(by, (str, Series)) else list(by)
+            keys = [
+                k if isinstance(k, str) else "key" if len(given) == 1 else f"key{i}"
+                for i, k in enumerate(given)
+            ]
+            return out.sort_by_multi(keys)
+        out._sort = True
+        return out
 
     def nlargest(self, n: int, columns: str) -> "DataFrame":
         return self._like(self._native.topk(columns, n, True))
@@ -807,11 +869,26 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
     def pivot_table(
         self,
         values: str,
-        index: str,
+        index: "Union[str, Sequence[str]]",
         columns: str,
-        aggfunc: "PivotAgg" = "first",
+        aggfunc: "PivotTableAgg" = "first",
     ) -> "DataFrame":
-        return self.pivot(index, columns, values, aggfunc)
+        """Long to wide with ``aggfunc`` over each (``index``, ``columns``)
+        cell: one row for each combination of the ``index`` keys, in sorted
+        order, and one column for each value of ``columns``. ``index`` may name
+        several keys and ``aggfunc`` may be any group-by reduction, such as
+        ``"median"``."""
+        keys = _names(index)
+        if len(keys) == 1 and aggfunc in get_args(PivotAgg):
+            return self.pivot(keys[0], columns, values, cast("PivotAgg", aggfunc))
+        picked = cast("DataFrame", self[keys + [columns, values]])
+        cells = getattr(picked.groupby(keys + [columns]), aggfunc)()
+        row = "__dftu_pivot_row__"
+        cells = cells.assign(**{row: cells.groupby(keys).ngroup()["ngroup"]})
+        wide = cells[[row, columns, values]].pivot(row, columns, values, "first")
+        names = cells[[row] + keys].drop_duplicates()
+        out = names.merge(wide, on=row).sort_values(keys)
+        return out.drop(columns=[row])
 
     def to_dict(self) -> "Dict[str, List[object]]":
         return {name: self[name].to_list() for name in self.columns}

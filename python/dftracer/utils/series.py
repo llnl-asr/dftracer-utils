@@ -21,6 +21,7 @@ from typing import (
     Generic,
     List,
     Literal,
+    Mapping,
     Optional,
     Sequence,
     Tuple,
@@ -464,6 +465,53 @@ _CMP_NE = 5
 _LOGICAL_AND = 0
 _LOGICAL_OR = 1
 
+_NormForm = Literal["NFC", "NFKC", "NFD", "NFKD"]
+# abi.h DFTU_NORM_* and DFTU_WRAP_*.
+_NORM_FORMS: Dict[str, int] = {"NFC": 0, "NFKC": 1, "NFD": 2, "NFKD": 3}
+_WRAP_FLAG_BITS = (1, 2, 4, 8, 16)
+
+
+def _norm_form_code(form: str) -> int:
+    code = _NORM_FORMS.get(form) if isinstance(form, str) else None
+    if code is None:
+        raise ValueError(f"invalid normalization form {form!r}")
+    return code
+
+
+def _translate_pairs(
+    table: Mapping[Union[int, str], Union[str, int, None]],
+) -> Tuple[List[str], List[Optional[str]]]:
+    """The keys (one codepoint each) and the replacements (``None`` deletes) of
+    a ``str.translate`` table: an int key or value is a codepoint."""
+    keys: List[str] = []
+    values: List[Optional[str]] = []
+    for key, value in table.items():
+        if isinstance(key, int) and not isinstance(key, bool):
+            key = chr(key)
+        if not isinstance(key, str) or len(key) != 1:
+            raise ValueError(f"translate keys must be a codepoint or one character, got {key!r}")
+        if isinstance(value, int) and not isinstance(value, bool):
+            value = chr(value)
+        elif value is not None and not isinstance(value, str):
+            raise TypeError(f"translate values must be str, int or None, got {value!r}")
+        keys.append(key)
+        values.append(value)
+    if len(set(keys)) != len(keys):
+        raise ValueError("translate table has a codepoint twice")
+    return keys, values
+
+
+def _wrap_flag_bits(
+    expand_tabs: bool,
+    replace_whitespace: bool,
+    drop_whitespace: bool,
+    break_long_words: bool,
+    break_on_hyphens: bool,
+) -> int:
+    given = (expand_tabs, replace_whitespace, drop_whitespace, break_long_words, break_on_hyphens)
+    return sum(bit for bit, on in zip(_WRAP_FLAG_BITS, given) if on)
+
+
 # Right-hand operand for a Series op: another Series or a Python scalar.
 _Scalar = Union[int, float]
 _SeriesOrScalar = Union["Series", int, float]
@@ -675,6 +723,11 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
 
     def __len__(self) -> int:
         return self._native.length
+
+    def __repr__(self) -> str:
+        from ._repr import series_repr
+
+        return series_repr(self)
 
     # builtins.slice (not bare `slice`): ty otherwise binds it to Series.slice.
     def __getitem__(self, key: "Union[int, builtins.slice]") -> "Union[Series, object]":
@@ -1071,10 +1124,18 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         return _wrap(self._native.clip(_unwrap(lo), _unwrap(hi)))
 
     def round(self, decimals: int = 0) -> "Series":
-        """Round to the nearest integer. Only ``decimals=0`` has a kernel."""
-        if decimals != 0:
-            raise NotImplementedError("round() supports decimals=0 only")
-        return _wrap(self._native.round())
+        """Round to ``decimals`` places, halves to even, as numpy and pandas:
+        the value scaled by ``10**decimals``, rounded and scaled back. A
+        negative ``decimals`` rounds to tens, hundreds and so on. An integer
+        column stays integer."""
+        if decimals == 0 or (decimals > 0 and self.dtype in _INTEGERS):
+            return _wrap(self._native.round())
+        scale = 10.0**decimals if decimals > 0 else 10.0 ** (-decimals)
+        if decimals > 0:
+            out = (self * scale).round() / scale
+        else:
+            out = (self / scale).round() * scale
+        return out.astype(self.dtype) if self.dtype in _INTEGERS else out
 
     def fillna(self, value: Union[bool, int, float, str]) -> "Series":
         return _wrap(self._native.fillna(_unwrap(value)))
@@ -1548,6 +1609,15 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
 
     def str_partition(self, sep: str, from_right: bool = False) -> "Series":
         return _wrap(self._native.str_partition(sep, from_right))
+
+    def str_normalize(self, form: int) -> "Series":
+        return _wrap(self._native.str_normalize(form))
+
+    def str_translate(self, from_: "Series", to: "Series") -> "Series":
+        return _wrap(self._native.str_translate(_unwrap(from_), _unwrap(to)))
+
+    def str_wrap(self, width: int, flags: int) -> "Series":
+        return _wrap(self._native.str_wrap(width, flags))
 
     def dt_part(self, code: int, unit: int = 2) -> "Series":
         return _wrap(self._native.dt_part(code, unit))
@@ -2272,6 +2342,33 @@ class _StrAccessor:
     def isalnum(self) -> Series:
         return self._s.str_is(0)
 
+    def encode(self, encoding: str = "utf-8", errors: str = "strict") -> Series:
+        """The UTF-8 bytes of each string, as a binary column (pandas
+        ``str.encode``). Only UTF-8, the engine's text encoding."""
+        from .columnar import _require_utf8
+
+        _require_utf8("encode", encoding)
+        return self._s.astype("binary")
+
+    def decode(self, encoding: str = "utf-8", errors: str = "strict") -> Series:
+        """Each binary value read as UTF-8 text (pandas ``str.decode``). With
+        ``errors="strict"`` a value that is not valid UTF-8 raises
+        ``ValueError``; with ``errors="null"`` it becomes null."""
+        from .columnar import _require_utf8
+
+        _require_utf8("decode", encoding)
+        if errors not in ("strict", "null"):
+            raise ValueError(f"decode: errors must be 'strict' or 'null', not {errors!r}")
+        out = self._s.astype("string")
+        if errors == "strict" and out.null_count > self._s.null_count:
+            raise ValueError("decode: a value is not valid utf-8")
+        return out
+
+    def isascii(self) -> Series:
+        """True where every character is ASCII, as ``str.isascii`` (an empty
+        string too)."""
+        return self.fullmatch("[\\x00-\\x7f]*")
+
     def isalpha(self) -> Series:
         return self._s.str_is(1)
 
@@ -2352,6 +2449,68 @@ class _StrAccessor:
     def findall(self, pat: str) -> Series:
         """Every regex match per row, as a List<String>."""
         return self._s.str_findall(pat)
+
+    def normalize(self, form: _NormForm) -> Series:
+        """Each string in the Unicode normalization ``form`` (``"NFC"``,
+        ``"NFKC"``, ``"NFD"`` or ``"NFKD"``); a value that is not valid UTF-8
+        is null."""
+        return self._s.str_normalize(_norm_form_code(form))
+
+    def translate(self, table: Mapping[Union[int, str], Union[str, int, None]]) -> Series:
+        """Each codepoint replaced by ``table`` (as ``str.translate``): a key is
+        a codepoint or a one-character string, a value a string, a codepoint or
+        ``None`` to delete it. A codepoint not in the table is kept."""
+        keys, values = _translate_pairs(table)
+        return self._s.str_translate(
+            Series.from_list(keys, dtype=DType.STRING),
+            Series.from_list(values, dtype=DType.STRING),
+        )
+
+    def wrap(
+        self,
+        width: int,
+        expand_tabs: bool = True,
+        replace_whitespace: bool = True,
+        drop_whitespace: bool = True,
+        break_long_words: bool = True,
+        break_on_hyphens: bool = True,
+    ) -> Series:
+        """Each string wrapped to lines of at most ``width`` codepoints, joined
+        by newlines: ``textwrap.TextWrapper`` of CPython 3.13.10, 3.14.1 and later with these
+        options, as pandas on those versions."""
+        if width < 1:
+            raise ValueError(f"invalid width {width!r} (must be > 0)")
+        flags = _wrap_flag_bits(
+            expand_tabs, replace_whitespace, drop_whitespace, break_long_words, break_on_hyphens
+        )
+        return self._s.str_wrap(width, flags)
+
+    def extractall(self, pat: str) -> "DataFrame":
+        """Every regex ``pat`` match per row, one output row per match: the
+        columns ``row`` (input position) and ``match`` (0-based order within
+        the row), then one per capture group, named as in ``pat`` or
+        ``"0"``, ``"1"``, ...  Rows without a match are left out (pandas
+        ``str.extractall`` with its index as columns)."""
+        import re
+
+        from .dataframe import DataFrame
+
+        rx = re.compile(pat)
+        if rx.groups == 0:
+            raise ValueError("extractall: the pattern has no capture group")
+        names = {i: n for n, i in rx.groupindex.items()}
+        labels = [names.get(g, str(g - 1)) for g in range(1, rx.groups + 1)]
+        found = DataFrame.from_dict({"m": self._s.str_findall(pat)})
+        rows = found.with_row_index("row").explode("m")
+        rows = cast(DataFrame, rows[cast(Series, rows["m"]).notna()])
+        if len(rows) == 0:
+            ints = {c: Series.from_list([], dtype=DType.INT64) for c in ["row", "match"]}
+            text = {c: Series.from_list([], dtype=DType.STRING) for c in labels}
+            return DataFrame.from_dict({**ints, **text})
+        rows = rows.assign(match=rows.groupby("row").cumcount()["cumcount"])
+        m = cast(Series, rows["m"])
+        groups = {c: m.str.extract(pat, g) for g, c in enumerate(labels, 1)}
+        return DataFrame.from_dict({"row": rows["row"], "match": rows["match"], **groups})
 
     def partition(self, sep: str = " ", expand: bool = True) -> "Union[Series, DataFrame]":
         """Split at the first ``sep`` into (head, sep, tail): a frame of

@@ -351,6 +351,19 @@ TEST_SUITE("join spill") {
             CHECK(rows_of(join(lf, rf, how, 256)) == reference(l, r, how));
     }
 
+    TEST_CASE("a right side of no rows keeps its columns under a budget") {
+        Rng rng{3};
+        const Table l = random_table(rng, 50, 5, 0, 1);
+        const Table r;
+        const DataFrame lf = frame_of(l, "lk", "lv");
+        const DataFrame rf = frame_of(r, "rk", "rv");
+        for (const JoinHow how : HOWS) {
+            CAPTURE(static_cast<int>(how));
+            const DataFrame out = join(lf, rf, how, 256);
+            CHECK(rows_of(out) == reference(l, r, how));
+        }
+    }
+
     TEST_CASE("a lookup matches keys of different number types") {
         std::vector<std::int64_t> lk;
         std::vector<double> rk;

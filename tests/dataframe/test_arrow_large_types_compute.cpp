@@ -196,6 +196,27 @@ TEST_SUITE("dataframe_arrow_large_types_compute") {
         CHECK(bit(2) == true);
     }
 
+    TEST_CASE("LargeString: normalize, translate and wrap run on the column") {
+        Series s = make_large_utf8(
+            {"cafe\xCC\x81 au lait", "\xEF\xAC\x81 one two three", "a\xFF"});
+        REQUIRE(s.valid());
+        REQUIRE(s.type() == TypeId::LargeString);
+        Series nfkc = s.str_normalize(DFTU_NORM_NFKC);
+        REQUIRE(nfkc.valid());
+        CHECK(nfkc.string_at(0) == "caf\xC3\xA9 au lait");
+        CHECK(nfkc.string_at(1) == "fi one two three");
+        CHECK(nfkc.is_null(2));
+        Series tr = s.str_translate(Series::strings({"a", "o"}),
+                                    Series::strings({"A", "0"}));
+        REQUIRE(tr.valid());
+        CHECK(tr.string_at(1) == "\xEF\xAC\x81 0ne tw0 three");
+        CHECK(tr.is_null(2));
+        Series wr = s.str_wrap(6, 31);
+        REQUIRE(wr.valid());
+        CHECK(wr.string_at(1) == "\xEF\xAC\x81 one\ntwo\nthree");
+        CHECK(wr.is_null(2));
+    }
+
     TEST_CASE("LargeString: is_in runs directly on the wide-offset column") {
         Series s = make_large_utf8({"a", "b", "c", "d"});
         Series needles = Series::strings({"b", "d"});

@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/base64.h>
 #include <dftracer/utils/core/common/hash/hash.h>
 #include <dftracer/utils/core/common/to_chars.h>
 #include <dftracer/utils/dataframe/agg/detail.h>
@@ -382,9 +383,9 @@ bool plain_key(const Series& c, PlainKey& out) {
 bool plain_shape(const AggState& st, const std::vector<const Series*>& keys,
                  const std::vector<const Series*>& values,
                  std::vector<PlainKey>& k, std::vector<Plain8>& v) {
-    if (st.has_fl || st.has_arg || st.has_bitor || st.has_prod || st.has_kmv ||
-        st.has_lst || st.has_ss || st.has_co || st.has_set || st.has_occ ||
-        st.has_dyn)
+    if (st.has_fl || st.has_arg || st.has_bitor || st.has_prod || st.has_msk ||
+        st.has_kmv || st.has_lst || st.has_ss || st.has_co || st.has_set ||
+        st.has_occ || st.has_dyn)
         return false;
     k.resize(keys.size());
     for (std::size_t j = 0; j < keys.size(); ++j)
@@ -1156,6 +1157,7 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
                     const std::vector<const Series*>& values,
                     const std::vector<AggDynInput>& dyn_in, std::int64_t begin,
                     std::int64_t end) {
+    std::string sketch_bytes;
     if (st.has_dyn)
         for (const AggDynInput& di : dyn_in)
             st.dyn_domain.emplace(di.name, col_domain(di.col->type()));
@@ -1251,6 +1253,16 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
                            type_name(vc->child(0).type())
                      : std::string("a column of type ") + type_name(t)) +
                 "; use a string, bool, number or a list of those");
+        }
+        for (std::size_t s = 0; s < st.specs.size(); ++s) {
+            if (st.specs[s].op != AggOp::SketchQuantile) continue;
+            const Series* vc =
+                values[static_cast<std::size_t>(st.specs[s].value_col)];
+            if (narrow_varwidth_type(vc->type()) != TypeId::String)
+                throw std::invalid_argument(
+                    std::string("group_by: aggregate '") + st.specs[s].out +
+                    "' reads base64 sketch text, not a " +
+                    type_name(vc->type()) + " column");
         }
         st.inited = true;
     }
@@ -1410,6 +1422,20 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
                 if (vc->is_null(i)) continue;
                 st.prod_acc[pbase + slot] *=
                     read_as_double(*vc, i, col_domain(vc->type()));
+            }
+        }
+        if (st.has_msk) {
+            const std::size_t mbase = static_cast<std::size_t>(g) * st.n_msk;
+            for (std::size_t slot = 0; slot < st.n_msk; ++slot) {
+                const Series* vc =
+                    values[static_cast<std::size_t>(st.msk_val_col[slot])];
+                if (vc->is_null(i)) continue;
+                if (!base64_decode_into(vc->string_at(i), sketch_bytes))
+                    continue;
+                const MergeSketch one = MergeSketch::deserialize(
+                    reinterpret_cast<const std::uint8_t*>(sketch_bytes.data()),
+                    sketch_bytes.size());
+                merge_default_accuracy(st.msk[mbase + slot], one);
             }
         }
         if (st.has_kmv) {

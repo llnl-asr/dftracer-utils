@@ -431,6 +431,60 @@ PyObject* Series_str_partition(PyObject* self, PyObject* args, PyObject* kwds) {
     }
     return make_series(std::move(out));
 }
+PyObject* Series_str_normalize(PyObject* self, PyObject* arg) {
+    Series* a = as_series(self);
+    if (!a) return nullptr;
+    const long form = PyLong_AsLong(arg);
+    if (form == -1 && PyErr_Occurred()) return nullptr;
+    if (form < DFTU_NORM_NFC || form > DFTU_NORM_NFKD) {
+        PyErr_SetString(PyExc_ValueError,
+                        "str_normalize: form must be 0 (NFC) to 3 (NFKD)");
+        return nullptr;
+    }
+    Series out = a->str_normalize(static_cast<std::int32_t>(form));
+    if (!out.valid()) {
+        PyErr_SetString(PyExc_TypeError, "str_normalize: not a String column");
+        return nullptr;
+    }
+    return make_series(std::move(out));
+}
+PyObject* Series_str_translate(PyObject* self, PyObject* args) {
+    Series* a = as_series(self);
+    if (!a) return nullptr;
+    PyObject* from_obj = nullptr;
+    PyObject* to_obj = nullptr;
+    if (!PyArg_ParseTuple(args, "OO", &from_obj, &to_obj)) return nullptr;
+    Series* from = as_series(from_obj);
+    if (!from) return nullptr;
+    Series* to = as_series(to_obj);
+    if (!to) return nullptr;
+    Series out = a->str_translate(*from, *to);
+    if (!out.valid()) {
+        PyErr_SetString(PyExc_ValueError,
+                        "str_translate: not a String column, or the table is "
+                        "not one distinct codepoint per key");
+        return nullptr;
+    }
+    return make_series(std::move(out));
+}
+PyObject* Series_str_wrap(PyObject* self, PyObject* args) {
+    Series* a = as_series(self);
+    if (!a) return nullptr;
+    long long width = 0;
+    int flags = 0;
+    if (!PyArg_ParseTuple(args, "Li", &width, &flags)) return nullptr;
+    if (width < 1) {
+        PyErr_SetString(PyExc_ValueError, "str_wrap: width must be >= 1");
+        return nullptr;
+    }
+    Series out = a->str_wrap(static_cast<std::int64_t>(width), flags);
+    if (!out.valid()) {
+        PyErr_SetString(PyExc_TypeError,
+                        "str_wrap: not a String column, or bad flags");
+        return nullptr;
+    }
+    return make_series(std::move(out));
+}
 
 PyObject* Series_dt_part(PyObject* self, PyObject* args) {
     Series* a = as_series(self);

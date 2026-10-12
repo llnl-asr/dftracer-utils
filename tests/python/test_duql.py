@@ -39,7 +39,8 @@ def test_string_match_ops():
     # case-insensitive form.
     assert str(Field("args.file").contains("tmp")) == 'args.file like "%tmp%"'
     assert (
-        str(Field("args.file").contains("a%b_c", case=True)) == 'args.file like "%a\\\\%b\\\\_c%"'
+        str(Field("args.file").contains("a%b_c", case=True))
+        == 'args.file like "%a\\\\%b\\\\_c%" escape "\\\\"'
     )
     assert str(Field("args.file").contains("tmp", case=False)) == '"tmp" in args.file'
     assert str(Field("name").starts_with("pre")) == 'name like "pre%"'
@@ -305,6 +306,28 @@ def test_traceviewer_filter_unified_predicates(tmp_path):
     assert sorted(kept["ts"]) == sorted(expected["ts"])
 
 
+def test_string_predicates_match_literal_wildcards_in_a_scan(tmp_path):
+    """starts_with, ends_with and contains take `_` and `%` literally when the
+    scan filters a trace, as str.startswith does."""
+    import dftracer.utils as dftu
+    from dftracer.utils.columnar import col
+
+    names = ["MPI_Send", "MPIX", "MPI%x", "a_b", "axb", "mpi_send"]
+    path = tmp_path / "names.ndjson.gz"
+    lines = [f'{{"name":"{n}","ts":{i}}}' for i, n in enumerate(names)]
+    path.write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
+    tv = dftu.TraceViewer(str(path))
+
+    def kept(expr):
+        return sorted(tv.filter(expr).collect()["name"].to_list())
+
+    assert kept(col("name").str.starts_with("MPI_")) == ["MPI_Send"]
+    assert kept(col("name").str.starts_with("MPI%")) == ["MPI%x"]
+    assert kept(col("name").str.ends_with("_b")) == ["a_b"]
+    assert kept(col("name").str.contains("I_S")) == ["MPI_Send"]
+    assert kept(col("name").str.starts_with("MPI")) == ["MPI%x", "MPIX", "MPI_Send"]
+
+
 def test_any_renders_and_filters_array_elements(tmp_path):
     import dftracer.utils as dftu
     from dftracer.utils.columnar import F
@@ -341,3 +364,21 @@ def test_load_path_macros_expand_in_queries(tmp_path):
     assert tv.duql("where longer_than(10)").collect().num_rows == 14
     with pytest.raises(DFTUtilsIOError):
         load_path(str(tmp_path / "missing.duql"))
+
+
+def test_traceviewer_group_by_takes_a_list(tmp_path):
+    import dftracer.utils as dftu
+
+    path = tmp_path / "keys.ndjson.gz"
+    lines = [
+        f'{{"op":"{op}","host":"{h}","ts":{i}}}'
+        for i, (op, h) in enumerate([("r", "a"), ("w", "a"), ("r", "b"), ("r", "a")])
+    ]
+    path.write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
+    tv = dftu.TraceViewer(str(path))
+
+    def counts(view):
+        return sorted(view.agg("count").collect().to_pandas().itertuples(index=False, name=None))
+
+    assert counts(tv.group_by(["op", "host"])) == counts(tv.group_by("op", "host"))
+    assert len(counts(tv.group_by(("op", "host")))) == 3

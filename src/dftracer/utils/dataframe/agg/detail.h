@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -442,6 +443,17 @@ class AggState {
     std::vector<std::int32_t> prod_val_col;
     std::vector<double> prod_acc;  // groups * n_prod
 
+    // SketchQuantile: one slot per distinct value column holding the merge of
+    // every valid serialized DDSketch of the group; the quantile is read at
+    // finalize, so specs with different `param` share a slot. An empty sketch
+    // marks a group with no valid input. A sketch of another accuracy than
+    // the default is skipped (merge_default_accuracy).
+    bool has_msk = false;
+    std::size_t n_msk = 0;
+    std::vector<int> spec_msk;     // spec -> slot, or -1
+    std::vector<std::int32_t> msk_val_col;
+    std::vector<MergeSketch> msk;  // groups * n_msk
+
     // Distinct + Sample: one KMV slot per distinct (value column, k) pair,
     // holding the k smallest element hashes with their reprs. Merge is a
     // union re-trimmed to k, so the sketch is order-independent.
@@ -644,6 +656,25 @@ class AggState {
         }
         has_prod = n_prod > 0;
 
+        spec_msk.assign(specs.size(), -1);
+        msk_val_col.clear();
+        n_msk = 0;
+        for (std::size_t s = 0; s < specs.size(); ++s) {
+            if (specs[s].op != AggOp::SketchQuantile) continue;
+            int slot = -1;
+            for (std::size_t k = 0; k < n_msk; ++k)
+                if (msk_val_col[k] == specs[s].value_col) {
+                    slot = static_cast<int>(k);
+                    break;
+                }
+            if (slot < 0) {
+                slot = static_cast<int>(n_msk++);
+                msk_val_col.push_back(specs[s].value_col);
+            }
+            spec_msk[s] = slot;
+        }
+        has_msk = n_msk > 0;
+
         spec_kmv.assign(specs.size(), -1);
         kmv_val_col.clear();
         kmv_k.clear();
@@ -842,6 +873,7 @@ class AggState {
         }
         if (has_bitor) bitor_acc.resize(bitor_acc.size() + n_bitor, 0);
         if (has_prod) prod_acc.resize(prod_acc.size() + n_prod, 1.0);
+        if (has_msk) msk.resize(msk.size() + n_msk);
         if (has_kmv) kmv.resize(kmv.size() + n_kmv);
         if (has_lst) lst.resize(lst.size() + n_lst);
         if (has_ss) ss_counters.resize(ss_counters.size() + n_ss);
@@ -1164,6 +1196,12 @@ class AggState {
             for (std::size_t slot = 0; slot < n_prod; ++slot)
                 prod_acc[dp + slot] *= other.prod_acc[sp + slot];
         }
+        if (has_msk) {
+            const std::size_t dm = static_cast<std::size_t>(g) * n_msk;
+            const std::size_t sm = static_cast<std::size_t>(j) * n_msk;
+            for (std::size_t slot = 0; slot < n_msk; ++slot)
+                merge_default_accuracy(msk[dm + slot], other.msk[sm + slot]);
+        }
         if (has_kmv) {
             const std::size_t dk = static_cast<std::size_t>(g) * n_kmv;
             const std::size_t sk2 = static_cast<std::size_t>(j) * n_kmv;
@@ -1259,6 +1297,10 @@ class AggState {
         n_prod = other.n_prod;
         spec_prod = other.spec_prod;
         prod_val_col = other.prod_val_col;
+        has_msk = other.has_msk;
+        n_msk = other.n_msk;
+        spec_msk = other.spec_msk;
+        msk_val_col = other.msk_val_col;
         has_kmv = other.has_kmv;
         n_kmv = other.n_kmv;
         spec_kmv = other.spec_kmv;

@@ -822,6 +822,11 @@ enum class StrFn : std::int32_t {
     Get = 26,
     Cat = 27,
     RegexReplace = 28,
+    Normalize = 29,  // i0 = dftu_norm_form
+    // text = the keys, one codepoint each; text2 = per key a codepoint L, then
+    // the value's codepoints (L = 1 + their count; L = 0 deletes the key).
+    Translate = 30,
+    Wrap = 31,  // i0 = width, i1 = dftu_wrap_flag bits
 };
 
 /// Mirrors dftu_join_how. Which rows a join keeps: Inner keeps matched pairs;

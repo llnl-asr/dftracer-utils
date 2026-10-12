@@ -156,6 +156,33 @@ TEST_SUITE("expression string methods") {
         CHECK(all.string_at(5) == "c");
     }
 
+    TEST_CASE("normalize, translate and wrap equal the eager kernels") {
+        Series s = sample();
+        same(run(fn(StrFn::Normalize, {}, DFTU_NORM_NFKD), s),
+             s.str_normalize(DFTU_NORM_NFKD));
+        same(run(fn(StrFn::Wrap, {}, 5, {}, 31), s), s.str_wrap(5, 31));
+        // Keys "o" and "-"; "o" -> "00", "-" deleted. Per key a codepoint L
+        // (1 + the value's codepoints, 0 to delete), then the value.
+        const std::string text2(
+            "\x03"
+            "00"
+            "\x00",
+            4);
+        same(run(fn(StrFn::Translate, "o-", 0, text2), s),
+             s.str_translate(Series::strings({"o", "-"}),
+                             Series::strings({"00", ""})));
+        CHECK(run(fn(StrFn::Translate, "o-", 0, text2), s).string_at(0) ==
+              "hell00 w00rld");
+        CHECK_THROWS_AS(run(fn(StrFn::Normalize, {}, 4), s),
+                        std::invalid_argument);
+        CHECK_THROWS_AS(run(fn(StrFn::Wrap, {}, 0, {}, 31), s),
+                        std::invalid_argument);
+        CHECK_THROWS_AS(run(fn(StrFn::Translate, "aa", 0, "\x01\x01"), s),
+                        std::invalid_argument);
+        CHECK_THROWS_AS(run(fn(StrFn::Translate, "a", 0, ""), s),
+                        std::invalid_argument);
+    }
+
     TEST_CASE("get reads a list element or a string byte") {
         Series s = sample();
         Series byte = run(fn(StrFn::Get, {}, 1), s);

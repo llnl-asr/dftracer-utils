@@ -1724,6 +1724,7 @@ bool reduce_broadcasts(Agg agg) noexcept {
             return true;
         case Agg::Count:
         case Agg::Pct:
+        case Agg::SketchQuantile:
         case Agg::Hist:
         case Agg::ArgMax:
         case Agg::SetUnion:

@@ -69,7 +69,7 @@ class GroupFold {
    private:
     struct Ord;
     struct Arg;
-    using Sketch = dataframe::BasicDDSketch<2048>;
+    using Sketch = dataframe::MergeSketch;
 
     void arg(std::size_t a, const dataframe::Series& in,
              const dataframe::Series& by, const std::vector<std::int64_t>& gid);

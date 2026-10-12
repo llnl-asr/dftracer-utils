@@ -9,12 +9,14 @@
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/duql/pattern_engine.h>
 #include <dftracer/utils/duql/substr_simd.h>
+#include <utf8proc.h>
 
 #include <algorithm>
 #include <bit>
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -1846,4 +1848,531 @@ dftu_series* dftu_series_str_findall(const dftu_series* v, const char* pattern,
             if (r == duql::MatchResult::LIMIT) limited.add(row);
         });
     return limited.apply(out, v);
+}
+
+// Unicode text ops over UTF-8 rows: normalize, translate and wrap. A row that
+// is not valid UTF-8 is null in the output.
+namespace {
+
+// The bytes of the codepoint at p (0 when it is not valid UTF-8: a stray or
+// truncated sequence, an overlong form, a surrogate or past U+10FFFF), and the
+// codepoint in `cp`.
+std::size_t utf8_next(const std::uint8_t* p, const std::uint8_t* end,
+                      std::uint32_t& cp) {
+    std::uint32_t c = *p;
+    if (c < 0x80) {
+        cp = c;
+        return 1;
+    }
+    std::size_t extra;
+    std::uint32_t least;
+    if (c >= 0xC2 && c <= 0xDF) {
+        extra = 1;
+        least = 0x80;
+        c &= 0x1F;
+    } else if ((c & 0xF0) == 0xE0) {
+        extra = 2;
+        least = 0x800;
+        c &= 0x0F;
+    } else if (c >= 0xF0 && c <= 0xF4) {
+        extra = 3;
+        least = 0x10000;
+        c &= 0x07;
+    } else {
+        return 0;
+    }
+    if (static_cast<std::size_t>(end - p) <= extra) return 0;
+    for (std::size_t k = 1; k <= extra; ++k) {
+        if ((p[k] & 0xC0) != 0x80) return 0;
+        c = (c << 6) | (p[k] & 0x3F);
+    }
+    if (c < least || c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF)) return 0;
+    cp = c;
+    return extra + 1;
+}
+
+bool decode_utf8(std::string_view s, std::vector<std::uint32_t>& out) {
+    out.clear();
+    const auto* p = reinterpret_cast<const std::uint8_t*>(s.data());
+    const auto* end = p + s.size();
+    while (p < end) {
+        std::uint32_t cp;
+        const std::size_t n = utf8_next(p, end, cp);
+        if (n == 0) return false;
+        out.push_back(cp);
+        p += n;
+    }
+    return true;
+}
+
+void encode_utf8(std::uint32_t c, std::string& out) {
+    if (c < 0x80) {
+        out.push_back(static_cast<char>(c));
+    } else if (c < 0x800) {
+        out.push_back(static_cast<char>(0xC0 | (c >> 6)));
+        out.push_back(static_cast<char>(0x80 | (c & 0x3F)));
+    } else if (c < 0x10000) {
+        out.push_back(static_cast<char>(0xE0 | (c >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((c >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (c & 0x3F)));
+    } else {
+        out.push_back(static_cast<char>(0xF0 | (c >> 18)));
+        out.push_back(static_cast<char>(0x80 | ((c >> 12) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | ((c >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (c & 0x3F)));
+    }
+}
+
+bool is_ascii_row(std::string_view s) {
+    for (const char ch : s)
+        if (static_cast<unsigned char>(ch) >= 0x80) return false;
+    return true;
+}
+
+// A narrow String column whose row i is what `fn(row, buf)` leaves in `buf`;
+// `fn` returns false to make the row null. A null input row stays null.
+template <class Off, class Fn>
+dftu_series* transform_rows_w(const dftu_series* v, Fn& fn) {
+    RowReader<Off> r(v);
+    if (!r.ok()) return nullptr;
+    const std::size_t n = static_cast<std::size_t>(v->length);
+    std::vector<std::int32_t> offsets(n + 1, 0);
+    std::string data;
+    std::string buf;
+    std::vector<std::uint8_t> valid((n + 7) / 8, 0);
+    bool any_null = false;
+    for (std::size_t i = 0; i < n; ++i) {
+        bool hit = false;
+        if (!r.is_null(static_cast<std::int64_t>(i)) &&
+            fn(r.at(static_cast<std::int64_t>(i)), buf)) {
+            data.append(buf);
+            hit = true;
+            if (!fits_int32_offsets(data.size())) return nullptr;
+        }
+        if (hit)
+            valid[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
+        else
+            any_null = true;
+        offsets[i + 1] = static_cast<std::int32_t>(data.size());
+    }
+    return dftu_series_new_string(DFTU_TYPE_STRING, offsets.data(), data.data(),
+                                  static_cast<int64_t>(n),
+                                  any_null ? valid.data() : nullptr);
+}
+
+template <class Fn>
+dftu_series* transform_rows(const dftu_series* v, Fn fn) {
+    return is_wide_offset_type(v->type) ? transform_rows_w<std::int64_t>(v, fn)
+                                        : transform_rows_w<std::int32_t>(v, fn);
+}
+
+bool is_utf8_string(const dftu_series* v) {
+    return v && narrow_varwidth_type(v->type) == TypeId::String;
+}
+
+// translate: the codepoint table.
+struct TranslateTable {
+    // The replacement of an ASCII byte, an index into `reps`, or -1.
+    std::int32_t ascii[128];
+    // Sorted by codepoint; the other keys.
+    std::vector<std::pair<std::uint32_t, std::int32_t>> wide;
+    std::vector<std::string> reps;
+    TranslateTable() { std::fill(std::begin(ascii), std::end(ascii), -1); }
+
+    std::int32_t find(std::uint32_t cp) const {
+        if (cp < 0x80) return ascii[cp];
+        const auto it = std::lower_bound(
+            wide.begin(), wide.end(), cp,
+            [](const auto& e, std::uint32_t k) { return e.first < k; });
+        return it != wide.end() && it->first == cp ? it->second : -1;
+    }
+};
+
+struct StringRows {
+    std::vector<std::string> rows;
+    std::vector<bool> nulls;
+};
+
+template <class Off>
+bool read_rows_w(const dftu_series* s, StringRows& out) {
+    RowReader<Off> r(s);
+    if (!r.ok()) return false;
+    for (std::int64_t i = 0; i < s->length; ++i) {
+        const bool is_null = r.is_null(i);
+        out.nulls.push_back(is_null);
+        out.rows.emplace_back(is_null ? std::string_view() : r.at(i));
+    }
+    return true;
+}
+
+bool read_rows(const dftu_series* s, StringRows& out) {
+    if (s->length == 0) return true;
+    std::unique_ptr<dftu_series, decltype(&dftu_series_free)> flat(
+        nullptr, &dftu_series_free);
+    if (s->encoding != Encoding::Flat) {
+        flat.reset(dftu_series_materialize(s));
+        if (!flat) return false;
+        s = flat.get();
+    }
+    return is_wide_offset_type(s->type) ? read_rows_w<std::int64_t>(s, out)
+                                        : read_rows_w<std::int32_t>(s, out);
+}
+
+bool build_translate_table(const dftu_series* from, const dftu_series* to,
+                           TranslateTable& t) {
+    if (!is_utf8_string(from) || !is_utf8_string(to) ||
+        from->length != to->length)
+        return false;
+    StringRows keys, vals;
+    if (!read_rows(from, keys) || !read_rows(to, vals)) return false;
+    std::vector<std::uint32_t> key, val;
+    for (std::size_t i = 0; i < keys.rows.size(); ++i) {
+        if (keys.nulls[i] || !decode_utf8(keys.rows[i], key) || key.size() != 1)
+            return false;
+        if (!vals.nulls[i] && !decode_utf8(vals.rows[i], val)) return false;
+        const auto rep = static_cast<std::int32_t>(t.reps.size());
+        t.reps.push_back(vals.nulls[i] ? std::string() : vals.rows[i]);
+        if (key[0] < 0x80) {
+            if (t.ascii[key[0]] >= 0) return false;
+            t.ascii[key[0]] = rep;
+        } else {
+            t.wide.emplace_back(key[0], rep);
+        }
+    }
+    std::sort(t.wide.begin(), t.wide.end());
+    return std::adjacent_find(t.wide.begin(), t.wide.end(),
+                              [](const auto& a, const auto& b) {
+                                  return a.first == b.first;
+                              }) == t.wide.end();
+}
+
+}  // namespace
+
+// wrap: textwrap.TextWrapper of CPython 3.13.10 and 3.14.1 on codepoints. A
+// non-ASCII codepoint counts as a letter and a word character in the splitting
+// rules.
+namespace {
+
+struct WrapChunk {
+    std::uint32_t s;
+    std::uint32_t e;
+    std::int64_t len() const { return static_cast<std::int64_t>(e - s); }
+};
+
+bool wrap_is_ws(std::uint32_t c) { return (c >= 9 && c <= 13) || c == ' '; }
+
+bool wrap_is_letter(std::uint32_t c) {
+    return c >= 0x80 || c == '_' || (c >= 'a' && c <= 'z') ||
+           (c >= 'A' && c <= 'Z');
+}
+
+bool wrap_is_word(std::uint32_t c) {
+    return wrap_is_letter(c) || (c >= '0' && c <= '9');
+}
+
+bool wrap_is_punct_word(std::uint32_t c) {
+    return wrap_is_word(c) || c == '!' || c == '"' || c == '\'' || c == '&' ||
+           c == '.' || c == ',' || c == '?';
+}
+
+// Python's str.isspace for one codepoint.
+bool py_is_space(std::uint32_t c) {
+    return (c >= 9 && c <= 13) || (c >= 0x1C && c <= 0x20) || c == 0x85 ||
+           c == 0xA0 || c == 0x1680 || (c >= 0x2000 && c <= 0x200A) ||
+           c == 0x2028 || c == 0x2029 || c == 0x202F || c == 0x205F ||
+           c == 0x3000;
+}
+
+class Wrapper {
+   public:
+    Wrapper(std::int64_t width, std::int32_t flags)
+        : width_(width),
+          expand_tabs_((flags & DFTU_WRAP_EXPAND_TABS) != 0),
+          replace_ws_((flags & DFTU_WRAP_REPLACE_WHITESPACE) != 0),
+          drop_ws_((flags & DFTU_WRAP_DROP_WHITESPACE) != 0),
+          break_long_((flags & DFTU_WRAP_BREAK_LONG_WORDS) != 0),
+          break_hyphens_((flags & DFTU_WRAP_BREAK_ON_HYPHENS) != 0) {}
+
+    // The lines of `src` joined by "\n" in `out`.
+    void run(const std::vector<std::uint32_t>& src, std::string& out) {
+        munge(src);
+        if (break_hyphens_)
+            split_hyphens();
+        else
+            split_spaces();
+        wrap(out);
+    }
+
+   private:
+    void munge(const std::vector<std::uint32_t>& src) {
+        t_.clear();
+        std::uint32_t col = 0;
+        for (const std::uint32_t c : src) {
+            if (c == '\t' && expand_tabs_) {
+                const std::uint32_t k = 8 - col % 8;
+                t_.insert(t_.end(), k, std::uint32_t{' '});
+                col += k;
+                continue;
+            }
+            col = (c == '\n' || c == '\r') ? 0 : col + 1;
+            t_.push_back(replace_ws_ && wrap_is_ws(c) ? std::uint32_t{' '} : c);
+        }
+    }
+
+    void emit(std::size_t s, std::size_t e) {
+        chunks_.push_back(
+            {static_cast<std::uint32_t>(s), static_cast<std::uint32_t>(e)});
+    }
+
+    void split_spaces() {
+        chunks_.clear();
+        const std::size_t n = t_.size();
+        std::size_t i = 0;
+        while (i < n) {
+            const bool ws = wrap_is_ws(t_[i]);
+            std::size_t j = i + 1;
+            while (j < n && wrap_is_ws(t_[j]) == ws) ++j;
+            emit(i, j);
+            i = j;
+        }
+    }
+
+    // Whether t_[j..] is two or more '-' followed by a word character.
+    bool dashes_then_word(std::size_t j) const {
+        const std::size_t n = t_.size();
+        std::size_t k = j;
+        while (k < n && t_[k] == '-') ++k;
+        return k - j >= 2 && k < n && wrap_is_word(t_[k]);
+    }
+
+    // wordsep_re: whitespace runs, an em-dash between words, or a word that
+    // ends at whitespace, the end, a hyphen inside a word or before an
+    // em-dash.
+    void split_hyphens() {
+        chunks_.clear();
+        const std::vector<std::uint32_t>& t = t_;
+        const std::size_t n = t.size();
+        std::size_t i = 0;
+        while (i < n) {
+            if (wrap_is_ws(t[i])) {
+                std::size_t j = i + 1;
+                while (j < n && wrap_is_ws(t[j])) ++j;
+                emit(i, j);
+                i = j;
+                continue;
+            }
+            if (t[i] == '-' && i > 0 && wrap_is_punct_word(t[i - 1]) &&
+                dashes_then_word(i)) {
+                std::size_t j = i;
+                while (j < n && t[j] == '-') ++j;
+                emit(i, j);
+                i = j;
+                continue;
+            }
+            std::size_t j = i + 1;
+            while (true) {
+                if (j < n && t[j] == '-' && hyphen_break(j)) {
+                    emit(i, j + 1);
+                    i = j + 1;
+                    break;
+                }
+                if (j >= n || wrap_is_ws(t[j]) ||
+                    (wrap_is_punct_word(t[j - 1]) && dashes_then_word(j))) {
+                    emit(i, j);
+                    i = j;
+                    break;
+                }
+                ++j;
+            }
+        }
+    }
+
+    // The '-' at t_[j] ends a chunk: two letters, or a letter, '-' and a
+    // letter, before it, and a letter, an optional '-' and a letter after it.
+    bool hyphen_break(std::size_t j) const {
+        const std::vector<std::uint32_t>& t = t_;
+        const std::size_t n = t.size();
+        const bool before =
+            (j >= 2 && wrap_is_letter(t[j - 2]) && wrap_is_letter(t[j - 1])) ||
+            (j >= 3 && wrap_is_letter(t[j - 3]) && t[j - 2] == '-' &&
+             wrap_is_letter(t[j - 1]));
+        if (!before) return false;
+        if (j + 2 >= n || !wrap_is_letter(t[j + 1])) return false;
+        return wrap_is_letter(t[j + 2]) ||
+               (t[j + 2] == '-' && j + 3 < n && wrap_is_letter(t[j + 3]));
+    }
+
+    bool space_chunk(const WrapChunk& c) const {
+        for (std::uint32_t k = c.s; k < c.e; ++k)
+            if (!py_is_space(t_[k])) return false;
+        return true;
+    }
+
+    void handle_long_word(std::size_t pos, std::int64_t cur_len) {
+        const std::int64_t space_left = width_ - cur_len;
+        if (break_long_ && space_left > 0) {
+            std::int64_t end = space_left;
+            WrapChunk& chunk = chunks_[pos];
+            if (break_hyphens_ && chunk.len() > space_left) {
+                std::int64_t hyphen = -1;
+                for (std::int64_t k = space_left - 1; k >= 0; --k)
+                    if (t_[chunk.s + k] == '-') {
+                        hyphen = k;
+                        break;
+                    }
+                bool other = false;
+                for (std::int64_t k = 0; k < hyphen && !other; ++k)
+                    other = t_[chunk.s + k] != '-';
+                if (hyphen > 0 && other) end = hyphen + 1;
+            }
+            const auto cut = chunk.s + static_cast<std::uint32_t>(end);
+            line_.push_back({chunk.s, cut});
+            chunk.s = cut;
+        } else if (line_.empty()) {
+            line_.push_back(chunks_[pos]);
+            taken_ = true;
+        }
+    }
+
+    void wrap(std::string& out) {
+        out.clear();
+        std::size_t pos = 0;
+        const std::size_t total = chunks_.size();
+        bool any_line = false;
+        while (pos < total) {
+            line_.clear();
+            std::int64_t cur_len = 0;
+            if (drop_ws_ && any_line && space_chunk(chunks_[pos])) ++pos;
+            while (pos < total) {
+                const std::int64_t l = chunks_[pos].len();
+                if (cur_len + l > width_) break;
+                line_.push_back(chunks_[pos++]);
+                cur_len += l;
+            }
+            if (pos < total && chunks_[pos].len() > width_) {
+                taken_ = false;
+                handle_long_word(pos, cur_len);
+                if (taken_) ++pos;
+                cur_len = 0;
+                for (const WrapChunk& c : line_) cur_len += c.len();
+            }
+            if (drop_ws_ && !line_.empty() && space_chunk(line_.back()))
+                line_.pop_back();
+            if (line_.empty()) continue;
+            if (any_line) out.push_back('\n');
+            any_line = true;
+            for (const WrapChunk& c : line_)
+                for (std::uint32_t k = c.s; k < c.e; ++k)
+                    encode_utf8(t_[k], out);
+        }
+    }
+
+    std::int64_t width_;
+    bool expand_tabs_;
+    bool replace_ws_;
+    bool drop_ws_;
+    bool break_long_;
+    bool break_hyphens_;
+    bool taken_ = false;
+    std::vector<std::uint32_t> t_;
+    std::vector<WrapChunk> chunks_;
+    std::vector<WrapChunk> line_;
+};
+
+}  // namespace
+
+dftu_series* dftu_series_str_normalize(const dftu_series* v, int32_t form) {
+    if (!is_utf8_string(v)) return nullptr;
+    int options = UTF8PROC_STABLE;
+    switch (form) {
+        case DFTU_NORM_NFC:
+            options |= UTF8PROC_COMPOSE;
+            break;
+        case DFTU_NORM_NFKC:
+            options |= UTF8PROC_COMPOSE | UTF8PROC_COMPAT;
+            break;
+        case DFTU_NORM_NFD:
+            options |= UTF8PROC_DECOMPOSE;
+            break;
+        case DFTU_NORM_NFKD:
+            options |= UTF8PROC_DECOMPOSE | UTF8PROC_COMPAT;
+            break;
+        default:
+            return nullptr;
+    }
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_normalize(flat_v, form));
+    const auto opts = static_cast<utf8proc_option_t>(options);
+    std::vector<utf8proc_int32_t> cps;
+    return transform_rows(v, [&](std::string_view row, std::string& out) {
+        out.clear();
+        if (is_ascii_row(row)) {
+            out.assign(row);
+            return true;
+        }
+        const auto* src = reinterpret_cast<const utf8proc_uint8_t*>(row.data());
+        const auto len = static_cast<utf8proc_ssize_t>(row.size());
+        if (cps.size() < row.size()) cps.resize(row.size());
+        auto n =
+            utf8proc_decompose(src, len, cps.data(),
+                               static_cast<utf8proc_ssize_t>(cps.size()), opts);
+        if (n > static_cast<utf8proc_ssize_t>(cps.size())) {
+            cps.resize(static_cast<std::size_t>(n));
+            n = utf8proc_decompose(src, len, cps.data(), n, opts);
+        }
+        if (n < 0) return false;
+        n = utf8proc_normalize_utf32(cps.data(), n, opts);
+        if (n < 0) return false;
+        for (utf8proc_ssize_t i = 0; i < n; ++i)
+            encode_utf8(static_cast<std::uint32_t>(cps[i]), out);
+        return true;
+    });
+}
+
+dftu_series* dftu_series_str_translate(const dftu_series* v,
+                                       const dftu_series* from,
+                                       const dftu_series* to) {
+    if (!is_utf8_string(v) || !from || !to) return nullptr;
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_translate(flat_v, from, to));
+    TranslateTable table;
+    if (!build_translate_table(from, to, table)) return nullptr;
+    return transform_rows(v, [&](std::string_view row, std::string& out) {
+        out.clear();
+        const auto* begin = reinterpret_cast<const std::uint8_t*>(row.data());
+        const auto* end = begin + row.size();
+        const auto* run = begin;
+        for (const auto* p = begin; p < end;) {
+            std::uint32_t cp;
+            const std::size_t n = utf8_next(p, end, cp);
+            if (n == 0) return false;
+            const std::int32_t rep = table.find(cp);
+            if (rep >= 0) {
+                out.append(reinterpret_cast<const char*>(run),
+                           static_cast<std::size_t>(p - run));
+                out.append(table.reps[static_cast<std::size_t>(rep)]);
+                run = p + n;
+            }
+            p += n;
+        }
+        out.append(reinterpret_cast<const char*>(run),
+                   static_cast<std::size_t>(end - run));
+        return true;
+    });
+}
+
+dftu_series* dftu_series_str_wrap(const dftu_series* v, int64_t width,
+                                  int32_t flags) {
+    constexpr std::int32_t ALL_FLAGS =
+        DFTU_WRAP_EXPAND_TABS | DFTU_WRAP_REPLACE_WHITESPACE |
+        DFTU_WRAP_DROP_WHITESPACE | DFTU_WRAP_BREAK_LONG_WORDS |
+        DFTU_WRAP_BREAK_ON_HYPHENS;
+    if (!is_utf8_string(v) || width < 1 || (flags & ~ALL_FLAGS) != 0)
+        return nullptr;
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_wrap(flat_v, width, flags));
+    Wrapper wrapper(width, flags);
+    std::vector<std::uint32_t> cps;
+    return transform_rows(v, [&](std::string_view row, std::string& out) {
+        if (!decode_utf8(row, cps)) return false;
+        wrapper.run(cps, out);
+        return true;
+    });
 }

@@ -404,6 +404,7 @@ BasicDDSketch<BINS> BasicDDSketch<BINS>::deserialize(const std::uint8_t* data,
 
     std::memcpy(&s.gamma_, p, sizeof(double));
     p += sizeof(double);
+    if (!std::isfinite(s.gamma_) || s.gamma_ <= 1.0) return BasicDDSketch{};
     s.log_gamma_ = std::log(s.gamma_);
     std::memcpy(&s.min_, p, sizeof(double));
     p += sizeof(double);
@@ -417,6 +418,11 @@ BasicDDSketch<BINS> BasicDDSketch<BINS>::deserialize(const std::uint8_t* data,
     std::int32_t off32 = 0;
     std::memcpy(&off32, p, sizeof(std::int32_t));
     p += sizeof(std::int32_t);
+    // Keys of a real value stay far inside this range; a wider offset would
+    // overflow the key arithmetic in add and merge.
+    constexpr std::int32_t MAX_KEY_MAGNITUDE = 1 << 29;
+    if (off32 < -MAX_KEY_MAGNITUDE || off32 > MAX_KEY_MAGNITUDE)
+        return BasicDDSketch{};
     s.offset_ = static_cast<int>(off32);
 
     std::uint32_t num = 0;

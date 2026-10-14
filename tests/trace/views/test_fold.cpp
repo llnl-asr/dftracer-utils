@@ -9,6 +9,7 @@
 #include <string>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "test_view_common.h"
 
@@ -16,6 +17,16 @@ using namespace dftracer::utils::trace::views::detail;
 using dftracer::utils::StringIntern;
 
 namespace {
+
+FoldEvent extract_fold_event(simdjson::dom::element root, StringIntern& intern,
+                             bool needs_args,
+                             const std::vector<std::string>* extra = nullptr,
+                             bool capture_schema = false) {
+    FoldEvent ev;
+    extract_fold_event_into(ev, root, intern, needs_args, extra,
+                            capture_schema);
+    return ev;
+}
 
 std::string padded(std::string s) {
     s.resize(s.size() + simdjson::SIMDJSON_PADDING, '\0');
@@ -390,5 +401,56 @@ TEST_SUITE("Fold") {
                 leaves.emplace_back(intern.resolve(id));
         CHECK(leaves == std::vector<std::string>{"args.hosts.0", "args.hosts.1",
                                                  "args.hosts.2"});
+    }
+
+    TEST_CASE(
+        "a reused buffer slot decodes as a fresh event and keeps capacity") {
+        StringIntern intern;
+        simdjson::dom::parser parser;
+        std::string wide = padded(
+            R"({"ph":"X","name":"read","cat":"POSIX","pid":7,"tid":9,"ts":100,"dur":5,"args":{"a":1,"b":2,"c":"x","d":null,"e":true,"f":3.5}})");
+        std::string narrow = padded(
+            R"({"ph":"X","name":"write","cat":"POSIX","pid":1,"tid":1,"ts":2,"dur":1,"args":{"a":9}})");
+        auto rw = parser.parse(wide.data(),
+                               wide.size() - simdjson::SIMDJSON_PADDING, false);
+        REQUIRE_FALSE(rw.error());
+        FoldEventBuffer buf;
+        extract_fold_event_into(buf.append(), rw.value_unsafe(), intern, true);
+        REQUIRE(buf.size() == 1);
+        const std::size_t wide_args = buf.back().args.size();
+        CHECK(wide_args == 5);
+        CHECK_FALSE(buf.back().specials.empty());
+
+        buf.clear();
+        CHECK(buf.empty());
+        simdjson::dom::parser parser2;
+        auto rn = parser2.parse(
+            narrow.data(), narrow.size() - simdjson::SIMDJSON_PADDING, false);
+        REQUIRE_FALSE(rn.error());
+        extract_fold_event_into(buf.append(), rn.value_unsafe(), intern, true);
+        const FoldEvent fresh =
+            extract_fold_event(rn.value_unsafe(), intern, true);
+        const FoldEvent& got = buf.back();
+        CHECK(got.name_id == fresh.name_id);
+        CHECK(got.pid == 1);
+        CHECK(got.ts == 2);
+        CHECK(got.args == fresh.args);
+        CHECK(got.args.size() == 1);
+        // Nothing of the wide record survives in the reused slot.
+        CHECK(got.specials.empty());
+        CHECK(got.args.capacity() >= wide_args);
+        CHECK(buf.events().size() == 1);
+    }
+
+    TEST_CASE("EventRows over a pick list reads only the picked events") {
+        std::vector<FoldEvent> evs(5);
+        for (std::size_t i = 0; i < evs.size(); ++i) evs[i].ts = 10 * i;
+        const std::vector<std::uint32_t> pick{1, 3, 4};
+        EventRows rows(evs, pick);
+        REQUIRE(rows.size() == 3);
+        std::vector<std::uint64_t> seen;
+        for (const FoldEvent& e : rows) seen.push_back(e.ts);
+        CHECK(seen == std::vector<std::uint64_t>{10, 30, 40});
+        CHECK(EventRows(evs).size() == 5);
     }
 }

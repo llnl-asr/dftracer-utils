@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -81,6 +82,91 @@ struct FoldEvent {
     /// "args.hosts.1", a top-level "type". Filled only when the scan captures
     /// schema (the index build); empty otherwise.
     std::vector<std::pair<std::uint32_t, std::uint8_t>> schema_leaves;
+};
+
+/// Reset `ev` to a default event, keeping the capacity of its vectors so a
+/// reused slot decodes the next record without allocating.
+inline void reset_fold_event(FoldEvent& ev) {
+    auto args = std::move(ev.args);
+    auto top_fields = std::move(ev.top_fields);
+    auto specials = std::move(ev.specials);
+    auto schema_leaves = std::move(ev.schema_leaves);
+    ev = FoldEvent{};
+    args.clear();
+    top_fields.clear();
+    specials.clear();
+    schema_leaves.clear();
+    ev.args = std::move(args);
+    ev.top_fields = std::move(top_fields);
+    ev.specials = std::move(specials);
+    ev.schema_leaves = std::move(schema_leaves);
+}
+
+/// FoldEvents a decoding worker reuses from batch to batch. clear() keeps
+/// every slot, and a slot keeps its vectors' capacity, so steady-state decode
+/// allocates nothing per event. Only the first size() slots are live.
+class FoldEventBuffer {
+   public:
+    /// The next slot, in whatever state its last use left it; the decoder
+    /// resets it.
+    FoldEvent& append() {
+        if (live_ == slots_.size()) slots_.emplace_back();
+        return slots_[live_++];
+    }
+    /// Drop the slot append() returned last (a record the caller rejects).
+    void discard_last() { --live_; }
+    void clear() { live_ = 0; }
+    bool empty() const { return live_ == 0; }
+    std::size_t size() const { return live_; }
+    const FoldEvent& back() const { return slots_[live_ - 1]; }
+    std::span<const FoldEvent> events() const { return {slots_.data(), live_}; }
+
+   private:
+    std::vector<FoldEvent> slots_;
+    std::size_t live_ = 0;
+};
+
+/// A read-only sequence of FoldEvents: all of a span, or the ones a list of
+/// indices picks, so a filter can hand the column builders its kept rows
+/// without copying a FoldEvent. Borrows both; they must outlive the view.
+class EventRows {
+   public:
+    EventRows(std::span<const FoldEvent> all)
+        : base_(all.data()), n_(all.size()) {}
+    EventRows(const std::vector<FoldEvent>& all)
+        : base_(all.data()), n_(all.size()) {}
+    EventRows(std::span<const FoldEvent> all,
+              std::span<const std::uint32_t> pick)
+        : base_(all.data()), pick_(pick.data()), n_(pick.size()) {}
+
+    std::size_t size() const { return n_; }
+    bool empty() const { return n_ == 0; }
+    const FoldEvent& operator[](std::size_t i) const {
+        return pick_ ? base_[pick_[i]] : base_[i];
+    }
+
+    class iterator {
+       public:
+        iterator(const EventRows* rows, std::size_t at)
+            : rows_(rows), at_(at) {}
+        const FoldEvent& operator*() const { return (*rows_)[at_]; }
+        iterator& operator++() {
+            ++at_;
+            return *this;
+        }
+        bool operator!=(const iterator& o) const { return at_ != o.at_; }
+
+       private:
+        const EventRows* rows_;
+        std::size_t at_;
+    };
+    iterator begin() const { return {this, 0}; }
+    iterator end() const { return {this, n_}; }
+
+   private:
+    const FoldEvent* base_;
+    const std::uint32_t* pick_ = nullptr;
+    std::size_t n_;
 };
 
 /// The fixed top-level fields of the trace schema. A bare reference to one of
@@ -217,6 +303,9 @@ struct DecodeHints {
     static constexpr std::size_t FIELD_CACHE_IDS = std::size_t{1} << 16;
 
     std::size_t args = 0;
+    /// The path being walked by decode_record, reused so a record's walk
+    /// allocates no path string.
+    std::string path;
     const dftracer::utils::index::RecordSchema* schema = nullptr;
     std::vector<const dftracer::utils::index::FieldSpec*> fields;
     std::vector<std::uint8_t> known;
@@ -227,7 +316,8 @@ struct DecodeHints {
     ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> arg_leaf_far;
 };
 
-/// A record of no known trace format as an owned data event (by_path): every
+/// Decode a record of no known trace format into `ev` (reset first), as an
+/// owned data event (by_path): every
 /// scalar leaf, by exact path ("op", "io.off", "hosts.1"), in `args`, and,
 /// with `capture_schema`, every leaf in `schema_leaves`. With `paths` (sorted,
 /// borrowed), only those leaves. With `record_schema`, a declared field's
@@ -240,9 +330,10 @@ struct DecodeHints {
 /// not shared between threads. With `capture_schema` and `skip_never_indexed`,
 /// a scalar at a `never_index` path of `record_schema` is listed in
 /// `schema_leaves` and its value is not decoded.
-FoldEvent decode_record(
-    simdjson::dom::element root, dftracer::utils::StringIntern& intern,
-    bool capture_schema = true, const std::vector<std::string>* paths = nullptr,
+void decode_record_into(
+    FoldEvent& ev, simdjson::dom::element root,
+    dftracer::utils::StringIntern& intern, bool capture_schema = true,
+    const std::vector<std::string>* paths = nullptr,
     const dftracer::utils::index::RecordSchema* record_schema = nullptr,
     const std::vector<const dftracer::utils::index::FieldSpec*>* path_fields =
         nullptr,
@@ -253,25 +344,28 @@ FoldEvent decode_record(
 /// or maps adds a bounded number of catalog paths and zone keys.
 inline constexpr std::size_t INDEX_MAX_CHILDREN = 256;
 
-/// Build an owned event from already-parsed scalars + the args element, for
-/// callers (like the index parse) that have run DFTracerEvent::parse_scalars
-/// already. Every string is interned, so the result outlives `args`'s parser.
-/// With `leaves` (and `needs_args`), each argument leaf also goes into
-/// `schema_leaves` as "args.<key>", in the same walk.
-FoldEvent build_fold_event(const DFTracerEvent& scalars,
+/// Build `ev` (reset first) as an owned event from already-parsed scalars + the
+/// args element, for callers (like the index parse) that have run
+/// DFTracerEvent::parse_scalars already. Every string is interned, so the
+/// result outlives `args`'s parser. With `leaves` (and `needs_args`), each
+/// argument leaf also goes into `schema_leaves` as "args.<key>", in the same
+/// walk.
+void build_fold_event_into(FoldEvent& ev, const DFTracerEvent& scalars,
                            simdjson::dom::element args, bool has_args,
                            dftracer::utils::StringIntern& intern,
                            bool needs_args, DecodeHints* leaves = nullptr);
 
-/// Parse a DOM object into an owned event. Every string is interned, so the
-/// result stays valid after the parser that produced `root` is reused. Args are
-/// captured only when `needs_args`. `extra_fields`, if given, names fields the
-/// POD does not natively carry (type/ph, a nested a.b/a[0]) to capture into the
-/// event. When `capture_schema`, every scalar leaf (arbitrarily nested) is
-/// enumerated into `schema_leaves` for the index build's column harvest.
-FoldEvent extract_fold_event(
-    simdjson::dom::element root, dftracer::utils::StringIntern& intern,
-    bool needs_args, const std::vector<std::string>* extra_fields = nullptr,
+/// Parse a DOM object into `ev` (reset first) as an owned event. Every string
+/// is interned, so the result stays valid after the parser that produced `root`
+/// is reused. Args are captured only when `needs_args`. `extra_fields`, if
+/// given, names fields the POD does not natively carry (type/ph, a nested
+/// a.b/a[0]) to capture into the event. When `capture_schema`, every scalar
+/// leaf (arbitrarily nested) is enumerated into `schema_leaves` for the index
+/// build's column harvest.
+void extract_fold_event_into(
+    FoldEvent& ev, simdjson::dom::element root,
+    dftracer::utils::StringIntern& intern, bool needs_args,
+    const std::vector<std::string>* extra_fields = nullptr,
     bool capture_schema = false, DecodeHints* hints = nullptr);
 
 }  // namespace dftracer::utils::trace::views::detail

@@ -122,6 +122,17 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     apply_aggregation(
         const dftracer::utils::dataframe::AggregateSpec& spec) const override;
 
+    /// Distinct rows by `subset` over a streamable row query: the scan keeps,
+    /// per worker, the first row of each key and merges by (unit, row) order,
+    /// so the result is the host `unique` row for row. Refuses (nullopt) a
+    /// non-row or non-Events query, a plan with a sort, top-k, limit or
+    /// offset, dynamic columns, a `subset` name the source lacks, and a key
+    /// column the event does not hold as a plain field or arg (io_cat,
+    /// acc_pat, window, clip, list and agg-engine tokens); the host cursor
+    /// then handles it.
+    std::optional<dftracer::utils::dataframe::SourceApplication> apply_distinct(
+        const std::vector<std::string>& subset) const override;
+
     /// Equal for sources that read the same files with the same scan
     /// settings (time range and scale, metadata, index roots, spill budget),
     /// so they can share one ViewSession scan. Branch-local shape (filters,
@@ -181,6 +192,11 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     /// run_collect_rows applies after the fuse, which streaming cannot.
     bool can_stream_rows() const;
 
+    /// True when this source buffers its result but still knows its columns
+    /// without scanning (a distinct row query over a fixed select), so
+    /// schema()/names() never run the scan at plan time.
+    bool static_schema() const;
+
     /// Best-effort column list for the streaming source's schema(), from index
     /// metadata rather than a scan.
     std::vector<std::string> row_schema() const;
@@ -216,6 +232,10 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     // answers "no change".
     std::vector<std::uint64_t> applied_filters_;
     bool absorb_aggregation_ = true;
+    // A distinct row scan: buffered, keyed on these positions of `select`
+    // (empty when not a distinct scan). Set once by apply_distinct().
+    bool distinct_ = false;
+    std::vector<std::int64_t> distinct_key_idx_;
     mutable std::shared_ptr<const dftracer::utils::dataframe::DataFrame> buf_;
     // The source never changes, so its schema (index metadata reads for a row
     // query, the buffered result otherwise) is computed once.

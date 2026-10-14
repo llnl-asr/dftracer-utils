@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <deque>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -40,6 +41,11 @@ struct ViewScannerInput {
     /// instead of a string_view, so the fold consumer does not re-parse. The
     /// intern table is shared across workers for consistent ids.
     dftracer::utils::StringIntern* fold_intern = nullptr;
+    /// Where fold mode decodes events. The caller keeps one per worker across
+    /// units so its slots keep their capacity; null uses a buffer private to
+    /// the scan. The events a batch exposes live here until the generator is
+    /// resumed.
+    detail::FoldEventBuffer* fold_buffer = nullptr;
     bool fold_needs_args = false;
     /// Top-level fields (type, ph, ...) to capture raw into each FoldEvent's
     /// args, for schemaless Field group keys the POD does not natively carry.
@@ -90,8 +96,9 @@ struct ViewScannerBatch {
     /// Uses deque so push_back doesn't invalidate string_view refs.
     std::deque<std::string> owned_events;
     /// Fold mode (ViewScannerInput::fold_intern set): each matching event
-    /// parsed once into an owned FoldEvent, so `events` stays empty.
-    std::vector<detail::FoldEvent> fold_events;
+    /// parsed once into an owned FoldEvent, so `events` stays empty. Borrowed
+    /// from the scan's buffer; valid until the next generator resume.
+    std::span<const detail::FoldEvent> fold_events;
     std::uint64_t events_matched = 0;
     std::uint64_t events_scanned = 0;
     std::uint64_t lines_invalid = 0;

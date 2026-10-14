@@ -2,7 +2,9 @@
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
+#include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/trace/views/view_source.h>
 #include <doctest/doctest.h>
 
@@ -10,6 +12,7 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -67,6 +70,40 @@ std::vector<std::tuple<std::string, double, double>> row_key_set(
 }  // namespace
 
 namespace scan = dftracer::utils::trace::views::detail::scan;
+
+namespace {
+
+constexpr int DISTINCT_EVENTS = 900;
+
+std::string distinct_run(int i) { return "r" + std::to_string((i * i) % 17); }
+std::string distinct_metric(int i) {
+    return "m" + std::to_string((i / 7 + i % 5) % 9);
+}
+
+// 900 events whose (run, metric) pairs first appear at scattered rows, written
+// into many small gzip members and indexed with a tiny checkpoint size, so the
+// scan has many units and first occurrences land in different ones.
+std::string create_distinct_trace(TestEnvironment& env,
+                                  const std::string& idx_dir) {
+    std::string pfw = env.get_dir() + "/distinct.pfw";
+    std::ofstream ofs(pfw);
+    for (int i = 0; i < DISTINCT_EVENTS; ++i) {
+        static const char* const NAMES[] = {"read", "write", "open", "lseek"};
+        ofs << R"({"ph":"X","name":")" << NAMES[i % 4]
+            << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" << (1000 + i)
+            << R"(,"dur":1,"run":")" << distinct_run(i) << R"(","metric":")"
+            << distinct_metric(i) << R"(","val":)" << (i % 5) << "}\n";
+    }
+    ofs.close();
+    std::string gz = pfw + ".gz";
+    dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 512);
+    fs::remove(pfw);
+    REQUIRE(dftu_utils_test::build_index(gz, idx_dir,
+                                         /*checkpoint_size=*/256));
+    return gz;
+}
+
+}  // namespace
 
 TEST_SUITE("trace scan - streaming row query") {
     TEST_CASE(
@@ -632,5 +669,94 @@ TEST_SUITE("trace scan - streaming row query") {
         // The index harvested "x" as an integer column; schema() must report
         // that concretely instead of falling back to Unknown.
         CHECK(schema.fields[1].type.id == df::TypeId::Int64);
+    }
+
+    TEST_CASE("ViewSource distinct pushdown is absorbed and matches the host") {
+        namespace df = dftracer::utils::dataframe;
+        TestEnvironment env(200);
+        const std::string idx_dir = env.get_dir() + "/distinct.dftindex";
+        std::string gz = create_distinct_trace(env, idx_dir);
+        std::string idx = determine_index_path(gz, idx_dir);
+
+        scan::ScanPlan v =
+            scan::select(scan::from_file(gz, idx), {"run", "metric"});
+        {
+            const auto& plan = *v;
+            auto vdef = dftracer::utils::trace::views::detail::make_vdef(
+                plan, /*for_aggregation=*/false);
+            std::uint64_t skipped = 0;
+            auto units =
+                run(dftracer::utils::trace::views::detail::gather_units(
+                    plan, vdef, skipped));
+            REQUIRE(units.size() > 8);
+        }
+
+        // Expected: the first row of each key in file order.
+        std::vector<std::pair<std::string, std::string>> want;
+        std::set<std::pair<std::string, std::string>> seen;
+        for (int i = 0; i < DISTINCT_EVENTS; ++i) {
+            std::pair<std::string, std::string> k{distinct_run(i),
+                                                  distinct_metric(i)};
+            if (seen.insert(k).second) want.push_back(k);
+        }
+        REQUIRE(want.size() > 20);
+
+        df::LazyFrame lf = scan::collect(v);
+        // The plan says the source does the distinct.
+        CHECK(lf.unique().explain().find("unique") == std::string::npos);
+        CHECK(lf.drop_duplicates().explain().find("unique") ==
+              std::string::npos);
+
+        for (int round = 0; round < 3; ++round) {
+            df::DataFrame pushed = run(lf.unique().collect());
+            REQUIRE(pushed.num_rows() ==
+                    static_cast<std::int64_t>(want.size()));
+            for (std::int64_t i = 0; i < pushed.num_rows(); ++i) {
+                CHECK(bstr(pushed, i, "args.run") ==
+                      want[static_cast<std::size_t>(i)].first);
+                CHECK(bstr(pushed, i, "args.metric") ==
+                      want[static_cast<std::size_t>(i)].second);
+            }
+        }
+
+        // A subset keys only that column and keeps the first row per key.
+        df::LazyFrame lf2 = scan::collect(
+            scan::select(scan::from_file(gz, idx), {"run", "metric"}));
+        CHECK(lf2.unique({"args.run"}).explain().find("unique") ==
+              std::string::npos);
+        df::DataFrame sub = run(lf2.unique({"args.run"}).collect());
+        std::vector<std::pair<std::string, std::string>> want_sub;
+        std::set<std::string> seen_run;
+        for (int i = 0; i < DISTINCT_EVENTS; ++i)
+            if (seen_run.insert(distinct_run(i)).second)
+                want_sub.emplace_back(distinct_run(i), distinct_metric(i));
+        REQUIRE(sub.num_rows() == static_cast<std::int64_t>(want_sub.size()));
+        for (std::int64_t i = 0; i < sub.num_rows(); ++i) {
+            CHECK(bstr(sub, i, "args.run") ==
+                  want_sub[static_cast<std::size_t>(i)].first);
+            CHECK(bstr(sub, i, "args.metric") ==
+                  want_sub[static_cast<std::size_t>(i)].second);
+        }
+    }
+
+    TEST_CASE("ViewSource refuses a distinct over a computed column") {
+        TestEnvironment env(200);
+        const std::string idx_dir = env.get_dir() + "/distinct.dftindex";
+        std::string gz = create_distinct_trace(env, idx_dir);
+        std::string idx = determine_index_path(gz, idx_dir);
+        scan::ScanPlan v = scan::select(scan::from_file(gz, idx), {"io_cat"});
+        namespace df = dftracer::utils::dataframe;
+        df::LazyFrame lf = scan::collect(v);
+        CHECK(lf.unique().explain().find("unique") != std::string::npos);
+        // io_cat comes from the event name, which a scan key cannot read as
+        // a field, so the host cursor must see the real categories.
+        const std::int64_t host =
+            run(scan::collect(
+                    scan::select(scan::from_file(gz, idx), {"io_cat"}))
+                    .collect())
+                .unique()
+                .num_rows();
+        CHECK(host > 1);
+        CHECK(run(lf.unique().collect()).num_rows() == host);
     }
 }

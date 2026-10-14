@@ -3770,6 +3770,8 @@ std::optional<SourceApplication> offer_op(const Source& source,
         schema_changing = true;
         return source.apply_aggregation(*spec);
     }
+    if (const auto* u = std::get_if<UniqueOp>(&op.node))
+        return source.apply_distinct(u->subset);
     if (const auto* o = std::get_if<SortByOp>(&op.node))
         return source.apply_sort({{o->name}, {o->descending}});
     if (const auto* o = std::get_if<SortByMultiOp>(&op.node))

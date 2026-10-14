@@ -124,6 +124,10 @@ class StreamRowFold : public Fold {
     duql::ValueMap qmap_;
     coro::Channel<dataframe::Morsel>::ProducerGuard guard_;
 
+    // Indices of the batch events the filter keeps, reused across step() calls
+    // so a batch costs no vector allocation and no FoldEvent copy.
+    std::vector<std::uint32_t> kept_;
+
     // fuse() awaits take_pending()'s task right after step() and before the
     // next step() on this fold, so one reused slot is enough.
     std::optional<coro::CoroTask<void>> pending_task_;

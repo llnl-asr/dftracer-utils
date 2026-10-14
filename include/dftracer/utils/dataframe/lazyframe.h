@@ -280,6 +280,14 @@ class Source {
         const AggregateSpec&) const {
         return std::nullopt;
     }
+    /// Distinct rows by `subset` (empty = every column), keeping the first
+    /// occurrence in source order. The output keeps every column and its
+    /// schema. A source that accepts it must produce the first-occurrence
+    /// order itself; the planner removes the UniqueOp.
+    virtual std::optional<SourceApplication> apply_distinct(
+        const std::vector<std::string>&) const {
+        return std::nullopt;
+    }
     virtual std::optional<SourceApplication> apply_sort(const SortSpec&) const {
         return std::nullopt;
     }

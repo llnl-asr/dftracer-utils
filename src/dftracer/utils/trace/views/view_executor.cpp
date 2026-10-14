@@ -1,3 +1,4 @@
+#include <ankerl/unordered_dense.h>
 #include <dftracer/utils/core/common/byte_view.h>
 #include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
@@ -931,6 +932,271 @@ bool is_row_query(const ViewPlan& plan) {
            !plan.auto_numeric_metrics;
 }
 
+namespace {
+
+// The value of arg `keyid` on `ev`, or nullptr if the event lacks it (a JSON
+// null is a Special, not an arg, so it also reads as absent - the same null the
+// built column gives it).
+const FoldEvent::ArgValue* distinct_find_arg(const FoldEvent& ev,
+                                             std::uint32_t keyid) {
+    for (const auto& [k, v] : ev.args)
+        if (k == keyid) return &v;
+    return nullptr;
+}
+
+// Order-preserving distinct pushed into the scan. Each worker keeps, per key,
+// the first row it saw together with that row's (unit, index) position; the
+// slices merge keeping the smallest position and the result is sorted by it.
+// The key tags every value with its kind and keeps doubles by bit pattern, so
+// it is never coarser than the key of the built column: the rows kept are a
+// superset of the host result, which still holds the first occurrence of every
+// host key. Where kinds mix in a column the key may be finer than the host's,
+// and needs_host_pass() says to dedup the built frame once more.
+class DistinctRowFold : public Fold {
+   public:
+    struct Key {
+        RowKeySource::Kind field = RowKeySource::Kind::ARG;
+        std::uint32_t arg_full = dftracer::utils::StringIntern::NO_ID;
+        std::uint32_t arg_bare = dftracer::utils::StringIntern::NO_ID;
+    };
+
+    DistinctRowFold(const dftracer::utils::StringIntern& intern,
+                    std::vector<std::string> select, std::vector<Key> keys,
+                    double time_scale, bool keep_metadata, bool by_path)
+        : intern_(&intern),
+          select_(std::move(select)),
+          keys_(std::move(keys)),
+          kinds_(keys_.size(), 0),
+          time_scale_(time_scale),
+          keep_metadata_(keep_metadata),
+          by_path_(by_path) {}
+
+    bool accepts(const ScanShape&) const override { return true; }
+    bool needs_args() const override { return true; }
+    bool wants_metadata() const override { return keep_metadata_; }
+
+    std::vector<std::string> extra_captures() const override {
+        return row_fold_extra_captures(select_);
+    }
+
+    std::unique_ptr<Fold> slice() const override {
+        return std::make_unique<DistinctRowFold>(
+            *intern_, select_, keys_, time_scale_, keep_metadata_, by_path_);
+    }
+
+    void step(const FoldBatch& batch) override {
+        const auto seq = static_cast<std::int64_t>(batch.unit.seq);
+        if (seq != cur_seq_) {
+            cur_seq_ = seq;
+            row_in_unit_ = 0;
+        }
+        for (const FoldEvent& ev : batch.events) {
+            const Position pos{seq, row_in_unit_++};
+            if (ev.phase == RecordPhase::UNKNOWN ||
+                (!keep_metadata_ && ev.phase == RecordPhase::METADATA))
+                continue;
+            scratch_.clear();
+            append_key(ev);
+            auto [it, inserted] = index_.try_emplace(scratch_, entries_.size());
+            if (inserted) {
+                entries_.push_back(Entry{pos, ev});
+            } else {
+                Entry& e = entries_[it->second];
+                if (pos < e.pos) {
+                    e.pos = pos;
+                    e.ev = ev;
+                }
+            }
+        }
+    }
+
+    void seal_unit(const ScanUnit&) override {}
+    void drop_unit(const ScanUnit&) override {}
+
+    void merge(Fold& other) override {
+        auto& o = static_cast<DistinctRowFold&>(other);
+        for (std::size_t i = 0; i < kinds_.size(); ++i)
+            kinds_[i] |= o.kinds_[i];
+        for (auto& [key, idx] : o.index_) {
+            Entry& src = o.entries_[idx];
+            auto [it, inserted] = index_.try_emplace(key, entries_.size());
+            if (inserted) {
+                entries_.push_back(std::move(src));
+            } else {
+                Entry& e = entries_[it->second];
+                if (src.pos < e.pos) e = std::move(src);
+            }
+        }
+        o.entries_.clear();
+        o.index_.clear();
+    }
+
+    coro::CoroTask<bool> finalize(const CoverageSet&) override {
+        co_return true;
+    }
+
+    // True when some key column saw a double or more than one value kind, so
+    // two rows with distinct fold keys may still be equal in the built column.
+    bool needs_host_pass() const {
+        for (std::size_t i = 0; i < keys_.size(); ++i) {
+            if (keys_[i].field != RowKeySource::Kind::ARG) continue;
+            const std::uint8_t m = kinds_[i];
+            if ((m & KIND_DBL) || (m & (m - 1))) return true;
+        }
+        return false;
+    }
+
+    // The distinct candidates in first-position order.
+    dataframe::DataFrame build() {
+        std::vector<std::size_t> order(entries_.size());
+        for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+        std::sort(order.begin(), order.end(),
+                  [&](std::size_t a, std::size_t b) {
+                      return entries_[a].pos < entries_[b].pos;
+                  });
+        std::vector<FoldEvent> evs;
+        evs.reserve(entries_.size());
+        for (std::size_t i : order) evs.push_back(std::move(entries_[i].ev));
+        entries_.clear();
+        index_.clear();
+        return build_row_frame(std::span<const FoldEvent>(evs), *intern_,
+                               select_, time_scale_, by_path_);
+    }
+
+   private:
+    struct Position {
+        std::int64_t seq;
+        std::int64_t row;
+        bool operator<(const Position& o) const {
+            return seq != o.seq ? seq < o.seq : row < o.row;
+        }
+    };
+    struct Entry {
+        Position pos;
+        FoldEvent ev;
+    };
+
+    static constexpr std::uint8_t KIND_STR = 1;
+    static constexpr std::uint8_t KIND_INT = 2;
+    static constexpr std::uint8_t KIND_UINT = 4;
+    static constexpr std::uint8_t KIND_DBL = 8;
+
+    static void append_id(std::string& out, std::uint32_t id) {
+        if (id == dftracer::utils::StringIntern::NO_ID) {
+            out.push_back('\0');
+            return;
+        }
+        out.push_back('\1');
+        out.append(reinterpret_cast<const char*>(&id), sizeof(id));
+    }
+
+    static void append_word(std::string& out, char tag, std::uint64_t v) {
+        out.push_back(tag);
+        out.append(reinterpret_cast<const char*>(&v), sizeof(v));
+    }
+
+    void append_key(const FoldEvent& ev) {
+        using Kind = RowKeySource::Kind;
+        for (std::size_t j = 0; j < keys_.size(); ++j) {
+            const Key& k = keys_[j];
+            switch (k.field) {
+                case Kind::NAME:
+                    append_id(scratch_, ev.name_id);
+                    break;
+                case Kind::CAT:
+                    append_id(scratch_, ev.cat_id);
+                    break;
+                case Kind::FHASH:
+                    append_id(scratch_, ev.fhash_id);
+                    break;
+                case Kind::HHASH:
+                    append_id(scratch_, ev.hhash_id);
+                    break;
+                case Kind::PID:
+                    append_word(scratch_, '\1', ev.pid);
+                    break;
+                case Kind::TID:
+                    append_word(scratch_, '\1', ev.tid);
+                    break;
+                case Kind::TS:
+                    append_word(scratch_, '\1', scaled(ev.ts));
+                    break;
+                case Kind::DUR:
+                    append_word(scratch_, '\1', scaled(ev.dur));
+                    break;
+                case Kind::PH:
+                    append_word(scratch_, '\1',
+                                static_cast<std::uint64_t>(ev.phase));
+                    break;
+                case Kind::ARG:
+                case Kind::REFUSED: {
+                    const FoldEvent::ArgValue* v =
+                        distinct_find_arg(ev, k.arg_full);
+                    if (!v &&
+                        k.arg_bare != dftracer::utils::StringIntern::NO_ID)
+                        v = distinct_find_arg(ev, k.arg_bare);
+                    if (!v) {
+                        scratch_.push_back('\0');
+                    } else if (const auto* id = std::get_if<std::uint32_t>(v)) {
+                        kinds_[j] |= KIND_STR;
+                        scratch_.push_back('\1');
+                        scratch_.append(reinterpret_cast<const char*>(id),
+                                        sizeof(*id));
+                    } else if (const auto* i = std::get_if<std::int64_t>(v)) {
+                        kinds_[j] |= KIND_INT;
+                        append_word(scratch_, '\2',
+                                    static_cast<std::uint64_t>(*i));
+                    } else if (const auto* u = std::get_if<std::uint64_t>(v)) {
+                        kinds_[j] |= KIND_UINT;
+                        append_word(scratch_, '\3', *u);
+                    } else {
+                        kinds_[j] |= KIND_DBL;
+                        std::uint64_t bits;
+                        const double d = std::get<double>(*v);
+                        std::memcpy(&bits, &d, sizeof(bits));
+                        append_word(scratch_, '\4', bits);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    std::uint64_t scaled(std::uint64_t v) const {
+        if (time_scale_ == 1.0) return v;
+        return static_cast<std::uint64_t>(static_cast<double>(v) * time_scale_ +
+                                          0.5);
+    }
+
+    const dftracer::utils::StringIntern* intern_;
+    std::vector<std::string> select_;
+    std::vector<Key> keys_;
+    std::vector<std::uint8_t> kinds_;
+    double time_scale_;
+    bool keep_metadata_;
+    bool by_path_;
+    std::int64_t cur_seq_ = -1;
+    std::int64_t row_in_unit_ = 0;
+    std::string scratch_;
+    std::vector<Entry> entries_;
+    ankerl::unordered_dense::map<std::string, std::size_t> index_;
+};
+
+}  // namespace
+
+bool distinct_keyable(const ViewPlan& plan,
+                      const std::vector<std::int64_t>& key_idx) {
+    const bool by_path = plan_by_path(plan);
+    for (std::int64_t at : key_idx) {
+        if (at < 0 || static_cast<std::size_t>(at) >= plan.select.size())
+            return false;
+        if (row_key_source(plan.select[static_cast<std::size_t>(at)], by_path)
+                .kind == RowKeySource::Kind::REFUSED)
+            return false;
+    }
+    return true;
+}
+
 coro::CoroTask<dataframe::DataFrame> run_collect_rows(const ViewPlan& plan) {
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
     dftracer::utils::StringIntern intern;
@@ -958,6 +1224,45 @@ coro::CoroTask<dataframe::DataFrame> run_collect_rows(const ViewPlan& plan) {
         b = b.slice(off, len);
     }
     co_return b;
+}
+
+coro::CoroTask<dataframe::DataFrame> run_collect_rows_distinct(
+    const ViewPlan& plan, const std::vector<std::int64_t>& key_idx) {
+    ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
+    dftracer::utils::StringIntern intern;
+    const bool by_path = plan_by_path(plan);
+    std::vector<DistinctRowFold::Key> keys;
+    std::vector<std::string> subset;
+    keys.reserve(key_idx.size());
+    subset.reserve(key_idx.size());
+    for (std::int64_t at : key_idx) {
+        const std::string& sel = plan.select[static_cast<std::size_t>(at)];
+        const RowKeySource src = row_key_source(sel, by_path);
+        DistinctRowFold::Key k;
+        k.field = src.kind;
+        if (src.kind == RowKeySource::Kind::ARG) {
+            k.arg_full = intern.get_or_insert(src.arg_full);
+            if (!src.arg_bare.empty())
+                k.arg_bare = intern.get_or_insert(src.arg_bare);
+        }
+        keys.push_back(k);
+        subset.push_back(canonical_row_column_name(sel, by_path));
+    }
+    DistinctRowFold fold(intern, plan.select, std::move(keys), plan.time_scale,
+                         metadata_rows(plan), by_path);
+    std::vector<Fold*> folds{&fold};
+    auto catalog = select_catalog_fold(plan, vdef, intern);
+    if (catalog) folds.push_back(catalog.get());
+    co_await execute(lower_fused_folds(plan, vdef, folds), intern);
+    const bool host_pass = fold.needs_host_pass();
+    dataframe::DataFrame b = fold.build();
+    if (!host_pass) co_return b;
+    // The frame holds only the fold's candidates, already in first-position
+    // order, so the host first-occurrence dedup runs over far fewer rows.
+    co_return co_await dataframe::LazyFrame::scan(
+        std::make_shared<dataframe::InMemorySource>(std::move(b)))
+        .unique(std::move(subset))
+        .collect();
 }
 
 namespace {

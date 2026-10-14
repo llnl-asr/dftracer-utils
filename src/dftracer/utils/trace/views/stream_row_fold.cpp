@@ -40,8 +40,8 @@ void StreamRowFold::step(const FoldBatch& batch) {
     const RecordPhase target =
         branch_ ? agg_phase_target(*branch_) : RecordPhase::UNKNOWN;
     const std::size_t total = batch.events.size();
-    std::vector<std::uint8_t> keep(total);
-    std::size_t kept = 0;
+    kept_.clear();
+    kept_.reserve(total);
     for (std::size_t i = 0; i < total; ++i) {
         const FoldEvent& ev = batch.events[i];
         const bool k = ev.phase != RecordPhase::UNKNOWN &&
@@ -49,18 +49,12 @@ void StreamRowFold::step(const FoldBatch& batch) {
                        (target == RecordPhase::UNKNOWN || ev.phase == target) &&
                        (!branch_ || !branch_->query ||
                         pod_matches(*branch_->query, ev, *intern_, qmap_));
-        keep[i] = k;
-        kept += k;
+        if (k) kept_.push_back(static_cast<std::uint32_t>(i));
     }
-    if (kept == 0) return;
-    std::vector<FoldEvent> filtered;
-    std::span<const FoldEvent> events = batch.events;
-    if (kept != total) {
-        filtered.reserve(kept);
-        for (std::size_t i = 0; i < total; ++i)
-            if (keep[i]) filtered.push_back(batch.events[i]);
-        events = filtered;
-    }
+    if (kept_.empty()) return;
+    const EventRows events = kept_.size() == total
+                                 ? EventRows(batch.events)
+                                 : EventRows(batch.events, kept_);
 
     const ColumnSpec spec{select_, time_scale_, emit_dyn_, by_path_, json_};
     dataframe::Morsel m = events_to_morsel(events, intern_, spec);

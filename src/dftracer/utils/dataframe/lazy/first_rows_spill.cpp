@@ -1,47 +1,14 @@
+#include <dftracer/utils/core/common/hash/fnv1a.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
+#include <dftracer/utils/dataframe/lazy/hash_arena.h>
+
+#include <algorithm>
 
 namespace dftracer::utils::dataframe {
 
 using namespace lazy_internal;
 
 namespace {
-
-// Radix-partition `keys` by hash into `seen_p.size()` buckets, each with its
-// own running hash set, and mark keep[i] the first time each key is seen
-// (order-preserving): buckets never overlap, so each is probed by exactly one
-// worker with no lock. `seen_p` carries state across calls, bounded by the
-// distinct-key count rather than the row count. An empty `seen_p` means no
-// parallel backend is installed; the single `seen_serial` set is used instead
-// so the partition bookkeeping is never paid for nothing.
-std::vector<std::uint8_t> first_seen_mask(
-    std::vector<std::string>& keys, std::int64_t n,
-    ankerl::unordered_dense::set<std::string>& seen_serial,
-    std::vector<ankerl::unordered_dense::set<std::string>>& seen_p) {
-    std::vector<std::uint8_t> keep_mask(static_cast<std::size_t>(n), 0);
-    if (seen_p.empty()) {
-        for (std::int64_t i = 0; i < n; ++i)
-            if (seen_serial.insert(std::move(keys[static_cast<std::size_t>(i)]))
-                    .second)
-                keep_mask[static_cast<std::size_t>(i)] = 1;
-        return keep_mask;
-    }
-    const std::size_t p = seen_p.size();
-    std::vector<std::vector<std::int64_t>> buckets(p);
-    for (std::int64_t i = 0; i < n; ++i)
-        buckets[std::hash<std::string>{}(keys[static_cast<std::size_t>(i)]) % p]
-            .push_back(i);
-    parallel_for(
-        static_cast<std::int64_t>(p), 1, [&](std::int64_t pb, std::int64_t pe) {
-            for (std::int64_t g = pb; g < pe; ++g)
-                for (std::int64_t i : buckets[static_cast<std::size_t>(g)])
-                    if (seen_p[static_cast<std::size_t>(g)]
-                            .insert(
-                                std::move(keys[static_cast<std::size_t>(i)]))
-                            .second)
-                        keep_mask[static_cast<std::size_t>(i)] = 1;
-        });
-    return keep_mask;
-}
 
 // Appends cell `i` to a head_by key. Numbers encode by value, so equal numbers
 // of different numeric types (1, 1u, 1.0, and 0.0 / -0.0) share one key and
@@ -84,6 +51,10 @@ void append_value_key(std::string& key, const Series& c, std::int64_t i) {
     }
     put('i', static_cast<std::int64_t>(read_u64(c, i)));
 }
+
+// Rows whose unique() key bytes share one buffer, and the unit of parallel
+// work that builds them.
+constexpr std::size_t KEY_CHUNK_ROWS = std::size_t{1} << 13;
 
 // Fan-out width for the partitioned first-seen dedup below.
 constexpr std::size_t DEDUP_PARTITIONS = 32;
@@ -456,24 +427,66 @@ class UniqueCursor : public Cursor {
         if (!spilling_) {
             while (auto m = co_await in_->next(max_rows)) {
                 const std::int64_t n = m->rows;
-                // Build the exact row keys in parallel (scalar string work,
-                // one per row, independent), then dedupe (radix-partitioned
-                // when a parallel backend is installed, else one serial set).
-                std::vector<std::string> keys(static_cast<std::size_t>(n));
+                // Build each row's key bytes once, in parallel: one buffer per
+                // chunk of rows (not one allocation per row) plus the row's
+                // offset, length and hash. The dedup below only compares them.
                 const std::vector<Series> kc = key_cols(m->columns);
-                parallel_for(n, std::int64_t{1} << 13,
-                             [&](std::int64_t b, std::int64_t e) {
-                                 for (std::int64_t i = b; i < e; ++i)
-                                     keys[static_cast<std::size_t>(i)] =
-                                         row_key(kc, i);
-                             });
-                std::vector<std::uint32_t> key_len(static_cast<std::size_t>(n));
-                for (std::int64_t i = 0; i < n; ++i)
-                    key_len[static_cast<std::size_t>(i)] =
-                        static_cast<std::uint32_t>(
-                            keys[static_cast<std::size_t>(i)].size());
-                std::vector<std::uint8_t> keep_mask =
-                    first_seen_mask(keys, n, seen_, seen_p_);
+                const auto nz = static_cast<std::size_t>(n);
+                const std::size_t nchunks =
+                    (nz + KEY_CHUNK_ROWS - 1) / KEY_CHUNK_ROWS;
+                std::vector<std::string> chunk_bytes(nchunks);
+                std::vector<std::uint64_t> hashes(nz);
+                std::vector<std::uint64_t> key_off(nz);
+                std::vector<std::uint32_t> key_len(nz);
+                parallel_for(
+                    static_cast<std::int64_t>(nchunks), 1,
+                    [&](std::int64_t cb, std::int64_t ce) {
+                        for (std::int64_t c = cb; c < ce; ++c) {
+                            std::string& buf =
+                                chunk_bytes[static_cast<std::size_t>(c)];
+                            const std::size_t lo =
+                                static_cast<std::size_t>(c) * KEY_CHUNK_ROWS;
+                            const std::size_t hi =
+                                std::min(nz, lo + KEY_CHUNK_ROWS);
+                            for (std::size_t at = lo; at < hi; ++at) {
+                                const std::size_t start = buf.size();
+                                for (const Series& col : kc)
+                                    append_cell(buf, col,
+                                                static_cast<std::int64_t>(at));
+                                key_off[at] = start;
+                                key_len[at] = static_cast<std::uint32_t>(
+                                    buf.size() - start);
+                                hashes[at] = hash::fnv1a_mix(hash::fnv1a_hash(
+                                    buf.data() + start, buf.size() - start));
+                            }
+                        }
+                    });
+                auto key_ptr = [&](std::size_t at) {
+                    return chunk_bytes[at / KEY_CHUNK_ROWS].data() +
+                           key_off[at];
+                };
+                std::vector<std::uint8_t> keep_mask(nz, 0);
+                if (seen_p_.empty()) {
+                    for (std::size_t at = 0; at < nz; ++at)
+                        if (seen_.insert(hashes[at], key_ptr(at), key_len[at]))
+                            keep_mask[at] = 1;
+                } else {
+                    const std::size_t p = seen_p_.size();
+                    std::vector<std::vector<std::size_t>> buckets(p);
+                    for (std::size_t at = 0; at < nz; ++at)
+                        buckets[hashes[at] % p].push_back(at);
+                    parallel_for(
+                        static_cast<std::int64_t>(p), 1,
+                        [&](std::int64_t pb, std::int64_t pe) {
+                            for (std::int64_t g = pb; g < pe; ++g)
+                                for (std::size_t at :
+                                     buckets[static_cast<std::size_t>(g)])
+                                    if (seen_p_[static_cast<std::size_t>(g)]
+                                            .insert(hashes[at], key_ptr(at),
+                                                    key_len[at]))
+                                        keep_mask[at] = 1;
+                        });
+                }
                 std::vector<std::int64_t> keep;
                 keep.reserve(static_cast<std::size_t>(n));
                 for (std::int64_t i = 0; i < n; ++i) {
@@ -533,18 +546,20 @@ class UniqueCursor : public Cursor {
     }
 
     bool already_seen(const std::string& key) const {
+        const std::uint64_t h =
+            hash::fnv1a_mix(hash::fnv1a_hash(key.data(), key.size()));
+        const auto len = static_cast<std::uint32_t>(key.size());
         if (!seen_p_.empty())
-            return seen_p_[std::hash<std::string>{}(key) % seen_p_.size()]
-                .contains(key);
-        return seen_.contains(key);
+            return seen_p_[h % seen_p_.size()].contains(h, key.data(), len);
+        return seen_.contains(h, key.data(), len);
     }
 
     std::unique_ptr<Cursor> in_;
     std::vector<std::string> sch_;
     std::vector<std::int64_t> key_idx_;
     std::uint64_t budget_;
-    ankerl::unordered_dense::set<std::string> seen_;
-    std::vector<ankerl::unordered_dense::set<std::string>> seen_p_;
+    HashArena seen_;
+    std::vector<HashArena> seen_p_;
     std::size_t fast_bytes_ = 0;
     std::int64_t next_row_id_ = 0;
     bool spilling_ = false;

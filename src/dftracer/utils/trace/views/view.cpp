@@ -212,7 +212,7 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
     // worker.
     struct Slot {
         dftracer::utils::StringIntern intern;
-        std::vector<detail::FoldEvent> events;
+        detail::FoldEventBuffer events;
     };
     auto slots = std::make_shared<std::vector<std::shared_ptr<Slot>>>();
     auto select = std::make_shared<std::vector<std::string>>(bp.select);
@@ -229,16 +229,17 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
         slots->push_back(slot);
         return [slot, by_path, keep_metadata, record_schema](
                    const json::JsonValue& jv, std::string_view) {
-            detail::FoldEvent fe =
-                by_path ? detail::decode_record(jv.element(), slot->intern,
-                                                /*capture_schema=*/false,
-                                                nullptr, record_schema)
-                        : detail::extract_fold_event(jv.element(), slot->intern,
-                                                     /*needs_args=*/true);
+            detail::FoldEvent& fe = slot->events.append();
+            if (by_path)
+                detail::decode_record_into(fe, jv.element(), slot->intern,
+                                           /*capture_schema=*/false, nullptr,
+                                           record_schema);
+            else
+                detail::extract_fold_event_into(fe, jv.element(), slot->intern,
+                                                /*needs_args=*/true);
             if (fe.phase == RecordPhase::UNKNOWN ||
                 (!keep_metadata && fe.phase == RecordPhase::METADATA))
-                return;
-            slot->events.push_back(std::move(fe));
+                slot->events.discard_last();
         };
     };
     auto finalize = [slots, select, out, time_scale, by_path]() {
@@ -247,7 +248,7 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
         for (const auto& s : *slots) {
             if (s->events.empty()) continue;
             frames.push_back(detail::build_row_frame(
-                s->events, s->intern, *select, time_scale, by_path));
+                s->events.events(), s->intern, *select, time_scale, by_path));
         }
         if (frames.empty()) return;  // out stays an empty frame
         std::vector<const dataframe::DataFrame*> parts;
@@ -301,15 +302,18 @@ void ViewSession::add_containment_branch(
     auto make_consumer = [intern, spec, bufs, by_path, record_schema]() {
         auto rows = std::make_shared<std::vector<detail::ContainmentRow>>();
         bufs->push_back(rows);
-        return [intern, spec, rows, by_path, record_schema](
+        auto scratch = std::make_shared<detail::FoldEvent>();
+        return [intern, spec, rows, scratch, by_path, record_schema](
                    const json::JsonValue& jv, std::string_view) {
-            detail::FoldEvent fe =
-                by_path ? detail::decode_record(jv.element(), *intern,
-                                                /*capture_schema=*/false,
-                                                nullptr, record_schema)
-                        : detail::extract_fold_event(jv.element(), *intern,
-                                                     spec->needs_args,
-                                                     &spec->nested_captures);
+            detail::FoldEvent& fe = *scratch;
+            if (by_path)
+                detail::decode_record_into(fe, jv.element(), *intern,
+                                           /*capture_schema=*/false, nullptr,
+                                           record_schema);
+            else
+                detail::extract_fold_event_into(fe, jv.element(), *intern,
+                                                spec->needs_args,
+                                                &spec->nested_captures);
             detail::ContainmentRow r;
             if (detail::containment_row(fe, *spec, *intern, r))
                 rows->push_back(r);

@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Push `unique()` and `drop_duplicates()` into the trace scan, so a distinct row query dedups each worker's rows before they become frame rows.
+  The result keeps the first occurrence in unit order, a key column the scan cannot key exactly falls back to the host cursor, and the host `unique` cursor now keys rows by a 64-bit hash with no per-row string allocation.
+  On the 17 GB genesis sweep, `filter(gtype == "counter").select("run", "metric").unique()` takes 33.5 s instead of 592 s, uses 74 cores instead of 10 and peaks at 11.0 GB instead of 13.8 GB.
 - Find the gzip members of a trace with 16 reads in flight instead of one, and keep the `sketch` strings of genesis records out of the index build.
   The member scan of the 20.7 GB genesis sweep took about 45 s on one core, and its sketches filled the string table to about 36 GB.
   The index of the regrouped 17 GB sweep now builds in 313 to 338 s at a 5 to 8 GB peak instead of 385 s at 42 GB ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).

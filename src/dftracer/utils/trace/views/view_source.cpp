@@ -637,7 +637,7 @@ std::optional<std::string> column_of(const df::Expr& e,
 
 std::optional<df::SourceApplication> ViewSource::apply_filter(
     const df::Expr& predicate) const {
-    if (!can_stream_rows()) return std::nullopt;
+    if (distinct_ || !can_stream_rows()) return std::nullopt;
     const std::uint64_t fp = df::expr_fingerprint(predicate);
     if (std::find(applied_filters_.begin(), applied_filters_.end(), fp) !=
         applied_filters_.end())
@@ -659,7 +659,7 @@ std::optional<df::SourceApplication> ViewSource::apply_filter(
 
 std::optional<df::SourceApplication> ViewSource::apply_projection(
     const std::vector<df::NamedExpr>& exprs) const {
-    if (!can_stream_rows()) return std::nullopt;
+    if (distinct_ || !can_stream_rows()) return std::nullopt;
     const std::vector<std::string> current = names();
     std::vector<std::string> cols;
     cols.reserve(exprs.size());
@@ -704,7 +704,7 @@ std::optional<detail::ComputedColumn> computed_from(
 std::optional<df::SourceApplication> ViewSource::apply_aggregation(
     const df::AggregateSpec& spec) const {
     const detail::ViewPlan& p = *plan_;
-    if (output_ != TraceOutput::Events || !absorb_aggregation_ ||
+    if (distinct_ || output_ != TraceOutput::Events || !absorb_aggregation_ ||
         !detail::is_row_query(*plan_) || p.auto_numeric_metrics)
         return std::nullopt;
     const std::vector<std::string> current = names();
@@ -779,11 +779,47 @@ std::optional<df::SourceApplication> ViewSource::apply_aggregation(
     return df::SourceApplication{std::move(next), df::ApplyStatus::Exact};
 }
 
+std::optional<df::SourceApplication> ViewSource::apply_distinct(
+    const std::vector<std::string>& subset) const {
+    const detail::ViewPlan& p = *plan_;
+    if (distinct_ || emit_dyn_ || !absorb_aggregation_ ||
+        output_ != TraceOutput::Events || !can_stream_rows() ||
+        p.select.empty() || p.cancelled || p.materialize ||
+        !p.sort_col.empty() || !p.topk_col.empty() || p.limit || p.offset)
+        return std::nullopt;
+    const std::vector<std::string> current = names();
+    std::vector<std::int64_t> key_idx;
+    if (subset.empty()) {
+        key_idx.resize(current.size());
+        for (std::size_t i = 0; i < current.size(); ++i)
+            key_idx[i] = static_cast<std::int64_t>(i);
+    } else {
+        key_idx.reserve(subset.size());
+        for (const std::string& name : subset) {
+            const auto it = std::find(current.begin(), current.end(), name);
+            if (it == current.end()) return std::nullopt;
+            key_idx.push_back(static_cast<std::int64_t>(it - current.begin()));
+        }
+    }
+    if (!detail::distinct_keyable(p, key_idx)) return std::nullopt;
+    auto next = std::make_shared<ViewSource>(plan_, emit_dyn_);
+    next->applied_filters_ = applied_filters_;
+    next->absorb_aggregation_ = absorb_aggregation_;
+    next->distinct_ = true;
+    next->distinct_key_idx_ = std::move(key_idx);
+    return df::SourceApplication{std::move(next), df::ApplyStatus::Exact};
+}
+
+bool ViewSource::static_schema() const {
+    return distinct_ && output_ == TraceOutput::Events &&
+           detail::is_row_query(*plan_) && !plan_->select.empty();
+}
+
 std::optional<std::string> ViewSource::batch_key() const {
     const detail::ViewPlan& p = *plan_;
-    if (emit_dyn_ || !absorb_aggregation_ || p.cancelled || p.materialize ||
-        p.auto_numeric_metrics || !p.sort_col.empty() || !p.topk_col.empty() ||
-        p.limit || p.offset)
+    if (distinct_ || emit_dyn_ || !absorb_aggregation_ || p.cancelled ||
+        p.materialize || p.auto_numeric_metrics || !p.sort_col.empty() ||
+        !p.topk_col.empty() || p.limit || p.offset)
         return std::nullopt;
     // The session's export branch writes whole events.
     if (output_ == TraceOutput::ExportJson && !p.select.empty())
@@ -1089,6 +1125,9 @@ coro::CoroTask<std::vector<df::DataFrame>> ViewSource::collect_batch(
 }
 
 bool ViewSource::can_stream_rows() const {
+    // A distinct row scan buffers (it merges per-worker sets and orders by
+    // first occurrence), so it never streams morsels.
+    if (distinct_) return false;
     if (output_ != TraceOutput::Events || !detail::is_row_query(*plan_))
         return false;
     const detail::ViewPlan& p = *plan_;
@@ -1190,7 +1229,7 @@ dftracer::utils::dataframe::Schema ViewSource::compute_schema() const {
                                  {"served_from_mv", T::Bool}});
     }
     df::Schema s;
-    if (can_stream_rows()) {
+    if (can_stream_rows() || static_schema()) {
         // row_column_type() reports TypeId::Unknown for a flattened arg
         // column, since it is data-dependent and the function has no index
         // access; fill those in from the same harvest columns()/schema() use,
@@ -1256,6 +1295,9 @@ coro::CoroTask<df::DataFrame> ViewSource::run_alone() const {
     const ContainmentArgs& t = tree_;
     switch (output_) {
         case TraceOutput::Events:
+            if (distinct_)
+                co_return co_await detail::run_collect_rows_distinct(
+                    *plan_, distinct_key_idx_);
             break;
         case TraceOutput::CallTree:
             co_return co_await scan::call_tree(plan_, t.partition, t.ts, t.dur,

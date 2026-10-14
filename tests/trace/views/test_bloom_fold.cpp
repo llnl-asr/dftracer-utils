@@ -36,6 +36,16 @@ using dftracer::utils::index::extensions::ScalableBloomFilter;
 
 namespace {
 
+FoldEvent extract_fold_event(simdjson::dom::element root, StringIntern& intern,
+                             bool needs_args,
+                             const std::vector<std::string>* extra = nullptr,
+                             bool capture_schema = false) {
+    FoldEvent ev;
+    extract_fold_event_into(ev, root, intern, needs_args, extra,
+                            capture_schema);
+    return ev;
+}
+
 std::string create_bloom_trace(TestEnvironment& env, int n,
                                std::size_t member_bytes) {
     std::string pfw = env.get_dir() + "/bloom.pfw";

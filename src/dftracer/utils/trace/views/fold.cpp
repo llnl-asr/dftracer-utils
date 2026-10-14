@@ -372,12 +372,12 @@ void FoldPortBus::clear() {
     frame.reset();
 }
 
-FoldEvent build_fold_event(const DFTracerEvent& scalars,
+void build_fold_event_into(FoldEvent& ev, const DFTracerEvent& scalars,
                            simdjson::dom::element args, bool has_args,
                            dftracer::utils::StringIntern& intern,
                            bool needs_args, DecodeHints* leaves) {
     if (!needs_args) leaves = nullptr;
-    FoldEvent ev;
+    reset_fold_event(ev);
     ev.phase = scalars.phase;
     ev.pid = scalars.pid;
     ev.tid = scalars.tid;
@@ -387,7 +387,7 @@ FoldEvent build_fold_event(const DFTracerEvent& scalars,
     if (!scalars.cat.empty()) ev.cat_id = intern.get_or_insert(scalars.cat);
     if (!scalars.name.empty()) ev.name_id = intern.get_or_insert(scalars.name);
 
-    if (!has_args) return ev;
+    if (!has_args) return;
 
     // fhash/hhash are group dimensions even for folds that want no other args,
     // so they are always harvested; the rest only when a fold asks.
@@ -416,10 +416,9 @@ FoldEvent build_fold_event(const DFTracerEvent& scalars,
             }
         }
     }
-    return ev;
 }
 
-FoldEvent extract_fold_event(simdjson::dom::element root,
+void extract_fold_event_into(FoldEvent& ev, simdjson::dom::element root,
                              dftracer::utils::StringIntern& intern,
                              bool needs_args,
                              const std::vector<std::string>* extra_fields,
@@ -427,8 +426,10 @@ FoldEvent extract_fold_event(simdjson::dom::element root,
     DFTracerEvent scalars;
     simdjson::dom::element args;
     bool has_args = false;
-    if (!DFTracerEvent::parse_scalars(root, scalars, args, has_args))
-        return FoldEvent{};
+    if (!DFTracerEvent::parse_scalars(root, scalars, args, has_args)) {
+        reset_fold_event(ev);
+        return;
+    }
     // An empty or non-object args is left to the leaf walk, which records it.
     simdjson::dom::object args_obj;
     DecodeHints* leaves =
@@ -437,14 +438,13 @@ FoldEvent extract_fold_event(simdjson::dom::element root,
                 args_obj.size() > 0
             ? hints
             : nullptr;
-    FoldEvent ev =
-        build_fold_event(scalars, args, has_args, intern, needs_args, leaves);
+    build_fold_event_into(ev, scalars, args, has_args, intern, needs_args,
+                          leaves);
     if (extra_fields)
         for (const auto& name : *extra_fields)
             capture_extra_field(ev, root, intern, name);
     if (capture_schema)
         capture_schema_leaves(ev, root, intern, leaves != nullptr);
-    return ev;
 }
 
 namespace {
@@ -770,14 +770,15 @@ void decode_leaves(std::string& path, simdjson::dom::element v, LeafDecode& d) {
 
 }  // namespace
 
-FoldEvent decode_record(
-    simdjson::dom::element root, dftracer::utils::StringIntern& intern,
-    bool capture_schema, const std::vector<std::string>* paths,
+void decode_record_into(
+    FoldEvent& ev, simdjson::dom::element root,
+    dftracer::utils::StringIntern& intern, bool capture_schema,
+    const std::vector<std::string>* paths,
     const dftracer::utils::index::RecordSchema* record_schema,
     const std::vector<const dftracer::utils::index::FieldSpec*>* path_fields,
     std::size_t max_children, DecodeHints* hints, bool skip_never_indexed) {
     namespace ix = dftracer::utils::index;
-    FoldEvent ev;
+    reset_fold_event(ev);
     ev.phase = RecordPhase::COMPLETE;
     ev.by_path = true;
     const auto* fields = paths ? path_fields : nullptr;
@@ -799,10 +800,11 @@ FoldEvent decode_record(
                  hints,
                  skip_never_indexed};
     if (hints) ev.args.reserve(hints->args);
-    std::string path;
+    std::string local_path;
+    std::string& path = hints ? hints->path : local_path;
+    path.clear();
     decode_leaves(path, root, d);
     if (hints) hints->args = ev.args.size();
-    return ev;
 }
 
 void capture_schema_leaves(FoldEvent& ev, simdjson::dom::element root,
@@ -898,6 +900,7 @@ coro::CoroTask<void> for_slices(std::vector<std::unique_ptr<Fold>>& slices,
 coro::CoroTask<void> fuse_worker(FuseWorkerCtx ctx, std::size_t w) {
     auto& slices = ctx.fslice[w];
     FoldPortBus bus;
+    FoldEventBuffer fold_buffer;
     for (auto& s : slices) s->bind_port_bus(&bus);
     PendingCoverage pending(ctx.covered_v[w]);
 
@@ -937,6 +940,7 @@ coro::CoroTask<void> fuse_worker(FuseWorkerCtx ctx, std::size_t w) {
         // A FoldEvent fold gets the parsed stream; a raw fold parses the lines
         // itself. When both are present, keep both.
         sin.fold_intern = ctx.any_wants_fold_event ? &ctx.intern : nullptr;
+        sin.fold_buffer = &fold_buffer;
         sin.fold_needs_args = ctx.any_needs_args;
         sin.fold_keep_raw = ctx.any_wants_raw && ctx.any_wants_fold_event;
         sin.fold_capture_schema = ctx.any_wants_schema;

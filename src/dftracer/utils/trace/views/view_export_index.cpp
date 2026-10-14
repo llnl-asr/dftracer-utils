@@ -99,7 +99,7 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
         std::unique_ptr<Fold> bloom;
         dftracer::utils::json::RecordParser parser;
         std::string parse_buf;
-        std::vector<FoldEvent> events;
+        FoldEventBuffer events;
     };
     std::mutex pool_mu;
     std::vector<std::unique_ptr<FoldSlice>> pool;
@@ -130,23 +130,24 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
             auto doc =
                 sl->parser.parse(sl->parse_buf.data(), line.size(), false);
             if (doc.error()) continue;
-            sl->events.push_back(
-                vdef.by_path ? decode_record(doc.value_unsafe(), intern,
-                                             /*capture_schema=*/true, nullptr,
-                                             vdef.record_schema, nullptr,
-                                             INDEX_MAX_CHILDREN, nullptr,
-                                             /*skip_never_indexed=*/true)
-                             : extract_fold_event(doc.value_unsafe(), intern,
-                                                  /*needs_args=*/true,
-                                                  /*extra_fields=*/nullptr,
-                                                  /*capture_schema=*/true));
+            if (vdef.by_path)
+                decode_record_into(sl->events.append(), doc.value_unsafe(),
+                                   intern, /*capture_schema=*/true, nullptr,
+                                   vdef.record_schema, nullptr,
+                                   INDEX_MAX_CHILDREN, nullptr,
+                                   /*skip_never_indexed=*/true);
+            else
+                extract_fold_event_into(sl->events.append(), doc.value_unsafe(),
+                                        intern, /*needs_args=*/true,
+                                        /*extra_fields=*/nullptr,
+                                        /*capture_schema=*/true);
         }
         ScanUnit unit;
         unit.file_path = utilities::fileio::gzip_part_path(
             opts.output_path, static_cast<int>(ref.part), multi);
         unit.index_path = index_path;
         unit.checkpoint_idx = ref.part_index;
-        FoldBatch fb{std::span<const FoldEvent>(sl->events), unit};
+        FoldBatch fb{sl->events.events(), unit};
         sl->bloom->step(fb);
         sl->bloom->seal_unit(unit);
         std::lock_guard<std::mutex> lk(pool_mu);

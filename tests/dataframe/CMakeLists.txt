@@ -41,7 +41,8 @@ set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_methods.cpp
                            test_chunked_columns.cpp
                            test_collect_spill.cpp
                            test_eval_inputs_in_place.cpp
-                           test_distinct_on_ids.cpp)
+                           test_distinct_on_ids.cpp
+                           test_hash_arena.cpp)
 
 foreach(test_file ${DATAFRAME_TEST_SOURCES})
   string(REPLACE ".cpp" "" bin_exec ${test_file})

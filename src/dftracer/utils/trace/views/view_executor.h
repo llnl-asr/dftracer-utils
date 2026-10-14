@@ -73,6 +73,19 @@ bool is_row_query(const ViewPlan& plan);
 /// is_row_query(plan).
 coro::CoroTask<dataframe::DataFrame> run_collect_rows(const ViewPlan& plan);
 
+/// Whether every key column (positions of `key_idx` in plan.select) is a plain
+/// field or arg the distinct scan can key from the event. False for a computed
+/// or token column (io_cat, acc_pat, window, clip, list, agg-engine tokens).
+bool distinct_keyable(const ViewPlan& plan,
+                      const std::vector<std::int64_t>& key_idx);
+
+/// Row-query collect with the distinct pushed into the scan: each worker keeps
+/// the first row of each key and the rows come out in first-occurrence order,
+/// matching the host unique(). Assumes is_row_query(plan) and
+/// distinct_keyable(plan, key_idx).
+coro::CoroTask<dataframe::DataFrame> run_collect_rows_distinct(
+    const ViewPlan& plan, const std::vector<std::int64_t>& key_idx);
+
 /// Scan, buffer the lean containment tuples in a ContainmentFold, then build
 /// the call-tree / flamegraph frame. `partition` names the lane keys;
 /// ts/dur/name name the interval and label fields (any field, POD scalar or

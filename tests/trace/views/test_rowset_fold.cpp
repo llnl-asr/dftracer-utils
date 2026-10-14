@@ -21,6 +21,16 @@ using dftracer::utils::StringIntern;
 
 namespace {
 
+FoldEvent extract_fold_event(simdjson::dom::element root, StringIntern& intern,
+                             bool needs_args,
+                             const std::vector<std::string>* extra = nullptr,
+                             bool capture_schema = false) {
+    FoldEvent ev;
+    extract_fold_event_into(ev, root, intern, needs_args, extra,
+                            capture_schema);
+    return ev;
+}
+
 std::string padded(std::string s) {
     s.resize(s.size() + simdjson::SIMDJSON_PADDING, '\0');
     return s;
@@ -242,9 +252,10 @@ TEST_SUITE("RowSetFold") {
             std::string buf = padded(line);
             auto doc = parser.parse(buf.data(), line.size(), false);
             REQUIRE_FALSE(doc.error());
-            const FoldEvent ev = decode_record(
-                doc.value_unsafe(), intern, true, nullptr, &genesis, nullptr,
-                INDEX_MAX_CHILDREN, nullptr, skip);
+            FoldEvent ev;
+            decode_record_into(ev, doc.value_unsafe(), intern, true, nullptr,
+                               &genesis, nullptr, INDEX_MAX_CHILDREN, nullptr,
+                               skip);
             const std::uint32_t id = intern.get_or_insert("dur.sketch");
             bool cataloged = false;
             for (const auto& [leaf, tag] : ev.schema_leaves)

@@ -79,21 +79,23 @@ std::size_t record_length(const char* line, std::size_t len) {
     return record == "[" || record == "]" ? 0 : len;
 }
 
-// An owned event from a parsed record, with the view's decoder. A fold that
+// Decode a parsed record into `ev`, with the view's decoder. A fold that
 // captures schema needs every leaf, so it gets no projection.
-detail::FoldEvent decode(simdjson::dom::element root,
-                         const ViewScannerInput& input, bool schema,
-                         detail::DecodeHints& hints) {
+void decode_into(detail::FoldEvent& ev, simdjson::dom::element root,
+                 const ViewScannerInput& input, bool schema,
+                 detail::DecodeHints& hints) {
     const bool skip_never = schema && input.fold_skip_never_indexed;
-    if (input.view.by_path)
-        return detail::decode_record(
-            root, *input.fold_intern, schema,
+    if (input.view.by_path) {
+        detail::decode_record_into(
+            ev, root, *input.fold_intern, schema,
             schema || input.view.paths.empty() ? nullptr : &input.view.paths,
             input.view.record_schema, &input.view.path_fields,
             schema ? detail::INDEX_MAX_CHILDREN : 0, &hints, skip_never);
-    return detail::extract_fold_event(root, *input.fold_intern,
-                                      input.fold_needs_args,
-                                      input.fold_extra_fields, schema, &hints);
+        return;
+    }
+    detail::extract_fold_event_into(ev, root, *input.fold_intern,
+                                    input.fold_needs_args,
+                                    input.fold_extra_fields, schema, &hints);
 }
 
 }  // namespace
@@ -224,6 +226,9 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
             .to(input.end_byte));
 
     ViewScannerBatch batch;
+    detail::FoldEventBuffer local_pool;
+    detail::FoldEventBuffer& pool =
+        input.fold_buffer ? *input.fold_buffer : local_pool;
 
     dftracer::utils::json::RecordParser parser;
     detail::DecodeHints hints;
@@ -318,12 +323,12 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
                             if (input.fold_intern) {
                                 // Parse-once: the fold consumer never
                                 // re-parses.
-                                batch.fold_events.push_back(decode(
-                                    root, input,
+                                decode_into(
+                                    pool.append(), root, input,
                                     !metadata && input.fold_capture_schema,
-                                    hints));
+                                    hints);
                                 batch.values_unconverted +=
-                                    batch.fold_events.back().unconverted;
+                                    pool.back().unconverted;
                                 if (input.fold_keep_raw)
                                     batch.events.emplace_back(line_start,
                                                               json_len);
@@ -341,16 +346,17 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
 
         // Yield at end of each chunk, string_view events point into
         // chunk data which is valid until the next co_await read_async().
-        if (!batch.events.empty() || !batch.fold_events.empty() ||
-            batch.lines_invalid > 0) {
+        if (!batch.events.empty() || !pool.empty() || batch.lines_invalid > 0) {
+            batch.fold_events = pool.events();
             co_yield std::move(batch);
             batch = ViewScannerBatch{};
+            pool.clear();
         }
     }
 
     // Final batch: normally empty since batches are yielded per chunk above.
-    if (!batch.events.empty() || !batch.fold_events.empty() ||
-        batch.lines_invalid > 0) {
+    if (!batch.events.empty() || !pool.empty() || batch.lines_invalid > 0) {
+        batch.fold_events = pool.events();
         co_yield std::move(batch);
     }
 }

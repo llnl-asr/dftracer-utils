@@ -89,8 +89,7 @@ dataframe::Series interned_column(std::span<const std::uint32_t> ids,
 /// named by its exact path, with no fixed columns. Shared by the materialized
 /// collect and the streaming chunk builder.
 dataframe::DataFrame build_row_frame(
-    std::span<const FoldEvent> events,
-    const dftracer::utils::StringIntern& intern,
+    EventRows events, const dftracer::utils::StringIntern& intern,
     const std::vector<std::string>& select, double time_scale = 1.0,
     bool by_path = false);
 
@@ -103,7 +102,7 @@ dataframe::DataFrame build_row_frame(
 /// With a window or clip token in `select`, only the events that start in its
 /// window contribute.
 std::vector<std::pair<std::string, dataframe::Series>>
-build_dyn_numeric_columns(std::span<const FoldEvent> events,
+build_dyn_numeric_columns(EventRows events,
                           const dftracer::utils::StringIntern& intern,
                           const std::vector<std::string>& select);
 
@@ -132,6 +131,31 @@ std::string canonical_row_column_name(std::string_view sel,
 /// classification as canonical_row_column_name/build_row_frame, so it cannot
 /// drift from what the scan actually emits.
 dataframe::TypeId row_column_type(std::string_view sel, bool by_path = false);
+
+/// How build_row_frame's select branch reads the value of `sel` from a
+/// FoldEvent, so a caller can key rows on exactly what the frame holds. REFUSED
+/// is a column computed from more than one field or from nothing the event
+/// stores (io_cat, acc_pat, a window/clip/list/agg-engine token); an ARG looks
+/// `arg_full` up first and `arg_bare` (empty for none) as its fallback.
+struct RowKeySource {
+    enum class Kind : std::uint8_t {
+        REFUSED,
+        NAME,
+        CAT,
+        FHASH,
+        HHASH,
+        PID,
+        TID,
+        TS,
+        DUR,
+        PH,
+        ARG,
+    };
+    Kind kind = Kind::REFUSED;
+    std::string arg_full;
+    std::string arg_bare;
+};
+RowKeySource row_key_source(std::string_view sel, bool by_path = false);
 
 /// Collect matching raw events straight into a native DataFrame. The
 /// row-query terminal (collect() / stream() with no group_by/agg) folds every

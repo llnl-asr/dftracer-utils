@@ -757,7 +757,7 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
         dftracer::utils::default_runtime().run_blocking(
             "dft-plugin-trace-read", [&](CoroScope&) -> coro::CoroTask<void> {
                 dftracer::utils::json::RecordParser parser;
-                std::vector<views::detail::FoldEvent> batch_events;
+                views::detail::FoldEventBuffer batch_events;
                 namespace ix = dftracer::utils::index;
                 const ix::RecordSchema& schema = ix::detect_file_schema(p);
                 const bool by_path = schema.decoder == ix::Decoder::PATH;
@@ -768,24 +768,25 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
                     [&](std::size_t,
                         const std::vector<std::string_view>& events) {
                         batch_events.clear();
-                        batch_events.reserve(events.size());
                         for (std::string_view ev : events) {
                             simdjson::padded_string ps(ev);
                             simdjson::dom::element root;
                             if (parser.parse(ps).get(root)) continue;
-                            batch_events.push_back(
-                                by_path ? views::detail::decode_record(
-                                              root, intern,
-                                              /*capture_schema=*/false, nullptr,
-                                              declared)
-                                        : views::detail::extract_fold_event(
-                                              root, intern,
-                                              /*needs_args=*/true));
+                            if (by_path)
+                                views::detail::decode_record_into(
+                                    batch_events.append(), root, intern,
+                                    /*capture_schema=*/false, nullptr,
+                                    declared);
+                            else
+                                views::detail::extract_fold_event_into(
+                                    batch_events.append(), root, intern,
+                                    /*needs_args=*/true);
                         }
                         if (batch_events.empty()) return;
                         dataframe::DataFrame df =
-                            views::detail::build_row_frame(batch_events, intern,
-                                                           {}, 1.0, by_path);
+                            views::detail::build_row_frame(
+                                batch_events.events(), intern, {}, 1.0,
+                                by_path);
                         std::vector<dftu_series*> handles;
                         handles.reserve(df.columns.size());
                         std::vector<const char*> names;

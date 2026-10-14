@@ -331,7 +331,7 @@ std::optional<std::string> array_text(
     return std::get<std::string>(std::move(cell->value));
 }
 
-df::Series list_column(std::span<const FoldEvent> evs,
+df::Series list_column(EventRows evs,
                        const dftracer::utils::StringIntern& intern,
                        std::string_view spec, std::string_view path) {
     std::vector<std::pair<std::string, char>> fields;
@@ -403,8 +403,8 @@ const FoldEvent::ArgValue* find_arg(const FoldEvent& ev, std::uint32_t keyid) {
     return nullptr;
 }
 
-df::Series u64_column(std::span<const FoldEvent> evs,
-                      std::uint64_t FoldEvent::* field, double scale = 1.0) {
+df::Series u64_column(EventRows evs, std::uint64_t FoldEvent::* field,
+                      double scale = 1.0) {
     std::vector<std::uint64_t> vals;
     vals.reserve(evs.size());
     if (scale == 1.0)
@@ -592,15 +592,14 @@ df::Series interned_column(std::span<const std::uint32_t> ids,
 
 namespace {
 
-std::vector<std::uint32_t> ids_of(std::span<const FoldEvent> evs,
+std::vector<std::uint32_t> ids_of(EventRows evs,
                                   std::uint32_t FoldEvent::* field) {
     std::vector<std::uint32_t> ids(evs.size());
     for (std::size_t r = 0; r < evs.size(); ++r) ids[r] = evs[r].*field;
     return ids;
 }
 
-df::Series str_id_column(std::span<const FoldEvent> evs,
-                         std::uint32_t FoldEvent::* field,
+df::Series str_id_column(EventRows evs, std::uint32_t FoldEvent::* field,
                          const dftracer::utils::StringIntern& intern) {
     return interned_column(ids_of(evs, field), intern);
 }
@@ -707,7 +706,7 @@ df::Series typed_arg_column(const std::vector<const FoldEvent::ArgValue*>& vals,
 // A nested/extra field is captured under its full name and a flat arg under
 // its bare key, so `keyid` (full) is tried first and `keyid_alt` (bare) as a
 // fallback, matching PodSource::find_arg; pass NO_ID for no fallback.
-df::Series arg_column(std::span<const FoldEvent> evs, std::uint32_t keyid,
+df::Series arg_column(EventRows evs, std::uint32_t keyid,
                       std::uint32_t keyid_alt,
                       const dftracer::utils::StringIntern& intern) {
     std::vector<const FoldEvent::ArgValue*> vals;
@@ -728,7 +727,7 @@ df::Series arg_column(std::span<const FoldEvent> evs, std::uint32_t keyid,
 // Every arg column of the empty select, named "args.<key>" in sorted key order,
 // in two passes over the events rather than one pass per column. Each column is
 // typed and filled exactly as arg_column(evs, key, NO_ID) would.
-void append_all_arg_columns(std::span<const FoldEvent> evs,
+void append_all_arg_columns(EventRows evs,
                             const dftracer::utils::StringIntern& intern,
                             df::DataFrame& out, std::string_view prefix) {
     struct Col {
@@ -781,7 +780,7 @@ void append_all_arg_columns(std::span<const FoldEvent> evs,
     }
 }
 
-df::Series top_column(std::span<const FoldEvent> evs, std::string_view name,
+df::Series top_column(EventRows evs, std::string_view name,
                       const dftracer::utils::StringIntern& intern,
                       double time_scale) {
     if (name == "name") return str_id_column(evs, &FoldEvent::name_id, intern);
@@ -799,7 +798,7 @@ df::Series top_column(std::span<const FoldEvent> evs, std::string_view name,
                             static_cast<std::int64_t>(vals.size()));
 }
 
-df::Series hash_column(std::span<const FoldEvent> evs, std::string_view f,
+df::Series hash_column(EventRows evs, std::string_view f,
                        const dftracer::utils::StringIntern& intern) {
     return f == "fhash" ? str_id_column(evs, &FoldEvent::fhash_id, intern)
                         : str_id_column(evs, &FoldEvent::hhash_id, intern);
@@ -808,7 +807,7 @@ df::Series hash_column(std::span<const FoldEvent> evs, std::string_view f,
 // The dfanalyzer I/O category enum value per event, from the event name. Kept
 // an Int64 (the enum's integer, matching the engine agg path's i64 form) so
 // the group-by collapses and renders it identically to a numeric key.
-df::Series iocat_column(std::span<const FoldEvent> evs,
+df::Series iocat_column(EventRows evs,
                         const dftracer::utils::StringIntern& intern) {
     std::vector<std::int64_t> vals;
     vals.reserve(evs.size());
@@ -826,7 +825,7 @@ df::Series iocat_column(std::span<const FoldEvent> evs,
 
 // The acc_pat group key: the constant "0" String for every event, matching the
 // engine agg path (a constant '0'). A single-group, byte-identical key.
-df::Series accpat_column(std::span<const FoldEvent> evs) {
+df::Series accpat_column(EventRows evs) {
     return df::Series::strings(std::vector<std::string>(evs.size(), "0"));
 }
 
@@ -865,7 +864,7 @@ bool append_json_key(const PodSource& src, std::string& out,
 // A group-key string column (see AGG_KEY_ARG_PREFIX): null where the event
 // lacks the value or holds JSON null, so a missing key never merges with "".
 // A `json` key column holds canonical JSON text.
-df::Series group_key_str_column(std::span<const FoldEvent> evs,
+df::Series group_key_str_column(EventRows evs,
                                 const dftracer::utils::StringIntern& intern,
                                 std::string_view field, bool arg_only,
                                 bool json) {
@@ -907,7 +906,7 @@ df::Series group_key_str_column(std::span<const FoldEvent> evs,
 // contribute nothing). The "size" pseudo-field resolves to the io-cat-derived
 // byte size (derived_size_t), falling back to a literal numeric "size" arg, so
 // the discovered "size" metric matches fold_numeric_args_t.
-df::Series num_arg_column(std::span<const FoldEvent> evs, std::string_view name,
+df::Series num_arg_column(EventRows evs, std::string_view name,
                           const dftracer::utils::StringIntern& intern) {
     const bool is_size = name == "size";
     const std::uint32_t keyid =
@@ -948,8 +947,7 @@ df::Series num_arg_column(std::span<const FoldEvent> evs, std::string_view name,
 // (derived_size_t), "te" is ts+dur (null when the event has no dur, matching
 // number_typed("dur")). ts/dur are read RAW; a non-identity time_scale is
 // reapplied on the engine side (SCALED_TE_COL), never baked in here.
-df::Series derived_agg_column(std::span<const FoldEvent> evs,
-                              std::string_view name,
+df::Series derived_agg_column(EventRows evs, std::string_view name,
                               const dftracer::utils::StringIntern& intern) {
     const bool is_size = name == "size";
     const std::int64_t n = static_cast<std::int64_t>(evs.size());
@@ -987,8 +985,7 @@ bool is_path_token(std::string_view sel) {
            is_derived_agg_field(sel, f);
 }
 
-df::Series window_mask_column(std::span<const FoldEvent> evs,
-                              const WindowSel& w) {
+df::Series window_mask_column(EventRows evs, const WindowSel& w) {
     const std::int64_t n = static_cast<std::int64_t>(evs.size());
     std::vector<std::int64_t> ones(evs.size(), 1);
     std::vector<bool> present;
@@ -999,7 +996,7 @@ df::Series window_mask_column(std::span<const FoldEvent> evs,
                                 vbits.empty() ? nullptr : vbits.data());
 }
 
-df::Series clip_column(std::span<const FoldEvent> evs, const WindowSel& w) {
+df::Series clip_column(EventRows evs, const WindowSel& w) {
     const bool is_ts = w.rest == "ts";
     const std::int64_t n = static_cast<std::int64_t>(evs.size());
     std::vector<std::uint64_t> vals;
@@ -1022,8 +1019,7 @@ df::Series clip_column(std::span<const FoldEvent> evs, const WindowSel& w) {
                             vbits.empty() ? nullptr : vbits.data());
 }
 
-bool any_hash_present(std::span<const FoldEvent> evs,
-                      std::uint32_t FoldEvent::* field) {
+bool any_hash_present(EventRows evs, std::uint32_t FoldEvent::* field) {
     for (const auto& ev : evs)
         if (ev.*field != dftracer::utils::StringIntern::NO_ID) return true;
     return false;
@@ -1171,7 +1167,7 @@ dataframe::TypeId row_column_type(std::string_view sel, bool by_path) {
 
 namespace {
 
-df::Series select_column(std::span<const FoldEvent> evs,
+df::Series select_column(EventRows evs,
                          const dftracer::utils::StringIntern& intern,
                          const std::string& sel, double time_scale,
                          bool by_path) {
@@ -1227,8 +1223,58 @@ df::Series select_column(std::span<const FoldEvent> evs,
 
 }  // namespace
 
+RowKeySource row_key_source(std::string_view sel, bool by_path) {
+    using Kind = RowKeySource::Kind;
+    RowKeySource out;
+    WindowSel win;
+    std::string_view list_spec;
+    std::string_view list_path;
+    if (parse_window_sel(sel, WINDOW_PREFIX, win) ||
+        parse_window_sel(sel, CLIP_PREFIX, win) ||
+        parse_list_sel(sel, list_spec, list_path))
+        return out;
+    if (by_path && !is_path_token(sel)) {
+        out.kind = Kind::ARG;
+        out.arg_full = flat_key(sel);
+        return out;
+    }
+    std::string_view f;
+    bool arg_only = false;
+    if (is_agg_key_field(sel, f, arg_only) || is_num_arg_field(sel, f) ||
+        is_derived_agg_field(sel, f) || is_iocat_field(sel) ||
+        is_accpat_field(sel))
+        return out;
+    const std::string_view key = strip_args_prefix(sel);
+    const std::string_view field = is_top_level(sel) ? sel : key;
+    if (is_top_level(sel) || is_hash_field(key)) {
+        if (field == "name")
+            out.kind = Kind::NAME;
+        else if (field == "cat")
+            out.kind = Kind::CAT;
+        else if (field == "fhash")
+            out.kind = Kind::FHASH;
+        else if (field == "hhash")
+            out.kind = Kind::HHASH;
+        else if (field == "pid")
+            out.kind = Kind::PID;
+        else if (field == "tid")
+            out.kind = Kind::TID;
+        else if (field == "ts")
+            out.kind = Kind::TS;
+        else if (field == "dur")
+            out.kind = Kind::DUR;
+        else
+            out.kind = Kind::PH;
+        return out;
+    }
+    out.kind = Kind::ARG;
+    out.arg_full = flat_key(sel);
+    out.arg_bare = flat_key(key);
+    return out;
+}
+
 dataframe::DataFrame build_row_frame(
-    std::span<const FoldEvent> evs, const dftracer::utils::StringIntern& intern,
+    EventRows evs, const dftracer::utils::StringIntern& intern,
     const std::vector<std::string>& select, double time_scale, bool by_path) {
     df::DataFrame out;
     const dftracer::utils::StringIntern* intern_ = &intern;
@@ -1268,7 +1314,7 @@ dataframe::DataFrame build_row_frame(
 }
 
 std::vector<std::pair<std::string, dataframe::Series>>
-build_dyn_numeric_columns(std::span<const FoldEvent> evs,
+build_dyn_numeric_columns(EventRows evs,
                           const dftracer::utils::StringIntern& intern,
                           const std::vector<std::string>& select) {
     namespace agg = dftracer::utils::index::schemas::dft::agg;

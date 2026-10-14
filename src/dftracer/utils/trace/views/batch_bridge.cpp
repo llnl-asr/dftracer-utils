@@ -8,7 +8,7 @@ namespace dftracer::utils::trace::views::detail {
 
 namespace {
 
-dataframe::DataFrame base_frame(std::span<const FoldEvent> events,
+dataframe::DataFrame base_frame(EventRows events,
                                 const dftracer::utils::StringIntern& intern,
                                 const ColumnSpec& spec) {
     dataframe::DataFrame f = build_row_frame(events, intern, spec.select,
@@ -28,8 +28,8 @@ dataframe::DataFrame base_frame(std::span<const FoldEvent> events,
 }  // namespace
 
 dataframe::DataFrame events_to_frame(
-    std::span<const FoldEvent> events,
-    const dftracer::utils::StringIntern& intern, const ColumnSpec& spec) {
+    EventRows events, const dftracer::utils::StringIntern& intern,
+    const ColumnSpec& spec) {
     dataframe::DataFrame f = base_frame(events, intern, spec);
     if (spec.emit_dyn)
         for (auto& [name, col] :
@@ -41,8 +41,7 @@ dataframe::DataFrame events_to_frame(
 }
 
 dataframe::Morsel events_to_morsel(
-    std::span<const FoldEvent> events,
-    std::shared_ptr<dftracer::utils::StringIntern> intern,
+    EventRows events, std::shared_ptr<dftracer::utils::StringIntern> intern,
     const ColumnSpec& spec) {
     dataframe::DataFrame f = events_to_frame(events, *intern, spec);
 

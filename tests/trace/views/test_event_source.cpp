@@ -8,6 +8,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <vector>
 
 using dftracer::utils::StringIntern;
 
@@ -17,6 +18,16 @@ using dftracer::utils::StringIntern;
 using namespace dftracer::utils::trace::views::detail;
 
 namespace {
+
+FoldEvent extract_fold_event(simdjson::dom::element root, StringIntern& intern,
+                             bool needs_args,
+                             const std::vector<std::string>* extra = nullptr,
+                             bool capture_schema = false) {
+    FoldEvent ev;
+    extract_fold_event_into(ev, root, intern, needs_args, extra,
+                            capture_schema);
+    return ev;
+}
 
 std::string padded(std::string s) {
     s.resize(s.size() + simdjson::SIMDJSON_PADDING, '\0');

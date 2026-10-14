@@ -506,7 +506,7 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
                 auto& slices = fslice[w];
                 dftracer::utils::json::RecordParser parser;
                 std::string parse_buf;
-                std::vector<FoldEvent> fold_events;
+                FoldEventBuffer fold_events;
                 DecodeHints hints;
                 for (;;) {
                     if (produced.load(std::memory_order_relaxed) >= cap) break;
@@ -547,32 +547,29 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
                                 auto doc = parser.parse(parse_buf.data(),
                                                         line.size(), false);
                                 if (doc.error()) continue;
-                                fold_events.push_back(
-                                    vdef.by_path
-                                        ? decode_record(
-                                              doc.value_unsafe(), *intern,
-                                              any_wants_schema,
-                                              any_wants_schema ||
-                                                      any_reads_every_field ||
-                                                      vdef.paths.empty()
-                                                  ? nullptr
-                                                  : &vdef.paths,
-                                              vdef.record_schema,
-                                              &vdef.path_fields,
-                                              any_wants_schema
-                                                  ? INDEX_MAX_CHILDREN
-                                                  : 0,
-                                              &hints,
-                                              any_wants_schema &&
-                                                  skip_never_indexed)
-                                        : extract_fold_event(
-                                              doc.value_unsafe(), *intern,
-                                              any_needs_args, nullptr,
-                                              any_wants_schema));
+                                if (vdef.by_path)
+                                    decode_record_into(
+                                        fold_events.append(),
+                                        doc.value_unsafe(), *intern,
+                                        any_wants_schema,
+                                        any_wants_schema ||
+                                                any_reads_every_field ||
+                                                vdef.paths.empty()
+                                            ? nullptr
+                                            : &vdef.paths,
+                                        vdef.record_schema, &vdef.path_fields,
+                                        any_wants_schema ? INDEX_MAX_CHILDREN
+                                                         : 0,
+                                        &hints,
+                                        any_wants_schema && skip_never_indexed);
+                                else
+                                    extract_fold_event_into(
+                                        fold_events.append(),
+                                        doc.value_unsafe(), *intern,
+                                        any_needs_args, nullptr,
+                                        any_wants_schema);
                             }
-                            FoldBatch fb{
-                                std::span<const FoldEvent>(fold_events),
-                                units[i]};
+                            FoldBatch fb{fold_events.events(), units[i]};
                             for (auto& s : slices) s->step(fb);
                         }
                         produced.fetch_add(b->events.size(),

@@ -19,6 +19,7 @@
 #include <deque>
 #include <exception>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -107,6 +108,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
                       1;
             auto piece = std::make_unique<Parsed>();
             piece->checkpoint_idx = checkpoint_idx;
+            piece->batch = buffers_.take();
             piece->buf = std::make_shared<std::string>();
             piece->buf->reserve(partial_.size() + (end - off) +
                                 simdjson::SIMDJSON_PADDING);
@@ -119,6 +121,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
                     inline_parser_ = std::make_unique<json::RecordParser>();
                 parse_into(*config(), *inline_parser_, *piece);
                 step(*piece);
+                buffers_.give(std::move(piece->batch));
                 continue;
             }
             if (in_flight_.size() >= parse_ahead_) co_await step_oldest();
@@ -175,12 +178,39 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         std::vector<std::string> extra_fields;
     };
 
+    using EventBuffer = trace::views::detail::FoldEventBuffer;
+
+    // Event buffers parsed chunks decode into. A buffer goes back once the
+    // last step of its chunk lets go, on whichever thread that is, and keeps
+    // its slots' capacity, so a steady-state parse allocates no event vectors.
+    // At most the chunks in flight hold one each.
+    class BufferPool {
+       public:
+        std::unique_ptr<EventBuffer> take() {
+            std::lock_guard<std::mutex> lock(mu_);
+            if (free_.empty()) return std::make_unique<EventBuffer>();
+            auto b = std::move(free_.back());
+            free_.pop_back();
+            return b;
+        }
+        void give(std::unique_ptr<EventBuffer> b) {
+            if (!b) return;
+            b->clear();
+            std::lock_guard<std::mutex> lock(mu_);
+            free_.push_back(std::move(b));
+        }
+
+       private:
+        std::mutex mu_;
+        std::vector<std::unique_ptr<EventBuffer>> free_;
+    };
+
     // One chunk of whole lines, its events and the lines plugin builders read.
     // The events and lines point into `buf`.
     struct Parsed {
         std::shared_ptr<std::string> buf;
         std::size_t checkpoint_idx = 0;
-        std::vector<trace::views::detail::FoldEvent> batch;
+        std::unique_ptr<EventBuffer> batch;
         std::vector<std::string_view> lines;
         std::unique_ptr<json::RecordParser> parser;
     };
@@ -205,26 +235,27 @@ class IndexFoldDriver : public index::build::IndexVisitor {
                 [&](simdjson::dom::element root, std::string_view line) {
                     if (!root.is_object()) return;
                     if (cfg.keep_lines) c.lines.push_back(line);
-                    c.batch.push_back(trace::views::detail::decode_record(
-                        root, *cfg.intern, true, nullptr, cfg.record_schema,
-                        nullptr, trace::views::detail::INDEX_MAX_CHILDREN,
-                        nullptr, cfg.skip_never_indexed));
+                    trace::views::detail::decode_record_into(
+                        c.batch->append(), root, *cfg.intern, true, nullptr,
+                        cfg.record_schema, nullptr,
+                        trace::views::detail::INDEX_MAX_CHILDREN, nullptr,
+                        cfg.skip_never_indexed);
                 });
         } else {
             trace::parse_buffer(
                 parser, c.buf, total, c.checkpoint_idx, line_number,
                 cfg.needs_args, [&](const trace::EventRecord& r) {
                     if (cfg.keep_lines) c.lines.push_back(r.line);
-                    c.batch.push_back(trace::views::detail::build_fold_event(
-                        r.ev, r.args_dom, r.has_args, *cfg.intern,
-                        cfg.needs_args));
+                    trace::views::detail::FoldEvent& ev = c.batch->append();
+                    trace::views::detail::build_fold_event_into(
+                        ev, r.ev, r.args_dom, r.has_args, *cfg.intern,
+                        cfg.needs_args);
                     for (const auto& name : cfg.extra_fields)
                         trace::views::detail::capture_extra_field(
-                            c.batch.back(), r.json.element(), *cfg.intern,
-                            name);
+                            ev, r.json.element(), *cfg.intern, name);
                     if (cfg.capture_schema)
                         trace::views::detail::capture_schema_leaves(
-                            c.batch.back(), r.json.element(), *cfg.intern);
+                            ev, r.json.element(), *cfg.intern);
                 });
         }
     }
@@ -252,8 +283,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
 
     void step(Parsed& c) {
         const auto unit = unit_of(c);
-        trace::views::detail::FoldBatch fb{
-            std::span<const trace::views::detail::FoldEvent>(c.batch), unit};
+        trace::views::detail::FoldBatch fb{c.batch->events(), unit};
         for (auto* f : folds_) f->step(fb);
         if (builders_) builders_->step(c.checkpoint_idx, c.lines);
     }
@@ -261,7 +291,9 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     // Returns a piece's permit once its last step lets go of it.
     struct PieceRelease {
         coro::CoroSemaphore* permits;
+        BufferPool* buffers;
         void operator()(Parsed* p) const {
+            buffers->give(std::move(p->batch));
             delete p;
             permits->release(1);
         }
@@ -278,8 +310,8 @@ class IndexFoldDriver : public index::build::IndexVisitor {
             tails_.resize(folds_.size());
         }
         co_await permits_->acquire(1);
-        std::shared_ptr<const Parsed> piece(done.release(),
-                                            PieceRelease{permits_.get()});
+        std::shared_ptr<const Parsed> piece(
+            done.release(), PieceRelease{permits_.get(), &buffers_});
         for (std::size_t i = 0; i < folds_.size(); ++i) {
             if (folds_[i] == bloom_) continue;
             std::optional<coro::SpawnFuture<void>> prev = std::move(tails_[i]);
@@ -303,9 +335,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         std::exception_ptr error;
         try {
             if (prev) co_await std::move(*prev);
-            fold->step(
-                {std::span<const trace::views::detail::FoldEvent>(c->batch),
-                 unit});
+            fold->step({c->batch->events(), unit});
         } catch (...) {
             error = std::current_exception();
         }
@@ -327,8 +357,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
                      cp)))
             co_await await_bloom_front();
         const auto unit = unit_of(*c);
-        const auto lane = bloom_->open(
-            {std::span<const trace::views::detail::FoldEvent>(c->batch), unit});
+        const auto lane = bloom_->open({c->batch->events(), unit});
         std::optional<coro::SpawnFuture<void>> prev;
         if (!bloom_steps_.empty() && bloom_steps_.back().checkpoint_idx == cp) {
             prev.emplace(std::move(bloom_steps_.back().done));
@@ -352,10 +381,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
             if (prev) co_await std::move(*prev);
             trace::views::detail::ScanUnit unit;
             unit.checkpoint_idx = c->checkpoint_idx;
-            bloom->observe(
-                lane,
-                {std::span<const trace::views::detail::FoldEvent>(c->batch),
-                 unit});
+            bloom->observe(lane, {c->batch->events(), unit});
         } catch (...) {
             error = std::current_exception();
         }
@@ -445,6 +471,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
                     co_await step_ahead(std::move(done));
                 } else {
                     step(*done);
+                    buffers_.give(std::move(done->batch));
                     parsers_.push_back(std::move(done->parser));
                 }
             } catch (...) {
@@ -471,6 +498,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     std::vector<std::optional<coro::SpawnFuture<void>>> tails_;
     std::vector<std::unique_ptr<json::RecordParser>> parsers_;
     std::unique_ptr<json::RecordParser> inline_parser_;
+    BufferPool buffers_;
     dftracer::utils::StringIntern* intern_;
     std::vector<trace::views::detail::Fold*> folds_;
     index::Decoder decoder_ = index::Decoder::DFTRACER;

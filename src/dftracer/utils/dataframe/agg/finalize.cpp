@@ -39,8 +39,7 @@ OccResult occ_summarize(
     o.total = total;
     o.span = te > ts ? te - ts : 0;
     if (deltas.empty()) return o;
-    std::vector<std::pair<std::uint64_t, std::int64_t>> pts(deltas.begin(),
-                                                            deltas.end());
+    std::vector<std::pair<std::uint64_t, std::int64_t>> pts = deltas.values();
     std::sort(pts.begin(), pts.end(),
               [](const auto& x, const auto& y) { return x.first < y.first; });
     std::int64_t depth = 0;

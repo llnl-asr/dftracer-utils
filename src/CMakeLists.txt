@@ -1584,6 +1584,17 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
     add_stdfs_if_needed(${bench_name})
     target_set_warnings(${bench_name})
   endforeach()
+
+  # `--smoke` runs one tiny case. ctest sees these only when
+  # DFTRACER_UTILS_TESTS is ON, which the `bench` preset sets.
+  if(DFTRACER_UTILS_TESTS)
+    enable_testing()
+    foreach(bench view_api_bench index_bench duql_eval_bench
+                  group_transform_bench)
+      add_test(NAME ${bench}_smoke COMMAND ${bench} --smoke)
+      set_tests_properties(${bench}_smoke PROPERTIES LABELS bench_smoke)
+    endforeach()
+  endif()
 endif()
 
 # ##############################################################################

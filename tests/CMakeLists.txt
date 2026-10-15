@@ -70,6 +70,15 @@ set_tests_properties(c_abi_guard PROPERTIES RESOURCE_LOCK build_tree)
 add_test(NAME index_layers
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_index_layers.cmake)
+add_test(NAME layering_scripts
+         COMMAND sh ${CMAKE_SOURCE_DIR}/tests/layering/run_layering_scripts.sh
+                 ${CMAKE_SOURCE_DIR} ${CMAKE_CXX_COMPILER})
+add_test(NAME layering_baseline
+         COMMAND
+           sh -c
+           "sh \"$0\" \"$1\" \"$2\" > \"$1/layering_baseline_1.txt\" && sh \"$0\" \"$1\" \"$2\" > \"$1/layering_baseline_2.txt\" && cmp \"$1/layering_baseline_1.txt\" \"$1/layering_baseline_2.txt\""
+           ${CMAKE_SOURCE_DIR}/scripts/layering/baseline.sh ${CMAKE_BINARY_DIR}
+           ${CMAKE_SOURCE_DIR})
 add_test(NAME agg_families
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_agg_families.cmake)

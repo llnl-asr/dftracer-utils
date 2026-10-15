@@ -52,6 +52,18 @@
       }
     },
     {
+      "name": "bench",
+      "displayName": "Benchmarks (Release)",
+      "description": "Release build with the standalone benchmarks; the smoke ctests need DFTRACER_UTILS_TESTS",
+      "inherits": "release",
+      "cacheVariables": {
+        "DFTRACER_UTILS_BUILD_BENCHMARKS": "ON",
+        "DFTRACER_UTILS_TESTS": "ON",
+        "DFTRACER_UTILS_BUILD_PYTHON": "ON",
+        "DFTRACER_UTILS_BUILD_STATIC": "OFF"
+      }
+    },
+    {
       "name": "shared-only",
       "displayName": "Shared Library Only (RelWithDebInfo)",
       "description": "Build only shared library",
@@ -161,6 +173,19 @@
       "name": "release",
       "displayName": "Release Build",
       "configurePreset": "release",
+      "jobs": 0
+    },
+    {
+      "name": "bench",
+      "displayName": "Benchmarks Build",
+      "configurePreset": "bench",
+      "targets": [
+        "view_api_bench",
+        "index_bench",
+        "duql_eval_bench",
+        "group_transform_bench",
+        "dftracer_utils_ext"
+      ],
       "jobs": 0
     },
     {
@@ -293,6 +318,20 @@
       },
       "execution": {
         "jobs": 0
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "bench",
+      "displayName": "Run Benchmark Smoke Tests",
+      "configurePreset": "bench",
+      "environment": {
+        "DFTRACER_UTILS_ELASTIC": "0"
+      },
+      "execution": {
+        "jobs": 1
       },
       "output": {
         "outputOnFailure": true

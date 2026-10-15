@@ -70,6 +70,19 @@ set_tests_properties(c_abi_guard PROPERTIES RESOURCE_LOCK build_tree)
 add_test(NAME index_layers
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_index_layers.cmake)
+if(DFTRACER_UTILS_BUILD_SHARED)
+  add_test(NAME library_versions
+           COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+                   -DLIB_DIR=${CMAKE_BINARY_DIR}/lib -P
+                   ${CMAKE_SOURCE_DIR}/cmake/scripts/check_library_versions.cmake)
+endif()
+add_test(NAME z_defs
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+                 -DWORK_DIR=${CMAKE_BINARY_DIR}/z_defs -DCXX=${CMAKE_CXX_COMPILER}
+                 -DGENERATOR=${CMAKE_GENERATOR} -P
+                 ${CMAKE_SOURCE_DIR}/tests/zdefs/run.cmake)
+set_tests_properties(z_defs PROPERTIES SKIP_REGULAR_EXPRESSION
+                     "z_defs: skipped on Apple")
 add_test(NAME layering_scripts
          COMMAND sh ${CMAKE_SOURCE_DIR}/tests/layering/run_layering_scripts.sh
                  ${CMAKE_SOURCE_DIR} ${CMAKE_CXX_COMPILER})

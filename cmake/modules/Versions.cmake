@@ -54,7 +54,8 @@ endfunction()
 
 # Reads VERSION and writes the interface versions into two generated headers:
 # core/common/versions.h for the library and plugins/abi_version.h, which the
-# plain-C plugin ABI includes.
+# plain-C plugin ABI includes. Also sets DFTRACER_UTILS_API_VERSION and
+# DFTRACER_UTILS_ABI_VERSION in the caller's scope for create_library.
 function(dftracer_utils_interface_versions version_file out_include_dir)
   set_property(
     DIRECTORY
@@ -128,6 +129,12 @@ function(dftracer_utils_interface_versions version_file out_include_dir)
                    "${out_include_dir}/dftracer/utils/${_h}" COPYONLY)
     file(REMOVE "${out_include_dir}/dftracer/utils/${_h}.tmp")
   endforeach()
+  set(DFTRACER_UTILS_API_VERSION
+      "${_api}"
+      PARENT_SCOPE)
+  set(DFTRACER_UTILS_ABI_VERSION
+      "${_abi}"
+      PARENT_SCOPE)
   dftracer_utils_item("Interface      "
                       "api=${_api} abi=${_abi} index=${_index} duql=${_duql}")
 endfunction()

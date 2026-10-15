@@ -78,12 +78,12 @@ a terminal) unless overridden by ``NO_COLOR``/``FORCE_COLOR``/
 The C++ API
 -----------
 
-The logger lives in ``dftracer/utils/core/common/logging.h``, namespace
+The logger lives in ``dftracer/utils/common/logging.h``, namespace
 ``dftracer::utils::logger``:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/common/logging.h>
+   #include <dftracer/utils/common/logging.h>
 
    using namespace dftracer::utils::logger;
 

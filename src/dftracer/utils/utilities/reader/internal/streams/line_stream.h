@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_LINE_STREAM_H
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_LINE_STREAM_H
 
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/utilities/reader/internal/stream.h>
 
 #include <cstring>

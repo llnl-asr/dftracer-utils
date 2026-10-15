@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/common/transparent_string_hash.h>
 #include <dftracer/utils/dataframe/types.h>
 
 #include <deque>

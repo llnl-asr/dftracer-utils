@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/platform_compat.h>
+#include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/core/coro/abi.h>
 #include <dftracer/utils/core/coro/task_abi.h>
 #include <dftracer/utils/core/runtime.h>

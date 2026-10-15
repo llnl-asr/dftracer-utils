@@ -3,7 +3,7 @@
 // min and max of "v" per chunk as "index_minmax.range".
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/trace/internal/utils.h>

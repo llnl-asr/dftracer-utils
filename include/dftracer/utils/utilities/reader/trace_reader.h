@@ -1,9 +1,9 @@
 #ifndef DFTRACER_UTILS_UTILITIES_READER_TRACE_READER_H
 #define DFTRACER_UTILS_UTILITIES_READER_TRACE_READER_H
 
-#include <dftracer/utils/core/common/archive_format.h>
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/constants.h>
+#include <dftracer/utils/common/archive_format.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/core/coro/async_generator.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/json/parser.h>

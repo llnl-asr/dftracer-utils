@@ -6,8 +6,8 @@
 // so callers guard their MpiTransport use with the same macro. The MPI-free
 // interface in transport.h keeps core buildable without MPI.
 
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/platform_compat.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/core/distributed/transport.h>
 
 #ifdef DFTRACER_UTILS_ENABLE_MPI

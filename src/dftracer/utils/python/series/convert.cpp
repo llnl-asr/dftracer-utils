@@ -1,9 +1,9 @@
 // clang-format off
-#include <dftracer/utils/core/common/int128.h>
+#include <dftracer/utils/common/int128.h>
 #include <dftracer/utils/python/series_detail.h>  // Python.h first
 #include <datetime.h>
 // clang-format on
-#include <dftracer/utils/core/common/hash/fnv1a.h>
+#include <dftracer/utils/common/hash/fnv1a.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
 #include <dftracer/utils/dataframe/series.h>

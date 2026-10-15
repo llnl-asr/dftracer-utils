@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_CONFIG_H
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_CONFIG_H
 
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
 
 #include <cstdint>

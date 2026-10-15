@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_runtime_mixin.h>
 #include <dftracer/utils/python/py_type_helpers.h>

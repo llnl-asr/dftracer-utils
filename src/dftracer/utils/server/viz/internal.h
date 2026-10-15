@@ -4,7 +4,7 @@
 // Helpers shared across the viz_api modules (handlers + summary builder).
 // Internal to the server; not installed.
 
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/common/transparent_string_hash.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/server/trace_index.h>

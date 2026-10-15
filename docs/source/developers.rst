@@ -228,7 +228,7 @@ Configure it once at startup with functions; emit with macros:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/common/logging.h>
+   #include <dftracer/utils/common/logging.h>
    namespace logger = dftracer::utils::logger;
 
    logger::init();  // reads env, defaults to Info + auto color

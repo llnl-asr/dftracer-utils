@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/trace/internal/index_root.h>
 
 #include <mutex>

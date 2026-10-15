@@ -2,8 +2,8 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_FOLD_EVENT_H
 
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/common/field_ref.h>
-#include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/common/field_ref.h>
+#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/trace/event.h>

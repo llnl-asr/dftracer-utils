@@ -1,5 +1,5 @@
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/object_pool.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/object_pool.h>
 #include <dftracer/utils/core/io/io_backend.h>
 #include <dftracer/utils/core/io/io_thread_pool.h>
 #include <dftracer/utils/core/pipeline/executor.h>

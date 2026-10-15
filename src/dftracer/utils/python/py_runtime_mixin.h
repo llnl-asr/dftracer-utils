@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_PYTHON_PY_RUNTIME_MIXIN_H
 
 #include <Python.h>
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/runtime.h>
 

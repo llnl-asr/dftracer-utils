@@ -974,12 +974,12 @@ The replay binary is otherwise unchanged from a CLI perspective; see the
 Memory Budget Control
 ----------------------
 
-The helpers in ``dftracer/utils/core/common/memory_budget.h`` give utilities a
+The helpers in ``dftracer/utils/common/memory_budget.h`` give utilities a
 single place to size a workload against available system memory:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/common/memory_budget.h>
+   #include <dftracer/utils/common/memory_budget.h>
 
    using namespace dftracer::utils;
 

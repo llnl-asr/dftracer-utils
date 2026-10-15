@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/external_sort.h>
-#include <dftracer/utils/core/common/spill_file.h>
+#include <dftracer/utils/common/external_sort.h>
+#include <dftracer/utils/common/spill_file.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>

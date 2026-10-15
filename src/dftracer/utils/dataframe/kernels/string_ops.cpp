@@ -1,5 +1,5 @@
-#include <dftracer/utils/core/common/hash/fnv1a.h>
-#include <dftracer/utils/core/common/hash/hex64.h>
+#include <dftracer/utils/common/hash/fnv1a.h>
+#include <dftracer/utils/common/hash/hex64.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/string_reader.h>

@@ -1,7 +1,7 @@
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/no_destructor.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/no_destructor.h>
+#include <dftracer/utils/common/transparent_string_hash.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/duql/ast.h>

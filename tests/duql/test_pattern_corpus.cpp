@@ -3,7 +3,7 @@
 // results agree. Newlines and multi-byte characters are the listed changes.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/duql/parser.h>
 #include <dftracer/utils/duql/pattern_engine.h>

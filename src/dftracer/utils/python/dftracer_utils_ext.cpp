@@ -1,8 +1,8 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/memory_budget.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_serialization.h>
 #include <dftracer/utils/plugins/abi_version.h>
 #include <dftracer/utils/python/batch_indexer.h>

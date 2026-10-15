@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_DUQL_PATTERN_ENGINE_H
 #define DFTRACER_UTILS_DUQL_PATTERN_ENGINE_H
 
-#include <dftracer/utils/core/common/expected.h>
+#include <dftracer/utils/common/expected.h>
 #include <dftracer/utils/duql/pattern.h>
 #include <dftracer/utils/duql/substr_simd.h>
 

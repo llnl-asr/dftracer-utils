@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_SPILL_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_SPILL_H
 
-#include <dftracer/utils/core/common/spill_dir.h>
-#include <dftracer/utils/core/common/spill_file.h>
+#include <dftracer/utils/common/spill_dir.h>
+#include <dftracer/utils/common/spill_file.h>
 #include <dftracer/utils/dataframe/agg.h>        // AggState, AggStatePtr
 #include <dftracer/utils/dataframe/lazyframe.h>  // Cursor, Morsel
 #include <dftracer/utils/dataframe/series.h>

@@ -1,6 +1,6 @@
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/transparent_string_hash.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/build/resolver.h>

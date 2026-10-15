@@ -5,7 +5,7 @@
 // scan can skip units it has not claimed yet without the caller re-planning.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/scalar.h>

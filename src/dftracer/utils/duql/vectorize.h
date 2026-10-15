@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_DUQL_VECTORIZE_H
 #define DFTRACER_UTILS_DUQL_VECTORIZE_H
 
-#include <dftracer/utils/core/common/expected.h>
+#include <dftracer/utils/common/expected.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/series.h>

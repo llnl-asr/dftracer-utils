@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_CORE_IO_IO_URING_BACKEND_H
 #ifdef DFTRACER_UTILS_HAVE_IO_URING
 
-#include <dftracer/utils/core/common/object_pool.h>
+#include <dftracer/utils/common/object_pool.h>
 #include <dftracer/utils/core/io/io.h>
 #include <dftracer/utils/core/io/io_backend.h>
 #include <dftracer/utils/core/io/io_completion_thread.h>

@@ -141,7 +141,7 @@ would spread that peak under the available limit.
 
       .. code-block:: cpp
 
-         #include <dftracer/utils/core/common/memory_budget.h>
+         #include <dftracer/utils/common/memory_budget.h>
          using namespace dftracer::utils;
 
          MemoryBudgetAdvice advice =

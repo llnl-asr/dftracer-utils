@@ -1,7 +1,7 @@
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/utilities/common/arrow/array_view.h>
 #include <dftracer/utils/utilities/common/arrow/partition_writer.h>
 #include <nanoarrow/nanoarrow.h>

@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_DUQL_ERRC_H
 #define DFTRACER_UTILS_DUQL_ERRC_H
 
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 
 #include <cstdint>
 

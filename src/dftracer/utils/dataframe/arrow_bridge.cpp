@@ -1,7 +1,7 @@
 #include <dftracer/utils/dataframe/arrow_bridge.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <nanoarrow/nanoarrow.h>

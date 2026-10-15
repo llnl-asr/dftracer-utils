@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_metrics.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_serialization.h>

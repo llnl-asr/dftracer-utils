@@ -4,8 +4,8 @@
 // an explicit to_arrow()/to_pandas()/to_polars(), zero-copy through the Arrow C
 // interface.
 
-#include <dftracer/utils/core/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/internal/frame_native.h>

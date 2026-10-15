@@ -1,10 +1,10 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMMON_ARROW_JOIN_INTERNAL_H
 #define DFTRACER_UTILS_UTILITIES_COMMON_ARROW_JOIN_INTERNAL_H
 
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/utilities/common/arrow/column_builder.h>
 #include <nanoarrow/nanoarrow.h>
 

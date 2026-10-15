@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_PIPELINE_PIPELINE_H
 #define DFTRACER_UTILS_CORE_PIPELINE_PIPELINE_H
 
-#include <dftracer/utils/core/common/typedefs.h>
+#include <dftracer/utils/common/typedefs.h>
 #include <dftracer/utils/core/pipeline/error.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/pipeline/pipeline_output.h>

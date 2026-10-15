@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_PYTHON_BATCH_BYTE_SIZE_H
 #define DFTRACER_UTILS_PYTHON_BATCH_BYTE_SIZE_H
 
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/python/memoryview_batch.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
 

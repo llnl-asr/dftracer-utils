@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_TASKS_TASK_H
 #define DFTRACER_UTILS_CORE_TASKS_TASK_H
 
-#include <dftracer/utils/core/common/typedefs.h>
+#include <dftracer/utils/common/typedefs.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/tasks/task_result.h>
 #include <dftracer/utils/core/tasks/task_traits.h>

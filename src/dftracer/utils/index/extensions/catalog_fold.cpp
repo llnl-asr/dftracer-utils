@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/index/build/index_write_lock.h>
 #include <dftracer/utils/index/extensions/catalog_fold.h>
 #include <dftracer/utils/index/store/index_database.h>

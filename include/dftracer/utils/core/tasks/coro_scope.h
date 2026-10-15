@@ -1,9 +1,9 @@
 #ifndef DFTRACER_UTILS_CORE_TASKS_CORO_SCOPE_H
 #define DFTRACER_UTILS_CORE_TASKS_CORO_SCOPE_H
 
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/exception_helpers.h>
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/exception_helpers.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/core/coro/async_generator.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/coro/coro.h>

@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_GZIP_CHECKPOINT_SIZE_H
 #define DFTRACER_UTILS_INDEX_GZIP_CHECKPOINT_SIZE_H
 
-#include <dftracer/utils/core/common/constants.h>
+#include <dftracer/utils/common/constants.h>
 
 #include <cstddef>
 #include <cstdint>

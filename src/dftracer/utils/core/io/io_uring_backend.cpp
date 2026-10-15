@@ -1,6 +1,6 @@
 #ifdef DFTRACER_UTILS_HAVE_IO_URING
 
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/core/io/io_uring_backend.h>
 #include <dftracer/utils/core/pipeline/executor.h>
 #include <fcntl.h>

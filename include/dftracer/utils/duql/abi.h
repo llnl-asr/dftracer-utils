@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_DUQL_ABI_H
 #define DFTRACER_UTILS_DUQL_ABI_H
 
-#include <dftracer/utils/core/common/export.h>
+#include <dftracer/utils/common/export.h>
 #include <stdint.h>
 
 // Stable C ABI for the query language: parse and serialize a query without the

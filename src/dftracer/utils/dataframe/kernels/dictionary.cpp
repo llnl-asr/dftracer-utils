@@ -1,5 +1,5 @@
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/common/hash/hash.h>
+#include <dftracer/utils/common/hash/hash.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/varwidth_offsets.h>

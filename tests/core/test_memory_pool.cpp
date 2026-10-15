@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/memory_pool.h>
+#include <dftracer/utils/common/memory_pool.h>
 #include <doctest/doctest.h>
 
 #include <thread>

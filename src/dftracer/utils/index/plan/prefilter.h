@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_PLAN_PREFILTER_H
 #define DFTRACER_UTILS_INDEX_PLAN_PREFILTER_H
 
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/duql/query.h>
 
 #include <cstddef>

@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_TASK_HANDLE_H
 #define DFTRACER_UTILS_CORE_TASK_HANDLE_H
 
-#include <dftracer/utils/core/common/typedefs.h>
+#include <dftracer/utils/common/typedefs.h>
 
 #include <chrono>
 #include <future>

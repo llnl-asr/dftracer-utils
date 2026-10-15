@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_COLUMN_READ_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_COLUMN_READ_H
 
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/decimal.h>

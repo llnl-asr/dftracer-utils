@@ -1,5 +1,5 @@
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #include <dftracer/utils/utilities/common/arrow/column_builder.h>

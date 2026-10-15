@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_INTERN_H
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_INTERN_H
 
-#include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/common/string_intern.h>
 
 #include <atomic>
 #include <cstdint>

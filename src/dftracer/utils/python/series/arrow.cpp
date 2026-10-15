@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
+#include <dftracer/utils/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/python/series_detail.h>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW

@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_TASK_GRAPH_TASK_GRAPH_H
 #define DFTRACER_UTILS_CORE_TASK_GRAPH_TASK_GRAPH_H
 
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/task_graph/reduction.h>
 #include <dftracer/utils/core/task_graph/task_graph_config.h>

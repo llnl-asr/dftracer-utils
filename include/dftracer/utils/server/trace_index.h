@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_SERVER_TRACE_INDEX_H
 #define DFTRACER_UTILS_SERVER_TRACE_INDEX_H
 
-#include <dftracer/utils/core/common/constants.h>
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/core/coro/async_mutex.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/index/record_schema.h>

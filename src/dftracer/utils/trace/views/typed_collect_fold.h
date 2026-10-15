@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_TYPED_COLLECT_FOLD_H
 #define DFTRACER_UTILS_TRACE_VIEWS_TYPED_COLLECT_FOLD_H
 
-#include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>

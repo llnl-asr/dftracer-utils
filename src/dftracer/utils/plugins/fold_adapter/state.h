@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_PLUGINS_FOLD_ADAPTER_STATE_H
 #define DFTRACER_UTILS_PLUGINS_FOLD_ADAPTER_STATE_H
 
-#include <dftracer/utils/core/common/spill_dir.h>
+#include <dftracer/utils/common/spill_dir.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/state_registry.h>
 

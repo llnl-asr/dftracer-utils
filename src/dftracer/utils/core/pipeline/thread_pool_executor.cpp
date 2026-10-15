@@ -1,5 +1,5 @@
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/platform_compat.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/core/coro/yield.h>
 #include <dftracer/utils/core/io/io_backend_factory.h>
 #include <dftracer/utils/core/pipeline/thread_pool_executor.h>

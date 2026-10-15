@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_ARROW_BRIDGE_H
 #define DFTRACER_UTILS_DATAFRAME_ARROW_BRIDGE_H
 
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #include <dftracer/utils/dataframe/dataframe.h>

@@ -1,6 +1,6 @@
 """Human-readable byte and duration parsing for user-facing arguments.
 
-Mirrors the C++ helpers in ``core/common/str_format.h`` so a Python caller can
+Mirrors the C++ helpers in ``common/str_format.h`` so a Python caller can
 pass either a raw number (in the argument's native unit) or a string such as
 ``"64MB"``, ``"1.5GiB"``, ``"30s"`` or ``"5m"``.
 

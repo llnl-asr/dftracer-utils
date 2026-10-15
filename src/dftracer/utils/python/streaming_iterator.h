@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_PYTHON_STREAMING_ITERATOR_H
 
 #include <Python.h>
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 
 #include <atomic>

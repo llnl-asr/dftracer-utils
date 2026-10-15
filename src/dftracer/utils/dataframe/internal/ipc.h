@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_IPC_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_IPC_H
 
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 
 #include <optional>

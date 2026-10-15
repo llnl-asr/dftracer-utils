@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 // nanoarrow must precede arrow.h: arrow_abi.h (pulled in by arrow.h) defines

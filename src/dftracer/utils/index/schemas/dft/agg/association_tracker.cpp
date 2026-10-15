@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/common/transparent_string_hash.h>
 #include <dftracer/utils/index/schemas/dft/agg/association_tracker.h>
 #include <dftracer/utils/index/store/key_codec.h>
 

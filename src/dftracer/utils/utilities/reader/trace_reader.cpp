@@ -1,5 +1,5 @@
-#include <dftracer/utils/core/common/archive_format.h>
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/archive_format.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/index/plan/prefilter.h>

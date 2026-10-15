@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_EXTENSIONS_CHUNK_DIMENSION_STATS_H
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_CHUNK_DIMENSION_STATS_H
 
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/common/transparent_string_hash.h>
 
 #include <cmath>
 #include <cstdint>

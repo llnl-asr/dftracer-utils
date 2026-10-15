@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_SERIES_H
 #define DFTRACER_UTILS_DATAFRAME_SERIES_H
 
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dataframe/types.h>

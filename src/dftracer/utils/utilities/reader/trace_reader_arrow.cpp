@@ -1,7 +1,7 @@
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/core/common/string_arena.h>
+#include <dftracer/utils/common/string_arena.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/plan/prefilter.h>
 #include <dftracer/utils/index/store/index_database.h>

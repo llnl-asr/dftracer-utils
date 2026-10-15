@@ -5,7 +5,7 @@
 // scan, the two collection paths, and the row-for-row comparisons. Split over
 // two binaries so each fits its own Valgrind budget.
 
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/dataframe/batch_ops.h>

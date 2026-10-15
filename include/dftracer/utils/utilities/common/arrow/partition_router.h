@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMMON_ARROW_PARTITION_ROUTER_H
 #define DFTRACER_UTILS_UTILITIES_COMMON_ARROW_PARTITION_ROUTER_H
 
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #include <dftracer/utils/core/coro/task.h>

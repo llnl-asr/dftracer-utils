@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATOR_TYPES_H
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATOR_TYPES_H
 
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/transparent_string_hash.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_key.h>

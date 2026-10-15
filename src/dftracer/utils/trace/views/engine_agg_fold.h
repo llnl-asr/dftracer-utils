@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_ENGINE_AGG_FOLD_H
 #define DFTRACER_UTILS_TRACE_VIEWS_ENGINE_AGG_FOLD_H
 
-#include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/duql/query.h>

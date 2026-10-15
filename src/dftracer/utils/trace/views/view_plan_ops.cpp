@@ -1,6 +1,6 @@
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/common/memory_budget.h>
-#include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/common/memory_budget.h>
+#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>

@@ -1,9 +1,9 @@
 #ifndef DFTRACER_UTILS_INDEX_GZIP_CHECKPOINT_INDEXER_FACTORY_H
 #define DFTRACER_UTILS_INDEX_GZIP_CHECKPOINT_INDEXER_FACTORY_H
 
-#include <dftracer/utils/core/common/archive_format.h>
-#include <dftracer/utils/core/common/constants.h>
-#include <dftracer/utils/core/common/format_detector.h>
+#include <dftracer/utils/common/archive_format.h>
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/format_detector.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 
 #include <memory>

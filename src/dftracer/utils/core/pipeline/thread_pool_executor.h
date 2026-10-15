@@ -2,9 +2,9 @@
 #define DFTRACER_UTILS_CORE_PIPELINE_THREAD_POOL_EXECUTOR_H
 
 #include <concurrentqueue.h>
-#include <dftracer/utils/core/common/platform_compat.h>
-#include <dftracer/utils/core/common/timer_service.h>
-#include <dftracer/utils/core/common/typedefs.h>
+#include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/common/timer_service.h>
+#include <dftracer/utils/common/typedefs.h>
 #include <dftracer/utils/core/coro/coro.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/io/io_backend.h>

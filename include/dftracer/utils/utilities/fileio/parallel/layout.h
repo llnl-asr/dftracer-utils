@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_PARALLEL_LAYOUT_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_PARALLEL_LAYOUT_H
 
-#include <dftracer/utils/core/common/filesystem_info.h>
+#include <dftracer/utils/common/filesystem_info.h>
 
 #include <cstddef>
 #include <string>
@@ -13,7 +13,7 @@ enum class FileLayout {
     STRIPED,  ///< single file, atomic-offset pwrite; used on local and PFS
 };
 
-/// Filesystem classification lives in core/common; re-exported here so existing
+/// Filesystem classification lives in common; re-exported here so existing
 /// callers keep using parallel::FilesystemKind.
 using dftracer::utils::FilesystemKind;
 

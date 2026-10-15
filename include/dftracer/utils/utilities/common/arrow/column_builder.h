@@ -1,10 +1,10 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMMON_ARROW_COLUMN_BUILDER_H
 #define DFTRACER_UTILS_UTILITIES_COMMON_ARROW_COLUMN_BUILDER_H
 
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/common/transparent_string_hash.h>
 #include <dftracer/utils/utilities/common/arrow/arrow_export.h>
 #include <dftracer/utils/utilities/common/statistics/ddsketch.h>
 

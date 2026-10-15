@@ -9,8 +9,8 @@
 // engine aggregation path rather than a wrapper around it.
 
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/common/to_chars.h>
+#include <dftracer/utils/common/string_intern.h>
+#include <dftracer/utils/common/to_chars.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/field_stat.h>

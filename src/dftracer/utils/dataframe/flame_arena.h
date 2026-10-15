@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_FLAME_ARENA_H
 #define DFTRACER_UTILS_DATAFRAME_FLAME_ARENA_H
 
-#include <dftracer/utils/core/common/transparent_string_hash.h>  // StringViewMap
+#include <dftracer/utils/common/transparent_string_hash.h>  // StringViewMap
 
 #include <cstdint>
 #include <cstring>

@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_BUILD_INDEX_FOLD_DRIVER_H
 #define DFTRACER_UTILS_INDEX_BUILD_INDEX_FOLD_DRIVER_H
 
-#include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/core/coro/async_semaphore.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/index/build/index_visitor.h>

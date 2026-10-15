@@ -10,7 +10,7 @@ result versus an exception.
 The problem with one flat error enum
 ------------------------------------------
 
-A single global ``ErrorCode`` enum (``core/common/error.h`` still has one,
+A single global ``ErrorCode`` enum (``common/error.h`` still has one,
 ``ErrorCode``, kept for compatibility) forces every subsystem to either reuse
 a handful of coarse categories that lose information, or keep adding cases to
 a header nothing but that header owns - so every new subsystem's errors are a
@@ -23,7 +23,7 @@ categories it can switch on without knowing those subsystem-specific codes.
 Domain, code, and condition
 --------------------------------
 
-An ``Error`` (``core/common/error.h``) carries three things:
+An ``Error`` (``common/error.h``) carries three things:
 
 - ``domain`` identifies which subsystem raised it, as an FNV-1a hash of a
   human-readable name (``ErrorDomain``, built with ``make_error_domain``).

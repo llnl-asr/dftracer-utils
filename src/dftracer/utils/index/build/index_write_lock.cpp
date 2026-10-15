@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/common/transparent_string_hash.h>
 #include <dftracer/utils/index/build/index_write_lock.h>
 
 #include <memory>

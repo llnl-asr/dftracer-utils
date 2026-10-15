@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_SCALAR_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_SCALAR_H
 
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/types.h>
 

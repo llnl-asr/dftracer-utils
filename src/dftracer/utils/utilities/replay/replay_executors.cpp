@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/utilities/replay/replay.h>
 #include <fcntl.h>
 #include <sys/stat.h>

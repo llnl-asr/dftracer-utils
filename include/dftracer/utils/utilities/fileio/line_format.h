@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_LINE_FORMAT_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINE_FORMAT_H
 
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/to_chars.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/to_chars.h>
 
 #include <charconv>
 #include <cstddef>

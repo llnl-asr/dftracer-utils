@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_BUILD_BATCH_BUILDER_H
 #define DFTRACER_UTILS_INDEX_BUILD_BATCH_BUILDER_H
 
-#include <dftracer/utils/core/common/constants.h>
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_drain.h>

@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_BATCH_BRIDGE_H
 #define DFTRACER_UTILS_TRACE_VIEWS_BATCH_BRIDGE_H
 
-#include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/trace/views/fold.h>

@@ -1,5 +1,5 @@
-#include <dftracer/utils/core/common/field_ref.h>
-#include <dftracer/utils/core/common/to_chars.h>
+#include <dftracer/utils/common/field_ref.h>
+#include <dftracer/utils/common/to_chars.h>
 #include <dftracer/utils/dataframe/buffer.h>
 #include <dftracer/utils/dataframe/internal/view_builder.h>
 #include <dftracer/utils/dataframe/kernels/dictionary.h>

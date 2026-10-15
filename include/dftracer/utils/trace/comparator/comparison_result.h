@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_TRACE_COMPARATOR_COMPARISON_RESULT_H
 #define DFTRACER_UTILS_TRACE_COMPARATOR_COMPARISON_RESULT_H
 
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_key.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_map.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_metrics.h>

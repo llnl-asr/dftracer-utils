@@ -1,6 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/python/batch_byte_size.h>
 #include <dftracer/utils/python/json.h>
 #include <dftracer/utils/python/py_errors.h>

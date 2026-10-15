@@ -1,7 +1,7 @@
-#include <dftracer/utils/core/common/memory_budget.h>
-#include <dftracer/utils/core/common/platform_compat.h>
-#include <dftracer/utils/core/common/string_arena.h>
-#include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/common/memory_budget.h>
+#include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/common/string_arena.h>
+#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/dataframe/batch_ops.h>

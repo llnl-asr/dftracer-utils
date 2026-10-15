@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_INDEX_ABI_H
 #define DFTRACER_UTILS_INDEX_ABI_H
 
-#include <dftracer/utils/core/common/abi.h>
-#include <dftracer/utils/core/common/export.h>
+#include <dftracer/utils/common/abi.h>
+#include <dftracer/utils/common/export.h>
 #include <stdint.h>
 
 /*

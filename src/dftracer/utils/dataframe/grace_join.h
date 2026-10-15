@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_GRACE_JOIN_H
 #define DFTRACER_UTILS_DATAFRAME_GRACE_JOIN_H
 
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/spill.h>

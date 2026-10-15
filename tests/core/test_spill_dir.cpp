@@ -1,9 +1,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/constants.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/filesystem_info.h>
-#include <dftracer/utils/core/common/spill_dir.h>
-#include <dftracer/utils/core/common/spill_dir_internal.h>
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/filesystem_info.h>
+#include <dftracer/utils/common/spill_dir.h>
+#include <dftracer/utils/common/spill_dir_internal.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 #include <unistd.h>

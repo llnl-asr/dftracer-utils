@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMMON_ARROW_ATTRIBUTION_H
 #define DFTRACER_UTILS_UTILITIES_COMMON_ARROW_ATTRIBUTION_H
 
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #include <dftracer/utils/utilities/common/arrow/arrow_export.h>

@@ -10,9 +10,9 @@
 //           set, the legacy replay_with_call_tree path that builds a
 //           hierarchical tree first
 
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/mpi/mpi_utils.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>

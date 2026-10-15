@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_INDEXER_H
 #define DFTRACER_UTILS_INDEX_INDEXER_H
 
-#include <dftracer/utils/core/common/constants.h>
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>

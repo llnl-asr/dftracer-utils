@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_DUQL_SYNTAX_LEXER_H
 #define DFTRACER_UTILS_DUQL_SYNTAX_LEXER_H
 
-#include <dftracer/utils/core/common/expected.h>
+#include <dftracer/utils/common/expected.h>
 #include <dftracer/utils/duql/parser.h>
 
 #include <cstddef>

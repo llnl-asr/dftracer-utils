@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_KERNELS_SORT_H
 #define DFTRACER_UTILS_DATAFRAME_KERNELS_SORT_H
 
-#include <dftracer/utils/core/common/hash/splitmix64.h>
+#include <dftracer/utils/common/hash/splitmix64.h>
 #include <dftracer/utils/dataframe/buffer.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/parallel.h>

@@ -1,5 +1,5 @@
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/platform_compat.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/core/coro/async_mutex.h>
 #include <dftracer/utils/core/coro/async_semaphore.h>
 #include <dftracer/utils/core/runtime.h>

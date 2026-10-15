@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFTRACER_METADATA_COLLECTOR_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFTRACER_METADATA_COLLECTOR_UTILITY_H
 
-#include <dftracer/utils/core/common/archive_format.h>
+#include <dftracer/utils/common/archive_format.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>

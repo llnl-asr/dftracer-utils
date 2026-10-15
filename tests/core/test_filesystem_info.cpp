@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/filesystem_info.h>
-#include <dftracer/utils/core/common/scratch.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/filesystem_info.h>
+#include <dftracer/utils/common/scratch.h>
 #include <doctest/doctest.h>
 
 #include <cstdlib>

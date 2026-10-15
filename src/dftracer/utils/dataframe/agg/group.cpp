@@ -1,10 +1,10 @@
 #include <concurrentqueue.h>
-#include <dftracer/utils/core/common/hash/fnv1a.h>       // string key hashing
-#include <dftracer/utils/core/common/hash/splitmix64.h>  // row hashing
-#include <dftracer/utils/core/common/platform_compat.h>  // hardware_concurrency
-#include <dftracer/utils/core/env.h>
+#include <dftracer/utils/common/env.h>
+#include <dftracer/utils/common/hash/fnv1a.h>       // string key hashing
+#include <dftracer/utils/common/hash/splitmix64.h>  // row hashing
+#include <dftracer/utils/common/platform_compat.h>  // hardware_concurrency
 #include <dftracer/utils/dataframe/agg/detail.h>
-#include <dftracer/utils/dataframe/batch_ops.h>          // concat, take
+#include <dftracer/utils/dataframe/batch_ops.h>     // concat, take
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>  // dftu_series
 #include <dftracer/utils/dataframe/internal/column_read.h>  // read_u64

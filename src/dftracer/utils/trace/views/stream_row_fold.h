@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_STREAM_ROW_FOLD_H
 #define DFTRACER_UTILS_TRACE_VIEWS_STREAM_ROW_FOLD_H
 
-#include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/core/coro/async_semaphore.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/coro/task.h>

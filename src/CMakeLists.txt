@@ -50,6 +50,7 @@ set(DFTRACER_UTILS_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/filesystem_info.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/scratch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/memory_budget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/tracked_bytes.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/spill_dir.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/spill_file.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/base64.cpp
@@ -421,6 +422,9 @@ create_library(
   "${PKG_CONFIG_LIBS_PRIVATE}")
 
 # Post-process core library targets to add dependency linking and warnings
+option(DFTRACER_UTILS_TRACKED_BYTES
+       "Count MemoryPool and lazy plan bytes in global gauges (measurement)" OFF)
+
 foreach(variant shared static)
   string(TOUPPER ${variant} VARIANT_UPPER)
   if(TARGET dftracer_utils_core_${variant})
@@ -455,6 +459,11 @@ foreach(variant shared static)
       target_compile_definitions(dftracer_utils_core_${variant}
                                  PUBLIC DFTRACER_UTILS_MPI_ENABLED)
       target_link_libraries(dftracer_utils_core_${variant} PUBLIC MPI::MPI_CXX)
+    endif()
+
+    if(DFTRACER_UTILS_TRACKED_BYTES)
+      target_compile_definitions(dftracer_utils_core_${variant}
+                                 PUBLIC DFTRACER_UTILS_TRACKED_BYTES)
     endif()
 
     # Set warnings
@@ -1571,7 +1580,10 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/duql_mask_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/prefilter_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/window_bench.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/group_transform_bench.cpp)
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/group_transform_bench.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/memory_attribution_bench.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/counter_contention_bench.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/pressure_read_bench.cpp)
 
   foreach(bench ${DFTRACER_BENCHMARKS})
     get_filename_component(bench_name ${bench} NAME_WE)
@@ -1594,6 +1606,27 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
       add_test(NAME ${bench}_smoke COMMAND ${bench} --smoke)
       set_tests_properties(${bench}_smoke PROPERTIES LABELS bench_smoke)
     endforeach()
+
+    add_test(NAME bench_smoke/memory_attribution
+             COMMAND memory_attribution_bench --smoke)
+    set_tests_properties(bench_smoke/memory_attribution PROPERTIES LABELS
+                                                                   bench_smoke)
+
+    add_test(NAME bench_smoke/counter_contention
+             COMMAND counter_contention_bench --smoke)
+    set_tests_properties(bench_smoke/counter_contention PROPERTIES LABELS
+                                                                   bench_smoke)
+
+    add_test(NAME bench_smoke/pressure_read COMMAND pressure_read_bench --smoke)
+    set_tests_properties(bench_smoke/pressure_read PROPERTIES LABELS
+                                                              bench_smoke)
+
+    add_executable(memory_probe_test
+                   ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/memory_probe_test.cpp)
+    target_set_warnings(memory_probe_test)
+    add_test(NAME bench_smoke/memory_probe COMMAND memory_probe_test)
+    set_tests_properties(bench_smoke/memory_probe PROPERTIES LABELS
+                                                            bench_smoke)
   endif()
 endif()
 

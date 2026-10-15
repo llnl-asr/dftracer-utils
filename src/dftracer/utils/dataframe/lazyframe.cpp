@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/common/hash/partition.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/memory_budget.h>
+#include <dftracer/utils/core/common/tracked_bytes.h>
 #include <dftracer/utils/core/common/transparent_string_hash.h>  // compute_memory_budget
 #include <dftracer/utils/core/coro/task_abi.h>                   // task_to_abi
 #include <dftracer/utils/core/coro/when_all.h>
@@ -5114,6 +5115,7 @@ coro::CoroTask<void> reclaim_chain(CursorChain& chain, bool& reported) {
         total += b;
         if (b) holders.emplace_back(b, c);
     }
+    tracked_bytes::set_lazy(total);
     if (total <= chain.budget) co_return;
     std::sort(holders.begin(), holders.end(),
               [](const auto& a, const auto& b) { return a.first > b.first; });

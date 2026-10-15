@@ -58,6 +58,7 @@
       "inherits": "release",
       "cacheVariables": {
         "DFTRACER_UTILS_BUILD_BENCHMARKS": "ON",
+        "DFTRACER_UTILS_TRACKED_BYTES": "ON",
         "DFTRACER_UTILS_TESTS": "ON",
         "DFTRACER_UTILS_BUILD_PYTHON": "ON",
         "DFTRACER_UTILS_BUILD_STATIC": "OFF"

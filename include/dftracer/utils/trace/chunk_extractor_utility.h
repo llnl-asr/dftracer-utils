@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFTRACER_CHUNK_EXTRACTOR_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFTRACER_CHUNK_EXTRACTOR_UTILITY_H
 
-#include <dftracer/utils/core/common/constants.h>
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/trace/event_id.h>
 #include <dftracer/utils/trace/internal/chunk_manifest.h>

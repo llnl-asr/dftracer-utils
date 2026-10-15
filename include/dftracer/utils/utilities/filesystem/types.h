@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILESYSTEM_TYPES_H
 #define DFTRACER_UTILS_UTILITIES_FILESYSTEM_TYPES_H
 
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/filesystem.h>
 
 #include <cstdint>
 

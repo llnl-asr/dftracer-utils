@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_VIEW_SCANNER_UTILITY_H
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_SCANNER_UTILITY_H
 
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/core/coro/async_generator.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>

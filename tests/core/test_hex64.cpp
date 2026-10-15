@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/hash/hex64.h>
+#include <dftracer/utils/common/hash/hex64.h>
 #include <doctest/doctest.h>
 
 #include <string>

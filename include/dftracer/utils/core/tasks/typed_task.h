@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_TASKS_TYPED_TASK_H
 #define DFTRACER_UTILS_CORE_TASKS_TYPED_TASK_H
 
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 

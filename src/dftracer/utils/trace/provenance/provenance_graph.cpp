@@ -20,7 +20,7 @@ constexpr std::string_view ENTITY_PREFIX = "prov_entity:";
 constexpr std::string_view TYPE_PREFIX = "prov_type:";
 
 // Per-slot partial: keyed for O(1) merge, flattened into vectors at the end.
-// dftracer entity API enums (core/common/entity.h), rendered as names.
+// dftracer entity API enums (common/entity.h), rendered as names.
 std::string store_name(std::string_view v) {
     static const char* names[] = {"memory",      "gpu_memory",   "local_disk",
                                   "parallel_fs", "burst_buffer", "object_store",

@@ -1,5 +1,5 @@
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/hash/fnv1a.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/hash/fnv1a.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/duql/subsumption.h>
 #include <dftracer/utils/index/cache/mv_store.h>

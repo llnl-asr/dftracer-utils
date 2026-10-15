@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_TASK_GRAPH_TASK_RESULT_H
 #define DFTRACER_UTILS_CORE_TASK_GRAPH_TASK_RESULT_H
 
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 
 #include <cstddef>
 #include <memory>

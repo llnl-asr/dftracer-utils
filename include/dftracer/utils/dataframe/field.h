@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_FIELD_H
 #define DFTRACER_UTILS_DATAFRAME_FIELD_H
 
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>

@@ -22,7 +22,7 @@
 // group_by or flamegraph; a query with an arrow is not pruned, which only
 // reads one file's own columns.
 
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/duql/query.h>

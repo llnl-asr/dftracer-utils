@@ -1,11 +1,11 @@
 #ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_ARROW_ROW_BUILDER_H
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_ARROW_ROW_BUILDER_H
 
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
-#include <dftracer/utils/core/common/string_arena.h>
+#include <dftracer/utils/common/string_arena.h>
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/trace/time_metric.h>
 #include <dftracer/utils/utilities/common/arrow/column_builder.h>

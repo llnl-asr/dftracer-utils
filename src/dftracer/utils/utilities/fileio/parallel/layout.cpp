@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/filesystem_info.h>
+#include <dftracer/utils/common/filesystem_info.h>
 #include <dftracer/utils/utilities/fileio/parallel/layout.h>
 
 #include <algorithm>

@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/str_format.h>
+#include <dftracer/utils/common/str_format.h>
 #include <doctest/doctest.h>
 
 using dftracer::utils::parse_bytes;

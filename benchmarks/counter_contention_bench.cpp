@@ -8,8 +8,8 @@
 // so the counters under test are the only counting in them.
 //
 //   a  one shared atomic: fetch_add on alloc, fetch_sub on free
-//   b  a per-thread counter flushed into one shared atomic every 64 KiB of change
-//   c  remote free onto the owner's page chain, one CAS per free
+//   b  a per-thread counter flushed into one shared atomic every 64 KiB of
+//   change c  remote free onto the owner's page chain, one CAS per free
 //      against a 64-entry thread-local buffer and one CAS per chain
 //
 // Variant c runs in rounds. Every thread allocates a batch and deals 256-block
@@ -32,10 +32,7 @@
 // allocated bytes and that both equal the bytes the size tables imply.
 
 #define DFTU_MEMORY_PROBE_DEFINE_NEW
-#include "memory_probe.h"
-#include "memory_workloads.h"
-
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
@@ -60,6 +57,9 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+#include "memory_probe.h"
+#include "memory_workloads.h"
 
 using namespace dftracer::utils;
 using dftracer::utils::coro::CoroTask;
@@ -361,7 +361,8 @@ void push_chain(std::atomic<Node*>& head, Node* first, Node* last) {
 
 struct RemoteShared {
     RemoteShared(std::size_t threads, std::size_t batch)
-        : chains(threads), outbox(threads, std::vector<Node*>(batch)),
+        : chains(threads),
+          outbox(threads, std::vector<Node*>(batch)),
           barrier(static_cast<std::ptrdiff_t>(threads)) {}
 
     std::vector<PaddedHead> chains;
@@ -409,7 +410,8 @@ void remote_worker(RemoteShared& sh, std::size_t t, std::size_t threads,
                 std::chrono::steady_clock::now() - push_begin)
                 .count());
         sh.barrier.arrive_and_wait();
-        Node* p = sh.chains[t].head.exchange(nullptr, std::memory_order_acquire);
+        Node* p =
+            sh.chains[t].head.exchange(nullptr, std::memory_order_acquire);
         while (p != nullptr) {
             Node* next = p->next;
             st.freed += p->size;
@@ -489,8 +491,8 @@ RunResult run_once(Variant v, std::size_t threads, const SizeTables& tables,
     r.ns_per_remote_free = static_cast<double>(push_ns) /
                            static_cast<double>(threads) /
                            static_cast<double>(pairs);
-    const bool remote = v == Variant::REMOTE_CAS_PER_FREE ||
-                        v == Variant::REMOTE_BUFFERED;
+    const bool remote =
+        v == Variant::REMOTE_CAS_PER_FREE || v == Variant::REMOTE_BUFFERED;
     r.counter_end = remote ? static_cast<std::int64_t>(r.allocated - r.freed)
                            : shared.value.load(std::memory_order_relaxed);
     return r;
@@ -541,8 +543,7 @@ int main(int argc, char** argv) {
                 for (std::size_t run = 0; run < sizes.runs; ++run) {
                     const RunResult r =
                         run_once(VARIANTS[vi].id, threads, tables, pairs);
-                    ns.push_back(remote ? r.ns_per_remote_free
-                                        : r.ns_per_pair);
+                    ns.push_back(remote ? r.ns_per_remote_free : r.ns_per_pair);
                     ns_round.push_back(r.ns_per_pair);
                     if (r.counter_end != 0 || r.allocated != r.freed ||
                         r.allocated != expected) {
@@ -582,8 +583,7 @@ int main(int argc, char** argv) {
         for (std::size_t vi = 0; vi < std::size(VARIANTS); ++vi) {
             if (with_barriers[vi].empty()) continue;
             std::printf("%-18s", VARIANTS[vi].name);
-            for (const double v : with_barriers[vi])
-                std::printf(" %9.1f", v);
+            for (const double v : with_barriers[vi]) std::printf(" %9.1f", v);
             std::printf("\n");
         }
     }

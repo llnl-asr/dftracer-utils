@@ -8,7 +8,7 @@
 // file-statics. The method bodies live in series/{arith,math,window,stats,
 // reduce,string,arrow}.cpp and are declared in series_detail.h.
 
-#include <dftracer/utils/core/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
+#include <dftracer/utils/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/python/py_method.h>

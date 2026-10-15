@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_INDEX_EXTENSIONS_ROWSET_FOLD_H
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_ROWSET_FOLD_H
 
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/common/string_intern.h>
+#include <dftracer/utils/common/transparent_string_hash.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/index/source.h>
 #include <dftracer/utils/index/store/index_write.h>

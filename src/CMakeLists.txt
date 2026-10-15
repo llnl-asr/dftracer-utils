@@ -43,18 +43,18 @@ endif()
 
 set(DFTRACER_UTILS_CORE_SOURCES
     # Common
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/logging.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/symbolize.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/format_detector.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/filesystem.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/filesystem_info.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/scratch.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/memory_budget.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/tracked_bytes.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/spill_dir.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/spill_file.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/base64.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/env.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/logging.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/symbolize.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/format_detector.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/filesystem.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/filesystem_info.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/scratch.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/memory_budget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/tracked_bytes.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/spill_dir.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/spill_file.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/base64.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/env.cpp
     # Utilities
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/utils/timer.cpp
     # Pipeline - New Architecture

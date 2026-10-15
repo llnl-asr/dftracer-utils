@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/index/cache/lru.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
 #include <dftracer/utils/utilities/common/serialization/binary_codec.h>

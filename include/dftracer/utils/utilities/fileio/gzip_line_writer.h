@@ -1,9 +1,9 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_GZIP_LINE_WRITER_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_GZIP_LINE_WRITER_H
 
-#include <dftracer/utils/core/common/constants.h>
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/memory_budget.h>
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/fileio/json_line_format.h>
 #include <dftracer/utils/utilities/fileio/line_format.h>

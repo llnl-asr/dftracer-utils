@@ -1,5 +1,5 @@
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/index/build/index_write_lock.h>
 #include <dftracer/utils/index/extensions/bloom_filter.h>

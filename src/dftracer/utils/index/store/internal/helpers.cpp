@@ -1,5 +1,5 @@
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 

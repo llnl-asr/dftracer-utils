@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/memory_budget.h>
+#include <dftracer/utils/common/memory_budget.h>
 #include <doctest/doctest.h>
 
 using dftracer::utils::format_memory_budget_warning;

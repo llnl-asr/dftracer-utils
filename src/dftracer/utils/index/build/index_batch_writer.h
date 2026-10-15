@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_BUILD_INDEX_BATCH_WRITER_H
 #define DFTRACER_UTILS_INDEX_BUILD_INDEX_BATCH_WRITER_H
 
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>

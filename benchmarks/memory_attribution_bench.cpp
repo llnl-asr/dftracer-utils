@@ -14,16 +14,14 @@
 // built-in lazy cursors report 0 resident bytes today.
 
 #ifndef DFTRACER_UTILS_TRACKED_BYTES
-#error "memory_attribution_bench needs a build with DFTRACER_UTILS_TRACKED_BYTES=ON"
+#error \
+    "memory_attribution_bench needs a build with DFTRACER_UTILS_TRACKED_BYTES=ON"
 #endif
 
 #define DFTU_MEMORY_PROBE_DEFINE_NEW
-#include "memory_probe.h"
-#include "memory_workloads.h"
-
-#include <dftracer/utils/core/common/constants.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/tracked_bytes.h>
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/tracked_bytes.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
@@ -51,6 +49,9 @@
 #include <utility>
 #include <vector>
 
+#include "memory_probe.h"
+#include "memory_workloads.h"
+
 using namespace dftracer::utils;
 using dftracer::utils::coro::CoroTask;
 namespace df = dftracer::utils::dataframe;
@@ -60,7 +61,8 @@ using namespace dftu::memory_workloads;
 namespace {
 
 constexpr std::uint64_t MIB = 1024ULL * 1024ULL;
-constexpr std::int64_t LIVE_OVER_ANON_SLACK = static_cast<std::int64_t>(16 * MIB);
+constexpr std::int64_t LIVE_OVER_ANON_SLACK =
+    static_cast<std::int64_t>(16 * MIB);
 constexpr std::chrono::milliseconds SAMPLE_INTERVAL{1};
 constexpr std::uint64_t SPILL_BUDGET = 8 * MIB;
 
@@ -89,9 +91,12 @@ struct WorkloadInfo {
 };
 
 constexpr WorkloadInfo WORKLOADS[] = {
-    {Workload::GROUP_BY, "group_by"},   {Workload::SORT, "sort"},
-    {Workload::JOIN, "join"},           {Workload::INDEX_BUILD, "index_build"},
-    {Workload::JSON_READ, "json_read"}, {Workload::GENESIS, "genesis"},
+    {Workload::GROUP_BY, "group_by"},
+    {Workload::SORT, "sort"},
+    {Workload::JOIN, "join"},
+    {Workload::INDEX_BUILD, "index_build"},
+    {Workload::JSON_READ, "json_read"},
+    {Workload::GENESIS, "genesis"},
     {Workload::SPILL_CYCLE, "spill_cycle"},
 };
 
@@ -208,7 +213,8 @@ void index_build(const Paths& p) {
 
 CoroTask<void> read_lines(std::string file) {
     simdjson::dom::parser parser;
-    auto gen = utilities::fileio::lines::sources::async_streaming_gz_lines(file);
+    auto gen =
+        utilities::fileio::lines::sources::async_streaming_gz_lines(file);
     std::uint64_t parsed = 0;
     while (auto line = co_await gen.next()) {
         std::string_view l = line->content;
@@ -228,7 +234,8 @@ void json_read(const Paths& p) {
 }
 
 void genesis(const Paths& p) {
-    run_scoped([&](CoroScope& ctx) { return genesis_run(ctx, p.genesis_root); });
+    run_scoped(
+        [&](CoroScope& ctx) { return genesis_run(ctx, p.genesis_root); });
 }
 
 std::string trace_text(std::int64_t lines) {
@@ -240,7 +247,8 @@ std::string trace_text(std::int64_t lines) {
         out += R"(","cat":"POSIX","pid":)" + std::to_string(i % 4);
         out += R"(,"tid":1,"ts":)" + std::to_string(1000 + i * 10);
         out += R"(,"dur":)" + std::to_string(1 + i % 50);
-        out += R"(,"args":{"fname":"/data/f)" + std::to_string(i % 8) + "\"}}\n";
+        out +=
+            R"(,"args":{"fname":"/data/f)" + std::to_string(i % 8) + "\"}}\n";
     }
     return out;
 }
@@ -369,12 +377,11 @@ int main(int argc, char** argv) {
         const std::int64_t unattributed =
             static_cast<std::int64_t>(r.peak_anon) -
             static_cast<std::int64_t>(r.peak_tracked);
-        std::printf(
-            "%-12s %9.1f %9.1f %9.1f %9.1f %9.1f %4.0f/%-4.0f %12.1f\n",
-            info.name, mib(r.peak_rss), mib(r.end_rss), mib(r.peak_anon),
-            static_cast<double>(r.peak_live) / MIB, mib(r.peak_tracked),
-            mib(r.peak_lazy), mib(r.peak_pool),
-            static_cast<double>(unattributed) / MIB);
+        std::printf("%-12s %9.1f %9.1f %9.1f %9.1f %9.1f %4.0f/%-4.0f %12.1f\n",
+                    info.name, mib(r.peak_rss), mib(r.end_rss),
+                    mib(r.peak_anon), static_cast<double>(r.peak_live) / MIB,
+                    mib(r.peak_tracked), mib(r.peak_lazy), mib(r.peak_pool),
+                    static_cast<double>(unattributed) / MIB);
         if (info.id == Workload::INDEX_BUILD)
             std::printf(
                 "%-12s rocksdb block cache %.1f MiB (fixed, in no gauge)\n",
@@ -397,8 +404,8 @@ int main(int argc, char** argv) {
                         static_cast<double>(r.peak_live) / MIB);
             ++failures;
         }
-        if (r.peak_live > static_cast<std::int64_t>(r.peak_anon) +
-                              LIVE_OVER_ANON_SLACK) {
+        if (r.peak_live >
+            static_cast<std::int64_t>(r.peak_anon) + LIVE_OVER_ANON_SLACK) {
             std::printf("%-12s live %.1f MiB above anon %.1f MiB + 16  FAIL\n",
                         info.name, static_cast<double>(r.peak_live) / MIB,
                         mib(r.peak_anon));

@@ -1,9 +1,9 @@
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/common/byte_view.h>
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/platform_compat.h>
+#include <dftracer/utils/common/byte_view.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/core/coro/async_mutex.h>
 #include <dftracer/utils/core/coro/when_all.h>
 #include <dftracer/utils/core/runtime.h>

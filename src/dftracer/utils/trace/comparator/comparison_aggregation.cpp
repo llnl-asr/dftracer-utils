@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_logic.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_map.h>

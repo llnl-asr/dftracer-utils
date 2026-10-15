@@ -1,5 +1,5 @@
-#include <dftracer/utils/core/common/constants.h>
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_serialization.h>
 #include <dftracer/utils/index/schemas/dft/agg/association_tracker.h>

@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_INDEX_STORE_INDEX_DATABASE_H
 #define DFTRACER_UTILS_INDEX_STORE_INDEX_DATABASE_H
 
-#include <dftracer/utils/core/common/transparent_string_hash.h>
-#include <dftracer/utils/core/common/versions.h>
+#include <dftracer/utils/common/transparent_string_hash.h>
+#include <dftracer/utils/common/versions.h>
 #include <dftracer/utils/index/store/file.h>
 #include <dftracer/utils/index/store/types.h>
 

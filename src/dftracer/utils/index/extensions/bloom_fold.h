@@ -2,8 +2,8 @@
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_BLOOM_FOLD_H
 
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/common/string_intern.h>
+#include <dftracer/utils/common/transparent_string_hash.h>
 #include <dftracer/utils/index/schemas/dft/bloom_core.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_sst_writer_context.h>

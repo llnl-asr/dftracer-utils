@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_COMPRESS_GZIP_MEMBER_READER_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_COMPRESS_GZIP_MEMBER_READER_H
 
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/exception_helpers.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/core/coro/async_generator.h>
 #include <dftracer/utils/core/io/io.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>

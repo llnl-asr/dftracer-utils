@@ -1,6 +1,6 @@
 #include <dftracer/utils/binaries/common_cli.h>
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/constants.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/io/io_backend.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>

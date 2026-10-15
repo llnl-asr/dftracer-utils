@@ -1,6 +1,6 @@
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/field_ref.h>
-#include <dftracer/utils/core/common/platform_compat.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/field_ref.h>
+#include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/core/coro/async_semaphore.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/coro/coro.h>

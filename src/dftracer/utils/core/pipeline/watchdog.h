@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_PIPELINE_WATCHDOG_H
 #define DFTRACER_UTILS_CORE_PIPELINE_WATCHDOG_H
 
-#include <dftracer/utils/core/common/typedefs.h>
+#include <dftracer/utils/common/typedefs.h>
 
 #include <atomic>
 #include <chrono>

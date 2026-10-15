@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_SERIALIZATION_H
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_SERIALIZATION_H
 
-#include <dftracer/utils/core/common/hash/hex64.h>
+#include <dftracer/utils/common/hash/hex64.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_output.h>
 #include <dftracer/utils/index/store/database.h>

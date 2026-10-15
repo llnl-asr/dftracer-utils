@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_ASYNC_FILE_SOURCE_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_ASYNC_FILE_SOURCE_H
 
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/scoped_fd.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/scoped_fd.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/io/io.h>
 

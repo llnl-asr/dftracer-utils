@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_BENCHMARKS_MEMORY_WORKLOADS_H
 #define DFTRACER_UTILS_BENCHMARKS_MEMORY_WORKLOADS_H
 
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/dataframe/dataframe.h>
@@ -108,7 +108,8 @@ class GenSource : public df::Source {
     std::uint64_t seed_;
 };
 
-inline df::LazyFrame gen(std::int64_t rows, std::int64_t keys, std::uint64_t seed) {
+inline df::LazyFrame gen(std::int64_t rows, std::int64_t keys,
+                         std::uint64_t seed) {
     return df::LazyFrame::scan(std::make_shared<GenSource>(rows, keys, seed));
 }
 
@@ -153,8 +154,8 @@ inline void write_gz(const std::string& path, const std::string& content) {
 }
 
 inline std::string genesis_line(std::int64_t pid, const std::string& name,
-                         std::int64_t ts, std::int64_t dur,
-                         const char* cat = "CPP_APP") {
+                                std::int64_t ts, std::int64_t dur,
+                                const char* cat = "CPP_APP") {
     return R"({"name":")" + name + R"(","cat":")" + cat + R"(","pid":)" +
            std::to_string(pid) + R"(,"tid":)" + std::to_string(pid) +
            R"(,"ts":)" + std::to_string(ts) + R"(,"dur":)" +

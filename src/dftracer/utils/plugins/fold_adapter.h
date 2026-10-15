@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_PLUGINS_FOLD_ADAPTER_H
 
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/plugins/abi.h>

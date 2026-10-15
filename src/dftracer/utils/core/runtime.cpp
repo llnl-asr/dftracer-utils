@@ -1,7 +1,7 @@
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/platform_compat.h>
-#include <dftracer/utils/core/env.h>
+#include <dftracer/utils/common/env.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/core/pipeline/watchdog.h>
 #include <dftracer/utils/core/runtime.h>
 

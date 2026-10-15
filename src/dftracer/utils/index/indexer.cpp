@@ -1,6 +1,6 @@
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/build/index_write_lock.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>

@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_PIPELINE_ERROR_H
 #define DFTRACER_UTILS_CORE_PIPELINE_ERROR_H
 
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 
 #include <stdexcept>
 #include <string>

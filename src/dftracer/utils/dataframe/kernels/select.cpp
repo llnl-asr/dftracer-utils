@@ -4,7 +4,7 @@
 // reverse, shift, top_k/bottom_k, sample. None is a lane kernel: the numeric
 // heavy lifting is delegated to argsort/topk_indices (SIMD) and take/filter.
 
-#include <dftracer/utils/core/common/hash/splitmix64.h>
+#include <dftracer/utils/common/hash/splitmix64.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/column_read.h>

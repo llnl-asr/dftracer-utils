@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_TRACE_ARGS_MAP_H
 #define DFTRACER_UTILS_TRACE_ARGS_MAP_H
 
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/common/string_intern.h>
+#include <dftracer/utils/common/transparent_string_hash.h>
 
 #include <cstdint>
 #include <limits>

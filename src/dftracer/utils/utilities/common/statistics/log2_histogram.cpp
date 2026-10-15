@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/bits.h>
+#include <dftracer/utils/common/bits.h>
 #include <dftracer/utils/utilities/common/statistics/log2_histogram.h>
 #include <simdjson.h>
 

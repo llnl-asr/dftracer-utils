@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/parser.h>

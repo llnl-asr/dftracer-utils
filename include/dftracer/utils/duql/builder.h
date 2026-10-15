@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_DUQL_BUILDER_H
 #define DFTRACER_UTILS_DUQL_BUILDER_H
 
-#include <dftracer/utils/core/common/to_chars.h>
+#include <dftracer/utils/common/to_chars.h>
 #include <dftracer/utils/duql/ast.h>
 #include <dftracer/utils/duql/string_literal.h>
 

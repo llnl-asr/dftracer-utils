@@ -1,8 +1,8 @@
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/binaries/json_cell_printer.h>
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/memory_budget.h>  // NO_SPILL_BUDGET
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/memory_budget.h>  // NO_SPILL_BUDGET
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>

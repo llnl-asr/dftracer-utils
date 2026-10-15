@@ -1,10 +1,10 @@
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/hash/splitmix64.h>
-#include <dftracer/utils/core/common/memory_budget.h>
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
-#include <dftracer/utils/core/env.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/env.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/hash/splitmix64.h>
+#include <dftracer/utils/common/memory_budget.h>
+#include <dftracer/utils/common/string_intern.h>
+#include <dftracer/utils/common/transparent_string_hash.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/batch_ops.h>

@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMMON_SERIALIZATION_BINARY_CODEC_H
 #define DFTRACER_UTILS_UTILITIES_COMMON_SERIALIZATION_BINARY_CODEC_H
 
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 
 #include <cstdint>
 #include <cstring>

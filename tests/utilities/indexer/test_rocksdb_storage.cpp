@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/filesystem.h>

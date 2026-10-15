@@ -3,7 +3,7 @@
 // marshal the Python arguments into dftu_op_arg and hand columns to/from the
 // engine. All work is the C ABI's (dftu_op_*); this file only marshals.
 
-#include <dftracer/utils/core/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
+#include <dftracer/utils/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/python/ops.h>

@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_DUQL_SYNTAX_TREE_H
 #define DFTRACER_UTILS_DUQL_SYNTAX_TREE_H
 
-#include <dftracer/utils/core/common/versions.h>
+#include <dftracer/utils/common/versions.h>
 
 #include <cstdint>
 #include <memory>

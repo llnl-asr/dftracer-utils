@@ -1,7 +1,7 @@
-#include <dftracer/utils/core/common/hash/constants.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/to_chars.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/common/hash/constants.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/to_chars.h>
+#include <dftracer/utils/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/duql/query.h>

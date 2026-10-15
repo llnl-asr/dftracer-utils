@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_TRACE_INTERNAL_INDEX_ROOT_H
 #define DFTRACER_UTILS_TRACE_INTERNAL_INDEX_ROOT_H
 
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/async_mutex.h>
 
 #include <cstddef>

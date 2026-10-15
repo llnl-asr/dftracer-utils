@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_H
 #define DFTRACER_UTILS_CORE_H
 
-#include <dftracer/utils/core/common/common.h>
+#include <dftracer/utils/common/common.h>
 
 // Pipeline
 #include <dftracer/utils/core/pipeline/error.h>

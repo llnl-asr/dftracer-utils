@@ -4,9 +4,9 @@
 // way a loaded plugin would.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/constants.h>
-#include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
 // fold_adapter.h transitively pulls nanoarrow (ArrowArray/ArrowSchema); it must
 // precede plugin.h so arrow_abi.h no-ops rather than tripping nanoarrow's outer

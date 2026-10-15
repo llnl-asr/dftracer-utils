@@ -1,7 +1,7 @@
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
     defined(__NetBSD__) || defined(__DragonFly__)
 
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/core/io/kqueue_thread_pool_backend.h>
 #include <dftracer/utils/core/pipeline/executor.h>
 #include <sys/event.h>

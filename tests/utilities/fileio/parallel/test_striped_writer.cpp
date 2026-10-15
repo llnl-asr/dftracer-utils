@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/byte_view.h>
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/byte_view.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>

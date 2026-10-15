@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_INDEX_GZIP_GZIP_INDEXER_H
 #define DFTRACER_UTILS_INDEX_GZIP_GZIP_INDEXER_H
 
-#include <dftracer/utils/core/common/archive_format.h>
-#include <dftracer/utils/core/common/constants.h>
+#include <dftracer/utils/common/archive_format.h>
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/index/build/index_visitor.h>

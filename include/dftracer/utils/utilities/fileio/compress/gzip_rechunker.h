@@ -1,10 +1,10 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_COMPRESS_GZIP_RECHUNKER_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_COMPRESS_GZIP_RECHUNKER_H
 
-#include <dftracer/utils/core/common/constants.h>
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/scoped_fd.h>
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/scoped_fd.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/io/io.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>

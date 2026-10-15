@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_ABI_H
 #define DFTRACER_UTILS_CORE_CORO_ABI_H
 
-#include <dftracer/utils/core/common/export.h>
+#include <dftracer/utils/common/export.h>
 #include <stdint.h>
 
 #ifdef __cplusplus

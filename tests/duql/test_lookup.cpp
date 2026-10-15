@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/duql/fields.h>
 #include <dftracer/utils/duql/pipeline.h>

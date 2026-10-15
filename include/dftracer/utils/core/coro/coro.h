@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_CORO_H
 #define DFTRACER_UTILS_CORE_CORO_CORO_H
 
-#include <dftracer/utils/core/common/object_pool.h>
-#include <dftracer/utils/core/common/typedefs.h>
+#include <dftracer/utils/common/object_pool.h>
+#include <dftracer/utils/common/typedefs.h>
 
 #include <atomic>
 #include <coroutine>

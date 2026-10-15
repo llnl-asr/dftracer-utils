@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_STORE_DB_MANAGER_H
 #define DFTRACER_UTILS_INDEX_STORE_DB_MANAGER_H
 
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/common/transparent_string_hash.h>
 #include <dftracer/utils/index/store/database.h>
 
 #include <condition_variable>

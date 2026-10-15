@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_WHEN_ANY_H
 #define DFTRACER_UTILS_CORE_CORO_WHEN_ANY_H
 
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/exception_helpers.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/core/coro/completion_state.h>
 #include <dftracer/utils/core/coro/coro.h>
 #include <dftracer/utils/core/coro/resumption_helper.h>
@@ -23,7 +23,7 @@
 #include <vector>
 
 // Timer service needed for TimeoutAwaitable
-#include <dftracer/utils/core/common/timer_service.h>
+#include <dftracer/utils/common/timer_service.h>
 
 namespace dftracer::utils::coro {
 

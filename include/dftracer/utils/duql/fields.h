@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_DUQL_FIELDS_H
 #define DFTRACER_UTILS_DUQL_FIELDS_H
 
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/common/transparent_string_hash.h>
 #include <dftracer/utils/duql/ast.h>
 
 #include <string>

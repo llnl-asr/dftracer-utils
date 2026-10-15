@@ -1,10 +1,10 @@
-#include <dftracer/utils/core/common/byte_view.h>
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/constants.h>
-#include <dftracer/utils/core/common/field_ref.h>
-#include <dftracer/utils/core/common/hash/fnv1a.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/memory_budget.h>
+#include <dftracer/utils/common/byte_view.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/field_ref.h>
+#include <dftracer/utils/common/hash/fnv1a.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/core/coro/when_all.h>
 #include <dftracer/utils/core/coro/when_any.h>
 #include <dftracer/utils/core/coro/yield.h>

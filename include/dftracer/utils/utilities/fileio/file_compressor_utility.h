@@ -1,10 +1,10 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_FILE_COMPRESSOR_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_FILE_COMPRESSOR_UTILITY_H
 
-#include <dftracer/utils/core/common/byte_view.h>
-#include <dftracer/utils/core/common/constants.h>
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/byte_view.h>
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/fileio/binary_file_reader_utility.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>

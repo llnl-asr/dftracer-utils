@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_STORE_INDEX_WRITE_H
 #define DFTRACER_UTILS_INDEX_STORE_INDEX_WRITE_H
 
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/common/transparent_string_hash.h>
 #include <dftracer/utils/index/gzip/gzip_member_record.h>
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/index/store/index_database.h>

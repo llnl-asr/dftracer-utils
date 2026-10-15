@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/parser.h>

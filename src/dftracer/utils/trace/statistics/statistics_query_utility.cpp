@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/trace/statistics/statistics_query_utility.h>
 
 #include <algorithm>

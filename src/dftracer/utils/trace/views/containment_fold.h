@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_CONTAINMENT_FOLD_H
 #define DFTRACER_UTILS_TRACE_VIEWS_CONTAINMENT_FOLD_H
 
-#include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/trace/views/fold.h>

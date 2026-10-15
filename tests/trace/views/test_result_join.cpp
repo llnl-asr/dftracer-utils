@@ -4,7 +4,7 @@
 // columns opaquely, so it is generic over any aggregation schema.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/trace/views/result_join.h>
 #include <doctest/doctest.h>

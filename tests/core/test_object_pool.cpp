@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/object_pool.h>
+#include <dftracer/utils/common/object_pool.h>
 #include <doctest/doctest.h>
 
 #include <cstddef>

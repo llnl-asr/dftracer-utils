@@ -3,8 +3,8 @@
 // back with exactly the aggregate an unbudgeted run produces.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/memory_budget.h>
-#include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/common/memory_budget.h>
+#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 

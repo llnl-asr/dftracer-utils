@@ -1,6 +1,6 @@
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/hash/constants.h>
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/hash/constants.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/io/io_backend.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>

@@ -1,6 +1,6 @@
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/hash/constants.h>
-#include <dftracer/utils/core/common/little_endian.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/hash/constants.h>
+#include <dftracer/utils/common/little_endian.h>
 #include <dftracer/utils/index/extensions/bloom_filter.h>
 
 #include <algorithm>

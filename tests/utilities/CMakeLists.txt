@@ -481,7 +481,7 @@ if(DFTRACER_UTILS_ENABLE_ARROW)
   endif()
 endif()
 
-# libstdc++'s std::to_chars, inlined through core/common/to_chars.h, trips
+# libstdc++'s std::to_chars, inlined through common/to_chars.h, trips
 # GCC's optimizer-based -Wstrict-overflow=2 inside the system header, which
 # -isystem cannot suppress; the rest of the tests keep =2.
 set_source_files_properties(

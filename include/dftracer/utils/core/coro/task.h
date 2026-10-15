@@ -1,11 +1,11 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_TASK_H
 #define DFTRACER_UTILS_CORE_CORO_TASK_H
 
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/exception_helpers.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/object_pool.h>
-#include <dftracer/utils/core/common/typedefs.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/exception_helpers.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/object_pool.h>
+#include <dftracer/utils/common/typedefs.h>
 #include <dftracer/utils/core/coro/yield.h>
 #include <dftracer/utils/core/utilities/monitor.h>
 

@@ -1,7 +1,7 @@
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/hash/fnv1a.h>
-#include <dftracer/utils/core/common/versions.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/hash/fnv1a.h>
+#include <dftracer/utils/common/versions.h>
 #include <dftracer/utils/duql/syntax/tree.h>
 #include <dftracer/utils/index/cache/lookup_store.h>
 #include <dftracer/utils/index/cache/lru.h>

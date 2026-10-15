@@ -70,6 +70,11 @@ set_tests_properties(c_abi_guard PROPERTIES RESOURCE_LOCK build_tree)
 add_test(NAME index_layers
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_index_layers.cmake)
+add_test(NAME blame_ignore_revs
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_blame_ignore_revs.cmake)
+set_tests_properties(blame_ignore_revs PROPERTIES SKIP_REGULAR_EXPRESSION
+                     "blame_ignore_revs: shallow clone, skipping")
 if(DFTRACER_UTILS_BUILD_SHARED)
   add_test(NAME library_versions
            COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR}

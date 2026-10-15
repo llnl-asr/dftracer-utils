@@ -387,6 +387,16 @@ if(DFTRACER_UTILS_ENABLE_PCH)
   set(DFTRACER_UTILS_PCH_MIN_COUNT 2)
 endif()
 
+# Dependencies are linked to each variant and, for their usage requirements, to
+# the object target, which follows the shared variant when it is built.
+set(DFTU_LINK_TYPE_shared SHARED)
+set(DFTU_LINK_TYPE_static STATIC)
+if(DFTRACER_UTILS_BUILD_SHARED)
+  set(DFTU_LINK_TYPE_objects SHARED)
+else()
+  set(DFTU_LINK_TYPE_objects STATIC)
+endif()
+
 create_library(
   NAME
   dftracer_utils_core
@@ -425,8 +435,8 @@ create_library(
 option(DFTRACER_UTILS_TRACKED_BYTES
        "Count MemoryPool and lazy plan bytes in global gauges (measurement)" OFF)
 
-foreach(variant shared static)
-  string(TOUPPER ${variant} VARIANT_UPPER)
+foreach(variant objects shared static)
+  set(VARIANT_UPPER ${DFTU_LINK_TYPE_${variant}})
   if(TARGET dftracer_utils_core_${variant})
     # Link dependencies using helper functions
     link_simdjson(dftracer_utils_core_${variant} ${VARIANT_UPPER})
@@ -466,24 +476,22 @@ foreach(variant shared static)
                                  PUBLIC DFTRACER_UTILS_TRACKED_BYTES)
     endif()
 
-    # Set warnings
-    target_set_warnings(dftracer_utils_core_${variant})
+    if(variant STREQUAL "objects")
+      target_set_warnings(dftracer_utils_core_objects)
 
-    # Apply precompiled headers (automatically handles detection and reuse)
-    if(DFTRACER_UTILS_ENABLE_PCH)
-      use_precompiled_header(dftracer_utils_core_${variant})
-    endif()
+      # Apply precompiled headers (automatically handles detection and reuse)
+      if(DFTRACER_UTILS_ENABLE_PCH)
+        use_precompiled_header(dftracer_utils_core_objects)
+      endif()
 
-    # Link coverage if needed
-    if(COVERAGE_LINK_OPTIONS)
+      # io_uring compile definition
+      if(DFTRACER_UTILS_HAVE_IO_URING)
+        target_compile_definitions(dftracer_utils_core_objects
+                                   PRIVATE DFTRACER_UTILS_HAVE_IO_URING)
+      endif()
+    elseif(COVERAGE_LINK_OPTIONS)
       target_link_libraries(dftracer_utils_core_${variant}
                             PRIVATE ${COVERAGE_LINK_OPTIONS})
-    endif()
-
-    # io_uring compile definition
-    if(DFTRACER_UTILS_HAVE_IO_URING)
-      target_compile_definitions(dftracer_utils_core_${variant}
-                                 PRIVATE DFTRACER_UTILS_HAVE_IO_URING)
     endif()
   endif()
 endforeach()
@@ -624,16 +632,17 @@ create_library(
   FIND_DEPENDENCIES
   dftracer_utils_core)
 
-foreach(variant shared static)
+foreach(variant objects shared static)
+  set(VARIANT_UPPER ${DFTU_LINK_TYPE_${variant}})
   if(TARGET dftracer_utils_json_${variant})
-    target_set_warnings(dftracer_utils_json_${variant})
-    string(TOUPPER ${variant} VARIANT_UPPER)
     link_simdjson(dftracer_utils_json_${variant} ${VARIANT_UPPER})
     add_stdfs_if_needed(dftracer_utils_json_${variant})
-    if(DFTRACER_UTILS_ENABLE_PCH)
-      use_precompiled_header(dftracer_utils_json_${variant})
-    endif()
-    if(COVERAGE_LINK_OPTIONS)
+    if(variant STREQUAL "objects")
+      target_set_warnings(dftracer_utils_json_objects)
+      if(DFTRACER_UTILS_ENABLE_PCH)
+        use_precompiled_header(dftracer_utils_json_objects)
+      endif()
+    elseif(COVERAGE_LINK_OPTIONS)
       target_link_libraries(dftracer_utils_json_${variant}
                             PRIVATE ${COVERAGE_LINK_OPTIONS})
     endif()
@@ -704,9 +713,9 @@ create_library(
   dftracer_utils_core
   dftracer_utils_json)
 
-foreach(variant shared static)
+foreach(variant objects shared static)
+  set(VARIANT_UPPER ${DFTU_LINK_TYPE_${variant}})
   if(TARGET dftracer_utils_duql_${variant})
-    target_set_warnings(dftracer_utils_duql_${variant})
     target_link_libraries(dftracer_utils_duql_${variant}
                           PRIVATE $<BUILD_INTERFACE:pcre2-8-static>
                                   $<BUILD_INTERFACE:hwy>)
@@ -714,15 +723,16 @@ foreach(variant shared static)
       target_link_libraries(dftracer_utils_duql_${variant}
                             PRIVATE $<BUILD_INTERFACE:dftracer_utils_hs>)
     endif()
-    target_compile_definitions(dftracer_utils_duql_${variant}
-                               PRIVATE PCRE2_CODE_UNIT_WIDTH=8 PCRE2_STATIC)
-    string(TOUPPER ${variant} VARIANT_UPPER)
     link_simdjson(dftracer_utils_duql_${variant} ${VARIANT_UPPER})
     add_stdfs_if_needed(dftracer_utils_duql_${variant})
-    if(DFTRACER_UTILS_ENABLE_PCH)
-      use_precompiled_header(dftracer_utils_duql_${variant})
-    endif()
-    if(COVERAGE_LINK_OPTIONS)
+    if(variant STREQUAL "objects")
+      target_set_warnings(dftracer_utils_duql_objects)
+      target_compile_definitions(dftracer_utils_duql_objects
+                                 PRIVATE PCRE2_CODE_UNIT_WIDTH=8 PCRE2_STATIC)
+      if(DFTRACER_UTILS_ENABLE_PCH)
+        use_precompiled_header(dftracer_utils_duql_objects)
+      endif()
+    elseif(COVERAGE_LINK_OPTIONS)
       target_link_libraries(dftracer_utils_duql_${variant}
                             PRIVATE ${COVERAGE_LINK_OPTIONS})
     endif()
@@ -789,15 +799,21 @@ create_library(
   FIND_DEPENDENCIES
     dftracer_utils_core dftracer_utils_duql)
 
-foreach(variant shared static)
+foreach(variant objects shared static)
+  set(VARIANT_UPPER ${DFTU_LINK_TYPE_${variant}})
   if(TARGET dftracer_utils_dataframe_${variant})
-    target_set_warnings(dftracer_utils_dataframe_${variant})
-    # Keep the many per-ISA Highway instantiations and header-inline helpers out
-    # of the shared object's dynamic symbol table; the stable C ABI (marked
-    # DFTU_EXPORT / default-visible) and the out-of-line C++ API stay exported.
-    set_target_properties(dftracer_utils_dataframe_${variant}
-                          PROPERTIES VISIBILITY_INLINES_HIDDEN ON)
-    string(TOUPPER ${variant} VARIANT_UPPER)
+    if(variant STREQUAL "objects")
+      target_set_warnings(dftracer_utils_dataframe_objects)
+      # Keep the many per-ISA Highway instantiations and header-inline helpers
+      # out of the shared object's dynamic symbol table; the stable C ABI
+      # (marked DFTU_EXPORT / default-visible) and the out-of-line C++ API stay
+      # exported.
+      set_target_properties(dftracer_utils_dataframe_objects
+                            PROPERTIES VISIBILITY_INLINES_HIDDEN ON)
+      if(DFTRACER_UTILS_ENABLE_PCH)
+        use_precompiled_header(dftracer_utils_dataframe_objects)
+      endif()
+    endif()
     link_simdjson(dftracer_utils_dataframe_${variant} ${VARIANT_UPPER})
     # Highway powers the SIMD kernels; hwy_contrib carries VQSort (argsort) and
     # publicly depends on hwy, so linking it pulls hwy in too. Fall back to hwy
@@ -829,13 +845,10 @@ foreach(variant shared static)
                               PRIVATE libzstd_static)
       endif()
     endif()
-    if(DFTRACER_UTILS_ENABLE_PCH)
-      use_precompiled_header(dftracer_utils_dataframe_${variant})
-    endif()
     if(DFTRACER_UTILS_ENABLE_ARROW)
       link_nanoarrow(dftracer_utils_dataframe_${variant} ${VARIANT_UPPER})
     endif()
-    if(COVERAGE_LINK_OPTIONS)
+    if(NOT variant STREQUAL "objects" AND COVERAGE_LINK_OPTIONS)
       target_link_libraries(dftracer_utils_dataframe_${variant}
                             PRIVATE ${COVERAGE_LINK_OPTIONS})
     endif()
@@ -897,9 +910,9 @@ set_source_files_properties(
   ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_scanner_utility.cpp
   PROPERTIES COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:GNU>:-Wno-strict-overflow>")
 
-foreach(variant shared static)
+foreach(variant objects shared static)
+  set(VARIANT_UPPER ${DFTU_LINK_TYPE_${variant}})
   if(TARGET dftracer_utils_utilities_${variant})
-    string(TOUPPER ${variant} VARIANT_UPPER)
     link_rocksdb(dftracer_utils_utilities_${variant} ${VARIANT_UPPER})
 
     # RocksDB is a static archive linked into this .so. Without this its
@@ -929,8 +942,17 @@ foreach(variant shared static)
     # Add stdfs if needed
     add_stdfs_if_needed(dftracer_utils_utilities_${variant})
 
-    # Set warnings
-    target_set_warnings(dftracer_utils_utilities_${variant})
+    if(variant STREQUAL "objects")
+      target_set_warnings(dftracer_utils_utilities_objects)
+
+      # Apply precompiled headers (automatically reuses from core library)
+      if(DFTRACER_UTILS_ENABLE_PCH)
+        use_precompiled_header(dftracer_utils_utilities_objects)
+      endif()
+
+      # Boost.Math (standalone, header-only) for DLIO distribution fitting.
+      link_boost_math(dftracer_utils_utilities_objects)
+    endif()
 
     # Add MPI compile definitions and link library when enabled
     if(DFTRACER_UTILS_ENABLE_MPI)
@@ -940,25 +962,16 @@ foreach(variant shared static)
                             PUBLIC MPI::MPI_CXX)
     endif()
 
-    # Apply precompiled headers (automatically reuses from core library)
-    if(DFTRACER_UTILS_ENABLE_PCH)
-      use_precompiled_header(dftracer_utils_utilities_${variant})
-    endif()
-
     # Link coverage if needed
-    if(COVERAGE_LINK_OPTIONS)
+    if(NOT variant STREQUAL "objects" AND COVERAGE_LINK_OPTIONS)
       target_link_libraries(dftracer_utils_utilities_${variant}
                             PRIVATE ${COVERAGE_LINK_OPTIONS})
     endif()
 
     # Link nanoarrow for Arrow data interchange
     if(DFTRACER_UTILS_ENABLE_ARROW)
-      string(TOUPPER ${variant} VARIANT_UPPER)
       link_nanoarrow(dftracer_utils_utilities_${variant} ${VARIANT_UPPER})
     endif()
-
-    # Boost.Math (standalone, header-only) for DLIO distribution fitting.
-    link_boost_math(dftracer_utils_utilities_${variant})
 
     # yaml-cpp for DLIO config emit.
     link_yaml_cpp(dftracer_utils_utilities_${variant})
@@ -1004,15 +1017,17 @@ foreach(variant shared static)
     else()
       set(host_ops_anchor "dftu_register_host_ops")
     endif()
-    target_link_options(dftracer_utils_utilities_${variant} INTERFACE
-                        "LINKER:-u,${host_ops_anchor}")
-    # GNU ld does not count -u as a reference when deciding --as-needed, so the
-    # shared library is still dropped from DT_NEEDED and its initializer never
-    # runs. Keep the dependency explicitly; Mach-O has no --as-needed and needs
-    # only the -u above.
-    if(NOT APPLE AND variant STREQUAL "shared")
-      target_link_options(dftracer_utils_utilities_shared INTERFACE
-                          "LINKER:--no-as-needed")
+    if(NOT variant STREQUAL "objects")
+      target_link_options(dftracer_utils_utilities_${variant} INTERFACE
+                          "LINKER:-u,${host_ops_anchor}")
+      # GNU ld does not count -u as a reference when deciding --as-needed, so
+      # the shared library is still dropped from DT_NEEDED and its initializer
+      # never runs. Keep the dependency explicitly; Mach-O has no --as-needed
+      # and needs only the -u above.
+      if(NOT APPLE AND variant STREQUAL "shared")
+        target_link_options(dftracer_utils_utilities_shared INTERFACE
+                            "LINKER:--no-as-needed")
+      endif()
     endif()
   endif()
 endforeach()

@@ -59,7 +59,12 @@ Usage:
     [FIND_DEPENDENCIES dep1 dep2 ...]      # Dependencies to find_dependency() in config
   )
 
+Both variants are linked from one OBJECT library, ${NAME}_objects, which holds
+the compile settings. Post-process compile settings on that target; consumers
+see PUBLIC ones only if they are also added to the variants as INTERFACE.
+
 Returns (sets in parent scope):
+  ${NAME}_OBJECTS_TARGET - Name of the object library (if a variant is built)
   ${NAME}_SHARED_TARGET - Name of shared library target (if created)
   ${NAME}_STATIC_TARGET - Name of static library target (if created)
   ${NAME}_INTERFACE_TARGET - Name of interface library target (if created)
@@ -148,14 +153,107 @@ function(create_library)
 
   set(CREATED_TARGETS "")
 
-  # Helper macro to set common properties
-  macro(setup_target_common TARGET_NAME TARGET_TYPE VARIANT)
-    # Link libraries
+  # INTERFACE libraries carry only usage requirements.
+  macro(setup_target_common TARGET_NAME)
     if(LIB_PUBLIC_LINK_LIBRARIES)
       target_link_libraries(${TARGET_NAME} PUBLIC ${LIB_PUBLIC_LINK_LIBRARIES})
     endif()
 
-    if(LIB_PRIVATE_LINK_LIBRARIES AND NOT ${TARGET_TYPE} STREQUAL "INTERFACE")
+    if(LIB_INTERFACE_LINK_LIBRARIES)
+      target_link_libraries(${TARGET_NAME}
+                            INTERFACE ${LIB_INTERFACE_LINK_LIBRARIES})
+    endif()
+
+    if(LIB_PUBLIC_INCLUDE_DIRS)
+      target_include_directories(${TARGET_NAME}
+                                 PUBLIC ${LIB_PUBLIC_INCLUDE_DIRS})
+    endif()
+
+    if(LIB_PUBLIC_COMPILE_OPTIONS)
+      target_compile_options(${TARGET_NAME}
+                             PUBLIC ${LIB_PUBLIC_COMPILE_OPTIONS})
+    endif()
+
+    if(LIB_PUBLIC_COMPILE_DEFINITIONS)
+      target_compile_definitions(${TARGET_NAME}
+                                 PUBLIC ${LIB_PUBLIC_COMPILE_DEFINITIONS})
+    endif()
+
+    if(LIB_PROPERTIES)
+      set_target_properties(${TARGET_NAME} PROPERTIES ${LIB_PROPERTIES})
+    endif()
+
+    target_enable_coroutine(${TARGET_NAME})
+  endmacro()
+
+  # The object target holds every compile setting. It takes the dependencies
+  # of the shared variant, or of the static one when only that is built, for
+  # their usage requirements; an object library links nothing.
+  macro(setup_object_target TARGET_NAME)
+    if(BUILD_SHARED_LIB)
+      set(OBJECT_VARIANT_LIBRARIES ${LIB_SHARED_LINK_LIBRARIES})
+    else()
+      set(OBJECT_VARIANT_LIBRARIES ${LIB_STATIC_LINK_LIBRARIES})
+    endif()
+    if(LIB_PUBLIC_LINK_LIBRARIES OR OBJECT_VARIANT_LIBRARIES)
+      target_link_libraries(
+        ${TARGET_NAME} PUBLIC ${LIB_PUBLIC_LINK_LIBRARIES}
+                              ${OBJECT_VARIANT_LIBRARIES})
+    endif()
+
+    if(LIB_PRIVATE_LINK_LIBRARIES)
+      target_link_libraries(${TARGET_NAME}
+                            PRIVATE ${LIB_PRIVATE_LINK_LIBRARIES})
+    endif()
+
+    if(LIB_PUBLIC_INCLUDE_DIRS)
+      target_include_directories(${TARGET_NAME}
+                                 PUBLIC ${LIB_PUBLIC_INCLUDE_DIRS})
+    endif()
+
+    if(LIB_PRIVATE_INCLUDE_DIRS)
+      target_include_directories(${TARGET_NAME}
+                                 PRIVATE ${LIB_PRIVATE_INCLUDE_DIRS})
+    endif()
+
+    if(LIB_PUBLIC_COMPILE_OPTIONS)
+      target_compile_options(${TARGET_NAME}
+                             PUBLIC ${LIB_PUBLIC_COMPILE_OPTIONS})
+    endif()
+
+    if(LIB_PRIVATE_COMPILE_OPTIONS)
+      target_compile_options(${TARGET_NAME}
+                             PRIVATE ${LIB_PRIVATE_COMPILE_OPTIONS})
+    endif()
+
+    if(LIB_PUBLIC_COMPILE_DEFINITIONS)
+      target_compile_definitions(${TARGET_NAME}
+                                 PUBLIC ${LIB_PUBLIC_COMPILE_DEFINITIONS})
+    endif()
+
+    if(LIB_PRIVATE_COMPILE_DEFINITIONS)
+      target_compile_definitions(${TARGET_NAME}
+                                 PRIVATE ${LIB_PRIVATE_COMPILE_DEFINITIONS})
+    endif()
+
+    if(LIB_PROPERTIES)
+      set_target_properties(${TARGET_NAME} PROPERTIES ${LIB_PROPERTIES})
+    endif()
+
+    target_enable_coroutine(${TARGET_NAME})
+  endmacro()
+
+  # A variant links the object files and carries what consumers must see. The
+  # compile settings stay on the object target, so the public ones are repeated
+  # here as INTERFACE.
+  macro(setup_variant_target TARGET_NAME VARIANT)
+    set_target_properties(${TARGET_NAME} PROPERTIES LINKER_LANGUAGE CXX)
+
+    if(LIB_PUBLIC_LINK_LIBRARIES)
+      target_link_libraries(${TARGET_NAME} PUBLIC ${LIB_PUBLIC_LINK_LIBRARIES})
+    endif()
+
+    if(LIB_PRIVATE_LINK_LIBRARIES)
       target_link_libraries(${TARGET_NAME}
                             PRIVATE ${LIB_PRIVATE_LINK_LIBRARIES})
     endif()
@@ -165,7 +263,6 @@ function(create_library)
                             INTERFACE ${LIB_INTERFACE_LINK_LIBRARIES})
     endif()
 
-    # Variant-specific libraries
     if("${VARIANT}" STREQUAL "shared" AND LIB_SHARED_LINK_LIBRARIES)
       target_link_libraries(${TARGET_NAME} PUBLIC ${LIB_SHARED_LINK_LIBRARIES})
     endif()
@@ -174,51 +271,26 @@ function(create_library)
       target_link_libraries(${TARGET_NAME} PUBLIC ${LIB_STATIC_LINK_LIBRARIES})
     endif()
 
-    # Include directories
     if(LIB_PUBLIC_INCLUDE_DIRS)
       target_include_directories(${TARGET_NAME}
-                                 PUBLIC ${LIB_PUBLIC_INCLUDE_DIRS})
+                                 INTERFACE ${LIB_PUBLIC_INCLUDE_DIRS})
     endif()
 
-    if(LIB_PRIVATE_INCLUDE_DIRS AND NOT ${TARGET_TYPE} STREQUAL "INTERFACE")
-      target_include_directories(${TARGET_NAME}
-                                 PRIVATE ${LIB_PRIVATE_INCLUDE_DIRS})
-    endif()
-
-    # Compile options
     if(LIB_PUBLIC_COMPILE_OPTIONS)
       target_compile_options(${TARGET_NAME}
-                             PUBLIC ${LIB_PUBLIC_COMPILE_OPTIONS})
+                             INTERFACE ${LIB_PUBLIC_COMPILE_OPTIONS})
     endif()
 
-    if(LIB_PRIVATE_COMPILE_OPTIONS AND NOT ${TARGET_TYPE} STREQUAL "INTERFACE")
-      target_compile_options(${TARGET_NAME}
-                             PRIVATE ${LIB_PRIVATE_COMPILE_OPTIONS})
-    endif()
-
-    # Compile definitions
     if(LIB_PUBLIC_COMPILE_DEFINITIONS)
       target_compile_definitions(${TARGET_NAME}
-                                 PUBLIC ${LIB_PUBLIC_COMPILE_DEFINITIONS})
+                                 INTERFACE ${LIB_PUBLIC_COMPILE_DEFINITIONS})
     endif()
 
-    if(LIB_PRIVATE_COMPILE_DEFINITIONS AND NOT ${TARGET_TYPE} STREQUAL
-                                           "INTERFACE")
-      target_compile_definitions(${TARGET_NAME}
-                                 PRIVATE ${LIB_PRIVATE_COMPILE_DEFINITIONS})
-    endif()
-
-    # Additional properties
     if(LIB_PROPERTIES)
       set_target_properties(${TARGET_NAME} PROPERTIES ${LIB_PROPERTIES})
     endif()
 
-    if(NOT ${TARGET_TYPE} STREQUAL "INTERFACE")
-      target_add_rpath(${TARGET_NAME})
-    endif()
-
-    # Enable C++20 coroutines support
-    target_enable_coroutine(${TARGET_NAME})
+    target_add_rpath(${TARGET_NAME})
   endmacro()
 
   # ============================================================================
@@ -229,7 +301,7 @@ function(create_library)
     add_library(${INTERFACE_TARGET_NAME} INTERFACE)
     add_library(${LIB_NAMESPACE}::${LIB_NAME} ALIAS ${INTERFACE_TARGET_NAME})
 
-    setup_target_common(${INTERFACE_TARGET_NAME} "INTERFACE" "interface")
+    setup_target_common(${INTERFACE_TARGET_NAME})
 
     list(APPEND CREATED_TARGETS ${INTERFACE_TARGET_NAME})
     set(${LIB_NAME}_INTERFACE_TARGET
@@ -266,11 +338,26 @@ function(create_library)
   endif()
 
   # ============================================================================
+  # Create OBJECT library shared by the SHARED and STATIC variants
+  # ============================================================================
+  if(BUILD_SHARED_LIB OR BUILD_STATIC_LIB)
+    set(OBJECTS_TARGET_NAME ${LIB_NAME}_objects)
+    add_library(${OBJECTS_TARGET_NAME} OBJECT ${LIB_SOURCES})
+    set_target_properties(${OBJECTS_TARGET_NAME}
+                          PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    setup_object_target(${OBJECTS_TARGET_NAME})
+    set(${LIB_NAME}_OBJECTS_TARGET
+        ${OBJECTS_TARGET_NAME}
+        PARENT_SCOPE)
+  endif()
+
+  # ============================================================================
   # Create SHARED library
   # ============================================================================
   if(BUILD_SHARED_LIB)
     set(SHARED_TARGET_NAME ${LIB_NAME}_shared)
-    add_library(${SHARED_TARGET_NAME} SHARED ${LIB_SOURCES})
+    add_library(${SHARED_TARGET_NAME} SHARED
+                $<TARGET_OBJECTS:${OBJECTS_TARGET_NAME}>)
     add_library(${LIB_NAMESPACE}::shared ALIAS ${SHARED_TARGET_NAME})
 
     # Set output name to base name (without _shared suffix)
@@ -278,12 +365,36 @@ function(create_library)
     set_target_properties(
       ${SHARED_TARGET_NAME}
       PROPERTIES OUTPUT_NAME ${BASE_NAME}
-                 VERSION ${LIB_VERSION}
-                 SOVERSION ${PROJECT_VERSION_MAJOR}
+                 VERSION ${DFTRACER_UTILS_API_VERSION}
+                 SOVERSION ${DFTRACER_UTILS_ABI_VERSION}
                  LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
                  ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
-    setup_target_common(${SHARED_TARGET_NAME} "SHARED" "shared")
+    if(DFTRACER_UTILS_API_VERSION VERSION_LESS DFTRACER_UTILS_ABI_VERSION)
+      message(
+        FATAL_ERROR
+          "VERSION: api ${DFTRACER_UTILS_API_VERSION} is lower than abi ${DFTRACER_UTILS_ABI_VERSION}. Mach-O needs current version >= compatibility version."
+      )
+    endif()
+
+    if(APPLE)
+      set_target_properties(
+        ${SHARED_TARGET_NAME}
+        PROPERTIES MACHO_COMPATIBILITY_VERSION ${DFTRACER_UTILS_ABI_VERSION}
+                   MACHO_CURRENT_VERSION ${DFTRACER_UTILS_API_VERSION})
+    endif()
+
+    # ld64 already rejects undefined symbols in a dylib. Clang does not link the
+    # sanitizer runtime into a shared library, so -z defs cannot hold there.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux"
+       AND NOT (CMAKE_CXX_COMPILER_ID MATCHES "Clang"
+                AND (DFTRACER_UTILS_ENABLE_ASAN
+                     OR DFTRACER_UTILS_ENABLE_UBSAN
+                     OR DFTRACER_UTILS_ENABLE_TSAN)))
+      target_link_options(${SHARED_TARGET_NAME} PRIVATE -Wl,-z,defs)
+    endif()
+
+    setup_variant_target(${SHARED_TARGET_NAME} shared)
 
     list(APPEND CREATED_TARGETS ${SHARED_TARGET_NAME})
     set(${LIB_NAME}_SHARED_TARGET
@@ -327,7 +438,8 @@ function(create_library)
   # ============================================================================
   if(BUILD_STATIC_LIB)
     set(STATIC_TARGET_NAME ${LIB_NAME}_static)
-    add_library(${STATIC_TARGET_NAME} STATIC ${LIB_SOURCES})
+    add_library(${STATIC_TARGET_NAME} STATIC
+                $<TARGET_OBJECTS:${OBJECTS_TARGET_NAME}>)
     add_library(${LIB_NAMESPACE}::static ALIAS ${STATIC_TARGET_NAME})
 
     # Set output name to base name (without _static suffix)
@@ -337,7 +449,7 @@ function(create_library)
       PROPERTIES OUTPUT_NAME ${BASE_NAME} ARCHIVE_OUTPUT_DIRECTORY
                                           ${CMAKE_BINARY_DIR}/lib)
 
-    setup_target_common(${STATIC_TARGET_NAME} "STATIC" "static")
+    setup_variant_target(${STATIC_TARGET_NAME} static)
 
     list(APPEND CREATED_TARGETS ${STATIC_TARGET_NAME})
     set(${LIB_NAME}_STATIC_TARGET

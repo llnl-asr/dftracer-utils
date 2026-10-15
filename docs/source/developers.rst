@@ -296,6 +296,17 @@ Python checks require ``uvx`` or ``ruff`` in PATH; web checks require Node/``npm
 and ``web/node_modules``. Both are skipped gracefully if their tools are not
 available, so the C++ workflow is unaffected.
 
+To keep ``git blame`` pointing at the real authors, turn on the list of
+formatting-only commits:
+
+.. code-block:: bash
+
+   git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+Append the full hash of a commit that only moves or reformats code to
+``.git-blame-ignore-revs``. The ``blame_ignore_revs`` test rejects a hash
+that changes more than whitespace or file names.
+
 Web UI
 ~~~~~~
 

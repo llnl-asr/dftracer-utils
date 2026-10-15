@@ -96,9 +96,12 @@ std::string long_path(std::uint32_t i, std::size_t len) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    const bool smoke = argc == 2 && std::string_view(argv[1]) == "--smoke";
     const std::size_t n =
-        argc > 1 ? static_cast<std::size_t>(std::atoll(argv[1])) : 200000;
-    const int rounds = argc > 2 ? std::atoi(argv[2]) : 7;
+        smoke ? 2000
+              : (argc > 1 ? static_cast<std::size_t>(std::atoll(argv[1]))
+                          : 200000);
+    const int rounds = smoke ? 1 : (argc > 2 ? std::atoi(argv[2]) : 7);
 
     simdjson::dom::parser parser;
     std::vector<std::string> texts;

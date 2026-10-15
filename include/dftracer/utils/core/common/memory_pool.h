@@ -1,6 +1,8 @@
 #ifndef DFTRACER_UTILS_CORE_COMMON_MEMORY_POOL_H
 #define DFTRACER_UTILS_CORE_COMMON_MEMORY_POOL_H
 
+#include <dftracer/utils/core/common/tracked_bytes.h>
+
 #include <atomic>
 #include <cstdint>
 #include <utility>
@@ -32,11 +34,13 @@ class MemoryPool {
             if (cur > cap || n > cap - cur) return false;
         } while (!used_.compare_exchange_weak(cur, cur + n,
                                               std::memory_order_relaxed));
+        tracked_bytes::add_pool(n);
         return true;
     }
 
     void release(std::uint64_t n) noexcept {
         used_.fetch_sub(n, std::memory_order_relaxed);
+        tracked_bytes::sub_pool(n);
     }
 
     /// Raises the capacity by `n`, for memory handed over from elsewhere; a

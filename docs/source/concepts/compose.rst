@@ -5,7 +5,7 @@ The compose model
 
 What this explains: how async operations are authored and combined in
 ``dftracer_utils_core`` - the ``Op<F>`` wrapper and the ranges-style ``|`` /
-``&&`` / ``||`` operators in ``core/utilities/compose.h`` - and why it replaced
+``&&`` / ``||`` operators in ``core/compose.h`` - and why it replaced
 the older ``Utility`` base-class pattern.
 
 The contract: a callable, nothing more
@@ -28,7 +28,7 @@ value and adds the composition operators below:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/utilities/compose.h>
+   #include <dftracer/utils/core/compose.h>
    namespace u = dftracer::utils::utilities;
 
    struct Doubler {

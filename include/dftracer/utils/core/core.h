@@ -14,6 +14,6 @@
 #include <dftracer/utils/core/tasks/tasks.h>
 
 // Utilities
-#include <dftracer/utils/core/utilities/compose.h>
+#include <dftracer/utils/core/compose.h>
 
 #endif  // DFTRACER_UTILS_CORE_H

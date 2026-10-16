@@ -1,5 +1,5 @@
-#ifndef DFTRACER_UTILS_CORE_UTILITIES_COMPOSE_H
-#define DFTRACER_UTILS_CORE_UTILITIES_COMPOSE_H
+#ifndef DFTRACER_UTILS_CORE_COMPOSE_H
+#define DFTRACER_UTILS_CORE_COMPOSE_H
 
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/coro/when_all.h>
@@ -149,4 +149,4 @@ auto operator||(Op<A> a, Op<B> b) {
 
 }  // namespace dftracer::utils::utilities
 
-#endif  // DFTRACER_UTILS_CORE_UTILITIES_COMPOSE_H
+#endif  // DFTRACER_UTILS_CORE_COMPOSE_H

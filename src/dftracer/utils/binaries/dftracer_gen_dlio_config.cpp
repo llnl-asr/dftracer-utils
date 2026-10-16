@@ -1,8 +1,8 @@
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/utils/timer.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_runner.h>
 #include <dftracer/utils/utilities/common/statistics/distributions.h>
 #include <dftracer/utils/utilities/common/statistics/mixture.h>

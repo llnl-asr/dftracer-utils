@@ -3,11 +3,14 @@
 # current version <api> on macOS. Also check that each shared library defines
 # every global text symbol of its static archive, since both link the same
 # object files. The shared library may define more: symbols of the static
-# libraries it bundles. Library names come from the create_library NAME arguments in
-# src/CMakeLists.txt.
+# libraries it bundles. Also check the libraries of ours that each shared
+# library needs: common needs none, and json and duql do not need core. Library
+# names come from the create_library NAME arguments in src/CMakeLists.txt.
 #
 # Usage: cmake -DSOURCE_DIR=<repo root> -DLIB_DIR=<build>/lib
 #              [-DVERSION_FILE=<file>] -P check_library_versions.cmake
+
+cmake_minimum_required(VERSION 3.20)
 
 foreach(_var SOURCE_DIR LIB_DIR)
   if(NOT DEFINED ${_var})
@@ -94,6 +97,35 @@ function(_symbols_only_in a b out)
   set(${out} "${_only}" PARENT_SCOPE)
 endfunction()
 
+# Sets <out> to the dftracer_utils_<x> libraries that a shared library needs.
+function(_needed_libraries lib out)
+  if(APPLE)
+    execute_process(
+      COMMAND "${_otool}" -L "${lib}"
+      OUTPUT_VARIABLE _dump
+      RESULT_VARIABLE _rc)
+    set(_pattern "[ \t]([^ \t\n]*/)?lib(dftracer_utils_[a-z_]+)[.0-9]*\\.dylib")
+  else()
+    execute_process(
+      COMMAND "${_readelf}" -d "${lib}"
+      OUTPUT_VARIABLE _dump
+      RESULT_VARIABLE _rc)
+    set(_pattern "\\(NEEDED\\)[^\n]*\\[lib(dftracer_utils_[a-z_]+)\\.so")
+  endif()
+  if(NOT _rc EQUAL 0)
+    message(FATAL_ERROR "cannot list needed libraries of ${lib}")
+  endif()
+  string(REGEX MATCHALL "${_pattern}" _hits "${_dump}")
+  set(_libs "")
+  foreach(_hit ${_hits})
+    string(REGEX REPLACE ".*lib(dftracer_utils_[a-z_]+)[.0-9]*\\.(dylib|so).*" "\\1" _lib
+                         "${_hit}")
+    list(APPEND _libs "${_lib}")
+  endforeach()
+  list(REMOVE_DUPLICATES _libs)
+  set(${out} "${_libs}" PARENT_SCOPE)
+endfunction()
+
 set(_failed FALSE)
 foreach(_name ${_names})
   set(_file "${LIB_DIR}/lib${_name}.${_ext}")
@@ -142,6 +174,24 @@ foreach(_name ${_names})
           "${_name}: SONAME ${_got}, expected lib${_name}.so.${_abi} from VERSION")
       set(_failed TRUE)
     endif()
+  endif()
+endforeach()
+
+foreach(_name ${_names})
+  set(_file "${LIB_DIR}/lib${_name}.${_ext}")
+  if(NOT EXISTS "${_file}")
+    continue()
+  endif()
+  _needed_libraries("${_file}" _needed)
+  list(REMOVE_ITEM _needed "${_name}")
+  if(_name STREQUAL "dftracer_utils_common" AND _needed)
+    message(SEND_ERROR "${_name}: needs ${_needed}, but common needs no library of ours")
+    set(_failed TRUE)
+  endif()
+  if((_name STREQUAL "dftracer_utils_json" OR _name STREQUAL "dftracer_utils_duql")
+     AND "dftracer_utils_core" IN_LIST _needed)
+    message(SEND_ERROR "${_name}: needs dftracer_utils_core (needs: ${_needed})")
+    set(_failed TRUE)
   endif()
 endforeach()
 

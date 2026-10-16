@@ -1,5 +1,5 @@
-#ifndef DFTRACER_UTILS_CORE_UTILS_TIMER_H
-#define DFTRACER_UTILS_CORE_UTILS_TIMER_H
+#ifndef DFTRACER_UTILS_COMMON_TIMER_H
+#define DFTRACER_UTILS_COMMON_TIMER_H
 
 #include <chrono>
 #include <cstdint>
@@ -86,4 +86,4 @@ class ScopedTimer {
 
 }  // namespace dftracer::utils
 
-#endif  // DFTRACER_UTILS_CORE_UTILS_TIMER_H
+#endif  // DFTRACER_UTILS_COMMON_TIMER_H

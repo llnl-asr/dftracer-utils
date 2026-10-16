@@ -25,3 +25,6 @@ How the runtime, executors, tasks, and pipeline relate:
 .. include:: /cpp_api/_generated/core.rst.inc
 .. include:: /cpp_api/_generated/bits.rst.inc
 .. include:: /cpp_api/_generated/logger.rst.inc
+.. include:: /cpp_api/_generated/tracked_bytes.rst.inc
+
+The tracked-bytes gauges exist only when you build with the CMake option ``DFTRACER_UTILS_TRACKED_BYTES``.

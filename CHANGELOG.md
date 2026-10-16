@@ -47,6 +47,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   This read path serves `dftracer_genesis_gen_dist` and every unindexed trace read.
   One 932 MB member reads in 0.92 s instead of 1.29 s with a third less peak memory and page faults, and a file of 16 MB members peaks at 113 MB instead of 147 MB ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 - Keep on PyPI only the newest `<tag>.postN.devX` prerelease of the previous release when a release is published, and delete the older ones, so the project stays under its PyPI storage limit.
+- Move the shared helper headers from `dftracer/utils/core/common/` to `dftracer/utils/common/`, and `dftracer/utils/core/env.h` to `dftracer/utils/common/env.h`.
+  Change your includes to the new paths.
+  The namespaces did not change.
+- Move `dftracer/utils/core/utilities/compose.h` to `dftracer/utils/core/compose.h`, and `dftracer/utils/core/utilities/monitor.h` to `dftracer/utils/core/coro/monitor.h`.
+  Change your includes to the new paths.
+- Add the library `dftracer_utils_common` for the shared helpers, with its own pkg-config and `find_package` names.
+  The `core` library links it, and the `json` and `duql` libraries link it instead of `core`.
+  Add `dftracer_utils_common` to your link line if you use only the helpers.
+- Take the SONAME and the macOS compatibility version of each shared library from the `abi` line of `VERSION`, and its version from the `api` line.
+  The file names change, for example `libdftracer_utils_core.so.0.0.1`, so link again and update any script that names a file.
+  Linux shared libraries now link with `-z defs`, so a shared library with an undefined symbol fails at link time.
 
 ### Added
 

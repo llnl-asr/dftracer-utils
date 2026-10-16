@@ -1,5 +1,5 @@
-#ifndef DFTRACER_UTILS_CORE_UTILITIES_MONITOR_H
-#define DFTRACER_UTILS_CORE_UTILITIES_MONITOR_H
+#ifndef DFTRACER_UTILS_CORE_CORO_MONITOR_H
+#define DFTRACER_UTILS_CORE_CORO_MONITOR_H
 
 namespace dftracer::utils::utilities {
 
@@ -74,4 +74,4 @@ void monitor_sync_complete(const void* handle);
 
 }  // namespace dftracer::utils::utilities
 
-#endif  // DFTRACER_UTILS_CORE_UTILITIES_MONITOR_H
+#endif  // DFTRACER_UTILS_CORE_CORO_MONITOR_H

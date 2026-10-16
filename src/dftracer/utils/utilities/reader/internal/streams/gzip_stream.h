@@ -267,9 +267,13 @@ class GzipStream : public StreamBase {
     coro::CoroTask<void> restart_compression() {
         inflater_.reset();
         if (use_member_) {
-            if (!co_await inflater_.seek_to_member(fd_, file_offset_, member_,
-                                                   member_window(),
-                                                   expected_out_bytes())) {
+            // GCC 12 lays the frame out differently in the ramp and the
+            // actor when a temporary lives in the condition of an `if` across
+            // the co_await, so the result goes through a local.
+            const bool restarted = co_await inflater_.seek_to_member(
+                fd_, file_offset_, member_, member_window(),
+                expected_out_bytes());
+            if (!restarted) {
                 throw ReaderError(ReaderError::COMPRESSION_ERROR,
                                   "Failed to reinitialize from member");
             }

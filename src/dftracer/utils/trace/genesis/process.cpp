@@ -517,7 +517,9 @@ class GroupReader {
             auto gen = async_streaming_gz_lines(file, 0, 0,
                                                 /*recover_truncated=*/false);
             std::size_t n = 0;
-            while (auto line = co_await gen.next()) {
+            for (;;) {
+                auto line = co_await gen.next();
+                if (!line) break;
                 auto st = handle_line(file, line->content);
                 if (!st) co_return st;
                 if (++n % 4096 == 0) co_await coro::maybe_yield();
@@ -1271,10 +1273,10 @@ coro::CoroTask<ReaderSize> reader_size(const std::string& file) {
         co_return out;
     }
     unsigned char trailer[4];
-    if (co_await io::pread(guard.get(), trailer, sizeof trailer,
-                           st.st_size - static_cast<off_t>(sizeof trailer)) !=
-        static_cast<ssize_t>(sizeof trailer))
-        co_return out;
+    const auto trailer_read =
+        co_await io::pread(guard.get(), trailer, sizeof trailer,
+                           st.st_size - static_cast<off_t>(sizeof trailer));
+    if (trailer_read != static_cast<ssize_t>(sizeof trailer)) co_return out;
     const std::uint64_t isize = static_cast<std::uint64_t>(trailer[0]) |
                                 static_cast<std::uint64_t>(trailer[1]) << 8 |
                                 static_cast<std::uint64_t>(trailer[2]) << 16 |

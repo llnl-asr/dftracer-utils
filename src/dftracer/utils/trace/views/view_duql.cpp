@@ -246,12 +246,14 @@ class MapSource final : public df::Source {
         coro::CoroTask<std::optional<df::Morsel>> next(
             std::int64_t max_rows) override {
             for (;;) {
-                if (rows_)
-                    if (auto m = co_await rows_->next(max_rows)) {
+                if (rows_) {
+                    auto m = co_await rows_->next(max_rows);
+                    if (m) {
                         m->dyn_state().name_ids = ids_;
                         m->dyn->intern = intern_;
                         co_return m;
                     }
+                }
                 auto batch = co_await batches_.next();
                 if (!batch) co_return std::nullopt;
                 df::DataFrame f = map_(std::move(*batch));
@@ -349,8 +351,11 @@ class FoldSource final : public df::Source {
         coro::CoroTask<std::optional<df::Morsel>> next(
             std::int64_t max_rows) override {
             if (!rows_) {
-                while (auto batch = co_await batches_.next())
+                for (;;) {
+                    auto batch = co_await batches_.next();
+                    if (!batch) break;
                     fold_.add(aligned(std::move(*batch), in_));
+                }
                 df::DataFrame f = fold_.finish(std::move(names_));
                 if (!projection_.empty()) f = f.select(projection_);
                 rows_ = df::InMemorySource(std::move(f)).scan({}).cursor;
@@ -1316,7 +1321,9 @@ class Sides {
             [&](dftracer::utils::CoroScope&) -> coro::CoroTask<void> {
                 auto gen = plan.stream();
                 std::string row_key;
-                while (auto f = co_await gen.next()) {
+                for (;;) {
+                    auto f = co_await gen.next();
+                    if (!f) break;
                     df::DataFrame part = duql::flat_frame(std::move(*f));
                     std::vector<std::int64_t> take;
                     for (std::int64_t r = 0; r < part.num_rows(); ++r) {

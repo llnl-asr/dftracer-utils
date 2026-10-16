@@ -315,7 +315,8 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
                                   piece.size() - RESTART_WINDOW,
                               RESTART_WINDOW);
             emit(msg);
-            if (!(co_await producer.send(std::move(msg)))) {
+            const auto send_ok = co_await producer.send(std::move(msg));
+            if (!send_ok) {
                 stop = true;
                 co_return true;
             }
@@ -346,7 +347,8 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
     msg.member_ended = true;
     msg.member_c_end = co_await next_member_start(
         fd, candidates, c_off + in_bytes, range_c_end);
-    if (!(co_await producer.send(std::move(msg)))) stop = true;
+    const auto send_ok = co_await producer.send(std::move(msg));
+    if (!send_ok) stop = true;
     co_return true;
 }
 
@@ -384,10 +386,11 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
         if (span >= ckpt_size / 8) {
             std::uint64_t consumed = 0;
             bool stop = false;
-            if (!co_await stream_member(
-                    fd, c_off, file_size, ckpt_size, candidates, range_c_end,
-                    strip_leading_partial && first, ship_bytes, buffers,
-                    producer, seq, consumed, stop)) {
+            const auto stream_member_ok = co_await stream_member(
+                fd, c_off, file_size, ckpt_size, candidates, range_c_end,
+                strip_leading_partial && first, ship_bytes, buffers, producer,
+                seq, consumed, stop);
+            if (!stream_member_ok) {
                 co_return false;
             }
             if (stop) co_return true;
@@ -453,7 +456,8 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
             fd, candidates, c_off + *in_bytes, range_c_end);
         msg.truncated = truncated;
         c_off = msg.member_c_end;
-        if (!(co_await producer.send(std::move(msg)))) co_return true;
+        const auto send_ok = co_await producer.send(std::move(msg));
+        if (!send_ok) co_return true;
     }
 
     // Non-last slice: capture the line straddling this slice's end by decoding
@@ -701,7 +705,9 @@ static dftracer::utils::coro::CoroTask<bool> parallel_dispatcher(
         [&](ParallelChan& chan) -> dftracer::utils::coro::CoroTask<void> {
         std::uint64_t expected_seq = 0;
         std::map<std::uint64_t, ParallelInflateMsg> pending;
-        while (auto msg_opt = co_await chan.receive()) {
+        for (;;) {
+            auto msg_opt = co_await chan.receive();
+            if (!msg_opt) break;
             pending.emplace(msg_opt->seq, std::move(*msg_opt));
             auto it = pending.begin();
             while (it != pending.end() && it->first == expected_seq) {

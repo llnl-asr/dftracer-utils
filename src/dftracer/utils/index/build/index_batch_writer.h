@@ -171,7 +171,9 @@ inline coro::CoroTask<void> index_batch_write_worker(
     static constexpr std::size_t MAX_BATCH_HASH_ENTRIES = 2u * 1024 * 1024;
     std::size_t batch_hash_entries = 0;
 
-    while (auto item = co_await channel->receive()) {
+    for (;;) {
+        auto item = co_await channel->receive();
+        if (!item) break;
         std::size_t entries =
             item->rowset_fold ? item->rowset_fold->entry_count() : 0;
         batch.push_back(std::move(*item));

@@ -447,7 +447,9 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
                         make_scanner_input(units[i], vdef, vdef.query);
                     ViewScannerUtility scanner;
                     auto gen = scanner(sin);
-                    while (auto b = co_await gen.next()) {
+                    for (;;) {
+                        auto b = co_await gen.next();
+                        if (!b) break;
                         if (is_cancelled(plan)) {
                             stop = true;
                             break;
@@ -456,29 +458,32 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
                         std::size_t total = 0;
                         for (const auto& ev : b->events) total += ev.size() + 1;
                         if (total == 0) continue;
-                        if (!co_await prod->append_with(
-                                total, [&](char* dst, std::size_t) {
-                                    char* p = dst;
-                                    for (const auto& ev : b->events) {
-                                        std::memcpy(p, ev.data(), ev.size());
-                                        p += ev.size();
-                                        *p++ = '\n';
-                                    }
-                                    return static_cast<std::size_t>(p - dst);
-                                })) {
+                        const auto append_with_ok = co_await prod->append_with(
+                            total, [&](char* dst, std::size_t) {
+                                char* p = dst;
+                                for (const auto& ev : b->events) {
+                                    std::memcpy(p, ev.data(), ev.size());
+                                    p += ev.size();
+                                    *p++ = '\n';
+                                }
+                                return static_cast<std::size_t>(p - dst);
+                            });
+                        if (!append_with_ok) {
                             ok = false;
                             co_return;
                         }
                     }
                 }
-                if (!co_await prod->flush()) ok = false;
+                const auto flush_ok = co_await prod->flush();
+                if (!flush_ok) ok = false;
                 co_return;
             });
         }
         co_return;
     });
 
-    if (!co_await writer.close()) ok = false;
+    const auto close_ok = co_await writer.close();
+    if (!close_ok) ok = false;
 
     if (!ok) {
         throw DFTUtilsException(
@@ -1688,7 +1693,9 @@ coro::CoroTask<ExportStats> run_session(
                     continue;
                 }
                 dataframe::AggStatePtr served;
-                if (co_await try_serve_aggregate_no_scan(*full, served)) {
+                const auto try_serve_aggregate_no_scan_ok =
+                    co_await try_serve_aggregate_no_scan(*full, served);
+                if (try_serve_aggregate_no_scan_ok) {
                     *br.agg->out = apply_agg_post_ops(
                         finalize_engine_result(*served, *full), *full);
                     continue;

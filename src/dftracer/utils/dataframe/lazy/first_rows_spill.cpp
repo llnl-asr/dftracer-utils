@@ -153,7 +153,9 @@ class FirstRowsSpill {
 
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) {
         if (runs_.empty()) co_return std::nullopt;
-        while (auto m = co_await replay_->next(max_rows)) {
+        for (;;) {
+            auto m = co_await replay_->next(max_rows);
+            if (!m) break;
             const std::int64_t lo = replay_id_;
             const std::int64_t hi = lo + m->rows;
             replay_id_ = hi;
@@ -249,7 +251,9 @@ class FirstRowsSpill {
             rows > UNIQUE_SPILL_MIN_LEAF_ROWS) {
             spill::HashPartitions sub(dir_, UNIQUE_SPILL_FANOUT);
             spill::Reader reader(path);
-            while (auto m = co_await reader.next(DEFAULT_MORSEL_ROWS)) {
+            for (;;) {
+                auto m = co_await reader.next(DEFAULT_MORSEL_ROWS);
+                if (!m) break;
                 std::vector<std::vector<std::int64_t>> pick(
                     UNIQUE_SPILL_FANOUT);
                 for (std::int64_t i = 0; i < m->rows; ++i)
@@ -285,7 +289,9 @@ class FirstRowsSpill {
             any = true;
         };
         spill::Reader reader(path);
-        while (auto m = co_await reader.next(DEFAULT_MORSEL_ROWS)) {
+        for (;;) {
+            auto m = co_await reader.next(DEFAULT_MORSEL_ROWS);
+            if (!m) break;
             const std::int64_t* row_ids = m->columns[0].data<std::int64_t>();
             for (std::int64_t i = 0; i < m->rows; ++i) {
                 const std::string_view key = m->columns[1].string_at(i);
@@ -333,7 +339,9 @@ class HeadByCursor : public Cursor {
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         if (n_ <= 0) co_return std::nullopt;
         if (!spilling_) {
-            while (auto m = co_await in_->next(max_rows)) {
+            for (;;) {
+                auto m = co_await in_->next(max_rows);
+                if (!m) break;
                 const std::int64_t rows = m->rows;
                 std::vector<std::string> keys = keys_of(*m);
                 std::vector<std::int64_t> keep;
@@ -372,7 +380,9 @@ class HeadByCursor : public Cursor {
                     const auto it = counts_.find(key);
                     return it == counts_.end() ? std::int64_t{0} : it->second;
                 });
-            while (auto m = co_await in_->next(max_rows)) {
+            for (;;) {
+                auto m = co_await in_->next(max_rows);
+                if (!m) break;
                 std::vector<std::string> keys = keys_of(*m);
                 external_->add(std::move(*m), std::move(keys));
             }
@@ -425,7 +435,9 @@ class UniqueCursor : public Cursor {
 
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         if (!spilling_) {
-            while (auto m = co_await in_->next(max_rows)) {
+            for (;;) {
+                auto m = co_await in_->next(max_rows);
+                if (!m) break;
                 const std::int64_t n = m->rows;
                 // Build each row's key bytes once, in parallel: one buffer per
                 // chunk of rows (not one allocation per row) plus the row's
@@ -512,7 +524,9 @@ class UniqueCursor : public Cursor {
                     return already_seen(key) ? std::int64_t{1}
                                              : std::int64_t{0};
                 });
-            while (auto m = co_await in_->next(max_rows)) {
+            for (;;) {
+                auto m = co_await in_->next(max_rows);
+                if (!m) break;
                 std::vector<std::string> keys(
                     static_cast<std::size_t>(m->rows));
                 const std::vector<Series> kc = key_cols(m->columns);

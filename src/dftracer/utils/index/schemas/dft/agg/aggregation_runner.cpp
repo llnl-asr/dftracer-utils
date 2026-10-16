@@ -291,7 +291,8 @@ coro::CoroTask<Result<AggregationRunResult>> run_aggregation(
                 auto& global_custom_metric_names = obs.custom_metric_names;
 
                 IpcWriter ipc;
-                if (co_await ipc.open(*input.output_file) != 0) {
+                const auto open_rc = co_await ipc.open(*input.output_file);
+                if (open_rc != 0) {
                     DFTRACER_UTILS_LOG_ERROR(
                         "Failed to open Arrow IPC file: %s",
                         input.output_file->c_str());
@@ -323,7 +324,9 @@ coro::CoroTask<Result<AggregationRunResult>> run_aggregation(
 
                     write_success = true;
                     for (auto& ab : pending_batches) {
-                        if (co_await ipc.write_batch(ab) != 0) {
+                        const auto write_batch_rc =
+                            co_await ipc.write_batch(ab);
+                        if (write_batch_rc != 0) {
                             write_success = false;
                             break;
                         }

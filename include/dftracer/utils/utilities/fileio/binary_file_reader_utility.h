@@ -23,7 +23,9 @@ namespace dftracer::utils::utilities::fileio {
  * Usage:
  * @code
  * auto gen = read_binary_file("/path/to/file.bin");
- * while (auto chunk = co_await gen.next()) {
+ * for (;;) {
+ *     auto chunk = co_await gen.next();
+ *     if (!chunk) break;
  *     process(chunk->as<char>(), chunk->size());
  * }
  * @endcode

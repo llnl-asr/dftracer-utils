@@ -1134,8 +1134,10 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                 if (transport.rank() == 0) {
                     std::vector<std::string> parts(rank_outs.begin(),
                                                    rank_outs.end());
-                    if (co_await fileio::parallel::merge_shards(final_output,
-                                                                parts) != 0) {
+                    const auto merge_rc =
+                        co_await fileio::parallel::merge_shards(final_output,
+                                                                parts);
+                    if (merge_rc != 0) {
                         DFTRACER_UTILS_LOG_ERROR("merge_shards failed for %s",
                                                  final_output.c_str());
                     } else if (!no_index) {

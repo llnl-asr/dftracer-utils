@@ -49,10 +49,10 @@ inline coro::AsyncGenerator<std::string_view> decode_gzip_members(
     std::size_t out_cap = INIT_OUT;
     if (file_size >= 18) {
         unsigned char trailer[4];
-        if (co_await dftracer::utils::io::pread(
-                fd, trailer, sizeof trailer,
-                static_cast<off_t>(file_size - sizeof trailer)) ==
-            static_cast<ssize_t>(sizeof trailer)) {
+        const auto trailer_read = co_await dftracer::utils::io::pread(
+            fd, trailer, sizeof trailer,
+            static_cast<off_t>(file_size - sizeof trailer));
+        if (trailer_read == static_cast<ssize_t>(sizeof trailer)) {
             const std::size_t isize =
                 static_cast<std::size_t>(trailer[0]) |
                 static_cast<std::size_t>(trailer[1]) << 8 |

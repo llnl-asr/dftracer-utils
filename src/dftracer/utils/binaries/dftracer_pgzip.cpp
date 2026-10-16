@@ -195,7 +195,8 @@ static int run_pgzip(const PgzipArgParse& cli) {
                         CoroScope&) mutable -> coro::CoroTask<void> {
                         auto guard = ch.guard();
                         for (std::size_t i = 0; i < num_files; ++i) {
-                            if (!co_await ch.send(i)) co_return;
+                            const auto send_ok = co_await ch.send(i);
+                            if (!send_ok) co_return;
                         }
                         co_return;
                     });
@@ -205,7 +206,9 @@ static int run_pgzip(const PgzipArgParse& cli) {
                                  results_ptr, mutex_ptr, compression_level,
                                  executor_threads, chunk_size](
                                     CoroScope&) -> coro::CoroTask<void> {
-                        while (auto fi_opt = co_await ch.receive()) {
+                        for (;;) {
+                            auto fi_opt = co_await ch.receive();
+                            if (!fi_opt) break;
                             const auto& path = (*files_ptr)[*fi_opt];
 
                             auto result = co_await compress_file_parallel(

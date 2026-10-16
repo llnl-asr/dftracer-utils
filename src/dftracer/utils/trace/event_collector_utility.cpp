@@ -93,7 +93,9 @@ EventCollectorFromMetadataUtility::operator()(
             auto line_gen =
                 utilities::fileio::lines::sources::async_streaming_gz_lines(
                     file.file_path, file.start_line, file.end_line);
-            while (auto line_opt = co_await line_gen.next()) {
+            for (;;) {
+                auto line_opt = co_await line_gen.next();
+                if (!line_opt) break;
                 co_await collector.process(line_opt->content.data(),
                                            line_opt->content.length());
             }

@@ -316,7 +316,9 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
         StringArena arena;
         std::vector<ArrowKeyHint> hints;
         builder.reserve(batch_size);
-        while (auto opt = co_await json_gen.next()) {
+        for (;;) {
+            auto opt = co_await json_gen.next();
+            if (!opt) break;
             if (!arrow_row_from_doc(builder, hints,
                                     simdjson::ondemand::document_reference(
                                         opt->parser->raw_document()),
@@ -380,7 +382,9 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
     };
 
     bool first_chunk = true;
-    while (auto chunk_opt = co_await chunk_gen.next()) {
+    for (;;) {
+        auto chunk_opt = co_await chunk_gen.next();
+        if (!chunk_opt) break;
         auto chunk = *chunk_opt;
         if (chunk.empty()) continue;
 

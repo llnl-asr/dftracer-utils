@@ -63,7 +63,9 @@ class ColumnScanCursor : public Cursor {
           shift_(shift) {}
 
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
-        while (auto m = co_await in_->next(max_rows)) {
+        for (;;) {
+            auto m = co_await in_->next(max_rows);
+            if (!m) break;
             if (m->rows == 0) continue;
             sent_ = true;
             co_return scan(std::move(*m));

@@ -196,7 +196,9 @@ coro::CoroTask<DataFrame> GraceJoin::right_rows(Part& part,
                                                 std::int64_t max_rows) {
     std::vector<DataFrame> parts;
     auto reader = part.right.reader();
-    while (auto m = co_await reader->next(max_rows)) {
+    for (;;) {
+        auto m = co_await reader->next(max_rows);
+        if (!m) break;
         DataFrame f;
         f.names = right_names_;
         f.columns = std::move(m->columns);
@@ -222,7 +224,9 @@ coro::CoroTask<void> GraceJoin::split_part(Work work, std::int64_t max_rows) {
     const int level = work.level + 1;
     {
         auto reader = work.part->right.reader();
-        while (auto m = co_await reader->next(max_rows)) {
+        for (;;) {
+            auto m = co_await reader->next(max_rows);
+            if (!m) break;
             DataFrame f;
             f.names = right_names_;
             f.columns = std::move(m->columns);
@@ -231,7 +235,9 @@ coro::CoroTask<void> GraceJoin::split_part(Work work, std::int64_t max_rows) {
     }
     {
         auto reader = work.part->left.reader();
-        while (auto m = co_await reader->next(max_rows)) {
+        for (;;) {
+            auto m = co_await reader->next(max_rows);
+            if (!m) break;
             DataFrame f;
             f.names = left_names_;
             f.columns = std::move(m->columns);
@@ -287,7 +293,9 @@ coro::CoroTask<DataFrame> GraceJoin::lookup_heads(
             right_key_.end())
             values.push_back(c);
     std::string text;
-    while (auto block = co_await right_block(max_rows)) {
+    for (;;) {
+        auto block = co_await right_block(max_rows);
+        if (!block) break;
         const std::vector<Series> keys = flat_keys(*block, right_key_);
         const std::int64_t n = block->num_rows();
         const std::size_t part = frames.size();
@@ -339,7 +347,9 @@ coro::CoroTask<void> GraceJoin::assign_groups(std::int64_t max_rows) {
     Current& c = *cur_;
     std::string text;
     auto reader = c.part->right.reader();
-    while (auto m = co_await reader->next(max_rows)) {
+    for (;;) {
+        auto m = co_await reader->next(max_rows);
+        if (!m) break;
         DataFrame f;
         f.names = right_names_;
         f.columns = std::move(m->columns);
@@ -377,7 +387,9 @@ coro::CoroTask<std::optional<DataFrame>> GraceJoin::next_group(
     c.right = c.part->right.reader();
     std::vector<DataFrame> parts;
     std::string text;
-    while (auto m = co_await c.right->next(max_rows)) {
+    for (;;) {
+        auto m = co_await c.right->next(max_rows);
+        if (!m) break;
         DataFrame f;
         f.names = right_names_;
         f.columns = std::move(m->columns);
@@ -473,7 +485,9 @@ coro::CoroTask<std::optional<DataFrame>> GraceJoin::deferred_left(
     std::int64_t max_rows) {
     Current& c = *cur_;
     const std::uint8_t keep = how_ == JoinHow::Semi ? 1 : 0;
-    while (auto m = co_await c.left->next(max_rows)) {
+    for (;;) {
+        auto m = co_await c.left->next(max_rows);
+        if (!m) break;
         DataFrame f;
         f.names = left_names_;
         f.columns = std::move(m->columns);
@@ -533,7 +547,8 @@ coro::CoroTask<std::optional<DataFrame>> GraceJoin::next(
                     cur_->matched.assign(
                         static_cast<std::size_t>(cur_->part->left_rows), 0);
                 if (how_ == JoinHow::Nest) co_await assign_groups(max_rows);
-                if (!co_await next_block(max_rows)) start_deferred();
+                const auto next_block_ok = co_await next_block(max_rows);
+                if (!next_block_ok) start_deferred();
             } else {
                 DataFrame right = co_await right_rows(*cur_->part, max_rows);
                 cur_->join.emplace(std::move(right), left_on_, right_on_, how_,
@@ -542,18 +557,25 @@ coro::CoroTask<std::optional<DataFrame>> GraceJoin::next(
             }
         }
         if (cur_->last_pass) {
-            if (auto out = co_await deferred_left(max_rows)) {
+            auto out = co_await deferred_left(max_rows);
+            if (out) {
                 co_return std::move(*out);
             }
             cur_.reset();
             continue;
         }
-        if (auto out = co_await probe_left(max_rows)) {
+        auto out = co_await probe_left(max_rows);
+        if (out) {
             if (out->num_rows() > 0) co_return std::move(*out);
             continue;
         }
         DataFrame rest = cur_->join->flush(left_names_, left_templates_);
-        if (cur_->blocks && !co_await next_block(max_rows)) {
+        bool exhausted = false;
+        if (cur_->blocks) {
+            const bool more = co_await next_block(max_rows);
+            exhausted = !more;
+        }
+        if (exhausted) {
             if (defers_left(how_))
                 start_deferred();
             else

@@ -81,7 +81,9 @@ coro::AsyncGenerator<Trace> ReplayEngine::stream_traces(
         cfg.auto_build_index = false;
         TraceReader rdr(std::move(cfg));
         auto gen = rdr.read_json(ReadConfig{});
-        while (auto opt = co_await gen.next()) {
+        for (;;) {
+            auto opt = co_await gen.next();
+            if (!opt) break;
             if (!opt->parser) continue;
             Trace trace;
             if (parse_trace_json(*opt->parser, trace)) {
@@ -105,8 +107,11 @@ coro::CoroTask<void> ReplayEngine::run_pipelined(
         auto p = channel->producer();
         auto guard = p.guard();
         auto gen = stream_traces(files);
-        while (auto trace = co_await gen.next()) {
-            if (!co_await p.send(std::move(*trace))) {
+        for (;;) {
+            auto trace = co_await gen.next();
+            if (!trace) break;
+            const auto send_ok = co_await p.send(std::move(*trace));
+            if (!send_ok) {
                 co_return;
             }
         }
@@ -114,7 +119,9 @@ coro::CoroTask<void> ReplayEngine::run_pipelined(
     };
     auto consumer = [this, channel, &result]() -> coro::CoroTask<void> {
         auto c = channel->consumer();
-        while (auto item = co_await c.receive()) {
+        for (;;) {
+            auto item = co_await c.receive();
+            if (!item) break;
             dispatch_trace(*item, result);
         }
         co_return;
@@ -146,7 +153,9 @@ coro::CoroTask<void> replay_file_async(ReplayEngine* engine,
 
     TraceReader rdr(std::move(cfg));
     auto gen = rdr.read_json(ReadConfig{});
-    while (auto opt = co_await gen.next()) {
+    for (;;) {
+        auto opt = co_await gen.next();
+        if (!opt) break;
         if (!opt->parser) continue;
         engine->process_trace_line(*opt->parser, *result);
     }
@@ -650,8 +659,11 @@ ReplayResult ReplayEngine::replay_with_call_tree(
         std::vector<Trace> events;
         [&]() -> coro::CoroTask<void> {
             auto gen = stream_traces(files);
-            while (auto opt = co_await gen.next())
+            for (;;) {
+                auto opt = co_await gen.next();
+                if (!opt) break;
                 events.push_back(std::move(*opt));
+            }
             co_return;
         }()
                      .get();

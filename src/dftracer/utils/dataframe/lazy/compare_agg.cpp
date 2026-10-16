@@ -160,7 +160,9 @@ class CompareAggCursor : public Cursor {
         auto rspool = std::make_shared<spill::Spool>(share_of(budget_));
         std::vector<std::string> lnames = sch_;
         std::vector<DataType> ltypes;
-        while (auto m = co_await in_->next(max_rows)) {
+        for (;;) {
+            auto m = co_await in_->next(max_rows);
+            if (!m) break;
             note_types(ltypes, m->columns);
             lspool->add(std::move(m->columns), m->rows);
         }
@@ -172,7 +174,9 @@ class CompareAggCursor : public Cursor {
         std::vector<std::string> rnames;
         std::vector<DataType> rtypes;
         auto gen = other.stream(max_rows);
-        while (auto df = co_await gen.next()) {
+        for (;;) {
+            auto df = co_await gen.next();
+            if (!df) break;
             if (rtypes.empty()) rnames = df->names;
             note_types(rtypes, df->columns);
             std::vector<Series> cols;

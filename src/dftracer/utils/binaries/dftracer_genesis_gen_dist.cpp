@@ -177,8 +177,10 @@ struct Report {
 coro::CoroTask<void> group_feeder(coro::ChannelProducer<std::size_t> producer,
                                   const std::vector<std::size_t>* order) {
     auto guard = producer.guard();
-    for (const std::size_t i : *order)
-        if (!co_await producer.send(i)) break;
+    for (const std::size_t i : *order) {
+        const auto sent = co_await producer.send(i);
+        if (!sent) break;
+    }
 }
 
 // Peak resident memory of this process so far, in bytes.
@@ -521,7 +523,9 @@ coro::CoroTask<void> group_worker(
         borrowed.fetch_add(n);
         return n;
     };
-    while (auto i = co_await in.receive()) {
+    for (;;) {
+        auto i = co_await in.receive();
+        if (!i) break;
         const genesis::RunGroup& group = (*groups)[*i];
         std::uint64_t share = shares.first(group);
         genesis::GroupProgress* live = progress->begin(w, &group);

@@ -823,7 +823,9 @@ dftracer::utils::coro::CoroTask<void> drain_stream(
     LazyFrame lf, std::int64_t morsel_rows) {
     try {
         auto gen = lf.stream(morsel_rows);
-        while (auto df = co_await gen.next()) {
+        for (;;) {
+            auto df = co_await gen.next();
+            if (!df) break;
             if (state->cancelled()) break;
             const std::size_t bytes =
                 static_cast<std::size_t>(df->num_rows()) *

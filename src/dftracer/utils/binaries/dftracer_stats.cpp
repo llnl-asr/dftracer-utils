@@ -772,7 +772,8 @@ static void run_detailed_query_workers(
                  files_ptr](CoroScope&) mutable -> coro::CoroTask<void> {
         auto guard = ch.guard();
         for (std::size_t fi = 0; fi < files_ptr->size(); ++fi) {
-            if (!co_await ch.send(fi)) {
+            const auto send_ok = co_await ch.send(fi);
+            if (!send_ok) {
                 co_return;
             }
         }
@@ -783,7 +784,9 @@ static void run_detailed_query_workers(
         scope.spawn([ch = file_chan->consumer(), files_ptr, index_dir_ptr,
                      needs_hash_resolution, json_output, top_n, qp, fn, fc, gb,
                      ad, am, om, jr](CoroScope&) -> coro::CoroTask<void> {
-            while (auto fi_opt = co_await ch.receive()) {
+            for (;;) {
+                auto fi_opt = co_await ch.receive();
+                if (!fi_opt) break;
                 std::size_t fi = *fi_opt;
                 std::string file_path = (*files_ptr)[fi];
                 co_await process_file_detailed(

@@ -235,7 +235,8 @@ class OrderedJoin : public Cursor {
                 lb_.reset();
                 continue;
             }
-            if (!co_await load_left()) co_return std::nullopt;
+            const auto load_left_ok = co_await load_left();
+            if (!load_left_ok) co_return std::nullopt;
         }
     }
 
@@ -257,7 +258,9 @@ class OrderedJoin : public Cursor {
             co_return false;
         rep_ = lb_;
         rep_row_ = r;
-        while (co_await feed_.fill(max_rows_)) {
+        for (;;) {
+            const auto fill_ok = co_await feed_.fill(max_rows_);
+            if (!fill_ok) break;
             const Seg& s = *feed_.seg();
             if (ops::compare_keys(L.by, r, s.keys, feed_.i()) <= 0) break;
             feed_.advance();
@@ -296,7 +299,9 @@ class OrderedJoin : public Cursor {
             b->m = std::move(*m);
             lb_ = std::move(b);
             li_ = 0;
-            if (!checked_ && co_await feed_.fill(max_rows_)) {
+            bool filled = false;
+            if (!checked_) filled = co_await feed_.fill(max_rows_);
+            if (filled) {
                 check_types(*lb_, *feed_.seg());
                 checked_ = true;
             }
@@ -451,7 +456,8 @@ class AsofCursor : public OrderedJoin {
     coro::CoroTask<void> step() override {
         const LeftBlock& L = *lb_;
         const std::int64_t r = li_++;
-        if (co_await enter_group(r)) {
+        const auto enter_group_ok = co_await enter_group(r);
+        if (enter_group_ok) {
             have_back_ = false;
             back_first_ = back_last_ = Held{};
         }
@@ -461,7 +467,8 @@ class AsofCursor : public OrderedJoin {
         }
         const ColumnView& lt = *L.t;
         for (;;) {
-            if (!co_await feed_.fill(max_rows_)) break;
+            const auto fill_ok = co_await feed_.fill(max_rows_);
+            if (!fill_ok) break;
             const SegPtr& s = feed_.seg();
             const std::int64_t j = feed_.i();
             if (!same_group(L, r, *s, j) || s->t->is_missing(j) ||
@@ -479,11 +486,14 @@ class AsofCursor : public OrderedJoin {
             if (have_back_ &&
                 back_last_.seg->t->compare(back_last_.i, lt, r) == 0) {
                 fwd = back_first_;
-            } else if (co_await feed_.fill(max_rows_)) {
-                const SegPtr& s = feed_.seg();
-                const std::int64_t j = feed_.i();
-                if (same_group(L, r, *s, j) && !s->t->is_missing(j))
-                    fwd = Held{s, j};
+            } else {
+                const bool filled = co_await feed_.fill(max_rows_);
+                if (filled) {
+                    const SegPtr& s = feed_.seg();
+                    const std::int64_t j = feed_.i();
+                    if (same_group(L, r, *s, j) && !s->t->is_missing(j))
+                        fwd = Held{s, j};
+                }
             }
         }
         const Held* cand = nullptr;
@@ -549,7 +559,8 @@ class IntervalCursor : public OrderedJoin {
         }
         const LeftBlock& L = *lb_;
         const std::int64_t r = li_++;
-        if (co_await enter_group(r)) {
+        const auto enter_group_ok = co_await enter_group(r);
+        if (enter_group_ok) {
             for (const Entry& e : active_) --e.seg->live;
             active_.clear();
             ordered_.clear();
@@ -618,7 +629,9 @@ class IntervalCursor : public OrderedJoin {
     coro::CoroTask<void> admit(const LeftBlock& L, std::int64_t r) {
         std::vector<std::int64_t> adm;
         SegPtr from;
-        while (co_await feed_.fill(max_rows_)) {
+        for (;;) {
+            const auto fill_ok = co_await feed_.fill(max_rows_);
+            if (!fill_ok) break;
             const SegPtr& s = feed_.seg();
             const std::int64_t j = feed_.i();
             if (!same_group(L, r, *s, j) || s->t->is_missing(j) ||

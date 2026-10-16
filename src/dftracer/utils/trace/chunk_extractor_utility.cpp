@@ -66,7 +66,9 @@ ChunkExtractorUtility::extract_and_write(
                     .with_line_range(spec.start_line, spec.end_line);
             auto line_gen = StreamingLineReader::read_async(reader_config);
 
-            while (auto line_opt = co_await line_gen.next()) {
+            for (;;) {
+                auto line_opt = co_await line_gen.next();
+                if (!line_opt) break;
                 const auto& line = *line_opt;
                 const char* trimmed;
                 std::size_t trimmed_length;
@@ -93,7 +95,9 @@ ChunkExtractorUtility::extract_and_write(
                 auto line_gen = sources::async_indexed_file_bytes(
                     reader, spec.start_byte, spec.end_byte);
 
-                while (auto line_opt = co_await line_gen.next()) {
+                for (;;) {
+                    auto line_opt = co_await line_gen.next();
+                    if (!line_opt) break;
                     const auto& line = *line_opt;
                     const char* trimmed;
                     std::size_t trimmed_length;
@@ -121,7 +125,9 @@ ChunkExtractorUtility::extract_and_write(
                     sources::async_streaming_gz_lines(spec.file_path);
                 std::size_t byte_pos = 0;
 
-                while (auto line_opt = co_await line_gen.next()) {
+                for (;;) {
+                    auto line_opt = co_await line_gen.next();
+                    if (!line_opt) break;
                     const auto& line = *line_opt;
                     const std::size_t line_start = byte_pos;
                     byte_pos += line.content.length() + 1;

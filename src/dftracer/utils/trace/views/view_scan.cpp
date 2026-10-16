@@ -519,7 +519,9 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
                     ViewScannerUtility scanner;
                     auto gen = scanner(sin);
                     bool complete = true;
-                    while (auto b = co_await gen.next()) {
+                    for (;;) {
+                        auto b = co_await gen.next();
+                        if (!b) break;
                         if (b->events.empty()) {
                             counts_v[w].add(*b);
                             continue;
@@ -623,8 +625,10 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
     st.chunks_covered = member_units;
     for (const auto& c : counts_v) c.add_to(st);
     st.truncated = produced.load(std::memory_order_relaxed) >= cap;
-    for (auto* f : folds)
-        if (co_await f->finalize(covered)) st.artifacts_committed = true;
+    for (auto* f : folds) {
+        const auto committed = co_await f->finalize(covered);
+        if (committed) st.artifacts_committed = true;
+    }
     co_return counted(plan, st);
 }
 

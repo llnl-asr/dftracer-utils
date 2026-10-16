@@ -322,7 +322,9 @@ coro::CoroTask<void> GzipReader::read_lines_with_processor_async(
             line_length--;
         }
 
-        if (!co_await processor.process(buffer.data(), line_length)) {
+        const auto process_ok =
+            co_await processor.process(buffer.data(), line_length);
+        if (!process_ok) {
             processor.end();
             co_return;
         }

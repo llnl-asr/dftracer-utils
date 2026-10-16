@@ -150,7 +150,9 @@ class FileDecompressorUtility {
             fileio::StreamingFileWriterUtility writer(input.output_path);
             auto gen = fileio::compress::decode_gzip_members(
                 fd.get(), static_cast<std::uint64_t>(st.st_size));
-            while (auto chunk = co_await gen.next()) {
+            for (;;) {
+                auto chunk = co_await gen.next();
+                if (!chunk) break;
                 co_await writer.process(ByteView(chunk->data(), chunk->size()));
             }
 

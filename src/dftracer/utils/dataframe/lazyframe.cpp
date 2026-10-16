@@ -166,7 +166,11 @@ coro::CoroTask<DataFrame> join_parts(std::vector<DataFrame> parts) {
 coro::CoroTask<DataFrame> drain_stream(coro::AsyncGenerator<DataFrame> gen,
                                        std::uint64_t budget = NO_SPILL_BUDGET) {
     PartHolder holder(budget);
-    while (auto df = co_await gen.next()) holder.add(std::move(*df));
+    for (;;) {
+        auto df = co_await gen.next();
+        if (!df) break;
+        holder.add(std::move(*df));
+    }
     std::vector<DataFrame> parts = holder.take();
     if (parts.empty()) co_return DataFrame{};
     // A single chunk needs no merge - concat cannot rejoin a nested
@@ -185,7 +189,9 @@ coro::CoroTask<DataFrame> drain_cursor(Cursor& c, std::vector<std::string> sch,
                                        std::int64_t max_rows, const char* who,
                                        std::uint64_t budget = NO_SPILL_BUDGET) {
     PartHolder holder(budget);
-    while (auto m = co_await c.next(max_rows)) {
+    for (;;) {
+        auto m = co_await c.next(max_rows);
+        if (!m) break;
         DataFrame df;
         df.names = sch;
         df.columns = std::move(m->columns);
@@ -260,7 +266,9 @@ class FilterCursor : public Cursor {
         : in_(std::move(in)), pred_(std::move(pred)) {}
 
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
-        while (auto m = co_await in_->next(max_rows)) {
+        for (;;) {
+            auto m = co_await in_->next(max_rows);
+            if (!m) break;
             std::optional<Morsel> filtered = apply(std::move(*m));
             if (filtered) co_return filtered;
         }
@@ -334,7 +342,9 @@ class FilterMaskCursor : public Cursor {
           mask_(mask.is_flat() ? std::move(mask) : mask.materialize()) {}
 
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
-        while (auto m = co_await in_->next(max_rows)) {
+        for (;;) {
+            auto m = co_await in_->next(max_rows);
+            if (!m) break;
             std::optional<Morsel> filtered = apply(std::move(*m));
             if (filtered) co_return filtered;
         }
@@ -762,7 +772,11 @@ class TailCursor : public Cursor {
             done_ = true;
             co_return std::nullopt;
         }
-        while (auto m = co_await in_->next(max_rows)) accumulate(std::move(*m));
+        for (;;) {
+            auto m = co_await in_->next(max_rows);
+            if (!m) break;
+            accumulate(std::move(*m));
+        }
         done_ = true;
         co_return finish();
     }
@@ -848,7 +862,9 @@ class DropNullsCursor : public Cursor {
    public:
     explicit DropNullsCursor(std::unique_ptr<Cursor> in) : in_(std::move(in)) {}
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
-        while (auto m = co_await in_->next(max_rows)) {
+        for (;;) {
+            auto m = co_await in_->next(max_rows);
+            if (!m) break;
             Morsel out = map_frame(std::move(*m),
                                    [](DataFrame f) { return f.drop_nulls(); });
             if (out.rows > 0) co_return out;
@@ -1001,7 +1017,9 @@ class NullCountCursor : public Cursor {
         if (done_) co_return std::nullopt;
         done_ = true;
         std::vector<std::int64_t> counts;
-        while (auto m = co_await in_->next(max_rows)) {
+        for (;;) {
+            auto m = co_await in_->next(max_rows);
+            if (!m) break;
             if (counts.empty()) counts.assign(m->columns.size(), 0);
             for (std::size_t i = 0; i < m->columns.size(); ++i)
                 counts[i] += m->columns[i].null_count();
@@ -1086,7 +1104,8 @@ class ExplodeCursor : public Cursor {
           budget_(budget),
           ci_(column_index_of(sch_, column_)) {}
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
-        if (!co_await feed_.fill(*in_, max_rows)) co_return std::nullopt;
+        const auto fill_ok = co_await feed_.fill(*in_, max_rows);
+        if (!fill_ok) co_return std::nullopt;
         co_return frame_op(feed_.take(rows_to_explode(max_rows)), sch_,
                            [&](DataFrame f) { return f.explode(column_); });
     }
@@ -1165,7 +1184,8 @@ class UnpivotCursor : public Cursor {
           val_(std::move(val)),
           budget_(budget) {}
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
-        if (!co_await feed_.fill(*in_, max_rows)) co_return std::nullopt;
+        const auto fill_ok = co_await feed_.fill(*in_, max_rows);
+        if (!fill_ok) co_return std::nullopt;
         co_return frame_op(feed_.take(rows_to_unpivot(max_rows)), sch_,
                            [&](DataFrame f) { return f.unpivot(id_, val_); });
     }
@@ -1256,7 +1276,9 @@ class TopkCursor : public Cursor {
         done_ = true;
         DataFrame best;
         bool has = false;
-        while (auto m = co_await in_->next(max_rows)) {
+        for (;;) {
+            auto m = co_await in_->next(max_rows);
+            if (!m) break;
             if (!has && outgrows(*m)) {
                 sorted_ = std::make_unique<SliceCursor>(
                     make_sort_merge(std::make_unique<ReplayCursor>(
@@ -1336,7 +1358,9 @@ class SampleCursor : public Cursor {
         std::vector<std::uint64_t> keys;  // parallel to best's rows
         std::vector<std::int64_t> idx;    // original global row indices
         std::int64_t off = 0;
-        while (auto m = co_await in_->next(max_rows)) {
+        for (;;) {
+            auto m = co_await in_->next(max_rows);
+            if (!m) break;
             const std::int64_t mrows = m->rows;
             DataFrame mf = frame_of(std::move(m->columns), sch_);
             DataFrame combined =
@@ -1422,7 +1446,9 @@ class DescribeCursor : public Cursor {
         std::vector<FieldStat> acc;
         std::int64_t total_rows = 0;
         bool first = true;
-        while (auto m = co_await in_->next(max_rows)) {
+        for (;;) {
+            auto m = co_await in_->next(max_rows);
+            if (!m) break;
             if (first) {
                 first = false;
                 for (std::size_t c = 0; c < m->columns.size(); ++c)
@@ -1795,7 +1821,9 @@ class IsDupCursor : public Cursor {
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         if (!counted_) co_await count(max_rows);
         if (external_) co_return co_await external_->next(max_rows);
-        while (auto m = co_await pass2_->next(max_rows)) {
+        for (;;) {
+            auto m = co_await pass2_->next(max_rows);
+            if (!m) break;
             const std::int64_t n = m->rows;
             const std::int64_t nbytes = (n + 7) / 8;
             std::vector<std::uint8_t> bits(static_cast<std::size_t>(nbytes), 0);
@@ -1911,7 +1939,8 @@ class ToDummiesCursor : public Cursor {
 
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         if (!built_) co_await build(max_rows);
-        if (!co_await feed_.fill(*pass2_, max_rows)) co_return std::nullopt;
+        const auto fill_ok = co_await feed_.fill(*pass2_, max_rows);
+        if (!fill_ok) co_return std::nullopt;
         // A morsel of dummy columns is as wide as the distinct values, so it
         // gets fewer rows the more there are: its bytes (built once, then
         // copied into the columns) stay within the output share.
@@ -1956,7 +1985,9 @@ class ToDummiesCursor : public Cursor {
 
         ankerl::unordered_dense::set<std::string> seen;
         std::vector<Series> chunks;
-        while (auto m = co_await first_->next(max_rows)) {
+        for (;;) {
+            auto m = co_await first_->next(max_rows);
+            if (!m) break;
             const Series& col = m->columns[static_cast<std::size_t>(ci_)];
             std::vector<Series> one;
             one.push_back(col.share());
@@ -2034,7 +2065,9 @@ class TakeCursor : public Cursor {
         std::vector<std::int64_t> where;
         std::size_t at = 0;
         std::int64_t base = 0;
-        while (auto m = co_await in_->next(max_rows)) {
+        for (;;) {
+            auto m = co_await in_->next(max_rows);
+            if (!m) break;
             const std::int64_t end = base + m->rows;
             std::vector<std::int64_t> local;
             std::vector<std::int64_t> slots;
@@ -2099,7 +2132,9 @@ constexpr std::string_view RIGHT_REST_COLUMN = "__rest_right";
 coro::AsyncGenerator<DataFrame> named_frames(std::unique_ptr<Cursor> cursor,
                                              std::vector<std::string> names,
                                              std::int64_t rows) {
-    while (auto m = co_await cursor->next(rows)) {
+    for (;;) {
+        auto m = co_await cursor->next(rows);
+        if (!m) break;
         DataFrame f = frame_of(std::move(m->columns), names);
         co_yield std::move(f);
     }
@@ -2139,7 +2174,8 @@ class JoinCursor : public Cursor {
         // A left morsel can match many right rows, so the probe takes as many
         // left rows as the output share allows from what the last ones made.
         while (in_) {
-            if (!co_await feed_.fill(*in_, max_rows)) {
+            const auto fill_ok = co_await feed_.fill(*in_, max_rows);
+            if (!fill_ok) {
                 in_.reset();
                 break;
             }
@@ -2230,7 +2266,9 @@ class JoinCursor : public Cursor {
         std::vector<DataFrame> parts;
         std::uint64_t bytes = 0;
         auto gen = right_frames(max_rows);
-        while (auto df = co_await gen.next()) {
+        for (;;) {
+            auto df = co_await gen.next();
+            if (!df) break;
             if (grace_) {
                 grace_->add_right(*df);
                 continue;
@@ -2287,7 +2325,9 @@ class JoinCursor : public Cursor {
         std::uint64_t bytes = 0;
         std::int64_t rows = 0;
         auto gen = other_.stream(max_rows);
-        while (auto df = co_await gen.next()) {
+        for (;;) {
+            auto df = co_await gen.next();
+            if (!df) break;
             bytes += spill::columns_bytes(flat_columns(*df));
             rows += df->num_rows();
             if (!cross_) {
@@ -2342,8 +2382,10 @@ class JoinCursor : public Cursor {
     coro::CoroTask<bool> next_left_block(std::int64_t max_rows) {
         std::vector<DataFrame> parts;
         std::uint64_t bytes = 0;
-        while (bytes < cross_block_bytes_ && in_ &&
-               co_await feed_.fill(*in_, max_rows)) {
+        for (;;) {
+            if (bytes >= cross_block_bytes_ || !in_) break;
+            const bool filled = co_await feed_.fill(*in_, max_rows);
+            if (!filled) break;
             Morsel part = feed_.take(feed_.remaining());
             parts.push_back(frame_of(std::move(part.columns), sch_));
             bytes += spill::columns_bytes(flat_columns(parts.back()));
@@ -2384,7 +2426,8 @@ class JoinCursor : public Cursor {
                 }
             }
             pair_.reset();
-            if (!co_await next_left_block(max_rows)) co_return std::nullopt;
+            const auto next_left_block_ok = co_await next_left_block(max_rows);
+            if (!next_left_block_ok) co_return std::nullopt;
             right_reader_ = cross_right_->reader();
         }
     }
@@ -2523,7 +2566,8 @@ class ConcatCursor : public Cursor {
 
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         if (in_) {
-            if (auto m = co_await in_->next(max_rows)) {
+            auto m = co_await in_->next(max_rows);
+            if (m) {
                 m->ordering = Ordering::Unordered;
                 co_return m;
             }
@@ -5290,7 +5334,9 @@ CursorChain lower_cursor_chain(
 coro::AsyncGenerator<DataFrame> drive_cursor_chain(CursorChain chain,
                                                    std::int64_t rows) {
     bool reported = false;
-    while (auto m = co_await chain.cursor->next(rows)) {
+    for (;;) {
+        auto m = co_await chain.cursor->next(rows);
+        if (!m) break;
         DataFrame out = frame_from_morsel(std::move(*m), chain.schema,
                                           chain.cursor->out_names());
         co_await reclaim_chain(chain, reported);
@@ -5766,7 +5812,9 @@ coro::CoroTask<AggStatePtr> LazyFrame::collect_group_state(
     AggStatePtr state = agg_new(lowered.specs, dyn);
     auto gen = stream(morsel_rows);
     std::int64_t rows_seen = 0;
-    while (auto df = co_await gen.next()) {
+    for (;;) {
+        auto df = co_await gen.next();
+        if (!df) break;
         agg_set_row_base(*state, rows_seen);
         rows_seen += df->num_rows();
         agg_accumulate_chunk(*state, *df, keys, lowered.value_names,

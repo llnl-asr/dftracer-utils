@@ -205,12 +205,17 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
             // members and names their parts.
             child.spawn([&](CoroScope&) -> coro::CoroTask<void> {
                 auto cons = ch->consumer();
-                while (auto item = co_await cons.receive()) {
-                    if (co_await writer.append(*item)) continue;
+                for (;;) {
+                    auto item = co_await cons.receive();
+                    if (!item) break;
+                    const auto append_ok = co_await writer.append(*item);
+                    if (append_ok) continue;
                     ok = false;
                     failed.store(true, std::memory_order_relaxed);
                     // Drain, so producers blocked on the channel finish.
-                    while (co_await cons.receive()) {
+                    for (;;) {
+                        const auto receive_ok = co_await cons.receive();
+                        if (!receive_ok) break;
                     }
                     co_return;
                 }
@@ -238,7 +243,9 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
                                     units[i], vdef, vdef.query);
                                 ViewScannerUtility scanner;
                                 auto gen = scanner(sin);
-                                while (auto b = co_await gen.next()) {
+                                for (;;) {
+                                    auto b = co_await gen.next();
+                                    if (!b) break;
                                     if (is_cancelled(plan) ||
                                         failed.load(std::memory_order_relaxed))
                                         co_return;
@@ -279,7 +286,10 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
         });
     });
 
-    if (ok && !co_await writer.close()) ok = false;
+    if (ok) {
+        const auto closed = co_await writer.close();
+        if (!closed) ok = false;
+    }
     if (!ok || parts.empty()) {
         throw DFTUtilsException(
             ErrorCode::IO, "export_trace failed writing " + opts.output_path);

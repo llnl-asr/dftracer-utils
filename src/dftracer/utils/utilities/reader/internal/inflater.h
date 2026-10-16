@@ -79,7 +79,9 @@ class ReaderInflater {
                                  member.member_idx, member.c_offset,
                                  member.uc_offset);
         reset();
-        if (!co_await begin_at(fd, offset, member.c_offset, expected_out)) {
+        const auto begin_at_ok =
+            co_await begin_at(fd, offset, member.c_offset, expected_out);
+        if (!begin_at_ok) {
             co_return false;
         }
         using dftracer::utils::index::gzip::GzipRecordKind;
@@ -90,9 +92,9 @@ class ReaderInflater {
         if (window.empty() || member.bits > 7) co_return false;
         unsigned char prime = 0;
         if (member.bits > 0) {
-            if (co_await dftracer::utils::io::pread(
-                    fd, &prime, 1, static_cast<off_t>(member.c_offset - 1)) !=
-                1) {
+            const auto prime_read = co_await dftracer::utils::io::pread(
+                fd, &prime, 1, static_cast<off_t>(member.c_offset - 1));
+            if (prime_read != 1) {
                 co_return false;
             }
         }
@@ -120,7 +122,9 @@ class ReaderInflater {
         while (bytes_out < len) {
             if (member_pos_ >= member_len_) {
                 if (exhausted_) break;
-                if (!co_await decode_next_member(fd, offset)) co_return false;
+                const auto decode_next_member_ok =
+                    co_await decode_next_member(fd, offset);
+                if (!decode_next_member_ok) co_return false;
                 if (member_len_ == 0) {
                     exhausted_ = true;
                     break;
@@ -141,7 +145,9 @@ class ReaderInflater {
         while (bytes_to_skip > 0) {
             if (member_pos_ >= member_len_) {
                 if (exhausted_) break;
-                if (!co_await decode_next_member(fd, offset)) co_return false;
+                const auto decode_next_member_ok =
+                    co_await decode_next_member(fd, offset);
+                if (!decode_next_member_ok) co_return false;
                 if (member_len_ == 0) {
                     exhausted_ = true;
                     break;

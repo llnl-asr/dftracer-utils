@@ -120,7 +120,9 @@ class PivotCursor : public Cursor {
 
         ankerl::unordered_dense::set<std::string> seen;
         std::vector<Series> distinct;
-        while (auto m = co_await first_->next(max_rows)) {
+        for (;;) {
+            auto m = co_await first_->next(max_rows);
+            if (!m) break;
             const Series& ic = m->columns[static_cast<std::size_t>(ii)];
             const Series& oc = m->columns[static_cast<std::size_t>(ci)];
             const Series& vc = m->columns[static_cast<std::size_t>(vi)];

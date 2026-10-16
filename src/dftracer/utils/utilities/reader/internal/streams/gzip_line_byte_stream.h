@@ -72,8 +72,10 @@ class GzipLineByteStream : public GzipStream {
         alignas(DFTRACER_OPTIMAL_ALIGNMENT) unsigned char
             search_buffer[SEARCH_BUFFER_SIZE];
         std::size_t search_bytes;
-        if (co_await inflater_.read(fd_, file_offset_, search_buffer,
-                                    sizeof(search_buffer) - 1, search_bytes)) {
+        const auto read_ok =
+            co_await inflater_.read(fd_, file_offset_, search_buffer,
+                                    sizeof(search_buffer) - 1, search_bytes);
+        if (read_ok) {
             std::size_t relative_target = target_start - current_pos;
             if (relative_target < search_bytes) {
                 // Always use backward search to find line start

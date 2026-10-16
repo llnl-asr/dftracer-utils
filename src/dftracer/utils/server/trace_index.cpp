@@ -658,7 +658,8 @@ coro::CoroTask<void> TraceIndex::initialize() {
                                 CoroScope&) mutable -> coro::CoroTask<void> {
                                 auto guard = ch.guard();
                                 for (auto idx : *large_files_ptr) {
-                                    if (!co_await ch.send(idx)) co_return;
+                                    const auto send_ok = co_await ch.send(idx);
+                                    if (!send_ok) co_return;
                                 }
                                 co_return;
                             });
@@ -667,7 +668,9 @@ coro::CoroTask<void> TraceIndex::initialize() {
                             scope.spawn([ch = meta_chan->consumer(), files_ptr,
                                          schemas_ptr](CoroScope&)
                                             -> coro::CoroTask<void> {
-                                while (auto fi_opt = co_await ch.receive()) {
+                                for (;;) {
+                                    auto fi_opt = co_await ch.receive();
+                                    if (!fi_opt) break;
                                     std::size_t fi = *fi_opt;
                                     auto* info = &(*files_ptr)[fi];
 

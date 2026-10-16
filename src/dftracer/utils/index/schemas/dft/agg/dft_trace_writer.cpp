@@ -436,7 +436,9 @@ coro::CoroTask<bool> write_shard_events(
     };
 
     while (more) {
-        if (!(co_await writer->append_with(buffer_capacity, fill))) {
+        const auto append_with_ok =
+            co_await writer->append_with(buffer_capacity, fill);
+        if (!append_with_ok) {
             co_return false;
         }
     }

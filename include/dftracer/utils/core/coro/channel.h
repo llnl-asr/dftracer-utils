@@ -808,7 +808,11 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
      * Get a receive-side handle for capturing into a coroutine lambda:
      *
      *   [ch = channel->consumer()](...) -> CoroTask<...> {
-     *       while (auto item = co_await ch.receive()) { ... }
+     *       for (;;) {
+     *           auto item = co_await ch.receive();
+     *           if (!item) break;
+     *           ...
+     *       }
      *   }
      */
     ChannelConsumer<T> consumer() {
@@ -1154,7 +1158,9 @@ class ChannelProducer {
  * @code
  *     [ch = channel->consumer()](CoroScope& ctx)
  *         -> CoroTask<void> {
- *         while (auto item = co_await ch.receive()) {
+ *         for (;;) {
+ *             auto item = co_await ch.receive();
+ *             if (!item) break;
  *             process(*item);
  *         }
  *     }

@@ -564,7 +564,9 @@ class NativeTransformCursor : public Cursor {
         GroupKeys groups(false);
         bool too_many = false;
         std::int64_t row = 0;
-        while (auto m = co_await in_->next(max_rows)) {
+        for (;;) {
+            auto m = co_await in_->next(max_rows);
+            if (!m) break;
             if (m->rows == 0) continue;
             if (!too_many && !spool.spilled()) {
                 std::vector<std::int32_t> scratch(

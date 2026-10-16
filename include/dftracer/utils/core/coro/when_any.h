@@ -748,7 +748,7 @@ class TimeoutAwaitable {
     void await_suspend(std::coroutine_handle<> h) {
         if (!timer_service_) {
             throw DFTUtilsException(
-                ErrorCode::PIPELINE,
+                ErrorCode::Pipeline,
                 "TimeoutAwaitable: TimerService not available");
         }
 
@@ -764,7 +764,7 @@ class TimeoutAwaitable {
         completed_.store(true, std::memory_order_release);
 
         if (timed_out_->load(std::memory_order_acquire)) {
-            throw DFTUtilsException(ErrorCode::PIPELINE, "Operation timed out");
+            throw DFTUtilsException(ErrorCode::Pipeline, "Operation timed out");
         }
     }
 

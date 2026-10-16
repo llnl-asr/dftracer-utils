@@ -29,7 +29,7 @@ template <typename T>
 std::vector<std::vector<T>> partition_all(std::size_t n,
                                           const std::vector<T>& items) {
     if (n == 0) {
-        throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+        throw DFTUtilsException(ErrorCode::InvalidArgument,
                                 "partition_all: n must be > 0");
     }
 

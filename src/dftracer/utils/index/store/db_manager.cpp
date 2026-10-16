@@ -127,7 +127,7 @@ std::shared_ptr<RocksDatabase> RocksDBManager::get_or_open(
                             break;
                         }
                         throw DFTUtilsException(
-                            ErrorCode::INVALID_ARGUMENT,
+                            ErrorCode::InvalidArgument,
                             "Cannot upgrade RocksDB instance at '" + db_path +
                                 "' from read-only to read-write while it is "
                                 "still "
@@ -231,7 +231,7 @@ std::shared_ptr<RocksDatabase> RocksDBManager::get_or_open(
             if (current.use_count() != 1) {
                 opening_.erase(db_path);
                 cv_.notify_all();
-                throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                throw DFTUtilsException(ErrorCode::InvalidArgument,
                                         "Cannot upgrade RocksDB instance at '" +
                                             db_path +
                                             "' from read-only to read-write "

@@ -33,7 +33,7 @@ FoldEvent ev(StringIntern& in, std::uint64_t pid, std::uint64_t ts,
     e.tid = 1;
     e.ts = ts;
     e.dur = dur;
-    e.phase = RecordPhase::COMPLETE;
+    e.phase = RecordPhase::Complete;
     e.has_dur = true;
     return e;
 }
@@ -104,7 +104,7 @@ TEST_SUITE("VectorizedFold") {
         StringIntern in;
         auto fold = make_fold(in);
         FoldEvent m = ev(in, 1, 1, 0);
-        m.phase = RecordPhase::METADATA;
+        m.phase = RecordPhase::Metadata;
         std::vector<FoldEvent> evs = {m};
         ScanUnit unit{};
         fold.step(FoldBatch{std::span<const FoldEvent>(evs), unit, {}});

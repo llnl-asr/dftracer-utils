@@ -39,17 +39,17 @@ class TypedCollectFold : public Fold {
     void step(const FoldBatch& batch) override {
         for (const auto& ev : batch.events) {
             switch (ev.phase) {
-                case RecordPhase::COMPLETE:
+                case RecordPhase::Complete:
                     regular_.push(ev);
                     break;
-                case RecordPhase::AGGREGATED:
+                case RecordPhase::Aggregated:
                     aggregated_.push(ev);
                     break;
-                case RecordPhase::COUNTER:
+                case RecordPhase::Counter:
                     counters_.push(ev);
                     break;
-                case RecordPhase::UNKNOWN:
-                case RecordPhase::METADATA:
+                case RecordPhase::Unknown:
+                case RecordPhase::Metadata:
                     break;
             }
         }

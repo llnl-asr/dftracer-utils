@@ -16,13 +16,13 @@
 namespace dftracer::utils::index::store::layout {
 
 enum class Family : std::uint8_t {
-    REGISTRY,
-    MEMBERS,
-    GRANULE,
-    BLOB,
-    POSTINGS,
-    AGGREGATION,
-    SYSTEM_METRICS,
+    Registry,
+    Members,
+    Granule,
+    Blob,
+    Postings,
+    Aggregation,
+    SystemMetrics,
 };
 
 inline constexpr std::size_t FAMILY_COUNT = 7;
@@ -136,12 +136,12 @@ std::string with_header(Ext ext, std::uint8_t kind, std::string_view payload);
 std::optional<std::string_view> payload(std::string_view value, Ext ext,
                                         std::uint8_t kind);
 
-enum class ExtStatus : std::uint8_t { READY = 1, FAILED = 2 };
+enum class ExtStatus : std::uint8_t { Ready = 1, Failed = 2 };
 
 struct ManifestEntry {
     std::uint32_t version = 0;
     std::uint64_t params_hash = 0;
-    ExtStatus status = ExtStatus::READY;
+    ExtStatus status = ExtStatus::Ready;
 };
 
 std::string encode_chunk_metadata(const ChunkMetadata& metadata);

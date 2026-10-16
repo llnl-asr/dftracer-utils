@@ -21,20 +21,20 @@ const int g_force_scratch = [] {
 
 TEST_CASE("filesystem_kind classifies the root filesystem") {
     const FilesystemKind k = filesystem_kind("/");
-    CHECK(k != FilesystemKind::UNKNOWN);
+    CHECK(k != FilesystemKind::Unknown);
     // A not-yet-created path resolves to its parent's filesystem.
     CHECK(filesystem_kind("/tmp/does/not/exist/yet") !=
-          FilesystemKind::UNKNOWN);
+          FilesystemKind::Unknown);
 }
 
 TEST_CASE("kind predicates are mutually consistent") {
-    CHECK(is_local_filesystem(FilesystemKind::LOCAL));
-    CHECK(is_local_filesystem(FilesystemKind::TMPFS));
-    CHECK(is_memory_filesystem(FilesystemKind::TMPFS));
-    CHECK_FALSE(is_memory_filesystem(FilesystemKind::LOCAL));
-    CHECK(is_network_filesystem(FilesystemKind::LUSTRE));
-    CHECK_FALSE(is_network_filesystem(FilesystemKind::LOCAL));
-    CHECK_FALSE(is_network_filesystem(FilesystemKind::TMPFS));
+    CHECK(is_local_filesystem(FilesystemKind::Local));
+    CHECK(is_local_filesystem(FilesystemKind::Tmpfs));
+    CHECK(is_memory_filesystem(FilesystemKind::Tmpfs));
+    CHECK_FALSE(is_memory_filesystem(FilesystemKind::Local));
+    CHECK(is_network_filesystem(FilesystemKind::Lustre));
+    CHECK_FALSE(is_network_filesystem(FilesystemKind::Local));
+    CHECK_FALSE(is_network_filesystem(FilesystemKind::Tmpfs));
 }
 
 TEST_CASE("list_mounts reports the root mount") {

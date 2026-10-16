@@ -160,7 +160,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
             fs::remove_all(root, ec);
             if (ec) {
                 throw DFTUtilsException(
-                    ErrorCode::IO, "failed to remove outdated index " + root +
+                    ErrorCode::Io, "failed to remove outdated index " + root +
                                        ": " + ec.message());
             }
         }
@@ -437,7 +437,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
     // The tier's own message says "is corrupt"; other column families say
     // only "Corruption" and cannot be repaired by clearing the tier.
     if (failure.find("is corrupt") == std::string::npos)
-        throw_corrupt(roots, failure, false, ErrorCode::INDEXER);
+        throw_corrupt(roots, failure, false, ErrorCode::Indexer);
     DFTRACER_UTILS_LOG_WARN(
         "the aggregation tier of %zu index(es) is corrupt (%s); clearing it "
         "and aggregating again",
@@ -455,7 +455,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
         if (!mentions_corruption(e.what())) throw;
         retry_failure = e.what();
     }
-    throw_corrupt(roots, retry_failure, true, ErrorCode::AGGREGATION);
+    throw_corrupt(roots, retry_failure, true, ErrorCode::Aggregation);
 }
 
 }  // namespace dftracer::utils::index::build

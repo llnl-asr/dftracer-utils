@@ -123,8 +123,8 @@ static coro::CoroTask<int> run_verify(
             const int fid = writer->file_id_for(get_logical_path(abs_path));
             namespace records = dftracer::utils::index::store::records;
             namespace kinds = dftracer::utils::index::extensions::kinds;
-            records::clear_file(*writer, IndexExtension::BLOOM, fid);
-            records::clear_file(*writer, IndexExtension::STATS, fid);
+            records::clear_file(*writer, IndexExtension::Bloom, fid);
+            records::clear_file(*writer, IndexExtension::Stats, fid);
 
             std::size_t file_size = metadata.uncompressed_size;
             std::size_t num_ckpts = metadata.num_checkpoints;
@@ -169,7 +169,7 @@ static coro::CoroTask<int> run_verify(
                 for (auto& [dim, bloom] : output.bloom_filters) {
                     auto blob = bloom.serialize();
                     records::put_path_granule(
-                        *writer, IndexExtension::BLOOM, fid, dim,
+                        *writer, IndexExtension::Bloom, fid, dim,
                         output.checkpoint_idx,
                         kinds::encode_bloom(blob, bloom.num_entries()));
 
@@ -188,17 +188,17 @@ static coro::CoroTask<int> run_verify(
             for (auto& [dim, bloom] : file_blooms) {
                 auto blob = bloom.serialize();
                 records::put_path_file(
-                    *writer, IndexExtension::BLOOM, fid, dim,
+                    *writer, IndexExtension::Bloom, fid, dim,
                     kinds::encode_bloom(blob, bloom.num_entries()));
             }
             for (const auto& dim : all_dimensions)
-                records::put_path(*writer, IndexExtension::BLOOM, fid, dim);
+                records::put_path(*writer, IndexExtension::Bloom, fid, dim);
             records::put_manifest(
-                *writer, fid, IndexExtension::BLOOM,
-                indexer_config.params_hash(IndexExtension::BLOOM));
+                *writer, fid, IndexExtension::Bloom,
+                indexer_config.params_hash(IndexExtension::Bloom));
             records::put_manifest(
-                *writer, fid, IndexExtension::STATS,
-                indexer_config.params_hash(IndexExtension::STATS));
+                *writer, fid, IndexExtension::Stats,
+                indexer_config.params_hash(IndexExtension::Stats));
             writer->commit();
 
             std::string basename = fs::path(abs_path).filename().string();

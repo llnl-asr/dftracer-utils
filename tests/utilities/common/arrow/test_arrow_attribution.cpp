@@ -43,9 +43,9 @@ ArrowExportResult make_batch(const std::vector<OptB>& sel,
                              const std::vector<OptS>& file,
                              const std::vector<OptI>& rk) {
     RecordBatchBuilder b;
-    b.declare_schema({{"sel", ColumnType::BOOL},
-                      {"file", ColumnType::STRING},
-                      {"rank", ColumnType::INT64}});
+    b.declare_schema({{"sel", ColumnType::Bool},
+                      {"file", ColumnType::String},
+                      {"rank", ColumnType::Int64}});
     for (std::size_t i = 0; i < sel.size(); ++i) {
         if (sel[i])
             b.append_bool(0, *sel[i]);

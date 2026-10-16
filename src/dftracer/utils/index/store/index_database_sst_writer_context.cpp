@@ -87,7 +87,7 @@ void move_file(const fs::path& src, const fs::path& dst) {
     ec.clear();
     fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
     if (ec) {
-        throw IndexerError(IndexerError::Type::FILE_ERROR,
+        throw IndexerError(IndexerError::Type::FileError,
                            "Failed to move SST '" + src.string() + "' to '" +
                                dst.string() + "': " + ec.message());
     }
@@ -109,7 +109,7 @@ IndexDatabaseSstWriterContext::Artifacts::move_to(
     std::error_code ec;
     fs::create_directories(dir, ec);
     if (ec) {
-        throw IndexerError(IndexerError::Type::FILE_ERROR,
+        throw IndexerError(IndexerError::Type::FileError,
                            "Failed to create SST move destination '" +
                                std::string(dest_dir) + "': " + ec.message());
     }
@@ -131,7 +131,7 @@ IndexDatabaseSstWriterContext::IndexDatabaseSstWriterContext(
     std::error_code ec;
     fs::create_directories(fs::path(staging_dir_) / batch_id_, ec);
     if (ec) {
-        throw IndexerError(IndexerError::Type::FILE_ERROR,
+        throw IndexerError(IndexerError::Type::FileError,
                            "Failed to create SST staging dir '" + staging_dir_ +
                                "/" + batch_id_ + "': " + ec.message());
     }
@@ -177,8 +177,8 @@ IndexDatabaseSstWriterContext::commit() {
         if (buf.entries.empty() && buf.ranges.empty()) continue;
         const auto family = static_cast<layout::Family>(f);
         const ::rocksdb::MergeOperator* merge_op = nullptr;
-        if (family == layout::Family::AGGREGATION) merge_op = &agg_merge_op;
-        if (family == layout::Family::SYSTEM_METRICS) merge_op = &sys_merge_op;
+        if (family == layout::Family::Aggregation) merge_op = &agg_merge_op;
+        if (family == layout::Family::SystemMetrics) merge_op = &sys_merge_op;
         out.sst[f] = emit_sst(
             (batch_dir / (std::string(layout::family_name(family)) + ".sst"))
                 .string(),

@@ -117,7 +117,7 @@ std::size_t for_each_in(std::unique_ptr<::rocksdb::Iterator> it,
     }
     if (!it->status().ok())
         throw DFTUtilsException::cat(
-            ErrorCode::IO, "aggregation tier scan: ", it->status().ToString());
+            ErrorCode::Io, "aggregation tier scan: ", it->status().ToString());
     return n;
 }
 

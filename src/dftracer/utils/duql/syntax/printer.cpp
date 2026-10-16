@@ -235,16 +235,16 @@ bool equal(const Program& a, const Program& b) {
 namespace {
 
 enum Prec : int {
-    OR = 1,
-    AND,
-    NOT,
-    CMP,
-    ADD,
-    MUL,
-    NEG,
-    COALESCE,
-    POSTFIX,
-    PRIMARY,
+    Or = 1,
+    And,
+    Not,
+    Cmp,
+    Add,
+    Mul,
+    Neg,
+    Coalesce,
+    Postfix,
+    Primary,
 };
 
 constexpr std::array<std::string_view, 12> RESERVED = {
@@ -317,8 +317,8 @@ void put_steps(std::string& out, const std::vector<PathStep>& steps) {
 }
 
 void put_path(std::string& out, const Path& path) {
-    if (path.root == PathRoot::CURRENT) out += '.';
-    if (path.root == PathRoot::ENCLOSING) out += "^.";
+    if (path.root == PathRoot::Current) out += '.';
+    if (path.root == PathRoot::Enclosing) out += "^.";
     put_steps(out, path.steps);
 }
 
@@ -361,7 +361,7 @@ class Printer {
     void exprs(const std::vector<ExprPtr>& items) {
         for (std::size_t i = 0; i < items.size(); ++i) {
             if (i) out += ", ";
-            expr(items[i], OR);
+            expr(items[i], Or);
         }
     }
 
@@ -406,7 +406,7 @@ class Printer {
         if (const auto* p = std::get_if<PipelinePtr>(&d.body))
             inline_pipeline(**p);
         else
-            expr(std::get<ExprPtr>(d.body), OR);
+            expr(std::get<ExprPtr>(d.body), Or);
     }
 
    private:
@@ -436,37 +436,37 @@ class Printer {
         } else {
             std::string text = number(lit);
             out += text;
-            if (!text.empty() && text[0] == '-') return NEG;
+            if (!text.empty() && text[0] == '-') return Neg;
         }
-        return PRIMARY;
+        return Primary;
     }
 
     int print(const Duration& d) {
         out += d.amount;
         out += d.unit;
-        return PRIMARY;
+        return Primary;
     }
 
     int print(const Path& p) {
         put_path(out, p);
-        return PRIMARY;
+        return Primary;
     }
 
     int print(const Param& p) {
         out += '$';
         out += p.name;
-        return PRIMARY;
+        return Primary;
     }
 
     int print(const Unary& u) {
-        if (u.op == UnaryOp::NOT) {
+        if (u.op == UnaryOp::Not) {
             out += "not ";
-            expr(u.operand, CMP);
-            return NOT;
+            expr(u.operand, Cmp);
+            return Not;
         }
         out += '-';
-        expr(u.operand, COALESCE);
-        return NEG;
+        expr(u.operand, Coalesce);
+        return Neg;
     }
 
     int print(const Binary& b) {
@@ -478,46 +478,46 @@ class Printer {
         };
         auto info = [](BinaryOp op) -> Info {
             switch (op) {
-                case BinaryOp::OR:
-                    return {"or", OR, OR, AND};
-                case BinaryOp::AND:
-                    return {"and", AND, AND, NOT};
-                case BinaryOp::EQ:
-                    return {"==", CMP, ADD, ADD};
-                case BinaryOp::NE:
-                    return {"!=", CMP, ADD, ADD};
-                case BinaryOp::LT:
-                    return {"<", CMP, ADD, ADD};
-                case BinaryOp::LE:
-                    return {"<=", CMP, ADD, ADD};
-                case BinaryOp::GT:
-                    return {">", CMP, ADD, ADD};
-                case BinaryOp::GE:
-                    return {">=", CMP, ADD, ADD};
-                case BinaryOp::REGEX:
-                    return {"~", CMP, ADD, ADD};
-                case BinaryOp::IREGEX:
-                    return {"~*", CMP, ADD, ADD};
-                case BinaryOp::NREGEX:
-                    return {"!~", CMP, ADD, ADD};
-                case BinaryOp::NIREGEX:
-                    return {"!~*", CMP, ADD, ADD};
-                case BinaryOp::ADD:
-                    return {"+", ADD, ADD, MUL};
-                case BinaryOp::SUB:
-                    return {"-", ADD, ADD, MUL};
-                case BinaryOp::MUL:
-                    return {"*", MUL, MUL, NEG};
-                case BinaryOp::DIV:
-                    return {"/", MUL, MUL, NEG};
-                case BinaryOp::IDIV:
-                    return {"//", MUL, MUL, NEG};
-                case BinaryOp::MOD:
-                    return {"%", MUL, MUL, NEG};
-                case BinaryOp::COALESCE:
-                    return {"??", COALESCE, COALESCE, POSTFIX};
+                case BinaryOp::Or:
+                    return {"or", Or, Or, And};
+                case BinaryOp::And:
+                    return {"and", And, And, Not};
+                case BinaryOp::Eq:
+                    return {"==", Cmp, Add, Add};
+                case BinaryOp::Ne:
+                    return {"!=", Cmp, Add, Add};
+                case BinaryOp::Lt:
+                    return {"<", Cmp, Add, Add};
+                case BinaryOp::Le:
+                    return {"<=", Cmp, Add, Add};
+                case BinaryOp::Gt:
+                    return {">", Cmp, Add, Add};
+                case BinaryOp::Ge:
+                    return {">=", Cmp, Add, Add};
+                case BinaryOp::Regex:
+                    return {"~", Cmp, Add, Add};
+                case BinaryOp::Iregex:
+                    return {"~*", Cmp, Add, Add};
+                case BinaryOp::Nregex:
+                    return {"!~", Cmp, Add, Add};
+                case BinaryOp::Niregex:
+                    return {"!~*", Cmp, Add, Add};
+                case BinaryOp::Add:
+                    return {"+", Add, Add, Mul};
+                case BinaryOp::Sub:
+                    return {"-", Add, Add, Mul};
+                case BinaryOp::Mul:
+                    return {"*", Mul, Mul, Neg};
+                case BinaryOp::Div:
+                    return {"/", Mul, Mul, Neg};
+                case BinaryOp::Idiv:
+                    return {"//", Mul, Mul, Neg};
+                case BinaryOp::Mod:
+                    return {"%", Mul, Mul, Neg};
+                case BinaryOp::Coalesce:
+                    return {"??", Coalesce, Coalesce, Postfix};
             }
-            return {"?", PRIMARY, PRIMARY, PRIMARY};
+            return {"?", Primary, Primary, Primary};
         };
         Info i = info(b.op);
         expr(b.left, i.left);
@@ -529,7 +529,7 @@ class Printer {
     }
 
     int print(const In& in) {
-        expr(in.subject, ADD);
+        expr(in.subject, Add);
         out += in.negated ? " not in " : " in ";
         if (!in.list_param.empty()) {
             out += '$';
@@ -541,7 +541,7 @@ class Printer {
             exprs(in.list);
             out += ']';
         }
-        return CMP;
+        return Cmp;
     }
 
     int print(const Contains& c) {
@@ -550,20 +550,20 @@ class Printer {
         if (c.any) out += "any(";
         put_path(out, c.path);
         if (c.any) out += ')';
-        return CMP;
+        return Cmp;
     }
 
     int print(const Between& b) {
-        expr(b.subject, ADD);
+        expr(b.subject, Add);
         out += b.negated ? " not between " : " between ";
-        expr(b.low, ADD);
+        expr(b.low, Add);
         out += " and ";
-        expr(b.high, ADD);
-        return CMP;
+        expr(b.high, Add);
+        return Cmp;
     }
 
     int print(const Like& l) {
-        expr(l.subject, ADD);
+        expr(l.subject, Add);
         out += l.negated ? " not " : " ";
         out += l.icase ? "ilike " : "like ";
         if (l.pattern_param.empty()) {
@@ -576,18 +576,18 @@ class Printer {
             out += " escape ";
             put_string(out, *l.escape);
         }
-        return CMP;
+        return Cmp;
     }
 
     int print(const Is& is) {
-        expr(is.subject, ADD);
+        expr(is.subject, Add);
         out += is.negated ? " is not " : " is ";
         out += is.missing ? "missing" : "null";
-        return CMP;
+        return Cmp;
     }
 
     int print(const Arrow& a) {
-        expr(a.key, POSTFIX);
+        expr(a.key, Postfix);
         out += " -> ";
         out += a.rowset;
         if (a.target_key) {
@@ -597,7 +597,7 @@ class Printer {
         }
         out += '.';
         put_steps(out, a.path.steps);
-        return POSTFIX;
+        return Postfix;
     }
 
     int print(const Call& c) {
@@ -609,45 +609,45 @@ class Printer {
                 out += c.args[i].name;
                 out += " = ";
             }
-            expr(c.args[i].value, OR);
+            expr(c.args[i].value, Or);
         }
         out += ')';
-        return PRIMARY;
+        return Primary;
     }
 
     int print(const Over& o) {
-        expr(o.call, POSTFIX);
+        expr(o.call, Postfix);
         out += " over ";
-        expr(o.width, PRIMARY);
+        expr(o.width, Primary);
         if (o.rows) out += " rows";
-        return POSTFIX;
+        return Postfix;
     }
 
     int print(const List& l) {
         out += '[';
         exprs(l.items);
         out += ']';
-        return PRIMARY;
+        return Primary;
     }
 
     int print(const Tuple& t) {
         out += '(';
         exprs(t.items);
         out += ')';
-        return PRIMARY;
+        return Primary;
     }
 
     int print(const Index& i) {
-        expr(i.base, POSTFIX);
+        expr(i.base, Postfix);
         out += '[';
-        expr(i.index, OR);
+        expr(i.index, Or);
         out += ']';
-        return POSTFIX;
+        return Postfix;
     }
 
     int print(const Subquery& s) {
         subquery(s.pipeline);
-        return PRIMARY;
+        return Primary;
     }
 
     void assigns(const std::vector<Assign>& fields) {
@@ -655,7 +655,7 @@ class Printer {
             if (i) out += ", ";
             out += fields[i].name;
             out += " = ";
-            expr(fields[i].value, OR);
+            expr(fields[i].value, Or);
         }
     }
 
@@ -672,7 +672,7 @@ class Printer {
                 out += list[i].name;
                 out += " = ";
             }
-            expr(list[i].value, OR);
+            expr(list[i].value, Or);
         }
     }
 
@@ -682,17 +682,17 @@ class Printer {
             const SortKey& k = list[i];
             if (k.descending) {
                 out += '-';
-                expr(k.value, COALESCE);
+                expr(k.value, Coalesce);
             } else {
                 std::size_t at = out.size();
-                expr(k.value, OR);
+                expr(k.value, Or);
                 if (out.size() > at && out[at] == '-') {
                     out.insert(at, 1, '(');
                     out += ')';
                 }
             }
-            if (k.nulls == NullsOrder::FIRST) out += " nulls first";
-            if (k.nulls == NullsOrder::LAST) out += " nulls last";
+            if (k.nulls == NullsOrder::First) out += " nulls first";
+            if (k.nulls == NullsOrder::Last) out += " nulls last";
         }
     }
 
@@ -709,7 +709,7 @@ class Printer {
 
     void print_stage(const Where& s) {
         out += "where ";
-        expr(s.condition, OR);
+        expr(s.condition, Or);
     }
 
     void print_stage(const Derive& s) {
@@ -721,7 +721,7 @@ class Printer {
         out += "parse ";
         put_path(out, s.column);
         out += " ~ ";
-        expr(s.pattern, OR);
+        expr(s.pattern, Or);
     }
 
     void print_stage(const Select& s) {
@@ -782,12 +782,12 @@ class Printer {
 
     void print_stage(const Pivot& s) {
         out += "pivot ";
-        expr(s.key, ADD);
+        expr(s.key, Add);
         if (!s.values.empty()) {
             out += " in [";
             for (std::size_t i = 0; i < s.values.size(); ++i) {
                 if (i) out += ", ";
-                expr(s.values[i], OR);
+                expr(s.values[i], Or);
                 if (i < s.labels.size() && !s.labels[i].empty()) {
                     out += " as ";
                     out += s.labels[i];
@@ -860,10 +860,10 @@ class Printer {
     }
 
     void join_key(const std::pair<ExprPtr, ExprPtr>& k) {
-        expr(k.first, ADD);
+        expr(k.first, Add);
         if (k.second) {
             out += " == ";
-            expr(k.second, ADD);
+            expr(k.second, Add);
         }
     }
 
@@ -883,8 +883,8 @@ class Printer {
 
     void print_stage(const Lookup& s) {
         join_keys(s.rowset, s.side, s.keys);
-        if (s.kind == LookupKind::INNER) out += " inner";
-        if (s.kind == LookupKind::ANTI) out += " anti";
+        if (s.kind == LookupKind::Inner) out += " inner";
+        if (s.kind == LookupKind::Anti) out += " anti";
         if (!s.into.empty()) {
             out += " into ";
             out += s.into;
@@ -905,18 +905,18 @@ class Printer {
         out += " asof ";
         join_key(s.time);
         switch (s.direction) {
-            case AsofDirection::BACKWARD:
+            case AsofDirection::Backward:
                 break;
-            case AsofDirection::FORWARD:
+            case AsofDirection::Forward:
                 out += " forward";
                 break;
-            case AsofDirection::NEAREST:
+            case AsofDirection::Nearest:
                 out += " nearest";
                 break;
         }
         if (s.within) {
             out += " within ";
-            expr(s.within, ADD);
+            expr(s.within, Add);
         }
     }
 
@@ -935,13 +935,13 @@ class Printer {
     void print_stage(const TimeRange& s) {
         out += "time_range ";
         if (s.low) {
-            expr(s.low, OR);
+            expr(s.low, Or);
             out += ' ';
         }
         out += "..";
         if (s.high) {
             out += ' ';
-            expr(s.high, OR);
+            expr(s.high, Or);
         }
         if (s.overlap) out += " overlap";
     }
@@ -950,23 +950,23 @@ class Printer {
 
     void print_stage(const Bucket& s) {
         out += "bucket ";
-        expr(s.width, OR);
+        expr(s.width, Or);
         if (s.every) {
             out += " every ";
-            expr(s.every, OR);
+            expr(s.every, Or);
         }
         if (s.at) {
             out += " at ";
-            expr(s.at, OR);
+            expr(s.at, Or);
         }
         if (s.fill) out += " fill";
-        if (s.fill_mode == FillMode::FORWARD) out += " forward";
-        if (s.fill_mode == FillMode::LINEAR) out += " linear";
+        if (s.fill_mode == FillMode::Forward) out += " forward";
+        if (s.fill_mode == FillMode::Linear) out += " linear";
         if (s.low) {
             out += " from ";
-            expr(s.low, OR);
+            expr(s.low, Or);
             out += " to ";
-            expr(s.high, OR);
+            expr(s.high, Or);
         }
         if (!s.as.empty()) {
             out += " as ";
@@ -981,10 +981,10 @@ class Printer {
             out += ' ';
         }
         out += "gap ";
-        expr(s.gap, OR);
+        expr(s.gap, Or);
         if (s.max) {
             out += " max ";
-            expr(s.max, OR);
+            expr(s.max, Or);
         }
         if (!s.as.empty()) {
             out += " as ";
@@ -997,7 +997,7 @@ class Printer {
 
 std::string to_text(const Expr& expr) {
     Printer p;
-    p.expr(expr, OR);
+    p.expr(expr, Or);
     return std::move(p.out);
 }
 
@@ -1073,39 +1073,39 @@ bool atomic(const Term& t) {
 
 const char* op_text(TermOp op) {
     switch (op) {
-        case TermOp::NEG:
+        case TermOp::Neg:
             return "-";
-        case TermOp::NOT:
+        case TermOp::Not:
             return "not ";
-        case TermOp::ADD:
+        case TermOp::Add:
             return " + ";
-        case TermOp::SUB:
+        case TermOp::Sub:
             return " - ";
-        case TermOp::MUL:
+        case TermOp::Mul:
             return " * ";
-        case TermOp::DIV:
+        case TermOp::Div:
             return " / ";
-        case TermOp::IDIV:
+        case TermOp::Idiv:
             return " // ";
-        case TermOp::MOD:
+        case TermOp::Mod:
             return " % ";
-        case TermOp::EQ:
+        case TermOp::Eq:
             return " == ";
-        case TermOp::NE:
+        case TermOp::Ne:
             return " != ";
-        case TermOp::LT:
+        case TermOp::Lt:
             return " < ";
-        case TermOp::LE:
+        case TermOp::Le:
             return " <= ";
-        case TermOp::GT:
+        case TermOp::Gt:
             return " > ";
-        case TermOp::GE:
+        case TermOp::Ge:
             return " >= ";
-        case TermOp::AND:
+        case TermOp::And:
             return " and ";
-        case TermOp::OR:
+        case TermOp::Or:
             return " or ";
-        case TermOp::COALESCE:
+        case TermOp::Coalesce:
             return " ?? ";
     }
     return " ";
@@ -1113,15 +1113,15 @@ const char* op_text(TermOp op) {
 
 const char* match_text(MatchOp op, bool negated) {
     switch (op) {
-        case MatchOp::LIKE:
+        case MatchOp::Like:
             return negated ? " not like " : " like ";
-        case MatchOp::ILIKE:
+        case MatchOp::Ilike:
             return negated ? " not ilike " : " ilike ";
-        case MatchOp::REGEX:
+        case MatchOp::Regex:
             return negated ? " !~ " : " ~ ";
-        case MatchOp::IREGEX:
+        case MatchOp::Iregex:
             return negated ? " !~* " : " ~* ";
-        case MatchOp::ICONTAINS:
+        case MatchOp::Icontains:
             break;
     }
     return negated ? " not in " : " in ";
@@ -1182,8 +1182,8 @@ void put_term(std::string& out, const Term& t) {
                     },
                     n.value);
             } else if constexpr (std::is_same_v<T, TField>) {
-                if (n.root == FieldRoot::ELEMENT) out += '.';
-                if (n.root == FieldRoot::OUTER) out += "^.";
+                if (n.root == FieldRoot::Element) out += '.';
+                if (n.root == FieldRoot::Outer) out += "^.";
                 syntax::put_steps(out, n.steps);
             } else if constexpr (std::is_same_v<T, TUnary>) {
                 out += op_text(n.op);
@@ -1238,14 +1238,14 @@ void put_term(std::string& out, const Term& t) {
                 out += ')';
             } else if constexpr (std::is_same_v<T, TLookup>) {
                 switch (n.kind) {
-                    case LookupKind::IN:
+                    case LookupKind::In:
                         put_keys(out, n.keys, 0, n.keys.size() - n.correlated);
                         out += n.negated ? " not in (" : " in (";
                         out += n.name;
                         put_correlated(out, n, n.keys.size() - n.correlated);
                         out += ')';
                         break;
-                    case LookupKind::ARROW:
+                    case LookupKind::Arrow:
                         put_keys(out, n.keys);
                         out += " -> ";
                         out += n.name;
@@ -1261,7 +1261,7 @@ void put_term(std::string& out, const Term& t) {
                         out += '.';
                         out += n.column;
                         break;
-                    case LookupKind::SCALAR:
+                    case LookupKind::Scalar:
                         out += '(';
                         out += n.name;
                         put_correlated(out, n, 0);
@@ -1269,7 +1269,7 @@ void put_term(std::string& out, const Term& t) {
                         break;
                 }
             } else if constexpr (std::is_same_v<T, TMatch>) {
-                if (n.op == MatchOp::ICONTAINS) {
+                if (n.op == MatchOp::Icontains) {
                     syntax::put_string(out, n.pattern);
                     out += match_text(n.op, n.negated);
                     put_child(out, *n.subject);

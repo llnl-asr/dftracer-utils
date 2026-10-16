@@ -156,7 +156,7 @@ ViewScannerInput& ViewScannerInput::with_view(const ViewDefinition& v) {
 // calls.
 // A record's phase, and with a window its ts and dur, read without a DOM.
 struct EventProbe {
-    RecordPhase phase = RecordPhase::UNKNOWN;
+    RecordPhase phase = RecordPhase::Unknown;
     bool has_ts = false;
     double ts = 0;
     double dur = 0;
@@ -218,8 +218,8 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
     auto stream = reader->stream(
         utilities::reader::internal::StreamConfig()
             .stream_type(
-                utilities::reader::internal::StreamType::MULTI_LINES_BYTES)
-            .range_type(utilities::reader::internal::RangeType::BYTE_RANGE)
+                utilities::reader::internal::StreamType::MultiLinesBytes)
+            .range_type(utilities::reader::internal::RangeType::ByteRange)
             .buffer_size(input.batch_size)
             .extend_to_line_boundary(true)
             .from(input.start_byte)
@@ -267,7 +267,7 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
                     const EventProbe p =
                         probe_event(line_start, line_len, input.view);
                     if (input.view.by_path ||
-                        p.phase != RecordPhase::METADATA) {
+                        p.phase != RecordPhase::Metadata) {
                         batch.events_scanned++;
                         if (in_window(p.has_ts, p.ts, p.dur, input.view)) {
                             batch.events.emplace_back(
@@ -299,9 +299,9 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
                     {
                         JsonValue json(root);
                         const RecordPhase phase = input.view.by_path
-                                                      ? RecordPhase::UNKNOWN
+                                                      ? RecordPhase::Unknown
                                                       : read_phase(json["ph"]);
-                        const bool metadata = phase == RecordPhase::METADATA;
+                        const bool metadata = phase == RecordPhase::Metadata;
                         bool match;
                         if (metadata) {
                             // Metadata records bypass the event query unless
@@ -399,25 +399,25 @@ ArrowExportResult ViewScannerBatch::to_arrow(
             auto val = field.value;
 
             if (val.is_int64()) {
-                auto ci = builder.add_or_get_column(key_sv, ColumnType::INT64);
+                auto ci = builder.add_or_get_column(key_sv, ColumnType::Int64);
                 builder.append_int64(ci, val.get_int64().value_unsafe());
             } else if (val.is_uint64()) {
-                auto ci = builder.add_or_get_column(key_sv, ColumnType::UINT64);
+                auto ci = builder.add_or_get_column(key_sv, ColumnType::Uint64);
                 builder.append_uint64(ci, val.get_uint64().value_unsafe());
             } else if (val.is_double()) {
-                auto ci = builder.add_or_get_column(key_sv, ColumnType::DOUBLE);
+                auto ci = builder.add_or_get_column(key_sv, ColumnType::Double);
                 builder.append_double(ci, val.get_double().value_unsafe());
             } else if (val.is_bool()) {
-                auto ci = builder.add_or_get_column(key_sv, ColumnType::BOOL);
+                auto ci = builder.add_or_get_column(key_sv, ColumnType::Bool);
                 builder.append_bool(ci, val.get_bool().value_unsafe());
             } else if (val.is_string()) {
-                auto ci = builder.add_or_get_column(key_sv, ColumnType::STRING);
+                auto ci = builder.add_or_get_column(key_sv, ColumnType::String);
                 builder.append_string(ci, val.get_string().value_unsafe());
             } else if (val.is_null()) {
                 auto existing = builder.find_column(key_sv);
                 if (existing) builder.append_null(*existing);
             } else {
-                auto ci = builder.add_or_get_column(key_sv, ColumnType::STRING);
+                auto ci = builder.add_or_get_column(key_sv, ColumnType::String);
                 held_serialized.push_back(simdjson::minify(val));
                 builder.append_string(ci, held_serialized.back());
             }

@@ -141,7 +141,7 @@ class TaskGraph {
     TaskGroup<U> fan_out(const TaskGroup<T>& source, num_outputs count,
                          Func&& mapper, TaskGraphFanOutConfig opts = {}) {
         if (source.size() != 1) {
-            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+            throw DFTUtilsException(ErrorCode::InvalidArgument,
                                     "fan_out: source must have exactly 1 task");
         }
 
@@ -211,7 +211,7 @@ class TaskGraph {
     TaskGroup<U> reduce(const TaskGroup<T>& group, split_every count,
                         Reducer&& reducer, TaskGraphReduceConfig opts = {}) {
         if (group.empty()) {
-            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+            throw DFTUtilsException(ErrorCode::InvalidArgument,
                                     "reduce: group cannot be empty");
         }
 
@@ -275,7 +275,7 @@ class TaskGraph {
     TaskGroup<T> fold(const TaskGroup<T>& group, T init, split_every count,
                       BinaryOp&& op, TaskGraphFoldConfig opts = {}) {
         if (group.empty()) {
-            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+            throw DFTUtilsException(ErrorCode::InvalidArgument,
                                     "fold: group cannot be empty");
         }
 
@@ -353,7 +353,7 @@ class TaskGraph {
                                         num_partitions count,
                                         TaskGraphPartitionConfig opts = {}) {
         if (count.count == 0) {
-            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+            throw DFTUtilsException(ErrorCode::InvalidArgument,
                                     "partition: count must be > 0");
         }
 
@@ -395,7 +395,7 @@ class TaskGraph {
         const TaskGroup<std::vector<T>>& group,
         split_every count = split_every{2}, TaskGraphConcatConfig opts = {}) {
         if (group.empty()) {
-            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+            throw DFTUtilsException(ErrorCode::InvalidArgument,
                                     "concat_partitions: group cannot be empty");
         }
 

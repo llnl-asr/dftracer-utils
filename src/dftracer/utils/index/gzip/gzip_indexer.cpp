@@ -604,7 +604,7 @@ static dftracer::utils::coro::CoroTask<bool> parallel_dispatcher(
     std::uint64_t member_c_start = plan->ranges.front().c_start;
     std::uint64_t member_uc_start = 0;
     std::uint64_t member_first_line = total_lines + 1;
-    GzipRecordKind piece_kind = GzipRecordKind::MEMBER;
+    GzipRecordKind piece_kind = GzipRecordKind::Member;
     std::uint8_t piece_bits = 0;
     std::string piece_window;
 
@@ -626,7 +626,7 @@ static dftracer::utils::coro::CoroTask<bool> parallel_dispatcher(
                 last.uc_size -= cut;
                 left -= cut;
                 if (last.uc_size == 0) {
-                    if (last.kind == GzipRecordKind::RESTART)
+                    if (last.kind == GzipRecordKind::Restart)
                         std::erase_if(restart_windows, [&](const auto& w) {
                             return w.first == last.member_idx;
                         });
@@ -650,8 +650,8 @@ static dftracer::utils::coro::CoroTask<bool> parallel_dispatcher(
 
         if (msg.member_ended || msg.restart) {
             GzipRecordKind kind = piece_kind;
-            if (msg.restart && kind == GzipRecordKind::MEMBER) {
-                kind = GzipRecordKind::HEAD;
+            if (msg.restart && kind == GzipRecordKind::Member) {
+                kind = GzipRecordKind::Head;
             }
             members.push_back(GzipMemberRecord{
                 .member_idx = member_idx,
@@ -664,16 +664,16 @@ static dftracer::utils::coro::CoroTask<bool> parallel_dispatcher(
                 .kind = kind,
                 .bits = piece_bits,
             });
-            if (kind == GzipRecordKind::RESTART) {
+            if (kind == GzipRecordKind::Restart) {
                 restart_windows.emplace_back(member_idx,
                                              std::move(piece_window));
             }
             if (msg.restart) {
-                piece_kind = GzipRecordKind::RESTART;
+                piece_kind = GzipRecordKind::Restart;
                 piece_bits = msg.bits;
                 piece_window = std::move(msg.window);
             } else {
-                piece_kind = GzipRecordKind::MEMBER;
+                piece_kind = GzipRecordKind::Member;
                 piece_bits = 0;
             }
             member_c_start = msg.member_c_end;
@@ -950,7 +950,7 @@ build_gzip_index_artifacts(const std::string& gz_path, std::uint64_t ckpt_size,
                 gz_path.c_str());
         } else {
             throw DFTUtilsException::cat(
-                ErrorCode::INVALID_ARGUMENT, "Indexer: ", gz_path,
+                ErrorCode::InvalidArgument, "Indexer: ", gz_path,
                 " is not gzip; an index reads gzip traces only. Gzip it, or "
                 "let dftracer_view, dftracer_run or dftracer_index convert it "
                 "(they write a gzip copy under split/)");
@@ -971,7 +971,7 @@ build_gzip_index_artifacts(const std::string& gz_path, std::uint64_t ckpt_size,
 void persist_gzip_index_artifacts(index::store::IndexWrite& w, int file_id,
                                   const GzipBuildArtifacts& artifacts) {
     namespace records = index::store::records;
-    records::clear_file(w, index::store::IndexExtension::MEMBERS, file_id);
+    records::clear_file(w, index::store::IndexExtension::Members, file_id);
     for (const auto& member : artifacts.members)
         records::put_gzip_member(w, file_id, member);
     for (const auto& [member_idx, window] : artifacts.restart_windows)
@@ -979,7 +979,7 @@ void persist_gzip_index_artifacts(index::store::IndexWrite& w, int file_id,
     records::put_file_metadata(w, file_id, artifacts.checkpoint_size,
                                artifacts.total_lines, artifacts.total_uc_size,
                                artifacts.truncated);
-    records::put_manifest(w, file_id, index::store::IndexExtension::MEMBERS, 0);
+    records::put_manifest(w, file_id, index::store::IndexExtension::Members, 0);
 }
 
 GzipIndexer::GzipIndexer(const std::string& gz_path_,
@@ -1000,19 +1000,19 @@ GzipIndexer::GzipIndexer(const std::string& gz_path_,
       cached_checkpoint_size_ready(false) {
     if (gz_path.empty()) {
         throw index::store::IndexerError(
-            index::store::IndexerError::Type::INVALID_ARGUMENT,
+            index::store::IndexerError::Type::InvalidArgument,
             "gz_path must not be empty");
     }
 
     if (!fs::exists(gz_path)) {
         throw index::store::IndexerError(
-            index::store::IndexerError::Type::FILE_ERROR,
+            index::store::IndexerError::Type::FileError,
             "gz_path does not exist: " + gz_path);
     }
 
     if (ckpt_size == 0) {
         throw index::store::IndexerError(
-            index::store::IndexerError::Type::INVALID_ARGUMENT,
+            index::store::IndexerError::Type::InvalidArgument,
             "ckpt_size must be greater than 0");
     }
 
@@ -1093,7 +1093,7 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
         });
     if (!artifacts) {
         throw index::store::IndexerError(
-            index::store::IndexerError::Type::BUILD_ERROR,
+            index::store::IndexerError::Type::BuildError,
             "Failed to build index for " + gz_path);
     }
 

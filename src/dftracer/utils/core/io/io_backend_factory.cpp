@@ -20,7 +20,7 @@ std::unique_ptr<IoBackend> create_io_backend(Executor& executor,
                                              IoBackendType backend_type,
                                              unsigned batch_threshold) {
     // Explicit backend selection (non-AUTO).
-    if (backend_type == IoBackendType::THREADPOOL) {
+    if (backend_type == IoBackendType::Threadpool) {
         DFTRACER_UTILS_LOG_INFO("I/O backend: using threadpool (%zu threads)",
                                 pool_size);
         return std::make_unique<ThreadPoolBackend>(executor, pool_size,
@@ -28,7 +28,7 @@ std::unique_ptr<IoBackend> create_io_backend(Executor& executor,
     }
 
 #ifdef __linux__
-    if (backend_type == IoBackendType::EPOLL_THREADPOOL) {
+    if (backend_type == IoBackendType::EpollThreadpool) {
         DFTRACER_UTILS_LOG_INFO(
             "I/O backend: using epoll+threadpool (%zu threads)", pool_size);
         return std::make_unique<EpollThreadPoolBackend>(executor, pool_size,
@@ -38,7 +38,7 @@ std::unique_ptr<IoBackend> create_io_backend(Executor& executor,
 
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
     defined(__NetBSD__) || defined(__DragonFly__)
-    if (backend_type == IoBackendType::KQUEUE_THREADPOOL) {
+    if (backend_type == IoBackendType::KqueueThreadpool) {
         DFTRACER_UTILS_LOG_INFO(
             "I/O backend: using kqueue+threadpool (%zu threads)", pool_size);
         return std::make_unique<KqueueThreadPoolBackend>(executor, pool_size,
@@ -47,7 +47,7 @@ std::unique_ptr<IoBackend> create_io_backend(Executor& executor,
 #endif
 
 #ifdef DFTRACER_UTILS_HAVE_IO_URING
-    if (backend_type == IoBackendType::IO_URING) {
+    if (backend_type == IoBackendType::IoUring) {
         auto uring =
             std::make_unique<IoUringBackend>(executor, 256, batch_threshold);
         if (uring->probe()) {

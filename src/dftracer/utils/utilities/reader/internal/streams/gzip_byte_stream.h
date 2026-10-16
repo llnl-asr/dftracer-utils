@@ -40,7 +40,7 @@ class GzipByteStream : public GzipStream {
     coro::CoroTask<std::span<const char>> read_async() override {
         co_await ensure_initialized();
         if (!decompression_initialized_) {
-            throw ReaderError(ReaderError::INITIALIZATION_ERROR,
+            throw ReaderError(ReaderError::InitializationError,
                               "Streaming session not properly initialized");
         }
 
@@ -71,7 +71,7 @@ class GzipByteStream : public GzipStream {
         // A decode failure must not pass for clean EOF (which would silently
         // drop the rest of the file).
         if (!result) {
-            throw ReaderError(ReaderError::COMPRESSION_ERROR,
+            throw ReaderError(ReaderError::CompressionError,
                               "gzip decode failed mid-stream at position " +
                                   std::to_string(current_position_));
         }

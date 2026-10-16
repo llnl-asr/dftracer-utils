@@ -75,13 +75,13 @@ std::string tier_field(const trace::views::detail::ViewPlan& plan,
         const ix::FieldSpec* spec = s.field_at(path);
         return spec && !spec->optional && spec->type == type;
     };
-    if (exact(r.name, ix::FieldType::STRING)) return "name";
-    if (exact(r.entity, ix::FieldType::INT)) return "pid";
-    if (exact(r.lane, ix::FieldType::INT)) return "tid";
-    if (r.duration_unit == ix::TimeUnit::US &&
-        exact(r.duration, ix::FieldType::INT))
+    if (exact(r.name, ix::FieldType::String)) return "name";
+    if (exact(r.entity, ix::FieldType::Int)) return "pid";
+    if (exact(r.lane, ix::FieldType::Int)) return "tid";
+    if (r.duration_unit == ix::TimeUnit::Us &&
+        exact(r.duration, ix::FieldType::Int))
         return "dur";
-    if (r.time_unit == ix::TimeUnit::US && exact(r.time, ix::FieldType::INT))
+    if (r.time_unit == ix::TimeUnit::Us && exact(r.time, ix::FieldType::Int))
         return "ts";
     return {};
 }
@@ -101,13 +101,13 @@ bool roles_complete(const trace::views::detail::ViewPlan& plan) {
         IndexDatabase db(f.index_path, index::store::IndexOpenMode::ReadOnly);
         const int fid = db.get_file_info_id(get_logical_path(f.file_path));
         if (fid < 0 ||
-            !db.extension_current(fid, index::store::IndexExtension::ZONEMAP))
+            !db.extension_current(fid, index::store::IndexExtension::Zonemap))
             return false;
         const auto spans = db.query_chunk_spans(fid);
         for (std::string_view p : paths) {
             std::map<std::uint64_t, index::extensions::kinds::Zone> zones;
             for (const auto& [granule, bytes] :
-                 db.path_granules(fid, index::store::IndexExtension::ZONEMAP,
+                 db.path_granules(fid, index::store::IndexExtension::Zonemap,
                                   std::string(p)))
                 if (auto z = index::extensions::kinds::decode_zone(bytes))
                     zones.emplace(granule, std::move(*z));
@@ -493,10 +493,10 @@ std::shared_ptr<const TierCache> build_tier_cache(const std::string& index_path,
             IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
             for (auto& [p, id] : db.query_all_file_info_ids()) {
                 auto state =
-                    db.extension_state(id, index::store::IndexExtension::AGG);
+                    db.extension_state(id, index::store::IndexExtension::Agg);
                 if (state && state->ready &&
                     state->version == index::store::layout::ext_version(
-                                          index::store::IndexExtension::AGG) &&
+                                          index::store::IndexExtension::Agg) &&
                     state->params_hash == handle->config.params_hash)
                     tc->files.insert(p);
             }
@@ -510,7 +510,7 @@ std::shared_ptr<const TierCache> build_tier_cache(const std::string& index_path,
                     AggKeyView kvp;
                     if (!agg::parse_agg_key_view(kd, tc->handle->agg->intern(),
                                                  kvp) ||
-                        kvp.map_type != agg::AggMapType::EVENT)
+                        kvp.map_type != agg::AggMapType::Event)
                         return true;
                     AggMetricsFullView mvp;
                     if (agg::parse_agg_value_full_view(vd, mvp))
@@ -793,7 +793,7 @@ bool agg_tier_collect(const trace::views::detail::ViewPlan& plan,
         [&](std::string_view kdata, std::string_view vdata) {
             AggKeyView kv;
             if (!agg::parse_agg_key_view(kdata, intern, kv)) return true;
-            if (kv.map_type != agg::AggMapType::EVENT) return true;
+            if (kv.map_type != agg::AggMapType::Event) return true;
             if (!key_passes_query(eval_root.get(), qfields, kv, fbuf))
                 return true;
             AggMetricsFullView mv;
@@ -914,8 +914,8 @@ bool events_profiles_collect(const trace::views::detail::ViewPlan& plan,
             AggKeyView kv;
             if (!agg::parse_agg_key_view(kdata, intern, kv, want_extra))
                 return true;
-            const bool is_profile = kv.map_type == agg::AggMapType::PROFILE;
-            if (kv.map_type != agg::AggMapType::EVENT && !is_profile)
+            const bool is_profile = kv.map_type == agg::AggMapType::Profile;
+            if (kv.map_type != agg::AggMapType::Event && !is_profile)
                 return true;
             if (!key_passes_query(eval_root.get(), qfields, kv, fbuf))
                 return true;

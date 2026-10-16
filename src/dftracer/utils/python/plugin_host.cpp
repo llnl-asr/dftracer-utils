@@ -121,7 +121,7 @@ CoroTask<void> run_host_scan(CoroScope& scope, std::vector<std::string> inputs,
     std::sort(files.begin(), files.end());
     if (files.empty())
         throw dftracer::utils::DFTUtilsException(
-            dftracer::utils::ErrorCode::NOT_FOUND, "no trace files found");
+            dftracer::utils::ErrorCode::NotFound, "no trace files found");
 
     if (auto_index) {
         auto norm = co_await dftracer::utils::index::build::

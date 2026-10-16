@@ -307,7 +307,7 @@ TEST_SUITE("View") {
         dataframe::LazyFrame plan = base.branch([=](ViewSession& s) {
             auto a = s.collect(by_cat(), count());
             auto b = s.collect(posix, by_cat(), count());
-            auto jh = s.join(a, b, JoinType::INNER);  // n_key inferred (1)
+            auto jh = s.join(a, b, JoinType::Inner);  // n_key inferred (1)
             auto ch = s.compare(a, b);
             return std::function<void(const ExportStats&)>(
                 [j, c, jh, ch](const ExportStats&) {
@@ -330,7 +330,7 @@ TEST_SUITE("View") {
                       .agg(count())
                       .collect()
                       .get();
-        auto rj = join_batches(ra, rb, 1, JoinType::INNER);
+        auto rj = join_batches(ra, rb, 1, JoinType::Inner);
         auto rc = cmp::CompareView::compare_batches(ra, rb, 1);
 
         // INNER join keeps only cat=posix (b is posix-only).
@@ -366,7 +366,7 @@ TEST_SUITE("View") {
             base.branch<dataframe::DataFrame>([foreign](ViewSession& s) {
                 auto a =
                     s.collect({GroupKey::cat()}, {{AggOp::Count, "", "n"}});
-                return s.join(a, *foreign, JoinType::INNER);
+                return s.join(a, *foreign, JoinType::Inner);
             });
         CHECK_THROWS_AS(joined.collect().get(), DFTUtilsException);
     }
@@ -2147,6 +2147,6 @@ TEST_SUITE("View") {
         fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
 
-        CHECK(View::from_file(gz, idx).time_metric() == trace::TimeMetric::NS);
+        CHECK(View::from_file(gz, idx).time_metric() == trace::TimeMetric::Ns);
     }
 }

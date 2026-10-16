@@ -27,7 +27,7 @@ class LineStream : public ReaderStream {
     std::size_t output_position_;
     std::size_t span_pos_;
 
-    enum class ParseResult { HAS_LINE, NEED_MORE_DATA, FINISHED };
+    enum class ParseResult { HasLine, NeedMoreData, Finished };
 
     struct DirectOutputResult {
         std::size_t bytes_written;
@@ -63,11 +63,11 @@ class LineStream : public ReaderStream {
         while (true) {
             auto result = try_parse_next_line();
 
-            if (result == ParseResult::HAS_LINE) {
+            if (result == ParseResult::HasLine) {
                 co_return std::span<const char>(current_line_.data(),
                                                 current_line_.size());
             }
-            if (result == ParseResult::FINISHED) {
+            if (result == ParseResult::Finished) {
                 co_return {};
             }
 
@@ -114,10 +114,10 @@ class LineStream : public ReaderStream {
 
             if (!direct.need_more_data) {
                 auto result = try_parse_next_line();
-                if (result == ParseResult::HAS_LINE) {
+                if (result == ParseResult::HasLine) {
                     co_return output_pending_line(buffer, buffer_size);
                 }
-                if (result == ParseResult::FINISHED) {
+                if (result == ParseResult::Finished) {
                     co_return 0;
                 }
             }
@@ -187,7 +187,7 @@ class LineStream : public ReaderStream {
     ParseResult try_parse_next_line() {
         if (is_beyond_range()) {
             is_finished_ = true;
-            return ParseResult::FINISHED;
+            return ParseResult::Finished;
         }
 
         while (has_data_in_span()) {
@@ -195,16 +195,16 @@ class LineStream : public ReaderStream {
 
             if (!newline_ptr) {
                 accumulate_remaining_span();
-                return ParseResult::NEED_MORE_DATA;
+                return ParseResult::NeedMoreData;
             }
 
             std::size_t newline_pos = newline_ptr - current_span_.data();
             if (process_complete_line(newline_pos)) {
-                return ParseResult::HAS_LINE;
+                return ParseResult::HasLine;
             }
         }
 
-        return ParseResult::NEED_MORE_DATA;
+        return ParseResult::NeedMoreData;
     }
 
     DirectOutputResult try_direct_output(char* buffer,

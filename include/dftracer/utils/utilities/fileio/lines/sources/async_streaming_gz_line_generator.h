@@ -30,7 +30,7 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
         co_await ::dftracer::utils::io::open(file_path.c_str(), O_RDONLY);
     if (fd_result < 0) {
         throw DFTUtilsException(
-            ErrorCode::IO,
+            ErrorCode::Io,
             "Cannot open compressed file: " + file_path + " (errno=" +
                 std::to_string(static_cast<int>(-fd_result)) + ")");
     }
@@ -38,7 +38,7 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
 
     struct stat st;
     if (::fstat(fd.get(), &st) != 0) {
-        throw DFTUtilsException(ErrorCode::IO,
+        throw DFTUtilsException(ErrorCode::Io,
                                 "Cannot stat compressed file: " + file_path);
     }
     const std::uint64_t file_size = static_cast<std::uint64_t>(st.st_size);

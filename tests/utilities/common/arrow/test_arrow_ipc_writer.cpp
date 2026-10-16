@@ -28,9 +28,9 @@ TEST_CASE("IpcWriter - basic write and close") {
     Runtime runtime(2);
     auto task = [&]() -> CoroTask<int> {
         RecordBatchBuilder builder;
-        builder.declare_schema({{"id", ColumnType::INT64},
-                                {"name", ColumnType::STRING},
-                                {"value", ColumnType::DOUBLE}});
+        builder.declare_schema({{"id", ColumnType::Int64},
+                                {"name", ColumnType::String},
+                                {"value", ColumnType::Double}});
         builder.reserve(2);
 
         std::string s0 = "hello", s1 = "world";
@@ -71,7 +71,7 @@ TEST_CASE("IpcWriter - multiple batches") {
         if (co_await writer.open(path) != 0) co_return 1;
 
         RecordBatchBuilder builder;
-        builder.declare_schema({{"x", ColumnType::INT64}});
+        builder.declare_schema({{"x", ColumnType::Int64}});
 
         for (int b = 0; b < 3; ++b) {
             builder.reserve(10);
@@ -127,7 +127,7 @@ TEST_CASE("IpcWriter - batches without a pooled slot match the pooled file") {
                 co_return 1;
             RecordBatchBuilder builder;
             builder.declare_schema(
-                {{"x", ColumnType::INT64}, {"y", ColumnType::DOUBLE}});
+                {{"x", ColumnType::Int64}, {"y", ColumnType::Double}});
             for (int b = 0; b < 4; ++b) {
                 builder.reserve(50);
                 for (int i = 0; i < 50; ++i) {
@@ -144,9 +144,9 @@ TEST_CASE("IpcWriter - batches without a pooled slot match the pooled file") {
         };
         return runtime.submit(task(), "test").get();
     };
-    std::vector<IpcCompression> modes{IpcCompression::NONE};
+    std::vector<IpcCompression> modes{IpcCompression::None};
 #ifdef DFTRACER_UTILS_ENABLE_ZSTD
-    modes.push_back(IpcCompression::ZSTD);
+    modes.push_back(IpcCompression::Zstd);
 #endif
     for (const IpcCompression mode : modes) {
         const std::string pooled = tmp_path("test_ipc_pooled.arrows");
@@ -167,7 +167,7 @@ TEST_CASE("IpcWriter - explicit ZSTD compression") {
     auto task = [&]() -> CoroTask<int> {
         RecordBatchBuilder builder;
         builder.declare_schema(
-            {{"x", ColumnType::INT64}, {"y", ColumnType::DOUBLE}});
+            {{"x", ColumnType::Int64}, {"y", ColumnType::Double}});
         builder.reserve(100);
         for (int i = 0; i < 100; ++i) {
             builder.append_int64(0, i);
@@ -177,7 +177,7 @@ TEST_CASE("IpcWriter - explicit ZSTD compression") {
         auto batch = builder.finish();
 
         IpcWriter writer;
-        if (co_await writer.open(path, IpcCompression::ZSTD) != 0) co_return 1;
+        if (co_await writer.open(path, IpcCompression::Zstd) != 0) co_return 1;
         if (co_await writer.write_batch(batch) != 0) co_return 2;
         if (co_await writer.close() != 0) co_return 3;
         co_return 0;
@@ -204,7 +204,7 @@ TEST_CASE("PartitionWriter - basic single file") {
         if (!writer.is_open()) co_return 2;
 
         RecordBatchBuilder builder;
-        builder.declare_schema({{"id", ColumnType::INT64}});
+        builder.declare_schema({{"id", ColumnType::Int64}});
         builder.reserve(100);
         for (int i = 0; i < 100; ++i) {
             builder.append_int64(0, i);
@@ -234,7 +234,7 @@ TEST_CASE("PartitionRouter - NONE mode pass-through") {
     fs::remove_all(dir);
 
     PartitionConfig config;
-    config.mode = PartitionConfig::Mode::NONE;
+    config.mode = PartitionConfig::Mode::None;
 
     Runtime runtime(2);
     RouterWriteStats stats;
@@ -245,7 +245,7 @@ TEST_CASE("PartitionRouter - NONE mode pass-through") {
 
         RecordBatchBuilder builder;
         builder.declare_schema(
-            {{"id", ColumnType::INT64}, {"cat", ColumnType::STRING}});
+            {{"id", ColumnType::Int64}, {"cat", ColumnType::String}});
         builder.reserve(10);
         for (int i = 0; i < 10; ++i) {
             builder.append_int64(0, i);
@@ -273,7 +273,7 @@ TEST_CASE("PartitionRouter - COLUMN mode single column") {
     fs::remove_all(dir);
 
     PartitionConfig config;
-    config.mode = PartitionConfig::Mode::COLUMN;
+    config.mode = PartitionConfig::Mode::Column;
     config.partition_columns = {"cat"};
 
     Runtime runtime(2);
@@ -285,7 +285,7 @@ TEST_CASE("PartitionRouter - COLUMN mode single column") {
 
         RecordBatchBuilder builder;
         builder.declare_schema(
-            {{"id", ColumnType::INT64}, {"cat", ColumnType::STRING}});
+            {{"id", ColumnType::Int64}, {"cat", ColumnType::String}});
         builder.reserve(6);
 
         for (int i = 0; i < 3; ++i) {

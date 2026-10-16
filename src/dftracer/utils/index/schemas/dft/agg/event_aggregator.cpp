@@ -94,11 +94,11 @@ EventAggregatorOutput EventAggregator::finalize() {
         scan([&output](AggMapType map_type, const AggregationKey& key,
                        AggregationMetrics& metrics) {
             switch (map_type) {
-                case AggMapType::PROFILE:
+                case AggMapType::Profile:
                     output.profile_aggregations.emplace(key,
                                                         std::move(metrics));
                     break;
-                case AggMapType::SYSTEM:
+                case AggMapType::System:
                     output.system_aggregations.emplace(key, std::move(metrics));
                     break;
                 default:
@@ -145,10 +145,10 @@ std::size_t EventAggregator::scan(ScanCallback callback) const {
             }
             return true;
         };
-        if (!scan_map(state_.aggregations, AggMapType::EVENT)) return count;
-        if (!scan_map(state_.profile_aggregations, AggMapType::PROFILE))
+        if (!scan_map(state_.aggregations, AggMapType::Event)) return count;
+        if (!scan_map(state_.profile_aggregations, AggMapType::Profile))
             return count;
-        scan_map(state_.system_aggregations, AggMapType::SYSTEM);
+        scan_map(state_.system_aggregations, AggMapType::System);
         return count;
     }
 

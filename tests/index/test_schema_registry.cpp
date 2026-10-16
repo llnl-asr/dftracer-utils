@@ -86,11 +86,11 @@ TEST_SUITE("SchemaRegistry") {
             "index: {path_budget: 8}\n",
             "yaml_a.yaml");
         CHECK(s.id == "yaml_a");
-        CHECK(s.decoder == ix::Decoder::PATH);
+        CHECK(s.decoder == ix::Decoder::Path);
         CHECK(s.require ==
               std::vector<std::string>{"status", "request_time", "upstream"});
         CHECK(s.roles.time == "ts_ms");
-        CHECK(s.roles.time_unit == ix::TimeUnit::MS);
+        CHECK(s.roles.time_unit == ix::TimeUnit::Ms);
         CHECK(s.roles.duration == "request_time");
         CHECK(s.roles.duration_unit == ix::TimeUnit::S);
         CHECK(s.always_index ==
@@ -239,7 +239,7 @@ TEST_SUITE("SchemaRegistry") {
         upstream.always_index = true;
         ix::FieldSpec status;
         status.name = "status";
-        status.type = ix::FieldType::INT;
+        status.type = ix::FieldType::Int;
         // Field order does not change the definition.
         spec.fields = {upstream, status};
         CHECK(&ix::register_schema(spec, "code") == &s);
@@ -256,7 +256,7 @@ TEST_SUITE("SchemaRegistry") {
             "  steps = where step > 0\n",
             "ext_dft.yaml");
         const auto& dft = ix::get_schema("dftracer");
-        CHECK(s.decoder == ix::Decoder::DFTRACER);
+        CHECK(s.decoder == ix::Decoder::Dftracer);
         CHECK(s.require ==
               std::vector<std::string>{"ph", "name", "ts", "args.step"});
         CHECK(s.roles.time == dft.roles.time);
@@ -372,7 +372,7 @@ TEST_SUITE("SchemaRegistry") {
         "the genesis built-in is path-decoded with a stored runs row set") {
         const auto& g = ix::get_schema("genesis");
         CHECK(g.builtin);
-        CHECK(g.decoder == ix::Decoder::PATH);
+        CHECK(g.decoder == ix::Decoder::Path);
         CHECK(g.require == std::vector<std::string>{"gtype", "run"});
         CHECK(g.roles.time == "ts");
         CHECK(mentions(g.source, "data = where gtype != \"run\""));

@@ -128,9 +128,9 @@ class GroupTransformCore {
         TransformCell::Step& s = st.step;
         switch (kind_) {
             case GroupwiseOp::CumSum:
-                if (cls == NumClass::SIGNED)
+                if (cls == NumClass::Signed)
                     std::construct_at(&s.sum_i);
-                else if (cls == NumClass::UNSIGNED)
+                else if (cls == NumClass::Unsigned)
                     std::construct_at(&s.sum_u);
                 else
                     std::construct_at(&s.sum_f);
@@ -157,7 +157,7 @@ class GroupTransformCore {
     NumClass step(TransformCell& st, std::size_t g, std::size_t c, NumClass cls,
                   std::uint64_t b, bool ok, std::uint64_t& out,
                   std::uint8_t& out_ok) {
-        const double x = cls == NumClass::FLOAT ? bits_double(b) : 0.0;
+        const double x = cls == NumClass::Float ? bits_double(b) : 0.0;
         TransformCell::Step& s = st.step;
         switch (kind_) {
             case GroupwiseOp::CumSum: {
@@ -165,10 +165,10 @@ class GroupTransformCore {
                     out_ok = 0;
                     return cls;
                 }
-                if (cls == NumClass::SIGNED) {
+                if (cls == NumClass::Signed) {
                     s.sum_i.add(static_cast<std::int64_t>(b));
                     out = static_cast<std::uint64_t>(s.sum_i.acc);
-                } else if (cls == NumClass::UNSIGNED) {
+                } else if (cls == NumClass::Unsigned) {
                     s.sum_u.add(b);
                     out = s.sum_u.acc;
                 } else {
@@ -180,18 +180,18 @@ class GroupTransformCore {
             case GroupwiseOp::CumProd: {
                 if (!ok) {
                     out_ok = 0;
-                    return NumClass::FLOAT;
+                    return NumClass::Float;
                 }
-                const double v = cls == NumClass::FLOAT
+                const double v = cls == NumClass::Float
                                      ? x
-                                     : (cls == NumClass::SIGNED
+                                     : (cls == NumClass::Signed
                                             ? static_cast<double>(
                                                   static_cast<std::int64_t>(b))
                                             : static_cast<double>(b));
                 s.prod.mul(v);
-                const double d = cls == NumClass::FLOAT ? (x - x) : 0.0;
+                const double d = cls == NumClass::Float ? (x - x) : 0.0;
                 out = double_bits(s.prod.acc + d);
-                return NumClass::FLOAT;
+                return NumClass::Float;
             }
             case GroupwiseOp::CumMax:
             case GroupwiseOp::CumMin: {
@@ -200,10 +200,10 @@ class GroupTransformCore {
                     return cls;
                 }
                 const bool smallest = kind_ == GroupwiseOp::CumMin;
-                if (cls == NumClass::SIGNED) {
+                if (cls == NumClass::Signed) {
                     s.ext.offer_i(static_cast<std::int64_t>(b), smallest);
                     out = static_cast<std::uint64_t>(s.ext.value.i);
-                } else if (cls == NumClass::UNSIGNED) {
+                } else if (cls == NumClass::Unsigned) {
                     s.ext.offer_u(b, smallest);
                     out = s.ext.value.u;
                 } else {
@@ -234,19 +234,19 @@ class GroupTransformCore {
                 ++st.seen;
                 if (!have) {
                     out_ok = 0;
-                    return cls == NumClass::FLOAT ? NumClass::FLOAT
-                                                  : NumClass::SIGNED;
+                    return cls == NumClass::Float ? NumClass::Float
+                                                  : NumClass::Signed;
                 }
-                if (cls == NumClass::FLOAT) {
+                if (cls == NumClass::Float) {
                     out = double_bits(steps::delta_f64(x, bits_double(prev)));
-                    return NumClass::FLOAT;
+                    return NumClass::Float;
                 }
                 out = static_cast<std::uint64_t>(
-                    cls == NumClass::SIGNED
+                    cls == NumClass::Signed
                         ? steps::delta_i64(static_cast<std::int64_t>(b),
                                            static_cast<std::int64_t>(prev))
                         : steps::delta_u64(b, prev));
-                return NumClass::SIGNED;
+                return NumClass::Signed;
             }
             case GroupwiseOp::FFill: {
                 if (!s.fill.step(ok, b, out)) out_ok = 0;
@@ -324,7 +324,7 @@ class GroupKeys {
     };
 
     static bool numeric(const std::vector<Series>& cols) {
-        NumClass cls = NumClass::SIGNED;
+        NumClass cls = NumClass::Signed;
         for (const Series& c : cols)
             if (!num_class(c.type(), cls)) return false;
         return !cols.empty();
@@ -339,10 +339,10 @@ class GroupKeys {
     // null.
     void add_numeric1(const Series& col, std::size_t n, std::int32_t* gid,
                       std::uint8_t* starts) {
-        NumClass cls = NumClass::SIGNED;
+        NumClass cls = NumClass::Signed;
         num_class(col.type(), cls);
         const NumCells cells = read_cells(col);
-        const bool is_float = cls == NumClass::FLOAT;
+        const bool is_float = cls == NumClass::Float;
         g_single_numeric_key_rows.fetch_add(n, std::memory_order_relaxed);
         for (std::size_t r = 0; r < n; ++r) {
             const bool ok = cells.ok[r] != 0;
@@ -369,7 +369,7 @@ class GroupKeys {
     void add_numeric(const std::vector<Series>& cols, std::size_t n,
                      std::int32_t* gid, std::uint8_t* starts) {
         std::vector<NumCells> cells;
-        std::vector<NumClass> cls(cols.size(), NumClass::SIGNED);
+        std::vector<NumClass> cls(cols.size(), NumClass::Signed);
         cells.reserve(cols.size());
         for (std::size_t c = 0; c < cols.size(); ++c) {
             num_class(cols[c].type(), cls[c]);
@@ -383,7 +383,7 @@ class GroupKeys {
                     continue;
                 }
                 std::uint64_t bits = cells[c].bits[r];
-                if (cls[c] == NumClass::FLOAT)
+                if (cls[c] == NumClass::Float)
                     bits = canonical_float_bits(bits);
                 k.w[c] = bits;
             }

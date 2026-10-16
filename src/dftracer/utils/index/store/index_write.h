@@ -40,13 +40,13 @@ void clear_file(IndexWrite& w, layout::Ext ext, int file_id);
 /// the same IndexWrite as the data, it is the commit point of that data.
 void put_manifest(IndexWrite& w, int file_id, layout::Ext ext,
                   std::uint64_t params_hash,
-                  layout::ExtStatus status = layout::ExtStatus::READY);
+                  layout::ExtStatus status = layout::ExtStatus::Ready);
 
 /// Marks plugin extension `name` built for `file_id` at the plugin's
 /// `version`; its data is keyed by `name` as a path of Ext::PLUGIN.
 void put_plugin_manifest(IndexWrite& w, int file_id, std::string_view name,
                          std::uint32_t version, std::uint64_t params_hash,
-                         layout::ExtStatus status = layout::ExtStatus::READY);
+                         layout::ExtStatus status = layout::ExtStatus::Ready);
 
 /// Removes plugin extension `name`'s data and manifest entry for `file_id`.
 void clear_plugin(IndexWrite& w, int file_id, std::string_view name);

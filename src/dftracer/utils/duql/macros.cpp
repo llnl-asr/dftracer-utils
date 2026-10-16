@@ -35,7 +35,7 @@ ExprPtr clone(const Expr& e) {
     auto tree = syntax::parse("where " + syntax::to_text(e));
     if (!tree || !tree->pipeline || tree->pipeline->stages.empty())
         throw DFTUtilsException(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             "duql: a macro body does not print back: " + syntax::to_text(e));
     return std::move(
         std::get<Where>(tree->pipeline->stages.front().node).condition);
@@ -103,7 +103,7 @@ class Expander {
             auto tree = syntax::parse(syntax::to_text(**body));
             if (!tree || !tree->pipeline)
                 throw DFTUtilsException(
-                    ErrorCode::INVALID_ARGUMENT,
+                    ErrorCode::InvalidArgument,
                     "duql: a macro body does not print back: " +
                         syntax::to_text(**body));
             PipelinePtr copy = std::move(tree->pipeline);
@@ -194,7 +194,7 @@ class Expander {
     static void bind(ExprPtr& e, const Macro& m, const std::vector<Arg>& args) {
         if (!e) return;
         if (const auto* p = std::get_if<Path>(&e->node);
-            p && p->root == PathRoot::RECORD && p->steps.size() == 1 &&
+            p && p->root == PathRoot::Record && p->steps.size() == 1 &&
             !p->steps.front().index) {
             for (std::size_t i = 0; i < m.params.size(); ++i)
                 if (m.params[i] == p->steps.front().key) {
@@ -222,35 +222,35 @@ void load_file(PathRegistry& r, const std::filesystem::path& file) {
     std::ifstream in(file);
     if (!in)
         throw DFTUtilsException(
-            ErrorCode::IO, "duql: cannot read macro file " + file.string());
+            ErrorCode::Io, "duql: cannot read macro file " + file.string());
     std::stringstream ss;
     ss << in.rdbuf();
     const std::string text = ss.str();
     auto tree = syntax::parse(text);
     if (!tree)
         throw DFTUtilsException(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             "duql macro file " + file.string() + ": " + tree.error().format());
     if (tree->pipeline)
-        throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+        throw DFTUtilsException(ErrorCode::InvalidArgument,
                                 "duql macro file " + file.string() +
                                     " holds a pipeline; it may hold only "
                                     "'def' declarations");
     for (const auto& d : tree->decls)
         if (!std::holds_alternative<Def>(d))
-            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+            throw DFTUtilsException(ErrorCode::InvalidArgument,
                                     "duql macro file " + file.string() +
                                         " may hold only 'def' declarations");
     std::vector<Def> defs = take_defs(tree->decls);
     auto macros = macros_of(defs, text, file.string());
     if (!macros)
-        throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+        throw DFTUtilsException(ErrorCode::InvalidArgument,
                                 "duql macro file " + file.string() + ": " +
                                     macros.error().format());
     for (auto& m : *macros) {
         for (const auto& old : r.macros)
             if (old.name == m.name)
-                throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                throw DFTUtilsException(ErrorCode::InvalidArgument,
                                         "duql macro '" + m.name +
                                             "' is defined in " + old.origin +
                                             " and " + file.string());

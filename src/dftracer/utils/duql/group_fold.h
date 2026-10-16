@@ -17,15 +17,15 @@
 namespace dftracer::utils::duql {
 
 enum class FoldOp : std::uint8_t {
-    ENGINE,
-    COUNT_DISTINCT,
-    COLLECT,
-    ARGMAX,
-    ARGMIN,
-    SKETCH,
-    MERGE,
-    MERGE_QUANTILE,
-    PLUGIN,
+    Engine,
+    CountDistinct,
+    Collect,
+    Argmax,
+    Argmin,
+    Sketch,
+    Merge,
+    MergeQuantile,
+    Plugin,
 };
 
 /// One aggregate of a GroupFold; `in` and `by` index a batch's columns.
@@ -39,7 +39,7 @@ enum class FoldOp : std::uint8_t {
 /// filling its operands after the column, null for a group with none.
 /// `type` is the output type.
 struct FoldAgg {
-    FoldOp op = FoldOp::ENGINE;
+    FoldOp op = FoldOp::Engine;
     dataframe::AggOp engine = dataframe::AggOp::Count;
     std::int32_t in = -1;
     std::int32_t by = -1;

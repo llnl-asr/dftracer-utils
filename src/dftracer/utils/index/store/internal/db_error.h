@@ -13,7 +13,7 @@ namespace dftracer::utils::index::store::internal {
 // database / writer contexts / provenance so the message format stays uniform.
 [[noreturn]] inline void throw_db_error(std::string_view message,
                                         const ::rocksdb::Status& status) {
-    throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+    throw IndexerError(IndexerError::Type::DatabaseError,
                        std::string(message) + ": " + status.ToString());
 }
 

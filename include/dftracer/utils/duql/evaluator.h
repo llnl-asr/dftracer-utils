@@ -16,15 +16,15 @@ using json::JsonValue;
 
 /// A three-valued result: a leaf on a missing or null field, or across types,
 /// is UNKNOWN; `and`, `or` and `not` follow Kleene logic.
-enum class Truth : std::uint8_t { NO, YES, UNKNOWN };
+enum class Truth : std::uint8_t { No, Yes, Unknown };
 
 /// A present field of a flattened record: a scalar, JSON `null`, or an array
 /// or object held as its canonical JSON text in `value`.
 struct Cell {
-    enum class Kind : std::uint8_t { VALUE, NULL_VALUE, ARRAY, OBJECT };
+    enum class Kind : std::uint8_t { Value, NullValue, Array, Object };
 
     LiteralValue value;
-    Kind kind = Kind::VALUE;
+    Kind kind = Kind::Value;
 
     Cell() = default;
     template <class T>
@@ -34,13 +34,13 @@ struct Cell {
 
     static Cell null() {
         Cell c;
-        c.kind = Kind::NULL_VALUE;
+        c.kind = Kind::NullValue;
         return c;
     }
     /// `text` is canonical JSON (json::canonical_json_text).
     static Cell json(std::string text, bool array) {
         Cell c{std::move(text)};
-        c.kind = array ? Kind::ARRAY : Kind::OBJECT;
+        c.kind = array ? Kind::Array : Kind::Object;
         return c;
     }
 };

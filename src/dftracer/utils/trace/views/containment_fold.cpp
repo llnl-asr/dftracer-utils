@@ -189,8 +189,8 @@ ContainmentSpec make_containment_spec(
             s.out.ts /= ix::micros_per(roles->time_unit);
         if (s.dur_ref.kind == FieldRef::Kind::Dur)
             s.out.dur /= ix::micros_per(roles->duration_unit);
-        s.out.floating = roles->time_unit != ix::TimeUnit::US ||
-                         roles->duration_unit != ix::TimeUnit::US;
+        s.out.floating = roles->time_unit != ix::TimeUnit::Us ||
+                         roles->duration_unit != ix::TimeUnit::Us;
     }
     return s;
 }
@@ -198,7 +198,7 @@ ContainmentSpec make_containment_spec(
 bool containment_row(const FoldEvent& ev, const ContainmentSpec& spec,
                      dftracer::utils::StringIntern& intern,
                      ContainmentRow& out) {
-    if (ev.phase == RecordPhase::METADATA || ev.phase == RecordPhase::UNKNOWN)
+    if (ev.phase == RecordPhase::Metadata || ev.phase == RecordPhase::Unknown)
         return false;
     if (spec.dur_ref.kind == FieldRef::Kind::Dur && !ev.has_dur) return false;
     std::uint64_t lane = dftracer::utils::hash::FNV1A_OFFSET_BASIS_LEGACY;

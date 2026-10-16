@@ -508,7 +508,7 @@ TEST_CASE("one extension is rebuilt or dropped without the others") {
             ix.drop_extension(bad);
             FAIL("expected an error");
         } catch (const DFTUtilsException& e) {
-            CHECK(e.code() == ErrorCode::INVALID_ARGUMENT);
+            CHECK(e.code() == ErrorCode::InvalidArgument);
         }
         CHECK_THROWS_AS(ix.rebuild_extension(bad), DFTUtilsException);
     }

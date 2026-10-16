@@ -15,7 +15,7 @@ coro::CoroTask<std::shared_ptr<reader::internal::Reader>>
 IndexedFileReaderUtility::operator()(const IndexedReadInput& input) const {
     // Validate input
     if (!fs::exists(input.file_path)) {
-        throw DFTUtilsException(ErrorCode::NOT_FOUND,
+        throw DFTUtilsException(ErrorCode::NotFound,
                                 "File does not exist: " + input.file_path);
     }
 

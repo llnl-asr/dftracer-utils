@@ -6,24 +6,24 @@ namespace dftracer::utils::io {
 /// I/O operation types, shared by every backend (thread pool, epoll, kqueue,
 /// io_uring) so the op set is maintained in one place.
 enum class IoOp {
-    READ,
-    WRITE,
-    PREAD,
-    PWRITE,
-    OPEN,
-    CLOSE,
-    FSYNC,
-    FTRUNCATE,
-    FSTAT,
-    ACCEPT,
-    RECV,
-    SEND,
-    READV,
-    WRITEV,
-    PREADV,
-    PWRITEV,
-    LSEEK,
-    SENDFILE
+    Read,
+    Write,
+    Pread,
+    Pwrite,
+    Open,
+    Close,
+    Fsync,
+    Ftruncate,
+    Fstat,
+    Accept,
+    Recv,
+    Send,
+    Readv,
+    Writev,
+    Preadv,
+    Pwritev,
+    Lseek,
+    Sendfile
 };
 
 }  // namespace dftracer::utils::io

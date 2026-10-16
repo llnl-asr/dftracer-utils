@@ -135,7 +135,7 @@ void check_keys(const detail::ViewPlan& p, std::vector<GroupKey>& keys) {
             case GroupKey::Kind::IoCat:
             case GroupKey::Kind::AccPat:
                 throw DFTUtilsException::cat(
-                    ErrorCode::INVALID_ARGUMENT, "group key ",
+                    ErrorCode::InvalidArgument, "group key ",
                     detail::group_col_name(k),
                     " needs dftracer events; schema ", schema.id,
                     " records have paths only");
@@ -143,7 +143,7 @@ void check_keys(const detail::ViewPlan& p, std::vector<GroupKey>& keys) {
         if (auto c = detail::resolver_column(k.kind);
             c && !has_rowset(schema, c->rowset, c->key, c->value))
             throw DFTUtilsException::cat(
-                ErrorCode::INVALID_ARGUMENT, "group key ",
+                ErrorCode::InvalidArgument, "group key ",
                 detail::group_col_name(k), " needs row set ", c->rowset, " (",
                 c->key, ", ", c->value, "); schema ", schema.id,
                 " defines none");
@@ -260,7 +260,7 @@ void ensure_indexes_fresh(const std::vector<ViewFile>& files) {
                     co_await ib::resolve_and_build_index(&scope, std::move(in));
             });
         if (!result.failures.empty())
-            throw DFTUtilsException::cat(ErrorCode::IO, "index of ",
+            throw DFTUtilsException::cat(ErrorCode::Io, "index of ",
                                          result.failures.front().file_path,
                                          " is stale and its rebuild failed: ",
                                          result.failures.front().message);
@@ -442,17 +442,17 @@ void overlay_declared(ColTypeMap& m,
     for (const auto& f : schema.fields) {
         CT t = CT::String;
         switch (f.type) {
-            case ix::FieldType::BOOL:
-            case ix::FieldType::INT:
+            case ix::FieldType::Bool:
+            case ix::FieldType::Int:
                 t = CT::Int64;
                 break;
-            case ix::FieldType::FLOAT:
+            case ix::FieldType::Float:
                 t = CT::Float64;
                 break;
-            case ix::FieldType::STRING:
-                t = f.role == ix::Role::TIME ? CT::Int64 : CT::String;
+            case ix::FieldType::String:
+                t = f.role == ix::Role::Time ? CT::Int64 : CT::String;
                 break;
-            case ix::FieldType::JSON:
+            case ix::FieldType::Json:
                 t = CT::Json;
                 break;
         }
@@ -484,23 +484,23 @@ namespace {
 const char* path_type_name(dftracer::utils::index::store::PathType t) {
     using PT = dftracer::utils::index::store::PathType;
     switch (t) {
-        case PT::NULL_VALUE:
+        case PT::NullValue:
             return "null";
-        case PT::BOOL:
+        case PT::Bool:
             return "bool";
-        case PT::INT:
+        case PT::Int:
             return "int";
-        case PT::UINT:
+        case PT::Uint:
             return "uint";
-        case PT::DOUBLE:
+        case PT::Double:
             return "float";
-        case PT::STRING:
+        case PT::String:
             return "string";
-        case PT::MIXED:
+        case PT::Mixed:
             return "mixed";
-        case PT::OBJECT:
+        case PT::Object:
             return "object";
-        case PT::ARRAY:
+        case PT::Array:
             return "array";
     }
     return "mixed";
@@ -522,7 +522,7 @@ std::optional<std::string> file_without_catalog(const ScanPlan& plan_) {
             const int fid = it->second->get_file_info_id(
                 st::internal::get_logical_path(f.file_path));
             if (fid < 0 ||
-                !it->second->extension_state(fid, st::IndexExtension::CATALOG))
+                !it->second->extension_state(fid, st::IndexExtension::Catalog))
                 return f.file_path;
         } catch (...) {
             return f.file_path;
@@ -547,7 +547,7 @@ void ensure_catalog(const ScanPlan& plan_) {
                 const int fid = it->second->get_file_info_id(
                     st::internal::get_logical_path(f.file_path));
                 missing = fid < 0 || !it->second->extension_current(
-                                         fid, st::IndexExtension::CATALOG);
+                                         fid, st::IndexExtension::Catalog);
             }
         } catch (...) {
         }
@@ -601,8 +601,8 @@ std::vector<SchemaLeaf> catalog_tree(const ScanPlan& plan_) {
     }
     std::map<std::string, SchemaLeaf> leaves;
     for (auto& [path, stat] : merged)
-        if (stat.type != st::PathType::OBJECT &&
-            stat.type != st::PathType::ARRAY)
+        if (stat.type != st::PathType::Object &&
+            stat.type != st::PathType::Array)
             leaves[path] =
                 SchemaLeaf{path, path_type_name(stat.type), stat.count, {}, {}};
     namespace ix = dftracer::utils::index;
@@ -614,7 +614,7 @@ std::vector<SchemaLeaf> catalog_tree(const ScanPlan& plan_) {
             leaf.path = f.path;
             const std::string below = f.path + ".";
             const bool has_leaves =
-                f.type == ix::FieldType::JSON &&
+                f.type == ix::FieldType::Json &&
                 std::any_of(merged.begin(), merged.end(), [&](const auto& kv) {
                     return kv.first.starts_with(below);
                 });
@@ -656,7 +656,7 @@ std::shared_ptr<const detail::JsonColumns> json_columns(
         if (t != CT::Json) continue;
         const auto* field = schema.field_at(name);
         const bool text =
-            field && field->type == dftracer::utils::index::FieldType::JSON;
+            field && field->type == dftracer::utils::index::FieldType::Json;
         // A dftracer catalog names args bare, so a top-level field of the
         // same name merges in; only the args column is JSON.
         if (by_path)
@@ -701,7 +701,7 @@ std::unordered_map<std::string, dataframe::DataType> column_types(
 }
 
 TimeMetric time_metric(const ScanPlan& plan_) {
-    if (plan_->files.empty()) return TimeMetric::US;
+    if (plan_->files.empty()) return TimeMetric::Us;
     return trace::read_time_metric(plan_->files.front().file_path);
 }
 
@@ -770,7 +770,7 @@ ScanPlan occ_cell(const ScanPlan& plan_, std::uint64_t cell_us) {
 ScanPlan time_scale(const ScanPlan& plan_, double ns_ratio) {
     if (ns_ratio != 1.0 && detail::plan_by_path(*plan_))
         throw DFTUtilsException::cat(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             "time_scale scales dftracer ts and dur; schema ",
             detail::plan_record_schema(*plan_).id,
             " gives its time units on its time and duration fields");
@@ -792,7 +792,7 @@ ScanPlan agg(const ScanPlan& plan_, std::vector<AggSpec> specs) {
     for (const AggSpec& s : specs)
         if (is_occupancy_op(s.op)) {
             detail::require_role(*plan_, "an occupancy aggregate",
-                                 detail::TraceRole::DURATION);
+                                 detail::TraceRole::Duration);
             timed = true;
         }
     auto next = clone(plan_);
@@ -830,7 +830,7 @@ AggSpec lower_field_agg(const FieldAggExpr& e) {
         case AggFn::ArgMax:
             return AggSpec(AggOp::ArgMax, e.field(), "", e.by());
     }
-    throw DFTUtilsException::cat(ErrorCode::INVALID_ARGUMENT,
+    throw DFTUtilsException::cat(ErrorCode::InvalidArgument,
                                  "unhandled aggregate function");
 }
 
@@ -877,7 +877,7 @@ ScanPlan agg(const ScanPlan& plan_, std::vector<FieldAggExpr> exprs) {
                     break;
                 default:
                     throw DFTUtilsException::cat(
-                        ErrorCode::INVALID_ARGUMENT,
+                        ErrorCode::InvalidArgument,
                         "F.any supports .count()/.mean()/.sum()/.min()/.max()/"
                         ".var()/.std()/.skew()/.kurt(); name a field for "
                         "argmax "
@@ -909,7 +909,7 @@ ScanPlan agg_numeric_args(const ScanPlan& plan_,
     for (const auto& s : reductions)
         if (!is_dyn_reduction(s.op))
             throw DFTUtilsException::cat(
-                ErrorCode::INVALID_ARGUMENT,
+                ErrorCode::InvalidArgument,
                 "agg_numeric_args supports only Count/Sum/Min/Max/SumSq/Mean/"
                 "Var/Std/Skew/Kurt over numeric args; Pct/Hist/ArgMax need a "
                 "named field");

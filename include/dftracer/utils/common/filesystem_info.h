@@ -8,31 +8,31 @@
 namespace dftracer::utils {
 
 enum class FilesystemKind {
-    UNKNOWN,
-    LOCAL,  ///< disk-backed local FS: ext4, xfs, btrfs, apfs, ...
-    TMPFS,  ///< RAM-backed: tmpfs / ramfs (e.g. /dev/shm)
-    NFS,
-    LUSTRE,
-    GPFS,
-    BEEGFS,
+    Unknown,
+    Local,  ///< disk-backed local FS: ext4, xfs, btrfs, apfs, ...
+    Tmpfs,  ///< RAM-backed: tmpfs / ramfs (e.g. /dev/shm)
+    Nfs,
+    Lustre,
+    Gpfs,
+    Beegfs,
 };
 
 /// True for networked or parallel stores (NFS/Lustre/GPFS/BeeGFS), where
 /// metadata- and fsync-heavy work such as index construction is slow.
 inline bool is_network_filesystem(FilesystemKind kind) noexcept {
-    return kind == FilesystemKind::NFS || kind == FilesystemKind::LUSTRE ||
-           kind == FilesystemKind::GPFS || kind == FilesystemKind::BEEGFS;
+    return kind == FilesystemKind::Nfs || kind == FilesystemKind::Lustre ||
+           kind == FilesystemKind::Gpfs || kind == FilesystemKind::Beegfs;
 }
 
 /// True for node-local filesystems (disk or RAM) that make good scratch space.
 inline bool is_local_filesystem(FilesystemKind kind) noexcept {
-    return kind == FilesystemKind::LOCAL || kind == FilesystemKind::TMPFS;
+    return kind == FilesystemKind::Local || kind == FilesystemKind::Tmpfs;
 }
 
 /// True for RAM-backed filesystems (tmpfs/ramfs). Fastest scratch, but its
 /// capacity competes with process memory, so callers should size accordingly.
 inline bool is_memory_filesystem(FilesystemKind kind) noexcept {
-    return kind == FilesystemKind::TMPFS;
+    return kind == FilesystemKind::Tmpfs;
 }
 
 /// Classify the filesystem backing `path` via statfs. When `path` does not

@@ -90,7 +90,7 @@ struct MetadataCollectorUtilityOutput {
     std::uint64_t num_lines = 0;
     std::uint64_t checkpoint_size = 0;
     std::size_t num_checkpoints = 0;
-    ArchiveFormat format = ArchiveFormat::UNKNOWN;
+    ArchiveFormat format = ArchiveFormat::Unknown;
     std::string error_message;
     std::size_t event_hash = 0;
 

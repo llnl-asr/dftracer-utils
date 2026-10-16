@@ -426,7 +426,7 @@ coro::CoroTask<IpcWriter::CompressedBatch> IpcWriter::compress_batch(
     ArrowExportResult& batch) {
     CompressedBatch result{};
 
-    if (compression_ == IpcCompression::NONE) {
+    if (compression_ == IpcCompression::None) {
         result.body = buffer_pool_.acquire(64 * 1024);
 
         int rc =
@@ -443,7 +443,7 @@ coro::CoroTask<IpcWriter::CompressedBatch> IpcWriter::compress_batch(
     }
 
 #ifdef DFTRACER_UTILS_ENABLE_ZSTD
-    if (compression_ != IpcCompression::ZSTD) {
+    if (compression_ != IpcCompression::Zstd) {
         co_return result;
     }
 

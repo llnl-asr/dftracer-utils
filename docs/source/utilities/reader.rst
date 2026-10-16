@@ -94,8 +94,8 @@ Fluent builder for configuring streams:
 .. code-block:: cpp
 
    StreamConfig config;
-   config.stream_type(StreamType::LINE)
-         .range_type(RangeType::LINE_RANGE)
+   config.stream_type(StreamType::Line)
+         .range_type(RangeType::LineRange)
          .from(100)    // Start line (1-based)
          .to(200);     // End line (inclusive)
 
@@ -109,8 +109,8 @@ Reading Lines
    auto reader = ReaderFactory::create("trace.pfw.gz", "trace-dir/.dftindex");
 
    StreamConfig config;
-   config.stream_type(StreamType::LINE)
-         .range_type(RangeType::LINE_RANGE)
+   config.stream_type(StreamType::Line)
+         .range_type(RangeType::LineRange)
          .from(1)
          .to(100);
 
@@ -149,8 +149,8 @@ Read lines within a byte range (useful for parallel splitting):
 .. code-block:: cpp
 
    StreamConfig config;
-   config.stream_type(StreamType::LINE_BYTES)
-         .range_type(RangeType::BYTE_RANGE)
+   config.stream_type(StreamType::LineBytes)
+         .range_type(RangeType::ByteRange)
          .from(0)
          .to(1024 * 1024);  // First 1MB
 

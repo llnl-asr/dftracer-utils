@@ -772,12 +772,12 @@ class OracleAggFold : public detail::Fold {
     }
     void step(const detail::FoldBatch& batch) override {
         for (const auto& ev : batch.events) {
-            if (ev.phase == RecordPhase::METADATA) {
+            if (ev.phase == RecordPhase::Metadata) {
                 if (want_ranks_) harvest_pr_rank(ev, *intern_, ranks_);
                 if (want_names_) harvest_name(ev);
-                if (phase_target_ != RecordPhase::METADATA) continue;
+                if (phase_target_ != RecordPhase::Metadata) continue;
             }
-            if (phase_target_ != RecordPhase::UNKNOWN &&
+            if (phase_target_ != RecordPhase::Unknown &&
                 ev.phase != phase_target_)
                 continue;
             detail::PodSource src(ev, *intern_);

@@ -405,9 +405,9 @@ BloomFold::finish_spilled(int file_id) {
                 index::store::records::clear_file(*deletes, ext, file_id);
         for (std::uint32_t k : sp.key_union)
             if (!full.contains(k))
-                for (auto ext : {index::store::IndexExtension::ZONEMAP,
-                                 index::store::IndexExtension::BLOOM,
-                                 index::store::IndexExtension::COUNTS})
+                for (auto ext : {index::store::IndexExtension::Zonemap,
+                                 index::store::IndexExtension::Bloom,
+                                 index::store::IndexExtension::Counts})
                     index::store::records::clear_path(*deletes, ext, file_id,
                                                       intern_->resolve(k));
         auto run = deletes->commit();
@@ -502,7 +502,7 @@ BloomFold::Lane BloomFold::open(const trace::views::detail::FoldBatch& batch) {
     lane.auto_chunk_ = &fs.auto_chunks[cp];
 
     for (const auto& e : batch.events)
-        if (e.phase != trace::RecordPhase::METADATA)
+        if (e.phase != trace::RecordPhase::Metadata)
             for (const auto& [leaf_id, tag] : e.schema_leaves)
                 observe_catalog_path(fs.paths[leaf_id], tag);
     return lane;
@@ -515,7 +515,7 @@ void BloomFold::observe(const Lane& lane,
     BV::PidTidCache pidtid;
 
     for (const auto& e : batch.events) {
-        if (e.phase == trace::RecordPhase::METADATA) {
+        if (e.phase == trace::RecordPhase::Metadata) {
             BV::observe_metadata(chunk, resolve_or_empty(*intern_, e.name_id));
             for (const char* p : {"name", "ph", "pid", "tid", "ts"})
                 BV::observe_metadata_path(chunk, p);
@@ -556,7 +556,7 @@ void BloomFold::observe(const Lane& lane,
             if (!e.has_dur)
                 for (const auto& [k, v] : e.args) {
                     if (k != dur_key_) continue;
-                    auto& ds = chunk.fixed_dim_stats[BV::FD_DUR];
+                    auto& ds = chunk.fixed_dim_stats[BV::FdDur];
                     // Durations are not negative, so the uint range holds.
                     if (const auto* i = std::get_if<std::int64_t>(&v);
                         i && *i >= 0)

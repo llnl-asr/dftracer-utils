@@ -119,7 +119,7 @@ AggregatedTraces load_aggregated_traces(const std::string& db_path,
     auto db_handle =
         agg::tier::open(db_path, rdb::RocksDatabase::OpenMode::ReadOnly);
     if (!db_handle) {
-        throw DFTUtilsException(ErrorCode::IO,
+        throw DFTUtilsException(ErrorCode::Io,
                                 "dlio: failed to open RocksDB at " + db_path);
     }
     auto& db = *db_handle;
@@ -371,11 +371,11 @@ void load_event_map(const std::string& path, TraceLoaderOptions& options) {
         root = YAML::LoadFile(path);
     } catch (const YAML::Exception& e) {
         throw DFTUtilsException(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             "dlio: failed to parse event map " + path + ": " + e.what());
     }
     if (!root.IsMap()) {
-        throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+        throw DFTUtilsException(ErrorCode::InvalidArgument,
                                 "dlio: event map " + path +
                                     " must be a mapping of component names");
     }

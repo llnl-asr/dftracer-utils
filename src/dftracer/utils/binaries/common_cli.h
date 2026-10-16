@@ -232,10 +232,10 @@ inline double get_duration_arg(const argparse::ArgumentParser& p,
     return *parsed;
 }
 
-enum class DirMode { DEFAULT_DOT, DEFAULT_EMPTY, REQUIRED };
+enum class DirMode { DefaultDot, DefaultEmpty, Required };
 
 struct DirectoryArgs : CliSchema {
-    DirMode mode = DirMode::DEFAULT_DOT;
+    DirMode mode = DirMode::DefaultDot;
     std::string help = "Directory containing trace files";
     std::string value;
 
@@ -246,13 +246,13 @@ struct DirectoryArgs : CliSchema {
     void register_on(argparse::ArgumentParser& p) override {
         auto& arg = p.add_argument("-d", "--directory").help(help);
         switch (mode) {
-            case DirMode::DEFAULT_DOT:
+            case DirMode::DefaultDot:
                 arg.default_value<std::string>(".");
                 break;
-            case DirMode::DEFAULT_EMPTY:
+            case DirMode::DefaultEmpty:
                 arg.default_value<std::string>("");
                 break;
-            case DirMode::REQUIRED:
+            case DirMode::Required:
                 arg.required();
                 break;
         }
@@ -263,7 +263,7 @@ struct DirectoryArgs : CliSchema {
     }
 
     bool validate() override {
-        if (mode == DirMode::REQUIRED && value.empty()) {
+        if (mode == DirMode::Required && value.empty()) {
             DFTRACER_UTILS_LOG_ERROR("%s", "--directory is required");
             return false;
         }

@@ -4935,13 +4935,13 @@ LazyFrame LazyFrame::frame_op(std::string name, OpArgs args,
 static TypeId native_out_type(GroupwiseOp kind, TypeId in, NumClass cls) {
     switch (kind) {
         case GroupwiseOp::CumSum:
-            return cls == NumClass::FLOAT ? TypeId::Float64
+            return cls == NumClass::Float ? TypeId::Float64
                    : in == TypeId::Uint64 ? TypeId::Uint64
                                           : TypeId::Int64;
         case GroupwiseOp::CumProd:
             return TypeId::Float64;
         case GroupwiseOp::Diff:
-            return cls == NumClass::FLOAT ? TypeId::Float64 : TypeId::Int64;
+            return cls == NumClass::Float ? TypeId::Float64 : TypeId::Int64;
         default:
             return in;
     }
@@ -4977,7 +4977,7 @@ std::optional<LazyFrame> native_group_transform(
     for (const Field& f : typed.fields) {
         TypeId out = TypeId::Int64;
         if (kind != GroupwiseOp::CumCount) {
-            NumClass cls = NumClass::SIGNED;
+            NumClass cls = NumClass::Signed;
             const Field* src = find_field(in, f.name);
             if (!src || !num_class(src->type.id, cls)) return std::nullopt;
             out = native_out_type(kind, src->type.id, cls);

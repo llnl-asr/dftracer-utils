@@ -7,18 +7,18 @@ namespace dftracer::utils {
 
 void TaskResult::set_value(std::any value) {
     value_ = std::move(value);
-    publish(State::value);
+    publish(State::Value);
 }
 
 void TaskResult::set_exception(std::exception_ptr ex) {
     exception_ = ex;
-    publish(State::exception);
+    publish(State::Exception);
 }
 
 void TaskResult::mark_running() {
-    auto expected = static_cast<std::uint8_t>(State::pending);
+    auto expected = static_cast<std::uint8_t>(State::Pending);
     state_.compare_exchange_strong(
-        expected, static_cast<std::uint8_t>(State::running),
+        expected, static_cast<std::uint8_t>(State::Running),
         std::memory_order_release, std::memory_order_relaxed);
 }
 
@@ -54,8 +54,8 @@ void TaskResult::publish(State s) {
 bool TaskResult::wait(std::chrono::milliseconds timeout) const {
     auto ready = [this] {
         auto s = static_cast<State>(state_.load(std::memory_order_acquire));
-        return s == State::value || s == State::exception ||
-               s == State::cancelled;
+        return s == State::Value || s == State::Exception ||
+               s == State::Cancelled;
     };
     if (ready()) return true;
 
@@ -71,11 +71,11 @@ std::any TaskResult::get() const {
     wait();
     std::lock_guard<std::mutex> lock(mutex_);
     auto s = static_cast<State>(state_.load(std::memory_order_acquire));
-    if (s == State::exception) {
+    if (s == State::Exception) {
         std::rethrow_exception(exception_);
     }
-    if (s == State::cancelled) {
-        throw DFTUtilsException(ErrorCode::PIPELINE, "Task was cancelled");
+    if (s == State::Cancelled) {
+        throw DFTUtilsException(ErrorCode::Pipeline, "Task was cancelled");
     }
     return value_;  // returns COPY
 }
@@ -83,12 +83,12 @@ std::any TaskResult::get() const {
 std::any TaskResult::get_ready() const {
     std::lock_guard<std::mutex> lock(mutex_);
     auto s = static_cast<State>(state_.load(std::memory_order_acquire));
-    assert(s == State::value || s == State::exception || s == State::cancelled);
-    if (s == State::exception) {
+    assert(s == State::Value || s == State::Exception || s == State::Cancelled);
+    if (s == State::Exception) {
         std::rethrow_exception(exception_);
     }
-    if (s == State::cancelled) {
-        throw DFTUtilsException(ErrorCode::PIPELINE, "Task was cancelled");
+    if (s == State::Cancelled) {
+        throw DFTUtilsException(ErrorCode::Pipeline, "Task was cancelled");
     }
     return value_;  // returns COPY
 }
@@ -97,17 +97,17 @@ std::exception_ptr TaskResult::get_exception() const { return exception_; }
 
 bool TaskResult::is_ready() const {
     auto s = static_cast<State>(state_.load(std::memory_order_acquire));
-    return s == State::value || s == State::exception || s == State::cancelled;
+    return s == State::Value || s == State::Exception || s == State::Cancelled;
 }
 
 bool TaskResult::has_exception() const {
     return static_cast<State>(state_.load(std::memory_order_acquire)) ==
-           State::exception;
+           State::Exception;
 }
 
 bool TaskResult::is_cancelled() const {
     return static_cast<State>(state_.load(std::memory_order_acquire)) ==
-           State::cancelled;
+           State::Cancelled;
 }
 
 TaskResult::State TaskResult::state() const {

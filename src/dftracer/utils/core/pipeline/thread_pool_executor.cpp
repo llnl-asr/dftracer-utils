@@ -488,12 +488,12 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
                     std::unique_lock<std::shared_mutex> lock(registry_mutex_);
                     auto it = task_registry_.find(tid);
                     if (it != task_registry_.end() &&
-                        it->second.state == TaskInfo::QUEUED) {
-                        it->second.state = TaskInfo::RUNNING;
+                        it->second.state == TaskInfo::Queued) {
+                        it->second.state = TaskInfo::Running;
                         it->second.started_at =
                             std::chrono::steady_clock::now();
                         it->second.worker_id = context->worker_id;
-                        it->second.location = TaskInfo::EXECUTING;
+                        it->second.location = TaskInfo::Executing;
                         ++tasks_started_;
                     }
                 }
@@ -735,22 +735,22 @@ ExecutorProgress ThreadPoolExecutor::get_progress() const {
 
     for (const auto& [task_id, info] : task_registry_) {
         switch (info.state) {
-            case TaskInfo::QUEUED:
+            case TaskInfo::Queued:
                 progress.tasks_queued++;
                 break;
-            case TaskInfo::RUNNING:
-            case TaskInfo::WAITING:
+            case TaskInfo::Running:
+            case TaskInfo::Waiting:
                 progress.tasks_running++;
                 break;
-            case TaskInfo::COMPLETED:
+            case TaskInfo::Completed:
                 // Already counted
                 break;
-            case TaskInfo::FAILED:
+            case TaskInfo::Failed:
                 progress.tasks_failed++;
                 break;
         }
 
-        if (info.state == TaskInfo::FAILED && !info.error_message.empty()) {
+        if (info.state == TaskInfo::Failed && !info.error_message.empty()) {
             progress.recent_errors.push_back({task_id, info.error_message});
         }
     }
@@ -818,32 +818,32 @@ TaskProgress ThreadPoolExecutor::build_task_progress_tree(
 
     // State
     switch (info.state) {
-        case TaskInfo::QUEUED:
+        case TaskInfo::Queued:
             progress.state = "queued";
             break;
-        case TaskInfo::RUNNING:
+        case TaskInfo::Running:
             progress.state = "running";
             break;
-        case TaskInfo::WAITING:
+        case TaskInfo::Waiting:
             progress.state = "waiting";
             break;
-        case TaskInfo::COMPLETED:
+        case TaskInfo::Completed:
             progress.state = "completed";
             break;
-        case TaskInfo::FAILED:
+        case TaskInfo::Failed:
             progress.state = "failed";
             break;
     }
 
     // Timing
     auto now = std::chrono::steady_clock::now();
-    if (info.state == TaskInfo::QUEUED) {
+    if (info.state == TaskInfo::Queued) {
         progress.queued_duration_ms =
             std::chrono::duration<double, std::milli>(now - info.queued_at)
                 .count();
         progress.execution_duration_ms = 0;
-    } else if (info.state == TaskInfo::RUNNING ||
-               info.state == TaskInfo::WAITING) {
+    } else if (info.state == TaskInfo::Running ||
+               info.state == TaskInfo::Waiting) {
         progress.queued_duration_ms = std::chrono::duration<double, std::milli>(
                                           info.started_at - info.queued_at)
                                           .count();
@@ -869,23 +869,23 @@ TaskProgress ThreadPoolExecutor::build_task_progress_tree(
             static_cast<double>(progress.total_subtasks);
     } else {
         progress.progress_percentage =
-            (info.state == TaskInfo::COMPLETED) ? 100.0 : 0.0;
+            (info.state == TaskInfo::Completed) ? 100.0 : 0.0;
     }
 
     // Location
     switch (info.location) {
-        case TaskInfo::SHARED_QUEUE:
+        case TaskInfo::SharedQueue:
             progress.location = "shared_queue";
             break;
-        case TaskInfo::LOCAL_QUEUE:
+        case TaskInfo::LocalQueue:
             progress.location =
                 "worker_" + std::to_string(info.worker_id) + "_local";
             break;
-        case TaskInfo::EXECUTING:
+        case TaskInfo::Executing:
             progress.location =
                 "executing_on_worker_" + std::to_string(info.worker_id);
             break;
-        case TaskInfo::DONE:
+        case TaskInfo::Done:
             progress.location = "done";
             break;
     }
@@ -929,10 +929,10 @@ coro::Coro ThreadPoolExecutor::run_task(std::shared_ptr<Task> task,
         std::unique_lock<std::shared_mutex> lock(registry_mutex_);
         auto it = task_registry_.find(task->get_id());
         if (it != task_registry_.end()) {
-            it->second.state = TaskInfo::RUNNING;
+            it->second.state = TaskInfo::Running;
             it->second.started_at = std::chrono::steady_clock::now();
             it->second.worker_id = context->worker_id;
-            it->second.location = TaskInfo::EXECUTING;
+            it->second.location = TaskInfo::Executing;
         }
     }
 
@@ -987,9 +987,9 @@ coro::Coro ThreadPoolExecutor::run_task(std::shared_ptr<Task> task,
                 std::unique_lock<std::shared_mutex> lock(registry_mutex_);
                 auto it = task_registry_.find(task->get_id());
                 if (it != task_registry_.end()) {
-                    it->second.state = TaskInfo::COMPLETED;
+                    it->second.state = TaskInfo::Completed;
                     it->second.completed_at = std::chrono::steady_clock::now();
-                    it->second.location = TaskInfo::DONE;
+                    it->second.location = TaskInfo::Done;
 
                     // Update parent's completed children count
                     if (it->second.parent_task_id != -1) {
@@ -1023,11 +1023,11 @@ coro::Coro ThreadPoolExecutor::run_task(std::shared_ptr<Task> task,
                     std::unique_lock<std::shared_mutex> lock(registry_mutex_);
                     auto it = task_registry_.find(task->get_id());
                     if (it != task_registry_.end()) {
-                        it->second.state = TaskInfo::FAILED;
+                        it->second.state = TaskInfo::Failed;
                         it->second.completed_at =
                             std::chrono::steady_clock::now();
                         it->second.error_message = e.what();
-                        it->second.location = TaskInfo::DONE;
+                        it->second.location = TaskInfo::Done;
                     }
                 }
 
@@ -1048,11 +1048,11 @@ coro::Coro ThreadPoolExecutor::run_task(std::shared_ptr<Task> task,
                     std::unique_lock<std::shared_mutex> lock(registry_mutex_);
                     auto it = task_registry_.find(task->get_id());
                     if (it != task_registry_.end()) {
-                        it->second.state = TaskInfo::FAILED;
+                        it->second.state = TaskInfo::Failed;
                         it->second.completed_at =
                             std::chrono::steady_clock::now();
                         it->second.error_message = "Unknown exception";
-                        it->second.location = TaskInfo::DONE;
+                        it->second.location = TaskInfo::Done;
                     }
                 }
 
@@ -1090,9 +1090,9 @@ void ThreadPoolExecutor::submit_task(std::shared_ptr<Task> task,
             it->second.task_id = task->get_id();
             it->second.parent_task_id = parent_task_id;
             it->second.name = task->get_name();
-            it->second.state = TaskInfo::QUEUED;
+            it->second.state = TaskInfo::Queued;
             it->second.queued_at = std::chrono::steady_clock::now();
-            it->second.location = TaskInfo::SHARED_QUEUE;
+            it->second.location = TaskInfo::SharedQueue;
             it->second.worker_id = static_cast<std::size_t>(-1);
 
             if (parent_task_id != -1) {
@@ -1129,9 +1129,9 @@ TaskIndex ThreadPoolExecutor::enqueue_tracked(
             it->second.task_id = id;
             it->second.parent_task_id = -1;
             it->second.name = std::move(name);
-            it->second.state = TaskInfo::QUEUED;
+            it->second.state = TaskInfo::Queued;
             it->second.queued_at = now;
-            it->second.location = TaskInfo::SHARED_QUEUE;
+            it->second.location = TaskInfo::SharedQueue;
             it->second.worker_id = static_cast<std::size_t>(-1);
         }
     }
@@ -1157,14 +1157,14 @@ void ThreadPoolExecutor::mark_coro_completed(TaskIndex id) {
         std::unique_lock<std::shared_mutex> lock(registry_mutex_);
         auto it = task_registry_.find(id);
         if (it != task_registry_.end() &&
-            it->second.state != TaskInfo::COMPLETED) {
+            it->second.state != TaskInfo::Completed) {
             auto now = std::chrono::steady_clock::now();
             if (it->second.started_at.time_since_epoch().count() == 0) {
                 it->second.started_at = now;
             }
-            it->second.state = TaskInfo::COMPLETED;
+            it->second.state = TaskInfo::Completed;
             it->second.completed_at = now;
-            it->second.location = TaskInfo::DONE;
+            it->second.location = TaskInfo::Done;
             was_new = true;
         }
     }

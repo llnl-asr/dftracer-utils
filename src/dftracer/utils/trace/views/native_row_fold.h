@@ -139,19 +139,19 @@ dataframe::TypeId row_column_type(std::string_view sel, bool by_path = false);
 /// `arg_full` up first and `arg_bare` (empty for none) as its fallback.
 struct RowKeySource {
     enum class Kind : std::uint8_t {
-        REFUSED,
-        NAME,
-        CAT,
-        FHASH,
-        HHASH,
-        PID,
-        TID,
-        TS,
-        DUR,
-        PH,
-        ARG,
+        Refused,
+        Name,
+        Cat,
+        Fhash,
+        Hhash,
+        Pid,
+        Tid,
+        Ts,
+        Dur,
+        Ph,
+        Arg,
     };
-    Kind kind = Kind::REFUSED;
+    Kind kind = Kind::Refused;
     std::string arg_full;
     std::string arg_bare;
 };
@@ -198,8 +198,8 @@ class NativeRowFold : public Fold {
 
     void step(const FoldBatch& batch) override {
         for (const FoldEvent& ev : batch.events) {
-            if (ev.phase == RecordPhase::UNKNOWN ||
-                (!keep_metadata_ && ev.phase == RecordPhase::METADATA))
+            if (ev.phase == RecordPhase::Unknown ||
+                (!keep_metadata_ && ev.phase == RecordPhase::Metadata))
                 continue;
             events_.push_back(ev);
         }

@@ -18,45 +18,45 @@ namespace dftracer::utils {
 
 /// Coarse error category
 enum class ErrorCode {
-    UNKNOWN,           ///< unclassified
-    INTERNAL,          ///< broken invariant / bug
-    INVALID_ARGUMENT,  ///< bad caller input
-    NOT_FOUND,         ///< missing file / key / entity
-    IO,                ///< filesystem / I/O failure
-    PARSE,             ///< parse / decode failure (JSON, format, ...)
-    COMPRESSION,       ///< (de)compression failure / corrupt compressed data
-    DUQL,              ///< duql error
-    READER,            ///< reader subsystem
-    INDEXER,           ///< indexer subsystem
-    PIPELINE,          ///< pipeline / executor
-    AGGREGATION,       ///< aggregation subsystem
+    Unknown,          ///< unclassified
+    Internal,         ///< broken invariant / bug
+    InvalidArgument,  ///< bad caller input
+    NotFound,         ///< missing file / key / entity
+    Io,               ///< filesystem / I/O failure
+    Parse,            ///< parse / decode failure (JSON, format, ...)
+    Compression,      ///< (de)compression failure / corrupt compressed data
+    Duql,             ///< duql error
+    Reader,           ///< reader subsystem
+    Indexer,          ///< indexer subsystem
+    Pipeline,         ///< pipeline / executor
+    Aggregation,      ///< aggregation subsystem
 };
 
 inline const char* error_code_name(ErrorCode code) noexcept {
     switch (code) {
-        case ErrorCode::UNKNOWN:
+        case ErrorCode::Unknown:
             return "UNKNOWN";
-        case ErrorCode::INTERNAL:
+        case ErrorCode::Internal:
             return "INTERNAL";
-        case ErrorCode::INVALID_ARGUMENT:
+        case ErrorCode::InvalidArgument:
             return "INVALID_ARGUMENT";
-        case ErrorCode::NOT_FOUND:
+        case ErrorCode::NotFound:
             return "NOT_FOUND";
-        case ErrorCode::IO:
+        case ErrorCode::Io:
             return "IO";
-        case ErrorCode::PARSE:
+        case ErrorCode::Parse:
             return "PARSE";
-        case ErrorCode::COMPRESSION:
+        case ErrorCode::Compression:
             return "COMPRESSION";
-        case ErrorCode::DUQL:
+        case ErrorCode::Duql:
             return "DUQL";
-        case ErrorCode::READER:
+        case ErrorCode::Reader:
             return "READER";
-        case ErrorCode::INDEXER:
+        case ErrorCode::Indexer:
             return "INDEXER";
-        case ErrorCode::PIPELINE:
+        case ErrorCode::Pipeline:
             return "PIPELINE";
-        case ErrorCode::AGGREGATION:
+        case ErrorCode::Aggregation:
             return "AGGREGATION";
     }
     return "UNKNOWN";
@@ -126,26 +126,26 @@ constexpr const char* condition_name(Condition c) noexcept {
 /// Legacy ErrorCode -> portable condition (subsystem codes fold to Internal).
 constexpr Condition condition_of(ErrorCode c) noexcept {
     switch (c) {
-        case ErrorCode::UNKNOWN:
+        case ErrorCode::Unknown:
             return Condition::Unknown;
-        case ErrorCode::INTERNAL:
+        case ErrorCode::Internal:
             return Condition::Internal;
-        case ErrorCode::INVALID_ARGUMENT:
+        case ErrorCode::InvalidArgument:
             return Condition::InvalidArgument;
-        case ErrorCode::NOT_FOUND:
+        case ErrorCode::NotFound:
             return Condition::NotFound;
-        case ErrorCode::IO:
+        case ErrorCode::Io:
             return Condition::Io;
-        case ErrorCode::PARSE:
+        case ErrorCode::Parse:
             return Condition::Parse;
-        case ErrorCode::COMPRESSION:
+        case ErrorCode::Compression:
             return Condition::Compression;
-        case ErrorCode::DUQL:
+        case ErrorCode::Duql:
             return Condition::InvalidArgument;
-        case ErrorCode::READER:
-        case ErrorCode::INDEXER:
-        case ErrorCode::PIPELINE:
-        case ErrorCode::AGGREGATION:
+        case ErrorCode::Reader:
+        case ErrorCode::Indexer:
+        case ErrorCode::Pipeline:
+        case ErrorCode::Aggregation:
             return Condition::Internal;
     }
     return Condition::Unknown;
@@ -156,30 +156,30 @@ constexpr Condition condition_of(ErrorCode c) noexcept {
 constexpr ErrorCode errorcode_of(Condition c) noexcept {
     switch (c) {
         case Condition::Unknown:
-            return ErrorCode::UNKNOWN;
+            return ErrorCode::Unknown;
         case Condition::Internal:
-            return ErrorCode::INTERNAL;
+            return ErrorCode::Internal;
         case Condition::InvalidArgument:
-            return ErrorCode::INVALID_ARGUMENT;
+            return ErrorCode::InvalidArgument;
         case Condition::NotFound:
-            return ErrorCode::NOT_FOUND;
+            return ErrorCode::NotFound;
         case Condition::Io:
-            return ErrorCode::IO;
+            return ErrorCode::Io;
         case Condition::Parse:
-            return ErrorCode::PARSE;
+            return ErrorCode::Parse;
         case Condition::Compression:
-            return ErrorCode::COMPRESSION;
+            return ErrorCode::Compression;
         case Condition::Timeout:
         case Condition::Unsupported:
         case Condition::Cancelled:
-            return ErrorCode::UNKNOWN;
+            return ErrorCode::Unknown;
     }
-    return ErrorCode::UNKNOWN;
+    return ErrorCode::Unknown;
 }
 
 /// Error as a value (travels inside Result<T>); see DFTUtilsException to throw.
 struct DFTUtilsError {
-    ErrorCode code = ErrorCode::UNKNOWN;
+    ErrorCode code = ErrorCode::Unknown;
     std::string message;
 
     DFTUtilsError() = default;

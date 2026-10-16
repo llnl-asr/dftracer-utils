@@ -11,16 +11,16 @@ namespace dftracer::utils::index::store {
 class IndexerError : public DFTUtilsException {
    public:
     enum Type {
-        DATABASE_ERROR,
-        FILE_ERROR,
-        COMPRESSION_ERROR,
-        INVALID_ARGUMENT,
-        BUILD_ERROR,
-        UNKNOWN_ERROR
+        DatabaseError,
+        FileError,
+        CompressionError,
+        InvalidArgument,
+        BuildError,
+        UnknownError
     };
 
     IndexerError(Type type, const std::string &message)
-        : DFTUtilsException(ErrorCode::INDEXER, format_message(type, message)),
+        : DFTUtilsException(ErrorCode::Indexer, format_message(type, message)),
           type_(type) {}
 
     inline Type type() const { return type_; }

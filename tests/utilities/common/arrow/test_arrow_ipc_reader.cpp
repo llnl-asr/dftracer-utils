@@ -24,7 +24,7 @@ static std::string tmp_path(const char* name) {
 
 static void write_test_file(const std::string& path, int num_batches,
                             int rows_per_batch,
-                            IpcCompression compression = IpcCompression::NONE) {
+                            IpcCompression compression = IpcCompression::None) {
     Runtime runtime(2);
 
     auto task = [&]() -> CoroTask<void> {
@@ -33,9 +33,9 @@ static void write_test_file(const std::string& path, int num_batches,
         if (rc != 0) co_return;
 
         RecordBatchBuilder builder;
-        builder.declare_schema({{"id", ColumnType::INT64},
-                                {"name", ColumnType::STRING},
-                                {"value", ColumnType::DOUBLE}});
+        builder.declare_schema({{"id", ColumnType::Int64},
+                                {"name", ColumnType::String},
+                                {"value", ColumnType::Double}});
 
         for (int b = 0; b < num_batches; ++b) {
             builder.reserve(rows_per_batch);
@@ -231,7 +231,7 @@ TEST_CASE("IpcReader - read ZSTD compressed file") {
     std::string path = tmp_path("test_ipc_reader_zstd.arrow");
     std::remove(path.c_str());
 
-    write_test_file(path, 3, 50, IpcCompression::ZSTD);
+    write_test_file(path, 3, 50, IpcCompression::Zstd);
 
     IpcReader reader;
     CHECK(reader.open(path) == 0);
@@ -261,14 +261,14 @@ TEST_CASE("IpcReader - roundtrip with all column types") {
 
         auto task = [&]() -> CoroTask<void> {
             IpcWriter writer;
-            co_await writer.open(path, IpcCompression::NONE);
+            co_await writer.open(path, IpcCompression::None);
 
             RecordBatchBuilder builder;
-            builder.declare_schema({{"i64", ColumnType::INT64},
-                                    {"u64", ColumnType::UINT64},
-                                    {"f64", ColumnType::DOUBLE},
-                                    {"str", ColumnType::STRING},
-                                    {"boo", ColumnType::BOOL}});
+            builder.declare_schema({{"i64", ColumnType::Int64},
+                                    {"u64", ColumnType::Uint64},
+                                    {"f64", ColumnType::Double},
+                                    {"str", ColumnType::String},
+                                    {"boo", ColumnType::Bool}});
 
             builder.reserve(3);
             for (int i = 0; i < 3; ++i) {
@@ -501,8 +501,8 @@ TEST_CASE("read_arrow_files_parallel - mixed compression") {
     std::string path_none = dir + "/none.arrow";
     std::string path_zstd = dir + "/zstd.arrow";
 
-    write_test_file(path_none, 2, 30, IpcCompression::NONE);
-    write_test_file(path_zstd, 2, 30, IpcCompression::ZSTD);
+    write_test_file(path_none, 2, 30, IpcCompression::None);
+    write_test_file(path_zstd, 2, 30, IpcCompression::Zstd);
 
     Runtime runtime(2);
 

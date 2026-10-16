@@ -47,8 +47,8 @@ struct PluginTraceWriter {
 // graph. Leaf nodes carry the plugin callback + owned state; combinator nodes
 // carry their children. Arena-owned by PluginFold (scan-lifetime).
 struct ComposeOp {
-    enum class Kind { LEAF, THEN, WHEN_ALL, WHEN_ANY };
-    Kind kind = Kind::LEAF;
+    enum class Kind { Leaf, Then, WhenAll, WhenAny };
+    Kind kind = Kind::Leaf;
     dftu_op_fn fn = nullptr;
     void* state = nullptr;
     void (*free_state)(void*) = nullptr;

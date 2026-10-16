@@ -61,18 +61,18 @@ void require_role(const ViewPlan& plan, std::string_view op, TraceRole role) {
     const auto& record_schema = plan_record_schema(plan);
     auto need = [&](const std::string& path, std::string_view name) {
         if (path.empty())
-            throw DFTUtilsException::cat(ErrorCode::INVALID_ARGUMENT, op,
+            throw DFTUtilsException::cat(ErrorCode::InvalidArgument, op,
                                          " needs a ", name, " role; schema ",
                                          record_schema.id, " binds none");
     };
     need(record_schema.roles.time, "time");
-    if (role == TraceRole::DURATION)
+    if (role == TraceRole::Duration)
         need(record_schema.roles.duration, "duration");
 }
 
 bool plan_by_path(const ViewPlan& plan) {
     return plan_record_schema(plan).decoder ==
-           dftracer::utils::index::Decoder::PATH;
+           dftracer::utils::index::Decoder::Path;
 }
 
 namespace {
@@ -83,20 +83,20 @@ std::optional<duql::Query> phase_query(const ViewPlan& plan) {
         if (plan.phase == Phase::Events || plan.phase == Phase::Any)
             return plan.query;
         throw DFTUtilsException(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             "record schema '" + plan_record_schema(plan).id +
                 "' decodes records by path, which have no phase; only the "
                 "events phase (every record) applies");
     }
     RecordPhase rp;
     if (plan.phase == Phase::Events) {
-        rp = RecordPhase::COMPLETE;
+        rp = RecordPhase::Complete;
     } else if (plan.phase == Phase::Counters) {
-        rp = RecordPhase::COUNTER;
+        rp = RecordPhase::Counter;
     } else if (plan.phase == Phase::Aggregated) {
-        rp = RecordPhase::AGGREGATED;
+        rp = RecordPhase::Aggregated;
     } else if (plan.phase == Phase::Metadata) {
-        rp = RecordPhase::METADATA;
+        rp = RecordPhase::Metadata;
     } else {
         return plan.query;
     }
@@ -198,7 +198,7 @@ void add_time_conditions(const ViewPlan& plan, ViewDefinition& vdef) {
     // ISO-8601 text times are compared after decoding, not on the raw record.
     const auto* time_field = plan_record_schema(plan).field_at(vdef.time_path);
     if (time_field &&
-        time_field->type == dftracer::utils::index::FieldType::STRING)
+        time_field->type == dftracer::utils::index::FieldType::String)
         return;
     std::vector<std::string> conds;
     auto bound = [&](const char* op, double v) {
@@ -324,7 +324,7 @@ coro::CoroTask<std::vector<ScanUnit>> gather_units(const ViewPlan& plan,
                         // its events from the result.
                         if (!md.success)
                             throw DFTUtilsException(
-                                ErrorCode::IO,
+                                ErrorCode::Io,
                                 "gather_units: metadata read failed for " +
                                     f.file_path + ": " + md.error_message);
                         uc_size = md.uncompressed_size;
@@ -420,7 +420,7 @@ bool any_file_missing_catalog(const ViewPlan& plan) {
             if (fid < 0 ||
                 !db.extension_current(
                     fid,
-                    dftracer::utils::index::store::IndexExtension::CATALOG))
+                    dftracer::utils::index::store::IndexExtension::Catalog))
                 return true;
         } catch (const std::exception&) {
             return true;
@@ -453,7 +453,7 @@ std::unique_ptr<Fold> select_catalog_fold(
     if (plan.files.empty() || !any_file_missing_catalog(plan)) return nullptr;
     auto fold = std::make_unique<ix::extensions::CatalogFold>(
         intern, ix::build::for_schema({}, plan_record_schema(plan))
-                    .params_hash(ix::store::IndexExtension::CATALOG));
+                    .params_hash(ix::store::IndexExtension::Catalog));
     if (!fold->accepts(scan_shape(vdef))) return nullptr;
     return fold;
 }

@@ -278,7 +278,7 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
     // window.
     const VizSummary* s = co_await ensure_viz_summary(index);
     auto to_native = [&](double us) {
-        return index.time_metric() == TraceIndex::TimeMetric::US
+        return index.time_metric() == TraceIndex::TimeMetric::Us
                    ? us
                    : static_cast<double>(
                          index.us_to_native(static_cast<std::uint64_t>(us)));

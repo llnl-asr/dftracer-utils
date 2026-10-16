@@ -33,23 +33,23 @@ std::vector<std::pair<std::string, std::uint64_t>> top_n(const Map& m,
 
 const char* query_type_to_string(StatisticsQueryType t) {
     switch (t) {
-        case StatisticsQueryType::SUMMARY:
+        case StatisticsQueryType::Summary:
             return "summary";
-        case StatisticsQueryType::CATEGORIES:
+        case StatisticsQueryType::Categories:
             return "categories";
-        case StatisticsQueryType::NAMES:
+        case StatisticsQueryType::Names:
             return "names";
-        case StatisticsQueryType::PID_TIDS:
+        case StatisticsQueryType::PidTids:
             return "pid_tids";
-        case StatisticsQueryType::TIME_RANGE:
+        case StatisticsQueryType::TimeRange:
             return "time_range";
-        case StatisticsQueryType::DURATION_STATS:
+        case StatisticsQueryType::DurationStats:
             return "duration_stats";
-        case StatisticsQueryType::TOP_N_NAMES:
+        case StatisticsQueryType::TopNNames:
             return "top_n_names";
-        case StatisticsQueryType::TOP_N_CATEGORIES:
+        case StatisticsQueryType::TopNCategories:
             return "top_n_categories";
-        case StatisticsQueryType::DETAILED:
+        case StatisticsQueryType::Detailed:
             return "detailed";
     }
     return "unknown";
@@ -67,7 +67,7 @@ coro::CoroTask<StatisticsQueryOutput> StatisticsQueryUtility::operator()(
     output.query_type_name = query_type_to_string(input.query_type);
 
     switch (input.query_type) {
-        case StatisticsQueryType::SUMMARY:
+        case StatisticsQueryType::Summary:
             output.results = sorted_desc(merged.category_counts);
             if (merged.min_timestamp_us !=
                 std::numeric_limits<std::uint64_t>::max()) {
@@ -85,19 +85,19 @@ coro::CoroTask<StatisticsQueryOutput> StatisticsQueryUtility::operator()(
             output.duration_max_us = merged.duration_max_us;
             break;
 
-        case StatisticsQueryType::CATEGORIES:
+        case StatisticsQueryType::Categories:
             output.results = sorted_desc(merged.category_counts);
             break;
 
-        case StatisticsQueryType::NAMES:
+        case StatisticsQueryType::Names:
             output.results = sorted_desc(merged.name_counts);
             break;
 
-        case StatisticsQueryType::PID_TIDS:
+        case StatisticsQueryType::PidTids:
             output.results = sorted_desc(merged.pid_tid_counts);
             break;
 
-        case StatisticsQueryType::TIME_RANGE:
+        case StatisticsQueryType::TimeRange:
             if (merged.min_timestamp_us !=
                 std::numeric_limits<std::uint64_t>::max()) {
                 output.min_timestamp_us = merged.min_timestamp_us;
@@ -106,7 +106,7 @@ coro::CoroTask<StatisticsQueryOutput> StatisticsQueryUtility::operator()(
             output.time_span_seconds = stats.time_span_seconds();
             break;
 
-        case StatisticsQueryType::DURATION_STATS:
+        case StatisticsQueryType::DurationStats:
             output.duration_count = merged.duration_count;
             output.duration_mean_us = stats.duration_mean_us();
             output.duration_stddev_us = stats.duration_stddev_us();
@@ -117,15 +117,15 @@ coro::CoroTask<StatisticsQueryOutput> StatisticsQueryUtility::operator()(
             output.duration_max_us = merged.duration_max_us;
             break;
 
-        case StatisticsQueryType::TOP_N_NAMES:
+        case StatisticsQueryType::TopNNames:
             output.results = top_n(merged.name_counts, input.top_n);
             break;
 
-        case StatisticsQueryType::TOP_N_CATEGORIES:
+        case StatisticsQueryType::TopNCategories:
             output.results = top_n(merged.category_counts, input.top_n);
             break;
 
-        case StatisticsQueryType::DETAILED:
+        case StatisticsQueryType::Detailed:
             // Detailed queries bypass StatisticsQueryUtility entirely -
             // they fold the scan into DetailedStatistics via DetailStatsView.
             break;

@@ -98,8 +98,8 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
 
         std::size_t max_bytes = reader->get_max_bytes();
         auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::LINE_BYTES)
-                                         .range_type(RangeType::BYTE_RANGE)
+                                         .stream_type(StreamType::LineBytes)
+                                         .range_type(RangeType::ByteRange)
                                          .from(0)
                                          .to(max_bytes));
         REQUIRE(stream != nullptr);
@@ -148,8 +148,8 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
 
         // Read first chunk
         auto stream1 = reader->stream(StreamConfig()
-                                          .stream_type(StreamType::LINE_BYTES)
-                                          .range_type(RangeType::BYTE_RANGE)
+                                          .stream_type(StreamType::LineBytes)
+                                          .range_type(RangeType::ByteRange)
                                           .from(0)
                                           .to(chunk_size));
         REQUIRE(stream1 != nullptr);
@@ -166,8 +166,8 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
 
         // Read second chunk
         auto stream2 = reader->stream(StreamConfig()
-                                          .stream_type(StreamType::LINE_BYTES)
-                                          .range_type(RangeType::BYTE_RANGE)
+                                          .stream_type(StreamType::LineBytes)
+                                          .range_type(RangeType::ByteRange)
                                           .from(chunk_size)
                                           .to(max_bytes));
         REQUIRE(stream2 != nullptr);
@@ -226,8 +226,8 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
 
         // Read first half
         auto stream1 = reader->stream(StreamConfig()
-                                          .stream_type(StreamType::LINE_BYTES)
-                                          .range_type(RangeType::BYTE_RANGE)
+                                          .stream_type(StreamType::LineBytes)
+                                          .range_type(RangeType::ByteRange)
                                           .from(0)
                                           .to(mid_point));
         std::string chunk1;
@@ -241,8 +241,8 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
 
         // Read second half
         auto stream2 = reader->stream(StreamConfig()
-                                          .stream_type(StreamType::LINE_BYTES)
-                                          .range_type(RangeType::BYTE_RANGE)
+                                          .stream_type(StreamType::LineBytes)
+                                          .range_type(RangeType::ByteRange)
                                           .from(mid_point)
                                           .to(max_bytes));
         std::string chunk2;
@@ -257,8 +257,8 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
         // Read full file
         auto stream_full =
             reader->stream(StreamConfig()
-                               .stream_type(StreamType::LINE_BYTES)
-                               .range_type(RangeType::BYTE_RANGE)
+                               .stream_type(StreamType::LineBytes)
+                               .range_type(RangeType::ByteRange)
                                .from(0)
                                .to(max_bytes));
         std::string full;
@@ -331,12 +331,11 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
             std::size_t end =
                 (i == num_chunks - 1) ? max_bytes : (i + 1) * chunk_size;
 
-            auto stream =
-                reader->stream(StreamConfig()
-                                   .stream_type(StreamType::LINE_BYTES)
-                                   .range_type(RangeType::BYTE_RANGE)
-                                   .from(start)
-                                   .to(end));
+            auto stream = reader->stream(StreamConfig()
+                                             .stream_type(StreamType::LineBytes)
+                                             .range_type(RangeType::ByteRange)
+                                             .from(start)
+                                             .to(end));
             REQUIRE(stream != nullptr);
 
             std::string chunk;
@@ -430,8 +429,8 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
 
                     auto stream =
                         reader->stream(StreamConfig()
-                                           .stream_type(StreamType::LINE_BYTES)
-                                           .range_type(RangeType::BYTE_RANGE)
+                                           .stream_type(StreamType::LineBytes)
+                                           .range_type(RangeType::ByteRange)
                                            .from(start)
                                            .to(end));
                     if (!stream) {
@@ -541,8 +540,8 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
 
                     auto stream =
                         reader->stream(StreamConfig()
-                                           .stream_type(StreamType::LINE_BYTES)
-                                           .range_type(RangeType::BYTE_RANGE)
+                                           .stream_type(StreamType::LineBytes)
+                                           .range_type(RangeType::ByteRange)
                                            .from(start)
                                            .to(end));
                     if (!stream) {
@@ -640,8 +639,8 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
 
                     auto stream =
                         reader->stream(StreamConfig()
-                                           .stream_type(StreamType::LINE_BYTES)
-                                           .range_type(RangeType::BYTE_RANGE)
+                                           .stream_type(StreamType::LineBytes)
+                                           .range_type(RangeType::ByteRange)
                                            .from(0)
                                            .to(max_bytes));
                     if (!stream) {
@@ -722,8 +721,8 @@ TEST_CASE("LINE_BYTES Stream - Edge Cases") {
 
         std::size_t max_bytes = reader->get_max_bytes();
         auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::LINE_BYTES)
-                                         .range_type(RangeType::BYTE_RANGE)
+                                         .stream_type(StreamType::LineBytes)
+                                         .range_type(RangeType::ByteRange)
                                          .from(0)
                                          .to(max_bytes));
         REQUIRE(stream != nullptr);
@@ -778,13 +777,13 @@ TEST_CASE("LINE_BYTES Stream - Edge Cases") {
         std::size_t mid = max_bytes / 2;
 
         auto stream1 = reader->stream(StreamConfig()
-                                          .stream_type(StreamType::LINE_BYTES)
-                                          .range_type(RangeType::BYTE_RANGE)
+                                          .stream_type(StreamType::LineBytes)
+                                          .range_type(RangeType::ByteRange)
                                           .from(0)
                                           .to(mid));
         auto stream2 = reader->stream(StreamConfig()
-                                          .stream_type(StreamType::LINE_BYTES)
-                                          .range_type(RangeType::BYTE_RANGE)
+                                          .stream_type(StreamType::LineBytes)
+                                          .range_type(RangeType::ByteRange)
                                           .from(mid)
                                           .to(max_bytes));
 
@@ -836,8 +835,8 @@ TEST_CASE("LINE_BYTES Stream - Edge Cases") {
 
         // Request empty range
         auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::LINE_BYTES)
-                                         .range_type(RangeType::BYTE_RANGE)
+                                         .stream_type(StreamType::LineBytes)
+                                         .range_type(RangeType::ByteRange)
                                          .from(100)
                                          .to(100));
         REQUIRE(stream != nullptr);
@@ -892,8 +891,8 @@ TEST_CASE("LINE_BYTES Stream - Arbitrary Boundary Tests" *
             // Read chunk 1: [0, 4194304)
             auto stream1 =
                 reader->stream(StreamConfig()
-                                   .stream_type(StreamType::LINE_BYTES)
-                                   .range_type(RangeType::BYTE_RANGE)
+                                   .stream_type(StreamType::LineBytes)
+                                   .range_type(RangeType::ByteRange)
                                    .from(0)
                                    .to(boundary));
             std::string chunk1;
@@ -908,8 +907,8 @@ TEST_CASE("LINE_BYTES Stream - Arbitrary Boundary Tests" *
             // Read chunk 2: [4194304, end)
             auto stream2 =
                 reader->stream(StreamConfig()
-                                   .stream_type(StreamType::LINE_BYTES)
-                                   .range_type(RangeType::BYTE_RANGE)
+                                   .stream_type(StreamType::LineBytes)
+                                   .range_type(RangeType::ByteRange)
                                    .from(boundary)
                                    .to(max_bytes));
             std::string chunk2;
@@ -972,14 +971,14 @@ TEST_CASE("LINE_BYTES Stream - Arbitrary Boundary Tests" *
 
             auto stream1 =
                 reader->stream(StreamConfig()
-                                   .stream_type(StreamType::LINE_BYTES)
-                                   .range_type(RangeType::BYTE_RANGE)
+                                   .stream_type(StreamType::LineBytes)
+                                   .range_type(RangeType::ByteRange)
                                    .from(0)
                                    .to(boundary));
             auto stream2 =
                 reader->stream(StreamConfig()
-                                   .stream_type(StreamType::LINE_BYTES)
-                                   .range_type(RangeType::BYTE_RANGE)
+                                   .stream_type(StreamType::LineBytes)
+                                   .range_type(RangeType::ByteRange)
                                    .from(boundary)
                                    .to(max_bytes));
             std::string chunk1, chunk2;
@@ -1002,8 +1001,8 @@ TEST_CASE("LINE_BYTES Stream - Arbitrary Boundary Tests" *
             // Read full file for comparison
             auto stream_full =
                 reader->stream(StreamConfig()
-                                   .stream_type(StreamType::LINE_BYTES)
-                                   .range_type(RangeType::BYTE_RANGE)
+                                   .stream_type(StreamType::LineBytes)
+                                   .range_type(RangeType::ByteRange)
                                    .from(0)
                                    .to(max_bytes));
             std::string full;
@@ -1063,13 +1062,13 @@ TEST_CASE("LINE_BYTES Stream - Arbitrary Boundary Tests" *
             if (boundary == 0 || boundary >= max_bytes) continue;
 
             auto s1 = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::LINE_BYTES)
-                                         .range_type(RangeType::BYTE_RANGE)
+                                         .stream_type(StreamType::LineBytes)
+                                         .range_type(RangeType::ByteRange)
                                          .from(0)
                                          .to(boundary));
             auto s2 = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::LINE_BYTES)
-                                         .range_type(RangeType::BYTE_RANGE)
+                                         .stream_type(StreamType::LineBytes)
+                                         .range_type(RangeType::ByteRange)
                                          .from(boundary)
                                          .to(max_bytes));
 
@@ -1126,12 +1125,11 @@ TEST_CASE("LINE_BYTES Stream - Multiple Worker Counts") {
         std::size_t max_bytes = reader->get_max_bytes();
 
         // Read full file once for reference
-        auto stream_ref =
-            reader->stream(StreamConfig()
-                               .stream_type(StreamType::LINE_BYTES)
-                               .range_type(RangeType::BYTE_RANGE)
-                               .from(0)
-                               .to(max_bytes));
+        auto stream_ref = reader->stream(StreamConfig()
+                                             .stream_type(StreamType::LineBytes)
+                                             .range_type(RangeType::ByteRange)
+                                             .from(0)
+                                             .to(max_bytes));
         std::vector<char> buffer(512 * 1024);
         std::string full_content;
         while (!stream_ref->done()) {
@@ -1172,8 +1170,8 @@ TEST_CASE("LINE_BYTES Stream - Multiple Worker Counts") {
 
                     auto stream = thread_reader->stream(
                         StreamConfig()
-                            .stream_type(StreamType::LINE_BYTES)
-                            .range_type(RangeType::BYTE_RANGE)
+                            .stream_type(StreamType::LineBytes)
+                            .range_type(RangeType::ByteRange)
                             .from(start)
                             .to(end));
                     if (!stream) return;
@@ -1248,12 +1246,11 @@ TEST_CASE("LINE_BYTES Stream - Event Ordering Verification") {
             std::size_t start = i * chunk_size;
             std::size_t end = (i == 7) ? max_bytes : (i + 1) * chunk_size;
 
-            auto stream =
-                reader->stream(StreamConfig()
-                                   .stream_type(StreamType::LINE_BYTES)
-                                   .range_type(RangeType::BYTE_RANGE)
-                                   .from(start)
-                                   .to(end));
+            auto stream = reader->stream(StreamConfig()
+                                             .stream_type(StreamType::LineBytes)
+                                             .range_type(RangeType::ByteRange)
+                                             .from(start)
+                                             .to(end));
             std::string chunk;
             while (!stream->done()) {
                 std::size_t bytes_read =
@@ -1266,12 +1263,11 @@ TEST_CASE("LINE_BYTES Stream - Event Ordering Verification") {
         }
 
         // Read sequentially
-        auto stream_seq =
-            reader->stream(StreamConfig()
-                               .stream_type(StreamType::LINE_BYTES)
-                               .range_type(RangeType::BYTE_RANGE)
-                               .from(0)
-                               .to(max_bytes));
+        auto stream_seq = reader->stream(StreamConfig()
+                                             .stream_type(StreamType::LineBytes)
+                                             .range_type(RangeType::ByteRange)
+                                             .from(0)
+                                             .to(max_bytes));
         std::string sequential;
         while (!stream_seq->done()) {
             std::size_t bytes_read =
@@ -1347,8 +1343,8 @@ TEST_CASE("LINE_BYTES Stream - Buffer Size Tests") {
         // Read full file with default buffer to get reference
         auto ref_stream =
             reference_reader->stream(StreamConfig()
-                                         .stream_type(StreamType::LINE_BYTES)
-                                         .range_type(RangeType::BYTE_RANGE)
+                                         .stream_type(StreamType::LineBytes)
+                                         .range_type(RangeType::ByteRange)
                                          .from(0)
                                          .to(max_bytes)
                                          .buffer_size(0));  // Use default
@@ -1390,13 +1386,12 @@ TEST_CASE("LINE_BYTES Stream - Buffer Size Tests") {
             REQUIRE(reader != nullptr);
 
             // Test reading full file with this buffer size
-            auto stream =
-                reader->stream(StreamConfig()
-                                   .stream_type(StreamType::LINE_BYTES)
-                                   .range_type(RangeType::BYTE_RANGE)
-                                   .from(0)
-                                   .to(max_bytes)
-                                   .buffer_size(buf_size));
+            auto stream = reader->stream(StreamConfig()
+                                             .stream_type(StreamType::LineBytes)
+                                             .range_type(RangeType::ByteRange)
+                                             .from(0)
+                                             .to(max_bytes)
+                                             .buffer_size(buf_size));
 
             std::string content;
             while (!stream->done()) {
@@ -1461,8 +1456,8 @@ TEST_CASE("LINE_BYTES Stream - Buffer Size Tests") {
                 auto reader = ReaderFactory::create(gz_file, idx_file);
                 auto stream1 =
                     reader->stream(StreamConfig()
-                                       .stream_type(StreamType::LINE_BYTES)
-                                       .range_type(RangeType::BYTE_RANGE)
+                                       .stream_type(StreamType::LineBytes)
+                                       .range_type(RangeType::ByteRange)
                                        .from(0)
                                        .to(mid_point)
                                        .buffer_size(buf_size));
@@ -1483,8 +1478,8 @@ TEST_CASE("LINE_BYTES Stream - Buffer Size Tests") {
                 auto reader = ReaderFactory::create(gz_file, idx_file);
                 auto stream2 =
                     reader->stream(StreamConfig()
-                                       .stream_type(StreamType::LINE_BYTES)
-                                       .range_type(RangeType::BYTE_RANGE)
+                                       .stream_type(StreamType::LineBytes)
+                                       .range_type(RangeType::ByteRange)
                                        .from(mid_point)
                                        .to(max_bytes)
                                        .buffer_size(buf_size));
@@ -1505,8 +1500,8 @@ TEST_CASE("LINE_BYTES Stream - Buffer Size Tests") {
                 auto reader = ReaderFactory::create(gz_file, idx_file);
                 auto stream_full =
                     reader->stream(StreamConfig()
-                                       .stream_type(StreamType::LINE_BYTES)
-                                       .range_type(RangeType::BYTE_RANGE)
+                                       .stream_type(StreamType::LineBytes)
+                                       .range_type(RangeType::ByteRange)
                                        .from(0)
                                        .to(max_bytes)
                                        .buffer_size(buf_size));

@@ -52,7 +52,7 @@ Pipeline::~Pipeline() {
 
 void Pipeline::set_source(std::shared_ptr<Task> source) {
     if (!source) {
-        throw PipelineError(PipelineError::VALIDATION_ERROR,
+        throw PipelineError(PipelineError::ValidationError,
                             "Source task cannot be null");
     }
     source_ = source;
@@ -67,7 +67,7 @@ void Pipeline::set_destination(std::shared_ptr<Task> destination) {
 void Pipeline::set_source(
     std::initializer_list<std::shared_ptr<Task>> sources) {
     if (sources.size() == 0) {
-        throw PipelineError(PipelineError::VALIDATION_ERROR,
+        throw PipelineError(PipelineError::ValidationError,
                             "Cannot set zero sources");
     }
 
@@ -79,7 +79,7 @@ void Pipeline::set_source(
     auto noop = make_noop_task("__start__");
     for (auto& source : sources) {
         if (!source) {
-            throw PipelineError(PipelineError::VALIDATION_ERROR,
+            throw PipelineError(PipelineError::ValidationError,
                                 "Source task cannot be null");
         }
         source->depends_on(noop);
@@ -92,7 +92,7 @@ void Pipeline::set_source(
 void Pipeline::set_destination(
     std::initializer_list<std::shared_ptr<Task>> destinations) {
     if (destinations.size() == 0) {
-        throw PipelineError(PipelineError::VALIDATION_ERROR,
+        throw PipelineError(PipelineError::ValidationError,
                             "Cannot set zero destinations");
     }
 
@@ -104,7 +104,7 @@ void Pipeline::set_destination(
     auto noop = make_noop_task("__end__");
     for (auto& dest : destinations) {
         if (!dest) {
-            throw PipelineError(PipelineError::VALIDATION_ERROR,
+            throw PipelineError(PipelineError::ValidationError,
                                 "Destination task cannot be null");
         }
         noop->depends_on(dest);
@@ -116,7 +116,7 @@ void Pipeline::set_destination(
 
 void Pipeline::set_source(const std::vector<std::shared_ptr<Task>>& sources) {
     if (sources.empty()) {
-        throw PipelineError(PipelineError::VALIDATION_ERROR,
+        throw PipelineError(PipelineError::ValidationError,
                             "Cannot set zero sources");
     }
 
@@ -128,7 +128,7 @@ void Pipeline::set_source(const std::vector<std::shared_ptr<Task>>& sources) {
     auto noop = make_noop_task("__start__");
     for (const auto& source : sources) {
         if (!source) {
-            throw PipelineError(PipelineError::VALIDATION_ERROR,
+            throw PipelineError(PipelineError::ValidationError,
                                 "Source task cannot be null");
         }
         source->depends_on(noop);
@@ -141,7 +141,7 @@ void Pipeline::set_source(const std::vector<std::shared_ptr<Task>>& sources) {
 void Pipeline::set_destination(
     const std::vector<std::shared_ptr<Task>>& destinations) {
     if (destinations.empty()) {
-        throw PipelineError(PipelineError::VALIDATION_ERROR,
+        throw PipelineError(PipelineError::ValidationError,
                             "Cannot set zero destinations");
     }
 
@@ -153,7 +153,7 @@ void Pipeline::set_destination(
     auto noop = make_noop_task("__end__");
     for (const auto& dest : destinations) {
         if (!dest) {
-            throw PipelineError(PipelineError::VALIDATION_ERROR,
+            throw PipelineError(PipelineError::ValidationError,
                                 "Destination task cannot be null");
         }
         noop->depends_on(dest);
@@ -194,7 +194,7 @@ bool Pipeline::validate() {
 PipelineOutput Pipeline::execute(const std::any& input) {
     if (!validated_) {
         if (!validate()) {
-            throw PipelineError(PipelineError::VALIDATION_ERROR,
+            throw PipelineError(PipelineError::ValidationError,
                                 "Pipeline validation failed");
         }
     }
@@ -216,7 +216,7 @@ PipelineOutput Pipeline::execute(const std::any& input) {
         try {
             output[destination_->get_id()] = destination_->result().get();
         } catch (...) {
-            if (error_policy_ == ErrorPolicy::FAIL_FAST) {
+            if (error_policy_ == ErrorPolicy::FailFast) {
                 throw;
             }
         }
@@ -226,7 +226,7 @@ PipelineOutput Pipeline::execute(const std::any& input) {
                 try {
                     output[task->get_id()] = task->result().get();
                 } catch (...) {
-                    if (error_policy_ == ErrorPolicy::FAIL_FAST) {
+                    if (error_policy_ == ErrorPolicy::FailFast) {
                         throw;
                     }
                 }

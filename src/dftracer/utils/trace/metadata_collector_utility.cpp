@@ -34,7 +34,7 @@ MetadataCollectorUtility::operator()(
         if (file_path.size() <= 3 ||
             file_path.substr(file_path.size() - 3) != ".gz") {
             throw DFTUtilsException(
-                ErrorCode::INVALID_ARGUMENT,
+                ErrorCode::InvalidArgument,
                 "Not a gzip trace: " + file_path +
                     " (dftracer traces must be gzip-compressed)");
         }

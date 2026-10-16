@@ -825,44 +825,44 @@ static void run_pipe_write_on_backend(io::IoBackendType type,
 }
 
 TEST_CASE("AsyncIO - lifecycle on threadpool backend (forced)") {
-    run_lifecycle_on_backend(io::IoBackendType::THREADPOOL, "threadpool");
+    run_lifecycle_on_backend(io::IoBackendType::Threadpool, "threadpool");
 }
 
 TEST_CASE("AsyncIO - pipe write on threadpool backend (forced)") {
-    run_pipe_write_on_backend(io::IoBackendType::THREADPOOL, "threadpool");
+    run_pipe_write_on_backend(io::IoBackendType::Threadpool, "threadpool");
 }
 
 #ifdef __linux__
 TEST_CASE("AsyncIO - lifecycle on epoll+threadpool backend (forced)") {
-    run_lifecycle_on_backend(io::IoBackendType::EPOLL_THREADPOOL,
+    run_lifecycle_on_backend(io::IoBackendType::EpollThreadpool,
                              "epoll+threadpool");
 }
 
 TEST_CASE("AsyncIO - pipe write on epoll+threadpool backend (forced)") {
-    run_pipe_write_on_backend(io::IoBackendType::EPOLL_THREADPOOL,
+    run_pipe_write_on_backend(io::IoBackendType::EpollThreadpool,
                               "epoll+threadpool");
 }
 #endif
 
 #ifdef DFTRACER_UTILS_HAVE_IO_URING
 TEST_CASE("AsyncIO - lifecycle on io_uring backend (forced)") {
-    run_lifecycle_on_backend(io::IoBackendType::IO_URING, "io_uring");
+    run_lifecycle_on_backend(io::IoBackendType::IoUring, "io_uring");
 }
 
 TEST_CASE("AsyncIO - pipe write on io_uring backend (forced)") {
-    run_pipe_write_on_backend(io::IoBackendType::IO_URING, "io_uring");
+    run_pipe_write_on_backend(io::IoBackendType::IoUring, "io_uring");
 }
 #endif
 
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
     defined(__NetBSD__) || defined(__DragonFly__)
 TEST_CASE("AsyncIO - lifecycle on kqueue+threadpool backend (forced)") {
-    run_lifecycle_on_backend(io::IoBackendType::KQUEUE_THREADPOOL,
+    run_lifecycle_on_backend(io::IoBackendType::KqueueThreadpool,
                              "kqueue+threadpool");
 }
 
 TEST_CASE("AsyncIO - pipe write on kqueue+threadpool backend (forced)") {
-    run_pipe_write_on_backend(io::IoBackendType::KQUEUE_THREADPOOL,
+    run_pipe_write_on_backend(io::IoBackendType::KqueueThreadpool,
                               "kqueue+threadpool");
 }
 #endif

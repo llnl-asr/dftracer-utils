@@ -14,7 +14,7 @@ std::atomic<std::uint64_t> g_scan_morsels{0};
 // What a morsel needs of the rows before it: the last valid value the op
 // produced (a running op: the value after it equals the op over the rows
 // so far), or the last rows of its input (a positional op).
-enum class Carry { OUTPUT, INPUT };
+enum class Carry { Output, Input };
 
 struct ScanOp {
     std::string_view name;
@@ -25,13 +25,13 @@ struct ScanOp {
 };
 
 constexpr ScanOp SCAN_OPS[] = {
-    {"dftu.series.cumsum", true, Carry::OUTPUT},
-    {"dftu.series.cum_prod", true, Carry::OUTPUT},
-    {"dftu.series.cummax", true, Carry::OUTPUT},
-    {"dftu.series.cummin", true, Carry::OUTPUT},
-    {"dftu.series.ffill", false, Carry::OUTPUT},
-    {"dftu.series.diff", false, Carry::INPUT},
-    {"dftu.series.shift", false, Carry::INPUT},
+    {"dftu.series.cumsum", true, Carry::Output},
+    {"dftu.series.cum_prod", true, Carry::Output},
+    {"dftu.series.cummax", true, Carry::Output},
+    {"dftu.series.cummin", true, Carry::Output},
+    {"dftu.series.ffill", false, Carry::Output},
+    {"dftu.series.diff", false, Carry::Input},
+    {"dftu.series.shift", false, Carry::Input},
 };
 
 std::int64_t scalar_to_i64(const dftu_scalar& s) {
@@ -106,7 +106,7 @@ class ColumnScanCursor : public Cursor {
             throw std::runtime_error(
                 "lazy frame op 'dftu.frame.column_op' failed: the op is not "
                 "row for row");
-        if (carry_mode_ == Carry::OUTPUT) {
+        if (carry_mode_ == Carry::Output) {
             for (std::int64_t i = res.length() - 1; i >= 0; --i) {
                 if (res.is_null(i)) continue;
                 carry_ = res.slice(i, 1);
@@ -212,9 +212,9 @@ std::unique_ptr<Cursor> make_column_scan(std::unique_ptr<Cursor>& in,
     const auto field =
         std::find_if(in_fields.begin(), in_fields.end(),
                      [&](const Field& f) { return f.name == column; });
-    NumClass cls = NumClass::SIGNED;
+    NumClass cls = NumClass::Signed;
     if (at < 0 || field == in_fields.end() || !num_class(field->type.id, cls) ||
-        (scan->integers_only && cls == NumClass::FLOAT))
+        (scan->integers_only && cls == NumClass::Float))
         return nullptr;
     std::int64_t shift = 0;
     std::int64_t keep = 0;

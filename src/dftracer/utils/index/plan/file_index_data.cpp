@@ -31,7 +31,7 @@ bool FileIndexData::current(IndexExtension ext) {
 const FileIndexData::Catalog& FileIndexData::catalog() {
     if (!catalog_) {
         catalog_.emplace();
-        if (current(IndexExtension::CATALOG)) *catalog_ = db->catalog(fid);
+        if (current(IndexExtension::Catalog)) *catalog_ = db->catalog(fid);
     }
     return *catalog_;
 }
@@ -70,9 +70,9 @@ const FileIndexData::Zones& FileIndexData::zones(const std::string& path) {
     if (it != zones_.end()) return it->second;
     auto& out = zones_[path];
     const auto& name = evidence_name(path);
-    if (name && current(IndexExtension::ZONEMAP))
+    if (name && current(IndexExtension::Zonemap))
         for (auto& [granule, bytes] :
-             db->path_granules(fid, IndexExtension::ZONEMAP, *name))
+             db->path_granules(fid, IndexExtension::Zonemap, *name))
             if (auto zone = kinds::decode_zone(bytes))
                 out.emplace(granule, std::move(*zone));
     return out;
@@ -83,9 +83,9 @@ const FileIndexData::Counts& FileIndexData::counts(const std::string& path) {
     if (it != counts_.end()) return it->second;
     auto& out = counts_[path];
     const auto& name = evidence_name(path);
-    if (name && current(IndexExtension::COUNTS))
+    if (name && current(IndexExtension::Counts))
         for (auto& [granule, bytes] :
-             db->path_granules(fid, IndexExtension::COUNTS, *name)) {
+             db->path_granules(fid, IndexExtension::Counts, *name)) {
             auto counts = kinds::decode_counts(bytes);
             if (!counts || !counts->compressed) continue;
             auto& g = out[granule];
@@ -100,9 +100,9 @@ const FileIndexData::Blooms& FileIndexData::blooms(const std::string& path) {
     if (it != blooms_.end()) return it->second;
     auto& out = blooms_[path];
     const auto& name = evidence_name(path);
-    if (name && current(IndexExtension::BLOOM))
+    if (name && current(IndexExtension::Bloom))
         for (auto& [granule, bytes] :
-             db->path_granules(fid, IndexExtension::BLOOM, *name))
+             db->path_granules(fid, IndexExtension::Bloom, *name))
             if (auto bloom = kinds::decode_bloom(bytes))
                 out.emplace(granule, std::move(*bloom));
     return out;
@@ -114,9 +114,9 @@ const index::extensions::ScalableBloomFilter* FileIndexData::file_bloom(
     if (it == file_blooms_.end()) {
         std::optional<index::extensions::ScalableBloomFilter> bloom;
         const auto& name = evidence_name(path);
-        if (name && current(IndexExtension::BLOOM))
+        if (name && current(IndexExtension::Bloom))
             if (auto bytes =
-                    db->path_file_value(fid, IndexExtension::BLOOM, *name))
+                    db->path_file_value(fid, IndexExtension::Bloom, *name))
                 bloom = kinds::decode_bloom(*bytes);
         it = file_blooms_.emplace(path, std::move(bloom)).first;
     }
@@ -130,7 +130,7 @@ const std::set<std::uint64_t>& FileIndexData::posting_chunks(
     if (it != posting_chunks_.end()) return it->second;
     auto& out = posting_chunks_[key];
     const auto& name = evidence_name(path);
-    if (name && current(IndexExtension::POSTINGS))
+    if (name && current(IndexExtension::Postings))
         for (auto g : db->posting_granules(fid, *name, kinds::value_hash(val)))
             out.insert(g);
     return out;
@@ -139,7 +139,7 @@ const std::set<std::uint64_t>& FileIndexData::posting_chunks(
 std::optional<bool> FileIndexData::posting_contains(const std::string& path,
                                                     const std::string& val) {
     const auto& name = evidence_name(path);
-    if (!name || !current(IndexExtension::POSTINGS)) return std::nullopt;
+    if (!name || !current(IndexExtension::Postings)) return std::nullopt;
     auto has = has_postings_.find(path);
     if (has == has_postings_.end())
         has = has_postings_.emplace(path, db->has_postings(fid, *name)).first;

@@ -387,7 +387,7 @@ class ViewSession {
     Deferred<dftracer::utils::dataframe::DataFrame> join(
         Deferred<dftracer::utils::dataframe::DataFrame> left,
         Deferred<dftracer::utils::dataframe::DataFrame> right,
-        JoinType how = JoinType::INNER, std::int64_t n_key = -1);
+        JoinType how = JoinType::Inner, std::int64_t n_key = -1);
 
     /// FULL-join two collect branches on their shared leading group keys and
     /// append `delta_<m>`/`pct_<m>` per metric, after the one scan. `baseline`

@@ -72,11 +72,11 @@ TEST_SUITE("Aggregator") {
         const auto* system_batch =
             static_cast<const AggregationBatch*>(nullptr);
         for (const auto& batch : batches) {
-            if (batch.batch_type == AggregationBatchType::EVENT) {
+            if (batch.batch_type == AggregationBatchType::Event) {
                 event_batch = &batch;
-            } else if (batch.batch_type == AggregationBatchType::PROFILE) {
+            } else if (batch.batch_type == AggregationBatchType::Profile) {
                 profile_batch = &batch;
-            } else if (batch.batch_type == AggregationBatchType::SYSTEM) {
+            } else if (batch.batch_type == AggregationBatchType::System) {
                 system_batch = &batch;
             }
         }
@@ -165,7 +165,7 @@ TEST_SUITE("Aggregator") {
 
         const AggregationBatch* profile_batch = nullptr;
         for (const auto& batch : batches) {
-            if (batch.batch_type == AggregationBatchType::PROFILE) {
+            if (batch.batch_type == AggregationBatchType::Profile) {
                 profile_batch = &batch;
             }
         }
@@ -223,7 +223,7 @@ TEST_SUITE("Aggregator") {
 
         const AggregationBatch* profile_batch = nullptr;
         for (const auto& batch : batches)
-            if (batch.batch_type == AggregationBatchType::PROFILE)
+            if (batch.batch_type == AggregationBatchType::Profile)
                 profile_batch = &batch;
         REQUIRE(profile_batch != nullptr);
         REQUIRE(profile_batch->entries.size() == 1);

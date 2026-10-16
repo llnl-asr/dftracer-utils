@@ -263,7 +263,7 @@ bool RocksDatabase::open(const std::string& db_path, OpenMode open_mode) {
     if (!list_status.ok()) {
         if (open_mode_ == OpenMode::ReadOnly) {
             throw DFTUtilsException(
-                ErrorCode::IO, "Failed to list RocksDB column families at '" +
+                ErrorCode::Io, "Failed to list RocksDB column families at '" +
                                    db_path_ + "': " + list_status.ToString());
         }
         column_family_names.reserve(default_column_families().size());
@@ -307,7 +307,7 @@ bool RocksDatabase::open(const std::string& db_path, OpenMode open_mode) {
     if (!status.ok()) {
         ::rocksdb::DB* raw = opened.release();
         cleanup_failed_open(raw, handles);
-        throw DFTUtilsException(ErrorCode::IO, "Failed to open RocksDB at '" +
+        throw DFTUtilsException(ErrorCode::Io, "Failed to open RocksDB at '" +
                                                    db_path_ +
                                                    "': " + status.ToString());
     }
@@ -370,7 +370,7 @@ const std::string& RocksDatabase::path() const noexcept { return db_path_; }
                           : std::string(column_family);
     const auto it = column_families_.find(name);
     if (it == column_families_.end() || it->second == nullptr) {
-        throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+        throw DFTUtilsException(ErrorCode::InvalidArgument,
                                 "Unknown RocksDB column family: " + name);
     }
     return it->second;

@@ -81,7 +81,7 @@ class MemberDecodeCache {
     /// retention but still coalesces in-flight decodes.
     explicit MemberDecodeCache(
         std::size_t capacity_bytes,
-        cache::EvictionKind kind = cache::EvictionKind::LRU)
+        cache::EvictionKind kind = cache::EvictionKind::Lru)
         : capacity_(capacity_bytes) {
         for (auto& shard : shards_) {
             shard.policy = cache::make_eviction_policy<MemberKey>(kind);
@@ -218,7 +218,7 @@ inline MemberDecodeCache* global_member_decode_cache() noexcept {
 /// instance; later calls just ensure it is published. Call once at startup.
 inline void configure_global_member_decode_cache(
     std::size_t capacity_bytes,
-    cache::EvictionKind kind = cache::EvictionKind::LRU) {
+    cache::EvictionKind kind = cache::EvictionKind::Lru) {
     static MemberDecodeCache instance(capacity_bytes, kind);
     detail::global_cache_slot().store(&instance, std::memory_order_release);
 }

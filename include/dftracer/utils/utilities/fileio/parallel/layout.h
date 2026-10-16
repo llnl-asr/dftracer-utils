@@ -9,8 +9,8 @@
 namespace dftracer::utils::utilities::fileio::parallel {
 
 enum class FileLayout {
-    SHARDED,  ///< N files, glob by name; used on NFS
-    STRIPED,  ///< single file, atomic-offset pwrite; used on local and PFS
+    Sharded,  ///< N files, glob by name; used on NFS
+    Striped,  ///< single file, atomic-offset pwrite; used on local and PFS
 };
 
 /// Filesystem classification lives in common; re-exported here so existing

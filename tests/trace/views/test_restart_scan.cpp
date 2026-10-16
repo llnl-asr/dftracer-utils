@@ -131,12 +131,12 @@ TEST_SUITE("RestartScan") {
 
         const auto pieces = members(one);
         REQUIRE(pieces.size() > 3);
-        CHECK(pieces[0].kind == GzipRecordKind::HEAD);
+        CHECK(pieces[0].kind == GzipRecordKind::Head);
         for (std::size_t i = 1; i < pieces.size(); ++i)
-            CHECK(pieces[i].kind == GzipRecordKind::RESTART);
+            CHECK(pieces[i].kind == GzipRecordKind::Restart);
         const auto multi = members(many);
         REQUIRE(multi.size() > 3);
-        for (const auto& m : multi) CHECK(m.kind == GzipRecordKind::MEMBER);
+        for (const auto& m : multi) CHECK(m.kind == GzipRecordKind::Member);
 
         const auto a = View::from_files({one.file()}).collect().get();
         const auto b = View::from_files({many.file()}).collect().get();

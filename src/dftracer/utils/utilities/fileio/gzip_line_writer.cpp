@@ -163,7 +163,7 @@ struct GzipLineWriter::Impl {
 
     // Writer step state; touched only under drain_mu, or after join.
     std::unique_ptr<pfw::ParallelWriter> writer;
-    pfw::FileLayout layout = pfw::FileLayout::STRIPED;
+    pfw::FileLayout layout = pfw::FileLayout::Striped;
     std::string cur_path;
     std::size_t part = 0;
     std::uint64_t member_idx = 0;
@@ -177,7 +177,7 @@ struct GzipLineWriter::Impl {
 
     ~Impl() {
         if (cleaned || closed) return;
-        set_error(ErrorCode::INTERNAL, "writer destroyed without close");
+        set_error(ErrorCode::Internal, "writer destroyed without close");
         try {
             default_runtime().run_blocking(
                 "gzip_line_writer_abort",
@@ -223,7 +223,7 @@ struct GzipLineWriter::Impl {
         const auto open_rc = co_await writer->open(
             cur_path, unordered() ? workers : 1, opts.compress, &scope);
         if (open_rc != 0) {
-            set_error(ErrorCode::IO, "cannot open " + cur_path);
+            set_error(ErrorCode::Io, "cannot open " + cur_path);
             co_return false;
         }
         for (auto& p : writer->output_paths()) created.push_back(p);
@@ -239,7 +239,7 @@ struct GzipLineWriter::Impl {
                                               comp, bytes.data(), bytes.size());
             give_compressor(std::move(c));
             if (!ok) {
-                set_error(ErrorCode::COMPRESSION, "member compression failed");
+                set_error(ErrorCode::Compression, "member compression failed");
                 co_return false;
             }
         }
@@ -249,7 +249,7 @@ struct GzipLineWriter::Impl {
             const int rc = header ? co_await writer->write_header(chunk)
                                   : co_await writer->write_footer(chunk);
             if (rc != 0) {
-                set_error(ErrorCode::IO, "write failed for " + cur_path);
+                set_error(ErrorCode::Io, "write failed for " + cur_path);
                 co_return false;
             }
             summary.c_bytes += chunk.size();
@@ -257,7 +257,7 @@ struct GzipLineWriter::Impl {
         }
         const auto write_chunk_rc = co_await writer->write_chunk(0, chunk);
         if (write_chunk_rc != 0) {
-            set_error(ErrorCode::IO, "write failed for " + cur_path);
+            set_error(ErrorCode::Io, "write failed for " + cur_path);
             co_return false;
         }
         auto span = writer->last_member(0);
@@ -270,7 +270,7 @@ struct GzipLineWriter::Impl {
         if (!writer) co_return true;
         bool ok = co_await write_extra(opts.part_footer, false);
         ok = co_await writer->close() == 0 && ok;
-        if (ok && layout == pfw::FileLayout::SHARDED) {
+        if (ok && layout == pfw::FileLayout::Sharded) {
             // GCC 12 destroys a temporary built inside co_await twice.
             const std::vector<std::string> shards = writer->output_paths();
             ok = co_await pfw::merge_shards(cur_path, shards) == 0;
@@ -278,7 +278,7 @@ struct GzipLineWriter::Impl {
         writer.reset();
         if (!ok) {
             if (!failed())
-                set_error(ErrorCode::IO, "cannot finish " + cur_path);
+                set_error(ErrorCode::Io, "cannot finish " + cur_path);
             co_return false;
         }
         if (opts.on_part) opts.on_part(part, cur_path, part_uc, part_lines);
@@ -296,7 +296,7 @@ struct GzipLineWriter::Impl {
                             : ByteView(d.plain.data(), d.plain.size());
         const auto write_chunk_rc = co_await writer->write_chunk(0, chunk);
         if (write_chunk_rc != 0) {
-            set_error(ErrorCode::IO, "write failed for " + cur_path);
+            set_error(ErrorCode::Io, "write failed for " + cur_path);
             co_return;
         }
         auto span = writer->last_member(0);
@@ -329,7 +329,7 @@ struct GzipLineWriter::Impl {
                              : ByteView(d.plain.data(), d.plain.size());
         const auto write_chunk_rc = co_await writer->write_chunk(slot, chunk);
         if (write_chunk_rc != 0) {
-            set_error(ErrorCode::IO, "write failed for " + cur_path);
+            set_error(ErrorCode::Io, "write failed for " + cur_path);
             co_return;
         }
         std::lock_guard<std::mutex> lk(mu);
@@ -403,7 +403,7 @@ struct GzipLineWriter::Impl {
                                           d.comp, bytes.data(), bytes.size());
                     give_compressor(std::move(c));
                     if (!ok)
-                        set_error(ErrorCode::COMPRESSION,
+                        set_error(ErrorCode::Compression,
                                   "member compression failed");
                 } else {
                     if (job->raw)
@@ -412,9 +412,9 @@ struct GzipLineWriter::Impl {
                         d.plain = std::move(job->data);
                 }
             } catch (const std::exception& e) {
-                set_error(ErrorCode::INTERNAL, e.what());
+                set_error(ErrorCode::Internal, e.what());
             } catch (...) {
-                set_error(ErrorCode::INTERNAL, "unknown worker failure");
+                set_error(ErrorCode::Internal, "unknown worker failure");
             }
         }
         if (unordered()) {
@@ -503,12 +503,12 @@ GzipLineWriter::~GzipLineWriter() = default;
 coro::CoroTask<Result<GzipLineWriter>> GzipLineWriter::open(
     std::string path, GzipWriterOptions opts) {
     if (opts.member_size == 0)
-        co_return make_error(ErrorCode::INVALID_ARGUMENT,
+        co_return make_error(ErrorCode::InvalidArgument,
                              "member_size must be positive");
     if (!opts.ordered && (opts.on_member || opts.on_part || opts.part_name ||
                           opts.part_size > 0))
         co_return make_error(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             "unordered mode takes no on_member, on_part, part_size or "
             "part_name");
     const std::size_t workers =
@@ -544,7 +544,7 @@ coro::CoroTask<Result<void>> GzipLineWriter::append(std::string_view lines) {
     }
     if (lines.empty()) co_return Result<void>{};
     if (lines.back() != '\n')
-        co_return make_error(ErrorCode::INVALID_ARGUMENT,
+        co_return make_error(ErrorCode::InvalidArgument,
                              "appended lines must end with a newline");
     std::vector<std::string> members;
     {
@@ -577,7 +577,7 @@ coro::CoroTask<Result<void>> GzipLineWriter::append_with(
         const std::size_t n = fill(own.get(), max_bytes);
         if (n > max_bytes || (n > 0 && own[n - 1] != '\n')) {
             s.unreserve(*s.prod_mem, held_units);
-            co_return make_error(ErrorCode::INVALID_ARGUMENT, bad);
+            co_return make_error(ErrorCode::InvalidArgument, bad);
         }
         if (n > 0) {
             // GCC 12 destroys a temporary built inside co_await twice.
@@ -592,7 +592,7 @@ coro::CoroTask<Result<void>> GzipLineWriter::append_with(
         }
         const std::size_t n = fill(s.scratch.get(), max_bytes);
         if (n > max_bytes || (n > 0 && s.scratch[n - 1] != '\n'))
-            co_return make_error(ErrorCode::INVALID_ARGUMENT, bad);
+            co_return make_error(ErrorCode::InvalidArgument, bad);
         s.buf.append(s.scratch.get(), n);
         for (auto& m : take_members(s.buf, s.opts.member_size))
             co_await s.submit(std::move(m));
@@ -625,7 +625,7 @@ GzipLineWriter::Producer::~Producer() {
 
 Result<GzipLineWriter::Producer> GzipLineWriter::producer() {
     if (!impl_->unordered())
-        return make_error(ErrorCode::INVALID_ARGUMENT,
+        return make_error(ErrorCode::InvalidArgument,
                           "producers need unordered mode");
     return Producer(impl_.get());
 }
@@ -672,7 +672,7 @@ coro::CoroTask<Result<void>> GzipLineWriter::Producer::append(
     }
     if (lines.empty()) co_return Result<void>{};
     if (lines.back() != '\n')
-        co_return make_error(ErrorCode::INVALID_ARGUMENT,
+        co_return make_error(ErrorCode::InvalidArgument,
                              "appended lines must end with a newline");
     co_await reserve_for(lines.size());
     buf_.append(lines);
@@ -694,7 +694,7 @@ coro::CoroTask<Result<void>> GzipLineWriter::Producer::append_with(
     if (n > max_bytes || (n > 0 && buf_[old + n - 1] != '\n')) {
         buf_.resize(old);
         release_extra();
-        co_return make_error(ErrorCode::INVALID_ARGUMENT,
+        co_return make_error(ErrorCode::InvalidArgument,
                              "appended lines must end with a newline");
     }
     buf_.resize(old + n);
@@ -743,7 +743,7 @@ coro::CoroTask<Result<WriteSummary>> GzipLineWriter::close(
     Impl& s = *impl_;
     if (s.cleaned) co_return unexpected(s.get_error());
     if (s.prod_held.load(std::memory_order_relaxed) != 0) {
-        s.set_error(ErrorCode::INVALID_ARGUMENT,
+        s.set_error(ErrorCode::InvalidArgument,
                     "close with unflushed producers");
         DFTUtilsError err = co_await s.fail();
         co_return unexpected(std::move(err));

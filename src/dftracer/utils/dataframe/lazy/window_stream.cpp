@@ -13,7 +13,7 @@ namespace {
 // which sort last).
 void order_values(const Series& col, std::vector<double>& ov,
                   std::vector<char>& miss) {
-    NumClass cls = NumClass::SIGNED;
+    NumClass cls = NumClass::Signed;
     if (!num_class(col.type(), cls))
         throw std::logic_error("window: a non-numeric order column");
     const NumCells cells = read_cells(col);
@@ -23,14 +23,14 @@ void order_values(const Series& col, std::vector<double>& ov,
     for (std::size_t i = 0; i < n; ++i) {
         double v = 0.0;
         switch (cls) {
-            case NumClass::SIGNED:
+            case NumClass::Signed:
                 v = static_cast<double>(
                     static_cast<std::int64_t>(cells.bits[i]));
                 break;
-            case NumClass::UNSIGNED:
+            case NumClass::Unsigned:
                 v = static_cast<double>(cells.bits[i]);
                 break;
-            case NumClass::FLOAT:
+            case NumClass::Float:
                 v = bits_double(cells.bits[i]);
                 break;
         }
@@ -40,9 +40,9 @@ void order_values(const Series& col, std::vector<double>& ov,
 }
 
 double cell_double(NumClass cls, std::uint64_t bits) {
-    return cls == NumClass::FLOAT
+    return cls == NumClass::Float
                ? bits_double(bits)
-               : (cls == NumClass::SIGNED
+               : (cls == NumClass::Signed
                       ? static_cast<double>(static_cast<std::int64_t>(bits))
                       : static_cast<double>(bits));
 }
@@ -181,14 +181,14 @@ struct PartitionStats {
         const std::size_t nv = value_cols.size();
         Cells c;
         c.cells.resize(nv);
-        c.cls.assign(nv, NumClass::SIGNED);
+        c.cls.assign(nv, NumClass::Signed);
         c.numeric.assign(nv, 0);
         for (std::size_t j = 0; j < nv; ++j) {
             const Series& col = m.columns[value_cols[j]];
             c.numeric[j] = num_class(col.type(), c.cls[j]) ? 1 : 0;
             if (c.numeric[j]) c.cells[j] = read_cells(col);
         }
-        NumClass oc = NumClass::SIGNED;
+        NumClass oc = NumClass::Signed;
         if (by_order && num_class(m.columns[order_col].type(), oc)) {
             std::vector<double> ov;
             order_values(m.columns[order_col], ov, c.omiss);
@@ -215,14 +215,14 @@ struct PartitionStats {
             if (!c.numeric[j]) continue;
             const std::uint64_t b = c.cells[j].bits[z];
             double x = 0.0;
-            if (c.cls[j] == NumClass::SIGNED) {
+            if (c.cls[j] == NumClass::Signed) {
                 const auto v = static_cast<std::int64_t>(b);
                 col.min.offer_i(v, true);
                 col.max.offer_i(v, false);
                 col.sum.enter_i(v);
                 if (by_nm) col.nm_sum.enter_i(v);
                 x = static_cast<double>(v);
-            } else if (c.cls[j] == NumClass::UNSIGNED) {
+            } else if (c.cls[j] == NumClass::Unsigned) {
                 col.min.offer_u(b, true);
                 col.max.offer_u(b, false);
                 col.sum.enter_u(b);
@@ -628,15 +628,15 @@ class WindowStreamCursor : public Cursor {
                 if (!planned_) {
                     plan(m->columns);
                     planned_ = true;
-                    if (mode_ == Carry::ALIGNED)
+                    if (mode_ == Carry::Aligned)
                         DFTRACER_UTILS_LOG_DEBUG(
                             "window: whole partitions, because of %s",
                             why_.c_str());
                     else
                         DFTRACER_UTILS_LOG_DEBUG(
                             "window: chunks cut inside partitions (%s)",
-                            mode_ == Carry::SEED ? "seed row" : "context rows");
-                    if (mode_ != Carry::ALIGNED && seq_) {
+                            mode_ == Carry::Seed ? "seed row" : "context rows");
+                    if (mode_ != Carry::Aligned && seq_) {
                         co_await sort_pass(std::move(*m), max_rows);
                         continue;
                     }
@@ -681,7 +681,7 @@ class WindowStreamCursor : public Cursor {
             grow_to_ = 0;
 
             const std::int64_t ctx_n = ctx_rows_;
-            const std::int64_t take_n = mode_ == Carry::ALIGNED ? emit : n;
+            const std::int64_t take_n = mode_ == Carry::Aligned ? emit : n;
             std::vector<Series> fcols;
             fcols.reserve(ncols);
             for (std::size_t c = 0; c < ncols; ++c) {
@@ -705,7 +705,7 @@ class WindowStreamCursor : public Cursor {
             DataFrame res = out.slice(ctx_n, emit);
             for (Series& c : res.columns) c = c.materialize();
 
-            if (mode_ != Carry::ALIGNED) carry(cols, fcols, res, key, n, emit);
+            if (mode_ != Carry::Aligned) carry(cols, fcols, res, key, n, emit);
 
             held_rows_ = n - emit;
             held_bytes_ = 0;
@@ -730,28 +730,28 @@ class WindowStreamCursor : public Cursor {
     }
 
    private:
-    enum class Carry { ALIGNED, SEED, HALO };
-    enum class Acc { NONE, SEED, POST_ADD };
+    enum class Carry { Aligned, Seed, Halo };
+    enum class Acc { None, Seed, PostAdd };
     enum class Kind {
-        KERNEL,
-        COUNT,
-        RANK,
-        DENSE,
-        PERCENT,
-        CUME,
-        NTILE,
-        WHOLE,
-        SESSION,
-        FRAME,
-        PICK,
-        LAST,
-        EXTREME
+        Kernel,
+        Count,
+        Rank,
+        Dense,
+        Percent,
+        Cume,
+        Ntile,
+        Whole,
+        Session,
+        Frame,
+        Pick,
+        Last,
+        Extreme
     };
 
     struct SpecState {
         WindowSpecInfo info;
-        Acc acc = Acc::NONE;
-        Kind kind = Kind::KERNEL;
+        Acc acc = Acc::None;
+        Kind kind = Kind::Kernel;
         int slot = -1;  // the column's slot in PartitionStats
         std::int64_t last_i = 0;
         std::uint64_t last_u = 0;
@@ -867,41 +867,41 @@ class WindowStreamCursor : public Cursor {
         const TypeId vt = w.value >= 0
                               ? cols[static_cast<std::size_t>(w.value)].type()
                               : TypeId::Unknown;
-        NumClass cls = NumClass::SIGNED;
+        NumClass cls = NumClass::Signed;
         const bool numeric = w.value >= 0 && num_class(vt, cls);
         if (w.unbounded) return false;
         switch (w.func) {
             case DFTU_WINDOW_ROW_NUMBER:
             case DFTU_WINDOW_RUNNING_COUNT:
-                s.kind = Kind::COUNT;
+                s.kind = Kind::Count;
                 break;
             case DFTU_WINDOW_RANK:
-                s.kind = Kind::RANK;
+                s.kind = Kind::Rank;
                 n.rank = true;
                 n.before = std::max<std::int64_t>(n.before, 1);
                 break;
             case DFTU_WINDOW_DENSE_RANK:
-                s.kind = Kind::DENSE;
+                s.kind = Kind::Dense;
                 n.rank = true;
                 n.before = std::max<std::int64_t>(n.before, 1);
                 break;
             case DFTU_WINDOW_PERCENT_RANK:
-                s.kind = Kind::PERCENT;
+                s.kind = Kind::Percent;
                 n.need_stats = true;
                 n.tie = true;
                 break;
             case DFTU_WINDOW_CUME_DIST:
-                s.kind = Kind::CUME;
+                s.kind = Kind::Cume;
                 n.need_stats = true;
                 n.tie = true;
                 tie_cut_ = true;
                 break;
             case DFTU_WINDOW_NTILE:
-                s.kind = Kind::NTILE;
+                s.kind = Kind::Ntile;
                 n.need_stats = true;
                 break;
             case DFTU_WINDOW_SESSIONIZE: {
-                NumClass tc = NumClass::SIGNED;
+                NumClass tc = NumClass::Signed;
                 if (!num_class(cols[static_cast<std::size_t>(w.time)].type(),
                                tc))
                     return false;
@@ -909,15 +909,15 @@ class WindowStreamCursor : public Cursor {
                     !num_class(cols[static_cast<std::size_t>(w.end)].type(),
                                tc))
                     return false;
-                s.kind = Kind::SESSION;
+                s.kind = Kind::Session;
                 break;
             }
             case DFTU_WINDOW_RUNNING_SUM:
                 if (vt == TypeId::Int64 || vt == TypeId::Uint64 ||
                     vt == TypeId::Float64)
-                    s.acc = Acc::SEED;
+                    s.acc = Acc::Seed;
                 else if (narrow_int(vt))
-                    s.acc = Acc::POST_ADD;
+                    s.acc = Acc::PostAdd;
                 else
                     return false;
                 n.acc = true;
@@ -925,14 +925,14 @@ class WindowStreamCursor : public Cursor {
                 break;
             case DFTU_WINDOW_RUNNING_PROD:
                 if (vt != TypeId::Float64) return false;
-                s.acc = Acc::SEED;
+                s.acc = Acc::Seed;
                 n.acc = true;
                 n.acc_cols.push_back(w.value);
                 break;
             case DFTU_WINDOW_RUNNING_MIN:
             case DFTU_WINDOW_RUNNING_MAX:
             case DFTU_WINDOW_FILL_FORWARD:
-                s.acc = Acc::SEED;
+                s.acc = Acc::Seed;
                 n.acc = true;
                 n.acc_cols.push_back(w.value);
                 break;
@@ -964,7 +964,7 @@ class WindowStreamCursor : public Cursor {
                             return false;
                     } else if (!is_count && !numeric) {
                         return false;
-                    } else if (is_mean || (is_sum && cls == NumClass::FLOAT)) {
+                    } else if (is_mean || (is_sum && cls == NumClass::Float)) {
                         if (!stats_ || !stats_->sorted) return false;
                         // The float sum of the rows with a missing order
                         // value comes from replay_pass.
@@ -974,25 +974,25 @@ class WindowStreamCursor : public Cursor {
                     if (!is_count && !is_sum && !is_mean) n.need_sorted = true;
                     if (w.range) n.order = true;
                     n.need_stats = true;
-                    s.kind = Kind::FRAME;
+                    s.kind = Kind::Frame;
                     break;
                 }
                 if (w.whole) {
                     const bool in_order = is_mean || (is_sum && numeric &&
-                                                      cls == NumClass::FLOAT);
+                                                      cls == NumClass::Float);
                     if (in_order) {
                         if (!numeric || !stats_ || !stats_->sorted)
                             return false;
                         n.need_sorted = true;
                     } else if (!is_count &&
-                               (!numeric || cls == NumClass::FLOAT)) {
+                               (!numeric || cls == NumClass::Float)) {
                         return false;
                     }
-                    s.kind = Kind::WHOLE;
+                    s.kind = Kind::Whole;
                     n.need_stats = true;
                     break;
                 }
-                const bool floating = numeric && cls == NumClass::FLOAT;
+                const bool floating = numeric && cls == NumClass::Float;
                 const bool exact = !is_mean && !(is_sum && floating);
                 if (!exact) {
                     if (!numeric) return false;
@@ -1004,7 +1004,7 @@ class WindowStreamCursor : public Cursor {
                             !ColumnView::supports(vt))
                             return false;
                         n.after = std::max(n.after, w.after);
-                        s.kind = Kind::EXTREME;
+                        s.kind = Kind::Extreme;
                         break;
                     }
                 } else {
@@ -1014,14 +1014,14 @@ class WindowStreamCursor : public Cursor {
                     break;
                 }
                 if (!frame_native(w, n, exact)) return false;
-                s.kind = Kind::FRAME;
+                s.kind = Kind::Frame;
                 break;
             }
             case DFTU_WINDOW_FRAME_VAR:
             case DFTU_WINDOW_FRAME_STD:
                 if (w.whole) {
                     if (!numeric || !stats_ || !stats_->whole_var) return false;
-                    s.kind = Kind::WHOLE;
+                    s.kind = Kind::Whole;
                     n.need_stats = true;
                     n.need_sorted = true;
                     break;
@@ -1036,7 +1036,7 @@ class WindowStreamCursor : public Cursor {
                 } else if (!frame_native(w, n, false)) {
                     return false;
                 }
-                s.kind = Kind::FRAME;
+                s.kind = Kind::Frame;
                 n.need_sorted = true;
                 break;
             case DFTU_WINDOW_FRAME_QUANTILE:
@@ -1051,13 +1051,13 @@ class WindowStreamCursor : public Cursor {
             case DFTU_WINDOW_FIRST_VALUE:
             case DFTU_WINDOW_NTH_VALUE:
                 if (w.value < 0) return false;
-                s.kind = Kind::PICK;
+                s.kind = Kind::Pick;
                 if (w.func == DFTU_WINDOW_NTH_VALUE && w.nth > 1)
                     n.after = std::max(n.after, w.nth - 1);
                 break;
             case DFTU_WINDOW_LAST_VALUE:
                 if (w.value < 0) return false;
-                s.kind = Kind::LAST;
+                s.kind = Kind::Last;
                 n.need_sorted = true;
                 break;
             default:
@@ -1068,7 +1068,7 @@ class WindowStreamCursor : public Cursor {
 
     // Chooses how a cut may fall from the functions and the column types.
     void plan(const std::vector<Series>& cols) {
-        mode_ = Carry::ALIGNED;
+        mode_ = Carry::Aligned;
         Needs n;
         for (SpecState& s : specs_)
             if (!classify(s, cols, n)) return;
@@ -1079,7 +1079,7 @@ class WindowStreamCursor : public Cursor {
         why_ = "a range frame needs one numeric order column";
         if (n.range || n.order) {
             if (order_.size() != 1) return;
-            NumClass oc = NumClass::SIGNED;
+            NumClass oc = NumClass::Signed;
             if (!num_class(cols[order_.front()].type(), oc)) return;
         }
         why_ = "figures for a whole-partition function are missing";
@@ -1094,10 +1094,10 @@ class WindowStreamCursor : public Cursor {
             const auto value = static_cast<std::size_t>(s.info.value);
             const bool var = s.info.func == DFTU_WINDOW_FRAME_VAR ||
                              s.info.func == DFTU_WINDOW_FRAME_STD;
-            if (s.kind == Kind::WHOLE ||
-                (s.kind == Kind::FRAME && (var || s.info.to_end)))
+            if (s.kind == Kind::Whole ||
+                (s.kind == Kind::Frame && (var || s.info.to_end)))
                 s.slot = stats_->slot_of(value);
-            else if (s.kind == Kind::LAST)
+            else if (s.kind == Kind::Last)
                 s.slot = stats_->last_slot_of(value);
             else
                 continue;
@@ -1108,7 +1108,7 @@ class WindowStreamCursor : public Cursor {
                (n.need_stats && (stats_->overflow || stats_->sorted));
         for (SpecState& s : specs_) {
             const WindowSpecInfo& w = s.info;
-            if (s.kind != Kind::FRAME || !w.to_end) continue;
+            if (s.kind != Kind::Frame || !w.to_end) continue;
             const bool apart = w.func == DFTU_WINDOW_FRAME_VAR ||
                                w.func == DFTU_WINDOW_FRAME_STD;
             if (!apart && w.func != DFTU_WINDOW_FRAME_MIN &&
@@ -1118,7 +1118,7 @@ class WindowStreamCursor : public Cursor {
             suffix_.push_back(
                 {w.value, apart, w.func == DFTU_WINDOW_FRAME_MIN});
         }
-        mode_ = n.acc ? Carry::SEED : Carry::HALO;
+        mode_ = n.acc ? Carry::Seed : Carry::Halo;
         before_ = n.before;
         after_ = n.after;
         range_ = n.range;
@@ -1323,7 +1323,7 @@ class WindowStreamCursor : public Cursor {
         };
         struct Work {
             NumCells cells;
-            NumClass cls = NumClass::SIGNED;
+            NumClass cls = NumClass::Signed;
             std::optional<ColumnView> view;
             std::optional<ColumnView> carried_view;
             Series carried;
@@ -1461,7 +1461,7 @@ class WindowStreamCursor : public Cursor {
     template <class Key>
     std::int64_t emit_count(const std::vector<Series>& cols, std::int64_t n,
                             const Key& key) {
-        if (mode_ == Carry::ALIGNED) {
+        if (mode_ == Carry::Aligned) {
             if (eof_) return n;
             const std::string last = key(n - 1);
             std::int64_t emit = n - 1;
@@ -1557,7 +1557,7 @@ class WindowStreamCursor : public Cursor {
         for (std::size_t r = 0; r < ue; ++r)
             bits[r] = static_cast<std::uint64_t>(v[r]);
         put(res, w.out,
-            make_numeric(bits, okv, NumClass::SIGNED, TypeId::Int64));
+            make_numeric(bits, okv, NumClass::Signed, TypeId::Int64));
     }
 
     void native_distribution(SpecState& s, DataFrame& res, std::size_t ue,
@@ -1568,7 +1568,7 @@ class WindowStreamCursor : public Cursor {
         for (std::size_t r = 0; r < ue; ++r) {
             const std::int64_t sz = row.part_of[r]->rows;
             double out = 0.0;
-            if (s.kind == Kind::PERCENT) {
+            if (s.kind == Kind::Percent) {
                 if (row.new_part[r] || !row.tie_prev[r]) {
                     s.rank_pos = row.pos[r];
                     s.rank_last = row.pos[r];
@@ -1583,19 +1583,19 @@ class WindowStreamCursor : public Cursor {
             bits[r] = double_bits(out);
         }
         put(res, w.out,
-            make_numeric(bits, okv, NumClass::FLOAT, TypeId::Float64));
+            make_numeric(bits, okv, NumClass::Float, TypeId::Float64));
     }
 
     void native_whole(SpecState& s, const std::vector<Series>& cols,
                       DataFrame& res, std::size_t ue, const RowInfo& row) {
         const WindowSpecInfo& w = s.info;
         const TypeId vt = cols[static_cast<std::size_t>(w.value)].type();
-        NumClass cls = NumClass::SIGNED;
+        NumClass cls = NumClass::Signed;
         const bool numeric = num_class(vt, cls);
         std::vector<std::uint64_t> bits(ue, 0);
         std::vector<std::uint8_t> okv(ue, 1);
         TypeId out_type = TypeId::Int64;
-        NumClass out_cls = NumClass::SIGNED;
+        NumClass out_cls = NumClass::Signed;
         const bool is_mean = w.func == DFTU_WINDOW_FRAME_MEAN;
         const bool var_fn =
             w.func == DFTU_WINDOW_FRAME_VAR || w.func == DFTU_WINDOW_FRAME_STD;
@@ -1615,11 +1615,11 @@ class WindowStreamCursor : public Cursor {
                     w.func == DFTU_WINDOW_FRAME_STD ? std::sqrt(var) : var);
             }
             put(res, w.out,
-                make_numeric(bits, okv, NumClass::FLOAT, TypeId::Float64));
+                make_numeric(bits, okv, NumClass::Float, TypeId::Float64));
             return;
         }
         const bool as_double = is_mean || (w.func == DFTU_WINDOW_FRAME_SUM &&
-                                           cls == NumClass::FLOAT);
+                                           cls == NumClass::Float);
         for (std::size_t r = 0; r < ue; ++r) {
             const PartitionStats::Col& c =
                 row.part_of[r]->cols[static_cast<std::size_t>(s.slot)];
@@ -1635,24 +1635,24 @@ class WindowStreamCursor : public Cursor {
                 bits[r] = std::bit_cast<std::uint64_t>(
                     is_mean ? c.fsum.mean(c.nonnull) : c.fsum.sum);
             } else if (w.func == DFTU_WINDOW_FRAME_SUM) {
-                bits[r] = cls == NumClass::UNSIGNED
+                bits[r] = cls == NumClass::Unsigned
                               ? c.sum.u64()
                               : static_cast<std::uint64_t>(c.sum.i64());
             } else {
                 const steps::Extreme& e =
                     w.func == DFTU_WINDOW_FRAME_MIN ? c.min : c.max;
-                bits[r] = cls == NumClass::UNSIGNED
+                bits[r] = cls == NumClass::Unsigned
                               ? e.value.u
                               : static_cast<std::uint64_t>(e.value.i);
             }
         }
         if (as_double) {
-            out_cls = NumClass::FLOAT;
+            out_cls = NumClass::Float;
             out_type = TypeId::Float64;
         } else if (w.func == DFTU_WINDOW_FRAME_SUM) {
             out_cls = cls;
             out_type =
-                cls == NumClass::UNSIGNED ? TypeId::Uint64 : TypeId::Int64;
+                cls == NumClass::Unsigned ? TypeId::Uint64 : TypeId::Int64;
         } else if (w.func != DFTU_WINDOW_FRAME_COUNT && numeric) {
             out_cls = cls;
             out_type = vt;
@@ -1664,7 +1664,7 @@ class WindowStreamCursor : public Cursor {
     void native(const std::vector<Series>& cols, DataFrame& res, std::int64_t n,
                 std::int64_t emit, bool continuing, const Key& key) {
         bool any = false;
-        for (const SpecState& s : specs_) any = any || s.kind >= Kind::PERCENT;
+        for (const SpecState& s : specs_) any = any || s.kind >= Kind::Percent;
         if (!any) return;
         const auto un = static_cast<std::size_t>(n);
         RowInfo row;
@@ -1707,7 +1707,7 @@ class WindowStreamCursor : public Cursor {
             row.run_last[z] = new_part[z + 1] ? r : row.run_last[z + 1];
         }
         for (const SpecState& s : specs_)
-            if (s.kind == Kind::FRAME && s.info.range) {
+            if (s.kind == Kind::Frame && s.info.range) {
                 order_values(cols[order_.front()], row.ov, row.miss);
                 break;
             }
@@ -1744,29 +1744,29 @@ class WindowStreamCursor : public Cursor {
         }
         for (SpecState& s : specs_) {
             switch (s.kind) {
-                case Kind::NTILE:
+                case Kind::Ntile:
                     native_ntile(s, res, ue, row);
                     break;
-                case Kind::PERCENT:
-                case Kind::CUME:
+                case Kind::Percent:
+                case Kind::Cume:
                     native_distribution(s, res, ue, row);
                     break;
-                case Kind::WHOLE:
+                case Kind::Whole:
                     native_whole(s, cols, res, ue, row);
                     break;
-                case Kind::SESSION:
+                case Kind::Session:
                     native_session(s, cols, res, ue, new_part);
                     break;
-                case Kind::FRAME:
+                case Kind::Frame:
                     native_frame(s, cols, res, ue, row);
                     break;
-                case Kind::PICK:
+                case Kind::Pick:
                     native_pick(s, cols, res, ue, row);
                     break;
-                case Kind::EXTREME:
+                case Kind::Extreme:
                     native_extreme(s, cols, res, ue, row);
                     break;
-                case Kind::LAST:
+                case Kind::Last:
                     native_last(s, cols, res, ue, row);
                     break;
                 default:
@@ -1784,10 +1784,10 @@ class WindowStreamCursor : public Cursor {
                         const std::vector<char>& new_part) {
         const WindowSpecInfo& w = s.info;
         const NumCells t = read_cells(cols[static_cast<std::size_t>(w.time)]);
-        NumClass tc = NumClass::SIGNED;
+        NumClass tc = NumClass::Signed;
         num_class(cols[static_cast<std::size_t>(w.time)].type(), tc);
         NumCells e;
-        NumClass ec = NumClass::SIGNED;
+        NumClass ec = NumClass::Signed;
         if (w.end >= 0) {
             e = read_cells(cols[static_cast<std::size_t>(w.end)]);
             num_class(cols[static_cast<std::size_t>(w.end)].type(), ec);
@@ -1819,7 +1819,7 @@ class WindowStreamCursor : public Cursor {
             bits[r] = static_cast<std::uint64_t>(s.session_id);
         }
         put(res, w.out,
-            make_numeric(bits, okv, NumClass::SIGNED, TypeId::Int64));
+            make_numeric(bits, okv, NumClass::Signed, TypeId::Int64));
     }
 
     // A frame answered by the kernel's own steps, from the state of the rows
@@ -1831,7 +1831,7 @@ class WindowStreamCursor : public Cursor {
                       DataFrame& res, std::size_t emit, const RowInfo& row) {
         const WindowSpecInfo& w = s.info;
         const Series& vcol = cols[static_cast<std::size_t>(w.value)];
-        NumClass cls = NumClass::SIGNED;
+        NumClass cls = NumClass::Signed;
         const bool numeric = num_class(vcol.type(), cls);
         NumCells cells;
         if (numeric) {
@@ -1849,20 +1849,20 @@ class WindowStreamCursor : public Cursor {
             w.func == DFTU_WINDOW_FRAME_VAR || w.func == DFTU_WINDOW_FRAME_STD;
         const bool mean_fn = w.func == DFTU_WINDOW_FRAME_MEAN;
         const bool sum_fn = w.func == DFTU_WINDOW_FRAME_SUM;
-        const bool float_acc = mean_fn || (sum_fn && cls == NumClass::FLOAT);
+        const bool float_acc = mean_fn || (sum_fn && cls == NumClass::Float);
         const bool smallest = w.func == DFTU_WINDOW_FRAME_MIN;
         const bool extreme_fn = smallest || w.func == DFTU_WINDOW_FRAME_MAX;
         const bool keep = !w.start;
         const auto order_of = [&](std::uint64_t a, std::uint64_t b) {
             switch (cls) {
-                case NumClass::SIGNED: {
+                case NumClass::Signed: {
                     const auto x = static_cast<std::int64_t>(a);
                     const auto y = static_cast<std::int64_t>(b);
                     return x < y ? -1 : (x > y ? 1 : 0);
                 }
-                case NumClass::UNSIGNED:
+                case NumClass::Unsigned:
                     return a < b ? -1 : (a > b ? 1 : 0);
-                case NumClass::FLOAT:
+                case NumClass::Float:
                     break;
             }
             return compare_doubles(bits_double(a), bits_double(b));
@@ -1913,7 +1913,7 @@ class WindowStreamCursor : public Cursor {
                 } else if (float_acc) {
                     s.win_sum.enter(c.v);
                 } else if (sum_fn) {
-                    if (cls == NumClass::UNSIGNED)
+                    if (cls == NumClass::Unsigned)
                         s.win_isum.enter_u(c.bits);
                     else
                         s.win_isum.enter_i(static_cast<std::int64_t>(c.bits));
@@ -1947,7 +1947,7 @@ class WindowStreamCursor : public Cursor {
             } else if (float_acc) {
                 s.win_sum.leave(c.v);
             } else if (sum_fn) {
-                if (cls == NumClass::UNSIGNED)
+                if (cls == NumClass::Unsigned)
                     s.win_isum.leave_u(c.bits);
                 else
                     s.win_isum.leave_i(static_cast<std::int64_t>(c.bits));
@@ -2105,7 +2105,7 @@ class WindowStreamCursor : public Cursor {
             } else if (float_acc) {
                 bits[r] = double_bits(s.win_sum.sum);
             } else if (sum_fn) {
-                bits[r] = cls == NumClass::UNSIGNED
+                bits[r] = cls == NumClass::Unsigned
                               ? s.win_isum.u64()
                               : static_cast<std::uint64_t>(s.win_isum.i64());
             } else {
@@ -2127,16 +2127,16 @@ class WindowStreamCursor : public Cursor {
         }
         if (count_fn)
             put(res, w.out,
-                make_numeric(bits, okv, NumClass::SIGNED, TypeId::Int64));
+                make_numeric(bits, okv, NumClass::Signed, TypeId::Int64));
         else if (var_fn || float_acc)
             put(res, w.out,
-                make_numeric(bits, okv, NumClass::FLOAT, TypeId::Float64));
+                make_numeric(bits, okv, NumClass::Float, TypeId::Float64));
         else if (sum_fn)
             put(res, w.out,
-                cls == NumClass::UNSIGNED
-                    ? make_numeric(bits, okv, NumClass::UNSIGNED,
+                cls == NumClass::Unsigned
+                    ? make_numeric(bits, okv, NumClass::Unsigned,
                                    TypeId::Uint64)
-                    : make_numeric(bits, okv, NumClass::SIGNED, TypeId::Int64));
+                    : make_numeric(bits, okv, NumClass::Signed, TypeId::Int64));
         else
             put(res, w.out, make_numeric(bits, okv, cls, vcol.type()));
     }
@@ -2281,7 +2281,7 @@ class WindowStreamCursor : public Cursor {
         }
         std::int64_t k_same = 0;
         if (continuing) {
-            if (mode_ == Carry::SEED) {
+            if (mode_ == Carry::Seed) {
                 k_same = 1;
             } else if (ctx_n > 0) {
                 const std::vector<Series> ck = key_columns(ctx_, part_);
@@ -2296,10 +2296,10 @@ class WindowStreamCursor : public Cursor {
             const int oc = column_index_of(res.names, s.info.out);
             if (oc < 0) continue;
             Series& col = res.columns[static_cast<std::size_t>(oc)];
-            const bool is_rank = s.kind == Kind::RANK;
-            const bool is_dense = s.kind == Kind::DENSE;
+            const bool is_rank = s.kind == Kind::Rank;
+            const bool is_dense = s.kind == Kind::Dense;
             if (continuing && run > 0) {
-                if (s.kind == Kind::COUNT && shift != 0) {
+                if (s.kind == Kind::Count && shift != 0) {
                     col = patched(col, run,
                                   [&](std::int64_t v) { return v + shift; });
                 } else if (is_rank) {
@@ -2310,7 +2310,7 @@ class WindowStreamCursor : public Cursor {
                     col = patched(col, run, [&](std::int64_t v) {
                         return v - 1 + s.last_i;
                     });
-                } else if (s.acc == Acc::POST_ADD) {
+                } else if (s.acc == Acc::PostAdd) {
                     if (col.type() == TypeId::Uint64)
                         col = patched(col, run, [&](std::uint64_t v) {
                             steps::SumU64 sum{s.last_u};
@@ -2325,7 +2325,7 @@ class WindowStreamCursor : public Cursor {
                         });
                 }
             }
-            if (is_rank || is_dense || s.acc == Acc::POST_ADD) {
+            if (is_rank || is_dense || s.acc == Acc::PostAdd) {
                 if (col.type() == TypeId::Uint64)
                     s.last_u = col.data<std::uint64_t>()[emit - 1];
                 else
@@ -2338,16 +2338,16 @@ class WindowStreamCursor : public Cursor {
         const std::vector<std::int64_t> last_row{emit - 1};
         const std::vector<std::int64_t> null_row{-1};
         ctx_.clear();
-        if (mode_ == Carry::SEED) {
+        if (mode_ == Carry::Seed) {
             for (std::size_t c = 0; c < sch_.size(); ++c) {
                 const SpecState* acc = nullptr;
                 for (const SpecState& s : specs_)
-                    if (s.acc != Acc::NONE &&
+                    if (s.acc != Acc::None &&
                         s.info.value == static_cast<int>(c))
                         acc = &s;
                 if (!acc)
                     ctx_.push_back(cols[c].take(last_row).materialize());
-                else if (acc->acc == Acc::POST_ADD)
+                else if (acc->acc == Acc::PostAdd)
                     ctx_.push_back(cols[c].take(null_row).materialize());
                 else
                     ctx_.push_back(
@@ -2441,7 +2441,7 @@ class WindowStreamCursor : public Cursor {
     std::vector<PartitionStats::Part> seq_parts_;
     PartitionStats::Part carry_part_;
     std::int64_t figs_need_ = 0;
-    Carry mode_ = Carry::ALIGNED;
+    Carry mode_ = Carry::Aligned;
     std::int64_t before_ = 0;
     std::int64_t after_ = 0;
     bool range_ = false;

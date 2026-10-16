@@ -44,11 +44,11 @@ namespace {
 using Sketch = dataframe::BasicDDSketch<2048>;
 using utilities::fileio::lines::sources::async_streaming_gz_lines;
 
-enum class Kind { DELTA, GAUGE };
-enum class Scope { PID, HOST };
+enum class Kind { Delta, Gauge };
+enum class Scope { Pid, Host };
 
 struct Series {
-    Kind kind = Kind::DELTA;
+    Kind kind = Kind::Delta;
     std::vector<std::pair<std::int64_t, double>> samples;
 };
 
@@ -169,7 +169,7 @@ constexpr std::uint64_t SERIES_SAMPLE_BYTES =
     sizeof(std::pair<std::int64_t, double>);
 
 struct GroupError {
-    ErrorCode code = ErrorCode::PARSE;
+    ErrorCode code = ErrorCode::Parse;
     std::string file;
     std::string reason;
     bool over_budget = false;
@@ -179,7 +179,7 @@ template <class T>
 using GResult = expected<T, GroupError>;
 
 unexpected<GroupError> fail(std::string file, std::string reason,
-                            ErrorCode code = ErrorCode::PARSE) {
+                            ErrorCode code = ErrorCode::Parse) {
     return unexpected<GroupError>(
         GroupError{code, std::move(file), std::move(reason)});
 }
@@ -230,7 +230,7 @@ struct GroupMem {
     }
 
     GroupError budget_error(std::string_view what) const {
-        return GroupError{ErrorCode::INVALID_ARGUMENT, "",
+        return GroupError{ErrorCode::InvalidArgument, "",
                           str_cat("memory budget exceeded by ", what,
                                   " (the share of this run group is ", share,
                                   " bytes); raise --memory-budget"),
@@ -375,7 +375,7 @@ struct SeriesView {
     std::size_t n = 0;
     std::int64_t first = 0;
     std::int64_t last = 0;
-    Kind kind = Kind::DELTA;
+    Kind kind = Kind::Delta;
 };
 
 SeriesView view_of(const Series& s) {
@@ -604,7 +604,7 @@ class GroupReader {
                     auto& h = host_series(hh->second);
                     for (std::size_t k = 0; k < 3; ++k) {
                         auto& s = h[FIELDS[k] + std::string(cols[2])];
-                        s.kind = Kind::GAUGE;
+                        s.kind = Kind::Gauge;
                         if (auto st = add_sample(
                                 s, ts, std::stod(std::string(cols[3 + k])));
                             !st)
@@ -748,7 +748,7 @@ class GroupReader {
         const std::int64_t ts = f.ts ? get_i64(*f.ts) : 0;
 
         switch (ph) {
-            case RecordPhase::COMPLETE: {
+            case RecordPhase::Complete: {
                 const std::uint32_t p = proc_index(hhash, pid);
                 if (cat == "dftracer") {
                     if (name == "start") procs_[p].start = ts;
@@ -768,7 +768,7 @@ class GroupReader {
                 if (cur_.size() >= CHUNK_CALLS) return seal();
                 return {};
             }
-            case RecordPhase::COUNTER:
+            case RecordPhase::Counter:
                 if (!has_args) return {};
                 if (pid == 0)
                     return handle_host(file, cat, name, hhash, ts, args);
@@ -793,7 +793,7 @@ class GroupReader {
                 }
                 return fail(file, "unknown per-process counter category " +
                                       std::string(cat));
-            case RecordPhase::METADATA:
+            case RecordPhase::Metadata:
                 if (name == "HH" && has_args)
                     host_hash_[std::string(get_sv(args, "name"))] =
                         std::string(get_sv(args, "value"));
@@ -825,8 +825,8 @@ class GroupReader {
             key += '.';
             key += k;
             auto& s = host[key];
-            s.kind = (net || (io && k != "ios_in_progress")) ? Kind::DELTA
-                                                             : Kind::GAUGE;
+            s.kind = (net || (io && k != "ios_in_progress")) ? Kind::Delta
+                                                             : Kind::Gauge;
             if (auto st = add_sample(s, ts, *num); !st) return st;
         }
         return {};
@@ -999,11 +999,11 @@ class SetAcc {
             cb.append_key_value("name", name);
             cb.append_comma();
             cb.append_key_value("metric", std::string_view(counter_keys_[cid]));
-            cb.append_raw(acc.scope == Scope::PID ? R"(,"scope":"pid")"
+            cb.append_raw(acc.scope == Scope::Pid ? R"(,"scope":"pid")"
                                                   : R"(,"scope":"host")");
-            cb.append_raw(acc.kind == Kind::DELTA ? R"(,"kind":"delta","v":)"
+            cb.append_raw(acc.kind == Kind::Delta ? R"(,"kind":"delta","v":)"
                                                   : R"(,"kind":"gauge","v":)");
-            append_stats(cb, acc.stats, true, acc.kind == Kind::DELTA, buf);
+            append_stats(cb, acc.stats, true, acc.kind == Kind::Delta, buf);
             cb.append_raw("}\n");
         }
     }
@@ -1055,7 +1055,7 @@ class SetAcc {
         pop(s.ts);
         if (!stack_.empty() && end > stack_.back().first) {
             failed_ =
-                GroupError{ErrorCode::PARSE, spec_->keys.papi_set,
+                GroupError{ErrorCode::Parse, spec_->keys.papi_set,
                            str_cat("call ", r_->strings_[s.name], " at ts ",
                                    s.ts, " ends after its parent ",
                                    recs_[stack_.back().second]->path)};
@@ -1109,11 +1109,11 @@ class SetAcc {
         const Proc& p = r_->procs_[s.proc];
         for (const auto& [k, series] : p.papi)
             sources_.push_back(
-                {view_of(series), {}, counter_id(k), Scope::PID});
+                {view_of(series), {}, counter_id(k), Scope::Pid});
         if (const auto h = r_->hosts_.find(p.hhash); h != r_->hosts_.end())
             for (const auto& [k, series] : h->second)
                 sources_.push_back(
-                    {view_of(series), {}, counter_id(k), Scope::HOST});
+                    {view_of(series), {}, counter_id(k), Scope::Host});
     }
 
     // Parent index + 1 (0 at the root) and the name id identify a path.
@@ -1159,7 +1159,7 @@ class SetAcc {
             return std::nullopt;
         for (Source& src : sources_) {
             const SeriesView& series = src.series;
-            const auto v = series.kind == Kind::DELTA
+            const auto v = series.kind == Kind::Delta
                                ? prorate(series, s.ts, end, src.cursor)
                                : weighted_mean(series, s.ts, end, src.cursor);
             if (!v) continue;
@@ -1175,8 +1175,8 @@ class SetAcc {
                 acc = std::make_unique<CounterAcc>(
                     CounterAcc{src.scope, series.kind, {}});
             }
-            if (!charge_growth(acc->stats.add(src.scope == Scope::HOST &&
-                                                      series.kind == Kind::DELTA
+            if (!charge_growth(acc->stats.add(src.scope == Scope::Host &&
+                                                      series.kind == Kind::Delta
                                                   ? *v / ppn_
                                                   : *v),
                                "counter statistics"))
@@ -1565,7 +1565,7 @@ coro::CoroTask<GroupResult> process_group(CoroScope& ctx, RunGroup group,
                                           GroupProgress* progress,
                                           const BorrowFn* borrow) {
     GroupResult result;
-    if (progress) progress->enter(GroupProgress::Phase::READ);
+    if (progress) progress->enter(GroupProgress::Phase::Read);
     auto state = std::make_shared<GroupState>(std::move(group), memory_share);
     RunGroup& g = state->g;
     GroupMem& mem = state->mem;
@@ -1588,7 +1588,7 @@ coro::CoroTask<GroupResult> process_group(CoroScope& ctx, RunGroup group,
             return read_file(f, mem_ptr, slots_ptr, total_slots, progress);
         }));
     std::vector<FilePart> parts = co_await coro::when_all(std::move(reads));
-    if (progress) progress->enter(GroupProgress::Phase::SORT);
+    if (progress) progress->enter(GroupProgress::Phase::Sort);
 
     std::vector<GroupReader::IdMap> maps;
     maps.reserve(parts.size());
@@ -1642,7 +1642,7 @@ coro::CoroTask<GroupResult> process_group(CoroScope& ctx, RunGroup group,
     // quarter and the calls pool, empty once replayed, go to its state.
     mem.state.add_capacity(memory_share / 4 +
                            (mem.calls.capacity() - mem.calls.used()));
-    if (progress) progress->enter(GroupProgress::Phase::WALK);
+    if (progress) progress->enter(GroupProgress::Phase::Walk);
     std::vector<coro::SpawnFuture<Result<void>>> walks;
     walks.reserve(ways);
     for (std::size_t w = 0; w < ways; ++w)

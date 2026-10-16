@@ -50,7 +50,7 @@ class CheckpointIndexerFactory {
      */
     static std::string generate_index_path(
         const std::string &archive_path,
-        ArchiveFormat format = ArchiveFormat::UNKNOWN);
+        ArchiveFormat format = ArchiveFormat::Unknown);
 
    private:
     CheckpointIndexerFactory() = delete;  // Static-only class

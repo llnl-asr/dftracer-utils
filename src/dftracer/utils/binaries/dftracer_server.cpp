@@ -29,7 +29,7 @@ using namespace dftracer::utils::server;
 
 class ServerArgParse : public cli::ArgParse {
    public:
-    cli::DirectoryArgs directory{cli::DirMode::REQUIRED};
+    cli::DirectoryArgs directory{cli::DirMode::Required};
     cli::PipelineArgs pipeline;
 
     std::string index_dir;
@@ -138,7 +138,7 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
         cli::build_pipeline_config("DFTracer Server", cli->pipeline);
     // Steady-load, latency-sensitive service: keep the full pool warm rather
     // than paying the elastic grow ramp on every request.
-    pipeline_config.with_io_backend(io::IoBackendType::THREADPOOL)
+    pipeline_config.with_io_backend(io::IoBackendType::Threadpool)
         .with_io_batch_size(1)
         .with_watchdog(false)
         .with_eager()

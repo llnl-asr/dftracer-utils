@@ -102,7 +102,7 @@ class GzipLineByteStream : public GzipStream {
    private:
     coro::CoroTask<std::size_t> read_line_aligned_data() {
         if (!decompression_initialized_) {
-            throw ReaderError(ReaderError::INITIALIZATION_ERROR,
+            throw ReaderError(ReaderError::InitializationError,
                               "Streaming session not properly initialized");
         }
 
@@ -154,7 +154,7 @@ class GzipLineByteStream : public GzipStream {
         if (partial_size > 0) {
             // A line that fills the buffer can never complete in it.
             if (partial_size >= buffer_.size()) {
-                throw ReaderError(ReaderError::READ_ERROR,
+                throw ReaderError(ReaderError::ReadError,
                                   "a line is longer than the read buffer (" +
                                       std::to_string(buffer_.size()) +
                                       " bytes)");
@@ -181,7 +181,7 @@ class GzipLineByteStream : public GzipStream {
             // A decode failure must not pass for clean EOF (which would
             // silently drop the rest of the file).
             if (!status) {
-                throw ReaderError(ReaderError::COMPRESSION_ERROR,
+                throw ReaderError(ReaderError::CompressionError,
                                   "gzip decode failed mid-stream at position " +
                                       std::to_string(current_position_));
             }

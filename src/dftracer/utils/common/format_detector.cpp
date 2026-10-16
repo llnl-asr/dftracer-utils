@@ -7,17 +7,17 @@ namespace dftracer::utils {
 ArchiveFormat FormatDetector::detect(const std::string& file_path) {
     if (file_path.size() >= 3 &&
         file_path.substr(file_path.size() - 3) == ".gz") {
-        return ArchiveFormat::GZIP;
+        return ArchiveFormat::Gzip;
     } else if (file_path.size() >= 5 &&
                file_path.substr(file_path.size() - 5) == ".gzip") {
-        return ArchiveFormat::GZIP;
+        return ArchiveFormat::Gzip;
     }
 
     FILE* file = std::fopen(file_path.c_str(), "rb");
     if (!file) {
         DFTRACER_UTILS_LOG_ERROR("Failed to open file for format detection: %s",
                                  file_path.c_str());
-        return ArchiveFormat::UNKNOWN;
+        return ArchiveFormat::Unknown;
     }
 
     ArchiveFormat format = detect_from_content(file);
@@ -26,11 +26,11 @@ ArchiveFormat FormatDetector::detect(const std::string& file_path) {
 }
 
 ArchiveFormat FormatDetector::detect_from_content(FILE* file) {
-    return has_gzip_magic(file) ? ArchiveFormat::GZIP : ArchiveFormat::UNKNOWN;
+    return has_gzip_magic(file) ? ArchiveFormat::Gzip : ArchiveFormat::Unknown;
 }
 
 bool FormatDetector::is_gzip(FILE* file) {
-    return detect_from_content(file) == ArchiveFormat::GZIP;
+    return detect_from_content(file) == ArchiveFormat::Gzip;
 }
 
 bool FormatDetector::has_gzip_magic(FILE* file) {

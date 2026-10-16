@@ -11,17 +11,17 @@ namespace dftracer::utils::utilities::reader {
 class ReaderError : public DFTUtilsException {
    public:
     enum Type {
-        DATABASE_ERROR,
-        FILE_IO_ERROR,
-        COMPRESSION_ERROR,
-        INVALID_ARGUMENT,
-        INITIALIZATION_ERROR,
-        READ_ERROR,
-        UNKNOWN_ERROR,
+        DatabaseError,
+        FileIoError,
+        CompressionError,
+        InvalidArgument,
+        InitializationError,
+        ReadError,
+        UnknownError,
     };
 
     ReaderError(Type type, const std::string &message)
-        : DFTUtilsException(ErrorCode::READER, format_message(type, message)),
+        : DFTUtilsException(ErrorCode::Reader, format_message(type, message)),
           type_(type) {}
 
     inline Type get_type() const { return type_; }

@@ -19,7 +19,7 @@ namespace dftracer::utils::io {
 /// @param batch_threshold   SQE batch threshold (io_uring), 16 default.
 std::unique_ptr<IoBackend> create_io_backend(
     Executor& executor, std::size_t pool_size = 4,
-    IoBackendType backend_type = IoBackendType::AUTO,
+    IoBackendType backend_type = IoBackendType::Auto,
     unsigned batch_threshold = 16);
 
 }  // namespace dftracer::utils::io

@@ -455,7 +455,7 @@ give the same schema (see :doc:`../../reference/record-schema`):
              static constexpr std::string_view id = "access_log";
              ix::Field<std::string, "remote_addr"> remote_addr;
              ix::Field<std::int64_t, "status"> status;
-             ix::Field<std::int64_t, "ts_ms", ix::TimeRole<ix::TimeUnit::MS>>
+             ix::Field<std::int64_t, "ts_ms", ix::TimeRole<ix::TimeUnit::Ms>>
                  ts_ms;
              ix::Field<double, "request_time",
                        ix::DurationRole<ix::TimeUnit::S>> request_time;

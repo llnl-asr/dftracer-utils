@@ -4,25 +4,25 @@ namespace dftracer::utils::utilities::reader {
 std::string ReaderError::format_message(Type type, const std::string &message) {
     const char *prefix = "";
     switch (type) {
-        case ReaderError::DATABASE_ERROR:
+        case ReaderError::DatabaseError:
             prefix = "Database error";
             break;
-        case ReaderError::FILE_IO_ERROR:
+        case ReaderError::FileIoError:
             prefix = "File I/O error";
             break;
-        case ReaderError::COMPRESSION_ERROR:
+        case ReaderError::CompressionError:
             prefix = "Compression error";
             break;
-        case ReaderError::INVALID_ARGUMENT:
+        case ReaderError::InvalidArgument:
             prefix = "Invalid argument";
             break;
-        case ReaderError::INITIALIZATION_ERROR:
+        case ReaderError::InitializationError:
             prefix = "Initialization error";
             break;
-        case ReaderError::READ_ERROR:
+        case ReaderError::ReadError:
             prefix = "Read error";
             break;
-        case ReaderError::UNKNOWN_ERROR:
+        case ReaderError::UnknownError:
             prefix = "Unknown error";
             break;
     }

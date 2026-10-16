@@ -82,12 +82,12 @@ const dftracer::utils::index::RecordSchema& plan_record_schema(
 bool plan_by_path(const ViewPlan& plan);
 
 // The trace roles an operation reads. DURATION implies TIME.
-enum class TraceRole : std::uint8_t { TIME, DURATION };
+enum class TraceRole : std::uint8_t { Time, Duration };
 
 // Throws INVALID_ARGUMENT naming `op` when the files' record_schema binds no
 // path to `role` (a time role for TIME; time and duration for DURATION).
 void require_role(const ViewPlan& plan, std::string_view op,
-                  TraceRole role = TraceRole::TIME);
+                  TraceRole role = TraceRole::Time);
 
 // Fold the phase selector into the query: Events -> ph=="X", Counters ->
 // ph=="C", Any -> no constraint. ANDed with any user filter and, for a plan

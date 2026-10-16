@@ -57,7 +57,7 @@ FoldEvent evt(StringIntern& intern, std::uint64_t pid, std::uint64_t dur,
     e.dur = dur;
     e.has_dur = true;
     e.name_id = intern.get_or_insert(name);
-    e.phase = RecordPhase::COMPLETE;
+    e.phase = RecordPhase::Complete;
     return e;
 }
 

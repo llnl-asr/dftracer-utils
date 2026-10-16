@@ -145,7 +145,7 @@ class TraceReader {
     TraceReaderConfig config_;
     bool has_index_ = false;
     std::string index_path_;
-    ArchiveFormat format_ = ArchiveFormat::UNKNOWN;
+    ArchiveFormat format_ = ArchiveFormat::Unknown;
     std::size_t cached_max_bytes_ = 0;
     std::size_t cached_num_lines_ = 0;
     bool metadata_cached_ = false;

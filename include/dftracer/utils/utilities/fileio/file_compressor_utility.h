@@ -131,7 +131,7 @@ class FileCompressorUtility {
             // Validate input file exists
             if (!fs::exists(input.input_path)) {
                 co_return make_error(
-                    ErrorCode::NOT_FOUND,
+                    ErrorCode::NotFound,
                     "Input file does not exist: " + input.input_path);
             }
 
@@ -176,7 +176,7 @@ class FileCompressorUtility {
             remove_file_quietly(input.output_path);
 
             co_return make_error(
-                ErrorCode::COMPRESSION,
+                ErrorCode::Compression,
                 std::string("Compression failed: ") + e.what());
         }
 

@@ -113,24 +113,24 @@ TEST_SUITE("ComputeCohensd") {
 
 TEST_SUITE("ClassifySignificance") {
     TEST_CASE("classify_significance - negligible") {
-        CHECK(classify_significance(0.1) == Significance::NEGLIGIBLE);
+        CHECK(classify_significance(0.1) == Significance::Negligible);
     }
 
     TEST_CASE("classify_significance - small") {
-        CHECK(classify_significance(0.3) == Significance::SMALL);
+        CHECK(classify_significance(0.3) == Significance::Small);
     }
 
     TEST_CASE("classify_significance - medium") {
-        CHECK(classify_significance(0.6) == Significance::MEDIUM);
+        CHECK(classify_significance(0.6) == Significance::Medium);
     }
 
     TEST_CASE("classify_significance - large") {
-        CHECK(classify_significance(1.0) == Significance::LARGE);
+        CHECK(classify_significance(1.0) == Significance::Large);
     }
 
     TEST_CASE("classify_significance - negative d") {
         // abs(-0.9) = 0.9 > 0.8 -> LARGE
-        CHECK(classify_significance(-0.9) == Significance::LARGE);
+        CHECK(classify_significance(-0.9) == Significance::Large);
     }
 }
 

@@ -46,7 +46,7 @@ dftracer::utils::index::gzip::TimeBounds timeline_bounds(
     const dftracer::utils::index::store::IndexDatabase& db, int fid,
     const dftracer::utils::index::RecordSchema& schema) {
     namespace ix = dftracer::utils::index;
-    if (schema.decoder == ix::Decoder::PATH) {
+    if (schema.decoder == ix::Decoder::Path) {
         ix::gzip::TimeBounds bounds;
         const auto& roles = schema.roles;
         if (roles.time.empty()) return bounds;
@@ -568,7 +568,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
                 .with_watchdog(false)
                 .with_global_timeout(std::chrono::seconds(0))
                 .with_task_timeout(std::chrono::seconds(0))
-                .with_io_backend(io::IoBackendType::THREADPOOL)
+                .with_io_backend(io::IoBackendType::Threadpool)
                 .with_io_batch_size(1);
 
         Pipeline pipeline(pipeline_config);
@@ -774,7 +774,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
             DFTRACER_UTILS_LOG_WARN(
                 "TraceIndex: failed to resolve time_metric: %s", e.what());
         }
-        if (time_metric_ != TimeMetric::US) {
+        if (time_metric_ != TimeMetric::Us) {
             DFTRACER_UTILS_LOG_INFO(
                 "TraceIndex: trace time unit is %s (scaling viz to us)",
                 std::string(time_metric_to_string(time_metric_)).c_str());

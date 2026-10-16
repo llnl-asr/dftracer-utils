@@ -102,7 +102,7 @@ FoldEvent make_event(StringIntern& intern, const char* fhash,
     fe.name_id = intern.get_or_insert("read");
     fe.fhash_id = intern.get_or_insert(fhash);
     fe.hhash_id = intern.get_or_insert(hhash);
-    fe.phase = RecordPhase::COMPLETE;
+    fe.phase = RecordPhase::Complete;
     fe.ts = 1;
     fe.dur = 5;
     fe.has_dur = true;

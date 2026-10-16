@@ -76,10 +76,10 @@ class EngineAggFold : public Fold {
     void step(const FoldBatch& batch) override {
         std::vector<FoldEvent> keep =
             select_events(batch, [&](const FoldEvent& ev) {
-                if (ev.phase == RecordPhase::METADATA && !keep_metadata_ &&
-                    phase_target_ != RecordPhase::METADATA)
+                if (ev.phase == RecordPhase::Metadata && !keep_metadata_ &&
+                    phase_target_ != RecordPhase::Metadata)
                     return false;
-                if (phase_target_ != RecordPhase::UNKNOWN &&
+                if (phase_target_ != RecordPhase::Unknown &&
                     ev.phase != phase_target_)
                     return false;
                 return !apply_query_ ||

@@ -58,7 +58,7 @@ class DomSource {
 
     RecordPhase phase() const {
         auto p = root_["ph"];
-        return p.error() ? RecordPhase::UNKNOWN
+        return p.error() ? RecordPhase::Unknown
                          : read_phase(json::JsonValue(p.value_unsafe()));
     }
 
@@ -437,18 +437,18 @@ std::optional<duql::Cell> container_cell(
 
 inline duql::Cell special_cell(FoldEvent::Special s) {
     switch (s) {
-        case FoldEvent::Special::NULL_VALUE:
+        case FoldEvent::Special::NullValue:
             return duql::Cell::null();
-        case FoldEvent::Special::FALSE_VALUE:
+        case FoldEvent::Special::FalseValue:
             return false;
-        case FoldEvent::Special::TRUE_VALUE:
+        case FoldEvent::Special::TrueValue:
             return true;
-        case FoldEvent::Special::EMPTY_ARRAY:
+        case FoldEvent::Special::EmptyArray:
             return duql::Cell::json("[]", true);
-        case FoldEvent::Special::EMPTY_OBJECT:
+        case FoldEvent::Special::EmptyObject:
             return duql::Cell::json("{}", false);
-        case FoldEvent::Special::JSON_ARRAY:
-        case FoldEvent::Special::JSON_OBJECT:
+        case FoldEvent::Special::JsonArray:
+        case FoldEvent::Special::JsonObject:
             break;
     }
     return duql::Cell::null();
@@ -466,10 +466,10 @@ inline bool pod_matches(const duql::Query& q, const FoldEvent& ev,
     scratch.clear();
     for (std::string_view f : q.fields()) {
         if (const auto* sp = src.special(f)) {
-            if (*sp == FoldEvent::Special::JSON_ARRAY ||
-                *sp == FoldEvent::Special::JSON_OBJECT)
+            if (*sp == FoldEvent::Special::JsonArray ||
+                *sp == FoldEvent::Special::JsonObject)
                 scratch[f] = duql::Cell::json(
-                    src.value(f), *sp == FoldEvent::Special::JSON_ARRAY);
+                    src.value(f), *sp == FoldEvent::Special::JsonArray);
             else
                 scratch[f] = special_cell(*sp);
             continue;
@@ -519,8 +519,8 @@ inline bool pod_matches(const duql::Query& q, const FoldEvent& ev,
             scratch[name] = std::move(lit);
         }
         for (const auto& s : ev.specials) {
-            if (s.top || s.kind == FoldEvent::Special::JSON_ARRAY ||
-                s.kind == FoldEvent::Special::JSON_OBJECT)
+            if (s.top || s.kind == FoldEvent::Special::JsonArray ||
+                s.kind == FoldEvent::Special::JsonObject)
                 continue;
             const std::string_view name = intern.resolve(s.key);
             if (name.size() > bare.size() && name.starts_with(bare) &&

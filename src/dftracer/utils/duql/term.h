@@ -16,51 +16,51 @@
 namespace dftracer::utils::duql {
 
 enum class Fn : std::uint8_t {
-    EXISTS,
-    COALESCE,
-    IF,
-    CASE,
-    ABS,
-    FLOOR,
-    CEIL,
-    ROUND,
-    MIN,
-    MAX,
-    LOG,
-    EXP,
-    POW,
-    LEN,
-    CONCAT,
-    LOWER,
-    UPPER,
-    TRIM,
-    STARTS_WITH,
-    ENDS_WITH,
-    CONTAINS,
-    SUBSTR,
-    REPLACE,
-    FIRST,
-    LAST,
-    SUM,
-    JSON,
-    TYPE,
-    INT,
-    FLOAT,
-    STRING,
-    EXTRACT,
-    SLICE,
-    FLATTEN,
-    KEYS,
-    VALUES,
-    PARSE_JSON,
-    SPLIT,
-    REGEX_REPLACE,
-    DATE_PART,
-    FORMAT_TIME,
-    INDEX_OF,
-    SORT,
-    UNIQUE,
-    JOIN,
+    Exists,
+    Coalesce,
+    If,
+    Case,
+    Abs,
+    Floor,
+    Ceil,
+    Round,
+    Min,
+    Max,
+    Log,
+    Exp,
+    Pow,
+    Len,
+    Concat,
+    Lower,
+    Upper,
+    Trim,
+    StartsWith,
+    EndsWith,
+    Contains,
+    Substr,
+    Replace,
+    First,
+    Last,
+    Sum,
+    Json,
+    Type,
+    Int,
+    Float,
+    String,
+    Extract,
+    Slice,
+    Flatten,
+    Keys,
+    Values,
+    ParseJson,
+    Split,
+    RegexReplace,
+    DatePart,
+    FormatTime,
+    IndexOf,
+    Sort,
+    Unique,
+    Join,
 };
 
 struct FnInfo {
@@ -74,51 +74,51 @@ inline constexpr std::uint8_t VARIADIC = 0xFF;
 
 /// Every built-in function, in Fn order.
 inline constexpr FnInfo FUNCTIONS[] = {
-    {Fn::EXISTS, "exists", 1, 1},
-    {Fn::COALESCE, "coalesce", 1, VARIADIC},
-    {Fn::IF, "if", 3, 3},
-    {Fn::CASE, "case", 3, VARIADIC},
-    {Fn::ABS, "abs", 1, 1},
-    {Fn::FLOOR, "floor", 1, 1},
-    {Fn::CEIL, "ceil", 1, 1},
-    {Fn::ROUND, "round", 1, 2},
-    {Fn::MIN, "min", 1, VARIADIC},
-    {Fn::MAX, "max", 1, VARIADIC},
-    {Fn::LOG, "log", 1, 1},
-    {Fn::EXP, "exp", 1, 1},
-    {Fn::POW, "pow", 2, 2},
-    {Fn::LEN, "len", 1, 1},
-    {Fn::CONCAT, "concat", 1, VARIADIC},
-    {Fn::LOWER, "lower", 1, 1},
-    {Fn::UPPER, "upper", 1, 1},
-    {Fn::TRIM, "trim", 1, 1},
-    {Fn::STARTS_WITH, "starts_with", 2, 2},
-    {Fn::ENDS_WITH, "ends_with", 2, 2},
-    {Fn::CONTAINS, "contains", 2, 2},
-    {Fn::SUBSTR, "substr", 2, 3},
-    {Fn::REPLACE, "replace", 3, 3},
-    {Fn::FIRST, "first", 1, 1},
-    {Fn::LAST, "last", 1, 1},
-    {Fn::SUM, "sum", 1, 1},
-    {Fn::JSON, "json", 1, 1},
-    {Fn::TYPE, "type", 1, 1},
-    {Fn::INT, "int", 1, 1},
-    {Fn::FLOAT, "float", 1, 1},
-    {Fn::STRING, "string", 1, 1},
-    {Fn::EXTRACT, "extract", 2, 3},
-    {Fn::SLICE, "slice", 2, 3},
-    {Fn::FLATTEN, "flatten", 1, 1},
-    {Fn::KEYS, "keys", 1, 1},
-    {Fn::VALUES, "values", 1, 1},
-    {Fn::PARSE_JSON, "parse_json", 1, 1},
-    {Fn::SPLIT, "split", 2, 2},
-    {Fn::REGEX_REPLACE, "regex_replace", 3, 3},
-    {Fn::DATE_PART, "date_part", 2, 2},
-    {Fn::FORMAT_TIME, "format_time", 2, 2},
-    {Fn::INDEX_OF, "index_of", 2, 2},
-    {Fn::SORT, "sort", 1, 1},
-    {Fn::UNIQUE, "unique", 1, 1},
-    {Fn::JOIN, "join", 2, 2},
+    {Fn::Exists, "exists", 1, 1},
+    {Fn::Coalesce, "coalesce", 1, VARIADIC},
+    {Fn::If, "if", 3, 3},
+    {Fn::Case, "case", 3, VARIADIC},
+    {Fn::Abs, "abs", 1, 1},
+    {Fn::Floor, "floor", 1, 1},
+    {Fn::Ceil, "ceil", 1, 1},
+    {Fn::Round, "round", 1, 2},
+    {Fn::Min, "min", 1, VARIADIC},
+    {Fn::Max, "max", 1, VARIADIC},
+    {Fn::Log, "log", 1, 1},
+    {Fn::Exp, "exp", 1, 1},
+    {Fn::Pow, "pow", 2, 2},
+    {Fn::Len, "len", 1, 1},
+    {Fn::Concat, "concat", 1, VARIADIC},
+    {Fn::Lower, "lower", 1, 1},
+    {Fn::Upper, "upper", 1, 1},
+    {Fn::Trim, "trim", 1, 1},
+    {Fn::StartsWith, "starts_with", 2, 2},
+    {Fn::EndsWith, "ends_with", 2, 2},
+    {Fn::Contains, "contains", 2, 2},
+    {Fn::Substr, "substr", 2, 3},
+    {Fn::Replace, "replace", 3, 3},
+    {Fn::First, "first", 1, 1},
+    {Fn::Last, "last", 1, 1},
+    {Fn::Sum, "sum", 1, 1},
+    {Fn::Json, "json", 1, 1},
+    {Fn::Type, "type", 1, 1},
+    {Fn::Int, "int", 1, 1},
+    {Fn::Float, "float", 1, 1},
+    {Fn::String, "string", 1, 1},
+    {Fn::Extract, "extract", 2, 3},
+    {Fn::Slice, "slice", 2, 3},
+    {Fn::Flatten, "flatten", 1, 1},
+    {Fn::Keys, "keys", 1, 1},
+    {Fn::Values, "values", 1, 1},
+    {Fn::ParseJson, "parse_json", 1, 1},
+    {Fn::Split, "split", 2, 2},
+    {Fn::RegexReplace, "regex_replace", 3, 3},
+    {Fn::DatePart, "date_part", 2, 2},
+    {Fn::FormatTime, "format_time", 2, 2},
+    {Fn::IndexOf, "index_of", 2, 2},
+    {Fn::Sort, "sort", 1, 1},
+    {Fn::Unique, "unique", 1, 1},
+    {Fn::Join, "join", 2, 2},
 };
 
 inline const FnInfo& fn_info(Fn fn) {
@@ -138,7 +138,7 @@ struct TConst {
 
 /// Where a path starts: the record, the current element of a quantifier's
 /// array (`.`), or the record around that element (`^.`).
-enum class FieldRoot : std::uint8_t { RECORD, ELEMENT, OUTER };
+enum class FieldRoot : std::uint8_t { Record, Element, Outer };
 
 /// A path. For a record or outer path, `base` is the path up to the first
 /// negative index, in the form readers and field maps use (`a.b`, `a[0]`);
@@ -149,27 +149,27 @@ struct TField {
     std::string base;
     std::vector<syntax::PathStep> steps;
     std::size_t neg_at = 0;
-    FieldRoot root = FieldRoot::RECORD;
+    FieldRoot root = FieldRoot::Record;
 };
 
 enum class TermOp : std::uint8_t {
-    NEG,
-    NOT,
-    ADD,
-    SUB,
-    MUL,
-    DIV,
-    IDIV,
-    MOD,
-    EQ,
-    NE,
-    LT,
-    LE,
-    GT,
-    GE,
-    AND,
-    OR,
-    COALESCE,
+    Neg,
+    Not,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Idiv,
+    Mod,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    And,
+    Or,
+    Coalesce,
 };
 
 struct TUnary {
@@ -236,22 +236,22 @@ struct LookupSlot {
 
 /// How a TLookup reads its side: IN tests that some row has the key, ARROW
 /// reads a column of the row with the key, SCALAR is the side's only cell.
-enum class LookupKind : std::uint8_t { IN, ARROW, SCALAR };
+enum class LookupKind : std::uint8_t { In, Arrow, Scalar };
 
 /// What a range-correlated lookup gives for the side rows in its range; NONE
 /// for a lookup without a range. ROWS: IN tests that there is one, SCALAR
 /// reads `column` of the only one. COUNT_VALUES counts the non-null values
 /// of `column`, COUNT_IF its true ones; the rest aggregate `column`.
 enum class RangeRead : std::uint8_t {
-    NONE,
-    ROWS,
-    COUNT,
-    COUNT_VALUES,
-    COUNT_IF,
-    SUM,
-    MIN,
-    MAX,
-    MEAN,
+    None,
+    Rows,
+    Count,
+    CountValues,
+    CountIf,
+    Sum,
+    Min,
+    Max,
+    Mean,
 };
 
 /// A read of the row set `side` of the program. `keys` are this row's key
@@ -281,8 +281,8 @@ struct TLookup {
     std::shared_ptr<LookupSlot> slot;
     std::optional<TermOp> low;
     std::optional<TermOp> high;
-    LookupKind kind = LookupKind::IN;
-    RangeRead range = RangeRead::NONE;
+    LookupKind kind = LookupKind::In;
+    RangeRead range = RangeRead::None;
     bool negated = false;
     bool all = false;
     /// IN only: a top-level term of the scan filter, which reads the side's
@@ -294,9 +294,9 @@ struct TLookup {
 /// `in` sub-query off the scan filter, or a sub-query correlated by `==`
 /// keys alone.
 inline bool joined(const TLookup& l) {
-    return l.range == RangeRead::NONE &&
-           ((l.kind == LookupKind::IN && !l.key_set) ||
-            (l.kind == LookupKind::SCALAR && !l.keys.empty()));
+    return l.range == RangeRead::None &&
+           ((l.kind == LookupKind::In && !l.key_set) ||
+            (l.kind == LookupKind::Scalar && !l.keys.empty()));
 }
 
 struct TMatch {
@@ -374,7 +374,7 @@ template <class F>
 void for_each_term_field(const Term& t, F&& fn) {
     for_each_term(t, [&fn](const Term& x) {
         if (const auto* f = std::get_if<TField>(&x.node);
-            f && f->root != FieldRoot::ELEMENT)
+            f && f->root != FieldRoot::Element)
             fn(*f);
     });
 }

@@ -177,7 +177,7 @@ TEST_SUITE("Dynamic filter pushdown") {
         // Build the same narrowing ViewSource::scan()/Cursor::narrow() would:
         // a bloom/dictionary prune of every remaining checkpoint against
         // name == "gamma", turned into per-file exclusions.
-        q::Expr e = q::field_cmp("name", q::CompareOp::EQ,
+        q::Expr e = q::field_cmp("name", q::CompareOp::Eq,
                                  q::LiteralNode{std::string("gamma")});
         auto built = std::move(e).build();
         REQUIRE(built.has_value());

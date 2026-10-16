@@ -10,7 +10,7 @@ namespace {
 template <typename T>
 T decode_big_endian(std::string_view bytes) {
     if (bytes.size() != sizeof(T)) {
-        throw DFTUtilsException(ErrorCode::PARSE,
+        throw DFTUtilsException(ErrorCode::Parse,
                                 "KeyCodec: invalid big-endian integer width");
     }
 

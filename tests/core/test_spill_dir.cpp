@@ -78,7 +78,7 @@ TEST_CASE("without a variable or a local disk the first usable fallback wins") {
 
 TEST_CASE("a RAM-backed fallback is never the spill directory") {
     using dftracer::utils::detail::choose_spill_dir;
-    if (dftracer::utils::filesystem_kind("/dev/shm") != FilesystemKind::TMPFS) {
+    if (dftracer::utils::filesystem_kind("/dev/shm") != FilesystemKind::Tmpfs) {
         MESSAGE("/dev/shm is not tmpfs here; nothing RAM-backed to refuse");
         return;
     }

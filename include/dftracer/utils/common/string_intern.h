@@ -138,7 +138,7 @@ class StringIntern {
         if (const auto* existing = slot_value(id)) {
             if (record_view(existing) == sv) return;
             throw DFTUtilsException(
-                ErrorCode::INVALID_ARGUMENT,
+                ErrorCode::InvalidArgument,
                 "string intern: id " + std::to_string(id) + " is already '" +
                     std::string(record_view(existing)) +
                     "', cannot rebind to '" + std::string(sv) +
@@ -159,7 +159,7 @@ class StringIntern {
     std::string_view resolve(std::uint32_t id) const {
         if (id >= FAST_CAPACITY) {
             throw DFTUtilsException(
-                ErrorCode::INVALID_ARGUMENT,
+                ErrorCode::InvalidArgument,
                 "string intern: id " + std::to_string(id) + " is out of range");
         }
         const auto* p = slot_value(id);
@@ -293,7 +293,7 @@ class StringIntern {
     [[noreturn]] static void throw_collision(const char* existing,
                                              std::string_view sv) {
         throw DFTUtilsException(
-            ErrorCode::INTERNAL,
+            ErrorCode::Internal,
             "string intern: deterministic id collision between '" +
                 std::string(record_view(existing)) + "' and '" +
                 std::string(sv) +
@@ -303,7 +303,7 @@ class StringIntern {
     std::uint32_t add_chunk(std::size_t bytes) {
         const auto n = num_chunks_.fetch_add(1, std::memory_order_relaxed);
         if (n >= CHUNK_DIRECTORY_SIZE * CHUNK_BLOCK_SIZE) {
-            throw DFTUtilsException(ErrorCode::INTERNAL,
+            throw DFTUtilsException(ErrorCode::Internal,
                                     "string intern: exhausted the chunk table");
         }
         auto& dir = chunk_dir_[n >> CHUNK_BLOCK_BITS];
@@ -454,7 +454,7 @@ class StringIntern {
     bool bind_slot(std::uint32_t id, const char* str, bool cas) {
         if (id >= FAST_CAPACITY) {
             throw DFTUtilsException(
-                ErrorCode::INTERNAL,
+                ErrorCode::Internal,
                 "string intern: exhausted the id space at " +
                     std::to_string(id));
         }

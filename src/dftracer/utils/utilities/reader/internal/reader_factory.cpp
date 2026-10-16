@@ -19,13 +19,13 @@ std::shared_ptr<Reader> ReaderFactory::create(const std::string &archive_path,
         static_cast<int>(format), archive_path.c_str());
 
     switch (format) {
-        case ArchiveFormat::GZIP:
+        case ArchiveFormat::Gzip:
             return std::make_shared<GzipReader>(archive_path, index_path,
                                                 index_ckpt_size);
 
         default:
             throw ReaderError(
-                ReaderError::INVALID_ARGUMENT,
+                ReaderError::InvalidArgument,
                 "Unsupported archive format for file: " + archive_path);
     }
 }
@@ -33,7 +33,7 @@ std::shared_ptr<Reader> ReaderFactory::create(const std::string &archive_path,
 std::shared_ptr<Reader> ReaderFactory::create(
     std::shared_ptr<dftracer::utils::index::gzip::CheckpointIndexer> indexer) {
     if (!indexer) {
-        throw ReaderError(ReaderError::INVALID_ARGUMENT,
+        throw ReaderError(ReaderError::InvalidArgument,
                           "Indexer cannot be null");
     }
 

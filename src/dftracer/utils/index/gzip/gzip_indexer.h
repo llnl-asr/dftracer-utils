@@ -107,7 +107,7 @@ class GzipIndexer : public CheckpointIndexer {
     std::string restart_window(std::uint64_t member_idx) const override;
 
     inline ArchiveFormat get_format_type() const override {
-        return ArchiveFormat::GZIP;
+        return ArchiveFormat::Gzip;
     }
     inline const char *get_format_name() const override {
         return dftracer::utils::get_format_name(get_format_type());

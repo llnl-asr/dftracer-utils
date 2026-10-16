@@ -35,7 +35,7 @@ inline coro::AsyncGenerator<std::string_view> decode_gzip_members(
 
     GzipMemberDecompressor dec;
     if (!dec.valid()) {
-        throw DFTUtilsException(ErrorCode::COMPRESSION,
+        throw DFTUtilsException(ErrorCode::Compression,
                                 "failed to allocate libdeflate decompressor");
     }
 
@@ -87,7 +87,7 @@ inline coro::AsyncGenerator<std::string_view> decode_gzip_members(
                 if (status == GzipDecode::InsufficientSpace) {
                     if (out_cap >= max_member_bytes) {
                         throw DFTUtilsException(
-                            ErrorCode::COMPRESSION,
+                            ErrorCode::Compression,
                             "gzip member is too large to decode in memory; "
                             "re-chunk the file with dftracer_split");
                     }
@@ -109,7 +109,7 @@ inline coro::AsyncGenerator<std::string_view> decode_gzip_members(
                                                           tail - head, rest)
                                 : std::nullopt;
                 if (!keep) {
-                    throw DFTUtilsException(ErrorCode::COMPRESSION,
+                    throw DFTUtilsException(ErrorCode::Compression,
                                             "gzip member failed to decompress");
                 }
                 if (*keep > 0) {
@@ -143,7 +143,7 @@ inline coro::AsyncGenerator<std::string_view> decode_gzip_members(
                 fd, comp.get() + tail, want, static_cast<off_t>(next_read));
             if (n <= 0) {
                 throw DFTUtilsException(
-                    ErrorCode::IO, "read error while decoding gzip member");
+                    ErrorCode::Io, "read error while decoding gzip member");
             }
             tail += static_cast<std::size_t>(n);
             next_read += static_cast<std::uint64_t>(n);

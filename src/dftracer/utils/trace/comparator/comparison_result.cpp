@@ -80,7 +80,7 @@ std::vector<MetricComparison> build_metadata_metrics(
         mc.delta = vval - bval;
         mc.pct_change = bval == 0.0 ? (vval != 0.0 ? 100.0 : 0.0)
                                     : (vval - bval) / bval * 100.0;
-        mc.significance = Significance::NEGLIGIBLE;
+        mc.significance = Significance::Negligible;
         mc.is_regression = false;
         return mc;
     };
@@ -123,10 +123,10 @@ double compute_cohens_d(const MetricStats& base, std::uint64_t n_base,
 
 Significance classify_significance(double d) {
     double abs_d = std::abs(d);
-    if (abs_d > 0.8) return Significance::LARGE;
-    if (abs_d > 0.5) return Significance::MEDIUM;
-    if (abs_d > 0.2) return Significance::SMALL;
-    return Significance::NEGLIGIBLE;
+    if (abs_d > 0.8) return Significance::Large;
+    if (abs_d > 0.5) return Significance::Medium;
+    if (abs_d > 0.2) return Significance::Small;
+    return Significance::Negligible;
 }
 
 namespace {
@@ -414,13 +414,13 @@ std::string metric_leaf(const std::string& name) {
 
 const char* significance_to_string(Significance s) {
     switch (s) {
-        case Significance::NEGLIGIBLE:
+        case Significance::Negligible:
             return "NEGLIGIBLE";
-        case Significance::SMALL:
+        case Significance::Small:
             return "SMALL";
-        case Significance::MEDIUM:
+        case Significance::Medium:
             return "MEDIUM";
-        case Significance::LARGE:
+        case Significance::Large:
             return "LARGE";
     }
     return "NEGLIGIBLE";
@@ -474,18 +474,18 @@ void flatten_node(RecordBatchBuilder& builder, const NodeResult& node,
 ArrowExportResult ComparisonOutput::to_arrow() const {
     RecordBatchBuilder builder;
     builder.declare_schema({
-        {"node_path", ColumnType::STRING},
-        {"metric_group", ColumnType::STRING},
-        {"metric_name", ColumnType::STRING},
-        {"baseline", ColumnType::DOUBLE},
-        {"variant", ColumnType::DOUBLE},
-        {"baseline_stdev", ColumnType::DOUBLE},
-        {"variant_stdev", ColumnType::DOUBLE},
-        {"delta", ColumnType::DOUBLE},
-        {"pct_change", ColumnType::DOUBLE},
-        {"cohens_d", ColumnType::DOUBLE},
-        {"significance", ColumnType::STRING},
-        {"is_regression", ColumnType::BOOL},
+        {"node_path", ColumnType::String},
+        {"metric_group", ColumnType::String},
+        {"metric_name", ColumnType::String},
+        {"baseline", ColumnType::Double},
+        {"variant", ColumnType::Double},
+        {"baseline_stdev", ColumnType::Double},
+        {"variant_stdev", ColumnType::Double},
+        {"delta", ColumnType::Double},
+        {"pct_change", ColumnType::Double},
+        {"cohens_d", ColumnType::Double},
+        {"significance", ColumnType::String},
+        {"is_regression", ColumnType::Bool},
     });
 
     for (const auto& node : nodes) {

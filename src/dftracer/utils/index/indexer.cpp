@@ -116,19 +116,19 @@ IndexStatus to_status(const build::ResolverResult& r) {
 void throw_on_failures(const build::ResolverResult& r) {
     if (r.failures.empty()) return;
     const auto& f = r.failures.front();
-    throw DFTUtilsException::cat(ErrorCode::IO, "failed to index ", f.file_path,
+    throw DFTUtilsException::cat(ErrorCode::Io, "failed to index ", f.file_path,
                                  ": ", f.message);
 }
 
 store::IndexExtension tier_extension(const std::string& name) {
     if (extensions::find_plugin_extension(name))
-        return store::IndexExtension::PLUGIN;
+        return store::IndexExtension::Plugin;
     auto ext = store::parse_extension(name);
     if (!ext || !(store::PRUNING_EXTENSIONS.has(*ext) ||
-                  *ext == store::IndexExtension::STATS ||
-                  *ext == store::IndexExtension::METADATA))
+                  *ext == store::IndexExtension::Stats ||
+                  *ext == store::IndexExtension::Metadata))
         throw DFTUtilsException::cat(
-            ErrorCode::INVALID_ARGUMENT, "not a tier extension: ", name,
+            ErrorCode::InvalidArgument, "not a tier extension: ", name,
             " (expected zonemap, bloom, counts, postings, dft.stats, "
             "dft.metadata or a registered plugin extension)");
     return *ext;
@@ -149,7 +149,7 @@ Indexer::Indexer(std::shared_ptr<Impl> impl) : impl_(std::move(impl)) {}
 
 Indexer Indexer::open(std::vector<std::string> paths, IndexerOptions options) {
     if (paths.empty())
-        throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+        throw DFTUtilsException(ErrorCode::InvalidArgument,
                                 "Indexer::open: no trace paths given");
     auto impl = std::make_shared<Impl>();
     impl->options = std::move(options);
@@ -157,7 +157,7 @@ Indexer Indexer::open(std::vector<std::string> paths, IndexerOptions options) {
         auto ext = store::parse_extension(name);
         if (!ext || !store::PRUNING_EXTENSIONS.has(*ext))
             throw DFTUtilsException::cat(
-                ErrorCode::INVALID_ARGUMENT,
+                ErrorCode::InvalidArgument,
                 "Indexer::open: not a pruning extension: ", name,
                 " (expected zonemap, bloom, counts or postings)");
         impl->extensions.add(*ext);
@@ -166,7 +166,7 @@ Indexer Indexer::open(std::vector<std::string> paths, IndexerOptions options) {
     for (auto& p : paths) {
         std::error_code ec;
         if (!fs::exists(p, ec))
-            throw DFTUtilsException::cat(ErrorCode::NOT_FOUND,
+            throw DFTUtilsException::cat(ErrorCode::NotFound,
                                          "Indexer::open: no such path: ", p);
         if (!fs::is_directory(p, ec)) {
             impl->paths.push_back(std::move(p));
@@ -299,9 +299,9 @@ coro::CoroTask<std::vector<FileManifest>> Indexer::manifest(CoroScope&) const {
                 auto state = db.extension_state(fid, ext);
                 if (!state) continue;
                 std::uint64_t want = file_config.params_hash(ext);
-                if (ext == store::IndexExtension::PROFILE)
+                if (ext == store::IndexExtension::Profile)
                     want = schema ? schema->params_hash() : 0;
-                else if (ext == store::IndexExtension::AGG)
+                else if (ext == store::IndexExtension::Agg)
                     want = agg_params ? *agg_params : 0;
                 m.extensions.push_back({std::string(store::extension_name(ext)),
                                         state->version, state->params_hash,
@@ -327,7 +327,7 @@ coro::CoroTask<std::vector<FileExplain>> Indexer::explain(
     auto parsed = duql::Query::from_string(query);
     if (!parsed)
         throw DFTUtilsException::cat(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             "Indexer::explain: ", parsed.error().format());
     std::vector<FileExplain> out;
     for (const auto& [index_path, traces] : impl_->by_index()) {
@@ -386,7 +386,7 @@ coro::CoroTask<IndexStatus> Indexer::drop_extension(CoroScope& scope,
             const int fid =
                 db.get_file_info_id(store::internal::get_logical_path(*p));
             if (fid < 0) continue;
-            if (ext == store::IndexExtension::PLUGIN)
+            if (ext == store::IndexExtension::Plugin)
                 store::records::clear_plugin(*writer, fid, extension);
             else
                 store::records::clear_file(*writer, ext, fid);
@@ -441,7 +441,7 @@ dataframe::DataFrame Indexer::rowset(std::string name) const {
     for (const auto& f : this->files()) files.push_back({f.path, f.index_path});
     auto frame = plan::stored_rowset(files, name);
     if (!frame)
-        throw DFTUtilsException::cat(ErrorCode::INVALID_ARGUMENT,
+        throw DFTUtilsException::cat(ErrorCode::InvalidArgument,
                                      "Indexer::rowset: the index holds no "
                                      "rows for row set '",
                                      name, "'; read it with View::duql(\"from ",

@@ -38,7 +38,7 @@ void set_format_version(IndexDatabase& db, std::uint32_t version) {
     layout::append_u32(body, version);
     db.db()->put(
         layout::format_key(),
-        layout::with_header(layout::Ext::HOST, layout::host::FORMAT, body));
+        layout::with_header(layout::Ext::Host, layout::host::FORMAT, body));
 }
 
 }  // namespace
@@ -104,19 +104,19 @@ TEST_SUITE("IndexDatabase") {
             dftu_utils_test::put_file_bloom(*writer, file_id, "name",
                                             std::span(blob), 4);
             dftu_utils_test::index_records::put_path(
-                *writer, dftu_utils_test::IndexExtension::BLOOM, file_id,
+                *writer, dftu_utils_test::IndexExtension::Bloom, file_id,
                 "name");
             dftu_utils_test::index_records::put_rowset(*writer, file_id,
                                                        "files", "frame");
             dftu_utils_test::index_records::put_manifest(
                 *writer, file_id,
-                dftracer::utils::index::store::IndexExtension::ROWSET, 0);
+                dftracer::utils::index::store::IndexExtension::Rowset, 0);
             dftu_utils_test::mark_built(*writer, file_id);
             writer->commit();
         }
 
         CHECK(db.extension_current(
-            file_id, dftracer::utils::index::store::IndexExtension::BLOOM));
+            file_id, dftracer::utils::index::store::IndexExtension::Bloom));
         CHECK(dftu_utils_test::has_file_bloom(db, file_id, "name"));
         CHECK(db.rowset(file_id, "files") == "frame");
 
@@ -126,14 +126,14 @@ TEST_SUITE("IndexDatabase") {
             rebuilt_id = dftu_utils_test::register_test_file(
                 *writer, "trace.pfw.gz", 0xBBBB);
             dftu_utils_test::index_records::clear_file(
-                *writer, dftracer::utils::index::store::IndexExtension::BLOOM,
+                *writer, dftracer::utils::index::store::IndexExtension::Bloom,
                 rebuilt_id);
             writer->commit();
         }
         CHECK(rebuilt_id == file_id);
 
         CHECK_FALSE(db.extension_current(
-            file_id, dftracer::utils::index::store::IndexExtension::BLOOM));
+            file_id, dftracer::utils::index::store::IndexExtension::Bloom));
         CHECK_FALSE(dftu_utils_test::has_file_bloom(db, file_id, "name"));
         CHECK(dftu_utils_test::bloom_chunks(db, file_id, "name") == 0);
         CHECK(db.rowset(file_id, "files") == "frame");
@@ -347,17 +347,17 @@ TEST_SUITE("IndexDatabase") {
                                                      0x2222);
             namespace rec = dftu_utils_test::index_records;
             rec::put_catalog_path(*writer, f1, "cat",
-                                  stat({PathType::STRING}, 5));
+                                  stat({PathType::String}, 5));
             rec::put_catalog_path(*writer, f1, "args.mhost",
-                                  stat({PathType::INT, PathType::BOOL}, 5));
+                                  stat({PathType::Int, PathType::Bool}, 5));
             rec::put_catalog_path(*writer, f2, "args.mhost",
-                                  stat({PathType::DOUBLE}, 2));
+                                  stat({PathType::Double}, 2));
             rec::put_catalog_path(*writer, f2, "args.fhash",
-                                  stat({PathType::STRING}, 2));
+                                  stat({PathType::String}, 2));
             rec::put_catalog_path(*writer, f2, "args.io.off",
-                                  stat({PathType::UINT}, 1));
+                                  stat({PathType::Uint}, 1));
             rec::put_catalog_path(*writer, f2, "args.gone",
-                                  stat({PathType::NULL_VALUE}, 0));
+                                  stat({PathType::NullValue}, 0));
             writer->commit();
         }
 
@@ -373,7 +373,7 @@ TEST_SUITE("IndexDatabase") {
         auto one = db.catalog(f1);
         REQUIRE(one.size() == 2);
         CHECK(one[0].first == "args.mhost");
-        CHECK(one[0].second.type == PathType::MIXED);
+        CHECK(one[0].second.type == PathType::Mixed);
         CHECK(one[0].second.count == 5);
         CHECK(one[1].first == "cat");
     }

@@ -101,7 +101,7 @@ TEST_SUITE("EventAggregator") {
             AggregationKey k;
             k.cat_id = intern.get_or_insert("POSIX");
             k.name_id = intern.get_or_insert("read");
-            key_a = serialize_agg_key(AggMapType::EVENT, k, intern);
+            key_a = serialize_agg_key(AggMapType::Event, k, intern);
             tier::flush_dictionary(*db, *agg.intern_table());
         }
         {
@@ -112,7 +112,7 @@ TEST_SUITE("EventAggregator") {
             AggregationKey k;
             k.cat_id = intern.get_or_insert("MPI");
             k.name_id = intern.get_or_insert("send");
-            key_b = serialize_agg_key(AggMapType::EVENT, k, intern);
+            key_b = serialize_agg_key(AggMapType::Event, k, intern);
             tier::flush_dictionary(*db, *agg.intern_table());
         }
 

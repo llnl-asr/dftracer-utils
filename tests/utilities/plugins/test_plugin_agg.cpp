@@ -50,7 +50,7 @@ FoldEvent evt(StringIntern& intern, const char* cat, const char* name,
     FoldEvent fe;
     fe.cat_id = intern.get_or_insert(cat);
     fe.name_id = intern.get_or_insert(name);
-    fe.phase = RecordPhase::COMPLETE;
+    fe.phase = RecordPhase::Complete;
     fe.ts = 1;
     fe.dur = dur;
     fe.has_dur = true;
@@ -235,7 +235,7 @@ FoldEvent evt_full(StringIntern& intern, const char* cat, const char* name,
     FoldEvent fe;
     fe.cat_id = intern.get_or_insert(cat);
     fe.name_id = intern.get_or_insert(name);
-    fe.phase = RecordPhase::COMPLETE;
+    fe.phase = RecordPhase::Complete;
     fe.pid = pid;
     fe.tid = tid;
     fe.ts = ts;

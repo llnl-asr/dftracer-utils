@@ -41,8 +41,8 @@ TEST_CASE("C++ Reader Streaming API - BYTES stream" *
 
     SUBCASE("BYTES + BYTE_RANGE - Raw bytes in exact range") {
         auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::BYTES)
-                                         .range_type(RangeType::BYTE_RANGE)
+                                         .stream_type(StreamType::Bytes)
+                                         .range_type(RangeType::ByteRange)
                                          .from(0)
                                          .to(100));
         REQUIRE(stream != nullptr);
@@ -64,8 +64,8 @@ TEST_CASE("C++ Reader Streaming API - BYTES stream" *
 
     SUBCASE("BYTES + BYTE_RANGE - Multiple reads") {
         auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::BYTES)
-                                         .range_type(RangeType::BYTE_RANGE)
+                                         .stream_type(StreamType::Bytes)
+                                         .range_type(RangeType::ByteRange)
                                          .from(0)
                                          .to(500));
         REQUIRE(stream != nullptr);
@@ -95,8 +95,8 @@ TEST_CASE("C++ Reader Streaming API - BYTES stream" *
         }
 
         auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::BYTES)
-                                         .range_type(RangeType::LINE_RANGE)
+                                         .stream_type(StreamType::Bytes)
+                                         .range_type(RangeType::LineRange)
                                          .from(1)
                                          .to(10));
         REQUIRE(stream != nullptr);
@@ -125,8 +125,8 @@ TEST_CASE("C++ Reader Streaming API - BYTES stream" *
         // First stream
         {
             auto stream1 = reader->stream(StreamConfig()
-                                              .stream_type(StreamType::BYTES)
-                                              .range_type(RangeType::BYTE_RANGE)
+                                              .stream_type(StreamType::Bytes)
+                                              .range_type(RangeType::ByteRange)
                                               .from(0)
                                               .to(100));
             REQUIRE(stream1 != nullptr);
@@ -140,8 +140,8 @@ TEST_CASE("C++ Reader Streaming API - BYTES stream" *
         // Second stream (equivalent to reset)
         {
             auto stream2 = reader->stream(StreamConfig()
-                                              .stream_type(StreamType::BYTES)
-                                              .range_type(RangeType::BYTE_RANGE)
+                                              .stream_type(StreamType::Bytes)
+                                              .range_type(RangeType::ByteRange)
                                               .from(0)
                                               .to(100));
             REQUIRE(stream2 != nullptr);
@@ -185,8 +185,8 @@ TEST_CASE("C++ Reader Streaming API - LINE_BYTES stream") {
 
     SUBCASE("LINE_BYTES + BYTE_RANGE - Single line-aligned bytes per read") {
         auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::LINE_BYTES)
-                                         .range_type(RangeType::BYTE_RANGE)
+                                         .stream_type(StreamType::LineBytes)
+                                         .range_type(RangeType::ByteRange)
                                          .from(0)
                                          .to(500));
         REQUIRE(stream != nullptr);
@@ -212,8 +212,8 @@ TEST_CASE("C++ Reader Streaming API - LINE_BYTES stream") {
 
     SUBCASE("LINE_BYTES + LINE_RANGE - Single line per read in line range") {
         auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::LINE_BYTES)
-                                         .range_type(RangeType::LINE_RANGE)
+                                         .stream_type(StreamType::LineBytes)
+                                         .range_type(RangeType::LineRange)
                                          .from(1)
                                          .to(10));
         REQUIRE(stream != nullptr);
@@ -265,8 +265,8 @@ TEST_CASE("C++ Reader Streaming API - MULTI_LINES_BYTES stream" *
     SUBCASE("MULTI_LINES_BYTES + BYTE_RANGE - Multiple lines per read") {
         auto stream =
             reader->stream(StreamConfig()
-                               .stream_type(StreamType::MULTI_LINES_BYTES)
-                               .range_type(RangeType::BYTE_RANGE)
+                               .stream_type(StreamType::MultiLinesBytes)
+                               .range_type(RangeType::ByteRange)
                                .from(0)
                                .to(1000));
         REQUIRE(stream != nullptr);
@@ -295,8 +295,8 @@ TEST_CASE("C++ Reader Streaming API - MULTI_LINES_BYTES stream" *
         "range") {
         auto stream =
             reader->stream(StreamConfig()
-                               .stream_type(StreamType::MULTI_LINES_BYTES)
-                               .range_type(RangeType::LINE_RANGE)
+                               .stream_type(StreamType::MultiLinesBytes)
+                               .range_type(RangeType::LineRange)
                                .from(1)
                                .to(20));
         REQUIRE(stream != nullptr);
@@ -352,8 +352,8 @@ TEST_CASE("C++ Reader Streaming API - LINE stream") {
 
     SUBCASE("LINE + BYTE_RANGE - Single parsed line per read") {
         auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::LINE)
-                                         .range_type(RangeType::BYTE_RANGE)
+                                         .stream_type(StreamType::Line)
+                                         .range_type(RangeType::ByteRange)
                                          .from(0)
                                          .to(500));
         REQUIRE(stream != nullptr);
@@ -383,8 +383,8 @@ TEST_CASE("C++ Reader Streaming API - LINE stream") {
 
     SUBCASE("LINE + LINE_RANGE - Single parsed line per read in line range") {
         auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::LINE)
-                                         .range_type(RangeType::LINE_RANGE)
+                                         .stream_type(StreamType::Line)
+                                         .range_type(RangeType::LineRange)
                                          .from(6)
                                          .to(15));
         REQUIRE(stream != nullptr);
@@ -435,8 +435,8 @@ TEST_CASE("C++ Reader Streaming API - MULTI_LINES stream" *
 
     SUBCASE("MULTI_LINES + BYTE_RANGE - Multiple parsed lines per read") {
         auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::MULTI_LINES)
-                                         .range_type(RangeType::BYTE_RANGE)
+                                         .stream_type(StreamType::MultiLines)
+                                         .range_type(RangeType::ByteRange)
                                          .from(0)
                                          .to(1000));
         REQUIRE(stream != nullptr);
@@ -470,8 +470,8 @@ TEST_CASE("C++ Reader Streaming API - MULTI_LINES stream" *
         "MULTI_LINES + LINE_RANGE - Multiple parsed lines per read in line "
         "range") {
         auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::MULTI_LINES)
-                                         .range_type(RangeType::LINE_RANGE)
+                                         .stream_type(StreamType::MultiLines)
+                                         .range_type(RangeType::LineRange)
                                          .from(11)
                                          .to(30));
         REQUIRE(stream != nullptr);
@@ -520,8 +520,8 @@ TEST_CASE("C++ Reader Streaming API - Edge cases") {
 
     SUBCASE("Empty range - start equals end") {
         auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::BYTES)
-                                         .range_type(RangeType::BYTE_RANGE)
+                                         .stream_type(StreamType::Bytes)
+                                         .range_type(RangeType::ByteRange)
                                          .from(100)
                                          .to(100));
         REQUIRE(stream != nullptr);
@@ -535,8 +535,8 @@ TEST_CASE("C++ Reader Streaming API - Edge cases") {
     SUBCASE("Range beyond file size") {
         std::size_t max_bytes = reader->get_max_bytes();
         auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::BYTES)
-                                         .range_type(RangeType::BYTE_RANGE)
+                                         .stream_type(StreamType::Bytes)
+                                         .range_type(RangeType::ByteRange)
                                          .from(max_bytes + 1000)
                                          .to(max_bytes + 2000));
         REQUIRE(stream != nullptr);
@@ -549,8 +549,8 @@ TEST_CASE("C++ Reader Streaming API - Edge cases") {
 
     SUBCASE("Very small buffer") {
         auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::BYTES)
-                                         .range_type(RangeType::BYTE_RANGE)
+                                         .stream_type(StreamType::Bytes)
+                                         .range_type(RangeType::ByteRange)
                                          .from(0)
                                          .to(100));
         REQUIRE(stream != nullptr);
@@ -579,8 +579,8 @@ TEST_CASE("C++ Reader Streaming API - Edge cases") {
         // First stream to establish baseline
         {
             auto stream = reader->stream(StreamConfig()
-                                             .stream_type(StreamType::BYTES)
-                                             .range_type(RangeType::BYTE_RANGE)
+                                             .stream_type(StreamType::Bytes)
+                                             .range_type(RangeType::ByteRange)
                                              .from(0)
                                              .to(50));
             REQUIRE(stream != nullptr);
@@ -591,8 +591,8 @@ TEST_CASE("C++ Reader Streaming API - Edge cases") {
         // Recreate stream multiple times and verify consistency
         for (int i = 0; i < 5; i++) {
             auto stream = reader->stream(StreamConfig()
-                                             .stream_type(StreamType::BYTES)
-                                             .range_type(RangeType::BYTE_RANGE)
+                                             .stream_type(StreamType::Bytes)
+                                             .range_type(RangeType::ByteRange)
                                              .from(0)
                                              .to(50));
             REQUIRE(stream != nullptr);
@@ -672,8 +672,8 @@ TEST_CASE("C++ Reader Streaming API - Buffer Size Tests") {
         std::string reference_data;
         {
             auto stream = reader->stream(StreamConfig()
-                                             .stream_type(StreamType::BYTES)
-                                             .range_type(RangeType::BYTE_RANGE)
+                                             .stream_type(StreamType::Bytes)
+                                             .range_type(RangeType::ByteRange)
                                              .from(0)
                                              .to(max_bytes)
                                              .buffer_size(0));
@@ -692,8 +692,8 @@ TEST_CASE("C++ Reader Streaming API - Buffer Size Tests") {
             INFO("Testing BYTES stream with buffer size: ", buf_size);
 
             auto stream = reader->stream(StreamConfig()
-                                             .stream_type(StreamType::BYTES)
-                                             .range_type(RangeType::BYTE_RANGE)
+                                             .stream_type(StreamType::Bytes)
+                                             .range_type(RangeType::ByteRange)
                                              .from(0)
                                              .to(max_bytes)
                                              .buffer_size(buf_size));
@@ -718,8 +718,8 @@ TEST_CASE("C++ Reader Streaming API - Buffer Size Tests") {
         std::vector<std::string> reference_lines;
         {
             auto stream = reader->stream(StreamConfig()
-                                             .stream_type(StreamType::LINE)
-                                             .range_type(RangeType::LINE_RANGE)
+                                             .stream_type(StreamType::Line)
+                                             .range_type(RangeType::LineRange)
                                              .from(1)
                                              .to(50)
                                              .buffer_size(0));
@@ -739,8 +739,8 @@ TEST_CASE("C++ Reader Streaming API - Buffer Size Tests") {
             INFO("Testing LINE stream with buffer size: ", buf_size);
 
             auto stream = reader->stream(StreamConfig()
-                                             .stream_type(StreamType::LINE)
-                                             .range_type(RangeType::LINE_RANGE)
+                                             .stream_type(StreamType::Line)
+                                             .range_type(RangeType::LineRange)
                                              .from(1)
                                              .to(50)
                                              .buffer_size(buf_size));
@@ -767,8 +767,8 @@ TEST_CASE("C++ Reader Streaming API - Buffer Size Tests") {
         {
             auto stream =
                 reader->stream(StreamConfig()
-                                   .stream_type(StreamType::MULTI_LINES)
-                                   .range_type(RangeType::LINE_RANGE)
+                                   .stream_type(StreamType::MultiLines)
+                                   .range_type(RangeType::LineRange)
                                    .from(1)
                                    .to(50)
                                    .buffer_size(0));
@@ -797,8 +797,8 @@ TEST_CASE("C++ Reader Streaming API - Buffer Size Tests") {
 
             auto stream =
                 reader->stream(StreamConfig()
-                                   .stream_type(StreamType::MULTI_LINES)
-                                   .range_type(RangeType::LINE_RANGE)
+                                   .stream_type(StreamType::MultiLines)
+                                   .range_type(RangeType::LineRange)
                                    .from(1)
                                    .to(50)
                                    .buffer_size(buf_size));

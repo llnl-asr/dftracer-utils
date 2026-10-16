@@ -127,11 +127,11 @@ void aggregate_event(const Acc& acc, AggState& st, const AggregationConfig& cfg,
         is_preaggregated_system = true;
     }
 
-    AggMapType map_type = AggMapType::EVENT;
+    AggMapType map_type = AggMapType::Event;
     if (is_preaggregated_system) {
-        map_type = AggMapType::SYSTEM;
+        map_type = AggMapType::System;
     } else if (acc.is_profile()) {
-        map_type = AggMapType::PROFILE;
+        map_type = AggMapType::Profile;
     }
 
     auto hhash = acc.arg_string("hhash");

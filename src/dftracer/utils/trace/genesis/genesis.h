@@ -112,9 +112,9 @@ struct GroupProgress {
     /// WAIT: the caller waits for its memory share. READ: its files are read.
     /// SORT: its calls go into the sort. WALK: the sorted calls are walked.
     /// WRITE: the caller writes its runs.
-    enum class Phase : std::uint8_t { WAIT, READ, SORT, WALK, WRITE };
+    enum class Phase : std::uint8_t { Wait, Read, Sort, Walk, Write };
 
-    std::atomic<Phase> phase{Phase::WAIT};
+    std::atomic<Phase> phase{Phase::Wait};
     /// steady_clock time, in nanoseconds, when `phase` was entered.
     std::atomic<std::int64_t> phase_since_ns{0};
     /// Compressed bytes of the files read so far.
@@ -137,7 +137,7 @@ struct GroupProgress {
         calls.store(0, std::memory_order_relaxed);
         sorted.store(0, std::memory_order_relaxed);
         walked.store(0, std::memory_order_relaxed);
-        enter(Phase::WAIT);
+        enter(Phase::Wait);
     }
 
     void updated() const {

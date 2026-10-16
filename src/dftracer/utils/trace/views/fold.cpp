@@ -68,21 +68,21 @@ std::uint32_t intern_string(dftracer::utils::StringIntern& intern,
 
 std::uint8_t leaf_type_tag(simdjson::dom::element v) {
     using dftracer::utils::index::store::PathType;
-    PathType t = PathType::NULL_VALUE;
+    PathType t = PathType::NullValue;
     if (v.is_string())
-        t = PathType::STRING;
+        t = PathType::String;
     else if (v.is_int64())
-        t = PathType::INT;
+        t = PathType::Int;
     else if (v.is_uint64())
-        t = PathType::UINT;
+        t = PathType::Uint;
     else if (v.is_double())
-        t = PathType::DOUBLE;
+        t = PathType::Double;
     else if (v.is_bool())
-        t = PathType::BOOL;
+        t = PathType::Bool;
     else if (v.is_array())
-        t = PathType::ARRAY;
+        t = PathType::Array;
     else if (v.is_object())
-        t = PathType::OBJECT;
+        t = PathType::Object;
     return static_cast<std::uint8_t>(t);
 }
 
@@ -275,18 +275,18 @@ std::string arg_json(const FoldEvent::ArgValue& v,
 
 std::string_view special_json(FoldEvent::Special s) {
     switch (s) {
-        case FoldEvent::Special::NULL_VALUE:
+        case FoldEvent::Special::NullValue:
             return "null";
-        case FoldEvent::Special::FALSE_VALUE:
+        case FoldEvent::Special::FalseValue:
             return "false";
-        case FoldEvent::Special::TRUE_VALUE:
+        case FoldEvent::Special::TrueValue:
             return "true";
-        case FoldEvent::Special::EMPTY_ARRAY:
+        case FoldEvent::Special::EmptyArray:
             return "[]";
-        case FoldEvent::Special::EMPTY_OBJECT:
+        case FoldEvent::Special::EmptyObject:
             return "{}";
-        case FoldEvent::Special::JSON_ARRAY:
-        case FoldEvent::Special::JSON_OBJECT:
+        case FoldEvent::Special::JsonArray:
+        case FoldEvent::Special::JsonObject:
             break;
     }
     return "null";
@@ -304,8 +304,8 @@ std::string_view json_text(const FoldEvent& ev,
 }
 
 bool is_json_text(FoldEvent::Special s) {
-    return s == FoldEvent::Special::JSON_ARRAY ||
-           s == FoldEvent::Special::JSON_OBJECT;
+    return s == FoldEvent::Special::JsonArray ||
+           s == FoldEvent::Special::JsonObject;
 }
 
 }  // namespace
@@ -520,8 +520,8 @@ void bind_field(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
     if (numeric) num = v.get_double().value_unsafe();
     std::optional<duql::Number> text_num;
     if (type == T::STRING &&
-        (f.type == ix::FieldType::INT || f.type == ix::FieldType::FLOAT ||
-         f.role == ix::Role::TIME || f.role == ix::Role::DURATION))
+        (f.type == ix::FieldType::Int || f.type == ix::FieldType::Float ||
+         f.role == ix::Role::Time || f.role == ix::Role::Duration))
         text_num = duql::parse_number(v.get_string().value_unsafe());
     auto keep = [&] {
         append_scalar_arg(d.ev.args, d.ev.specials, id, v, d.intern);
@@ -543,7 +543,7 @@ void bind_field(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
         return true;
     };
     // An ISO-8601 time is its microseconds once decoded.
-    if (f.role == ix::Role::TIME && f.type == ix::FieldType::STRING &&
+    if (f.role == ix::Role::Time && f.type == ix::FieldType::String &&
         type == T::STRING) {
         if (const auto us = ix::iso8601_micros(v.get_string().value_unsafe())) {
             d.ev.args.emplace_back(id, *us);
@@ -552,7 +552,7 @@ void bind_field(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
         return;
     }
     switch (f.type) {
-        case ix::FieldType::STRING:
+        case ix::FieldType::String:
             if (type == T::STRING || type == T::NULL_VALUE) {
                 keep();
             } else {
@@ -561,11 +561,11 @@ void bind_field(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
                 d.ev.args.emplace_back(id, d.intern.get_or_insert(text));
             }
             break;
-        case ix::FieldType::BOOL:
+        case ix::FieldType::Bool:
             if (type != T::BOOL) return unconverted();
             keep();
             break;
-        case ix::FieldType::FLOAT:
+        case ix::FieldType::Float:
             if (numeric) {
                 d.ev.args.emplace_back(id, *num);
             } else if (text_num) {
@@ -576,13 +576,13 @@ void bind_field(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
                 return unconverted();
             }
             break;
-        case ix::FieldType::JSON: {
+        case ix::FieldType::Json: {
             std::string text;
             dftracer::utils::json::append_canonical_json(text, v);
             d.ev.args.emplace_back(id, d.intern.get_or_insert(text));
             return;
         }
-        case ix::FieldType::INT:
+        case ix::FieldType::Int:
             if (type == T::INT64 || type == T::UINT64) {
                 keep();
             } else if (const auto n = type == T::DOUBLE
@@ -600,22 +600,22 @@ void bind_field(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
         num = std::visit([](auto x) { return static_cast<double>(x); },
                          *text_num);
     std::optional<double> micros;
-    if (num) micros = ix::micros_per(f.unit.value_or(ix::TimeUnit::US)) * *num;
+    if (num) micros = ix::micros_per(f.unit.value_or(ix::TimeUnit::Us)) * *num;
     switch (f.role) {
-        case ix::Role::NONE:
+        case ix::Role::None:
             break;
-        case ix::Role::TIME:
+        case ix::Role::Time:
             if (micros && *micros >= 0)
                 d.ev.ts = static_cast<std::uint64_t>(std::llround(*micros));
             break;
-        case ix::Role::DURATION:
+        case ix::Role::Duration:
             if (micros && *micros >= 0) {
                 d.ev.dur = static_cast<std::uint64_t>(std::llround(*micros));
                 d.ev.has_dur = true;
             }
             break;
-        case ix::Role::ENTITY:
-        case ix::Role::LANE: {
+        case ix::Role::Entity:
+        case ix::Role::Lane: {
             if (d.ev.args.empty() || d.ev.args.back().first != id) break;
             const auto& value = d.ev.args.back().second;
             std::uint64_t lane = 0;
@@ -626,10 +626,10 @@ void bind_field(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
             else if (const auto* sid = std::get_if<std::uint32_t>(&value))
                 lane = static_cast<std::uint64_t>(
                     ix::entity_id(d.intern.resolve(*sid)));
-            (f.role == ix::Role::ENTITY ? d.ev.pid : d.ev.tid) = lane;
+            (f.role == ix::Role::Entity ? d.ev.pid : d.ev.tid) = lane;
             break;
         }
-        case ix::Role::NAME:
+        case ix::Role::Name:
             if (!d.ev.args.empty() && d.ev.args.back().first == id)
                 if (const auto* sid =
                         std::get_if<std::uint32_t>(&d.ev.args.back().second))
@@ -657,15 +657,15 @@ void capture_json(const std::string& path, simdjson::dom::element v,
         pos = *at;
     }
     const auto* f = d.field(path, pos);
-    if (!f || f->type != dftracer::utils::index::FieldType::JSON) return;
+    if (!f || f->type != dftracer::utils::index::FieldType::Json) return;
     if (d.paths) --d.left;
     std::string text;
     dftracer::utils::json::append_canonical_json(text, v);
     const std::uint32_t id = d.intern.get_or_insert(path);
     d.ev.args.emplace_back(id, d.intern.get_or_insert(text));
     d.ev.specials.push_back({id, v.is_array()
-                                     ? FoldEvent::Special::JSON_ARRAY
-                                     : FoldEvent::Special::JSON_OBJECT});
+                                     ? FoldEvent::Special::JsonArray
+                                     : FoldEvent::Special::JsonObject});
 }
 
 // An array or object past max_children: one leaf of its canonical text.
@@ -679,8 +679,8 @@ void collapse(const std::string& path, simdjson::dom::element v,
     dftracer::utils::json::append_canonical_json(text, v);
     d.ev.args.emplace_back(id, d.intern.get_or_insert(text));
     d.ev.specials.push_back({id, v.is_array()
-                                     ? FoldEvent::Special::JSON_ARRAY
-                                     : FoldEvent::Special::JSON_OBJECT});
+                                     ? FoldEvent::Special::JsonArray
+                                     : FoldEvent::Special::JsonObject});
 }
 
 // An empty array or object at a decoded path, for filters.
@@ -690,8 +690,8 @@ void note_empty(const std::string& path, simdjson::dom::element v,
     const std::uint32_t id = d.intern.get_or_insert(path);
     if (d.schema) d.ev.schema_leaves.emplace_back(id, leaf_type_tag(v));
     d.ev.specials.push_back({id, v.is_array()
-                                     ? FoldEvent::Special::EMPTY_ARRAY
-                                     : FoldEvent::Special::EMPTY_OBJECT});
+                                     ? FoldEvent::Special::EmptyArray
+                                     : FoldEvent::Special::EmptyObject});
 }
 
 void decode_leaves(std::string& path, simdjson::dom::element v, LeafDecode& d) {
@@ -753,7 +753,7 @@ void decode_leaves(std::string& path, simdjson::dom::element v, LeafDecode& d) {
     const std::uint32_t id = d.intern.get_or_insert(path);
     if (d.schema) d.ev.schema_leaves.emplace_back(id, leaf_type_tag(v));
     if (v.is_null()) {
-        d.ev.specials.push_back({id, FoldEvent::Special::NULL_VALUE});
+        d.ev.specials.push_back({id, FoldEvent::Special::NullValue});
         return;
     }
     if (d.skip_never && d.schema && d.record_schema &&
@@ -779,14 +779,14 @@ void decode_record_into(
     std::size_t max_children, DecodeHints* hints, bool skip_never_indexed) {
     namespace ix = dftracer::utils::index;
     reset_fold_event(ev);
-    ev.phase = RecordPhase::COMPLETE;
+    ev.phase = RecordPhase::Complete;
     ev.by_path = true;
     const auto* fields = paths ? path_fields : nullptr;
     bool json = record_schema && record_schema->has_json;
     if (json && fields)
         json = std::any_of(fields->begin(), fields->end(),
                            [](const ix::FieldSpec* f) {
-                               return f && f->type == ix::FieldType::JSON;
+                               return f && f->type == ix::FieldType::Json;
                            });
     LeafDecode d{intern,
                  ev,

@@ -41,17 +41,17 @@ FilesystemKind classify_magic(unsigned long magic) noexcept {
     switch (magic) {
         case TMPFS_MAGIC:
         case RAMFS_MAGIC:
-            return FilesystemKind::TMPFS;
+            return FilesystemKind::Tmpfs;
         case NFS_MAGIC:
-            return FilesystemKind::NFS;
+            return FilesystemKind::Nfs;
         case LUSTRE_MAGIC:
-            return FilesystemKind::LUSTRE;
+            return FilesystemKind::Lustre;
         case GPFS_MAGIC:
-            return FilesystemKind::GPFS;
+            return FilesystemKind::Gpfs;
         case BEEGFS_MAGIC:
-            return FilesystemKind::BEEGFS;
+            return FilesystemKind::Beegfs;
         default:
-            return FilesystemKind::LOCAL;
+            return FilesystemKind::Local;
     }
 }
 #endif
@@ -61,18 +61,18 @@ FilesystemKind classify_magic(unsigned long magic) noexcept {
 // pseudo/kernel filesystems (proc, sysfs, ...) to UNKNOWN so they are never
 // mistaken for usable local storage.
 FilesystemKind classify_fstype_name(std::string_view name) noexcept {
-    if (name == "tmpfs" || name == "ramfs") return FilesystemKind::TMPFS;
-    if (name == "nfs" || name == "nfs4") return FilesystemKind::NFS;
-    if (name == "lustre") return FilesystemKind::LUSTRE;
-    if (name == "gpfs") return FilesystemKind::GPFS;
-    if (name == "beegfs") return FilesystemKind::BEEGFS;
+    if (name == "tmpfs" || name == "ramfs") return FilesystemKind::Tmpfs;
+    if (name == "nfs" || name == "nfs4") return FilesystemKind::Nfs;
+    if (name == "lustre") return FilesystemKind::Lustre;
+    if (name == "gpfs") return FilesystemKind::Gpfs;
+    if (name == "beegfs") return FilesystemKind::Beegfs;
     if (name == "ext2" || name == "ext3" || name == "ext4" || name == "xfs" ||
         name == "btrfs" || name == "f2fs" || name == "zfs" || name == "jfs" ||
         name == "reiserfs" || name == "ntfs" || name == "vfat" ||
         name == "exfat" || name == "overlay" || name == "fuseblk" ||
         name == "apfs" || name == "hfs" || name == "ufs" || name == "msdos")
-        return FilesystemKind::LOCAL;
-    return FilesystemKind::UNKNOWN;
+        return FilesystemKind::Local;
+    return FilesystemKind::Unknown;
 }
 
 std::string probe_path(const std::string& path) noexcept {
@@ -118,15 +118,15 @@ FilesystemKind filesystem_kind(const std::string& path) noexcept {
     [[maybe_unused]] const std::string target = probe_path(path);
 #if defined(__linux__)
     struct statfs st{};
-    if (::statfs(target.c_str(), &st) != 0) return FilesystemKind::UNKNOWN;
+    if (::statfs(target.c_str(), &st) != 0) return FilesystemKind::Unknown;
     return classify_magic(static_cast<unsigned long>(st.f_type));
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
     defined(__NetBSD__)
     struct statfs st{};
-    if (::statfs(target.c_str(), &st) != 0) return FilesystemKind::UNKNOWN;
+    if (::statfs(target.c_str(), &st) != 0) return FilesystemKind::Unknown;
     return classify_fstype_name(st.f_fstypename);
 #else
-    return FilesystemKind::UNKNOWN;
+    return FilesystemKind::Unknown;
 #endif
 }
 

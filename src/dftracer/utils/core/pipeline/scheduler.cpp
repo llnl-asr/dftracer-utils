@@ -15,7 +15,7 @@ namespace dftracer::utils {
 
 Scheduler::Scheduler(TaskExecutor* executor) : executor_(executor) {
     if (!executor_) {
-        throw PipelineError(PipelineError::VALIDATION_ERROR,
+        throw PipelineError(PipelineError::ValidationError,
                             "Executor cannot be null");
     }
 
@@ -52,7 +52,7 @@ Scheduler::Scheduler(TaskExecutor* executor, Watchdog* watchdog,
       error_policy_(config.error_policy),
       error_handler_(config.error_handler) {
     if (!executor_) {
-        throw PipelineError(PipelineError::VALIDATION_ERROR,
+        throw PipelineError(PipelineError::ValidationError,
                             "Executor cannot be null");
     }
 
@@ -104,7 +104,7 @@ Scheduler::~Scheduler() {
 
 void Scheduler::schedule(std::shared_ptr<Task> source, const std::any& input) {
     if (!source) {
-        throw PipelineError(PipelineError::VALIDATION_ERROR,
+        throw PipelineError(PipelineError::ValidationError,
                             "Source task cannot be null");
     }
 
@@ -182,7 +182,7 @@ void Scheduler::schedule(std::shared_ptr<Task> source, const std::any& input) {
             bool completed = done_cv_.wait_for(lock, global_timeout_, [this] {
                 return pending_count_ == 0 ||
                        (has_error_.load() &&
-                        error_policy_ == ErrorPolicy::FAIL_FAST) ||
+                        error_policy_ == ErrorPolicy::FailFast) ||
                        shutdown_requested_.load();
             });
 
@@ -195,7 +195,7 @@ void Scheduler::schedule(std::shared_ptr<Task> source, const std::any& input) {
                     static_cast<long long>(global_timeout_.count()));
                 lock.unlock();
                 request_shutdown();
-                throw PipelineError(PipelineError::TIMEOUT_ERROR,
+                throw PipelineError(PipelineError::TimeoutError,
                                     "Pipeline execution timed out");
             }
         } else {
@@ -203,7 +203,7 @@ void Scheduler::schedule(std::shared_ptr<Task> source, const std::any& input) {
             done_cv_.wait(lock, [this] {
                 return pending_count_ == 0 ||
                        (has_error_.load() &&
-                        error_policy_ == ErrorPolicy::FAIL_FAST) ||
+                        error_policy_ == ErrorPolicy::FailFast) ||
                        shutdown_requested_.load();
             });
         }
@@ -220,19 +220,19 @@ void Scheduler::schedule(std::shared_ptr<Task> source, const std::any& input) {
     // Check for timeout first (watchdog sets both has_error_ and
     // shutdown_requested_)
     if (!timeout_reason_.empty()) {
-        throw PipelineError(PipelineError::TIMEOUT_ERROR, timeout_reason_);
+        throw PipelineError(PipelineError::TimeoutError, timeout_reason_);
     }
 
     if (shutdown_requested_.load()) {
-        throw PipelineError(PipelineError::INTERRUPTED,
+        throw PipelineError(PipelineError::Interrupted,
                             "Pipeline execution was interrupted");
     }
 
-    if (has_error_.load() && error_policy_ == ErrorPolicy::FAIL_FAST) {
+    if (has_error_.load() && error_policy_ == ErrorPolicy::FailFast) {
         DFTRACER_UTILS_LOG_DEBUG(
             "Throwing EXECUTION_ERROR: has_error=%d, policy=%d",
             has_error_.load(), static_cast<int>(error_policy_));
-        throw PipelineError(PipelineError::EXECUTION_ERROR,
+        throw PipelineError(PipelineError::ExecutionError,
                             "Pipeline execution failed");
     }
 
@@ -275,7 +275,7 @@ void Scheduler::on_task_completed(std::shared_ptr<Task> task) {
     // FAIL_FAST policy.  handle_task_error() already decremented
     // pending_count_, so we must NOT decrement again here.
     if (shutdown_requested_.load() ||
-        (task_failed && error_policy_ == ErrorPolicy::FAIL_FAST)) {
+        (task_failed && error_policy_ == ErrorPolicy::FailFast)) {
         DFTRACER_UTILS_LOG_DEBUG(
             "Skipping child scheduling for task '%s' due to shutdown or "
             "FAIL_FAST",
@@ -303,7 +303,7 @@ void Scheduler::on_task_completed(std::shared_ptr<Task> task) {
         if (prev == 1) {
             // For CONTINUE/CUSTOM policy: skip children if any parent failed
             bool has_failed_parent = false;
-            if (error_policy_ != ErrorPolicy::FAIL_FAST) {
+            if (error_policy_ != ErrorPolicy::FailFast) {
                 for (const auto& parent : child->get_parents()) {
                     if (parent->result().has_exception()) {
                         has_failed_parent = true;
@@ -570,7 +570,7 @@ void Scheduler::handle_task_error(std::shared_ptr<Task> task) {
         }
     }
 
-    if (error_policy_ == ErrorPolicy::FAIL_FAST) {
+    if (error_policy_ == ErrorPolicy::FailFast) {
         // Stop scheduling new tasks
         --pending_count_;  // Still decrement to unblock waiting thread
 
@@ -630,7 +630,7 @@ void Scheduler::validate_task_types(std::shared_ptr<Task> task) {
                                   current->get_name(), cloc.file_name(),
                                   cloc.line(), parent->get_name(),
                                   ploc.file_name(), ploc.line());
-                    throw PipelineError(PipelineError::TYPE_MISMATCH, buf);
+                    throw PipelineError(PipelineError::TypeMismatch, buf);
                 }
             }
         }
@@ -657,7 +657,7 @@ void Scheduler::skip_task_and_descendants(std::shared_ptr<Task> task) {
 
     // Set exception on skipped task
     task->set_exception(std::make_exception_ptr(
-        PipelineError(PipelineError::EXECUTION_ERROR, "Parent task failed")));
+        PipelineError(PipelineError::ExecutionError, "Parent task failed")));
 
     DFTRACER_UTILS_LOG_DEBUG("Skipped task ID %ld ('%s') due to failed parent",
                              task->get_id(), task->get_name());

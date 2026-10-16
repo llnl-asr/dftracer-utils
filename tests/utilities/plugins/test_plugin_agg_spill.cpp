@@ -109,7 +109,7 @@ FoldEvent evt(StringIntern& intern, const std::string& cat,
     FoldEvent fe;
     fe.cat_id = intern.get_or_insert(cat);
     fe.name_id = intern.get_or_insert(name);
-    fe.phase = RecordPhase::COMPLETE;
+    fe.phase = RecordPhase::Complete;
     fe.pid = 1;
     fe.tid = 1;
     fe.ts = dur;

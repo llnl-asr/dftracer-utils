@@ -21,7 +21,7 @@ Result<std::unique_ptr<SpillFile>> SpillFile::create() {
     f->fd_ = ScopedFd(::mkostemp(path.data(), O_CLOEXEC));
     if (f->fd_.get() < 0)
         return make_error(
-            ErrorCode::IO,
+            ErrorCode::Io,
             str_cat("spill: cannot create a spill file in '", *dir, "' (",
                     std::strerror(errno), "); set ", constants::SPILL_DIR_ENV,
                     " to a writable directory"));
@@ -50,12 +50,12 @@ Result<void> SpillFile::write_at(std::uint64_t offset, const void* data,
         if (w < 0) {
             if (errno == EINTR) continue;
             return make_error(
-                ErrorCode::IO,
+                ErrorCode::Io,
                 str_cat("spill: write failed (", std::strerror(errno),
                         "); the spill directory may be full"));
         }
         if (w == 0)
-            return make_error(ErrorCode::IO, "spill: write made no progress");
+            return make_error(ErrorCode::Io, "spill: write made no progress");
         done += static_cast<std::size_t>(w);
     }
     return {};
@@ -78,7 +78,7 @@ Result<void> SpillFile::read(std::uint64_t offset, void* out,
         if (r < 0 && errno == EINTR) continue;
         if (r <= 0)
             return make_error(
-                ErrorCode::IO,
+                ErrorCode::Io,
                 str_cat("spill: short read at offset ", offset + done, " (",
                         r < 0 ? std::strerror(errno) : "end of file", ")"));
         done += static_cast<std::size_t>(r);

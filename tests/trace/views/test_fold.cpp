@@ -239,7 +239,7 @@ TEST_SUITE("Fold") {
             void step(const FoldBatch& b) override {
                 for (const auto& e : b.events) {
                     if (e.phase !=
-                        dftracer::utils::trace::RecordPhase::METADATA)
+                        dftracer::utils::trace::RecordPhase::Metadata)
                         continue;
                     std::string type(in->resolve(e.name_id));
                     std::string name, value;
@@ -300,7 +300,7 @@ TEST_SUITE("Fold") {
         REQUIRE_FALSE(r.error());
         FoldEvent e = extract_fold_event(r.value_unsafe(), intern, true);
 
-        CHECK(e.phase == dftracer::utils::trace::RecordPhase::METADATA);
+        CHECK(e.phase == dftracer::utils::trace::RecordPhase::Metadata);
         CHECK(intern.resolve(e.name_id) == "FH");
         CHECK(intern.resolve(e.hhash_id) == "hh9");  // hhash always harvested
 

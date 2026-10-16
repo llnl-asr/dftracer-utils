@@ -104,7 +104,7 @@ coro::CoroTask<Result<PruneResult>> prune_data(const PruneRequest& request) {
             }))
             co_return result;
     } catch (const std::exception& e) {
-        co_return make_error(ErrorCode::INDEXER,
+        co_return make_error(ErrorCode::Indexer,
                              "prune_file: index read failed for " +
                                  request.file_path + ": " + e.what());
     }
@@ -128,9 +128,9 @@ coro::CoroTask<Result<PruneResult>> prune_data(const PruneRequest& request) {
 
 coro::CoroTask<Result<PruneResult>> prune_file(PruneRequest request) {
     PruneResult result;
-    if (request.metadata != MetadataUse::RECORDS) {
+    if (request.metadata != MetadataUse::Records) {
         auto data = co_await prune_data(request);
-        if (!data || request.metadata == MetadataUse::NONE || data->all_chunks)
+        if (!data || request.metadata == MetadataUse::None || data->all_chunks)
             co_return data;
         result = std::move(*data);
     }
@@ -146,14 +146,14 @@ coro::CoroTask<Result<PruneResult>> prune_file(PruneRequest request) {
                 meta = db.chunk_metadata(fid);
             });
         } catch (const std::exception& e) {
-            co_return make_error(ErrorCode::INDEXER,
+            co_return make_error(ErrorCode::Indexer,
                                  "prune_file: index read failed for " +
                                      request.file_path + ": " + e.what());
         }
     }
     if (!meta) co_return PruneResult{};
 
-    if (request.metadata == MetadataUse::EVERY) {
+    if (request.metadata == MetadataUse::Every) {
         for (const auto& [chunk, m] : *meta)
             if (m.records > 0) result.candidates.push_back(chunk);
     } else {

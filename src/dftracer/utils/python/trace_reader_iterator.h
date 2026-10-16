@@ -21,10 +21,10 @@ extern PyTypeObject ArrowBatchCapsuleType;
 #endif
 
 enum class IteratorMode {
-    MEMORYVIEW,
-    JSON_DICT,
+    Memoryview,
+    JsonDict,
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-    ARROW,
+    Arrow,
 #endif
 };
 

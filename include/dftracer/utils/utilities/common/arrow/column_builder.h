@@ -26,26 +26,26 @@ namespace dftracer::utils::utilities::common::arrow {
 /// list<struct<...>> column whose struct fields are named by ColumnSpec::fields
 /// (each a scalar column type): one list of inner structs per row.
 enum class ColumnType {
-    INT64,
-    UINT64,
-    DOUBLE,
-    STRING,
+    Int64,
+    Uint64,
+    Double,
+    String,
     /// Arrow binary: same offset+data layout as STRING but no UTF-8 validation,
     /// so it carries opaque byte blobs (a plugin BYTES key resolves to one).
-    BINARY,
-    BOOL,
-    DICT_STRING,
-    HIST,
-    STRING_LIST,
-    INT64_LIST,
-    STRUCT_LIST,
-    INT8,
-    INT16,
-    INT32,
-    UINT8,
-    UINT16,
-    UINT32,
-    FLOAT32
+    Binary,
+    Bool,
+    DictString,
+    Hist,
+    StringList,
+    Int64List,
+    StructList,
+    Int8,
+    Int16,
+    Int32,
+    Uint8,
+    Uint16,
+    Uint32,
+    Float32
 };
 
 struct ColumnSpec {

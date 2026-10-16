@@ -32,7 +32,7 @@ Result<std::string> choose_spill_dir(
             ec = std::make_error_code(std::errc::permission_denied);
         if (ec)
             return make_error(
-                ErrorCode::IO,
+                ErrorCode::Io,
                 str_cat("spill: cannot use spill directory '", env, "' (",
                         ec.message(), "); set ", constants::SPILL_DIR_ENV,
                         " to a writable directory"));
@@ -61,7 +61,7 @@ Result<std::string> choose_spill_dir(
         return dir;
     }
     return make_error(
-        ErrorCode::IO,
+        ErrorCode::Io,
         str_cat("spill: no spill directory off RAM (no writable local disk, "
                 "and the temp and cache directories are RAM-backed or not "
                 "writable); set ",
@@ -151,7 +151,7 @@ Result<ScopedSpillSubdir> ScopedSpillSubdir::create(std::string_view prefix) {
     fs::create_directories(dir, ec);
     if (ec)
         return make_error(
-            ErrorCode::IO,
+            ErrorCode::Io,
             str_cat("spill: cannot create '", dir.string(), "' (", ec.message(),
                     "); set ", constants::SPILL_DIR_ENV,
                     " to a writable directory"));

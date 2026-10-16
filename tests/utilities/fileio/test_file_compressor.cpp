@@ -209,7 +209,7 @@ TEST_SUITE("FileCompressor") {
             auto result = compressor(input).get();
 
             REQUIRE(!result);
-            CHECK(result.error().code == dftracer::utils::ErrorCode::NOT_FOUND);
+            CHECK(result.error().code == dftracer::utils::ErrorCode::NotFound);
             CHECK(result.error().message.find("does not exist") !=
                   std::string::npos);
             CHECK(!fs::exists(non_existent + ".gz"));

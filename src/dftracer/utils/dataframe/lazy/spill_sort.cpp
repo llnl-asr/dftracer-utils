@@ -13,8 +13,8 @@ namespace {
 // to keep its order as a signed one), floats as doubles, strings as views into
 // the morsel; nulls sort last in both directions, as in cmp_cell.
 struct KeyData {
-    enum class Kind { INT, FLOAT, BYTES, DEC128, DEC256 };
-    Kind kind = Kind::INT;
+    enum class Kind { Int, Float, Bytes, Dec128, Dec256 };
+    Kind kind = Kind::Int;
     std::vector<std::int64_t> ints;
     std::vector<double> floats;
     std::vector<std::string_view> bytes;  // strings, binary and decimal cells
@@ -35,7 +35,7 @@ struct KeyData {
             case TypeId::String:
             case TypeId::Binary:
             case TypeId::FixedSizeBinary:
-                kind = Kind::BYTES;
+                kind = Kind::Bytes;
                 bytes.resize(size);
                 for (std::int64_t i = 0; i < n; ++i)
                     if (!null_at(i))
@@ -44,7 +44,7 @@ struct KeyData {
             case TypeId::Decimal128:
             case TypeId::Decimal256: {
                 const std::size_t width = t == TypeId::Decimal128 ? 16 : 32;
-                kind = t == TypeId::Decimal128 ? Kind::DEC128 : Kind::DEC256;
+                kind = t == TypeId::Decimal128 ? Kind::Dec128 : Kind::Dec256;
                 bytes.resize(size);
                 const char* base =
                     reinterpret_cast<const char*>(c.data<std::uint8_t>());
@@ -53,27 +53,27 @@ struct KeyData {
                 break;
             }
             case TypeId::Float16:
-                kind = Kind::FLOAT;
+                kind = Kind::Float;
                 floats.resize(size);
                 for (std::int64_t i = 0; i < n; ++i)
                     floats[static_cast<std::size_t>(i)] = static_cast<double>(
                         half_to_float(c.data<std::uint16_t>()[i]));
                 break;
             case TypeId::Float32:
-                kind = Kind::FLOAT;
+                kind = Kind::Float;
                 floats.resize(size);
                 for (std::int64_t i = 0; i < n; ++i)
                     floats[static_cast<std::size_t>(i)] =
                         static_cast<double>(c.data<float>()[i]);
                 break;
             case TypeId::Float64:
-                kind = Kind::FLOAT;
+                kind = Kind::Float;
                 floats.resize(size);
                 for (std::int64_t i = 0; i < n; ++i)
                     floats[static_cast<std::size_t>(i)] = c.data<double>()[i];
                 break;
             default:
-                kind = Kind::INT;
+                kind = Kind::Int;
                 ints.resize(size);
                 for (std::int64_t i = 0; i < n; ++i)
                     ints[static_cast<std::size_t>(i)] = int_cell(c, t, i);
@@ -90,16 +90,16 @@ struct KeyData {
         const auto a = static_cast<std::size_t>(i);
         const auto b = static_cast<std::size_t>(j);
         switch (kind) {
-            case Kind::INT:
+            case Kind::Int:
                 return ints[a] < o.ints[b] ? -1 : (ints[a] > o.ints[b] ? 1 : 0);
-            case Kind::BYTES:
+            case Kind::Bytes:
                 return bytes[a] < o.bytes[b] ? -1
                                              : (bytes[a] > o.bytes[b] ? 1 : 0);
-            case Kind::DEC128:
+            case Kind::Dec128:
                 return compare_decimal128(bytes[a].data(), o.bytes[b].data());
-            case Kind::DEC256:
+            case Kind::Dec256:
                 return compare_decimal256(bytes[a].data(), o.bytes[b].data());
-            case Kind::FLOAT:
+            case Kind::Float:
                 break;
         }
         return compare_doubles(floats[a], o.floats[b]);

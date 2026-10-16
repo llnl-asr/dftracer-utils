@@ -408,7 +408,7 @@ static bool with_indexer(IndexerObject* self, Fn fn) {
     });
 }
 
-enum class IndexerCall { STATUS, BUILD, REBUILD, ENSURE };
+enum class IndexerCall { Status, Build, Rebuild, Ensure };
 
 static bool run_indexer(IndexerObject* self, IndexerCall call,
                         dftracer::utils::index::IndexStatus& out) {
@@ -420,16 +420,16 @@ static bool run_indexer(IndexerObject* self, IndexerCall call,
         auto ix = dftracer::utils::index::Indexer::open(std::move(paths),
                                                         std::move(*options));
         switch (call) {
-            case IndexerCall::STATUS:
+            case IndexerCall::Status:
                 out = ix.status();
                 break;
-            case IndexerCall::BUILD:
+            case IndexerCall::Build:
                 out = ix.build();
                 break;
-            case IndexerCall::REBUILD:
+            case IndexerCall::Rebuild:
                 out = ix.rebuild();
                 break;
-            case IndexerCall::ENSURE: {
+            case IndexerCall::Ensure: {
                 if (!force) {
                     out = ix.build();
                     break;
@@ -482,7 +482,7 @@ static PyObject* status_dict(const dftracer::utils::index::IndexStatus& st) {
 static PyObject* Indexer_resolve(IndexerObject* self,
                                  PyObject* Py_UNUSED(ignored)) {
     dftracer::utils::index::IndexStatus st;
-    if (!run_indexer(self, IndexerCall::STATUS, st)) return nullptr;
+    if (!run_indexer(self, IndexerCall::Status, st)) return nullptr;
     return status_dict(st);
 }
 
@@ -495,7 +495,7 @@ static PyObject* Indexer_build(IndexerObject* self,
     dftracer::utils::index::IndexStatus st;
     if (!run_indexer(
             self,
-            self->force_rebuild ? IndexerCall::REBUILD : IndexerCall::BUILD,
+            self->force_rebuild ? IndexerCall::Rebuild : IndexerCall::Build,
             st))
         return nullptr;
     Py_RETURN_NONE;
@@ -508,7 +508,7 @@ static PyObject* Indexer_build(IndexerObject* self,
 static PyObject* Indexer_ensure_indexed(IndexerObject* self,
                                         PyObject* Py_UNUSED(ignored)) {
     dftracer::utils::index::IndexStatus st;
-    if (!run_indexer(self, IndexerCall::ENSURE, st)) return nullptr;
+    if (!run_indexer(self, IndexerCall::Ensure, st)) return nullptr;
     return status_dict(st);
 }
 

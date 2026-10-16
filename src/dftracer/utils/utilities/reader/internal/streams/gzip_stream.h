@@ -142,7 +142,7 @@ class GzipStream : public StreamBase {
     int open_file(const std::string &path) {
         int fd = ::open(path.c_str(), O_RDONLY);
         if (fd < 0) {
-            throw ReaderError(ReaderError::FILE_IO_ERROR,
+            throw ReaderError(ReaderError::FileIoError,
                               "Failed to open file: " + path);
         }
 #ifdef __linux__
@@ -209,9 +209,9 @@ class GzipStream : public StreamBase {
 
         if (!use_member_ &&
             member_.kind !=
-                dftracer::utils::index::gzip::GzipRecordKind::MEMBER) {
+                dftracer::utils::index::gzip::GzipRecordKind::Member) {
             throw ReaderError(
-                ReaderError::COMPRESSION_ERROR,
+                ReaderError::CompressionError,
                 "Failed to start at a restart point of " + current_gz_path_);
         }
         if (!use_member_) {
@@ -219,7 +219,7 @@ class GzipStream : public StreamBase {
                 fd_, file_offset_, 0, constants::indexer::ZLIB_GZIP_WINDOW_BITS,
                 expected_out_bytes());
             if (!initialize_ok) {
-                throw ReaderError(ReaderError::COMPRESSION_ERROR,
+                throw ReaderError(ReaderError::CompressionError,
                                   "Failed to initialize inflater");
             }
         }
@@ -251,7 +251,7 @@ class GzipStream : public StreamBase {
 
     std::string member_window() const {
         using dftracer::utils::index::gzip::GzipRecordKind;
-        return member_.kind == GzipRecordKind::RESTART
+        return member_.kind == GzipRecordKind::Restart
                    ? indexer_->restart_window(member_.member_idx)
                    : std::string();
     }
@@ -274,7 +274,7 @@ class GzipStream : public StreamBase {
                 fd_, file_offset_, member_, member_window(),
                 expected_out_bytes());
             if (!restarted) {
-                throw ReaderError(ReaderError::COMPRESSION_ERROR,
+                throw ReaderError(ReaderError::CompressionError,
                                   "Failed to reinitialize from member");
             }
         } else {
@@ -282,7 +282,7 @@ class GzipStream : public StreamBase {
                 fd_, file_offset_, 0, constants::indexer::ZLIB_GZIP_WINDOW_BITS,
                 expected_out_bytes());
             if (!initialize_ok) {
-                throw ReaderError(ReaderError::COMPRESSION_ERROR,
+                throw ReaderError(ReaderError::CompressionError,
                                   "Failed to initialize inflater");
             }
         }

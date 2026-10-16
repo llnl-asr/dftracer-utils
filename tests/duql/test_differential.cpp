@@ -33,7 +33,7 @@ void leaves(const duql::QueryNode& node,
                 leaves(*n.operand, out);
             } else if constexpr (std::is_same_v<T, duql::ExprLeaf>) {
             } else if constexpr (std::is_same_v<T, duql::MatchNode>) {
-                if (!n.field.any && n.op != duql::MatchOp::ICONTAINS)
+                if (!n.field.any && n.op != duql::MatchOp::Icontains)
                     out.push_back(&node);
             } else {
                 if (!n.field.any) out.push_back(&node);

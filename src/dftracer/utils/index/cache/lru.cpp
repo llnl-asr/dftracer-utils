@@ -34,7 +34,7 @@ std::uint64_t now_micros() {
 
 void check_status(const ::rocksdb::Status& st, const char* what) {
     if (!st.ok())
-        throw DFTUtilsException(ErrorCode::IO,
+        throw DFTUtilsException(ErrorCode::Io,
                                 std::string(what) + ": " + st.ToString());
 }
 

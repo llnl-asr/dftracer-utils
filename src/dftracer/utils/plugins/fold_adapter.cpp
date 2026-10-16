@@ -763,7 +763,7 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
                 views::detail::FoldEventBuffer batch_events;
                 namespace ix = dftracer::utils::index;
                 const ix::RecordSchema& schema = ix::detect_file_schema(p);
-                const bool by_path = schema.decoder == ix::Decoder::PATH;
+                const bool by_path = schema.decoder == ix::Decoder::Path;
                 const ix::RecordSchema* declared =
                     schema.fields.empty() ? nullptr : &schema;
                 views::View v = views::View::from_file(p);
@@ -900,13 +900,13 @@ namespace {
 coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
                                  const void* in, void* out) {
     using Kind = ComposeOp::Kind;
-    if (op->kind == Kind::LEAF) {
+    if (op->kind == Kind::Leaf) {
         int rc = 0;
         ::dftu_task* t = op->fn ? op->fn(op->state, in, out, &rc) : nullptr;
         if (t) co_await *as_task(t);
         co_return rc;
     }
-    if (op->kind == Kind::THEN) {
+    if (op->kind == Kind::Then) {
         ComposeOp* a = op->children[0];
         ComposeOp* b = op->children[1];
         std::vector<char> mid(a->out_size);
@@ -914,7 +914,7 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
         if (rc != 0) co_return rc;
         co_return co_await eval_compose(self, b, mid.data(), out);
     }
-    if (op->kind == Kind::WHEN_ALL) {
+    if (op->kind == Kind::WhenAll) {
         // Each child writes its own disjoint slice of the concatenated output.
         std::vector<coro::CoroTask<int>> kids;
         kids.reserve(op->children.size());
@@ -951,7 +951,7 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
     try {
         compose_ops_.emplace_back();
         ComposeOp& op = compose_ops_.back();
-        op.kind = ComposeOp::Kind::LEAF;
+        op.kind = ComposeOp::Kind::Leaf;
         op.fn = fn;
         op.state = state;
         op.free_state = free_state;
@@ -983,7 +983,7 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
     try {
         compose_ops_.emplace_back();
         ComposeOp& op = compose_ops_.back();
-        op.kind = ComposeOp::Kind::THEN;
+        op.kind = ComposeOp::Kind::Then;
         op.in_ty = oa->in_ty;
         op.out_ty = ob->out_ty;
         op.in_size = oa->in_size;
@@ -1018,7 +1018,7 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
     try {
         compose_ops_.emplace_back();
         ComposeOp& op = compose_ops_.back();
-        op.kind = ComposeOp::Kind::WHEN_ALL;
+        op.kind = ComposeOp::Kind::WhenAll;
         op.in_ty = first->in_ty;
         op.out_ty = DFTU_T_BYTES;
         op.in_size = first->in_size;
@@ -1051,7 +1051,7 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
     try {
         compose_ops_.emplace_back();
         ComposeOp& op = compose_ops_.back();
-        op.kind = ComposeOp::Kind::WHEN_ANY;
+        op.kind = ComposeOp::Kind::WhenAny;
         op.in_ty = first->in_ty;
         op.out_ty = first->out_ty;
         op.in_size = first->in_size;
@@ -1283,8 +1283,8 @@ void PluginFold::step(const FoldBatch& batch) {
         namespace views = dftracer::utils::trace::views::detail;
         col_scratch_.clear();
         for (const auto& fe : batch.events) {
-            if (fe.phase == trace::RecordPhase::METADATA ||
-                fe.phase == trace::RecordPhase::UNKNOWN)
+            if (fe.phase == trace::RecordPhase::Metadata ||
+                fe.phase == trace::RecordPhase::Unknown)
                 continue;
             if (query_ && !passes_query(fe)) continue;
             col_scratch_.push_back(fe);

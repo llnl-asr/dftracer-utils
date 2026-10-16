@@ -73,22 +73,22 @@ ColumnType nanoarrow_to_column_type(ArrowType type) {
         case NANOARROW_TYPE_INT32:
         case NANOARROW_TYPE_INT16:
         case NANOARROW_TYPE_INT8:
-            return ColumnType::INT64;
+            return ColumnType::Int64;
         case NANOARROW_TYPE_UINT64:
         case NANOARROW_TYPE_UINT32:
         case NANOARROW_TYPE_UINT16:
         case NANOARROW_TYPE_UINT8:
-            return ColumnType::UINT64;
+            return ColumnType::Uint64;
         case NANOARROW_TYPE_DOUBLE:
         case NANOARROW_TYPE_FLOAT:
-            return ColumnType::DOUBLE;
+            return ColumnType::Double;
         case NANOARROW_TYPE_STRING:
         case NANOARROW_TYPE_LARGE_STRING:
-            return ColumnType::STRING;
+            return ColumnType::String;
         case NANOARROW_TYPE_BOOL:
-            return ColumnType::BOOL;
+            return ColumnType::Bool;
         default:
-            return ColumnType::STRING;
+            return ColumnType::String;
     }
 }
 
@@ -472,13 +472,13 @@ coro::CoroTask<int> PartitionRouter::write_batch(ArrowExportResult& batch) {
     if (!is_open_ || !batch.valid()) co_return -1;
 
     switch (config_.mode) {
-        case PartitionConfig::Mode::NONE:
+        case PartitionConfig::Mode::None:
             co_return co_await route_none(batch);
-        case PartitionConfig::Mode::COLUMN:
+        case PartitionConfig::Mode::Column:
             co_return co_await route_column(batch);
-        case PartitionConfig::Mode::BUCKETED:
+        case PartitionConfig::Mode::Bucketed:
             co_return co_await route_bucketed(batch);
-        case PartitionConfig::Mode::VIEW:
+        case PartitionConfig::Mode::View:
             co_return co_await route_view(batch);
     }
     co_return -1;

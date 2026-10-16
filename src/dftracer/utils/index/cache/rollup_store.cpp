@@ -82,7 +82,7 @@ void add_rest_fields(std::string& sig,
     // Dictionaries of the record schema resolve `resolved.*` fields, so a
     // rollup made under one schema must not serve another.
     if (!plan.record_schema)
-        throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+        throw DFTUtilsException(ErrorCode::InvalidArgument,
                                 "rollup signature: the plan's record schema "
                                 "is not resolved");
     add(std::to_string(plan.record_schema->params_hash()));

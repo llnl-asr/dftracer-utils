@@ -403,17 +403,17 @@ dftu_series* pattern_predicate(const dftu_series* v,
     if (const auto t = duql::literal_test(p); t && !t->icase) {
         const std::string_view lit = t->text;
         switch (t->op) {
-            case duql::LiteralTest::Op::EQUALS:
+            case duql::LiteralTest::Op::Equals:
                 return string_mask(
                     v, [lit](std::string_view s) { return s == lit; });
-            case duql::LiteralTest::Op::STARTS_WITH:
+            case duql::LiteralTest::Op::StartsWith:
                 return string_mask(v, [lit](std::string_view s) {
                     return s.starts_with(lit);
                 });
-            case duql::LiteralTest::Op::ENDS_WITH:
+            case duql::LiteralTest::Op::EndsWith:
                 return string_mask(
                     v, [lit](std::string_view s) { return s.ends_with(lit); });
-            case duql::LiteralTest::Op::CONTAINS:
+            case duql::LiteralTest::Op::Contains:
                 return string_mask(v, [lit](std::string_view s) {
                     return substr_find(
                                s.data(), static_cast<std::int64_t>(s.size()),
@@ -423,11 +423,11 @@ dftu_series* pattern_predicate(const dftu_series* v,
         }
     }
     // Case-sensitive globs run inline too; SEGMENTS search long strings.
-    if (!p.icase && p.kind == duql::detail::Kind::GLOB)
+    if (!p.icase && p.kind == duql::detail::Kind::Glob)
         return string_mask(v, [toks = p.glob](std::string_view s) {
             return duql::detail::glob_match_t<false, true>(toks, s);
         });
-    if (!p.icase && p.kind == duql::detail::Kind::SEGMENTS)
+    if (!p.icase && p.kind == duql::detail::Kind::Segments)
         return string_mask(v, [&p, toks = p.glob](std::string_view s) {
             return s.size() < duql::detail::SIMD_MIN_HAY
                        ? duql::detail::glob_match_t<false, false>(toks, s)
@@ -436,8 +436,8 @@ dftu_series* pattern_predicate(const dftu_series* v,
     LimitedRows limited;
     dftu_series* out = string_mask(v, [&](std::string_view s) {
         const auto r = duql::match(p, s);
-        if (r == duql::MatchResult::LIMIT) limited.add(s);
-        return r == duql::MatchResult::YES;
+        if (r == duql::MatchResult::Limit) limited.add(s);
+        return r == duql::MatchResult::Yes;
     });
     return limited.apply(out, v);
 }
@@ -472,7 +472,7 @@ dftu_series* regex_replace_w(const dftu_series* v,
         if (!r.is_null(static_cast<std::int64_t>(i))) {
             const std::string_view s = r.at(static_cast<std::int64_t>(i));
             if (duql::regex_replace(re, sub, s, buf) !=
-                duql::MatchResult::LIMIT) {
+                duql::MatchResult::Limit) {
                 data.append(buf);
                 hit = true;
                 if (!fits_int32_offsets(data.size())) return nullptr;
@@ -577,7 +577,7 @@ dftu_series* str_extract_w(const dftu_series* v,
         if (!r.is_null(static_cast<std::int64_t>(i))) {
             const std::string_view s = r.at(static_cast<std::int64_t>(i));
             std::string_view m;
-            if (duql::extract(re, s, group, m) == duql::MatchResult::YES) {
+            if (duql::extract(re, s, group, m) == duql::MatchResult::Yes) {
                 data.append(m);
                 hit = true;
                 if (!fits_int32_offsets(data.size())) return nullptr;
@@ -1845,7 +1845,7 @@ dftu_series* dftu_series_str_findall(const dftu_series* v, const char* pattern,
         v, [&](std::string_view row, std::vector<std::string>& parts) {
             const auto r = duql::findall(
                 *re, row, [&](std::string_view m) { parts.emplace_back(m); });
-            if (r == duql::MatchResult::LIMIT) limited.add(row);
+            if (r == duql::MatchResult::Limit) limited.add(row);
         });
     return limited.apply(out, v);
 }

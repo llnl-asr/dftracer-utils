@@ -36,11 +36,11 @@ inline bool query_evaluable_by_fold(const duql::Query& q) {
 /// The scan RecordPhase an aggregation plan folds; UNKNOWN (Any) folds every
 /// phase with no filter.
 inline RecordPhase agg_phase_target(const ViewPlan& plan) {
-    if (plan.phase == Phase::Events) return RecordPhase::COMPLETE;
-    if (plan.phase == Phase::Counters) return RecordPhase::COUNTER;
-    if (plan.phase == Phase::Aggregated) return RecordPhase::AGGREGATED;
-    if (plan.phase == Phase::Metadata) return RecordPhase::METADATA;
-    return RecordPhase::UNKNOWN;
+    if (plan.phase == Phase::Events) return RecordPhase::Complete;
+    if (plan.phase == Phase::Counters) return RecordPhase::Counter;
+    if (plan.phase == Phase::Aggregated) return RecordPhase::Aggregated;
+    if (plan.phase == Phase::Metadata) return RecordPhase::Metadata;
+    return RecordPhase::Unknown;
 }
 
 }  // namespace dftracer::utils::trace::views::detail

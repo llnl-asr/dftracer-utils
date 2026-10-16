@@ -34,10 +34,10 @@ std::string metric_leaf(const std::string& name);
 
 /// Cohen's d effect size classification.
 enum class Significance : int {
-    NEGLIGIBLE = 0,  ///< |d| <= 0.2
-    SMALL = 1,       ///< |d| > 0.2
-    MEDIUM = 2,      ///< |d| > 0.5
-    LARGE = 3        ///< |d| > 0.8
+    Negligible = 0,  ///< |d| <= 0.2
+    Small = 1,       ///< |d| > 0.2
+    Medium = 2,      ///< |d| > 0.5
+    Large = 3        ///< |d| > 0.8
 };
 
 /// Human-readable name of an effect-size bucket (e.g. "MEDIUM").
@@ -60,7 +60,7 @@ struct MetricComparison {
     /// Percentage change (e.g. 15.3 for +15.3%).
     double pct_change = 0.0;
     double cohens_d = 0.0;
-    Significance significance = Significance::NEGLIGIBLE;
+    Significance significance = Significance::Negligible;
     /// True if performance got worse (higher duration, lower bandwidth).
     bool is_regression = false;
 };

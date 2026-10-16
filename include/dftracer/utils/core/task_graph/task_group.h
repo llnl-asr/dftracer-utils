@@ -60,7 +60,7 @@ class TaskGroup {
      */
     std::shared_ptr<Task> task() const {
         if (tasks_.size() != 1) {
-            throw DFTUtilsException(ErrorCode::INTERNAL,
+            throw DFTUtilsException(ErrorCode::Internal,
                                     "TaskGroup::task() called on group with " +
                                         std::to_string(tasks_.size()) +
                                         " tasks (expected 1)");
@@ -73,7 +73,7 @@ class TaskGroup {
      */
     std::shared_ptr<Task> at(std::size_t index) const {
         if (index >= tasks_.size()) {
-            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+            throw DFTUtilsException(ErrorCode::InvalidArgument,
                                     "TaskGroup index out of range");
         }
         return tasks_[index];
@@ -133,7 +133,7 @@ class TaskGroup<void> {
 
     std::shared_ptr<Task> task() const {
         if (tasks_.size() != 1) {
-            throw DFTUtilsException(ErrorCode::INTERNAL,
+            throw DFTUtilsException(ErrorCode::Internal,
                                     "TaskGroup::task() called on group with " +
                                         std::to_string(tasks_.size()) +
                                         " tasks (expected 1)");
@@ -143,7 +143,7 @@ class TaskGroup<void> {
 
     std::shared_ptr<Task> at(std::size_t index) const {
         if (index >= tasks_.size()) {
-            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+            throw DFTUtilsException(ErrorCode::InvalidArgument,
                                     "TaskGroup index out of range");
         }
         return tasks_[index];

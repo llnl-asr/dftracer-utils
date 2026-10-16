@@ -428,7 +428,7 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
     {
         auto phr = root["ph"];
         if (!phr.error() &&
-            read_phase(phr.value_unsafe()) == RecordPhase::COUNTER) {
+            read_phase(phr.value_unsafe()) == RecordPhase::Counter) {
             auto tr = root["ts"];
             if (tr.error()) return;
             double ts = json_number(tr.value_unsafe());
@@ -483,7 +483,7 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
     {
         auto phr = root["ph"];
         if (!phr.error() &&
-            read_phase(phr.value_unsafe()) == RecordPhase::AGGREGATED) {
+            read_phase(phr.value_unsafe()) == RecordPhase::Aggregated) {
             b.has_aggregated.store(true, std::memory_order_relaxed);
             return;
         }
@@ -1190,9 +1190,9 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
             jb.append_comma();
             jb.append_key_value("dur", end_ts - start_ts);
             jb.append_comma();
-            jb.append_key_value("ph", phase_to_int(RecordPhase::COMPLETE));
+            jb.append_key_value("ph", phase_to_int(RecordPhase::Complete));
             jb.append_comma();
-            jb.append_key_value("type", event_type_to_int(EventType::DFTRACER));
+            jb.append_key_value("type", event_type_to_int(EventType::Dftracer));
             jb.append_comma();
             jb.escape_and_append_with_quotes("args");
             jb.append_colon();

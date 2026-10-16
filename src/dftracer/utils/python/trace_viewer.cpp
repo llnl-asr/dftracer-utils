@@ -614,13 +614,13 @@ PyObject* tv_time_unit(PyObject* self, PyObject* arg) {
     const std::string t(s);
     trace::TimeMetric target;
     if (t == "ns")
-        target = trace::TimeMetric::NS;
+        target = trace::TimeMetric::Ns;
     else if (t == "us")
-        target = trace::TimeMetric::US;
+        target = trace::TimeMetric::Us;
     else if (t == "ms")
-        target = trace::TimeMetric::MS;
+        target = trace::TimeMetric::Ms;
     else if (t == "sec" || t == "s")
-        target = trace::TimeMetric::SEC;
+        target = trace::TimeMetric::Sec;
     else {
         PyErr_SetString(PyExc_ValueError, "time_unit must be ns/us/ms/sec/s");
         return nullptr;

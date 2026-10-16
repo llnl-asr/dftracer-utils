@@ -64,7 +64,7 @@ class Scheduler {
     std::mutex done_mutex_;
 
     // Error policy
-    ErrorPolicy error_policy_{ErrorPolicy::FAIL_FAST};
+    ErrorPolicy error_policy_{ErrorPolicy::FailFast};
     ErrorHandler error_handler_;
     std::atomic<bool> has_error_{false};
     // Reason for timeout (if timeout occurred)

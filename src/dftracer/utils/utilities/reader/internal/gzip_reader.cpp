@@ -1,5 +1,5 @@
+#include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/utils/timer.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/utilities/reader/error.h>

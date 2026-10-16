@@ -2,10 +2,10 @@
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_RUNNER_H
 
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
-#include <dftracer/utils/core/utils/timer.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/dft_trace_writer.h>
 

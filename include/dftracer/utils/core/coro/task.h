@@ -6,8 +6,8 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/object_pool.h>
 #include <dftracer/utils/common/typedefs.h>
+#include <dftracer/utils/core/coro/monitor.h>
 #include <dftracer/utils/core/coro/yield.h>
-#include <dftracer/utils/core/utilities/monitor.h>
 
 #include <atomic>
 #include <coroutine>

@@ -3,7 +3,7 @@
 #include <dftracer/utils/common/ptr_hash.h>
 #include <dftracer/utils/common/sharded_mutex.h>
 #include <dftracer/utils/common/symbolize.h>
-#include <dftracer/utils/core/utilities/monitor.h>
+#include <dftracer/utils/core/coro/monitor.h>
 
 #include <algorithm>
 #include <atomic>

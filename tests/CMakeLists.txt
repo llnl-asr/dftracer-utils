@@ -263,6 +263,13 @@ foreach(test_file ${TEST_CPP_SOURCES})
                                            RESOURCE_LOCK heavy_threading)
   endif()
 
+  # Builds a dozen RocksDB indexes. Each SST flush and compaction ends in a
+  # full fsync (F_FULLFSYNC on macOS), so it waits on the disk and takes 10x
+  # longer when the rest of the suite writes at the same time.
+  if(bin_exec STREQUAL "index/test_build_memory")
+    set_tests_properties(${bin_exec} PROPERTIES RUN_SERIAL TRUE)
+  endif()
+
   # Robustness test generates large (128 MB) gzip files; coverage
   # instrumentation on macOS CI runners makes it significantly slower, and
   # TSan more so (about 1200 s on an M4 Pro). The prune oracle reads its corpus

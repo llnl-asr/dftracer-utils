@@ -92,8 +92,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix a read of string offsets from an unaligned address when a spilled or cached frame was read back.
+  A string or binary column read its offsets in place from the saved bytes, and the length of a column name could put them at any byte.
 - Fix a crash with SIGILL when a build with GCC 12 read a gzip trace from the middle of the file.
-  The compiler laid out the frame of the restart step in two ways, so a reused frame could stop the program ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+  The compiler laid out the frame of the restart step in two ways, so a reused frame could stop the program.
 - Fix the first query or build on a new index failing with `lock hold by current process` when a read-write open of the index ran while an older read-write handle of it was still closing.
   It happened on an index that a rebuild had reset while a reader still held it, such as the first `TraceViewer` read of 29 files with relative paths ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 - Match `_` and `%` literally in a `TraceViewer.filter` of `col(...).str.starts_with`, `ends_with` and `contains`.

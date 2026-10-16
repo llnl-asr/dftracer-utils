@@ -441,20 +441,23 @@ Series get_series_data(const std::uint8_t*& p, const std::uint8_t* end) {
         }
         return Series{col};
     }
-    if (is_wide_offset_type(type)) {  // LargeString / LargeBinary
+    if (is_wide_offset_type(type) || !byte_width(type)) {
+        // String, Binary, LargeString and LargeBinary. The offsets sit at any
+        // byte of the blob, so they are copied, never read in place.
+        const std::size_t width = is_wide_offset_type(type)
+                                      ? sizeof(std::int64_t)
+                                      : sizeof(std::int32_t);
         const std::int64_t nbytes = get_pod<std::int64_t>(p, end);
-        const auto* offs = reinterpret_cast<const std::int64_t*>(take_bytes(
-            p, end, static_cast<std::size_t>(n + 1) * sizeof(std::int64_t)));
+        const std::size_t off_bytes = static_cast<std::size_t>(n + 1) * width;
+        const std::uint8_t* offs = take_bytes(p, end, off_bytes);
         const std::uint8_t* data =
             take_bytes(p, end, static_cast<std::size_t>(nbytes));
         auto* col = new dftu_series();
         col->type = type;
         col->encoding = Encoding::Flat;
         col->length = n;
-        col->offsets = Buffer::allocate(static_cast<std::size_t>(n + 1) *
-                                        sizeof(std::int64_t));
-        std::memcpy(col->offsets->data(), offs,
-                    static_cast<std::size_t>(n + 1) * sizeof(std::int64_t));
+        col->offsets = Buffer::allocate(off_bytes);
+        std::memcpy(col->offsets->data(), offs, off_bytes);
         col->data = Buffer::allocate(static_cast<std::size_t>(nbytes));
         if (nbytes != 0)
             std::memcpy(col->data->data(), data,
@@ -466,14 +469,6 @@ Series get_series_data(const std::uint8_t*& p, const std::uint8_t* end) {
             col->null_count = nulls;
         }
         return Series{col};
-    }
-    if (!byte_width(type)) {  // String / Binary
-        const std::int64_t nbytes = get_pod<std::int64_t>(p, end);
-        const auto* offs = reinterpret_cast<const std::int32_t*>(take_bytes(
-            p, end, static_cast<std::size_t>(n + 1) * sizeof(std::int32_t)));
-        const std::uint8_t* data =
-            take_bytes(p, end, static_cast<std::size_t>(nbytes));
-        return Series{dftu_series_new_string(dt, offs, data, n, validity)};
     }
     const std::size_t bytes = buffer_bytes(type, n);
     const std::uint8_t* data = take_bytes(p, end, bytes);

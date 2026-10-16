@@ -89,7 +89,7 @@ namespace {
 // Bump VERSION when the on-disk layout below changes; the loader then ignores
 // the stale cache.
 constexpr std::uint32_t VIZ_SUMMARY_MAGIC = 0x315A5644;  // "DVZ1"
-constexpr std::uint32_t VIZ_SUMMARY_FORMAT_VERSION = 1;
+constexpr std::uint32_t VIZ_SUMMARY_FORMAT_VERSION = 2;
 
 struct BufWriter {
     std::string b;
@@ -229,8 +229,15 @@ void serialize_summary(BufWriter& w, const VizSummary& s) {
         w.u64(lv.nbuckets);
         w.dbl(lv.bucket_us);
         auto wvec_lvl = [&](const std::vector<double>& v) {
+            std::uint64_t nonzero = 0;
+            for (double x : v) nonzero += x != 0.0;
             w.u64(v.size());
-            for (double x : v) w.dbl(x);
+            w.u64(nonzero);
+            for (std::size_t i = 0; i < v.size(); ++i) {
+                if (v[i] == 0.0) continue;
+                w.u32(static_cast<std::uint32_t>(i));
+                w.dbl(v[i]);
+            }
         };
         wvec_lvl(lv.read_bytes);
         wvec_lvl(lv.write_bytes);
@@ -341,9 +348,19 @@ bool deserialize_summary(BufReader& r, VizSummary& s) {
         lv.bucket_us = r.dbl();
         auto rvec_lvl = [&](std::vector<double>& v) -> bool {
             std::uint64_t n = r.u64();
-            if (!r.fits(n, 8)) return false;
-            v.resize(n);
-            for (auto& x : v) x = r.dbl();
+            std::uint64_t nonzero = r.u64();
+            constexpr std::uint64_t MAX_BUCKETS =
+                VizSummary::MAX_BUCKETS_PER_LANE
+                << (2 * VizSummary::EXTRA_LEVELS);
+            if (n != lv.nbuckets || n > MAX_BUCKETS || !r.fits(nonzero, 4 + 8))
+                return false;
+            v.assign(n, 0.0);
+            for (std::uint64_t i = 0; i < nonzero; ++i) {
+                std::uint32_t at = r.u32();
+                double x = r.dbl();
+                if (at >= n) return false;
+                v[at] = x;
+            }
             return r.ok;
         };
         if (!rvec_lvl(lv.read_bytes) || !rvec_lvl(lv.write_bytes) ||

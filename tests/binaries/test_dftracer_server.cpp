@@ -321,7 +321,7 @@ struct ServerProcess {
         if (pid == 0) {
             ::execl(binary.c_str(), binary.c_str(), "-d", data_dir.c_str(),
                     "-p", port_str.c_str(), "--bind", "127.0.0.1",
-                    "--executor-threads", "2", nullptr);
+                    "--executor-threads", "2", "--io-threads", "2", nullptr);
             ::_exit(127);
         }
 
@@ -1184,9 +1184,12 @@ TEST_CASE("DFTracer Server - viz summary cache persists and invalidates") {
         CHECK(body.find("\"begin\":1000000,\"end\":1010000") !=
               std::string::npos);
     }
-    CHECK(fs::exists(cache));
+    REQUIRE(fs::exists(cache));
+    const auto cache_time = fs::last_write_time(cache);
+    const auto cache_size = fs::file_size(cache);
 
-    // Second run reuses the cache; the result is unchanged.
+    // Second run reuses the cache; the result is unchanged. A rejected cache
+    // is rebuilt and rewritten, so an untouched file shows the load worked.
     {
         int port = pick_port();
         ServerProcess server;
@@ -1197,6 +1200,9 @@ TEST_CASE("DFTracer Server - viz summary cache persists and invalidates") {
               std::string::npos);
         CHECK(body.find("\"begin\":2010000") == std::string::npos);
     }
+
+    CHECK(fs::last_write_time(cache) == cache_time);
+    CHECK(fs::file_size(cache) == cache_size);
 
     // A changed source invalidates the cache: the new run's gap must appear.
     auto v2 = env.create_dft_multirun_gzip_file(3, 1000000, 10000);

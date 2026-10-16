@@ -410,7 +410,9 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
     const std::uint64_t first = static_cast<std::uint64_t>(offset);
     const std::uint64_t last = first + static_cast<std::uint64_t>(limit);
     auto morsels = sorted.stream();
-    while (auto part = co_await morsels.next()) {
+    for (;;) {
+        auto part = co_await morsels.next();
+        if (!part) break;
         const dataframe::DataFrame rows =
             co_await dataframe::join_chunks(std::move(*part));
         // The builder is per thread: no co_await until its text is out.

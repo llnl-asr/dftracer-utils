@@ -106,6 +106,9 @@ add_test(NAME layering_baseline
 add_test(NAME agg_families
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_agg_families.cmake)
+add_test(NAME coro_conditions
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_coro_conditions.cmake)
 
 # ##############################################################################
 # Unit Tests

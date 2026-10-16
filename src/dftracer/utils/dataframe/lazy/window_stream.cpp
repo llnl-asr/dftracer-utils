@@ -1232,7 +1232,9 @@ class WindowStreamCursor : public Cursor {
             }
             out.add(cur, cur.last);
         };
-        while (auto m = co_await body->next(max_rows)) {
+        for (;;) {
+            auto m = co_await body->next(max_rows);
+            if (!m) break;
             const std::vector<Series> pk =
                 key_columns(m->columns, st.part_cols);
             const PartitionStats::Cells cells = st.cells_of(*m);
@@ -1334,7 +1336,9 @@ class WindowStreamCursor : public Cursor {
         auto rev = body_->reverse_reader();
         std::string cur_key;
         bool open = false;
-        while (auto m = co_await rev->next(max_rows)) {
+        for (;;) {
+            auto m = co_await rev->next(max_rows);
+            if (!m) break;
             const std::vector<Series> pk = key_columns(m->columns, part_);
             const auto rows = static_cast<std::size_t>(m->rows);
             std::vector<Work> work(suffix_.size());

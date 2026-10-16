@@ -91,7 +91,9 @@ coro::CoroTask<void> validate_file(std::string path, FileValResult* result) {
         // A cut trace is invalid here, not recovered.
         auto gen = async_streaming_gz_lines(result->path, 0, 0,
                                             /*recover_truncated=*/false);
-        while (auto line_opt = co_await gen.next()) {
+        for (;;) {
+            auto line_opt = co_await gen.next();
+            if (!line_opt) break;
             const auto& line = *line_opt;
             const char* start = nullptr;
             std::size_t trimmed = 0;

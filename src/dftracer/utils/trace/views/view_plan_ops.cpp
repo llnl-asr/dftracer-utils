@@ -1116,7 +1116,11 @@ coro::AsyncGenerator<dataframe::DataFrame> stream(ScanPlan plan_,
                                                   std::int64_t morsel_rows) {
     dataframe::LazyFrame lf = collect(plan_);
     auto gen = lf.stream(morsel_rows);
-    while (auto df = co_await gen.next()) co_yield std::move(*df);
+    for (;;) {
+        auto df = co_await gen.next();
+        if (!df) break;
+        co_yield std::move(*df);
+    }
 }
 
 coro::CoroTask<dataframe::DataFrame> collect_frame(ScanPlan plan_) {

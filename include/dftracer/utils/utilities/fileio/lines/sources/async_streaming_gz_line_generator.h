@@ -50,7 +50,9 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
     try {
         auto bytes = compress::decode_gzip_members(
             fd.get(), file_size, std::size_t{1} << 31, recover_truncated);
-        while (auto chunk = co_await bytes.next()) {
+        for (;;) {
+            auto chunk = co_await bytes.next();
+            if (!chunk) break;
             const char* data = chunk->data();
             const std::size_t remaining = chunk->size();
             std::size_t pos = 0;

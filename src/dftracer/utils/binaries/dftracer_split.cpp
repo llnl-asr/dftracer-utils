@@ -175,8 +175,9 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
         struct stat st;
         if (::fstat(sfd.get(), &st) != 0) continue;
         const auto fsize = static_cast<std::uint64_t>(st.st_size);
-        if (!co_await gzc::gzip_needs_rechunk(sfd.get(), fsize,
-                                              gzc::RECHUNK_MEMBER_CAP)) {
+        const auto gzip_needs_rechunk_ok = co_await gzc::gzip_needs_rechunk(
+            sfd.get(), fsize, gzc::RECHUNK_MEMBER_CAP);
+        if (!gzip_needs_rechunk_ok) {
             continue;
         }
         sfd.reset();

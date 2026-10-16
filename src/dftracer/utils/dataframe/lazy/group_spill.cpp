@@ -21,7 +21,8 @@ class SlicedRows : public Cursor {
         : in_(in), cap_(cap), taken_(taken) {}
 
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
-        if (!co_await feed_.fill(in_, max_rows)) co_return std::nullopt;
+        const auto fill_ok = co_await feed_.fill(in_, max_rows);
+        if (!fill_ok) co_return std::nullopt;
         Morsel m = feed_.take(std::min(max_rows, cap_));
         taken_ += m.rows;
         co_return m;

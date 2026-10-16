@@ -27,7 +27,9 @@ namespace dftracer::utils::utilities::fileio::lines::sources {
  *     .with_line_range(1, 100);
  *
  * auto gen = async_indexed_file_lines(config);
- * while (auto line = co_await gen.next()) {
+ * for (;;) {
+ *     auto line = co_await gen.next();
+ *     if (!line) break;
  *     process(*line);
  * }
  * @endcode

@@ -163,7 +163,9 @@ MetadataCollectorUtility::process_compressed(
                         .with_file(input.file_path)
                         .with_index(input.index_path)
                         .with_line_range(1, total_lines));
-                while (auto line_opt = co_await line_gen.next()) {
+                for (;;) {
+                    auto line_opt = co_await line_gen.next();
+                    if (!line_opt) break;
                     const auto& line = *line_opt;
                     const char* trimmed;
                     std::size_t trimmed_length;

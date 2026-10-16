@@ -672,9 +672,12 @@ int host_arrow_write_ipc(void*, [[maybe_unused]] ::ArrowArray* a,
         dftracer::utils::default_runtime().run_blocking(
             "dft-plugin-ipc", [&](CoroScope&) -> coro::CoroTask<void> {
                 arr::IpcWriter writer;
-                if (co_await writer.open(p) != 0) co_return;
-                if (co_await writer.write_batch(res) != 0) co_return;
-                if (co_await writer.close() != 0) co_return;
+                const auto open_rc = co_await writer.open(p);
+                if (open_rc != 0) co_return;
+                const auto write_rc = co_await writer.write_batch(res);
+                if (write_rc != 0) co_return;
+                const auto close_rc = co_await writer.close();
+                if (close_rc != 0) co_return;
                 rc = 0;
             });
         ArrowSchemaMove(res.get_schema(), s);

@@ -950,7 +950,9 @@ coro::CoroTask<void> fuse_worker(FuseWorkerCtx ctx, std::size_t w) {
         ViewScannerUtility scanner;
         auto gen = scanner(sin);
         bool complete = true;
-        while (auto b = co_await gen.next()) {
+        for (;;) {
+            auto b = co_await gen.next();
+            if (!b) break;
             if (is_cancelled(ctx.plan)) {
                 complete = false;
                 break;

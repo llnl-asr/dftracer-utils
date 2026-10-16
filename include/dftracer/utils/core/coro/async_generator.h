@@ -81,7 +81,9 @@ template <typename T, typename F,
           std::enable_if_t<detail::is_map_fn_v<F, T>, int> = 0>
 AsyncGenerator<std::invoke_result_t<F, T>> map(AsyncGenerator<T> source,
                                                F func) {
-    while (auto val = co_await source.next()) {
+    for (;;) {
+        auto val = co_await source.next();
+        if (!val) break;
         co_yield std::invoke(func, std::move(*val));
     }
 }
@@ -91,9 +93,13 @@ template <typename T, typename F,
           typename InnerGen = std::invoke_result_t<F, T>,
           typename U = typename InnerGen::value_type>
 AsyncGenerator<U> flat_map(AsyncGenerator<T> source, F func) {
-    while (auto val = co_await source.next()) {
+    for (;;) {
+        auto val = co_await source.next();
+        if (!val) break;
         auto inner = std::invoke(func, std::move(*val));
-        while (auto out = co_await inner.next()) {
+        for (;;) {
+            auto out = co_await inner.next();
+            if (!out) break;
             co_yield std::move(*out);
         }
     }
@@ -101,7 +107,9 @@ AsyncGenerator<U> flat_map(AsyncGenerator<T> source, F func) {
 
 template <typename T, typename F>
 AsyncGenerator<T> filter(AsyncGenerator<T> source, F pred) {
-    while (auto val = co_await source.next()) {
+    for (;;) {
+        auto val = co_await source.next();
+        if (!val) break;
         if (std::invoke(pred, *val)) {
             co_yield std::move(*val);
         }
@@ -122,11 +130,15 @@ AsyncGenerator<T> take(AsyncGenerator<T> source, std::size_t n) {
 template <typename T, typename F,
           std::enable_if_t<detail::is_generator_factory_v<F, T>, int> = 0>
 AsyncGenerator<T> concat(AsyncGenerator<T> first, F factory) {
-    while (auto val = co_await first.next()) {
+    for (;;) {
+        auto val = co_await first.next();
+        if (!val) break;
         co_yield std::move(*val);
     }
     auto second = factory();
-    while (auto val = co_await second.next()) {
+    for (;;) {
+        auto val = co_await second.next();
+        if (!val) break;
         co_yield std::move(*val);
     }
 }

@@ -75,7 +75,9 @@ class StreamingLineReader {
      * Returns an AsyncGenerator<Line> for non-blocking iteration:
      * @code
      * auto gen = StreamingLineReader::read_async(config);
-     * while (auto line = co_await gen.next()) {
+     * for (;;) {
+     *     auto line = co_await gen.next();
+     *     if (!line) break;
      *     co_await process(*line);
      * }
      * @endcode

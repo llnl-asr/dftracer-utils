@@ -961,12 +961,14 @@ class TransformSource final : public dataframe::Source {
         coro::CoroTask<std::optional<dataframe::Morsel>> next(
             std::int64_t max_rows) override {
             for (;;) {
-                if (rows_)
-                    if (auto m = co_await rows_->next(max_rows)) {
+                if (rows_) {
+                    auto m = co_await rows_->next(max_rows);
+                    if (m) {
                         m->dyn_state().name_ids = ids_;
                         m->dyn->intern = intern_;
                         co_return m;
                     }
+                }
                 auto batch = co_await batches_.next();
                 if (!batch) co_return std::nullopt;
                 dataframe::DataFrame f = std::move(*batch);
@@ -1213,7 +1215,9 @@ coro::CoroTask<dataframe::DataFrame> run_collect_via_engine(
     if (auto df = try_serve_rollup(plan)) co_return std::move(*df);
     {
         dataframe::AggStatePtr served;
-        if (co_await try_serve_aggregate_no_scan(plan, served))
+        const auto try_serve_aggregate_no_scan_ok =
+            co_await try_serve_aggregate_no_scan(plan, served);
+        if (try_serve_aggregate_no_scan_ok)
             co_return finalize_engine_result(*served, plan);
     }
 

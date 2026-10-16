@@ -153,7 +153,9 @@ class FileCompressorUtility {
 
             std::string carry;
             auto gen = fileio::read_binary_file(input.input_path, member_size);
-            while (auto chunk = co_await gen.next()) {
+            for (;;) {
+                auto chunk = co_await gen.next();
+                if (!chunk) break;
                 std::string_view block(chunk->as<char>(), chunk->size());
                 const auto nl = block.rfind('\n');
                 if (nl == std::string_view::npos) {

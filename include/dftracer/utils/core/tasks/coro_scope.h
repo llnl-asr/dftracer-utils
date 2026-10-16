@@ -282,7 +282,8 @@ class CoroScope {
             coro::Generator<T> gen = func(scope);
 
             for (auto item : gen) {
-                if (!co_await ch.send(std::move(item))) {
+                const auto send_ok = co_await ch.send(std::move(item));
+                if (!send_ok) {
                     co_return;
                 }
             }
@@ -302,7 +303,8 @@ class CoroScope {
             coro::Generator<T> gen = func(scope);
 
             for (auto item : gen) {
-                if (!co_await ch.send(std::move(item))) {
+                const auto send_ok = co_await ch.send(std::move(item));
+                if (!send_ok) {
                     co_return;
                 }
             }
@@ -322,8 +324,11 @@ class CoroScope {
             auto guard = ch.guard();
             coro::AsyncGenerator<T> gen = func(scope);
 
-            while (auto item = co_await gen.next()) {
-                if (!co_await ch.send(std::move(*item))) {
+            for (;;) {
+                auto item = co_await gen.next();
+                if (!item) break;
+                const auto send_ok = co_await ch.send(std::move(*item));
+                if (!send_ok) {
                     co_return;
                 }
             }
@@ -343,8 +348,11 @@ class CoroScope {
             auto guard = ch.guard();
             coro::AsyncGenerator<T> gen = func(scope);
 
-            while (auto item = co_await gen.next()) {
-                if (!co_await ch.send(std::move(*item))) {
+            for (;;) {
+                auto item = co_await gen.next();
+                if (!item) break;
+                const auto send_ok = co_await ch.send(std::move(*item));
+                if (!send_ok) {
                     co_return;
                 }
             }
@@ -388,7 +396,9 @@ class CoroScope {
         for (std::size_t i = 0; i < count; i++) {
             spawn([&channel, func = consumer_func](
                       CoroScope& scope) -> coro::CoroTask<void> {
-                while (auto item = co_await channel.receive()) {
+                for (;;) {
+                    auto item = co_await channel.receive();
+                    if (!item) break;
                     co_await func(scope, std::move(*item));
                 }
                 co_return;
@@ -403,7 +413,9 @@ class CoroScope {
         for (std::size_t i = 0; i < count; i++) {
             spawn([ch = channel->consumer(), func = consumer_func](
                       CoroScope& scope) -> coro::CoroTask<void> {
-                while (auto item = co_await ch.receive()) {
+                for (;;) {
+                    auto item = co_await ch.receive();
+                    if (!item) break;
                     co_await func(scope, std::move(*item));
                 }
                 co_return;
@@ -424,9 +436,12 @@ class CoroScope {
             spawn([input, op = output->producer(), func = transform_func](
                       CoroScope& scope) mutable -> coro::CoroTask<void> {
                 auto guard = op.guard();
-                while (auto item = co_await input->receive()) {
+                for (;;) {
+                    auto item = co_await input->receive();
+                    if (!item) break;
                     auto result = co_await func(scope, std::move(*item));
-                    if (!co_await op.send(std::move(result))) {
+                    const auto send_ok = co_await op.send(std::move(result));
+                    if (!send_ok) {
                         co_return;
                     }
                 }
@@ -444,9 +459,12 @@ class CoroScope {
             spawn([&input, op = output.producer(), func = transform_func](
                       CoroScope& scope) mutable -> coro::CoroTask<void> {
                 auto guard = op.guard();
-                while (auto item = co_await input.receive()) {
+                for (;;) {
+                    auto item = co_await input.receive();
+                    if (!item) break;
                     auto result = co_await func(scope, std::move(*item));
-                    if (!co_await op.send(std::move(result))) {
+                    const auto send_ok = co_await op.send(std::move(result));
+                    if (!send_ok) {
                         co_return;
                     }
                 }

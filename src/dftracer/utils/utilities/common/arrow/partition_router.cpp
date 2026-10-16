@@ -230,7 +230,9 @@ coro::CoroTask<PartitionWriter*> PartitionRouter::get_or_create_writer(
 
     auto writer = std::make_unique<PartitionWriter>();
     std::string path = partition_path(partition_key);
-    if (co_await writer->open(path, chunk_size_bytes_, compression_) != 0) {
+    const auto open_rc =
+        co_await writer->open(path, chunk_size_bytes_, compression_);
+    if (open_rc != 0) {
         co_return nullptr;
     }
 

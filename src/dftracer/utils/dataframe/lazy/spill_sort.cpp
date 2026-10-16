@@ -428,7 +428,9 @@ class SortMergeCursor : public Cursor {
             // The merged run keeps the morsel size of the runs it replaces, so
             // the fan-in chosen for the first pass holds for every later one.
             const std::int64_t rows = run_rows_ > 0 ? run_rows_ : max_rows;
-            while (auto m = co_await merger.next(rows)) {
+            for (;;) {
+                auto m = co_await merger.next(rows);
+                if (!m) break;
                 run_morsel_bytes_ = std::max<std::uint64_t>(
                     run_morsel_bytes_, spill::columns_bytes(m->columns));
                 w.write(m->columns, m->rows);
@@ -448,7 +450,9 @@ class SortMergeCursor : public Cursor {
         std::vector<std::vector<Series>> pending;
         std::size_t pend_bytes = 0;
         int run_id = 0;
-        while (auto m = co_await in_->next(max_rows)) {
+        for (;;) {
+            auto m = co_await in_->next(max_rows);
+            if (!m) break;
             pend_bytes += spill::columns_bytes(m->columns);
             pending.push_back(std::move(m->columns));
             if (budget_ > 0 && pend_bytes > budget_ / share::SORT_RUN) {

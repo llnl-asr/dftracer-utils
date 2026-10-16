@@ -215,10 +215,10 @@ class GzipStream : public StreamBase {
                 "Failed to start at a restart point of " + current_gz_path_);
         }
         if (!use_member_) {
-            if (!co_await inflater_.initialize(
-                    fd_, file_offset_, 0,
-                    constants::indexer::ZLIB_GZIP_WINDOW_BITS,
-                    expected_out_bytes())) {
+            const auto initialize_ok = co_await inflater_.initialize(
+                fd_, file_offset_, 0, constants::indexer::ZLIB_GZIP_WINDOW_BITS,
+                expected_out_bytes());
+            if (!initialize_ok) {
                 throw ReaderError(ReaderError::COMPRESSION_ERROR,
                                   "Failed to initialize inflater");
             }
@@ -278,10 +278,10 @@ class GzipStream : public StreamBase {
                                   "Failed to reinitialize from member");
             }
         } else {
-            if (!co_await inflater_.initialize(
-                    fd_, file_offset_, 0,
-                    constants::indexer::ZLIB_GZIP_WINDOW_BITS,
-                    expected_out_bytes())) {
+            const auto initialize_ok = co_await inflater_.initialize(
+                fd_, file_offset_, 0, constants::indexer::ZLIB_GZIP_WINDOW_BITS,
+                expected_out_bytes());
+            if (!initialize_ok) {
                 throw ReaderError(ReaderError::COMPRESSION_ERROR,
                                   "Failed to initialize inflater");
             }

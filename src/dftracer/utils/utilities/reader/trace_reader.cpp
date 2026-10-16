@@ -127,7 +127,9 @@ coro::AsyncGenerator<Line> yield_lines_from_ranges(
         auto gen =
             yield_lines_from_stream(std::move(stream), range.start_line, &query,
                                     chunk_prune_only, &prefilter);
-        while (auto line = co_await gen.next()) {
+        for (;;) {
+            auto line = co_await gen.next();
+            if (!line) break;
             co_yield *line;
         }
     }
@@ -164,7 +166,9 @@ coro::AsyncGenerator<std::span<const char>> yield_chunks_from_ranges(
                                .to(range.end_line)
                                .buffer_size(buffer_size));
         auto gen = yield_chunks_from_stream(std::move(stream), &prefilter);
-        while (auto chunk = co_await gen.next()) {
+        for (;;) {
+            auto chunk = co_await gen.next();
+            if (!chunk) break;
             co_yield *chunk;
         }
     }
@@ -250,7 +254,9 @@ coro::AsyncGenerator<Line> read_lines_indexed(
                 auto gen = yield_lines_from_ranges(reader, std::move(ranges),
                                                    config.buffer_size, *query,
                                                    chunk_prune_only, prefilter);
-                while (auto line = co_await gen.next()) {
+                for (;;) {
+                    auto line = co_await gen.next();
+                    if (!line) break;
                     co_yield *line;
                 }
                 co_return;
@@ -269,7 +275,9 @@ coro::AsyncGenerator<Line> read_lines_indexed(
     auto gen = yield_lines_from_stream(std::move(stream), start,
                                        query ? &*query : nullptr,
                                        chunk_prune_only, &prefilter);
-    while (auto line = co_await gen.next()) {
+    for (;;) {
+        auto line = co_await gen.next();
+        if (!line) break;
         co_yield *line;
     }
 }
@@ -288,7 +296,9 @@ coro::AsyncGenerator<Line> read_lines_gz(std::string file_path,
 
     auto gen =
         fileio::lines::sources::async_streaming_gz_lines(file_path, start, end);
-    while (auto opt = co_await gen.next()) {
+    for (;;) {
+        auto opt = co_await gen.next();
+        if (!opt) break;
         const std::size_t line_start = byte_pos;
         byte_pos += opt->content.size() + 1;
 
@@ -398,7 +408,9 @@ coro::AsyncGenerator<std::span<const char>> read_chunks_indexed(
 
                 auto gen = yield_chunks_from_ranges(
                     reader, std::move(ranges), config.buffer_size, prefilter);
-                while (auto chunk = co_await gen.next()) {
+                for (;;) {
+                    auto chunk = co_await gen.next();
+                    if (!chunk) break;
                     co_yield *chunk;
                 }
                 co_return;
@@ -421,7 +433,9 @@ coro::AsyncGenerator<std::span<const char>> read_chunks_indexed(
                                range_type == internal::RangeType::BYTE_RANGE));
 
     auto gen = yield_chunks_from_stream(std::move(stream), &prefilter);
-    while (auto chunk = co_await gen.next()) {
+    for (;;) {
+        auto chunk = co_await gen.next();
+        if (!chunk) break;
         co_yield *chunk;
     }
 }
@@ -483,7 +497,9 @@ coro::CoroTask<trace::TimeMetric> TraceReader::read_time_metric(
     auto gen = read_lines(probe);
     dftracer::utils::json::RecordParser parser;
     TimeMetric metric = TimeMetric::US;
-    while (auto line_opt = co_await gen.next()) {
+    for (;;) {
+        auto line_opt = co_await gen.next();
+        if (!line_opt) break;
         const char* start = nullptr;
         std::size_t len = 0;
         if (!json::trim_and_validate(line_opt->content.data(),
@@ -587,7 +603,9 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
         // cannot hold, so it runs on the record's DOM.
         dftracer::utils::json::RecordParser expr_parser;
 
-        while (auto chunk_opt = co_await chunk_gen.next()) {
+        for (;;) {
+            auto chunk_opt = co_await chunk_gen.next();
+            if (!chunk_opt) break;
             auto chunk = *chunk_opt;
             if (chunk.empty()) continue;
             auto trimmed = strip_ndjson_bookends(
@@ -680,7 +698,9 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
     json::JsonParser parser;
     dftracer::utils::json::RecordParser expr_parser;
 
-    while (auto opt = co_await line_gen.next()) {
+    for (;;) {
+        auto opt = co_await line_gen.next();
+        if (!opt) break;
         const char* trimmed;
         std::size_t trimmed_len;
         if (!dftracer::utils::json::trim_and_validate_with_comma(
@@ -787,7 +807,9 @@ coro::AsyncGenerator<std::span<const char>> TraceReader::read_raw(
         auto gen =
             fileio::lines::sources::async_streaming_gz_lines(config_.file_path);
         std::size_t byte_pos = 0;
-        while (auto opt = co_await gen.next()) {
+        for (;;) {
+            auto opt = co_await gen.next();
+            if (!opt) break;
             const auto& line = *opt;
             std::size_t line_end = byte_pos + line.content.size() + 1;
             if (config.end_byte > 0 && byte_pos >= config.end_byte) break;

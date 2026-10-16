@@ -15,7 +15,9 @@
  * #include <dftracer/utils/utilities/fileio/lines/lines.h>
  *
  * auto gen = StreamingLineReader::read_async(config);
- * while (auto line = co_await gen.next()) {
+ * for (;;) {
+ *     auto line = co_await gen.next();
+ *     if (!line) break;
  *     // Process *line...
  * }
  * @endcode

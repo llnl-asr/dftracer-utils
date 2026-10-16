@@ -113,7 +113,9 @@ class PaddedStripedWriter : public ParallelWriter {
         std::vector<std::uint8_t> pad;
         pad.reserve(stripe_size_);
         pad_to_stripe(pad, stripe_size_);
-        if (co_await pwrite_bytes(pad.data(), pad.size(), 0) != 0) {
+        const auto pwrite_bytes_rc =
+            co_await pwrite_bytes(pad.data(), pad.size(), 0);
+        if (pwrite_bytes_rc != 0) {
             co_return -1;
         }
 
@@ -181,14 +183,16 @@ class PaddedStripedWriter : public ParallelWriter {
     }
 
     coro::CoroTask<int> write_footer(ByteView data) override {
-        if (co_await drain_packer() != 0) co_return -1;
+        const auto drain_rc = co_await drain_packer();
+        if (drain_rc != 0) co_return -1;
         const auto stripes = next_stripe_idx_.load(std::memory_order_relaxed);
         const auto offset = (stripes + 1) * stripe_size_;  // +1 for header
         co_return co_await pwrite_all(data, static_cast<off_t>(offset));
     }
 
     coro::CoroTask<int> close() override {
-        if (co_await drain_packer() != 0) {
+        const auto drain_packer_rc = co_await drain_packer();
+        if (drain_packer_rc != 0) {
             if (fd_ >= 0) {
                 co_await ::dftracer::utils::io::close(fd_);
                 fd_ = -1;
@@ -260,7 +264,9 @@ class PaddedStripedWriter : public ParallelWriter {
             co_return;
         };
 
-        while (auto chunk = co_await consumer.receive()) {
+        for (;;) {
+            auto chunk = co_await consumer.receive();
+            if (!chunk) break;
             if (!buf.empty() &&
                 buf.size() + chunk->data.size() + PAD_MEMBER_FIXED_OVERHEAD >
                     stripe_size_) {

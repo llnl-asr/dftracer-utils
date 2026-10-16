@@ -680,14 +680,17 @@ void parallel_for_each(CoroScope& scope, Range items, std::size_t threads,
                     CoroScope&) mutable -> coro::CoroTask<void> {
         auto guard = ch.guard();
         for (const auto& item : items) {
-            if (!co_await ch.send(item)) co_return;
+            const auto send_ok = co_await ch.send(item);
+            if (!send_ok) co_return;
         }
         co_return;
     });
     for (std::size_t w = 0; w < threads; ++w) {
         scope.spawn([ch = chan->consumer(),
                      worker](CoroScope&) mutable -> coro::CoroTask<void> {
-            while (auto item = co_await ch.receive()) {
+            for (;;) {
+                auto item = co_await ch.receive();
+                if (!item) break;
                 co_await worker(*item);
             }
             co_return;

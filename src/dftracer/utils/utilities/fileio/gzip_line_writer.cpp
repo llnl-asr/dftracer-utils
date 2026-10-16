@@ -220,8 +220,9 @@ struct GzipLineWriter::Impl {
         writer = std::move(cw.writer);
         layout = cw.layout.layout;
         part_c = part_uc = part_lines = 0;
-        if (co_await writer->open(cur_path, unordered() ? workers : 1,
-                                  opts.compress, &scope) != 0) {
+        const auto open_rc = co_await writer->open(
+            cur_path, unordered() ? workers : 1, opts.compress, &scope);
+        if (open_rc != 0) {
             set_error(ErrorCode::IO, "cannot open " + cur_path);
             co_return false;
         }
@@ -254,7 +255,8 @@ struct GzipLineWriter::Impl {
             summary.c_bytes += chunk.size();
             co_return true;
         }
-        if (co_await writer->write_chunk(0, chunk) != 0) {
+        const auto write_chunk_rc = co_await writer->write_chunk(0, chunk);
+        if (write_chunk_rc != 0) {
             set_error(ErrorCode::IO, "write failed for " + cur_path);
             co_return false;
         }
@@ -286,12 +288,14 @@ struct GzipLineWriter::Impl {
     coro::CoroTask<void> write_member(Done& d) {
         if (!writer) {
             part = d.part;
-            if (!co_await open_part()) co_return;
+            const auto open_part_ok = co_await open_part();
+            if (!open_part_ok) co_return;
         }
         const bool gz = opts.compress;
         ByteView chunk = gz ? ByteView(d.comp.data(), d.comp.size())
                             : ByteView(d.plain.data(), d.plain.size());
-        if (co_await writer->write_chunk(0, chunk) != 0) {
+        const auto write_chunk_rc = co_await writer->write_chunk(0, chunk);
+        if (write_chunk_rc != 0) {
             set_error(ErrorCode::IO, "write failed for " + cur_path);
             co_return;
         }
@@ -313,14 +317,18 @@ struct GzipLineWriter::Impl {
         summary.uc_bytes += d.uc_size;
         summary.c_bytes += m.c_size;
         if (opts.on_member) opts.on_member(m);
-        if (d.ends_part && !co_await close_part()) co_return;
+        if (d.ends_part) {
+            const auto part_closed = co_await close_part();
+            if (!part_closed) co_return;
+        }
     }
 
     coro::CoroTask<void> write_unordered(std::size_t slot, Done& d) {
         ByteView chunk = opts.compress
                              ? ByteView(d.comp.data(), d.comp.size())
                              : ByteView(d.plain.data(), d.plain.size());
-        if (co_await writer->write_chunk(slot, chunk) != 0) {
+        const auto write_chunk_rc = co_await writer->write_chunk(slot, chunk);
+        if (write_chunk_rc != 0) {
             set_error(ErrorCode::IO, "write failed for " + cur_path);
             co_return;
         }
@@ -508,7 +516,8 @@ coro::CoroTask<Result<GzipLineWriter>> GzipLineWriter::open(
                      : std::max<std::size_t>(1, available_parallelism());
     auto impl =
         std::make_unique<Impl>(std::move(path), std::move(opts), workers);
-    if (!co_await impl->open_part()) co_return unexpected(impl->get_error());
+    const auto open_part_ok = co_await impl->open_part();
+    if (!open_part_ok) co_return unexpected(impl->get_error());
     co_return GzipLineWriter(std::move(impl));
 }
 
@@ -748,7 +757,8 @@ coro::CoroTask<Result<WriteSummary>> GzipLineWriter::close(
         co_return unexpected(std::move(err));
     }
     s.summary.parts = s.writer ? s.part + 1 : s.part;
-    if (!co_await s.close_part()) {
+    const auto close_part_ok = co_await s.close_part();
+    if (!close_part_ok) {
         DFTUtilsError err = co_await s.fail();
         co_return unexpected(std::move(err));
     }

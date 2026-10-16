@@ -21,7 +21,9 @@ namespace dftracer::utils::utilities::fileio::lines::sources {
  * @code
  * auto reader = ReaderFactory::create("file.gz", "file.gz.idx");
  * auto gen = async_indexed_file_bytes(reader, 1000, 5000);
- * while (auto line = co_await gen.next()) {
+ * for (;;) {
+ *     auto line = co_await gen.next();
+ *     if (!line) break;
  *     process(*line);
  * }
  * @endcode

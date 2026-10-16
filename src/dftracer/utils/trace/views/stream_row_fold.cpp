@@ -38,15 +38,15 @@ std::uint64_t morsel_bytes(const dataframe::Morsel& m) {
 void StreamRowFold::step(const FoldBatch& batch) {
     if (dropped_ && dropped_->load(std::memory_order_relaxed)) return;
     const RecordPhase target =
-        branch_ ? agg_phase_target(*branch_) : RecordPhase::UNKNOWN;
+        branch_ ? agg_phase_target(*branch_) : RecordPhase::Unknown;
     const std::size_t total = batch.events.size();
     kept_.clear();
     kept_.reserve(total);
     for (std::size_t i = 0; i < total; ++i) {
         const FoldEvent& ev = batch.events[i];
-        const bool k = ev.phase != RecordPhase::UNKNOWN &&
-                       (keep_metadata_ || ev.phase != RecordPhase::METADATA) &&
-                       (target == RecordPhase::UNKNOWN || ev.phase == target) &&
+        const bool k = ev.phase != RecordPhase::Unknown &&
+                       (keep_metadata_ || ev.phase != RecordPhase::Metadata) &&
+                       (target == RecordPhase::Unknown || ev.phase == target) &&
                        (!branch_ || !branch_->query ||
                         pod_matches(*branch_->query, ev, *intern_, qmap_));
         if (k) kept_.push_back(static_cast<std::uint32_t>(i));

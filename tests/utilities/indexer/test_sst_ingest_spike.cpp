@@ -94,10 +94,10 @@ struct Fixture {
             "/traces/trace_" + std::to_string(file_id) + ".pfw.gz";
         records::put_file_record(
             w, path, {static_cast<std::uint32_t>(file_id), 7, 11, 13});
-        records::clear_file(w, IndexExtension::MEMBERS, file_id);
-        for (auto ext : {IndexExtension::ZONEMAP, IndexExtension::BLOOM,
-                         IndexExtension::COUNTS, IndexExtension::POSTINGS,
-                         IndexExtension::STATS})
+        records::clear_file(w, IndexExtension::Members, file_id);
+        for (auto ext : {IndexExtension::Zonemap, IndexExtension::Bloom,
+                         IndexExtension::Counts, IndexExtension::Postings,
+                         IndexExtension::Stats})
             records::clear_file(w, ext, file_id);
 
         records::put_gzip_member(w, file_id, cp_a);
@@ -125,7 +125,7 @@ struct Fixture {
                                        /*num_chunks=*/2);
         records::put_file_pid_tid_counts(w, file_id, file_stats.pid_tid_counts);
 
-        records::put_path(w, IndexExtension::BLOOM, file_id, "name");
+        records::put_path(w, IndexExtension::Bloom, file_id, "name");
         dftu_utils_test::put_dimension_stats(w, file_id, cp_a.member_idx,
                                              dim_stats_a, 60);
         if (with_second_member)
@@ -135,7 +135,7 @@ struct Fixture {
         namespace kinds = dftracer::utils::index::extensions::kinds;
         const auto read_id = kinds::value_hash("read");
         const auto write_id = kinds::value_hash("write");
-        records::put_path(w, IndexExtension::POSTINGS, file_id, "name");
+        records::put_path(w, IndexExtension::Postings, file_id, "name");
         records::put_posting(w, file_id, "name", read_id);
         records::put_posting_granule(w, file_id, "name", read_id,
                                      cp_a.member_idx);
@@ -150,17 +150,17 @@ struct Fixture {
 
         // One merge per key: the SST emitter combines same-key operands, so
         // each SST stays key-unique either way.
-        w.put(layout::Family::AGGREGATION, "\xFF\xFD\x01", "name-one");
-        w.put(layout::Family::AGGREGATION, "\xFF\xFD\x02", "name-two");
-        w.merge(layout::Family::AGGREGATION, "agg-key-1", "operand-1");
-        w.merge(layout::Family::AGGREGATION, "agg-key-2", "operand-2");
-        w.merge(layout::Family::SYSTEM_METRICS, "sys-key-1", "sys-1");
-        w.merge(layout::Family::SYSTEM_METRICS, "sys-key-2", "sys-2");
+        w.put(layout::Family::Aggregation, "\xFF\xFD\x01", "name-one");
+        w.put(layout::Family::Aggregation, "\xFF\xFD\x02", "name-two");
+        w.merge(layout::Family::Aggregation, "agg-key-1", "operand-1");
+        w.merge(layout::Family::Aggregation, "agg-key-2", "operand-2");
+        w.merge(layout::Family::SystemMetrics, "sys-key-1", "sys-1");
+        w.merge(layout::Family::SystemMetrics, "sys-key-2", "sys-2");
 
-        records::put_manifest(w, file_id, IndexExtension::MEMBERS, 0);
-        for (auto ext : {IndexExtension::ZONEMAP, IndexExtension::BLOOM,
-                         IndexExtension::COUNTS, IndexExtension::POSTINGS,
-                         IndexExtension::STATS, IndexExtension::ROWSET})
+        records::put_manifest(w, file_id, IndexExtension::Members, 0);
+        for (auto ext : {IndexExtension::Zonemap, IndexExtension::Bloom,
+                         IndexExtension::Counts, IndexExtension::Postings,
+                         IndexExtension::Stats, IndexExtension::Rowset})
             records::put_manifest(w, file_id, ext, 42);
     }
 };
@@ -187,9 +187,9 @@ void check_same_bytes(const IndexDatabase& db_a, const IndexDatabase& db_b) {
 }
 
 void check_readable(const IndexDatabase& db, int file_id) {
-    CHECK(db.extension_current(file_id, IndexExtension::MEMBERS));
+    CHECK(db.extension_current(file_id, IndexExtension::Members));
     CHECK(db.pruning_tier_current(file_id));
-    CHECK(db.extension_state(file_id, IndexExtension::BLOOM)->params_hash ==
+    CHECK(db.extension_state(file_id, IndexExtension::Bloom)->params_hash ==
           42);
     CHECK(db.get_file_info_id("/traces/trace_" + std::to_string(file_id) +
                               ".pfw.gz") == file_id);
@@ -200,7 +200,7 @@ void check_readable(const IndexDatabase& db, int file_id) {
     CHECK(db.query_chunk_statistics(file_id).size() == 2);
     CHECK(db.query_file_scalar_stats_batch({file_id}).count(file_id) == 1);
     CHECK(db.query_file_pids(file_id).contains(1));
-    CHECK(db.path_granules(file_id, IndexExtension::ZONEMAP, "name").size() ==
+    CHECK(db.path_granules(file_id, IndexExtension::Zonemap, "name").size() ==
           2);
     CHECK(db.has_posting(file_id, "name", value_hash("read")));
     CHECK_FALSE(db.has_posting(file_id, "name", value_hash("open")));
@@ -244,7 +244,7 @@ TEST_SUITE("IndexDatabaseSstWriterContext") {
             f2.populate(sst, 2);
             registry.append(sst.commit());
         }
-        CHECK(registry.files(layout::Family::MEMBERS).size() == 2);
+        CHECK(registry.files(layout::Family::Members).size() == 2);
         db_b.bulk_ingest(registry);
 
         check_same_bytes(db_a, db_b);
@@ -287,7 +287,7 @@ TEST_SUITE("IndexDatabaseSstWriterContext") {
         CHECK(db.query_gzip_members(1).size() == 1);
         CHECK(db.query_chunk_statistics(1).size() == 1);
         CHECK(dftu_utils_test::bloom_chunks(db, 1, "name") == 1);
-        CHECK(db.path_granules(1, IndexExtension::ZONEMAP, "name").size() == 1);
+        CHECK(db.path_granules(1, IndexExtension::Zonemap, "name").size() == 1);
         CHECK_FALSE(db.has_posting(1, "name", value_hash("write")));
         CHECK(db.posting_granules(1, "name", value_hash("write")).empty());
     }
@@ -300,7 +300,7 @@ TEST_SUITE("IndexDatabaseSstWriterContext") {
             records::put_gzip_member(*w, 1, make_member(0, 0, 10));
             w->commit();
         }
-        CHECK_FALSE(db.extension_current(1, IndexExtension::MEMBERS));
+        CHECK_FALSE(db.extension_current(1, IndexExtension::Members));
         CHECK(db.query_gzip_members(1).empty());
     }
 }

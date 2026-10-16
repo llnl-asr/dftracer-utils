@@ -25,7 +25,7 @@ void RunLoop::schedule_destroy(std::coroutine_handle<> handle) {
 void RunLoop::mark_coro_completed(TaskIndex /*id*/) {}
 
 io::IoBackend& RunLoop::io_backend() {
-    throw DFTUtilsException(ErrorCode::PIPELINE, "RunLoop has no I/O backend");
+    throw DFTUtilsException(ErrorCode::Pipeline, "RunLoop has no I/O backend");
 }
 
 void RunLoop::drive_until(const std::function<bool()>& done) {
@@ -76,7 +76,7 @@ void RunLoop::drain_destroys() {
 
 void RunLoop::throw_stalled() {
     throw DFTUtilsException(
-        ErrorCode::PIPELINE,
+        ErrorCode::Pipeline,
         "RunLoop stalled: no runnable coroutines but the awaited work has "
         "not completed. Something is waiting on a resumption that will "
         "never arrive.");

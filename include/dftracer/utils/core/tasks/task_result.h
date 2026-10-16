@@ -18,11 +18,11 @@ namespace dftracer::utils {
 class TaskResult {
    public:
     enum class State : std::uint8_t {
-        pending,    ///< Not started
-        running,    ///< Execution in progress
-        value,      ///< Completed with value
-        exception,  ///< Completed with exception
-        cancelled,  ///< Cancelled before completion
+        Pending,    ///< Not started
+        Running,    ///< Execution in progress
+        Value,      ///< Completed with value
+        Exception,  ///< Completed with exception
+        Cancelled,  ///< Cancelled before completion
     };
 
     TaskResult() = default;
@@ -99,7 +99,7 @@ class TaskResult {
 
     std::any value_;
     std::exception_ptr exception_;
-    std::atomic<std::uint8_t> state_{static_cast<std::uint8_t>(State::pending)};
+    std::atomic<std::uint8_t> state_{static_cast<std::uint8_t>(State::Pending)};
 
     /// Reader tracking for smart value release.
     /// Starts at 0. Incremented by add_reader() (called from depends_on).

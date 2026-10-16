@@ -64,7 +64,7 @@ static std::string build_viz_events_body(std::vector<std::string>& events,
                                          std::uint64_t display_global_min,
                                          TraceIndex::TimeMetric metric) {
     // Even without an offset, a non-US trace still needs ts/dur scaled to us.
-    if (global_min > 0 || metric != TraceIndex::TimeMetric::US) {
+    if (global_min > 0 || metric != TraceIndex::TimeMetric::Us) {
         for (auto& event : events) {
             event = normalize_event_ts(event, global_min, metric);
         }
@@ -140,7 +140,7 @@ coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
     // lookback is in us; convert to native so scan_begin (native) is right.
     double lookback = params.get_double("lookback", 0);
     if (lookback < 0) lookback = 0;
-    if (lookback > 0 && index.time_metric() != TraceIndex::TimeMetric::US)
+    if (lookback > 0 && index.time_metric() != TraceIndex::TimeMetric::Us)
         lookback = static_cast<double>(
             index.us_to_native(static_cast<std::uint64_t>(lookback)));
     double scan_begin = begin - lookback;

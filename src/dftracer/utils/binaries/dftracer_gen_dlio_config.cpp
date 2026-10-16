@@ -32,7 +32,7 @@ namespace {
 class GenDlioConfigArgParse : public cli::ArgParse {
    public:
     cli::DirectoryArgs directory{
-        cli::DirMode::DEFAULT_DOT,
+        cli::DirMode::DefaultDot,
         "Input directory containing .pfw or .pfw.gz traces"};
     cli::PipelineArgs pipeline;
     cli::IndexingArgs indexing;

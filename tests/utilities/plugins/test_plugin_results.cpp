@@ -74,7 +74,7 @@ std::vector<FoldEvent> make_events(std::uint64_t count) {
         evs[i].ts = i;
         // step() drops METADATA/UNKNOWN-phase events before it ever reaches
         // on_batch; the default FoldEvent phase is UNKNOWN.
-        evs[i].phase = dftracer::utils::trace::RecordPhase::COMPLETE;
+        evs[i].phase = dftracer::utils::trace::RecordPhase::Complete;
     }
     return evs;
 }

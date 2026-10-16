@@ -230,7 +230,7 @@ std::shared_ptr<Task> Task::with_combiner(
             std::snprintf(buf, sizeof(buf),
                           "Combiner expects %zu inputs but received %zu",
                           sizeof...(Args), inputs.size());
-            throw PipelineError(PipelineError::VALIDATION_ERROR, buf);
+            throw PipelineError(PipelineError::ValidationError, buf);
         }
 
         if constexpr (sizeof...(Args) == 1) {

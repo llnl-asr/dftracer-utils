@@ -81,7 +81,7 @@ void plant_sentinel(const std::string& trace) {
     const int fid = file_id(trace);
     IndexDatabase db(index_of(trace));
     auto w = db.begin_write();
-    index::store::records::put_path_granule(*w, IndexExtension::BLOOM, fid,
+    index::store::records::put_path_granule(*w, IndexExtension::Bloom, fid,
                                             SENTINEL, 0, "x");
     w->commit();
 }
@@ -89,7 +89,7 @@ void plant_sentinel(const std::string& trace) {
 bool has_sentinel(const std::string& trace) {
     const int fid = file_id(trace);
     IndexDatabase db(index_of(trace), index::store::IndexOpenMode::ReadOnly);
-    return !db.path_granules(fid, IndexExtension::BLOOM, SENTINEL).empty();
+    return !db.path_granules(fid, IndexExtension::Bloom, SENTINEL).empty();
 }
 
 std::optional<index::ExtensionEntry> agg_entry(const Indexer& ix,
@@ -158,11 +158,11 @@ TEST_SUITE("AggExtension") {
             const int fid = file_id(gz);
             IndexDatabase db(index_of(gz));
             auto w = db.begin_write();
-            w->put(layout::Family::REGISTRY,
+            w->put(layout::Family::Registry,
                    layout::manifest_key(static_cast<std::uint32_t>(fid),
-                                        layout::Ext::AGG),
+                                        layout::Ext::Agg),
                    layout::encode_manifest(
-                       {stale, built->params_hash, layout::ExtStatus::READY}));
+                       {stale, built->params_hash, layout::ExtStatus::Ready}));
             w->commit();
         }
         auto reopened = Indexer::open({gz}, with_aggregation(1000000));
@@ -194,11 +194,11 @@ TEST_SUITE("AggExtension") {
             IndexDatabase db(index_of(a));
             auto w = db.begin_write();
             w->put(
-                layout::Family::REGISTRY,
+                layout::Family::Registry,
                 layout::manifest_key(static_cast<std::uint32_t>(fid),
-                                     layout::Ext::AGG),
+                                     layout::Ext::Agg),
                 layout::encode_manifest({built->version + 1, built->params_hash,
-                                         layout::ExtStatus::READY}));
+                                         layout::ExtStatus::Ready}));
             w->commit();
         }
         auto reopened = Indexer::open({a, b}, with_aggregation(1000000));
@@ -215,7 +215,7 @@ TEST_SUITE("AggExtension") {
             IndexDatabase db(index_of(gz));
             auto w = db.begin_write();
             // An operand the aggregation merge operator cannot read.
-            w->merge(layout::Family::AGGREGATION, "\xFF\xFE", "garbage");
+            w->merge(layout::Family::Aggregation, "\xFF\xFE", "garbage");
             w->commit();
         }
         IndexDatabase db(index_of(gz), index::store::IndexOpenMode::ReadOnly);
@@ -242,7 +242,7 @@ TEST_SUITE("AggExtension") {
         {
             IndexDatabase db(index_of(gz));
             auto w = db.begin_write();
-            w->merge(layout::Family::AGGREGATION, "\xFF\xFE", "garbage");
+            w->merge(layout::Family::Aggregation, "\xFF\xFE", "garbage");
             w->commit();
         }
         auto ix = Indexer::open({gz}, with_aggregation(1'000'000));

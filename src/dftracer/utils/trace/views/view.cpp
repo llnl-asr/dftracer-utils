@@ -129,13 +129,13 @@ Deferred<dataframe::DataFrame> ViewSession::join(
     if (!left.value_ || !right.value_ || left.executed_ != executed_ ||
         right.executed_ != executed_)
         throw DFTUtilsException::cat(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             "ViewSession::join: both handles must be collect() results of "
             "this session");
     if (n_key < 0) n_key = key_count_of(left.value_.get());
     if (n_key < 0)
         throw DFTUtilsException::cat(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             "ViewSession::join: cannot infer n_key; pass it explicitly");
     auto out = std::make_shared<dataframe::DataFrame>();
     combines_.emplace_back(
@@ -151,13 +151,13 @@ Deferred<dataframe::DataFrame> ViewSession::compare(
     if (!baseline.value_ || !variant.value_ ||
         baseline.executed_ != executed_ || variant.executed_ != executed_)
         throw DFTUtilsException::cat(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             "ViewSession::compare: both handles must be collect() results of "
             "this session");
     if (n_key < 0) n_key = key_count_of(baseline.value_.get());
     if (n_key < 0)
         throw DFTUtilsException::cat(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             "ViewSession::compare: cannot infer n_key; pass it explicitly");
     auto out = std::make_shared<dataframe::DataFrame>();
     combines_.emplace_back(
@@ -237,8 +237,8 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
             else
                 detail::extract_fold_event_into(fe, jv.element(), slot->intern,
                                                 /*needs_args=*/true);
-            if (fe.phase == RecordPhase::UNKNOWN ||
-                (!keep_metadata && fe.phase == RecordPhase::METADATA))
+            if (fe.phase == RecordPhase::Unknown ||
+                (!keep_metadata && fe.phase == RecordPhase::Metadata))
                 slot->events.discard_last();
         };
     };
@@ -388,7 +388,7 @@ coro::CoroTask<ExportStats> ViewSession::execute() {
 void TraceSession::add(const std::vector<dataframe::LazyFrame>& plans,
                        Resolve resolve) {
     if (*executed_)
-        throw DFTUtilsException::cat(ErrorCode::INVALID_ARGUMENT,
+        throw DFTUtilsException::cat(ErrorCode::InvalidArgument,
                                      "TraceSession::collect after execute()");
     plans_.insert(plans_.end(), plans.begin(), plans.end());
     pending_.push_back(Pending{plans.size(), std::move(resolve)});
@@ -467,7 +467,7 @@ View View::reshape(
     const std::function<scan::ScanPlan(const scan::ScanPlan&)>& step) const {
     auto refuse = [&](const std::string& why) {
         return DFTUtilsException::cat(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             std::string("View::") + builder + " " + why);
     };
     if (std::optional<std::string> op =
@@ -514,7 +514,7 @@ bool View::aggregates() const {
 scan::ScanPlan View::absorbed(const char* method, Need need) const {
     auto fail = [&](const std::string& why) {
         return DFTUtilsException::cat(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             std::string("View::") + method + " " + why);
     };
     dataframe::LazyFrame planned = dataframe::detail::optimize_plan(lf_);
@@ -622,7 +622,7 @@ dataframe::LazyFrame View::call_tree(std::vector<std::string> partition,
                                      std::string ts, std::string dur,
                                      std::string name) const {
     scan::ScanPlan v = absorbed("call_tree", Need::Events);
-    detail::require_role(*v, "call_tree", detail::TraceRole::DURATION);
+    detail::require_role(*v, "call_tree", detail::TraceRole::Duration);
     v = scan::timed(v);
     return terminal_plan(v, TraceOutput::CallTree,
                          {std::move(partition),
@@ -637,7 +637,7 @@ dataframe::LazyFrame View::flamegraph(std::vector<std::string> partition,
                                       std::string name,
                                       std::vector<std::string> group) const {
     scan::ScanPlan v = absorbed("flamegraph", Need::Events);
-    detail::require_role(*v, "flamegraph", detail::TraceRole::DURATION);
+    detail::require_role(*v, "flamegraph", detail::TraceRole::Duration);
     v = scan::timed(v);
     return terminal_plan(v, TraceOutput::Flamegraph,
                          {std::move(partition), std::move(ts), std::move(dur),
@@ -648,7 +648,7 @@ dataframe::LazyResult<ContainmentResult> View::containment(
     std::vector<std::string> partition, std::string ts, std::string dur,
     std::string name, std::vector<std::string> group) const {
     scan::ScanPlan v = absorbed("containment", Need::Events);
-    detail::require_role(*v, "containment", detail::TraceRole::DURATION);
+    detail::require_role(*v, "containment", detail::TraceRole::Duration);
     v = scan::timed(v);
     ContainmentArgs tree{std::move(partition), std::move(ts), std::move(dur),
                          std::move(name), std::move(group)};
@@ -664,7 +664,7 @@ dataframe::LazyResult<std::string> View::flamegraph_partial(
     std::vector<std::string> partition, std::string ts, std::string dur,
     std::string name, std::vector<std::string> group) const {
     scan::ScanPlan v = absorbed("flamegraph_partial", Need::EventsHead);
-    detail::require_role(*v, "flamegraph", detail::TraceRole::DURATION);
+    detail::require_role(*v, "flamegraph", detail::TraceRole::Duration);
     v = scan::timed(v);
     return partial_result(
         terminal_plan(v, TraceOutput::FlamegraphPartial,

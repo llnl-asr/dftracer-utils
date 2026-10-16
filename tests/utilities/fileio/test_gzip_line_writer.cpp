@@ -297,7 +297,7 @@ TEST_CASE("GzipLineWriter - errors") {
         o.member_size = 100;
         Written w = write_all(path.string(), o, {"{\"a\":1}"});
         CHECK(!w.err.has_value());
-        CHECK(w.err.error().code == ErrorCode::INVALID_ARGUMENT);
+        CHECK(w.err.error().code == ErrorCode::InvalidArgument);
         fs::remove(path);
     }
     SUBCASE("a worker failure removes the output") {

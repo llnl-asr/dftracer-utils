@@ -25,39 +25,39 @@ inline std::optional<ColumnType> scalar_type_from_storage(
     ArrowType t) noexcept {
     switch (t) {
         case NANOARROW_TYPE_INT64:
-            return ColumnType::INT64;
+            return ColumnType::Int64;
         case NANOARROW_TYPE_INT32:
-            return ColumnType::INT32;
+            return ColumnType::Int32;
         case NANOARROW_TYPE_INT16:
-            return ColumnType::INT16;
+            return ColumnType::Int16;
         case NANOARROW_TYPE_INT8:
-            return ColumnType::INT8;
+            return ColumnType::Int8;
         case NANOARROW_TYPE_UINT64:
-            return ColumnType::UINT64;
+            return ColumnType::Uint64;
         case NANOARROW_TYPE_UINT32:
-            return ColumnType::UINT32;
+            return ColumnType::Uint32;
         case NANOARROW_TYPE_UINT16:
-            return ColumnType::UINT16;
+            return ColumnType::Uint16;
         case NANOARROW_TYPE_UINT8:
-            return ColumnType::UINT8;
+            return ColumnType::Uint8;
         case NANOARROW_TYPE_DOUBLE:
-            return ColumnType::DOUBLE;
+            return ColumnType::Double;
         case NANOARROW_TYPE_FLOAT:
-            return ColumnType::FLOAT32;
+            return ColumnType::Float32;
         case NANOARROW_TYPE_STRING:
         case NANOARROW_TYPE_LARGE_STRING:
-            return ColumnType::STRING;
+            return ColumnType::String;
         case NANOARROW_TYPE_BINARY:
         case NANOARROW_TYPE_LARGE_BINARY:
-            return ColumnType::BINARY;
+            return ColumnType::Binary;
         case NANOARROW_TYPE_BOOL:
-            return ColumnType::BOOL;
+            return ColumnType::Bool;
         default:
             return std::nullopt;
     }
 }
 
-enum class KeyKind { SIGNED, UNSIGNED, FLOAT, BYTES };
+enum class KeyKind { Signed, Unsigned, Float, Bytes };
 
 inline std::optional<KeyKind> key_kind_from_storage(ArrowType t) noexcept {
     switch (t) {
@@ -66,20 +66,20 @@ inline std::optional<KeyKind> key_kind_from_storage(ArrowType t) noexcept {
         case NANOARROW_TYPE_INT32:
         case NANOARROW_TYPE_INT64:
         case NANOARROW_TYPE_BOOL:
-            return KeyKind::SIGNED;
+            return KeyKind::Signed;
         case NANOARROW_TYPE_UINT8:
         case NANOARROW_TYPE_UINT16:
         case NANOARROW_TYPE_UINT32:
         case NANOARROW_TYPE_UINT64:
-            return KeyKind::UNSIGNED;
+            return KeyKind::Unsigned;
         case NANOARROW_TYPE_FLOAT:
         case NANOARROW_TYPE_DOUBLE:
-            return KeyKind::FLOAT;
+            return KeyKind::Float;
         case NANOARROW_TYPE_STRING:
         case NANOARROW_TYPE_LARGE_STRING:
         case NANOARROW_TYPE_BINARY:
         case NANOARROW_TYPE_LARGE_BINARY:
-            return KeyKind::BYTES;
+            return KeyKind::Bytes;
         default:
             return std::nullopt;
     }
@@ -119,67 +119,67 @@ inline ValueCol plan_value_col(const ArrowArrayView* v, const ArrowSchema* s,
                     scalar_type_from_storage(elem->children[f]->storage_type);
                 if (!ft) {
                     throw DFTUtilsException(
-                        ErrorCode::INVALID_ARGUMENT,
+                        ErrorCode::InvalidArgument,
                         "arrow: unsupported struct-list field type");
                 }
                 vc.field_types.push_back(*ft);
                 const char* fname = item_schema->children[f]->name;
                 fields.push_back({fname ? fname : "", *ft});
             }
-            vc.type = ColumnType::STRUCT_LIST;
-            spec = {name ? name : "", ColumnType::STRUCT_LIST,
+            vc.type = ColumnType::StructList;
+            spec = {name ? name : "", ColumnType::StructList,
                     std::move(fields)};
             return vc;
         }
         if (auto ek = key_kind_from_storage(elem->storage_type)) {
-            if (*ek == KeyKind::BYTES) {
-                vc.type = ColumnType::STRING_LIST;
-                spec = {name ? name : "", ColumnType::STRING_LIST};
+            if (*ek == KeyKind::Bytes) {
+                vc.type = ColumnType::StringList;
+                spec = {name ? name : "", ColumnType::StringList};
                 return vc;
             }
-            if (*ek == KeyKind::SIGNED || *ek == KeyKind::UNSIGNED) {
-                vc.type = ColumnType::INT64_LIST;
-                spec = {name ? name : "", ColumnType::INT64_LIST};
+            if (*ek == KeyKind::Signed || *ek == KeyKind::Unsigned) {
+                vc.type = ColumnType::Int64List;
+                spec = {name ? name : "", ColumnType::Int64List};
                 return vc;
             }
         }
-        throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+        throw DFTUtilsException(ErrorCode::InvalidArgument,
                                 "arrow: unsupported list element type");
     }
-    throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+    throw DFTUtilsException(ErrorCode::InvalidArgument,
                             "arrow: unsupported value column type");
 }
 
 inline void append_scalar(RecordBatchBuilder& b, std::size_t out, ColumnType ct,
                           const ArrowArrayView* v, std::int64_t pos) {
     switch (ct) {
-        case ColumnType::INT64:
-        case ColumnType::INT32:
-        case ColumnType::INT16:
-        case ColumnType::INT8:
+        case ColumnType::Int64:
+        case ColumnType::Int32:
+        case ColumnType::Int16:
+        case ColumnType::Int8:
             b.append_int64(out, ArrowArrayViewGetIntUnsafe(v, pos));
             break;
-        case ColumnType::UINT64:
-        case ColumnType::UINT32:
-        case ColumnType::UINT16:
-        case ColumnType::UINT8:
+        case ColumnType::Uint64:
+        case ColumnType::Uint32:
+        case ColumnType::Uint16:
+        case ColumnType::Uint8:
             b.append_uint64(out, ArrowArrayViewGetUIntUnsafe(v, pos));
             break;
-        case ColumnType::DOUBLE:
-        case ColumnType::FLOAT32:
+        case ColumnType::Double:
+        case ColumnType::Float32:
             b.append_double(out, ArrowArrayViewGetDoubleUnsafe(v, pos));
             break;
-        case ColumnType::BOOL:
+        case ColumnType::Bool:
             b.append_bool(out, ArrowArrayViewGetIntUnsafe(v, pos) != 0);
             break;
-        case ColumnType::STRING: {
+        case ColumnType::String: {
             ArrowStringView s = ArrowArrayViewGetStringUnsafe(v, pos);
             b.append_string(
                 out, std::string_view(s.data,
                                       static_cast<std::size_t>(s.size_bytes)));
             break;
         }
-        case ColumnType::BINARY: {
+        case ColumnType::Binary: {
             ArrowStringView s = ArrowArrayViewGetStringUnsafe(v, pos);
             b.append_binary(
                 out, std::string_view(s.data,
@@ -187,7 +187,7 @@ inline void append_scalar(RecordBatchBuilder& b, std::size_t out, ColumnType ct,
             break;
         }
         default:
-            throw DFTUtilsException(ErrorCode::INTERNAL,
+            throw DFTUtilsException(ErrorCode::Internal,
                                     "arrow: unhandled scalar column type");
     }
 }
@@ -199,7 +199,7 @@ inline void append_value(RecordBatchBuilder& b, std::size_t out,
         return;
     }
     switch (vc.type) {
-        case ColumnType::STRING_LIST: {
+        case ColumnType::StringList: {
             const ArrowArrayView* elem = vc.view->children[0];
             const std::int64_t start =
                 ArrowArrayViewListChildOffset(vc.view, row);
@@ -215,7 +215,7 @@ inline void append_value(RecordBatchBuilder& b, std::size_t out,
             b.append_string_list(out, vals);
             break;
         }
-        case ColumnType::INT64_LIST: {
+        case ColumnType::Int64List: {
             const ArrowArrayView* elem = vc.view->children[0];
             const std::int64_t start =
                 ArrowArrayViewListChildOffset(vc.view, row);
@@ -228,7 +228,7 @@ inline void append_value(RecordBatchBuilder& b, std::size_t out,
             b.append_int64_list(out, vals);
             break;
         }
-        case ColumnType::STRUCT_LIST: {
+        case ColumnType::StructList: {
             const ArrowArrayView* st = vc.view->children[0];
             const std::int64_t start =
                 ArrowArrayViewListChildOffset(vc.view, row);
@@ -242,18 +242,18 @@ inline void append_value(RecordBatchBuilder& b, std::size_t out,
                     const ArrowArrayView* fv = st->children[f];
                     StructCell& c = cells[f];
                     switch (vc.field_types[f]) {
-                        case ColumnType::DOUBLE:
-                        case ColumnType::FLOAT32:
+                        case ColumnType::Double:
+                        case ColumnType::Float32:
                             c.f64 = ArrowArrayViewGetDoubleUnsafe(fv, p);
                             break;
-                        case ColumnType::UINT64:
-                        case ColumnType::UINT32:
-                        case ColumnType::UINT16:
-                        case ColumnType::UINT8:
+                        case ColumnType::Uint64:
+                        case ColumnType::Uint32:
+                        case ColumnType::Uint16:
+                        case ColumnType::Uint8:
                             c.u64 = ArrowArrayViewGetUIntUnsafe(fv, p);
                             break;
-                        case ColumnType::STRING:
-                        case ColumnType::BINARY: {
+                        case ColumnType::String:
+                        case ColumnType::Binary: {
                             ArrowStringView s =
                                 ArrowArrayViewGetStringUnsafe(fv, p);
                             c.str = std::string_view(
@@ -288,17 +288,17 @@ inline bool row_key_null(const KeyViews& keys, std::int64_t row) {
 inline int cell_cmp(const ArrowArrayView* va, std::int64_t ia,
                     const ArrowArrayView* vb, std::int64_t ib, KeyKind k) {
     switch (k) {
-        case KeyKind::SIGNED: {
+        case KeyKind::Signed: {
             std::int64_t a = ArrowArrayViewGetIntUnsafe(va, ia);
             std::int64_t b = ArrowArrayViewGetIntUnsafe(vb, ib);
             return a < b ? -1 : (a > b ? 1 : 0);
         }
-        case KeyKind::UNSIGNED: {
+        case KeyKind::Unsigned: {
             std::uint64_t a = ArrowArrayViewGetUIntUnsafe(va, ia);
             std::uint64_t b = ArrowArrayViewGetUIntUnsafe(vb, ib);
             return a < b ? -1 : (a > b ? 1 : 0);
         }
-        case KeyKind::FLOAT: {
+        case KeyKind::Float: {
             double a = ArrowArrayViewGetDoubleUnsafe(va, ia);
             double b = ArrowArrayViewGetDoubleUnsafe(vb, ib);
             return a < b ? -1 : (a > b ? 1 : 0);

@@ -19,9 +19,9 @@ class Task;
  * Error handling policy for pipeline execution
  */
 enum class ErrorPolicy {
-    FAIL_FAST,  ///< Stop immediately on first error (default)
-    CONTINUE,   ///< Continue other branches, skip children of failed tasks
-    CUSTOM      ///< User-provided handler
+    FailFast,  ///< Stop immediately on first error (default)
+    Continue,  ///< Continue other branches, skip children of failed tasks
+    Custom     ///< User-provided handler
 };
 
 /**
@@ -60,7 +60,7 @@ struct PipelineConfig {
     /// pin either path regardless of the env.
     std::optional<std::size_t> min_workers;
     std::chrono::milliseconds elastic_keepalive{250};
-    ErrorPolicy error_policy = ErrorPolicy::FAIL_FAST;
+    ErrorPolicy error_policy = ErrorPolicy::FailFast;
     ErrorHandler error_handler =
         nullptr;                  ///< Custom error handler (for CUSTOM policy)
     bool enable_watchdog = true;  ///< Hang detection
@@ -76,7 +76,7 @@ struct PipelineConfig {
     std::chrono::microseconds timeslice_duration{
         10'000};  ///< Coroutine yield timeslice (10ms, 0 = disabled)
     std::size_t io_thread_count = 0;   ///< 0 = hardware_concurrency
-    io::IoBackendType io_backend_type = io::IoBackendType::AUTO;
+    io::IoBackendType io_backend_type = io::IoBackendType::Auto;
     unsigned io_batch_threshold = 16;  ///< SQE batch threshold (0 = per-op)
 
     PipelineConfig& with_name(std::string pipeline_name) {
@@ -131,7 +131,7 @@ struct PipelineConfig {
      */
     PipelineConfig& with_error_handler(ErrorHandler handler) {
         error_handler = std::move(handler);
-        error_policy = ErrorPolicy::CUSTOM;
+        error_policy = ErrorPolicy::Custom;
         return *this;
     }
 

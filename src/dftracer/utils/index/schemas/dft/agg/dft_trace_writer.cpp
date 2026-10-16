@@ -279,7 +279,7 @@ coro::CoroTask<bool> write_shard_events(
 
                 // For REGULAR, pre-parse ts/te by skipping through value bytes.
                 std::uint64_t regular_ts = 0, regular_te = 0;
-                if (input->format == TraceEventFormat::REGULAR) {
+                if (input->format == TraceEventFormat::Regular) {
                     BinaryReader tmp(value_bytes);
                     tmp.varint();            // count
                     skip_metric_stats(tmp);  // duration
@@ -291,7 +291,7 @@ coro::CoroTask<bool> write_shard_events(
 
                 const int type_int =
                     trace::event_type_to_int(trace::event_type_from_cat(cat));
-                if (input->format == TraceEventFormat::REGULAR) {
+                if (input->format == TraceEventFormat::Regular) {
                     // Expand back to a timed COMPLETE event (ts + dur).
                     std::uint64_t duration = regular_te - regular_ts;
                     buf.append_literal("{\"name\":\"");
@@ -304,7 +304,7 @@ coro::CoroTask<bool> write_shard_events(
                     buf.append_u64(duration);
                     buf.append_literal(",\"ph\":");
                     buf.append_u64(
-                        trace::phase_to_int(trace::RecordPhase::COMPLETE));
+                        trace::phase_to_int(trace::RecordPhase::Complete));
                     buf.append_literal(",\"type\":");
                     buf.append_i64(type_int);
                     buf.append_literal(",\"pid\":");
@@ -317,9 +317,9 @@ coro::CoroTask<bool> write_shard_events(
                     // the bucket time; COUNTER (ph:2) renders the same shape as
                     // a counter sample. Both are instantaneous (no dur).
                     trace::RecordPhase rp =
-                        input->format == TraceEventFormat::COUNTER
-                            ? trace::RecordPhase::COUNTER
-                            : trace::RecordPhase::AGGREGATED;
+                        input->format == TraceEventFormat::Counter
+                            ? trace::RecordPhase::Counter
+                            : trace::RecordPhase::Aggregated;
                     buf.append_literal("{\"name\":\"");
                     buf.append_json_escaped(name);
                     buf.append_literal("\",\"cat\":\"");

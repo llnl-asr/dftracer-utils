@@ -57,8 +57,8 @@ class VectorizedFold : public Fold {
     void step(const FoldBatch& batch) override {
         scratch_.clear();
         for (const FoldEvent& ev : batch.events) {
-            if (ev.phase == RecordPhase::METADATA ||
-                ev.phase == RecordPhase::UNKNOWN)
+            if (ev.phase == RecordPhase::Metadata ||
+                ev.phase == RecordPhase::Unknown)
                 continue;
             scratch_.push_back(ev);
         }

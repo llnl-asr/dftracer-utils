@@ -42,7 +42,7 @@ std::string lookup_cache_path(const trace::views::detail::ViewPlan& plan) {
 std::optional<std::uint64_t> lookup_signature(
     const trace::views::detail::ViewPlan& plan, std::string_view side_text) {
     if (!plan.record_schema)
-        throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+        throw DFTUtilsException(ErrorCode::InvalidArgument,
                                 "lookup signature: the plan's record schema "
                                 "is not resolved");
     std::string sig;

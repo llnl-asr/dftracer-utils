@@ -23,7 +23,7 @@ namespace {
 bool indexed_by_path(const IndexDatabase& db, int fid) {
     const auto id = db.file_schema(fid);
     const RecordSchema* schema = id ? find_schema(*id) : nullptr;
-    return schema && schema->decoder == Decoder::PATH;
+    return schema && schema->decoder == Decoder::Path;
 }
 
 // Chunk i is gzip member i; every member is a candidate until a Condition
@@ -235,7 +235,7 @@ ChunkExplanation explain_file_chunks(const IndexDatabase& db,
                           std::move(own), ctx));
     }
     for (auto& c : conds) {
-        if (!c || c->extension() != index::store::IndexExtension::PLUGIN)
+        if (!c || c->extension() != index::store::IndexExtension::Plugin)
             continue;
         std::string name = c->name();
         Conditions own;
@@ -283,7 +283,7 @@ Result<ChunkPrunerBatchOutput> ChunkPruner::process_batch(
                 prune_file_chunks(db, item.file_path, item.query));
     } catch (const std::exception& e) {
         return make_error(
-            ErrorCode::INDEXER,
+            ErrorCode::Indexer,
             std::string("ChunkPruner: batch failed: ") + e.what());
     }
     return batch_out;

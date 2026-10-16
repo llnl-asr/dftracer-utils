@@ -27,7 +27,7 @@ class ReaderStreamCache {
 
    public:
     ReaderStreamCache()
-        : type_(StreamType::BYTES),
+        : type_(StreamType::Bytes),
           start_bytes_(0),
           end_bytes_(0),
           initialized_(false) {}

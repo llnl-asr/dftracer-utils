@@ -43,8 +43,8 @@ bool writable_dir(const std::string& dir) {
 // RAM-backed tmpfs (e.g. /dev/shm) is fastest and needs no fsync; node-local
 // disk is the large-capacity fallback. Larger free space breaks ties.
 int locality_tier(FilesystemKind kind) {
-    if (kind == FilesystemKind::TMPFS) return 2;
-    if (kind == FilesystemKind::LOCAL) return 1;
+    if (kind == FilesystemKind::Tmpfs) return 2;
+    if (kind == FilesystemKind::Local) return 1;
     return 0;
 }
 
@@ -117,7 +117,7 @@ std::string compute_local_spill_root() {
     std::string best;
     std::uintmax_t best_avail = 0;
     for (const auto& m : list_mounts()) {
-        if (m.kind != FilesystemKind::LOCAL) continue;
+        if (m.kind != FilesystemKind::Local) continue;
         if (!writable_dir(m.mountpoint)) continue;
         std::error_code ec;
         const auto space = fs::space(m.mountpoint, ec);
@@ -133,7 +133,7 @@ std::string compute_local_spill_root() {
         const std::string home = env_str("HOME");
         if (!home.empty()) candidates.push_back(home + "/.cache");
         for (const auto& c : candidates) {
-            if (filesystem_kind(c) == FilesystemKind::LOCAL &&
+            if (filesystem_kind(c) == FilesystemKind::Local &&
                 writable_dir(c)) {
                 best = c;
                 break;
@@ -219,7 +219,7 @@ void publish_path(const std::string& src, const std::string& dst) {
              ec);
     if (ec) {
         throw DFTUtilsException(
-            ErrorCode::IO,
+            ErrorCode::Io,
             "failed to publish " + src + " to " + dst + ": " + ec.message());
     }
     fs::remove_all(src, ec);

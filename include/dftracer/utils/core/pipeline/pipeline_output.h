@@ -13,7 +13,7 @@ namespace dftracer::utils {
 struct PipelineOutput : public std::unordered_map<TaskIndex, std::any> {
     operator std::any() const {
         if (size() == 1) return begin()->second;
-        throw PipelineError(PipelineError::OUTPUT_CONVERSION_ERROR,
+        throw PipelineError(PipelineError::OutputConversionError,
                             "Cannot convert multi-output pipeline (" +
                                 std::to_string(size()) +
                                 " outputs) to single std::any");
@@ -22,7 +22,7 @@ struct PipelineOutput : public std::unordered_map<TaskIndex, std::any> {
     std::any get() const {
         if (size() == 1) return begin()->second;
         throw PipelineError(
-            PipelineError::OUTPUT_CONVERSION_ERROR,
+            PipelineError::OutputConversionError,
             "Cannot get single value from multi-output pipeline (" +
                 std::to_string(size()) + " outputs)");
     }
@@ -36,7 +36,7 @@ struct PipelineOutput : public std::unordered_map<TaskIndex, std::any> {
         auto it = find(id);
         if (it == end()) {
             throw PipelineError(
-                PipelineError::OUTPUT_CONVERSION_ERROR,
+                PipelineError::OutputConversionError,
                 "No output found for task ID " + std::to_string(id));
         }
         return it->second;
@@ -48,7 +48,7 @@ struct PipelineOutput : public std::unordered_map<TaskIndex, std::any> {
         try {
             return std::any_cast<T>(it);
         } catch (const std::bad_any_cast& e) {
-            throw PipelineError(PipelineError::OUTPUT_CONVERSION_ERROR,
+            throw PipelineError(PipelineError::OutputConversionError,
                                 "Failed to cast output of task ID " +
                                     std::to_string(id) + ": " + e.what());
         }
@@ -56,7 +56,7 @@ struct PipelineOutput : public std::unordered_map<TaskIndex, std::any> {
 
     std::any first() const {
         if (empty())
-            throw PipelineError(PipelineError::OUTPUT_CONVERSION_ERROR,
+            throw PipelineError(PipelineError::OutputConversionError,
                                 "No pipeline outputs available");
         return begin()->second;
     }

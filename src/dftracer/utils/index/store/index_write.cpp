@@ -34,7 +34,7 @@ void delete_key(IndexWrite& w, layout::Family family, std::string key) {
 
 void clear_file(IndexWrite& w, Ext ext, int file_id) {
     const auto manifest = layout::manifest_key(fid(file_id), ext);
-    w.delete_range(layout::Family::REGISTRY, manifest,
+    w.delete_range(layout::Family::Registry, manifest,
                    layout::prefix_end(manifest));
     for (const auto& k : layout::kinds()) {
         if (k.ext != ext) continue;
@@ -46,7 +46,7 @@ void clear_file(IndexWrite& w, Ext ext, int file_id) {
 void clear_path(IndexWrite& w, Ext ext, int file_id, std::string_view path) {
     for (const auto& k : layout::kinds()) {
         if (k.ext != ext || k.kind == layout::path_kind::PATHS) continue;
-        if (k.kind == layout::path_kind::FILE && ext != Ext::POSTINGS) {
+        if (k.kind == layout::path_kind::FILE && ext != Ext::Postings) {
             auto key = layout::file_prefix(ext, k.kind, fid(file_id));
             key.append(path);
             delete_key(w, k.family, std::move(key));
@@ -59,7 +59,7 @@ void clear_path(IndexWrite& w, Ext ext, int file_id, std::string_view path) {
 
 void put_manifest(IndexWrite& w, int file_id, Ext ext,
                   std::uint64_t params_hash, layout::ExtStatus status) {
-    w.put(layout::Family::REGISTRY, layout::manifest_key(fid(file_id), ext),
+    w.put(layout::Family::Registry, layout::manifest_key(fid(file_id), ext),
           layout::encode_manifest(
               {layout::ext_version(ext), params_hash, status}));
 }
@@ -67,37 +67,37 @@ void put_manifest(IndexWrite& w, int file_id, Ext ext,
 void put_plugin_manifest(IndexWrite& w, int file_id, std::string_view name,
                          std::uint32_t version, std::uint64_t params_hash,
                          layout::ExtStatus status) {
-    w.put(layout::Family::REGISTRY,
+    w.put(layout::Family::Registry,
           layout::plugin_manifest_key(fid(file_id), name),
           layout::encode_manifest({version, params_hash, status}));
 }
 
 void clear_plugin(IndexWrite& w, int file_id, std::string_view name) {
     const auto manifest = layout::plugin_manifest_key(fid(file_id), name);
-    w.delete_range(layout::Family::REGISTRY, manifest,
+    w.delete_range(layout::Family::Registry, manifest,
                    layout::prefix_end(manifest));
-    clear_path(w, Ext::PLUGIN, file_id, name);
-    auto listed = layout::file_prefix(Ext::PLUGIN, layout::path_kind::PATHS,
+    clear_path(w, Ext::Plugin, file_id, name);
+    auto listed = layout::file_prefix(Ext::Plugin, layout::path_kind::PATHS,
                                       fid(file_id));
     listed.append(name);
-    delete_key(w, layout::family_of(Ext::PLUGIN, layout::path_kind::PATHS),
+    delete_key(w, layout::family_of(Ext::Plugin, layout::path_kind::PATHS),
                std::move(listed));
 }
 
 void put_file_record(IndexWrite& w, std::string_view logical_path,
                      const layout::FileRecord& record) {
-    w.put(layout::Family::REGISTRY, layout::file_by_path_key(logical_path),
+    w.put(layout::Family::Registry, layout::file_by_path_key(logical_path),
           layout::encode_file_record(record));
     w.put(
-        layout::Family::REGISTRY, layout::file_by_id_key(record.file_id),
-        layout::with_header(Ext::HOST, layout::host::FILE_BY_ID, logical_path));
+        layout::Family::Registry, layout::file_by_id_key(record.file_id),
+        layout::with_header(Ext::Host, layout::host::FILE_BY_ID, logical_path));
 }
 
 void put_file_metadata(IndexWrite& w, int file_id,
                        std::uint64_t checkpoint_size, std::uint64_t total_lines,
                        std::uint64_t total_uc_size, bool truncated) {
-    put_value(w, Ext::MEMBERS, layout::members::METADATA,
-              layout::file_prefix(Ext::MEMBERS, layout::members::METADATA,
+    put_value(w, Ext::Members, layout::members::METADATA,
+              layout::file_prefix(Ext::Members, layout::members::METADATA,
                                   fid(file_id)),
               enc::encode_metadata_record(
                   checkpoint_size, total_lines, total_uc_size,
@@ -106,16 +106,16 @@ void put_file_metadata(IndexWrite& w, int file_id,
 
 void put_gzip_member(IndexWrite& w, int file_id,
                      const index::gzip::GzipMemberRecord& member) {
-    put_value(w, Ext::MEMBERS, layout::members::MEMBER,
-              layout::granule_key(Ext::MEMBERS, layout::members::MEMBER,
+    put_value(w, Ext::Members, layout::members::MEMBER,
+              layout::granule_key(Ext::Members, layout::members::MEMBER,
                                   fid(file_id), granule(member.member_idx)),
               enc::encode_gzip_member_value(member));
 }
 
 void put_restart_window(IndexWrite& w, int file_id, std::uint64_t member_idx,
                         std::string_view window) {
-    put_value(w, Ext::MEMBERS, layout::members::RESTART,
-              layout::granule_key(Ext::MEMBERS, layout::members::RESTART,
+    put_value(w, Ext::Members, layout::members::RESTART,
+              layout::granule_key(Ext::Members, layout::members::RESTART,
                                   fid(file_id), granule(member_idx)),
               window);
 }
@@ -144,26 +144,26 @@ void put_path_file(IndexWrite& w, Ext ext, int file_id, std::string_view path,
 
 void put_posting(IndexWrite& w, int file_id, std::string_view path,
                  std::uint64_t value_hash) {
-    auto key = layout::path_prefix(Ext::POSTINGS, layout::path_kind::IN_FILE,
+    auto key = layout::path_prefix(Ext::Postings, layout::path_kind::IN_FILE,
                                    fid(file_id), path);
     layout::append_u64(key, value_hash);
-    w.put(Family::POSTINGS, key, {});
+    w.put(Family::Postings, key, {});
 }
 
 void put_posting_granule(IndexWrite& w, int file_id, std::string_view path,
                          std::uint64_t value_hash, std::uint64_t granule_idx) {
-    auto key = layout::path_prefix(Ext::POSTINGS, layout::path_kind::IN_GRANULE,
+    auto key = layout::path_prefix(Ext::Postings, layout::path_kind::IN_GRANULE,
                                    fid(file_id), path);
     layout::append_u64(key, value_hash);
     layout::append_u32(key, granule(granule_idx));
-    w.put(Family::POSTINGS, key, {});
+    w.put(Family::Postings, key, {});
 }
 
 void put_chunk_statistics(IndexWrite& w, int file_id,
                           std::uint64_t checkpoint_idx,
                           const index::schemas::dft::ChunkStatistics& stats) {
-    put_value(w, Ext::STATS, sk::CHUNK_STATS,
-              layout::granule_key(Ext::STATS, sk::CHUNK_STATS, fid(file_id),
+    put_value(w, Ext::Stats, sk::CHUNK_STATS,
+              layout::granule_key(Ext::Stats, sk::CHUNK_STATS, fid(file_id),
                                   granule(checkpoint_idx)),
               enc::encode_chunk_statistics_value(stats));
 }
@@ -171,8 +171,8 @@ void put_chunk_statistics(IndexWrite& w, int file_id,
 void put_chunk_metadata(IndexWrite& w, int file_id,
                         std::uint64_t checkpoint_idx,
                         const ChunkMetadata& metadata) {
-    put_value(w, Ext::METADATA, layout::metadata_kind::CHUNK,
-              layout::granule_key(Ext::METADATA, layout::metadata_kind::CHUNK,
+    put_value(w, Ext::Metadata, layout::metadata_kind::CHUNK,
+              layout::granule_key(Ext::Metadata, layout::metadata_kind::CHUNK,
                                   fid(file_id), granule(checkpoint_idx)),
               layout::encode_chunk_metadata(metadata));
 }
@@ -181,41 +181,41 @@ void put_file_scalar_stats(IndexWrite& w, int file_id,
                            const index::schemas::dft::ChunkStatistics& stats,
                            std::uint64_t num_chunks) {
     put_value(
-        w, Ext::STATS, sk::FILE_SCALAR_STATS,
-        layout::file_prefix(Ext::STATS, sk::FILE_SCALAR_STATS, fid(file_id)),
+        w, Ext::Stats, sk::FILE_SCALAR_STATS,
+        layout::file_prefix(Ext::Stats, sk::FILE_SCALAR_STATS, fid(file_id)),
         internal::encode_file_scalar_stats_value(stats, num_chunks));
 }
 
 void put_file_pid_tid_counts(IndexWrite& w, int file_id,
                              const StringViewMap<std::uint64_t>& counts) {
     put_value(
-        w, Ext::STATS, sk::FILE_PID_TID_COUNTS,
-        layout::file_prefix(Ext::STATS, sk::FILE_PID_TID_COUNTS, fid(file_id)),
+        w, Ext::Stats, sk::FILE_PID_TID_COUNTS,
+        layout::file_prefix(Ext::Stats, sk::FILE_PID_TID_COUNTS, fid(file_id)),
         enc::encode_count_map_value(counts));
 }
 
 void put_profile(IndexWrite& w, int file_id, std::string_view profile_id,
                  std::uint64_t params_hash) {
-    put_value(w, Ext::PROFILE, layout::profile_kind::ID,
-              layout::file_prefix(Ext::PROFILE, layout::profile_kind::ID,
+    put_value(w, Ext::Profile, layout::profile_kind::ID,
+              layout::file_prefix(Ext::Profile, layout::profile_kind::ID,
                                   fid(file_id)),
               profile_id);
-    put_manifest(w, file_id, Ext::PROFILE, params_hash);
+    put_manifest(w, file_id, Ext::Profile, params_hash);
 }
 
 void put_catalog_path(IndexWrite& w, int file_id, std::string_view path,
                       const PathStat& stat) {
-    auto key = layout::file_prefix(Ext::CATALOG, layout::catalog_kind::PATH,
+    auto key = layout::file_prefix(Ext::Catalog, layout::catalog_kind::PATH,
                                    fid(file_id));
     key.append(path);
-    put_value(w, Ext::CATALOG, layout::catalog_kind::PATH, key,
+    put_value(w, Ext::Catalog, layout::catalog_kind::PATH, key,
               layout::encode_path_stat(stat));
 }
 
 void put_rowset(IndexWrite& w, int file_id, std::string_view name,
                 std::string_view frame) {
-    put_value(w, Ext::ROWSET, layout::rowset_kind::FRAME,
-              layout::path_prefix(Ext::ROWSET, layout::rowset_kind::FRAME,
+    put_value(w, Ext::Rowset, layout::rowset_kind::FRAME,
+              layout::path_prefix(Ext::Rowset, layout::rowset_kind::FRAME,
                                   fid(file_id), name),
               frame);
 }

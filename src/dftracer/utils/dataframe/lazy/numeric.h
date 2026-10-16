@@ -5,7 +5,7 @@
 
 namespace dftracer::utils::dataframe::lazy_internal {
 
-enum class NumClass { SIGNED, UNSIGNED, FLOAT };
+enum class NumClass { Signed, Unsigned, Float };
 
 inline bool num_class(TypeId t, NumClass& cls) {
     switch (t) {
@@ -13,17 +13,17 @@ inline bool num_class(TypeId t, NumClass& cls) {
         case TypeId::Int16:
         case TypeId::Int32:
         case TypeId::Int64:
-            cls = NumClass::SIGNED;
+            cls = NumClass::Signed;
             return true;
         case TypeId::Uint8:
         case TypeId::Uint16:
         case TypeId::Uint32:
         case TypeId::Uint64:
-            cls = NumClass::UNSIGNED;
+            cls = NumClass::Unsigned;
             return true;
         case TypeId::Float32:
         case TypeId::Float64:
-            cls = NumClass::FLOAT;
+            cls = NumClass::Float;
             return true;
         default:
             return false;
@@ -139,13 +139,13 @@ inline Series make_numeric(const std::vector<std::uint64_t>& bits,
         std::vector<T> v(bits.size());
         for (std::size_t i = 0; i < bits.size(); ++i) {
             switch (cls) {
-                case NumClass::SIGNED:
+                case NumClass::Signed:
                     v[i] = static_cast<T>(static_cast<std::int64_t>(bits[i]));
                     break;
-                case NumClass::UNSIGNED:
+                case NumClass::Unsigned:
                     v[i] = static_cast<T>(bits[i]);
                     break;
-                case NumClass::FLOAT:
+                case NumClass::Float:
                     v[i] = static_cast<T>(bits_double(bits[i]));
                     break;
             }

@@ -92,34 +92,34 @@ ArrowExportResult AggregationBatch::to_arrow() const {
                                           : local_custom_metric_names;
 
     std::vector<utilities::common::arrow::ColumnSpec> schema = {
-        {"batch_type", ColumnType::INT64},  {"cat", ColumnType::STRING},
-        {"name", ColumnType::STRING},       {"pid", ColumnType::UINT64},
-        {"tid", ColumnType::UINT64},        {"hhash", ColumnType::STRING},
-        {"fhash", ColumnType::STRING},      {"time_bucket", ColumnType::UINT64},
-        {"count", ColumnType::UINT64},      {"dur_total", ColumnType::UINT64},
-        {"dur_min", ColumnType::UINT64},    {"dur_max", ColumnType::UINT64},
-        {"dur_mean", ColumnType::DOUBLE},   {"dur_std", ColumnType::DOUBLE},
-        {"size_total", ColumnType::UINT64}, {"size_min", ColumnType::UINT64},
-        {"size_max", ColumnType::UINT64},   {"size_mean", ColumnType::DOUBLE},
-        {"size_std", ColumnType::DOUBLE},   {"ts", ColumnType::UINT64},
-        {"te", ColumnType::UINT64},
+        {"batch_type", ColumnType::Int64},  {"cat", ColumnType::String},
+        {"name", ColumnType::String},       {"pid", ColumnType::Uint64},
+        {"tid", ColumnType::Uint64},        {"hhash", ColumnType::String},
+        {"fhash", ColumnType::String},      {"time_bucket", ColumnType::Uint64},
+        {"count", ColumnType::Uint64},      {"dur_total", ColumnType::Uint64},
+        {"dur_min", ColumnType::Uint64},    {"dur_max", ColumnType::Uint64},
+        {"dur_mean", ColumnType::Double},   {"dur_std", ColumnType::Double},
+        {"size_total", ColumnType::Uint64}, {"size_min", ColumnType::Uint64},
+        {"size_max", ColumnType::Uint64},   {"size_mean", ColumnType::Double},
+        {"size_std", ColumnType::Double},   {"ts", ColumnType::Uint64},
+        {"te", ColumnType::Uint64},
     };
     if (has_approximated_entries) {
-        schema.push_back({"count_ci_lower", ColumnType::DOUBLE});
-        schema.push_back({"count_ci_upper", ColumnType::DOUBLE});
+        schema.push_back({"count_ci_lower", ColumnType::Double});
+        schema.push_back({"count_ci_upper", ColumnType::Double});
     }
     for (auto id : extra_key_ids) {
         schema.push_back(
-            {std::string(strings().resolve(id)), ColumnType::STRING});
+            {std::string(strings().resolve(id)), ColumnType::String});
     }
     struct MetricSuffix {
         const char* suffix;
         ColumnType type;
     };
     static constexpr MetricSuffix cm_schema[] = {
-        {"_total", ColumnType::UINT64}, {"_min", ColumnType::UINT64},
-        {"_max", ColumnType::UINT64},   {"_mean", ColumnType::DOUBLE},
-        {"_std", ColumnType::DOUBLE},
+        {"_total", ColumnType::Uint64}, {"_min", ColumnType::Uint64},
+        {"_max", ColumnType::Uint64},   {"_mean", ColumnType::Double},
+        {"_std", ColumnType::Double},
     };
     for (auto cm : custom_metric_names) {
         for (const auto& [suffix, type] : cm_schema) {
@@ -356,13 +356,13 @@ coro::AsyncGenerator<AggregationBatch> Aggregator::operator()(
                      AggregationMetrics& metrics) {
         total_keys++;
         switch (map_type) {
-            case AggMapType::EVENT:
+            case AggMapType::Event:
                 event_entries.emplace_back(key, std::move(metrics));
                 break;
-            case AggMapType::PROFILE:
+            case AggMapType::Profile:
                 profile_entries.emplace_back(key, std::move(metrics));
                 break;
-            case AggMapType::SYSTEM:
+            case AggMapType::System:
                 system_entries.emplace_back(key, std::move(metrics));
                 break;
         }
@@ -383,7 +383,7 @@ coro::AsyncGenerator<AggregationBatch> Aggregator::operator()(
     };
 
     for (std::size_t i = 0; i < event_entries.size(); i += batch_sz) {
-        AggregationBatch batch = make_batch(AggregationBatchType::EVENT);
+        AggregationBatch batch = make_batch(AggregationBatchType::Event);
         std::size_t end = std::min(i + batch_sz, event_entries.size());
         for (std::size_t j = i; j < end; ++j) {
             batch.entries.push_back(std::move(event_entries[j]));
@@ -392,7 +392,7 @@ coro::AsyncGenerator<AggregationBatch> Aggregator::operator()(
     }
 
     for (std::size_t i = 0; i < profile_entries.size(); i += batch_sz) {
-        AggregationBatch batch = make_batch(AggregationBatchType::PROFILE);
+        AggregationBatch batch = make_batch(AggregationBatchType::Profile);
         std::size_t end = std::min(i + batch_sz, profile_entries.size());
         for (std::size_t j = i; j < end; ++j) {
             batch.entries.push_back(std::move(profile_entries[j]));
@@ -401,7 +401,7 @@ coro::AsyncGenerator<AggregationBatch> Aggregator::operator()(
     }
 
     for (std::size_t i = 0; i < system_entries.size(); i += batch_sz) {
-        AggregationBatch batch = make_batch(AggregationBatchType::SYSTEM);
+        AggregationBatch batch = make_batch(AggregationBatchType::System);
         std::size_t end = std::min(i + batch_sz, system_entries.size());
         for (std::size_t j = i; j < end; ++j) {
             batch.entries.push_back(std::move(system_entries[j]));

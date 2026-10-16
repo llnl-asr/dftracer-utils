@@ -100,7 +100,7 @@ TEST_SUITE("duql decorrelate") {
         REQUIRE(d->high);
         CHECK(d->high->open);
         CHECK(syntax::to_text(*d->high->outer) == "ts");
-        CHECK(d->read == RangeRead::MAX);
+        CHECK(d->read == RangeRead::Max);
         CHECK(!d->empty);
         CHECK(has(syntax::to_text(*d->side),
                   {"dur > 1", "select __correlated_value = dur",
@@ -120,7 +120,7 @@ TEST_SUITE("duql decorrelate") {
         CHECK(!d->low->open);
         CHECK(syntax::to_text(*d->low->outer) == "lo");
         CHECK(syntax::to_text(*d->high->outer) == "hi * 2");
-        CHECK(d->read == RangeRead::COUNT);
+        CHECK(d->read == RangeRead::Count);
         CHECK(has(syntax::to_text(*d->side),
                   {"__ck0 = pid", "__correlated_range = ts + 1"}));
         const auto f =
@@ -137,17 +137,17 @@ TEST_SUITE("duql decorrelate") {
                        true)
                 ->read;
         };
-        CHECK(read("count()") == RangeRead::COUNT);
-        CHECK(read("count(dur)") == RangeRead::COUNT_VALUES);
-        CHECK(read("count_if(dur > 2)") == RangeRead::COUNT_IF);
-        CHECK(read("sum(dur)") == RangeRead::SUM);
-        CHECK(read("min(dur)") == RangeRead::MIN);
-        CHECK(read("mean(dur)") == RangeRead::MEAN);
+        CHECK(read("count()") == RangeRead::Count);
+        CHECK(read("count(dur)") == RangeRead::CountValues);
+        CHECK(read("count_if(dur > 2)") == RangeRead::CountIf);
+        CHECK(read("sum(dur)") == RangeRead::Sum);
+        CHECK(read("min(dur)") == RangeRead::Min);
+        CHECK(read("mean(dur)") == RangeRead::Mean);
         CHECK(run("from data | where ts < ^.ts | select dur", true)->read ==
-              RangeRead::ROWS);
+              RangeRead::Rows);
         const auto g = run("from data | where ts < ^.ts | group fd {}", false);
         REQUIRE(g);
-        CHECK(g->read == RangeRead::ROWS);
+        CHECK(g->read == RangeRead::Rows);
         CHECK(has(syntax::to_text(*g->side),
                   {"select fd", "__correlated_range = ts"}));
         const auto b =

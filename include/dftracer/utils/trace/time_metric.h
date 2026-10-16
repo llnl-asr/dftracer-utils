@@ -12,24 +12,24 @@ namespace dftracer::utils::trace {
 /// Time unit a trace records ts/dur in, declared via the CM metadata event
 /// {"name":"CM","ph":"M","args":{"name":"time_metric","value":"NS"}}.
 /// Microseconds (US) is the canonical unit; an absent or unknown metric is US.
-enum class TimeMetric { US, NS, MS, SEC };
+enum class TimeMetric { Us, Ns, Ms, Sec };
 
 inline TimeMetric parse_time_metric(std::string_view value) {
-    if (value == "NS") return TimeMetric::NS;
-    if (value == "MS") return TimeMetric::MS;
-    if (value == "SEC") return TimeMetric::SEC;
-    return TimeMetric::US;
+    if (value == "NS") return TimeMetric::Ns;
+    if (value == "MS") return TimeMetric::Ms;
+    if (value == "SEC") return TimeMetric::Sec;
+    return TimeMetric::Us;
 }
 
 inline std::string_view time_metric_to_string(TimeMetric metric) {
     switch (metric) {
-        case TimeMetric::NS:
+        case TimeMetric::Ns:
             return "NS";
-        case TimeMetric::MS:
+        case TimeMetric::Ms:
             return "MS";
-        case TimeMetric::SEC:
+        case TimeMetric::Sec:
             return "SEC";
-        case TimeMetric::US:
+        case TimeMetric::Us:
         default:
             return "US";
     }
@@ -37,13 +37,13 @@ inline std::string_view time_metric_to_string(TimeMetric metric) {
 
 inline std::uint64_t time_metric_ns_per_unit(TimeMetric metric) {
     switch (metric) {
-        case TimeMetric::NS:
+        case TimeMetric::Ns:
             return 1ULL;
-        case TimeMetric::US:
+        case TimeMetric::Us:
             return 1000ULL;
-        case TimeMetric::MS:
+        case TimeMetric::Ms:
             return 1000000ULL;
-        case TimeMetric::SEC:
+        case TimeMetric::Sec:
             return 1000000000ULL;
         default:
             return 1000ULL;
@@ -61,7 +61,7 @@ inline std::uint64_t scale_between(TimeMetric from, TimeMetric to,
 }
 
 inline std::uint64_t scale_to_us(TimeMetric metric, std::uint64_t value) {
-    return scale_between(metric, TimeMetric::US, value);
+    return scale_between(metric, TimeMetric::Us, value);
 }
 
 /// Multiplier that converts a native value to microseconds, for fractional
@@ -74,7 +74,7 @@ inline double time_metric_us_scale(TimeMetric metric) {
 /// file's native unit (from its CM declaration); `target`, when set, requests
 /// scaling ts/dur from `metric` into that unit.
 struct TimeScaleState {
-    TimeMetric metric = TimeMetric::US;
+    TimeMetric metric = TimeMetric::Us;
     std::optional<TimeMetric> target;
 };
 

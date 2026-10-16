@@ -127,7 +127,7 @@ bool has_catalog(const std::string& gz) {
                              st::IndexOpenMode::ReadOnly);
         const int fid = db.get_file_info_id(st::internal::get_logical_path(gz));
         return fid >= 0 &&
-               db.extension_current(fid, st::IndexExtension::CATALOG);
+               db.extension_current(fid, st::IndexExtension::Catalog);
     } catch (...) {
         return false;
     }

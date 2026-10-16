@@ -95,34 +95,34 @@ struct PipelineSample {
 };
 
 enum class AggFn : std::uint8_t {
-    COUNT,
-    COUNT_IF,
-    SUM,
-    MIN,
-    MAX,
-    MEAN,
-    VAR,
-    STD,
-    FIRST,
-    LAST,
-    QUANTILE,
-    HISTOGRAM,
-    BUSY,
-    CONCURRENCY,
-    UTILIZATION,
-    ACTIVE,
-    COUNT_DISTINCT,
-    COLLECT,
-    ARGMAX,
-    ARGMIN,
-    SKETCH,
-    MERGE,
-    PLUGIN,
+    Count,
+    CountIf,
+    Sum,
+    Min,
+    Max,
+    Mean,
+    Var,
+    Std,
+    First,
+    Last,
+    Quantile,
+    Histogram,
+    Busy,
+    Concurrency,
+    Utilization,
+    Active,
+    CountDistinct,
+    Collect,
+    Argmax,
+    Argmin,
+    Sketch,
+    Merge,
+    Plugin,
 };
 
 inline bool is_occupancy(AggFn fn) {
-    return fn == AggFn::BUSY || fn == AggFn::CONCURRENCY ||
-           fn == AggFn::UTILIZATION || fn == AggFn::ACTIVE;
+    return fn == AggFn::Busy || fn == AggFn::Concurrency ||
+           fn == AggFn::Utilization || fn == AggFn::Active;
 }
 
 /// One `name = fn(arg)` of a `group` or `agg` block. `arg` is null for
@@ -133,7 +133,7 @@ inline bool is_occupancy(AggFn fn) {
 /// `arg` values, `params` filling its operands after the column in order.
 struct PipelineAgg {
     std::string name;
-    AggFn fn = AggFn::COUNT;
+    AggFn fn = AggFn::Count;
     TermRef arg;
     double q = 0;
     std::string text;
@@ -168,7 +168,7 @@ struct PipelineBucket {
     double width = 0;
     std::optional<double> low;
     std::optional<double> high;
-    syntax::FillMode fill_mode = syntax::FillMode::ZERO;
+    syntax::FillMode fill_mode = syntax::FillMode::Zero;
     bool fill = false;
     TermRef key;
     std::string text;
@@ -194,37 +194,37 @@ struct PipelineSession {
 };
 
 enum class WinFn : std::uint8_t {
-    ROW_NUMBER,
-    RANK,
-    DENSE_RANK,
-    LAG,
-    LEAD,
-    RUNNING_SUM,
-    RUNNING_COUNT,
-    COUNT,
-    SUM,
-    MIN,
-    MAX,
-    MEAN,
-    FIRST,
-    LAST,
-    VAR,
-    STD,
-    QUANTILE,
-    HISTOGRAM,
-    RUNNING_MIN,
-    RUNNING_MAX,
-    RUNNING_MEAN,
-    NTILE,
-    NTH,
-    PERCENT_RANK,
-    CUME_DIST,
-    FILL_FORWARD,
-    COUNT_IF,
-    COUNT_DISTINCT,
-    COLLECT,
-    ARGMAX,
-    ARGMIN,
+    RowNumber,
+    Rank,
+    DenseRank,
+    Lag,
+    Lead,
+    RunningSum,
+    RunningCount,
+    Count,
+    Sum,
+    Min,
+    Max,
+    Mean,
+    First,
+    Last,
+    Var,
+    Std,
+    Quantile,
+    Histogram,
+    RunningMin,
+    RunningMax,
+    RunningMean,
+    Ntile,
+    Nth,
+    PercentRank,
+    CumeDist,
+    FillForward,
+    CountIf,
+    CountDistinct,
+    Collect,
+    Argmax,
+    Argmin,
 };
 
 /// The frame of `over N rows` (`rows` rows ending at the current one) or
@@ -243,7 +243,7 @@ struct WinFrame {
 /// past the partition's edge (null: none).
 struct PipelineWinCall {
     std::string column;
-    WinFn fn = WinFn::ROW_NUMBER;
+    WinFn fn = WinFn::RowNumber;
     TermRef arg;
     TermRef fallback;
     TermRef by;
@@ -296,7 +296,7 @@ struct PipelineNest {
 struct PipelineAsof {
     PipelineItem time;
     std::string column;
-    syntax::AsofDirection direction = syntax::AsofDirection::BACKWARD;
+    syntax::AsofDirection direction = syntax::AsofDirection::Backward;
     std::optional<double> tolerance;
 };
 
@@ -321,7 +321,7 @@ struct PipelineLookup {
     std::vector<std::pair<PipelineItem, std::string>> keys;
     std::variant<std::monostate, PipelineNest, PipelineAsof, PipelineOverlap>
         mode;
-    syntax::LookupKind kind = syntax::LookupKind::LEFT;
+    syntax::LookupKind kind = syntax::LookupKind::Left;
 };
 
 struct Pipeline;
@@ -365,10 +365,10 @@ using PipelineStage =
 /// The records a pipeline reads: every record of the View's files (`all`),
 /// the records the View reads (`data`), the records of the file `path`, or
 /// the rows of the source row set `side`.
-enum class InputKind : std::uint8_t { ALL, DATA, FILE, SIDE };
+enum class InputKind : std::uint8_t { All, Data, File, Side };
 
 struct Input {
-    InputKind kind = InputKind::DATA;
+    InputKind kind = InputKind::Data;
     std::string path;
     std::size_t side = 0;
 };
@@ -406,7 +406,7 @@ struct Program {
 /// What a loaded plugin registered under a name: a column -> column
 /// function, a table -> table function, a column -> value reducer, another
 /// kind, or nothing.
-enum class PluginKind : std::uint8_t { NONE, COLUMN, TABLE, AGGREGATE, OTHER };
+enum class PluginKind : std::uint8_t { None, Column, Table, Aggregate, Other };
 
 /// The plugin functions a compile may call: `kind` of a dotted name, and
 /// the loaded plugin namespaces, sorted, for the unknown-name error.

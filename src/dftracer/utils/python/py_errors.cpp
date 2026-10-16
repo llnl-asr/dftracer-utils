@@ -75,28 +75,28 @@ int init_py_errors(PyObject *m) {
 
 PyObject *py_error_type_for(ErrorCode code) {
     switch (code) {
-        case ErrorCode::INVALID_ARGUMENT:
+        case ErrorCode::InvalidArgument:
             return g_dft_value_error;
-        case ErrorCode::NOT_FOUND:
+        case ErrorCode::NotFound:
             return g_dft_not_found_error;
-        case ErrorCode::IO:
+        case ErrorCode::Io:
             return g_dft_io_error;
-        case ErrorCode::PARSE:
+        case ErrorCode::Parse:
             return g_dft_parse_error;
-        case ErrorCode::COMPRESSION:
+        case ErrorCode::Compression:
             return g_dft_compression_error;
-        case ErrorCode::DUQL:
+        case ErrorCode::Duql:
             return g_dft_duql_error;
-        case ErrorCode::READER:
+        case ErrorCode::Reader:
             return g_dft_reader_error;
-        case ErrorCode::INDEXER:
+        case ErrorCode::Indexer:
             return g_dft_indexer_error;
-        case ErrorCode::PIPELINE:
+        case ErrorCode::Pipeline:
             return g_dft_pipeline_error;
-        case ErrorCode::AGGREGATION:
+        case ErrorCode::Aggregation:
             return g_dft_aggregation_error;
-        case ErrorCode::UNKNOWN:
-        case ErrorCode::INTERNAL:
+        case ErrorCode::Unknown:
+        case ErrorCode::Internal:
             return g_dft_error;
     }
     return g_dft_error;

@@ -44,7 +44,7 @@ inline dftu_scalar raise_if_error(dftu_scalar s) {
         const char* msg = s.value.err != nullptr && s.value.err->message
                               ? s.value.err->message
                               : "reduction failed";
-        throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT, msg);
+        throw DFTUtilsException(ErrorCode::InvalidArgument, msg);
     }
     return s;
 }

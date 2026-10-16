@@ -229,7 +229,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         trace::strip_array_delimiters(c.buf->data(), total);
         c.buf->resize(total + simdjson::SIMDJSON_PADDING, '\0');
         std::size_t line_number = 0;
-        if (cfg.decoder == index::Decoder::PATH) {
+        if (cfg.decoder == index::Decoder::Path) {
             trace::parse_lines(
                 parser, c.buf->data(), total,
                 [&](simdjson::dom::element root, std::string_view line) {
@@ -501,7 +501,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     BufferPool buffers_;
     dftracer::utils::StringIntern* intern_;
     std::vector<trace::views::detail::Fold*> folds_;
-    index::Decoder decoder_ = index::Decoder::DFTRACER;
+    index::Decoder decoder_ = index::Decoder::Dftracer;
     const index::RecordSchema* record_schema_ = nullptr;
     bool needs_args_ = false;
     bool capture_schema_ = false;

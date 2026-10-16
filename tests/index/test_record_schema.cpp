@@ -126,10 +126,10 @@ TEST_SUITE("Schemas") {
                  {"op", "host", "lat", "io.off", "hosts.0", "hosts.1", "ok"})
                 CHECK_MESSAGE(cat.count(p), p);
             CHECK(cat.at("op").count == 4000);
-            CHECK(cat.at("ok").type == store::PathType::BOOL);
+            CHECK(cat.at("ok").type == store::PathType::Bool);
             const auto blooms =
                 db.extension_paths(static_cast<int>(files[0].file_id),
-                                   store::IndexExtension::BLOOM);
+                                   store::IndexExtension::Bloom);
             CHECK(std::find(blooms.begin(), blooms.end(), "op") !=
                   blooms.end());
             CHECK(std::find(blooms.begin(), blooms.end(), "cat") ==

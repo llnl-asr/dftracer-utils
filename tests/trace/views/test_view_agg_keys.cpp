@@ -1001,7 +1001,7 @@ TEST_SUITE("View") {
             const dataframe::DataFrame r =
                 view({GroupKey::field("args.s")}).collect().get();
             const dataframe::DataFrame j =
-                join_batches(r, r, 1, JoinType::INNER);
+                join_batches(r, r, 1, JoinType::Inner);
             REQUIRE(j.num_rows() == 3);
             Groups got;
             for (std::int64_t i = 0; i < j.num_rows(); ++i) {

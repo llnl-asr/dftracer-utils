@@ -372,7 +372,7 @@ TEST_CASE("Scheduler - Global timeout triggers") {
         try {
             scheduler.schedule(blocking_task);
         } catch (const PipelineError& e) {
-            caught_timeout = (e.get_type() == PipelineError::TIMEOUT_ERROR);
+            caught_timeout = (e.get_type() == PipelineError::TimeoutError);
         }
 
         // Cleanup: signal task to exit and give it time
@@ -650,18 +650,18 @@ TEST_CASE("Integration - Full pipeline with all features") {
 // ============================================================================
 
 TEST_CASE("Error Types - All error types present") {
-    CHECK(PipelineError::TYPE_MISMATCH >= 0);
-    CHECK(PipelineError::VALIDATION_ERROR >= 0);
-    CHECK(PipelineError::EXECUTION_ERROR >= 0);
-    CHECK(PipelineError::INITIALIZATION_ERROR >= 0);
-    CHECK(PipelineError::OUTPUT_CONVERSION_ERROR >= 0);
-    CHECK(PipelineError::TIMEOUT_ERROR >= 0);
-    CHECK(PipelineError::INTERRUPTED >= 0);
-    CHECK(PipelineError::EXECUTOR_UNRESPONSIVE >= 0);
+    CHECK(PipelineError::TypeMismatch >= 0);
+    CHECK(PipelineError::ValidationError >= 0);
+    CHECK(PipelineError::ExecutionError >= 0);
+    CHECK(PipelineError::InitializationError >= 0);
+    CHECK(PipelineError::OutputConversionError >= 0);
+    CHECK(PipelineError::TimeoutError >= 0);
+    CHECK(PipelineError::Interrupted >= 0);
+    CHECK(PipelineError::ExecutorUnresponsive >= 0);
 }
 
 TEST_CASE("Error - Timeout error message") {
-    PipelineError error(PipelineError::TIMEOUT_ERROR, "Pipeline timed out");
+    PipelineError error(PipelineError::TimeoutError, "Pipeline timed out");
     std::string msg = error.what();
 
     CHECK(msg.find("TIMEOUT") != std::string::npos);
@@ -669,7 +669,7 @@ TEST_CASE("Error - Timeout error message") {
 }
 
 TEST_CASE("Error - Interrupted error message") {
-    PipelineError error(PipelineError::INTERRUPTED, "Pipeline interrupted");
+    PipelineError error(PipelineError::Interrupted, "Pipeline interrupted");
     std::string msg = error.what();
 
     CHECK(msg.find("INTERRUPTED") != std::string::npos);
@@ -677,7 +677,7 @@ TEST_CASE("Error - Interrupted error message") {
 }
 
 TEST_CASE("Error - Executor unresponsive error message") {
-    PipelineError error(PipelineError::EXECUTOR_UNRESPONSIVE, "Executor hung");
+    PipelineError error(PipelineError::ExecutorUnresponsive, "Executor hung");
     std::string msg = error.what();
 
     CHECK(msg.find("EXECUTOR_UNRESPONSIVE") != std::string::npos);
@@ -697,7 +697,7 @@ TEST_CASE("Error Scenario - Task throws exception") {
         "ThrowingTask");
 
     // FAIL_FAST policy should throw immediately
-    scheduler.set_error_policy(ErrorPolicy::FAIL_FAST);
+    scheduler.set_error_policy(ErrorPolicy::FailFast);
 
     CHECK_THROWS_AS(scheduler.schedule(throwing_task), PipelineError);
 
@@ -725,7 +725,7 @@ TEST_CASE("Error Scenario - Task throws exception in chain") {
     task2->depends_on(task1);
     task3->depends_on(task2);
 
-    scheduler.set_error_policy(ErrorPolicy::FAIL_FAST);
+    scheduler.set_error_policy(ErrorPolicy::FailFast);
 
     CHECK_THROWS_AS(scheduler.schedule(task1), PipelineError);
 
@@ -759,9 +759,8 @@ TEST_CASE("Error Scenario - Type mismatch between tasks") {
         // If we get here, try scheduling (might throw later)
         scheduler.schedule(int_task);
     } catch (const PipelineError& e) {
-        caught_type_error =
-            (e.get_type() == PipelineError::TYPE_MISMATCH ||
-             e.get_type() == PipelineError::TYPE_MISMATCH_ERROR);
+        caught_type_error = (e.get_type() == PipelineError::TypeMismatch ||
+                             e.get_type() == PipelineError::TypeMismatchError);
     } catch (const std::exception& e) {
         // Type checking might throw std::exception
         std::string msg = e.what();
@@ -808,7 +807,7 @@ TEST_CASE("Error Policy - FAIL_FAST stops on first error") {
     task2->depends_on(root);
     task3->depends_on(root);
 
-    scheduler.set_error_policy(ErrorPolicy::FAIL_FAST);
+    scheduler.set_error_policy(ErrorPolicy::FailFast);
 
     CHECK_THROWS_AS(scheduler.schedule(root), PipelineError);
 
@@ -853,7 +852,7 @@ TEST_CASE("Error Policy - CONTINUE continues on error") {
     task2->depends_on(root);
     task3->depends_on(root);
 
-    scheduler.set_error_policy(ErrorPolicy::CONTINUE);
+    scheduler.set_error_policy(ErrorPolicy::Continue);
 
     // With CONTINUE policy, should not throw
     CHECK_NOTHROW(scheduler.schedule(root));
@@ -911,7 +910,7 @@ TEST_CASE("Error Scenario - Per-task timeout") {
         try {
             scheduler.schedule(task_with_timeout);
         } catch (const PipelineError& e) {
-            caught_timeout = (e.get_type() == PipelineError::TIMEOUT_ERROR);
+            caught_timeout = (e.get_type() == PipelineError::TimeoutError);
         }
 
         should_exit->store(true);
@@ -938,7 +937,7 @@ TEST_CASE("Error Scenario - Validation error on null task") {
     try {
         scheduler.schedule(nullptr);
     } catch (const PipelineError& e) {
-        caught_validation = (e.get_type() == PipelineError::VALIDATION_ERROR);
+        caught_validation = (e.get_type() == PipelineError::ValidationError);
     }
 
     CHECK(caught_validation);
@@ -976,7 +975,7 @@ TEST_CASE("Error Scenario - Graceful shutdown (INTERRUPTED)") {
                 scheduler.schedule(long_task);
             } catch (const PipelineError& e) {
                 caught_interrupted =
-                    (e.get_type() == PipelineError::INTERRUPTED);
+                    (e.get_type() == PipelineError::Interrupted);
             }
         });
 
@@ -1263,7 +1262,7 @@ TEST_CASE("Pipeline - Error policy propagation") {
     auto config =
         PipelineConfig().with_name("ErrorPolicy").with_compute_threads(4);
     Pipeline pipeline(config);
-    pipeline.set_error_policy(ErrorPolicy::FAIL_FAST);
+    pipeline.set_error_policy(ErrorPolicy::FailFast);
 
     auto failing_task = make_task(
         []() { throw std::runtime_error("Task fails"); }, "FailingTask");
@@ -2194,7 +2193,7 @@ TEST_CASE("Error Handler - Custom error handling") {
         handler_done = true;
     });
 
-    scheduler.set_error_policy(ErrorPolicy::CONTINUE);
+    scheduler.set_error_policy(ErrorPolicy::Continue);
 
     auto task1 = make_task(
         []() { std::this_thread::sleep_for(std::chrono::milliseconds(50)); },
@@ -2226,7 +2225,7 @@ TEST_CASE("Error Handler - Multiple errors with CONTINUE policy") {
     scheduler.set_error_handler(
         [&](std::shared_ptr<Task>, std::exception_ptr) { ++error_count; });
 
-    scheduler.set_error_policy(ErrorPolicy::CONTINUE);
+    scheduler.set_error_policy(ErrorPolicy::Continue);
 
     auto root = make_task([]() {}, "Root");
 
@@ -2259,7 +2258,7 @@ TEST_CASE("Error Handler - Multiple errors with CONTINUE policy") {
 
 TEST_CASE("ErrorPolicy - FAIL_FAST stops on first error") {
     auto config = PipelineConfig().with_compute_threads(4).with_error_policy(
-        ErrorPolicy::FAIL_FAST);
+        ErrorPolicy::FailFast);
 
     Pipeline pipeline(config);
 
@@ -2304,7 +2303,7 @@ TEST_CASE("ErrorPolicy - FAIL_FAST stops on first error") {
 
 TEST_CASE("ErrorPolicy - CONTINUE policy continues other branches") {
     auto config = PipelineConfig().with_compute_threads(4).with_error_policy(
-        ErrorPolicy::CONTINUE);
+        ErrorPolicy::Continue);
 
     Pipeline pipeline(config);
 
@@ -2411,7 +2410,7 @@ TEST_CASE("ErrorPolicy - CUSTOM handler is called on error") {
 
 TEST_CASE("ErrorPolicy - CONTINUE skips children of failed tasks") {
     auto config = PipelineConfig().with_compute_threads(4).with_error_policy(
-        ErrorPolicy::CONTINUE);
+        ErrorPolicy::Continue);
 
     Pipeline pipeline(config);
 
@@ -2578,13 +2577,13 @@ TEST_CASE("PipelineConfig - Fluent API chaining") {
     auto config = PipelineConfig()
                       .with_name("TestPipeline")
                       .with_compute_threads(8)
-                      .with_error_policy(ErrorPolicy::CONTINUE)
+                      .with_error_policy(ErrorPolicy::Continue)
                       .with_watchdog(true)
                       .with_global_timeout(std::chrono::seconds(60));
 
     CHECK(config.name == "TestPipeline");
     CHECK(config.executor_threads == 8);
-    CHECK(config.error_policy == ErrorPolicy::CONTINUE);
+    CHECK(config.error_policy == ErrorPolicy::Continue);
     CHECK(config.enable_watchdog == true);
     CHECK(config.global_timeout == std::chrono::seconds(60));
 }

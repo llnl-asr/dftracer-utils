@@ -37,7 +37,7 @@ struct FoldEvent {
     std::uint64_t tid = 0;
     std::uint64_t ts = 0;
     std::uint64_t dur = 0;
-    RecordPhase phase = RecordPhase::UNKNOWN;
+    RecordPhase phase = RecordPhase::Unknown;
     bool has_dur = false;
     /// A record decoded by exact path (decode_record): every field is in
     /// `args` under its path, and the fixed fields above are unset.
@@ -61,13 +61,13 @@ struct FoldEvent {
     /// an array or object whose `args` entry is its canonical JSON text (a
     /// declared json field).
     enum class Special : std::uint8_t {
-        NULL_VALUE,
-        FALSE_VALUE,
-        TRUE_VALUE,
-        EMPTY_ARRAY,
-        EMPTY_OBJECT,
-        JSON_ARRAY,
-        JSON_OBJECT,
+        NullValue,
+        FalseValue,
+        TrueValue,
+        EmptyArray,
+        EmptyObject,
+        JsonArray,
+        JsonObject,
     };
     struct SpecialValue {
         std::uint32_t key;
@@ -230,20 +230,19 @@ inline void append_scalar_arg(
         case T::BOOL: {
             const bool b = v.get_bool().value_unsafe();
             into.emplace_back(key_id, static_cast<std::int64_t>(b));
-            specials.push_back(
-                {key_id, b ? S::TRUE_VALUE : S::FALSE_VALUE, top});
+            specials.push_back({key_id, b ? S::TrueValue : S::FalseValue, top});
             break;
         }
         case T::NULL_VALUE:
-            specials.push_back({key_id, S::NULL_VALUE, top});
+            specials.push_back({key_id, S::NullValue, top});
             break;
         case T::ARRAY:
             if (v.get_array().value_unsafe().size() == 0)
-                specials.push_back({key_id, S::EMPTY_ARRAY, top});
+                specials.push_back({key_id, S::EmptyArray, top});
             break;
         case T::OBJECT:
             if (v.get_object().value_unsafe().size() == 0)
-                specials.push_back({key_id, S::EMPTY_OBJECT, top});
+                specials.push_back({key_id, S::EmptyObject, top});
             break;
         case T::BIGINT:
             // Wider than 64 bits: kept exact as its digits.

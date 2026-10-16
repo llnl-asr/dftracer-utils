@@ -47,7 +47,7 @@ std::vector<FoldEvent> make_events(StringIntern& intern) {
     std::vector<FoldEvent> out;
     for (int i = 0; i < EVENTS; ++i) {
         FoldEvent ev;
-        ev.phase = RecordPhase::COMPLETE;
+        ev.phase = RecordPhase::Complete;
         ev.by_path = true;
         ev.args.emplace_back(size, static_cast<std::int64_t>(i * 10));
         if (i % 3 != 0) ev.args.emplace_back(lat, i * 0.25);
@@ -143,7 +143,7 @@ TEST_SUITE("RowBuild") {
         std::vector<FoldEvent> kept;
         for (std::size_t i = 0; i < events.size(); ++i) {
             if (i % 4 == 1) {
-                events[i].phase = RecordPhase::UNKNOWN;
+                events[i].phase = RecordPhase::Unknown;
             } else {
                 kept.push_back(events[i]);
             }
@@ -160,7 +160,7 @@ TEST_SUITE("RowBuild") {
     TEST_CASE("a batch with no kept event sends nothing") {
         auto intern = std::make_shared<StringIntern>();
         auto events = make_events(*intern);
-        for (auto& ev : events) ev.phase = RecordPhase::UNKNOWN;
+        for (auto& ev : events) ev.phase = RecordPhase::Unknown;
         CHECK(stepped(intern, std::move(events)).columns.empty());
     }
 

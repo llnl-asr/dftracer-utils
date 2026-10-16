@@ -512,7 +512,7 @@ class CoroTask {
                     co_return co_await std::move(fall);
                 }
             }
-            throw DFTUtilsException(ErrorCode::INTERNAL,
+            throw DFTUtilsException(ErrorCode::Internal,
                                     "Unreachable code in or_else reached");
         }(std::move(*this), std::move(fallback));
     }

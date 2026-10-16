@@ -38,7 +38,7 @@ class Pipeline {
     std::string name_;
     bool validated_{false};
 
-    ErrorPolicy error_policy_{ErrorPolicy::FAIL_FAST};
+    ErrorPolicy error_policy_{ErrorPolicy::FailFast};
     ErrorHandler error_handler_{nullptr};
 
    public:

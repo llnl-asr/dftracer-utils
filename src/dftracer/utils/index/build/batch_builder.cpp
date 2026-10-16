@@ -615,13 +615,13 @@ static std::unique_ptr<BatchWriteState> init_batch_write_state(
     if (!config.file_slices.empty() &&
         config.file_slices.size() != config.file_paths.size()) {
         throw index::store::IndexerError(
-            index::store::IndexerError::Type::INVALID_ARGUMENT,
+            index::store::IndexerError::Type::InvalidArgument,
             "file_slices.size() must match file_paths.size() (or be empty)");
     }
     if (!config.preassigned_file_ids.empty()) {
         if (config.preassigned_file_ids.size() != config.file_paths.size()) {
             throw index::store::IndexerError(
-                index::store::IndexerError::Type::INVALID_ARGUMENT,
+                index::store::IndexerError::Type::InvalidArgument,
                 "preassigned_file_ids.size() must match file_paths.size()");
         }
         // Distributed path: the coordinator assigned the ids.
@@ -656,7 +656,7 @@ static std::unique_ptr<BatchWriteState> init_batch_write_state(
     if (static_cast<bool>(state->sink_factory) !=
         static_cast<bool>(state->sink_commit)) {
         throw index::store::IndexerError(
-            index::store::IndexerError::Type::INVALID_ARGUMENT,
+            index::store::IndexerError::Type::InvalidArgument,
             "IndexBuildBatchConfig: sink_factory and sink_commit must be set "
             "together (either both null for the default RocksDB path, or "
             "both non-null for the distributed SST path).");

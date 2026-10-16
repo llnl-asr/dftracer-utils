@@ -181,7 +181,7 @@ class ThreadPoolExecutor : public TaskExecutor {
 
     // Configuration (stored from ExecutorConfig)
     std::size_t io_pool_size_ = 0;
-    io::IoBackendType io_backend_type_ = io::IoBackendType::AUTO;
+    io::IoBackendType io_backend_type_ = io::IoBackendType::Auto;
     unsigned io_batch_threshold_ = 16;
 
    public:

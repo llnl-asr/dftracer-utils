@@ -91,13 +91,13 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
 
     ssize_t in_fd_res = co_await io::open(in_path.c_str(), O_RDONLY);
     if (in_fd_res < 0) {
-        throw DFTUtilsException(ErrorCode::IO, "Cannot open file: " + in_path);
+        throw DFTUtilsException(ErrorCode::Io, "Cannot open file: " + in_path);
     }
     ScopedFd in_fd(static_cast<int>(in_fd_res));
 
     struct stat st;
     if (::fstat(in_fd.get(), &st) != 0) {
-        throw DFTUtilsException(ErrorCode::IO, "Cannot stat file: " + in_path);
+        throw DFTUtilsException(ErrorCode::Io, "Cannot stat file: " + in_path);
     }
     const auto file_size = static_cast<std::uint64_t>(st.st_size);
     unsigned char magic[2] = {0, 0};
@@ -106,7 +106,7 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
 
     z_stream zs{};
     if (!plain && inflateInit2(&zs, 15 + 16) != Z_OK) {
-        throw DFTUtilsException(ErrorCode::COMPRESSION,
+        throw DFTUtilsException(ErrorCode::Compression,
                                 "inflateInit2 failed for " + in_path);
     }
 
@@ -180,7 +180,7 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
 
     if (!plain) inflateEnd(&zs);
     if (!ok) {
-        throw DFTUtilsException(ErrorCode::COMPRESSION,
+        throw DFTUtilsException(ErrorCode::Compression,
                                 "decompression failed for " + in_path);
     }
     unwrap(co_await writer.close(carry));

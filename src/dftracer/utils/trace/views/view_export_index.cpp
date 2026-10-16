@@ -193,7 +193,7 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
         opts.output_path, std::move(wopts));
     if (!opened) {
         throw DFTUtilsException(
-            ErrorCode::IO, "export_trace failed writing " + opts.output_path);
+            ErrorCode::Io, "export_trace failed writing " + opts.output_path);
     }
     auto writer = std::move(*opened);
 
@@ -292,7 +292,7 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
     }
     if (!ok || parts.empty()) {
         throw DFTUtilsException(
-            ErrorCode::IO, "export_trace failed writing " + opts.output_path);
+            ErrorCode::Io, "export_trace failed writing " + opts.output_path);
     }
 
     for (auto& sl : pool) bloom.merge(*sl->bloom);
@@ -324,21 +324,21 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
             records::put_file_record(
                 *w, logical,
                 {static_cast<std::uint32_t>(fid), mtime, hash, bytes});
-            for (auto ext : {IndexExtension::ZONEMAP, IndexExtension::BLOOM,
-                             IndexExtension::COUNTS, IndexExtension::POSTINGS,
-                             IndexExtension::STATS})
+            for (auto ext : {IndexExtension::Zonemap, IndexExtension::Bloom,
+                             IndexExtension::Counts, IndexExtension::Postings,
+                             IndexExtension::Stats})
                 records::clear_file(*w, ext, fid);
-            records::clear_file(*w, IndexExtension::MEMBERS, fid);
+            records::clear_file(*w, IndexExtension::Members, fid);
             for (const auto& m : part.members)
                 records::put_gzip_member(*w, fid, m);
             records::put_file_metadata(*w, fid, member_size, part.total_lines,
                                        part.total_uc, false);
-            records::put_manifest(*w, fid, IndexExtension::MEMBERS, 0);
+            records::put_manifest(*w, fid, IndexExtension::Members, 0);
             records::put_profile(*w, fid, schema.id, schema.params_hash());
         }
         w->commit();
     } catch (const std::exception& e) {
-        throw DFTUtilsException(ErrorCode::IO,
+        throw DFTUtilsException(ErrorCode::Io,
                                 std::string("fused index build failed for ") +
                                     opts.output_path + ": " + e.what());
     }

@@ -154,8 +154,8 @@ std::vector<std::uint8_t> validity_of(const std::vector<bool>& present) {
 
 // One array element or struct field value.
 struct Scalar {
-    enum class K : std::uint8_t { NUL, BOOL, INT, DBL, STR, JSON };
-    K k = K::NUL;
+    enum class K : std::uint8_t { Nul, Bool, Int, Dbl, Str, Json };
+    K k = K::Nul;
     std::int64_t i = 0;
     double d = 0;
     std::string s;
@@ -166,40 +166,40 @@ Scalar scalar_of(simdjson::dom::element e) {
     Scalar out;
     switch (e.type()) {
         case T::BOOL:
-            out.k = Scalar::K::BOOL;
+            out.k = Scalar::K::Bool;
             out.i = e.get_bool().value_unsafe() ? 1 : 0;
             break;
         case T::INT64:
-            out.k = Scalar::K::INT;
+            out.k = Scalar::K::Int;
             out.i = e.get_int64().value_unsafe();
             break;
         case T::UINT64: {
             const std::uint64_t u = e.get_uint64().value_unsafe();
             if (u <= static_cast<std::uint64_t>(
                          std::numeric_limits<std::int64_t>::max())) {
-                out.k = Scalar::K::INT;
+                out.k = Scalar::K::Int;
                 out.i = static_cast<std::int64_t>(u);
             } else {
-                out.k = Scalar::K::DBL;
+                out.k = Scalar::K::Dbl;
                 out.d = static_cast<double>(u);
             }
             break;
         }
         case T::DOUBLE:
-            out.k = Scalar::K::DBL;
+            out.k = Scalar::K::Dbl;
             out.d = e.get_double().value_unsafe();
             break;
         case T::STRING:
-            out.k = Scalar::K::STR;
+            out.k = Scalar::K::Str;
             out.s = e.get_string().value_unsafe();
             break;
         case T::ARRAY:
         case T::OBJECT:
-            out.k = Scalar::K::JSON;
+            out.k = Scalar::K::Json;
             dftracer::utils::json::append_canonical_json(out.s, e);
             break;
         case T::BIGINT:
-            out.k = Scalar::K::STR;
+            out.k = Scalar::K::Str;
             out.s = e.get_bigint().value_unsafe();
             break;
         default:
@@ -212,11 +212,11 @@ Scalar scalar_of(simdjson::dom::element e) {
 char infer_kind(const std::vector<Scalar>& vals) {
     bool i = false, d = false, s = false, b = false, j = false;
     for (const Scalar& v : vals) {
-        i |= v.k == Scalar::K::INT;
-        d |= v.k == Scalar::K::DBL;
-        s |= v.k == Scalar::K::STR;
-        b |= v.k == Scalar::K::BOOL;
-        j |= v.k == Scalar::K::JSON;
+        i |= v.k == Scalar::K::Int;
+        d |= v.k == Scalar::K::Dbl;
+        s |= v.k == Scalar::K::Str;
+        b |= v.k == Scalar::K::Bool;
+        j |= v.k == Scalar::K::Json;
     }
     if (j ||
         static_cast<int>(i || d) + static_cast<int>(s) + static_cast<int>(b) >
@@ -236,11 +236,11 @@ df::Series column_of(const std::vector<Scalar>& vals, char kind) {
         std::vector<double> ds(vals.size(), 0);
         for (std::size_t r = 0; r < vals.size(); ++r) {
             const Scalar& v = vals[r];
-            if (v.k == Scalar::K::INT) {
+            if (v.k == Scalar::K::Int) {
                 is[r] = v.i;
                 ds[r] = static_cast<double>(v.i);
                 present[r] = true;
-            } else if (v.k == Scalar::K::DBL && kind == 'f') {
+            } else if (v.k == Scalar::K::Dbl && kind == 'f') {
                 ds[r] = v.d;
                 present[r] = true;
             }
@@ -253,7 +253,7 @@ df::Series column_of(const std::vector<Scalar>& vals, char kind) {
     if (kind == 'b') {
         std::vector<std::uint8_t> bits((vals.size() + 7) / 8, 0);
         for (std::size_t r = 0; r < vals.size(); ++r) {
-            if (vals[r].k != Scalar::K::BOOL) continue;
+            if (vals[r].k != Scalar::K::Bool) continue;
             present[r] = true;
             if (vals[r].i)
                 bits[r >> 3] |= static_cast<std::uint8_t>(1u << (r & 7));
@@ -266,27 +266,27 @@ df::Series column_of(const std::vector<Scalar>& vals, char kind) {
     std::vector<std::string_view> text(vals.size());
     for (std::size_t r = 0; r < vals.size(); ++r) {
         const Scalar& v = vals[r];
-        if (v.k == Scalar::K::NUL || (kind == 's' && v.k != Scalar::K::STR))
+        if (v.k == Scalar::K::Nul || (kind == 's' && v.k != Scalar::K::Str))
             continue;
         present[r] = true;
-        if (v.k == Scalar::K::STR && kind == 's') {
+        if (v.k == Scalar::K::Str && kind == 's') {
             text[r] = v.s;
             continue;
         }
         std::string& t = owned.emplace_back();
         switch (v.k) {
-            case Scalar::K::STR:
+            case Scalar::K::Str:
                 t += '"';
                 dftracer::utils::json::append_json_escaped(t, v.s);
                 t += '"';
                 break;
-            case Scalar::K::BOOL:
+            case Scalar::K::Bool:
                 t = v.i ? "true" : "false";
                 break;
-            case Scalar::K::INT:
+            case Scalar::K::Int:
                 t = std::to_string(v.i);
                 break;
-            case Scalar::K::DBL:
+            case Scalar::K::Dbl:
                 t = double_text(v.d);
                 break;
             default:
@@ -320,14 +320,14 @@ std::optional<std::string> array_text(
     const std::string path = flat_key(at);
     PodSource src(ev, intern);
     if (const auto* sp = src.special(path)) {
-        if (*sp == FoldEvent::Special::EMPTY_ARRAY) return "[]";
-        if (*sp == FoldEvent::Special::JSON_ARRAY)
+        if (*sp == FoldEvent::Special::EmptyArray) return "[]";
+        if (*sp == FoldEvent::Special::JsonArray)
             return std::string(src.value(path));
         return std::nullopt;
     }
     if (src.has(path)) return std::nullopt;
     auto cell = container_cell(ev, intern, path);
-    if (!cell || cell->kind != duql::Cell::Kind::ARRAY) return std::nullopt;
+    if (!cell || cell->kind != duql::Cell::Kind::Array) return std::nullopt;
     return std::get<std::string>(std::move(cell->value));
 }
 
@@ -834,22 +834,22 @@ bool append_json_key(const PodSource& src, std::string& out,
                      std::string_view field) {
     if (const auto* sp = src.special(field)) {
         switch (*sp) {
-            case FoldEvent::Special::NULL_VALUE:
+            case FoldEvent::Special::NullValue:
                 return false;
-            case FoldEvent::Special::FALSE_VALUE:
+            case FoldEvent::Special::FalseValue:
                 out += "false";
                 return true;
-            case FoldEvent::Special::TRUE_VALUE:
+            case FoldEvent::Special::TrueValue:
                 out += "true";
                 return true;
-            case FoldEvent::Special::EMPTY_ARRAY:
+            case FoldEvent::Special::EmptyArray:
                 out += "[]";
                 return true;
-            case FoldEvent::Special::EMPTY_OBJECT:
+            case FoldEvent::Special::EmptyObject:
                 out += "{}";
                 return true;
-            case FoldEvent::Special::JSON_ARRAY:
-            case FoldEvent::Special::JSON_OBJECT:
+            case FoldEvent::Special::JsonArray:
+            case FoldEvent::Special::JsonObject:
                 return src.append_value(out, field);
         }
     }
@@ -885,10 +885,10 @@ df::Series group_key_str_column(EventRows evs,
                             : src.append_value(*data, field);
         if (!has)
             if (const auto* sp = src.special(field)) {
-                if (*sp == FoldEvent::Special::EMPTY_ARRAY) {
+                if (*sp == FoldEvent::Special::EmptyArray) {
                     *data += "[]";
                     has = true;
-                } else if (*sp == FoldEvent::Special::EMPTY_OBJECT) {
+                } else if (*sp == FoldEvent::Special::EmptyObject) {
                     *data += "{}";
                     has = true;
                 }
@@ -1234,7 +1234,7 @@ RowKeySource row_key_source(std::string_view sel, bool by_path) {
         parse_list_sel(sel, list_spec, list_path))
         return out;
     if (by_path && !is_path_token(sel)) {
-        out.kind = Kind::ARG;
+        out.kind = Kind::Arg;
         out.arg_full = flat_key(sel);
         return out;
     }
@@ -1248,26 +1248,26 @@ RowKeySource row_key_source(std::string_view sel, bool by_path) {
     const std::string_view field = is_top_level(sel) ? sel : key;
     if (is_top_level(sel) || is_hash_field(key)) {
         if (field == "name")
-            out.kind = Kind::NAME;
+            out.kind = Kind::Name;
         else if (field == "cat")
-            out.kind = Kind::CAT;
+            out.kind = Kind::Cat;
         else if (field == "fhash")
-            out.kind = Kind::FHASH;
+            out.kind = Kind::Fhash;
         else if (field == "hhash")
-            out.kind = Kind::HHASH;
+            out.kind = Kind::Hhash;
         else if (field == "pid")
-            out.kind = Kind::PID;
+            out.kind = Kind::Pid;
         else if (field == "tid")
-            out.kind = Kind::TID;
+            out.kind = Kind::Tid;
         else if (field == "ts")
-            out.kind = Kind::TS;
+            out.kind = Kind::Ts;
         else if (field == "dur")
-            out.kind = Kind::DUR;
+            out.kind = Kind::Dur;
         else
-            out.kind = Kind::PH;
+            out.kind = Kind::Ph;
         return out;
     }
-    out.kind = Kind::ARG;
+    out.kind = Kind::Arg;
     out.arg_full = flat_key(sel);
     out.arg_bare = flat_key(key);
     return out;

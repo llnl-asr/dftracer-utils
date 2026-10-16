@@ -58,7 +58,7 @@ struct DfanalyzerContext {
     const std::function<void(std::size_t, std::size_t)>* progress = nullptr;
 };
 
-enum class AggregationBatchType { EVENT, PROFILE, SYSTEM };
+enum class AggregationBatchType { Event, Profile, System };
 
 struct CountConfidenceInterval {
     double lower = 0.0;
@@ -127,7 +127,7 @@ struct AggregationEntry {
 
 struct AggregationBatch {
     std::vector<AggregationEntry> entries;
-    AggregationBatchType batch_type = AggregationBatchType::EVENT;
+    AggregationBatchType batch_type = AggregationBatchType::Event;
     std::size_t total_events_processed = 0;
     std::size_t total_files_processed = 0;
     std::size_t total_bytes_processed = 0;
@@ -144,7 +144,7 @@ struct AggregationBatch {
 
     const StringIntern& strings() const {
         if (!intern) {
-            throw DFTUtilsException(ErrorCode::INTERNAL,
+            throw DFTUtilsException(ErrorCode::Internal,
                                     "aggregation batch has no intern table");
         }
         return intern->intern;

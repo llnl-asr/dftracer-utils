@@ -26,9 +26,9 @@ struct FixedString {
 /// Field options: index past the path budget, or play a trace
 /// role.
 struct AlwaysIndex {};
-template <TimeUnit UNIT = TimeUnit::US>
+template <TimeUnit UNIT = TimeUnit::Us>
 struct TimeRole {};
-template <TimeUnit UNIT = TimeUnit::US>
+template <TimeUnit UNIT = TimeUnit::Us>
 struct DurationRole {};
 struct EntityRole {};
 struct LaneRole {};
@@ -82,15 +82,15 @@ struct Unwrap<std::optional<T>> {
 template <typename T>
 consteval FieldType field_type() {
     if constexpr (std::same_as<T, bool>)
-        return FieldType::BOOL;
+        return FieldType::Bool;
     else if constexpr (std::integral<T>)
-        return FieldType::INT;
+        return FieldType::Int;
     else if constexpr (std::floating_point<T>)
-        return FieldType::FLOAT;
+        return FieldType::Float;
     else if constexpr (std::same_as<T, std::string>)
-        return FieldType::STRING;
+        return FieldType::String;
     else if constexpr (std::same_as<T, Json>)
-        return FieldType::JSON;
+        return FieldType::Json;
     else
         static_assert(sizeof(T) == 0,
                       "a schema field holds bool, an integer, a floating "
@@ -99,7 +99,7 @@ consteval FieldType field_type() {
 
 template <FieldType TYPE>
 inline constexpr bool NUMERIC =
-    TYPE == FieldType::INT || TYPE == FieldType::FLOAT;
+    TYPE == FieldType::Int || TYPE == FieldType::Float;
 
 template <FieldType TYPE>
 void set_option(index::FieldSpec& f, AlwaysIndex*) {
@@ -107,28 +107,28 @@ void set_option(index::FieldSpec& f, AlwaysIndex*) {
 }
 template <FieldType TYPE>
 void set_option(index::FieldSpec& f, EntityRole*) {
-    f.role = Role::ENTITY;
+    f.role = Role::Entity;
 }
 template <FieldType TYPE>
 void set_option(index::FieldSpec& f, LaneRole*) {
-    f.role = Role::LANE;
+    f.role = Role::Lane;
 }
 template <FieldType TYPE>
 void set_option(index::FieldSpec& f, NameRole*) {
-    f.role = Role::NAME;
+    f.role = Role::Name;
 }
 template <FieldType TYPE, TimeUnit UNIT>
 void set_option(index::FieldSpec& f, TimeRole<UNIT>*) {
     static_assert(NUMERIC<TYPE>,
                   "a time field is an integer or floating point");
-    f.role = Role::TIME;
+    f.role = Role::Time;
     f.unit = UNIT;
 }
 template <FieldType TYPE, TimeUnit UNIT>
 void set_option(index::FieldSpec& f, DurationRole<UNIT>*) {
     static_assert(NUMERIC<TYPE>,
                   "a duration field is an integer or floating point");
-    f.role = Role::DURATION;
+    f.role = Role::Duration;
     f.unit = UNIT;
 }
 

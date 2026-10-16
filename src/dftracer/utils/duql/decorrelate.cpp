@@ -39,7 +39,7 @@ ExprPtr and_of(std::vector<ExprPtr> terms) {
     ExprPtr out = std::move(terms.front());
     for (std::size_t i = 1; i < terms.size(); ++i)
         out =
-            expr_of(Binary{BinaryOp::AND, std::move(out), std::move(terms[i])});
+            expr_of(Binary{BinaryOp::And, std::move(out), std::move(terms[i])});
     return out;
 }
 
@@ -49,7 +49,7 @@ ExprPtr and_of(std::vector<ExprPtr> terms) {
 template <class F>
 void enclosing(Expr& e, int quant, F& fn) {
     if (auto* p = std::get_if<Path>(&e.node)) {
-        if (p->root == PathRoot::ENCLOSING && quant == 0) fn(e, *p);
+        if (p->root == PathRoot::Enclosing && quant == 0) fn(e, *p);
         return;
     }
     if (std::holds_alternative<Subquery>(e.node)) return;
@@ -95,7 +95,7 @@ Copy copy_of(const Pipeline& p) {
 }
 
 void flatten(ExprPtr& e, std::vector<ExprPtr*>& out) {
-    if (auto* b = std::get_if<Binary>(&e->node); b && b->op == BinaryOp::AND) {
+    if (auto* b = std::get_if<Binary>(&e->node); b && b->op == BinaryOp::And) {
         flatten(b->left, out);
         flatten(b->right, out);
         return;
@@ -121,7 +121,7 @@ std::size_t count_enclosing(Expr& e) {
 // the conditions of any() and all().
 bool reads_own(Expr& e, int quant = 0) {
     if (auto* p = std::get_if<Path>(&e.node))
-        return p->root != PathRoot::ENCLOSING && quant == 0;
+        return p->root != PathRoot::Enclosing && quant == 0;
     if (std::holds_alternative<Subquery>(e.node)) return false;
     if (auto* c = std::get_if<Call>(&e.node);
         c && (c->name == "any" || c->name == "all") && c->args.size() == 2)
@@ -148,22 +148,22 @@ ExprPtr clone(const Expr& e, Span span) {
 
 BinaryOp flipped(BinaryOp op) {
     switch (op) {
-        case BinaryOp::LT:
-            return BinaryOp::GT;
-        case BinaryOp::LE:
-            return BinaryOp::GE;
-        case BinaryOp::GT:
-            return BinaryOp::LT;
-        case BinaryOp::GE:
-            return BinaryOp::LE;
+        case BinaryOp::Lt:
+            return BinaryOp::Gt;
+        case BinaryOp::Le:
+            return BinaryOp::Ge;
+        case BinaryOp::Gt:
+            return BinaryOp::Lt;
+        case BinaryOp::Ge:
+            return BinaryOp::Le;
         default:
             return op;
     }
 }
 
 bool comparison(BinaryOp op) {
-    return op == BinaryOp::EQ || op == BinaryOp::LT || op == BinaryOp::LE ||
-           op == BinaryOp::GT || op == BinaryOp::GE;
+    return op == BinaryOp::Eq || op == BinaryOp::Lt || op == BinaryOp::Le ||
+           op == BinaryOp::Gt || op == BinaryOp::Ge;
 }
 
 // Sorts the correlated terms of one `where` into its keys, the bounds of
@@ -184,9 +184,9 @@ class Terms {
         if (auto* b = std::get_if<Between>(&t->node);
             b && !b->negated && count_enclosing(*b->subject) == 0) {
             const Span at = t->span;
-            ExprPtr low = expr_of(Binary{BinaryOp::GE, clone(*b->subject, at),
+            ExprPtr low = expr_of(Binary{BinaryOp::Ge, clone(*b->subject, at),
                                          std::move(b->low)});
-            ExprPtr high = expr_of(Binary{BinaryOp::LE, std::move(b->subject),
+            ExprPtr high = expr_of(Binary{BinaryOp::Le, std::move(b->subject),
                                           std::move(b->high)});
             low->span = at;
             high->span = at;
@@ -214,9 +214,9 @@ class Terms {
                    "'" + term +
                        "' mixes the enclosing row with the sub-query's own "
                        "fields on one side; compare an expression of each");
-        auto unroot = [](Expr&, Path& path) { path.root = PathRoot::RECORD; };
+        auto unroot = [](Expr&, Path& path) { path.root = PathRoot::Record; };
         enclosing(*outer, 0, unroot);
-        if (op == BinaryOp::EQ) {
+        if (op == BinaryOp::Eq) {
             keys.push_back(Assign{std::string(CORRELATED_KEY_PREFIX) +
                                       std::to_string(out_.outer.size()),
                                   std::move(inner)});
@@ -234,14 +234,14 @@ class Terms {
                        "'; a correlated range bounds one expression; for "
                        "intervals write 'lookup ... overlap'");
         }
-        const bool lower = op == BinaryOp::GT || op == BinaryOp::GE;
+        const bool lower = op == BinaryOp::Gt || op == BinaryOp::Ge;
         auto& slot = lower ? out_.low : out_.high;
         if (slot)
             refuse(text_, t->span,
                    "'" + term + "' is a second " + (lower ? "lower" : "upper") +
                        " bound of '" + range_ + "'");
         slot = CorrelatedBound{std::move(outer),
-                               op == BinaryOp::GT || op == BinaryOp::LT};
+                               op == BinaryOp::Gt || op == BinaryOp::Lt};
     }
 
    private:
@@ -353,13 +353,13 @@ RangeRead range_read(const std::string& text, const Expr& e) {
     const auto* c = std::get_if<Call>(&e.node);
     const std::string name = c ? c->name : to_text(e);
     if (c && name == "count") {
-        return c->args.empty() ? RangeRead::COUNT : RangeRead::COUNT_VALUES;
+        return c->args.empty() ? RangeRead::Count : RangeRead::CountValues;
     }
-    if (c && name == "count_if") return RangeRead::COUNT_IF;
-    if (c && name == "sum") return RangeRead::SUM;
-    if (c && name == "min") return RangeRead::MIN;
-    if (c && name == "max") return RangeRead::MAX;
-    if (c && name == "mean") return RangeRead::MEAN;
+    if (c && name == "count_if") return RangeRead::CountIf;
+    if (c && name == "sum") return RangeRead::Sum;
+    if (c && name == "min") return RangeRead::Min;
+    if (c && name == "max") return RangeRead::Max;
+    if (c && name == "mean") return RangeRead::Mean;
     refuse(text, e.span,
            "'" + name +
                "' over a correlated range; use count, count_if, sum, min, "
@@ -421,7 +421,7 @@ std::optional<Decorrelated> decorrelate(const Pipeline& p, bool scalar) {
     }
     if (r.low || r.high) {
         std::vector<Item> items;
-        d.read = RangeRead::ROWS;
+        d.read = RangeRead::Rows;
         if (auto* s = std::get_if<Select>(&tail.node)) {
             items = std::move(s->items);
         } else if (auto* g = std::get_if<Group>(&tail.node);

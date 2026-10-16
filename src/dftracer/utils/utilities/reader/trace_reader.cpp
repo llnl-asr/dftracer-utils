@@ -47,8 +47,8 @@ thread_local dftracer::utils::json::RecordParser tl_parser;
 /// that was never compressed fails at the reader instead of silently taking
 /// a path with no index, no pruning and no random access.
 void reject_unless_gzip(ArchiveFormat format, const std::string& file_path) {
-    if (format == ArchiveFormat::GZIP) return;
-    throw ReaderError(ReaderError::INVALID_ARGUMENT,
+    if (format == ArchiveFormat::Gzip) return;
+    throw ReaderError(ReaderError::InvalidArgument,
                       "Not a gzip trace: " + file_path +
                           " (dftracer traces must be gzip-compressed)");
 }
@@ -119,8 +119,8 @@ coro::AsyncGenerator<Line> yield_lines_from_ranges(
     for (const auto& range : ranges) {
         auto stream =
             reader->stream(internal::StreamConfig()
-                               .stream_type(internal::StreamType::MULTI_LINES)
-                               .range_type(internal::RangeType::LINE_RANGE)
+                               .stream_type(internal::StreamType::MultiLines)
+                               .range_type(internal::RangeType::LineRange)
                                .from(range.start_line)
                                .to(range.end_line)
                                .buffer_size(buffer_size));
@@ -160,8 +160,8 @@ coro::AsyncGenerator<std::span<const char>> yield_chunks_from_ranges(
     for (const auto& range : ranges) {
         auto stream =
             reader->stream(internal::StreamConfig()
-                               .stream_type(internal::StreamType::MULTI_LINES)
-                               .range_type(internal::RangeType::LINE_RANGE)
+                               .stream_type(internal::StreamType::MultiLines)
+                               .range_type(internal::RangeType::LineRange)
                                .from(range.start_line)
                                .to(range.end_line)
                                .buffer_size(buffer_size));
@@ -192,14 +192,14 @@ coro::AsyncGenerator<Line> read_lines_indexed(
 
     index::plan::Prefilter prefilter =
         query ? index::plan::Prefilter(*query) : index::plan::Prefilter{};
-    auto range_type = config.has_line_range() ? internal::RangeType::LINE_RANGE
-                                              : internal::RangeType::BYTE_RANGE;
+    auto range_type = config.has_line_range() ? internal::RangeType::LineRange
+                                              : internal::RangeType::ByteRange;
     std::size_t start =
         config.has_line_range() ? config.start_line : config.start_byte;
     std::size_t end =
         config.has_line_range() ? config.end_line : config.end_byte;
 
-    if (range_type == internal::RangeType::LINE_RANGE) {
+    if (range_type == internal::RangeType::LineRange) {
         auto total_lines = reader->get_num_lines();
         if (start == 0) start = 1;
         if (end == 0 || end > total_lines) end = total_lines;
@@ -211,13 +211,13 @@ coro::AsyncGenerator<Line> read_lines_indexed(
     }
 
     if (query && !index_path.empty() &&
-        range_type == internal::RangeType::BYTE_RANGE) {
+        range_type == internal::RangeType::ByteRange) {
         // GCC 12 destroys a temporary built inside co_await twice.
         dftracer::utils::index::plan::PruneRequest prune_req{
             .index_path = index_path,
             .file_path = file_path,
             .query = &*query,
-            .metadata = dftracer::utils::index::plan::MetadataUse::ALL};
+            .metadata = dftracer::utils::index::plan::MetadataUse::All};
         auto pruned = co_await dftracer::utils::index::plan::prune_file(
             std::move(prune_req));
         if (!pruned->file_may_match) co_return;
@@ -266,7 +266,7 @@ coro::AsyncGenerator<Line> read_lines_indexed(
 
     auto stream =
         reader->stream(internal::StreamConfig()
-                           .stream_type(internal::StreamType::MULTI_LINES)
+                           .stream_type(internal::StreamType::MultiLines)
                            .range_type(range_type)
                            .from(start)
                            .to(end)
@@ -335,14 +335,14 @@ coro::AsyncGenerator<std::span<const char>> read_chunks_indexed(
 
     index::plan::Prefilter prefilter =
         query ? index::plan::Prefilter(*query) : index::plan::Prefilter{};
-    auto range_type = config.has_line_range() ? internal::RangeType::LINE_RANGE
-                                              : internal::RangeType::BYTE_RANGE;
+    auto range_type = config.has_line_range() ? internal::RangeType::LineRange
+                                              : internal::RangeType::ByteRange;
     std::size_t start =
         config.has_line_range() ? config.start_line : config.start_byte;
     std::size_t end =
         config.has_line_range() ? config.end_line : config.end_byte;
 
-    if (range_type == internal::RangeType::LINE_RANGE) {
+    if (range_type == internal::RangeType::LineRange) {
         auto total_lines = reader->get_num_lines();
         if (start == 0) start = 1;
         if (end == 0 || end > total_lines) end = total_lines;
@@ -359,7 +359,7 @@ coro::AsyncGenerator<std::span<const char>> read_chunks_indexed(
             .index_path = index_path,
             .file_path = file_path,
             .query = &*query,
-            .metadata = dftracer::utils::index::plan::MetadataUse::ALL};
+            .metadata = dftracer::utils::index::plan::MetadataUse::All};
         auto pruned = co_await dftracer::utils::index::plan::prune_file(
             std::move(prune_req));
         if (!pruned->file_may_match) co_return;
@@ -384,7 +384,7 @@ coro::AsyncGenerator<std::span<const char>> read_chunks_indexed(
                     const auto& ckpt = spans[ckpt_idx];
                     // Intersect with the caller's window (byte or line) so
                     // chunk-level parallel work items stay disjoint.
-                    if (range_type == internal::RangeType::BYTE_RANGE) {
+                    if (range_type == internal::RangeType::ByteRange) {
                         std::size_t ckpt_start = ckpt.uc_offset;
                         std::size_t ckpt_end = ckpt.uc_offset + ckpt.uc_size;
                         if (ckpt_end <= start) continue;
@@ -418,9 +418,9 @@ coro::AsyncGenerator<std::span<const char>> read_chunks_indexed(
         }
     }
 
-    auto stream_type = (range_type == internal::RangeType::BYTE_RANGE)
-                           ? internal::StreamType::MULTI_LINES_BYTES
-                           : internal::StreamType::MULTI_LINES;
+    auto stream_type = (range_type == internal::RangeType::ByteRange)
+                           ? internal::StreamType::MultiLinesBytes
+                           : internal::StreamType::MultiLines;
     auto stream =
         reader->stream(internal::StreamConfig()
                            .stream_type(stream_type)
@@ -430,7 +430,7 @@ coro::AsyncGenerator<std::span<const char>> read_chunks_indexed(
                            .buffer_size(config.buffer_size)
                            .extend_to_line_boundary(
                                extend_to_line_boundary &&
-                               range_type == internal::RangeType::BYTE_RANGE));
+                               range_type == internal::RangeType::ByteRange));
 
     auto gen = yield_chunks_from_stream(std::move(stream), &prefilter);
     for (;;) {
@@ -451,7 +451,7 @@ void TraceReader::probe_index() {
     format_ = CheckpointIndexerFactory::detect_format(config_.file_path);
     index_path_ = dftu_internal::determine_index_path(config_.file_path,
                                                       config_.index_dir);
-    has_index_ = format_ == ArchiveFormat::GZIP && fs::exists(index_path_);
+    has_index_ = format_ == ArchiveFormat::Gzip && fs::exists(index_path_);
     // Do not trust an index whose source changed since it was built; fall back
     // to a raw read rather than serving stale data. Uses the shared stat-based
     // freshness predicate, so a record with no stored stat is treated as stale
@@ -496,7 +496,7 @@ coro::CoroTask<trace::TimeMetric> TraceReader::read_time_metric(
     probe.end_line = max_lines;
     auto gen = read_lines(probe);
     dftracer::utils::json::RecordParser parser;
-    TimeMetric metric = TimeMetric::US;
+    TimeMetric metric = TimeMetric::Us;
     for (;;) {
         auto line_opt = co_await gen.next();
         if (!line_opt) break;
@@ -535,15 +535,15 @@ std::shared_ptr<internal::Reader> TraceReader::create_indexed_reader() {
 
 internal::StreamType TraceReader::resolve_raw_stream_type(
     const ReadConfig& config) const {
-    if (!config.line_aligned) return internal::StreamType::BYTES;
-    if (config.multi_line) return internal::StreamType::MULTI_LINES_BYTES;
-    return internal::StreamType::LINE_BYTES;
+    if (!config.line_aligned) return internal::StreamType::Bytes;
+    if (config.multi_line) return internal::StreamType::MultiLinesBytes;
+    return internal::StreamType::LineBytes;
 }
 
 internal::RangeType TraceReader::resolve_range_type(
     const ReadConfig& config) const {
-    if (config.has_line_range()) return internal::RangeType::LINE_RANGE;
-    return internal::RangeType::BYTE_RANGE;
+    if (config.has_line_range()) return internal::RangeType::LineRange;
+    return internal::RangeType::ByteRange;
 }
 
 coro::AsyncGenerator<Line> TraceReader::read_lines(ReadConfig config) {
@@ -765,7 +765,7 @@ coro::AsyncGenerator<std::span<const char>> TraceReader::read_raw(
         std::size_t end =
             config.has_line_range() ? config.end_line : config.end_byte;
 
-        if (range_type == internal::RangeType::LINE_RANGE) {
+        if (range_type == internal::RangeType::LineRange) {
             auto total_lines = reader->get_num_lines();
             if (start == 0) start = 1;
             if (end == 0 || end > total_lines) end = total_lines;
@@ -777,7 +777,7 @@ coro::AsyncGenerator<std::span<const char>> TraceReader::read_raw(
         }
 
         if (!config.query.empty() && !index_path_.empty() &&
-            range_type == internal::RangeType::BYTE_RANGE) {
+            range_type == internal::RangeType::ByteRange) {
             auto parsed = Query::from_string(config.query);
             if (!parsed) throw duql::DuqlParseError(parsed.error());
             // GCC 12 destroys a temporary built inside co_await twice.
@@ -785,7 +785,7 @@ coro::AsyncGenerator<std::span<const char>> TraceReader::read_raw(
                 .index_path = index_path_,
                 .file_path = config_.file_path,
                 .query = &*parsed,
-                .metadata = dftracer::utils::index::plan::MetadataUse::ALL};
+                .metadata = dftracer::utils::index::plan::MetadataUse::All};
             auto pruned = co_await dftracer::utils::index::plan::prune_file(
                 std::move(prune_req));
             if (!pruned->file_may_match) co_return;
@@ -803,7 +803,7 @@ coro::AsyncGenerator<std::span<const char>> TraceReader::read_raw(
             if (chunk.empty()) break;
             co_yield chunk;
         }
-    } else if (format_ == ArchiveFormat::GZIP) {
+    } else if (format_ == ArchiveFormat::Gzip) {
         auto gen =
             fileio::lines::sources::async_streaming_gz_lines(config_.file_path);
         std::size_t byte_pos = 0;

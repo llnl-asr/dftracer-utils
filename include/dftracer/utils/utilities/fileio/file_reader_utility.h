@@ -65,19 +65,19 @@ class FileReaderUtility {
         const filesystem::FileEntry& input) const {
         if (!fs::exists(input.path)) {
             throw DFTUtilsException(
-                ErrorCode::NOT_FOUND,
+                ErrorCode::NotFound,
                 "File does not exist: " + input.path.string());
         }
 
         if (!input.is_regular_file) {
             throw DFTUtilsException(
-                ErrorCode::IO,
+                ErrorCode::Io,
                 "Path is not a regular file: " + input.path.string());
         }
 
         std::ifstream file(input.path, std::ios::binary);
         if (!file) {
-            throw DFTUtilsException(ErrorCode::IO,
+            throw DFTUtilsException(ErrorCode::Io,
                                     "Cannot open file: " + input.path.string());
         }
 

@@ -64,7 +64,7 @@ const RecordSchema& files_schema(const std::vector<RowSetFile>& files) {
         }
         if (found && found != schemas[i])
             throw DFTUtilsException::cat(
-                ErrorCode::INVALID_ARGUMENT,
+                ErrorCode::InvalidArgument,
                 "a View reads files of one record schema: ", files[voter].trace,
                 " is ", found->id, " and ", files[i].trace, " is ",
                 schemas[i]->id);
@@ -126,7 +126,7 @@ bool has_stored_rowsets(const std::vector<RowSetFile>& files) {
             const int fid =
                 db.get_file_info_id(store::internal::get_logical_path(f.trace));
             if (fid < 0 ||
-                !db.extension_current(fid, store::IndexExtension::ROWSET))
+                !db.extension_current(fid, store::IndexExtension::Rowset))
                 return false;
         }
     } catch (const std::exception&) {

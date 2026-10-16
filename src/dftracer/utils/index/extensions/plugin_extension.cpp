@@ -153,15 +153,15 @@ void PluginBuilders::write(store::IndexWrite& w, int file_id) {
         if (!b.builder) {
             records::put_plugin_manifest(w, file_id, name, b.ext->vt.version,
                                          b.ext->vt.params_hash,
-                                         store::layout::ExtStatus::FAILED);
+                                         store::layout::ExtStatus::Failed);
             continue;
         }
-        records::put_path(w, store::IndexExtension::PLUGIN, file_id, name);
+        records::put_path(w, store::IndexExtension::Plugin, file_id, name);
         for (const auto& [granule, bytes] : b.granules)
-            records::put_path_granule(w, store::IndexExtension::PLUGIN, file_id,
+            records::put_path_granule(w, store::IndexExtension::Plugin, file_id,
                                       name, granule, bytes);
         if (b.file)
-            records::put_path_file(w, store::IndexExtension::PLUGIN, file_id,
+            records::put_path_file(w, store::IndexExtension::Plugin, file_id,
                                    name, *b.file);
         records::put_plugin_manifest(w, file_id, name, b.ext->vt.version,
                                      b.ext->vt.params_hash);

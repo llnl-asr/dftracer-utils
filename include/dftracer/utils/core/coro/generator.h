@@ -129,7 +129,7 @@ class Generator {
         reference operator*() const {
             if (!handle_ || !handle_.promise().current_value_) {
                 throw DFTUtilsException(
-                    ErrorCode::INVALID_ARGUMENT,
+                    ErrorCode::InvalidArgument,
                     "Generator iterator: no value available");
             }
             return *handle_.promise().current_value_;
@@ -246,7 +246,7 @@ class Generator {
      */
     const T& value() const {
         if (!handle_ || !handle_.promise().current_value_) {
-            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+            throw DFTUtilsException(ErrorCode::InvalidArgument,
                                     "Generator: no value available");
         }
         return *handle_.promise().current_value_;

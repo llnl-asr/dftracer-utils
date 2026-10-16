@@ -126,7 +126,7 @@ class FileDecompressorUtility {
             // Validate input file exists
             if (!fs::exists(input.input_path)) {
                 co_return make_error(
-                    ErrorCode::NOT_FOUND,
+                    ErrorCode::NotFound,
                     "Input file does not exist: " + input.input_path);
             }
 
@@ -136,14 +136,14 @@ class FileDecompressorUtility {
             ssize_t fd_result =
                 co_await io::open(input.input_path.c_str(), O_RDONLY);
             if (fd_result < 0) {
-                co_return make_error(ErrorCode::IO,
+                co_return make_error(ErrorCode::Io,
                                      "Cannot open file: " + input.input_path);
             }
             ScopedFd fd(static_cast<int>(fd_result));
 
             struct stat st;
             if (::fstat(fd.get(), &st) != 0) {
-                co_return make_error(ErrorCode::IO,
+                co_return make_error(ErrorCode::Io,
                                      "Cannot stat file: " + input.input_path);
             }
 
@@ -166,7 +166,7 @@ class FileDecompressorUtility {
             remove_file_quietly(input.output_path);
 
             co_return make_error(
-                ErrorCode::COMPRESSION,
+                ErrorCode::Compression,
                 std::string("Decompression failed: ") + e.what());
         }
 

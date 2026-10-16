@@ -93,12 +93,12 @@ inline Expr field_cmp(std::string_view name, CompareOp op, LiteralNode value) {
                          detail::literal(std::forward<T>(value))); \
     }
 
-DFTRACER_UTILS_DUQL_DEFINE_CMP(field_eq, CompareOp::EQ)
-DFTRACER_UTILS_DUQL_DEFINE_CMP(field_ne, CompareOp::NE)
-DFTRACER_UTILS_DUQL_DEFINE_CMP(field_gt, CompareOp::GT)
-DFTRACER_UTILS_DUQL_DEFINE_CMP(field_lt, CompareOp::LT)
-DFTRACER_UTILS_DUQL_DEFINE_CMP(field_ge, CompareOp::GE)
-DFTRACER_UTILS_DUQL_DEFINE_CMP(field_le, CompareOp::LE)
+DFTRACER_UTILS_DUQL_DEFINE_CMP(field_eq, CompareOp::Eq)
+DFTRACER_UTILS_DUQL_DEFINE_CMP(field_ne, CompareOp::Ne)
+DFTRACER_UTILS_DUQL_DEFINE_CMP(field_gt, CompareOp::Gt)
+DFTRACER_UTILS_DUQL_DEFINE_CMP(field_lt, CompareOp::Lt)
+DFTRACER_UTILS_DUQL_DEFINE_CMP(field_ge, CompareOp::Ge)
+DFTRACER_UTILS_DUQL_DEFINE_CMP(field_le, CompareOp::Le)
 
 #undef DFTRACER_UTILS_DUQL_DEFINE_CMP
 
@@ -219,19 +219,19 @@ class Field {
     }
 
     Expr like(std::string_view pattern) const {
-        return field_match(name_, MatchOp::LIKE, pattern);
+        return field_match(name_, MatchOp::Like, pattern);
     }
     Expr ilike(std::string_view pattern) const {
-        return field_match(name_, MatchOp::ILIKE, pattern);
+        return field_match(name_, MatchOp::Ilike, pattern);
     }
     Expr regex(std::string_view pattern) const {
-        return field_match(name_, MatchOp::REGEX, pattern);
+        return field_match(name_, MatchOp::Regex, pattern);
     }
     Expr iregex(std::string_view pattern) const {
-        return field_match(name_, MatchOp::IREGEX, pattern);
+        return field_match(name_, MatchOp::Iregex, pattern);
     }
     Expr contains(std::string_view substring) const {
-        return field_match(name_, MatchOp::ICONTAINS, substring);
+        return field_match(name_, MatchOp::Icontains, substring);
     }
 
    private:
@@ -510,16 +510,16 @@ struct Item {
     std::string name;
 };
 
-enum class Nulls : std::uint8_t { DEFAULT, FIRST, LAST };
+enum class Nulls : std::uint8_t { Default, First, Last };
 
 /// A sort key: a path (from a string) or an expression, ascending; `-x`
 /// sorts descending.
 struct SortKey {
     SortKey(const char* path) : value(c(path)) {}
     SortKey(const std::string& path) : value(c(path)) {}
-    SortKey(Col v, Nulls n = Nulls::DEFAULT) : value(std::move(v)), nulls(n) {}
+    SortKey(Col v, Nulls n = Nulls::Default) : value(std::move(v)), nulls(n) {}
     Col value;
-    Nulls nulls = Nulls::DEFAULT;
+    Nulls nulls = Nulls::Default;
 };
 
 /// A lookup key: `left`, or `left == right` (`right` the row set's side).
@@ -532,11 +532,11 @@ struct JoinKey {
     std::optional<Col> right;
 };
 
-enum class Asof : std::uint8_t { BACKWARD, FORWARD, NEAREST };
+enum class Asof : std::uint8_t { Backward, Forward, Nearest };
 
 /// How `lookup` treats rows: LEFT keeps every row, INNER drops rows with no
 /// match, ANTI keeps only rows with no match (and takes no `into`).
-enum class LookupHow : std::uint8_t { LEFT, INNER, ANTI };
+enum class LookupHow : std::uint8_t { Left, Inner, Anti };
 
 /// A duql query under construction, held as duql text with its bound
 /// parameters. Stage methods return a new Pipe. A Pipe with no source reads
@@ -705,22 +705,22 @@ class Pipe {
     }
     Pipe lookup(std::string_view rowset, const std::vector<JoinKey>& on,
                 std::string_view into = {},
-                LookupHow how = LookupHow::LEFT) const {
+                LookupHow how = LookupHow::Left) const {
         return lookup_text(std::string(rowset), on, into, how);
     }
     /// `side` needs a source; it prints as `(from ...)`.
     Pipe lookup(const Pipe& side, const std::vector<JoinKey>& on,
                 std::string_view into = {},
-                LookupHow how = LookupHow::LEFT) const {
+                LookupHow how = LookupHow::Left) const {
         return lookup_text("(" + side.inline_text() + ")", on, into, how);
     }
     Pipe lookup_asof(std::string_view rowset, const std::vector<JoinKey>& on,
-                     const JoinKey& time, Asof direction = Asof::BACKWARD,
+                     const JoinKey& time, Asof direction = Asof::Backward,
                      std::optional<Col> within = std::nullopt) const {
         return asof_text(std::string(rowset), on, time, direction, within);
     }
     Pipe lookup_asof(const Pipe& side, const std::vector<JoinKey>& on,
-                     const JoinKey& time, Asof direction = Asof::BACKWARD,
+                     const JoinKey& time, Asof direction = Asof::Backward,
                      std::optional<Col> within = std::nullopt) const {
         return asof_text("(" + side.inline_text() + ")", on, time, direction,
                          within);
@@ -849,8 +849,8 @@ class Pipe {
         for (std::size_t i = 0; i < keys.size(); ++i) {
             if (i) out += ", ";
             out += keys[i].value.raw();
-            if (keys[i].nulls == Nulls::FIRST) out += " nulls first";
-            if (keys[i].nulls == Nulls::LAST) out += " nulls last";
+            if (keys[i].nulls == Nulls::First) out += " nulls first";
+            if (keys[i].nulls == Nulls::Last) out += " nulls last";
         }
         return out;
     }
@@ -859,12 +859,12 @@ class Pipe {
     }
     Pipe lookup_text(const std::string& side, const std::vector<JoinKey>& on,
                      std::string_view into, LookupHow how) const {
-        if (how == LookupHow::ANTI && !into.empty())
+        if (how == LookupHow::Anti && !into.empty())
             throw std::invalid_argument(
                 "duql: an anti lookup cannot take into");
         std::string t = join_keys(side, on);
-        if (how == LookupHow::INNER) t += " inner";
-        if (how == LookupHow::ANTI) t += " anti";
+        if (how == LookupHow::Inner) t += " inner";
+        if (how == LookupHow::Anti) t += " anti";
         if (!into.empty()) t += " into " + std::string(into);
         return stage(t);
     }
@@ -872,8 +872,8 @@ class Pipe {
                    const JoinKey& time, Asof direction,
                    const std::optional<Col>& within) const {
         std::string t = join_keys(side, on) + " asof " + key_text(time);
-        if (direction == Asof::FORWARD) t += " forward";
-        if (direction == Asof::NEAREST) t += " nearest";
+        if (direction == Asof::Forward) t += " forward";
+        if (direction == Asof::Nearest) t += " nearest";
         if (within) t += " within " + within->raw();
         return stage(t);
     }

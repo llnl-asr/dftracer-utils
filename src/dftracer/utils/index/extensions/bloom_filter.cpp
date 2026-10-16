@@ -81,7 +81,7 @@ BloomFilter BloomFilter::from_blob(const unsigned char* data,
                                    std::size_t size) {
     if (size < HEADER_SIZE) {
         throw DFTUtilsException(
-            ErrorCode::PARSE,
+            ErrorCode::Parse,
             "BloomFilter::from_blob: data too small for header");
     }
 
@@ -167,7 +167,7 @@ void BloomFilter::merge_from(const BloomFilter& other) {
     if (bits_.size() != other.bits_.size() || num_bits_ != other.num_bits_ ||
         num_hashes_ != other.num_hashes_) {
         throw DFTUtilsException(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             "BloomFilter::merge_from: incompatible filter parameters");
     }
 

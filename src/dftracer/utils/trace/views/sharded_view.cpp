@@ -62,7 +62,7 @@ ShardedView ShardedView::from_manifest(const std::string& root) {
     auto manifest = dftracer::utils::index::store::read_shard_manifest(root);
     if (!manifest) {
         throw DFTUtilsException(
-            ErrorCode::IO,
+            ErrorCode::Io,
             "no shard manifest under " + root + " (" +
                 std::string(
                     dftracer::utils::index::store::SHARD_MANIFEST_FILENAME) +
@@ -71,7 +71,7 @@ ShardedView ShardedView::from_manifest(const std::string& root) {
     if (manifest->format_version !=
         dftracer::utils::index::store::IndexDatabase::FORMAT_VERSION) {
         throw DFTUtilsException(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             "shard manifest format version " +
                 std::to_string(manifest->format_version) +
                 " does not match this build's " +
@@ -170,7 +170,7 @@ coro::CoroTask<std::size_t> consolidate_shard_set(CoroScope* scope,
     auto manifest = dftracer::utils::index::store::read_shard_manifest(root);
     if (!manifest) {
         throw DFTUtilsException(
-            ErrorCode::IO,
+            ErrorCode::Io,
             "no shard manifest under " + root + " (" +
                 std::string(
                     dftracer::utils::index::store::SHARD_MANIFEST_FILENAME) +
@@ -216,7 +216,7 @@ std::size_t merge_shard_set(const std::string& root,
     auto manifest = dftracer::utils::index::store::read_shard_manifest(root);
     if (!manifest) {
         throw DFTUtilsException(
-            ErrorCode::IO,
+            ErrorCode::Io,
             "no shard manifest under " + root + " (" +
                 std::string(
                     dftracer::utils::index::store::SHARD_MANIFEST_FILENAME) +
@@ -251,7 +251,7 @@ std::size_t merge_shard_set(const std::string& root,
                     agg::tier::write_config(*out, *config);
                 } else if (config->params_hash != shard_config->params_hash) {
                     throw DFTUtilsException(
-                        ErrorCode::INVALID_ARGUMENT,
+                        ErrorCode::InvalidArgument,
                         "shard " + shard.path +
                             " was aggregated with another config than the "
                             "first shard");
@@ -295,7 +295,7 @@ std::size_t merge_shard_set(const std::string& root,
                 std::vector<int> aggregated;
                 for (const auto& [path, id] : sdb.query_all_file_info_ids()) {
                     auto state = sdb.extension_state(
-                        id, dftracer::utils::index::store::IndexExtension::AGG);
+                        id, dftracer::utils::index::store::IndexExtension::Agg);
                     if (state && state->ready &&
                         state->params_hash == config->params_hash)
                         aggregated.push_back(id);
@@ -309,7 +309,7 @@ std::size_t merge_shard_set(const std::string& root,
             {
                 namespace layout = dftracer::utils::index::store::layout;
                 const auto prefix = layout::kind_prefix(
-                    layout::Ext::HOST, layout::host::FILE_BY_PATH);
+                    layout::Ext::Host, layout::host::FILE_BY_PATH);
                 auto b = out->begin_batch();
                 auto it = s->new_iterator(rcf::DEFAULT);
                 for (it->Seek(prefix); it->Valid(); it->Next()) {

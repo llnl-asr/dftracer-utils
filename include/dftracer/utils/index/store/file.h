@@ -25,36 +25,36 @@ struct FileRegistryEntry {
 /// Owners of index data. The manifest records, per file, which of them are
 /// built and with which configuration.
 enum class IndexExtension : std::uint16_t {
-    HOST = 0,
+    Host = 0,
     /// Gzip members and file metadata.
-    MEMBERS = 1,
+    Members = 1,
     /// Per chunk and path: value range, type, record counts.
-    ZONEMAP = 4,
+    Zonemap = 4,
     /// Per chunk and path, and per file: a bloom of the path's values.
-    BLOOM = 5,
+    Bloom = 5,
     /// Per chunk and path: value counts up to a cap.
-    COUNTS = 6,
+    Counts = 6,
     /// Per file and path: value to chunks.
-    POSTINGS = 7,
+    Postings = 7,
     /// dftracer statistics no pruning source reads: chunk and file summaries
     /// and pid:tid counts.
-    STATS = 8,
+    Stats = 8,
     /// Per file: every JSON path, its type and its non-null record count.
-    CATALOG = 9,
+    Catalog = 9,
     /// Per file: the id of the schema its records were decoded with.
-    PROFILE = 10,
+    Profile = 10,
     /// Per chunk: how many metadata records, with their names and paths.
-    METADATA = 11,
+    Metadata = 11,
     /// Plugin extensions (plugins/abi/index.h), each keyed by its name, with
     /// one manifest entry per name.
-    PLUGIN = 12,
+    Plugin = 12,
     /// The dftracer pre-aggregation tier; its rows live in the aggregation
     /// and system_metrics families without a file id, and this extension's
     /// manifest entry marks a file's rows as merged into them.
-    AGG = 13,
+    Agg = 13,
     /// Per file and row set: the rows of each row set of the schema's source
     /// that the build evaluates, as an Arrow IPC frame keyed by its name.
-    ROWSET = 14,
+    Rowset = 14,
 };
 
 /// The type of a JSON path. A number is INT when it fits in int64 and UINT
@@ -62,35 +62,35 @@ enum class IndexExtension : std::uint16_t {
 /// ARRAY mark an empty object or array, recorded so a path that holds one is
 /// known to exist.
 enum class PathType : std::uint8_t {
-    NULL_VALUE = 0,
-    BOOL = 1,
-    INT = 2,
-    UINT = 3,
-    DOUBLE = 4,
-    STRING = 5,
-    MIXED = 6,
-    OBJECT = 7,
-    ARRAY = 8,
+    NullValue = 0,
+    Bool = 1,
+    Int = 2,
+    Uint = 3,
+    Double = 4,
+    String = 5,
+    Mixed = 6,
+    Object = 7,
+    Array = 8,
 };
 
 /// The least type both `a` and `b` promote to: NULL_VALUE yields to the
 /// other, INT and UINT join to UINT, numbers join with DOUBLE to DOUBLE, and
 /// anything else is MIXED. Commutative and associative.
 constexpr PathType join(PathType a, PathType b) {
-    if (a == b || b == PathType::NULL_VALUE) return a;
-    if (a == PathType::NULL_VALUE) return b;
+    if (a == b || b == PathType::NullValue) return a;
+    if (a == PathType::NullValue) return b;
     auto number = [](PathType t) {
-        return t == PathType::INT || t == PathType::UINT ||
-               t == PathType::DOUBLE;
+        return t == PathType::Int || t == PathType::Uint ||
+               t == PathType::Double;
     };
-    if (!number(a) || !number(b)) return PathType::MIXED;
-    if (a == PathType::DOUBLE || b == PathType::DOUBLE) return PathType::DOUBLE;
-    return PathType::UINT;
+    if (!number(a) || !number(b)) return PathType::Mixed;
+    if (a == PathType::Double || b == PathType::Double) return PathType::Double;
+    return PathType::Uint;
 }
 
 /// One path of a file's catalog.
 struct PathStat {
-    PathType type = PathType::NULL_VALUE;
+    PathType type = PathType::NullValue;
     /// Bit (1 << PathType) for every scalar type seen, MIXED included; an
     /// empty object or array sets none.
     std::uint8_t seen = 0;
@@ -138,15 +138,15 @@ class ExtensionMask {
 
 /// The pruning extensions; a build makes these unless told otherwise.
 inline constexpr ExtensionMask PRUNING_EXTENSIONS = {
-    IndexExtension::ZONEMAP, IndexExtension::BLOOM, IndexExtension::COUNTS,
-    IndexExtension::POSTINGS};
+    IndexExtension::Zonemap, IndexExtension::Bloom, IndexExtension::Counts,
+    IndexExtension::Postings};
 
 /// Every extension a build writes, in manifest order.
 inline constexpr IndexExtension ALL_EXTENSIONS[] = {
-    IndexExtension::MEMBERS, IndexExtension::ZONEMAP,  IndexExtension::BLOOM,
-    IndexExtension::COUNTS,  IndexExtension::POSTINGS, IndexExtension::STATS,
-    IndexExtension::CATALOG, IndexExtension::PROFILE,  IndexExtension::METADATA,
-    IndexExtension::AGG,     IndexExtension::ROWSET};
+    IndexExtension::Members, IndexExtension::Zonemap,  IndexExtension::Bloom,
+    IndexExtension::Counts,  IndexExtension::Postings, IndexExtension::Stats,
+    IndexExtension::Catalog, IndexExtension::Profile,  IndexExtension::Metadata,
+    IndexExtension::Agg,     IndexExtension::Rowset};
 
 /// The extension's name, such as "zonemap" or "core.members".
 std::string_view extension_name(IndexExtension ext);

@@ -56,10 +56,10 @@ std::regex old_regex(const Leaf& l) {
     auto flags = std::regex::ECMAScript;
     std::string src;
     switch (l.op) {
-        case duql::MatchOp::ILIKE:
+        case duql::MatchOp::Ilike:
             flags |= std::regex::icase;
             [[fallthrough]];
-        case duql::MatchOp::LIKE:
+        case duql::MatchOp::Like:
             src = "^";
             for (char c : l.pattern) {
                 if (c == '%')
@@ -71,13 +71,13 @@ std::regex old_regex(const Leaf& l) {
             }
             src += '$';
             break;
-        case duql::MatchOp::IREGEX:
+        case duql::MatchOp::Iregex:
             flags |= std::regex::icase;
             [[fallthrough]];
-        case duql::MatchOp::REGEX:
+        case duql::MatchOp::Regex:
             src = l.pattern;
             break;
-        case duql::MatchOp::ICONTAINS:
+        case duql::MatchOp::Icontains:
             flags |= std::regex::icase;
             for (char c : l.pattern) append_escaped(src, c);
             break;
@@ -132,12 +132,12 @@ TEST_CASE("golden patterns keep their results") {
             CAPTURE(l.pattern);
             const std::regex re = old_regex(l);
             const bool anchored =
-                l.op == duql::MatchOp::LIKE || l.op == duql::MatchOp::ILIKE;
+                l.op == duql::MatchOp::Like || l.op == duql::MatchOp::Ilike;
             for (const auto& s : strings_for(l.pattern, rng)) {
                 CAPTURE(s);
                 const bool old = anchored ? std::regex_match(s, re)
                                           : std::regex_search(s, re);
-                CHECK((duql::match(*l.compiled, s) == duql::MatchResult::YES) ==
+                CHECK((duql::match(*l.compiled, s) == duql::MatchResult::Yes) ==
                       old);
                 ++compared;
             }
@@ -165,9 +165,9 @@ TEST_CASE("DataFrame kernels and duql agree on the golden patterns") {
         std::vector<Leaf> found;
         leaves(**tree, found);
         for (const Leaf& l : found) {
-            const bool regex = l.op == duql::MatchOp::REGEX;
+            const bool regex = l.op == duql::MatchOp::Regex;
             // str_like escapes with `\`; duql like has no escape character.
-            const bool like = l.op == duql::MatchOp::LIKE &&
+            const bool like = l.op == duql::MatchOp::Like &&
                               l.pattern.find('\\') == std::string::npos;
             if (!regex && !like) continue;
             CAPTURE(l.pattern);
@@ -182,7 +182,7 @@ TEST_CASE("DataFrame kernels and duql agree on the golden patterns") {
                 const bool bit =
                     (m.data<std::uint8_t>()[i >> 3] >> (i & 7)) & 1;
                 CHECK(bit == (duql::match(*l.compiled, strings[i]) ==
-                              duql::MatchResult::YES));
+                              duql::MatchResult::Yes));
             }
             if (!regex) continue;
             // str_matches is the whole-string form of the same regex.
@@ -196,7 +196,7 @@ TEST_CASE("DataFrame kernels and duql agree on the golden patterns") {
                 const bool bit =
                     (whole.data<std::uint8_t>()[i >> 3] >> (i & 7)) & 1;
                 CHECK(bit == ((*full) && duql::match(**full, strings[i]) ==
-                                             duql::MatchResult::YES));
+                                             duql::MatchResult::Yes));
                 CHECK(bit == std::regex_match(strings[i], re));
             }
         }
@@ -342,7 +342,7 @@ TEST_CASE("Vectorscan and PCRE2 agree on every golden regex") {
         std::vector<Leaf> found;
         leaves(**tree, found);
         for (const Leaf& l : found) {
-            if (l.op != duql::MatchOp::REGEX && l.op != duql::MatchOp::IREGEX)
+            if (l.op != duql::MatchOp::Regex && l.op != duql::MatchOp::Iregex)
                 continue;
             if (!seen.emplace(static_cast<int>(l.op), l.pattern).second)
                 continue;
@@ -352,7 +352,7 @@ TEST_CASE("Vectorscan and PCRE2 agree on every golden regex") {
             for (const auto& s : strings) agree(*l.compiled, s);
             for (const bool whole : {false, true}) {
                 auto w = duql::compile_regex(
-                    l.pattern, l.op == duql::MatchOp::IREGEX, whole);
+                    l.pattern, l.op == duql::MatchOp::Iregex, whole);
                 REQUIRE(w);
                 for (const auto& s : strings) agree(**w, s);
             }
@@ -411,7 +411,7 @@ TEST_CASE("Vectorscan and PCRE2 agree on non-ASCII and invalid UTF-8") {
         std::vector<Leaf> found;
         leaves(**tree, found);
         for (const Leaf& l : found) {
-            if (l.op != duql::MatchOp::REGEX && l.op != duql::MatchOp::IREGEX)
+            if (l.op != duql::MatchOp::Regex && l.op != duql::MatchOp::Iregex)
                 continue;
             if (!seen.insert(l.pattern).second) continue;
             run(l.pattern, false);

@@ -34,10 +34,10 @@ void check(const ::rocksdb::Status& status, const char* what,
     if (status.ok()) return;
     if (status.IsCorruption())
         throw DFTUtilsException::cat(
-            ErrorCode::AGGREGATION, what, " failed: the index at ", db.path(),
+            ErrorCode::Aggregation, what, " failed: the index at ", db.path(),
             " is corrupt (", status.ToString(),
             "); delete that directory and build the index again");
-    throw DFTUtilsException::cat(ErrorCode::IO, what, ": ", status.ToString());
+    throw DFTUtilsException::cat(ErrorCode::Io, what, ": ", status.ToString());
 }
 
 std::optional<std::string> get(const RocksDatabase& db, std::string_view key) {
@@ -53,8 +53,8 @@ void put(RocksDatabase& db, std::string_view key, std::string_view value) {
 }
 
 std::string manifest_value(std::uint64_t params_hash) {
-    return layout::encode_manifest({layout::ext_version(layout::Ext::AGG),
-                                    params_hash, layout::ExtStatus::READY});
+    return layout::encode_manifest({layout::ext_version(layout::Ext::Agg),
+                                    params_hash, layout::ExtStatus::Ready});
 }
 
 template <class Put>
@@ -146,7 +146,7 @@ void write_config(RocksDatabase& db, const Config& config) {
 
 void put_file(index::store::IndexWrite& w, int file_id,
               std::uint64_t params_hash) {
-    index::store::records::put_manifest(w, file_id, layout::Ext::AGG,
+    index::store::records::put_manifest(w, file_id, layout::Ext::Agg,
                                         params_hash);
 }
 
@@ -158,19 +158,19 @@ void put_files(RocksDatabase& db, std::span<const int> file_ids,
         if (id >= 0)
             db.put(batch, cf::DEFAULT,
                    layout::manifest_key(static_cast<std::uint32_t>(id),
-                                        layout::Ext::AGG),
+                                        layout::Ext::Agg),
                    value);
     check(db.commit_batch(batch), "aggregation manifest write", db);
 }
 
 void merge_row(index::store::IndexWrite& w, std::string_view key,
                std::string_view value) {
-    w.merge(layout::Family::AGGREGATION, key, value);
+    w.merge(layout::Family::Aggregation, key, value);
 }
 
 void merge_system_row(index::store::IndexWrite& w, std::string_view key,
                       std::string_view value) {
-    w.merge(layout::Family::SYSTEM_METRICS, key, value);
+    w.merge(layout::Family::SystemMetrics, key, value);
 }
 
 Writer::Writer(RocksDatabase& db) : db_(&db), batch_(db.begin_batch()) {}
@@ -266,7 +266,7 @@ void load_dictionary(const RocksDatabase& db, AggInternTable& table) {
 
 void flush_dictionary(index::store::IndexWrite& w, AggInternTable& table) {
     flush_entries(table, [&w](std::string_view key, std::string_view value) {
-        w.put(layout::Family::AGGREGATION, key, value);
+        w.put(layout::Family::Aggregation, key, value);
     });
 }
 
@@ -284,7 +284,7 @@ void clear(RocksDatabase& db) {
     db.delete_range(batch, cf::AGGREGATION, std::string_view(), all_end);
     db.delete_range(batch, cf::SYSTEM_METRICS, std::string_view(), all_end);
     const auto prefix =
-        layout::kind_prefix(layout::Ext::HOST, layout::host::MANIFEST);
+        layout::kind_prefix(layout::Ext::Host, layout::host::MANIFEST);
     const std::size_t agg_entry = prefix.size() + 4 + 2;
     auto it = db.new_iterator(cf::DEFAULT);
     for (it->Seek(prefix); it->Valid(); it->Next()) {
@@ -292,7 +292,7 @@ void clear(RocksDatabase& db) {
         if (!key.starts_with(prefix)) break;
         if (key.size() == agg_entry &&
             layout::read_u16(key.substr(prefix.size() + 4)) ==
-                static_cast<std::uint16_t>(layout::Ext::AGG))
+                static_cast<std::uint16_t>(layout::Ext::Agg))
             db.del(batch, cf::DEFAULT, key);
     }
     check(db.commit_batch(batch), "aggregation tier clear", db);

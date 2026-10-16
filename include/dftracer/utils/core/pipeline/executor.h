@@ -44,7 +44,7 @@ struct ExecutorConfig {
     std::chrono::seconds idle_timeout{5};
     std::chrono::seconds deadlock_timeout{10};
     std::size_t io_pool_size = 0;  ///< 0 = hardware_concurrency
-    io::IoBackendType io_backend_type = io::IoBackendType::AUTO;
+    io::IoBackendType io_backend_type = io::IoBackendType::Auto;
     unsigned io_batch_threshold = 16;
 };
 
@@ -55,11 +55,11 @@ struct TaskInfo {
     std::size_t worker_id;
 
     enum State {
-        QUEUED,     ///< In queue (shared or local)
-        RUNNING,    ///< Currently executing
-        WAITING,    ///< Waiting for child tasks
-        COMPLETED,  ///< Successfully finished
-        FAILED      ///< Failed with error
+        Queued,     ///< In queue (shared or local)
+        Running,    ///< Currently executing
+        Waiting,    ///< Waiting for child tasks
+        Completed,  ///< Successfully finished
+        Failed      ///< Failed with error
     } state;
 
     std::chrono::steady_clock::time_point queued_at;
@@ -71,7 +71,7 @@ struct TaskInfo {
 
     std::string error_message;
 
-    enum Location { SHARED_QUEUE, LOCAL_QUEUE, EXECUTING, DONE } location;
+    enum Location { SharedQueue, LocalQueue, Executing, Done } location;
 };
 
 struct TaskProgress {

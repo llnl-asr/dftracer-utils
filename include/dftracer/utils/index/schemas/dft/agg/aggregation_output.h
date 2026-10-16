@@ -15,9 +15,9 @@
 namespace dftracer::utils::index::schemas::dft::agg {
 
 enum class AggMapType : std::uint8_t {
-    EVENT = 0,
-    PROFILE = 1,
-    SYSTEM = 2,
+    Event = 0,
+    Profile = 1,
+    System = 2,
 };
 
 class AssociationTracker;
@@ -58,7 +58,7 @@ struct EventAggregatorOutput {
 
     const StringIntern& strings() const {
         if (!intern) {
-            throw DFTUtilsException(ErrorCode::INTERNAL,
+            throw DFTUtilsException(ErrorCode::Internal,
                                     "aggregation output has no intern table");
         }
         return intern->intern;

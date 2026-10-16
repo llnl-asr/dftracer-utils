@@ -242,7 +242,7 @@ class SinkWriterVisitor : public dftracer::utils::index::build::IndexVisitor {
             while (pos <= last_nl) {
                 const std::size_t nl = buf_.find('\n', pos);
                 const std::string_view line(buf_.data() + pos, nl - pos);
-                if (phase_of(line) != trace::RecordPhase::METADATA) {
+                if (phase_of(line) != trace::RecordPhase::Metadata) {
                     kept_.append(line);
                     kept_.push_back('\n');
                 }
@@ -262,9 +262,9 @@ class SinkWriterVisitor : public dftracer::utils::index::build::IndexVisitor {
         pad_.resize(line.size() + simdjson::SIMDJSON_PADDING);
         simdjson::ondemand::document doc;
         if (parser_.iterate(pad_.data(), line.size(), pad_.size()).get(doc))
-            return trace::RecordPhase::UNKNOWN;
+            return trace::RecordPhase::Unknown;
         auto f = doc.find_field_unordered("ph");
-        if (f.error()) return trace::RecordPhase::UNKNOWN;
+        if (f.error()) return trace::RecordPhase::Unknown;
         return trace::read_phase(f.value_unsafe());
     }
 
@@ -424,7 +424,7 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
         opts.output_path, std::move(wopts));
     if (!opened) {
         throw DFTUtilsException(
-            ErrorCode::IO, "export_trace failed writing " + opts.output_path);
+            ErrorCode::Io, "export_trace failed writing " + opts.output_path);
     }
     auto writer = std::move(*opened);
 
@@ -487,7 +487,7 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
 
     if (!ok) {
         throw DFTUtilsException(
-            ErrorCode::IO, "export_trace failed writing " + opts.output_path);
+            ErrorCode::Io, "export_trace failed writing " + opts.output_path);
     }
 
     ExportStats st;
@@ -960,7 +960,7 @@ const FoldEvent::ArgValue* distinct_find_arg(const FoldEvent& ev,
 class DistinctRowFold : public Fold {
    public:
     struct Key {
-        RowKeySource::Kind field = RowKeySource::Kind::ARG;
+        RowKeySource::Kind field = RowKeySource::Kind::Arg;
         std::uint32_t arg_full = dftracer::utils::StringIntern::NO_ID;
         std::uint32_t arg_bare = dftracer::utils::StringIntern::NO_ID;
     };
@@ -997,8 +997,8 @@ class DistinctRowFold : public Fold {
         }
         for (const FoldEvent& ev : batch.events) {
             const Position pos{seq, row_in_unit_++};
-            if (ev.phase == RecordPhase::UNKNOWN ||
-                (!keep_metadata_ && ev.phase == RecordPhase::METADATA))
+            if (ev.phase == RecordPhase::Unknown ||
+                (!keep_metadata_ && ev.phase == RecordPhase::Metadata))
                 continue;
             scratch_.clear();
             append_key(ev);
@@ -1044,7 +1044,7 @@ class DistinctRowFold : public Fold {
     // two rows with distinct fold keys may still be equal in the built column.
     bool needs_host_pass() const {
         for (std::size_t i = 0; i < keys_.size(); ++i) {
-            if (keys_[i].field != RowKeySource::Kind::ARG) continue;
+            if (keys_[i].field != RowKeySource::Kind::Arg) continue;
             const std::uint8_t m = kinds_[i];
             if ((m & KIND_DBL) || (m & (m - 1))) return true;
         }
@@ -1105,36 +1105,36 @@ class DistinctRowFold : public Fold {
         for (std::size_t j = 0; j < keys_.size(); ++j) {
             const Key& k = keys_[j];
             switch (k.field) {
-                case Kind::NAME:
+                case Kind::Name:
                     append_id(scratch_, ev.name_id);
                     break;
-                case Kind::CAT:
+                case Kind::Cat:
                     append_id(scratch_, ev.cat_id);
                     break;
-                case Kind::FHASH:
+                case Kind::Fhash:
                     append_id(scratch_, ev.fhash_id);
                     break;
-                case Kind::HHASH:
+                case Kind::Hhash:
                     append_id(scratch_, ev.hhash_id);
                     break;
-                case Kind::PID:
+                case Kind::Pid:
                     append_word(scratch_, '\1', ev.pid);
                     break;
-                case Kind::TID:
+                case Kind::Tid:
                     append_word(scratch_, '\1', ev.tid);
                     break;
-                case Kind::TS:
+                case Kind::Ts:
                     append_word(scratch_, '\1', scaled(ev.ts));
                     break;
-                case Kind::DUR:
+                case Kind::Dur:
                     append_word(scratch_, '\1', scaled(ev.dur));
                     break;
-                case Kind::PH:
+                case Kind::Ph:
                     append_word(scratch_, '\1',
                                 static_cast<std::uint64_t>(ev.phase));
                     break;
-                case Kind::ARG:
-                case Kind::REFUSED: {
+                case Kind::Arg:
+                case Kind::Refused: {
                     const FoldEvent::ArgValue* v =
                         distinct_find_arg(ev, k.arg_full);
                     if (!v &&
@@ -1196,7 +1196,7 @@ bool distinct_keyable(const ViewPlan& plan,
         if (at < 0 || static_cast<std::size_t>(at) >= plan.select.size())
             return false;
         if (row_key_source(plan.select[static_cast<std::size_t>(at)], by_path)
-                .kind == RowKeySource::Kind::REFUSED)
+                .kind == RowKeySource::Kind::Refused)
             return false;
     }
     return true;
@@ -1245,7 +1245,7 @@ coro::CoroTask<dataframe::DataFrame> run_collect_rows_distinct(
         const RowKeySource src = row_key_source(sel, by_path);
         DistinctRowFold::Key k;
         k.field = src.kind;
-        if (src.kind == RowKeySource::Kind::ARG) {
+        if (src.kind == RowKeySource::Kind::Arg) {
             k.arg_full = intern.get_or_insert(src.arg_full);
             if (!src.arg_bare.empty())
                 k.arg_bare = intern.get_or_insert(src.arg_bare);
@@ -1348,11 +1348,11 @@ dataframe::AggStatePtr decode_partials(
     for (std::string_view p : partials) {
         if (p.empty())
             throw DFTUtilsException::cat(
-                ErrorCode::AGGREGATION,
+                ErrorCode::Aggregation,
                 "aggregate partial: empty (missing wire tag)");
         if (static_cast<std::uint8_t>(p[0]) !=
             static_cast<std::uint8_t>(AggWireTag::AggState))
-            throw DFTUtilsException::cat(ErrorCode::AGGREGATION,
+            throw DFTUtilsException::cat(ErrorCode::Aggregation,
                                          "aggregate partial: unknown wire tag");
         dataframe::AggStatePtr st =
             dataframe::agg_deserialize(std::string(p.substr(1)));
@@ -1628,7 +1628,7 @@ class BranchDriverFold : public Fold {
             json::JsonValue jv(root);
             const bool metadata =
                 gate_metadata_ &&
-                trace::read_phase(jv["ph"]) == trace::RecordPhase::METADATA;
+                trace::read_phase(jv["ph"]) == trace::RecordPhase::Metadata;
             for (std::size_t i = 0; i < branches_->size(); ++i) {
                 const BranchHooks* br = (*branches_)[i];
                 if (metadata && !br->wants_metadata) continue;

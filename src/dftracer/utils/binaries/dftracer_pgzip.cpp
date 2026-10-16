@@ -20,7 +20,7 @@ namespace fileio = dftracer::utils::utilities::fileio;
 
 class PgzipArgParse : public cli::ArgParse {
    public:
-    cli::DirectoryArgs directory{cli::DirMode::DEFAULT_DOT,
+    cli::DirectoryArgs directory{cli::DirMode::DefaultDot,
                                  "Directory containing .pfw files"};
     cli::PipelineArgs pipeline;
     cli::WatchdogArgs watchdog;

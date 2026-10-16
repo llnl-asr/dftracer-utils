@@ -26,13 +26,13 @@ struct RouterWriteStats {
 
 struct PartitionConfig {
     enum class Mode {
-        NONE,
-        COLUMN,
-        BUCKETED,
-        VIEW,
+        None,
+        Column,
+        Bucketed,
+        View,
     };
 
-    Mode mode = Mode::NONE;
+    Mode mode = Mode::None;
     std::vector<std::string> partition_columns;
     int num_buckets = 0;
     std::vector<std::pair<std::string, std::optional<std::string>>> views;

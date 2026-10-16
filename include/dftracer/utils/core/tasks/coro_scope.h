@@ -79,7 +79,7 @@ class CoroScope {
     void enqueue_coro(coro::Coro& c) {
         if (!executor_->is_running()) {
             throw DFTUtilsException(
-                ErrorCode::PIPELINE,
+                ErrorCode::Pipeline,
                 "Cannot spawn coroutine: executor is not running");
         }
         join_handle_.track(c);

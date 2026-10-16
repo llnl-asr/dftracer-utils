@@ -235,7 +235,7 @@ class BasicLineFormat {
             fmt, [&](char c) { f.text_.push_back(c); },
             [&] { f.end_.push_back(f.text_.size()); });
         if (err)
-            return make_error(ErrorCode::INVALID_ARGUMENT,
+            return make_error(ErrorCode::InvalidArgument,
                               std::string("line format: ") + err);
         f.end_.push_back(f.text_.size());
         return f;

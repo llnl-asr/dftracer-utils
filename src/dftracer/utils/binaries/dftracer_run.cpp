@@ -127,7 +127,7 @@ static bool prescan_plugin_args(int argc, char** argv, std::vector<char*>& kept,
 
 class RunArgParse : public cli::ArgParse {
    public:
-    cli::DirectoryArgs directory{cli::DirMode::DEFAULT_EMPTY};
+    cli::DirectoryArgs directory{cli::DirMode::DefaultEmpty};
     cli::FilesArgs files_args;
     cli::PipelineArgs pipeline;
     cli::IndexingArgs indexing;
@@ -199,7 +199,7 @@ static Result<Plugins> build_plugins(const PluginArgs& plugin_args) {
                             build_config(plugin_args.shared, block));
             } catch (const std::exception& e) {
                 return make_error(
-                    ErrorCode::INVALID_ARGUMENT,
+                    ErrorCode::InvalidArgument,
                     "plugin '" + block.path + "' config error: " + e.what());
             }
         } else {

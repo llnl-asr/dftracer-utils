@@ -7,16 +7,16 @@ namespace dftracer::utils::utilities::fileio::parallel {
 
 LayoutInfo detect_layout(const std::string& path) noexcept {
     LayoutInfo info{};
-    info.layout = FileLayout::STRIPED;
+    info.layout = FileLayout::Striped;
     info.fs = filesystem_kind(path);
     info.stripe_size = 0;
     info.stripe_count = 0;
 
     // NFS lacks a cheap atomic-offset write, so shard into per-writer files.
-    if (info.fs == FilesystemKind::NFS) {
-        info.layout = FileLayout::SHARDED;
+    if (info.fs == FilesystemKind::Nfs) {
+        info.layout = FileLayout::Sharded;
     }
-    if (info.fs == FilesystemKind::LUSTRE) {
+    if (info.fs == FilesystemKind::Lustre) {
         const StripeInfo stripe = lustre_stripe(path);
         info.stripe_size = stripe.size;
         info.stripe_count = stripe.count;
@@ -45,7 +45,7 @@ WriterSizing compute_writer_sizing(const LayoutInfo& info,
 }
 
 bool uses_padded_layout(const LayoutInfo& info, bool gzip) noexcept {
-    return info.layout == FileLayout::STRIPED && gzip &&
+    return info.layout == FileLayout::Striped && gzip &&
            info.stripe_size >= MIN_PADDED_STRIPE_BYTES;
 }
 

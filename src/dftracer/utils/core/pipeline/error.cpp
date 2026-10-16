@@ -6,34 +6,34 @@ std::string PipelineError::format_message(Type type,
                                           const std::string &message) {
     std::string prefix;
     switch (type) {
-        case TYPE_MISMATCH:
+        case TypeMismatch:
             prefix = "[TYPE_MISMATCH]";
             break;
-        case TYPE_MISMATCH_ERROR:
+        case TypeMismatchError:
             prefix = "[TYPE_MISMATCH_ERROR]";
             break;
-        case VALIDATION_ERROR:
+        case ValidationError:
             prefix = "[VALIDATION]";
             break;
-        case EXECUTION_ERROR:
+        case ExecutionError:
             prefix = "[EXECUTION]";
             break;
-        case INITIALIZATION_ERROR:
+        case InitializationError:
             prefix = "[INITIALIZATION]";
             break;
-        case OUTPUT_CONVERSION_ERROR:
+        case OutputConversionError:
             prefix = "[OUTPUT_CONVERSION]";
             break;
-        case TIMEOUT_ERROR:
+        case TimeoutError:
             prefix = "[TIMEOUT]";
             break;
-        case INTERRUPTED:
+        case Interrupted:
             prefix = "[INTERRUPTED]";
             break;
-        case EXECUTOR_UNRESPONSIVE:
+        case ExecutorUnresponsive:
             prefix = "[EXECUTOR_UNRESPONSIVE]";
             break;
-        case UNKNOWN_ERROR:
+        case UnknownError:
             prefix = "[UNKNOWN]";
             break;
     }

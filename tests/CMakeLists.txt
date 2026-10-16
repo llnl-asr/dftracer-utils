@@ -109,6 +109,9 @@ add_test(NAME agg_families
 add_test(NAME coro_conditions
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_coro_conditions.cmake)
+add_test(NAME enum_style
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_enum_style.cmake)
 
 # ##############################################################################
 # Unit Tests

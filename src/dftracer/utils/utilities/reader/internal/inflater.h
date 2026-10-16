@@ -85,8 +85,8 @@ class ReaderInflater {
             co_return false;
         }
         using dftracer::utils::index::gzip::GzipRecordKind;
-        if (member.kind == GzipRecordKind::MEMBER) co_return true;
-        if (member.kind == GzipRecordKind::HEAD) {
+        if (member.kind == GzipRecordKind::Member) co_return true;
+        if (member.kind == GzipRecordKind::Head) {
             co_return start_stream(31);
         }
         if (window.empty() || member.bits > 7) co_return false;
@@ -317,7 +317,7 @@ class ReaderInflater {
             [fd, off, fsize]() -> coro::CoroTask<MemberDecodeCache::Bytes> {
             auto decoded = co_await decode_member_at(fd, off, fsize);
             if (!decoded) {
-                throw DFTUtilsException(ErrorCode::COMPRESSION,
+                throw DFTUtilsException(ErrorCode::Compression,
                                         "gzip member decode failed");
             }
             co_return std::make_shared<const DecodedMember>(

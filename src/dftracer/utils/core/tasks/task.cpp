@@ -13,7 +13,7 @@ namespace dftracer::utils {
 
 std::shared_ptr<Task> Task::depends_on(std::shared_ptr<Task> parent) {
     if (!parent) {
-        throw PipelineError(PipelineError::VALIDATION_ERROR,
+        throw PipelineError(PipelineError::ValidationError,
                             "Cannot add null parent to task");
     }
 
@@ -68,7 +68,7 @@ void Task::set_exception(std::exception_ptr ex) { result_.set_exception(ex); }
 
 std::any Task::apply_combiner(const std::vector<std::any>& inputs) const {
     if (!has_custom_combiner_) {
-        throw PipelineError(PipelineError::VALIDATION_ERROR,
+        throw PipelineError(PipelineError::ValidationError,
                             "Task has no custom combiner");
     }
     return input_combiner_(inputs);
@@ -84,7 +84,7 @@ std::shared_ptr<Task> Task::operator&(std::shared_ptr<Task> other) {
             // (other)
             if (inputs.size() != 2) {
                 throw DFTUtilsException(
-                    ErrorCode::INVALID_ARGUMENT,
+                    ErrorCode::InvalidArgument,
                     "AND combiner expects exactly 2 inputs");
             }
             // Return tuple of both results
@@ -108,7 +108,7 @@ std::shared_ptr<Task> Task::operator&(std::shared_ptr<Task> other) {
 
 std::shared_ptr<Task> Task::operator^(std::shared_ptr<Task> tap_task) {
     if (!tap_task) {
-        throw PipelineError(PipelineError::VALIDATION_ERROR,
+        throw PipelineError(PipelineError::ValidationError,
                             "Tap task cannot be null");
     }
     auto passthrough = make_task(

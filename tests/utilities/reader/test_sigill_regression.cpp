@@ -87,8 +87,8 @@ TEST_SUITE("sigill_regression") {
         GzipReader reader(indexer);
         auto stream =
             reader.stream(StreamConfig()
-                              .stream_type(StreamType::MULTI_LINES_BYTES)
-                              .range_type(RangeType::BYTE_RANGE)
+                              .stream_type(StreamType::MultiLinesBytes)
+                              .range_type(RangeType::ByteRange)
                               .from(start)
                               .to(reader.get_max_bytes()));
         std::string out;

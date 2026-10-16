@@ -88,7 +88,7 @@ static std::vector<std::string> shard_files(
 
 class ViewArgParse : public cli::ArgParse {
    public:
-    cli::DirectoryArgs directory{cli::DirMode::DEFAULT_EMPTY};
+    cli::DirectoryArgs directory{cli::DirMode::DefaultEmpty};
     cli::FilesArgs files_args;
     cli::PipelineArgs pipeline;
     cli::IndexingArgs indexing;

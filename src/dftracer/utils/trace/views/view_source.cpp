@@ -137,17 +137,17 @@ std::optional<Pushable> translate_str_pred(
     switch (op) {
         case df::StrPredOp::Contains:
             return Pushable{
-                q::field_match(*field, q::MatchOp::ICONTAINS, pattern), false};
+                q::field_match(*field, q::MatchOp::Icontains, pattern), false};
         case df::StrPredOp::StartsWith:
-            return Pushable{q::field_match(*field, q::MatchOp::LIKE,
+            return Pushable{q::field_match(*field, q::MatchOp::Like,
                                            escape_like(pattern) + "%"),
                             true};
         case df::StrPredOp::EndsWith:
-            return Pushable{q::field_match(*field, q::MatchOp::LIKE,
+            return Pushable{q::field_match(*field, q::MatchOp::Like,
                                            "%" + escape_like(pattern)),
                             true};
         case df::StrPredOp::Like:
-            return Pushable{q::field_match(*field, q::MatchOp::LIKE, pattern),
+            return Pushable{q::field_match(*field, q::MatchOp::Like, pattern),
                             true};
         case df::StrPredOp::Matches:
         case df::StrPredOp::Search:
@@ -250,22 +250,22 @@ std::optional<q::Expr> translate_leaf(const df::Expr& e,
     q::CompareOp qop;
     switch (op) {
         case df::CmpOp::Gt:
-            qop = q::CompareOp::GT;
+            qop = q::CompareOp::Gt;
             break;
         case df::CmpOp::Ge:
-            qop = q::CompareOp::GE;
+            qop = q::CompareOp::Ge;
             break;
         case df::CmpOp::Lt:
-            qop = q::CompareOp::LT;
+            qop = q::CompareOp::Lt;
             break;
         case df::CmpOp::Le:
-            qop = q::CompareOp::LE;
+            qop = q::CompareOp::Le;
             break;
         case df::CmpOp::Eq:
-            qop = q::CompareOp::EQ;
+            qop = q::CompareOp::Eq;
             break;
         case df::CmpOp::Ne:
-            qop = q::CompareOp::NE;
+            qop = q::CompareOp::Ne;
             break;
     }
 
@@ -492,8 +492,8 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
                 .index_path = f.index_path,
                 .file_path = f.file_path,
                 .query = &built.value(),
-                .metadata = metadata_rows_ ? ip::MetadataUse::RECORDS
-                                           : ip::MetadataUse::NONE};
+                .metadata = metadata_rows_ ? ip::MetadataUse::Records
+                                           : ip::MetadataUse::None};
             auto out = co_await ip::prune_file(std::move(prune_req));
             if (!out->file_may_match) {
                 dyn_prune_->exclude_file(f.file_path);
@@ -1460,7 +1460,7 @@ df::Series terminal_cell(const df::DataFrame& frame, const char* name) {
     const std::int64_t at = frame.column_index(name);
     if (at < 0 || static_cast<std::size_t>(at) >= frame.columns.size() ||
         frame.columns[static_cast<std::size_t>(at)].length() < 1)
-        throw DFTUtilsException::cat(ErrorCode::INTERNAL,
+        throw DFTUtilsException::cat(ErrorCode::Internal,
                                      "view terminal: the result has no '", name,
                                      "' row (", frame.columns.size(),
                                      " columns, ", frame.num_rows(), " rows)");

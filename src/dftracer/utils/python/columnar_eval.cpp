@@ -29,32 +29,32 @@ namespace {
 
 // AST node opcodes (mirror the serializer in columnar.py).
 enum {
-    AST_COL = 0,
-    AST_LIT_I = 1,
-    AST_LIT_F = 2,
-    AST_BIN = 3,
-    AST_PRIM = 4,
-    AST_CMP = 5,
-    AST_LOGICAL = 6,
-    AST_NOT = 7,
-    AST_CAST = 8,
-    AST_UNARY = 9,
-    AST_CLIP = 10,
-    AST_FILLNA = 11,
-    AST_STR_PRED = 12,
-    AST_STR_MAP = 13,
-    AST_STR_LEN = 14,
-    AST_STR_FIND = 15,
-    AST_STR_REPLACE = 16,
-    AST_STR_SLICE = 17,
-    AST_IS_IN = 18,
-    AST_SELECT = 19,
-    AST_IS_NULL = 20,
-    AST_CMP_EXPR = 21,
-    AST_STR_FN = 22,  // (fn, text, text2, i0, i1, operand count)
-    AST_STR_PRED_COL = 23,
-    AST_STR_REPLACE_COL = 24,
-    AST_LIT_S = 25,
+    AstCol = 0,
+    AstLitI = 1,
+    AstLitF = 2,
+    AstBin = 3,
+    AstPrim = 4,
+    AstCmp = 5,
+    AstLogical = 6,
+    AstNot = 7,
+    AstCast = 8,
+    AstUnary = 9,
+    AstClip = 10,
+    AstFillna = 11,
+    AstStrPred = 12,
+    AstStrMap = 13,
+    AstStrLen = 14,
+    AstStrFind = 15,
+    AstStrReplace = 16,
+    AstStrSlice = 17,
+    AstIsIn = 18,
+    AstSelect = 19,
+    AstIsNull = 20,
+    AstCmpExpr = 21,
+    AstStrFn = 22,  // (fn, text, text2, i0, i1, operand count)
+    AstStrPredCol = 23,
+    AstStrReplaceCol = 24,
+    AstLitS = 25,
 };
 
 // A borrowed view of a Python str; valid while `o` lives, which the ast list
@@ -140,37 +140,37 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
             return e;
         };
         switch (op) {
-            case AST_COL:
+            case AstCol:
                 stack.push_back(dataframe::expr_col(
                     static_cast<std::int32_t>(PyLong_AsLong(arg(1)))));
                 break;
-            case AST_LIT_I:
+            case AstLitI:
                 stack.push_back(dataframe::expr_lit(
                     static_cast<std::int64_t>(PyLong_AsLongLong(arg(1)))));
                 break;
-            case AST_LIT_F:
+            case AstLitF:
                 stack.push_back(dataframe::expr_lit(PyFloat_AsDouble(arg(1))));
                 break;
-            case AST_LIT_S: {
+            case AstLitS: {
                 std::string_view v;
                 if (!py_str_view(arg(1), &v)) return false;
                 stack.push_back(dataframe::expr_lit_str(v));
                 break;
             }
-            case AST_BIN: {
+            case AstBin: {
                 dataframe::Expr b = pop(), a = pop();
                 stack.push_back(dataframe::expr_binary(
                     static_cast<dataframe::BinaryOp>(PyLong_AsLong(arg(1))), a,
                     b));
                 break;
             }
-            case AST_PRIM: {
+            case AstPrim: {
                 dataframe::Expr a = pop();
                 stack.push_back(dataframe::expr_prim(
                     static_cast<dataframe::PrimOp>(PyLong_AsLong(arg(1))), a));
                 break;
             }
-            case AST_CMP: {
+            case AstCmp: {
                 dftu_scalar rhs{};
                 if (PyUnicode_Check(arg(2))) {
                     // expr_cmp copies the text into the node, so the borrow
@@ -189,38 +189,38 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                     rhs));
                 break;
             }
-            case AST_CMP_EXPR: {
+            case AstCmpExpr: {
                 dataframe::Expr b = pop(), a = pop();
                 stack.push_back(dataframe::expr_cmp_expr(
                     static_cast<dataframe::CmpOp>(PyLong_AsLong(arg(1))), a,
                     b));
                 break;
             }
-            case AST_LOGICAL: {
+            case AstLogical: {
                 dataframe::Expr b = pop(), a = pop();
                 stack.push_back(dataframe::expr_logical(
                     static_cast<dataframe::LogicalOp>(PyLong_AsLong(arg(1))), a,
                     b));
                 break;
             }
-            case AST_NOT: {
+            case AstNot: {
                 dataframe::Expr a = pop();
                 stack.push_back(dataframe::expr_not(a));
                 break;
             }
-            case AST_CAST: {
+            case AstCast: {
                 dataframe::Expr a = pop();
                 stack.push_back(dataframe::expr_cast(
                     static_cast<dataframe::TypeId>(PyLong_AsLong(arg(1))), a));
                 break;
             }
-            case AST_UNARY: {
+            case AstUnary: {
                 dataframe::Expr a = pop();
                 stack.push_back(dataframe::expr_unary(
                     static_cast<dataframe::UnaryOp>(PyLong_AsLong(arg(1))), a));
                 break;
             }
-            case AST_CLIP: {
+            case AstClip: {
                 dftu_scalar lo{}, hi{};
                 if (!py_to_scalar(arg(1), &lo) || !py_to_scalar(arg(2), &hi))
                     return false;
@@ -228,14 +228,14 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                 stack.push_back(dataframe::expr_clip(a, lo, hi));
                 break;
             }
-            case AST_FILLNA: {
+            case AstFillna: {
                 dftu_scalar fill{};
                 if (!py_to_scalar(arg(1), &fill)) return false;
                 dataframe::Expr a = pop();
                 stack.push_back(dataframe::expr_fillna(a, fill));
                 break;
             }
-            case AST_STR_PRED: {
+            case AstStrPred: {
                 std::string_view pattern;
                 if (!py_str_view(arg(2), &pattern)) return false;
                 dataframe::Expr a = pop();
@@ -244,7 +244,7 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                     pattern));
                 break;
             }
-            case AST_STR_PRED_COL: {
+            case AstStrPredCol: {
                 if (stack.size() < 2) {
                     PyErr_SetString(PyExc_ValueError,
                                     "string predicate needs its operands");
@@ -257,7 +257,7 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                     needle));
                 break;
             }
-            case AST_STR_REPLACE_COL: {
+            case AstStrReplaceCol: {
                 if (stack.size() < 3) {
                     PyErr_SetString(PyExc_ValueError,
                                     "replace needs its operands");
@@ -269,14 +269,14 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                 stack.push_back(dataframe::expr_str_replace_col(a, from, to));
                 break;
             }
-            case AST_STR_MAP: {
+            case AstStrMap: {
                 dataframe::Expr a = pop();
                 stack.push_back(dataframe::expr_str_map(
                     static_cast<dataframe::StrMapOp>(PyLong_AsLong(arg(1))),
                     a));
                 break;
             }
-            case AST_STR_FN: {
+            case AstStrFn: {
                 std::string_view text, text2;
                 if (PyTuple_GET_SIZE(t) != 7 || !py_str_view(arg(2), &text) ||
                     !py_str_view(arg(3), &text2))
@@ -300,20 +300,20 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                     nargs == 2 ? &b : nullptr, text, text2, i0, i1));
                 break;
             }
-            case AST_STR_LEN: {
+            case AstStrLen: {
                 dataframe::Expr a = pop();
                 stack.push_back(
                     dataframe::expr_str_len(a, PyLong_AsLong(arg(1)) != 0));
                 break;
             }
-            case AST_STR_FIND: {
+            case AstStrFind: {
                 std::string_view needle;
                 if (!py_str_view(arg(1), &needle)) return false;
                 dataframe::Expr a = pop();
                 stack.push_back(dataframe::expr_str_find(a, needle));
                 break;
             }
-            case AST_STR_REPLACE: {
+            case AstStrReplace: {
                 std::string_view from, to;
                 if (!py_str_view(arg(1), &from) || !py_str_view(arg(2), &to))
                     return false;
@@ -322,7 +322,7 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                     a, from, to, PyLong_AsLong(arg(3)) != 0));
                 break;
             }
-            case AST_STR_SLICE: {
+            case AstStrSlice: {
                 const long long start = PyLong_AsLongLong(arg(1));
                 const long long len = PyLong_AsLongLong(arg(2));
                 if (PyErr_Occurred()) return false;
@@ -330,14 +330,14 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                 stack.push_back(dataframe::expr_str_slice(a, start, len));
                 break;
             }
-            case AST_IS_IN: {
+            case AstIsIn: {
                 dataframe::Series values;
                 if (!py_values_series(arg(1), &values)) return false;
                 dataframe::Expr a = pop();
                 stack.push_back(dataframe::expr_is_in(a, std::move(values)));
                 break;
             }
-            case AST_SELECT: {
+            case AstSelect: {
                 if (stack.size() < 3) {
                     PyErr_SetString(PyExc_ValueError,
                                     "select needs three operands");
@@ -347,7 +347,7 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                 stack.push_back(dataframe::expr_select(cond, a, b));
                 break;
             }
-            case AST_IS_NULL: {
+            case AstIsNull: {
                 if (stack.empty()) {
                     PyErr_SetString(PyExc_ValueError,
                                     "is_null needs an operand");

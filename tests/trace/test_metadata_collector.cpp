@@ -112,7 +112,7 @@ TEST_SUITE("MetadataCollector") {
             CHECK(output.valid_events == 100);
 
             // Collecting metadata for a gzip trace builds its index.
-            CHECK(output.format == ArchiveFormat::GZIP);
+            CHECK(output.format == ArchiveFormat::Gzip);
             CHECK(output.has_index == true);
             CHECK(output.compressed_size > 0);
             CHECK(output.uncompressed_size > 0);
@@ -155,7 +155,7 @@ TEST_SUITE("MetadataCollector") {
             CHECK(output.valid_events > 0);
 
             // Verify extended fields for compressed files
-            CHECK(output.format == ArchiveFormat::GZIP);
+            CHECK(output.format == ArchiveFormat::Gzip);
             CHECK(output.has_index == true);
             CHECK(output.index_valid == true);
             CHECK(output.index_path == index_path);
@@ -206,7 +206,7 @@ TEST_SUITE("MetadataCollector") {
                 CHECK(output.success == true);
                 CHECK(output.has_index == true);
                 CHECK(output.index_valid == true);
-                CHECK(output.format == ArchiveFormat::GZIP);
+                CHECK(output.format == ArchiveFormat::Gzip);
                 CHECK(output.num_lines == 25);
             }
         }

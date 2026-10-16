@@ -103,12 +103,12 @@ inline coro::CoroTask<void> index_batch_write_worker(
                     // batch may commit after that ingest.
                     for (auto ext : index::store::ALL_EXTENSIONS)
                         if (!spills &&
-                            ext != index::store::IndexExtension::MEMBERS)
+                            ext != index::store::IndexExtension::Members)
                             index::store::records::clear_file(sink, ext,
                                                               job.file_id);
                     // Plugin data is never in a spill run, so it clears here.
                     index::store::records::clear_file(
-                        sink, index::store::IndexExtension::PLUGIN,
+                        sink, index::store::IndexExtension::Plugin,
                         job.file_id);
                     // After the clears, which cover core.profile too.
                     if (job.schema)

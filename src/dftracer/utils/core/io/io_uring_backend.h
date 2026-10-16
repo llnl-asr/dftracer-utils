@@ -115,7 +115,7 @@ struct IoUringSubmitCtx : SubmitContext {
         ObjectPool::instance().deallocate(ptr, size);
     }
 
-    IoOp op = IoOp::READ;
+    IoOp op = IoOp::Read;
     int fd = -1;
     void* buf = nullptr;
     std::size_t len = 0;

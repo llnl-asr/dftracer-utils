@@ -89,7 +89,7 @@ Runtime::~Runtime() { shutdown(); }
 
 TaskHandle Runtime::submit(coro::CoroTask<void> task, std::string name) {
     if (shutdown_called_.load(std::memory_order_acquire)) {
-        throw DFTUtilsException(ErrorCode::PIPELINE, "Runtime is shut down");
+        throw DFTUtilsException(ErrorCode::Pipeline, "Runtime is shut down");
     }
     if (name.empty()) {
         name = "task-" + std::to_string(task_name_counter_++);
@@ -169,7 +169,7 @@ bool Runtime::is_responsive() const { return executor_->is_responsive(); }
 void Runtime::set_global_timeout(std::chrono::milliseconds timeout) {
     if (!watchdog_) {
         throw DFTUtilsException(
-            ErrorCode::PIPELINE,
+            ErrorCode::Pipeline,
             "Cannot set timeout: Runtime created without watchdog");
     }
     watchdog_->set_global_timeout(timeout);
@@ -178,7 +178,7 @@ void Runtime::set_global_timeout(std::chrono::milliseconds timeout) {
 void Runtime::set_default_task_timeout(std::chrono::milliseconds timeout) {
     if (!watchdog_) {
         throw DFTUtilsException(
-            ErrorCode::PIPELINE,
+            ErrorCode::Pipeline,
             "Cannot set timeout: Runtime created without watchdog");
     }
     watchdog_->set_default_task_timeout(timeout);

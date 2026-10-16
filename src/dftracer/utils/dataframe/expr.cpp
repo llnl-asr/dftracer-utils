@@ -783,60 +783,60 @@ bool decode_translate_table(std::string_view text, std::string_view text2,
 
 // Slot-IR opcodes.
 enum {
-    OP_LOAD,
-    OP_ADD,
-    OP_SUB,
-    OP_MUL,
-    OP_DIV,
-    OP_ADDS,
-    OP_SUBS,
-    OP_MULS,
-    OP_DIVS,
-    OP_PRIM,
-    OP_UNARY,
-    OP_CLIP,
-    OP_FILLNA,
-    OP_CMP,
-    OP_LOGICAL,
-    OP_NOT,
-    OP_CAST,
-    OP_STR_PRED,
-    OP_STR_MAP,
-    OP_STR_LEN,
-    OP_STR_FIND,
-    OP_STR_REPLACE,
-    OP_STR_SLICE,
-    OP_IS_IN,
-    OP_CONST,    // a column of `param` type filled with `scalar`
-    OP_SELECT,   // c ? a : b, with the mask in slot `c`
-    OP_IS_NULL,  // the null mask of slot `a` (param 1) or the valid mask (0)
-    OP_CONST_NULL,
-    OP_TO_I64,   // Uint64 -> Int64, null past int64
-    OP_ARITH,
-    OP_NEG,
-    OP_CMP_EXPR,
-    OP_EXTREME,
-    OP_CONCAT,
-    OP_ROUND,
-    OP_LOG,
-    OP_POW,
-    OP_STR_SUBSTR,
-    OP_STR_PATTERN,
-    OP_STR_EXTRACT,
-    OP_STR_REGEX_REPLACE,
-    OP_CONVERT,
-    OP_LIST_LEN,
-    OP_LIST_GET,
-    OP_LIST_SUM,
-    OP_LIST_CONTAINS,
-    OP_STR_FN,  // param = StrFn; scalar/scalar2 = i0/i1; text/text2
-    OP_STR_PRED_COL,
-    OP_STR_REPLACE_COL,
-    OP_STR_SUBSTR_COL,
-    OP_ROUND_COL,
-    OP_STR_EXTRACT_COL,
-    OP_DATE_PART,   // param = part code, scalar = ns per unit
-    OP_FORMAT_TIME  // text = format, scalar = ns per unit
+    OpLoad,
+    OpAdd,
+    OpSub,
+    OpMul,
+    OpDiv,
+    OpAdds,
+    OpSubs,
+    OpMuls,
+    OpDivs,
+    OpPrim,
+    OpUnary,
+    OpClip,
+    OpFillna,
+    OpCmp,
+    OpLogical,
+    OpNot,
+    OpCast,
+    OpStrPred,
+    OpStrMap,
+    OpStrLen,
+    OpStrFind,
+    OpStrReplace,
+    OpStrSlice,
+    OpIsIn,
+    OpConst,   // a column of `param` type filled with `scalar`
+    OpSelect,  // c ? a : b, with the mask in slot `c`
+    OpIsNull,  // the null mask of slot `a` (param 1) or the valid mask (0)
+    OpConstNull,
+    OpToI64,   // Uint64 -> Int64, null past int64
+    OpArith,
+    OpNeg,
+    OpCmpExpr,
+    OpExtreme,
+    OpConcat,
+    OpRound,
+    OpLog,
+    OpPow,
+    OpStrSubstr,
+    OpStrPattern,
+    OpStrExtract,
+    OpStrRegexReplace,
+    OpConvert,
+    OpListLen,
+    OpListGet,
+    OpListSum,
+    OpListContains,
+    OpStrFn,  // param = StrFn; scalar/scalar2 = i0/i1; text/text2
+    OpStrPredCol,
+    OpStrReplaceCol,
+    OpStrSubstrCol,
+    OpRoundCol,
+    OpStrExtractCol,
+    OpDatePart,   // param = part code, scalar = ns per unit
+    OpFormatTime  // text = format, scalar = ns per unit
 };
 
 struct SlotOp {
@@ -857,8 +857,8 @@ struct SlotOp {
     const duql::Substitution* subst = nullptr;
 };
 
-const int COL_OP[4] = {OP_ADD, OP_SUB, OP_MUL, OP_DIV};
-const int SCALAR_OP[4] = {OP_ADDS, OP_SUBS, OP_MULS, OP_DIVS};
+const int COL_OP[4] = {OpAdd, OpSub, OpMul, OpDiv};
+const int SCALAR_OP[4] = {OpAdds, OpSubs, OpMuls, OpDivs};
 
 // A compiled subexpression: either a compile-time scalar or a column in slot
 // `slot` of type `type`. `full` is the complete DataType: a bare column
@@ -968,7 +968,7 @@ class Compiler {
                     input_types_[static_cast<std::size_t>(n->i)];
                 if (dt.id == TypeId::Unknown)
                     return {false, -1, TypeId::Unknown, {}, dt};
-                int slot = emit(OP_LOAD, -1, -1, n->i, {});
+                int slot = emit(OpLoad, -1, -1, n->i, {});
                 return {false, slot, dt.id, {}, dt};
             }
             case ExprKind::Binary:
@@ -980,7 +980,7 @@ class Compiler {
                 if (a.type != TypeId::Int64 && a.type != TypeId::Uint64)
                     a = cast(a, TypeId::Int64);
                 return {false,
-                        emit(OP_PRIM, a.slot, -1, n->i, {}),
+                        emit(OpPrim, a.slot, -1, n->i, {}),
                         TypeId::Int64,
                         {},
                         scalar(TypeId::Int64)};
@@ -1010,7 +1010,7 @@ class Compiler {
                         break;
                 }
                 return {false,
-                        emit(OP_UNARY, a.slot, -1, n->i, {}),
+                        emit(OpUnary, a.slot, -1, n->i, {}),
                         t,
                         {},
                         scalar(t)};
@@ -1020,7 +1020,7 @@ class Compiler {
                 if (is_unknown(a0)) return unknown_val();
                 Val a = as_col(a0, "clip");
                 return {false,
-                        emit(OP_CLIP, a.slot, -1, 0, n->scalar, n->scalar2),
+                        emit(OpClip, a.slot, -1, 0, n->scalar, n->scalar2),
                         a.type,
                         {},
                         scalar(a.type)};
@@ -1030,7 +1030,7 @@ class Compiler {
                 if (is_unknown(a0)) return unknown_val();
                 Val a = as_col(a0, "fillna");
                 return {false,
-                        emit(OP_FILLNA, a.slot, -1, 0, n->scalar),
+                        emit(OpFillna, a.slot, -1, 0, n->scalar),
                         a.type,
                         {},
                         scalar(a.type)};
@@ -1040,7 +1040,7 @@ class Compiler {
                 if (is_unknown(a0)) return unknown_val();
                 Val a = as_col(a0, "compare");
                 return {false,
-                        emit(OP_CMP, a.slot, -1, n->i, n->scalar),
+                        emit(OpCmp, a.slot, -1, n->i, n->scalar),
                         TypeId::Bool,
                         {},
                         scalar(TypeId::Bool)};
@@ -1052,7 +1052,7 @@ class Compiler {
                 Val a = as_col(a0, "logical");
                 Val b = as_col(b0, "logical");
                 return {false,
-                        emit(OP_LOGICAL, a.slot, b.slot, n->i, {}),
+                        emit(OpLogical, a.slot, b.slot, n->i, {}),
                         TypeId::Bool,
                         {},
                         scalar(TypeId::Bool)};
@@ -1062,7 +1062,7 @@ class Compiler {
                 if (is_unknown(a0)) return unknown_val();
                 Val a = as_col(a0, "not");
                 return {false,
-                        emit(OP_NOT, a.slot, -1, 0, {}),
+                        emit(OpNot, a.slot, -1, 0, {}),
                         TypeId::Bool,
                         {},
                         scalar(TypeId::Bool)};
@@ -1076,7 +1076,7 @@ class Compiler {
                 if (is_unknown(a0)) return unknown_val();
                 Val a = as_str(a0, "string predicate", true);
                 return {false,
-                        emit_text(OP_STR_PRED, a.slot, n->i, n->text),
+                        emit_text(OpStrPred, a.slot, n->i, n->text),
                         TypeId::Bool,
                         {},
                         scalar(TypeId::Bool)};
@@ -1086,7 +1086,7 @@ class Compiler {
                 if (is_unknown(a0)) return unknown_val();
                 Val a = as_str(a0, "string map", false);
                 return {false,
-                        emit(OP_STR_MAP, a.slot, -1, n->i, {}),
+                        emit(OpStrMap, a.slot, -1, n->i, {}),
                         TypeId::String,
                         {},
                         scalar(TypeId::String)};
@@ -1096,7 +1096,7 @@ class Compiler {
                 if (is_unknown(a0)) return unknown_val();
                 Val a = as_str(a0, "string length", true);
                 return {false,
-                        emit(OP_STR_LEN, a.slot, -1, n->i, {}),
+                        emit(OpStrLen, a.slot, -1, n->i, {}),
                         TypeId::Int64,
                         {},
                         scalar(TypeId::Int64)};
@@ -1106,7 +1106,7 @@ class Compiler {
                 if (is_unknown(a0)) return unknown_val();
                 Val a = as_str(a0, "string find", true);
                 return {false,
-                        emit_text(OP_STR_FIND, a.slot, 0, n->text),
+                        emit_text(OpStrFind, a.slot, 0, n->text),
                         TypeId::Int64,
                         {},
                         scalar(TypeId::Int64)};
@@ -1117,7 +1117,7 @@ class Compiler {
                 Val a = as_str(a0, "string replace", false);
                 return {
                     false,
-                    emit_text(OP_STR_REPLACE, a.slot, n->i, n->text, n->text2),
+                    emit_text(OpStrReplace, a.slot, n->i, n->text, n->text2),
                     TypeId::String,
                     {},
                     scalar(TypeId::String)};
@@ -1135,7 +1135,7 @@ class Compiler {
                         type_name(a0.type));
                 Val a = num(a0, fmt ? "format_time" : "date_part");
                 SlotOp op;
-                op.opcode = fmt ? OP_FORMAT_TIME : OP_DATE_PART;
+                op.opcode = fmt ? OpFormatTime : OpDatePart;
                 op.a = a.slot;
                 op.param = n->i;
                 op.scalar = n->scalar;
@@ -1147,12 +1147,11 @@ class Compiler {
                 Val a0 = compile(n->a.get());
                 if (is_unknown(a0)) return unknown_val();
                 Val a = as_str(a0, "string slice", false);
-                return {
-                    false,
-                    emit(OP_STR_SLICE, a.slot, -1, 0, n->scalar, n->scalar2),
-                    TypeId::String,
-                    {},
-                    scalar(TypeId::String)};
+                return {false,
+                        emit(OpStrSlice, a.slot, -1, 0, n->scalar, n->scalar2),
+                        TypeId::String,
+                        {},
+                        scalar(TypeId::String)};
             }
             case ExprKind::IsIn: {
                 Val a0 = compile(n->a.get());
@@ -1167,7 +1166,7 @@ class Compiler {
                         " column needs " + type_name(a.type) + " values, got " +
                         type_name(n->values.type()));
                 SlotOp op;
-                op.opcode = OP_IS_IN;
+                op.opcode = OpIsIn;
                 op.a = a.slot;
                 op.values = n->values.handle();
                 return {
@@ -1194,7 +1193,7 @@ class Compiler {
                     throw std::invalid_argument(
                         std::string("expr: no null literal of type ") +
                         type_name(t));
-                return col_val(emit(OP_CONST_NULL, -1, -1, n->i, {}), t);
+                return col_val(emit(OpConstNull, -1, -1, n->i, {}), t);
             }
             case ExprKind::Arith: {
                 Val a0 = compile(n->a.get());
@@ -1203,7 +1202,7 @@ class Compiler {
                 Val a = num(a0, "arithmetic");
                 Val b = num(b0, "arithmetic");
                 const TypeId t = arith_type(n->i, a.type, b.type);
-                return col_val(emit(OP_ARITH, a.slot, b.slot, n->i, {}), t);
+                return col_val(emit(OpArith, a.slot, b.slot, n->i, {}), t);
             }
             case ExprKind::Neg: {
                 Val a0 = compile(n->a.get());
@@ -1211,7 +1210,7 @@ class Compiler {
                 Val a = num(a0, "negation");
                 const TypeId t =
                     a.type == TypeId::Float64 ? TypeId::Float64 : TypeId::Int64;
-                return col_val(emit(OP_NEG, a.slot, -1, 0, {}), t);
+                return col_val(emit(OpNeg, a.slot, -1, 0, {}), t);
             }
             case ExprKind::CmpExpr: {
                 Val a0 = compile(n->a.get());
@@ -1220,7 +1219,7 @@ class Compiler {
                 Val a = operand(a0, "compare");
                 Val b = operand(b0, "compare");
                 same_domain(a, b, "compare");
-                return col_val(emit(OP_CMP_EXPR, a.slot, b.slot, n->i, {}),
+                return col_val(emit(OpCmpExpr, a.slot, b.slot, n->i, {}),
                                TypeId::Bool);
             }
             case ExprKind::Coalesce: {
@@ -1232,11 +1231,11 @@ class Compiler {
                 const TypeId t = common_type(a, b, "coalesce");
                 // Presence is the operand's own: a value that does not fit
                 // `t` is a null result, not a reason to move on to `b`.
-                const int present = emit(OP_IS_NULL, a.slot, -1, 0, {});
+                const int present = emit(OpIsNull, a.slot, -1, 0, {});
                 a = to_type(a, t);
                 b = to_type(b, t);
                 SlotOp op;
-                op.opcode = OP_SELECT;
+                op.opcode = OpSelect;
                 op.a = a.slot;
                 op.b = b.slot;
                 op.c = present;
@@ -1250,7 +1249,7 @@ class Compiler {
                 Val b = operand(b0, "least/greatest");
                 same_domain(a, b, "least/greatest");
                 const TypeId t = common_type(a, b, "least/greatest");
-                return col_val(emit(OP_EXTREME, a.slot, b.slot, n->i, {}), t);
+                return col_val(emit(OpExtreme, a.slot, b.slot, n->i, {}), t);
             }
             case ExprKind::Concat: {
                 Val a0 = compile(n->a.get());
@@ -1258,7 +1257,7 @@ class Compiler {
                 if (is_unknown(a0) || is_unknown(b0)) return unknown_val();
                 Val a = as_str(a0, "concat", false);
                 Val b = as_str(b0, "concat", false);
-                return col_val(emit(OP_CONCAT, a.slot, b.slot, 0, {}),
+                return col_val(emit(OpConcat, a.slot, b.slot, 0, {}),
                                TypeId::String);
             }
             case ExprKind::Round: {
@@ -1270,14 +1269,13 @@ class Compiler {
                 if (integer && n->scalar.value.i >= 0) return a0;
                 Val a = num(a0, "round");
                 const TypeId t = integer ? TypeId::Int64 : TypeId::Float64;
-                return col_val(emit(OP_ROUND, a.slot, -1, 0, n->scalar), t);
+                return col_val(emit(OpRound, a.slot, -1, 0, n->scalar), t);
             }
             case ExprKind::Log: {
                 Val a0 = compile(n->a.get());
                 if (is_unknown(a0)) return unknown_val();
                 Val a = num(a0, "log");
-                return col_val(emit(OP_LOG, a.slot, -1, 0, {}),
-                               TypeId::Float64);
+                return col_val(emit(OpLog, a.slot, -1, 0, {}), TypeId::Float64);
             }
             case ExprKind::Pow: {
                 Val a0 = compile(n->a.get());
@@ -1285,7 +1283,7 @@ class Compiler {
                 if (is_unknown(a0) || is_unknown(b0)) return unknown_val();
                 Val a = num(a0, "pow");
                 Val b = num(b0, "pow");
-                return col_val(emit(OP_POW, a.slot, b.slot, 0, {}),
+                return col_val(emit(OpPow, a.slot, b.slot, 0, {}),
                                TypeId::Float64);
             }
             case ExprKind::StrSubstr: {
@@ -1293,7 +1291,7 @@ class Compiler {
                 if (is_unknown(a0)) return unknown_val();
                 Val a = as_str(a0, "substr", false);
                 return col_val(
-                    emit(OP_STR_SUBSTR, a.slot, -1, 0, n->scalar, n->scalar2),
+                    emit(OpStrSubstr, a.slot, -1, 0, n->scalar, n->scalar2),
                     TypeId::String);
             }
             case ExprKind::StrPredCol: {
@@ -1302,7 +1300,7 @@ class Compiler {
                 if (is_unknown(a0) || is_unknown(b0)) return unknown_val();
                 Val a = as_str(a0, "string predicate", true);
                 Val b = as_str(b0, "string predicate", true);
-                return col_val(emit(OP_STR_PRED_COL, a.slot, b.slot, n->i, {}),
+                return col_val(emit(OpStrPredCol, a.slot, b.slot, n->i, {}),
                                TypeId::Bool);
             }
             case ExprKind::StrReplaceCol: {
@@ -1315,7 +1313,7 @@ class Compiler {
                 Val b = as_str(b0, "string replace", false);
                 Val c = as_str(c0, "string replace", false);
                 SlotOp op;
-                op.opcode = OP_STR_REPLACE_COL;
+                op.opcode = OpStrReplaceCol;
                 op.a = a.slot;
                 op.b = b.slot;
                 op.c = c.slot;
@@ -1331,7 +1329,7 @@ class Compiler {
                 Val a = as_str(a0, "substr", false);
                 Val b = num(b0, "substr");
                 SlotOp op;
-                op.opcode = OP_STR_SUBSTR_COL;
+                op.opcode = OpStrSubstrCol;
                 op.a = a.slot;
                 op.b = b.slot;
                 if (n->c) op.c = num(c0, "substr").slot;
@@ -1349,7 +1347,7 @@ class Compiler {
                 const bool unsigned_in =
                     a0.is_scalar ? a0.scalar.kind == DFTU_SCALAR_TAG_U64
                                  : a0.type == TypeId::Uint64;
-                return col_val(emit(OP_ROUND_COL, a.slot, b.slot, 0, {}),
+                return col_val(emit(OpRoundCol, a.slot, b.slot, 0, {}),
                                unsigned_in ? TypeId::Uint64
                                : integer   ? TypeId::Int64
                                            : TypeId::Float64);
@@ -1365,7 +1363,7 @@ class Compiler {
                 Val a0 = compile(n->a.get());
                 if (is_unknown(a0)) return unknown_val();
                 as_list(a0, "list_len");
-                return col_val(emit(OP_LIST_LEN, a0.slot, -1, 0, {}),
+                return col_val(emit(OpListLen, a0.slot, -1, 0, {}),
                                TypeId::Int64);
             }
             case ExprKind::ListGet: {
@@ -1373,7 +1371,7 @@ class Compiler {
                 if (is_unknown(a0)) return unknown_val();
                 const DataType elem = as_list(a0, "list_get");
                 return {false,
-                        emit(OP_LIST_GET, a0.slot, -1, 0, n->scalar),
+                        emit(OpListGet, a0.slot, -1, 0, n->scalar),
                         elem.id,
                         {},
                         elem};
@@ -1385,15 +1383,14 @@ class Compiler {
                 const TypeId t = e == TypeId::Float32 || e == TypeId::Float64
                                      ? TypeId::Float64
                                      : TypeId::Int64;
-                return col_val(emit(OP_LIST_SUM, a0.slot, -1, 0, {}), t);
+                return col_val(emit(OpListSum, a0.slot, -1, 0, {}), t);
             }
             case ExprKind::ListContains: {
                 Val a0 = compile(n->a.get());
                 if (is_unknown(a0)) return unknown_val();
                 as_list(a0, "list_contains");
-                return col_val(
-                    emit(OP_LIST_CONTAINS, a0.slot, -1, 0, n->scalar),
-                    TypeId::Bool);
+                return col_val(emit(OpListContains, a0.slot, -1, 0, n->scalar),
+                               TypeId::Bool);
             }
             case ExprKind::StrFn:
                 return compile_str_fn(n);
@@ -1402,7 +1399,7 @@ class Compiler {
                 if (is_unknown(a0)) return unknown_val();
                 Val a = as_col(a0, "is_null");
                 return {false,
-                        emit(OP_IS_NULL, a.slot, -1, n->i, {}),
+                        emit(OpIsNull, a.slot, -1, n->i, {}),
                         TypeId::Bool,
                         {},
                         scalar(TypeId::Bool)};
@@ -1467,7 +1464,7 @@ class Compiler {
     Val to_type(Val v, TypeId t) {
         if (v.type == t) return v;
         if (v.type == TypeId::Uint64 && t == TypeId::Int64)
-            return col_val(emit(OP_TO_I64, v.slot, -1, 0, {}), t);
+            return col_val(emit(OpToI64, v.slot, -1, 0, {}), t);
         return cast(v, t);
     }
 
@@ -1502,7 +1499,7 @@ class Compiler {
             Val g0 = compile(n->b.get());
             if (is_unknown(g0)) return unknown_val();
             SlotOp op;
-            op.opcode = OP_STR_EXTRACT_COL;
+            op.opcode = OpStrExtractCol;
             op.a = a.slot;
             op.b = num(g0, "string extract").slot;
             op.text = n->text;
@@ -1516,9 +1513,9 @@ class Compiler {
                                         std::to_string(group) +
                                         " is not in the pattern");
         SlotOp op;
-        op.opcode = extract   ? OP_STR_EXTRACT
-                    : replace ? OP_STR_REGEX_REPLACE
-                              : OP_STR_PATTERN;
+        op.opcode = extract   ? OpStrExtract
+                    : replace ? OpStrRegexReplace
+                              : OpStrPattern;
         op.subst = n->subst.get();
         op.a = a.slot;
         op.scalar = n->scalar;
@@ -1542,12 +1539,12 @@ class Compiler {
         const TypeId t = op == ConvertOp::Int     ? TypeId::Int64
                          : op == ConvertOp::Float ? TypeId::Float64
                                                   : TypeId::String;
-        return col_val(emit(OP_CONVERT, a.slot, -1, n->i, {}), t);
+        return col_val(emit(OpConvert, a.slot, -1, n->i, {}), t);
     }
 
     int emit_str_fn(const ExprNode* n, int a, int b) {
         SlotOp op;
-        op.opcode = OP_STR_FN;
+        op.opcode = OpStrFn;
         op.a = a;
         op.b = b;
         op.param = n->i;
@@ -1586,7 +1583,7 @@ class Compiler {
         if (fn == StrFn::Get && !a0.is_scalar && a0.type == TypeId::List) {
             const DataType elem = as_list(a0, "get");
             return {false,
-                    emit(OP_LIST_GET, a0.slot, -1, 0, n->scalar),
+                    emit(OpListGet, a0.slot, -1, 0, n->scalar),
                     elem.id,
                     {},
                     elem};
@@ -1679,7 +1676,7 @@ class Compiler {
 
     Val cast(Val v, TypeId t) {
         return {false,
-                emit(OP_CAST, v.slot, -1, static_cast<std::int32_t>(t), {}),
+                emit(OpCast, v.slot, -1, static_cast<std::int32_t>(t), {}),
                 t,
                 {},
                 scalar(t)};
@@ -1747,7 +1744,7 @@ class Compiler {
     // A column of `t` holding `s` in every row, for a scalar arm of a select.
     Val broadcast(dftu_scalar s, TypeId t) {
         return {false,
-                emit(OP_CONST, -1, -1, static_cast<std::int32_t>(t), s),
+                emit(OpConst, -1, -1, static_cast<std::int32_t>(t), s),
                 t,
                 {},
                 scalar(t)};
@@ -1803,7 +1800,7 @@ class Compiler {
             }
         }
         SlotOp op;
-        op.opcode = OP_SELECT;
+        op.opcode = OpSelect;
         op.a = a.slot;
         op.b = b.slot;
         op.c = c.slot;
@@ -2693,7 +2690,7 @@ Series extract_kernel(const Series& sa, const duql::CompiledPattern& p,
     for (std::int64_t i = 0; i < a->length; ++i) {
         std::string_view m;
         if (valid_at(a, i) &&
-            duql::extract(p, ta.at(i), group, m) == duql::MatchResult::YES)
+            duql::extract(p, ta.at(i), group, m) == duql::MatchResult::Yes)
             c.add(m);
         else
             c.end_row(false);
@@ -2893,7 +2890,7 @@ Series extract_col_kernel(const Series& sa, const Series& sb,
         std::string_view m;
         if (g && !g->neg && g->mag <= max_group &&
             duql::extract(p, ta.at(i), static_cast<std::size_t>(g->mag), m) ==
-                duql::MatchResult::YES)
+                duql::MatchResult::Yes)
             c.add(m);
         else
             c.end_row(false);
@@ -3326,39 +3323,39 @@ std::vector<Series> eval_chunk(const std::vector<SlotOp>& prog,
             return s[static_cast<std::size_t>(op.b)];
         };
         switch (op.opcode) {
-            case OP_LOAD:
+            case OpLoad:
                 s[k] = load_slice(inputs[static_cast<std::size_t>(op.param)],
                                   offset, len);
                 break;
-            case OP_ADD:
+            case OpAdd:
                 s[k] = Series{dftu_series_add(A(), B())};
                 break;
-            case OP_SUB:
+            case OpSub:
                 s[k] = Series{dftu_series_sub(A(), B())};
                 break;
-            case OP_MUL:
+            case OpMul:
                 s[k] = Series{dftu_series_mul(A(), B())};
                 break;
-            case OP_DIV:
+            case OpDiv:
                 s[k] = Series{dftu_series_div(A(), B())};
                 break;
-            case OP_ADDS:
+            case OpAdds:
                 s[k] = Series{dftu_series_add_scalar(A(), op.scalar)};
                 break;
-            case OP_SUBS:
+            case OpSubs:
                 s[k] = Series{dftu_series_sub_scalar(A(), op.scalar)};
                 break;
-            case OP_MULS:
+            case OpMuls:
                 s[k] = Series{dftu_series_mul_scalar(A(), op.scalar)};
                 break;
-            case OP_DIVS:
+            case OpDivs:
                 s[k] = Series{dftu_series_div_scalar(A(), op.scalar)};
                 break;
-            case OP_PRIM:
+            case OpPrim:
                 s[k] = Series{
                     dftu_series_prim(A(), static_cast<dftu_prim_op>(op.param))};
                 break;
-            case OP_UNARY: {
+            case OpUnary: {
                 dftu_series* r = nullptr;
                 switch (static_cast<UnaryOp>(op.param)) {
                     case UnaryOp::Abs:
@@ -3404,28 +3401,28 @@ std::vector<Series> eval_chunk(const std::vector<SlotOp>& prog,
                 s[k] = Series{r};
                 break;
             }
-            case OP_CLIP:
+            case OpClip:
                 s[k] = Series{dftu_series_clip(A(), op.scalar, op.scalar2)};
                 break;
-            case OP_FILLNA:
+            case OpFillna:
                 s[k] = Series{dftu_series_fillna(A(), op.scalar)};
                 break;
-            case OP_CMP:
+            case OpCmp:
                 s[k] = Series{dftu_series_compare(
                     A(), static_cast<dftu_cmp_op>(op.param), op.scalar)};
                 break;
-            case OP_LOGICAL:
+            case OpLogical:
                 s[k] = Series{dftu_series_logical(
                     A(), B(), static_cast<dftu_logical_op>(op.param))};
                 break;
-            case OP_NOT:
+            case OpNot:
                 s[k] = Series{dftu_series_logical_not(A())};
                 break;
-            case OP_CAST:
+            case OpCast:
                 s[k] = Series{
                     dftu_series_cast(A(), static_cast<dftu_dtype>(op.param))};
                 break;
-            case OP_STR_PRED: {
+            case OpStrPred: {
                 const char* p = op.text.data();
                 const auto n = static_cast<std::int32_t>(op.text.size());
                 dftu_series* r = nullptr;
@@ -3452,7 +3449,7 @@ std::vector<Series> eval_chunk(const std::vector<SlotOp>& prog,
                 s[k] = Series{r};
                 break;
             }
-            case OP_STR_MAP: {
+            case OpStrMap: {
                 dftu_series* r = nullptr;
                 switch (static_cast<StrMapOp>(op.param)) {
                     case StrMapOp::Lower:
@@ -3483,16 +3480,16 @@ std::vector<Series> eval_chunk(const std::vector<SlotOp>& prog,
                 s[k] = Series{r};
                 break;
             }
-            case OP_STR_LEN:
+            case OpStrLen:
                 s[k] = Series{op.param ? dftu_series_str_len_chars(A())
                                        : dftu_series_str_len_bytes(A())};
                 break;
-            case OP_STR_FIND:
+            case OpStrFind:
                 s[k] = Series{dftu_series_str_find(
                     A(), op.text.data(),
                     static_cast<std::int32_t>(op.text.size()))};
                 break;
-            case OP_STR_REPLACE: {
+            case OpStrReplace: {
                 const char* f = op.text.data();
                 const auto fn = static_cast<std::int32_t>(op.text.size());
                 const char* t = op.text2.data();
@@ -3502,110 +3499,110 @@ std::vector<Series> eval_chunk(const std::vector<SlotOp>& prog,
                              : dftu_series_str_replace(A(), f, fn, t, tn)};
                 break;
             }
-            case OP_STR_SLICE:
+            case OpStrSlice:
                 s[k] = Series{dftu_series_str_slice(A(), op.scalar.value.i,
                                                     op.scalar2.value.i)};
                 break;
-            case OP_IS_IN:
+            case OpIsIn:
                 s[k] = Series{dftu_series_is_in(A(), op.values)};
                 break;
-            case OP_IS_NULL:
+            case OpIsNull:
                 s[k] = Series{op.param ? dftu_series_null_mask(A())
                                        : dftu_series_valid_mask(A())};
                 break;
-            case OP_CONST:
+            case OpConst:
                 s[k] =
                     const_column(static_cast<TypeId>(op.param), op.scalar, len);
                 break;
-            case OP_SELECT:
+            case OpSelect:
                 s[k] = Series{dftu_series_where(
                     s[static_cast<std::size_t>(op.c)].handle(), A(), B())};
                 break;
-            case OP_CONST_NULL:
+            case OpConstNull:
                 s[k] = Series::nulls(static_cast<TypeId>(op.param), len);
                 break;
-            case OP_TO_I64:
+            case OpToI64:
                 s[k] = to_i64_kernel(SA());
                 break;
-            case OP_ARITH:
+            case OpArith:
                 s[k] = arith_kernel(SA(), SB(), op.param);
                 break;
-            case OP_NEG:
+            case OpNeg:
                 s[k] = neg_kernel(SA());
                 break;
-            case OP_CMP_EXPR:
+            case OpCmpExpr:
                 s[k] = cmp_expr_kernel(SA(), SB(), op.param);
                 break;
-            case OP_EXTREME:
+            case OpExtreme:
                 s[k] = extreme_kernel(SA(), SB(), op.param != 0);
                 break;
-            case OP_CONCAT:
+            case OpConcat:
                 s[k] = Series{dftu_series_str_cat(A(), B())};
                 break;
-            case OP_ROUND:
+            case OpRound:
                 s[k] = round_kernel(SA(), op.scalar.value.i);
                 break;
-            case OP_LOG:
+            case OpLog:
                 s[k] = log_kernel(SA());
                 break;
-            case OP_POW:
+            case OpPow:
                 s[k] = pow_kernel(SA(), SB());
                 break;
-            case OP_STR_SUBSTR:
+            case OpStrSubstr:
                 s[k] =
                     substr_kernel(SA(), op.scalar.value.i, op.scalar2.value.i);
                 break;
-            case OP_STR_PRED_COL:
+            case OpStrPredCol:
                 s[k] = str_pred_col_kernel(SA(), SB(), op.param);
                 break;
-            case OP_STR_REPLACE_COL:
+            case OpStrReplaceCol:
                 s[k] = str_replace_col_kernel(
                     SA(), SB(), s[static_cast<std::size_t>(op.c)]);
                 break;
-            case OP_STR_SUBSTR_COL:
+            case OpStrSubstrCol:
                 s[k] = substr_col_kernel(
                     SA(), SB(),
                     op.c >= 0 ? &s[static_cast<std::size_t>(op.c)] : nullptr);
                 break;
-            case OP_ROUND_COL:
+            case OpRoundCol:
                 s[k] = round_col_kernel(SA(), SB());
                 break;
-            case OP_STR_EXTRACT_COL:
+            case OpStrExtractCol:
                 s[k] = extract_col_kernel(SA(), SB(), *op.pattern);
                 break;
-            case OP_DATE_PART:
+            case OpDatePart:
                 s[k] = date_part_kernel(SA(), op.param, op.scalar.value.i);
                 break;
-            case OP_FORMAT_TIME:
+            case OpFormatTime:
                 s[k] = format_time_kernel(SA(), op.text, op.scalar.value.i);
                 break;
-            case OP_STR_PATTERN:
+            case OpStrPattern:
                 s[k] = str_pattern(SA(), *op.pattern);
                 break;
-            case OP_STR_EXTRACT:
+            case OpStrExtract:
                 s[k] =
                     extract_kernel(SA(), *op.pattern,
                                    static_cast<std::size_t>(op.scalar.value.i));
                 break;
-            case OP_STR_REGEX_REPLACE:
+            case OpStrRegexReplace:
                 s[k] = str_regex_replace(SA(), *op.pattern, *op.subst);
                 break;
-            case OP_CONVERT:
+            case OpConvert:
                 s[k] = convert_kernel(SA(), op.param);
                 break;
-            case OP_LIST_LEN:
+            case OpListLen:
                 s[k] = Series{dftu_series_list_len(A())};
                 break;
-            case OP_LIST_GET:
+            case OpListGet:
                 s[k] = Series{dftu_series_list_get(A(), op.scalar.value.i)};
                 break;
-            case OP_LIST_SUM:
+            case OpListSum:
                 s[k] = list_sum_kernel(SA());
                 break;
-            case OP_LIST_CONTAINS:
+            case OpListContains:
                 s[k] = list_contains_kernel(SA(), op.scalar);
                 break;
-            case OP_STR_FN:
+            case OpStrFn:
                 s[k] = str_fn_eval(op, SA(), op.b >= 0 ? &SB() : nullptr, len);
                 break;
             default:
@@ -3681,7 +3678,7 @@ std::vector<Series> eval_many(const std::vector<Expr>& roots,
     // joined there, in parallel).
     std::vector<bool> used(inputs.size(), false);
     for (const SlotOp& op : c.program)
-        if (op.opcode == OP_LOAD)
+        if (op.opcode == OpLoad)
             used[static_cast<std::size_t>(op.param)] = true;
     std::vector<Series> flat(inputs.size());
     for (std::size_t i = 0; i < inputs.size(); ++i)

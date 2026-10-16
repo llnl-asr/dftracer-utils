@@ -22,11 +22,11 @@ namespace {
 
 std::string render_cell(const ArrowArrayView* v, std::int64_t row, KeyKind k) {
     switch (k) {
-        case KeyKind::SIGNED:
+        case KeyKind::Signed:
             return std::to_string(ArrowArrayViewGetIntUnsafe(v, row));
-        case KeyKind::UNSIGNED:
+        case KeyKind::Unsigned:
             return std::to_string(ArrowArrayViewGetUIntUnsafe(v, row));
-        case KeyKind::FLOAT: {
+        case KeyKind::Float: {
             char buf[32];
             std::snprintf(buf, sizeof(buf), "%.17g",
                           ArrowArrayViewGetDoubleUnsafe(v, row));
@@ -55,7 +55,7 @@ ArrowExportResult attribute(const ArrowSchema* s, const ArrowArray* a,
     ArrowArrayView av;
     if (init_array_view(av, const_cast<ArrowSchema*>(s),
                         const_cast<ArrowArray*>(a)) != NANOARROW_OK) {
-        throw DFTUtilsException(ErrorCode::INTERNAL,
+        throw DFTUtilsException(ErrorCode::Internal,
                                 "attribute: failed to view batch");
     }
     struct Guard {
@@ -65,12 +65,12 @@ ArrowExportResult attribute(const ArrowSchema* s, const ArrowArray* a,
 
     const std::int64_t ncols = av.n_children;
     if (select_col >= static_cast<std::uint32_t>(ncols)) {
-        throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+        throw DFTUtilsException(ErrorCode::InvalidArgument,
                                 "attribute: select column index out of range");
     }
     const ArrowArrayView* sview = av.children[select_col];
     if (sview->storage_type != NANOARROW_TYPE_BOOL) {
-        throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+        throw DFTUtilsException(ErrorCode::InvalidArgument,
                                 "attribute: select column must be boolean");
     }
 
@@ -79,14 +79,14 @@ ArrowExportResult attribute(const ArrowSchema* s, const ArrowArray* a,
     for (std::uint32_t d = 0; d < n_dim; ++d) {
         if (dim_cols[d] >= static_cast<std::uint32_t>(ncols)) {
             throw DFTUtilsException(
-                ErrorCode::INVALID_ARGUMENT,
+                ErrorCode::InvalidArgument,
                 "attribute: dimension column index out of range");
         }
         const ArrowArrayView* v = av.children[dim_cols[d]];
         auto kk = key_kind_from_storage(v->storage_type);
         if (!kk) {
             throw DFTUtilsException(
-                ErrorCode::INVALID_ARGUMENT,
+                ErrorCode::InvalidArgument,
                 "attribute: unsupported dimension column type");
         }
         dviews[d] = v;
@@ -148,13 +148,13 @@ ArrowExportResult attribute(const ArrowSchema* s, const ArrowArray* a,
     if (top_k > 0 && rows.size() > top_k) rows.resize(top_k);
 
     RecordBatchBuilder b;
-    b.declare_schema({{"dimension", ColumnType::STRING},
-                      {"value", ColumnType::STRING},
-                      {"selected_count", ColumnType::INT64},
-                      {"baseline_count", ColumnType::INT64},
-                      {"selected_frac", ColumnType::DOUBLE},
-                      {"baseline_frac", ColumnType::DOUBLE},
-                      {"difference", ColumnType::DOUBLE}});
+    b.declare_schema({{"dimension", ColumnType::String},
+                      {"value", ColumnType::String},
+                      {"selected_count", ColumnType::Int64},
+                      {"baseline_count", ColumnType::Int64},
+                      {"selected_frac", ColumnType::Double},
+                      {"baseline_frac", ColumnType::Double},
+                      {"difference", ColumnType::Double}});
     for (const OutRow& r : rows) {
         double sf =
             denom_sel > 0 ? static_cast<double>(r.sel) / denom_sel : 0.0;

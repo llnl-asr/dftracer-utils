@@ -98,10 +98,10 @@ class TraceIndex {
     TimeMetric time_metric() const { return time_metric_; }
     std::uint64_t native_to_us(std::uint64_t v) const {
         return dftracer::utils::trace::scale_between(time_metric_,
-                                                     TimeMetric::US, v);
+                                                     TimeMetric::Us, v);
     }
     std::uint64_t us_to_native(std::uint64_t v) const {
-        return dftracer::utils::trace::scale_between(TimeMetric::US,
+        return dftracer::utils::trace::scale_between(TimeMetric::Us,
                                                      time_metric_, v);
     }
 
@@ -147,7 +147,7 @@ class TraceIndex {
     std::unordered_map<std::string, std::size_t> path_to_index_;
     std::uint64_t global_min_ts_ = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t global_max_ts_ = 0;
-    TimeMetric time_metric_ = TimeMetric::US;
+    TimeMetric time_metric_ = TimeMetric::Us;
     const dftracer::utils::index::RecordSchema* record_schema_ = nullptr;
     std::size_t max_concurrent_;
     std::size_t checkpoint_size_;

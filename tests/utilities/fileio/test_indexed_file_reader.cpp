@@ -44,8 +44,8 @@ TEST_SUITE("IndexedFileReader") {
             // Verify reader can read lines
             auto stream =
                 reader->stream(StreamConfig()
-                                   .stream_type(StreamType::MULTI_LINES)
-                                   .range_type(RangeType::LINE_RANGE)
+                                   .stream_type(StreamType::MultiLines)
+                                   .range_type(RangeType::LineRange)
                                    .from(1)
                                    .to(10));
             CHECK(stream != nullptr);
@@ -301,8 +301,8 @@ TEST_SUITE("IndexedFileReader") {
             // Create line stream to read specific lines
             auto stream =
                 reader->stream(StreamConfig()
-                                   .stream_type(StreamType::MULTI_LINES)
-                                   .range_type(RangeType::LINE_RANGE)
+                                   .stream_type(StreamType::MultiLines)
+                                   .range_type(RangeType::LineRange)
                                    .from(5)
                                    .to(10));
             CHECK(stream != nullptr);

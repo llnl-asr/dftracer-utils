@@ -251,15 +251,15 @@ constexpr std::size_t PHASES = 5;
 
 const char* phase_name(Phase p) {
     switch (p) {
-        case Phase::WAIT:
+        case Phase::Wait:
             return "wait";
-        case Phase::READ:
+        case Phase::Read:
             return "read";
-        case Phase::SORT:
+        case Phase::Sort:
             return "sort";
-        case Phase::WALK:
+        case Phase::Walk:
             return "walk";
-        case Phase::WRITE:
+        case Phase::Write:
             return "write";
     }
     return "?";
@@ -309,7 +309,7 @@ class Progress {
 
     void retry(std::size_t w) { slots_[w].live.reset(); }
 
-    void writing(std::size_t w) { slots_[w].live.enter(Phase::WRITE); }
+    void writing(std::size_t w) { slots_[w].live.enter(Phase::Write); }
 
     void end(std::size_t w, std::size_t runs) {
         Slot& s = slots_[w];
@@ -355,10 +355,10 @@ class Progress {
             if (!g) continue;
             const Phase ph = s.live.phase.load(std::memory_order_relaxed);
             ++in_phase[static_cast<std::size_t>(ph)];
-            if (ph == Phase::READ)
+            if (ph == Phase::Read)
                 read += static_cast<double>(
                     std::min(s.live.read_bytes.load(), g->compressed_bytes));
-            else if (ph != Phase::WAIT)
+            else if (ph != Phase::Wait)
                 read += static_cast<double>(g->compressed_bytes);
             calls += static_cast<double>(s.live.calls.load());
             sorted += static_cast<double>(s.live.sorted.load());
@@ -421,13 +421,13 @@ class Progress {
             const Phase ph = s.live.phase.load(std::memory_order_relaxed);
             const double c = static_cast<double>(s.live.calls.load());
             std::string count;
-            if (ph == Phase::READ)
+            if (ph == Phase::Read)
                 count = bytes_of(static_cast<double>(s.live.read_bytes.load()),
                                  static_cast<double>(g->compressed_bytes));
-            else if (ph == Phase::SORT)
+            else if (ph == Phase::Sort)
                 count = count_of(static_cast<double>(s.live.sorted.load()), c) +
                         " calls";
-            else if (ph == Phase::WALK)
+            else if (ph == Phase::Walk)
                 count = count_of(static_cast<double>(s.live.walked.load()), c) +
                         " calls";
             const double in_ph =

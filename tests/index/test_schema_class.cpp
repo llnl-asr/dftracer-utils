@@ -39,7 +39,7 @@ struct ClassWeb {
 
 struct ClassTimed {
     static constexpr std::string_view id = "class_timed";
-    ix::Field<std::uint64_t, "ts_ms", ix::TimeRole<ix::TimeUnit::MS>> ts_ms;
+    ix::Field<std::uint64_t, "ts_ms", ix::TimeRole<ix::TimeUnit::Ms>> ts_ms;
     ix::Field<std::string, "worker", ix::EntityRole> worker;
     ix::Field<std::optional<bool>, "ok"> ok;
     ix::Field<std::optional<std::int64_t>, "thread", ix::LaneRole> thread;
@@ -59,7 +59,7 @@ TEST_SUITE("SchemaClass") {
         CHECK(s.always_index ==
               std::vector<std::string>{"request_time", "upstream"});
         REQUIRE(s.field_at("tags") != nullptr);
-        CHECK(s.field_at("tags")->type == ix::FieldType::JSON);
+        CHECK(s.field_at("tags")->type == ix::FieldType::Json);
         CHECK(s.field_at("meta.host")->optional);
         CHECK(&ix::register_schema(
                   "id: class_nginx\n"
@@ -74,7 +74,7 @@ TEST_SUITE("SchemaClass") {
 
     TEST_CASE("a class extends another schema") {
         const auto& s = ix::register_schema<ClassStep>("test_schema_class");
-        CHECK(s.decoder == ix::Decoder::DFTRACER);
+        CHECK(s.decoder == ix::Decoder::Dftracer);
         CHECK(s.require ==
               std::vector<std::string>{"ph", "name", "ts", "args.step"});
     }
@@ -82,14 +82,14 @@ TEST_SUITE("SchemaClass") {
     TEST_CASE("member types map to field types") {
         const auto spec = ix::schema_spec<ClassTimed>();
         REQUIRE(spec.fields.size() == 5);
-        CHECK(spec.fields[0].type == ix::FieldType::INT);
-        CHECK(spec.fields[0].role == ix::Role::TIME);
-        CHECK(spec.fields[0].unit == ix::TimeUnit::MS);
-        CHECK(spec.fields[1].role == ix::Role::ENTITY);
-        CHECK(spec.fields[2].type == ix::FieldType::BOOL);
+        CHECK(spec.fields[0].type == ix::FieldType::Int);
+        CHECK(spec.fields[0].role == ix::Role::Time);
+        CHECK(spec.fields[0].unit == ix::TimeUnit::Ms);
+        CHECK(spec.fields[1].role == ix::Role::Entity);
+        CHECK(spec.fields[2].type == ix::FieldType::Bool);
         CHECK(spec.fields[2].optional);
-        CHECK(spec.fields[3].role == ix::Role::LANE);
-        CHECK(spec.fields[4].role == ix::Role::NAME);
+        CHECK(spec.fields[3].role == ix::Role::Lane);
+        CHECK(spec.fields[4].role == ix::Role::Name);
         CHECK(spec.extends == "generic");
     }
 

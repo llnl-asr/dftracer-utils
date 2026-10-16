@@ -16,9 +16,9 @@ namespace dftracer::utils::cache {
 template <typename Key>
 std::unique_ptr<EvictionPolicy<Key>> make_eviction_policy(EvictionKind kind) {
     switch (kind) {
-        case EvictionKind::CLOCK:
+        case EvictionKind::Clock:
             return std::make_unique<ClockEvictionPolicy<Key>>();
-        case EvictionKind::LRU:
+        case EvictionKind::Lru:
         default:
             return std::make_unique<LruEvictionPolicy<Key>>();
     }

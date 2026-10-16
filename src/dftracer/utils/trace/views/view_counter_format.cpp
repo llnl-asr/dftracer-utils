@@ -70,9 +70,9 @@ std::string counter_line(const std::vector<std::string>& group_cols,
     s += ",\"ts\":";
     s += bucket.empty() ? "0" : bucket;
     s += ",\"ph\":";
-    s += std::to_string(phase_to_int(RecordPhase::COUNTER));
+    s += std::to_string(phase_to_int(RecordPhase::Counter));
     s += ",\"type\":";
-    s += std::to_string(event_type_to_int(EventType::PSUTIL));
+    s += std::to_string(event_type_to_int(EventType::Psutil));
     s += ",\"args\":{";
 
     bool first = true;

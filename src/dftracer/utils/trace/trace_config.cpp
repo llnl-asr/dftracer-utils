@@ -100,12 +100,12 @@ bool decompress_first_member(std::ifstream& in, std::streamoff fsize,
 
 TimeMetric read_time_metric(const std::string& trace_path) {
     std::ifstream in(trace_path, std::ios::binary | std::ios::ate);
-    if (!in) return TimeMetric::US;
+    if (!in) return TimeMetric::Us;
     const std::streamoff fsize = in.tellg();
-    if (fsize < 18) return TimeMetric::US;
+    if (fsize < 18) return TimeMetric::Us;
 
     std::vector<std::uint8_t> uc;
-    if (!decompress_first_member(in, fsize, uc)) return TimeMetric::US;
+    if (!decompress_first_member(in, fsize, uc)) return TimeMetric::Us;
 
     simdjson::dom::parser parser;
     std::size_t pos = 0, lines = 0;
@@ -132,7 +132,7 @@ TimeMetric read_time_metric(const std::string& trace_path) {
         pos = nl + 1;
         ++lines;
     }
-    return TimeMetric::US;
+    return TimeMetric::Us;
 }
 
 std::optional<TraceConfig> parse_end_event(std::string_view line) {

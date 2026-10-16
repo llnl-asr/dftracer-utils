@@ -128,7 +128,7 @@ class Cursor {
             } else {
                 std::snprintf(err, sizeof(err), "Corrupt RocksDB payload");
             }
-            throw IndexerError(IndexerError::Type::DATABASE_ERROR, err);
+            throw IndexerError(IndexerError::Type::DatabaseError, err);
         }
         auto chunk = data_.substr(offset_, len);
         offset_ += len;

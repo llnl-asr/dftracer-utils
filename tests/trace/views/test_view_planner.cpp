@@ -93,9 +93,9 @@ static void populate_test_idx(const std::string& index_path,
                                     file_cat_bloom.num_entries());
 
     dftu_utils_test::index_records::put_path(
-        *writer, dftu_utils_test::IndexExtension::BLOOM, fid, "name");
+        *writer, dftu_utils_test::IndexExtension::Bloom, fid, "name");
     dftu_utils_test::index_records::put_path(
-        *writer, dftu_utils_test::IndexExtension::BLOOM, fid, "cat");
+        *writer, dftu_utils_test::IndexExtension::Bloom, fid, "cat");
     dftu_utils_test::mark_built(*writer, fid);
     writer->commit();
 }
@@ -297,7 +297,7 @@ TEST_SUITE("ViewPlannerUtility") {
             dftu_utils_test::put_chunk_bloom(*writer, fid, 0, "fhash", blob,
                                              fhash_bloom.num_entries());
             dftu_utils_test::index_records::put_path(
-                *writer, dftu_utils_test::IndexExtension::BLOOM, fid, "fhash");
+                *writer, dftu_utils_test::IndexExtension::Bloom, fid, "fhash");
             dftu_utils_test::mark_built(*writer, fid);
             writer->commit();
         }

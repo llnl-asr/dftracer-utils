@@ -22,7 +22,7 @@ class EventAggregator;
 /// writes them as ph:3 AGGREGATED records (the new format's folded-event
 /// phase); COUNTER as ph:2 counter samples; REGULAR expands them back to ph:1
 /// COMPLETE events.
-enum class TraceEventFormat { AGGREGATED, COUNTER, REGULAR };
+enum class TraceEventFormat { Aggregated, Counter, Regular };
 
 struct DftracerTraceWriterInput {
     std::string output_path;
@@ -38,7 +38,7 @@ struct DftracerTraceWriterInput {
     std::vector<double> percentiles;
     bool compress = false;
     int compression_level = 6;
-    TraceEventFormat format = TraceEventFormat::AGGREGATED;
+    TraceEventFormat format = TraceEventFormat::Aggregated;
     /// Workers add their per-shard key count here if non-null.
     std::atomic<std::size_t>* keys_written = nullptr;
     /// Total shard-prefix range (half-open) this invocation is responsible

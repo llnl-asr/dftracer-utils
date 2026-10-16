@@ -229,7 +229,7 @@ void clear_default_runtime_if(Runtime* rt);
 template <typename T>
 TypedTaskHandle<T> Runtime::submit(coro::CoroTask<T> task, std::string name) {
     if (shutdown_called_.load(std::memory_order_acquire)) {
-        throw DFTUtilsException(ErrorCode::PIPELINE, "Runtime is shut down");
+        throw DFTUtilsException(ErrorCode::Pipeline, "Runtime is shut down");
     }
     if (name.empty()) {
         name = "task-" + std::to_string(task_name_counter_++);

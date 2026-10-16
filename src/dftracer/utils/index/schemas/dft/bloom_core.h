@@ -37,39 +37,39 @@ class BloomCore {
     /// Fixed bloom filter slots. Indices match DEFAULT_BLOOM_DIMENSIONS
     /// order: name, cat, pid, tid, hhash, fhash, shash.
     enum FixedBloom : std::uint8_t {
-        BF_NAME = 0,
-        BF_CAT,
-        BF_PID,
-        BF_TID,
-        BF_HHASH,
-        BF_FHASH,
-        BF_SHASH,
-        BF_COUNT
+        BfName = 0,
+        BfCat,
+        BfPid,
+        BfTid,
+        BfHhash,
+        BfFhash,
+        BfShash,
+        BfCount
     };
 
     /// Fixed dimension_stats slots. Superset of bloom dims plus pid_tid,
     /// ts, dur (which are observed for range stats but not hashed).
     enum FixedDim : std::uint8_t {
-        FD_NAME = 0,
-        FD_CAT,
-        FD_PID,
-        FD_TID,
-        FD_PID_TID,
-        FD_HHASH,
-        FD_FHASH,
-        FD_SHASH,
-        FD_TS,
-        FD_DUR,
-        FD_COUNT
+        FdName = 0,
+        FdCat,
+        FdPid,
+        FdTid,
+        FdPidTid,
+        FdHhash,
+        FdFhash,
+        FdShash,
+        FdTs,
+        FdDur,
+        FdCount
     };
 
     /// The paths the fixed dimensions are stored under, by FixedDim.
     static std::span<const std::string_view> fixed_dimension_names();
 
     struct ChunkState {
-        std::array<index::extensions::ScalableBloomFilter, BF_COUNT>
+        std::array<index::extensions::ScalableBloomFilter, BfCount>
             fixed_blooms;
-        std::array<ChunkDimensionStats, FD_COUNT> fixed_dim_stats;
+        std::array<ChunkDimensionStats, FdCount> fixed_dim_stats;
         /// Blooms of the leading extra dimensions, observed value by value.
         std::vector<index::extensions::ScalableBloomFilter> extra_blooms;
         std::vector<ChunkDimensionStats> extra_dim_stats;

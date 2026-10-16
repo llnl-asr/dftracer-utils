@@ -20,10 +20,10 @@ TEST_SUITE("AggregationSerialization") {
         key.fhash = 0xdef456ULL;
         key.time_bucket = 5000000;
 
-        auto data = serialize_agg_key(AggMapType::EVENT, key, intern);
+        auto data = serialize_agg_key(AggMapType::Event, key, intern);
         auto result = deserialize_agg_key(data);
 
-        CHECK(result.map_type == AggMapType::EVENT);
+        CHECK(result.map_type == AggMapType::Event);
         CHECK(result.key.cat(intern) == "POSIX");
         CHECK(result.key.name(intern) == "read");
         CHECK(result.key.pid == key.pid);
@@ -46,7 +46,7 @@ TEST_SUITE("AggregationSerialization") {
             key.fhash = 0xf07c4ebf132e3799ULL;
             const auto before = intern.entry_count();
 
-            auto data = serialize_agg_key(AggMapType::EVENT, key, intern);
+            auto data = serialize_agg_key(AggMapType::Event, key, intern);
             auto result = deserialize_agg_key(data);
             CHECK(result.key.fhash_inline);
             CHECK(result.key.fhash == key.fhash);
@@ -60,7 +60,7 @@ TEST_SUITE("AggregationSerialization") {
 
         SUBCASE("a hash outside that form keeps its text") {
             std::string out;
-            serialize_agg_key_into(out, AggMapType::EVENT, "posix", "read", 1,
+            serialize_agg_key_into(out, AggMapType::Event, "posix", "read", 1,
                                    2, "", "NOT-A-HASH", 0, intern);
             AggKeyView view;
             REQUIRE(parse_agg_key_view(out, intern, view));
@@ -71,7 +71,7 @@ TEST_SUITE("AggregationSerialization") {
 
         SUBCASE("no file hash resolves to empty") {
             std::string out;
-            serialize_agg_key_into(out, AggMapType::EVENT, "posix", "read", 1,
+            serialize_agg_key_into(out, AggMapType::Event, "posix", "read", 1,
                                    2, "", "", 0, intern);
             AggKeyView view;
             REQUIRE(parse_agg_key_view(out, intern, view));
@@ -98,10 +98,10 @@ TEST_SUITE("AggregationSerialization") {
         key.extra_keys->emplace_back(ek_a, ev_a);
         key.extra_keys->emplace_back(ek_b, ev_b);
 
-        auto data = serialize_agg_key(AggMapType::PROFILE, key, intern);
+        auto data = serialize_agg_key(AggMapType::Profile, key, intern);
         auto result = deserialize_agg_key(data);
 
-        CHECK(result.map_type == AggMapType::PROFILE);
+        CHECK(result.map_type == AggMapType::Profile);
         CHECK(result.key.cat(intern) == "MPI");
         REQUIRE(result.key.extra_keys != nullptr);
         REQUIRE(result.key.extra_keys->size() == 2);
@@ -136,7 +136,7 @@ TEST_SUITE("AggregationSerialization") {
         key.time_bucket = 1000000;
 
         for (auto mt :
-             {AggMapType::EVENT, AggMapType::PROFILE, AggMapType::SYSTEM}) {
+             {AggMapType::Event, AggMapType::Profile, AggMapType::System}) {
             auto data = serialize_agg_key(mt, key, intern);
             auto result = deserialize_agg_key(data);
             CHECK(result.map_type == mt);
@@ -155,8 +155,8 @@ TEST_SUITE("AggregationSerialization") {
 
         b = a;
         b.cat_id = intern.get_or_insert("BBB");
-        auto ka = serialize_agg_key(AggMapType::EVENT, a, intern);
-        auto kb = serialize_agg_key(AggMapType::EVENT, b, intern);
+        auto ka = serialize_agg_key(AggMapType::Event, a, intern);
+        auto kb = serialize_agg_key(AggMapType::Event, b, intern);
         CHECK(ka < kb);
     }
 
@@ -173,8 +173,8 @@ TEST_SUITE("AggregationSerialization") {
         b = a;
         b.time_bucket = 2000000;
 
-        auto ka = serialize_agg_key(AggMapType::EVENT, a, intern);
-        auto kb = serialize_agg_key(AggMapType::EVENT, b, intern);
+        auto ka = serialize_agg_key(AggMapType::Event, a, intern);
+        auto kb = serialize_agg_key(AggMapType::Event, b, intern);
         CHECK(ka != kb);
     }
 

@@ -114,16 +114,16 @@ const Path* quant_pattern(const Expr& e) {
 
 bool comparison(const Expr& e) {
     if (const auto* b = std::get_if<Binary>(&e.node)) switch (b->op) {
-            case BinaryOp::EQ:
-            case BinaryOp::NE:
-            case BinaryOp::LT:
-            case BinaryOp::LE:
-            case BinaryOp::GT:
-            case BinaryOp::GE:
-            case BinaryOp::REGEX:
-            case BinaryOp::IREGEX:
-            case BinaryOp::NREGEX:
-            case BinaryOp::NIREGEX:
+            case BinaryOp::Eq:
+            case BinaryOp::Ne:
+            case BinaryOp::Lt:
+            case BinaryOp::Le:
+            case BinaryOp::Gt:
+            case BinaryOp::Ge:
+            case BinaryOp::Regex:
+            case BinaryOp::Iregex:
+            case BinaryOp::Nregex:
+            case BinaryOp::Niregex:
                 return true;
             default:
                 return false;
@@ -281,7 +281,7 @@ class Expander {
         };
         ExprPtr acc = part_for(std::move(ms.front()));
         for (std::size_t i = 1; i < ms.size(); ++i)
-            acc = make(Binary{all ? BinaryOp::AND : BinaryOp::OR,
+            acc = make(Binary{all ? BinaryOp::And : BinaryOp::Or,
                               std::move(acc), part_for(std::move(ms[i]))},
                        span);
         acc->span = span;

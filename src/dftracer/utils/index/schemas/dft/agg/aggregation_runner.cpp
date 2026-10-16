@@ -118,7 +118,7 @@ coro::CoroTask<Result<AggregationRunResult>> run_aggregation(
             input.output_format.c_str(),
             AggregationConfig::supported_formats_str().c_str());
         co_return make_error(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             "run_aggregation: invalid output format '" + input.output_format +
                 "' (supported: " + AggregationConfig::supported_formats_str() +
                 ")");
@@ -183,7 +183,7 @@ coro::CoroTask<Result<AggregationRunResult>> run_aggregation(
         DFTRACER_UTILS_LOG_ERROR("No .pfw or .pfw.gz files found in: %s",
                                  input.log_dir.c_str());
         co_return make_error(
-            ErrorCode::NOT_FOUND,
+            ErrorCode::NotFound,
             "run_aggregation: no .pfw or .pfw.gz files found in " +
                 input.log_dir);
     }
@@ -408,7 +408,7 @@ coro::CoroTask<Result<AggregationRunResult>> run_aggregation(
 
     if (!write_success) {
         co_return make_error(
-            ErrorCode::AGGREGATION,
+            ErrorCode::Aggregation,
             "run_aggregation: failed to write output file " +
                 (input.output_file ? *input.output_file : std::string("")));
     }

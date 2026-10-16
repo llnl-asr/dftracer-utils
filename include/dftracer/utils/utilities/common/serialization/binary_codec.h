@@ -177,7 +177,7 @@ class BinaryReader {
             if ((b & 0x80) == 0) return v;
             shift += 7;
         }
-        throw DFTUtilsException(ErrorCode::PARSE,
+        throw DFTUtilsException(ErrorCode::Parse,
                                 "binary_codec: truncated varint");
     }
 
@@ -190,7 +190,7 @@ class BinaryReader {
    private:
     std::string_view take(std::size_t n) {
         if (off_ + n > data_.size()) {
-            throw DFTUtilsException(ErrorCode::PARSE,
+            throw DFTUtilsException(ErrorCode::Parse,
                                     "binary_codec: truncated data");
         }
         auto s = data_.substr(off_, n);

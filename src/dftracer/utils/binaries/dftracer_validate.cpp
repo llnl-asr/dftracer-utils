@@ -30,7 +30,7 @@ using dftracer::utils::utilities::fileio::lines::sources::
 
 class ValidateArgParse : public cli::ArgParse {
    public:
-    cli::DirectoryArgs directory{cli::DirMode::DEFAULT_EMPTY};
+    cli::DirectoryArgs directory{cli::DirMode::DefaultEmpty};
     cli::FilesArgs files_args{"Trace files to validate (.pfw, .pfw.gz)"};
     cli::PipelineArgs pipeline;
 
@@ -80,7 +80,7 @@ coro::CoroTask<void> validate_file(std::string path, FileValResult* result) {
         // validate would read no lines and still count the file as passing
         // without ever decompressing it.
         if (CheckpointIndexerFactory::detect_format(result->path) !=
-            ArchiveFormat::GZIP) {
+            ArchiveFormat::Gzip) {
             throw std::runtime_error(
                 "not a gzip trace (dftracer traces must be gzip-compressed)");
         }

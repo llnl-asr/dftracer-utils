@@ -134,7 +134,7 @@ Classes
      - the ``"path"`` template argument
    * - ``role``, ``unit``
      - ``field(role=..., unit=...)``
-     - ``TimeRole<TimeUnit::MS>``, ``DurationRole<...>``, ``EntityRole``,
+     - ``TimeRole<TimeUnit::Ms>``, ``DurationRole<...>``, ``EntityRole``,
        ``LaneRole``, ``NameRole``
    * - ``always_index``
      - ``field(always_index=True)``

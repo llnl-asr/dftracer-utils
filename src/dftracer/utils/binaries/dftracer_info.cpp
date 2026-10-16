@@ -36,7 +36,7 @@ using dftracer::utils::index::store::IndexDatabase;
 
 class InfoArgParse : public cli::ArgParse {
    public:
-    cli::DirectoryArgs directory{cli::DirMode::DEFAULT_EMPTY};
+    cli::DirectoryArgs directory{cli::DirMode::DefaultEmpty};
     cli::FilesArgs files_args{"Compressed files to inspect (GZIP, TAR.GZ)"};
     cli::PipelineArgs pipeline;
     cli::IndexingArgs indexing;

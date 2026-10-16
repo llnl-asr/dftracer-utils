@@ -138,10 +138,10 @@ class StreamConfig {
 
    private:
     /** Type of stream (BYTES, LINE, MULTI_LINES, etc.) */
-    StreamType stream_type_ = StreamType::LINE;
+    StreamType stream_type_ = StreamType::Line;
 
     /** How to interpret start/end (BYTE_RANGE or LINE_RANGE) */
-    RangeType range_type_ = RangeType::BYTE_RANGE;
+    RangeType range_type_ = RangeType::ByteRange;
 
     /** Start of range (byte offset or line number based on range_type) */
     std::size_t start_ = 0;

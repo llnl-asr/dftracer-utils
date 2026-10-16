@@ -76,7 +76,7 @@ class ParallelWriter {
 };
 
 struct WriterConfig {
-    FileLayout layout = FileLayout::STRIPED;
+    FileLayout layout = FileLayout::Striped;
     std::size_t stripe_size = 0;  ///< PFS stripe; 0 disables padded layout
     bool gzip = false;
 };

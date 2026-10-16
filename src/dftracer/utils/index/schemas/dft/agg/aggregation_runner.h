@@ -37,7 +37,7 @@ struct AggregationRunInput {
     /// written in `output_format`.
     std::optional<std::string> output_file;
     std::string output_format = AggregationConfig::FORMAT_JSON;
-    TraceEventFormat event_format = TraceEventFormat::AGGREGATED;
+    TraceEventFormat event_format = TraceEventFormat::Aggregated;
     bool compress_output = false;
     int compression_level = 1;
 

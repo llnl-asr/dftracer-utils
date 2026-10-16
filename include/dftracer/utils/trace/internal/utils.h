@@ -92,23 +92,23 @@ inline bool name_in(const std::string_view (&ops)[N], std::string_view name) {
 // WRITE are file-descriptor transfers only (socket ops fall through to OTHER).
 // Int values match dfanalyzer's IOCategory enum.
 enum class IOCategory : std::int8_t {
-    READ = 1,
-    WRITE = 2,
-    METADATA = 3,
-    PCTL = 4,
-    IPC = 5,
-    OTHER = 6,
-    SYNC = 7,
+    Read = 1,
+    Write = 2,
+    Metadata = 3,
+    Pctl = 4,
+    Ipc = 5,
+    Other = 6,
+    Sync = 7,
 };
 
 inline IOCategory io_category(std::string_view name) {
-    if (name_in(posix_ops::FILE_READ, name)) return IOCategory::READ;
-    if (name_in(posix_ops::FILE_WRITE, name)) return IOCategory::WRITE;
-    if (name_in(posix_ops::SYNC, name)) return IOCategory::SYNC;
-    if (name_in(posix_ops::METADATA, name)) return IOCategory::METADATA;
-    if (name_in(posix_ops::PCTL, name)) return IOCategory::PCTL;
-    if (name_in(posix_ops::IPC, name)) return IOCategory::IPC;
-    return IOCategory::OTHER;
+    if (name_in(posix_ops::FILE_READ, name)) return IOCategory::Read;
+    if (name_in(posix_ops::FILE_WRITE, name)) return IOCategory::Write;
+    if (name_in(posix_ops::SYNC, name)) return IOCategory::Sync;
+    if (name_in(posix_ops::METADATA, name)) return IOCategory::Metadata;
+    if (name_in(posix_ops::PCTL, name)) return IOCategory::Pctl;
+    if (name_in(posix_ops::IPC, name)) return IOCategory::Ipc;
+    return IOCategory::Other;
 }
 
 // The byte-size metric for one event, matching the reader's normalize rule so

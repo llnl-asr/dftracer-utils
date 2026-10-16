@@ -56,7 +56,7 @@ Truth truth(const char* query_str, const ValueMap& fields) {
 }
 
 bool eval(const char* query_str, const ValueMap& fields) {
-    return truth(query_str, fields) == Truth::YES;
+    return truth(query_str, fields) == Truth::Yes;
 }
 
 }  // namespace
@@ -202,11 +202,11 @@ TEST_CASE("evaluate - any over flattened positions in a value map") {
 
 TEST_CASE("spec - empty string is a value") {
     CHECK(eval(R"(x == "")", R"({"x":""})"));
-    CHECK(truth(R"(x != "")", R"({"x":""})") == Truth::NO);
+    CHECK(truth(R"(x != "")", R"({"x":""})") == Truth::No);
     ValueMap m;
     m["x"] = std::string();
     CHECK(eval(R"(x == "")", m));
-    CHECK(truth(R"(x != "")", m) == Truth::NO);
+    CHECK(truth(R"(x != "")", m) == Truth::No);
 }
 
 TEST_CASE("spec - negation does not select missing or null fields") {
@@ -218,55 +218,55 @@ TEST_CASE("spec - negation does not select missing or null fields") {
             CAPTURE(records[i]);
             CHECK(eval(q, records[i]) == expected[i]);
         }
-        CHECK(truth(q, "{}") == Truth::UNKNOWN);
-        CHECK(truth(q, R"({"x":null})") == Truth::UNKNOWN);
+        CHECK(truth(q, "{}") == Truth::Unknown);
+        CHECK(truth(q, R"({"x":null})") == Truth::Unknown);
 
         ValueMap one, two, absent;
         one["x"] = std::int64_t{1};
         two["x"] = std::int64_t{2};
         CHECK_FALSE(eval(q, one));
         CHECK(eval(q, two));
-        CHECK(truth(q, absent) == Truth::UNKNOWN);
+        CHECK(truth(q, absent) == Truth::Unknown);
     }
 }
 
 TEST_CASE("spec - unknown under or") {
     CHECK(eval("x == 1 or y == 5", R"({"y":5})"));
-    CHECK(truth("x == 1 or y == 6", R"({"y":5})") == Truth::UNKNOWN);
-    CHECK(truth("x == 1 and y == 6", R"({"y":5})") == Truth::NO);
+    CHECK(truth("x == 1 or y == 6", R"({"y":5})") == Truth::Unknown);
+    CHECK(truth("x == 1 and y == 6", R"({"y":5})") == Truth::No);
     ValueMap m;
     m["y"] = std::int64_t{5};
     CHECK(eval("x == 1 or y == 5", m));
-    CHECK(truth("x == 1 or y == 6", m) == Truth::UNKNOWN);
-    CHECK(truth("x == 1 and y == 6", m) == Truth::NO);
+    CHECK(truth("x == 1 or y == 6", m) == Truth::Unknown);
+    CHECK(truth("x == 1 and y == 6", m) == Truth::No);
 }
 
 TEST_CASE("spec - type mismatch fails a comparison and its negation") {
     const char* rec = R"({"cat":"POSIX"})";
-    CHECK(truth("cat > 100", rec) == Truth::UNKNOWN);
-    CHECK(truth("not (cat > 100)", rec) == Truth::UNKNOWN);
+    CHECK(truth("cat > 100", rec) == Truth::Unknown);
+    CHECK(truth("not (cat > 100)", rec) == Truth::Unknown);
     CHECK_FALSE(eval("cat > 100", rec));
     CHECK_FALSE(eval("not (cat > 100)", rec));
     ValueMap m;
     m["cat"] = std::string("POSIX");
-    CHECK(truth("cat > 100", m) == Truth::UNKNOWN);
-    CHECK(truth("not (cat > 100)", m) == Truth::UNKNOWN);
+    CHECK(truth("cat > 100", m) == Truth::Unknown);
+    CHECK(truth("not (cat > 100)", m) == Truth::Unknown);
 }
 
 TEST_CASE("spec - any() over a missing, non-array or non-matching array") {
-    CHECK(truth(R"(any(tags) == "a")", "{}") == Truth::UNKNOWN);
-    CHECK(truth(R"(any(tags) == "a")", R"({"tags":null})") == Truth::UNKNOWN);
-    CHECK(truth(R"(any(tags) == "a")", R"({"tags":"a"})") == Truth::UNKNOWN);
-    CHECK(truth(R"(any(tags) == "a")", R"({"tags":["b"]})") == Truth::NO);
-    CHECK(truth(R"(any(tags) == "a")", R"({"tags":[]})") == Truth::NO);
+    CHECK(truth(R"(any(tags) == "a")", "{}") == Truth::Unknown);
+    CHECK(truth(R"(any(tags) == "a")", R"({"tags":null})") == Truth::Unknown);
+    CHECK(truth(R"(any(tags) == "a")", R"({"tags":"a"})") == Truth::Unknown);
+    CHECK(truth(R"(any(tags) == "a")", R"({"tags":["b"]})") == Truth::No);
+    CHECK(truth(R"(any(tags) == "a")", R"({"tags":[]})") == Truth::No);
     CHECK_FALSE(eval(R"(not (any(tags) == "a"))", "{}"));
     CHECK(eval(R"(not (any(tags) == "a"))", R"({"tags":["b"]})"));
 
     ValueMap absent, b;
     b["tags.0"] = std::string("b");
-    CHECK(truth(R"(any(tags) == "a")", absent) == Truth::UNKNOWN);
+    CHECK(truth(R"(any(tags) == "a")", absent) == Truth::Unknown);
     CHECK_FALSE(eval(R"(not (any(tags) == "a"))", absent));
-    CHECK(truth(R"(any(tags) == "a")", b) == Truth::NO);
+    CHECK(truth(R"(any(tags) == "a")", b) == Truth::No);
     CHECK(eval(R"(not (any(tags) == "a"))", b));
 }
 
@@ -293,29 +293,29 @@ TEST_CASE("spec - exact numeric comparison across int and double") {
 
 TEST_CASE("spec - args fallback only when the bare name is missing") {
     CHECK(truth("ret == 5", R"({"ret":null,"args":{"ret":5}})") ==
-          Truth::UNKNOWN);
+          Truth::Unknown);
     CHECK(eval("ret == 5", R"({"args":{"ret":5}})"));
     CHECK(eval("args.ret == 5", R"({"ret":null,"args":{"ret":5}})"));
 }
 
 TEST_CASE("spec - in and not in") {
-    CHECK(truth(R"(x in ["a", "b"])", R"({"x":1})") == Truth::UNKNOWN);
-    CHECK(truth(R"(x not in ["a", "b"])", R"({"x":1})") == Truth::UNKNOWN);
-    CHECK(truth("x in [1, 2]", R"({"x":"1"})") == Truth::UNKNOWN);
-    CHECK(truth("x not in [1, 2]", R"({"x":"1"})") == Truth::UNKNOWN);
-    CHECK(truth("x not in [1, 2]", "{}") == Truth::UNKNOWN);
-    CHECK(truth("x not in [1, 2]", R"({"x":null})") == Truth::UNKNOWN);
+    CHECK(truth(R"(x in ["a", "b"])", R"({"x":1})") == Truth::Unknown);
+    CHECK(truth(R"(x not in ["a", "b"])", R"({"x":1})") == Truth::Unknown);
+    CHECK(truth("x in [1, 2]", R"({"x":"1"})") == Truth::Unknown);
+    CHECK(truth("x not in [1, 2]", R"({"x":"1"})") == Truth::Unknown);
+    CHECK(truth("x not in [1, 2]", "{}") == Truth::Unknown);
+    CHECK(truth("x not in [1, 2]", R"({"x":null})") == Truth::Unknown);
     CHECK_FALSE(eval("x not in [1, 2]", "{}"));
     CHECK(eval("x not in [1, 2]", R"({"x":3})"));
-    CHECK(truth("x in [1, 2]", R"({"x":3})") == Truth::NO);
+    CHECK(truth("x in [1, 2]", R"({"x":3})") == Truth::No);
 
     ValueMap i, s, absent;
     i["x"] = std::int64_t{1};
     s["x"] = std::string("1");
-    CHECK(truth(R"(x in ["a", "b"])", i) == Truth::UNKNOWN);
-    CHECK(truth(R"(x not in ["a", "b"])", i) == Truth::UNKNOWN);
-    CHECK(truth("x in [1, 2]", s) == Truth::UNKNOWN);
-    CHECK(truth("x not in [1, 2]", absent) == Truth::UNKNOWN);
+    CHECK(truth(R"(x in ["a", "b"])", i) == Truth::Unknown);
+    CHECK(truth(R"(x not in ["a", "b"])", i) == Truth::Unknown);
+    CHECK(truth("x in [1, 2]", s) == Truth::Unknown);
+    CHECK(truth("x not in [1, 2]", absent) == Truth::Unknown);
     CHECK(eval("x in [1, 2]", i));
 }
 
@@ -360,21 +360,21 @@ TEST_CASE("expressions - numbers") {
     CHECK(eval("x % 3 == 2", R"({"x":-7})"));
     CHECK(eval("x % -3 == -2", R"({"x":7})"));
     CHECK(eval("x + y == 3.5", R"({"x":1,"y":2.5})"));
-    CHECK(truth("x * 2 > 0", R"({"x":9223372036854775807})") == Truth::UNKNOWN);
+    CHECK(truth("x * 2 > 0", R"({"x":9223372036854775807})") == Truth::Unknown);
     CHECK(eval("x - 1 == 9223372036854775807", R"({"x":9223372036854775808})"));
     CHECK(eval("x // 2.0 == 3.0", R"({"x":7.5})"));
 }
 
 TEST_CASE("expressions - division by zero and overflow are unknown") {
-    CHECK(truth("x / z > 0", R"({"x":1,"z":0})") == Truth::UNKNOWN);
-    CHECK(truth("not (x / z > 0)", R"({"x":1,"z":0})") == Truth::UNKNOWN);
-    CHECK(truth("x // z > 0", R"({"x":1,"z":0})") == Truth::UNKNOWN);
-    CHECK(truth("x % z > 0", R"({"x":1,"z":0})") == Truth::UNKNOWN);
-    CHECK(truth("x * 4 > 0", R"({"x":9223372036854775807})") == Truth::UNKNOWN);
+    CHECK(truth("x / z > 0", R"({"x":1,"z":0})") == Truth::Unknown);
+    CHECK(truth("not (x / z > 0)", R"({"x":1,"z":0})") == Truth::Unknown);
+    CHECK(truth("x // z > 0", R"({"x":1,"z":0})") == Truth::Unknown);
+    CHECK(truth("x % z > 0", R"({"x":1,"z":0})") == Truth::Unknown);
+    CHECK(truth("x * 4 > 0", R"({"x":9223372036854775807})") == Truth::Unknown);
     CHECK(truth("x + 1 > 0", R"({"x":18446744073709551615})") ==
-          Truth::UNKNOWN);
-    CHECK(truth("x + 1 > 0", R"({"x":"a"})") == Truth::UNKNOWN);
-    CHECK(truth("x + 1 > 0", R"({})") == Truth::UNKNOWN);
+          Truth::Unknown);
+    CHECK(truth("x + 1 > 0", R"({"x":"a"})") == Truth::Unknown);
+    CHECK(truth("x + 1 > 0", R"({})") == Truth::Unknown);
 }
 
 TEST_CASE("expressions - presence tests") {
@@ -393,7 +393,7 @@ TEST_CASE("expressions - coalesce") {
                                          R"({"a":2,"b":9})"};
     CHECK(kept("(a ?? b) == 2", rs) == std::vector<int>{0, 2});
     CHECK(kept("coalesce(a, b) == 2", rs) == std::vector<int>{0, 2});
-    CHECK(truth("(a ?? b) == 2", R"({})") == Truth::UNKNOWN);
+    CHECK(truth("(a ?? b) == 2", R"({})") == Truth::Unknown);
 }
 
 TEST_CASE("expressions - between") {
@@ -412,11 +412,11 @@ TEST_CASE("expressions - in with expressions") {
 }
 
 TEST_CASE("expressions - functions of the wrong input type are unknown") {
-    CHECK(truth(R"(lower(x) == "5")", R"({"x":5})") == Truth::UNKNOWN);
-    CHECK(truth(R"(not (lower(x) == "5"))", R"({"x":5})") == Truth::UNKNOWN);
-    CHECK(truth("len(x) > 0", R"({"x":5})") == Truth::UNKNOWN);
-    CHECK(truth("abs(x) > 0", R"({"x":"a"})") == Truth::UNKNOWN);
-    CHECK(truth("sum(x) > 0", R"({"x":[1,"a"]})") == Truth::UNKNOWN);
+    CHECK(truth(R"(lower(x) == "5")", R"({"x":5})") == Truth::Unknown);
+    CHECK(truth(R"(not (lower(x) == "5"))", R"({"x":5})") == Truth::Unknown);
+    CHECK(truth("len(x) > 0", R"({"x":5})") == Truth::Unknown);
+    CHECK(truth("abs(x) > 0", R"({"x":"a"})") == Truth::Unknown);
+    CHECK(truth("sum(x) > 0", R"({"x":[1,"a"]})") == Truth::Unknown);
 }
 
 TEST_CASE("expressions - array functions") {
@@ -425,7 +425,7 @@ TEST_CASE("expressions - array functions") {
     CHECK(eval(R"(first(tags) == "a" and last(tags) == "b")", r));
     CHECK(eval("sum(n) == 6.5 and min(n) == 1 and max(n) == 3", r));
     CHECK(eval("len(e) == 0 and sum(e) == 0", r));
-    CHECK(truth("first(e) == 1", r) == Truth::UNKNOWN);
+    CHECK(truth("first(e) == 1", r) == Truth::Unknown);
     CHECK_FALSE(eval(R"(contains(tags, "z"))", r));
     CHECK(eval(R"(len(o) == 2)", R"({"o":{"a":1,"b":2}})"));
 }
@@ -468,7 +468,7 @@ TEST_CASE("expressions - computed array index") {
         INFO(q);
         CHECK(eval(q, r));
     }
-    CHECK(truth("xs[i + 1] == 1", r) == Truth::UNKNOWN);
+    CHECK(truth("xs[i + 1] == 1", r) == Truth::Unknown);
 }
 
 TEST_CASE("expressions - array index parameters fold to a literal step") {
@@ -595,7 +595,7 @@ TEST_CASE("expressions - string functions") {
     CHECK(eval(R"(contains(p, "b.t"))", r));
     CHECK(eval(R"(replace(p, "/", ":") == ":a:b.txt")", r));
     CHECK(eval(R"(concat(p, "#", 3) == "/a/b.txt#3")", r));
-    CHECK(truth(R"(concat(p, missing_field) == "x")", r) == Truth::UNKNOWN);
+    CHECK(truth(R"(concat(p, missing_field) == "x")", r) == Truth::Unknown);
 }
 
 TEST_CASE("expressions - number functions") {
@@ -605,7 +605,7 @@ TEST_CASE("expressions - number functions") {
     CHECK(eval("round(x) == -3 and round(2.345, 2) == 2.35", r));
     CHECK(eval("min(x, i) == -3 and max(x, i, 0) == 0", r));
     CHECK(eval("pow(2, 10) == 1024 and exp(0) == 1 and log(1) == 0", r));
-    CHECK(truth("log(i) > 0", r) == Truth::UNKNOWN);
+    CHECK(truth("log(i) > 0", r) == Truth::Unknown);
 }
 
 TEST_CASE("expressions - type conversions") {
@@ -618,7 +618,7 @@ TEST_CASE("expressions - type conversions") {
     CHECK(eval(R"(json(s) == '"42"' and json(z) == "null")", r));
     CHECK(eval(R"(type(o) == "object" and type(z) == "null")", r));
     CHECK(eval(R"(type(nope) == "missing" and type(d) == "number")", r));
-    CHECK(truth(R"(int(o) == 1)", r) == Truth::UNKNOWN);
+    CHECK(truth(R"(int(o) == 1)", r) == Truth::Unknown);
 }
 
 TEST_CASE("expressions - if and case") {
@@ -629,10 +629,10 @@ TEST_CASE("expressions - if and case") {
 }
 
 TEST_CASE("expressions - object against a string is unknown") {
-    CHECK(truth(R"(o == '{"a":1}')", R"({"o":{"a":1}})") == Truth::UNKNOWN);
+    CHECK(truth(R"(o == '{"a":1}')", R"({"o":{"a":1}})") == Truth::Unknown);
     CHECK(truth(R"(not (o == '{"a":1}'))", R"({"o":{"a":1}})") ==
-          Truth::UNKNOWN);
-    CHECK(truth(R"(o in ['{"a":1}'])", R"({"o":{"a":1}})") == Truth::UNKNOWN);
+          Truth::Unknown);
+    CHECK(truth(R"(o in ['{"a":1}'])", R"({"o":{"a":1}})") == Truth::Unknown);
 }
 
 TEST_CASE("expressions - compile errors") {
@@ -660,8 +660,8 @@ TEST_CASE("expressions - field maps agree with JSON records") {
     CHECK(eval("len(tags) == 2", m));
     CHECK(eval(R"(tags[-1] == "y")", m));
     CHECK(eval(R"(json(o) == '{"k":1}')", m));
-    CHECK(truth("n == 1", m) == Truth::UNKNOWN);
-    CHECK(truth(R"(tags == "x")", m) == Truth::UNKNOWN);
+    CHECK(truth("n == 1", m) == Truth::Unknown);
+    CHECK(truth(R"(tags == "x")", m) == Truth::Unknown);
 }
 
 TEST_CASE("quantifiers - any and all truth tables") {
@@ -670,31 +670,31 @@ TEST_CASE("quantifiers - any and all truth tables") {
         R"("f":[false,null],"s":"x","n":null,"o":{"a":true},"cat":"io",)"
         R"("h":[{"up":false,"k":1},{"up":true,"k":2}],"g":[[1,2],[3]]})";
     const std::vector<std::pair<const char*, Truth>> cases = {
-        {"any(e, .)", Truth::NO},
-        {"all(e, .)", Truth::YES},
-        {"any(t, .)", Truth::YES},
-        {"all(t, .)", Truth::YES},
-        {"any(m, .)", Truth::YES},
-        {"all(m, .)", Truth::NO},
-        {"any(u, .)", Truth::YES},
-        {"all(u, .)", Truth::UNKNOWN},
-        {"any(f, .)", Truth::UNKNOWN},
-        {"all(f, .)", Truth::NO},
-        {"any(s, .)", Truth::UNKNOWN},
-        {"all(n, .)", Truth::UNKNOWN},
-        {"any(nope, .)", Truth::UNKNOWN},
-        {"all(o, .)", Truth::UNKNOWN},
-        {"not all(e, .)", Truth::NO},
-        {"not any(f, .)", Truth::UNKNOWN},
-        {R"(any(h, .up and ^.cat == "io"))", Truth::YES},
-        {R"(all(h, .k > 0 and ^.cat == "io"))", Truth::YES},
-        {"all(h, .k > 1)", Truth::NO},
-        {"any(h, .nope == 1)", Truth::UNKNOWN},
-        {"any(g, .[0] == 3)", Truth::YES},
-        {"all(g, len(.) > 0)", Truth::YES},
-        {"any(h, .k == 2) and all(t, .)", Truth::YES},
-        {"all(t) == true", Truth::YES},
-        {"any(h) == 1", Truth::NO},
+        {"any(e, .)", Truth::No},
+        {"all(e, .)", Truth::Yes},
+        {"any(t, .)", Truth::Yes},
+        {"all(t, .)", Truth::Yes},
+        {"any(m, .)", Truth::Yes},
+        {"all(m, .)", Truth::No},
+        {"any(u, .)", Truth::Yes},
+        {"all(u, .)", Truth::Unknown},
+        {"any(f, .)", Truth::Unknown},
+        {"all(f, .)", Truth::No},
+        {"any(s, .)", Truth::Unknown},
+        {"all(n, .)", Truth::Unknown},
+        {"any(nope, .)", Truth::Unknown},
+        {"all(o, .)", Truth::Unknown},
+        {"not all(e, .)", Truth::No},
+        {"not any(f, .)", Truth::Unknown},
+        {R"(any(h, .up and ^.cat == "io"))", Truth::Yes},
+        {R"(all(h, .k > 0 and ^.cat == "io"))", Truth::Yes},
+        {"all(h, .k > 1)", Truth::No},
+        {"any(h, .nope == 1)", Truth::Unknown},
+        {"any(g, .[0] == 3)", Truth::Yes},
+        {"all(g, len(.) > 0)", Truth::Yes},
+        {"any(h, .k == 2) and all(t, .)", Truth::Yes},
+        {"all(t) == true", Truth::Yes},
+        {"any(h) == 1", Truth::No},
     };
     for (const auto& [q, want] : cases) {
         CAPTURE(std::string(q));
@@ -706,10 +706,10 @@ TEST_CASE("quantifiers - a flattened record reads the array cell") {
     ValueMap m;
     m["h"] = Cell::json("[1,5]", true);
     m["cat"] = Cell(std::string("io"));
-    CHECK(truth("any(h, . > 3)", m) == Truth::YES);
-    CHECK(truth("all(h, . > 3)", m) == Truth::NO);
-    CHECK(truth(R"(any(h, . == 1 and ^.cat == "io"))", m) == Truth::YES);
-    CHECK(truth("any(x, . > 3)", m) == Truth::UNKNOWN);
+    CHECK(truth("any(h, . > 3)", m) == Truth::Yes);
+    CHECK(truth("all(h, . > 3)", m) == Truth::No);
+    CHECK(truth(R"(any(h, . == 1 and ^.cat == "io"))", m) == Truth::Yes);
+    CHECK(truth("any(x, . > 3)", m) == Truth::Unknown);
 }
 
 TEST_CASE("evaluate - regex_replace") {
@@ -724,11 +724,11 @@ TEST_CASE("evaluate - regex_replace") {
     CHECK(eval(R"(regex_replace(s, "z", "y") == "abc")", R"({"s":"abc"})"));
     CHECK(eval(R"(regex_replace(s, "a", "$$") == "$bc")", R"({"s":"abc"})"));
     CHECK(truth(R"(regex_replace(s, "a", "b") == "b")", R"({"s":null})") ==
-          Truth::UNKNOWN);
+          Truth::Unknown);
     CHECK(truth(R"(regex_replace(s, "a", "b") == "b")", R"({"s":5})") ==
-          Truth::UNKNOWN);
+          Truth::Unknown);
     CHECK(truth(R"(regex_replace(s, "a", "b") == "b")", R"({})") ==
-          Truth::UNKNOWN);
+          Truth::Unknown);
 }
 
 namespace {

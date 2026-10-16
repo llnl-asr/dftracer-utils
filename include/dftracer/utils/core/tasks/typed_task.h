@@ -87,7 +87,7 @@ class TypedTask : public Task {
         static_assert(std::is_same_v<I_, I> && std::is_same_v<O_, O>,
                       "Template parameters must match class parameters");
         // Default implementation - should be overridden
-        throw DFTUtilsException(ErrorCode::INTERNAL,
+        throw DFTUtilsException(ErrorCode::Internal,
                                 "TypedTask::apply() must be overridden");
     }
 
@@ -98,7 +98,7 @@ class TypedTask : public Task {
         static_assert(std::is_same_v<I_, I> && std::is_same_v<O_, O>,
                       "Template parameters must match class parameters");
         DFTRACER_UTILS_LOG_ERROR("%s", "TypedTask::apply() not overridden");
-        throw DFTUtilsException(ErrorCode::INTERNAL,
+        throw DFTUtilsException(ErrorCode::Internal,
                                 "TypedTask::apply() must be overridden");
     }
 
@@ -109,7 +109,7 @@ class TypedTask : public Task {
         static_assert(std::is_same_v<I_, I> && std::is_same_v<O_, O>,
                       "Template parameters must match class parameters");
         DFTRACER_UTILS_LOG_ERROR("%s", "TypedTask::apply() not overridden");
-        throw DFTUtilsException(ErrorCode::INTERNAL,
+        throw DFTUtilsException(ErrorCode::Internal,
                                 "TypedTask::apply() must be overridden");
     }
 
@@ -120,7 +120,7 @@ class TypedTask : public Task {
         static_assert(std::is_same_v<I_, I> && std::is_same_v<O_, O>,
                       "Template parameters must match class parameters");
         DFTRACER_UTILS_LOG_ERROR("%s", "TypedTask::apply() not overridden");
-        throw DFTUtilsException(ErrorCode::INTERNAL,
+        throw DFTUtilsException(ErrorCode::Internal,
                                 "TypedTask::apply() must be overridden");
     }
 

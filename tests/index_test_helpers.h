@@ -33,9 +33,9 @@ inline int register_test_file(
 /// readers use the data a test wrote.
 inline void mark_built(dftracer::utils::index::store::IndexWrite& w,
                        int file_id) {
-    for (auto ext : {IndexExtension::MEMBERS, IndexExtension::ZONEMAP,
-                     IndexExtension::BLOOM, IndexExtension::COUNTS,
-                     IndexExtension::POSTINGS, IndexExtension::STATS})
+    for (auto ext : {IndexExtension::Members, IndexExtension::Zonemap,
+                     IndexExtension::Bloom, IndexExtension::Counts,
+                     IndexExtension::Postings, IndexExtension::Stats})
         index_records::put_manifest(w, file_id, ext, 0);
 }
 
@@ -62,14 +62,14 @@ inline void put_dimension_stats(
     zone.max = ds.max_value;
     zone.observed = observed;
     zone.present = present;
-    index_records::put_path_granule(w, IndexExtension::ZONEMAP, file_id,
+    index_records::put_path_granule(w, IndexExtension::Zonemap, file_id,
                                     ds.dimension, chunk,
                                     kinds::encode_zone(zone));
     if (compressed)
         index_records::put_path_granule(
-            w, IndexExtension::COUNTS, file_id, ds.dimension, chunk,
+            w, IndexExtension::Counts, file_id, ds.dimension, chunk,
             kinds::encode_counts({observed, *compressed}));
-    index_records::put_path(w, IndexExtension::ZONEMAP, file_id, ds.dimension);
+    index_records::put_path(w, IndexExtension::Zonemap, file_id, ds.dimension);
 }
 
 inline void put_chunk_bloom(dftracer::utils::index::store::IndexWrite& w,
@@ -78,7 +78,7 @@ inline void put_chunk_bloom(dftracer::utils::index::store::IndexWrite& w,
                             std::span<const unsigned char> bloom,
                             std::uint64_t num_entries) {
     index_records::put_path_granule(
-        w, IndexExtension::BLOOM, file_id, path, chunk,
+        w, IndexExtension::Bloom, file_id, path, chunk,
         dftracer::utils::index::extensions::kinds::encode_bloom(bloom,
                                                                 num_entries));
 }
@@ -88,7 +88,7 @@ inline void put_file_bloom(dftracer::utils::index::store::IndexWrite& w,
                            std::span<const unsigned char> bloom,
                            std::uint64_t num_entries) {
     index_records::put_path_file(
-        w, IndexExtension::BLOOM, file_id, path,
+        w, IndexExtension::Bloom, file_id, path,
         dftracer::utils::index::extensions::kinds::encode_bloom(bloom,
                                                                 num_entries));
 }
@@ -97,13 +97,13 @@ inline void put_file_bloom(dftracer::utils::index::store::IndexWrite& w,
 inline std::size_t bloom_chunks(
     const dftracer::utils::index::store::IndexDatabase& db, int file_id,
     std::string_view path) {
-    return db.path_granules(file_id, IndexExtension::BLOOM, path).size();
+    return db.path_granules(file_id, IndexExtension::Bloom, path).size();
 }
 
 inline bool has_file_bloom(
     const dftracer::utils::index::store::IndexDatabase& db, int file_id,
     std::string_view path) {
-    return db.path_file_value(file_id, IndexExtension::BLOOM, path).has_value();
+    return db.path_file_value(file_id, IndexExtension::Bloom, path).has_value();
 }
 
 }  // namespace dftu_utils_test

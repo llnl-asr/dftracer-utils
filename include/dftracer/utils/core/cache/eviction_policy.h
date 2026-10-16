@@ -30,7 +30,7 @@ class EvictionPolicy {
     virtual std::size_t size() const = 0;
 };
 
-enum class EvictionKind { LRU, CLOCK };
+enum class EvictionKind { Lru, Clock };
 
 /// Create a policy of the given kind.
 template <typename Key>

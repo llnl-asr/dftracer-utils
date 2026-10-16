@@ -176,10 +176,10 @@ class GzipLineWriter {
         coro::CoroTask<Result<void>> append_view(line_format::detail::View f,
                                                  const A&... args) {
             if (f.holes != sizeof...(A))
-                co_return make_error(ErrorCode::INVALID_ARGUMENT,
+                co_return make_error(ErrorCode::InvalidArgument,
                                      "line format argument count mismatch");
             if (line_format::any_null(args...))
-                co_return make_error(ErrorCode::INVALID_ARGUMENT,
+                co_return make_error(ErrorCode::InvalidArgument,
                                      "null string argument");
             co_return co_await append_with(
                 line_format::max_line_bytes<E>(f, args...),
@@ -265,10 +265,10 @@ class GzipLineWriter {
     coro::CoroTask<Result<void>> append_view(line_format::detail::View f,
                                              const A&... args) {
         if (f.holes != sizeof...(A))
-            co_return make_error(ErrorCode::INVALID_ARGUMENT,
+            co_return make_error(ErrorCode::InvalidArgument,
                                  "line format argument count mismatch");
         if (line_format::any_null(args...))
-            co_return make_error(ErrorCode::INVALID_ARGUMENT,
+            co_return make_error(ErrorCode::InvalidArgument,
                                  "null string argument");
         co_return co_await append_with(
             line_format::max_line_bytes<E>(f, args...),

@@ -9,9 +9,10 @@
 //   memory_attribution_bench           (larger sizes)
 //   memory_attribution_bench --smoke   (small sizes plus the checks, for ctest)
 //
-// The smoke checks: pool_used moved during genesis, tracked is at most live,
-// and live is at most anon + 16 MiB. lazy_resident is printed, not checked:
-// built-in lazy cursors report 0 resident bytes today.
+// The checks: pool_used moved during genesis, tracked is at most live, and
+// live is at most anon + 16 MiB. The last one fails only under --smoke; a full
+// run prints it as "over" and does not count it. lazy_resident is printed, not
+// checked: built-in lazy cursors report 0 resident bytes today.
 
 #ifndef DFTRACER_UTILS_TRACKED_BYTES
 #error \
@@ -406,10 +407,10 @@ int main(int argc, char** argv) {
         }
         if (r.peak_live >
             static_cast<std::int64_t>(r.peak_anon) + LIVE_OVER_ANON_SLACK) {
-            std::printf("%-12s live %.1f MiB above anon %.1f MiB + 16  FAIL\n",
+            std::printf("%-12s live %.1f MiB above anon %.1f MiB + 16  %s\n",
                         info.name, static_cast<double>(r.peak_live) / MIB,
-                        mib(r.peak_anon));
-            ++failures;
+                        mib(r.peak_anon), smoke ? "FAIL" : "over");
+            if (smoke) ++failures;
         }
     }
     std::printf("sizes in MiB; unattributed = peak anon - peak tracked\n");

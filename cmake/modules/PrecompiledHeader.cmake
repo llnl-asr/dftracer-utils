@@ -1,293 +1,190 @@
 # ##############################################################################
 # PrecompiledHeader.cmake
 #
-# This module provides functions to automatically detect and configure
-# precompiled headers for CMake targets.
+# use_precompiled_header(<target>) builds a precompiled header for one target
+# from the includes of that target's own sources:
 #
-# Functions: - detect_common_headers: Analyzes source files to find commonly
-# used headers - use_precompiled_header: Applies precompiled headers to a target
+# * a standard library header (no "/" and no ".h") is kept when at least
+#   MIN_COUNT sources include it
+# * a third-party header is kept under the same count only when the target
+#   links the library that provides it (DFTU_PCH_THIRD_PARTY below)
+# * a header of this project is never kept
 #
-# Usage: include(PrecompiledHeader) use_precompiled_header(my_target)
+# MIN_COUNT overrides DFTRACER_UTILS_PCH_MIN_COUNT for one target. The default
+# of 2 keeps nothing for a target with a handful of sources.
+# DFTRACER_UTILS_ENABLE_PCH=OFF turns it off. Call it after the target has
+# its link libraries, because the header list reads them.
 # ##############################################################################
 
 include_guard(GLOBAL)
 
-# ##############################################################################
-# detect_common_headers
-#
-# Analyzes source files in a directory to find the most commonly included
-# standard library and system headers.
-#
-# Parameters: SOURCE_DIR - Directory to scan for source files OUTPUT_VAR -
-# Variable name to store the list of detected headers MIN_COUNT  - Minimum
-# number of occurrences to include a header (default: 3)
-#
-# Example: detect_common_headers( SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src
-# OUTPUT_VAR COMMON_HEADERS MIN_COUNT 5 )
-# ##############################################################################
-function(detect_common_headers)
-  set(options "")
-  set(oneValueArgs SOURCE_DIR OUTPUT_VAR MIN_COUNT)
-  set(multiValueArgs "")
-  cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}"
-                        ${ARGN})
+# Header regex and the regex of the link library that provides it. Highway has
+# no row: foreach_target.h must precede highway.h, so a precompiled highway.h
+# breaks every multi-target kernel.
+set(DFTU_PCH_THIRD_PARTY
+    "^simdjson\\.h$|simdjson"
+    "^concurrentqueue|concurrentqueue"
+    "^ankerl/|unordered_dense"
+    "^tl/expected|tl_expected|tl::expected")
 
-  if(NOT ARG_SOURCE_DIR)
-    message(FATAL_ERROR "SOURCE_DIR is required for detect_common_headers")
-  endif()
-
-  if(NOT ARG_OUTPUT_VAR)
-    message(FATAL_ERROR "OUTPUT_VAR is required for detect_common_headers")
-  endif()
-
-  if(NOT ARG_MIN_COUNT)
-    set(ARG_MIN_COUNT 3)
-  endif()
-
-  # Find all C++ source and header files
-  file(
-    GLOB_RECURSE
-    ALL_SOURCES
-    "${ARG_SOURCE_DIR}/*.cpp"
-    "${ARG_SOURCE_DIR}/*.cc"
-    "${ARG_SOURCE_DIR}/*.cxx"
-    "${ARG_SOURCE_DIR}/*.h"
-    "${ARG_SOURCE_DIR}/*.hpp")
-
-  if(NOT ALL_SOURCES)
-    message(
-      WARNING "No source files found in ${ARG_SOURCE_DIR} for PCH detection")
-    set(${ARG_OUTPUT_VAR}
-        ""
-        PARENT_SCOPE)
-    return()
-  endif()
-
-  # Filter out files from directories that may have optional dependencies (e.g.,
-  # Python bindings that are only built conditionally)
-  set(FILTERED_SOURCES "")
-  foreach(SOURCE_FILE ${ALL_SOURCES})
-    # Exclude Python binding files (only built when DFTRACER_UTILS_BUILD_PYTHON
-    # is ON)
-    if(SOURCE_FILE MATCHES "/python/")
+# Collects the names of every library that TARGET links, directly or through
+# the link interface of a library it links.
+function(dftu_pch_link_closure TARGET OUTPUT_VAR)
+  set(QUEUE ${TARGET})
+  set(RESULT "")
+  while(QUEUE)
+    list(POP_FRONT QUEUE CURRENT)
+    if(DFTU_PCH_SEEN_${CURRENT})
       continue()
     endif()
-    # Exclude MPI-guarded sources when MPI is off. They still live on disk and
-    # include <mpi.h>, which would otherwise land in the PCH (MIN_COUNT=2 is
-    # easy to hit) and break every non-MPI target because no MPI include path is
-    # attached.
-    if(NOT DFTRACER_UTILS_ENABLE_MPI)
-      if(SOURCE_FILE MATCHES "/mpi/" OR SOURCE_FILE MATCHES
-                                        "_mpi\\.(cpp|cc|cxx|h|hpp)$")
-        continue()
+    set(DFTU_PCH_SEEN_${CURRENT} TRUE)
+    list(APPEND RESULT "${CURRENT}")
+    if(NOT TARGET ${CURRENT})
+      continue()
+    endif()
+    get_target_property(ALIASED ${CURRENT} ALIASED_TARGET)
+    if(ALIASED)
+      list(APPEND QUEUE "${ALIASED}")
+      continue()
+    endif()
+    get_target_property(TARGET_TYPE ${CURRENT} TYPE)
+    set(LINKED "")
+    if(NOT TARGET_TYPE STREQUAL "INTERFACE_LIBRARY")
+      get_target_property(DIRECT ${CURRENT} LINK_LIBRARIES)
+      if(DIRECT)
+        list(APPEND LINKED ${DIRECT})
       endif()
     endif()
-    list(APPEND FILTERED_SOURCES "${SOURCE_FILE}")
-  endforeach()
-
-  set(ALL_SOURCES "${FILTERED_SOURCES}")
-
-  # Use a map (list of key-value pairs) to count header occurrences
-  set(HEADER_COUNTS "")
-
-  # Read each file and extract #include <...> directives
-  foreach(SOURCE_FILE ${ALL_SOURCES})
-    file(STRINGS "${SOURCE_FILE}" FILE_CONTENTS)
-
-    foreach(LINE ${FILE_CONTENTS})
-      # Match #include <header> (system/standard library headers)
-      if(LINE MATCHES "^[ \t]*#[ \t]*include[ \t]*<([^>]+)>")
-        set(HEADER "${CMAKE_MATCH_1}")
-
-        # Filter out project-specific headers (containing /) and specific
-        # third-party headers that might not be available everywhere
-        if(NOT HEADER MATCHES "/"
-           AND NOT HEADER MATCHES "^Python\\.h$"
-           AND NOT HEADER MATCHES "^mpi\\.h$"
-           AND NOT HEADER MATCHES "^hs\\.h$"
-           AND NOT HEADER MATCHES "^zstd\\.h$"
-           AND NOT HEADER MATCHES "^argparse/")
-          # Increment count for this header
-          set(FOUND FALSE)
-          set(NEW_COUNTS "")
-
-          foreach(ENTRY ${HEADER_COUNTS})
-            string(REGEX MATCH "^([^:]+):([0-9]+)$" MATCH_RESULT "${ENTRY}")
-            if(MATCH_RESULT)
-              set(ENTRY_HEADER "${CMAKE_MATCH_1}")
-              set(ENTRY_COUNT "${CMAKE_MATCH_2}")
-
-              if(ENTRY_HEADER STREQUAL HEADER)
-                math(EXPR ENTRY_COUNT "${ENTRY_COUNT} + 1")
-                list(APPEND NEW_COUNTS "${ENTRY_HEADER}:${ENTRY_COUNT}")
-                set(FOUND TRUE)
-              else()
-                list(APPEND NEW_COUNTS "${ENTRY}")
-              endif()
-            endif()
-          endforeach()
-
-          if(NOT FOUND)
-            list(APPEND NEW_COUNTS "${HEADER}:1")
-          endif()
-
-          set(HEADER_COUNTS "${NEW_COUNTS}")
-        endif()
+    get_target_property(INTERFACE_LINKED ${CURRENT} INTERFACE_LINK_LIBRARIES)
+    if(INTERFACE_LINKED)
+      list(APPEND LINKED ${INTERFACE_LINKED})
+    endif()
+    foreach(LIB ${LINKED})
+      string(REGEX REPLACE "\\$<(BUILD_INTERFACE|LINK_ONLY):([^>]*)>" "\\2" LIB
+                           "${LIB}")
+      if(LIB AND NOT LIB MATCHES "\\$<")
+        list(APPEND QUEUE "${LIB}")
       endif()
     endforeach()
-  endforeach()
-
-  # Filter headers by minimum count and sort by frequency
-  set(FILTERED_HEADERS "")
-  set(SORTED_ENTRIES "")
-
-  foreach(ENTRY ${HEADER_COUNTS})
-    string(REGEX MATCH "^([^:]+):([0-9]+)$" MATCH_RESULT "${ENTRY}")
-    if(MATCH_RESULT)
-      set(HEADER "${CMAKE_MATCH_1}")
-      set(COUNT "${CMAKE_MATCH_2}")
-
-      if(COUNT GREATER_EQUAL ARG_MIN_COUNT)
-        # Pad count for sorting (assumes count < 10000)
-        string(LENGTH "${COUNT}" COUNT_LEN)
-        math(EXPR PAD_LEN "5 - ${COUNT_LEN}")
-        set(PADDED_COUNT "${COUNT}")
-        foreach(I RANGE 1 ${PAD_LEN})
-          set(PADDED_COUNT "0${PADDED_COUNT}")
-        endforeach()
-
-        list(APPEND SORTED_ENTRIES "${PADDED_COUNT}:${HEADER}")
-      endif()
-    endif()
-  endforeach()
-
-  # Sort by count (descending)
-  list(SORT SORTED_ENTRIES ORDER DESCENDING)
-
-  # Extract headers from sorted list
-  foreach(ENTRY ${SORTED_ENTRIES})
-    string(REGEX MATCH "^[0-9]+:(.+)$" MATCH_RESULT "${ENTRY}")
-    if(MATCH_RESULT)
-      list(APPEND FILTERED_HEADERS "<${CMAKE_MATCH_1}>")
-    endif()
-  endforeach()
-
-  # Return the list
-  set(${ARG_OUTPUT_VAR}
-      "${FILTERED_HEADERS}"
+  endwhile()
+  set(${OUTPUT_VAR}
+      "${RESULT}"
       PARENT_SCOPE)
-
-  # Optional: Print detected headers for debugging
-  if(FILTERED_HEADERS)
-    list(LENGTH FILTERED_HEADERS HEADER_COUNT)
-    dftracer_utils_ok(
-      "Detected ${HEADER_COUNT} common headers for PCH (min count: ${ARG_MIN_COUNT})"
-    )
-  else()
-    message(
-      WARNING
-        "No common headers detected for PCH with min count ${ARG_MIN_COUNT}")
-  endif()
 endfunction()
 
-# ##############################################################################
-# use_precompiled_header
-#
-# Applies precompiled headers to a target using a global cache of detected
-# headers. This function automatically handles PCH reuse across targets: - First
-# call: detects common headers and creates PCH for the first target - Subsequent
-# calls: reuse PCH from compatible targets (same variant)
-#
-# The function maintains separate PCH for shared and static library variants
-# because they have different compile definitions.
-#
-# Parameters: TARGET          - The CMake target to apply PCH to
-#
-# Global variables used (set by detect_common_headers or earlier calls):
-# DFTRACER_UTILS_ENABLE_PCH     - Enable/disable PCH globally
-# DFTRACER_UTILS_PCH_HEADERS    - Cached list of detected headers
-# DFTRACER_UTILS_PCH_SOURCE_DIR - Source directory for header detection
-# DFTRACER_UTILS_PCH_MIN_COUNT  - Minimum occurrence count (default: 3)
-#
-# Examples: # Simple usage - handles everything automatically
-# use_precompiled_header(my_target_shared)
-# use_precompiled_header(my_target_static)
-# use_precompiled_header(another_target_shared)  # Reuses from my_target_shared
-# ##############################################################################
 function(use_precompiled_header TARGET)
-  # Check if precompiled headers are enabled globally
+  cmake_parse_arguments(ARG "" "MIN_COUNT" "" ${ARGN})
   if(NOT DFTRACER_UTILS_ENABLE_PCH)
     return()
   endif()
 
-  # Check if target exists
   if(NOT TARGET ${TARGET})
     message(FATAL_ERROR "Target ${TARGET} does not exist")
   endif()
 
-  # Determine if this is a shared or static library variant
-  get_target_property(TARGET_TYPE ${TARGET} TYPE)
-  set(VARIANT_KEY "")
-
-  if(TARGET_TYPE STREQUAL "SHARED_LIBRARY")
-    set(VARIANT_KEY "SHARED")
-  elseif(TARGET_TYPE STREQUAL "STATIC_LIBRARY")
-    set(VARIANT_KEY "STATIC")
-  elseif(TARGET_TYPE STREQUAL "EXECUTABLE")
-    set(VARIANT_KEY "EXECUTABLE")
+  if(ARG_MIN_COUNT)
+    set(MIN_COUNT ${ARG_MIN_COUNT})
+  elseif(DFTRACER_UTILS_PCH_MIN_COUNT)
+    set(MIN_COUNT ${DFTRACER_UTILS_PCH_MIN_COUNT})
   else()
-    set(VARIANT_KEY "OTHER")
+    set(MIN_COUNT 2)
   endif()
 
-  message(
-    DEBUG
-    "PCH: Target ${TARGET} has type ${TARGET_TYPE}, variant key: ${VARIANT_KEY}"
-  )
+  get_target_property(TARGET_SOURCES ${TARGET} SOURCES)
+  get_target_property(TARGET_SOURCE_DIR ${TARGET} SOURCE_DIR)
+  if(NOT TARGET_SOURCES)
+    message(WARNING "PCH: ${TARGET} has no sources. PCH will not be applied.")
+    return()
+  endif()
 
-  # Get or detect headers if not already cached
-  get_property(PCH_HEADERS GLOBAL PROPERTY DFTRACER_UTILS_PCH_HEADERS_CACHED)
+  dftu_pch_link_closure(${TARGET} LINKED_LIBS)
+
+  set(HEADERS "")
+  foreach(SOURCE ${TARGET_SOURCES})
+    if(SOURCE MATCHES "\\$<" OR NOT SOURCE MATCHES "\\.(cpp|cc|cxx)$")
+      continue()
+    endif()
+    cmake_path(ABSOLUTE_PATH SOURCE BASE_DIRECTORY "${TARGET_SOURCE_DIR}"
+               NORMALIZE)
+    if(NOT EXISTS "${SOURCE}")
+      continue()
+    endif()
+    file(STRINGS "${SOURCE}" INCLUDE_LINES
+         REGEX "^[ \t]*#[ \t]*include[ \t]*<[^>]+>")
+    set(SEEN "")
+    foreach(LINE ${INCLUDE_LINES})
+      string(REGEX REPLACE "^[ \t]*#[ \t]*include[ \t]*<([^>]+)>.*$" "\\1"
+                           HEADER "${LINE}")
+      list(APPEND SEEN "${HEADER}")
+    endforeach()
+    list(REMOVE_DUPLICATES SEEN)
+    foreach(HEADER ${SEEN})
+      if(NOT DEFINED DFTU_PCH_COUNT_${HEADER})
+        list(APPEND HEADERS "${HEADER}")
+        set(DFTU_PCH_COUNT_${HEADER} 0)
+      endif()
+      math(EXPR DFTU_PCH_COUNT_${HEADER} "${DFTU_PCH_COUNT_${HEADER}} + 1")
+    endforeach()
+  endforeach()
+
+  set(ENTRIES "")
+  foreach(HEADER ${HEADERS})
+    set(COUNT ${DFTU_PCH_COUNT_${HEADER}})
+    unset(DFTU_PCH_COUNT_${HEADER})
+    if(COUNT LESS MIN_COUNT)
+      continue()
+    endif()
+    if(HEADER MATCHES "^dftracer/")
+      continue()
+    endif()
+    if(NOT HEADER MATCHES "/" AND NOT HEADER MATCHES "\\.h")
+      set(KEEP TRUE)
+    else()
+      set(KEEP FALSE)
+      foreach(RULE ${DFTU_PCH_THIRD_PARTY})
+        string(REPLACE "|" ";" RULE_PARTS "${RULE}")
+        list(POP_FRONT RULE_PARTS HEADER_REGEX)
+        if(HEADER MATCHES "${HEADER_REGEX}")
+          foreach(LIB ${LINKED_LIBS})
+            foreach(LIB_REGEX ${RULE_PARTS})
+              if(LIB MATCHES "${LIB_REGEX}")
+                set(KEEP TRUE)
+              endif()
+            endforeach()
+          endforeach()
+        endif()
+      endforeach()
+    endif()
+    if(KEEP)
+      string(LENGTH "${COUNT}" COUNT_LEN)
+      math(EXPR PAD_LEN "5 - ${COUNT_LEN}")
+      string(REPEAT "0" ${PAD_LEN} PAD)
+      list(APPEND ENTRIES "${PAD}${COUNT}:${HEADER}")
+    endif()
+  endforeach()
+  list(SORT ENTRIES ORDER DESCENDING)
+
+  set(PCH_HEADERS "")
+  foreach(ENTRY ${ENTRIES})
+    string(REGEX REPLACE "^[0-9]+:" "" HEADER "${ENTRY}")
+    list(APPEND PCH_HEADERS "<${HEADER}>")
+  endforeach()
 
   if(NOT PCH_HEADERS)
-    # Detect headers from source directory
-    if(NOT DFTRACER_UTILS_PCH_SOURCE_DIR)
-      message(
-        FATAL_ERROR
-          "DFTRACER_UTILS_PCH_SOURCE_DIR must be set before calling use_precompiled_header"
-      )
-    endif()
-
-    if(NOT DFTRACER_UTILS_PCH_MIN_COUNT)
-      set(DFTRACER_UTILS_PCH_MIN_COUNT 3)
-    endif()
-
-    detect_common_headers(
-      SOURCE_DIR "${DFTRACER_UTILS_PCH_SOURCE_DIR}" OUTPUT_VAR PCH_HEADERS
-      MIN_COUNT ${DFTRACER_UTILS_PCH_MIN_COUNT})
-
-    if(NOT PCH_HEADERS)
-      message(
-        WARNING "No common headers detected for PCH. PCH will not be applied.")
-      return()
-    endif()
-
-    # Cache the detected headers globally
-    set_property(GLOBAL PROPERTY DFTRACER_UTILS_PCH_HEADERS_CACHED
-                                 "${PCH_HEADERS}")
-
-    list(LENGTH PCH_HEADERS HEADER_COUNT)
-    dftracer_utils_ok("Detected ${HEADER_COUNT} common headers for PCH")
+    message(WARNING "PCH: no common headers for ${TARGET}. PCH not applied.")
+    return()
   endif()
 
-  # Apply PCH to this target (each target gets its own PCH to avoid compile
-  # definition issues)
+  list(LENGTH PCH_HEADERS HEADER_COUNT)
+  string(REPLACE ";" " " HEADER_TEXT "${PCH_HEADERS}")
+  message(STATUS "PCH ${TARGET}: ${HEADER_COUNT} headers: ${HEADER_TEXT}")
+
   target_precompile_headers(${TARGET} PRIVATE ${PCH_HEADERS})
 
   # Clang should ignore pch timestamp
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_options(${TARGET} PRIVATE -Xclang -fno-pch-timestamp)
   endif()
-
-  dftracer_utils_ok("Target ${TARGET}: Applied PCH (${VARIANT_KEY})")
 endfunction()
 
 # ##############################################################################

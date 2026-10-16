@@ -387,7 +387,6 @@ endif()
 
 # Set global PCH configuration (used by use_precompiled_header function)
 if(DFTRACER_UTILS_ENABLE_PCH)
-  set(DFTRACER_UTILS_PCH_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
   set(DFTRACER_UTILS_PCH_MIN_COUNT 2)
 endif()
 
@@ -536,9 +535,6 @@ foreach(variant objects shared static)
     if(variant STREQUAL "objects")
       target_set_warnings(dftracer_utils_core_objects)
 
-      # No PCH here: the global header list includes <simdjson.h>, and a core
-      # object that includes it emits simdjson symbols that core does not link.
-
       # io_uring compile definition
       if(DFTRACER_UTILS_HAVE_IO_URING)
         target_compile_definitions(dftracer_utils_core_objects
@@ -550,6 +546,8 @@ foreach(variant objects shared static)
     endif()
   endif()
 endforeach()
+
+use_precompiled_header(dftracer_utils_core_objects)
 
 # +++++++++++++++++++++++++++++++++++++++++
 # Vec Library (native vectorized columnar engine)
@@ -701,6 +699,8 @@ foreach(variant objects shared static)
   endif()
 endforeach()
 
+use_precompiled_header(dftracer_utils_json_objects MIN_COUNT 1)
+
 # +++++++++++++++++++++++++++++++++++++++++
 # Query Library (predicate IR + string codec + evaluator)
 # +++++++++++++++++++++++++++++++++++++++++
@@ -788,6 +788,8 @@ foreach(variant objects shared static)
   endif()
 endforeach()
 
+use_precompiled_header(dftracer_utils_duql_objects)
+
 # +++++++++++++++++++++++++++++++++++++++++
 # DataFrame Library (query execution over vec: mask + plan)
 # +++++++++++++++++++++++++++++++++++++++++
@@ -859,9 +861,6 @@ foreach(variant objects shared static)
       # exported.
       set_target_properties(dftracer_utils_dataframe_objects
                             PROPERTIES VISIBILITY_INLINES_HIDDEN ON)
-      if(DFTRACER_UTILS_ENABLE_PCH)
-        use_precompiled_header(dftracer_utils_dataframe_objects)
-      endif()
     endif()
     link_simdjson(dftracer_utils_dataframe_${variant} ${VARIANT_UPPER})
     # Highway powers the SIMD kernels; hwy_contrib carries VQSort (argsort) and
@@ -903,6 +902,8 @@ foreach(variant objects shared static)
     endif()
   endif()
 endforeach()
+
+use_precompiled_header(dftracer_utils_dataframe_objects)
 
 # +++++++++++++++++++++++++++++++++++++++++
 # Utilities Library
@@ -994,11 +995,6 @@ foreach(variant objects shared static)
     if(variant STREQUAL "objects")
       target_set_warnings(dftracer_utils_utilities_objects)
 
-      # Apply precompiled headers (automatically reuses from core library)
-      if(DFTRACER_UTILS_ENABLE_PCH)
-        use_precompiled_header(dftracer_utils_utilities_objects)
-      endif()
-
       # Boost.Math (standalone, header-only) for DLIO distribution fitting.
       link_boost_math(dftracer_utils_utilities_objects)
     endif()
@@ -1080,6 +1076,8 @@ foreach(variant objects shared static)
     endif()
   endif()
 endforeach()
+
+use_precompiled_header(dftracer_utils_utilities_objects)
 
 # Create unified configs for core and utilities libraries This allows discovery
 # via "dftracer_utils_core" instead of "dftracer_utils_core_shared"

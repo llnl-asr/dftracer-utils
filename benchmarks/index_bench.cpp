@@ -790,7 +790,10 @@ int main(int argc, char** argv) {
             std::printf("%s: no baseline\n", std::string(input).c_str());
             continue;
         }
-        (void)cur.get(c);
+        if (cur.get(c) != simdjson::SUCCESS) {
+            std::printf("%s: no current result\n", std::string(input).c_str());
+            continue;
+        }
         std::printf("%s\n", std::string(input).c_str());
         regressed = compare(b, c) || regressed;
     }

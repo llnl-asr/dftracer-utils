@@ -164,8 +164,9 @@ std::string run_id(const RunKeys& keys);
 /// path records. Calls beyond their quarter go to a spill file in spill_dir().
 /// A set whose counter series or path records alone exceed their quarter is
 /// skipped with a reason that names the share, and `over_budget` is set; the
-/// rest of the output is not counted. A share below MIN_MEMORY_BUDGET_BYTES
-/// works, but the open readers then hold more than the share.
+/// rest of the output is not counted. A share below
+/// memory::MIN_MEMORY_BUDGET_BYTES works, but the open readers then hold more
+/// than the share.
 ///
 /// `progress`, when given, is updated as the group goes and must outlive the
 /// call.

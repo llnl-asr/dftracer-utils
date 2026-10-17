@@ -30,6 +30,7 @@ enum class ErrorCode {
     Indexer,          ///< indexer subsystem
     Pipeline,         ///< pipeline / executor
     Aggregation,      ///< aggregation subsystem
+    MemoryBudgetExceeded,  ///< a reservation does not fit the memory budget
 };
 
 inline const char* error_code_name(ErrorCode code) noexcept {
@@ -58,6 +59,8 @@ inline const char* error_code_name(ErrorCode code) noexcept {
             return "PIPELINE";
         case ErrorCode::Aggregation:
             return "AGGREGATION";
+        case ErrorCode::MemoryBudgetExceeded:
+            return "MEMORY_BUDGET_EXCEEDED";
     }
     return "UNKNOWN";
 }
@@ -146,6 +149,7 @@ constexpr Condition condition_of(ErrorCode c) noexcept {
         case ErrorCode::Indexer:
         case ErrorCode::Pipeline:
         case ErrorCode::Aggregation:
+        case ErrorCode::MemoryBudgetExceeded:
             return Condition::Internal;
     }
     return Condition::Unknown;

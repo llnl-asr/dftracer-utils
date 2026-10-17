@@ -600,7 +600,8 @@ class LazyFrame {
     /// when a sink's in-memory state grows past this many bytes it spills to a
     /// sorted temp run, k-way merged at the end, so peak memory stays bounded.
     /// 0 (the default) means "auto": ~1/3 of available memory. Pass
-    /// NO_SPILL_BUDGET to disable spilling. Same knob and policy as View.
+    /// memory::NO_SPILL_BUDGET to disable spilling. Same knob and policy as
+    /// View.
     LazyFrame memory_budget(std::uint64_t bytes) const;
     /// Explicitly set the budget to ~1/3 of available memory (same as the
     /// default); sugar for readers who want spilling stated at the call site.

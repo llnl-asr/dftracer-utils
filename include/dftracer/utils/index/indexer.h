@@ -54,7 +54,7 @@ struct IndexerOptions {
     /// empty detects each file's from its first lines.
     std::string schema;
     /// Bytes a build may hold at once, as View::memory_budget: 0 is about a
-    /// third of available memory, NO_SPILL_BUDGET leaves it unbounded.
+    /// third of available memory, memory::NO_SPILL_BUDGET leaves it unbounded.
     std::uint64_t memory_budget = 0;
     /// Runtime for the blocking calls; nullptr uses default_runtime(). Not
     /// owned; it must outlive the Indexer.

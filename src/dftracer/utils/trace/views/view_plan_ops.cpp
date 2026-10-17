@@ -1,5 +1,4 @@
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
@@ -10,6 +9,7 @@
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/json/parser.h>
+#include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/time_metric.h>
 #include <dftracer/utils/trace/views/containment_fold.h>
@@ -936,8 +936,9 @@ ScanPlan auto_spill(const ScanPlan& plan_) {
     // ~1/3 of available memory, floored so tiny machines still get a workable
     // in-core window before spilling.
     std::uint64_t budget =
-        static_cast<std::uint64_t>(detect_available_memory() / 3);
-    if (budget < MIN_MEMORY_BUDGET_BYTES) budget = MIN_MEMORY_BUDGET_BYTES;
+        static_cast<std::uint64_t>(memory::detect_available_memory() / 3);
+    if (budget < memory::MIN_MEMORY_BUDGET_BYTES)
+        budget = memory::MIN_MEMORY_BUDGET_BYTES;
     return memory_budget(plan_, budget);
 }
 

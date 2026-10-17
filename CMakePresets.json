@@ -264,7 +264,8 @@
       "displayName": "Run Tests",
       "configurePreset": "tests",
       "environment": {
-        "DFTRACER_UTILS_ELASTIC": "0"
+        "DFTRACER_UTILS_ELASTIC": "0",
+        "DFTRACER_UTILS_MEMORY_EXIT_CHECK": "1"
       },
       "execution": {
         "jobs": 0
@@ -278,7 +279,8 @@
       "displayName": "Run Tests (single library)",
       "configurePreset": "tests-single",
       "environment": {
-        "DFTRACER_UTILS_ELASTIC": "0"
+        "DFTRACER_UTILS_ELASTIC": "0",
+        "DFTRACER_UTILS_MEMORY_EXIT_CHECK": "1"
       },
       "execution": {
         "jobs": 0

@@ -330,6 +330,21 @@ PY
     err "C++ Valgrind failures: ${failed_names[*]}"
     return 1
   fi
+  run_direct_tests
+}
+
+# Tests labelled valgrind_direct run Valgrind themselves, with a planted bug
+# that they expect it to report. They run as plain ctest tests, once per run
+# (shard 1), and are never wrapped in a second Valgrind.
+run_direct_tests() {
+  [[ "${VALGRIND_SHARD:-1/1}" == 1/* ]] || return 0
+  log "Running the tests that call Valgrind themselves"
+  ctest --test-dir "$BUILD_DIR" -L valgrind_direct \
+    -R "${VALGRIND_CTEST_FILTER:-.}" --no-tests=ignore --output-on-failure \
+    2>&1 | tee "$LOG_DIR/cpp/direct.log" || {
+    err "A test that calls Valgrind itself failed"
+    return 1
+  }
 }
 
 # Concurrency for parallel valgrind runs
@@ -363,7 +378,7 @@ run_cpp_one() {
   local -a test_env=()
   if [[ -n "$env_b64" ]]; then
     local line
-    while IFS= read -r line; do
+    while IFS= read -r line || [[ -n "$line" ]]; do
       [[ -n "$line" ]] && test_env+=("$line")
     done < <(printf '%s' "$env_b64" | base64 -d)
   fi

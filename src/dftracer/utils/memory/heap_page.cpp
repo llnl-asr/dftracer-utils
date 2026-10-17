@@ -1,5 +1,10 @@
+#include <dftracer/utils/memory/asan.h>
+#include <dftracer/utils/memory/attrib.h>
 #include <dftracer/utils/memory/heap_page.h>
 #include <dftracer/utils/memory/heap_system.h>
+#include <dftracer/utils/memory/link.h>
+#include <dftracer/utils/memory/settings.h>
+#include <dftracer/utils/memory/vg.h>
 #include <pthread.h>
 #include <sys/mman.h>
 #include <time.h>
@@ -58,6 +63,7 @@ enum class SpanKind : std::uint8_t { Standard, Large, Huge };
 
 struct PageDesc {
     void* free_list;
+    std::uint16_t* ids;
     PageDesc* prev;
     PageDesc* next;
     std::atomic<void*> thread_free;
@@ -70,6 +76,7 @@ struct PageDesc {
     std::uint8_t cls;
     PageKind kind;
     bool listed;
+    std::uint16_t pool_id;
 };
 
 struct Heap;
@@ -87,10 +94,11 @@ struct SpanHeader {
     std::atomic<SpanHeader*> cache_next;
     std::uint32_t free_pages;
     SpanKind kind;
+    std::uint16_t pool_id;
     std::uint64_t free_since[PAGES_PER_SPAN];
     PageDesc pages[PAGES_PER_SPAN];
 };
-static_assert(sizeof(SpanHeader) <= HEAP_PAGE_SIZE);
+static_assert(sizeof(SpanHeader) <= (std::size_t{16} << 10));
 
 struct Chain {
     PageDesc* page;
@@ -105,11 +113,11 @@ struct Heap {
     std::atomic<PageDesc*> inbox;
     std::atomic<Heap*> stack_next;
     Heap* all_next;
-    std::atomic<std::ptrdiff_t> live;
     std::atomic<std::ptrdiff_t> reserved;
     std::uint32_t remote_count;
     std::uint32_t chain_count;
     Chain chains[REMOTE_BUFFER];
+    AttribCache attrib;
 };
 static_assert(sizeof(Heap) <= HEAP_PAGE_SIZE);
 
@@ -160,6 +168,73 @@ void list_remove(T*& head, T* node) noexcept {
 
 constexpr std::size_t round_up(std::size_t n, std::size_t to) noexcept {
     return (n + to - 1) & ~(to - 1);
+}
+
+constexpr std::size_t PAGE_MASK = HEAP_PAGE_SIZE - 1;
+
+// Every small block has a 16-bit pool id. A class of HEADER_IDS_MIN_BLOCK
+// bytes or more keeps its ids in the span's header page, so its page is all
+// blocks. A smaller class keeps them at the start of its page, padded so the
+// blocks keep the alignment of their class. The slot of a block is found by a
+// multiply with the reciprocal of the class size, exact for offsets below a
+// page.
+constexpr std::size_t HEADER_IDS_MIN_BLOCK = 512;
+constexpr std::size_t HEADER_IDS_PER_PAGE =
+    HEAP_PAGE_SIZE / HEADER_IDS_MIN_BLOCK;
+constexpr std::size_t HEADER_IDS_OFFSET = std::size_t{16} << 10;
+static_assert(HEADER_IDS_OFFSET + PAGES_PER_SPAN * HEADER_IDS_PER_PAGE * 2 <=
+              HEAP_PAGE_SIZE);
+
+struct SmallLayout {
+    std::uint32_t capacity;
+    std::uint32_t side;
+    std::uint32_t magic;
+    std::uint32_t delta;
+};
+
+constexpr SmallLayout make_small_layout(std::size_t block) noexcept {
+    bool in_header = block >= HEADER_IDS_MIN_BLOCK;
+    std::size_t capacity = HEAP_PAGE_SIZE / block;
+    std::size_t side = 0;
+    if (!in_header) {
+        while (round_up(capacity * 2, SMALL_MAX_ALIGN) + capacity * block >
+               HEAP_PAGE_SIZE) {
+            --capacity;
+        }
+        side = round_up(capacity * 2, SMALL_MAX_ALIGN);
+    }
+    std::uint64_t magic = ((std::uint64_t{1} << 32) + block - 1) / block;
+    return {static_cast<std::uint32_t>(capacity),
+            static_cast<std::uint32_t>(side), static_cast<std::uint32_t>(magic),
+            static_cast<std::uint32_t>(attrib_delta(block))};
+}
+
+constexpr std::array<SmallLayout, CLASS_COUNT> make_small_layouts() noexcept {
+    std::array<SmallLayout, CLASS_COUNT> layouts{};
+    for (std::size_t i = 0; i < CLASS_COUNT; ++i) {
+        layouts[i] = make_small_layout(CLASS_SIZES[i]);
+    }
+    return layouts;
+}
+
+constexpr std::array<SmallLayout, CLASS_COUNT> SMALL_LAYOUTS =
+    make_small_layouts();
+
+std::uint16_t* page_ids(SpanHeader* span, std::size_t index,
+                        const SmallLayout& layout) noexcept {
+    if (layout.side != 0) {
+        return reinterpret_cast<std::uint16_t*>(reinterpret_cast<char*>(span) +
+                                                index * HEAP_PAGE_SIZE);
+    }
+    return reinterpret_cast<std::uint16_t*>(reinterpret_cast<char*>(span) +
+                                            HEADER_IDS_OFFSET) +
+           index * HEADER_IDS_PER_PAGE;
+}
+
+std::size_t slot_of(const SmallLayout& layout, const void* p) noexcept {
+    std::uint64_t offset =
+        (reinterpret_cast<std::uintptr_t>(p) & PAGE_MASK) - layout.side;
+    return static_cast<std::size_t>((offset * layout.magic) >> 32);
 }
 
 std::uintptr_t addr(const void* p) noexcept {
@@ -233,6 +308,14 @@ void bump(std::atomic<std::ptrdiff_t>& counter, std::size_t n,
         std::memory_order_relaxed);
 }
 
+// Called before bytes are mapped, never for a cached span or run: those move
+// between the cache and a heap and leave the total as it was.
+void check_cap(std::size_t bytes) {
+    std::size_t cap = hard_cap();
+    if (cap != 0 && page_reserved() + bytes > cap) [[unlikely]]
+        throw std::bad_alloc();
+}
+
 std::uint64_t pack_heap(Heap* h, std::uint64_t tag) noexcept {
     return (tag << HEAP_TAG_SHIFT) | (addr(h) >> HEAP_ADDR_SHIFT);
 }
@@ -278,6 +361,7 @@ Heap* create_heap() {
     auto* h = new (raw) Heap{};
     h->reserved.store(static_cast<std::ptrdiff_t>(HEAP_PAGE_SIZE),
                       std::memory_order_relaxed);
+    attrib_register(h->attrib);
     Heap* head = g_all_heaps.load(std::memory_order_relaxed);
     do {
         h->all_next = head;
@@ -290,7 +374,7 @@ void push_chain(const Chain& c) noexcept {
     PageDesc* d = c.page;
     void* old = d->thread_free.load(std::memory_order_relaxed);
     do {
-        *static_cast<void**>(c.tail) = old;
+        store_link(c.tail, old);
     } while (!d->thread_free.compare_exchange_weak(
         old, c.head, std::memory_order_acq_rel, std::memory_order_relaxed));
     if (old != nullptr) return;
@@ -322,7 +406,7 @@ void remote_free(Heap& h, PageDesc* d, void* p) noexcept {
         c = &h.chains[h.chain_count++];
         *c = Chain{d, nullptr, nullptr};
     }
-    *static_cast<void**>(p) = c->head;
+    store_link(p, c->head);
     c->head = p;
     if (c->tail == nullptr) c->tail = p;
     if (++h.remote_count == REMOTE_BUFFER) flush_remote(h);
@@ -343,7 +427,7 @@ bool drain_inbox(Heap& h) noexcept {
         SpanHeader* s = span_of(d);
         auto index = static_cast<std::size_t>(d - s->pages);
         while (list != nullptr) {
-            void* following = *static_cast<void**>(list);
+            void* following = load_link(list);
             if (d->kind == PageKind::Small) {
                 free_small_block(h, s, index, list);
             } else {
@@ -366,6 +450,7 @@ void thread_exit(void* arg) {
     auto* h = static_cast<Heap*>(arg);
     flush_remote(*h);
     drain_inbox(*h);
+    attrib_set_scope(h->attrib, GENERAL_POOL_ID);
     t_heap = nullptr;
     push_free_heap(h);
 }
@@ -388,6 +473,7 @@ void after_fork_child() noexcept {
 }
 
 void process_init() {
+    vg_init();
     if (::pthread_key_create(&g_key, thread_exit) != 0 ||
         ::pthread_atfork(nullptr, nullptr, after_fork_child) != 0) {
         abort_with("dftracer-utils memory: cannot register thread hooks\n");
@@ -638,7 +724,7 @@ void purge_heap(Heap& h, std::uint64_t now, std::uint64_t delay,
 // CACHE_ENTRIES_PER_CALL purged entries in each of the CACHE_COUNT caches.
 void decay_step(Heap& h) noexcept {
     std::uint64_t now = now_ms();
-    std::uint64_t delay = config().decay_ms;
+    std::uint64_t delay = decay_ms();
     purge_heap(h, now, delay, PURGE_SPANS_PER_CALL);
     for (Cache& c : g_caches) {
         decay_cache(c, now, delay, CACHE_ENTRIES_PER_CALL);
@@ -723,7 +809,7 @@ void trim_all(std::uint64_t now) noexcept {
 }
 
 void trim_decayed(std::uint64_t now) noexcept {
-    std::uint64_t delay = config().decay_ms;
+    std::uint64_t delay = decay_ms();
     if (t_heap != nullptr) {
         flush_remote(*t_heap);
         drain_inbox(*t_heap);
@@ -737,6 +823,7 @@ SpanHeader* new_span(Heap& h) {
     if (s != nullptr) {
         adopt_cached_span(h, s);
     } else {
+        check_cap(HEAP_SPAN_SIZE);
         void* base = map_aligned(HEAP_SPAN_SIZE);
         if (base == nullptr) throw std::bad_alloc();
         s = new (base) SpanHeader{};
@@ -746,6 +833,8 @@ SpanHeader* new_span(Heap& h) {
         s->free_mask = ALL_PAGES_FREE;
         s->free_pages = static_cast<std::uint32_t>(USABLE_PAGES);
         stamp_free_pages(s, 1, USABLE_PAGES, now_ms());
+        asan_poison(page_base(s, 1), USABLE_PAGES * HEAP_PAGE_SIZE);
+        vg_noaccess(page_base(s, 1), USABLE_PAGES * HEAP_PAGE_SIZE);
         list_push(h.spans, s);
         bump(h.reserved, HEAP_SPAN_SIZE, true);
     }
@@ -781,6 +870,8 @@ void take_run(Heap& h, SpanHeader* s, std::size_t index,
 void give_run(Heap& h, SpanHeader* s, std::size_t index,
               std::size_t n) noexcept {
     s->free_mask |= run_bits(index, n);
+    asan_poison(page_base(s, index), n * HEAP_PAGE_SIZE);
+    vg_noaccess(page_base(s, index), n * HEAP_PAGE_SIZE);
     stamp_free_pages(s, index, n, now_ms());
     if (s->free_pages == 0) list_push(h.spans, s);
     s->free_pages += static_cast<std::uint32_t>(n);
@@ -820,7 +911,10 @@ PageDesc* new_small_page(Heap& h, std::size_t cls) {
     d->free_list = nullptr;
     d->used = 0;
     d->bump = 0;
-    d->capacity = static_cast<std::uint32_t>(HEAP_PAGE_SIZE / CLASS_SIZES[cls]);
+    d->capacity = SMALL_LAYOUTS[cls].capacity;
+    d->ids = page_ids(r.span, r.index, SMALL_LAYOUTS[cls]);
+    asan_unpoison(page_base(r.span, r.index), SMALL_LAYOUTS[cls].side);
+    vg_define(page_base(r.span, r.index), SMALL_LAYOUTS[cls].side);
     d->cls = static_cast<std::uint8_t>(cls);
     d->kind = PageKind::Small;
     d->listed = true;
@@ -836,15 +930,19 @@ void* allocate_small(Heap& h, std::size_t size, std::size_t align) {
         d = h.avail[cls];
         if (d == nullptr) d = new_small_page(h, cls);
     }
-    std::size_t block = CLASS_SIZES[cls];
+    const SmallLayout& layout = SMALL_LAYOUTS[cls];
+    std::size_t block = layout.delta - ATTRIB_BLOCK;
     void* p;
+    std::size_t slot;
     if (d->free_list != nullptr) {
         p = d->free_list;
-        d->free_list = *static_cast<void**>(p);
+        d->free_list = load_link(p);
+        slot = slot_of(layout, p);
     } else {
         SpanHeader* s = span_of(d);
         std::size_t index = static_cast<std::size_t>(d - s->pages);
-        p = page_base(s, index) + d->bump * block;
+        slot = d->bump;
+        p = page_base(s, index) + layout.side + slot * block;
         ++d->bump;
     }
     ++d->used;
@@ -852,7 +950,10 @@ void* allocate_small(Heap& h, std::size_t size, std::size_t align) {
         list_remove(h.avail[cls], d);
         d->listed = false;
     }
-    bump(h.live, block, true);
+    d->ids[slot] = h.attrib.scope;
+    attrib_charge(h.attrib, layout.delta);
+    asan_unpoison(p, size);
+    vg_alloc(p, size, block);
     return p;
 }
 
@@ -860,7 +961,7 @@ void free_small_block(Heap& h, SpanHeader* s, std::size_t index,
                       void* p) noexcept {
     PageDesc* d = &s->pages[index];
     std::size_t cls = d->cls;
-    *static_cast<void**>(p) = d->free_list;
+    store_link(p, d->free_list);
     d->free_list = p;
     --d->used;
     if (!d->listed) {
@@ -882,8 +983,12 @@ void* allocate_medium(Heap& h, std::size_t size, std::size_t align) {
     d->kind = PageKind::MediumHead;
     d->pages = static_cast<std::uint32_t>(n);
     d->size = size;
-    bump(h.live, n * HEAP_PAGE_SIZE, true);
-    return page_base(r.span, r.index);
+    d->pool_id = h.attrib.scope;
+    attrib_charge(h.attrib, attrib_delta(n * HEAP_PAGE_SIZE));
+    char* p = page_base(r.span, r.index);
+    asan_unpoison(p, size);
+    vg_alloc(p, size, n * HEAP_PAGE_SIZE);
+    return p;
 }
 
 void free_medium_run(Heap& h, SpanHeader* s, std::size_t index) noexcept {
@@ -909,6 +1014,7 @@ void* allocate_mapped(Heap& h, std::size_t size, std::size_t align) {
         s = adopt_cached_run(h, run);
     }
     if (s == nullptr) {
+        check_cap(bytes);
         void* base = map_aligned(bytes);
         if (base == nullptr) throw std::bad_alloc();
         s = new (base) SpanHeader{};
@@ -919,9 +1025,16 @@ void* allocate_mapped(Heap& h, std::size_t size, std::size_t align) {
     s->kind = kind;
     s->size = size;
     s->usable = run;
-    bump(h.live, run, true);
+    s->pool_id = h.attrib.scope;
+    attrib_direct(s->pool_id, static_cast<std::ptrdiff_t>(run), 1);
     if (kind == SpanKind::Large) decay_step(h);
-    return reinterpret_cast<char*>(s) + offset;
+    char* p = reinterpret_cast<char*>(s) + offset;
+    // A huge run can be gigabytes, so only its slack is poisoned.
+    std::size_t from = kind == SpanKind::Large ? 0 : round_up(size, 8);
+    asan_poison(p + from, run - from);
+    asan_unpoison(p, size);
+    vg_alloc(p, size, run);
+    return p;
 }
 
 // Any thread unmaps a block that owns its mapping and credits its own heap;
@@ -931,9 +1044,12 @@ void free_mapped(Heap& h, SpanHeader* s, [[maybe_unused]] std::size_t size,
 #ifdef DFTRACER_UTILS_MEMORY_CHECKS
     if (sized) check_size(s->size == size);
 #endif
-    bump(h.live, s->usable, false);
+    attrib_direct(s->pool_id, -static_cast<std::ptrdiff_t>(s->usable), -1);
     bump(h.reserved, s->map_bytes, false);
+    char* user = reinterpret_cast<char*>(s) + (s->map_bytes - s->usable);
+    vg_free(user, s->usable);
     if (run_cacheable(s)) {
+        asan_poison(user, s->usable);
         s->purged_mask = 0;
         cache_put(
             1 + static_cast<std::size_t>(std::countr_zero(s->usable >> 20)), s,
@@ -941,6 +1057,9 @@ void free_mapped(Heap& h, SpanHeader* s, [[maybe_unused]] std::size_t size,
         decay_step(h);
         return;
     }
+    // The shadow of an unmapped range stays; another mapping may land there.
+    std::size_t from = s->kind == SpanKind::Large ? 0 : round_up(s->size, 8);
+    asan_unpoison(user + from, s->usable - from);
     ::munmap(s, s->map_bytes);
 }
 
@@ -961,12 +1080,19 @@ void free_standard(Heap& me, SpanHeader* s, void* p,
     bool small = d->kind == PageKind::Small;
     std::size_t bytes =
         small ? CLASS_SIZES[d->cls] : std::size_t{d->pages} * HEAP_PAGE_SIZE;
+    asan_poison(p, bytes);
+    vg_free(p, bytes);
 #ifdef DFTRACER_UTILS_MEMORY_CHECKS
     if (sized) {
         check_size(small ? small_size_matches(d->cls, size) : d->size == size);
     }
 #endif
-    bump(me.live, bytes, false);
+    if (small) {
+        const SmallLayout& layout = SMALL_LAYOUTS[d->cls];
+        attrib_credit(me.attrib, d->ids[slot_of(layout, p)], layout.delta);
+    } else {
+        attrib_credit(me.attrib, d->pool_id, attrib_delta(bytes));
+    }
     if (s->owner != &me) {
         remote_free(me, d, p);
     } else if (small) {
@@ -1037,15 +1163,31 @@ void* page_grow_huge(void* p, std::size_t size, std::size_t align) {
     }
     std::size_t old_bytes = s->map_bytes;
     std::size_t old_usable = s->usable;
+    std::size_t old_size = s->size;
     std::size_t bytes = round_up(offset + size, HEAP_PAGE_SIZE);
+    check_cap(bytes - old_bytes);
+    // The old block ends here and the new one starts after the move; a failed
+    // move puts the old one back.
+    asan_unpoison(p, old_usable);
+    vg_free(p, old_usable);
+    auto restore = [&] {
+        asan_poison(static_cast<char*>(p) + round_up(old_size, 8),
+                    old_usable - round_up(old_size, 8));
+        vg_alloc(p, old_size, old_usable);
+        vg_define(p, old_size);
+    };
     void* moved = ::mremap(s, old_bytes, bytes, 0);
     if (moved == MAP_FAILED) {
         void* target = map_aligned(bytes);
-        if (target == nullptr) throw std::bad_alloc();
+        if (target == nullptr) {
+            restore();
+            throw std::bad_alloc();
+        }
         moved = ::mremap(s, old_bytes, old_bytes, MREMAP_MAYMOVE | MREMAP_FIXED,
                          target);
         if (moved == MAP_FAILED) {
             ::munmap(target, bytes);
+            restore();
             throw std::bad_alloc();
         }
     }
@@ -1053,28 +1195,41 @@ void* page_grow_huge(void* p, std::size_t size, std::size_t align) {
     grown->map_bytes = bytes;
     grown->size = size;
     grown->usable = bytes - offset;
+    asan_poison(reinterpret_cast<char*>(moved) + offset + round_up(size, 8),
+                grown->usable - round_up(size, 8));
     bump(h.reserved, bytes - old_bytes, true);
-    bump(h.live, grown->usable - old_usable, true);
-    return reinterpret_cast<char*>(moved) + offset;
+    attrib_direct(grown->pool_id,
+                  static_cast<std::ptrdiff_t>(grown->usable - old_usable), 0);
+    char* user = reinterpret_cast<char*>(moved) + offset;
+    vg_alloc(user, size, grown->usable);
+    vg_define(user, old_size);
+    return user;
 #else
+    AttribCache& attrib = local_heap().attrib;
+    std::uint16_t scope = attrib.scope;
+    attrib_set_scope(attrib, s->pool_id);
     void* grown = page_allocate(size, align);
+    attrib_set_scope(attrib, scope);
     std::memcpy(grown, p, s->size);
     page_deallocate(p);
     return grown;
 #endif
 }
 
-PageStats page_stats() noexcept {
-    std::ptrdiff_t live = 0;
+std::size_t page_reserved() noexcept {
     std::ptrdiff_t reserved = 0;
     for (Heap* h = g_all_heaps.load(std::memory_order_acquire); h != nullptr;
          h = h->all_next) {
-        live += h->live.load(std::memory_order_relaxed);
         reserved += h->reserved.load(std::memory_order_relaxed);
     }
     reserved += g_cache_reserved.load(std::memory_order_relaxed);
+    return static_cast<std::size_t>(std::max<std::ptrdiff_t>(reserved, 0));
+}
+
+PageStats page_stats() noexcept {
+    std::ptrdiff_t live = attrib_live_total();
     return {static_cast<std::size_t>(std::max<std::ptrdiff_t>(live, 0)),
-            static_cast<std::size_t>(std::max<std::ptrdiff_t>(reserved, 0))};
+            page_reserved()};
 }
 
 std::size_t page_heap_count() noexcept {
@@ -1097,6 +1252,8 @@ bool page_checks_enabled() noexcept {
     return false;
 #endif
 }
+
+AttribCache& page_attrib() { return local_heap().attrib; }
 
 std::size_t page_class_count() noexcept { return CLASS_COUNT; }
 

@@ -1,5 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/memory_budget.h>
+#include <dftracer/utils/memory/budget.h>
 #include <doctest/doctest.h>
 
 using dftracer::utils::format_memory_budget_warning;
@@ -42,8 +43,6 @@ TEST_SUITE("memory_budget_advice") {
 
 TEST_SUITE("concurrent spill budget") {
     using dftracer::utils::concurrent_spill_ways;
-    using dftracer::utils::MIN_MEMORY_BUDGET_BYTES;
-    using dftracer::utils::NO_SPILL_BUDGET;
     using dftracer::utils::share_spill_budget;
 
     TEST_CASE("shares of concurrent runs stay within the budget") {
@@ -58,15 +57,23 @@ TEST_SUITE("concurrent spill budget") {
     TEST_CASE("one run, never-spill and tiny budgets keep their meaning") {
         CHECK(share_spill_budget(0, 1) == 0);
         CHECK(share_spill_budget(1234, 1) == 1234);
-        CHECK(share_spill_budget(NO_SPILL_BUDGET, 8) == NO_SPILL_BUDGET);
+        CHECK(share_spill_budget(dftracer::utils::memory::NO_SPILL_BUDGET, 8) ==
+              dftracer::utils::memory::NO_SPILL_BUDGET);
         CHECK(share_spill_budget(1, 4) == 1);
     }
 
     TEST_CASE("concurrency is capped so each share is at least the minimum") {
-        CHECK(concurrent_spill_ways(4 * MIN_MEMORY_BUDGET_BYTES, 10) == 4);
-        CHECK(concurrent_spill_ways(4 * MIN_MEMORY_BUDGET_BYTES, 2) == 2);
+        CHECK(concurrent_spill_ways(
+                  4 * dftracer::utils::memory::MIN_MEMORY_BUDGET_BYTES, 10) ==
+              4);
+        CHECK(concurrent_spill_ways(
+                  4 * dftracer::utils::memory::MIN_MEMORY_BUDGET_BYTES, 2) ==
+              2);
         CHECK(concurrent_spill_ways(1, 10) == 1);
-        CHECK(concurrent_spill_ways(NO_SPILL_BUDGET, 10) == 10);
-        CHECK(concurrent_spill_ways(4 * MIN_MEMORY_BUDGET_BYTES, 0) == 1);
+        CHECK(concurrent_spill_ways(dftracer::utils::memory::NO_SPILL_BUDGET,
+                                    10) == 10);
+        CHECK(concurrent_spill_ways(
+                  4 * dftracer::utils::memory::MIN_MEMORY_BUDGET_BYTES, 0) ==
+              1);
     }
 }

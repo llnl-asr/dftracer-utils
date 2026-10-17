@@ -2,6 +2,7 @@
 #include <dftracer/utils/dataframe/lazy/cursors.h>
 #include <dftracer/utils/dataframe/lazy/numeric.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/memory/budget.h>
 
 #include <array>
 #include <atomic>
@@ -544,7 +545,7 @@ class NativeTransformCursor : public Cursor {
     }
 
     coro::CoroTask<void> build(std::int64_t max_rows) {
-        const bool bounded = budget_ != NO_SPILL_BUDGET && budget_ > 0;
+        const bool bounded = budget_ != memory::NO_SPILL_BUDGET && budget_ > 0;
         if (!bounded || keys_.empty()) {
             tail_ = std::make_unique<TransformPassCursor>(std::move(in_), keys_,
                                                           false, false, core());

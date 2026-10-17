@@ -1,4 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/memory/asan.h>
+#include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/memory/heap_page.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
@@ -431,3 +433,89 @@ TEST_CASE("null frees are no-ops") {
     page_deallocate(nullptr);
     page_deallocate(nullptr, 0);
 }
+
+// Run only by the ctest memory_asan_page_heap_overrun, which expects ASan to
+// report it.
+TEST_CASE("planted page heap overrun" * doctest::skip()) {
+    REQUIRE(config().backend == Backend::PageHeap);
+    constexpr std::size_t size = 24;
+    auto* p = static_cast<volatile char*>(allocate(size, 16));
+    p[size] = 1;
+    deallocate(const_cast<char*>(p), size);
+}
+
+namespace {
+
+constexpr std::size_t PLANTED_LEAK_BYTES = 777;
+
+// Drops the only pointer in a frame that scrub_stack then overwrites, so
+// Valgrind finds no pointer to the block.
+__attribute__((noinline)) void plant_leak() {
+    void* p = allocate(PLANTED_LEAK_BYTES, 16);
+    std::memset(p, 1, PLANTED_LEAK_BYTES);
+    asm volatile("" : : "r"(p) : "memory");
+}
+
+__attribute__((noinline)) void scrub_stack() {
+    volatile char junk[16 * KIB];
+    for (std::size_t i = 0; i < sizeof(junk); ++i) junk[i] = 0;
+}
+
+}  // namespace
+
+// Run only by the ctest memory_valgrind_planted_leak, which runs Valgrind on it
+// and expects the block to be reported as definitely lost.
+TEST_CASE("planted page heap leak" * doctest::skip()) {
+    REQUIRE(config().backend == Backend::PageHeap);
+    plant_leak();
+    scrub_stack();
+}
+
+#ifdef DFTRACER_UTILS_MEMORY_ASAN
+namespace {
+bool poisoned(const void* p) { return __asan_address_is_poisoned(p) != 0; }
+}  // namespace
+
+TEST_CASE("the page heap poisons slack, free blocks and purged pages") {
+    constexpr std::size_t small = 100;
+    auto* s = static_cast<char*>(page_allocate(small, 16));
+    std::size_t cls = page_class_size(page_class_for(small, 16));
+    std::memset(s, 1, small);
+    CHECK_FALSE(poisoned(s + small - 1));
+    CHECK(poisoned(s + small));
+    CHECK(poisoned(s + cls - 1));
+    page_deallocate(s, small);
+    CHECK(poisoned(s));
+    CHECK(poisoned(s + cls - 1));
+
+    constexpr std::size_t medium = HEAP_PAGE_SIZE + 5000;
+    auto* m = static_cast<char*>(page_allocate(medium, 16));
+    std::memset(m, 1, medium);
+    CHECK_FALSE(poisoned(m + medium - 1));
+    CHECK(poisoned(m + medium));
+    CHECK(poisoned(m + 2 * HEAP_PAGE_SIZE - 1));
+    page_deallocate(m, medium);
+    CHECK(poisoned(m));
+    page_trim(Mode::All);
+    CHECK(poisoned(m));
+    CHECK(poisoned(m + HEAP_PAGE_SIZE));
+
+    constexpr std::size_t large = 3 * MIB;
+    auto* l = static_cast<char*>(page_allocate(large, 16));
+    std::memset(l, 1, large);
+    CHECK_FALSE(poisoned(l + large - 1));
+    CHECK(poisoned(l + large));
+    CHECK(poisoned(l + 4 * MIB - 1));
+    page_deallocate(l, large);
+    CHECK(poisoned(l));
+    page_trim(Mode::All);
+    CHECK(poisoned(l + MIB));
+
+    constexpr std::size_t huge = 70 * MIB + 13;
+    auto* h = static_cast<char*>(page_allocate(huge, 16));
+    h[huge - 1] = 1;
+    CHECK_FALSE(poisoned(h + huge - 1));
+    CHECK(poisoned(h + huge + 8));
+    page_deallocate(h, huge);
+}
+#endif

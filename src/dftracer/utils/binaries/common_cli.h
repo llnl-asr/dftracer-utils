@@ -6,6 +6,7 @@
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
+#include <dftracer/utils/common/memory_config.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/core/coro/channel.h>
@@ -19,6 +20,7 @@
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/store/database.h>
+#include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
 #include <algorithm>
@@ -143,6 +145,12 @@ int cli_main(int argc, char** argv, const char* name, const char* description,
         }
     } rocksdb_exit_guard;
     dftracer::utils::logger::init();
+    if (auto configured = dftracer::utils::configure_memory_from_env();
+        !configured) {
+        DFTRACER_UTILS_LOG_ERROR("Error: %s",
+                                 configured.error().format().c_str());
+        return 1;
+    }
     argparse::ArgumentParser program(name, DFTRACER_UTILS_PACKAGE_VERSION);
     program.add_description(description);
     CliT cli(program);
@@ -297,8 +305,8 @@ struct FilesArgs : CliSchema {
 };
 
 /// --memory-budget, shared by every tool that bounds its memory. 0 means auto:
-/// resolve_spill_budget turns it into a third of the memory available to the
-/// process.
+/// memory::resolve_spill_budget turns it into a third of the memory available
+/// to the process.
 struct MemoryArgs : CliSchema {
     std::uint64_t memory_budget = 0;
 

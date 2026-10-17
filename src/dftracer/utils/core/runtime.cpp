@@ -1,6 +1,7 @@
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/memory_config.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/core/pipeline/watchdog.h>
 #include <dftracer/utils/core/runtime.h>
@@ -46,6 +47,7 @@ std::size_t resolve_io_threads(std::size_t requested) {
 }  // namespace
 
 Runtime::Runtime(std::size_t threads) : threads_(resolve_threads(threads)) {
+    unwrap(configure_memory_from_env());
     ExecutorConfig config;
     config.num_threads = threads_;
     config.io_pool_size = resolve_io_threads(config.io_pool_size);
@@ -58,6 +60,7 @@ Runtime::Runtime(std::size_t threads) : threads_(resolve_threads(threads)) {
 
 Runtime::Runtime(const ExecutorConfig& config, bool enable_watchdog)
     : threads_(resolve_threads(config.num_threads)) {
+    unwrap(configure_memory_from_env());
     ExecutorConfig cfg = config;
     cfg.num_threads = threads_;
     cfg.io_pool_size = resolve_io_threads(config.io_pool_size);

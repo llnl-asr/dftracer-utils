@@ -97,6 +97,7 @@ PyObject *py_error_type_for(ErrorCode code) {
             return g_dft_aggregation_error;
         case ErrorCode::Unknown:
         case ErrorCode::Internal:
+        case ErrorCode::MemoryBudgetExceeded:
             return g_dft_error;
     }
     return g_dft_error;

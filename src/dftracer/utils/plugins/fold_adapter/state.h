@@ -35,8 +35,8 @@ class SpillDir {
 class StateAccum {
    public:
     /// `budget` is the scan's out-of-core budget in bytes, resolved through
-    /// resolve_spill_budget: 0 means auto and NO_SPILL_BUDGET disables
-    /// spilling.
+    /// memory::resolve_spill_budget: 0 means auto and memory::NO_SPILL_BUDGET
+    /// disables spilling.
     StateAccum(const RegisteredState& reg, std::uint64_t budget);
     ~StateAccum();
     StateAccum(const StateAccum&) = delete;

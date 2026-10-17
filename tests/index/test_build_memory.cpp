@@ -1,6 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/filesystem.h>
-#include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/index/build/batch_builder.h>
@@ -9,6 +8,7 @@
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
 #include <rocksdb/iterator.h>
@@ -135,11 +135,12 @@ TEST_SUITE("IndexBuildMemory") {
             write_trace(env.get_dir(), "large", 60000, 600, 6u << 20)};
         for (const auto& file : files) {
             for (std::uint64_t budget :
-                 {NO_SPILL_BUDGET, std::uint64_t{64 << 10}}) {
+                 {memory::NO_SPILL_BUDGET, std::uint64_t{64 << 10}}) {
                 CAPTURE(file);
                 CAPTURE(budget);
-                const auto tag = fs::path(file).stem().string() +
-                                 std::to_string(budget == NO_SPILL_BUDGET);
+                const auto tag =
+                    fs::path(file).stem().string() +
+                    std::to_string(budget == memory::NO_SPILL_BUDGET);
                 const auto serial_dir = env.get_dir() + "/serial" + tag;
                 const auto ahead_dir = env.get_dir() + "/ahead" + tag;
                 const auto serial = run_build({file}, serial_dir, budget, 0, 1);
@@ -160,7 +161,7 @@ TEST_SUITE("IndexBuildMemory") {
             write_trace(env.get_dir(), "many", 12000, 600, 2048)};
         const auto big_dir = env.get_dir() + "/big";
         const auto small_dir = env.get_dir() + "/small";
-        const auto big = run_build(files, big_dir, NO_SPILL_BUDGET);
+        const auto big = run_build(files, big_dir, memory::NO_SPILL_BUDGET);
         const auto small = run_build(files, small_dir, 1 << 20);
         REQUIRE(big.indexed == 1);
         REQUIRE(small.indexed == 1);
@@ -181,7 +182,7 @@ TEST_SUITE("IndexBuildMemory") {
             const auto small_dir =
                 env.get_dir() + "/small" + std::to_string(path_budget);
             const auto big =
-                run_build(files, big_dir, NO_SPILL_BUDGET, path_budget);
+                run_build(files, big_dir, memory::NO_SPILL_BUDGET, path_budget);
             const auto small =
                 run_build(files, small_dir, 64 * 1024, path_budget);
             REQUIRE(big.indexed == 2);

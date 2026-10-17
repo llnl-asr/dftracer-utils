@@ -83,8 +83,9 @@ struct IndexBuildBatchConfig {
     /// and hash tables are left as they are.
     bool tier_only = false;
     /// Bytes the build may hold at once: 0 resolves through
-    /// resolve_spill_budget, NO_SPILL_BUDGET leaves the build unbounded.
-    /// Parse workers admit a file only while its estimated bytes fit.
+    /// memory::resolve_spill_budget, memory::NO_SPILL_BUDGET leaves the build
+    /// unbounded. Parse workers admit a file only while its estimated bytes
+    /// fit.
     std::uint64_t memory_budget = 0;
     /// RecordSchema id every file is decoded with; empty detects each file's.
     std::string schema;

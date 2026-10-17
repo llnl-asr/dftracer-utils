@@ -39,6 +39,8 @@ void page_trim(Mode mode) noexcept;
 void* page_grow_huge(void* p, std::size_t size, std::size_t align);
 
 PageStats page_stats() noexcept;
+/// The reserved field of page_stats() alone, without walking the pools.
+std::size_t page_reserved() noexcept;
 /// Push the calling thread's buffered remote frees to their pages.
 void page_flush_remote() noexcept;
 /// Heaps ever created. A heap is never unmapped; an exited thread's heap is

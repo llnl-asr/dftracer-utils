@@ -2,7 +2,6 @@
 #include <dftracer/utils/binaries/json_cell_printer.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/common/memory_budget.h>  // NO_SPILL_BUDGET
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
@@ -15,6 +14,7 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
+#include <dftracer/utils/memory/budget.h>  // NO_SPILL_BUDGET
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -962,7 +962,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         if (time_bucket > 0) v = v.time_bucket(time_bucket);
         if (cli->occ_cell > 0) v = v.resolution(cli->occ_cell);
         if (cli->no_spill)
-            v = v.memory_budget(NO_SPILL_BUDGET);
+            v = v.memory_budget(memory::NO_SPILL_BUDGET);
         else if (cli->memory_budget > 0)
             v = v.memory_budget(cli->memory_budget);
         // else: leave the plan default (0), which resolves to auto (~1/3 RAM).

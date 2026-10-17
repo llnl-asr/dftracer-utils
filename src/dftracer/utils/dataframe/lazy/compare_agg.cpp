@@ -1,5 +1,6 @@
 #include <dftracer/utils/dataframe/lazy/cursors.h>
 #include <dftracer/utils/dataframe/lazy/numeric.h>
+#include <dftracer/utils/memory/budget.h>
 
 namespace dftracer::utils::dataframe {
 
@@ -129,8 +130,9 @@ class CompareAggCursor : public Cursor {
 
    private:
     static std::uint64_t share_of(std::uint64_t budget) {
-        return budget == 0 || budget == NO_SPILL_BUDGET ? NO_SPILL_BUDGET
-                                                        : budget / share::SPOOL;
+        return budget == 0 || budget == memory::NO_SPILL_BUDGET
+                   ? memory::NO_SPILL_BUDGET
+                   : budget / share::SPOOL;
     }
 
     // The type of a column is the first one a morsel gives it that is known:
@@ -195,7 +197,7 @@ class CompareAggCursor : public Cursor {
             LazyFrame::scan(std::make_shared<SpoolSource>(rspool, Schema{rf}));
         LazyFrame composed = compose_compare_agg(
             left, right, lf, rf, static_cast<std::size_t>(n_key_));
-        if (budget_ != 0 && budget_ != NO_SPILL_BUDGET)
+        if (budget_ != 0 && budget_ != memory::NO_SPILL_BUDGET)
             composed = composed.memory_budget(budget_);
         plan_.emplace(std::move(composed));
         gen_.emplace(plan_->stream(max_rows));

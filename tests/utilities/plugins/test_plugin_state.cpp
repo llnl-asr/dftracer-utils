@@ -5,9 +5,9 @@
 // could do; what is under test is the machinery around it, not the shape.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 
 #include <memory>
@@ -30,7 +30,6 @@
 #include <variant>
 #include <vector>
 
-using dftracer::utils::NO_SPILL_BUDGET;
 using dftracer::utils::Runtime;
 using dftracer::utils::StringIntern;
 using dftracer::utils::plugins::NamedResultRegistry;
@@ -371,8 +370,10 @@ Totals expected(int n_slices) {
 }  // namespace
 
 TEST_CASE("a registered state merges across worker slices") {
-    const RunResult one = run_state(true, NO_SPILL_BUDGET, 1);
-    const RunResult many = run_state(true, NO_SPILL_BUDGET, 4);
+    const RunResult one =
+        run_state(true, dftracer::utils::memory::NO_SPILL_BUDGET, 1);
+    const RunResult many =
+        run_state(true, dftracer::utils::memory::NO_SPILL_BUDGET, 4);
 
     CHECK(one.runs == 0);
     CHECK(many.runs == 0);
@@ -384,7 +385,8 @@ TEST_CASE("a registered state merges across worker slices") {
 }
 
 TEST_CASE("a serializable state spills past the budget, same result") {
-    const RunResult want = run_state(true, NO_SPILL_BUDGET, 4);
+    const RunResult want =
+        run_state(true, dftracer::utils::memory::NO_SPILL_BUDGET, 4);
     const RunResult got = run_state(true, TINY_BUDGET, 4);
 
     // The mechanism, not just the answer: a budget that was silently ignored
@@ -406,7 +408,8 @@ TEST_CASE("a state with no serialize pair is refused a spill") {
 }
 
 TEST_CASE("a plugin's own slice is asked to reclaim past the budget") {
-    const SliceRun free = run_slice(true, NO_SPILL_BUDGET, 4);
+    const SliceRun free =
+        run_slice(true, dftracer::utils::memory::NO_SPILL_BUDGET, 4);
     const SliceRun held = run_slice(true, TINY_BUDGET, 4);
 
     CHECK(free.reclaims == 0);

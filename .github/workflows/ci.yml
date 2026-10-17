@@ -120,6 +120,76 @@ jobs:
       shards: 4
       rocksdb_version: ${{ needs.changes.outputs.rocksdb_version }}
 
+  test-single-ubuntu-22-04:
+    needs: [changes, deps-ubuntu-22-04]
+    if: needs.changes.outputs.code == 'true' || needs.changes.outputs.coverage == 'true'
+    permissions:
+      contents: read
+      actions: write
+    runs-on: ubuntu-22.04
+    env:
+      ROCKSDB_VERSION: ${{ needs.changes.outputs.rocksdb_version }}
+      CMAKE_POLICY_VERSION_MINIMUM: 3.5
+      CMAKE_C_COMPILER_LAUNCHER: sccache
+      CMAKE_CXX_COMPILER_LAUNCHER: sccache
+      CMAKE_ASM_COMPILER_LAUNCHER: sccache
+      DFTRACER_UTILS_DEPS_PREFIX: ${{ github.workspace }}/.deps
+      SCCACHE_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+      SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+      SCCACHE_REGION: auto
+      SCCACHE_IDLE_TIMEOUT: "0"
+      SCCACHE_S3_USE_SSL: "true"
+      AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Prepare deps dir
+        run: |
+          sudo mkdir -p /opt/dftracer-deps
+          sudo chown "$(id -u):$(id -g)" /opt/dftracer-deps
+
+      - name: Restore RocksDB
+        run: scripts/ci/deps_cache.sh restore rocksdb /opt/dftracer-deps
+
+      - name: Use prebuilt RocksDB
+        run: |
+          prefix="/opt/dftracer-deps/rocksdb-${ROCKSDB_VERSION}"
+          if [ -x "${prefix}/bin/ldb" ]; then
+            echo "DFTRACER_UTILS_ROCKSDB_PREFIX=${prefix}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::no prebuilt RocksDB at ${prefix}; building from source"
+          fi
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - name: Restore dependency installs
+        run: scripts/ci/deps_cache.sh restore "ci-RelWithDebInfo" "$DFTRACER_UTILS_DEPS_PREFIX"
+
+      - name: Cache CPM dependency sources
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.cpmsource
+          key: cpmsource-lite-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
+          restore-keys: |
+            cpmsource-lite-v1-
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake zlib1g-dev libsqlite3-dev pkg-config ninja-build
+
+      - name: Run single library tests
+        run: |
+          ulimit -c unlimited || true
+          make test-single
+
   test-ubuntu-22-04-arm:
     needs: [changes, deps-ubuntu-22-04-arm]
     if: needs.changes.outputs.code == 'true' || needs.changes.outputs.coverage == 'true'

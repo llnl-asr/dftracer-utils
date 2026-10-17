@@ -7,7 +7,7 @@
 # Usage:
 #   scripts/ci/run_ci_local.sh [options] <job> [<job> ...]
 #
-# Jobs: test test-py lint typecheck format valgrind-cpp valgrind-mpi valgrind-py
+# Jobs: test test-py test-single lint typecheck format valgrind-cpp valgrind-mpi valgrind-py
 #       all = test test-py lint typecheck format (no Valgrind)
 #
 # Options:
@@ -42,7 +42,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 ENGINE="auto"
 BASE_IMAGE="ubuntu:22.04"
-CI_IMAGE="dftracer-utils-ci:local"
+CI_IMAGE="dftracer-utils-ci:cmake-pip"
 REBUILD=0
 KEEP=0
 SHELL_MODE=0
@@ -81,7 +81,7 @@ while [ $# -gt 0 ]; do
     --in-container) IN_CONTAINER=1; shift ;;
     -h|--help) usage; exit 0 ;;
     all) JOB_LIST+=(test test-py lint typecheck format); shift ;;
-    test|test-py|lint|typecheck|format|valgrind-cpp|valgrind-mpi|valgrind-py)
+    test|test-py|test-single|lint|typecheck|format|valgrind-cpp|valgrind-mpi|valgrind-py)
       JOB_LIST+=("$1"); shift ;;
     *) echo "Unknown job or option: $1" >&2; usage; exit 1 ;;
   esac
@@ -133,6 +133,14 @@ if [ "${IN_CONTAINER}" -eq 1 ]; then
         ctest --preset tests --output-on-failure ;;
       test-py)
         if [ "${RUN_TY}" -eq 1 ]; then make test-py RUN_TY=1; else make test-py; fi ;;
+      test-single)
+        # The preset builds with every core; a small container VM kills the
+        # compiler or a test for lack of memory, so allow about 2 GB for each job.
+        mem_gb=$(awk '/MemTotal/ {print int($2 / 1048576)}' /proc/meminfo)
+        build_jobs=$((mem_gb / 2))
+        [ "${build_jobs}" -lt 1 ] && build_jobs=1
+        [ "${build_jobs}" -gt "$(nproc)" ] && build_jobs="$(nproc)"
+        make test-single BUILD_JOBS="${build_jobs}" CTEST_ARGS="-j ${build_jobs}" ;;
       lint) make lint ;;
       typecheck) make typecheck ;;
       format) make check-format ;;
@@ -183,7 +191,9 @@ elif [ -n "${STORAGE_DRIVER}" ]; then
 fi
 engine() { "${ENGINE}" ${engine_opts[@]+"${engine_opts[@]}"} "$@"; }
 
-# apt set = union of every job's deps in ci.yml; uv provides uvx for lint.
+# apt set = union of every job's deps in ci.yml; uv provides uvx for lint. The
+# apt cmake of 22.04 is 3.22 and cannot read the version 6 presets, so pip
+# installs a newer one into /usr/local/bin.
 ensure_image() {
   if [ "${REBUILD}" -eq 0 ] && \
      engine image inspect "${CI_IMAGE}" >/dev/null 2>&1; then
@@ -202,8 +212,8 @@ RUN A='-o APT::Sandbox::User=root' \
       build-essential cmake ninja-build ccache valgrind gdb git \
       zlib1g-dev libzstd-dev libsqlite3-dev pkg-config ca-certificates \
       libopenmpi-dev openmpi-bin python3 python3-dev python3-venv python3-pip \
- && (pip3 install --no-cache-dir uv \
-     || pip3 install --no-cache-dir --break-system-packages uv) \
+ && (pip3 install --no-cache-dir uv cmake \
+     || pip3 install --no-cache-dir --break-system-packages uv cmake) \
  && rm -rf /var/lib/apt/lists/*
 EOF
 }

@@ -68,6 +68,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Add the library `dftracer_utils_dstd`, between `memory` and `common`, with its own pkg-config and `find_package` names.
   It holds the hashing, eviction policy, `expected`, base64 and generic headers that the other libraries share, and it links only `memory`.
   Include paths change: the generic headers moved from `dftracer/utils/common/` and `dftracer/utils/core/` to `dftracer/utils/dstd/`, `tracked_bytes.h` and `memory_pool.h` moved to `dftracer/utils/memory/`, and `timer_service.h` moved to `dftracer/utils/core/`.
+- Add the CMake option `DFTRACER_UTILS_SINGLE_LIBRARY`, off by default, to build one library `dftracer_utils` instead of one library for each area.
+  The `dftracer_utils::shared` and `dftracer_utils::static` targets, the CLI tools and the Python extension link only that library.
+  A build with the option on installs only `dftracer_utils`, with its own pkg-config and `find_package` names, and no per-area packages.
 - Take the pandas names `col(...).isin`, `startswith`, `endswith`, `between`, `isnull`, `notnull`, `cumsum`, `cummax`, `cummin`, `cumprod`, `ffill`, `bfill` and `astype` in column expressions.
   `col(...).str` takes every pandas string method that the engine has, such as `startswith`, `lower`, `strip`, `len` and `split` ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 - Round to any number of places with `Series.round(decimals)` and `DataFrame.round(decimals)`, with halves to even as numpy and pandas do.

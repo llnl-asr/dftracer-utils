@@ -38,6 +38,15 @@ endif()
 # ##############################################################################
 
 # -----------------------------------------
+# Memory library sources
+# -----------------------------------------
+
+set(DFTRACER_UTILS_MEMORY_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/heap.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/heap_page.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/heap_system.cpp)
+
+# -----------------------------------------
 # Common library sources
 # -----------------------------------------
 
@@ -401,6 +410,54 @@ endif()
 
 create_library(
   NAME
+  dftracer_utils_memory
+  NAMESPACE
+  dftracer_utils_memory
+  SOURCES
+  ${DFTRACER_UTILS_MEMORY_SOURCES}
+  VERSION
+  ${PROJECT_VERSION}
+  DESCRIPTION
+  "DFTracer utils memory library (allocator)"
+  URL
+  "https://github.com/llnl-asr/dftracer-utils"
+  BUILD_SHARED
+  ${DFTRACER_UTILS_BUILD_SHARED}
+  BUILD_STATIC
+  ${DFTRACER_UTILS_BUILD_STATIC}
+  PUBLIC_LINK_LIBRARIES
+  Threads::Threads
+  PUBLIC_INCLUDE_DIRS
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE_COMPILE_OPTIONS
+  ${COVERAGE_COMPILE_OPTIONS}
+  PKG_CONFIG_LIBS_PRIVATE
+  "-lpthread")
+
+foreach(variant objects shared static)
+  if(TARGET dftracer_utils_memory_${variant})
+    if(variant STREQUAL "objects")
+      target_set_warnings(dftracer_utils_memory_objects)
+      if(DFTRACER_UTILS_MEMORY_BACKEND STREQUAL "system")
+        target_compile_definitions(dftracer_utils_memory_objects
+                                   PRIVATE DFTRACER_UTILS_MEMORY_BACKEND_SYSTEM)
+      endif()
+      target_compile_definitions(
+        dftracer_utils_memory_objects
+        PRIVATE
+          $<$<OR:$<BOOL:${DFTRACER_UTILS_DEBUG}>,$<CONFIG:Debug>>:DFTRACER_UTILS_MEMORY_CHECKS>
+      )
+    elseif(COVERAGE_LINK_OPTIONS)
+      target_link_libraries(dftracer_utils_memory_${variant}
+                            PRIVATE ${COVERAGE_LINK_OPTIONS})
+    endif()
+  endif()
+endforeach()
+
+create_library(
+  NAME
   dftracer_utils_common
   NAMESPACE
   dftracer_utils_common
@@ -416,6 +473,10 @@ create_library(
   ${DFTRACER_UTILS_BUILD_SHARED}
   BUILD_STATIC
   ${DFTRACER_UTILS_BUILD_STATIC}
+  SHARED_LINK_LIBRARIES
+  dftracer_utils_memory::shared
+  STATIC_LINK_LIBRARIES
+  dftracer_utils_memory::static
   PUBLIC_LINK_LIBRARIES
   ghc_filesystem
   Threads::Threads
@@ -426,8 +487,12 @@ create_library(
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
   PRIVATE_COMPILE_OPTIONS
   ${COVERAGE_COMPILE_OPTIONS}
+  PKG_CONFIG_REQUIRES
+  "dftracer_utils_memory"
   PKG_CONFIG_LIBS_PRIVATE
-  "-lpthread")
+  "-lpthread"
+  FIND_DEPENDENCIES
+  dftracer_utils_memory)
 
 option(DFTRACER_UTILS_TRACKED_BYTES
        "Count MemoryPool and lazy plan bytes in global gauges (measurement)" OFF)
@@ -480,8 +545,10 @@ create_library(
   BUILD_STATIC
   ${DFTRACER_UTILS_BUILD_STATIC}
   SHARED_LINK_LIBRARIES
+  dftracer_utils_memory::shared
   dftracer_utils_common::shared
   STATIC_LINK_LIBRARIES
+  dftracer_utils_memory::static
   dftracer_utils_common::static
   PUBLIC_LINK_LIBRARIES
   ghc_filesystem
@@ -496,10 +563,11 @@ create_library(
   PRIVATE_COMPILE_OPTIONS
   ${COVERAGE_COMPILE_OPTIONS}
   PKG_CONFIG_REQUIRES
-  "dftracer_utils_common ${PKG_CONFIG_REQUIRES}"
+  "dftracer_utils_memory dftracer_utils_common ${PKG_CONFIG_REQUIRES}"
   PKG_CONFIG_LIBS_PRIVATE
   "${PKG_CONFIG_LIBS_PRIVATE}"
   FIND_DEPENDENCIES
+  dftracer_utils_memory
   dftracer_utils_common)
 
 # Post-process core library targets to add dependency linking and warnings
@@ -1082,6 +1150,20 @@ use_precompiled_header(dftracer_utils_utilities_objects)
 # via "dftracer_utils_core" instead of "dftracer_utils_core_shared"
 create_unified_library_config(
   NAME
+  dftracer_utils_memory
+  VERSION
+  ${PROJECT_VERSION}
+  DESCRIPTION
+  "DFTracer utils memory library (allocator)"
+  URL
+  "https://github.com/llnl-asr/dftracer-utils"
+  BUILD_SHARED
+  ${DFTRACER_UTILS_BUILD_SHARED}
+  BUILD_STATIC
+  ${DFTRACER_UTILS_BUILD_STATIC})
+
+create_unified_library_config(
+  NAME
   dftracer_utils_common
   VERSION
   ${PROJECT_VERSION}
@@ -1092,7 +1174,11 @@ create_unified_library_config(
   BUILD_SHARED
   ${DFTRACER_UTILS_BUILD_SHARED}
   BUILD_STATIC
-  ${DFTRACER_UTILS_BUILD_STATIC})
+  ${DFTRACER_UTILS_BUILD_STATIC}
+  PKG_CONFIG_REQUIRES
+  "dftracer_utils_memory"
+  FIND_DEPENDENCIES
+  dftracer_utils_memory)
 
 create_unified_library_config(
   NAME
@@ -1185,7 +1271,8 @@ if(DFTRACER_UTILS_PREFERRED_TYPE)
   set(UNIFIED_CONFIG_CONTENT "")
   string(APPEND UNIFIED_CONFIG_CONTENT "@PACKAGE_INIT@\n\n")
   string(APPEND UNIFIED_CONFIG_CONTENT "include(CMakeFindDependencyMacro)\n\n")
-  string(APPEND UNIFIED_CONFIG_CONTENT "# Find common, core and utilities libraries\n")
+  string(APPEND UNIFIED_CONFIG_CONTENT "# Find memory, common, core and utilities libraries\n")
+  string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_memory)\n")
   string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_common)\n")
   string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_core)\n")
   string(APPEND UNIFIED_CONFIG_CONTENT
@@ -1663,6 +1750,7 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/group_transform_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/memory_attribution_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/counter_contention_bench.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/heap_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/pressure_read_bench.cpp)
 
   foreach(bench ${DFTRACER_BENCHMARKS})
@@ -1696,6 +1784,9 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
              COMMAND counter_contention_bench --smoke)
     set_tests_properties(bench_smoke/counter_contention PROPERTIES LABELS
                                                                    bench_smoke)
+
+    add_test(NAME bench_smoke/heap COMMAND heap_bench --smoke)
+    set_tests_properties(bench_smoke/heap PROPERTIES LABELS bench_smoke)
 
     add_test(NAME bench_smoke/pressure_read COMMAND pressure_read_bench --smoke)
     set_tests_properties(bench_smoke/pressure_read PROPERTIES LABELS

@@ -113,6 +113,7 @@
       "inherits": "debug",
       "cacheVariables": {
         "DFTRACER_UTILS_TESTS": "ON",
+        "DFTRACER_UTILS_MEMORY_BACKEND": "system",
         "DFTRACER_UTILS_ENABLE_ASAN": "ON"
       }
     },
@@ -123,6 +124,7 @@
       "inherits": "debug",
       "cacheVariables": {
         "DFTRACER_UTILS_TESTS": "ON",
+        "DFTRACER_UTILS_MEMORY_BACKEND": "system",
         "DFTRACER_UTILS_ENABLE_TSAN": "ON",
         "DFTRACER_UTILS_COVERAGE": "OFF"
       }
@@ -134,6 +136,7 @@
       "inherits": "debug",
       "cacheVariables": {
         "DFTRACER_UTILS_TESTS": "ON",
+        "DFTRACER_UTILS_MEMORY_BACKEND": "system",
         "DFTRACER_UTILS_ENABLE_UBSAN": "ON",
         "DFTRACER_UTILS_COVERAGE": "OFF"
       }
@@ -145,6 +148,7 @@
       "inherits": "debug",
       "cacheVariables": {
         "DFTRACER_UTILS_TESTS": "ON",
+        "DFTRACER_UTILS_MEMORY_BACKEND": "system",
         "DFTRACER_UTILS_ENABLE_ASAN": "ON",
         "DFTRACER_UTILS_ENABLE_UBSAN": "ON",
         "DFTRACER_UTILS_COVERAGE": "OFF"

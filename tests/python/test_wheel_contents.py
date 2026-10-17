@@ -29,7 +29,12 @@ FORBIDDEN_SUFFIXES = (".a",)
 REQUIRED_PATTERNS = (
     "dftracer/utils/__init__.py",
     "dftracer/utils/dftracer_utils_ext",
+    "dftracer/lib/libdftracer_utils_memory",
+    "dftracer/lib/libdftracer_utils_common",
     "dftracer/lib/libdftracer_utils_core",
+    "dftracer/lib/libdftracer_utils_json",
+    "dftracer/lib/libdftracer_utils_duql",
+    "dftracer/lib/libdftracer_utils_dataframe",
     "dftracer/lib/libdftracer_utils_utilities",
     "dftracer/bin/dftracer_index",
     "dftracer/bin/ldb",

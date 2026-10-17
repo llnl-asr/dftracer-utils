@@ -9,6 +9,7 @@
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <fcntl.h>
@@ -99,10 +100,10 @@ class GenDistArgParse : public cli::ArgParse {
             return false;
         }
         if (memory.memory_budget != 0 &&
-            memory.memory_budget < MIN_MEMORY_BUDGET_BYTES) {
+            memory.memory_budget < memory::MIN_MEMORY_BUDGET_BYTES) {
             DFTRACER_UTILS_LOG_ERROR(
                 "--memory-budget must be at least %zu bytes (64MB)",
-                static_cast<std::size_t>(MIN_MEMORY_BUDGET_BYTES));
+                static_cast<std::size_t>(memory::MIN_MEMORY_BUDGET_BYTES));
             return false;
         }
         if (!shard_text.empty() && !parse_shard()) {
@@ -628,7 +629,8 @@ coro::CoroTask<int> run_gen_dist(CoroScope& ctx, const GenDistArgParse* cli,
     // An eighth of the budget for the writers' buffers and in-flight members,
     // the rest for the groups being read. The run and func records, about a
     // hundredth of the bytes, get a quarter of the writers' part.
-    const std::uint64_t total = resolve_spill_budget(cli->memory.memory_budget);
+    const std::uint64_t total =
+        memory::resolve_spill_budget(cli->memory.memory_budget);
     const std::uint64_t head_budget = total / 32;
     const std::uint64_t writer_budget = total / 8 - head_budget;
     const std::uint64_t budget = total - writer_budget - head_budget;
@@ -876,7 +878,8 @@ int run_mpi(GenDistArgParse& cli) {
     }
     if (cli.memory.memory_budget == 0)
         cli.memory.memory_budget = std::max<std::uint64_t>(
-            MIN_MEMORY_BUDGET_BYTES, resolve_spill_budget(0) / node_ranks());
+            memory::MIN_MEMORY_BUDGET_BYTES,
+            memory::resolve_spill_budget(0) / node_ranks());
     const Shard shard{static_cast<std::size_t>(rank),
                       static_cast<std::size_t>(size)};
     const std::string part = str_cat(cli.output, ".", rank, ".part");

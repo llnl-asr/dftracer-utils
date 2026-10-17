@@ -2,7 +2,6 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/core/coro/when_all.h>
 #include <dftracer/utils/core/coro/when_any.h>
 #include <dftracer/utils/core/coro/yield.h>
@@ -16,6 +15,7 @@
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/record_parser.h>
+#include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/fold_adapter/ext.h>
 #include <dftracer/utils/plugins/fold_adapter/state.h>
@@ -1380,8 +1380,8 @@ dataframe::DataFrame PluginFold::rewritten_batch(
 void PluginFold::reclaim_slice() {
     if (!slice_ || !plugin_->bytes) return;
     const std::uint64_t budget =
-        dftracer::utils::resolve_spill_budget(memory_budget_);
-    if (budget == dftracer::utils::NO_SPILL_BUDGET) return;
+        dftracer::utils::memory::resolve_spill_budget(memory_budget_);
+    if (budget == dftracer::utils::memory::NO_SPILL_BUDGET) return;
     const std::uint64_t held = plugin_->bytes(slice_);
     if (held <= budget) return;
     const std::uint64_t freed =

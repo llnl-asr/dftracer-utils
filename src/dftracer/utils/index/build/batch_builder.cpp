@@ -20,6 +20,7 @@
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
 #include <algorithm>
@@ -470,8 +471,9 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
     }
 
     auto admission = std::make_shared<Admission>();
-    if (state->memory_budget != NO_SPILL_BUDGET) {
-        admission->capacity = resolve_spill_budget(state->memory_budget);
+    if (state->memory_budget != memory::NO_SPILL_BUDGET) {
+        admission->capacity =
+            memory::resolve_spill_budget(state->memory_budget);
         admission->sem =
             std::make_unique<coro::CoroSemaphore>(admission->capacity);
         if (!state->sink_factory || state->spill_commit)

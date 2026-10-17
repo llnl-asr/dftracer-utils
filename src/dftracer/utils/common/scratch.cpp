@@ -2,8 +2,8 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/filesystem_info.h>
-#include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/scratch.h>
+#include <dftracer/utils/memory/budget.h>
 #include <pwd.h>
 #include <unistd.h>
 
@@ -62,7 +62,7 @@ bool mount_has_room(const std::string& mount, FilesystemKind kind,
     if (ec) return false;
     std::uint64_t avail = static_cast<std::uint64_t>(space.available);
     if (is_memory_filesystem(kind)) {
-        const std::uint64_t ram = detect_available_memory();
+        const std::uint64_t ram = memory::detect_available_memory();
         if (ram != 0 && ram < avail) avail = ram;
         if (needed * 2 > avail) return false;
     }

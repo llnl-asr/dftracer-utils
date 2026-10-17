@@ -162,6 +162,7 @@ set(TEST_CPP_SOURCES
     dstd/test_eviction_policy.cpp
     core/test_filesystem_info.cpp
     core/test_memory_budget.cpp
+    core/test_memory_config.cpp
     core/test_async_semaphore.cpp
     core/test_external_sort.cpp
     core/test_spill_dir.cpp

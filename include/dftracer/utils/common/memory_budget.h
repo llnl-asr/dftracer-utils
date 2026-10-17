@@ -9,29 +9,16 @@
 namespace dftracer::utils {
 
 static constexpr std::size_t DEFAULT_MEMORY_BUDGET_FRACTION_PERCENT = 50;
-static constexpr std::size_t MIN_MEMORY_BUDGET_BYTES = 64 * 1024 * 1024;
-
-/// Sentinel spill budget meaning "never spill" (an effectively infinite bound):
-/// resolve_spill_budget passes it through unchanged, and no in-memory state
-/// ever exceeds it. Distinct from 0, which means "auto".
-static constexpr std::uint64_t NO_SPILL_BUDGET = ~std::uint64_t{0};
-
-/// Resolve a configured out-of-core spill budget the same way everywhere: 0
-/// means "auto" and becomes ~1/3 of available memory (floored at
-/// MIN_MEMORY_BUDGET_BYTES); NO_SPILL_BUDGET passes through (never spills); any
-/// other value is used as-is. Shared by the View and the lazy DataFrame so both
-/// treat 0 identically.
-std::uint64_t resolve_spill_budget(std::uint64_t configured);
 
 /// One of `ways` concurrent runs' share of the spill budget `configured`, so
 /// the shares add up to at most the resolved budget. `configured` is returned
-/// unchanged when `ways <= 1` or it is NO_SPILL_BUDGET; a share is never 0,
-/// which would mean "auto".
+/// unchanged when `ways <= 1` or it is memory::NO_SPILL_BUDGET; a share is
+/// never 0, which would mean "auto".
 std::uint64_t share_spill_budget(std::uint64_t configured, std::size_t ways);
 
 /// How many of `n` independent runs to start at once under the spill budget
-/// `configured` so each share is at least MIN_MEMORY_BUDGET_BYTES; in [1, n]
-/// (n when `configured` is NO_SPILL_BUDGET).
+/// `configured` so each share is at least memory::MIN_MEMORY_BUDGET_BYTES; in
+/// [1, n] (n when `configured` is memory::NO_SPILL_BUDGET).
 std::size_t concurrent_spill_ways(std::uint64_t configured, std::size_t n);
 
 /// Peak resident memory of a read + aggregate + HLM pass is ~this multiple of
@@ -47,7 +34,6 @@ static constexpr std::size_t MAX_PER_FILE_PEAK_BYTES =
     16ULL * 1024 * 1024 * 1024;
 static constexpr std::size_t PER_FILE_SAMPLE_LIMIT = 1024;
 
-std::size_t detect_available_memory();
 std::size_t compute_memory_budget(std::size_t user_override_bytes = 0);
 std::size_t estimate_per_file_bytes(const std::vector<std::size_t>& file_sizes,
                                     std::size_t user_override_bytes = 0);
@@ -63,9 +49,9 @@ struct MemoryBudgetAdvice {
     std::size_t suggested_nodes = 1;  ///< nodes to spread peak under available
 };
 
-/// `available_bytes == 0` uses detect_available_memory(). suggested_nodes is
-/// ceil(peak_bytes / available_bytes), so it exceeds 1 only when it does not
-/// fit.
+/// `available_bytes == 0` uses memory::detect_available_memory().
+/// suggested_nodes is ceil(peak_bytes / available_bytes), so it exceeds 1 only
+/// when it does not fit.
 MemoryBudgetAdvice memory_budget_advice(std::size_t required_bytes,
                                         std::size_t available_bytes = 0);
 

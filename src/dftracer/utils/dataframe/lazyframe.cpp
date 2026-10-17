@@ -36,6 +36,7 @@
 #include <dftracer/utils/dstd/hash/hash.h>
 #include <dftracer/utils/dstd/hash/partition.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>  // compute_memory_budget
+#include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/memory/tracked_bytes.h>
 
 #include <algorithm>
@@ -111,7 +112,7 @@ class PartHolder {
     explicit PartHolder(std::uint64_t budget) : budget_(budget) {}
 
     void add(DataFrame&& df) {
-        if (budget_ != NO_SPILL_BUDGET) {
+        if (budget_ != memory::NO_SPILL_BUDGET) {
             if (held_ > budget_) {
                 if (!file_) file_ = std::make_unique<spill::PartFile>();
                 df.columns = file_->append(df.columns);
@@ -163,8 +164,9 @@ coro::CoroTask<DataFrame> join_parts(std::vector<DataFrame> parts) {
     co_return out;
 }
 
-coro::CoroTask<DataFrame> drain_stream(coro::AsyncGenerator<DataFrame> gen,
-                                       std::uint64_t budget = NO_SPILL_BUDGET) {
+coro::CoroTask<DataFrame> drain_stream(
+    coro::AsyncGenerator<DataFrame> gen,
+    std::uint64_t budget = memory::NO_SPILL_BUDGET) {
     PartHolder holder(budget);
     for (;;) {
         auto df = co_await gen.next();
@@ -184,10 +186,10 @@ coro::CoroTask<DataFrame> drain_stream(coro::AsyncGenerator<DataFrame> gen,
 // sort_by_multi) whose eager op has no incremental form and needs every row at
 // once. An input with no morsel is typed from `fields`, the plan's schema at
 // this point, matched by name.
-coro::CoroTask<DataFrame> drain_cursor(Cursor& c, std::vector<std::string> sch,
-                                       const std::vector<Field>& fields,
-                                       std::int64_t max_rows, const char* who,
-                                       std::uint64_t budget = NO_SPILL_BUDGET) {
+coro::CoroTask<DataFrame> drain_cursor(
+    Cursor& c, std::vector<std::string> sch, const std::vector<Field>& fields,
+    std::int64_t max_rows, const char* who,
+    std::uint64_t budget = memory::NO_SPILL_BUDGET) {
     PartHolder holder(budget);
     for (;;) {
         auto m = co_await c.next(max_rows);
@@ -2257,12 +2259,13 @@ class JoinCursor : public Cursor {
             co_return;
         }
         if (!right_rest_ &&
-            (budget_ == NO_SPILL_BUDGET || how_ == JoinHow::Cross)) {
+            (budget_ == memory::NO_SPILL_BUDGET || how_ == JoinHow::Cross)) {
             DataFrame right = co_await other_.collect();
             co_await start_in_memory(std::move(right));
             co_return;
         }
-        const bool spill = budget_ != NO_SPILL_BUDGET && how_ != JoinHow::Cross;
+        const bool spill =
+            budget_ != memory::NO_SPILL_BUDGET && how_ != JoinHow::Cross;
         std::vector<DataFrame> parts;
         std::uint64_t bytes = 0;
         auto gen = right_frames(max_rows);
@@ -2645,7 +2648,8 @@ class FrameOpCursor : public Cursor {
           name_(std::move(name)),
           op_(op),
           args_(std::move(args)),
-          hold_(has_cap(budget) ? budget / share::SPOOL : NO_SPILL_BUDGET),
+          hold_(has_cap(budget) ? budget / share::SPOOL
+                                : memory::NO_SPILL_BUDGET),
           per_morsel_(per_morsel) {}
 
     // The registry op takes its input as one frame. The parts of the input
@@ -2685,7 +2689,7 @@ class FrameOpCursor : public Cursor {
             chunks_.set(morsel_of(std::move(out)));
         }
         if (chunks_.empty()) co_return std::nullopt;
-        co_return chunks_.next(max_rows, NO_SPILL_BUDGET);
+        co_return chunks_.next(max_rows, memory::NO_SPILL_BUDGET);
     }
 
     std::optional<std::vector<std::string>> out_names() const override {
@@ -4195,7 +4199,7 @@ std::unique_ptr<Cursor> make_cursor(const LazyOp& op,
                 // The right plan runs under the budget of this plan unless it
                 // sets its own.
                 LazyFrame other = o.other;
-                if (budget != NO_SPILL_BUDGET && budget > 0 &&
+                if (budget != memory::NO_SPILL_BUDGET && budget > 0 &&
                     detail::PlanAccess::memory_budget(other) == 0)
                     other = other.memory_budget(budget);
                 return std::make_unique<JoinCursor>(
@@ -4219,12 +4223,13 @@ std::unique_ptr<Cursor> make_cursor(const LazyOp& op,
                     return make_native_transform(std::move(in), sch, *o.args,
                                                  o.out_names, o.out_types,
                                                  budget);
-                if (o.name == WINDOW_OP && budget != NO_SPILL_BUDGET &&
+                if (o.name == WINDOW_OP && budget != memory::NO_SPILL_BUDGET &&
                     budget > 0)
                     return make_window(std::move(in), sch, o.in_fields, o.name,
                                        o.op, o.args, budget);
-                if (o.name == COMPARE_AGG_OP && budget != NO_SPILL_BUDGET &&
-                    budget > 0 && o.args->frames().size() == 1) {
+                if (o.name == COMPARE_AGG_OP &&
+                    budget != memory::NO_SPILL_BUDGET && budget > 0 &&
+                    o.args->frames().size() == 1) {
                     LazyFrame other = o.args->frames().front();
                     if (detail::PlanAccess::memory_budget(other) == 0)
                         other = other.memory_budget(budget);
@@ -4233,7 +4238,7 @@ std::unique_ptr<Cursor> make_cursor(const LazyOp& op,
                                             budget);
                 }
                 if ((o.name == ASOF_OP || o.name == INTERVAL_OP) &&
-                    budget != NO_SPILL_BUDGET && budget > 0 &&
+                    budget != memory::NO_SPILL_BUDGET && budget > 0 &&
                     o.args->frames().size() == 1) {
                     LazyFrame other = o.args->frames().front();
                     if (detail::PlanAccess::memory_budget(other) == 0)
@@ -4242,7 +4247,7 @@ std::unique_ptr<Cursor> make_cursor(const LazyOp& op,
                                                         *o.args, other, budget))
                         return joined;
                 }
-                if (budget != NO_SPILL_BUDGET && budget > 0) {
+                if (budget != memory::NO_SPILL_BUDGET && budget > 0) {
                     std::unique_ptr<Cursor> streamed;
                     if (o.name == COLUMN_OP)
                         streamed =
@@ -4415,7 +4420,7 @@ coro::CoroTask<DataFrame> LazyFrame::run_ops_in_memory(
             const std::int64_t rows = std::max<std::int64_t>(df.num_rows(), 1);
             const LazyFrame whole(
                 std::make_shared<InMemorySource>(std::move(df)), {op},
-                NO_SPILL_BUDGET);
+                memory::NO_SPILL_BUDGET);
             next = co_await drain_stream(whole.stream(rows));
         }
         df = std::move(next);
@@ -5115,7 +5120,7 @@ LazyFrame LazyFrame::memory_budget(std::uint64_t bytes) const {
 LazyFrame LazyFrame::auto_spill() const {
     // Same policy as the default (0) and as View: ~1/3 of available
     // memory.
-    return LazyFrame(source_, ops_, resolve_spill_budget(0));
+    return LazyFrame(source_, ops_, memory::resolve_spill_budget(0));
 }
 
 LazyFrame LazyFrame::op(std::string name, OpArgs args) const {
@@ -5352,7 +5357,7 @@ coro::AsyncGenerator<DataFrame> stream_plan(PlanParts plan,
                                             std::uint64_t memory_budget,
                                             std::int64_t morsel_rows) {
     // 0 resolves to auto (~1/3 RAM), same policy as View.
-    const std::uint64_t budget = resolve_spill_budget(memory_budget);
+    const std::uint64_t budget = memory::resolve_spill_budget(memory_budget);
     const std::int64_t eff_rows =
         morsel_rows > 0 ? morsel_rows : DEFAULT_MORSEL_ROWS;
 
@@ -5379,7 +5384,7 @@ CursorChain open_chain(const LazyFrame& lf) {
                                     detail::PlanAccess::ops(lf));
     return lower_cursor_chain(
         std::move(plan.source), plan.ops,
-        resolve_spill_budget(detail::PlanAccess::memory_budget(lf)));
+        memory::resolve_spill_budget(detail::PlanAccess::memory_budget(lf)));
 }
 
 std::unique_ptr<Cursor> without_rest_column(CursorChain chain) {
@@ -5448,11 +5453,11 @@ coro::CoroTask<DataFrame> collect_plan(PlanParts plan,
                      [](const auto& op) { return may_expand(*op); })) {
         if (const DataFrame* f = plan.source->as_frame();
             f && spill::columns_bytes(f->columns) <=
-                     resolve_spill_budget(0) / share::SPILL_STATE)
+                     memory::resolve_spill_budget(0) / share::SPILL_STATE)
             co_return co_await detail::PlanAccess::run_in_memory(
                 share_frame(*f), std::move(plan.ops));
     }
-    const std::uint64_t budget = resolve_spill_budget(memory_budget);
+    const std::uint64_t budget = memory::resolve_spill_budget(memory_budget);
     co_return co_await drain_stream(
         stream_plan(std::move(plan), memory_budget, morsel_rows), budget);
 }
@@ -5656,7 +5661,7 @@ coro::CoroTask<void> batch_leaves(std::vector<PlannedTree*> leaves,
         for (PlannedTree* m : g.members) sources.push_back(m->parts.source);
         if (std::all_of(g.members.begin(), g.members.end(), streamable)) {
             const std::uint64_t budget =
-                resolve_spill_budget(g.members.front()->memory_budget);
+                memory::resolve_spill_budget(g.members.front()->memory_budget);
             if (auto cursors = sources.front()->open_batch(sources, budget)) {
                 if (cursors->size() != g.members.size())
                     throw std::logic_error(

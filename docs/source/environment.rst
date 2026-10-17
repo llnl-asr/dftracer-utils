@@ -74,6 +74,55 @@ Memory and kernels
        stores them raw. ``auto``, unset or any other value compresses only
        when the spill file is on a network file system, where the bytes
        written cost more than the compression.
+   * - ``DFTRACER_UTILS_MEMORY_BACKEND``
+     - the build option
+     - ``page_heap`` or ``system``. Picks the allocator backend, read once
+       before the first allocation. Unset or empty uses the CMake option of the
+       same name (``page_heap``, and ``system`` in the sanitizer presets). Any
+       other value stops the process at the first allocation.
+   * - ``DFTRACER_UTILS_MEM_DECAY_MS``
+     - ``1000``
+     - Milliseconds an idle page or run stays backed before the heap gives it
+       back to the operating system. ``0`` gives it back at the first slow
+       path. Read once before the first allocation. A value that is not a whole
+       number up to ``4294967295`` stops the process at the first allocation.
+   * - ``DFTRACER_UTILS_MEM_BUDGET``
+     - a third of the available memory
+     - The sum of reservations that the memory manager accepts, in bytes or
+       with a unit such as ``4GB``. Unset or ``0`` uses a third of the
+       available memory (the cgroup limit when there is one). A value that is
+       not a byte size is an error that names the variable.
+   * - ``DFTRACER_UTILS_MEM_HARD_LIMIT``
+     - ``0``
+     - Bytes of heap the process may hold from the operating system, in bytes
+       or with a unit. An allocation that would pass it fails with
+       ``std::bad_alloc``. ``0`` sets no cap. A bad value is an error that
+       names the variable.
+   * - ``DFTRACER_UTILS_MEM_LIMIT_HEADROOM``
+     - 5% of the limit, at least 256 MB
+     - How far below the process memory limit the measured memory may grow
+       before holders are asked to give bytes back. Bytes or a unit. A bad
+       value is an error that names the variable.
+   * - ``DFTRACER_UTILS_MEM_SPILL_HEADROOM``
+     - 2% of the budget, at least 32 MB
+     - How far past the budget a pool that is spilling may reserve, so that
+       the spill can allocate its buffers. Bytes or a unit. A bad value is an
+       error that names the variable.
+   * - ``DFTRACER_UTILS_MEMORY_DEBUG``
+     - ``0``
+     - ``1`` turns on the heap debug checks, read once before the first
+       allocation: a record of the caller and size of each live block, a
+       redzone behind each block, a fill pattern on freed blocks and double
+       free detection. Each allocation is slower and freed blocks stay counted
+       for a while. Any value other than ``0`` or ``1`` stops the process at
+       the first allocation.
+   * - ``DFTRACER_UTILS_MEMORY_EXIT_CHECK``
+     - ``0``
+     - For test runs. ``1`` makes the process print a leak report and exit
+       with status ``70`` when blocks that no host buffer owns are still live
+       at exit or a scratch pool leaked. Do not set it for a normal run. The
+       Python extension turns it off at import. Any value other than ``0`` or
+       ``1`` stops the process at the first allocation.
    * - ``DFTRACER_UTILS_STRING_PREDICATE``
      - ``auto``
      - Scan used by the string class predicates (``isalpha``, ``isdigit`` and

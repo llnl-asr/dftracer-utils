@@ -13,16 +13,16 @@ namespace dftracer::utils::dataframe {
 
 /// Out-of-core accumulation for a long-lived AggState: the spill half of the
 /// aggregation engine, driven by the same budget the View and the lazy
-/// DataFrame breakers use (see resolve_spill_budget). A driver that folds an
-/// unbounded number of batches into one state offers the state after each
-/// accumulate; past the budget the state is written to a sorted temp run and
-/// replaced by a fresh empty one, so the live group map never grows past the
-/// budget however many groups the input has. drain() reads the runs back and
-/// finalizes, in bounded group chunks when the specs allow it.
+/// DataFrame breakers use (see memory::resolve_spill_budget). A driver that
+/// folds an unbounded number of batches into one state offers the state after
+/// each accumulate; past the budget the state is written to a sorted temp run
+/// and replaced by a fresh empty one, so the live group map never grows past
+/// the budget however many groups the input has. drain() reads the runs back
+/// and finalizes, in bounded group chunks when the specs allow it.
 class AggSpiller {
    public:
-    /// `budget` in bytes: 0 means "auto" (resolve_spill_budget), and
-    /// NO_SPILL_BUDGET disables spilling. Resolved once, here.
+    /// `budget` in bytes: 0 means "auto" (memory::resolve_spill_budget), and
+    /// memory::NO_SPILL_BUDGET disables spilling. Resolved once, here.
     explicit AggSpiller(std::uint64_t budget = 0);
     ~AggSpiller();
     AggSpiller(AggSpiller&&) noexcept;

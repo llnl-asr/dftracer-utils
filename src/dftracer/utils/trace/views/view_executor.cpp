@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/core/coro/async_mutex.h>
 #include <dftracer/utils/core/coro/when_all.h>
@@ -31,6 +32,7 @@
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/json/record_parser.h>
+#include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/trace/internal/index_root.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/containment_fold.h>
@@ -536,8 +538,8 @@ std::string bootstrap_spill_root(const std::string& index_path) {
     return index_path + ".spill";
 }
 
-// `spill_share` bounds the bloom chunks the file holds; NO_SPILL_BUDGET holds
-// them all.
+// `spill_share` bounds the bloom chunks the file holds; memory::NO_SPILL_BUDGET
+// holds them all.
 coro::CoroTask<BootstrapFile> bootstrap_file(
     const ViewPlan* plan, ViewFile f, int file_id, std::uint64_t spill_share,
     std::size_t parse_ahead, bool keep_state, std::mutex* persist) {
@@ -550,7 +552,7 @@ coro::CoroTask<BootstrapFile> bootstrap_file(
         intern, dftracer::utils::index::build::for_schema({}, schema));
     dftracer::utils::index::extensions::RowSetFold rowsets(
         intern, dftracer::utils::index::indexed_rowsets(schema));
-    if (spill_share != NO_SPILL_BUDGET)
+    if (spill_share != memory::NO_SPILL_BUDGET)
         bloom.enable_spill(spill_share,
                            bootstrap_spill_root(f.index_path) + "/file_" +
                                std::to_string(file_id),

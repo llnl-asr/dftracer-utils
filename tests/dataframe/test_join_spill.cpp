@@ -2,12 +2,12 @@
 // and gives the rows of the in-memory join, checked against a nested loop.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/grace_join.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/memory/budget.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -19,7 +19,6 @@
 #include <utility>
 #include <vector>
 
-using dftracer::utils::NO_SPILL_BUDGET;
 using dftracer::utils::coro::CoroTask;
 using dftracer::utils::dataframe::DataFrame;
 using dftracer::utils::dataframe::InMemorySource;
@@ -216,7 +215,9 @@ TEST_SUITE("join spill") {
         for (const JoinHow how : HOWS) {
             CAPTURE(static_cast<int>(how));
             const auto want = reference(l, r, how);
-            CHECK(rows_of(join(lf, rf, how, NO_SPILL_BUDGET)) == want);
+            CHECK(rows_of(join(lf, rf, how,
+                               dftracer::utils::memory::NO_SPILL_BUDGET)) ==
+                  want);
             CHECK(rows_of(join(lf, rf, how, 4096)) == want);
             CHECK(rows_of(join(lf, rf, how, 1)) == want);
         }
@@ -272,8 +273,8 @@ TEST_SUITE("join spill") {
         block_tables(l, r);
         const DataFrame lf = frame_of(l, "lk", "lv");
         const DataFrame rf = frame_of(r, "rk", "rv");
-        const auto want =
-            rows_of(join(lf, rf, JoinHow::Lookup, NO_SPILL_BUDGET));
+        const auto want = rows_of(join(
+            lf, rf, JoinHow::Lookup, dftracer::utils::memory::NO_SPILL_BUDGET));
         REQUIRE(want.size() == l.key.size());
         for (const std::uint64_t budget :
              {std::uint64_t{512}, std::uint64_t{4096}}) {
@@ -292,8 +293,8 @@ TEST_SUITE("join spill") {
         r.key[1400] = 3;
         const DataFrame lf = frame_of(l, "lk", "lv");
         const DataFrame rf = frame_of(r, "rk", "rv");
-        const std::string want =
-            error_of(lf, rf, JoinHow::Lookup, NO_SPILL_BUDGET);
+        const std::string want = error_of(
+            lf, rf, JoinHow::Lookup, dftracer::utils::memory::NO_SPILL_BUDGET);
         REQUIRE_FALSE(want.empty());
         for (const std::uint64_t budget :
              {std::uint64_t{512}, std::uint64_t{4096}})
@@ -308,7 +309,8 @@ TEST_SUITE("join spill") {
         const DataFrame lf = frame_of(l, "lk", "lv");
         const DataFrame rf = frame_of(r, "rk", "rv");
         const auto want =
-            nest_rows_of(join(lf, rf, JoinHow::Nest, NO_SPILL_BUDGET, "m"));
+            nest_rows_of(join(lf, rf, JoinHow::Nest,
+                              dftracer::utils::memory::NO_SPILL_BUDGET, "m"));
         REQUIRE(want.size() == l.key.size());
         for (const std::uint64_t budget :
              {std::uint64_t{512}, std::uint64_t{4096}}) {
@@ -333,8 +335,10 @@ TEST_SUITE("join spill") {
         }
         const DataFrame lf = frame_of(l, "lk", "lv");
         const DataFrame rf = frame_of(r, "rk", "rv");
-        CHECK(nest_rows_of(join(lf, rf, JoinHow::Nest, 256, "m")) ==
-              nest_rows_of(join(lf, rf, JoinHow::Nest, NO_SPILL_BUDGET, "m")));
+        CHECK(
+            nest_rows_of(join(lf, rf, JoinHow::Nest, 256, "m")) ==
+            nest_rows_of(join(lf, rf, JoinHow::Nest,
+                              dftracer::utils::memory::NO_SPILL_BUDGET, "m")));
     }
 
     TEST_CASE("an empty side and no matching key") {
@@ -383,7 +387,7 @@ TEST_SUITE("join spill") {
         const auto plain = [&](std::uint64_t budget) {
             return rows_of(join(l, r, JoinHow::Lookup, budget));
         };
-        const auto want = plain(NO_SPILL_BUDGET);
+        const auto want = plain(dftracer::utils::memory::NO_SPILL_BUDGET);
         CHECK(want.size() == 600);
         CHECK(plain(300) == want);
     }
@@ -426,7 +430,8 @@ TEST_SUITE("join spill") {
         rf.names.push_back("tags");
         rf.columns.push_back(Series::list(off, rf.columns[1].share()));
         const DataFrame spilled = join(lf, rf, JoinHow::Inner, 256);
-        const DataFrame whole = join(lf, rf, JoinHow::Inner, NO_SPILL_BUDGET);
+        const DataFrame whole = join(lf, rf, JoinHow::Inner,
+                                     dftracer::utils::memory::NO_SPILL_BUDGET);
         CHECK(spilled.num_rows() == whole.num_rows());
         CHECK(spilled.names == whole.names);
         DataFrame plain_spilled, plain_whole;

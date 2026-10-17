@@ -1,5 +1,4 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
@@ -14,6 +13,7 @@
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/trace/views/aggfold.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
@@ -511,9 +511,10 @@ TEST_CASE("a first-touch query under a small budget spills the same index") {
     // The default budget holds every chunk, and the tier is still written
     // as sorted runs.
     const std::string runs = determine_index_path(gz, env.get_dir() + "/runs");
-    CHECK(count(held, dftracer::utils::NO_SPILL_BUDGET) ==
+    CHECK(count(held, dftracer::utils::memory::NO_SPILL_BUDGET) ==
           count(spilled, 4096));
-    CHECK(count(runs, 0) == count(held, dftracer::utils::NO_SPILL_BUDGET));
+    CHECK(count(runs, 0) ==
+          count(held, dftracer::utils::memory::NO_SPILL_BUDGET));
     CHECK_FALSE(fs::exists(spilled + ".spill"));
     CHECK_FALSE(fs::exists(runs + ".spill"));
     const auto expected = index_contents(held);

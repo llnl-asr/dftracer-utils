@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/memory/heap_system.h>
+#include <dftracer/utils/memory/manager.h>
 #include <doctest/doctest.h>
 
 #include <cstddef>
@@ -53,7 +54,9 @@ TEST_CASE("every alignment from 1 to 4096 and size from 0 to 64 MiB") {
     }
 }
 
-TEST_CASE("the header holds the size, pool id 0 and the offset") {
+TEST_CASE("the header holds the size, the scope pool id and the offset") {
+    PoolHandle pool = Manager::get().root().child("header");
+    constexpr std::uint16_t GENERAL = 1;
     for (std::size_t align : alignments()) {
         for (std::size_t size : SIZES) {
             CAPTURE(align);
@@ -61,7 +64,7 @@ TEST_CASE("the header holds the size, pool id 0 and the offset") {
             void* p = allocate(size, align);
             const SystemHeader* h = system_header(p);
             CHECK(h->size == size);
-            CHECK(h->pool_id == 0);
+            CHECK(h->pool_id == GENERAL);
             std::size_t offset =
                 align > SYSTEM_HEADER_SIZE ? align : SYSTEM_HEADER_SIZE;
             CHECK(h->offset == offset);
@@ -70,6 +73,14 @@ TEST_CASE("the header holds the size, pool id 0 and the offset") {
             if (size > 0) std::memset(p, 0, size);
             CHECK(system_header(p)->size == size);
             deallocate(p, size);
+
+            void* scoped;
+            {
+                Scope scope{*pool};
+                scoped = allocate(size, align);
+            }
+            CHECK(system_header(scoped)->pool_id == pool->id());
+            deallocate(scoped, size);
         }
     }
 }

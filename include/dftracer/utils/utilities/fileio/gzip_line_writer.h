@@ -3,8 +3,8 @@
 
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/utilities/fileio/json_line_format.h>
 #include <dftracer/utils/utilities/fileio/line_format.h>
 
@@ -47,10 +47,10 @@ struct GzipWriterOptions {
     bool compress = true;       ///< false: the same members as plain bytes
     /// Bytes the writer may hold: producer, shared and append_with buffers
     /// plus the plaintext and compressed buffers of in-flight members. 0 is
-    /// auto (resolve_spill_budget(0)); NO_SPILL_BUDGET is no limit. A call
-    /// that would pass the budget waits. The budget is kept in two halves,
-    /// one for buffers being filled and one for in-flight members, and the
-    /// writer holds at least one member of each, so a budget below one
+    /// auto (memory::resolve_spill_budget(0)); memory::NO_SPILL_BUDGET is no
+    /// limit. A call that would pass the budget waits. The budget is kept in
+    /// two halves, one for buffers being filled and one for in-flight members,
+    /// and the writer holds at least one member of each, so a budget below one
     /// member plus its compressed bound is exceeded by that member, and one
     /// append batch or append_with `max_bytes` larger than its half by that
     /// call.

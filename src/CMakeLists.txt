@@ -42,9 +42,13 @@ endif()
 # -----------------------------------------
 
 set(DFTRACER_UTILS_MEMORY_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/budget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/debug.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/heap.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/heap_page.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/heap_system.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/manager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/pressure.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/tracked_bytes.cpp)
 
 # -----------------------------------------
@@ -66,6 +70,7 @@ set(DFTRACER_UTILS_COMMON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/filesystem_info.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/scratch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/memory_budget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/memory_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/spill_dir.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/spill_file.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/env.cpp

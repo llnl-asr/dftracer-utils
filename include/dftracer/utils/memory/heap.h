@@ -29,25 +29,57 @@ struct Config {
     Backend backend = Backend::PageHeap;
     /// Milliseconds idle memory stays backed; constants::DECAY_MS_ENV sets it.
     std::uint32_t decay_ms = constants::DEFAULT_DECAY_MS;
+    /// The sum of reservations the root accepts. Zero is a third of the
+    /// available memory.
+    std::size_t budget = 0;
+    /// Bytes of heap the process may hold from the operating system. Zero is
+    /// no cap. The system backend checks it only for blocks above 1 MiB.
+    std::size_t hard_cap = 0;
+    /// Bytes below the process limit where under_pressure turns on. Zero is
+    /// 5% of the limit and at least 256 MiB.
+    std::size_t limit_headroom = 0;
+    /// Bytes past the budget a reclaiming pool may reserve. Zero is 2% of the
+    /// budget and at least 32 MiB.
+    std::size_t spill_headroom = 0;
 };
 
 /**
  * @brief The configuration in effect.
  *
- * The backend is fixed at the first call to any function in this header and
- * never changes; constants::MEMORY_BACKEND_ENV picks it.
+ * The backend and the decay time are fixed at the first call to any function
+ * in this header and never change; constants::MEMORY_BACKEND_ENV and
+ * constants::DECAY_MS_ENV pick them. The other fields hold the resolved
+ * values, never zero except hard_cap.
  */
 Config config() noexcept;
+
+/**
+ * @brief Set the budget, the hard cap and the two headrooms.
+ *
+ * Every one of those fields is applied and a zero selects its default, so a
+ * default Config restores them all. The backend and the decay time are
+ * ignored. Safe to call while other threads allocate.
+ */
+void configure(const Config& config) noexcept;
 
 /**
  * @brief Allocate @p size bytes aligned to @p align.
  *
  * @p align must be a power of two. The page heap serves at most 2 MiB and
- * aborts on more. A zero @p size returns a unique pointer
- * that must still be freed. Throws std::bad_alloc when the memory is not
- * available. The block is freed only by deallocate() of this library.
+ * aborts on more. A zero @p size returns a unique pointer that must still be
+ * freed. Throws std::bad_alloc when the memory is not available or the block
+ * would pass the hard cap. The block is freed only by deallocate() of this
+ * library.
  */
 void* allocate(std::size_t size, std::size_t align);
+
+/**
+ * @brief Allocate like allocate() and return null instead of throwing.
+ *
+ * Null means the hard cap or the operating system refused. A bad alignment
+ * still aborts.
+ */
+void* try_allocate(std::size_t size, std::size_t align) noexcept;
 
 /// Free a block from allocate(); null is a no-op.
 void deallocate(void* p) noexcept;

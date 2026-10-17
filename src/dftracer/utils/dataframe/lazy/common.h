@@ -37,6 +37,7 @@
 #include <dftracer/utils/dstd/hash/partition.h>
 #include <dftracer/utils/dstd/int128.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>  // compute_memory_budget
+#include <dftracer/utils/memory/budget.h>
 
 #include <algorithm>
 #include <cmath>
@@ -136,15 +137,15 @@ inline Morsel slice_morsel(const Morsel& m, std::int64_t off,
 // ---- output morsels within the budget ----
 
 // Whether `budget` limits anything: it does not when it is 0 (unset) or
-// NO_SPILL_BUDGET.
+// memory::NO_SPILL_BUDGET.
 inline bool has_cap(std::uint64_t budget) {
-    return budget != NO_SPILL_BUDGET && budget > 0;
+    return budget != memory::NO_SPILL_BUDGET && budget > 0;
 }
 
 // The bytes one output morsel may take of `budget`.
 inline std::uint64_t output_share(std::uint64_t budget) {
     return has_cap(budget) ? std::max<std::uint64_t>(budget / share::OUTPUT, 1)
-                           : NO_SPILL_BUDGET;
+                           : memory::NO_SPILL_BUDGET;
 }
 
 // How many rows of `bytes_per_row` bytes fit `byte_share`, between 1 and
@@ -152,7 +153,7 @@ inline std::uint64_t output_share(std::uint64_t budget) {
 inline std::int64_t rows_within(std::uint64_t byte_share,
                                 std::uint64_t bytes_per_row,
                                 std::int64_t max_rows) {
-    if (byte_share == NO_SPILL_BUDGET) return max_rows;
+    if (byte_share == memory::NO_SPILL_BUDGET) return max_rows;
     const std::uint64_t fit =
         byte_share / std::max<std::uint64_t>(bytes_per_row, 1);
     return std::clamp<std::int64_t>(
@@ -247,7 +248,7 @@ class ExpansionGovernor {
     explicit ExpansionGovernor(std::uint64_t byte_share) : share_(byte_share) {}
 
     std::int64_t rows(std::int64_t max_rows) const {
-        if (share_ == NO_SPILL_BUDGET) return max_rows;
+        if (share_ == memory::NO_SPILL_BUDGET) return max_rows;
         const double out_rows =
             static_cast<double>(share_) / static_cast<double>(row_bytes_);
         const double in_rows = out_rows / std::max(expansion_, 1.0);
@@ -346,7 +347,7 @@ inline constexpr std::size_t MAX_ACCUMULATE_BATCH = 32;
 inline std::size_t accumulate_batch(std::uint64_t budget,
                                     std::uint64_t partial_bytes) {
     if (partial_bytes == 0) return 2;
-    if (budget == NO_SPILL_BUDGET) return MAX_ACCUMULATE_BATCH;
+    if (budget == memory::NO_SPILL_BUDGET) return MAX_ACCUMULATE_BATCH;
     return std::clamp<std::size_t>(budget / share::CHUNK / (2 * partial_bytes),
                                    1, MAX_ACCUMULATE_BATCH);
 }

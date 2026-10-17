@@ -17,6 +17,37 @@ inline constexpr const char* SPILL_DIR_ENV = "DFTRACER_UTILS_SPILL_DIR";
 inline constexpr const char* SPILL_COMPRESS_ENV =
     "DFTRACER_UTILS_SPILL_COMPRESS";
 
+/// The memory settings and their defaults, repeated in memory/constants.h; a
+/// test keeps the two sets equal. The backend, decay time, debug and exit check
+/// are read by the memory library before its first allocation. The rest are
+/// read by configure_memory_from_env (common/memory_config.h). Byte values take
+/// a number or a unit such as "512MB".
+namespace memory_settings {
+inline constexpr const char* MEMORY_BACKEND_ENV =
+    "DFTRACER_UTILS_MEMORY_BACKEND";
+inline constexpr const char* DECAY_MS_ENV = "DFTRACER_UTILS_MEM_DECAY_MS";
+inline constexpr std::uint32_t DEFAULT_DECAY_MS = 1000;
+inline constexpr const char* BUDGET_ENV = "DFTRACER_UTILS_MEM_BUDGET";
+inline constexpr std::uint64_t DEFAULT_BUDGET_BYTES = 0;
+inline constexpr const char* HARD_LIMIT_ENV = "DFTRACER_UTILS_MEM_HARD_LIMIT";
+inline constexpr std::uint64_t DEFAULT_HARD_LIMIT_BYTES = 0;
+inline constexpr const char* LIMIT_HEADROOM_ENV =
+    "DFTRACER_UTILS_MEM_LIMIT_HEADROOM";
+inline constexpr std::uint64_t LIMIT_HEADROOM_PERCENT = 5;
+inline constexpr std::uint64_t LIMIT_HEADROOM_MIN_BYTES = std::uint64_t{256}
+                                                          << 20;
+inline constexpr const char* SPILL_HEADROOM_ENV =
+    "DFTRACER_UTILS_MEM_SPILL_HEADROOM";
+inline constexpr std::uint64_t SPILL_HEADROOM_PERCENT = 2;
+inline constexpr std::uint64_t SPILL_HEADROOM_MIN_BYTES = std::uint64_t{32}
+                                                          << 20;
+inline constexpr const char* DEBUG_ENV = "DFTRACER_UTILS_MEMORY_DEBUG";
+inline constexpr bool DEFAULT_DEBUG = false;
+inline constexpr const char* EXIT_CHECK_ENV =
+    "DFTRACER_UTILS_MEMORY_EXIT_CHECK";
+inline constexpr bool DEFAULT_EXIT_CHECK = false;
+}  // namespace memory_settings
+
 namespace indexer {
 static constexpr std::size_t ZLIB_WINDOW_SIZE = 32768;
 static constexpr int ZLIB_GZIP_WINDOW_BITS = 31;    ///< 15 + 16 for gzip format

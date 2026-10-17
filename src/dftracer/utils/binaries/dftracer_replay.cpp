@@ -13,6 +13,7 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/memory_config.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/mpi/mpi_utils.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
@@ -465,6 +466,12 @@ coro::CoroTask<void> task_execute(RunCtx* ctx, CoroScope* scope) {
 
 int run(int argc, char** argv) {
     dftracer::utils::logger::init();
+    if (auto configured = dftracer::utils::configure_memory_from_env();
+        !configured) {
+        DFTRACER_UTILS_LOG_ERROR("Error: %s",
+                                 configured.error().format().c_str());
+        return 1;
+    }
 
     argparse::ArgumentParser program("dftracer_replay",
                                      DFTRACER_UTILS_PACKAGE_VERSION);

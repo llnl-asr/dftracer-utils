@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/coro/async_semaphore.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <dftracer/utils/utilities/fileio/parallel/merge.h>
@@ -74,7 +75,8 @@ struct GzipLineWriter::Impl {
           workers(w),
           compute(w) {
         for (std::size_t i = w; i-- > 0;) free_slots.push_back(i);
-        const std::uint64_t budget = resolve_spill_budget(opts.memory_budget);
+        const std::uint64_t budget =
+            memory::resolve_spill_budget(opts.memory_budget);
         auto c = take_compressor();
         const std::size_t m = opts.member_size;
         const std::size_t job_b =

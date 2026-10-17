@@ -3,12 +3,12 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
-#include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/spill.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/memory/budget.h>
 #include <doctest/doctest.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -149,7 +149,8 @@ TEST_SUITE("collect spill") {
         SpillDirVar var("dftu_cs_equal");
         const DataFrame df = make_frame();
         const DataFrame want =
-            run(lazy_of(df, dftracer::utils::NO_SPILL_BUDGET).collect(MORSEL));
+            run(lazy_of(df, dftracer::utils::memory::NO_SPILL_BUDGET)
+                    .collect(MORSEL));
         const DataFrame got = run(lazy_of(df, 1).collect(MORSEL));
         same_columns(got, want, 5);
         const Series& list = got.columns[5];
@@ -162,7 +163,8 @@ TEST_SUITE("collect spill") {
         SpillDirVar var("dftu_cs_outlive");
         const DataFrame df = make_frame();
         const DataFrame want =
-            run(lazy_of(df, dftracer::utils::NO_SPILL_BUDGET).collect(MORSEL));
+            run(lazy_of(df, dftracer::utils::memory::NO_SPILL_BUDGET)
+                    .collect(MORSEL));
         Series kept_i, kept_s;
         {
             DataFrame got = run(lazy_of(df, 1).collect(MORSEL));
@@ -178,12 +180,13 @@ TEST_SUITE("collect spill") {
         CHECK(var.entries() == 0);
     }
 
-    TEST_CASE("NO_SPILL_BUDGET never creates a spill file") {
+    TEST_CASE("memory::NO_SPILL_BUDGET never creates a spill file") {
         SpillDirVar var("dftu_cs_never");
         ::setenv(DIR_VAR, (var.dir / "missing" / "x").c_str(), 1);
         const DataFrame df = make_frame();
         const DataFrame got =
-            run(lazy_of(df, dftracer::utils::NO_SPILL_BUDGET).collect(MORSEL));
+            run(lazy_of(df, dftracer::utils::memory::NO_SPILL_BUDGET)
+                    .collect(MORSEL));
         CHECK(got.num_rows() == N);
         CHECK(!fs::exists(var.dir / "missing"));
     }

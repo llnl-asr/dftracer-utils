@@ -1,7 +1,6 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/abi.h>
@@ -26,6 +25,7 @@
 #include <dftracer/utils/index/plan/rowsets.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/source.h>
+#include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -1310,8 +1310,9 @@ class Sides {
             } catch (const std::exception&) {
             }
         }
-        const std::uint64_t budget = dftracer::utils::resolve_spill_budget(
-            views[i]->memory_budget_bytes());
+        const std::uint64_t budget =
+            dftracer::utils::memory::resolve_spill_budget(
+                views[i]->memory_budget_bytes());
         dftracer::utils::StringViewSet seen;
         std::vector<df::DataFrame> parts;
         std::uint64_t bytes = 0;

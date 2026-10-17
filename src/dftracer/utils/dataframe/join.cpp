@@ -1,4 +1,3 @@
-#include <dftracer/utils/common/hash/hash_combine.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
@@ -6,6 +5,7 @@
 #include <dftracer/utils/dataframe/join.h>
 #include <dftracer/utils/dataframe/kernels/filter.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/hash/hash_combine.h>
 #include <dftracer/utils/duql/vectorize.h>
 
 #include <algorithm>

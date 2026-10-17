@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_DUQL_EVALUATOR_H
 #define DFTRACER_UTILS_DUQL_EVALUATOR_H
 
-#include <dftracer/utils/common/transparent_string_hash.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/ast.h>
 #include <dftracer/utils/json/json_value.h>
 

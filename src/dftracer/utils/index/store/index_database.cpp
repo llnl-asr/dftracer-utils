@@ -1,6 +1,6 @@
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/common/transparent_string_hash.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_merge_operator.h>
 #include <dftracer/utils/index/schemas/dft/agg/system_metrics_merge_operator.h>
 #include <dftracer/utils/index/store/database.h>

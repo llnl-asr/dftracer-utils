@@ -2,8 +2,8 @@
 #define DFTRACER_UTILS_DUQL_PARSER_H
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/expected.h>
-#include <dftracer/utils/common/transparent_string_hash.h>
+#include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/ast.h>
 
 #include <cstddef>

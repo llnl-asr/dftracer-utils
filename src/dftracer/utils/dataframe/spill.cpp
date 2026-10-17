@@ -1,4 +1,3 @@
-#include <dftracer/utils/common/bits.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/env.h>
@@ -12,6 +11,7 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/spill.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/bits.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>

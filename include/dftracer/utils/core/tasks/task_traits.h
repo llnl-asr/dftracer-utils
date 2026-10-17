@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_TASKS_TASK_TRAITS_H
 #define DFTRACER_UTILS_CORE_TASKS_TASK_TRAITS_H
 
-#include <dftracer/utils/core/coro/coroutine_traits.h>
+#include <dftracer/utils/dstd/coroutine_traits.h>
 
 #include <any>
 #include <cstddef>

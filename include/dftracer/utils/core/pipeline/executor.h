@@ -3,11 +3,11 @@
 
 #include <concurrentqueue.h>
 #include <dftracer/utils/common/platform_compat.h>
-#include <dftracer/utils/common/timer_service.h>
 #include <dftracer/utils/common/typedefs.h>
 #include <dftracer/utils/core/coro/coro.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/io/io_backend.h>
+#include <dftracer/utils/core/timer_service.h>
 
 #include <any>
 #include <atomic>

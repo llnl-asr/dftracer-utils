@@ -1,7 +1,5 @@
 #include <concurrentqueue.h>
 #include <dftracer/utils/common/env.h>
-#include <dftracer/utils/common/hash/fnv1a.h>       // string key hashing
-#include <dftracer/utils/common/hash/splitmix64.h>  // row hashing
 #include <dftracer/utils/common/platform_compat.h>  // hardware_concurrency
 #include <dftracer/utils/dataframe/agg/detail.h>
 #include <dftracer/utils/dataframe/batch_ops.h>     // concat, take
@@ -10,6 +8,8 @@
 #include <dftracer/utils/dataframe/internal/column_read.h>  // read_u64
 #include <dftracer/utils/dataframe/kernels/sort.h>          // argsort
 #include <dftracer/utils/dataframe/parallel.h>              // parallel_for
+#include <dftracer/utils/dstd/hash/fnv1a.h>       // string key hashing
+#include <dftracer/utils/dstd/hash/splitmix64.h>  // row hashing
 
 #include <algorithm>
 #include <atomic>

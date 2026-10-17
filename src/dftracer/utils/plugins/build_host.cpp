@@ -1,7 +1,7 @@
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/hash/fnv1a.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/plugins/build_host.h>
 #include <dftracer/utils/plugins/fold_adapter/ext.h>
 #include <dftracer/utils/plugins/state_registry.h>

@@ -2,8 +2,8 @@
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_METRICS_H
 
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/common/transparent_string_hash.h>
 #include <dftracer/utils/dataframe/field_stat.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/utilities/common/statistics/ddsketch.h>
 #include <dftracer/utils/utilities/common/statistics/distinct_sketch.h>
 

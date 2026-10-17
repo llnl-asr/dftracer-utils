@@ -1,5 +1,5 @@
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/little_endian.h>
+#include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 
 #include <algorithm>

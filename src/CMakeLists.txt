@@ -44,7 +44,15 @@ endif()
 set(DFTRACER_UTILS_MEMORY_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/heap.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/heap_page.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/heap_system.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/heap_system.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/tracked_bytes.cpp)
+
+# -----------------------------------------
+# Dstd library sources
+# -----------------------------------------
+
+set(DFTRACER_UTILS_DSTD_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/base64.cpp)
 
 # -----------------------------------------
 # Common library sources
@@ -58,10 +66,8 @@ set(DFTRACER_UTILS_COMMON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/filesystem_info.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/scratch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/memory_budget.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/tracked_bytes.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/spill_dir.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/spill_file.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/base64.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/env.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/timer.cpp)
 
@@ -437,8 +443,16 @@ create_library(
   PKG_CONFIG_LIBS_PRIVATE
   "-lpthread")
 
+option(DFTRACER_UTILS_TRACKED_BYTES
+       "Count MemoryPool and lazy plan bytes in global gauges (measurement)" OFF)
+
 foreach(variant objects shared static)
   if(TARGET dftracer_utils_memory_${variant})
+    if(DFTRACER_UTILS_TRACKED_BYTES)
+      target_compile_definitions(dftracer_utils_memory_${variant}
+                                 PUBLIC DFTRACER_UTILS_TRACKED_BYTES)
+    endif()
+
     if(variant STREQUAL "objects")
       target_set_warnings(dftracer_utils_memory_objects)
       if(DFTRACER_UTILS_MEMORY_BACKEND STREQUAL "system")
@@ -452,6 +466,52 @@ foreach(variant objects shared static)
       )
     elseif(COVERAGE_LINK_OPTIONS)
       target_link_libraries(dftracer_utils_memory_${variant}
+                            PRIVATE ${COVERAGE_LINK_OPTIONS})
+    endif()
+  endif()
+endforeach()
+
+create_library(
+  NAME
+  dftracer_utils_dstd
+  NAMESPACE
+  dftracer_utils_dstd
+  SOURCES
+  ${DFTRACER_UTILS_DSTD_SOURCES}
+  VERSION
+  ${PROJECT_VERSION}
+  DESCRIPTION
+  "DFTracer utils dstd library (standard-library extensions)"
+  URL
+  "https://github.com/llnl-asr/dftracer-utils"
+  BUILD_SHARED
+  ${DFTRACER_UTILS_BUILD_SHARED}
+  BUILD_STATIC
+  ${DFTRACER_UTILS_BUILD_STATIC}
+  SHARED_LINK_LIBRARIES
+  dftracer_utils_memory::shared
+  STATIC_LINK_LIBRARIES
+  dftracer_utils_memory::static
+  PUBLIC_INCLUDE_DIRS
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE_COMPILE_OPTIONS
+  ${COVERAGE_COMPILE_OPTIONS}
+  PKG_CONFIG_REQUIRES
+  "dftracer_utils_memory"
+  FIND_DEPENDENCIES
+  dftracer_utils_memory)
+
+foreach(variant objects shared static)
+  if(TARGET dftracer_utils_dstd_${variant})
+    link_unordered_dense(dftracer_utils_dstd_${variant})
+    link_tl_expected(dftracer_utils_dstd_${variant})
+
+    if(variant STREQUAL "objects")
+      target_set_warnings(dftracer_utils_dstd_objects)
+    elseif(COVERAGE_LINK_OPTIONS)
+      target_link_libraries(dftracer_utils_dstd_${variant}
                             PRIVATE ${COVERAGE_LINK_OPTIONS})
     endif()
   endif()
@@ -476,8 +536,10 @@ create_library(
   ${DFTRACER_UTILS_BUILD_STATIC}
   SHARED_LINK_LIBRARIES
   dftracer_utils_memory::shared
+  dftracer_utils_dstd::shared
   STATIC_LINK_LIBRARIES
   dftracer_utils_memory::static
+  dftracer_utils_dstd::static
   PUBLIC_LINK_LIBRARIES
   ghc_filesystem
   Threads::Threads
@@ -489,14 +551,12 @@ create_library(
   PRIVATE_COMPILE_OPTIONS
   ${COVERAGE_COMPILE_OPTIONS}
   PKG_CONFIG_REQUIRES
-  "dftracer_utils_memory"
+  "dftracer_utils_memory dftracer_utils_dstd"
   PKG_CONFIG_LIBS_PRIVATE
   "-lpthread"
   FIND_DEPENDENCIES
-  dftracer_utils_memory)
-
-option(DFTRACER_UTILS_TRACKED_BYTES
-       "Count MemoryPool and lazy plan bytes in global gauges (measurement)" OFF)
+  dftracer_utils_memory
+  dftracer_utils_dstd)
 
 foreach(variant objects shared static)
   if(TARGET dftracer_utils_common_${variant})
@@ -512,11 +572,6 @@ foreach(variant objects shared static)
     if(DFTRACER_UTILS_HAVE_LUSTREAPI)
       target_link_libraries(dftracer_utils_common_${variant}
                             PRIVATE ${LUSTREAPI_LIBRARY})
-    endif()
-
-    if(DFTRACER_UTILS_TRACKED_BYTES)
-      target_compile_definitions(dftracer_utils_common_${variant}
-                                 PUBLIC DFTRACER_UTILS_TRACKED_BYTES)
     endif()
 
     if(variant STREQUAL "objects")
@@ -547,9 +602,11 @@ create_library(
   ${DFTRACER_UTILS_BUILD_STATIC}
   SHARED_LINK_LIBRARIES
   dftracer_utils_memory::shared
+  dftracer_utils_dstd::shared
   dftracer_utils_common::shared
   STATIC_LINK_LIBRARIES
   dftracer_utils_memory::static
+  dftracer_utils_dstd::static
   dftracer_utils_common::static
   PUBLIC_LINK_LIBRARIES
   ghc_filesystem
@@ -564,11 +621,12 @@ create_library(
   PRIVATE_COMPILE_OPTIONS
   ${COVERAGE_COMPILE_OPTIONS}
   PKG_CONFIG_REQUIRES
-  "dftracer_utils_memory dftracer_utils_common ${PKG_CONFIG_REQUIRES}"
+  "dftracer_utils_memory dftracer_utils_dstd dftracer_utils_common ${PKG_CONFIG_REQUIRES}"
   PKG_CONFIG_LIBS_PRIVATE
   "${PKG_CONFIG_LIBS_PRIVATE}"
   FIND_DEPENDENCIES
   dftracer_utils_memory
+  dftracer_utils_dstd
   dftracer_utils_common)
 
 # Post-process core library targets to add dependency linking and warnings
@@ -1165,6 +1223,24 @@ create_unified_library_config(
 
 create_unified_library_config(
   NAME
+  dftracer_utils_dstd
+  VERSION
+  ${PROJECT_VERSION}
+  DESCRIPTION
+  "DFTracer utils dstd library (standard-library extensions)"
+  URL
+  "https://github.com/llnl-asr/dftracer-utils"
+  BUILD_SHARED
+  ${DFTRACER_UTILS_BUILD_SHARED}
+  BUILD_STATIC
+  ${DFTRACER_UTILS_BUILD_STATIC}
+  PKG_CONFIG_REQUIRES
+  "dftracer_utils_memory"
+  FIND_DEPENDENCIES
+  dftracer_utils_memory)
+
+create_unified_library_config(
+  NAME
   dftracer_utils_common
   VERSION
   ${PROJECT_VERSION}
@@ -1177,9 +1253,10 @@ create_unified_library_config(
   BUILD_STATIC
   ${DFTRACER_UTILS_BUILD_STATIC}
   PKG_CONFIG_REQUIRES
-  "dftracer_utils_memory"
+  "dftracer_utils_memory dftracer_utils_dstd"
   FIND_DEPENDENCIES
-  dftracer_utils_memory)
+  dftracer_utils_memory
+  dftracer_utils_dstd)
 
 create_unified_library_config(
   NAME
@@ -1272,8 +1349,9 @@ if(DFTRACER_UTILS_PREFERRED_TYPE)
   set(UNIFIED_CONFIG_CONTENT "")
   string(APPEND UNIFIED_CONFIG_CONTENT "@PACKAGE_INIT@\n\n")
   string(APPEND UNIFIED_CONFIG_CONTENT "include(CMakeFindDependencyMacro)\n\n")
-  string(APPEND UNIFIED_CONFIG_CONTENT "# Find memory, common, core and utilities libraries\n")
+  string(APPEND UNIFIED_CONFIG_CONTENT "# Find memory, dstd, common, core and utilities libraries\n")
   string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_memory)\n")
+  string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_dstd)\n")
   string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_common)\n")
   string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_core)\n")
   string(APPEND UNIFIED_CONFIG_CONTENT

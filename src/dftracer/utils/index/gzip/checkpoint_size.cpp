@@ -1,5 +1,5 @@
-#include <dftracer/utils/common/bits.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/index/gzip/checkpoint_size.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <fcntl.h>

@@ -261,7 +261,7 @@ dataframe/test_string_view	7.3
 dataframe/test_concat_text	7.3
 dataframe/test_arrow_types_windowed	7.3
 dataframe/test_arrow_large_types_compute	7.3
-core/test_eviction_policy	7.3
+dstd/test_eviction_policy	7.3
 utilities/compression/test_libdeflate_gzip	7.2
 utilities/common/arrow/test_arrow_attribution	7.2
 pipeline/test_simple_scope	7.2
@@ -271,7 +271,7 @@ dataframe/test_set_union	7.2
 dataframe/test_native_frame	7.2
 dataframe/test_arrow_types_tail	7.2
 dataframe/test_arrow_types	7.2
-core/test_hex64	7.2
+dstd/test_hex64	7.2
 utilities/plugins/test_plugin_ops	7.1
 utilities/fileio/lines/sources/test_async_streaming_gz_line_generator	7.1
 utilities/common/statistics/test_log2_histogram	7.1

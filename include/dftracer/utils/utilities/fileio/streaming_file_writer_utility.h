@@ -1,9 +1,9 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_STREAMING_FILE_WRITER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_STREAMING_FILE_WRITER_UTILITY_H
 
-#include <dftracer/utils/common/byte_view.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/utilities/fileio/types/streaming.h>
 
 #include <fstream>

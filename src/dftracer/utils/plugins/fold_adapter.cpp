@@ -1,8 +1,6 @@
-#include <dftracer/utils/common/byte_view.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/field_ref.h>
-#include <dftracer/utils/common/hash/fnv1a.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/core/coro/when_all.h>
@@ -14,6 +12,8 @@
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
+#include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/plugins/fold_adapter.h>

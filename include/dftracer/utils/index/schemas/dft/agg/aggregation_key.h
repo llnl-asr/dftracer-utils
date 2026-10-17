@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_KEY_H
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_KEY_H
 
-#include <dftracer/utils/common/hash/hex64.h>
 #include <dftracer/utils/common/string_intern.h>
+#include <dftracer/utils/dstd/hash/hex64.h>
 
 #include <cstdint>
 #include <memory>

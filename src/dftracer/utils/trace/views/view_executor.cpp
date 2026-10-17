@@ -1,5 +1,4 @@
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/common/byte_view.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/logging.h>
@@ -9,6 +8,7 @@
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/dataframe/agg.h>
+#include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>

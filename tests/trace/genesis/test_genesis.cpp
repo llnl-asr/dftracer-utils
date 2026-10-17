@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/base64.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dataframe/sketch.h>
+#include <dftracer/utils/dstd/base64.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>

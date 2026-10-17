@@ -1,4 +1,4 @@
-#include <dftracer/utils/common/hash/hex64.h>
+#include <dftracer/utils/dstd/hash/hex64.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_serialization.h>
 #include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/utilities/common/serialization/binary_codec.h>

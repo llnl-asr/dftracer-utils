@@ -1,12 +1,8 @@
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/filesystem.h>
-#include <dftracer/utils/common/hash/hash.h>
-#include <dftracer/utils/common/hash/partition.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
-#include <dftracer/utils/common/tracked_bytes.h>
-#include <dftracer/utils/common/transparent_string_hash.h>  // compute_memory_budget
-#include <dftracer/utils/core/coro/task_abi.h>              // task_to_abi
+#include <dftracer/utils/core/coro/task_abi.h>   // task_to_abi
 #include <dftracer/utils/core/coro/when_all.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/dataframe/agg.h>        // streaming group-by state
@@ -37,6 +33,10 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/parallel.h>  // parallel_for (parallel sinks)
 #include <dftracer/utils/dataframe/types.h>     // byte_width, buffer_bytes
+#include <dftracer/utils/dstd/hash/hash.h>
+#include <dftracer/utils/dstd/hash/partition.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>  // compute_memory_budget
+#include <dftracer/utils/memory/tracked_bytes.h>
 
 #include <algorithm>
 #include <cmath>

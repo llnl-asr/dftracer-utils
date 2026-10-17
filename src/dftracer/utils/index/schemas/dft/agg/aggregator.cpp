@@ -20,7 +20,7 @@
 #include <dftracer/utils/utilities/common/arrow/column_builder.h>
 #endif
 
-#include <dftracer/utils/common/transparent_string_hash.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 
 #include <algorithm>
 #include <cinttypes>

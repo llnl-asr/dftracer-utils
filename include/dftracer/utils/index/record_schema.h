@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_RECORD_SCHEMA_H
 #define DFTRACER_UTILS_INDEX_RECORD_SCHEMA_H
 
-#include <dftracer/utils/common/hash/fnv1a.h>
+#include <dftracer/utils/dstd/hash/fnv1a.h>
 
 #include <charconv>
 #include <cmath>

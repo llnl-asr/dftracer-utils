@@ -4,7 +4,8 @@
 # every global text symbol of its static archive, since both link the same
 # object files. The shared library may define more: symbols of the static
 # libraries it bundles. Also check the libraries of ours that each shared
-# library needs: common needs none, and json and duql do not need core. Library
+# library needs: memory needs none, common needs only memory, and json and duql
+# do not need core. Library
 # names come from the create_library NAME arguments in src/CMakeLists.txt.
 #
 # Usage: cmake -DSOURCE_DIR=<repo root> -DLIB_DIR=<build>/lib
@@ -184,9 +185,17 @@ foreach(_name ${_names})
   endif()
   _needed_libraries("${_file}" _needed)
   list(REMOVE_ITEM _needed "${_name}")
-  if(_name STREQUAL "dftracer_utils_common" AND _needed)
-    message(SEND_ERROR "${_name}: needs ${_needed}, but common needs no library of ours")
+  if(_name STREQUAL "dftracer_utils_memory" AND _needed)
+    message(SEND_ERROR "${_name}: needs ${_needed}, but memory needs no library of ours")
     set(_failed TRUE)
+  endif()
+  if(_name STREQUAL "dftracer_utils_common")
+    set(_above_memory ${_needed})
+    list(REMOVE_ITEM _above_memory "dftracer_utils_memory")
+    if(_above_memory)
+      message(SEND_ERROR "${_name}: needs ${_above_memory}, but common needs only memory")
+      set(_failed TRUE)
+    endif()
   endif()
   if((_name STREQUAL "dftracer_utils_json" OR _name STREQUAL "dftracer_utils_duql")
      AND "dftracer_utils_core" IN_LIST _needed)

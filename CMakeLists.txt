@@ -96,6 +96,18 @@ option(DFTRACER_UTILS_VALGRIND_MODE
 if(DFTRACER_UTILS_VALGRIND_MODE)
   add_compile_definitions(DFTRACER_UTILS_VALGRIND_MODE=1)
 endif()
+set(DFTRACER_UTILS_MEMORY_BACKEND
+    "page_heap"
+    CACHE STRING
+    "Default memory backend: page_heap or system; the environment variable of the same name overrides it at start")
+set_property(CACHE DFTRACER_UTILS_MEMORY_BACKEND PROPERTY STRINGS page_heap
+                                                          system)
+if(NOT DFTRACER_UTILS_MEMORY_BACKEND MATCHES "^(page_heap|system)$")
+  message(
+    FATAL_ERROR
+      "DFTRACER_UTILS_MEMORY_BACKEND must be page_heap or system, not '${DFTRACER_UTILS_MEMORY_BACKEND}'"
+  )
+endif()
 set(DFTRACER_UTILS_ROCKSDB_VERSION
     "11.1.2"
     CACHE STRING "RocksDB version to find or build")

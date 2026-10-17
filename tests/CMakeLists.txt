@@ -95,7 +95,13 @@ add_test(
   NAME common_no_upward
   COMMAND
     sh -c
-    "bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/' \"$0/include/dftracer/utils/common\" \"$0/src/dftracer/utils/common\" | grep -vE '<dftracer/utils/common/'); if [ -n \"$bad\" ]; then echo \"include from common/ into another module:\"; echo \"$bad\"; exit 1; fi"
+    "bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/' \"$0/include/dftracer/utils/common\" \"$0/src/dftracer/utils/common\" | grep -vE '<dftracer/utils/(common|memory)/'); if [ -n \"$bad\" ]; then echo \"include from common/ into a module above it:\"; echo \"$bad\"; exit 1; fi"
+    ${CMAKE_SOURCE_DIR})
+add_test(
+  NAME memory_no_upward
+  COMMAND
+    sh -c
+    "bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/' \"$0/include/dftracer/utils/memory\" \"$0/src/dftracer/utils/memory\" | grep -vE '<dftracer/utils/memory/'); if [ -n \"$bad\" ]; then echo \"include from memory/ into another module:\"; echo \"$bad\"; exit 1; fi"
     ${CMAKE_SOURCE_DIR})
 add_test(NAME layering_baseline
          COMMAND
@@ -371,6 +377,12 @@ add_subdirectory(dataframe)
 add_subdirectory(compose)
 
 # +++++++++++++++++++++++++++++++++++++++++
+# Memory Library Tests
+# +++++++++++++++++++++++++++++++++++++++++
+
+add_subdirectory(memory)
+
+# +++++++++++++++++++++++++++++++++++++++++
 # Memory Layout Budgets
 # +++++++++++++++++++++++++++++++++++++++++
 
@@ -544,6 +556,16 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
   # pkg-config discovery tests
   # ==========================================================================
 
+  # Test memory library
+  add_test(
+    NAME test_pkgconfig_discovery_memory
+    COMMAND
+      ${CMAKE_COMMAND}
+      -DPKG_CONFIG_PATH=${TEST_INSTALL_PREFIX}/lib/pkgconfig:${TEST_INSTALL_PREFIX}/lib64/pkgconfig:${TEST_INSTALL_PREFIX}/lib/${CMAKE_LIBRARY_ARCHITECTURE}/pkgconfig
+      -DLIBRARY_NAME=dftracer_utils_memory
+      -DTEST_TYPE=pkgconfig -P
+      ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
+
   # Test common library
   add_test(
     NAME test_pkgconfig_discovery_common
@@ -587,6 +609,15 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
   # ==========================================================================
   # CMake find_package discovery tests
   # ==========================================================================
+
+  # Test memory library
+  add_test(
+    NAME test_cmake_discovery_memory
+    COMMAND
+      ${CMAKE_COMMAND} -DCMAKE_PREFIX_PATH=${TEST_INSTALL_PREFIX}
+      -DLIBRARY_NAME=dftracer_utils_memory
+      -DTEST_TYPE=cmake -P
+      ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
 
   # Test common library
   add_test(
@@ -637,6 +668,8 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
   endif()
 
   set(PACKAGE_DISCOVERY_TESTS
+      test_pkgconfig_discovery_memory
+      test_cmake_discovery_memory
       test_pkgconfig_discovery_common
       test_pkgconfig_discovery_core
       test_pkgconfig_discovery_utilities
@@ -659,7 +692,7 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
   list(APPEND PACKAGE_DISCOVERY_TESTS test_target_dftracer_utils)
 
   foreach(VARIANT IN LISTS PACKAGE_TEST_VARIANTS)
-    foreach(LIBRARY dftracer_utils_common dftracer_utils_core
+    foreach(LIBRARY dftracer_utils_memory dftracer_utils_common dftracer_utils_core
                     dftracer_utils_utilities)
       add_target_alias_test(test_target_${LIBRARY}_${VARIANT}
                             "${LIBRARY}::${VARIANT}")

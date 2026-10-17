@@ -124,6 +124,10 @@ Pass with ``-D`` at configure time, for example
    * - ``DFTRACER_UTILS_BUILD_STATIC``
      - ``ON``
      - Build the static libraries.
+   * - ``DFTRACER_UTILS_SINGLE_LIBRARY``
+     - ``OFF``
+     - Build one ``libdftracer_utils`` from every area, and install only that library and its ``dftracer_utils`` package.
+       The per-area packages such as ``dftracer_utils_core`` are not built or installed.
    * - ``DFTRACER_UTILS_BUILD_BINARIES``
      - ``ON``
      - Build the ``dftracer_*`` command-line tools.

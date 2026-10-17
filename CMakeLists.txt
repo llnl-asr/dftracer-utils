@@ -84,6 +84,8 @@ option(
   ON)
 option(DFTRACER_UTILS_BUILD_SHARED "Build shared library" ON)
 option(DFTRACER_UTILS_BUILD_STATIC "Build static library" ON)
+option(DFTRACER_UTILS_SINGLE_LIBRARY
+       "Build one library dftracer_utils instead of one per area" OFF)
 option(DFTRACER_UTILS_BUILD_BINARIES "Build command-line binaries" ON)
 option(DFTRACER_UTILS_BUILD_PYTHON "Build Python bindings" OFF)
 option(DFTRACER_UTILS_ENABLE_PCH "Enable precompiled headers" OFF)
@@ -281,7 +283,8 @@ dftracer_utils_item("Compiler       "
 dftracer_utils_item("Target arch    " "${CMAKE_SYSTEM_PROCESSOR}")
 dftracer_utils_item(
   "Libraries      "
-  "shared=${DFTRACER_UTILS_BUILD_SHARED} static=${DFTRACER_UTILS_BUILD_STATIC}")
+  "shared=${DFTRACER_UTILS_BUILD_SHARED} static=${DFTRACER_UTILS_BUILD_STATIC} single=${DFTRACER_UTILS_SINGLE_LIBRARY}"
+)
 dftracer_utils_item(
   "Binaries / PyExt"
   "${DFTRACER_UTILS_BUILD_BINARIES} / ${DFTRACER_UTILS_BUILD_PYTHON}")

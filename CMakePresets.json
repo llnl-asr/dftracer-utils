@@ -96,6 +96,16 @@
       }
     },
     {
+      "name": "tests-single",
+      "displayName": "Tests, single library (RelWithDebInfo)",
+      "description": "Tests with one library dftracer_utils instead of one per area",
+      "inherits": "tests",
+      "binaryDir": "${sourceDir}/build/build-tests-single",
+      "cacheVariables": {
+        "DFTRACER_UTILS_SINGLE_LIBRARY": "ON"
+      }
+    },
+    {
       "name": "coverage",
       "displayName": "Coverage (Debug + gcov/lcov)",
       "description": "Tests with coverage instrumentation enabled",
@@ -212,6 +222,12 @@
       "jobs": 0
     },
     {
+      "name": "tests-single",
+      "displayName": "Tests Build (single library)",
+      "configurePreset": "tests-single",
+      "jobs": 0
+    },
+    {
       "name": "coverage",
       "displayName": "Coverage Build",
       "configurePreset": "coverage",
@@ -247,6 +263,20 @@
       "name": "tests",
       "displayName": "Run Tests",
       "configurePreset": "tests",
+      "environment": {
+        "DFTRACER_UTILS_ELASTIC": "0"
+      },
+      "execution": {
+        "jobs": 0
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "tests-single",
+      "displayName": "Run Tests (single library)",
+      "configurePreset": "tests-single",
       "environment": {
         "DFTRACER_UTILS_ELASTIC": "0"
       },

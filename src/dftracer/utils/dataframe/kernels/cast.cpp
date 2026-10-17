@@ -1,4 +1,3 @@
-#include <dftracer/utils/common/to_chars.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/decimal.h>
@@ -6,6 +5,7 @@
 #include <dftracer/utils/dataframe/internal/numeric_dispatch.h>
 #include <dftracer/utils/dataframe/internal/varwidth_offsets.h>
 #include <dftracer/utils/dataframe/kernels/cast.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <simdjson.h>
 
 #include <cctype>

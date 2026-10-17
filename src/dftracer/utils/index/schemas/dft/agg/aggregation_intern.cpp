@@ -1,4 +1,4 @@
-#include <dftracer/utils/common/transparent_string_hash.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 
 #include <atomic>

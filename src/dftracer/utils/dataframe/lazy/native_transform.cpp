@@ -1,7 +1,7 @@
-#include <dftracer/utils/common/hash/splitmix64.h>
 #include <dftracer/utils/dataframe/kernels/running.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
 #include <dftracer/utils/dataframe/lazy/numeric.h>
+#include <dftracer/utils/dstd/hash/splitmix64.h>
 
 #include <array>
 #include <atomic>

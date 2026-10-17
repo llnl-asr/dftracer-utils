@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMAS_DFT_BLOOM_CORE_H
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_BLOOM_CORE_H
 
-#include <dftracer/utils/common/transparent_string_hash.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/extensions/chunk_dimension_stats.h>

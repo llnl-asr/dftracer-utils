@@ -4,9 +4,9 @@
 # every global text symbol of its static archive, since both link the same
 # object files. The shared library may define more: symbols of the static
 # libraries it bundles. Also check the libraries of ours that each shared
-# library needs: memory needs none, common needs only memory, and json and duql
-# do not need core. Library
-# names come from the create_library NAME arguments in src/CMakeLists.txt.
+# library needs: memory needs none, dstd needs only memory, common needs only
+# memory and dstd, and json and duql do not need core. Library names come from
+# the create_library NAME arguments in src/CMakeLists.txt.
 #
 # Usage: cmake -DSOURCE_DIR=<repo root> -DLIB_DIR=<build>/lib
 #              [-DVERSION_FILE=<file>] -P check_library_versions.cmake
@@ -189,11 +189,19 @@ foreach(_name ${_names})
     message(SEND_ERROR "${_name}: needs ${_needed}, but memory needs no library of ours")
     set(_failed TRUE)
   endif()
-  if(_name STREQUAL "dftracer_utils_common")
+  if(_name STREQUAL "dftracer_utils_dstd")
     set(_above_memory ${_needed})
     list(REMOVE_ITEM _above_memory "dftracer_utils_memory")
     if(_above_memory)
-      message(SEND_ERROR "${_name}: needs ${_above_memory}, but common needs only memory")
+      message(SEND_ERROR "${_name}: needs ${_above_memory}, but dstd needs only memory")
+      set(_failed TRUE)
+    endif()
+  endif()
+  if(_name STREQUAL "dftracer_utils_common")
+    set(_above_dstd ${_needed})
+    list(REMOVE_ITEM _above_dstd "dftracer_utils_memory" "dftracer_utils_dstd")
+    if(_above_dstd)
+      message(SEND_ERROR "${_name}: needs ${_above_dstd}, but common needs only memory and dstd")
       set(_failed TRUE)
     endif()
   endif()

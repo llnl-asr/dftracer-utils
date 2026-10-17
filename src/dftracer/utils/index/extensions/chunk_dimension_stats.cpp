@@ -1,4 +1,4 @@
-#include <dftracer/utils/common/little_endian.h>
+#include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/index/extensions/chunk_dimension_stats.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>

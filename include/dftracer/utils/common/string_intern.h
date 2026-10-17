@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_COMMON_STRING_INTERN_H
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/hash/fnv1a.h>
+#include <dftracer/utils/dstd/hash/fnv1a.h>
 
 #include <algorithm>
 #include <atomic>

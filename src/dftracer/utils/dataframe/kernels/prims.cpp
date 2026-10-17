@@ -3,14 +3,14 @@
 // scalar tail reuses the core bit/hash primitives so the SIMD body and the tail
 // stay in agreement with the JIT/plugin path (plugins/prims.h mirrors them).
 
-#include <dftracer/utils/common/bits.h>
-#include <dftracer/utils/common/hash/constants.h>
-#include <dftracer/utils/common/hash/splitmix64.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/buffer.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/kernels/prims.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/bits.h>
+#include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/hash/splitmix64.h>
 
 #include <cstddef>
 #include <cstdint>

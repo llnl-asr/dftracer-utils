@@ -5,7 +5,7 @@
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
-#include <dftracer/utils/common/string_arena.h>
+#include <dftracer/utils/dstd/string_arena.h>
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/trace/time_metric.h>
 #include <dftracer/utils/utilities/common/arrow/column_builder.h>

@@ -1,4 +1,3 @@
-#include <dftracer/utils/common/hash/splitmix64.h>
 #include <dftracer/utils/dataframe/abi.h>                   // dftu_series_data
 #include <dftracer/utils/dataframe/field_stat.h>            // FieldStat
 #include <dftracer/utils/dataframe/internal/column_data.h>
@@ -10,6 +9,7 @@
 #include <dftracer/utils/dataframe/kernels/sort.h>  // argsort, parallel_packed_sort
 #include <dftracer/utils/dataframe/kernels/stats.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/hash/splitmix64.h>
 
 #include <algorithm>
 #include <atomic>

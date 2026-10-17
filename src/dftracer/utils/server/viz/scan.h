@@ -5,8 +5,8 @@
 // threshold, viz-query (ViewDefinition) building from request params, and
 // target-file selection. Internal to the server.
 
-#include <dftracer/utils/common/expected.h>
-#include <dftracer/utils/common/to_chars.h>
+#include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/duql/syntax/parser.h>
 #include <dftracer/utils/json/record_parser.h>

@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_FINGERPRINT_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_FINGERPRINT_H
 
-#include <dftracer/utils/common/hash/hash.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/hash/hash.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -14,7 +14,7 @@
 
 namespace dftracer::utils::dataframe::detail {
 
-// Incremental FNV-1a (common/hash) over the fields a caller feeds in.
+// Incremental FNV-1a (dstd/hash) over the fields a caller feeds in.
 // Variable-length values are length prefixed so adjacent fields cannot alias.
 class Fingerprint {
    public:

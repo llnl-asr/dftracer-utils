@@ -1,10 +1,8 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/hash/splitmix64.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/string_intern.h>
-#include <dftracer/utils/common/transparent_string_hash.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
@@ -15,6 +13,8 @@
 #include <dftracer/utils/dataframe/internal/rest_column.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/fields.h>
 #include <dftracer/utils/duql/group_fold.h>
 #include <dftracer/utils/duql/overlap.h>

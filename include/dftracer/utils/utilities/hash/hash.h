@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_HASH_HASH_H
 #define DFTRACER_UTILS_UTILITIES_HASH_HASH_H
 
-#include <dftracer/utils/common/hash/fnv1a.h>
+#include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 #include <dftracer/utils/utilities/hash/types.h>

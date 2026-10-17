@@ -3,7 +3,7 @@
 
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/string_intern.h>
-#include <dftracer/utils/common/transparent_string_hash.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_logic.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_metrics.h>

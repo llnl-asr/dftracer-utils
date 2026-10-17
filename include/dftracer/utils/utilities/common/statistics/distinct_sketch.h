@@ -14,7 +14,7 @@
 // Both forms merge (sparse pairs union, dense registers take the maximum), so
 // per-file and per-worker sketches combine without keeping the values.
 
-#include <dftracer/utils/common/bits.h>
+#include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
 
 #include <algorithm>

@@ -1,13 +1,13 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_GRACE_JOIN_H
 #define DFTRACER_UTILS_DATAFRAME_GRACE_JOIN_H
 
-#include <dftracer/utils/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/spill.h>
 #include <dftracer/utils/dataframe/join.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 
 #include <cstdint>
 #include <deque>

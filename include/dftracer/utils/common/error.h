@@ -1,9 +1,9 @@
 #ifndef DFTRACER_UTILS_COMMON_ERROR_H
 #define DFTRACER_UTILS_COMMON_ERROR_H
 
-#include <dftracer/utils/common/expected.h>
-#include <dftracer/utils/common/hash/fnv1a.h>
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/hash/fnv1a.h>
 
 #include <concepts>
 #include <cstdarg>

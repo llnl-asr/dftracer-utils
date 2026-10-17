@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_DUQL_LOOKUP_H
 #define DFTRACER_UTILS_DUQL_LOOKUP_H
 
-#include <dftracer/utils/common/int128.h>
-#include <dftracer/utils/common/transparent_string_hash.h>
+#include <dftracer/utils/dstd/int128.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/duql/term.h>

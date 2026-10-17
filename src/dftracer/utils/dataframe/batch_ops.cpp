@@ -1,7 +1,4 @@
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/common/hash/fnv1a.h>       // string cell hashing
-#include <dftracer/utils/common/hash/splitmix64.h>  // row/cell hashing
-#include <dftracer/utils/common/to_chars.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
@@ -21,6 +18,9 @@
 #include <dftracer/utils/dataframe/kernels/group_by.h>
 #include <dftracer/utils/dataframe/kernels/sort.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/hash/fnv1a.h>       // string cell hashing
+#include <dftracer/utils/dstd/hash/splitmix64.h>  // row/cell hashing
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/json/json_escape.h>
 
 #include <algorithm>

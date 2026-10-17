@@ -1,9 +1,9 @@
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/env.h>
-#include <dftracer/utils/common/ptr_hash.h>
 #include <dftracer/utils/common/sharded_mutex.h>
 #include <dftracer/utils/common/symbolize.h>
 #include <dftracer/utils/core/coro/monitor.h>
+#include <dftracer/utils/dstd/ptr_hash.h>
 
 #include <algorithm>
 #include <atomic>

@@ -1,5 +1,5 @@
 #include <dftracer/utils/common/config.h>
-#include <dftracer/utils/common/hash/fnv1a.h>
+#include <dftracer/utils/dstd/hash/fnv1a.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #include <dftracer/utils/common/filesystem.h>

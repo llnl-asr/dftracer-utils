@@ -1,8 +1,8 @@
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/common/ptr_hash.h>
 #include <dftracer/utils/common/symbolize.h>
+#include <dftracer/utils/dstd/ptr_hash.h>
 #include <unistd.h>
 
 #include <chrono>

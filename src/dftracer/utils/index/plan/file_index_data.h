@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_INDEX_PLAN_FILE_INDEX_DATA_H
 
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/common/transparent_string_hash.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 #include <dftracer/utils/index/store/index_database.h>

@@ -1,11 +1,11 @@
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/platform_compat.h>
-#include <dftracer/utils/common/string_arena.h>
 #include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
+#include <dftracer/utils/dstd/string_arena.h>
 #include <dftracer/utils/index/cache/mv_store.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_escape.h>

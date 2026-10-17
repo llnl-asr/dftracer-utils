@@ -1,4 +1,4 @@
-#include <dftracer/utils/common/hash/hash_combine.h>
+#include <dftracer/utils/dstd/hash/hash_combine.h>
 #include <dftracer/utils/trace/comparator/comparison_result.h>
 #include <dftracer/utils/trace/internal/utils.h>
 

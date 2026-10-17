@@ -4,8 +4,8 @@
 #endif
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/byte_view.h>
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/utilities/fileio/streaming_file_writer_utility.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>

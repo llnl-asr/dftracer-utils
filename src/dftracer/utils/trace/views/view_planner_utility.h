@@ -2,8 +2,8 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_PLANNER_UTILITY_H
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/index/store/types.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 
 #include <cstddef>

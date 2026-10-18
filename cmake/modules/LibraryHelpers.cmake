@@ -42,7 +42,8 @@ endfunction()
 
 # Creates the empty one-library targets of DFTRACER_UTILS_SINGLE_LIBRARY on the
 # first call. create_library adds each library's objects to them, so an ALIAS
-# such as dftracer_utils_core::shared has a target before core is declared.
+# such as dftracer_utils_runtime::shared has a target before runtime is
+# declared.
 function(_create_single_library_targets)
   if(TARGET dftracer_utils_shared OR TARGET dftracer_utils_static)
     return()
@@ -98,8 +99,8 @@ Creates a library with automatic shared/static variants, complete with:
 
 Usage:
   create_library(
-    NAME base_name                    # e.g., "dftracer_utils_core"
-    NAMESPACE namespace               # e.g., "dftracer_utils_core" -> creates dftracer_utils_core::shared
+    NAME base_name                    # e.g., "dftracer_utils_runtime"
+    NAMESPACE namespace               # e.g., "dftracer_utils_runtime" -> creates dftracer_utils_runtime::shared
     SOURCES file1.cpp file2.cpp ...   # Source files
     [PUBLIC_HEADERS file1.h ...]      # Public headers to install
     [VERSION version]                 # Defaults to PROJECT_VERSION
@@ -701,7 +702,7 @@ This allows users to discover the library without specifying the variant.
 
 Usage:
   create_unified_library_config(
-    NAME library_name                 # e.g., "dftracer_utils_core"
+    NAME library_name                 # e.g., "dftracer_utils_runtime"
     VERSION version                   # Package version
     [DESCRIPTION "desc"]              # Package description
     [URL "https://..."]              # Package URL

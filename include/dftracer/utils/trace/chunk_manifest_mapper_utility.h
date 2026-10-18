@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFTRACER_CHUNK_MANIFEST_MAPPER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFTRACER_CHUNK_MANIFEST_MAPPER_UTILITY_H
 
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/trace/internal/chunk_manifest.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/fileio/types/types.h>

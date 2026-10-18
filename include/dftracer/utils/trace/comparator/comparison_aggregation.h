@@ -1,11 +1,11 @@
 #ifndef DFTRACER_UTILS_TRACE_COMPARATOR_COMPARISON_AGGREGATION_H
 #define DFTRACER_UTILS_TRACE_COMPARATOR_COMPARISON_AGGREGATION_H
 
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_output.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 
 #include <cstddef>
 #include <optional>

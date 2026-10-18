@@ -1,9 +1,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregator.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
 #include <doctest/doctest.h>
 

@@ -1,10 +1,10 @@
 #ifndef DFTRACER_UTILS_UTILITIES_REPLAY_REPLAY_H
 #define DFTRACER_UTILS_UTILITIES_REPLAY_REPLAY_H
 
-#include <dftracer/utils/core/coro/async_generator.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/json/parser.h>
+#include <dftracer/utils/runtime/coro/async_generator.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/replay/trace.h>
 
 #include <chrono>

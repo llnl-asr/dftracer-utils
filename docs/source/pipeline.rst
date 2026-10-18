@@ -49,8 +49,8 @@ Tasks are created using ``make_task`` and receive a ``CoroScope&`` parameter:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/tasks/task.h>
-   #include <dftracer/utils/core/coro/task.h>
+   #include <dftracer/utils/runtime/tasks/task.h>
+   #include <dftracer/utils/runtime/coro/task.h>
 
    using namespace dftracer::utils;
    using namespace dftracer::utils::coro;
@@ -101,8 +101,8 @@ Configure pipeline with ``PipelineConfig``:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/pipeline/pipeline.h>
-   #include <dftracer/utils/core/pipeline/pipeline_config.h>
+   #include <dftracer/utils/runtime/pipeline/pipeline.h>
+   #include <dftracer/utils/runtime/pipeline/pipeline_config.h>
 
    auto config = PipelineConfig()
        .with_name("MyPipeline")
@@ -154,7 +154,7 @@ Example with parallel work:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/tasks/coro_scope.h>
+   #include <dftracer/utils/runtime/tasks/coro_scope.h>
 
    auto task = make_task([](CoroScope& scope) -> CoroTask<void> {
        // Spawn multiple parallel tasks
@@ -226,8 +226,8 @@ Use ``Channel<T>`` for streaming data between tasks. This pattern is useful when
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/coro/channel.h>
-   #include <dftracer/utils/core/tasks/task.h>
+   #include <dftracer/utils/runtime/coro/channel.h>
+   #include <dftracer/utils/runtime/tasks/task.h>
 
    // Create channel with capacity
    auto channel = coro::make_channel<Batch>(100);
@@ -365,8 +365,8 @@ Run multiple operations concurrently:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/coro/when_all.h>
-   #include <dftracer/utils/core/coro/when_any.h>
+   #include <dftracer/utils/runtime/coro/when_all.h>
+   #include <dftracer/utils/runtime/coro/when_any.h>
 
    // Wait for all
    std::vector<IOAwaitable<Data>> ops;
@@ -408,7 +408,7 @@ Lazy Sequences and Async Generators
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/coro/generator.h>
+   #include <dftracer/utils/runtime/coro/generator.h>
 
    // Synchronous generator
    Generator<int> range(int start, int end) {
@@ -426,7 +426,7 @@ Lazy Sequences and Async Generators
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/coro/async_generator.h>
+   #include <dftracer/utils/runtime/coro/async_generator.h>
 
    // Async generator - streams data from files
    AsyncGenerator<Data> read_all(const std::vector<std::string>& paths) {
@@ -844,7 +844,7 @@ Control execution duration and cooperative cancellation using ``PipelineConfig``
 
 .. code-block:: cpp
 
-    #include <dftracer/utils/core/coro/when_any.h>
+    #include <dftracer/utils/runtime/coro/when_any.h>
 
     auto task = make_task([](CoroScope& scope) -> coro::CoroTask<void> {
         auto cache_future = scope.spawn([](CoroScope& s)
@@ -887,8 +887,8 @@ Build complex task graphs with fan-out, fan-in, map, and reduce. Example from ``
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/task_graph/task_graph.h>
-   #include <dftracer/utils/core/pipeline/pipeline.h>
+   #include <dftracer/utils/runtime/task_graph/task_graph.h>
+   #include <dftracer/utils/runtime/pipeline/pipeline.h>
 
    using namespace dftracer::utils;
    using namespace dftracer::utils::task_graph;

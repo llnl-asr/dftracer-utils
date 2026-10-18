@@ -23,13 +23,13 @@ chunks; too many on a shared or oversubscribed node hurts more than it helps.
 
    .. tab-item:: C++
 
-      ``Runtime`` (``dftracer/utils/core/runtime.h``, namespace
+      ``Runtime`` (``dftracer/utils/runtime/runtime.h``, namespace
       ``dftracer::utils``) takes a thread count directly, or a full
       ``ExecutorConfig`` for finer control:
 
       .. code-block:: cpp
 
-         #include <dftracer/utils/core/runtime.h>
+         #include <dftracer/utils/runtime/runtime.h>
          using namespace dftracer::utils;
 
          Runtime rt(8);   // 8 worker threads; 0 = hardware_concurrency

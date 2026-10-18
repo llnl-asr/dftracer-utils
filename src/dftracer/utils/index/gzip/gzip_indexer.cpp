@@ -2,11 +2,6 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/core/coro/async_semaphore.h>
-#include <dftracer/utils/core/coro/channel.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/executor/executor.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/index/build/index_visitor.h>
 #include <dftracer/utils/index/gzip/checkpoint_size.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
@@ -16,6 +11,11 @@
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/runtime/coro/async_semaphore.h>
+#include <dftracer/utils/runtime/coro/channel.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/executor/executor.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <fcntl.h>
 #include <sys/stat.h>

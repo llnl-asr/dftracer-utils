@@ -18,12 +18,12 @@ In the core library: a plain callable
 An async op is any callable of shape ``I -> coro::CoroTask<O>`` - no base
 class, no registration. Write it as a lambda, a free function, or a struct
 with ``operator()``, then wrap it with
-``dftracer::utils::utilities::op`` (``dftracer/utils/core/compose.h``)
+``dftracer::utils::utilities::op`` (``dftracer/utils/runtime/compose.h``)
 to get the ``|`` / ``&&`` / ``||`` composition operators:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/compose.h>
+   #include <dftracer/utils/runtime/compose.h>
    namespace u = dftracer::utils::utilities;
 
    auto doubler = u::op([](int x) -> coro::CoroTask<int> { co_return x * 2; });

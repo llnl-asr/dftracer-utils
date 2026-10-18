@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_TRACE_INTERNAL_INDEX_ROOT_H
 #define DFTRACER_UTILS_TRACE_INTERNAL_INDEX_ROOT_H
 
-#include <dftracer/utils/core/coro/async_mutex.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/runtime/coro/async_mutex.h>
 
 #include <cstddef>
 #include <cstdint>

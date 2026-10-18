@@ -1,5 +1,5 @@
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/core/io/io.h>
+#include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
 #include <fcntl.h>
 #include <unistd.h>

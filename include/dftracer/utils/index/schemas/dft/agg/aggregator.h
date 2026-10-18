@@ -2,11 +2,11 @@
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATOR_H
 
 #include <dftracer/utils/common/constants.h>
-#include <dftracer/utils/core/coro/async_generator.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregator_types.h>
+#include <dftracer/utils/runtime/coro/async_generator.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 
 #include <cstddef>
 #include <optional>

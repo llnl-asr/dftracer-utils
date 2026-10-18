@@ -2,8 +2,8 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/timer.h>
-#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_runner.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/common/statistics/distributions.h>
 #include <dftracer/utils/utilities/common/statistics/mixture.h>
 #include <dftracer/utils/utilities/dlio/barrier_simulator.h>

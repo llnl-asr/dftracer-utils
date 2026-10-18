@@ -18,14 +18,14 @@ The builder
 -----------
 
 ``TaskGraph::builder`` (in
-``dftracer/utils/core/task_graph/task_graph.h``, namespace
+``dftracer/utils/runtime/task_graph/task_graph.h``, namespace
 ``dftracer::utils::task_graph``) returns a graph you attach nodes to. The config
 struct takes a ``name`` and an optional ``max_concurrency`` (0 = unlimited):
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/task_graph/task_graph.h>
-   #include <dftracer/utils/core/pipeline/pipeline.h>
+   #include <dftracer/utils/runtime/task_graph/task_graph.h>
+   #include <dftracer/utils/runtime/pipeline/pipeline.h>
    using namespace dftracer::utils;
    using namespace dftracer::utils::task_graph;
 

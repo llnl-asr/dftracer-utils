@@ -2,11 +2,11 @@
 #define DFTRACER_UTILS_INDEX_BUILD_BATCH_BUILDER_H
 
 #include <dftracer/utils/common/constants.h>
-#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_drain.h>
 #include <dftracer/utils/index/store/index_database_sst_writer_context.h>
 #include <dftracer/utils/index/store/index_write.h>
+#include <dftracer/utils/runtime/coro/task.h>
 
 #include <array>
 #include <cstddef>

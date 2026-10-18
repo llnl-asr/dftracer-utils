@@ -6,8 +6,6 @@
 
 #include <dftracer/utils/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/common/memory_budget.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
@@ -26,6 +24,8 @@
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/series.h>
 #include <dftracer/utils/python/streaming_iterator.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 
 #include <cstdint>
 #include <new>

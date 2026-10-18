@@ -1,7 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/filesystem.h>
-#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/duql/macros.h>
@@ -23,6 +22,7 @@
 #include <dftracer/utils/python/py_str_helpers.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/trace_viewer.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/time_metric.h>
 #include <dftracer/utils/trace/views/view.h>

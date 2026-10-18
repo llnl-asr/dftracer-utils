@@ -1,7 +1,5 @@
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/string_intern.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/cache/mv_store.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -10,6 +8,8 @@
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/time_metric.h>
 #include <dftracer/utils/trace/views/containment_fold.h>

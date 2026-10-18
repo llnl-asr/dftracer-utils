@@ -13,7 +13,7 @@ Run work in a scope
 -------------------
 
 Every task runs inside a ``CoroScope``. ``Runtime`` (in
-``dftracer/utils/core/runtime.h``) has four entry points; pick the one that
+``dftracer/utils/runtime/runtime.h``) has four entry points; pick the one that
 matches how you need to wait:
 
 .. list-table::
@@ -42,7 +42,7 @@ matches how you need to wait:
 
       .. code-block:: cpp
 
-         #include <dftracer/utils/core/runtime.h>
+         #include <dftracer/utils/runtime/runtime.h>
          using namespace dftracer::utils;
 
          Runtime rt;                          // threads = hardware concurrency

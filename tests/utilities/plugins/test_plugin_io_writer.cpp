@@ -6,10 +6,10 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/string_intern.h>
-#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
+#include <dftracer/utils/runtime/runtime.h>
 // compose.h pulls plugin.h/arrow_abi.h; keep it after fold_adapter.h so
 // nanoarrow's full definitions win over arrow_abi.h's fallback structs.
 #include <dftracer/utils/plugins/compose.h>

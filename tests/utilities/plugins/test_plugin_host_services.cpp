@@ -11,10 +11,10 @@
 // fold_adapter.h transitively pulls nanoarrow (ArrowArray/ArrowSchema); it must
 // precede plugin.h so arrow_abi.h no-ops rather than tripping nanoarrow's outer
 // ARROW_FLAG_DICTIONARY_ORDERED sentinel.
-#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dirent.h>
 #include <doctest/doctest.h>

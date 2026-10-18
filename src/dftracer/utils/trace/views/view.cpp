@@ -1,8 +1,6 @@
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/common/string_intern.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/dstd/string_arena.h>
@@ -10,6 +8,8 @@
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/json/parser.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/comparator/compare_view.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/time_metric.h>

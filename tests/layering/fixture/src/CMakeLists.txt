@@ -4,4 +4,4 @@ create_library(
   NAMESPACE
   dftracer::utils
   SOURCES
-  dftracer/utils/core/impl.cpp)
+  dftracer/utils/runtime/impl.cpp)

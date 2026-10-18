@@ -3,9 +3,9 @@
 
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/string_intern.h>
-#include <dftracer/utils/core/coro/async_generator.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
+#include <dftracer/utils/runtime/coro/async_generator.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW

@@ -3,8 +3,8 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
-#include <dftracer/utils/core/coro/async_generator.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/runtime/coro/async_generator.h>
 
 #include <cstddef>
 #include <fstream>

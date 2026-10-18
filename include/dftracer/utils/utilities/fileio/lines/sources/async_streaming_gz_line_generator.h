@@ -4,8 +4,8 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/common/scoped_fd.h>
-#include <dftracer/utils/core/coro/async_generator.h>
-#include <dftracer/utils/core/io/io.h>
+#include <dftracer/utils/runtime/coro/async_generator.h>
+#include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_member_reader.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
 #include <sys/stat.h>

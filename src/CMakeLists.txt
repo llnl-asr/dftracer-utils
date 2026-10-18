@@ -77,52 +77,52 @@ set(DFTRACER_UTILS_COMMON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/timer.cpp)
 
 # -----------------------------------------
-# Core library sources
+# Runtime library sources
 # -----------------------------------------
 
-set(DFTRACER_UTILS_CORE_SOURCES
+set(DFTRACER_UTILS_RUNTIME_SOURCES
     # Pipeline - New Architecture
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/tasks/error.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/pipeline.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/executor/executor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/executor/run_loop.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/scheduler/thread_pool_executor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/scheduler/task_executor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/scheduler.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/scheduler/watchdog.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/runtime.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/tasks/error.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/pipeline/pipeline.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/executor/executor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/executor/run_loop.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/scheduler/thread_pool_executor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/scheduler/task_executor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/pipeline/scheduler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/scheduler/watchdog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/runtime.cpp
     # Coro
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/coro/coro.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/coro/yield.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/task_abi.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/coro/monitor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/coro/coro.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/coro/yield.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/task_abi.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/coro/monitor.cpp
     # Async I/O
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/io.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/io_awaitable.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/io_thread_pool.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/thread_pool_file_ops.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/thread_pool_backend.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/io_backend_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/io_backend_sync.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/io_completion_thread.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io_awaitable.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io_thread_pool.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/thread_pool_file_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/thread_pool_backend.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io_backend_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io_backend_sync.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io_completion_thread.cpp
     # Tasks
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/tasks/task.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/tasks/task_result.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/tasks/task.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/tasks/task_result.cpp
     # RocksDB
 )
 
 # Conditionally add io_uring backend sources
 if(DFTRACER_UTILS_HAVE_IO_URING)
-  list(APPEND DFTRACER_UTILS_CORE_SOURCES
-       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/io_uring_backend.cpp)
+  list(APPEND DFTRACER_UTILS_RUNTIME_SOURCES
+       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io_uring_backend.cpp)
 endif()
 
 # Linux: add epoll+threadpool backend
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   list(
     APPEND
-    DFTRACER_UTILS_CORE_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/epoll_thread_pool_backend.cpp
+    DFTRACER_UTILS_RUNTIME_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/epoll_thread_pool_backend.cpp
   )
 endif()
 
@@ -130,8 +130,8 @@ endif()
 if(DFTRACER_UTILS_HAVE_KQUEUE)
   list(
     APPEND
-    DFTRACER_UTILS_CORE_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/kqueue_thread_pool_backend.cpp
+    DFTRACER_UTILS_RUNTIME_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/kqueue_thread_pool_backend.cpp
   )
 endif()
 
@@ -342,7 +342,7 @@ list(APPEND DFTRACER_UTILS_UTILITIES_SOURCES
 # Add MPI-specific sources if MPI is enabled
 if(DFTRACER_UTILS_ENABLE_MPI)
   list(APPEND DFTRACER_UTILS_UTILITIES_SOURCES
-       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/mpi/mpi_utils.cpp)
+       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/mpi/mpi_utils.cpp)
 endif()
 
 if(DFTRACER_UTILS_ENABLE_ARROW)
@@ -385,7 +385,7 @@ endif()
 set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -lsimdjson")
 
 # +++++++++++++++++++++++++++++++++++++++++
-# Core Library
+# Runtime Library
 # +++++++++++++++++++++++++++++++++++++++++
 
 # Collect all dependency libraries
@@ -593,15 +593,15 @@ endforeach()
 
 create_library(
   NAME
-  dftracer_utils_core
+  dftracer_utils_runtime
   NAMESPACE
-  dftracer_utils_core
+  dftracer_utils_runtime
   SOURCES
-  ${DFTRACER_UTILS_CORE_SOURCES}
+  ${DFTRACER_UTILS_RUNTIME_SOURCES}
   VERSION
   ${PROJECT_VERSION}
   DESCRIPTION
-    "DFTracer utils core library (reader, pipeline)"
+    "DFTracer utils runtime library (reader, pipeline)"
   URL
   "https://github.com/llnl-asr/dftracer-utils"
   BUILD_SHARED
@@ -637,9 +637,9 @@ create_library(
   dftracer_utils_dstd
   dftracer_utils_common)
 
-# Post-process core library targets to add dependency linking and warnings
+# Post-process runtime library targets to add dependency linking and warnings
 foreach(variant objects shared static)
-  dftu_variant_target(VARIANT_TARGET dftracer_utils_core ${variant})
+  dftu_variant_target(VARIANT_TARGET dftracer_utils_runtime ${variant})
   set(VARIANT_UPPER ${DFTU_LINK_TYPE_${variant}})
   if(TARGET ${VARIANT_TARGET})
     # Link dependencies using helper functions
@@ -649,7 +649,7 @@ foreach(variant objects shared static)
 
     # The coroutine monitor (monitor.cpp) calls dladdr() for symbolization.
     # On older glibc (e.g. manylinux aarch64) dladdr lives in libdl, so the
-    # core library must link it explicitly; CMAKE_DL_LIBS is empty where the
+    # runtime library must link it explicitly; CMAKE_DL_LIBS is empty where the
     # symbol is already in libc (newer glibc) or libSystem (macOS).
     target_link_libraries(${VARIANT_TARGET}
                           PUBLIC ${CMAKE_DL_LIBS})
@@ -657,8 +657,8 @@ foreach(variant objects shared static)
     # Add stdfs if needed
     add_stdfs_if_needed(${VARIANT_TARGET})
 
-    # mpi_utils.cpp is part of the core library sources when MPI is enabled, so
-    # core itself needs the MPI include path and runtime. Without this the
+    # mpi_utils.cpp is part of the runtime library sources when MPI is enabled,
+    # so runtime itself needs the MPI include path and runtime. Without this the
     # precompiled header pulls in <mpi.h> and fails with "mpi.h: No such file or
     # directory".
     if(DFTRACER_UTILS_ENABLE_MPI)
@@ -668,11 +668,11 @@ foreach(variant objects shared static)
     endif()
 
     if(variant STREQUAL "objects")
-      target_set_warnings(dftracer_utils_core_objects)
+      target_set_warnings(dftracer_utils_runtime_objects)
 
       # io_uring compile definition
       if(DFTRACER_UTILS_HAVE_IO_URING)
-        target_compile_definitions(dftracer_utils_core_objects
+        target_compile_definitions(dftracer_utils_runtime_objects
                                    PRIVATE DFTRACER_UTILS_HAVE_IO_URING)
       endif()
     elseif(COVERAGE_LINK_OPTIONS)
@@ -682,7 +682,7 @@ foreach(variant objects shared static)
   endif()
 endforeach()
 
-use_precompiled_header(dftracer_utils_core_objects)
+use_precompiled_header(dftracer_utils_runtime_objects)
 
 # +++++++++++++++++++++++++++++++++++++++++
 # Vec Library (native vectorized columnar engine)
@@ -974,10 +974,10 @@ create_library(
   BUILD_STATIC
   ${DFTRACER_UTILS_BUILD_STATIC}
   SHARED_LINK_LIBRARIES
-    dftracer_utils_core::shared
+    dftracer_utils_runtime::shared
     dftracer_utils_duql::shared
   STATIC_LINK_LIBRARIES
-    dftracer_utils_core::static
+    dftracer_utils_runtime::static
     dftracer_utils_duql::static
   PUBLIC_INCLUDE_DIRS
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
@@ -987,9 +987,9 @@ create_library(
   PRIVATE_COMPILE_OPTIONS
   ${COVERAGE_COMPILE_OPTIONS}
   PKG_CONFIG_REQUIRES
-    "dftracer_utils_core dftracer_utils_duql"
+    "dftracer_utils_runtime dftracer_utils_duql"
   FIND_DEPENDENCIES
-    dftracer_utils_core dftracer_utils_duql)
+    dftracer_utils_runtime dftracer_utils_duql)
 
 foreach(variant objects shared static)
   dftu_variant_target(VARIANT_TARGET dftracer_utils_dataframe ${variant})
@@ -1069,12 +1069,12 @@ create_library(
   BUILD_STATIC
   ${DFTRACER_UTILS_BUILD_STATIC}
   SHARED_LINK_LIBRARIES
-    dftracer_utils_core::shared
+    dftracer_utils_runtime::shared
     dftracer_utils_dataframe::shared
     dftracer_utils_json::shared
     dftracer_utils_duql::shared
   STATIC_LINK_LIBRARIES
-    dftracer_utils_core::static
+    dftracer_utils_runtime::static
     dftracer_utils_dataframe::static
     dftracer_utils_json::static
     dftracer_utils_duql::static
@@ -1086,9 +1086,9 @@ create_library(
   PRIVATE_COMPILE_OPTIONS
   ${COVERAGE_COMPILE_OPTIONS}
   PKG_CONFIG_REQUIRES
-  "dftracer_utils_core"
+  "dftracer_utils_runtime"
   FIND_DEPENDENCIES
-  dftracer_utils_core)
+  dftracer_utils_runtime)
 
 # Post-process utilities library targets simdjson (third-party) inlined here
 # trips GCC's optimizer-based -Wstrict-overflow that -isystem cannot suppress;
@@ -1226,8 +1226,9 @@ endforeach()
 use_precompiled_header(dftracer_utils_utilities_objects)
 
 if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
-  # Create unified configs for core and utilities libraries This allows discovery
-  # via "dftracer_utils_core" instead of "dftracer_utils_core_shared"
+  # Create unified configs for runtime and utilities libraries This allows
+  # discovery via "dftracer_utils_runtime" instead of
+  # "dftracer_utils_runtime_shared"
   create_unified_library_config(
     NAME
     dftracer_utils_memory
@@ -1281,11 +1282,11 @@ if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
 
   create_unified_library_config(
     NAME
-    dftracer_utils_core
+    dftracer_utils_runtime
     VERSION
     ${PROJECT_VERSION}
     DESCRIPTION
-      "DFTracer utils core library (reader, pipeline)"
+      "DFTracer utils runtime library (reader, pipeline)"
     URL
     "https://github.com/llnl-asr/dftracer-utils"
     PKG_CONFIG_REQUIRES
@@ -1307,9 +1308,9 @@ if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
     URL
     "https://github.com/llnl-asr/dftracer-utils"
     PKG_CONFIG_REQUIRES
-    "dftracer_utils_core"
+    "dftracer_utils_runtime"
     FIND_DEPENDENCIES
-    dftracer_utils_core
+    dftracer_utils_runtime
     BUILD_SHARED
     ${DFTRACER_UTILS_BUILD_SHARED}
     BUILD_STATIC
@@ -1336,12 +1337,12 @@ if(DFTRACER_UTILS_SINGLE_LIBRARY)
     endif()
   endforeach()
 else()
-  # Create interface libraries that link both core and utilities
+  # Create interface libraries that link both runtime and utilities
   if(DFTRACER_UTILS_BUILD_SHARED)
     add_library(dftracer_utils_shared INTERFACE)
     target_link_libraries(
       dftracer_utils_shared
-      INTERFACE dftracer_utils_core::shared dftracer_utils_utilities::shared
+      INTERFACE dftracer_utils_runtime::shared dftracer_utils_utilities::shared
                 dftracer_utils_dataframe::shared)
 
     # Create aliases
@@ -1358,7 +1359,7 @@ else()
     add_library(dftracer_utils_static INTERFACE)
     target_link_libraries(
       dftracer_utils_static
-      INTERFACE dftracer_utils_core::static dftracer_utils_utilities::static
+      INTERFACE dftracer_utils_runtime::static dftracer_utils_utilities::static
                 dftracer_utils_dataframe::static)
 
     # Create aliases
@@ -1389,11 +1390,11 @@ if(DFTRACER_UTILS_PREFERRED_TYPE)
   string(APPEND UNIFIED_CONFIG_CONTENT "@PACKAGE_INIT@\n\n")
   string(APPEND UNIFIED_CONFIG_CONTENT "include(CMakeFindDependencyMacro)\n\n")
   if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
-    string(APPEND UNIFIED_CONFIG_CONTENT "# Find memory, dstd, common, core and utilities libraries\n")
+    string(APPEND UNIFIED_CONFIG_CONTENT "# Find memory, dstd, common, runtime and utilities libraries\n")
     string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_memory)\n")
     string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_dstd)\n")
     string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_common)\n")
-    string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_core)\n")
+    string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_runtime)\n")
     string(APPEND UNIFIED_CONFIG_CONTENT
            "find_dependency(dftracer_utils_utilities)\n")
     string(APPEND UNIFIED_CONFIG_CONTENT
@@ -1497,7 +1498,7 @@ if(DFTRACER_UTILS_PREFERRED_TYPE)
     set(DFTRACER_UTILS_PKG_CONFIG_LIBS_PRIVATE "-lpthread")
   else()
     set(DFTRACER_UTILS_PKG_CONFIG_REQUIRES
-        "dftracer_utils_core dftracer_utils_utilities")
+        "dftracer_utils_runtime dftracer_utils_utilities")
     set(DFTRACER_UTILS_PKG_CONFIG_LIBS_PRIVATE "")
   endif()
   create_pkgconfig_file(
@@ -1508,7 +1509,7 @@ if(DFTRACER_UTILS_PREFERRED_TYPE)
     VERSION
     ${PROJECT_VERSION}
     DESCRIPTION
-    "DFTracer utils library (core + utilities)"
+    "DFTracer utils library (runtime + utilities)"
     URL
     "https://github.com/llnl-asr/dftracer-utils"
     REQUIRES
@@ -1666,7 +1667,7 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
                                                        ${CMAKE_BINARY_DIR}/bin)
     target_add_rpath(${bin_exec})
 
-    # Link to unified library (which includes both core and utilities)
+    # Link to unified library (which includes both runtime and utilities)
     target_link_libraries(${bin_exec} PRIVATE dftracer_utils argparse::argparse)
 
     target_include_directories(

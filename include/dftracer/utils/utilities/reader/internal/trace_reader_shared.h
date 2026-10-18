@@ -1,9 +1,9 @@
 #ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_TRACE_READER_SHARED_H
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_TRACE_READER_SHARED_H
 
-#include <dftracer/utils/core/coro/async_generator.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/canonical.h>
+#include <dftracer/utils/runtime/coro/async_generator.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <simdjson.h>

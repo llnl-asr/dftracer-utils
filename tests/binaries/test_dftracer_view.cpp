@@ -2,12 +2,12 @@
 #include <dftracer/utils/binaries/json_cell_printer.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/filesystem.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregator.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_rechunker.h>

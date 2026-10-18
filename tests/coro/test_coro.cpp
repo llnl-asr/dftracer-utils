@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/coro/coro.h>
-#include <dftracer/utils/core/coro/join_handle.h>
-#include <dftracer/utils/core/coro/yield.h>
+#include <dftracer/utils/runtime/coro/coro.h>
+#include <dftracer/utils/runtime/coro/join_handle.h>
+#include <dftracer/utils/runtime/coro/yield.h>
 #include <doctest/doctest.h>
 
 #include <coroutine>

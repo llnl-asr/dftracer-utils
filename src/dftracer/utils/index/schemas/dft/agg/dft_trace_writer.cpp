@@ -1,6 +1,4 @@
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/core/io/io.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_serialization.h>
@@ -9,6 +7,8 @@
 #include <dftracer/utils/index/schemas/dft/agg/event_aggregator.h>
 #include <dftracer/utils/index/store/column_families.h>
 #include <dftracer/utils/index/store/database.h>
+#include <dftracer/utils/runtime/io/io.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/utilities/common/serialization/binary_codec.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>

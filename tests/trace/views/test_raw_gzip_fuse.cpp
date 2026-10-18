@@ -474,7 +474,7 @@ class ThrowingFold final : public Fold {
 };
 
 // Every live key and value of every family of an index, in order.
-std::vector<std::pair<std::string, std::string>> index_contents(
+static std::vector<std::pair<std::string, std::string>> index_contents(
     const std::string& index_path) {
     namespace store = dftracer::utils::index::store;
     store::RocksDBManager::instance().reset(index_path);

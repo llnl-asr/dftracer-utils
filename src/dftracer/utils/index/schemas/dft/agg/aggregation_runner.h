@@ -3,11 +3,11 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/timer.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/dft_trace_writer.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/pipeline/pipeline.h>
+#include <dftracer/utils/runtime/pipeline/pipeline_config.h>
 
 #include <cstddef>
 #include <cstdint>

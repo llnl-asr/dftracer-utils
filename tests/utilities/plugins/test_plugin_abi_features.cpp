@@ -4,10 +4,10 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/string_intern.h>
-#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/plugins/config.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
+#include <dftracer/utils/runtime/runtime.h>
 
 #include <memory>
 // After plugin.h/fold_adapter.h so nanoarrow is already set up for arrow_abi.h.

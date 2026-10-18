@@ -1,8 +1,8 @@
 #ifndef DFTRACER_TESTS_PLUGIN_COMMON_H
 #define DFTRACER_TESTS_PLUGIN_COMMON_H
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/plugins/plugins.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>

@@ -5,8 +5,8 @@
 # object files. The shared library may define more: symbols of the static
 # libraries it bundles. Also check the libraries of ours that each shared
 # library needs: memory needs none, dstd needs only memory, common needs only
-# memory and dstd, and json and duql do not need core. Library names come from
-# the create_library NAME arguments in src/CMakeLists.txt.
+# memory and dstd, and json and duql do not need runtime. Library names come
+# from the create_library NAME arguments in src/CMakeLists.txt.
 #
 # Usage: cmake -DSOURCE_DIR=<repo root> -DLIB_DIR=<build>/lib
 #              [-DVERSION_FILE=<file>] -P check_library_versions.cmake
@@ -206,8 +206,8 @@ foreach(_name ${_names})
     endif()
   endif()
   if((_name STREQUAL "dftracer_utils_json" OR _name STREQUAL "dftracer_utils_duql")
-     AND "dftracer_utils_core" IN_LIST _needed)
-    message(SEND_ERROR "${_name}: needs dftracer_utils_core (needs: ${_needed})")
+     AND "dftracer_utils_runtime" IN_LIST _needed)
+    message(SEND_ERROR "${_name}: needs dftracer_utils_runtime (needs: ${_needed})")
     set(_failed TRUE)
   endif()
 endforeach()

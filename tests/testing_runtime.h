@@ -5,8 +5,8 @@
 // testing_utilities.h so the 160-odd tests that never touch the runtime do not
 // pay for its headers.
 
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 
 #include <utility>
 

@@ -1,0 +1,101 @@
+#ifdef __linux__
+
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/runtime/executor/executor.h>
+#include <dftracer/utils/runtime/io/epoll_thread_pool_backend.h>
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
+#include <unistd.h>
+
+#include <cerrno>
+#include <cstring>
+
+namespace dftracer::utils::io {
+
+EpollThreadPoolBackend::EpollThreadPoolBackend(Executor& executor,
+                                               std::size_t pool_size,
+                                               unsigned batch_threshold)
+    : ThreadPoolFileOps(executor, pool_size, batch_threshold) {}
+
+EpollThreadPoolBackend::~EpollThreadPoolBackend() = default;
+
+void EpollThreadPoolBackend::start() {
+    pool_.start();
+
+    epoll_fd_.reset(::epoll_create1(EPOLL_CLOEXEC));
+    if (!epoll_fd_.valid()) {
+        DFTRACER_UTILS_LOG_ERROR("epoll_create1 failed: %s",
+                                 std::strerror(errno));
+        return;
+    }
+
+    event_fd_.reset(::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC));
+    if (!event_fd_.valid()) {
+        DFTRACER_UTILS_LOG_ERROR("eventfd failed: %s", std::strerror(errno));
+        epoll_fd_.reset();
+        return;
+    }
+
+    // Register the eventfd with epoll for shutdown wakeup.
+    struct epoll_event ev{};
+    ev.events = EPOLLIN;
+    ev.data.fd = event_fd_.get();
+    if (::epoll_ctl(epoll_fd_.get(), EPOLL_CTL_ADD, event_fd_.get(), &ev) < 0) {
+        DFTRACER_UTILS_LOG_ERROR("epoll_ctl(eventfd) failed: %s",
+                                 std::strerror(errno));
+    }
+
+    DFTRACER_UTILS_LOG_DEBUG(
+        "epoll+threadpool backend started (epoll_fd=%d, event_fd=%d)",
+        epoll_fd_.get(), event_fd_.get());
+
+    completion_thread_.start([this] { epoll_loop(); });
+}
+
+void EpollThreadPoolBackend::stop() {
+    // Signal the completion thread to exit.
+    completion_thread_.signal_stop();
+
+    // Wake epoll_wait by writing to eventfd.
+    if (event_fd_.valid()) {
+        uint64_t val = 1;
+        [[maybe_unused]] auto r = ::write(event_fd_.get(), &val, sizeof(val));
+    }
+
+    completion_thread_.join();
+    pool_.stop();
+
+    epoll_fd_.reset();
+    event_fd_.reset();
+}
+
+void EpollThreadPoolBackend::epoll_loop() {
+    constexpr int MAX_EVENTS = 64;
+    struct epoll_event events[MAX_EVENTS];
+
+    while (completion_thread_.running()) {
+        int n = ::epoll_wait(epoll_fd_.get(), events, MAX_EVENTS, 100);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+
+        for (int i = 0; i < n; ++i) {
+            if (events[i].data.fd == event_fd_.get()) {
+                // Shutdown signal -- drain the eventfd and exit.
+                uint64_t val = 0;
+                [[maybe_unused]] auto r =
+                    ::read(event_fd_.get(), &val, sizeof(val));
+                // Don't break immediately; process any other events first.
+                continue;
+            }
+
+            // Future: dispatch socket I/O events here.
+            // For now, only the eventfd is registered.
+        }
+    }
+}
+
+}  // namespace dftracer::utils::io
+
+#endif  // __linux__

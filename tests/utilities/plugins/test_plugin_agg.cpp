@@ -4,8 +4,8 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/string_intern.h>
-#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
+#include <dftracer/utils/runtime/runtime.h>
 
 #include <memory>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's

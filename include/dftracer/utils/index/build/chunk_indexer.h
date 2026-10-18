@@ -2,12 +2,12 @@
 #define DFTRACER_UTILS_INDEX_BUILD_CHUNK_INDEXER_H
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/index/store/file.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 
 #include <algorithm>

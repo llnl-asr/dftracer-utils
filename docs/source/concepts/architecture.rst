@@ -14,7 +14,7 @@ The C++ build produces five layered libraries, each as both a shared and a
 static variant (``src/CMakeLists.txt``), aggregated behind
 ``dftracer::utils``:
 
-- ``dftracer_utils_core`` is the async runtime: coroutines, the task
+- ``dftracer_utils_runtime`` is the async runtime: coroutines, the task
   executor and scheduler, the io backend, the pipeline machinery, RocksDB
   wrappers, and shared primitives (string interning, object pools, sharded
   maps, the error type). It knows nothing about traces.
@@ -30,7 +30,7 @@ static variant (``src/CMakeLists.txt``), aggregated behind
   holds the top domain logic: trace reading, indexing, aggregation,
   comparison, statistics, plugins, and replay.
 
-The dependency runs one way, down this list. Nothing in ``core`` knows what
+The dependency runs one way, down this list. Nothing in ``runtime`` knows what
 a DFTracer event looks like; nothing in ``utilities`` reimplements scheduling,
 I/O, JSON parsing, or the columnar kernels. This split is why the coroutine
 runtime can be reasoned about (and tested) on its own, and why domain code
@@ -40,17 +40,17 @@ active.
 .. mermaid::
 
    graph TB
-       Core["dftracer_utils_core<br/>runtime, coro, io, pipeline"]
+       Runtime["dftracer_utils_runtime<br/>runtime, coro, io, pipeline"]
        Json["dftracer_utils_json<br/>simdjson-backed parsing"]
        Query["dftracer_utils_duql<br/>predicate IR, evaluator"]
        DF["dftracer_utils_dataframe<br/>Series/DataFrame, SIMD kernels"]
        Util["dftracer_utils_utilities<br/>trace, indexer, plugins"]
-       Json --> Core
-       Query --> Core
+       Json --> Runtime
+       Query --> Runtime
        Query --> Json
-       DF --> Core
+       DF --> Runtime
        DF --> Query
-       Util --> Core
+       Util --> Runtime
        Util --> Json
        Util --> Query
        Util --> DF
@@ -125,7 +125,7 @@ own side of the boundary.
 See also
 --------
 
-- :doc:`async-runtime` for what ``dftracer_utils_core`` actually runs.
+- :doc:`async-runtime` for what ``dftracer_utils_runtime`` actually runs.
 - :doc:`fused-scan` for how one pass serves many analytics.
 - :doc:`indexing-and-pushdown` for the bloom/stats/checkpoint index and pruning.
 - :doc:`dataframe-model` for the columnar result type.

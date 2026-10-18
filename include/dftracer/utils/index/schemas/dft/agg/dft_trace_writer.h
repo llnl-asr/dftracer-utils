@@ -2,11 +2,11 @@
 #define DFTRACER_UTILS_TRACE_AGGREGATORS_PERFETTO_TRACE_WRITER_UTILITY_H
 
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_key.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_metrics.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_output.h>
 #include <dftracer/utils/index/schemas/dft/agg/association_tracker.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 
 #include <atomic>
 #include <cstdint>

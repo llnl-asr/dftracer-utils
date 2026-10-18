@@ -2,10 +2,6 @@
 #include <dftracer/utils/binaries/json_cell_printer.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/duql/pipeline.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
@@ -15,6 +11,10 @@
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
 #include <dftracer/utils/memory/budget.h>  // NO_SPILL_BUDGET
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/pipeline/pipeline.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -34,7 +34,7 @@
 // source then produces a distribution-capable dftracer_view; without MPI it is
 // the plain single-node binary.
 #ifdef DFTRACER_UTILS_ENABLE_MPI
-#include <dftracer/utils/core/distributed/mpi_transport.h>
+#include <dftracer/utils/runtime/distributed/mpi_transport.h>
 #include <dftracer/utils/utilities/fileio/parallel/merge.h>
 #endif
 

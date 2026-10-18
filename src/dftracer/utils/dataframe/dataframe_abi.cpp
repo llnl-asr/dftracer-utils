@@ -1,4 +1,3 @@
-#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
@@ -7,6 +6,7 @@
 #include <dftracer/utils/dataframe/internal/lazyframe_handle.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/duql/internal/duql_handle.h>
+#include <dftracer/utils/runtime/runtime.h>
 
 #include <cstddef>
 #include <cstdint>

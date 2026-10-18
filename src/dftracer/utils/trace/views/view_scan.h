@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_VIEW_SCAN_H
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_SCAN_H
 
-#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>

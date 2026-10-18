@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 
 #include <chrono>
 #include <cstdio>

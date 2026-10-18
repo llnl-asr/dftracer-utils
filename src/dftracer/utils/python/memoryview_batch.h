@@ -3,7 +3,7 @@
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
-#include <dftracer/utils/core/coro/channel.h>
+#include <dftracer/utils/runtime/coro/channel.h>
 
 #include <atomic>
 #include <cstddef>

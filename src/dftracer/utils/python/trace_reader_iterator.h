@@ -3,8 +3,8 @@
 
 #include <Python.h>
 #include <dftracer/utils/common/config.h>
-#include <dftracer/utils/core/task_handle.h>
 #include <dftracer/utils/python/memoryview_batch.h>
+#include <dftracer/utils/runtime/task_handle.h>
 #include <dftracer/utils/trace/args_map.h>
 #include <dftracer/utils/utilities/reader/internal/json_dict_builder.h>
 

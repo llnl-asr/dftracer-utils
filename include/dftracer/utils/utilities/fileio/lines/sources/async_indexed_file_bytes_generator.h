@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_ASYNC_INDEXED_FILE_BYTES_GENERATOR_H
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/core/coro/async_generator.h>
+#include <dftracer/utils/runtime/coro/async_generator.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/stream.h>

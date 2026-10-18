@@ -4,9 +4,9 @@
 #include <dftracer/utils/common/archive_format.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/constants.h>
-#include <dftracer/utils/core/coro/async_generator.h>
-#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/json/parser.h>
+#include <dftracer/utils/runtime/coro/async_generator.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/trace/time_metric.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>

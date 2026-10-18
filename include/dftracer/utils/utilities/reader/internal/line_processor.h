@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_LINE_PROCESSOR_H
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_LINE_PROCESSOR_H
 
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/runtime/coro/task.h>
 
 #include <cstddef>
 

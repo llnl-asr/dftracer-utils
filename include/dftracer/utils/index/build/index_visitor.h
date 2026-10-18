@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_BUILD_INDEX_VISITOR_H
 #define DFTRACER_UTILS_INDEX_BUILD_INDEX_VISITOR_H
 
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/runtime/coro/task.h>
 
 #include <cstddef>
 

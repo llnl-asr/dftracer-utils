@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_SERVER_HTTP_RESPONSE_H
 #define DFTRACER_UTILS_SERVER_HTTP_RESPONSE_H
 
-#include <dftracer/utils/core/coro/async_generator.h>
+#include <dftracer/utils/runtime/coro/async_generator.h>
 
 #include <memory>
 #include <span>

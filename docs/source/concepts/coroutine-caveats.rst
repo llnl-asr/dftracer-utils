@@ -11,7 +11,7 @@ rules and compiler bugs that are easy to trip over and hard to debug, because
 the failures are silent memory corruption rather than clean errors.
 
 This page explains those traps and the patterns the codebase uses to avoid them.
-It is written for anyone about to touch the ``core/coro`` code, or wondering why
+It is written for anyone about to touch the ``runtime/coro`` code, or wondering why
 some of it looks the way it does.
 
 Why some of this code looks unusual

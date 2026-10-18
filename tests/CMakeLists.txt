@@ -27,9 +27,9 @@ file(
 
 # task_abi.h is a C++ bridge (dftracer::utils::task_to_abi takes a
 # coro::CoroTask<void>&&) that hands C++ coroutines off to the C ABI in
-# core/coro/abi.h; it is not itself a C ABI header, so exclude it here.
+# runtime/coro/abi.h; it is not itself a C ABI header, so exclude it here.
 list(FILTER DFTRACER_C_ABI_HEADERS EXCLUDE REGEX
-     "core/coro/task_abi\\.h$")
+     "runtime/coro/task_abi\\.h$")
 list(SORT DFTRACER_C_ABI_HEADERS)
 
 set(C_ABI_GUARD_SRC ${CMAKE_CURRENT_BINARY_DIR}/generated/c_abi_guard.c)
@@ -70,13 +70,13 @@ set_tests_properties(c_abi_guard PROPERTIES RESOURCE_LOCK build_tree)
 add_test(NAME index_layers
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_index_layers.cmake)
-add_test(NAME core_layers
+add_test(NAME runtime_layers
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
-                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_core_layers.cmake)
-add_test(NAME core_layers_planted
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_runtime_layers.cmake)
+add_test(NAME runtime_layers_planted
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
-                 -DPLANT_DIR=${CMAKE_BINARY_DIR}/core_layers_planted -P
-                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_core_layers.cmake)
+                 -DPLANT_DIR=${CMAKE_BINARY_DIR}/runtime_layers_planted -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_runtime_layers.cmake)
 add_test(NAME blame_ignore_revs
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_blame_ignore_revs.cmake)
@@ -158,23 +158,23 @@ add_test(NAME enum_style
 # +++++++++++++++++++++++++++++++++++++++++
 
 set(TEST_CPP_SOURCES
-    # Core tests
-    core/test_runtime.cpp
-    core/test_runtime_abi.cpp
-    core/test_task_abi.cpp
-    core/test_logging.cpp
-    core/test_string_intern.cpp
+    # Runtime and common tests
+    runtime/test_runtime.cpp
+    runtime/test_runtime_abi.cpp
+    runtime/test_task_abi.cpp
+    common/test_logging.cpp
+    common/test_string_intern.cpp
     dstd/test_hash_partition.cpp
     dstd/test_hex64.cpp
     dstd/test_eviction_policy.cpp
-    core/test_filesystem_info.cpp
-    core/test_memory_budget.cpp
-    core/test_memory_config.cpp
-    core/test_async_semaphore.cpp
-    core/test_external_sort.cpp
-    core/test_spill_dir.cpp
-    core/test_str_format.cpp
-    core/test_object_pool.cpp
+    common/test_filesystem_info.cpp
+    common/test_memory_budget.cpp
+    common/test_memory_config.cpp
+    runtime/test_async_semaphore.cpp
+    common/test_external_sort.cpp
+    common/test_spill_dir.cpp
+    common/test_str_format.cpp
+    common/test_object_pool.cpp
     # Pipeline tests
     pipeline/test_pipeline.cpp
 
@@ -291,7 +291,7 @@ foreach(test_file ${TEST_CPP_SOURCES})
 
   # These thread-heavy tests contend heavily when run together on low-core CI.
   # Give them extra timeout and serialize via a shared lock.
-  if(bin_exec STREQUAL "core/test_runtime"
+  if(bin_exec STREQUAL "runtime/test_runtime"
      OR bin_exec STREQUAL "pipeline/test_task_scope"
      OR bin_exec STREQUAL "pipeline/test_pipeline"
      OR bin_exec STREQUAL "coro/test_channel")
@@ -617,13 +617,13 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
         -DTEST_TYPE=pkgconfig -P
         ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
 
-    # Test core library
+    # Test runtime library
     add_test(
-      NAME test_pkgconfig_discovery_core
+      NAME test_pkgconfig_discovery_runtime
       COMMAND
         ${CMAKE_COMMAND}
         -DPKG_CONFIG_PATH=${TEST_INSTALL_PREFIX}/lib/pkgconfig:${TEST_INSTALL_PREFIX}/lib64/pkgconfig:${TEST_INSTALL_PREFIX}/lib/${CMAKE_LIBRARY_ARCHITECTURE}/pkgconfig
-        -DLIBRARY_NAME=dftracer_utils_core
+        -DLIBRARY_NAME=dftracer_utils_runtime
         -DTEST_TYPE=pkgconfig -P
         ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
 
@@ -680,12 +680,12 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
         -DTEST_TYPE=cmake -P
         ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
 
-    # Test core library
+    # Test runtime library
     add_test(
-      NAME test_cmake_discovery_core
+      NAME test_cmake_discovery_runtime
       COMMAND
         ${CMAKE_COMMAND} -DCMAKE_PREFIX_PATH=${TEST_INSTALL_PREFIX}
-        -DLIBRARY_NAME=dftracer_utils_core
+        -DLIBRARY_NAME=dftracer_utils_runtime
         -DTEST_TYPE=cmake -P
         ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
 
@@ -731,10 +731,10 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
       test_pkgconfig_discovery_dstd
       test_cmake_discovery_dstd
       test_pkgconfig_discovery_common
-      test_pkgconfig_discovery_core
+      test_pkgconfig_discovery_runtime
       test_pkgconfig_discovery_utilities
       test_cmake_discovery_common
-      test_cmake_discovery_core
+      test_cmake_discovery_runtime
       test_cmake_discovery_utilities)
   endif()
 
@@ -752,7 +752,7 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
 
   foreach(VARIANT IN LISTS PACKAGE_TEST_VARIANTS)
     if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
-      foreach(LIBRARY dftracer_utils_memory dftracer_utils_dstd dftracer_utils_common dftracer_utils_core
+      foreach(LIBRARY dftracer_utils_memory dftracer_utils_dstd dftracer_utils_common dftracer_utils_runtime
                       dftracer_utils_utilities)
         add_target_alias_test(test_target_${LIBRARY}_${VARIANT}
                               "${LIBRARY}::${VARIANT}")

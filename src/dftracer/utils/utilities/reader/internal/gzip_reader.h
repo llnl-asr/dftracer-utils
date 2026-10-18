@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_GZIP_READER_H
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_GZIP_READER_H
 
-#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/reader/internal/line_processor.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/reader_stream_cache.h>

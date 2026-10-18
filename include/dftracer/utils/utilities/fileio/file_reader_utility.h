@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_FILEIO_FILE_READER_UTILITY_H
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/filesystem/directory_scanner_utility.h>
 #include <dftracer/utils/utilities/text/shared.h>
 

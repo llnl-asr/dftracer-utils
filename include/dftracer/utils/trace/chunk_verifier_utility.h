@@ -1,9 +1,9 @@
 #ifndef DFTRACER_UTILS_TRACE_CHUNK_VERIFIER_UTILITY_H
 #define DFTRACER_UTILS_TRACE_CHUNK_VERIFIER_UTILITY_H
 
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/coro/when_all.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/coro/when_all.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 
 #include <algorithm>
 #include <cstdint>

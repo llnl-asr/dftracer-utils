@@ -58,6 +58,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Take the SONAME and the macOS compatibility version of each shared library from the `abi` line of `VERSION`, and its version from the `api` line.
   The file names change, for example `libdftracer_utils_core.so.0.0.1`, so link again and update any script that names a file.
   Linux shared libraries now link with `-z defs`, so a shared library with an undefined symbol fails at link time.
+- Rename the library `dftracer_utils_core` to `dftracer_utils_runtime`, with its pkg-config and `find_package` names, and move its headers from `dftracer/utils/core/` to `dftracer/utils/runtime/`.
+  The include-all header `dftracer/utils/core/core.h` is removed, so include the headers you use.
 
 ### Added
 

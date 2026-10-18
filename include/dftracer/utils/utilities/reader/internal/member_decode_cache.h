@@ -2,10 +2,10 @@
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_MEMBER_DECODE_CACHE_H
 
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/coro/async_mutex.h>
-#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/dstd/cache/eviction_policy.h>
 #include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/runtime/coro/async_mutex.h>
+#include <dftracer/utils/runtime/coro/task.h>
 
 #include <array>
 #include <atomic>

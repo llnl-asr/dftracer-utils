@@ -57,7 +57,7 @@ elseif(TEST_TYPE STREQUAL "target")
   # Test specific target alias by checking config files
   message(STATUS "Testing target alias: ${TARGET_ALIAS}")
 
-  # Derive library name from target alias (e.g., dftracer_utils_core::shared -> dftracer_utils_core)
+  # Derive library name from target alias (e.g., dftracer_utils_runtime::shared -> dftracer_utils_runtime)
   string(REGEX REPLACE "::.*$" "" BASE_LIBRARY_NAME "${TARGET_ALIAS}")
   string(TOUPPER "${BASE_LIBRARY_NAME}" BASE_LIBRARY_NAME_UPPER)
   string(REPLACE "-" "_" BASE_LIBRARY_NAME_UPPER "${BASE_LIBRARY_NAME_UPPER}")

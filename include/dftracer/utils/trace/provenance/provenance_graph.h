@@ -21,7 +21,7 @@
 // dedupes entities across processes and folds PROV_CONT chunks into their
 // activity, so callers get the graph rather than raw events.
 
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/runtime/coro/task.h>
 
 #include <cstddef>
 #include <cstdint>

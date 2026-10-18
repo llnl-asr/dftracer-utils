@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_SERVER_VIZ_HANDLERS_H
 #define DFTRACER_UTILS_SERVER_VIZ_HANDLERS_H
 
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
 

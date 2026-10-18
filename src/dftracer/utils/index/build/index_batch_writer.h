@@ -2,8 +2,6 @@
 #define DFTRACER_UTILS_INDEX_BUILD_INDEX_BATCH_WRITER_H
 
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/core/coro/channel.h>
-#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
 #include <dftracer/utils/index/extensions/plugin_extension.h>
 #include <dftracer/utils/index/extensions/rowset_fold.h>
@@ -11,6 +9,8 @@
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/index/store/index_write.h>
+#include <dftracer/utils/runtime/coro/channel.h>
+#include <dftracer/utils/runtime/coro/task.h>
 
 #include <atomic>
 #include <chrono>

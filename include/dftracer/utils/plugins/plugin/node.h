@@ -1,9 +1,9 @@
 #ifndef DFTRACER_UTILS_PLUGINS_PLUGIN_NODE_H
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_NODE_H
 
-#include <dftracer/utils/core/coro/abi.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/plugins/plugin/source.h>
+#include <dftracer/utils/runtime/coro/abi.h>
 
 #include <cstdint>
 #include <memory>

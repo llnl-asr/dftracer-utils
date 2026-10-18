@@ -4,8 +4,8 @@ The compose model
 ==================
 
 What this explains: how async operations are authored and combined in
-``dftracer_utils_core`` - the ``Op<F>`` wrapper and the ranges-style ``|`` /
-``&&`` / ``||`` operators in ``core/compose.h`` - and why it replaced
+``dftracer_utils_runtime`` - the ``Op<F>`` wrapper and the ranges-style ``|`` /
+``&&`` / ``||`` operators in ``runtime/compose.h`` - and why it replaced
 the older ``Utility`` base-class pattern.
 
 The contract: a callable, nothing more
@@ -28,7 +28,7 @@ value and adds the composition operators below:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/compose.h>
+   #include <dftracer/utils/runtime/compose.h>
    namespace u = dftracer::utils::utilities;
 
    struct Doubler {
@@ -127,7 +127,7 @@ Two things made it worth removing:
   plain function composes with ``|`` the same way a tagged ``Utility`` did,
   without the base class or the tag vocabulary.
 - **TaskGraph was already callable-native.** The :doc:`task-graph
-  <task-graph>` DAG (``core/task_graph/``) takes any ``CoroScope&, Args... ->
+  <task-graph>` DAG (``runtime/task_graph/``) takes any ``CoroScope&, Args... ->
   CoroTask<T>`` callable at its nodes - it never needed a ``Utility`` to plug
   in. A compose pipeline drops straight into a graph node with no adapter:
 

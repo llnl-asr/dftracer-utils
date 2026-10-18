@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_PYTHON_TASK_HANDLE_H
 
 #include <Python.h>
-#include <dftracer/utils/core/task_handle.h>
+#include <dftracer/utils/runtime/task_handle.h>
 
 #include <any>
 #include <future>

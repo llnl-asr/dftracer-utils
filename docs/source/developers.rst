@@ -568,7 +568,7 @@ Never store it across the parser's or the input buffer's lifetime.
 
 **Instantiating Executor directly**
 
-``Executor`` (``core/pipeline/executor.h``) is internal to the Pipeline. Never create it directly; use ``Pipeline`` or the task framework instead.
+``Executor`` (``runtime/executor/executor.h``) is internal to the Pipeline. Never create it directly; use ``Pipeline`` or the task framework instead.
 
 **Per-event SQL indexing**
 

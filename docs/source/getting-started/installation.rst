@@ -49,7 +49,7 @@ build dirs land under ``build/build-<preset>/``).
 
 The build produces five layered component libraries, each as shared and static:
 
-- ``dftracer_utils_core``, the async runtime (coroutines, tasks, I/O backend,
+- ``dftracer_utils_runtime``, the async runtime (coroutines, tasks, I/O backend,
   pipelines, RocksDB wrappers, common primitives).
 - ``dftracer_utils_json``, JSON parsing (simdjson-backed).
 - ``dftracer_utils_duql``, the duql filter language (predicate IR, string codec, evaluator).
@@ -127,7 +127,7 @@ Pass with ``-D`` at configure time, for example
    * - ``DFTRACER_UTILS_SINGLE_LIBRARY``
      - ``OFF``
      - Build one ``libdftracer_utils`` from every area, and install only that library and its ``dftracer_utils`` package.
-       The per-area packages such as ``dftracer_utils_core`` are not built or installed.
+       The per-area packages such as ``dftracer_utils_runtime`` are not built or installed.
    * - ``DFTRACER_UTILS_BUILD_BINARIES``
      - ``ON``
      - Build the ``dftracer_*`` command-line tools.

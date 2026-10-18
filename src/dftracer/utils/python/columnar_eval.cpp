@@ -7,7 +7,6 @@
 // pool.
 
 #include <dftracer/utils/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
@@ -16,6 +15,7 @@
 #include <dftracer/utils/python/py_method.h>
 #include <dftracer/utils/python/py_scalar_helpers.h>
 #include <dftracer/utils/python/series.h>
+#include <dftracer/utils/runtime/runtime.h>
 
 #include <cstdint>
 #include <string>

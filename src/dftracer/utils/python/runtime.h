@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_PYTHON_RUNTIME_H
 
 #include <Python.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/runtime/runtime.h>
 
 #include <memory>
 

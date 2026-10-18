@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_TRACE_COMPARATOR_COMPARE_VIEW_H
 #define DFTRACER_UTILS_TRACE_COMPARATOR_COMPARE_VIEW_H
 
-#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/trace/views/view.h>
 
 #include <cstddef>

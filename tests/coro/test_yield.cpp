@@ -2,10 +2,10 @@
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/coro/when_all.h>
 #include <dftracer/utils/core/coro/yield.h>
-#include <dftracer/utils/core/pipeline/executor.h>
 #include <dftracer/utils/core/pipeline/scheduler.h>
-#include <dftracer/utils/core/pipeline/thread_pool_executor.h>
 #include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/core/scheduler/task_executor.h>
+#include <dftracer/utils/core/scheduler/thread_pool_executor.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <doctest/doctest.h>

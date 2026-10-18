@@ -1,8 +1,8 @@
-#ifndef DFTRACER_UTILS_CORE_PIPELINE_RUN_LOOP_H
-#define DFTRACER_UTILS_CORE_PIPELINE_RUN_LOOP_H
+#ifndef DFTRACER_UTILS_CORE_EXECUTOR_RUN_LOOP_H
+#define DFTRACER_UTILS_CORE_EXECUTOR_RUN_LOOP_H
 
-#include <dftracer/utils/core/pipeline/executor.h>
-#include <dftracer/utils/core/timer_service.h>
+#include <dftracer/utils/core/executor/executor.h>
+#include <dftracer/utils/core/executor/timer_service.h>
 
 #include <coroutine>
 #include <deque>
@@ -65,4 +65,4 @@ class RunLoop : public Executor {
 
 }  // namespace dftracer::utils
 
-#endif  // DFTRACER_UTILS_CORE_PIPELINE_RUN_LOOP_H
+#endif  // DFTRACER_UTILS_CORE_EXECUTOR_RUN_LOOP_H

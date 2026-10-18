@@ -1,8 +1,8 @@
 #ifdef __linux__
 
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/core/executor/executor.h>
 #include <dftracer/utils/core/io/epoll_thread_pool_backend.h>
-#include <dftracer/utils/core/pipeline/executor.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <unistd.h>

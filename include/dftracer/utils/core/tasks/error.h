@@ -1,5 +1,5 @@
-#ifndef DFTRACER_UTILS_CORE_PIPELINE_ERROR_H
-#define DFTRACER_UTILS_CORE_PIPELINE_ERROR_H
+#ifndef DFTRACER_UTILS_CORE_TASKS_ERROR_H
+#define DFTRACER_UTILS_CORE_TASKS_ERROR_H
 
 #include <dftracer/utils/common/error.h>
 
@@ -37,4 +37,4 @@ class PipelineError : public DFTUtilsException {
 
 }  // namespace dftracer::utils
 
-#endif  // DFTRACER_UTILS_CORE_PIPELINE_ERROR_H
+#endif  // DFTRACER_UTILS_CORE_TASKS_ERROR_H

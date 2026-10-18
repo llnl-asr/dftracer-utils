@@ -3,8 +3,8 @@
 
 #include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/core/coro/completion_state.h>
-#include <dftracer/utils/core/coro/resumption_helper.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/executor/resumption_helper.h>
 
 #include <atomic>
 #include <coroutine>

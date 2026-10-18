@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/pipeline/error.h>
+#include <dftracer/utils/core/tasks/error.h>
 
 namespace dftracer::utils {
 

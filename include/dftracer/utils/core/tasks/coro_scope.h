@@ -11,7 +11,7 @@
 #include <dftracer/utils/core/coro/join_handle.h>
 #include <dftracer/utils/core/coro/spawn_future.h>
 #include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/pipeline/executor.h>
+#include <dftracer/utils/core/executor/executor.h>
 
 #include <atomic>
 #include <cstddef>

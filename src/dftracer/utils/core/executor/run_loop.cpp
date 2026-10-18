@@ -1,6 +1,6 @@
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/core/pipeline/executor.h>
-#include <dftracer/utils/core/pipeline/run_loop.h>
+#include <dftracer/utils/core/executor/executor.h>
+#include <dftracer/utils/core/executor/run_loop.h>
 
 #include <utility>
 

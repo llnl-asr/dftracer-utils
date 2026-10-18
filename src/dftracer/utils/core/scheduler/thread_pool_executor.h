@@ -1,14 +1,14 @@
-#ifndef DFTRACER_UTILS_CORE_PIPELINE_THREAD_POOL_EXECUTOR_H
-#define DFTRACER_UTILS_CORE_PIPELINE_THREAD_POOL_EXECUTOR_H
+#ifndef DFTRACER_UTILS_CORE_SCHEDULER_THREAD_POOL_EXECUTOR_H
+#define DFTRACER_UTILS_CORE_SCHEDULER_THREAD_POOL_EXECUTOR_H
 
 #include <concurrentqueue.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/common/typedefs.h>
 #include <dftracer/utils/core/coro/coro.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/executor/timer_service.h>
 #include <dftracer/utils/core/io/io_backend.h>
-#include <dftracer/utils/core/pipeline/executor.h>
-#include <dftracer/utils/core/timer_service.h>
+#include <dftracer/utils/core/scheduler/task_executor.h>
 
 #include <any>
 #include <atomic>
@@ -350,7 +350,8 @@ class ThreadPoolExecutor : public TaskExecutor {
 };
 
 void* get_current_worker_context();
+void set_current_worker_context(void* context);
 
 }  // namespace dftracer::utils
 
-#endif  // DFTRACER_UTILS_CORE_PIPELINE_THREAD_POOL_EXECUTOR_H
+#endif  // DFTRACER_UTILS_CORE_SCHEDULER_THREAD_POOL_EXECUTOR_H

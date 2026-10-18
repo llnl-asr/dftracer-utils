@@ -1,5 +1,5 @@
-#ifndef DFTRACER_UTILS_CORE_PIPELINE_WATCHDOG_H
-#define DFTRACER_UTILS_CORE_PIPELINE_WATCHDOG_H
+#ifndef DFTRACER_UTILS_CORE_SCHEDULER_WATCHDOG_H
+#define DFTRACER_UTILS_CORE_SCHEDULER_WATCHDOG_H
 
 #include <dftracer/utils/common/typedefs.h>
 
@@ -216,4 +216,4 @@ class Watchdog {
 
 }  // namespace dftracer::utils
 
-#endif  // DFTRACER_UTILS_CORE_PIPELINE_WATCHDOG_H
+#endif  // DFTRACER_UTILS_CORE_SCHEDULER_WATCHDOG_H

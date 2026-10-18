@@ -2,10 +2,10 @@
 #define DFTRACER_UTILS_CORE_PIPELINE_PIPELINE_H
 
 #include <dftracer/utils/common/typedefs.h>
-#include <dftracer/utils/core/pipeline/error.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/pipeline/pipeline_output.h>
 #include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/core/tasks/error.h>
 
 #include <any>
 #include <cstddef>

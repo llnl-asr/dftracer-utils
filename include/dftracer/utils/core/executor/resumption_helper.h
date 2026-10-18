@@ -1,5 +1,5 @@
-#ifndef DFTRACER_UTILS_CORE_CORO_RESUMPTION_HELPER_H
-#define DFTRACER_UTILS_CORE_CORO_RESUMPTION_HELPER_H
+#ifndef DFTRACER_UTILS_CORE_EXECUTOR_RESUMPTION_HELPER_H
+#define DFTRACER_UTILS_CORE_EXECUTOR_RESUMPTION_HELPER_H
 
 #include <coroutine>
 
@@ -22,4 +22,4 @@ void schedule_destroy_helper(Executor* executor,
                              std::coroutine_handle<> handle);
 }  // namespace dftracer::utils
 
-#endif  // DFTRACER_UTILS_CORE_CORO_RESUMPTION_HELPER_H
+#endif  // DFTRACER_UTILS_CORE_EXECUTOR_RESUMPTION_HELPER_H

@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_CORE_TASKS_DETAIL_TASK_IMPL_H
 #define DFTRACER_UTILS_CORE_TASKS_DETAIL_TASK_IMPL_H
 
-#include <dftracer/utils/core/pipeline/error.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/core/tasks/error.h>
 #include <dftracer/utils/core/tasks/task_traits.h>
 #include <dftracer/utils/dstd/coroutine_traits.h>
 

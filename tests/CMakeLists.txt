@@ -70,6 +70,13 @@ set_tests_properties(c_abi_guard PROPERTIES RESOURCE_LOCK build_tree)
 add_test(NAME index_layers
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_index_layers.cmake)
+add_test(NAME core_layers
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_core_layers.cmake)
+add_test(NAME core_layers_planted
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+                 -DPLANT_DIR=${CMAKE_BINARY_DIR}/core_layers_planted -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_core_layers.cmake)
 add_test(NAME blame_ignore_revs
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_blame_ignore_revs.cmake)

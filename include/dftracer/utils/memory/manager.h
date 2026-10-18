@@ -69,6 +69,14 @@ class Reservation {
     }
     Status status() const noexcept { return status_; }
     std::size_t bytes() const noexcept { return bytes_; }
+    /**
+     * @brief Reserve @p bytes more in the same pool, as Pool::reserve does.
+     *
+     * On failure the reservation keeps its bytes and the status says why. An
+     * empty reservation has no pool to grow in: it returns its own failure,
+     * or Status::OverBudget when it was default constructed.
+     */
+    Status grow(std::size_t bytes) noexcept;
     void release() noexcept;
 
    private:
@@ -484,6 +492,9 @@ class Scope {
    private:
     std::uint16_t previous_;
 };
+
+/// The pool a Scope set on the calling thread, else the general pool.
+Pool& current_pool();
 
 /// Every open pool, root first.
 std::vector<PoolStats> pool_stats();

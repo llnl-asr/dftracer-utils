@@ -623,6 +623,10 @@ Reporter set_reporter(Reporter reporter) noexcept {
     return g_reporter.exchange(reporter, std::memory_order_acq_rel);
 }
 
+Pool& current_pool() {
+    return ManagerAccess::slot(Manager::get(), attrib_local().scope);
+}
+
 Scope::Scope(Pool& pool) noexcept {
     AttribCache& cache = attrib_local();
     previous_ = cache.scope;
@@ -887,6 +891,18 @@ Reservation& Reservation::operator=(Reservation&& other) noexcept {
 }
 
 Reservation::~Reservation() { release(); }
+
+Status Reservation::grow(std::size_t bytes) noexcept {
+    if (pool_ == nullptr) {
+        return status_ == Status::Ok ? Status::OverBudget : status_;
+    }
+    Reservation extra = pool_->reserve(bytes);
+    if (!extra) return extra.status();
+    bytes_ += extra.bytes_;
+    extra.pool_ = nullptr;
+    extra.bytes_ = 0;
+    return Status::Ok;
+}
 
 void Reservation::release() noexcept {
     if (pool_ != nullptr && bytes_ != 0) {

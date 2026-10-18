@@ -8,6 +8,8 @@
 
 namespace dftracer::utils::memory {
 
+class Pool;
+
 enum class Backend : std::uint8_t {
     PageHeap,
     /// The C library allocator with a header per block, for sanitizers and
@@ -74,6 +76,14 @@ void configure(const Config& config) noexcept;
 void* allocate(std::size_t size, std::size_t align);
 
 /**
+ * @brief Allocate like allocate() and charge the block to @p pool, as a Scope
+ * of @p pool would, whatever the scope of the calling thread.
+ *
+ * The pool must be open.
+ */
+void* allocate(std::size_t size, std::size_t align, Pool& pool);
+
+/**
  * @brief Allocate like allocate() and return null instead of throwing.
  *
  * Null means the hard cap or the operating system refused. A bad alignment
@@ -90,6 +100,20 @@ void deallocate(void* p) noexcept;
  * Debug builds abort when @p size differs from the size passed to allocate().
  */
 void deallocate(void* p, std::size_t size) noexcept;
+
+/**
+ * @brief Resize a block from allocate() whose requested size is @p old_size.
+ *
+ * Returns @p p when the block already fits @p new_size at @p align, else a
+ * new block that holds the first min(@p old_size, @p new_size) bytes, and @p p
+ * is freed. Either way the block stays charged to the pool of the old block
+ * and is freed with @p new_size. A null @p p is allocate(@p new_size,
+ * @p align). Throws std::bad_alloc and leaves @p p intact when the memory is
+ * not available. Debug builds abort when @p old_size is not the size of the
+ * block.
+ */
+void* reallocate(void* p, std::size_t old_size, std::size_t new_size,
+                 std::size_t align);
 
 /**
  * @brief Give idle memory back to the operating system.

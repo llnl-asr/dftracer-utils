@@ -6,7 +6,8 @@ set(MEMORY_TEST_SOURCES test_system_backend.cpp test_heap.cpp
                         test_heap_threads.cpp test_heap_trim.cpp
                         test_memory_pool.cpp test_budget.cpp test_pool.cpp
                         test_pool_threads.cpp test_reclaim.cpp
-                        test_pressure.cpp test_debug.cpp)
+                        test_pressure.cpp test_debug.cpp test_allocator.cpp
+                        test_arena.cpp)
 
 find_package(Threads REQUIRED)
 
@@ -42,7 +43,8 @@ endforeach()
 
 # The pool tests run once per backend: the loop above runs them on the
 # system backend.
-foreach(bin_exec test_pool test_pool_threads test_reclaim test_pressure)
+foreach(bin_exec test_pool test_pool_threads test_reclaim test_pressure
+                 test_allocator test_arena)
   add_test(NAME memory/${bin_exec}_page_heap COMMAND memory_${bin_exec})
   set_tests_properties(
     memory/${bin_exec}_page_heap PROPERTIES ENVIRONMENT
@@ -82,6 +84,17 @@ if(DFTRACER_UTILS_ENABLE_ASAN)
                "DFTRACER_UTILS_MEMORY_BACKEND=page_heap;ASAN_OPTIONS=abort_on_error=0"
                PASS_REGULAR_EXPRESSION
                "AddressSanitizer: (heap-buffer-overflow|use-after-poison)")
+
+  # reset() poisons the kept chunk, so a write through an old pointer is a
+  # use after poison.
+  add_test(NAME memory_asan_arena_use_after_reset
+           COMMAND memory_test_arena "--test-case=planted arena use after reset"
+                   --no-skip)
+  set_tests_properties(
+    memory_asan_arena_use_after_reset
+    PROPERTIES ENVIRONMENT
+               "DFTRACER_UTILS_MEMORY_BACKEND=page_heap;ASAN_OPTIONS=abort_on_error=0"
+               PASS_REGULAR_EXPRESSION "AddressSanitizer: use-after-poison")
 endif()
 
 # A decay time that is not a whole number aborts the process at the first

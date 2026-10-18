@@ -38,6 +38,10 @@ void page_trim(Mode mode) noexcept;
 /// with mremap; elsewhere the block is copied. Throws std::bad_alloc.
 void* page_grow_huge(void* p, std::size_t size, std::size_t align);
 
+/// Resize a block from page_allocate as reallocate() describes.
+void* page_reallocate(void* p, std::size_t old_size, std::size_t new_size,
+                      std::size_t align);
+
 PageStats page_stats() noexcept;
 /// The reserved field of page_stats() alone, without walking the pools.
 std::size_t page_reserved() noexcept;

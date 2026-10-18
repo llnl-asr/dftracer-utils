@@ -82,10 +82,10 @@ Series large_of(const Rows& rows) {
     Series s = strings_of(rows, TypeId::String);
     auto* o = new dftu_series(*s.handle());
     o->type = TypeId::LargeString;
-    o->offsets = Buffer::allocate(static_cast<std::size_t>(o->length + 1) *
-                                  sizeof(std::int64_t));
+    o->offsets = new_buffer(static_cast<std::size_t>(o->length + 1) *
+                            sizeof(std::int64_t));
     const std::int32_t* src = s.offsets();
-    auto* dst = reinterpret_cast<std::int64_t*>(o->offsets->data());
+    auto* dst = reinterpret_cast<std::int64_t*>(writable(o->offsets));
     for (std::int64_t i = 0; i <= o->length; ++i) dst[i] = src[i];
     return Series{o};
 }
@@ -95,8 +95,9 @@ Series selection_over(const Series& base, const Idx& idx) {
     adopt_type_from(*o, *base.handle());
     o->encoding = Encoding::Selection;
     o->length = static_cast<std::int64_t>(idx.size());
-    o->data = Buffer::allocate(idx.size() * sizeof(std::int64_t));
-    std::memcpy(o->data->data(), idx.data(), idx.size() * sizeof(std::int64_t));
+    o->data = new_buffer(idx.size() * sizeof(std::int64_t));
+    std::memcpy(writable(o->data), idx.data(),
+                idx.size() * sizeof(std::int64_t));
     o->set_child(std::make_shared<dftu_series>(*base.handle()));
     return Series{o};
 }

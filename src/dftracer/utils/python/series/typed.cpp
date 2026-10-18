@@ -12,8 +12,8 @@ namespace dftracer::utils::python::series_detail {
 
 namespace {
 
-std::size_t buffer_size(const std::shared_ptr<dataframe::Buffer>& b) {
-    return b ? b->size() : 0;
+std::size_t buffer_size(const dataframe::BufferView& b) {
+    return b.block() ? b.size() : 0;
 }
 
 std::size_t nbytes_of(const dftu_series& c) {

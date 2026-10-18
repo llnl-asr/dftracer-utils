@@ -36,18 +36,19 @@ struct Builder {
     bool key_at(const dftu_series* c, std::int64_t i, std::string_view& s) {
         if (is_string) return str_at(c, i, s);
         for (;;) {
-            if (c->validity && !((c->validity->data()[i >> 3] >> (i & 7)) & 1))
+            if (c->validity.block() &&
+                !((c->validity.data()[i >> 3] >> (i & 7)) & 1))
                 return false;
             switch (c->encoding) {
                 case Encoding::Dictionary:
                     i = reinterpret_cast<const std::int32_t*>(
-                        c->data->data())[i];
+                        c->data.data())[i];
                     c = c->child().get();
                     break;
                 case Encoding::Selection: {
                     const std::int64_t idx =
                         reinterpret_cast<const std::int64_t*>(
-                            c->data->data())[i];
+                            c->data.data())[i];
                     if (idx < 0) return false;
                     i = idx;
                     c = c->child().get();
@@ -60,7 +61,7 @@ struct Builder {
                     break;
                 }
                 default: {
-                    const auto* d = c->data->data();
+                    const auto* d = c->data.data();
                     if (is_bool)
                         s = std::string_view(
                             BOOL_BYTES + ((d[i >> 3] >> (i & 7)) & 1), 1);
@@ -80,7 +81,7 @@ struct Builder {
         std::string_view s;
         if (c->is_chunked()) {
             const auto* starts =
-                reinterpret_cast<const std::int64_t*>(c->data->data());
+                reinterpret_cast<const std::int64_t*>(c->data.data());
             for (std::size_t k = 0; k < c->nested.size(); ++k)
                 fill(c->nested[k].series.get(), base + starts[k]);
             return;
@@ -89,12 +90,12 @@ struct Builder {
             const dftu_series* dict = c->child().get();
             const auto k = static_cast<std::uint32_t>(dict->length);
             const auto* codes =
-                reinterpret_cast<const std::int32_t*>(c->data->data());
+                reinterpret_cast<const std::int32_t*>(c->data.data());
             std::vector<std::int32_t> entry(k, -2);
             for (std::int64_t i = 0; i < c->length; ++i) {
                 const std::int64_t row = base + i;
-                if (c->validity &&
-                    !((c->validity->data()[i >> 3] >> (i & 7)) & 1)) {
+                if (c->validity.block() &&
+                    !((c->validity.data()[i >> 3] >> (i & 7)) & 1)) {
                     ids[i] = null(row);
                     continue;
                 }

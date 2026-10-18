@@ -346,6 +346,35 @@ TEST_CASE("interval cuts the pairs of one point into morsels") {
     CHECK(row_keys(parts) == row_keys(eager));
 }
 
+TEST_CASE("long intervals stay active across many right morsels") {
+    std::vector<I> point, lo, hi, id;
+    for (std::int64_t i = 0; i < 3000; ++i) point.push_back(I{i});
+    for (std::int64_t i = 0; i < 2000; ++i) {
+        lo.push_back(I{i / 4});
+        hi.push_back(I{i % 97 == 0 ? i / 4 + 2500 : i / 4 + 3});
+        id.push_back(I{i});
+    }
+    const DataFrame left = frame({"point"}, i64s(point));
+    const DataFrame right =
+        frame({"lo", "hi", "id"}, i64s(lo), i64s(hi), i64s(id));
+    for (const bool outer : {false, true}) {
+        INFO("outer=" << outer);
+        const DataFrame eager =
+            df::interval(left, right, "point", "lo", "hi", {}, outer);
+        for (const std::uint64_t budget : {SMALL_BUDGET, std::uint64_t{1}})
+            expect_same(morsels(budgeted(left, budget)
+                                    .interval(budgeted(right, budget), "point",
+                                              "lo", "hi", {}, outer)),
+                        eager);
+        // Small morsels with no budget: the right side moves several morsels
+        // between two flushes.
+        expect_same(morsels(left.lazy().interval(right.lazy(), "point", "lo",
+                                                 "hi", {}, outer),
+                            64),
+                    eager);
+    }
+}
+
 TEST_CASE("interval with an empty side") {
     const DataFrame left = frame({"point"}, i64s({I{1}, I{5}}));
     const DataFrame right =

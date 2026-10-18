@@ -19,10 +19,11 @@ using dftracer::utils::dataframe::is_wide_offset_type;
 using dftracer::utils::dataframe::narrow_varwidth_type;
 using dftracer::utils::dataframe::offsets_of;
 using dftracer::utils::dataframe::TypeId;
+using dftracer::utils::dataframe::writable;
 
 bool is_valid(const dftu_series& v, std::int64_t i) {
-    if (!v.validity) return true;
-    return (v.validity->data()[i >> 3] & (1u << (i & 7))) != 0;
+    if (!v.validity.block()) return true;
+    return (v.validity.data()[i >> 3] & (1u << (i & 7))) != 0;
 }
 
 template <class X>
@@ -68,8 +69,8 @@ template <class Off>
 void hash_string_keys(const dftu_series& k, std::vector<std::int32_t>& group_of,
                       std::vector<std::string>& distinct) {
     const Off* offsets =
-        reinterpret_cast<const Off*>(offsets_of<Off>(k)->data());
-    const char* data = reinterpret_cast<const char*>(k.data->data());
+        reinterpret_cast<const Off*>(offsets_of<Off>(k).data());
+    const char* data = reinterpret_cast<const char*>(k.data.data());
     std::unordered_map<std::string, std::int32_t> idx;
     for (std::int64_t i = 0; i < k.length; ++i) {
         std::string key(data + offsets[i],
@@ -110,7 +111,7 @@ Groups build_groups(const dftu_series* keys_in) {
             hash_string_keys<std::int32_t>(*k, g.group_of, distinct);
     } else {
         std::unordered_map<std::string, std::int32_t> idx;
-        const char* data = reinterpret_cast<const char*>(k->data->data());
+        const char* data = reinterpret_cast<const char*>(k->data.data());
         for (std::int64_t i = 0; i < k->length; ++i) {
             std::string key(data + static_cast<std::size_t>(i) * width, width);
             auto [it, ins] = idx.try_emplace(
@@ -146,8 +147,8 @@ Groups build_groups(const dftu_series* keys_in) {
         out->set_fixed_size(k->fixed_size());
         std::string bytes;
         for (const std::string& s : distinct) bytes += s;
-        out->data = dftracer::utils::dataframe::Buffer::allocate(bytes.size());
-        std::memcpy(out->data->data(), bytes.data(), bytes.size());
+        out->data = dftracer::utils::dataframe::new_buffer(bytes.size());
+        std::memcpy(writable(out->data), bytes.data(), bytes.size());
         g.keys = out;
     } else {
         std::string bytes;
@@ -156,9 +157,9 @@ Groups build_groups(const dftu_series* keys_in) {
         dftracer::utils::dataframe::adopt_type_from(*out, *k);
         out->encoding = Encoding::Flat;
         out->length = g.num_groups;
-        out->data = dftracer::utils::dataframe::Buffer::allocate(bytes.size());
+        out->data = dftracer::utils::dataframe::new_buffer(bytes.size());
         if (!bytes.empty())
-            std::memcpy(out->data->data(), bytes.data(), bytes.size());
+            std::memcpy(writable(out->data), bytes.data(), bytes.size());
         g.keys = out;
     }
     if (materialized) dftu_series_free(materialized);
@@ -179,7 +180,7 @@ void aggregate(const dftu_series& v, const std::vector<std::int32_t>& group_of,
     std::vector<std::int64_t> cnts(g_count, 0);
     std::vector<T> mins(g_count, T{});
     std::vector<T> maxs(g_count, T{});
-    const T* p = reinterpret_cast<const T*>(v.data->data());
+    const T* p = reinterpret_cast<const T*>(v.data.data());
     for (std::int64_t i = 0; i < v.length; ++i) {
         if (!is_valid(v, i)) continue;
         std::size_t g =

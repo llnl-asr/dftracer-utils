@@ -157,7 +157,7 @@ TEST_SUITE("native frame") {
         Series fl = Series::list({0, 2, 4}, strings({"a", "b", "c", "d"}));
         fl.handle()->type = TypeId::FixedSizeList;
         fl.handle()->set_fixed_size(2);
-        fl.handle()->offsets.reset();
+        fl.handle()->offsets = {};
         f.columns.push_back(std::move(fl));
         const auto back = frame_from_native(frame_to_native(f));
         REQUIRE(back);

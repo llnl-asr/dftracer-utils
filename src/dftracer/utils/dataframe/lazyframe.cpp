@@ -5972,7 +5972,7 @@ void fingerprint_op(Fingerprint& fp, const LazyOp& op) {
             },
             [&](const FilterMaskOp& o) {
                 const dftu_series* m = o.mask.handle();
-                fp.pod(m && m->data ? m->data->data() : nullptr);
+                fp.pod(m && m->data.block() ? m->data.data() : nullptr);
                 fp.pod(m ? o.mask.length() : std::int64_t{0});
             },
             [&](const SortByMultiOp& o) {

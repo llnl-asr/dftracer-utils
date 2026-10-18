@@ -52,8 +52,8 @@ dftu_scalar mode(const Series& v) { return dftu_series_mode(v.handle()); }
 namespace {
 
 bool is_valid(const dftu_series& v, std::int64_t i) {
-    if (!v.validity) return true;
-    return (v.validity->data()[i >> 3] & (1u << (i & 7))) != 0;
+    if (!v.validity.block()) return true;
+    return (v.validity.data()[i >> 3] & (1u << (i & 7))) != 0;
 }
 
 template <class T>
@@ -79,13 +79,13 @@ using sum_acc_t = std::conditional_t<
 
 template <class T>
 void reduce_one(const dftu_series& v, std::int32_t op, dftu_scalar& out) {
-    const T* p = reinterpret_cast<const T*>(v.data->data());
+    const T* p = reinterpret_cast<const T*>(v.data.data());
     const std::int64_t n = v.length;
     // A validity bitmap forces a per-element branch that blocks the compiler
     // from vectorizing the reduction; the far more common no-null column runs a
     // branch-free loop that auto-vectorizes (reduce_simd handles f64 sum before
     // we get here, but integer sum and all min/max land on this path).
-    const bool has_null = v.validity != nullptr;
+    const bool has_null = static_cast<bool>(v.validity.block());
 
     if (op == DFTU_REDUCE_SUM) {
         sum_acc_t<T> acc = 0;
@@ -142,9 +142,9 @@ void reduce_one(const dftu_series& v, std::int32_t op, dftu_scalar& out) {
 // Product accumulates in the column's wide domain, skipping nulls (identity 1).
 template <class T>
 void product_one(const dftu_series& v, dftu_scalar& out) {
-    const T* p = reinterpret_cast<const T*>(v.data->data());
+    const T* p = reinterpret_cast<const T*>(v.data.data());
     const std::int64_t n = v.length;
-    const bool has_null = v.validity != nullptr;
+    const bool has_null = static_cast<bool>(v.validity.block());
     sum_acc_t<T> acc = 1;
     for (std::int64_t i = 0; i < n; ++i)
         if (!has_null || is_valid(v, i)) acc *= static_cast<sum_acc_t<T>>(p[i]);
@@ -162,9 +162,9 @@ void product_one(const dftu_series& v, dftu_scalar& out) {
 
 template <class T>
 void argextreme_one(const dftu_series& v, bool is_min, std::int64_t& out_idx) {
-    const T* p = reinterpret_cast<const T*>(v.data->data());
+    const T* p = reinterpret_cast<const T*>(v.data.data());
     const std::int64_t n = v.length;
-    const bool has_null = v.validity != nullptr;
+    const bool has_null = static_cast<bool>(v.validity.block());
     out_idx = -1;
     T best{};
     for (std::int64_t i = 0; i < n; ++i) {
@@ -201,9 +201,9 @@ void mode_serial(const T* p, const std::vector<std::int64_t>& idx,
 template <class T>
 void mode_one(const dftu_series& v, dftu_scalar& out) {
     using dftracer::utils::dataframe::radix_counts_by;
-    const T* p = reinterpret_cast<const T*>(v.data->data());
+    const T* p = reinterpret_cast<const T*>(v.data.data());
     const std::int64_t n = v.length;
-    const bool has_null = v.validity != nullptr;
+    const bool has_null = static_cast<bool>(v.validity.block());
 
     std::vector<std::int64_t> idx;
     idx.reserve(static_cast<std::size_t>(n));

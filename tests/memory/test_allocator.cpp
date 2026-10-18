@@ -301,7 +301,7 @@ TEST_CASE("reallocate stays in place when the block already fits") {
                           {110, 100},
                           {40000, 60000},
                           {60000, 40000},
-                          {3 * MIB, 3 * MIB + 4096},
+                          {3 * MIB + 4096, 3 * MIB + 8192},
                           {70 * MIB + 100, 70 * MIB + 200},
                           {70 * MIB + 200, 70 * MIB + 100}};
     for (const Case& c : cases) {
@@ -374,7 +374,7 @@ TEST_CASE("reallocate accepts a block another thread allocated") {
                                     {100, 5000},
                                     {40000, 60000},
                                     {40000, 3 * MIB},
-                                    {3 * MIB, 3 * MIB + 4096},
+                                    {3 * MIB + 4096, 3 * MIB + 8192},
                                     {70 * MIB + 100, 70 * MIB + 200}};
     for (const auto& pair : sizes) {
         CAPTURE(pair[0]);
@@ -402,7 +402,7 @@ TEST_CASE("a block resized in place is poisoned past its new size") {
     };
     const std::size_t sizes[][2] = {{100, 110},
                                     {40000, 60000},
-                                    {3 * MIB, 3 * MIB + 4096},
+                                    {3 * MIB + 4096, 3 * MIB + 8192},
                                     {70 * MIB + 100, 70 * MIB + 200}};
     for (const auto& pair : sizes) {
         std::size_t small = pair[0];

@@ -504,8 +504,9 @@ PyObject* typed_list(const T* d, std::int64_t n, const std::uint8_t* valid,
 bool fast_pylist(const Series& col, PyObject** result) {
     const std::int64_t n = col.length();
     const dftu_series* h = col.handle();
-    const std::uint8_t* valid =
-        col.null_count() > 0 && h->validity ? h->validity->data() : nullptr;
+    const std::uint8_t* valid = col.null_count() > 0 && h->validity.block()
+                                    ? h->validity.data()
+                                    : nullptr;
     if (col.null_count() > 0 && !valid) return false;
     const void* d = dftu_series_data(const_cast<dftu_series*>(h));
     if (!d && n > 0) return false;
@@ -779,7 +780,7 @@ class StringFiller {
         switch (c->encoding) {
             case dataframe::Encoding::Chunked: {
                 const auto* starts =
-                    reinterpret_cast<const std::int64_t*>(c->data->data());
+                    reinterpret_cast<const std::int64_t*>(c->data.data());
                 for (std::size_t k = 0; k < c->nested.size(); ++k)
                     if (!fill(c->nested[k].series.get(), dst + starts[k]))
                         return false;
@@ -812,7 +813,7 @@ class StringFiller {
     bool fill_dictionary(const dftu_series* c, PyObject** dst) {
         const dftu_series* dict = c->child().get();
         const auto* codes =
-            reinterpret_cast<const std::int32_t*>(c->data->data());
+            reinterpret_cast<const std::int32_t*>(c->data.data());
         std::vector<PyObject*> entries(static_cast<std::size_t>(dict->length),
                                        nullptr);
         bool ok = true;
@@ -844,9 +845,10 @@ class StringFiller {
     bool fill_rows(const dftu_series* c, PyObject** dst) {
         if (cache_.empty()) cache_.resize(SLOTS);
         const bool flat = c->encoding == dataframe::Encoding::Flat;
-        const std::uint8_t* valid = flat && c->null_count > 0 && c->validity
-                                        ? c->validity->data()
-                                        : nullptr;
+        const std::uint8_t* valid =
+            flat && c->null_count > 0 && c->validity.block()
+                ? c->validity.data()
+                : nullptr;
         const bool probe = !flat || (c->null_count > 0 && !valid);
         for (std::int64_t i = 0; i < c->length; ++i) {
             PyObject* v;
@@ -929,7 +931,7 @@ PyObject* Series_np_parts(PyObject* self, PyObject* args) {
     const std::int64_t n = col.length();
     const bool has_nulls = col.null_count() > 0;
     const std::uint8_t* valid =
-        has_nulls && h->validity ? h->validity->data() : nullptr;
+        has_nulls && h->validity.block() ? h->validity.data() : nullptr;
     if (has_nulls && !valid) {
         PyErr_SetString(PyExc_TypeError,
                         "Series has nulls but no validity bitmap");
@@ -1475,8 +1477,8 @@ PyObject* with_validity(Series series, const Bits& bits, Py_ssize_t n) {
         any = any || !((bits[static_cast<std::size_t>(i >> 3)] >> (i & 7)) & 1);
     if (!any) return make_series(std::move(series));
     auto* h = new dftu_series(*series.handle());
-    h->validity = dataframe::Buffer::allocate(bits.size());
-    std::memcpy(h->validity->data(), bits.data(), bits.size());
+    h->validity = dataframe::new_buffer(bits.size());
+    std::memcpy(dataframe::writable(h->validity), bits.data(), bits.size());
     std::int64_t nulls = 0;
     for (Py_ssize_t i = 0; i < n; ++i)
         nulls += !((bits[static_cast<std::size_t>(i >> 3)] >> (i & 7)) & 1);

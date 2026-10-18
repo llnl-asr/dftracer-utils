@@ -199,6 +199,7 @@
         "index_bench",
         "duql_eval_bench",
         "group_transform_bench",
+        "slice_bench",
         "dftracer_utils_ext"
       ],
       "jobs": 0

@@ -43,6 +43,7 @@ endif()
 
 set(DFTRACER_UTILS_MEMORY_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/arena.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/block.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/budget.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/debug.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/heap.cpp
@@ -1883,7 +1884,8 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/memory_attribution_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/counter_contention_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/heap_bench.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/pressure_read_bench.cpp)
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/pressure_read_bench.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/slice_bench.cpp)
 
   foreach(bench ${DFTRACER_BENCHMARKS})
     get_filename_component(bench_name ${bench} NAME_WE)
@@ -1919,6 +1921,9 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
 
     add_test(NAME bench_smoke/heap COMMAND heap_bench --smoke)
     set_tests_properties(bench_smoke/heap PROPERTIES LABELS bench_smoke)
+
+    add_test(NAME bench_smoke/slice COMMAND slice_bench --smoke)
+    set_tests_properties(bench_smoke/slice PROPERTIES LABELS bench_smoke)
 
     add_test(NAME bench_smoke/pressure_read COMMAND pressure_read_bench --smoke)
     set_tests_properties(bench_smoke/pressure_read PROPERTIES LABELS

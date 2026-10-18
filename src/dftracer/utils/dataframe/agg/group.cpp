@@ -275,8 +275,8 @@ std::optional<DataFrame> finalize_in_place(
     for (std::size_t c = 0; c < ncols; ++c) {
         const dftu_series* h = piece0.columns[c].handle();
         width[c] = scatter_width(h->type);
-        if (width[c] == 0 || h->encoding != Encoding::Flat || h->offsets ||
-            !h->nested.empty())
+        if (width[c] == 0 || h->encoding != Encoding::Flat ||
+            h->offsets.block() || !h->nested.empty())
             return std::nullopt;
         ctype[c] = h->type;
     }
@@ -323,9 +323,9 @@ std::optional<DataFrame> finalize_in_place(
         };
         if (kinds[k] == KeyKind::Str) {
             h->type = TypeId::String;
-            h->offsets = Buffer::allocate(static_cast<std::size_t>(G + 1) *
-                                          sizeof(std::int32_t));
-            auto* off = reinterpret_cast<std::int32_t*>(h->offsets->data());
+            h->offsets = new_buffer(static_cast<std::size_t>(G + 1) *
+                                    sizeof(std::int32_t));
+            auto* off = reinterpret_cast<std::int32_t*>(writable(h->offsets));
             std::int64_t total = 0;
             off[0] = 0;
             for (std::int64_t i = 0; i < G; ++i) {
@@ -337,8 +337,8 @@ std::optional<DataFrame> finalize_in_place(
                 Series::check_string_bytes(static_cast<std::size_t>(total));
                 off[i + 1] = static_cast<std::int32_t>(total);
             }
-            h->data = Buffer::allocate(static_cast<std::size_t>(total));
-            std::uint8_t* bytes = h->data->data();
+            h->data = new_buffer(static_cast<std::size_t>(total));
+            std::uint8_t* bytes = writable(h->data);
             parallel_for(G, 1 << 14, [&](std::int64_t b, std::int64_t e) {
                 for (std::int64_t i = b; i < e; ++i) {
                     const AggState* st;
@@ -352,8 +352,8 @@ std::optional<DataFrame> finalize_in_place(
             });
         } else {
             h->type = kinds[k] == KeyKind::U64 ? TypeId::Uint64 : TypeId::Int64;
-            h->data = Buffer::allocate(static_cast<std::size_t>(G) * 8);
-            auto* dst = reinterpret_cast<std::int64_t*>(h->data->data());
+            h->data = new_buffer(static_cast<std::size_t>(G) * 8);
+            auto* dst = reinterpret_cast<std::int64_t*>(writable(h->data));
             parallel_for(G, 1 << 14, [&](std::int64_t b, std::int64_t e) {
                 for (std::int64_t i = b; i < e; ++i) {
                     const AggState* st;
@@ -375,8 +375,8 @@ std::optional<DataFrame> finalize_in_place(
             ++nulls;
         }
         if (nulls > 0) {
-            h->validity = Buffer::allocate(validity_bytes);
-            std::memcpy(h->validity->data(), null_row.data(), validity_bytes);
+            h->validity = new_buffer(validity_bytes);
+            std::memcpy(writable(h->validity), null_row.data(), validity_bytes);
             h->null_count = nulls;
         }
         out.names.push_back(key_names[k]);
@@ -395,9 +395,9 @@ std::optional<DataFrame> finalize_in_place(
         Series col{h};
         h->type = ctype[c];
         h->length = G;
-        h->data = Buffer::allocate(static_cast<std::size_t>(G) * width[c]);
+        h->data = new_buffer(static_cast<std::size_t>(G) * width[c]);
         handle[c] = h;
-        dst[c] = h->data->data();
+        dst[c] = writable(h->data);
         vbits[c].store(nullptr);
         nulls_of[c].store(0);
         out.names.push_back(piece0.names[c]);
@@ -409,9 +409,9 @@ std::optional<DataFrame> finalize_in_place(
         const std::lock_guard<std::mutex> lock(vmu[c]);
         b = vbits[c].load(std::memory_order_relaxed);
         if (b == nullptr) {
-            handle[c]->validity = Buffer::allocate(words * 8);
-            std::memset(handle[c]->validity->data(), 0xFF, words * 8);
-            b = reinterpret_cast<std::uint64_t*>(handle[c]->validity->data());
+            handle[c]->validity = new_buffer(words * 8);
+            std::memset(writable(handle[c]->validity), 0xFF, words * 8);
+            b = reinterpret_cast<std::uint64_t*>(writable(handle[c]->validity));
             vbits[c].store(b, std::memory_order_release);
         }
         return b;
@@ -424,10 +424,11 @@ std::optional<DataFrame> finalize_in_place(
         for (std::size_t c = 0; c < ncols; ++c) {
             const dftu_series* ph = piece.columns[c].handle();
             if (ph->type != ctype[c] || ph->length != ng ||
-                ph->encoding != Encoding::Flat || ph->offsets)
+                ph->encoding != Encoding::Flat || ph->offsets.block())
                 throw std::logic_error("group_by: partition columns differ");
             const std::size_t w = width[c];
-            const std::uint8_t* src = ph->data ? ph->data->data() : nullptr;
+            const std::uint8_t* src =
+                ph->data.block() ? ph->data.data() : nullptr;
             std::uint8_t* out_c = dst[c];
             if (w == 8) {
                 for (std::int64_t g = 0; g < ng; ++g)
@@ -444,9 +445,9 @@ std::optional<DataFrame> finalize_in_place(
                                     w,
                         src + static_cast<std::size_t>(g) * w, w);
             }
-            if (ph->validity == nullptr) continue;
+            if (!ph->validity.block()) continue;
             std::uint64_t* bits = validity_of(c);
-            const std::uint8_t* pv = ph->validity->data();
+            const std::uint8_t* pv = ph->validity.data();
             std::int64_t nulls = 0;
             for (std::int64_t g = 0; g < ng; ++g) {
                 if ((pv[g >> 3] >> (g & 7)) & 1) continue;
@@ -478,7 +479,7 @@ std::optional<DataFrame> finalize_in_place(
     for (std::size_t c = 0; c < ncols; ++c) {
         const std::int64_t nulls = nulls_of[c].load();
         if (nulls == 0)
-            handle[c]->validity.reset();  // a bitmap with no null in it
+            handle[c]->validity = {};  // a bitmap with no null in it
         handle[c]->null_count = nulls;
     }
     in_place_finalizes.fetch_add(1, std::memory_order_relaxed);

@@ -1,5 +1,5 @@
 #include <dftracer/utils/common/field_ref.h>
-#include <dftracer/utils/dataframe/buffer.h>
+#include <dftracer/utils/dataframe/internal/buffers.h>
 #include <dftracer/utils/dataframe/internal/view_builder.h>
 #include <dftracer/utils/dataframe/kernels/dictionary.h>
 #include <dftracer/utils/dataframe/series.h>
@@ -485,8 +485,7 @@ class ChunkViews {
         auto owner = intern_.chunk(chunk);
         const auto* data = reinterpret_cast<const std::uint8_t*>(owner->data());
         const auto size = owner->size();
-        const auto index = b.add_buffer(df::Buffer::wrap(
-            const_cast<std::uint8_t*>(data), size, [owner](void*) {}));
+        const auto index = b.add_buffer(df::borrow_buffer(data, size, owner));
         seen_.emplace_back(chunk, index);
         return remember(chunk, index);
     }
@@ -514,9 +513,8 @@ df::Series text_view_column(const std::shared_ptr<std::string>& data,
     b.reserve(static_cast<std::int64_t>(ends.size()));
     std::int32_t index = 0;
     if (!data->empty())
-        index = b.add_buffer(
-            df::Buffer::wrap(reinterpret_cast<std::uint8_t*>(data->data()),
-                             data->size(), [data](void*) {}));
+        index =
+            b.add_buffer(df::borrow_buffer(data->data(), data->size(), data));
     std::size_t begin = 0;
     for (std::size_t r = 0; r < ends.size(); ++r) {
         if (!present[r])

@@ -70,8 +70,8 @@ std::vector<std::uint8_t> validity_bitmap(const Series& s) {
 namespace {
 void add_new_bytes(const dftu_series* c, std::unordered_set<const void*>& seen,
                    std::size_t& total) {
-    auto add = [&](const std::shared_ptr<Buffer>& b) {
-        if (b && seen.insert(b.get()).second) total += b->size();
+    auto add = [&](const BufferView& b) {
+        if (b.block() && seen.insert(b.data()).second) total += b.size();
     };
     add(c->data);
     add(c->offsets);
@@ -348,8 +348,8 @@ Series get_series_data(const std::uint8_t*& p, const std::uint8_t* end) {
         col->set_child(std::shared_ptr<dftu_series>(child.release()));
         if (validity != nullptr) {
             const std::size_t vbytes = static_cast<std::size_t>((n + 7) / 8);
-            col->validity = Buffer::allocate(vbytes);
-            std::memcpy(col->validity->data(), validity, vbytes);
+            col->validity = new_buffer(vbytes);
+            std::memcpy(writable(col->validity), validity, vbytes);
             col->null_count = nulls;
         }
         return Series{col};
@@ -366,14 +366,14 @@ Series get_series_data(const std::uint8_t*& p, const std::uint8_t* end) {
         col->type = type;
         col->encoding = Encoding::Flat;
         col->length = n;
-        auto buffer = Buffer::allocate(off_bytes);
-        if (off_bytes != 0) std::memcpy(buffer->data(), offs, off_bytes);
+        auto buffer = new_buffer(off_bytes);
+        if (off_bytes != 0) std::memcpy(writable(buffer), offs, off_bytes);
         col->offsets = std::move(buffer);
         col->set_child(std::shared_ptr<dftu_series>(child.release()));
         if (validity != nullptr) {
             const std::size_t vbytes = static_cast<std::size_t>((n + 7) / 8);
-            col->validity = Buffer::allocate(vbytes);
-            std::memcpy(col->validity->data(), validity, vbytes);
+            col->validity = new_buffer(vbytes);
+            std::memcpy(writable(col->validity), validity, vbytes);
             col->null_count = nulls;
         }
         return Series{col};
@@ -395,8 +395,8 @@ Series get_series_data(const std::uint8_t*& p, const std::uint8_t* end) {
         }
         if (validity != nullptr) {
             const std::size_t vbytes = static_cast<std::size_t>((n + 7) / 8);
-            col->validity = Buffer::allocate(vbytes);
-            std::memcpy(col->validity->data(), validity, vbytes);
+            col->validity = new_buffer(vbytes);
+            std::memcpy(writable(col->validity), validity, vbytes);
             col->null_count = nulls;
         }
         return Series{col};
@@ -411,12 +411,12 @@ Series get_series_data(const std::uint8_t*& p, const std::uint8_t* end) {
         col->encoding = Encoding::Flat;
         col->length = n;
         col->set_decimal(precision, scale);
-        col->data = Buffer::allocate(bytes);
-        if (bytes != 0) std::memcpy(col->data->data(), data, bytes);
+        col->data = new_buffer(bytes);
+        if (bytes != 0) std::memcpy(writable(col->data), data, bytes);
         if (validity != nullptr) {
             const std::size_t vbytes = static_cast<std::size_t>((n + 7) / 8);
-            col->validity = Buffer::allocate(vbytes);
-            std::memcpy(col->validity->data(), validity, vbytes);
+            col->validity = new_buffer(vbytes);
+            std::memcpy(writable(col->validity), validity, vbytes);
             col->null_count = nulls;
         }
         return Series{col};
@@ -431,12 +431,12 @@ Series get_series_data(const std::uint8_t*& p, const std::uint8_t* end) {
         col->encoding = Encoding::Flat;
         col->length = n;
         col->set_fixed_size(width);
-        col->data = Buffer::allocate(bytes);
-        if (bytes != 0) std::memcpy(col->data->data(), data, bytes);
+        col->data = new_buffer(bytes);
+        if (bytes != 0) std::memcpy(writable(col->data), data, bytes);
         if (validity != nullptr) {
             const std::size_t vbytes = static_cast<std::size_t>((n + 7) / 8);
-            col->validity = Buffer::allocate(vbytes);
-            std::memcpy(col->validity->data(), validity, vbytes);
+            col->validity = new_buffer(vbytes);
+            std::memcpy(writable(col->validity), validity, vbytes);
             col->null_count = nulls;
         }
         return Series{col};
@@ -456,16 +456,16 @@ Series get_series_data(const std::uint8_t*& p, const std::uint8_t* end) {
         col->type = type;
         col->encoding = Encoding::Flat;
         col->length = n;
-        col->offsets = Buffer::allocate(off_bytes);
-        std::memcpy(col->offsets->data(), offs, off_bytes);
-        col->data = Buffer::allocate(static_cast<std::size_t>(nbytes));
+        col->offsets = new_buffer(off_bytes);
+        std::memcpy(writable(col->offsets), offs, off_bytes);
+        col->data = new_buffer(static_cast<std::size_t>(nbytes));
         if (nbytes != 0)
-            std::memcpy(col->data->data(), data,
+            std::memcpy(writable(col->data), data,
                         static_cast<std::size_t>(nbytes));
         if (validity != nullptr) {
             const std::size_t vbytes = static_cast<std::size_t>((n + 7) / 8);
-            col->validity = Buffer::allocate(vbytes);
-            std::memcpy(col->validity->data(), validity, vbytes);
+            col->validity = new_buffer(vbytes);
+            std::memcpy(writable(col->validity), validity, vbytes);
             col->null_count = nulls;
         }
         return Series{col};
@@ -480,6 +480,17 @@ Series get_series_data(const std::uint8_t*& p, const std::uint8_t* end) {
 namespace {
 
 constexpr std::size_t REGION_ALIGN = 64;
+
+struct Mapping {
+    void* addr;
+    std::size_t bytes;
+};
+
+void unmap(void* context) {
+    auto* m = static_cast<Mapping*>(context);
+    ::munmap(m->addr, m->bytes);
+    delete m;
+}
 
 bool is_nested(TypeId t) {
     return t == TypeId::Struct || t == TypeId::List || t == TypeId::LargeList ||
@@ -576,12 +587,20 @@ std::vector<Series> PartFile::append(const std::vector<Series>& cols) {
                                  std::string(std::strerror(errno)) + "); set " +
                                  constants::SPILL_DIR_ENV +
                                  " to a usable directory");
-    const std::shared_ptr<void> region(
-        map, [region_bytes](void* m) { ::munmap(m, region_bytes); });
-    const auto window = [&](const Piece& p) -> std::shared_ptr<Buffer> {
-        if (p.bytes == 0) return Buffer::allocate(0);
-        return Buffer::wrap(static_cast<std::uint8_t*>(map) + p.at, p.bytes,
-                            [region](void*) {});
+    Mapping* mapping = nullptr;
+    memory::BlockRef region;
+    try {
+        mapping = new Mapping{map, region_bytes};
+        region = memory::Block::borrow(map, region_bytes, unmap, mapping);
+    } catch (...) {
+        delete mapping;
+        ::munmap(map, region_bytes);
+        throw;
+    }
+    const BufferView whole(std::move(region));
+    const auto window = [&](const Piece& p) -> BufferView {
+        if (p.bytes == 0) return new_buffer(0);
+        return whole.slice(p.at, p.bytes);
     };
     for (std::size_t i = 0; i < cols.size(); ++i) {
         const ColumnPlan& cp = plans[i];

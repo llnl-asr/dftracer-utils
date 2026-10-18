@@ -166,8 +166,8 @@ std::vector<std::int32_t> dictionary_encode_parallel(
 
 template <class Off>
 dftu_series* dictionary_encode_w(const dftu_series* v) {
-    const Off* off = reinterpret_cast<const Off*>(offsets_of<Off>(*v)->data());
-    const char* data = reinterpret_cast<const char*>(v->data->data());
+    const Off* off = reinterpret_cast<const Off*>(offsets_of<Off>(*v).data());
+    const char* data = reinterpret_cast<const char*>(v->data.data());
 
     std::vector<std::int32_t> codes;
     std::vector<Off> dict_offsets{0};
@@ -200,11 +200,12 @@ dftu_series* dictionary_encode_w(const dftu_series* v) {
     dict->encoding = Encoding::Flat;
     dict->length = static_cast<std::int64_t>(dict_offsets.size() - 1);
     std::size_t off_bytes = dict_offsets.size() * sizeof(Off);
-    offsets_of<Off>(*dict) = Buffer::allocate(off_bytes);
-    std::memcpy(offsets_of<Off>(*dict)->data(), dict_offsets.data(), off_bytes);
-    dict->data = Buffer::allocate(dict_data.size());
+    offsets_of<Off>(*dict) = new_buffer(off_bytes);
+    std::memcpy(writable(offsets_of<Off>(*dict)), dict_offsets.data(),
+                off_bytes);
+    dict->data = new_buffer(dict_data.size());
     if (!dict_data.empty())
-        std::memcpy(dict->data->data(), dict_data.data(), dict_data.size());
+        std::memcpy(writable(dict->data), dict_data.data(), dict_data.size());
 
     auto* out = new dftu_series();
     out->type = v->type;
@@ -212,8 +213,8 @@ dftu_series* dictionary_encode_w(const dftu_series* v) {
     out->length = v->length;
     out->null_count = v->null_count;
     out->validity = v->validity;
-    out->data = Buffer::allocate(codes.size() * sizeof(std::int32_t));
-    std::memcpy(out->data->data(), codes.data(),
+    out->data = new_buffer(codes.size() * sizeof(std::int32_t));
+    std::memcpy(writable(out->data), codes.data(),
                 codes.size() * sizeof(std::int32_t));
     out->set_child(std::shared_ptr<dftu_series>(dict));
     return out;
@@ -230,7 +231,7 @@ dftu_series* dftu_series_dictionary_encode(const dftu_series* v) {
     const TypeId base = narrow_varwidth_type(v->type);
     if (base != TypeId::String && base != TypeId::Binary) return nullptr;
     const bool wide = is_wide_offset_type(v->type);
-    if (!v->offsets || !v->data) return nullptr;
+    if (!v->offsets.block() || !v->data.block()) return nullptr;
     return wide ? dictionary_encode_w<std::int64_t>(v)
                 : dictionary_encode_w<std::int32_t>(v);
 }

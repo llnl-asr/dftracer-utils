@@ -34,11 +34,11 @@ Series large_strings(const std::vector<std::string>& values) {
         data += values[i];
         offsets[i + 1] = static_cast<std::int64_t>(data.size());
     }
-    col->offsets = Buffer::allocate(offsets.size() * sizeof(std::int64_t));
-    std::memcpy(col->offsets->data(), offsets.data(),
+    col->offsets = new_buffer(offsets.size() * sizeof(std::int64_t));
+    std::memcpy(writable(col->offsets), offsets.data(),
                 offsets.size() * sizeof(std::int64_t));
-    col->data = Buffer::allocate(data.size());
-    std::memcpy(col->data->data(), data.data(), data.size());
+    col->data = new_buffer(data.size());
+    std::memcpy(writable(col->data), data.data(), data.size());
     return Series{col};
 }
 

@@ -248,12 +248,12 @@ dataframe::Series evaluate_mask(const QueryNode& node,
     if (m.handle() && m.handle()->encoding != dataframe::Encoding::Flat)
         m = dataframe::Series{dftu_series_materialize(m.handle())};
     dftu_series* s = m.handle();
-    if (!s || !s->validity) return m;
+    if (!s || !s->validity.block()) return m;
     const std::size_t bytes = dataframe::buffer_bytes(s->type, s->length);
-    auto data = dataframe::Buffer::allocate(bytes);
-    const std::uint8_t* pd = s->data->data();
-    const std::uint8_t* pv = s->validity->data();
-    std::uint8_t* po = data->data();
+    auto data = dataframe::new_buffer(bytes);
+    const std::uint8_t* pd = s->data.data();
+    const std::uint8_t* pv = s->validity.data();
+    std::uint8_t* po = writable(data);
     for (std::size_t i = 0; i < bytes; ++i)
         po[i] = static_cast<std::uint8_t>(pd[i] & pv[i]);
     s->data = std::move(data);

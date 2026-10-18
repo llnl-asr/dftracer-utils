@@ -2,6 +2,7 @@
 #include <dftracer/utils/memory/asan.h>
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/memory/heap_page.h>
+#include <dftracer/utils/memory/manager.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <sys/wait.h>
@@ -44,14 +45,13 @@ std::size_t round_up(std::size_t n, std::size_t to) {
     return (n + to - 1) / to * to;
 }
 
-std::size_t bit_ceil(std::size_t n) {
-    std::size_t r = 1;
-    while (r < n) r *= 2;
-    return r;
-}
-
+// Eight classes per doubling: a size in (2^k, 2^(k+1)] rounds up to a
+// multiple of 2^k / 8.
 std::size_t large_run(std::size_t size) {
-    return std::max(MIB, bit_ceil(size));
+    if (size <= MIB) return MIB;
+    std::size_t k = MIB;
+    while (2 * k < size) k *= 2;
+    return round_up(size, k / 8);
 }
 
 std::size_t huge_bytes(std::size_t size) {
@@ -145,6 +145,7 @@ TEST_CASE("counters scenario" * doctest::skip()) {
     const std::size_t mapped = run + HEAP_PAGE_SIZE;
     const std::size_t heap = HEAP_PAGE_SIZE;
     const std::size_t small = 224 + 2 * HEAP_PAGE_SIZE;
+    // Every growth here stays within the retention goal, so none purges.
     expect(1, 112, heap + span);
     expect(2, 224, heap + span);
     expect(3, small, heap + span);
@@ -233,7 +234,7 @@ TEST_CASE("the tier boundaries pick small, medium, large and huge") {
         CHECK(allocated - reserved() == run);
         CHECK(reserved() - before <= HEAP_PAGE_SIZE);
     }
-    CHECK(large_run(MEDIUM_MAX + 1) == 2 * MIB);
+    CHECK(large_run(MEDIUM_MAX + 1) == MIB + 128 * KIB);
     CHECK(large_run(LARGE_MAX) == 64 * MIB);
 
     std::size_t before_huge = reserved();
@@ -500,12 +501,12 @@ TEST_CASE("the page heap poisons slack, free blocks and purged pages") {
     CHECK(poisoned(m));
     CHECK(poisoned(m + HEAP_PAGE_SIZE));
 
-    constexpr std::size_t large = 3 * MIB;
+    constexpr std::size_t large = 3 * MIB - 100 * KIB;
     auto* l = static_cast<char*>(page_allocate(large, 16));
     std::memset(l, 1, large);
     CHECK_FALSE(poisoned(l + large - 1));
     CHECK(poisoned(l + large));
-    CHECK(poisoned(l + 4 * MIB - 1));
+    CHECK(poisoned(l + large_run(large) - 1));
     page_deallocate(l, large);
     CHECK(poisoned(l));
     page_trim(Mode::All);
@@ -519,3 +520,171 @@ TEST_CASE("the page heap poisons slack, free blocks and purged pages") {
     page_deallocate(h, huge);
 }
 #endif
+
+TEST_CASE("a large block is charged at most an eighth above its size") {
+    // Pool counters sum the heaps of the active backend; the page_heap run of
+    // this file covers the case.
+    if (config().backend != Backend::PageHeap) return;
+    PoolHandle pool = Manager::get().root().child("large_classes");
+    REQUIRE(pool);
+    Scope scope{*pool};
+    for (std::size_t size : {MIB + 1, 3 * MIB, 33 * MIB, 64 * MIB}) {
+        CAPTURE(size);
+        void* p = page_allocate(size, 16);
+        CHECK(pool->live() >= size);
+        CHECK(pool->live() <= round_up(size * 9 / 8, HEAP_PAGE_SIZE));
+        page_deallocate(p, size);
+        CHECK(pool->live() == 0);
+    }
+}
+
+TEST_CASE("a cached large run is reused only for its own class") {
+    void* a = page_allocate(3 * MIB, 16);
+    page_deallocate(a, 3 * MIB);
+    void* same = page_allocate(3 * MIB - 200 * KIB, 16);
+    CHECK(same == a);
+    page_deallocate(same, 3 * MIB - 200 * KIB);
+    void* other = page_allocate(3 * MIB + 300 * KIB, 16);
+    CHECK(other != a);
+    page_deallocate(other, 3 * MIB + 300 * KIB);
+}
+
+TEST_CASE("reallocate across large classes keeps the bytes") {
+    auto fill = [](void* p, std::size_t n) {
+        auto* b = static_cast<unsigned char*>(p);
+        for (std::size_t i = 0; i < n; i += 4093)
+            b[i] = static_cast<unsigned char>(i * 31);
+    };
+    auto holds = [](const void* p, std::size_t n) {
+        const auto* b = static_cast<const unsigned char*>(p);
+        bool ok = true;
+        for (std::size_t i = 0; i < n; i += 4093)
+            ok &= b[i] == static_cast<unsigned char>(i * 31);
+        return ok;
+    };
+    void* p = page_allocate(3 * MIB, 16);
+    fill(p, 3 * MIB);
+    void* grown = page_reallocate(p, 3 * MIB, 5 * MIB, 16);
+    CHECK(holds(grown, 3 * MIB));
+    void* shrunk = page_reallocate(grown, 5 * MIB, 3 * MIB / 2, 16);
+    CHECK(holds(shrunk, 3 * MIB / 2));
+    void* same =
+        page_reallocate(shrunk, 3 * MIB / 2, 3 * MIB / 2 - 10 * KIB, 16);
+    CHECK(same == shrunk);
+    CHECK(holds(same, 3 * MIB / 2 - 10 * KIB));
+    page_deallocate(same, 3 * MIB / 2 - 10 * KIB);
+}
+
+namespace {
+
+std::size_t run_mapped(std::size_t size) {
+    return large_run(size) + HEAP_PAGE_SIZE;
+}
+
+// Allocates and frees 5 MiB runs until more than @p bytes are cached.
+void make_warm_idle(std::size_t bytes) {
+    std::vector<void*> runs;
+    for (std::size_t got = 0; got <= bytes; got += run_mapped(5 * MIB))
+        runs.push_back(page_allocate(5 * MIB, 16));
+    for (void* p : runs) page_deallocate(p, 5 * MIB);
+}
+
+}  // namespace
+
+TEST_CASE("a cached run is reused for its own class") {
+    CHECK(fresh_process::run("warm reuse scenario").ok());
+}
+
+TEST_CASE("warm reuse scenario" * doctest::skip()) {
+    fresh_process::announce();
+    void* a = page_allocate(3 * MIB, 16);
+    void* c = page_allocate(5 * MIB, 16);
+    page_deallocate(a, 3 * MIB);
+    page_deallocate(c, 5 * MIB);
+    const std::size_t reserved_before = reserved();
+    void* again = page_allocate(3 * MIB - 100 * KIB, 16);
+    CHECK(again == a);
+    CHECK(reserved() == reserved_before);
+    page_deallocate(again, 3 * MIB - 100 * KIB);
+    CHECK(reserved() == reserved_before);
+}
+
+TEST_CASE("a cold run of the own class is reused when nothing warm fits") {
+    CHECK(fresh_process::run("cold reuse scenario").ok());
+}
+
+TEST_CASE("cold reuse scenario" * doctest::skip()) {
+    fresh_process::announce();
+    void* keep = page_allocate(2 * MIB, 16);
+    void* a = page_allocate(3 * MIB, 16);
+    page_deallocate(a, 3 * MIB);
+    page_trim(Mode::All);
+    // 5 MiB is more than two classes above 3 MiB, so it is no candidate.
+    make_warm_idle(12 * MIB);
+    // The cold run is backed again and nothing else is purged.
+    const std::size_t reserved_before = reserved();
+    void* again = page_allocate(3 * MIB, 16);
+    CHECK(again == a);
+    CHECK(reserved() == reserved_before + large_run(3 * MIB));
+    page_deallocate(again, 3 * MIB);
+    page_deallocate(keep, 2 * MIB);
+}
+
+TEST_CASE("a medium block takes backed free pages before purged ones") {
+    CHECK(fresh_process::run("backed run first scenario").ok());
+}
+
+TEST_CASE("backed run first scenario" * doctest::skip()) {
+    fresh_process::announce();
+    constexpr std::size_t BLOCK = MIB / 2;
+    void* hold = page_allocate(100, 16);
+    void* purged = page_allocate(BLOCK, 16);
+    void* backed = page_allocate(BLOCK, 16);
+    void* tail = page_allocate(BLOCK, 16);
+    REQUIRE(purged < backed);
+    page_deallocate(purged, BLOCK);
+    page_trim(Mode::All);
+    page_deallocate(backed, BLOCK);
+    const std::size_t before = reserved();
+    void* again = page_allocate(BLOCK, 16);
+    CHECK(again == backed);
+    CHECK(reserved() == before);
+    page_deallocate(again, BLOCK);
+    page_deallocate(tail, BLOCK);
+    page_deallocate(hold, 100);
+}
+
+TEST_CASE("a large block takes a warm larger run before a cold own run") {
+    CHECK(fresh_process::run("warm larger run scenario").ok());
+}
+
+TEST_CASE("warm larger run scenario" * doctest::skip()) {
+    fresh_process::announce();
+    constexpr std::size_t OWN = 3 * MIB;
+    constexpr std::size_t LARGER = 3 * MIB + 300 * KIB;
+    PoolHandle pool = Manager::get().root().child("warm_larger");
+    REQUIRE(pool);
+    Scope scope{*pool};
+    void* cold = page_allocate(OWN, 16);
+    void* warm = page_allocate(LARGER, 16);
+    page_deallocate(cold, OWN);
+    page_trim(Mode::All);
+    page_deallocate(warm, LARGER);
+    const std::size_t before = reserved();
+    constexpr std::size_t REQUEST = OWN - 100 * KIB;
+    auto* p = static_cast<unsigned char*>(page_allocate(REQUEST, 16));
+    CHECK(p == warm);
+    CHECK(reserved() == before);
+    // The run keeps its own size: the pool is charged its usable bytes. Pool
+    // counters sum the active backend's heaps.
+    const bool page_backend = config().backend == Backend::PageHeap;
+    if (page_backend) CHECK(pool->live() == large_run(LARGER));
+    for (std::size_t i = 0; i < REQUEST; i += 4096) p[i] = 0x5A;
+    auto* q =
+        static_cast<unsigned char*>(page_reallocate(p, REQUEST, 4 * MIB, 16));
+    bool kept = true;
+    for (std::size_t i = 0; i < REQUEST; i += 4096) kept &= q[i] == 0x5A;
+    CHECK(kept);
+    page_deallocate(q, 4 * MIB);
+    if (page_backend) CHECK(pool->live() == 0);
+}

@@ -174,14 +174,15 @@ TEST_SUITE("dataframe concat") {
         w->type = TypeId::LargeString;
         w->encoding = dftracer::utils::dataframe::Encoding::Flat;
         w->length = 2;
-        w->offsets = dftracer::utils::dataframe::Buffer::allocate(
-            3 * sizeof(std::int64_t));
-        w->data = dftracer::utils::dataframe::Buffer::allocate(3);
-        auto* off = reinterpret_cast<std::int64_t*>(w->offsets->data());
+        w->offsets =
+            dftracer::utils::dataframe::new_buffer(3 * sizeof(std::int64_t));
+        w->data = dftracer::utils::dataframe::new_buffer(3);
+        auto* off = reinterpret_cast<std::int64_t*>(
+            dftracer::utils::dataframe::writable(w->offsets));
         off[0] = 0;
         off[1] = 1;
         off[2] = 3;
-        std::memcpy(w->data->data(), "xyy", 3);
+        std::memcpy(dftracer::utils::dataframe::writable(w->data), "xyy", 3);
         Series wide{w};
         Series a = dict_of({"a", "b", "a"});
         Series out = dftracer::utils::dataframe::concat_columns({&a, &wide});

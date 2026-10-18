@@ -2,7 +2,7 @@
 # a higher layer or the query engine (trace/views), except for the edges in
 # ALLOWED. Those edges are known debt that no plan stage removes yet. An
 # ALLOWED edge that no longer exists also fails, so fixes cannot leave stale
-# entries. See docs/plans/2026-09-24-extensible-index.md.
+# entries.
 #
 # Usage: cmake -DSOURCE_DIR=<repo root> -P check_index_layers.cmake
 

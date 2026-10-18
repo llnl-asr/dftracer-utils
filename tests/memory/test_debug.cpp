@@ -230,6 +230,60 @@ TEST_CASE("a write to a freed block is caught" * doctest::skip()) {
     }
 }
 
+TEST_CASE("reallocate moves the block and keeps its pool and contents") {
+    PoolHandle owner = Manager::get().root().child("owner");
+    PoolHandle other = Manager::get().root().child("other");
+    void* p;
+    {
+        Scope s{*owner};
+        p = allocate(100, 16);
+    }
+    std::memset(p, 7, 100);
+    void* q;
+    {
+        Scope s{*other};
+        q = reallocate(p, 100, 5000, 16);
+    }
+    CHECK(q != p);
+    bool intact = true;
+    for (std::size_t i = 0; i < 100; ++i) {
+        intact &= static_cast<unsigned char*>(q)[i] == 7;
+    }
+    CHECK(intact);
+    std::size_t blocks = 0;
+    debug_for_each_site(
+        owner->id(),
+        [](void* context, const DebugSite& group) noexcept {
+            *static_cast<std::size_t*>(context) += group.blocks;
+        },
+        &blocks);
+    CHECK(blocks == 1);
+    deallocate(q, 5000);
+    debug_drain();
+    CHECK(owner->live() == 0);
+    CHECK(other->live() == 0);
+}
+
+TEST_CASE("the pool overload charges its pool under the debug wrapper") {
+    PoolHandle named = Manager::get().root().child("named");
+    PoolHandle scope = Manager::get().root().child("scope");
+    Scope s{*scope};
+    void* p = allocate(100, 16, *named);
+    CHECK(named->blocks() == 1);
+    CHECK(scope->blocks() == 0);
+    deallocate(p, 100);
+    debug_drain();
+    CHECK(named->live() == 0);
+}
+
+TEST_CASE("a resize with the wrong old size is caught" * doctest::skip()) {
+    fresh_process::announce();
+    plain_abort();
+    void* p = allocate(64, 16);
+    p = reallocate(p, 32, 128, 16);
+    deallocate(p, 128);
+}
+
 TEST_CASE("a sized free of another size is caught" * doctest::skip()) {
     fresh_process::announce();
     plain_abort();
@@ -252,6 +306,8 @@ TEST_CASE("the debug checks abort in a forked child") {
                  "sized free does not match");
     expect_abort("a pointer that was never allocated is caught",
                  "did not allocate");
+    expect_abort("a resize with the wrong old size is caught",
+                 "sized free does not match");
 }
 
 TEST_CASE("planted leak at exit" * doctest::skip()) {

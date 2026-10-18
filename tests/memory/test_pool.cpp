@@ -315,6 +315,24 @@ TEST_CASE("a moved reservation releases once") {
     CHECK(pool->reserved() == 0);
 }
 
+TEST_CASE("a reservation grows in its pool and keeps its bytes on failure") {
+    BudgetGuard budget{std::size_t{1} << 30};
+    PoolHandle pool = root().child("grow", PoolKind::Scratch, {2 * MIB});
+    {
+        Reservation r = pool->reserve(MIB);
+        CHECK(r.grow(MIB / 2) == Status::Ok);
+        CHECK(r.bytes() == MIB + MIB / 2);
+        CHECK(pool->reserved() == MIB + MIB / 2);
+        CHECK(r.grow(MIB) == Status::OverBudget);
+        CHECK(r.bytes() == MIB + MIB / 2);
+        CHECK(pool->reserved() == MIB + MIB / 2);
+    }
+    CHECK(pool->reserved() == 0);
+    Reservation empty;
+    CHECK(empty.grow(10) == Status::OverBudget);
+    CHECK(empty.bytes() == 0);
+}
+
 TEST_CASE("a pool limit refuses a reservation and leaves the totals alone") {
     BudgetGuard budget{std::size_t{1} << 30};
     PoolHandle limited =

@@ -72,6 +72,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   Nothing allocates through the pools yet, so no run changes.
 - Add the debug mode `DFTRACER_UTILS_MEMORY_DEBUG=1`, which finds a write past the end of a block, a use after free and a double free in the heap, and `DFTRACER_UTILS_MEMORY_EXIT_CHECK=1`, which fails a test run that leaks.
   The page heap also reports to AddressSanitizer and Valgrind, so both tools see its blocks.
+- Add the allocator classes `memory::Allocator`, `memory::PoolAllocator` and `memory::Arena` to `dftracer_utils_memory`.
+  `memory::Allocator` charges the pool of the current `memory::Scope` and `memory::PoolAllocator` charges one pool that you name.
+  `memory::Arena` hands out blocks from chunks in a pool of its own and frees them all at once on `reset()`.
+  `memory::allocate` also takes a pool to charge, and `memory::reallocate` resizes a block in place when it fits.
+- Add the `dstd` containers on that allocator, such as `dstd::Vector`, `dstd::String`, `dstd::HashMap`, `dstd::Map`, `dstd::Deque`, `dstd::UniquePtr` and `dstd::SharedPtr`, and the types `dstd::Function`, `dstd::Any` and `dstd::RawBuffer`.
+  A `dstd::HashMap` keyed by `dstd::String` finds a key from a `std::string_view` without a copy, and no code uses the containers yet.
 - Add the library `dftracer_utils_dstd`, between `memory` and `common`, with its own pkg-config and `find_package` names.
   It holds the hashing, eviction policy, `expected`, base64 and generic headers that the other libraries share, and it links only `memory`.
   Include paths change: the generic headers moved from `dftracer/utils/common/` and `dftracer/utils/core/` to `dftracer/utils/dstd/`, `tracked_bytes.h` and `memory_pool.h` moved to `dftracer/utils/memory/`, and `timer_service.h` moved to `dftracer/utils/core/`.

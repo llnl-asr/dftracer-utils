@@ -42,6 +42,7 @@ endif()
 # -----------------------------------------
 
 set(DFTRACER_UTILS_MEMORY_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/arena.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/budget.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/debug.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/heap.cpp

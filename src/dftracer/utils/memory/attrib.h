@@ -65,6 +65,25 @@ void attrib_flush(AttribEntry& entry) noexcept;
 void attrib_switch(AttribEntry& entry, std::uint16_t id) noexcept;
 /// Make @p id the cache's scope.
 void attrib_set_scope(AttribCache& cache, std::uint16_t id) noexcept;
+/// Makes @p id the cache's scope until destruction, as a Scope does, and
+/// skips both switches when it already is.
+class ScopeOverride {
+   public:
+    ScopeOverride(AttribCache& cache, std::uint16_t id) noexcept
+        : cache_(cache), previous_(cache.scope) {
+        if (id != previous_) attrib_set_scope(cache, id);
+    }
+    ScopeOverride(const ScopeOverride&) = delete;
+    ScopeOverride& operator=(const ScopeOverride&) = delete;
+    ~ScopeOverride() {
+        if (cache_.scope != previous_) attrib_set_scope(cache_, previous_);
+    }
+
+   private:
+    AttribCache& cache_;
+    std::uint16_t previous_;
+};
+
 /// Link a new cache into the list that counter reads walk.
 void attrib_register(AttribCache& cache) noexcept;
 /// Bytes charged to every pool and not yet credited, from the flushed

@@ -5,6 +5,7 @@
 #include <dftracer/utils/memory/settings.h>
 #include <sys/mman.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -179,6 +180,31 @@ void debug_deallocate(void* p, std::size_t size, bool sized) noexcept {
     auto old = g_quarantine[slot].exchange(reinterpret_cast<std::uintptr_t>(p),
                                            std::memory_order_acq_rel);
     if (old != 0) release(reinterpret_cast<void*>(old));
+}
+
+// Always a new block: the redzone sits right behind the old size.
+void* debug_reallocate(void* p, std::size_t old_size, std::size_t new_size,
+                       std::size_t align, void* site) {
+    if (p == nullptr) return debug_allocate(new_size, align, site);
+    Slot* s = lookup(p, false);
+    if (s == nullptr ||
+        s->state.load(std::memory_order_acquire) != STATE_LIVE) {
+        die("resize of a block that is not live", p, old_size, 0);
+    }
+    if (s->size.load(std::memory_order_relaxed) != old_size) {
+        die("sized free does not match the allocated size", p,
+            s->size.load(std::memory_order_relaxed),
+            s->site.load(std::memory_order_relaxed));
+    }
+    void* moved;
+    {
+        ScopeOverride scope{attrib_local(),
+                            s->pool.load(std::memory_order_relaxed)};
+        moved = debug_allocate(new_size, align, site);
+    }
+    std::memcpy(moved, p, std::min(old_size, new_size));
+    debug_deallocate(p, old_size, true);
+    return moved;
 }
 
 void debug_drain() noexcept {

@@ -26,6 +26,10 @@ void* system_allocate(std::size_t size, std::size_t align);
 void system_deallocate(void* p) noexcept;
 void system_deallocate(void* p, std::size_t size) noexcept;
 
+/// Resize a block from system_allocate as reallocate() describes.
+void* system_reallocate(void* p, std::size_t old_size, std::size_t new_size,
+                        std::size_t align);
+
 [[noreturn]] void abort_with(const char* message) noexcept;
 
 }  // namespace dftracer::utils::memory

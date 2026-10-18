@@ -38,6 +38,12 @@ void* debug_allocate(std::size_t size, std::size_t align, void* site);
 /// its fill or the process aborts.
 void debug_deallocate(void* p, std::size_t size, bool sized) noexcept;
 
+/// Move a block to a new one of @p new_size bytes in the pool of the old one,
+/// recorded at @p site. The free of the old block is checked as a sized free
+/// of @p old_size.
+void* debug_reallocate(void* p, std::size_t old_size, std::size_t new_size,
+                       std::size_t align, void* site);
+
 /// Check and release every quarantined block, so pool counters match.
 void debug_drain() noexcept;
 

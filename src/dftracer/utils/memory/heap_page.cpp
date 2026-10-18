@@ -1029,8 +1029,9 @@ void* allocate_mapped(Heap& h, std::size_t size, std::size_t align) {
     attrib_direct(s->pool_id, static_cast<std::ptrdiff_t>(run), 1);
     if (kind == SpanKind::Large) decay_step(h);
     char* p = reinterpret_cast<char*>(s) + offset;
-    // A huge run can be gigabytes, so only its slack is poisoned.
-    std::size_t from = kind == SpanKind::Large ? 0 : round_up(size, 8);
+    // A huge run can be gigabytes, so only its slack is poisoned, from the
+    // granule that holds the last byte so an overrun into it is seen.
+    std::size_t from = kind == SpanKind::Large ? 0 : (size & ~std::size_t{7});
     asan_poison(p + from, run - from);
     asan_unpoison(p, size);
     vg_alloc(p, size, run);
@@ -1058,7 +1059,8 @@ void free_mapped(Heap& h, SpanHeader* s, [[maybe_unused]] std::size_t size,
         return;
     }
     // The shadow of an unmapped range stays; another mapping may land there.
-    std::size_t from = s->kind == SpanKind::Large ? 0 : round_up(s->size, 8);
+    std::size_t from =
+        s->kind == SpanKind::Large ? 0 : (s->size & ~std::size_t{7});
     asan_unpoison(user + from, s->usable - from);
     ::munmap(s, s->map_bytes);
 }
@@ -1116,6 +1118,59 @@ void release(void* p, std::size_t size, bool sized) noexcept {
     } else {
         free_standard(*me, s, p, size, sized);
     }
+}
+
+std::size_t medium_pages(std::size_t size) noexcept {
+    return (std::max<std::size_t>(size, 1) + HEAP_PAGE_SIZE - 1) /
+           HEAP_PAGE_SIZE;
+}
+
+std::uint16_t pool_of(SpanHeader* s, void* p) noexcept {
+    if (s->kind != SpanKind::Standard) return s->pool_id;
+    PageDesc* d = &s->pages[(addr(p) - addr(s)) / HEAP_PAGE_SIZE];
+    if (d->kind == PageKind::Small) {
+        return d->ids[slot_of(SMALL_LAYOUTS[d->cls], p)];
+    }
+    return d->pool_id;
+}
+
+// True when page_allocate(size, align) would pick the class or the run that
+// already holds @p p.
+bool fits_in_place(SpanHeader* s, void* p, std::size_t size,
+                   std::size_t align) noexcept {
+    if ((addr(p) & (align - 1)) != 0) return false;
+    bool small = size <= SMALL_MAX && align <= SMALL_MAX_ALIGN;
+    bool medium = !small && size <= MEDIUM_MAX && align <= MEDIUM_MAX;
+    if (s->kind == SpanKind::Standard) {
+        PageDesc* d = &s->pages[(addr(p) - addr(s)) / HEAP_PAGE_SIZE];
+        if (d->kind == PageKind::Small) {
+            return small && class_for(size, align) == d->cls;
+        }
+        return medium && medium_pages(size) == d->pages;
+    }
+    if (small || medium) return false;
+    if (s->kind == SpanKind::Large) {
+        return size <= LARGE_MAX &&
+               std::max(MEDIUM_MAX, std::bit_ceil(size)) == s->usable;
+    }
+    return size > LARGE_MAX && round_up(size, HEAP_PAGE_SIZE) == s->usable;
+}
+
+void resize_in_place(SpanHeader* s, void* p, std::size_t old_size,
+                     std::size_t new_size) noexcept {
+    if (s->kind != SpanKind::Standard) {
+        s->size = new_size;
+    } else {
+        PageDesc* d = &s->pages[(addr(p) - addr(s)) / HEAP_PAGE_SIZE];
+        if (d->kind != PageKind::Small) d->size = new_size;
+    }
+    // Both sizes share one run, so the range poisoned again stays below a
+    // page even for a huge block.
+    std::size_t from = std::min(old_size, new_size) & ~std::size_t{7};
+    asan_poison(static_cast<char*>(p) + from,
+                round_up(std::max(old_size, new_size), 8) - from);
+    asan_unpoison(p, new_size);
+    vg_resize(p, old_size, new_size);
 }
 
 }  // namespace
@@ -1205,15 +1260,48 @@ void* page_grow_huge(void* p, std::size_t size, std::size_t align) {
     vg_define(user, old_size);
     return user;
 #else
-    AttribCache& attrib = local_heap().attrib;
-    std::uint16_t scope = attrib.scope;
-    attrib_set_scope(attrib, s->pool_id);
-    void* grown = page_allocate(size, align);
-    attrib_set_scope(attrib, scope);
+    void* grown;
+    {
+        ScopeOverride scope{local_heap().attrib, s->pool_id};
+        grown = page_allocate(size, align);
+    }
     std::memcpy(grown, p, s->size);
     page_deallocate(p);
     return grown;
 #endif
+}
+
+void* page_reallocate(void* p, std::size_t old_size, std::size_t new_size,
+                      std::size_t align) {
+    check_align(align);
+    if (p == nullptr) return page_allocate(new_size, align);
+    SpanHeader* s = span_of(p);
+#ifdef DFTRACER_UTILS_MEMORY_CHECKS
+    if (s->kind != SpanKind::Standard) {
+        check_size(s->size == old_size);
+    } else {
+        PageDesc* d = &s->pages[(addr(p) - addr(s)) / HEAP_PAGE_SIZE];
+        check_size(d->kind == PageKind::Small
+                       ? small_size_matches(d->cls, old_size)
+                       : d->size == old_size);
+    }
+#endif
+    if (fits_in_place(s, p, new_size, align)) {
+        resize_in_place(s, p, old_size, new_size);
+        return p;
+    }
+    if (s->kind == SpanKind::Huge && new_size > s->size &&
+        (addr(p) & (align - 1)) == 0) {
+        return page_grow_huge(p, new_size, align);
+    }
+    void* moved;
+    {
+        ScopeOverride scope{local_heap().attrib, pool_of(s, p)};
+        moved = page_allocate(new_size, align);
+    }
+    std::memcpy(moved, p, std::min(old_size, new_size));
+    page_deallocate(p, old_size);
+    return moved;
 }
 
 std::size_t page_reserved() noexcept {

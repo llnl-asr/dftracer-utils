@@ -167,6 +167,10 @@ set(TEST_CPP_SOURCES
     dstd/test_hash_partition.cpp
     dstd/test_hex64.cpp
     dstd/test_eviction_policy.cpp
+    dstd/test_containers.cpp
+    dstd/test_function.cpp
+    dstd/test_any.cpp
+    dstd/test_raw_buffer.cpp
     common/test_filesystem_info.cpp
     common/test_memory_budget.cpp
     common/test_memory_config.cpp

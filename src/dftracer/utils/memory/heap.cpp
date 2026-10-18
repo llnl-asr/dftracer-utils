@@ -233,6 +233,14 @@ void* allocate(std::size_t size, std::size_t align) {
     }
 }
 
+void* allocate(std::size_t size, std::size_t align, Pool& pool) {
+    ScopeOverride scope{attrib_local(), pool.id()};
+    if (debug_enabled()) {
+        return debug_allocate(size, align, __builtin_return_address(0));
+    }
+    return allocate(size, align);
+}
+
 void* try_allocate(std::size_t size, std::size_t align) noexcept {
     try {
         if (debug_enabled()) {
@@ -270,6 +278,23 @@ void deallocate(void* p, std::size_t size) noexcept {
             deallocate_other(p, size, true);
             return;
     }
+}
+
+void* reallocate(void* p, std::size_t old_size, std::size_t new_size,
+                 std::size_t align) {
+    switch (dispatch()) {
+        case Dispatch::PageHeap:
+            return page_reallocate(p, old_size, new_size, align);
+        case Dispatch::System:
+            return system_reallocate(p, old_size, new_size, align);
+        case Dispatch::DebugPageHeap:
+        case Dispatch::DebugSystem:
+            return debug_reallocate(p, old_size, new_size, align,
+                                    __builtin_return_address(0));
+        case Dispatch::Unresolved:
+            break;
+    }
+    abort_with("dftracer-utils memory: unknown backend\n");
 }
 
 void trim(Mode mode) noexcept {

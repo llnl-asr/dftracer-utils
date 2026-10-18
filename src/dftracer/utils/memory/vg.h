@@ -40,6 +40,21 @@ inline void vg_free(void* p, std::size_t usable) noexcept {
     VALGRIND_MAKE_MEM_NOACCESS(p, usable);
 }
 
+/// The block keeps its address; bytes past @p new_size become unaddressable.
+inline void vg_resize(void* p, std::size_t old_size,
+                      std::size_t new_size) noexcept {
+    if (!vg_active()) [[likely]]
+        return;
+    // Memcheck reports a resize in place to zero bytes as a bad free.
+    if (new_size == 0) {
+        VALGRIND_FREELIKE_BLOCK(p, 0);
+        VALGRIND_MALLOCLIKE_BLOCK(p, 0, 0, 0);
+        VALGRIND_MAKE_MEM_NOACCESS(p, old_size);
+        return;
+    }
+    VALGRIND_RESIZEINPLACE_BLOCK(p, old_size, new_size, 0);
+}
+
 inline void vg_noaccess(void* p, std::size_t n) noexcept {
     if (vg_active()) [[unlikely]]
         VALGRIND_MAKE_MEM_NOACCESS(p, n);
@@ -57,6 +72,7 @@ inline void vg_init() noexcept {}
 constexpr bool vg_active() noexcept { return false; }
 inline void vg_alloc(void*, std::size_t, std::size_t) noexcept {}
 inline void vg_free(void*, std::size_t) noexcept {}
+inline void vg_resize(void*, std::size_t, std::size_t) noexcept {}
 inline void vg_noaccess(void*, std::size_t) noexcept {}
 inline void vg_define(void*, std::size_t) noexcept {}
 

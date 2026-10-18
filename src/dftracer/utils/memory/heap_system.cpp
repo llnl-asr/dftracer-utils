@@ -159,4 +159,34 @@ void system_deallocate(void* p, std::size_t size) noexcept {
     system_deallocate(p);
 }
 
+// A C library block has no size class to grow into, and a block resized in
+// place would hide an overrun past the new size from ASan.
+void* system_reallocate(void* p, std::size_t old_size, std::size_t new_size,
+                        std::size_t align) {
+    if (align == 0 || (align & (align - 1)) != 0) {
+        abort_with("dftracer-utils memory: alignment is not a power of two\n");
+    }
+    if (p == nullptr) return system_allocate(new_size, align);
+    SystemHeader* header = system_header(p);
+#ifdef DFTRACER_UTILS_MEMORY_CHECKS
+    if (header->size != old_size) {
+        abort_with(
+            "dftracer-utils memory: sized free does not match the allocated "
+            "size\n");
+    }
+#endif
+    if (new_size == header->size &&
+        (reinterpret_cast<std::uintptr_t>(p) & (align - 1)) == 0) {
+        return p;
+    }
+    void* moved;
+    {
+        ScopeOverride scope{system_attrib(), header->pool_id};
+        moved = system_allocate(new_size, align);
+    }
+    std::memcpy(moved, p, std::min(old_size, new_size));
+    system_deallocate(p);
+    return moved;
+}
+
 }  // namespace dftracer::utils::memory

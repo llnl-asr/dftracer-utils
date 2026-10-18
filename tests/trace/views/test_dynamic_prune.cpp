@@ -1,8 +1,8 @@
-// Dynamic filter pushdown (docs/plans/plugin_runtime.md section 12, gap 10):
-// once a scan is already open, nothing could previously narrow what remains.
-// dataframe::Cursor::narrow() is the advisory hook; views::detail::DynamicPrune
-// is the state ViewSource's streaming cursor writes into so a running fuse()
-// scan can skip units it has not claimed yet without the caller re-planning.
+// Dynamic filter pushdown: once a scan is already open, nothing could
+// previously narrow what remains. dataframe::Cursor::narrow() is the advisory
+// hook; views::detail::DynamicPrune is the state ViewSource's streaming cursor
+// writes into so a running fuse() scan can skip units it has not claimed yet
+// without the caller re-planning.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/string_intern.h>

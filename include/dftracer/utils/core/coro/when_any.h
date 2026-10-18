@@ -5,8 +5,8 @@
 #include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/core/coro/completion_state.h>
 #include <dftracer/utils/core/coro/coro.h>
-#include <dftracer/utils/core/coro/resumption_helper.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/executor/resumption_helper.h>
 
 #include <atomic>
 #include <chrono>
@@ -23,7 +23,7 @@
 #include <vector>
 
 // Timer service needed for TimeoutAwaitable
-#include <dftracer/utils/core/timer_service.h>
+#include <dftracer/utils/core/executor/timer_service.h>
 
 namespace dftracer::utils::coro {
 

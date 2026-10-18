@@ -82,18 +82,19 @@ set(DFTRACER_UTILS_COMMON_SOURCES
 
 set(DFTRACER_UTILS_CORE_SOURCES
     # Pipeline - New Architecture
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/error.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/tasks/error.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/pipeline.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/executor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/run_loop.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/thread_pool_executor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/executor/executor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/executor/run_loop.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/scheduler/thread_pool_executor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/scheduler/task_executor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/scheduler.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/watchdog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/scheduler/watchdog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/runtime.cpp
     # Coro
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/coro/coro.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/coro/yield.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/coro/task_abi.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/task_abi.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/coro/monitor.cpp
     # Async I/O
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/io.cpp

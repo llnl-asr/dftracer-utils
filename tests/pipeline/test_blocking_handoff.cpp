@@ -3,8 +3,8 @@
 // under asan/tsan for the real value: worker churn and permit park/unpark while
 // nested scopes drain. No deadlock, no stranded work, exact permit accounting.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/pipeline/thread_pool_executor.h>
 #include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/core/scheduler/thread_pool_executor.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <doctest/doctest.h>
 

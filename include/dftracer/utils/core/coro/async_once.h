@@ -2,8 +2,8 @@
 #define DFTRACER_UTILS_CORE_CORO_ASYNC_ONCE_H
 
 #include <dftracer/utils/core/coro/completion_latch.h>
-#include <dftracer/utils/core/coro/resumption_helper.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/executor/resumption_helper.h>
 
 #include <atomic>
 #include <coroutine>

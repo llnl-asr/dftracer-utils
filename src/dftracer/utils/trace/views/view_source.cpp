@@ -4,7 +4,7 @@
 #include <dftracer/utils/core/coro/async_semaphore.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/coro/coro.h>
-#include <dftracer/utils/core/pipeline/executor.h>
+#include <dftracer/utils/core/executor/executor.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>  // expr_fingerprint

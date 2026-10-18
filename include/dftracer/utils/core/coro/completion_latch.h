@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_COMPLETION_LATCH_H
 #define DFTRACER_UTILS_CORE_CORO_COMPLETION_LATCH_H
 
-#include <dftracer/utils/core/coro/resumption_helper.h>
+#include <dftracer/utils/core/executor/resumption_helper.h>
 
 #include <atomic>
 #include <coroutine>

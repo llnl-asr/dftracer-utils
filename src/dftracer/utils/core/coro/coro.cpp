@@ -1,5 +1,5 @@
 #include <dftracer/utils/core/coro/coro.h>
-#include <dftracer/utils/core/pipeline/executor.h>
+#include <dftracer/utils/core/executor/executor.h>
 
 namespace dftracer::utils::coro {
 

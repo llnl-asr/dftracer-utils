@@ -1,9 +1,9 @@
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/core/pipeline/error.h>
-#include <dftracer/utils/core/pipeline/executor.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/pipeline/scheduler.h>
-#include <dftracer/utils/core/pipeline/watchdog.h>
+#include <dftracer/utils/core/scheduler/task_executor.h>
+#include <dftracer/utils/core/scheduler/watchdog.h>
+#include <dftracer/utils/core/tasks/error.h>
 #include <dftracer/utils/core/tasks/task.h>
 
 #include <algorithm>

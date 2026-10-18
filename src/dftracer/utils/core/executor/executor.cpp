@@ -1,21 +1,13 @@
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/core/coro/resumption_helper.h>
-#include <dftracer/utils/core/pipeline/executor.h>
-#include <dftracer/utils/core/pipeline/thread_pool_executor.h>
+#include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/core/executor/executor.h>
+#include <dftracer/utils/core/executor/resumption_helper.h>
 
 #include <coroutine>
-#include <memory>
+#include <cstddef>
 #include <vector>
 
 namespace dftracer::utils {
-
-static thread_local void* tls_current_worker_context = nullptr;
-
-void* get_current_worker_context() { return tls_current_worker_context; }
-
-void set_current_worker_context(void* context) {
-    tls_current_worker_context = context;
-}
 
 static thread_local Executor* tls_current_executor = nullptr;
 
@@ -71,10 +63,6 @@ void schedule_destroy_helper(Executor* executor,
 std::size_t available_parallelism() noexcept {
     auto* exec = Executor::current();
     return exec ? exec->get_num_threads() : 1;
-}
-
-std::unique_ptr<TaskExecutor> make_task_executor(const ExecutorConfig& config) {
-    return std::make_unique<ThreadPoolExecutor>(config);
 }
 
 }  // namespace dftracer::utils

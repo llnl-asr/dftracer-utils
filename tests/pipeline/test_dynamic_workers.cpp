@@ -3,8 +3,8 @@
 // task, no crash, no UB. Run under the asan/tsan presets for the real value:
 // worker churn while the shared run queue is being drained.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/pipeline/thread_pool_executor.h>
 #include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/core/scheduler/thread_pool_executor.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>

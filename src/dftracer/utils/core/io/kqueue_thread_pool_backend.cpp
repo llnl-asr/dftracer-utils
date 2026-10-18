@@ -2,8 +2,8 @@
     defined(__NetBSD__) || defined(__DragonFly__)
 
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/core/executor/executor.h>
 #include <dftracer/utils/core/io/kqueue_thread_pool_backend.h>
-#include <dftracer/utils/core/pipeline/executor.h>
 #include <sys/event.h>
 #include <sys/time.h>
 #include <sys/types.h>

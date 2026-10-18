@@ -4,7 +4,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/core/coro/coro.h>
 #include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/pipeline/executor.h>
+#include <dftracer/utils/core/scheduler/task_executor.h>
 #include <dftracer/utils/core/task_handle.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 

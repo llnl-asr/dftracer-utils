@@ -1,8 +1,8 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/object_pool.h>
+#include <dftracer/utils/core/executor/executor.h>
 #include <dftracer/utils/core/io/io_backend.h>
 #include <dftracer/utils/core/io/io_thread_pool.h>
-#include <dftracer/utils/core/pipeline/executor.h>
 #include <dftracer/utils/index/store/filesystem.h>
 #include <fcntl.h>
 #include <rocksdb/env.h>

@@ -3,8 +3,8 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_config.h>
 #include <dftracer/utils/common/platform_compat.h>
-#include <dftracer/utils/core/pipeline/watchdog.h>
 #include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/core/scheduler/watchdog.h>
 
 #include <algorithm>
 #include <cstdlib>

@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_ASYNC_SEMAPHORE_H
 #define DFTRACER_UTILS_CORE_CORO_ASYNC_SEMAPHORE_H
 
-#include <dftracer/utils/core/coro/resumption_helper.h>
+#include <dftracer/utils/core/executor/resumption_helper.h>
 
 #include <coroutine>
 #include <cstddef>

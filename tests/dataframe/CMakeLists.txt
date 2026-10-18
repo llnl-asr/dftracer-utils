@@ -95,14 +95,16 @@ foreach(test_file ${DATAFRAME_TEST_SOURCES})
     set_tests_properties(dataframe/${bin_exec} PROPERTIES TIMEOUT ${scale_timeout})
   endif()
   # Runs every op in a child process at several budgets: about 30 s alone, 65 s
-  # under coverage, and it is CPU-bound, so a loaded machine multiplies that.
+  # under coverage. It is CPU-bound and reads peak memory, so it runs serially:
+  # under the full suite it took 260 to 300 s and timed out.
   if(bin_exec STREQUAL "test_op_peak_memory")
     set(peak_timeout 300)
     if(DFTRACER_UTILS_COVERAGE OR DFTRACER_UTILS_ENABLE_TSAN
        OR DFTRACER_UTILS_ENABLE_ASAN)
       set(peak_timeout 900)
     endif()
-    set_tests_properties(dataframe/${bin_exec} PROPERTIES TIMEOUT ${peak_timeout})
+    set_tests_properties(dataframe/${bin_exec} PROPERTIES TIMEOUT ${peak_timeout}
+                                                          RUN_SERIAL TRUE)
   endif()
 endforeach()
 

@@ -308,7 +308,11 @@ foreach(test_file ${TEST_CPP_SOURCES})
   # Builds a dozen RocksDB indexes. Each SST flush and compaction ends in a
   # full fsync (F_FULLFSYNC on macOS), so it waits on the disk and takes 10x
   # longer when the rest of the suite writes at the same time.
-  if(bin_exec STREQUAL "index/test_build_memory")
+  # index/test_indexer and reader/test_reader build indexes too: 11 to 16 s
+  # alone, past their 120 s limit under the full suite.
+  if(bin_exec STREQUAL "index/test_build_memory"
+     OR bin_exec STREQUAL "index/test_indexer"
+     OR bin_exec STREQUAL "reader/test_reader")
     set_tests_properties(${bin_exec} PROPERTIES RUN_SERIAL TRUE)
   endif()
 

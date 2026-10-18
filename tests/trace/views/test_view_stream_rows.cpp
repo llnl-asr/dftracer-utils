@@ -75,7 +75,10 @@ namespace {
 
 constexpr int DISTINCT_EVENTS = 900;
 
-std::string distinct_run(int i) { return "r" + std::to_string((i * i) % 17); }
+std::string distinct_run(int i) {
+    const auto u = static_cast<unsigned>(i);
+    return "r" + std::to_string((u * u) % 17);
+}
 std::string distinct_metric(int i) {
     return "m" + std::to_string((i / 7 + i % 5) % 9);
 }

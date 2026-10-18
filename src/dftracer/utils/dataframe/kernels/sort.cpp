@@ -187,9 +187,8 @@ Series index_column(std::int64_t n, At at) {
     out->type = TypeId::Int64;
     out->encoding = Encoding::Flat;
     out->length = n;
-    out->data =
-        Buffer::allocate(static_cast<std::size_t>(n) * sizeof(std::int64_t));
-    auto* d = reinterpret_cast<std::int64_t*>(out->data->data());
+    out->data = new_buffer(static_cast<std::size_t>(n) * sizeof(std::int64_t));
+    auto* d = reinterpret_cast<std::int64_t*>(writable(out->data));
     parallel_for(n, PACK_GRAIN, [&](std::int64_t b, std::int64_t e) {
         for (std::int64_t i = b; i < e; ++i) d[i] = at(i);
     });

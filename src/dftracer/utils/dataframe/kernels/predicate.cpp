@@ -88,8 +88,8 @@ dftu_series* new_bool(std::int64_t n) {
     out->length = n;
     out->null_count = 0;
     std::size_t bytes = buffer_bytes(TypeId::Bool, n);
-    out->data = Buffer::allocate(bytes == 0 ? 1 : bytes);
-    std::memset(out->data->data(), 0, out->data->size());
+    out->data = new_buffer(bytes == 0 ? 1 : bytes);
+    std::memset(writable(out->data), 0, out->data.size());
     return out;
 }
 
@@ -99,14 +99,14 @@ dftu_series* predicate_mask(const dftu_series* v, std::int32_t mode) {
     dftu_series* out = new_bool(v->length);
     if (v->type == TypeId::Float32) {
         HWY_DYNAMIC_DISPATCH(PredF32)
-        (v->data->data(), v->length, mode, out->data->data());
+        (v->data.data(), v->length, mode, writable(out->data));
     } else if (v->type == TypeId::Float64) {
         HWY_DYNAMIC_DISPATCH(PredF64)
-        (v->data->data(), v->length, mode, out->data->data());
+        (v->data.data(), v->length, mode, writable(out->data));
     } else if (mode == 1) {
         // Integer/Bool columns are all-finite (never NaN/Inf); trailing bits of
         // the last byte are ignored by the length.
-        std::memset(out->data->data(), 0xFF, out->data->size());
+        std::memset(writable(out->data), 0xFF, out->data.size());
     }
     // mode 0/2 on an integer column: all false, already zeroed.
     // A null value has a null answer, as every elementwise op.
@@ -144,19 +144,19 @@ dftu_series* dftu_series_valid_mask(const dftu_series* v) {
     DFTU_PER_CHUNK(v, dftu_series_valid_mask);
     dftu_series* out = new_bool(v->length);
     if (v->rowwise_nulls()) {
-        std::uint8_t* dst = out->data->data();
+        std::uint8_t* dst = writable(out->data);
         for (std::int64_t i = 0; i < v->length; ++i)
             if (!dftu_series_is_null(v, i))
                 dst[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
         return out;
     }
-    if (!v->validity) {
-        std::memset(out->data->data(), 0xFF, out->data->size());
+    if (!v->validity.block()) {
+        std::memset(writable(out->data), 0xFF, out->data.size());
         return out;
     }
     std::memcpy(
-        out->data->data(), v->validity->data(),
-        std::min(buffer_bytes(TypeId::Bool, v->length), v->validity->size()));
+        writable(out->data), v->validity.data(),
+        std::min(buffer_bytes(TypeId::Bool, v->length), v->validity.size()));
     return out;
 }
 
@@ -165,17 +165,17 @@ dftu_series* dftu_series_null_mask(const dftu_series* v) {
     DFTU_PER_CHUNK(v, dftu_series_null_mask);
     dftu_series* out = new_bool(v->length);
     if (v->rowwise_nulls()) {
-        std::uint8_t* dst = out->data->data();
+        std::uint8_t* dst = writable(out->data);
         for (std::int64_t i = 0; i < v->length; ++i)
             if (dftu_series_is_null(v, i))
                 dst[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
         return out;
     }
-    if (!v->validity) return out;
-    const std::uint8_t* bm = v->validity->data();
-    std::uint8_t* dst = out->data->data();
+    if (!v->validity.block()) return out;
+    const std::uint8_t* bm = v->validity.data();
+    std::uint8_t* dst = writable(out->data);
     const std::size_t bytes =
-        std::min(buffer_bytes(TypeId::Bool, v->length), v->validity->size());
+        std::min(buffer_bytes(TypeId::Bool, v->length), v->validity.size());
     for (std::size_t i = 0; i < bytes; ++i)
         dst[i] = static_cast<std::uint8_t>(~bm[i]);
     return out;

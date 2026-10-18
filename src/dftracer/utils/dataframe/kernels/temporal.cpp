@@ -58,8 +58,8 @@ bool resolve_unit(const dftu_series* v, TimeUnit fallback, TimeUnit* unit,
 }
 
 std::int64_t value_at(const dftu_series& v, std::int64_t i, bool days) {
-    if (days) return reinterpret_cast<const std::int32_t*>(v.data->data())[i];
-    return reinterpret_cast<const std::int64_t*>(v.data->data())[i];
+    if (days) return reinterpret_cast<const std::int32_t*>(v.data.data())[i];
+    return reinterpret_cast<const std::int64_t*>(v.data.data())[i];
 }
 
 dftu_series* alloc_i64_like(const dftu_series* v) {
@@ -69,7 +69,7 @@ dftu_series* alloc_i64_like(const dftu_series* v) {
     out->length = v->length;
     out->null_count = v->null_count;
     out->validity = v->validity;
-    out->data = Buffer::allocate(buffer_bytes(TypeId::Int64, v->length));
+    out->data = new_buffer(buffer_bytes(TypeId::Int64, v->length));
     return out;
 }
 
@@ -152,7 +152,7 @@ dftu_series* dftu_series_dt_part(const dftu_series* in, int32_t part,
     }
     const std::int64_t per_second = unit_per_second(u);
     dftu_series* out = alloc_i64_like(v);
-    auto* po = reinterpret_cast<std::int64_t*>(out->data->data());
+    auto* po = reinterpret_cast<std::int64_t*>(writable(out->data));
     const auto p = static_cast<dftu_dt_part>(part);
     for (std::int64_t i = 0; i < v->length; ++i)
         po[i] = part_of(value_at(*v, i, days), per_second, days, p);
@@ -187,8 +187,8 @@ dftu_series* dftu_series_dt_format(const dftu_series* in, const char* fmt,
     offsets.push_back(0);
     std::string text;
     for (std::int64_t i = 0; i < v->length; ++i) {
-        const bool valid =
-            !v->validity || ((v->validity->data()[i >> 3] >> (i & 7)) & 1);
+        const bool valid = !v->validity.block() ||
+                           ((v->validity.data()[i >> 3] >> (i & 7)) & 1);
         if (valid)
             format_time(text, civil_time(value_at(*v, i, days), ns_per_unit),
                         f);
@@ -201,7 +201,7 @@ dftu_series* dftu_series_dt_format(const dftu_series* in, const char* fmt,
     }
     dftu_series* out = dftu_series_new_string(
         DFTU_TYPE_STRING, offsets.data(), text.data(), v->length,
-        v->validity ? v->validity->data() : nullptr);
+        v->validity.block() ? v->validity.data() : nullptr);
     dftu_series_free(v);
     return out;
 }
@@ -227,9 +227,9 @@ dftu_series* dftu_series_dt_round(const dftu_series* in, int64_t every,
     out->length = v->length;
     out->null_count = v->null_count;
     out->validity = v->validity;
-    out->data = Buffer::allocate(buffer_bytes(TypeId::Int64, v->length));
-    const auto* pi = reinterpret_cast<const std::int64_t*>(v->data->data());
-    auto* po = reinterpret_cast<std::int64_t*>(out->data->data());
+    out->data = new_buffer(buffer_bytes(TypeId::Int64, v->length));
+    const auto* pi = reinterpret_cast<const std::int64_t*>(v->data.data());
+    auto* po = reinterpret_cast<std::int64_t*>(writable(out->data));
     for (std::int64_t i = 0; i < v->length; ++i) {
         const std::int64_t t = pi[i];
         const std::int64_t lo = dftracer::utils::floor_div(t, every) * every;

@@ -288,23 +288,24 @@ bool is_in_f64_simd(const dftu_series& v, const dftu_series& values,
     // Only the clean case: both FLAT Float64 with no nulls (read_f64 is
     // identity there, so equality is exact), and a small needle set worth
     // broadcasting.
-    if (v.encoding != Encoding::Flat || v.type != TypeId::Float64 || v.validity)
+    if (v.encoding != Encoding::Flat || v.type != TypeId::Float64 ||
+        v.validity.block())
         return false;
     if (values.encoding != Encoding::Flat || values.type != TypeId::Float64 ||
-        values.validity)
+        values.validity.block())
         return false;
     const std::int64_t nn = values.length;
     if (nn <= 0 || nn > 32) return false;
     HWY_DYNAMIC_DISPATCH(is_in_f64)
-    (reinterpret_cast<const double*>(v.data->data()), v.length,
-     reinterpret_cast<const double*>(values.data->data()), static_cast<int>(nn),
+    (reinterpret_cast<const double*>(v.data.data()), v.length,
+     reinterpret_cast<const double*>(values.data.data()), static_cast<int>(nn),
      out);
     return true;
 }
 
 bool is_sorted_numeric(const dftu_series& v, bool descending, bool* out) {
-    if (v.encoding != Encoding::Flat || v.validity) return false;
-    const void* p = v.data->data();
+    if (v.encoding != Encoding::Flat || v.validity.block()) return false;
+    const void* p = v.data.data();
     const std::int64_t n = v.length;
     const std::int32_t desc = descending ? 1 : 0;
     switch (v.type) {
@@ -345,7 +346,7 @@ bool is_sorted_numeric(const dftu_series& v, bool descending, bool* out) {
 
 bool compare(const dftu_series& v, std::int32_t op, dftu_scalar rhs,
              std::uint8_t* out) {
-    return compare(v.type, v.data->data(), v.length, op, rhs, out);
+    return compare(v.type, v.data.data(), v.length, op, rhs, out);
 }
 
 bool compare(TypeId type, const void* p, std::int64_t n, std::int32_t op,

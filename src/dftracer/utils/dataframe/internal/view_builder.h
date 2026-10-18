@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_VIEW_BUILDER_H
 
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/dataframe/buffer.h>
+#include <dftracer/utils/dataframe/internal/buffers.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
 
@@ -29,7 +29,7 @@ class ViewBuilder {
 
     /// The buffer's index; a buffer already added (same data pointer) returns
     /// its index.
-    std::int32_t add_buffer(std::shared_ptr<Buffer> buffer);
+    std::int32_t add_buffer(BufferView buffer);
 
     /// A row viewing `bytes`, which must lie inside buffer `buffer_index`.
     void append(std::string_view bytes, std::int32_t buffer_index);
@@ -57,12 +57,12 @@ class ViewBuilder {
 
    private:
     std::uint8_t* new_view();
-    std::int32_t cached_buffer(const std::shared_ptr<Buffer>& buffer);
+    std::int32_t cached_buffer(const BufferView& buffer);
     void append_flat(const dftu_series& col, std::int64_t row);
     void append_view_row(const dftu_series& col, std::int64_t row);
 
     std::vector<std::uint8_t> views_;
-    std::vector<std::shared_ptr<Buffer>> buffers_;
+    std::vector<BufferView> buffers_;
     ankerl::unordered_dense::map<const std::uint8_t*, std::int32_t> index_of_;
     std::vector<std::int64_t> null_rows_;
     const std::uint8_t* last_data_ = nullptr;

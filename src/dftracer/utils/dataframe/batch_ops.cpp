@@ -4,7 +4,7 @@
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/containment.h>
 #include <dftracer/utils/dataframe/internal/cell_ops.h>  // shared cell helpers
-#include <dftracer/utils/dataframe/internal/column_data.h>  // dftu_series, Buffer
+#include <dftracer/utils/dataframe/internal/column_data.h>  // dftu_series, BufferView
 #include <dftracer/utils/dataframe/internal/column_read.h>  // read_u64
 #include <dftracer/utils/dataframe/internal/float16.h>
 #include <dftracer/utils/dataframe/internal/radix_dedup.h>  // parallel dedup
@@ -383,9 +383,10 @@ namespace {
 bool fits_view(const dftu_series& c) {
     switch (c.encoding) {
         case Encoding::Flat:
-            return !c.data || c.data->size() <=
-                                  static_cast<std::size_t>(
-                                      std::numeric_limits<std::int32_t>::max());
+            return !c.data.block() ||
+                   c.data.size() <=
+                       static_cast<std::size_t>(
+                           std::numeric_limits<std::int32_t>::max());
         case Encoding::Dictionary:
         case Encoding::Selection:
             return !c.child() || fits_view(*c.child());
@@ -470,11 +471,11 @@ Series concat_text_views(const std::vector<const Series*>& parts) {
                 const dftu_series* h = parts[i]->handle();
                 if (h->length != 0 && !remaps[i].empty()) {
                     const auto* src =
-                        reinterpret_cast<const std::int32_t*>(h->data->data());
+                        reinterpret_cast<const std::int32_t*>(h->data.data());
                     for (std::int64_t r = 0; r < h->length; ++r) {
                         const bool null =
-                            h->validity &&
-                            !((h->validity->data()[r >> 3] >> (r & 7)) & 1);
+                            h->validity.block() &&
+                            !((h->validity.data()[r >> 3] >> (r & 7)) & 1);
                         const std::int64_t at = row0 + r;
                         if (null) {
                             any_null = true;
@@ -623,8 +624,8 @@ Series concat_columns(const std::vector<const Series*>& parts) {
             const dftu_series* h = mats[i].handle();
             // No bitmap: every row present; an unaligned part leaves the
             // 0xFF fill as is.
-            if (!h->validity) continue;
-            copy_bits(validity.data(), i, h->validity->data(), true);
+            if (!h->validity.block()) continue;
+            copy_bits(validity.data(), i, h->validity.data(), true);
         }
     }
     if (t == TypeId::List || t == TypeId::Struct)
@@ -667,7 +668,7 @@ Series concat_columns(const std::vector<const Series*>& parts) {
                 const dftu_series* h = mats[i].handle();
                 if (h->length == 0 || remaps[i].empty()) continue;
                 const auto* src =
-                    reinterpret_cast<const std::int32_t*>(h->data->data());
+                    reinterpret_cast<const std::int32_t*>(h->data.data());
                 for (std::int64_t r = 0; r < h->length; ++r)
                     codes[static_cast<std::size_t>(starts[i] + r)] =
                         remaps[i][static_cast<std::size_t>(src[r])];
@@ -692,9 +693,10 @@ Series concat_columns(const std::vector<const Series*>& parts) {
         for (std::size_t i = 0; i < mats.size(); ++i) {
             const dftu_series* h = mats[i].handle();
             TextPart& q = tp[i];
-            q.data = h->data ? reinterpret_cast<const char*>(h->data->data())
-                             : nullptr;
-            q.valid = h->validity ? h->validity->data() : nullptr;
+            q.data = h->data.block()
+                         ? reinterpret_cast<const char*>(h->data.data())
+                         : nullptr;
+            q.valid = h->validity.block() ? h->validity.data() : nullptr;
             q.has_null = q.valid != nullptr && mats[i].null_count() > 0;
             const bool wide_part = is_wide_offset_type(mats[i].type());
             any_wide |= wide_part;
@@ -725,13 +727,13 @@ Series concat_columns(const std::vector<const Series*>& parts) {
         w->type = wide ? TypeId::LargeString : TypeId::String;
         w->encoding = Encoding::Flat;
         w->length = total;
-        w->offsets = Buffer::allocate(
-            (static_cast<std::size_t>(total) + 1) *
-            (wide ? sizeof(std::int64_t) : sizeof(std::int32_t)));
-        w->data = Buffer::allocate(static_cast<std::size_t>(bytes));
-        char* out_data = reinterpret_cast<char*>(w->data->data());
-        auto* out32 = reinterpret_cast<std::int32_t*>(w->offsets->data());
-        auto* out64 = reinterpret_cast<std::int64_t*>(w->offsets->data());
+        w->offsets =
+            new_buffer((static_cast<std::size_t>(total) + 1) *
+                       (wide ? sizeof(std::int64_t) : sizeof(std::int32_t)));
+        w->data = new_buffer(static_cast<std::size_t>(bytes));
+        char* out_data = reinterpret_cast<char*>(writable(w->data));
+        auto* out32 = reinterpret_cast<std::int32_t*>(writable(w->offsets));
+        auto* out64 = reinterpret_cast<std::int64_t*>(writable(w->offsets));
         if (wide)
             out64[0] = 0;
         else
@@ -763,8 +765,8 @@ Series concat_columns(const std::vector<const Series*>& parts) {
                 }
             });
         if (vptr) {
-            w->validity = Buffer::allocate(validity.size());
-            std::memcpy(w->validity->data(), vptr, validity.size());
+            w->validity = new_buffer(validity.size());
+            std::memcpy(writable(w->validity), vptr, validity.size());
             std::int64_t nulls = 0;
             for (const Series& m : mats) nulls += m.null_count();
             w->null_count = nulls;
@@ -781,25 +783,25 @@ Series concat_columns(const std::vector<const Series*>& parts) {
     out->encoding = Encoding::Flat;
     out->length = total;
     if (vptr) {
-        out->validity = Buffer::allocate(validity.size());
-        std::memcpy(out->validity->data(), vptr, validity.size());
+        out->validity = new_buffer(validity.size());
+        std::memcpy(writable(out->validity), vptr, validity.size());
         std::int64_t nulls = 0;
         for (const Series& m : mats) nulls += m.null_count();
         out->null_count = nulls;
     }
 
     if (t == TypeId::Bool) {
-        out->data = Buffer::allocate(buffer_bytes(TypeId::Bool, total));
-        std::memset(out->data->data(), 0, out->data->size());
-        std::uint8_t* bits = out->data->data();
+        out->data = new_buffer(buffer_bytes(TypeId::Bool, total));
+        std::memset(writable(out->data), 0, out->data.size());
+        std::uint8_t* bits = writable(out->data);
         for (std::size_t i = 0; i < mats.size(); ++i)
             copy_bits(bits, i, mats[i].data<std::uint8_t>(), true);
         return Series{out};
     }
 
     const std::size_t w = byte_width(t).value_or(0);
-    out->data = Buffer::allocate(static_cast<std::size_t>(total) * w);
-    std::uint8_t* buf = out->data->data();
+    out->data = new_buffer(static_cast<std::size_t>(total) * w);
+    std::uint8_t* buf = writable(out->data);
     parallel_for(
         static_cast<std::int64_t>(mats.size()), 1,
         [&](std::int64_t b, std::int64_t e) {
@@ -2206,9 +2208,9 @@ DataFrame group_by_dynamic(const DataFrame& b, const std::string& time_col,
         kc->type = TypeId::Int64;
         kc->encoding = Encoding::Flat;
         kc->length = n;
-        kc->data = Buffer::allocate(static_cast<std::size_t>(n) *
-                                    sizeof(std::int64_t));
-        auto* kd = reinterpret_cast<std::int64_t*>(kc->data->data());
+        kc->data =
+            new_buffer(static_cast<std::size_t>(n) * sizeof(std::int64_t));
+        auto* kd = reinterpret_cast<std::int64_t*>(writable(kc->data));
         parallel_for(n, std::int64_t{1} << 16,
                      [&](std::int64_t lo, std::int64_t hi) {
                          for (std::int64_t i = lo; i < hi; ++i)

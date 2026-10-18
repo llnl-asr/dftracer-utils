@@ -503,8 +503,8 @@ namespace {
 bool is_numeric(TypeId t) { return is_numeric_dispatchable(t); }
 
 bool is_valid(const dftu_series& v, std::int64_t i) {
-    if (!v.validity) return true;
-    return (v.validity->data()[i >> 3] & (1u << (i & 7))) != 0;
+    if (!v.validity.block()) return true;
+    return (v.validity.data()[i >> 3] & (1u << (i & 7))) != 0;
 }
 
 dftu_series* alloc_like(const dftu_series* a, bool keep_validity) {
@@ -513,8 +513,8 @@ dftu_series* alloc_like(const dftu_series* a, bool keep_validity) {
     out->encoding = Encoding::Flat;
     out->length = a->length;
     out->null_count = keep_validity ? a->null_count : 0;
-    out->validity = keep_validity ? a->validity : nullptr;
-    out->data = Buffer::allocate(buffer_bytes(a->type, a->length));
+    out->validity = keep_validity ? a->validity : BufferView{};
+    out->data = new_buffer(buffer_bytes(a->type, a->length));
     return out;
 }
 
@@ -536,10 +536,10 @@ dftu_series* fillna_bool(const dftu_series* a, dftu_scalar fill) {
             return nullptr;
     }
     dftu_series* out = alloc_like(a, false);
-    auto* bits = static_cast<std::uint8_t*>(out->data->data());
-    std::memcpy(bits, a->data->data(), out->data->size());
-    if (a->validity) {
-        const auto* valid = a->validity->data();
+    auto* bits = static_cast<std::uint8_t*>(writable(out->data));
+    std::memcpy(bits, a->data.data(), out->data.size());
+    if (a->validity.block()) {
+        const auto* valid = a->validity.data();
         for (std::int64_t i = 0; i < a->length; ++i) {
             if ((valid[i >> 3] >> (i & 7)) & 1) continue;
             if (fv)
@@ -558,9 +558,10 @@ dftu_series* fillna_string(const dftu_series* a, dftu_scalar fill) {
         return nullptr;
     const std::string_view fv(fill.value.s, fill.len);
     const auto* off = reinterpret_cast<const std::int32_t*>(
-        offsets_of<std::int32_t>(*a)->data());
-    const char* text = reinterpret_cast<const char*>(a->data->data());
-    const std::uint8_t* valid = a->validity ? a->validity->data() : nullptr;
+        offsets_of<std::int32_t>(*a).data());
+    const char* text = reinterpret_cast<const char*>(a->data.data());
+    const std::uint8_t* valid =
+        a->validity.block() ? a->validity.data() : nullptr;
     std::vector<std::string_view> views(static_cast<std::size_t>(a->length));
     for (std::int64_t i = 0; i < a->length; ++i)
         views[static_cast<std::size_t>(i)] =
@@ -579,7 +580,7 @@ dftu_series* fillna_string(const dftu_series* a, dftu_scalar fill) {
 template <class T>
 void cumsum_one(const dftu_series& a, void* ov) {
     T* out = static_cast<T*>(ov);
-    const T* in = reinterpret_cast<const T*>(a.data->data());
+    const T* in = reinterpret_cast<const T*>(a.data.data());
     T acc = T{0};
     for (std::int64_t i = 0; i < a.length; ++i) {
         if (is_valid(a, i)) acc = static_cast<T>(acc + in[i]);
@@ -592,7 +593,7 @@ void cumsum_one(const dftu_series& a, void* ov) {
 template <class T, bool IS_MAX>
 void cumextreme_one(const dftu_series& a, void* ov) {
     T* out = static_cast<T*>(ov);
-    const T* in = reinterpret_cast<const T*>(a.data->data());
+    const T* in = reinterpret_cast<const T*>(a.data.data());
     T acc = T{0};
     bool seen = false;
     for (std::int64_t i = 0; i < a.length; ++i) {
@@ -622,7 +623,7 @@ void cummin_one(const dftu_series& a, void* ov) {
 template <class T>
 void cumprod_one(const dftu_series& a, void* ov) {
     T* out = static_cast<T*>(ov);
-    const T* in = reinterpret_cast<const T*>(a.data->data());
+    const T* in = reinterpret_cast<const T*>(a.data.data());
     T acc = T{1};
     for (std::int64_t i = 0; i < a.length; ++i) {
         if (is_valid(a, i)) acc = static_cast<T>(acc * in[i]);
@@ -639,7 +640,7 @@ void set_valid(std::uint8_t* v, std::int64_t i) {
 template <class T>
 void diff_one(const dftu_series& a, void* ov, std::uint8_t* valid) {
     T* out = static_cast<T*>(ov);
-    const T* in = reinterpret_cast<const T*>(a.data->data());
+    const T* in = reinterpret_cast<const T*>(a.data.data());
     for (std::int64_t i = 0; i < a.length; ++i) {
         out[i] = T{0};
         if (i == 0 || !is_valid(a, i) || !is_valid(a, i - 1)) continue;
@@ -650,7 +651,7 @@ void diff_one(const dftu_series& a, void* ov, std::uint8_t* valid) {
 
 template <class T>
 void pctchange_one(const dftu_series& a, double* out, std::uint8_t* valid) {
-    const T* in = reinterpret_cast<const T*>(a.data->data());
+    const T* in = reinterpret_cast<const T*>(a.data.data());
     for (std::int64_t i = 0; i < a.length; ++i) {
         out[i] = 0.0;
         if (i == 0 || !is_valid(a, i) || !is_valid(a, i - 1)) continue;
@@ -666,7 +667,7 @@ void pctchange_one(const dftu_series& a, double* out, std::uint8_t* valid) {
 template <class T>
 void diff_data_one(const dftu_series& a, void* ov) {
     T* out = static_cast<T*>(ov);
-    const T* in = reinterpret_cast<const T*>(a.data->data());
+    const T* in = reinterpret_cast<const T*>(a.data.data());
     if (a.length > 0) out[0] = T{0};
     for (std::int64_t i = 1; i < a.length; ++i)
         out[i] = static_cast<T>(in[i] - in[i - 1]);
@@ -674,7 +675,7 @@ void diff_data_one(const dftu_series& a, void* ov) {
 
 template <class T>
 void pctchange_data_one(const dftu_series& a, double* out) {
-    const T* in = reinterpret_cast<const T*>(a.data->data());
+    const T* in = reinterpret_cast<const T*>(a.data.data());
     if (a.length > 0) out[0] = 0.0;
     for (std::int64_t i = 1; i < a.length; ++i)
         out[i] = (static_cast<double>(in[i]) - static_cast<double>(in[i - 1])) /
@@ -696,25 +697,25 @@ void fill_valid_except_first(std::uint8_t* v, std::int64_t n) {
 // Widen any numeric column to a double buffer (scalar cast; nulls read as-is).
 template <class T>
 void widen_f64(const dftu_series& a, double* out) {
-    const T* in = reinterpret_cast<const T*>(a.data->data());
+    const T* in = reinterpret_cast<const T*>(a.data.data());
     for (std::int64_t i = 0; i < a.length; ++i)
         out[i] = static_cast<double>(in[i]);
 }
 
 // A fresh zeroed validity bitmap; the caller marks valid rows, then
 // attach_bitmap wires it in and computes null_count.
-std::shared_ptr<Buffer> new_bitmap(std::int64_t n) {
+BufferView new_bitmap(std::int64_t n) {
     auto bytes = static_cast<std::size_t>((n + 7) / 8);
-    auto buf = Buffer::allocate(bytes == 0 ? 1 : bytes);
-    std::memset(buf->data(), 0, bytes);
+    auto buf = new_buffer(bytes == 0 ? 1 : bytes);
+    std::memset(writable(buf), 0, bytes);
     return buf;
 }
-void attach_bitmap(dftu_series* out, std::shared_ptr<Buffer> vbuf) {
+void attach_bitmap(dftu_series* out, BufferView vbuf) {
     // Count set bits a byte at a time with popcount. Trailing bits past
     // `length` are always 0 (new_bitmap zeroes the buffer and only rows <
     // length are set), so whole-byte popcount is exact.
     std::int64_t valid = 0;
-    const std::uint8_t* b = vbuf->data();
+    const std::uint8_t* b = vbuf.data();
     const std::size_t nbytes = static_cast<std::size_t>((out->length + 7) / 8);
     for (std::size_t i = 0; i < nbytes; ++i) valid += __builtin_popcount(b[i]);
     out->validity = std::move(vbuf);
@@ -730,8 +731,8 @@ dftu_series* widen_to_f64(const dftu_series* a) {
     out->length = a->length;
     out->null_count = a->null_count;
     out->validity = a->validity;
-    out->data = Buffer::allocate(buffer_bytes(TypeId::Float64, a->length));
-    auto* o = reinterpret_cast<double*>(out->data->data());
+    out->data = new_buffer(buffer_bytes(TypeId::Float64, a->length));
+    auto* o = reinterpret_cast<double*>(writable(out->data));
     DF_NUMERIC_DISPATCH(a->type, widen_f64, *a, o)
     return out;
 }
@@ -789,7 +790,7 @@ dftu_series* dftu_series_abs(const dftu_series* a) {
     if (a->encoding != Encoding::Flat || !is_numeric(a->type)) return nullptr;
     dftu_series* out = alloc_like(a, true);
     HWY_DYNAMIC_DISPATCH(AbsKernel)
-    (static_cast<std::int32_t>(a->type), a->data->data(), out->data->data(),
+    (static_cast<std::int32_t>(a->type), a->data.data(), writable(out->data),
      static_cast<std::size_t>(a->length));
     return out;
 }
@@ -804,8 +805,8 @@ dftu_series* dftu_series_clip(const dftu_series* a, dftu_scalar lo,
         return nullptr;
     dftu_series* out = alloc_like(a, true);
     HWY_DYNAMIC_DISPATCH(ClipKernel)
-    (static_cast<std::int32_t>(a->type), a->data->data(), lo, hi,
-     out->data->data(), static_cast<std::size_t>(a->length));
+    (static_cast<std::int32_t>(a->type), a->data.data(), lo, hi,
+     writable(out->data), static_cast<std::size_t>(a->length));
     return out;
 }
 
@@ -816,7 +817,7 @@ dftu_series* dftu_series_round(const dftu_series* a) {
     if (a->encoding != Encoding::Flat || !is_numeric(a->type)) return nullptr;
     dftu_series* out = alloc_like(a, true);
     HWY_DYNAMIC_DISPATCH(RoundKernel)
-    (static_cast<std::int32_t>(a->type), a->data->data(), out->data->data(),
+    (static_cast<std::int32_t>(a->type), a->data.data(), writable(out->data),
      static_cast<std::size_t>(a->length));
     return out;
 }
@@ -828,7 +829,7 @@ dftu_series* dftu_series_ceil(const dftu_series* a) {
     if (a->encoding != Encoding::Flat || !is_numeric(a->type)) return nullptr;
     dftu_series* out = alloc_like(a, true);
     HWY_DYNAMIC_DISPATCH(CeilKernel)
-    (static_cast<std::int32_t>(a->type), a->data->data(), out->data->data(),
+    (static_cast<std::int32_t>(a->type), a->data.data(), writable(out->data),
      static_cast<std::size_t>(a->length));
     return out;
 }
@@ -840,7 +841,7 @@ dftu_series* dftu_series_floor(const dftu_series* a) {
     if (a->encoding != Encoding::Flat || !is_numeric(a->type)) return nullptr;
     dftu_series* out = alloc_like(a, true);
     HWY_DYNAMIC_DISPATCH(FloorKernel)
-    (static_cast<std::int32_t>(a->type), a->data->data(), out->data->data(),
+    (static_cast<std::int32_t>(a->type), a->data.data(), writable(out->data),
      static_cast<std::size_t>(a->length));
     return out;
 }
@@ -852,7 +853,7 @@ dftu_series* dftu_series_trunc(const dftu_series* a) {
     if (a->encoding != Encoding::Flat || !is_numeric(a->type)) return nullptr;
     dftu_series* out = alloc_like(a, true);
     HWY_DYNAMIC_DISPATCH(TruncKernel)
-    (static_cast<std::int32_t>(a->type), a->data->data(), out->data->data(),
+    (static_cast<std::int32_t>(a->type), a->data.data(), writable(out->data),
      static_cast<std::size_t>(a->length));
     return out;
 }
@@ -866,7 +867,7 @@ dftu_series* dftu_series_sign(const dftu_series* a) {
         return nullptr;
     dftu_series* out = alloc_like(a, true);
     HWY_DYNAMIC_DISPATCH(SignKernel)
-    (static_cast<std::int32_t>(a->type), a->data->data(), out->data->data(),
+    (static_cast<std::int32_t>(a->type), a->data.data(), writable(out->data),
      static_cast<std::size_t>(a->length));
     return out;
 }
@@ -880,7 +881,7 @@ dftu_series* dftu_series_negate(const dftu_series* a) {
         return nullptr;
     dftu_series* out = alloc_like(a, true);
     HWY_DYNAMIC_DISPATCH(NegateKernel)
-    (static_cast<std::int32_t>(a->type), a->data->data(), out->data->data(),
+    (static_cast<std::int32_t>(a->type), a->data.data(), writable(out->data),
      static_cast<std::size_t>(a->length));
     return out;
 }
@@ -898,9 +899,9 @@ dftu_series* dftu_series_fillna(const dftu_series* a, dftu_scalar fill) {
         return nullptr;
     dftu_series* out = alloc_like(a, false);
     HWY_DYNAMIC_DISPATCH(FillKernel)
-    (static_cast<std::int32_t>(a->type), a->data->data(),
-     a->validity ? a->validity->data() : nullptr, fill, out->data->data(),
-     static_cast<std::size_t>(a->length));
+    (static_cast<std::int32_t>(a->type), a->data.data(),
+     a->validity.block() ? a->validity.data() : nullptr, fill,
+     writable(out->data), static_cast<std::size_t>(a->length));
     return out;
 }
 
@@ -914,12 +915,12 @@ dftu_series* dftu_series_cumsum(const dftu_series* a) {
         a->type == TypeId::Bool)
         return nullptr;
     dftu_series* out = alloc_like(a, true);
-    if (!a->validity) {
+    if (!a->validity.block()) {
         HWY_DYNAMIC_DISPATCH(CumSumKernel)
-        (static_cast<std::int32_t>(a->type), a->data->data(), out->data->data(),
-         static_cast<std::size_t>(a->length));
+        (static_cast<std::int32_t>(a->type), a->data.data(),
+         writable(out->data), static_cast<std::size_t>(a->length));
     } else {
-        DF_NUMERIC_DISPATCH(a->type, cumsum_one, *a, out->data->data())
+        DF_NUMERIC_DISPATCH(a->type, cumsum_one, *a, writable(out->data))
     }
     return out;
 }
@@ -932,12 +933,12 @@ dftu_series* dftu_series_cummax(const dftu_series* a) {
         a->type == TypeId::Bool)
         return nullptr;
     dftu_series* out = alloc_like(a, true);
-    if (!a->validity) {
+    if (!a->validity.block()) {
         HWY_DYNAMIC_DISPATCH(CumMaxKernel)
-        (static_cast<std::int32_t>(a->type), a->data->data(), out->data->data(),
-         static_cast<std::size_t>(a->length));
+        (static_cast<std::int32_t>(a->type), a->data.data(),
+         writable(out->data), static_cast<std::size_t>(a->length));
     } else {
-        DF_NUMERIC_DISPATCH(a->type, cummax_one, *a, out->data->data())
+        DF_NUMERIC_DISPATCH(a->type, cummax_one, *a, writable(out->data))
     }
     return out;
 }
@@ -950,12 +951,12 @@ dftu_series* dftu_series_cummin(const dftu_series* a) {
         a->type == TypeId::Bool)
         return nullptr;
     dftu_series* out = alloc_like(a, true);
-    if (!a->validity) {
+    if (!a->validity.block()) {
         HWY_DYNAMIC_DISPATCH(CumMinKernel)
-        (static_cast<std::int32_t>(a->type), a->data->data(), out->data->data(),
-         static_cast<std::size_t>(a->length));
+        (static_cast<std::int32_t>(a->type), a->data.data(),
+         writable(out->data), static_cast<std::size_t>(a->length));
     } else {
-        DF_NUMERIC_DISPATCH(a->type, cummin_one, *a, out->data->data())
+        DF_NUMERIC_DISPATCH(a->type, cummin_one, *a, writable(out->data))
     }
     return out;
 }
@@ -968,12 +969,12 @@ dftu_series* dftu_series_cum_prod(const dftu_series* a) {
         a->type == TypeId::Bool)
         return nullptr;
     dftu_series* out = alloc_like(a, true);
-    if (!a->validity) {
+    if (!a->validity.block()) {
         HWY_DYNAMIC_DISPATCH(CumProdKernel)
-        (static_cast<std::int32_t>(a->type), a->data->data(), out->data->data(),
-         static_cast<std::size_t>(a->length));
+        (static_cast<std::int32_t>(a->type), a->data.data(),
+         writable(out->data), static_cast<std::size_t>(a->length));
     } else {
-        DF_NUMERIC_DISPATCH(a->type, cumprod_one, *a, out->data->data())
+        DF_NUMERIC_DISPATCH(a->type, cumprod_one, *a, writable(out->data))
     }
     return out;
 }
@@ -990,8 +991,8 @@ dftu_series* dftu_series_cum_count(const dftu_series* a) {
     out->encoding = Encoding::Flat;
     out->length = a->length;
     out->null_count = 0;
-    out->data = Buffer::allocate(buffer_bytes(TypeId::Int64, a->length));
-    auto* o = reinterpret_cast<std::int64_t*>(out->data->data());
+    out->data = new_buffer(buffer_bytes(TypeId::Int64, a->length));
+    auto* o = reinterpret_cast<std::int64_t*>(writable(out->data));
     parallel_prefix_scan<std::int64_t>(
         a->length, CUM_ONE_SCAN_GRAIN, 0,
         [&](std::int64_t b, std::int64_t e) -> std::int64_t {
@@ -1018,16 +1019,16 @@ dftu_series* dftu_series_diff(const dftu_series* a) {
         return nullptr;
     dftu_series* out = alloc_like(a, false);
     auto vbuf = new_bitmap(a->length);
-    if (!a->validity) {
+    if (!a->validity.block()) {
         // Dense column: fill validity in bulk and let the branch-free data-only
         // diff auto-vectorize. null_count is exactly 1 (row 0).
-        fill_valid_except_first(vbuf->data(), a->length);
-        DF_NUMERIC_DISPATCH(a->type, diff_data_one, *a, out->data->data())
+        fill_valid_except_first(writable(vbuf), a->length);
+        DF_NUMERIC_DISPATCH(a->type, diff_data_one, *a, writable(out->data))
         out->validity = std::move(vbuf);
         out->null_count = a->length > 0 ? 1 : 0;
     } else {
-        DF_NUMERIC_DISPATCH(a->type, diff_one, *a, out->data->data(),
-                            vbuf->data())
+        DF_NUMERIC_DISPATCH(a->type, diff_one, *a, writable(out->data),
+                            writable(vbuf))
         attach_bitmap(out, std::move(vbuf));
     }
     return out;
@@ -1045,18 +1046,18 @@ dftu_series* dftu_series_pct_change(const dftu_series* a) {
     out->encoding = Encoding::Flat;
     out->length = a->length;
     out->null_count = 0;
-    out->data = Buffer::allocate(buffer_bytes(TypeId::Float64, a->length));
+    out->data = new_buffer(buffer_bytes(TypeId::Float64, a->length));
     auto vbuf = new_bitmap(a->length);
-    auto* o = reinterpret_cast<double*>(out->data->data());
-    if (!a->validity) {
+    auto* o = reinterpret_cast<double*>(writable(out->data));
+    if (!a->validity.block()) {
         // Dense column: bulk validity + branch-free data-only pct_change (any
         // numeric type widens to double). null_count is exactly 1 (row 0).
-        fill_valid_except_first(vbuf->data(), a->length);
+        fill_valid_except_first(writable(vbuf), a->length);
         DF_NUMERIC_DISPATCH(a->type, pctchange_data_one, *a, o)
         out->validity = std::move(vbuf);
         out->null_count = a->length > 0 ? 1 : 0;
     } else {
-        DF_NUMERIC_DISPATCH(a->type, pctchange_one, *a, o, vbuf->data())
+        DF_NUMERIC_DISPATCH(a->type, pctchange_one, *a, o, writable(vbuf))
         attach_bitmap(out, std::move(vbuf));
     }
     return out;
@@ -1071,7 +1072,7 @@ dftu_series* dftu_series_sqrt(const dftu_series* a) {
         return nullptr;
     dftu_series* out = widen_to_f64(a);
     HWY_DYNAMIC_DISPATCH(SqrtKernel)
-    (reinterpret_cast<double*>(out->data->data()),
+    (reinterpret_cast<double*>(writable(out->data)),
      static_cast<std::size_t>(a->length));
     return out;
 }
@@ -1085,7 +1086,7 @@ dftu_series* dftu_series_exp(const dftu_series* a) {
         return nullptr;
     dftu_series* out = widen_to_f64(a);
     HWY_DYNAMIC_DISPATCH(ExpKernel)
-    (reinterpret_cast<double*>(out->data->data()),
+    (reinterpret_cast<double*>(writable(out->data)),
      static_cast<std::size_t>(a->length));
     return out;
 }
@@ -1099,7 +1100,7 @@ dftu_series* dftu_series_log(const dftu_series* a) {
         return nullptr;
     dftu_series* out = widen_to_f64(a);
     HWY_DYNAMIC_DISPATCH(LogKernel)
-    (reinterpret_cast<double*>(out->data->data()),
+    (reinterpret_cast<double*>(writable(out->data)),
      static_cast<std::size_t>(a->length));
     return out;
 }

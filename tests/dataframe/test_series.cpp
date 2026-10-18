@@ -3222,10 +3222,11 @@ TEST_CASE("string_at reads a LargeString dictionary") {
     h->type = TypeId::LargeString;
     h->length = 3;
     const std::int64_t offs[4] = {0, 1, 2, 3};
-    h->offsets = dftracer::utils::dataframe::Buffer::allocate(sizeof(offs));
-    std::memcpy(h->offsets->data(), offs, sizeof(offs));
-    h->data = dftracer::utils::dataframe::Buffer::allocate(3);
-    std::memcpy(h->data->data(), "pqp", 3);
+    h->offsets = dftracer::utils::dataframe::new_buffer(sizeof(offs));
+    std::memcpy(dftracer::utils::dataframe::writable(h->offsets), offs,
+                sizeof(offs));
+    h->data = dftracer::utils::dataframe::new_buffer(3);
+    std::memcpy(dftracer::utils::dataframe::writable(h->data), "pqp", 3);
     Series large{h};
     Series dict = large.dictionary_encode();
     REQUIRE(dict.encoding() == Encoding::Dictionary);

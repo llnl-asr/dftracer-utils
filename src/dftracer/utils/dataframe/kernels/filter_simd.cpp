@@ -116,8 +116,9 @@ HWY_EXPORT(CompactU8);
 
 std::int64_t compact_gt(const dftu_series& v, dftu_scalar threshold,
                         std::int64_t* out) {
-    if (v.validity) return -1;  // nulls need masking; caller does scalar
-    const void* p = v.data->data();
+    if (v.validity.block())
+        return -1;  // nulls need masking; caller does scalar
+    const void* p = v.data.data();
     std::int64_t n = v.length;
     switch (v.type) {
         case TypeId::Int64:

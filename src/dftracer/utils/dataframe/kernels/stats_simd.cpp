@@ -173,10 +173,10 @@ dftu_series* dftu_series_is_between(const dftu_series* v, dftu_scalar lo,
     out->null_count = v->null_count;
     out->validity = v->validity;  // shared: nulls propagate
     std::size_t bytes = buffer_bytes(TypeId::Bool, v->length);
-    out->data = Buffer::allocate(bytes == 0 ? 1 : bytes);
-    std::memset(out->data->data(), 0, out->data->size());
-    const void* p = v->data->data();
-    std::uint8_t* bits = out->data->data();
+    out->data = new_buffer(bytes == 0 ? 1 : bytes);
+    std::memset(writable(out->data), 0, out->data.size());
+    const void* p = v->data.data();
+    std::uint8_t* bits = writable(out->data);
     const std::int64_t n = v->length;
     switch (v->type) {
         case TypeId::Int64:
@@ -248,10 +248,10 @@ dftu_scalar dftu_series_dot(const dftu_series* v, const dftu_series* other) {
     }
     if (v->encoding == Encoding::Flat && other->encoding == Encoding::Flat &&
         v->type == TypeId::Float64 && other->type == TypeId::Float64 &&
-        !v->validity && !other->validity) {
+        !v->validity.block() && !other->validity.block()) {
         out.value.d = HWY_DYNAMIC_DISPATCH(dot_f64)(
-            reinterpret_cast<const double*>(v->data->data()),
-            reinterpret_cast<const double*>(other->data->data()), v->length);
+            reinterpret_cast<const double*>(v->data.data()),
+            reinterpret_cast<const double*>(other->data.data()), v->length);
         return out;
     }
     Series a{const_cast<dftu_series*>(v)};

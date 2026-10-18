@@ -150,7 +150,7 @@ void fingerprint_node(detail::Fingerprint& fp, const ExprNode* n) {
     fp.str(n->text);
     fp.str(n->text2);
     const dftu_series* vals = n->values.handle();
-    fp.pod(vals && vals->data ? vals->data->data() : nullptr);
+    fp.pod(vals && vals->data.block() ? vals->data.data() : nullptr);
     fp.pod(vals ? n->values.length() : std::int64_t{0});
     fingerprint_node(fp, n->a.get());
     fingerprint_node(fp, n->b.get());
@@ -1980,16 +1980,18 @@ Series flat_view(const Series& s) {
 }
 
 bool valid_at(const dftu_series* h, std::int64_t i) {
-    return !h->validity || ((h->validity->data()[i >> 3] >> (i & 7)) & 1);
+    return !h->validity.block() ||
+           ((h->validity.data()[i >> 3] >> (i & 7)) & 1);
 }
 
 bool bit_at(const dftu_series* h, std::int64_t i) {
-    return (h->data->data()[i >> 3] >> (i & 7)) & 1;
+    return (h->data.data()[i >> 3] >> (i & 7)) & 1;
 }
 
 template <class T>
 const T* values_of(const dftu_series* h) {
-    return h->data ? reinterpret_cast<const T*>(h->data->data()) : nullptr;
+    return h->data.block() ? reinterpret_cast<const T*>(h->data.data())
+                           : nullptr;
 }
 
 struct TextCol {
@@ -1998,11 +2000,12 @@ struct TextCol {
     const std::int64_t* off64 = nullptr;
 
     explicit TextCol(const dftu_series* h) {
-        if (h->data) data = reinterpret_cast<const char*>(h->data->data());
-        if (h->offsets && !h->wide_offsets())
-            off32 = reinterpret_cast<const std::int32_t*>(h->offsets->data());
-        if (h->offsets && h->wide_offsets())
-            off64 = reinterpret_cast<const std::int64_t*>(h->offsets->data());
+        if (h->data.block())
+            data = reinterpret_cast<const char*>(h->data.data());
+        if (h->offsets.block() && !h->wide_offsets())
+            off32 = reinterpret_cast<const std::int32_t*>(h->offsets.data());
+        if (h->offsets.block() && h->wide_offsets())
+            off64 = reinterpret_cast<const std::int64_t*>(h->offsets.data());
     }
     bool ok() const { return off32 || off64; }
     std::string_view at(std::int64_t i) const {
@@ -2704,7 +2707,7 @@ struct IntCol {
     const dftu_series* h;
     const void* p;
     explicit IntCol(const dftu_series* s)
-        : h(s), p(s->data ? s->data->data() : nullptr) {}
+        : h(s), p(s->data.block() ? s->data.data() : nullptr) {}
     std::optional<Int> at(std::int64_t i) const {
         if (!valid_at(h, i)) return std::nullopt;
         if (h->type == TypeId::Int64)
@@ -3051,9 +3054,9 @@ std::optional<ListParts> list_parts(const Series& s) {
     ListParts p;
     p.list = flat_view(s);
     const dftu_series* h = p.list.handle();
-    if (!h || h->type != TypeId::List || !h->offsets || !h->child())
+    if (!h || h->type != TypeId::List || !h->offsets.block() || !h->child())
         return std::nullopt;
-    p.off = reinterpret_cast<const std::int32_t*>(h->offsets->data());
+    p.off = reinterpret_cast<const std::int32_t*>(h->offsets.data());
     Series child = flat_view(Series{dftu_series_share(h->child().get())});
     const TypeId t = child.type();
     if (is_num_type(t) && t != TypeId::Int64 && t != TypeId::Uint64 &&
@@ -3693,7 +3696,7 @@ std::vector<Series> eval_many(const std::vector<Expr>& roots,
         if (!used[i] || !inputs[i]->handle()->is_chunked()) continue;
         const dftu_series& h = *inputs[i]->handle();
         const auto* starts =
-            reinterpret_cast<const std::int64_t*>(h.data->data());
+            reinterpret_cast<const std::int64_t*>(h.data.data());
         std::vector<std::int64_t> own(starts, starts + h.nested.size() + 1);
         if (bounds.empty()) {
             bounds = std::move(own);

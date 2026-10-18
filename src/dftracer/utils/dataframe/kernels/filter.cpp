@@ -15,20 +15,22 @@
 #include <string>
 #include <vector>
 
-using dftracer::utils::dataframe::Buffer;
+using dftracer::utils::dataframe::BufferView;
 using dftracer::utils::dataframe::Encoding;
 using dftracer::utils::dataframe::is_wide_offset_type;
 using dftracer::utils::dataframe::narrow_varwidth_type;
+using dftracer::utils::dataframe::new_buffer;
 using dftracer::utils::dataframe::offsets_of;
 using dftracer::utils::dataframe::scalar_as;
 using dftracer::utils::dataframe::Series;
 using dftracer::utils::dataframe::TypeId;
+using dftracer::utils::dataframe::writable;
 
 namespace {
 
 bool is_valid(const dftu_series& v, std::int64_t i) {
-    if (!v.validity) return true;
-    const std::uint8_t* bm = v.validity->data();
+    if (!v.validity.block()) return true;
+    const std::uint8_t* bm = v.validity.data();
     return (bm[i >> 3] & (1u << (i & 7))) != 0;
 }
 
@@ -37,7 +39,7 @@ bool is_valid(const dftu_series& v, std::int64_t i) {
 template <class T>
 void select_gt(const dftu_series& v, dftu_scalar threshold,
                std::vector<std::int64_t>& sel) {
-    const T* p = reinterpret_cast<const T*>(v.data->data());
+    const T* p = reinterpret_cast<const T*>(v.data.data());
     const T t = scalar_as<T>(threshold);
     for (std::int64_t i = 0; i < v.length; ++i) {
         if (is_valid(v, i) && p[i] > t) sel.push_back(i);
@@ -48,14 +50,14 @@ void select_gt(const dftu_series& v, dftu_scalar threshold,
 // base. A row the selection holds as null (outer fill or its own bitmap)
 // becomes -1.
 template <class Idx>
-std::shared_ptr<Buffer> resolve_through(const dftu_series& sel, const Idx* idx,
-                                        std::int64_t n) {
+BufferView resolve_through(const dftu_series& sel, const Idx* idx,
+                           std::int64_t n) {
     const std::int64_t* inner =
-        reinterpret_cast<const std::int64_t*>(sel.data->data());
-    const std::uint8_t* own = sel.validity ? sel.validity->data() : nullptr;
-    auto out =
-        Buffer::allocate(static_cast<std::size_t>(n) * sizeof(std::int64_t));
-    auto* c = reinterpret_cast<std::int64_t*>(out->data());
+        reinterpret_cast<const std::int64_t*>(sel.data.data());
+    const std::uint8_t* own =
+        sel.validity.block() ? sel.validity.data() : nullptr;
+    auto out = new_buffer(static_cast<std::size_t>(n) * sizeof(std::int64_t));
+    auto* c = reinterpret_cast<std::int64_t*>(writable(out));
     for (std::int64_t i = 0; i < n; ++i) {
         const std::int64_t k = idx[i];
         c[i] =
@@ -69,10 +71,10 @@ std::shared_ptr<Buffer> resolve_through(const dftu_series& sel, const Idx* idx,
 // gathered by its own layout, so a selection is always one level over a FLAT
 // column. `indices` is the index buffer the selection adopts, shared between
 // every column of one frame filter; a composed base gets its own.
-dftu_series* make_selection(const dftu_series& base,
-                            std::shared_ptr<Buffer> indices, std::int64_t n) {
+dftu_series* make_selection(const dftu_series& base, BufferView indices,
+                            std::int64_t n) {
     const std::int64_t* sel =
-        reinterpret_cast<const std::int64_t*>(indices->data());
+        reinterpret_cast<const std::int64_t*>(indices.data());
     if (base.encoding == Encoding::Selection && base.child())
         return make_selection(*base.child(), resolve_through(base, sel, n), n);
     if (base.encoding != Encoding::Flat) return dftu_series_take(&base, sel, n);
@@ -85,10 +87,11 @@ dftu_series* make_selection(const dftu_series& base,
     return out;
 }
 
-std::shared_ptr<Buffer> index_buffer(const std::vector<std::int64_t>& sel) {
-    auto buf = Buffer::allocate(sel.size() * sizeof(std::int64_t));
+BufferView index_buffer(const std::vector<std::int64_t>& sel) {
+    auto buf = new_buffer(sel.size() * sizeof(std::int64_t));
     if (!sel.empty())
-        std::memcpy(buf->data(), sel.data(), sel.size() * sizeof(std::int64_t));
+        std::memcpy(writable(buf), sel.data(),
+                    sel.size() * sizeof(std::int64_t));
     return buf;
 }
 
@@ -110,7 +113,7 @@ dftu_series* dftu_series_filter_gt(const dftu_series* v,
         return nullptr;
 
     std::vector<std::int64_t> sel;
-    if (!v->validity) {
+    if (!v->validity.block()) {
         sel.resize(static_cast<std::size_t>(v->length));
         std::int64_t k =
             dftracer::utils::dataframe::compact_gt(*v, threshold, sel.data());
@@ -128,8 +131,8 @@ namespace dftracer::utils::dataframe {
 
 // Two passes over 64-bit words: a popcount per chunk gives each chunk its
 // output offset, then every chunk writes its indices in place, in parallel.
-std::shared_ptr<Buffer> mask_to_indices(const std::uint8_t* bits,
-                                        std::int64_t n, std::int64_t& count) {
+BufferView mask_to_indices(const std::uint8_t* bits, std::int64_t n,
+                           std::int64_t& count) {
     constexpr std::int64_t GRAIN = std::int64_t{1} << 16;  // whole words
     const std::int64_t words = n / 64;
     const std::int64_t chunks = (words + GRAIN - 1) / GRAIN;
@@ -150,9 +153,9 @@ std::shared_ptr<Buffer> mask_to_indices(const std::uint8_t* bits,
     for (std::int64_t i = words * 64; i < n; ++i)
         tail += (bits[i >> 3] >> (i & 7)) & 1;
     count = counts.back() + tail;
-    auto out = Buffer::allocate(static_cast<std::size_t>(count) *
-                                sizeof(std::int64_t));
-    auto* sel = reinterpret_cast<std::int64_t*>(out->data());
+    auto out =
+        new_buffer(static_cast<std::size_t>(count) * sizeof(std::int64_t));
+    auto* sel = reinterpret_cast<std::int64_t*>(writable(out));
     parallel_for(words, GRAIN, [&](std::int64_t b, std::int64_t e) {
         std::int64_t k = counts[static_cast<std::size_t>(b / GRAIN)];
         for (std::int64_t w = b; w < e; ++w) {
@@ -174,7 +177,7 @@ std::shared_ptr<Buffer> mask_to_indices(const std::uint8_t* bits,
 
 Series mask_index_column(const std::uint8_t* bits, std::int64_t n) {
     std::int64_t count = 0;
-    std::shared_ptr<Buffer> idx = mask_to_indices(bits, n, count);
+    BufferView idx = mask_to_indices(bits, n, count);
     auto* out = new dftu_series();
     out->type = TypeId::Int64;
     out->encoding = Encoding::Flat;
@@ -183,18 +186,17 @@ Series mask_index_column(const std::uint8_t* bits, std::int64_t n) {
     return Series{out};
 }
 
-std::shared_ptr<Buffer> mask_to_indices(const dftu_series& mask,
-                                        std::int64_t& count) {
+BufferView mask_to_indices(const dftu_series& mask, std::int64_t& count) {
     if (!mask.is_chunked()) {
         if (mask.encoding == Encoding::Flat)
-            return mask_to_indices(mask.data->data(), mask.length, count);
+            return mask_to_indices(mask.data.data(), mask.length, count);
         std::unique_ptr<dftu_series> flat(dftu_series_materialize(&mask));
-        return mask_to_indices(flat->data->data(), flat->length, count);
+        return mask_to_indices(flat->data.data(), flat->length, count);
     }
     const auto* starts =
-        reinterpret_cast<const std::int64_t*>(mask.data->data());
+        reinterpret_cast<const std::int64_t*>(mask.data.data());
     const std::size_t k = mask.nested.size();
-    std::vector<std::shared_ptr<Buffer>> parts(k);
+    std::vector<BufferView> parts(k);
     std::vector<std::int64_t> counts(k + 1, 0);
     parallel_for(
         static_cast<std::int64_t>(k), 1, [&](std::int64_t b, std::int64_t e) {
@@ -206,15 +208,15 @@ std::shared_ptr<Buffer> mask_to_indices(const dftu_series& mask,
         });
     for (std::size_t i = 0; i < k; ++i) counts[i + 1] += counts[i];
     count = counts[k];
-    auto out = Buffer::allocate(static_cast<std::size_t>(count) *
-                                sizeof(std::int64_t));
-    auto* dst = reinterpret_cast<std::int64_t*>(out->data());
+    auto out =
+        new_buffer(static_cast<std::size_t>(count) * sizeof(std::int64_t));
+    auto* dst = reinterpret_cast<std::int64_t*>(writable(out));
     parallel_for(
         static_cast<std::int64_t>(k), 1, [&](std::int64_t b, std::int64_t e) {
             for (std::int64_t c = b; c < e; ++c) {
                 const auto i = static_cast<std::size_t>(c);
                 const auto* src =
-                    reinterpret_cast<const std::int64_t*>(parts[i]->data());
+                    reinterpret_cast<const std::int64_t*>(parts[i].data());
                 for (std::int64_t j = 0; j < counts[i + 1] - counts[i]; ++j)
                     dst[counts[i] + j] = src[j] + starts[i];
             }
@@ -224,7 +226,7 @@ std::shared_ptr<Buffer> mask_to_indices(const dftu_series& mask,
 
 Series mask_index_column(const Series& mask) {
     std::int64_t count = 0;
-    std::shared_ptr<Buffer> idx = mask_to_indices(*mask.handle(), count);
+    BufferView idx = mask_to_indices(*mask.handle(), count);
     auto* out = new dftu_series();
     out->type = TypeId::Int64;
     out->encoding = Encoding::Flat;
@@ -238,8 +240,7 @@ Series mask_index_column(const Series& mask) {
 dftu_series* dftu_series_filter(const dftu_series* v, const dftu_series* mask) {
     if (mask->type != TypeId::Bool || mask->length != v->length) return nullptr;
     std::int64_t count = 0;
-    std::shared_ptr<Buffer> sel =
-        dftracer::utils::dataframe::mask_to_indices(*mask, count);
+    BufferView sel = dftracer::utils::dataframe::mask_to_indices(*mask, count);
     return make_selection(*v, std::move(sel), count);
 }
 
@@ -313,16 +314,16 @@ static IdxInfo scan_indices(const Idx* idx, std::int64_t n) {
 }
 
 template <class Idx>
-static std::shared_ptr<Buffer> gather_validity(const dftu_series& base,
-                                               const Idx* idx, std::int64_t n,
-                                               std::int64_t& null_count,
-                                               bool has_null_idx) {
+static BufferView gather_validity(const dftu_series& base, const Idx* idx,
+                                  std::int64_t n, std::int64_t& null_count,
+                                  bool has_null_idx) {
     null_count = 0;
-    if (!base.validity && !has_null_idx) return nullptr;
-    const std::uint8_t* bm = base.validity ? base.validity->data() : nullptr;
-    auto out = Buffer::allocate(buffer_bytes(TypeId::Bool, n));
-    std::memset(out->data(), 0, out->size());
-    std::uint8_t* ob = out->data();
+    if (!base.validity.block() && !has_null_idx) return {};
+    const std::uint8_t* bm =
+        base.validity.block() ? base.validity.data() : nullptr;
+    auto out = new_buffer(buffer_bytes(TypeId::Bool, n));
+    std::memset(writable(out), 0, out.size());
+    std::uint8_t* ob = writable(out);
     // Whole bytes per task (8 rows), so no two tasks write one byte.
     const std::int64_t bytes = (n + 7) / 8;
     null_count = dftracer::utils::dataframe::parallel_reduce<std::int64_t>(
@@ -364,8 +365,8 @@ template <class Off, class BOff, class Idx>
 static dftu_series* gather_varwidth_w(const dftu_series& base, const Idx* idx,
                                       std::int64_t n, const IdxInfo& info) {
     const BOff* boff =
-        reinterpret_cast<const BOff*>(offsets_of<BOff>(base)->data());
-    const char* bdata = reinterpret_cast<const char*>(base.data->data());
+        reinterpret_cast<const BOff*>(offsets_of<BOff>(base).data());
+    const char* bdata = reinterpret_cast<const char*>(base.data.data());
 
     auto* result = new dftu_series();
     dftracer::utils::dataframe::adopt_type_from(*result, base);
@@ -375,8 +376,8 @@ static dftu_series* gather_varwidth_w(const dftu_series& base, const Idx* idx,
     result->encoding = Encoding::Flat;
     result->length = n;
     offsets_of<Off>(*result) =
-        Buffer::allocate((static_cast<std::size_t>(n) + 1) * sizeof(Off));
-    Off* off = reinterpret_cast<Off*>(offsets_of<Off>(*result)->data());
+        new_buffer((static_cast<std::size_t>(n) + 1) * sizeof(Off));
+    Off* off = reinterpret_cast<Off*>(writable(offsets_of<Off>(*result)));
     constexpr std::int64_t GRAIN = std::int64_t{1} << 15;
 
     // A run of consecutive rows (a slice, a filter that kept a block) is one
@@ -393,8 +394,8 @@ static dftu_series* gather_varwidth_w(const dftu_series& base, const Idx* idx,
                 for (std::int64_t i = b; i < e; ++i)
                     off[i] = static_cast<Off>(boff[idx[0] + i] - first);
             });
-        result->data = Buffer::allocate(total);
-        if (total) std::memcpy(result->data->data(), bdata + first, total);
+        result->data = new_buffer(total);
+        if (total) std::memcpy(writable(result->data), bdata + first, total);
         result->validity =
             gather_validity(base, idx, n, result->null_count, info.has_neg);
         return result;
@@ -413,8 +414,8 @@ static dftu_series* gather_varwidth_w(const dftu_series& base, const Idx* idx,
     }
     const std::size_t total = static_cast<std::size_t>(off[n]);
 
-    result->data = Buffer::allocate(total);
-    char* dst = reinterpret_cast<char*>(result->data->data());
+    result->data = new_buffer(total);
+    char* dst = reinterpret_cast<char*>(writable(result->data));
     dftracer::utils::dataframe::parallel_for(
         n, GRAIN, [&](std::int64_t b, std::int64_t e) {
             for (std::int64_t i = b; i < e; ++i) {
@@ -454,9 +455,9 @@ static dftu_series* gather_view(const dftu_series& base, const Idx* idx,
     out->encoding = Encoding::View;
     out->length = n;
     out->blobs = base.blobs;
-    out->data = Buffer::allocate(static_cast<std::size_t>(n) * VIEW_BYTES);
-    const std::uint8_t* src = base.data->data();
-    std::uint8_t* dst = out->data->data();
+    out->data = new_buffer(static_cast<std::size_t>(n) * VIEW_BYTES);
+    const std::uint8_t* src = base.data.data();
+    std::uint8_t* dst = writable(out->data);
     dftracer::utils::dataframe::parallel_for(
         n, std::int64_t{1} << 15, [&](std::int64_t b, std::int64_t e) {
             for (std::int64_t i = b; i < e; ++i) {
@@ -500,7 +501,7 @@ template <class Off, class Idx>
 static dftu_series* gather_list_w(const dftu_series& base, const Idx* idx,
                                   std::int64_t n, const IdxInfo& info) {
     const Off* boff =
-        reinterpret_cast<const Off*>(offsets_of<Off>(base)->data());
+        reinterpret_cast<const Off*>(offsets_of<Off>(base).data());
     std::vector<std::int64_t> child_idx;
     std::vector<Off> offsets{0};
     offsets.reserve(static_cast<std::size_t>(n) + 1);
@@ -515,8 +516,8 @@ static dftu_series* gather_list_w(const dftu_series& base, const Idx* idx,
     out->encoding = Encoding::Flat;
     out->length = n;
     const std::size_t off_bytes = offsets.size() * sizeof(Off);
-    offsets_of<Off>(*out) = Buffer::allocate(off_bytes);
-    std::memcpy(offsets_of<Off>(*out)->data(), offsets.data(), off_bytes);
+    offsets_of<Off>(*out) = new_buffer(off_bytes);
+    std::memcpy(writable(offsets_of<Off>(*out)), offsets.data(), off_bytes);
     out->set_child(std::shared_ptr<dftu_series>(
         gather_column(*base.child(), child_idx.data(),
                       static_cast<std::int64_t>(child_idx.size()))));
@@ -542,10 +543,10 @@ static dftu_series* gather_bool(const dftu_series& base, const Idx* idx,
     dftracer::utils::dataframe::adopt_type_from(*out, base);
     out->encoding = Encoding::Flat;
     out->length = n;
-    out->data = Buffer::allocate(buffer_bytes(TypeId::Bool, n));
-    std::memset(out->data->data(), 0, out->data->size());
-    const std::uint8_t* src = base.data->data();
-    std::uint8_t* dst = out->data->data();
+    out->data = new_buffer(buffer_bytes(TypeId::Bool, n));
+    std::memset(writable(out->data), 0, out->data.size());
+    const std::uint8_t* src = base.data.data();
+    std::uint8_t* dst = writable(out->data);
     for (std::int64_t i = 0; i < n; ++i) {
         const std::int64_t k = idx[i];
         if (k >= 0 && ((src[k >> 3] >> (k & 7)) & 1))
@@ -579,7 +580,7 @@ template <class Idx>
 static dftu_series* gather_chunked_runs(const dftu_series& base, const Idx* idx,
                                         std::int64_t n, const IdxInfo& info) {
     const auto* starts =
-        reinterpret_cast<const std::int64_t*>(base.data->data());
+        reinterpret_cast<const std::int64_t*>(base.data.data());
     const std::size_t chunks = base.nested.size();
     struct Run {
         std::int64_t begin, end, top;
@@ -638,7 +639,7 @@ static dftu_series* gather_chunked_runs(const dftu_series& base, const Idx* idx,
 class ChunkLocator {
    public:
     explicit ChunkLocator(const dftu_series& base)
-        : starts_(reinterpret_cast<const std::int64_t*>(base.data->data())) {
+        : starts_(reinterpret_cast<const std::int64_t*>(base.data.data())) {
         const std::size_t chunks = base.nested.size();
         while ((starts_[chunks] >> shift_) >
                static_cast<std::int64_t>(chunks) * 4)
@@ -688,27 +689,27 @@ static dftu_series* gather_chunked_text(const dftu_series& base, const Idx* idx,
         all_dictionary &= c.series->encoding == Encoding::Dictionary;
     if (all_dictionary) return nullptr;
     std::vector<Src> srcs(chunks);
-    auto blobs = std::make_shared<std::vector<std::shared_ptr<Buffer>>>();
+    auto blobs = std::make_shared<std::vector<BufferView>>();
     for (std::size_t c = 0; c < chunks; ++c) {
         Src& src = srcs[c];
         src.chunk = base.nested[c].series.get();
         src.text = src.chunk;
         if (src.chunk->encoding == Encoding::Dictionary) {
-            if (!src.chunk->child() || !src.chunk->data) return nullptr;
+            if (!src.chunk->child() || !src.chunk->data.block()) return nullptr;
             src.codes =
-                reinterpret_cast<const std::int32_t*>(src.chunk->data->data());
+                reinterpret_cast<const std::int32_t*>(src.chunk->data.data());
             src.text = src.chunk->child().get();
         }
         const dftu_series& t = *src.text;
         src.blob_base = static_cast<std::int32_t>(blobs->size());
         if (t.encoding == Encoding::Flat) {
-            if (!t.offsets || t.wide_offsets()) return nullptr;
-            if (t.data)
+            if (!t.offsets.block() || t.wide_offsets()) return nullptr;
+            if (t.data.block())
                 blobs->push_back(t.data);
             else
-                blobs->push_back(Buffer::allocate(0));
+                blobs->push_back(new_buffer(0));
         } else if (t.encoding == Encoding::View) {
-            if (!t.data) return nullptr;
+            if (!t.data.block()) return nullptr;
             if (t.blobs)
                 for (const auto& b : *t.blobs) blobs->push_back(b);
         } else {
@@ -724,15 +725,16 @@ static dftu_series* gather_chunked_text(const dftu_series& base, const Idx* idx,
     out->encoding = Encoding::View;
     out->length = n;
     out->blobs = std::move(blobs);
-    out->data = Buffer::allocate(static_cast<std::size_t>(n) * VIEW_BYTES);
-    auto valid = Buffer::allocate(static_cast<std::size_t>((n + 7) / 8));
-    std::uint8_t* dst = out->data->data();
-    std::uint8_t* vbits = valid->data();
+    out->data = new_buffer(static_cast<std::size_t>(n) * VIEW_BYTES);
+    auto valid = new_buffer(static_cast<std::size_t>((n + 7) / 8));
+    std::uint8_t* dst = writable(out->data);
+    std::uint8_t* vbits = writable(valid);
     constexpr std::int64_t BLOCK = std::int64_t{1} << 13;
     const std::int64_t blocks = (n + BLOCK - 1) / BLOCK;
     std::vector<std::int64_t> nulls(static_cast<std::size_t>(blocks), 0);
     auto is_null = [](const dftu_series& c, std::int64_t r) {
-        return c.validity && !((c.validity->data()[r >> 3] >> (r & 7)) & 1);
+        return c.validity.block() &&
+               !((c.validity.data()[r >> 3] >> (r & 7)) & 1);
     };
     dftracer::utils::dataframe::parallel_for(
         blocks, 1, [&](std::int64_t bb, std::int64_t be) {
@@ -761,7 +763,7 @@ static dftu_series* gather_chunked_text(const dftu_series& base, const Idx* idx,
                                 present = false;
                             } else if (t.encoding == Encoding::View) {
                                 std::memcpy(d,
-                                            t.data->data() +
+                                            t.data.data() +
                                                 static_cast<std::size_t>(r) *
                                                     VIEW_BYTES,
                                             VIEW_BYTES);
@@ -776,13 +778,14 @@ static dftu_series* gather_chunked_text(const dftu_series& base, const Idx* idx,
                             } else {
                                 const auto* off =
                                     reinterpret_cast<const std::int32_t*>(
-                                        t.offsets->data());
+                                        t.offsets.data());
                                 const std::int32_t size = off[r + 1] - off[r];
                                 const char* bytes =
-                                    t.data ? reinterpret_cast<const char*>(
-                                                 t.data->data()) +
-                                                 off[r]
-                                           : nullptr;
+                                    t.data.block()
+                                        ? reinterpret_cast<const char*>(
+                                              t.data.data()) +
+                                              off[r]
+                                        : nullptr;
                                 std::memcpy(d, &size, sizeof(size));
                                 if (size <= VIEW_INLINE) {
                                     if (size > 0)
@@ -835,10 +838,11 @@ static dftu_series* gather_chunked_lookup(const dftu_series& base,
     bool any_validity = false;
     for (std::size_t c = 0; c < chunks; ++c) {
         const dftu_series& chunk = *base.nested[c].series;
-        if (chunk.encoding != Encoding::Flat || !chunk.data) return nullptr;
-        data[c] = chunk.data->data();
-        bitmaps[c] = chunk.validity ? chunk.validity->data() : nullptr;
-        any_validity |= chunk.validity != nullptr;
+        if (chunk.encoding != Encoding::Flat || !chunk.data.block())
+            return nullptr;
+        data[c] = chunk.data.data();
+        bitmaps[c] = chunk.validity.block() ? chunk.validity.data() : nullptr;
+        any_validity |= static_cast<bool>(chunk.validity.block());
     }
     const ChunkLocator locator(base);
     auto locate = [&](std::int64_t v, std::size_t& c) {
@@ -849,8 +853,8 @@ static dftu_series* gather_chunked_lookup(const dftu_series& base,
     dftracer::utils::dataframe::adopt_type_from(*out, base);
     out->encoding = Encoding::Flat;
     out->length = n;
-    out->data = Buffer::allocate(static_cast<std::size_t>(n) * width);
-    std::uint8_t* dst = out->data->data();
+    out->data = new_buffer(static_cast<std::size_t>(n) * width);
+    std::uint8_t* dst = writable(out->data);
     constexpr std::int64_t GRAIN = std::int64_t{1} << 16;
     auto read_as = [&](auto tag) {
         using T = decltype(tag);
@@ -895,9 +899,9 @@ static dftu_series* gather_chunked_lookup(const dftu_series& base,
             });
     }
     if (!any_validity && !info.has_neg) return out;
-    auto valid = Buffer::allocate(buffer_bytes(TypeId::Bool, n));
-    std::memset(valid->data(), 0, valid->size());
-    std::uint8_t* ob = valid->data();
+    auto valid = new_buffer(buffer_bytes(TypeId::Bool, n));
+    std::memset(writable(valid), 0, valid.size());
+    std::uint8_t* ob = writable(valid);
     const std::int64_t bytes = (n + 7) / 8;
     out->null_count = dftracer::utils::dataframe::parallel_reduce<std::int64_t>(
         bytes, std::int64_t{1} << 13, std::int64_t{0},
@@ -962,7 +966,7 @@ static dftu_series* gather_column(const dftu_series& base, const Idx* idx,
         const auto resolved = resolve_through(base, idx, n);
         return gather_column(
             *base.child(),
-            reinterpret_cast<const std::int64_t*>(resolved->data()), n);
+            reinterpret_cast<const std::int64_t*>(resolved.data()), n);
     }
     if (base.encoding == Encoding::Dictionary && base.child()) {
         dftu_series codes;
@@ -995,9 +999,9 @@ static dftu_series* gather_column(const dftu_series& base, const Idx* idx,
     dftracer::utils::dataframe::adopt_type_from(*out, base);
     out->encoding = Encoding::Flat;
     out->length = n;
-    out->data = Buffer::allocate(static_cast<std::size_t>(n) * width);
-    const std::uint8_t* src = base.data->data();
-    std::uint8_t* dst = out->data->data();
+    out->data = new_buffer(static_cast<std::size_t>(n) * width);
+    const std::uint8_t* src = base.data.data();
+    std::uint8_t* dst = writable(out->data);
 
     // Contiguous ascending indices (head/tail/slice, and any filter that keeps
     // a run of rows) collapse to a single block copy. The check short-circuits
@@ -1056,7 +1060,7 @@ dftu_series* materialize_view(const dftu_series& v) {
     constexpr std::size_t VIEW_BYTES = 16;
     constexpr std::int32_t INLINE_BYTES = 12;
     const std::int64_t n = v.length;
-    const std::uint8_t* views = v.data->data();
+    const std::uint8_t* views = v.data.data();
     auto size_of = [&](std::int64_t i) {
         std::int32_t size;
         std::memcpy(&size, views + static_cast<std::size_t>(i) * VIEW_BYTES,
@@ -1064,7 +1068,8 @@ dftu_series* materialize_view(const dftu_series& v) {
         return size;
     };
     auto valid = [&](std::int64_t i) {
-        return !v.validity || ((v.validity->data()[i >> 3] >> (i & 7)) & 1);
+        return !v.validity.block() ||
+               ((v.validity.data()[i >> 3] >> (i & 7)) & 1);
     };
     std::uint64_t total = 0;
     for (std::int64_t i = 0; i < n; ++i)
@@ -1080,18 +1085,18 @@ dftu_series* materialize_view(const dftu_series& v) {
     out->length = n;
     out->validity = v.validity;
     out->null_count = v.null_count;
-    out->data = Buffer::allocate(static_cast<std::size_t>(total));
+    out->data = new_buffer(static_cast<std::size_t>(total));
     out->offsets =
-        Buffer::allocate((static_cast<std::size_t>(n) + 1) *
-                         (wide ? sizeof(std::int64_t) : sizeof(std::int32_t)));
-    std::uint8_t* dst = out->data->data();
+        new_buffer((static_cast<std::size_t>(n) + 1) *
+                   (wide ? sizeof(std::int64_t) : sizeof(std::int32_t)));
+    std::uint8_t* dst = writable(out->data);
     std::uint64_t pos = 0;
     auto put_offset = [&](std::int64_t i) {
         if (wide)
-            reinterpret_cast<std::int64_t*>(out->offsets->data())[i] =
+            reinterpret_cast<std::int64_t*>(writable(out->offsets))[i] =
                 static_cast<std::int64_t>(pos);
         else
-            reinterpret_cast<std::int32_t*>(out->offsets->data())[i] =
+            reinterpret_cast<std::int32_t*>(writable(out->offsets))[i] =
                 static_cast<std::int32_t>(pos);
     };
     for (std::int64_t i = 0; i < n; ++i) {
@@ -1105,7 +1110,7 @@ dftu_series* materialize_view(const dftu_series& v) {
             std::int32_t index, offset;
             std::memcpy(&index, view + 8, sizeof(index));
             std::memcpy(&offset, view + 12, sizeof(offset));
-            src = (*v.blobs)[static_cast<std::size_t>(index)]->data() + offset;
+            src = (*v.blobs)[static_cast<std::size_t>(index)].data() + offset;
         }
         if (size > 0)
             std::memcpy(dst + pos, src, static_cast<std::size_t>(size));
@@ -1143,19 +1148,19 @@ dftu_series* dftu_series_materialize(const dftu_series* v) {
     // A null row of the view itself (a dictionary's code for a null value) is
     // null in the result, whatever the base entry the code points at holds.
     auto with_own_nulls = [&](dftu_series* out) {
-        if (!out || !v->validity) return out;
+        if (!out || !v->validity.block()) return out;
         const std::int64_t n = out->length;
         const std::size_t bytes = static_cast<std::size_t>((n + 7) / 8);
-        auto bits = Buffer::allocate(bytes);
-        const std::uint8_t* own = v->validity->data();
+        auto bits = new_buffer(bytes);
+        const std::uint8_t* own = v->validity.data();
         const std::uint8_t* gathered =
-            out->validity ? out->validity->data() : nullptr;
+            out->validity.block() ? out->validity.data() : nullptr;
         for (std::size_t k = 0; k < bytes; ++k)
-            bits->data()[k] = static_cast<std::uint8_t>(
+            writable(bits)[k] = static_cast<std::uint8_t>(
                 (gathered ? gathered[k] : 0xFF) & own[k]);
         std::int64_t valid = 0;
         for (std::int64_t i = 0; i < n; ++i)
-            valid += (bits->data()[i >> 3] >> (i & 7)) & 1;
+            valid += (bits.data()[i >> 3] >> (i & 7)) & 1;
         out->validity = std::move(bits);
         out->null_count = n - valid;
         return out;
@@ -1163,13 +1168,13 @@ dftu_series* dftu_series_materialize(const dftu_series* v) {
 
     if (v->encoding == Encoding::Selection) {
         const std::int64_t* idx =
-            reinterpret_cast<const std::int64_t*>(v->data->data());
+            reinterpret_cast<const std::int64_t*>(v->data.data());
         return with_own_nulls(gather_column(base, idx, v->length));
     }
     // Dictionary codes are int32 (they index a small distinct-value set);
     // the gather reads them as they are.
     const std::int32_t* codes =
-        reinterpret_cast<const std::int32_t*>(v->data->data());
+        reinterpret_cast<const std::int32_t*>(v->data.data());
     return with_own_nulls(gather_column(base, codes, v->length));
 }
 
@@ -1179,7 +1184,7 @@ Series select_rows(const Series& v, const std::vector<std::int64_t>& indices) {
 }
 std::vector<Series> select_rows(const std::vector<Series>& columns,
                                 const std::vector<std::int64_t>& indices) {
-    std::shared_ptr<Buffer> shared = index_buffer(indices);
+    BufferView shared = index_buffer(indices);
     const auto n = static_cast<std::int64_t>(indices.size());
     std::vector<Series> out;
     out.reserve(columns.size());
@@ -1199,21 +1204,20 @@ namespace {
 // A null condition is false (SQL CASE: a NULL test takes the ELSE arm).
 bool mask_bit(const dftu_series& m, std::int64_t i) {
     if (!is_valid(m, i)) return false;
-    const std::uint8_t* b = m.data->data();
+    const std::uint8_t* b = m.data.data();
     return (b[i >> 3] & (1u << (i & 7))) != 0;
 }
 
 // Per-row pick between two FLAT columns of one type. The validity bit follows
 // the picked side, so a null on the other side never leaks through.
-std::shared_ptr<Buffer> where_validity(const dftu_series& m,
-                                       const dftu_series& a,
-                                       const dftu_series& b, std::int64_t n,
-                                       std::int64_t& null_count) {
+BufferView where_validity(const dftu_series& m, const dftu_series& a,
+                          const dftu_series& b, std::int64_t n,
+                          std::int64_t& null_count) {
     null_count = 0;
-    if (!a.validity && !b.validity) return nullptr;
-    auto out = Buffer::allocate(buffer_bytes(TypeId::Bool, n));
-    std::memset(out->data(), 0, out->size());
-    std::uint8_t* ob = out->data();
+    if (!a.validity.block() && !b.validity.block()) return {};
+    auto out = new_buffer(buffer_bytes(TypeId::Bool, n));
+    std::memset(writable(out), 0, out.size());
+    std::uint8_t* ob = writable(out);
     for (std::int64_t i = 0; i < n; ++i) {
         const bool valid = mask_bit(m, i) ? is_valid(a, i) : is_valid(b, i);
         if (valid)
@@ -1227,10 +1231,10 @@ std::shared_ptr<Buffer> where_validity(const dftu_series& m,
 template <class Off, class BOff>
 dftu_series* where_varwidth(const dftu_series& m, const dftu_series& a,
                             const dftu_series& b, std::int64_t n) {
-    const BOff* ao = reinterpret_cast<const BOff*>(offsets_of<BOff>(a)->data());
-    const BOff* bo = reinterpret_cast<const BOff*>(offsets_of<BOff>(b)->data());
-    const char* ad = reinterpret_cast<const char*>(a.data->data());
-    const char* bd = reinterpret_cast<const char*>(b.data->data());
+    const BOff* ao = reinterpret_cast<const BOff*>(offsets_of<BOff>(a).data());
+    const BOff* bo = reinterpret_cast<const BOff*>(offsets_of<BOff>(b).data());
+    const char* ad = reinterpret_cast<const char*>(a.data.data());
+    const char* bd = reinterpret_cast<const char*>(b.data.data());
     std::vector<Off> offsets{0};
     offsets.reserve(static_cast<std::size_t>(n) + 1);
     std::string out;
@@ -1252,10 +1256,10 @@ dftu_series* where_varwidth(const dftu_series& m, const dftu_series& a,
     r->encoding = Encoding::Flat;
     r->length = n;
     const std::size_t off_bytes = offsets.size() * sizeof(Off);
-    offsets_of<Off>(*r) = Buffer::allocate(off_bytes);
-    std::memcpy(offsets_of<Off>(*r)->data(), offsets.data(), off_bytes);
-    r->data = Buffer::allocate(out.size());
-    if (!out.empty()) std::memcpy(r->data->data(), out.data(), out.size());
+    offsets_of<Off>(*r) = new_buffer(off_bytes);
+    std::memcpy(writable(offsets_of<Off>(*r)), offsets.data(), off_bytes);
+    r->data = new_buffer(out.size());
+    if (!out.empty()) std::memcpy(writable(r->data), out.data(), out.size());
     r->validity = where_validity(m, a, b, n, r->null_count);
     return r;
 }
@@ -1295,11 +1299,11 @@ dftu_series* dftu_series_where(const dftu_series* mask, const dftu_series* a,
         dftracer::utils::dataframe::adopt_type_from(*out, *fa);
         out->encoding = Encoding::Flat;
         out->length = n;
-        out->data = Buffer::allocate(buffer_bytes(TypeId::Bool, n));
-        std::memset(out->data->data(), 0, out->data->size());
-        std::uint8_t* dst = out->data->data();
-        const std::uint8_t* ad = fa->data->data();
-        const std::uint8_t* bd = fb->data->data();
+        out->data = new_buffer(buffer_bytes(TypeId::Bool, n));
+        std::memset(writable(out->data), 0, out->data.size());
+        std::uint8_t* dst = writable(out->data);
+        const std::uint8_t* ad = fa->data.data();
+        const std::uint8_t* bd = fb->data.data();
         for (std::int64_t i = 0; i < n; ++i) {
             const std::uint8_t* src = mask_bit(*mask, i) ? ad : bd;
             if (src[i >> 3] & (1u << (i & 7)))
@@ -1314,10 +1318,10 @@ dftu_series* dftu_series_where(const dftu_series* mask, const dftu_series* a,
         dftracer::utils::dataframe::adopt_type_from(*out, *fa);
         out->encoding = Encoding::Flat;
         out->length = n;
-        out->data = Buffer::allocate(static_cast<std::size_t>(n) * width);
-        std::uint8_t* dst = out->data->data();
-        const std::uint8_t* ad = fa->data->data();
-        const std::uint8_t* bd = fb->data->data();
+        out->data = new_buffer(static_cast<std::size_t>(n) * width);
+        std::uint8_t* dst = writable(out->data);
+        const std::uint8_t* ad = fa->data.data();
+        const std::uint8_t* bd = fb->data.data();
         for (std::int64_t i = 0; i < n; ++i) {
             const std::uint8_t* src = mask_bit(*mask, i) ? ad : bd;
             std::memcpy(dst + static_cast<std::size_t>(i) * width,

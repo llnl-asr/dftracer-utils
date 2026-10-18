@@ -16,7 +16,7 @@ constexpr std::size_t PREFIX_BYTES = 4;
 constexpr std::int64_t INT32_LIMIT = std::numeric_limits<std::int32_t>::max();
 
 bool own_null(const dftu_series& c, std::int64_t i) {
-    return c.validity && !((c.validity->data()[i >> 3] >> (i & 7)) & 1);
+    return c.validity.block() && !((c.validity.data()[i >> 3] >> (i & 7)) & 1);
 }
 
 }  // namespace
@@ -33,8 +33,8 @@ std::uint8_t* ViewBuilder::new_view() {
     return views_.data() + at;
 }
 
-std::int32_t ViewBuilder::add_buffer(std::shared_ptr<Buffer> buffer) {
-    const std::uint8_t* key = buffer->data();
+std::int32_t ViewBuilder::add_buffer(BufferView buffer) {
+    const std::uint8_t* key = buffer.data();
     auto [it, fresh] =
         index_of_.try_emplace(key, static_cast<std::int32_t>(buffers_.size()));
     if (fresh) {
@@ -47,10 +47,10 @@ std::int32_t ViewBuilder::add_buffer(std::shared_ptr<Buffer> buffer) {
     return it->second;
 }
 
-std::int32_t ViewBuilder::cached_buffer(const std::shared_ptr<Buffer>& buffer) {
-    if (buffer->data() != last_data_) {
+std::int32_t ViewBuilder::cached_buffer(const BufferView& buffer) {
+    if (buffer.data() != last_data_) {
         last_index_ = add_buffer(buffer);
-        last_data_ = buffer->data();
+        last_data_ = buffer.data();
     }
     return last_index_;
 }
@@ -72,7 +72,7 @@ void ViewBuilder::append(std::string_view bytes, std::int32_t buffer_index) {
         throw std::length_error("view column: value over INT32_MAX bytes");
     const std::int64_t offset =
         reinterpret_cast<const std::uint8_t*>(bytes.data()) -
-        buffers_[static_cast<std::size_t>(buffer_index)]->data();
+        buffers_[static_cast<std::size_t>(buffer_index)].data();
     if (offset < 0 || offset > INT32_LIMIT)
         throw std::length_error("view column: offset outside int32");
     std::uint8_t* v = new_view();
@@ -94,12 +94,12 @@ void ViewBuilder::append_flat(const dftu_series& c, std::int64_t row) {
     std::int64_t begin, end;
     if (c.wide_offsets()) {
         const auto* off =
-            reinterpret_cast<const std::int64_t*>(c.offsets->data());
+            reinterpret_cast<const std::int64_t*>(c.offsets.data());
         begin = off[idx];
         end = off[idx + 1];
     } else {
         const auto* off =
-            reinterpret_cast<const std::int32_t*>(c.offsets->data());
+            reinterpret_cast<const std::int32_t*>(c.offsets.data());
         begin = off[idx];
         end = off[idx + 1];
     }
@@ -108,12 +108,12 @@ void ViewBuilder::append_flat(const dftu_series& c, std::int64_t row) {
         if (len > INT32_LIMIT)
             throw std::length_error("view column: value over INT32_MAX bytes");
         const char* bytes =
-            reinterpret_cast<const char*>(c.data->data()) + begin;
+            reinterpret_cast<const char*>(c.data.data()) + begin;
         if (begin > INT32_LIMIT) {
-            auto copy = Buffer::allocate(static_cast<std::size_t>(len));
-            std::memcpy(copy->data(), bytes, static_cast<std::size_t>(len));
+            auto copy = new_buffer(static_cast<std::size_t>(len));
+            std::memcpy(writable(copy), bytes, static_cast<std::size_t>(len));
             const std::string_view sv(
-                reinterpret_cast<const char*>(copy->data()),
+                reinterpret_cast<const char*>(copy.data()),
                 static_cast<std::size_t>(len));
             return append(sv, add_buffer(std::move(copy)));
         }
@@ -121,13 +121,13 @@ void ViewBuilder::append_flat(const dftu_series& c, std::int64_t row) {
                       cached_buffer(c.data));
     }
     append_inline(std::string_view(
-        len ? reinterpret_cast<const char*>(c.data->data()) + begin : "",
+        len ? reinterpret_cast<const char*>(c.data.data()) + begin : "",
         static_cast<std::size_t>(len)));
 }
 
 void ViewBuilder::append_view_row(const dftu_series& c, std::int64_t row) {
     const std::uint8_t* src =
-        c.data->data() + static_cast<std::size_t>(row) * VIEW_BYTES;
+        c.data.data() + static_cast<std::size_t>(row) * VIEW_BYTES;
     std::uint8_t* v = new_view();
     std::memcpy(v, src, VIEW_BYTES);
     std::int32_t size;
@@ -152,12 +152,12 @@ void ViewBuilder::append_row(const dftu_series& col, std::int64_t row) {
                 return append_view_row(*c, i);
             case Encoding::Dictionary:
                 i = reinterpret_cast<const std::int32_t*>(
-                    c->data->data())[static_cast<std::size_t>(i)];
+                    c->data.data())[static_cast<std::size_t>(i)];
                 c = c->child().get();
                 break;
             case Encoding::Selection:
                 i = reinterpret_cast<const std::int64_t*>(
-                    c->data->data())[static_cast<std::size_t>(i)];
+                    c->data.data())[static_cast<std::size_t>(i)];
                 if (i < 0) return append_null();
                 c = c->child().get();
                 break;
@@ -188,7 +188,7 @@ void ViewBuilder::append_column(const dftu_series& col) {
                       static_cast<std::size_t>(col.length) * VIEW_BYTES);
         std::uint8_t* dst = views_.data() + entries_at;
         const auto* codes =
-            reinterpret_cast<const std::int32_t*>(col.data->data());
+            reinterpret_cast<const std::int32_t*>(col.data.data());
         const std::size_t k = entries / VIEW_BYTES;
         for (std::int64_t i = 0; i < col.length; ++i) {
             const auto code = static_cast<std::uint32_t>(codes[i]);
@@ -217,7 +217,7 @@ void ViewBuilder::append_column(const dftu_series& col) {
     const std::size_t at = views_.size();
     views_.resize(at + static_cast<std::size_t>(n) * VIEW_BYTES);
     std::uint8_t* dst = views_.data() + at;
-    const std::uint8_t* src = col.data->data();
+    const std::uint8_t* src = col.data.data();
     std::memcpy(dst, src, static_cast<std::size_t>(n) * VIEW_BYTES);
     for (std::int64_t i = 0; i < n; ++i) {
         std::uint8_t* v = dst + static_cast<std::size_t>(i) * VIEW_BYTES;
@@ -229,7 +229,7 @@ void ViewBuilder::append_column(const dftu_series& col) {
         const std::int32_t mapped = remap[static_cast<std::size_t>(index)];
         std::memcpy(v + 8, &mapped, sizeof(mapped));
     }
-    if (col.validity && col.null_count > 0)
+    if (col.validity.block() && col.null_count > 0)
         for (std::int64_t i = 0; i < n; ++i)
             if (own_null(col, i)) null_rows_.push_back(base + i);
 }
@@ -242,14 +242,14 @@ Series ViewBuilder::finish(TypeId type, bool json) {
     out->encoding = Encoding::View;
     out->length = n;
     auto bytes = std::make_shared<std::vector<std::uint8_t>>(std::move(views_));
-    out->data = Buffer::wrap(bytes->data(), bytes->size(), [bytes](void*) {});
-    out->blobs = std::make_shared<const std::vector<std::shared_ptr<Buffer>>>(
-        std::move(buffers_));
+    out->data = borrow_buffer(bytes->data(), bytes->size(), bytes);
+    out->blobs =
+        std::make_shared<const std::vector<BufferView>>(std::move(buffers_));
     if (!null_rows_.empty()) {
-        out->validity = Buffer::allocate(static_cast<std::size_t>((n + 7) / 8));
-        std::memset(out->validity->data(), 0xFF, out->validity->size());
+        out->validity = new_buffer(static_cast<std::size_t>((n + 7) / 8));
+        std::memset(writable(out->validity), 0xFF, out->validity.size());
         for (std::int64_t r : null_rows_)
-            out->validity->data()[r >> 3] &=
+            writable(out->validity)[r >> 3] &=
                 static_cast<std::uint8_t>(~(1u << (r & 7)));
         out->null_count = static_cast<std::int64_t>(null_rows_.size());
     }

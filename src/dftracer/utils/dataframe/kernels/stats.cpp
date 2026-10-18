@@ -59,18 +59,18 @@ std::vector<double> nonnull_values(const Series& v) {
     const std::int64_t chunks = (n + GRAIN - 1) / GRAIN;
     std::vector<std::vector<double>> parts(static_cast<std::size_t>(chunks));
     const dftu_series& h = *v.handle();
-    const std::uint8_t* valid = h.encoding == Encoding::Flat && h.validity
-                                    ? h.validity->data()
-                                    : nullptr;
+    const std::uint8_t* valid =
+        h.encoding == Encoding::Flat && h.validity.block() ? h.validity.data()
+                                                           : nullptr;
     const bool flat64 =
-        h.encoding == Encoding::Flat && h.data &&
+        h.encoding == Encoding::Flat && h.data.block() &&
         (v.type() == TypeId::Float64 || v.type() == TypeId::Int64);
     parallel_for(n, GRAIN, [&](std::int64_t b, std::int64_t e) {
         std::vector<double>& out = parts[static_cast<std::size_t>(b / GRAIN)];
         out.reserve(static_cast<std::size_t>(e - b));
         if (flat64) {
             const auto* d =
-                reinterpret_cast<const std::uint8_t*>(h.data->data());
+                reinterpret_cast<const std::uint8_t*>(h.data.data());
             const bool is_f = v.type() == TypeId::Float64;
             for (std::int64_t i = b; i < e; ++i) {
                 if (valid && !((valid[i >> 3] >> (i & 7)) & 1)) continue;
@@ -265,8 +265,9 @@ double quantile(const Series& v, double q) {
         v.encoding() == Encoding::Flat &&
         (v.type() == TypeId::Float64 || v.type() == TypeId::Int64)) {
         const auto total = static_cast<std::size_t>(v.length());
-        const std::uint8_t* validity =
-            v.handle()->validity ? v.handle()->validity->data() : nullptr;
+        const std::uint8_t* validity = v.handle()->validity.block()
+                                           ? v.handle()->validity.data()
+                                           : nullptr;
         auto [a, b] = v.type() == TypeId::Float64
                           ? two_order_statistics(v.data<double>(), total,
                                                  validity, lo, sortable_key)
@@ -502,8 +503,8 @@ Series rolling(const Series& v, std::int64_t window, RollingOp op) {
     res->type = TypeId::Float64;
     res->encoding = Encoding::Flat;
     res->length = n;
-    res->data = Buffer::allocate(static_cast<std::size_t>(n) * sizeof(double));
-    double* out = reinterpret_cast<double*>(res->data->data());
+    res->data = new_buffer(static_cast<std::size_t>(n) * sizeof(double));
+    double* out = reinterpret_cast<double*>(writable(res->data));
     constexpr std::int64_t GRAIN_ROWS = std::int64_t{1} << 16;
     const std::int64_t grain = std::max(GRAIN_ROWS, window * 4);
     if (op == RollingOp::Sum || op == RollingOp::Mean) {
@@ -559,8 +560,8 @@ Series rolling(const Series& v, std::int64_t window, RollingOp op) {
         if (!((valid[static_cast<std::size_t>(i >> 3)] >> (i & 7)) & 1))
             ++res->null_count;
     if (res->null_count > 0) {
-        res->validity = Buffer::allocate(valid.size());
-        std::memcpy(res->validity->data(), valid.data(), valid.size());
+        res->validity = new_buffer(valid.size());
+        std::memcpy(writable(res->validity), valid.data(), valid.size());
     }
     return Series{res};
 }

@@ -3,12 +3,14 @@
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/memory/heap_page.h>
 #include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/settings.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 #include <algorithm>
+#include <chrono>
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
@@ -217,8 +219,9 @@ TEST_CASE("the tier boundaries pick small, medium, large and huge") {
     CHECK(live() - base_live == MEDIUM_MAX);
     page_deallocate(medium_top, MEDIUM_MAX);
 
-    // A freed run is cached and still counted. Trim purges it and keeps
-    // only its header page. Trimming first makes the bytes exact.
+    // A freed run is cached, and still counted below LARGE_PURGE_SIZE. Trim
+    // purges it and keeps only its header page. Trimming first makes the
+    // bytes exact.
     for (std::size_t size : {MEDIUM_MAX + 1, LARGE_MAX}) {
         CAPTURE(size);
         std::size_t run = large_run(size);
@@ -229,7 +232,8 @@ TEST_CASE("the tier boundaries pick small, medium, large and huge") {
         CHECK(live() - base_live == run);
         CHECK(allocated - before >= run);
         page_deallocate(large, size);
-        CHECK(reserved() == allocated);
+        CHECK(reserved() ==
+              (run >= LARGE_PURGE_SIZE ? allocated - run : allocated));
         page_trim(Mode::All);
         CHECK(allocated - reserved() == run);
         CHECK(reserved() - before <= HEAP_PAGE_SIZE);
@@ -630,6 +634,42 @@ TEST_CASE("cold reuse scenario" * doctest::skip()) {
     page_deallocate(keep, 2 * MIB);
 }
 
+TEST_CASE(
+    "a freed run at or above the purge size leaves the resident set at once") {
+    CHECK(fresh_process::run("purge size scenario").ok());
+}
+
+TEST_CASE("purge size scenario" * doctest::skip()) {
+    fresh_process::announce();
+    constexpr std::size_t BIG = LARGE_PURGE_SIZE;
+    constexpr std::size_t SMALL = LARGE_PURGE_SIZE / 2;
+    void* big = page_allocate(BIG, 16);
+    void* small = page_allocate(SMALL, 16);
+    touch(big, BIG);
+    touch(small, SMALL);
+
+    const std::size_t before = reserved();
+    page_deallocate(big, BIG);
+    CHECK(reserved() == before - large_run(BIG));
+
+    const std::size_t backed = reserved();
+    page_deallocate(small, SMALL);
+    if (decay_ms() > 0) {
+        page_trim(Mode::Decayed);
+        CHECK(reserved() == backed);
+        std::this_thread::sleep_for(std::chrono::milliseconds(decay_ms() + 50));
+    }
+    page_trim(Mode::Decayed);
+    CHECK(reserved() <= backed - large_run(SMALL));
+
+    const std::size_t purged = reserved();
+    void* again = page_allocate(BIG, 16);
+    CHECK(again == big);
+    CHECK(reserved() == purged + large_run(BIG));
+    touch(again, BIG);
+    page_deallocate(again, BIG);
+}
+
 TEST_CASE("a medium block takes backed free pages before purged ones") {
     CHECK(fresh_process::run("backed run first scenario").ok());
 }
@@ -687,4 +727,66 @@ TEST_CASE("warm larger run scenario" * doctest::skip()) {
     CHECK(kept);
     page_deallocate(q, 4 * MIB);
     if (page_backend) CHECK(pool->live() == 0);
+}
+
+TEST_CASE("mapping past the budget purges cached pages first") {
+    CHECK(fresh_process::run("budget purge scenario").ok());
+}
+
+TEST_CASE("budget purge scenario" * doctest::skip()) {
+    fresh_process::announce();
+    // Runs below the purge size stay backed when freed, so the budget check
+    // is what purges them.
+    constexpr std::size_t RUN = LARGE_PURGE_SIZE / 2;
+    constexpr std::size_t CACHED = 32 * MIB;
+    constexpr std::size_t NEXT = 8 * MIB;
+    std::vector<void*> runs;
+    for (std::size_t got = 0; got < CACHED; got += RUN) {
+        runs.push_back(page_allocate(RUN, 16));
+        touch(runs.back(), RUN);
+    }
+    for (void* p : runs) page_deallocate(p, RUN);
+    const std::size_t budget = reserved() + MIB;
+    Config c;
+    c.budget = budget;
+    configure(c);
+    const std::size_t purged_before = page_budget_purged();
+
+    // The cached runs are classes below 8 MiB, so the map is new.
+    void* next = page_allocate(NEXT, 16);
+    CHECK(page_budget_purged() > purged_before);
+    CHECK(reserved() <= budget);
+    CHECK(reserved() <= budget + large_run(NEXT));
+    page_deallocate(next, NEXT);
+    configure(Config{});
+}
+
+TEST_CASE("mapping under the budget purges nothing") {
+    CHECK(fresh_process::run("budget no purge scenario").ok());
+}
+
+TEST_CASE("budget no purge scenario" * doctest::skip()) {
+    fresh_process::announce();
+    constexpr std::size_t CACHED = 32 * MIB;
+    constexpr std::size_t NEXT = 8 * MIB;
+    void* big = page_allocate(CACHED, 16);
+    touch(big, CACHED);
+    page_deallocate(big, CACHED);
+
+    // No budget resolved yet: nothing is compared.
+    std::size_t before = reserved();
+    void* first = page_allocate(NEXT, 16);
+    CHECK(page_budget_purged() == 0);
+    CHECK(reserved() == before + HEAP_PAGE_SIZE + large_run(NEXT));
+    page_deallocate(first, NEXT);
+
+    Config c;
+    c.budget = std::size_t{1} << 40;
+    configure(c);
+    before = reserved();
+    void* second = page_allocate(NEXT * 2, 16);
+    CHECK(page_budget_purged() == 0);
+    CHECK(reserved() == before + HEAP_PAGE_SIZE + large_run(NEXT * 2));
+    page_deallocate(second, NEXT * 2);
+    configure(Config{});
 }

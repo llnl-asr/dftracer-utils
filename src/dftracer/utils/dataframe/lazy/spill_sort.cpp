@@ -1,3 +1,4 @@
+#include <dftracer/utils/dataframe/internal/governor.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
 
@@ -344,6 +345,8 @@ class SortMergeCursor : public Cursor {
         co_return co_await in_->narrow(predicate);
     }
 
+    std::uint64_t resident_bytes() const override { return gov_.reserved(); }
+
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         if (!built_) co_await build(max_rows);
 
@@ -437,8 +440,7 @@ class SortMergeCursor : public Cursor {
             }
             w.close();
         }
-        std::error_code ec;
-        for (int id : ids) fs::remove(dir_.run_path(id), ec);
+        for (int id : ids) dir_.remove_run(dir_.run_path(id));
         co_return out_id;
     }
 
@@ -455,9 +457,12 @@ class SortMergeCursor : public Cursor {
             if (!m) break;
             pend_bytes += spill::columns_bytes(m->columns);
             pending.push_back(std::move(m->columns));
-            if (budget_ > 0 && pend_bytes > budget_ / share::SORT_RUN) {
+            if (budget_ > 0 &&
+                (pend_bytes > budget_ / share::SORT_RUN ||
+                 (has_cap(budget_) && gov_.check(pend_bytes) != 0))) {
                 spill_run(pending, run_id++, max_rows);
                 pend_bytes = 0;
+                gov_.spilled(0);
             }
         }
 
@@ -523,6 +528,7 @@ class SortMergeCursor : public Cursor {
     std::optional<RunMerger> merger_;
     std::unique_ptr<Cursor> single_;
     std::optional<Morsel> empty_;
+    Governor gov_{"sort"};
 };
 
 }  // namespace

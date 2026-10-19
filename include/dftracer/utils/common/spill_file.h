@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/scoped_fd.h>
+#include <dftracer/utils/common/spill_dir.h>
 
 #include <atomic>
 #include <cstddef>
@@ -13,7 +14,8 @@ namespace dftracer::utils {
 
 /// One temp file in spill_dir(), unlinked at creation so a crash leaves
 /// nothing behind. append() and read() may be called from many threads; the
-/// bytes are in native endianness and never leave the machine.
+/// bytes are in native endianness and never leave the machine. Its size is
+/// charged to the "spill" external slot until it is destroyed.
 class SpillFile {
    public:
     /// IO error naming the directory and the variable when the file cannot be
@@ -47,10 +49,11 @@ class SpillFile {
     }
 
    private:
-    SpillFile() = default;
+    explicit SpillFile(bool in_memory) : charge_(in_memory) {}
 
     ScopedFd fd_;
     std::atomic<std::uint64_t> end_{0};
+    SpillCharge charge_;
 };
 
 }  // namespace dftracer::utils

@@ -1,5 +1,6 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/coro/monitor.h>
 #include <dftracer/utils/runtime/coro/yield.h>
 #include <dftracer/utils/runtime/io/io_backend_factory.h>
@@ -453,6 +454,8 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
     // Grows while idle so the pool is not polling, resets on work found.
     std::chrono::milliseconds idle_park = IDLE_PARK_MIN;
 
+    memory::Pool& general = memory::Manager::get().general();
+
     // Fixed for the process lifetime; read once to keep the resume loop cheap.
     const bool monitor = utilities::monitoring_enabled();
     if (monitor) {
@@ -501,7 +504,12 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
                 if (monitor) {
                     utilities::monitor_resume_begin(pending_entry.monitor_id);
                 }
-                pending_resume.resume();
+                {
+                    // Our coroutines enter their own pool; anything else
+                    // charges the general pool.
+                    memory::Scope scope{general};
+                    pending_resume.resume();
+                }
                 if (monitor) {
                     utilities::monitor_resume_end(pending_resume.address(),
                                                   pending_resume.done());
@@ -564,6 +572,7 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
 
 void ThreadPoolExecutor::drive_until(const std::function<bool()>& done) {
     constexpr int IDLE_POLL_MS = 1;
+    memory::Pool& general = memory::Manager::get().general();
 
     while (!done()) {
         const std::uint64_t observed_signal =
@@ -574,6 +583,7 @@ void ThreadPoolExecutor::drive_until(const std::function<bool()>& done) {
             coro::reset_timeslice();
             if (entry.handle && !entry.handle.done()) {
                 DFTRACER_TSAN_ACQUIRE(entry.handle.address());
+                memory::Scope scope{general};
                 entry.handle.resume();
             }
             drain_thread_local_destroys();

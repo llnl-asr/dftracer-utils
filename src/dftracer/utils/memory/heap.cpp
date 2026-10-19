@@ -34,6 +34,7 @@ std::atomic<std::uint8_t> g_dispatch{
 std::atomic<bool> g_exit_check{constants::DEFAULT_EXIT_CHECK};
 std::atomic<std::uint32_t> g_decay_ms{constants::DEFAULT_DECAY_MS};
 std::atomic<std::size_t> g_hard_cap{0};
+std::atomic<std::size_t> g_map_budget{0};
 
 constexpr Backend compiled_backend() noexcept {
 #ifdef DFTRACER_UTILS_MEMORY_BACKEND_SYSTEM
@@ -199,6 +200,14 @@ std::size_t hard_cap() noexcept {
 
 void set_hard_cap(std::size_t bytes) noexcept {
     g_hard_cap.store(bytes, std::memory_order_relaxed);
+}
+
+std::size_t map_budget() noexcept {
+    return g_map_budget.load(std::memory_order_relaxed);
+}
+
+void set_map_budget(std::size_t bytes) noexcept {
+    g_map_budget.store(bytes, std::memory_order_relaxed);
 }
 
 Config config() noexcept {

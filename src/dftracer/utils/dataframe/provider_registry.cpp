@@ -9,6 +9,7 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>
+#include <dftracer/utils/dataframe/internal/governor.h>
 #include <dftracer/utils/dataframe/internal/lazyframe_handle.h>
 #include <dftracer/utils/dataframe/internal/provider_source.h>
 #include <dftracer/utils/dataframe/internal/schema_types.h>
@@ -178,6 +179,7 @@ class ProviderCursor final : public Cursor {
         : source_(std::move(source)),
           vt_(vt),
           self_(self),
+          gov_(vt),
           expected_projection_(std::move(expected_projection)) {}
 
     ~ProviderCursor() override {
@@ -259,6 +261,7 @@ class ProviderCursor final : public Cursor {
         Morsel m;
         m.rows = df.num_rows();
         m.columns = std::move(df.columns);
+        gov_.at_morsel(vt_, self_);
         return m;
     }
 
@@ -267,6 +270,7 @@ class ProviderCursor final : public Cursor {
     std::shared_ptr<const Source> source_;
     const ::dftu_cursor_vt* vt_;
     void* self_;
+    PluginGovernor gov_;
     std::vector<std::string> expected_projection_;
     ::dftu_result_frame pending_result_{};
     ::dftu_task* pending_task_ = nullptr;

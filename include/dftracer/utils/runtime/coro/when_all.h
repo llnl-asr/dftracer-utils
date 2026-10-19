@@ -2,7 +2,9 @@
 #define DFTRACER_UTILS_RUNTIME_CORO_WHEN_ALL_H
 
 #include <dftracer/utils/common/exception_helpers.h>
+#include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/coro/completion_state.h>
+#include <dftracer/utils/runtime/coro/pool_resume.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/executor/resumption_helper.h>
 
@@ -33,6 +35,15 @@ struct FireAndForget {
         }
         static void operator delete(void* ptr, std::size_t size) {
             ObjectPool::instance().deallocate(ptr, size);
+        }
+
+        /// The pool current when the wrapper was created; it enters it again
+        /// each time it resumes.
+        memory::PoolTag pool{memory::current_pool_tag()};
+
+        template <typename U>
+        auto await_transform(U&& awaitable) noexcept {
+            return detail::in_pool(std::forward<U>(awaitable), pool);
         }
 
         FireAndForget get_return_object() { return {}; }

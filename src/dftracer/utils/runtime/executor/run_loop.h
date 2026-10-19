@@ -39,6 +39,7 @@ class RunLoop : public Executor {
     std::size_t get_io_pool_size() const override { return 0; }
     TimerService& get_timer_service() override { return timer_service_; }
 
+    bool runs_remote_wakeups() const noexcept override { return false; }
     bool has_io_backend() const noexcept override { return false; }
     io::IoBackend& io_backend() override;
 

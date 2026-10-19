@@ -33,6 +33,8 @@ constexpr std::size_t REPORT_BYTES = 1024;
 constexpr std::size_t TABLE_ALIGN = std::size_t{16} << 10;
 constexpr std::size_t MAX_POSTS = 64;
 constexpr std::size_t NAME_MAX_BYTES = 47;
+// The arrival of no waiter; the counter never reaches it.
+constexpr std::uint64_t NO_WAITER = ~std::uint64_t{0};
 
 constexpr std::uint32_t ENTRY_FREE = 0;
 constexpr std::uint32_t ENTRY_BUSY = 1;
@@ -109,7 +111,8 @@ struct alignas(64) ReclaimEntry {
 
 struct alignas(64) ExternalEntry {
     std::atomic<std::uint32_t> state;
-    std::atomic<std::size_t> bytes;
+    std::atomic<std::size_t> counted;
+    std::atomic<std::size_t> reported;
     std::uint8_t name_size;
     char name[NAME_MAX_BYTES + 1];
 };
@@ -137,7 +140,8 @@ struct ManagerAccess {
                                             std::size_t i) noexcept {
         return m.externals_[i];
     }
-    static std::size_t external_total(const Manager& m) noexcept;
+    static std::size_t counted_total(const Manager& m) noexcept;
+    static std::size_t reported_total(const Manager& m) noexcept;
     static std::size_t limit(Manager& m) noexcept;
     static void refresh(Manager& m, bool read_process) noexcept;
     static void apply(Manager& m, const Config& config) noexcept;
@@ -155,6 +159,13 @@ struct ManagerAccess {
     static std::ptrdiff_t exported_total(Manager& m) noexcept;
     static void exit_check() noexcept;
     static void report_sites(Manager& m, std::uint16_t pool) noexcept;
+    static bool push_wait(Manager& m, ReserveWait& w) noexcept;
+    static void wake(Manager& m) noexcept;
+    static bool grant(Manager& m, std::uint64_t self) noexcept;
+    static void grant_pass(Manager& m, std::uint64_t self,
+                           bool& self_granted) noexcept;
+    static ReserveWait* merge_arrivals(ReserveWait* a, ReserveWait* b) noexcept;
+    static ReserveWait* sort_arrivals(ReserveWait* list) noexcept;
 };
 
 struct PoolAccess {
@@ -185,8 +196,16 @@ struct PoolAccess {
                         std::size_t slack, std::size_t& shortfall) noexcept;
     static Status settle(Manager& m, Pool& p, std::size_t slack,
                          std::size_t& shortfall) noexcept;
+    static bool never_fits(Manager& m, const Pool& p,
+                           std::size_t bytes) noexcept;
+    static std::size_t slack_of(Manager& m, const Pool& p) noexcept {
+        return p.reclaiming_.load(std::memory_order_relaxed) != 0
+                   ? m.spill_headroom()
+                   : 0;
+    }
     static Admit add_reserved(Manager& m, Pool& p, std::size_t bytes,
                               std::size_t slack) noexcept;
+    static void uncharge(Manager& m, Pool& p, std::size_t bytes) noexcept;
     static void sub_reserved(Pool& p, std::size_t bytes) noexcept;
     static void own_totals(Manager& m, std::uint16_t id, std::ptrdiff_t& bytes,
                            std::ptrdiff_t& blocks) noexcept;
@@ -455,8 +474,40 @@ void attrib_switch(AttribEntry& entry, std::uint16_t id) noexcept {
     entry.id.store(id, std::memory_order_relaxed);
 }
 
+// The entry that names `id`, else the first empty one from its home slot, so
+// two pools whose ids share a slot (a task pool and general) do not evict each
+// other on every resume. The home slot when every entry holds counts.
+static AttribEntry& attrib_park_entry(AttribCache& cache,
+                                      std::uint16_t id) noexcept {
+    AttribEntry* empty = nullptr;
+    for (std::size_t i = 0; i < ATTRIB_ENTRIES; ++i) {
+        AttribEntry& e = cache.entries[(id + i) % ATTRIB_ENTRIES];
+        if (e.id.load(std::memory_order_relaxed) == id) return e;
+        if (!empty && e.word.load(std::memory_order_relaxed) == 0) empty = &e;
+    }
+    return empty ? *empty : cache.entries[id % ATTRIB_ENTRIES];
+}
+
+// Parks the hot counts in the leaving pool's entry rather than flushing, so a
+// switch on the resume path does no atomic read-modify-write. A concurrent
+// read may see them twice or not at all, as with a flush.
 void attrib_set_scope(AttribCache& cache, std::uint16_t id) noexcept {
-    attrib_switch(cache.hot, id);
+    AttribEntry& hot = cache.hot;
+    std::int64_t word = hot.word.load(std::memory_order_relaxed);
+    if (word != 0) {
+        auto leaving =
+            static_cast<std::uint16_t>(hot.id.load(std::memory_order_relaxed));
+        AttribEntry& park = attrib_park_entry(cache, leaving);
+        if (park.id.load(std::memory_order_relaxed) != leaving)
+            attrib_switch(park, leaving);
+        std::int64_t parked = park.word.load(std::memory_order_relaxed) + word;
+        park.word.store(parked, std::memory_order_relaxed);
+        hot.word.store(0, std::memory_order_relaxed);
+        std::int64_t bytes = attrib_bytes(parked);
+        if (bytes >= ATTRIB_FLUSH_BYTES || bytes <= -ATTRIB_FLUSH_BYTES)
+            attrib_flush(park);
+    }
+    hot.id.store(id, std::memory_order_relaxed);
     cache.scope = id;
 }
 
@@ -485,6 +536,8 @@ Manager& Manager::get() noexcept {
 
 Pool& Manager::root() noexcept { return table_[ROOT_POOL_ID]; }
 
+Pool& Manager::general() noexcept { return table_[GENERAL_POOL_ID]; }
+
 std::size_t Manager::budget() noexcept {
     std::size_t b = budget_.load(std::memory_order_relaxed);
     if (b != 0) return b;
@@ -494,12 +547,16 @@ std::size_t Manager::budget() noexcept {
             : static_cast<std::size_t>(resolved);
     std::size_t expected = 0;
     budget_.compare_exchange_strong(expected, b, std::memory_order_relaxed);
-    return budget_.load(std::memory_order_relaxed);
+    b = budget_.load(std::memory_order_relaxed);
+    set_map_budget(b);
+    return b;
 }
 
 void Manager::set_budget(std::size_t bytes) noexcept {
     budget_.store(bytes, std::memory_order_relaxed);
+    set_map_budget(bytes != 0 ? bytes : budget());
     ManagerAccess::mark_dirty(*this);
+    ManagerAccess::wake(*this);
 }
 
 std::size_t Manager::limit_headroom() noexcept {
@@ -530,10 +587,18 @@ std::size_t ManagerAccess::limit(Manager& m) noexcept {
     return limit;
 }
 
-std::size_t ManagerAccess::external_total(const Manager& m) noexcept {
+std::size_t ManagerAccess::counted_total(const Manager& m) noexcept {
     std::size_t total = 0;
     for (std::size_t i = 0; i < EXTERNAL_SLOTS; ++i) {
-        total += m.externals_[i].bytes.load(std::memory_order_relaxed);
+        total += m.externals_[i].counted.load(std::memory_order_relaxed);
+    }
+    return total;
+}
+
+std::size_t ManagerAccess::reported_total(const Manager& m) noexcept {
+    std::size_t total = 0;
+    for (std::size_t i = 0; i < EXTERNAL_SLOTS; ++i) {
+        total += m.externals_[i].reported.load(std::memory_order_relaxed);
     }
     return total;
 }
@@ -567,7 +632,7 @@ void ManagerAccess::refresh(Manager& m, bool read_process) noexcept {
     }
     m.dirty_.store(false, std::memory_order_relaxed);
     std::size_t ours =
-        std::max(heap_reserved(), m.root().reserved()) + external_total(m);
+        std::max(heap_reserved(), m.root().reserved()) + counted_total(m);
     bool over_budget = ours > m.budget();
     std::size_t limit = ManagerAccess::limit(m);
     std::size_t headroom = m.limit_headroom();
@@ -596,9 +661,10 @@ Stats Manager::stats() {
         active_backend() == Backend::PageHeap ? page_reserved() : out.live;
     out.pool_reserved = table_[ROOT_POOL_ID].reserved();
     out.budget = budget();
-    out.external = ManagerAccess::external_total(*this);
+    const std::size_t counted = ManagerAccess::counted_total(*this);
+    out.external = counted + ManagerAccess::reported_total(*this);
     out.measured = measured_.load(std::memory_order_relaxed);
-    std::size_t ours = out.reserved + out.external;
+    std::size_t ours = out.reserved + counted;
     out.unattributed = out.measured > ours ? out.measured - ours : 0;
     out.limit = ManagerAccess::limit(*this);
     return out;
@@ -627,24 +693,44 @@ Pool& current_pool() {
     return ManagerAccess::slot(Manager::get(), attrib_local().scope);
 }
 
-Scope::Scope(Pool& pool) noexcept {
-    AttribCache& cache = attrib_local();
-    previous_ = cache.scope;
-    attrib_set_scope(cache, pool.id());
+Scope::Scope(Pool& pool) noexcept
+    : cache_(&attrib_local()), previous_(cache_->scope) {
+    if (pool.id() != previous_) attrib_set_scope(*cache_, pool.id());
 }
 
-Scope::~Scope() { attrib_set_scope(attrib_local(), previous_); }
+Scope::~Scope() {
+    if (cache_->scope != previous_) attrib_set_scope(*cache_, previous_);
+}
+
+PoolTag current_pool_tag() noexcept {
+    std::uint16_t id = attrib_local().scope;
+    return PoolTag{ManagerAccess::slot(Manager::get(), id).generation(), id};
+}
+
+void enter_pool(PoolTag tag) noexcept {
+    AttribCache& cache = attrib_local();
+    if (cache.scope == tag.id) return;
+    std::uint16_t id = GENERAL_POOL_ID;
+    if (tag.id < ManagerAccess::slot_count(Manager::get())) {
+        Pool& p = ManagerAccess::slot(Manager::get(), tag.id);
+        // The acquire of the open state orders the generation read after it.
+        if (PoolAccess::is_open(p) && p.generation() == tag.generation)
+            id = tag.id;
+    }
+    if (cache.scope != id) attrib_set_scope(cache, id);
+}
 
 bool PoolAccess::try_add(Manager& m, Pool& p, std::ptrdiff_t n,
                          std::size_t slack, std::size_t& shortfall) noexcept {
     bool is_root = p.id_ == ROOT_POOL_ID;
     std::size_t budget = is_root ? m.budget() : 0;
-    std::size_t external = is_root ? ManagerAccess::external_total(m) : 0;
+    std::size_t external = is_root ? ManagerAccess::counted_total(m) : 0;
     std::ptrdiff_t cur = p.reserved_.load(std::memory_order_relaxed);
     do {
         auto next = static_cast<std::size_t>(cur + n);
-        if (p.limit_ != 0 && next > p.limit_) {
-            shortfall = next - p.limit_;
+        const std::size_t limit = p.limit_.load(std::memory_order_relaxed);
+        if (limit != 0 && next > limit) {
+            shortfall = next - limit;
             return false;
         }
         if (is_root) {
@@ -696,21 +782,26 @@ Status PoolAccess::settle(Manager& m, Pool& p, std::size_t slack,
     }
 }
 
+bool PoolAccess::never_fits(Manager& m, const Pool& p,
+                            std::size_t bytes) noexcept {
+    if (bytes > m.budget() ||
+        bytes > static_cast<std::size_t>(
+                    std::numeric_limits<std::ptrdiff_t>::max() / 2)) {
+        return true;
+    }
+    for (const Pool* a = &p; a->id_ != ROOT_POOL_ID;
+         a = &ManagerAccess::slot(m, a->parent_)) {
+        const std::size_t limit = a->limit_.load(std::memory_order_relaxed);
+        if (limit != 0 && bytes > limit) return true;
+    }
+    return false;
+}
+
 // A request above the budget or above a limit on the way to the root can
 // never fit, so it carries no shortfall and nobody is asked for bytes.
 Admit PoolAccess::add_reserved(Manager& m, Pool& p, std::size_t bytes,
                                std::size_t slack) noexcept {
-    if (bytes > m.budget() ||
-        bytes > static_cast<std::size_t>(
-                    std::numeric_limits<std::ptrdiff_t>::max() / 2)) {
-        return {Status::OverBudget, 0};
-    }
-    for (const Pool* a = &p; a->id_ != ROOT_POOL_ID;
-         a = &ManagerAccess::slot(m, a->parent_)) {
-        if (a->limit_ != 0 && bytes > a->limit_) {
-            return {Status::OverBudget, 0};
-        }
-    }
+    if (never_fits(m, p, bytes)) return {Status::OverBudget, 0};
     auto n = static_cast<std::ptrdiff_t>(bytes);
     std::size_t shortfall = 0;
     if (!try_add(m, p, n, slack, shortfall)) {
@@ -738,13 +829,18 @@ std::vector<std::size_t> PoolAccess::adopted_by(Manager& m, const Snapshot& s) {
     return adopted;
 }
 
-void PoolAccess::sub_reserved(Pool& p, std::size_t bytes) noexcept {
-    Manager& m = Manager::get();
+void PoolAccess::uncharge(Manager& m, Pool& p, std::size_t bytes) noexcept {
     std::size_t ignored = 0;
     p.reserved_.fetch_sub(static_cast<std::ptrdiff_t>(bytes),
                           std::memory_order_relaxed);
     settle(m, p, 0, ignored);
     ManagerAccess::mark_dirty(m);
+}
+
+void PoolAccess::sub_reserved(Pool& p, std::size_t bytes) noexcept {
+    Manager& m = Manager::get();
+    uncharge(m, p, bytes);
+    ManagerAccess::wake(m);
 }
 
 void PoolAccess::own_totals(Manager& m, std::uint16_t id, std::ptrdiff_t& bytes,
@@ -904,12 +1000,198 @@ Status Reservation::grow(std::size_t bytes) noexcept {
     return Status::Ok;
 }
 
+Status Reservation::try_grow(std::size_t bytes) noexcept {
+    if (pool_ == nullptr) {
+        return status_ == Status::Ok ? Status::OverBudget : status_;
+    }
+    Reservation extra = pool_->try_reserve(bytes);
+    if (!extra) return extra.status();
+    bytes_ += extra.bytes_;
+    extra.pool_ = nullptr;
+    extra.bytes_ = 0;
+    return Status::Ok;
+}
+
+std::size_t Reservation::take_from(Reservation& other,
+                                   std::size_t bytes) noexcept {
+    const std::size_t moved = std::min(bytes, other.bytes_);
+    if (pool_ == nullptr) {
+        pool_ = other.pool_;
+        status_ = Status::Ok;
+    }
+    other.bytes_ -= moved;
+    bytes_ += moved;
+    return moved;
+}
+
 void Reservation::release() noexcept {
     if (pool_ != nullptr && bytes_ != 0) {
         PoolAccess::sub_reserved(*pool_, bytes_);
     }
     pool_ = nullptr;
     bytes_ = 0;
+}
+
+ReserveWait* ReserveWait::create(Pool& pool, std::size_t bytes, Resume resume,
+                                 void* context) noexcept {
+    void* raw = nullptr;
+    try {
+        raw = allocate(sizeof(ReserveWait), alignof(ReserveWait),
+                       Manager::get().general());
+    } catch (const std::bad_alloc&) {
+        return nullptr;
+    }
+    return new (raw) ReserveWait(pool, bytes, resume, context);
+}
+
+void ReserveWait::retain() noexcept {
+    refs_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void ReserveWait::drop() noexcept {
+    if (refs_.fetch_sub(1, std::memory_order_acq_rel) != 1) return;
+    if (state_.load(std::memory_order_relaxed) == WaitState::Granted &&
+        !taken_) {
+        PoolAccess::sub_reserved(*pool_, bytes_);
+    }
+    this->~ReserveWait();
+    deallocate(this, sizeof(ReserveWait));
+}
+
+Status ReserveWait::push() noexcept {
+    Manager& m = Manager::get();
+    if (PoolAccess::never_fits(m, *pool_, bytes_)) return Status::OverBudget;
+    return ManagerAccess::push_wait(m, *this) ? Status::Ok : Status::Pending;
+}
+
+bool ReserveWait::cancel() noexcept {
+    WaitState expected = WaitState::Waiting;
+    if (!state_.compare_exchange_strong(expected, WaitState::Cancelled,
+                                        std::memory_order_acq_rel)) {
+        return false;
+    }
+    // A cancelled head no longer blocks the waiters behind it.
+    ManagerAccess::wake(Manager::get());
+    return true;
+}
+
+Reservation ReserveWait::take() noexcept {
+    if (taken_ || state() != WaitState::Granted) return Reservation{};
+    taken_ = true;
+    return Reservation{pool_, bytes_, Status::Ok};
+}
+
+// The seq_cst fence pairs with the one in wake(): either the releaser sees
+// this waiter in the count, or the grant pass below sees the released bytes.
+// The pusher names its node by arrival, never by address: once listed, the
+// node can be granted, freed and its block reused by a newer node.
+bool ManagerAccess::push_wait(Manager& m, ReserveWait& w) noexcept {
+    w.refs_.fetch_add(1, std::memory_order_relaxed);
+    std::uint64_t arrival =
+        m.wait_arrivals_.fetch_add(1, std::memory_order_relaxed);
+    w.arrival_ = arrival;
+    m.waiters_.fetch_add(1, std::memory_order_relaxed);
+    ReserveWait* head = m.wait_head_.load(std::memory_order_relaxed);
+    do {
+        w.next_ = head;
+    } while (!m.wait_head_.compare_exchange_weak(
+        head, &w, std::memory_order_release, std::memory_order_relaxed));
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    return grant(m, arrival);
+}
+
+void ManagerAccess::wake(Manager& m) noexcept {
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    if (m.waiters_.load(std::memory_order_relaxed) == 0) return;
+    grant(m, NO_WAITER);
+}
+
+// `again` is raised before `granting` is tried, and the holder re-reads it
+// after it lowers `granting`, so a caller that loses the flag is always
+// served by the holder or wins the flag itself. Every write to `again` is a
+// read-modify-write, so the holder that clears it synchronizes with each
+// caller that raised it.
+bool ManagerAccess::grant(Manager& m, std::uint64_t self) noexcept {
+    bool self_granted = false;
+    m.again_.exchange(true, std::memory_order_seq_cst);
+    while (true) {
+        if (m.granting_.exchange(true, std::memory_order_seq_cst)) {
+            return self_granted;
+        }
+        while (m.again_.exchange(false, std::memory_order_seq_cst)) {
+            grant_pass(m, self, self_granted);
+        }
+        m.granting_.store(false, std::memory_order_seq_cst);
+        if (!m.again_.load(std::memory_order_seq_cst)) return self_granted;
+    }
+}
+
+// Runs only while `granting` is held, which owns wait_held_. The held nodes
+// are sorted by arrival and every newer push has a larger number, so merging
+// the taken list keeps strict first in, first out order.
+void ManagerAccess::grant_pass(Manager& m, std::uint64_t self,
+                               bool& self_granted) noexcept {
+    ReserveWait* taken =
+        m.wait_head_.exchange(nullptr, std::memory_order_acquire);
+    if (taken != nullptr) {
+        m.wait_held_ = merge_arrivals(m.wait_held_, sort_arrivals(taken));
+    }
+    ReserveWait** link = &m.wait_held_;
+    while (ReserveWait* w = *link) {
+        if (w->state_.load(std::memory_order_acquire) == WaitState::Cancelled) {
+            *link = w->next_;
+            m.waiters_.fetch_sub(1, std::memory_order_relaxed);
+            w->drop();
+            continue;
+        }
+        Pool& p = *w->pool_;
+        if (PoolAccess::add_reserved(m, p, w->bytes_,
+                                     PoolAccess::slack_of(m, p))
+                .status != Status::Ok) {
+            break;
+        }
+        *link = w->next_;
+        m.waiters_.fetch_sub(1, std::memory_order_relaxed);
+        WaitState expected = WaitState::Waiting;
+        if (w->state_.compare_exchange_strong(expected, WaitState::Granted,
+                                              std::memory_order_acq_rel)) {
+            mark_dirty(m);
+            if (w->arrival_ == self) {
+                self_granted = true;
+            } else {
+                w->resume_(w->context_);
+            }
+        } else {
+            PoolAccess::uncharge(m, p, w->bytes_);
+        }
+        w->drop();
+    }
+}
+
+ReserveWait* ManagerAccess::merge_arrivals(ReserveWait* a,
+                                           ReserveWait* b) noexcept {
+    ReserveWait* out = nullptr;
+    ReserveWait** tail = &out;
+    while (a != nullptr && b != nullptr) {
+        ReserveWait*& pick = a->arrival_ < b->arrival_ ? a : b;
+        *tail = pick;
+        tail = &pick->next_;
+        pick = pick->next_;
+    }
+    *tail = a != nullptr ? a : b;
+    return out;
+}
+
+ReserveWait* ManagerAccess::sort_arrivals(ReserveWait* list) noexcept {
+    if (list == nullptr || list->next_ == nullptr) return list;
+    ReserveWait* slow = list;
+    for (ReserveWait* fast = list->next_;
+         fast != nullptr && fast->next_ != nullptr; fast = fast->next_->next_) {
+        slow = slow->next_;
+    }
+    ReserveWait* second = slow->next_;
+    slow->next_ = nullptr;
+    return merge_arrivals(sort_arrivals(list), sort_arrivals(second));
 }
 
 PoolHandle::PoolHandle(PoolHandle&& other) noexcept
@@ -948,7 +1230,7 @@ PoolHandle Pool::child(std::string_view name, PoolKind kind, Limits limits) {
     p->name_size_ = static_cast<std::uint8_t>(size);
     p->parent_ = id_;
     p->kind_ = kind;
-    p->limit_ = limits.bytes;
+    p->limit_.store(limits.bytes, std::memory_order_relaxed);
     p->peak_.store(0, std::memory_order_relaxed);
     std::uint32_t generation =
         p->generation_.load(std::memory_order_relaxed) + 1;
@@ -975,10 +1257,36 @@ Reservation Pool::reserve(std::size_t bytes) noexcept {
         }
     }
     if (admit.status != Status::Ok) {
+        // A failed attempt may have charged a level and taken it back while a
+        // grant pass looked, so that pass may have stopped on room that is
+        // free again.
+        ManagerAccess::wake(m);
         return Reservation{nullptr, 0, admit.status};
     }
     ManagerAccess::mark_dirty(m);
     return Reservation{this, bytes, Status::Ok};
+}
+
+Reservation Pool::try_reserve(std::size_t bytes) noexcept {
+    if (bytes == 0) return Reservation{this, 0, Status::Ok};
+    Manager& m = Manager::get();
+    const bool reclaiming = reclaiming_.load(std::memory_order_relaxed) != 0;
+    const Admit admit = PoolAccess::add_reserved(
+        m, *this, bytes, reclaiming ? m.spill_headroom() : 0);
+    if (admit.status != Status::Ok) {
+        ManagerAccess::wake(m);
+        return Reservation{nullptr, 0, admit.status};
+    }
+    ManagerAccess::mark_dirty(m);
+    return Reservation{this, bytes, Status::Ok};
+}
+
+void Pool::raise_limit(std::size_t bytes) noexcept {
+    std::size_t cur = limit_.load(std::memory_order_relaxed);
+    while (cur != 0 && !limit_.compare_exchange_weak(
+                           cur, cur + bytes, std::memory_order_relaxed)) {
+    }
+    if (cur != 0) ManagerAccess::wake(Manager::get());
 }
 
 std::string Pool::path() const {
@@ -1210,7 +1518,8 @@ ExternalSlot attach_external(std::string_view name) {
     std::size_t size = std::min<std::size_t>(name.size(), NAME_MAX_BYTES);
     std::memcpy(e->name, name.data(), size);
     e->name_size = static_cast<std::uint8_t>(size);
-    e->bytes.store(0, std::memory_order_relaxed);
+    e->counted.store(0, std::memory_order_relaxed);
+    e->reported.store(0, std::memory_order_relaxed);
     e->state.store(ENTRY_ATTACHED, std::memory_order_release);
     return ExternalSlot{e, Status::Ok};
 }
@@ -1234,21 +1543,45 @@ ExternalSlot::~ExternalSlot() { detach(); }
 
 void ExternalSlot::set(std::size_t bytes) noexcept {
     if (entry_ == nullptr) return;
-    entry_->bytes.store(bytes, std::memory_order_relaxed);
-    ManagerAccess::mark_dirty(Manager::get());
+    std::size_t old =
+        entry_->counted.exchange(bytes, std::memory_order_relaxed);
+    Manager& m = Manager::get();
+    ManagerAccess::mark_dirty(m);
+    if (bytes < old) ManagerAccess::wake(m);
+}
+
+// Reported bytes never reach the budget, so they neither dirty the pressure
+// flag nor wake a waiter.
+void ExternalSlot::add(std::ptrdiff_t delta, Kind kind) noexcept {
+    if (entry_ == nullptr || delta == 0) return;
+    if (kind == Kind::Reported) {
+        entry_->reported.fetch_add(static_cast<std::size_t>(delta),
+                                   std::memory_order_relaxed);
+        return;
+    }
+    entry_->counted.fetch_add(static_cast<std::size_t>(delta),
+                              std::memory_order_relaxed);
+    Manager& m = Manager::get();
+    ManagerAccess::mark_dirty(m);
+    if (delta < 0) ManagerAccess::wake(m);
 }
 
 std::size_t ExternalSlot::bytes() const noexcept {
-    return entry_ == nullptr ? 0
-                             : entry_->bytes.load(std::memory_order_relaxed);
+    return entry_ == nullptr
+               ? 0
+               : entry_->counted.load(std::memory_order_relaxed) +
+                     entry_->reported.load(std::memory_order_relaxed);
 }
 
 void ExternalSlot::detach() noexcept {
     if (entry_ == nullptr) return;
-    entry_->bytes.store(0, std::memory_order_relaxed);
+    entry_->counted.store(0, std::memory_order_relaxed);
+    entry_->reported.store(0, std::memory_order_relaxed);
     entry_->state.store(ENTRY_FREE, std::memory_order_release);
     entry_ = nullptr;
-    ManagerAccess::mark_dirty(Manager::get());
+    Manager& m = Manager::get();
+    ManagerAccess::mark_dirty(m);
+    ManagerAccess::wake(m);
 }
 
 std::vector<ExternalStats> external_stats() {
@@ -1260,7 +1593,8 @@ std::vector<ExternalStats> external_stats() {
             continue;
         }
         out.push_back({std::string(e.name, e.name_size),
-                       e.bytes.load(std::memory_order_relaxed)});
+                       e.counted.load(std::memory_order_relaxed) +
+                           e.reported.load(std::memory_order_relaxed)});
     }
     return out;
 }

@@ -22,6 +22,8 @@ class SpillDir {
 
     /// The directory, created on first use; empty if it could not be created.
     const std::string& path();
+    /// Charge `bytes` written to a file in the directory to the spill gauge.
+    void charge(std::uint64_t bytes) noexcept;
 
    private:
     std::optional<dftracer::utils::ScopedSpillSubdir> dir_;

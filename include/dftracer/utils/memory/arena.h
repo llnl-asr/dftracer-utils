@@ -118,12 +118,26 @@ class Arena {
     /// heap rounds a chunk of its own above 1 MiB to a power of two.
     std::size_t chunk_bytes() const noexcept { return chunk_bytes_; }
     std::size_t reserved() const noexcept { return reservation_.bytes(); }
+    /// Bytes left in the current chunk before any alignment padding.
+    std::size_t room() const noexcept { return cur_ <= end_ ? end_ - cur_ : 0; }
+    /// The size of the next chunk the arena takes, unless a request too big
+    /// for it gets a chunk of its own. The one after doubles, up to
+    /// ARENA_MAX_CHUNK.
+    std::size_t next_chunk() const noexcept {
+        return grown_ >= CHUNK_DOUBLINGS ? ARENA_MAX_CHUNK
+                                         : ARENA_FIRST_CHUNK << grown_;
+    }
+    /// The bytes a chunk of each size spends on its header.
+    static constexpr std::size_t CHUNK_HEADER = 64;
 
    private:
-    struct alignas(64) Chunk {
+    struct alignas(CHUNK_HEADER) Chunk {
         Chunk* next;
         std::size_t size;
     };
+    static_assert(sizeof(Chunk) == CHUNK_HEADER);
+    static constexpr std::size_t CHUNK_DOUBLINGS = 6;
+    static_assert((ARENA_FIRST_CHUNK << CHUNK_DOUBLINGS) == ARENA_MAX_CHUNK);
 
     struct Destructor {
         void (*destroy)(void*) noexcept;

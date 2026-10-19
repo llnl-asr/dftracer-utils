@@ -21,7 +21,6 @@
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/internal/node_registry.h>  // find_node
-#include <dftracer/utils/dataframe/internal/reclaim_registry.h>
 #include <dftracer/utils/dataframe/internal/rest_column.h>
 #include <dftracer/utils/dataframe/internal/schema_types.h>   // dftu_schema
 #include <dftracer/utils/dataframe/internal/spill.h>  // external-merge spill
@@ -358,12 +357,13 @@ inline std::size_t accumulate_batch(std::uint64_t budget,
 // states in parallel (the mergeable agg IR) that are then merged, so the batch
 // size follows the size of a partial and memory stays near the budget.
 // `accumulate(state, morsel, row_base)` folds one morsel, `make()` makes a
-// fresh state, and `active()` says whether folding is still wanted (a caller
-// that gave up on `state` only wants its batches).
-template <class Make, class Accumulate, class After, class Active>
+// fresh state, `active()` says whether folding is still wanted (a caller
+// that gave up on `state` only wants its batches), and `cut(batch)`, called
+// at each morsel the batch takes, ends the batch early when it returns true.
+template <class Make, class Accumulate, class After, class Active, class Cut>
 inline coro::CoroTask<void> accumulate_batches(
     Cursor& in, std::int64_t max_rows, std::uint64_t budget, AggStatePtr& state,
-    Make make, Accumulate accumulate, After after, Active active) {
+    Make make, Accumulate accumulate, After after, Active active, Cut cut) {
     std::size_t cap = accumulate_batch(budget, 0);
     std::vector<Morsel> batch;
     batch.reserve(MAX_ACCUMULATE_BATCH);
@@ -379,6 +379,7 @@ inline coro::CoroTask<void> accumulate_batches(
                 break;
             }
             batch.push_back(std::move(*m));
+            if (cut(batch)) break;
         }
         if (batch.empty()) break;
         row_base.clear();

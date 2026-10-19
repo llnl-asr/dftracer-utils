@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/exception_helpers.h>
+#include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/coro/completion_state.h>
 #include <dftracer/utils/runtime/coro/coro.h>
 #include <dftracer/utils/runtime/coro/task.h>
@@ -755,6 +756,7 @@ class TimeoutAwaitable {
         timer_id_ = timer_service_->register_timeout(duration_, [this, h]() {
             if (!completed_.load(std::memory_order_acquire)) {
                 timed_out_->store(true, std::memory_order_release);
+                memory::Scope scope{memory::Manager::get().general()};
                 h.resume();
             }
         });

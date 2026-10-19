@@ -4,10 +4,11 @@
 
 set(MEMORY_TEST_SOURCES test_system_backend.cpp test_heap.cpp
                         test_heap_threads.cpp test_heap_trim.cpp
-                        test_memory_pool.cpp test_budget.cpp test_pool.cpp
+                        test_budget.cpp test_pool.cpp
                         test_pool_threads.cpp test_reclaim.cpp
                         test_pressure.cpp test_debug.cpp test_allocator.cpp
-                        test_arena.cpp test_block.cpp test_block_threads.cpp)
+                        test_arena.cpp test_block.cpp test_block_threads.cpp
+                        test_reserve_wait.cpp)
 
 find_package(Threads REQUIRED)
 
@@ -44,7 +45,8 @@ endforeach()
 # The pool tests run once per backend: the loop above runs them on the
 # system backend.
 foreach(bin_exec test_heap test_pool test_pool_threads test_reclaim test_pressure
-                 test_allocator test_arena test_block test_block_threads)
+                 test_allocator test_arena test_block test_block_threads
+                 test_reserve_wait)
   add_test(NAME memory/${bin_exec}_page_heap COMMAND memory_${bin_exec})
   set_tests_properties(
     memory/${bin_exec}_page_heap PROPERTIES ENVIRONMENT

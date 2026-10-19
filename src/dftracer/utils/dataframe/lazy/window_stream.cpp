@@ -1,3 +1,4 @@
+#include <dftracer/utils/dataframe/internal/governor.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dataframe/kernels/running.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
@@ -614,6 +615,8 @@ class WindowStreamCursor : public Cursor {
         }
     }
 
+    std::uint64_t resident_bytes() const override { return gov_.reserved(); }
+
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         while (true) {
             while (!eof_ &&
@@ -644,6 +647,7 @@ class WindowStreamCursor : public Cursor {
                 held_bytes_ += spill::columns_bytes(m->columns);
                 held_rows_ += m->rows;
                 held_.push_back(std::move(*m));
+                govern();
             }
             if (held_rows_ == 0) co_return std::nullopt;
 
@@ -1174,6 +1178,7 @@ class WindowStreamCursor : public Cursor {
                                             .take({m->rows - 1})
                                             .materialize());
                 body_->add(std::move(m->columns), m->rows);
+                govern();
             }
             m = co_await in_->next(max_rows);
         }
@@ -1417,7 +1422,22 @@ class WindowStreamCursor : public Cursor {
                                        .materialize();
             }
             suffix_spool_->add(std::move(cols), m->rows);
+            govern();
         }
+    }
+
+    // The rows held for the chunk cannot leave before the kernel runs; the
+    // spools of a sequential pass can, when the governor asks.
+    void govern() {
+        if (!has_cap(budget_)) return;
+        const std::uint64_t spooled =
+            (body_ ? body_->memory_bytes() : 0) +
+            (suffix_spool_ ? suffix_spool_->memory_bytes() : 0);
+        if (gov_.check(held_bytes_ + spooled, spooled) == 0) return;
+        if (body_) body_->spill();
+        if (suffix_spool_) suffix_spool_->spill();
+        gov_.spilled(held_bytes_ + (body_ ? body_->memory_bytes() : 0) +
+                     (suffix_spool_ ? suffix_spool_->memory_bytes() : 0));
     }
 
     void decode_figures(const Morsel& m) { decode_figures(m, figs_buf_); }
@@ -2430,6 +2450,7 @@ class WindowStreamCursor : public Cursor {
     std::shared_ptr<PartitionStats> stats_;
     std::uint64_t budget_;
     std::uint64_t chunk_bytes_;
+    Governor gov_{"window"};
     std::vector<SpecState> specs_;
     std::vector<Suffix> suffix_;
     bool seq_ = false;

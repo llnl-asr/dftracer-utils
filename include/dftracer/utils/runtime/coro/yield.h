@@ -1,6 +1,8 @@
 #ifndef DFTRACER_UTILS_RUNTIME_CORO_YIELD_H
 #define DFTRACER_UTILS_RUNTIME_CORO_YIELD_H
 
+#include <dftracer/utils/memory/manager.h>
+
 #include <atomic>
 #include <chrono>
 #include <coroutine>
@@ -109,10 +111,13 @@ namespace detail {
 /// timeslice is exceeded, forces a yield before continuing.
 /// When the inner is NOT ready (coroutine will suspend anyway),
 /// passes through with zero overhead -- no clock read.
+/// After a suspension the coroutine enters its pool `pool_` again.
 template <typename Inner>
 struct YieldCheckAwaitable {
     Inner inner_;
+    memory::PoolTag pool_;
     bool yielding_ = false;
+    bool suspended_ = false;
 
     bool await_ready() noexcept(noexcept(inner_.await_ready())) {
         bool inner_ready = inner_.await_ready();
@@ -128,6 +133,7 @@ struct YieldCheckAwaitable {
     // sibling-call optimization (see CoroTask::await_suspend).
     template <typename Handle>
     auto await_suspend(Handle h) noexcept(noexcept(inner_.await_suspend(h))) {
+        suspended_ = true;
         using R = decltype(inner_.await_suspend(h));
         if constexpr (std::is_void_v<R> || std::is_same_v<R, bool>) {
             if (yielding_) {
@@ -151,6 +157,7 @@ struct YieldCheckAwaitable {
 
     auto await_resume() noexcept(noexcept(inner_.await_resume()))
         -> decltype(inner_.await_resume()) {
+        if (suspended_) memory::enter_pool(pool_);
         return inner_.await_resume();
     }
 };

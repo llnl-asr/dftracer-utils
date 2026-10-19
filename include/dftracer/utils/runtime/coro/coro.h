@@ -3,10 +3,13 @@
 
 #include <dftracer/utils/common/object_pool.h>
 #include <dftracer/utils/common/typedefs.h>
+#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/runtime/coro/pool_resume.h>
 
 #include <atomic>
 #include <coroutine>
 #include <exception>
+#include <utility>
 
 namespace dftracer::utils {
 class Executor;
@@ -90,6 +93,10 @@ struct CoroPromise {
 
     TaskIndex task_id{-1};
 
+    /// The pool current when the coroutine was created; it enters it each
+    /// time it resumes.
+    memory::PoolTag pool{memory::current_pool_tag()};
+
     /// True when Coro::release() transferred ownership to the queue.
     /// FinalAwaiter uses this to schedule deferred destruction.
     bool released{false};
@@ -98,7 +105,12 @@ struct CoroPromise {
         return Coro{std::coroutine_handle<CoroPromise>::from_promise(*this)};
     }
 
-    std::suspend_always initial_suspend() noexcept { return {}; }
+    detail::EnterPoolOnStart initial_suspend() noexcept { return {pool}; }
+
+    template <typename U>
+    auto await_transform(U&& awaitable) noexcept {
+        return detail::in_pool(std::forward<U>(awaitable), pool);
+    }
 
     struct FinalAwaiter {
         bool await_ready() noexcept { return false; }

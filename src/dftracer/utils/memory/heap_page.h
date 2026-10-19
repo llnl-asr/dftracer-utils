@@ -13,6 +13,12 @@ inline constexpr std::size_t SMALL_MAX = std::size_t{32} << 10;
 inline constexpr std::size_t SMALL_MAX_ALIGN = 64;
 inline constexpr std::size_t MEDIUM_MAX = std::size_t{1} << 20;
 inline constexpr std::size_t LARGE_MAX = std::size_t{64} << 20;
+/// A freed large run of at least this size is purged at once and cached cold,
+/// as jemalloc purges huge extents eagerly when it runs without background
+/// threads: a doubling container leaves its old runs in classes it never asks
+/// for again, and decay runs only when a heap maps or frees a large run.
+/// 2 and 4 MiB slow the mixed heap_bench case by 4 to 6% (reuse faults again).
+inline constexpr std::size_t LARGE_PURGE_SIZE = std::size_t{8} << 20;
 /// The largest alignment the page heap serves. A block that is aligned more
 /// would sit in a span other than the one that holds its header.
 inline constexpr std::size_t MAX_ALIGN = HEAP_SPAN_SIZE / 2;
@@ -45,6 +51,8 @@ void* page_reallocate(void* p, std::size_t old_size, std::size_t new_size,
 PageStats page_stats() noexcept;
 /// The reserved field of page_stats() alone, without walking the pools.
 std::size_t page_reserved() noexcept;
+/// Backed bytes purged so far because a map would have passed the budget.
+std::size_t page_budget_purged() noexcept;
 /// Push the calling thread's buffered remote frees to their pages.
 void page_flush_remote() noexcept;
 /// Heaps ever created. A heap is never unmapped; an exited thread's heap is

@@ -50,8 +50,7 @@ set(DFTRACER_UTILS_MEMORY_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/heap_page.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/heap_system.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/manager.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/pressure.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/tracked_bytes.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/pressure.cpp)
 
 # -----------------------------------------
 # Dstd library sources
@@ -450,17 +449,9 @@ create_library(
   PKG_CONFIG_LIBS_PRIVATE
   "-lpthread")
 
-option(DFTRACER_UTILS_TRACKED_BYTES
-       "Count MemoryPool and lazy plan bytes in global gauges (measurement)" OFF)
-
 foreach(variant objects shared static)
   dftu_variant_target(VARIANT_TARGET dftracer_utils_memory ${variant})
   if(TARGET ${VARIANT_TARGET})
-    if(DFTRACER_UTILS_TRACKED_BYTES)
-      target_compile_definitions(${VARIANT_TARGET}
-                                 PUBLIC DFTRACER_UTILS_TRACKED_BYTES)
-    endif()
-
     if(variant STREQUAL "objects")
       target_set_warnings(dftracer_utils_memory_objects)
       if(DFTRACER_UTILS_MEMORY_BACKEND STREQUAL "system")
@@ -1885,7 +1876,8 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/counter_contention_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/heap_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/pressure_read_bench.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/slice_bench.cpp)
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/slice_bench.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/spill_harness.cpp)
 
   foreach(bench ${DFTRACER_BENCHMARKS})
     get_filename_component(bench_name ${bench} NAME_WE)
@@ -1924,6 +1916,10 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
 
     add_test(NAME bench_smoke/slice COMMAND slice_bench --smoke)
     set_tests_properties(bench_smoke/slice PROPERTIES LABELS bench_smoke)
+
+    add_test(NAME bench_smoke/spill_harness COMMAND spill_harness --smoke)
+    set_tests_properties(bench_smoke/spill_harness PROPERTIES LABELS
+                                                              bench_smoke)
 
     add_test(NAME bench_smoke/pressure_read COMMAND pressure_read_bench --smoke)
     set_tests_properties(bench_smoke/pressure_read PROPERTIES LABELS

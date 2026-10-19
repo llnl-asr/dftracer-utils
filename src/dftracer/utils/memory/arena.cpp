@@ -55,8 +55,7 @@ void* Arena::allocate_chunk(std::size_t n, std::size_t align) {
         throw std::bad_alloc();
     }
     std::size_t need = sizeof(Chunk) + pad + n;
-    std::size_t next =
-        grown_ >= 6 ? ARENA_MAX_CHUNK : ARENA_FIRST_CHUNK << grown_;
+    std::size_t next = next_chunk();
     if (need > next) {
         Chunk* chunk = new_chunk(need);
         ++grown_;

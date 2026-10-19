@@ -90,7 +90,9 @@ bool pages_intact(const void* p, std::size_t size, unsigned char tag) {
     return c[size - 1] == tag;
 }
 
-constexpr std::size_t LARGE_BLOCK = 8 * MIB;
+// Below LARGE_PURGE_SIZE, so a freed block stays cached until trim or decay.
+constexpr std::size_t LARGE_BLOCK = LARGE_PURGE_SIZE / 2;
+constexpr std::size_t LARGE_COUNT = 64 * MIB / LARGE_BLOCK;
 constexpr std::size_t MEDIUM_BLOCK = MEDIUM_MAX;
 constexpr std::size_t SMALL_BLOCK = 1000;
 
@@ -104,7 +106,7 @@ struct WorkingSet {
 WorkingSet build_set() {
     std::size_t div = SANITIZED ? 4 : 1;
     WorkingSet set;
-    for (std::size_t i = 0; i < 8 / div; ++i) {
+    for (std::size_t i = 0; i < LARGE_COUNT / div; ++i) {
         set.large.push_back(page_allocate(LARGE_BLOCK, 16));
         touch_pages(set.large.back(), LARGE_BLOCK, 0x11);
     }
@@ -155,7 +157,7 @@ TEST_CASE("reserved counts cached memory until it is purged") {
 
 TEST_CASE("cached run scenario" * doctest::skip()) {
     fresh_process::announce();
-    constexpr std::size_t RUN = 32 * MIB;
+    constexpr std::size_t RUN = LARGE_PURGE_SIZE / 2;
     page_deallocate(page_allocate(1, 16), 1);
     page_trim(Mode::All);
     std::size_t base = reserved();

@@ -1,4 +1,5 @@
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/executor/executor.h>
 #include <dftracer/utils/runtime/executor/run_loop.h>
 
@@ -52,7 +53,10 @@ bool RunLoop::run_one() {
         handle = ready_.front();
         ready_.pop_front();
     }
-    if (handle && !handle.done()) handle.resume();
+    if (handle && !handle.done()) {
+        memory::Scope scope{memory::Manager::get().general()};
+        handle.resume();
+    }
     // Released spawned frames (scope.spawn) route their destruction to the
     // thread-local queue via FinalAwaiter; the RunLoop is bound as the
     // current executor, so draining it here funnels them into pending_destroy_.

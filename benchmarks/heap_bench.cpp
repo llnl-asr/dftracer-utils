@@ -20,6 +20,11 @@
 //   mixed                     a fixed-seed trace of small, medium (64 KiB to
 //                             1 MiB) and large (1 to 8 MiB) blocks with random
 //                             lifetimes. One op is one alloc plus one free.
+//   mixed budget              mixed with a 1 TiB budget: every new mapping
+//                             compares the backed bytes with the budget and
+//                             never purges.
+//   mixed tight               mixed with a 64 MiB budget, below its peak: a
+//                             new mapping purges cached runs first.
 //
 // The default run is a driver. For every case it starts this binary again for
 // each allocator in rounds of system, heap, system, heap, system, heap, so
@@ -54,6 +59,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace mem = dftracer::utils::memory;
@@ -263,6 +269,16 @@ double mixed_case(const Scale& scale) {
     return elapsed_ns(start, end) / static_cast<double>(trace.size());
 }
 
+template <class A>
+double mixed_budget_case(const Scale& scale, std::size_t budget) {
+    mem::Config config;
+    config.budget = budget;
+    mem::configure(config);
+    double ns = mixed_case<A>(scale);
+    mem::configure(mem::Config{});
+    return ns;
+}
+
 struct Case {
     std::string name;
     std::function<double(bool heap, const Scale&)> run;
@@ -306,6 +322,14 @@ std::vector<Case> make_cases() {
     cases.push_back({"mixed", both([](auto policy, const Scale& scale) {
                          return mixed_case<decltype(policy)>(scale);
                      })});
+    for (auto [name, budget] : {std::pair<const char*, std::size_t>{
+                                    "mixed budget", 1024 * 1024 * MIB},
+                                {"mixed tight", 64 * MIB}}) {
+        cases.push_back({name, both([budget](auto policy, const Scale& scale) {
+                             return mixed_budget_case<decltype(policy)>(scale,
+                                                                        budget);
+                         })});
+    }
     return cases;
 }
 

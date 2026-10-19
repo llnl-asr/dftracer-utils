@@ -2,11 +2,14 @@
 #define DFTRACER_UTILS_INDEX_BUILD_INDEX_FOLD_DRIVER_H
 
 #include <dftracer/utils/common/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/index_visitor.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
 #include <dftracer/utils/index/extensions/plugin_extension.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/record_parser.h>
+#include <dftracer/utils/memory/allocator.h>
+#include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/coro/async_semaphore.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/parse_inflated.h>
@@ -15,7 +18,9 @@
 #include <simdjson.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <exception>
 #include <memory>
@@ -27,6 +32,99 @@
 #include <vector>
 
 namespace dftracer::utils::index::build {
+
+/// Idle fold event buffers freed so far because a reservation over the budget
+/// asked for bytes. For tests.
+inline std::atomic<std::uint64_t> g_fold_buffers_freed{0};
+
+/// Event buffers parsed chunks decode into. A buffer goes back once the last
+/// step of its chunk lets go, on whichever thread that is, and keeps its
+/// slots' capacity, so a steady-state parse allocates no event vectors. At
+/// most the chunks in flight hold one each.
+///
+/// The idle buffers are what the build can give back: the pool reports them
+/// on a ReclaimSlot of its own "fold buffers" pool, below the pool current at
+/// construction, and frees idle buffers to cover a posted request at the next
+/// take() or give(). A new buffer is made under that pool's scope; what it
+/// grows to while a chunk decodes is charged to the decoding thread's scope,
+/// since the decode also interns strings that outlive the buffers.
+class FoldBufferPool final : public memory::Reclaimer {
+   public:
+    using EventBuffer = trace::views::detail::FoldEventBuffer;
+
+    FoldBufferPool()
+        : pool_(memory::current_pool().child("fold buffers")),
+          free_(memory::PoolAllocator<Idle>(pool_ ? *pool_
+                                                  : memory::current_pool())) {
+        if (pool_) slot_ = pool_->attach(*this);
+    }
+    FoldBufferPool(const FoldBufferPool&) = delete;
+    FoldBufferPool& operator=(const FoldBufferPool&) = delete;
+
+    std::unique_ptr<EventBuffer> take() {
+        std::lock_guard<std::mutex> lock(mu_);
+        answer_request();
+        if (free_.empty()) {
+            if (!pool_) return std::make_unique<EventBuffer>();
+            memory::Scope scope{*pool_};
+            return std::make_unique<EventBuffer>();
+        }
+        Idle idle = std::move(free_.back());
+        free_.pop_back();
+        idle_bytes_ -= idle.bytes;
+        slot_.set_reclaimable(idle_bytes_);
+        return std::move(idle.buffer);
+    }
+
+    void give(std::unique_ptr<EventBuffer> b) {
+        if (!b) return;
+        // The slots this use filled, a lower bound on what the buffer holds:
+        // the slots' own vectors are not counted.
+        const std::uint64_t bytes =
+            b->size() * sizeof(trace::views::detail::FoldEvent);
+        b->clear();
+        std::lock_guard<std::mutex> lock(mu_);
+        free_.push_back(Idle{std::move(b), bytes});
+        idle_bytes_ += bytes;
+        answer_request();
+    }
+
+    std::size_t idle() const {
+        std::lock_guard<std::mutex> lock(mu_);
+        return free_.size();
+    }
+
+    // The slot carries the idle bytes; the pool frees on its own thread.
+    std::size_t reclaimable() const override { return 0; }
+    std::size_t reclaim(std::size_t) override { return 0; }
+
+   private:
+    struct Idle {
+        std::unique_ptr<EventBuffer> buffer;
+        std::uint64_t bytes = 0;
+    };
+
+    // Holds mu_.
+    void answer_request() {
+        std::uint64_t want = slot_.take_request();
+        while (want > 0 && !free_.empty()) {
+            const std::uint64_t bytes = free_.back().bytes;
+            free_.pop_back();
+            idle_bytes_ -= bytes;
+            want -= std::min(want, std::max<std::uint64_t>(bytes, 1));
+            g_fold_buffers_freed.fetch_add(1, std::memory_order_relaxed);
+        }
+        slot_.set_reclaimable(idle_bytes_);
+    }
+
+    // Declared first: the pool closes after the slot detaches and the idle
+    // buffers free.
+    memory::PoolHandle pool_;
+    dstd::PoolVector<Idle> free_;
+    memory::ReclaimSlot slot_;
+    mutable std::mutex mu_;
+    std::uint64_t idle_bytes_ = 0;
+};
 
 /// Drives index folds (BloomFold, DictFold, AggregationFold) from the gzip
 /// index parse: it is an IndexVisitor, so it slots into Indexer::VisitorList;
@@ -178,32 +276,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         std::vector<std::string> extra_fields;
     };
 
-    using EventBuffer = trace::views::detail::FoldEventBuffer;
-
-    // Event buffers parsed chunks decode into. A buffer goes back once the
-    // last step of its chunk lets go, on whichever thread that is, and keeps
-    // its slots' capacity, so a steady-state parse allocates no event vectors.
-    // At most the chunks in flight hold one each.
-    class BufferPool {
-       public:
-        std::unique_ptr<EventBuffer> take() {
-            std::lock_guard<std::mutex> lock(mu_);
-            if (free_.empty()) return std::make_unique<EventBuffer>();
-            auto b = std::move(free_.back());
-            free_.pop_back();
-            return b;
-        }
-        void give(std::unique_ptr<EventBuffer> b) {
-            if (!b) return;
-            b->clear();
-            std::lock_guard<std::mutex> lock(mu_);
-            free_.push_back(std::move(b));
-        }
-
-       private:
-        std::mutex mu_;
-        std::vector<std::unique_ptr<EventBuffer>> free_;
-    };
+    using EventBuffer = FoldBufferPool::EventBuffer;
 
     // One chunk of whole lines, its events and the lines plugin builders read.
     // The events and lines point into `buf`.
@@ -291,7 +364,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     // Returns a piece's permit once its last step lets go of it.
     struct PieceRelease {
         coro::CoroSemaphore* permits;
-        BufferPool* buffers;
+        FoldBufferPool* buffers;
         void operator()(Parsed* p) const {
             buffers->give(std::move(p->batch));
             delete p;
@@ -498,7 +571,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     std::vector<std::optional<coro::SpawnFuture<void>>> tails_;
     std::vector<std::unique_ptr<json::RecordParser>> parsers_;
     std::unique_ptr<json::RecordParser> inline_parser_;
-    BufferPool buffers_;
+    FoldBufferPool buffers_;
     dftracer::utils::StringIntern* intern_;
     std::vector<trace::views::detail::Fold*> folds_;
     index::Decoder decoder_ = index::Decoder::Dftracer;

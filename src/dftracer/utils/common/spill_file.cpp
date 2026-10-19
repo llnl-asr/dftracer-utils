@@ -17,7 +17,7 @@ Result<std::unique_ptr<SpillFile>> SpillFile::create() {
     auto dir = spill_dir();
     if (!dir) return unexpected(dir.error());
     std::string path = (fs::path(*dir) / "dftu_spill_XXXXXX").string();
-    std::unique_ptr<SpillFile> f(new SpillFile());
+    std::unique_ptr<SpillFile> f(new SpillFile(spill_dir_in_memory(*dir)));
     f->fd_ = ScopedFd(::mkostemp(path.data(), O_CLOEXEC));
     if (f->fd_.get() < 0)
         return make_error(
@@ -35,8 +35,10 @@ std::uint64_t SpillFile::reserve(std::size_t bytes, std::size_t align) {
         const std::uint64_t at =
             align > 1 ? (cur + align - 1) / align * align : cur;
         if (end_.compare_exchange_weak(cur, at + bytes,
-                                       std::memory_order_relaxed))
+                                       std::memory_order_relaxed)) {
+            charge_.add(at + bytes - cur);
             return at;
+        }
     }
 }
 

@@ -9,6 +9,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Make each stateful lazy op (sort, top-k, group by, joins, `asof`, `interval`, window, `head_by`, `unique`, `is_duplicated`, pivot and compare agg) hold its state in a pool of its query and spill when the memory manager asks for bytes back.
+  A second query that needs memory over the budget now makes the first one spill instead of going past the budget.
+- Make `unique` and `is_duplicated` use up to half the peak memory, because their keys now sit in a chunked arena that never moves and their hash table grows four times at a time once it is large.
+  On a 1 GiB budget, `unique` peaks at 163 MiB instead of 336 MiB on macOS and at 133 MiB instead of 163 MiB on Linux.
+- Give memory back to the system at once when a run of 8 MiB or more is freed in the page heap, and purge cached pages before the heap maps past the budget.
+- Give each `dftracer_genesis_gen_dist` group a memory pool with the limit of its share, so the memory of each group shows in `memory::pool_stats()`.
+- Let an index build free its idle fold buffers when the memory manager asks for bytes back.
 - Push `unique()` and `drop_duplicates()` into the trace scan, so a distinct row query dedups each worker's rows before they become frame rows.
   The result keeps the first occurrence in unit order, a key column the scan cannot key exactly falls back to the host cursor, and the host `unique` cursor now keys rows by a 64-bit hash with no per-row string allocation.
   On the 17 GB genesis sweep, `filter(gtype == "counter").select("run", "metric").unique()` takes 33.5 s instead of 592 s, uses 74 cores instead of 10 and peaks at 11.0 GB instead of 13.8 GB.
@@ -64,12 +71,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ### Added
 
 - Add the library `dftracer_utils_memory`, the allocator that the other libraries will use, with its own pkg-config and `find_package` names.
-  The `common` and `core` libraries link it, and no code allocates from it yet.
+  The `common` and `core` libraries link it.
   The CMake option `DFTRACER_UTILS_MEMORY_BACKEND` and the environment variable of the same name pick its backend, `page_heap` or `system`; the variable wins, and a value that is not one of the two stops the process at the first allocation.
   The sanitizer presets use `system`.
 - Add the memory manager of `dftracer_utils_memory`, with pools that count the bytes of a query, reclaimers that give bytes back and a measure of the process memory.
   The variables `DFTRACER_UTILS_MEM_BUDGET`, `DFTRACER_UTILS_MEM_HARD_LIMIT`, `DFTRACER_UTILS_MEM_LIMIT_HEADROOM` and `DFTRACER_UTILS_MEM_SPILL_HEADROOM` set its limits and take bytes or a unit such as `4GB`.
-  Nothing allocates through the pools yet, so no run changes.
 - Add the debug mode `DFTRACER_UTILS_MEMORY_DEBUG=1`, which finds a write past the end of a block, a use after free and a double free in the heap, and `DFTRACER_UTILS_MEMORY_EXIT_CHECK=1`, which fails a test run that leaks.
   The page heap also reports to AddressSanitizer and Valgrind, so both tools see its blocks.
 - Add the allocator classes `memory::Allocator`, `memory::PoolAllocator` and `memory::Arena` to `dftracer_utils_memory`.
@@ -81,10 +87,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   Memory that Arrow or a C ABI caller hands in is not charged.
 - `interval` joins run about 40% faster and use less memory when many intervals are open, because they no longer copy each right row on its own.
 - Add the `dstd` containers on that allocator, such as `dstd::Vector`, `dstd::String`, `dstd::HashMap`, `dstd::Map`, `dstd::Deque`, `dstd::UniquePtr` and `dstd::SharedPtr`, and the types `dstd::Function`, `dstd::Any` and `dstd::RawBuffer`.
-  A `dstd::HashMap` keyed by `dstd::String` finds a key from a `std::string_view` without a copy, and no code uses the containers yet.
+  A `dstd::HashMap` keyed by `dstd::String` finds a key from a `std::string_view` without a copy.
 - Add the library `dftracer_utils_dstd`, between `memory` and `common`, with its own pkg-config and `find_package` names.
   It holds the hashing, eviction policy, `expected`, base64 and generic headers that the other libraries share, and it links only `memory`.
-  Include paths change: the generic headers moved from `dftracer/utils/common/` and `dftracer/utils/core/` to `dftracer/utils/dstd/`, `tracked_bytes.h` and `memory_pool.h` moved to `dftracer/utils/memory/`, and `timer_service.h` moved to `dftracer/utils/core/`.
+  Include paths change: the generic headers moved from `dftracer/utils/common/` and `dftracer/utils/core/` to `dftracer/utils/dstd/`, and `timer_service.h` moved to `dftracer/utils/core/`.
+- Add `dstd::PoolVector`, `dstd::PoolHashMap` and `dstd::PoolHashSet`, which charge one pool that you name through `memory::PoolAllocator`.
+- Charge a coroutine's memory to the pool that was current when it was made, on every thread it resumes on.
+  `memory::PoolTag` and `memory::enter_pool` carry the pool, and a task made with no pool charges the root's general pool.
+- Make `memory::Pool::reserve` ask the holders of the pool to give bytes back when a request does not fit, and return `Status::Pending` while they do.
+  `memory::Pool::try_reserve` asks nobody and fails at once, for a holder that spills by itself.
+- Add `reserve_async(pool, bytes, deadline)` in `dftracer/utils/runtime/coro/reserve_async.h`, which a coroutine awaits until its bytes fit or the deadline passes.
+  Waiters get their bytes first in, first out, and a request larger than the pool limit or the budget fails at once with `Status::OverBudget`.
+- Add `memory::Pool::raise_limit` to raise the limit of an open pool.
+- Add `memory::ExternalSlot::add` with the kinds `Counted`, which counts toward the budget, and `Reported`, which only shows in `memory::Stats::external`.
+- Show spilled bytes in `memory::Stats::external` under the slot `spill`.
+  When the spill directory is on tmpfs, the spilled bytes also count toward the budget, and the process warns once with the directory and `DFTRACER_UTILS_SPILL_DIR`.
 - Add the CMake option `DFTRACER_UTILS_SINGLE_LIBRARY`, off by default, to build one library `dftracer_utils` instead of one library for each area.
   The `dftracer_utils::shared` and `dftracer_utils::static` targets, the CLI tools and the Python extension link only that library.
   A build with the option on installs only `dftracer_utils`, with its own pkg-config and `find_package` names, and no per-area packages.
@@ -116,6 +133,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Print a `DataFrame` or a `Series` the way pandas does, with the row index, right-aligned values and a common number of decimals for each float column.
   Past 60 rows it prints the first 5 and the last 5 rows with a `...` row and a `[N rows x M columns]` footer, and it reads only the rows that it shows ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 - Show a `DataFrame` as an HTML table in Jupyter, with the same rows and cells as its printed form ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+
+### Removed
+
+- Remove `tracked_bytes.h`, its gauges and the CMake option `DFTRACER_UTILS_TRACKED_BYTES`.
+  Read the bytes of each pool with `memory::pool_stats()` instead.
+- Remove `MemoryPool` (`memory_pool.h`).
+  Use a `memory::Pool` child with a limit and a `memory::Reservation` instead.
 
 ### Fixed
 

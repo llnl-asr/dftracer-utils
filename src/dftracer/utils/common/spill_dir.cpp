@@ -6,16 +6,20 @@
 #include <dftracer/utils/common/scratch.h>
 #include <dftracer/utils/common/spill_dir.h>
 #include <dftracer/utils/common/spill_dir_internal.h>
+#include <dftracer/utils/memory/manager.h>
 #include <signal.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <charconv>
+#include <map>
 #include <mutex>
 #include <set>
 #include <string>
 #include <system_error>
+#include <unordered_map>
 #include <vector>
 
 namespace dftracer::utils {
@@ -89,8 +93,80 @@ Result<std::string> spill_dir() {
             return true;
         }();
         (void)logged;
+        spill_dir_in_memory(*dir);
     }
     return dir;
+}
+
+bool spill_dir_in_memory(const std::string& dir) {
+    static std::mutex mu;
+    static auto* kinds = new std::map<std::string, bool>();
+    static bool warned = false;
+    std::lock_guard<std::mutex> lock(mu);
+    const auto found = kinds->find(dir);
+    if (found != kinds->end()) return found->second;
+    const bool in_memory = is_memory_filesystem(filesystem_kind(dir));
+    kinds->emplace(dir, in_memory);
+    if (in_memory && !warned) {
+        warned = true;
+        DFTRACER_UTILS_LOG_WARN(
+            "spill directory '%s' is RAM-backed (tmpfs): spilled bytes stay in "
+            "memory and count toward the memory budget; set %s to a directory "
+            "on a disk",
+            dir.c_str(), constants::SPILL_DIR_ENV);
+    }
+    return in_memory;
+}
+
+namespace {
+
+memory::ExternalSlot& spill_slot() {
+    static auto* slot =
+        new memory::ExternalSlot(memory::attach_external("spill"));
+    return *slot;
+}
+
+// The live subdirectories by path, so a writer that has only a file path finds
+// the charge of the directory holding it.
+struct SubdirRegistry {
+    std::mutex mu;
+    std::unordered_map<std::string, std::weak_ptr<SpillCharge>> by_path;
+};
+
+SubdirRegistry& subdirs() {
+    static auto* r = new SubdirRegistry();
+    return *r;
+}
+
+}  // namespace
+
+void SpillCharge::add(std::uint64_t bytes) noexcept {
+    if (bytes == 0) return;
+    bytes_.fetch_add(bytes, std::memory_order_relaxed);
+    spill_slot().add(static_cast<std::ptrdiff_t>(bytes),
+                     in_memory_ ? memory::ExternalSlot::Kind::Counted
+                                : memory::ExternalSlot::Kind::Reported);
+}
+
+void SpillCharge::release(std::uint64_t bytes) noexcept {
+    std::uint64_t cur = bytes_.load(std::memory_order_relaxed);
+    std::uint64_t take = 0;
+    do {
+        take = std::min(cur, bytes);
+    } while (!bytes_.compare_exchange_weak(cur, cur - take,
+                                           std::memory_order_relaxed));
+    if (take == 0) return;
+    spill_slot().add(-static_cast<std::ptrdiff_t>(take),
+                     in_memory_ ? memory::ExternalSlot::Kind::Counted
+                                : memory::ExternalSlot::Kind::Reported);
+}
+
+SpillCharge::~SpillCharge() {
+    const std::uint64_t bytes = bytes_.load(std::memory_order_relaxed);
+    if (bytes == 0) return;
+    spill_slot().add(-static_cast<std::ptrdiff_t>(bytes),
+                     in_memory_ ? memory::ExternalSlot::Kind::Counted
+                                : memory::ExternalSlot::Kind::Reported);
 }
 
 namespace {
@@ -155,26 +231,53 @@ Result<ScopedSpillSubdir> ScopedSpillSubdir::create(std::string_view prefix) {
             str_cat("spill: cannot create '", dir.string(), "' (", ec.message(),
                     "); set ", constants::SPILL_DIR_ENV,
                     " to a writable directory"));
-    return ScopedSpillSubdir(dir.string());
+    auto charge = std::make_shared<SpillCharge>(spill_dir_in_memory(*root));
+    SubdirRegistry& reg = subdirs();
+    {
+        std::lock_guard<std::mutex> lock(reg.mu);
+        reg.by_path[dir.string()] = charge;
+    }
+    return ScopedSpillSubdir(dir.string(), std::move(charge));
+}
+
+std::shared_ptr<SpillCharge> ScopedSpillSubdir::charge_for(
+    const std::string& file) {
+    const std::string parent = fs::path(file).parent_path().string();
+    SubdirRegistry& reg = subdirs();
+    std::lock_guard<std::mutex> lock(reg.mu);
+    const auto found = reg.by_path.find(parent);
+    return found == reg.by_path.end() ? nullptr : found->second.lock();
 }
 
 ScopedSpillSubdir::ScopedSpillSubdir(ScopedSpillSubdir&& other) noexcept
-    : path_(std::exchange(other.path_, std::string())) {}
+    : path_(std::exchange(other.path_, std::string())),
+      charge_(std::move(other.charge_)) {}
 
 ScopedSpillSubdir& ScopedSpillSubdir::operator=(
     ScopedSpillSubdir&& other) noexcept {
     if (this != &other) {
-        std::error_code ec;
-        if (!path_.empty()) fs::remove_all(path_, ec);
+        remove();
         path_ = std::exchange(other.path_, std::string());
+        charge_ = std::move(other.charge_);
     }
     return *this;
 }
 
-ScopedSpillSubdir::~ScopedSpillSubdir() {
+ScopedSpillSubdir::~ScopedSpillSubdir() { remove(); }
+
+// A writer that still holds the charge keeps it until it lets go, so the bytes
+// leave the gauge once the files are gone and no writer adds more.
+void ScopedSpillSubdir::remove() noexcept {
     if (path_.empty()) return;
     std::error_code ec;
     fs::remove_all(path_, ec);
+    SubdirRegistry& reg = subdirs();
+    {
+        std::lock_guard<std::mutex> lock(reg.mu);
+        reg.by_path.erase(path_);
+    }
+    path_.clear();
+    charge_.reset();
 }
 
 }  // namespace dftracer::utils

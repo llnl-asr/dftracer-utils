@@ -20,6 +20,16 @@ using HashMap =
 template <class T, class H = Hash<T>, class Eq = Equal<T>>
 using HashSet = ankerl::unordered_dense::set<T, H, Eq, memory::Allocator<T>>;
 
+/// Charged to the pool their allocator names, on any thread.
+template <class K, class V, class H = Hash<K>, class Eq = Equal<K>>
+using PoolHashMap =
+    ankerl::unordered_dense::map<K, V, H, Eq,
+                                 memory::PoolAllocator<std::pair<K, V>>>;
+
+template <class T, class H = Hash<T>, class Eq = Equal<T>>
+using PoolHashSet =
+    ankerl::unordered_dense::set<T, H, Eq, memory::PoolAllocator<T>>;
+
 }  // namespace dftracer::utils::dstd
 
 #endif  // DFTRACER_UTILS_DSTD_HASH_MAP_H

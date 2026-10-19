@@ -8,6 +8,7 @@
 #include <cstring>
 #include <new>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace dftracer::utils::memory;
@@ -128,6 +129,47 @@ TEST_CASE("external bytes count toward the budget") {
     external.set(0);
     Reservation more = pool->reserve(30 * MIB);
     CHECK(more);
+}
+
+TEST_CASE("reported external bytes show in stats but not in the budget") {
+    Settings settings(64 * MIB);
+    PoolHandle pool = root().child("reported");
+    const std::size_t before = Manager::get().stats().external;
+    ExternalSlot external = attach_external("test");
+    external.add(static_cast<std::ptrdiff_t>(100 * MIB),
+                 ExternalSlot::Kind::Reported);
+    CHECK(external.bytes() == 100 * MIB);
+    CHECK(Manager::get().stats().external == before + 100 * MIB);
+    Reservation fits = pool->reserve(30 * MIB);
+    CHECK(fits);
+    external.add(static_cast<std::ptrdiff_t>(30 * MIB),
+                 ExternalSlot::Kind::Counted);
+    Reservation over = pool->reserve(10 * MIB);
+    CHECK(over.status() == Status::OverBudget);
+    external.add(-static_cast<std::ptrdiff_t>(30 * MIB),
+                 ExternalSlot::Kind::Counted);
+    external.add(-static_cast<std::ptrdiff_t>(100 * MIB),
+                 ExternalSlot::Kind::Reported);
+    CHECK(external.bytes() == 0);
+    CHECK(Manager::get().stats().external == before);
+}
+
+TEST_CASE("concurrent external adds lose no bytes") {
+    ExternalSlot external = attach_external("test");
+    constexpr int THREADS = 8;
+    constexpr int ROUNDS = 10000;
+    std::vector<std::thread> threads;
+    for (int t = 0; t < THREADS; ++t)
+        threads.emplace_back([&external, t] {
+            const auto kind = t % 2 == 0 ? ExternalSlot::Kind::Counted
+                                         : ExternalSlot::Kind::Reported;
+            for (int i = 0; i < ROUNDS; ++i) {
+                external.add(3, kind);
+                external.add(-1, kind);
+            }
+        });
+    for (std::thread& t : threads) t.join();
+    CHECK(external.bytes() == std::size_t{2} * THREADS * ROUNDS);
 }
 
 TEST_CASE("external slots are listed by name and freed on detach") {

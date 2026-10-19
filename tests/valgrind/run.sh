@@ -59,6 +59,39 @@ DEFAULT_PYTEST_FILES=(tests/python)
 log() { printf '\033[1;34m[valgrind]\033[0m %s\n' "$*"; }
 err() { printf '\033[1;31m[valgrind]\033[0m %s\n' "$*" >&2; }
 
+# Print a failed test's logs as soon as it ends, so CI shows why it failed
+# while the shard still runs. On GitHub Actions the logs fold into a group and
+# the test gets an error annotation on the run page.
+show_failure() {
+  # Parallel tests fail at once: hold a lock so their logs do not interleave.
+  if command -v flock >/dev/null 2>&1; then
+    mkdir -p "$LOG_DIR"
+    (
+      flock 9
+      print_failure "$@"
+    ) 9>"$LOG_DIR/.print.lock"
+  else
+    print_failure "$@"
+  fi
+}
+
+print_failure() {
+  local title="$1"
+  shift
+  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+    printf '::error title=Valgrind::%s\n' "$title"
+    printf '::group::%s\n' "$title"
+  fi
+  local f
+  for f in "$@"; do
+    [[ -e "$f" ]] || continue
+    printf '===== %s =====\n' "$(basename "$f")"
+    sed -n '1,200p' "$f" || true
+  done
+  [[ -n "${GITHUB_ACTIONS:-}" ]] && printf '::endgroup::\n'
+  return 0
+}
+
 # Seconds since the epoch, sub-second where available. BSD date has no %N.
 now_s() {
   local t
@@ -434,6 +467,7 @@ run_cpp_one() {
   else
     err "C++  ✗ FAILED (exit $rc): $name"
   fi
+  ((rc == 0)) || show_failure "C++ $name (exit $rc)" "$logf" "$logf".*
 }
 
 run_mpi() {
@@ -531,7 +565,18 @@ run_py_one() {
     err "Python ✗ TIMEOUT/KILLED ${py_timeout}s: $fname"
   else
     err "Python ✗ FAILED (exit $rc): $fname"
-    sed -n '1,30p' "$logf" >&2 || true
+    show_failure "Python $fname (exit $rc)" "$logf"
+  fi
+  # Report this file's Valgrind findings in our code now, not only in the
+  # summary at the end of the shard.
+  if ((rc == 0 || rc == 5)) && compgen -G "$xmldir/p.*.${fname}.xml" >/dev/null; then
+    local found
+    if ! found="$(python3 "$SUPP_DIR/ours_only.py" --match "${VALGRIND_OURS_MATCH:-dftracer}" "$xmldir"/p.*."${fname}".xml 2>&1)"; then
+      err "Python ✗ Valgrind findings in our code: $fname"
+      local tmpf="$LOG_DIR/python-${fname}.findings.txt"
+      printf '%s\n' "$found" >"$tmpf"
+      show_failure "Python $fname: Valgrind findings in our code" "$tmpf"
+    fi
   fi
 }
 

@@ -168,6 +168,7 @@ jobs:
           name: valgrind-cpp-logs-${{ matrix.shard }}
           path: build/valgrind-logs/
           if-no-files-found: ignore
+          retention-days: 1
 
   valgrind-mpi:
     permissions:
@@ -250,6 +251,7 @@ jobs:
           name: valgrind-mpi-logs
           path: build/valgrind-logs/
           if-no-files-found: ignore
+          retention-days: 1
 
   valgrind-python-warm:
     permissions:
@@ -428,3 +430,4 @@ jobs:
           name: valgrind-python-logs-${{ matrix.shard }}
           path: build/valgrind-logs/
           if-no-files-found: ignore
+          retention-days: 1

@@ -115,6 +115,7 @@ jobs:
         with:
           name: package-${{ inputs.name }}
           path: package/*.tar.gz
+          retention-days: 1
 
       - name: sccache stats
         if: always()

@@ -288,6 +288,7 @@ jobs:
         with:
           name: web-dist
           path: web/dist/index.html
+          retention-days: 1
 
 
 
@@ -321,5 +322,5 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     uses: ./.github/workflows/wheel.yml
     with:
-      os: macos-14
+      os: macos-15
     secrets: inherit

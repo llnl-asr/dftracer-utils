@@ -18,6 +18,7 @@ struct PoolAccess;
 struct ManagerAccess;
 struct ReclaimEntry;
 struct ExternalEntry;
+struct AttribCache;
 
 inline constexpr std::size_t RECLAIMER_SLOTS = 4096;
 inline constexpr std::size_t EXTERNAL_SLOTS = 256;
@@ -77,16 +78,109 @@ class Reservation {
      * or Status::OverBudget when it was default constructed.
      */
     Status grow(std::size_t bytes) noexcept;
+    /**
+     * @brief Grow as grow() does, through Pool::try_reserve: a refusal asks
+     * no holder for bytes and trims nothing.
+     */
+    Status try_grow(std::size_t bytes) noexcept;
+    /**
+     * @brief Move up to @p bytes of @p other into this reservation without
+     * touching the pool and return the bytes moved.
+     *
+     * Both must hold bytes of the same pool; an empty reservation takes the
+     * pool of @p other.
+     */
+    std::size_t take_from(Reservation& other, std::size_t bytes) noexcept;
     void release() noexcept;
 
    private:
     friend class Pool;
+    friend class ReserveWait;
     Reservation(Pool* pool, std::size_t bytes, Status status) noexcept
         : pool_(pool), bytes_(bytes), status_(status) {}
 
     Pool* pool_ = nullptr;
     std::size_t bytes_ = 0;
     Status status_ = Status::Ok;
+};
+
+enum class WaitState : std::uint8_t {
+    Waiting,
+    Granted,
+    Cancelled,
+};
+
+/**
+ * @brief A request for bytes in a pool that waits for a release to free room.
+ *
+ * Waiters are granted strictly in push order, and the grant stops at the
+ * first waiter that does not fit. A grant applies the same checks as
+ * Pool::reserve: the pool limit, each ancestor's limit and the budget with
+ * the external bytes. It charges the bytes before the node turns Granted, so
+ * no other reservation can take the room before the waiter resumes.
+ *
+ * The node is reference counted: create() returns one reference, push() adds
+ * one for the list, and each other holder (a timer) calls retain(). The
+ * last drop() frees it and releases granted bytes that nobody took. The pool
+ * must stay open until the waiter is cancelled or its reservation is
+ * released. Every call takes no lock and never waits.
+ */
+class ReserveWait {
+   public:
+    /// Runs at most once, on the thread that granted the waiter. It must only
+    /// enqueue the waiter's work: it runs while that thread grants others.
+    using Resume = void (*)(void* context) noexcept;
+
+    /// Null when the heap has no memory. The node is charged to the general
+    /// pool, so a node that outlives its pool is no leak of that pool.
+    static ReserveWait* create(Pool& pool, std::size_t bytes, Resume resume,
+                               void* context) noexcept;
+
+    ReserveWait(const ReserveWait&) = delete;
+    ReserveWait& operator=(const ReserveWait&) = delete;
+
+    void retain() noexcept;
+    void drop() noexcept;
+
+    /**
+     * @brief List the waiter, then grant waiters on the calling thread.
+     *
+     * Call once. Status::Ok means this call granted the waiter and Resume is
+     * never called. Status::Pending means another thread grants it later and
+     * calls Resume; from the push on, it may do so before push() returns.
+     * Status::OverBudget means the request is larger than the budget or a
+     * limit on the way to the root, so it can never fit; it is not listed.
+     */
+    Status push() noexcept;
+
+    /// Move a waiting node to Cancelled. False when it was granted first.
+    bool cancel() noexcept;
+
+    WaitState state() const noexcept {
+        return state_.load(std::memory_order_acquire);
+    }
+    std::size_t bytes() const noexcept { return bytes_; }
+
+    /// The granted bytes as a Reservation, once. Empty when the node is not
+    /// Granted or the bytes were taken.
+    Reservation take() noexcept;
+
+   private:
+    friend struct ManagerAccess;
+    ReserveWait(Pool& pool, std::size_t bytes, Resume resume,
+                void* context) noexcept
+        : bytes_(bytes), pool_(&pool), resume_(resume), context_(context) {}
+    ~ReserveWait() = default;
+
+    std::uint64_t arrival_ = 0;
+    std::size_t bytes_;
+    Pool* pool_;
+    ReserveWait* next_ = nullptr;
+    Resume resume_;
+    void* context_;
+    std::atomic<std::uint32_t> refs_{1};
+    std::atomic<WaitState> state_{WaitState::Waiting};
+    bool taken_ = false;
 };
 
 /**
@@ -213,8 +307,9 @@ class ReclaimSlot {
  * @brief Bytes the process holds outside this library, such as the RocksDB
  * memtables and caches, released on destruction.
  *
- * They count toward the budget like reservations do. Empty when
- * attach_external failed; set() then does nothing.
+ * Counted bytes count toward the budget like reservations do; reported
+ * bytes, such as spill files on a disk, show in Stats::external only. Empty
+ * when attach_external failed; set() and add() then do nothing.
  */
 class ExternalSlot {
    public:
@@ -228,8 +323,14 @@ class ExternalSlot {
     explicit operator bool() const noexcept { return entry_ != nullptr; }
     Status status() const noexcept { return status_; }
 
-    /// Replace the bytes this slot reports. Thread safe.
+    /// Whether bytes given to add() count toward the budget.
+    enum class Kind : std::uint8_t { Counted, Reported };
+
+    /// Replace the bytes this slot reports, all counted. Thread safe.
     void set(std::size_t bytes) noexcept;
+    /// Add `delta` bytes of `kind`; a negative delta must not exceed what was
+    /// added of that kind. Thread safe, and concurrent calls never lose one.
+    void add(std::ptrdiff_t delta, Kind kind) noexcept;
     std::size_t bytes() const noexcept;
     void detach() noexcept;
 
@@ -297,6 +398,24 @@ class Pool {
     Reservation reserve(std::size_t bytes) noexcept;
 
     /**
+     * @brief Reserve as reserve() does, but on a refusal ask no holder for
+     * bytes and trim nothing.
+     *
+     * For a holder that answers a refusal itself, such as by writing what it
+     * holds to disk: a refusal costs only the failed check.
+     */
+    Reservation try_reserve(std::size_t bytes) noexcept;
+
+    /**
+     * @brief Raise the limit of this pool by @p bytes. A pool with no limit
+     * keeps none.
+     *
+     * Thread safe. A reservation checked against the old limit at the same
+     * time may still be refused.
+     */
+    void raise_limit(std::size_t bytes) noexcept;
+
+    /**
      * @brief Register a holder of this pool that can give bytes back.
      *
      * Reads Reclaimer::reclaimable() once, on the calling thread, as the first
@@ -307,12 +426,18 @@ class Pool {
     ReclaimSlot attach(Reclaimer& reclaimer);
 
     std::uint16_t id() const noexcept { return id_; }
+    /// Changes each time the slot opens a new pool.
+    std::uint32_t generation() const noexcept {
+        return generation_.load(std::memory_order_relaxed);
+    }
     std::uint16_t parent() const noexcept { return parent_; }
     PoolKind kind() const noexcept { return kind_; }
     std::string_view name() const noexcept { return {name_, name_size_}; }
     /// Names from the root joined by '/', for example "root/query/scan".
     std::string path() const;
-    std::size_t limit() const noexcept { return limit_; }
+    std::size_t limit() const noexcept {
+        return limit_.load(std::memory_order_relaxed);
+    }
 
     /// Bytes and blocks held by this pool and every pool below it.
     std::size_t live() const;
@@ -345,7 +470,7 @@ class Pool {
     std::atomic<std::ptrdiff_t> charged_{0};
     std::atomic<std::ptrdiff_t> peak_{0};
     std::atomic<std::ptrdiff_t> exported_{0};
-    std::size_t limit_ = 0;
+    std::atomic<std::size_t> limit_{0};
     std::atomic<std::uint32_t> generation_{0};
     std::atomic<std::uint32_t> state_{0};
     std::atomic<std::uint32_t> children_{0};
@@ -384,13 +509,13 @@ struct Stats {
     /// The root's reservations, counted in quanta.
     std::size_t pool_reserved;
     std::size_t budget;
-    /// Sum of the external slots.
+    /// Sum of the external slots, counted and reported bytes.
     std::size_t external;
     /// Anonymous and shared memory of the process (resident footprint on
     /// macOS), read when stats() runs.
     std::size_t measured;
-    /// measured minus reserved and external, zero when that is negative:
-    /// memory of Python, pandas, pyarrow and the C library.
+    /// measured minus reserved and counted external, zero when that is
+    /// negative: memory of Python, pandas, pyarrow and the C library.
     std::size_t unattributed;
     /// The process limit: the cgroup limit, else the available memory at the
     /// first read.
@@ -418,6 +543,7 @@ class Manager {
 
     /// Id 0. Blocks allocated with no scope go to its child "general", id 1.
     Pool& root() noexcept;
+    Pool& general() noexcept;
 
     /// The sum of reservations the root accepts. Unless set, a third of the
     /// available memory as resolve_spill_budget(0) computes it at first use.
@@ -436,7 +562,8 @@ class Manager {
     /**
      * @brief True when holders should give bytes back.
      *
-     * Either max(heap reserved, root reservations) plus external bytes pass
+     * Either max(heap reserved, root reservations) plus counted external
+     * bytes pass
      * the budget, or the measured memory passes the limit minus the limit
      * headroom. Memory that is neither ours nor external never trips the
      * budget. The budget term follows a reservation or an external change at
@@ -470,6 +597,12 @@ class Manager {
     std::atomic<std::size_t> limit_{0};
     std::atomic<std::size_t> measured_{0};
     std::atomic<std::uint64_t> next_sample_ms_{0};
+    std::atomic<std::uint64_t> wait_arrivals_{0};
+    std::atomic<ReserveWait*> wait_head_{nullptr};
+    ReserveWait* wait_held_ = nullptr;
+    std::atomic<std::uint32_t> waiters_{0};
+    std::atomic<bool> granting_{false};
+    std::atomic<bool> again_{false};
     std::atomic<bool> dirty_{true};
     std::atomic<bool> pressure_{false};
     std::atomic<bool> leaked_{false};
@@ -490,11 +623,36 @@ class Scope {
     ~Scope();
 
    private:
+    AttribCache* cache_;
     std::uint16_t previous_;
 };
 
 /// The pool a Scope set on the calling thread, else the general pool.
 Pool& current_pool();
+
+/**
+ * @brief A pool named by its slot and generation.
+ *
+ * Unlike a Pool reference it may outlive the pool: enter_pool() then picks
+ * the general pool. A value-initialized tag names no pool.
+ */
+struct PoolTag {
+    std::uint32_t generation = 0;
+    std::uint16_t id = 0;
+};
+
+/// The tag of current_pool().
+PoolTag current_pool_tag() noexcept;
+
+/**
+ * @brief Make the tagged pool the calling thread's scope without restoring
+ * it, or the general pool when that pool has closed.
+ *
+ * For a coroutine that enters its own pool each time it resumes; whoever
+ * resumed it restores its own scope with a Scope. Takes no lock and does no
+ * atomic read-modify-write.
+ */
+void enter_pool(PoolTag tag) noexcept;
 
 /// Every open pool, root first.
 std::vector<PoolStats> pool_stats();

@@ -15,11 +15,11 @@
 #include <dftracer/utils/dataframe/internal/expr_handle.h>  // expr_handle_wrap/unwrap
 #include <dftracer/utils/dataframe/internal/fingerprint.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
+#include <dftracer/utils/dataframe/internal/governor.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/dataframe/internal/lazyframe_handle.h>
 #include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/internal/node_registry.h>  // find_node
-#include <dftracer/utils/dataframe/internal/reclaim_registry.h>
 #include <dftracer/utils/dataframe/internal/rest_column.h>
 #include <dftracer/utils/dataframe/internal/schema_types.h>   // dftu_schema
 #include <dftracer/utils/dataframe/internal/spill.h>  // external-merge spill
@@ -32,14 +32,18 @@
 #include <dftracer/utils/dataframe/types.h>     // byte_width, buffer_bytes
 #include <dftracer/utils/dstd/hash/hash.h>
 #include <dftracer/utils/dstd/hash/partition.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>  // compute_memory_budget
+#include <dftracer/utils/memory/allocator.h>
 #include <dftracer/utils/memory/budget.h>
-#include <dftracer/utils/memory/tracked_bytes.h>
 #include <dftracer/utils/runtime/coro/task_abi.h>         // task_to_abi
 #include <dftracer/utils/runtime/coro/when_all.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 
 #include <algorithm>
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -65,15 +69,7 @@ namespace dftracer::utils::dataframe {
 
 using namespace lazy_internal;
 
-Cursor::~Cursor() {
-    if (registry_) registry_->remove(this);
-}
-
-void Cursor::attach(std::shared_ptr<ReclaimRegistry> registry) {
-    if (registry_) registry_->remove(this);
-    registry_ = std::move(registry);
-    if (registry_) registry_->add(this);
-}
+Cursor::~Cursor() = default;
 
 namespace {
 
@@ -1281,10 +1277,23 @@ class TopkCursor : public Cursor {
         for (;;) {
             auto m = co_await in_->next(max_rows);
             if (!m) break;
-            if (!has && outgrows(*m)) {
+            const std::uint64_t held =
+                (has ? spill::columns_bytes(best.columns) : 0) +
+                spill::columns_bytes(m->columns);
+            const bool asked = has_cap(budget_) && gov_.check(held) != 0;
+            if ((!has && outgrows(*m)) || asked) {
+                // The k best so far go first, so the head of the sort is
+                // still the top k of every row.
+                Morsel first = std::move(*m);
+                if (has) {
+                    DataFrame cur = frame_of(std::move(first.columns), sch_);
+                    first = morsel_of(concat({&best, &cur}));
+                    best = DataFrame{};
+                }
+                gov_.spilled(0);
                 sorted_ = std::make_unique<SliceCursor>(
                     make_sort_merge(std::make_unique<ReplayCursor>(
-                                        std::move(*m), std::move(in_)),
+                                        std::move(first), std::move(in_)),
                                     sch_, std::vector<std::string>{name_},
                                     std::vector<bool>{largest_}, budget_),
                     0, k_);
@@ -1311,7 +1320,7 @@ class TopkCursor : public Cursor {
     }
 
     std::uint64_t resident_bytes() const override {
-        return sorted_ ? sorted_->resident_bytes() : 0;
+        return sorted_ ? sorted_->resident_bytes() : gov_.reserved();
     }
     coro::CoroTask<std::uint64_t> reclaim(std::uint64_t want) override {
         co_return sorted_ ? co_await sorted_->reclaim(want) : 0;
@@ -1336,6 +1345,7 @@ class TopkCursor : public Cursor {
     std::int64_t k_;
     bool largest_;
     std::uint64_t budget_;
+    Governor gov_{"topk"};
     std::unique_ptr<Cursor> sorted_;
     bool done_ = false;
 };
@@ -1643,6 +1653,7 @@ class NodeCursor final : public Cursor {
         bridge.release();
         out_self_ = out_self;
         out_vt_ = out_vt;
+        gov_.emplace(out_vt_);
     }
 
     ~NodeCursor() override {
@@ -1678,6 +1689,7 @@ class NodeCursor final : public Cursor {
         Morsel m;
         m.rows = df.num_rows();
         m.columns = std::move(df.columns);
+        gov_->at_morsel(out_vt_, out_self_);
         co_return m;
     }
 
@@ -1706,6 +1718,7 @@ class NodeCursor final : public Cursor {
     Schema declared_;
     void* out_self_ = nullptr;
     const ::dftu_cursor_vt* out_vt_ = nullptr;
+    std::optional<PluginGovernor> gov_;
 };
 
 class RowKeyCursor : public Cursor {
@@ -1820,6 +1833,8 @@ class IsDupCursor : public Cursor {
           budget_(budget),
           unique_(unique) {}
 
+    std::uint64_t resident_bytes() const override { return gov_.reserved(); }
+
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         if (!counted_) co_await count(max_rows);
         if (external_) co_return co_await external_->next(max_rows);
@@ -1867,6 +1882,11 @@ class IsDupCursor : public Cursor {
                 keys[static_cast<std::size_t>(i)] = row_key(m.columns, i);
             return Series::strings(keys);
         };
+        // The state's size at the last batch and the bytes of the batch read
+        // so far: what the governor sees at each morsel.
+        std::uint64_t state_bytes = 0;
+        std::uint64_t batch_bytes = 0;
+        bool asked = false;
         co_await accumulate_batches(
             *first_, max_rows, budget_, state, [&] { return agg_new(specs); },
             [&](AggState& st, const Morsel& m, std::int64_t) {
@@ -1874,13 +1894,32 @@ class IsDupCursor : public Cursor {
             },
             [&](std::vector<Morsel>& batch, AggStatePtr& st) {
                 for (auto& m : batch) spool_.add(std::move(m.columns), m.rows);
-                if (!spilled_ && budget_ > 0 &&
-                    agg_approx_bytes(*st) > budget_ / share::SPILL_STATE) {
+                if (budget_ == 0) return;
+                std::uint64_t agg = st ? agg_approx_bytes(*st) : 0;
+                asked = asked || (has_cap(budget_) &&
+                                  gov_.check(agg + spool_.memory_bytes()) != 0);
+                if (!spilled_ &&
+                    (agg > budget_ / share::SPILL_STATE || asked)) {
                     spilled_ = true;
                     st.reset();
+                    agg = 0;
                 }
+                if (asked) {
+                    spool_.spill();
+                    gov_.spilled(agg + spool_.memory_bytes());
+                    asked = false;
+                }
+                state_bytes = agg;
             },
-            [&] { return !spilled_; });
+            [&] { return !spilled_; },
+            [&](const std::vector<Morsel>& batch) {
+                if (!has_cap(budget_)) return false;
+                if (batch.size() == 1) batch_bytes = 0;
+                batch_bytes += spill::columns_bytes(batch.back().columns);
+                asked = gov_.check(state_bytes + spool_.memory_bytes() +
+                                   batch_bytes) != 0;
+                return asked;
+            });
         first_.reset();
         if (spilled_) {
             auto keyed = std::make_unique<RowKeyCursor>(spool_.reader());
@@ -1907,6 +1946,19 @@ class IsDupCursor : public Cursor {
         const Series& kc = r.columns[0];
         const Series& cc = r.columns[1];
         const std::int64_t d = r.num_rows();
+        // The map is reserved before it grows. Pass 2 needs every count and
+        // reads the spool, so nothing here can spill and none is offered.
+        if (has_cap(budget_))
+            gov_.check(spool_.memory_bytes() +
+                           static_cast<std::uint64_t>(d) * COUNT_ENTRY_BYTES,
+                       0);
+        // The aggregate's tables live on the C library, and glibc keeps the
+        // pages their rehashes freed. The map comes from the cursor's pool and
+        // cannot reuse them, so give them back first: at 2 million keys they
+        // are about 32 MiB, the size of the map's bucket array.
+#if defined(__GLIBC__)
+        ::malloc_trim(0);
+#endif
         counts_.reserve(static_cast<std::size_t>(d));
         for (std::int64_t i = 0; i < d; ++i)
             counts_.emplace(std::string(kc.string_at(i)),
@@ -1915,13 +1967,28 @@ class IsDupCursor : public Cursor {
         counted_ = true;
     }
 
+    // The counts never leave the cursor, so they live in its Scratch pool. A
+    // key past the short-string size keeps its bytes on the C library.
+    using Counts = dstd::PoolHashMap<std::string, std::int64_t,
+                                     ankerl::unordered_dense::hash<std::string>,
+                                     std::equal_to<std::string>>;
+    // An entry and its bucket.
+    static constexpr std::uint64_t COUNT_ENTRY_BYTES =
+        sizeof(Counts::value_type) + sizeof(Counts::bucket_type);
+
+    memory::Pool& counts_pool() const {
+        return gov_.pool() ? *gov_.pool() : memory::current_pool();
+    }
+
+    // Declared first: its pool closes after the counts free.
+    Governor gov_{"is_duplicated"};
     std::unique_ptr<Cursor> first_, pass2_, external_;
     spill::Spool spool_;
     std::uint64_t budget_;
     bool unique_;
     bool spilled_ = false;
     bool counted_ = false;
-    ankerl::unordered_dense::map<std::string, std::int64_t> counts_;
+    Counts counts_{Counts::allocator_type(counts_pool())};
 };
 
 // Two-pass one-hot encode. Pass 1 collects the distinct non-null values of
@@ -2169,6 +2236,10 @@ class JoinCursor : public Cursor {
                       can_carry_rest(other_)),
           suffix_extras_(suffix_extras) {}
 
+    std::uint64_t resident_bytes() const override {
+        return governor_.reserved();
+    }
+
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         if (!join_ && !grace_ && !cross_) co_await build(max_rows);
         if (grace_) co_return co_await next_spilled(max_rows);
@@ -2278,12 +2349,14 @@ class JoinCursor : public Cursor {
             }
             bytes += spill::columns_bytes(flat_columns(*df));
             parts.push_back(std::move(*df));
-            if (!spill || bytes <= budget_) continue;
+            if (!spill || (bytes <= budget_ && governor_.check(bytes) == 0))
+                continue;
             grace_ = std::make_unique<GraceJoin>(
                 sch_, parts.front().names, left_on_, right_on_, how_, suffix_,
                 budget_, nulls_equal_);
             for (const DataFrame& p : parts) grace_->add_right(p);
             parts.clear();
+            governor_.spilled(0);
         }
         if (grace_) co_return;
         if (parts.empty()) parts.push_back(empty_right());
@@ -2540,6 +2613,8 @@ class JoinCursor : public Cursor {
     std::unique_ptr<GraceJoin> grace_;
     std::uint64_t budget_;
     ExpansionGovernor gov_;
+    // The right side's place in the memory governor.
+    Governor governor_{"join"};
     MorselFeed feed_;
     ResultChunks flush_;
     // A cross join whose right side is spooled.
@@ -5139,50 +5214,15 @@ namespace {
 // The pull chain a streaming terminal drives: the source cursor with every
 // op the source did not apply stacked on it, plus the schema at its output.
 struct CursorChain {
-    // Declared first so it outlives the cursor built over it.
+    // The query run's Results pool, when the chain is a run; the stateful
+    // cursors' Scratch pools sit below it. Declared first so it closes after
+    // every cursor.
+    memory::PoolHandle pool;
+    // Declared before the cursor so it outlives the cursor built over it.
     std::shared_ptr<const Source> source;
     std::unique_ptr<Cursor> cursor;
     std::vector<std::string> schema;
-    std::uint64_t budget = 0;
-    // Every stage the lowering built and still alive, whoever owns it now.
-    std::shared_ptr<ReclaimRegistry> registry;
 };
-
-// The chain's resident bytes against its budget: when over, the largest
-// holders are asked to reclaim, in turn, until it fits or nothing more
-// comes back. A stage that cannot measure itself reports 0 and is never
-// asked. Advisory throughout: a stage may free less than asked, and a
-// chain that stays over after every stage has been asked is logged once
-// rather than stopped, since the result is not in question.
-coro::CoroTask<void> reclaim_chain(CursorChain& chain, bool& reported) {
-    if (chain.budget == 0 || !chain.registry) co_return;
-    const std::vector<Cursor*> stages = chain.registry->snapshot();
-    std::uint64_t total = 0;
-    std::vector<std::pair<std::uint64_t, Cursor*>> holders;
-    for (Cursor* c : stages) {
-        const std::uint64_t b = c->resident_bytes();
-        total += b;
-        if (b) holders.emplace_back(b, c);
-    }
-    tracked_bytes::set_lazy(total);
-    if (total <= chain.budget) co_return;
-    std::sort(holders.begin(), holders.end(),
-              [](const auto& a, const auto& b) { return a.first > b.first; });
-    for (const auto& [bytes, c] : holders) {
-        const std::uint64_t want = total - chain.budget;
-        const std::uint64_t freed = co_await c->reclaim(want);
-        total -= std::min(freed, total);
-        if (total <= chain.budget) co_return;
-    }
-    if (!reported) {
-        reported = true;
-        DFTRACER_UTILS_LOG_WARN(
-            "lazy plan holds %llu bytes past its %llu byte budget and no "
-            "stage could reclaim the rest",
-            static_cast<unsigned long long>(total),
-            static_cast<unsigned long long>(chain.budget));
-    }
-}
 
 // Lower `ops` onto `source`: push a leading projection and the contiguous run
 // of filters after it into the scan, then stack every op the source did not
@@ -5270,11 +5310,6 @@ CursorChain lower_cursor_chain(
     chain.source = std::move(source_ptr);
     chain.cursor = std::move(r.cursor);
     chain.schema = projection.empty() ? names : projection;
-    chain.budget = budget;
-    // Bottom up, each stage enrolled before the next one wraps it, so a
-    // stage a plugin node later takes ownership of is already on the list.
-    chain.registry = std::make_shared<ReclaimRegistry>();
-    chain.cursor->attach(chain.registry);
     if (!chain.schema.empty() &&
         std::find(drop.begin(), drop.end(), false) != drop.end()) {
         const Schema declared = source.schema();
@@ -5288,7 +5323,6 @@ CursorChain lower_cursor_chain(
         const bool rest = projection.empty() && source.undeclared_columns();
         chain.cursor = std::make_unique<AlignCursor>(std::move(chain.cursor),
                                                      std::move(fields), rest);
-        chain.cursor->attach(chain.registry);
         if (rest) chain.schema.emplace_back(REST_COLUMN);
     }
     for (std::size_t i = 0; i < ops.size(); ++i) {
@@ -5300,7 +5334,6 @@ CursorChain lower_cursor_chain(
                 fields.push_back(Field{name, scalar(TypeId::Unknown), true});
             chain.cursor = std::make_unique<AlignCursor>(
                 std::move(chain.cursor), std::move(fields), true);
-            chain.cursor->attach(chain.registry);
             chain.schema.emplace_back(REST_COLUMN);
         }
         const bool rest = has_rest(chain.schema);
@@ -5317,7 +5350,6 @@ CursorChain lower_cursor_chain(
             std::iota(idx.begin(), idx.end(), 0);
             chain.cursor = std::make_unique<SelectCursor>(
                 std::move(chain.cursor), std::move(idx));
-            chain.cursor->attach(chain.registry);
             chain.schema.pop_back();
         }
         chain.cursor = make_cursor(*ops[i], std::move(chain.cursor),
@@ -5325,9 +5357,6 @@ CursorChain lower_cursor_chain(
         chain.schema = has_rest(chain.schema)
                            ? rest_out_schema(*ops[i], chain.schema)
                            : out_schema(*ops[i], std::move(chain.schema));
-        // A names-only op (rename) hands the same, already enrolled, cursor
-        // back; attach re-enrols it once.
-        chain.cursor->attach(chain.registry);
     }
     return chain;
 }
@@ -5338,13 +5367,11 @@ CursorChain lower_cursor_chain(
 // early-out (~StreamViewCursor stops and wakes the producer).
 coro::AsyncGenerator<DataFrame> drive_cursor_chain(CursorChain chain,
                                                    std::int64_t rows) {
-    bool reported = false;
     for (;;) {
         auto m = co_await chain.cursor->next(rows);
         if (!m) break;
         DataFrame out = frame_from_morsel(std::move(*m), chain.schema,
                                           chain.cursor->out_names());
-        co_await reclaim_chain(chain, reported);
         co_yield std::move(out);
     }
 }
@@ -5361,12 +5388,22 @@ coro::AsyncGenerator<DataFrame> stream_plan(PlanParts plan,
     const std::int64_t eff_rows =
         morsel_rows > 0 ? morsel_rows : DEFAULT_MORSEL_ROWS;
 
+    // The run's pool is the scope while the chain is built and of every
+    // coroutine the driver makes, so the cursors' Scratch pools sit below it
+    // and the output blocks are charged to it. It has no limit: the plan's
+    // budget stays with the fraction triggers, and the governor answers to
+    // the process budget.
+    memory::PoolHandle pool =
+        memory::Manager::get().root().child("query", memory::PoolKind::Results);
+    memory::Scope scope{pool ? *pool : memory::current_pool()};
+    CursorChain chain =
+        lower_cursor_chain(std::move(plan.source), plan.ops, budget);
+    chain.pool = std::move(pool);
     // Returned, not re-yielded through: an extra coroutine layer around a
     // parallel drain has miscompiled frames before (project_coro_threadlocal_
     // parser_pitfall), and it would delay the chain's destruction past the
     // consumer's last pull, which is the scan early-out.
-    return drive_cursor_chain(
-        lower_cursor_chain(std::move(plan.source), plan.ops, budget), eff_rows);
+    return drive_cursor_chain(std::move(chain), eff_rows);
 }
 
 }  // namespace

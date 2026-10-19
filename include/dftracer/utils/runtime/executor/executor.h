@@ -37,6 +37,12 @@ class Executor {
     /// executor with a shared queue keeps serving it and loses no capacity.
     virtual void drive_until(const std::function<bool()>& done) = 0;
 
+    /// False when the executor runs only work that is ready on the driving
+    /// thread, so a coroutine woken from another thread (a timer, a release)
+    /// is never run while it waits. Awaitables that wait for such a wake-up
+    /// do not wait there.
+    virtual bool runs_remote_wakeups() const noexcept { return true; }
+
     /// Without a backend the io layer falls back to blocking syscalls.
     virtual bool has_io_backend() const noexcept = 0;
     virtual io::IoBackend& io_backend() = 0;

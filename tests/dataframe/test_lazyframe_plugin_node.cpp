@@ -1251,20 +1251,20 @@ TEST_SUITE("lazyframe plugin node") {
         const std::vector<bool> want{false, false, true, false, true, false};
         CHECK(log.masks[0] == want);
 
-        // The node's declared size ran past the budget, so the driver asked
-        // it for the excess and it shrank to fit.
+        // The node's declared size cannot be reserved under the budget, so
+        // its governor asked it for all of it at the next morsel.
         REQUIRE(!flog.reclaims.empty());
-        CHECK(flog.reclaims[0] == (std::uint64_t{1} << 40) - 64 * 1024 * 1024);
-        CHECK(flog.bytes == 64 * 1024 * 1024);
+        CHECK(flog.reclaims[0] == std::uint64_t{1} << 40);
+        CHECK(flog.bytes == 0);
 
         CHECK(dftu_node_unregister("test.forward") == 0);
     }
 
     TEST_CASE(
         "a provider under a plugin node is still measured and reclaimed") {
-        // The node owns its input cursor once open() succeeds, so the driver
-        // cannot reach the provider through the node; the registry every
-        // stage joined when the chain was built reaches it regardless.
+        // The node owns its input cursor once open() succeeds; the provider
+        // has its own place in the governor, so it is measured and asked
+        // wherever it ends up.
         constexpr std::uint64_t BUDGET = 64 * 1024 * 1024;
         ForwardLog flog;  // the node itself holds nothing
         dftu_node_vt vt = make_forward_vt();
@@ -1285,8 +1285,8 @@ TEST_SUITE("lazyframe plugin node") {
 
         CHECK(flog.reclaims.empty());
         REQUIRE(!log.reclaims.empty());
-        CHECK(log.reclaims[0] == (std::uint64_t{1} << 40) - BUDGET);
-        CHECK(log.bytes == BUDGET);
+        CHECK(log.reclaims[0] == std::uint64_t{1} << 40);
+        CHECK(log.bytes == 0);
 
         CHECK(dftu_node_unregister("test.forward.under") == 0);
     }

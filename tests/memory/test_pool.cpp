@@ -349,6 +349,59 @@ TEST_CASE("a pool limit refuses a reservation and leaves the totals alone") {
     CHECK(exact);
 }
 
+TEST_CASE("a raised limit admits what the old one refused") {
+    PoolHandle p = Manager::get().root().child("raise", PoolKind::Scratch,
+                                               Limits{2 * MIB});
+    Reservation a = p->reserve(2 * MIB);
+    REQUIRE(a);
+    CHECK(a.try_grow(MIB) == Status::OverBudget);
+    p->raise_limit(MIB);
+    CHECK(p->limit() == 3 * MIB);
+    CHECK(a.try_grow(MIB) == Status::Ok);
+    CHECK(a.bytes() == 3 * MIB);
+    CHECK(a.try_grow(1) == Status::OverBudget);
+
+    PoolHandle open = Manager::get().root().child("no limit");
+    open->raise_limit(MIB);
+    CHECK(open->limit() == 0);
+}
+
+TEST_CASE("try_reserve refuses without asking holders for bytes") {
+    struct Holder : Reclaimer {
+        std::size_t reclaimable() const override { return 64 * MIB; }
+        std::size_t reclaim(std::size_t) override { return 0; }
+    } holder;
+    BudgetGuard budget(64 * MIB);
+    PoolHandle holds = Manager::get().root().child("holds");
+    ReclaimSlot slot = holds->attach(holder);
+    Reservation held = holds->reserve(32 * MIB);
+    REQUIRE(held);
+    PoolHandle other = Manager::get().root().child("other");
+
+    Reservation quiet = other->try_reserve(48 * MIB);
+    CHECK_FALSE(quiet);
+    CHECK(quiet.status() == Status::OverBudget);
+    CHECK(slot.take_request() == 0);
+
+    Reservation loud = other->reserve(48 * MIB);
+    CHECK(loud.status() == Status::Pending);
+    CHECK(slot.take_request() > 0);
+}
+
+TEST_CASE("take_from moves bytes between reservations of one pool") {
+    PoolHandle p = Manager::get().root().child("take");
+    Reservation a = p->reserve(3 * MIB);
+    Reservation b;
+    CHECK(b.take_from(a, 2 * MIB) == 2 * MIB);
+    CHECK(a.bytes() == MIB);
+    CHECK(b.bytes() == 2 * MIB);
+    CHECK(b.take_from(a, 5 * MIB) == MIB);
+    CHECK(a.bytes() == 0);
+    CHECK(p->reserved() == 3 * MIB);
+    b.release();
+    CHECK(p->reserved() == 0);
+}
+
 TEST_CASE("a limit on an ancestor refuses a reservation below it") {
     BudgetGuard budget{std::size_t{1} << 30};
     PoolHandle parent =

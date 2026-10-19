@@ -46,6 +46,10 @@ const std::string& SpillDir::path() {
     return dir_->path();
 }
 
+void SpillDir::charge(std::uint64_t bytes) noexcept {
+    if (dir_) dir_->charge().add(bytes);
+}
+
 const std::string& StateAccum::dir_path() {
     if (!dir_) dir_ = std::make_shared<SpillDir>();
     return dir_->path();
@@ -113,6 +117,7 @@ void StateAccum::maybe_spill() {
                  static_cast<std::streamsize>(out.len));
         os.close();
         if (os) {
+            dir_->charge(out.len);
             runs_.push_back(path);
             written = true;
         }

@@ -11,6 +11,8 @@
 // The core algorithm (atomic state with intrusive waiter stack,
 // LIFO-to-FIFO reversal on unlock) follows cppcoro's design.
 
+#include <dftracer/utils/memory/manager.h>
+
 #include <atomic>
 #include <cassert>
 #include <coroutine>
@@ -179,6 +181,7 @@ inline void AsyncMutex::unlock() {
     assert(head != nullptr);
 
     waiters_ = head->next_;
+    memory::Scope scope{memory::Manager::get().general()};
     head->awaiter_.resume();
 }
 

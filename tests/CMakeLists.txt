@@ -162,6 +162,8 @@ set(TEST_CPP_SOURCES
     runtime/test_runtime.cpp
     runtime/test_runtime_abi.cpp
     runtime/test_task_abi.cpp
+    runtime/test_task_pool.cpp
+    runtime/test_reserve_async.cpp
     common/test_logging.cpp
     common/test_string_intern.cpp
     dstd/test_hash_partition.cpp

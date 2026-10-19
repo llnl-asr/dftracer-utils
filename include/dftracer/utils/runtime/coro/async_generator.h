@@ -2,6 +2,8 @@
 #define DFTRACER_UTILS_RUNTIME_CORO_ASYNC_GENERATOR_H
 
 #include <dftracer/utils/common/exception_helpers.h>
+#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/runtime/coro/pool_resume.h>
 
 #include <atomic>
 #include <coroutine>
@@ -170,6 +172,9 @@ class AsyncGenerator {
         std::coroutine_handle<> continuation_{};
         /// The CoroTask handoff, once per next(): see CoroTask::await_suspend.
         std::atomic<bool> handoff_{false};
+        /// The pool current when the generator was created; it enters it
+        /// each time it resumes.
+        memory::PoolTag pool_{memory::current_pool_tag()};
 
         T* value_ptr() noexcept {
             return std::launder(reinterpret_cast<T*>(value_storage_));
@@ -187,16 +192,21 @@ class AsyncGenerator {
                 std::coroutine_handle<promise_type>::from_promise(*this)};
         }
 
-        std::suspend_always initial_suspend() noexcept { return {}; }
+        detail::EnterPoolOnStart initial_suspend() noexcept { return {pool_}; }
 
         auto yield_value(T value) noexcept {
             clear_value();
             ::new (static_cast<void*>(value_storage_)) T(std::move(value));
             has_value_ = true;
-            return ToConsumer{};
+            return ToConsumer{pool_};
         }
 
-        auto final_suspend() noexcept { return ToConsumer{}; }
+        auto final_suspend() noexcept { return ToConsumer{pool_}; }
+
+        template <typename U>
+        auto await_transform(U&& awaitable) noexcept {
+            return detail::in_pool(std::forward<U>(awaitable), pool_);
+        }
 
         void return_void() noexcept {}
 
@@ -204,6 +214,8 @@ class AsyncGenerator {
 
         // The consumer may destroy the frame once the exchange is done.
         struct ToConsumer {
+            memory::PoolTag pool;
+
             bool await_ready() noexcept { return false; }
             void await_suspend(std::coroutine_handle<promise_type> h) noexcept {
                 auto& p = h.promise();
@@ -212,7 +224,7 @@ class AsyncGenerator {
                     p.handoff_.exchange(true, std::memory_order_acq_rel))
                     next.resume();
             }
-            void await_resume() noexcept {}
+            void await_resume() noexcept { memory::enter_pool(pool); }
         };
     };
 

@@ -7,7 +7,7 @@
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/base64.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
-#include <dftracer/utils/memory/memory_pool.h>
+#include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/coro/async_semaphore.h>
 #include <dftracer/utils/runtime/coro/when_all.h>
 #include <dftracer/utils/runtime/coro/yield.h>
@@ -190,21 +190,30 @@ unexpected<GroupError> fail_from(const DFTUtilsError& e) {
 
 // A group's memory is its share of the budget in four equal parts: the calls
 // kept in memory between reading and sorting, the sort buffer, the state
-// (counter series, path records), and the open readers (a semaphore).
+// (counter series, path records), and the open readers (a semaphore). The
+// calls and the state are pools below the group's own pool, each limited to
+// its part; the group pool has no limit, since its children reach it in
+// quanta of 1 MiB and a share of a few MiB would refuse them.
 struct GroupMem {
-    explicit GroupMem(std::uint64_t share_bytes)
+    GroupMem(std::uint64_t share_bytes, std::string_view name)
         : share(share_bytes),
-          calls(share_bytes / 4),
-          state(share_bytes / 4),
+          pool(memory::current_pool().child(name)),
+          calls(part(pool, "calls", share_bytes / 4)),
+          state(part(pool, "state", share_bytes / 4)),
           sort_budget(share_bytes / 4) {}
 
+    // Every pool opened; false when the pool table is full.
+    bool open() const { return pool && calls && state; }
+
     std::uint64_t share;
-    MemoryPool calls;
-    MemoryPool state;
+    // Declared first, so it closes after its children.
+    memory::PoolHandle pool;
+    memory::PoolHandle calls;
+    memory::PoolHandle state;
     std::uint64_t sort_budget;
     const BorrowFn* borrow = nullptr;
 
-    // Raises the state pool by memory the caller lends, at least
+    // Raises the state limit by memory the caller lends, at least
     // BORROW_STEP at a time so the lender is asked rarely; false when it
     // lends nothing.
     bool borrow_state(std::uint64_t need) {
@@ -213,7 +222,7 @@ struct GroupMem {
         std::uint64_t got = (*borrow)(ask);
         if (got == 0 && ask > need) got = (*borrow)(need);
         if (got == 0) return false;
-        state.add_capacity(got);
+        state->raise_limit(got);
         return true;
     }
 
@@ -242,6 +251,14 @@ struct GroupMem {
     }
 
    private:
+    // A limit of zero means none, so a zero part still gets one byte.
+    static memory::PoolHandle part(const memory::PoolHandle& group,
+                                   std::string_view name, std::uint64_t bytes) {
+        if (!group) return {};
+        return group->child(name, memory::PoolKind::Scratch,
+                            memory::Limits{std::max<std::uint64_t>(bytes, 1)});
+    }
+
     std::mutex mu_;
     std::unique_ptr<SpillFile> file_;
 };
@@ -250,7 +267,8 @@ struct GroupMem {
 // every item.
 class Charge {
    public:
-    explicit Charge(GroupMem& mem) noexcept : mem_(&mem), res_(mem.state) {}
+    explicit Charge(GroupMem& mem) noexcept
+        : mem_(&mem), res_(mem.state->try_reserve(0)) {}
 
     // The budget error naming `what` when the state pool cannot take `n` more
     // bytes.
@@ -258,11 +276,12 @@ class Charge {
         used_ += n;
         if (used_ <= res_.bytes()) return {};
         const std::uint64_t need = used_ - res_.bytes();
-        if (res_.try_grow(std::max(need, CHARGE_STEP)) || res_.try_grow(need))
+        if (res_.try_grow(std::max(need, CHARGE_STEP)) == memory::Status::Ok ||
+            res_.try_grow(need) == memory::Status::Ok)
             return {};
         // Another task may take the borrowed bytes first; then ask again.
         for (int tries = 0; tries < 4 && mem_->borrow_state(need); ++tries)
-            if (res_.try_grow(need)) return {};
+            if (res_.try_grow(need) == memory::Status::Ok) return {};
         return mem_->over_budget(what);
     }
 
@@ -276,7 +295,7 @@ class Charge {
 
    private:
     GroupMem* mem_;
-    Reservation res_;
+    memory::Reservation res_;
     std::uint64_t used_ = 0;
 };
 
@@ -496,7 +515,7 @@ class GroupReader {
    public:
     struct Chunk {
         std::vector<Call> mem;
-        Reservation res;
+        memory::Reservation res;
         std::uint64_t offset = 0;
         std::uint64_t count = 0;
         bool spilled = false;
@@ -701,8 +720,8 @@ class GroupReader {
         Chunk c;
         c.count = cur_.size();
         const std::uint64_t bytes = c.count * sizeof(Call);
-        c.res = Reservation(mem_->calls);
-        if (c.res.try_grow(bytes)) {
+        c.res = mem_->calls->try_reserve(bytes);
+        if (c.res) {
             c.mem = std::move(cur_);
             if (last) c.mem.shrink_to_fit();
             cur_ = {};
@@ -1348,9 +1367,18 @@ using CallSorter = ExternalSorter<SortRec, SortLess>;
 
 // What a group keeps while its runs are written: the memory share, the strings
 // and processes the records name, and the sets' records.
+// "genesis/" and the end of the group's directory, which tells groups apart
+// within the 47 bytes a pool name keeps.
+std::string group_pool_name(const RunGroup& g) {
+    constexpr std::size_t KEEP = 39;
+    const std::string_view dir = g.dir;
+    return str_cat("genesis/",
+                   dir.size() > KEEP ? dir.substr(dir.size() - KEEP) : dir);
+}
+
 struct GroupState {
     GroupState(RunGroup group, std::uint64_t share)
-        : g(std::move(group)), mem(share), r(mem) {}
+        : g(std::move(group)), mem(share, group_pool_name(g)), r(mem) {}
 
     RunGroup g;
     GroupMem mem;
@@ -1455,7 +1483,7 @@ GResult<void> replay_chunks(std::vector<FilePart>& parts,
             progress->updated();
         }
         chunk.mem = {};
-        chunk.res.reset();
+        chunk.res.release();
     }
     return {};
 }
@@ -1576,6 +1604,10 @@ coro::CoroTask<GroupResult> process_group(CoroScope& ctx, RunGroup group,
             result.skips.push_back(
                 {g.dir, file, s.keys.papi_set + ": " + reason});
     };
+    if (!mem.open()) {
+        skip_all("", "no memory pool is free for the group");
+        co_return result;
+    }
 
     const std::uint64_t total_slots =
         std::max<std::uint64_t>(1, (memory_share / 4) / READER_BYTES);
@@ -1640,8 +1672,8 @@ coro::CoroTask<GroupResult> process_group(CoroScope& ctx, RunGroup group,
     }
     // The walk reads no files and keeps no calls of its own: the readers'
     // quarter and the calls pool, empty once replayed, go to its state.
-    mem.state.add_capacity(memory_share / 4 +
-                           (mem.calls.capacity() - mem.calls.used()));
+    mem.state->raise_limit(memory_share / 4 +
+                           (mem.calls->limit() - mem.calls->reserved()));
     if (progress) progress->enter(GroupProgress::Phase::Walk);
     std::vector<coro::SpawnFuture<Result<void>>> walks;
     walks.reserve(ways);

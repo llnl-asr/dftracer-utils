@@ -88,6 +88,24 @@ TEST_CASE("chunks grow from 64 KiB to 4 MiB and then stay at 4 MiB") {
     CHECK(sizes == expected);
 }
 
+TEST_CASE("room and next_chunk tell what the next allocation takes") {
+    Arena arena{root(), "room"};
+    CHECK(arena.room() == 0);
+    CHECK(arena.next_chunk() == ARENA_FIRST_CHUNK);
+    arena.allocate(100, 1);
+    CHECK(arena.room() == ARENA_FIRST_CHUNK - Arena::CHUNK_HEADER - 100);
+    CHECK(arena.next_chunk() == 2 * ARENA_FIRST_CHUNK);
+    arena.allocate(arena.room(), 1);
+    CHECK(arena.room() == 0);
+    CHECK(arena.chunk_bytes() == ARENA_FIRST_CHUNK);
+    arena.allocate(1, 1);
+    CHECK(arena.chunk_bytes() == 3 * ARENA_FIRST_CHUNK);
+    while (arena.next_chunk() < ARENA_MAX_CHUNK)
+        arena.allocate(arena.room() + 1, 1);
+    arena.allocate(arena.room() + 1, 1);
+    CHECK(arena.next_chunk() == ARENA_MAX_CHUNK);
+}
+
 TEST_CASE("a request bigger than the next chunk gets a chunk of its own") {
     Arena arena{root(), "oversized"};
     void* small = arena.allocate(100);

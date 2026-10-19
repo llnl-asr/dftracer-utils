@@ -22,6 +22,11 @@ bool exit_check_env() noexcept;
 std::size_t hard_cap() noexcept;
 void set_hard_cap(std::size_t bytes) noexcept;
 
+/// The budget the page heap keeps its backed bytes under when it maps; zero
+/// until the manager has resolved its budget. One relaxed load.
+std::size_t map_budget() noexcept;
+void set_map_budget(std::size_t bytes) noexcept;
+
 }  // namespace dftracer::utils::memory
 
 #endif  // DFTRACER_UTILS_MEMORY_SETTINGS_H

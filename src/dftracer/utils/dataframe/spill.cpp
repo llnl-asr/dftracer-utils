@@ -629,6 +629,13 @@ Dir::~Dir() = default;
 
 int Dir::next_run() { return runs_.fetch_add(1); }
 
+void Dir::remove_run(const std::string& path) const noexcept {
+    std::error_code ec;
+    const std::uintmax_t size = fs::file_size(path, ec);
+    std::error_code rm;
+    if (fs::remove(path, rm) && !ec) dir_.charge().release(size);
+}
+
 std::string Dir::run_path(int id) const {
     return (fs::path(dir_.path()) / ("run_" + std::to_string(id) + ".bin"))
         .string();
@@ -687,7 +694,8 @@ struct Reader::Codec {};
 #endif
 
 Writer::Writer(const std::string& path)
-    : os_(path, std::ios::binary | std::ios::trunc) {
+    : os_(path, std::ios::binary | std::ios::trunc),
+      charge_(ScopedSpillSubdir::charge_for(path)) {
     if (!os_) throw std::runtime_error("spill: cannot open run file " + path);
     if (spill_compression_on(path)) codec_ = std::make_unique<Codec>();
 }
@@ -723,8 +731,10 @@ void Writer::write(const std::vector<Series>& cols, std::int64_t rows) {
     os_.write(payload, static_cast<std::streamsize>(stored));
     if (!os_)
         throw std::runtime_error("spill: cannot write a run file (disk full?)");
-    written_ +=
+    const std::uint64_t n =
         sizeof(stored) + sizeof(raw) + static_cast<std::uint64_t>(stored);
+    written_ += n;
+    if (charge_) charge_->add(n);
 }
 
 void Writer::close() {
@@ -842,10 +852,7 @@ Spool::Spool(std::uint64_t budget, std::shared_ptr<Dir> dir)
 
 Spool::~Spool() {
     writer_.reset();
-    if (!run_.empty()) {
-        std::error_code ec;
-        fs::remove(run_, ec);
-    }
+    if (!run_.empty()) dir_->remove_run(run_);
 }
 
 void Spool::add(std::vector<Series> columns, std::int64_t rows) {
@@ -859,17 +866,32 @@ void Spool::add(std::vector<Series> columns, std::int64_t rows) {
         m.rows = rows;
         m.columns = std::move(columns);
         mem_.push_back(std::move(m));
-        if (bytes_ > budget_) {  // overflow: subsequent morsels go to disk
-            if (!dir_) dir_ = std::make_shared<Dir>();
-            run_ = dir_->run_path(dir_->next_run());
-            writer_ = std::make_unique<Writer>(run_);
-            spilling_ = true;
-        }
+        if (bytes_ > budget_) open_run();  // later morsels go to disk
         return;
     }
     total_bytes_ += columns_bytes(columns);
     offsets_.push_back(writer_->bytes());
     writer_->write(columns, rows);
+}
+
+void Spool::open_run() {
+    if (!dir_) dir_ = std::make_shared<Dir>();
+    run_ = dir_->run_path(dir_->next_run());
+    writer_ = std::make_unique<Writer>(run_);
+    spilling_ = true;
+}
+
+std::uint64_t Spool::spill() {
+    if (read_ || spilling_) return 0;
+    open_run();
+    for (const Morsel& m : mem_) {
+        offsets_.push_back(writer_->bytes());
+        writer_->write(m.columns, m.rows);
+    }
+    mem_.clear();
+    const std::uint64_t freed = bytes_;
+    bytes_ = 0;
+    return freed;
 }
 
 std::unique_ptr<Cursor> Spool::reader() {
@@ -895,6 +917,8 @@ void write_agg_run(AggState& state, const std::string& path) {
     agg_sort_groups(state);
     std::ofstream os(path, std::ios::binary);
     if (!os) throw std::runtime_error("agg spill: cannot open run " + path);
+    const std::shared_ptr<SpillCharge> charge =
+        ScopedSpillSubdir::charge_for(path);
     const std::int64_t ng = agg_num_groups(state);
     for (std::int64_t g = 0; g < ng; ++g) {
         const std::string blob =
@@ -906,6 +930,7 @@ void write_agg_run(AggState& state, const std::string& path) {
         os.write(blob.data(), static_cast<std::streamsize>(blob.size()));
         if (!os)
             throw std::runtime_error("agg spill: cannot write run " + path);
+        if (charge) charge->add(sizeof(len) + blob.size());
     }
     os.close();
     if (!os) throw std::runtime_error("agg spill: cannot write run " + path);

@@ -1,23 +1,21 @@
-// Benchmark: how much of a workload's memory the process-wide gauges explain.
+// Benchmark: how much of a workload's memory the memory pools explain.
 // Each workload runs in its own child process (fork) so the peak of one does
-// not hide the next. A bench thread samples the memory probe and the gauges of
-// tracked_bytes.h every millisecond; the parent prints per workload the peak
-// and end RSS, the peak anon bytes, the peak `operator new` live bytes, the
-// peak tracked bytes and unattributed = peak anon - peak tracked. Anything no
-// gauge counts (HashArena, the fold BufferPool, RocksDB) is unattributed.
+// not hide the next. A bench thread samples the memory probe and
+// memory::pool_stats() every millisecond; the parent prints per workload the
+// peak and end RSS, the peak anon bytes, the peak `operator new` live bytes,
+// the peak live and reserved bytes of the root pool and of the workload's own
+// pools ("query" for a lazy plan, "genesis/..." for genesis, "fold buffers"
+// for the index build), and unattributed = peak anon - peak root live. Memory
+// that no pool holds (RocksDB, the C library) is unattributed.
 //
 //   memory_attribution_bench           (larger sizes)
 //   memory_attribution_bench --smoke   (small sizes plus the checks, for ctest)
 //
-// The checks: pool_used moved during genesis, tracked is at most live, and
-// live is at most anon + 16 MiB. The last one fails only under --smoke; a full
-// run prints it as "over" and does not count it. lazy_resident is printed, not
-// checked: built-in lazy cursors report 0 resident bytes today.
-
-#ifndef DFTRACER_UTILS_TRACKED_BYTES
-#error \
-    "memory_attribution_bench needs a build with DFTRACER_UTILS_TRACKED_BYTES=ON"
-#endif
+// The checks: a genesis pool showed live or reserved bytes during genesis,
+// root live is at most anon + 16 MiB, and `operator new` live is at most
+// anon + 16 MiB. The two live checks fail only under --smoke, since bytes that
+// are allocated but never touched are live without being resident; a full run
+// prints them as "over" and does not count them.
 
 #define DFTU_MEMORY_PROBE_DEFINE_NEW
 #include <dftracer/utils/common/constants.h>
@@ -25,7 +23,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/memory/tracked_bytes.h>
+#include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -86,29 +84,66 @@ enum class Workload : std::uint8_t {
     SPILL_CYCLE,
 };
 
+// The pools a workload's own bytes sit in.
+enum class PoolGroup : std::uint8_t { None, Query, Genesis, FoldBuffers };
+
 struct WorkloadInfo {
     Workload id;
     const char* name;
+    PoolGroup group;
 };
 
 constexpr WorkloadInfo WORKLOADS[] = {
-    {Workload::GROUP_BY, "group_by"},
-    {Workload::SORT, "sort"},
-    {Workload::JOIN, "join"},
-    {Workload::INDEX_BUILD, "index_build"},
-    {Workload::JSON_READ, "json_read"},
-    {Workload::GENESIS, "genesis"},
-    {Workload::SPILL_CYCLE, "spill_cycle"},
+    {Workload::GROUP_BY, "group_by", PoolGroup::Query},
+    {Workload::SORT, "sort", PoolGroup::Query},
+    {Workload::JOIN, "join", PoolGroup::Query},
+    {Workload::INDEX_BUILD, "index_build", PoolGroup::FoldBuffers},
+    {Workload::JSON_READ, "json_read", PoolGroup::None},
+    {Workload::GENESIS, "genesis", PoolGroup::Genesis},
+    {Workload::SPILL_CYCLE, "spill_cycle", PoolGroup::Query},
 };
+
+const char* group_name(PoolGroup g) {
+    switch (g) {
+        case PoolGroup::None:
+            return "-";
+        case PoolGroup::Query:
+            return "query";
+        case PoolGroup::Genesis:
+            return "genesis/";
+        case PoolGroup::FoldBuffers:
+            return "fold buffers";
+    }
+    return "-";
+}
+
+bool ends_with(std::string_view s, std::string_view tail) {
+    return s.size() >= tail.size() && s.substr(s.size() - tail.size()) == tail;
+}
+
+bool in_group(const memory::PoolStats& p, PoolGroup g) {
+    switch (g) {
+        case PoolGroup::None:
+            return false;
+        case PoolGroup::Query:
+            return ends_with(p.path, "/query");
+        case PoolGroup::Genesis:
+            return p.path.find("/genesis/") != std::string::npos;
+        case PoolGroup::FoldBuffers:
+            return ends_with(p.path, "/fold buffers");
+    }
+    return false;
+}
 
 struct Peaks {
     std::uint64_t peak_rss = 0;
     std::uint64_t end_rss = 0;
     std::uint64_t peak_anon = 0;
     std::int64_t peak_live = 0;
-    std::uint64_t peak_tracked = 0;
-    std::uint64_t peak_lazy = 0;
-    std::uint64_t peak_pool = 0;
+    std::uint64_t peak_root_live = 0;
+    std::uint64_t peak_root_reserved = 0;
+    std::uint64_t peak_group_live = 0;
+    std::uint64_t peak_group_reserved = 0;
     std::uint64_t malloc_in_use = 0;
     std::uint64_t malloc_heap = 0;
     std::uint64_t end_anon = 0;
@@ -122,7 +157,8 @@ struct Paths {
 
 class Sampler {
    public:
-    Sampler() : thread_([this] { loop(); }) {}
+    explicit Sampler(PoolGroup group)
+        : group_(group), thread_([this] { loop(); }) {}
     ~Sampler() { stop(); }
 
     Peaks stop() {
@@ -151,17 +187,44 @@ class Sampler {
     void sample() {
         const mp::Reading r = mp::read();
         const std::int64_t live = mp::live_bytes();
-        const std::uint64_t lazy =
-            tracked_bytes::lazy_resident().load(std::memory_order_relaxed);
-        const std::uint64_t pool =
-            tracked_bytes::pool_used().load(std::memory_order_relaxed);
+        const std::vector<memory::PoolStats> pools = memory::pool_stats();
+        std::uint64_t group_live = 0;
+        std::uint64_t group_reserved = 0;
+        for (const memory::PoolStats& p : pools) {
+            if (p.path == "root") {
+                result_.peak_root_live =
+                    std::max<std::uint64_t>(result_.peak_root_live, p.live);
+                result_.peak_root_reserved = std::max<std::uint64_t>(
+                    result_.peak_root_reserved, p.reserved);
+            }
+            // live and reserved cover a pool's subtree, so only the topmost
+            // pool of the group counts.
+            if (!in_group(p, group_) || parent_in_group(pools, p)) continue;
+            group_live += p.live;
+            group_reserved += p.reserved;
+        }
         result_.peak_anon = std::max(result_.peak_anon, r.anon);
         result_.peak_live = std::max(result_.peak_live, live);
-        result_.peak_lazy = std::max(result_.peak_lazy, lazy);
-        result_.peak_pool = std::max(result_.peak_pool, pool);
-        result_.peak_tracked = std::max(result_.peak_tracked, lazy + pool);
+        result_.peak_group_live = std::max(result_.peak_group_live, group_live);
+        result_.peak_group_reserved =
+            std::max(result_.peak_group_reserved, group_reserved);
     }
 
+    bool parent_in_group(const std::vector<memory::PoolStats>& pools,
+                         const memory::PoolStats& p) const {
+        std::uint16_t id = p.parent;
+        for (std::size_t depth = 0; depth < pools.size(); ++depth) {
+            const memory::PoolStats* up = nullptr;
+            for (const memory::PoolStats& q : pools)
+                if (q.id == id) up = &q;
+            if (up == nullptr || up->path == "root") return false;
+            if (in_group(*up, group_)) return true;
+            id = up->parent;
+        }
+        return false;
+    }
+
+    PoolGroup group_;
     std::atomic<bool> run_{true};
     bool stopped_ = false;
     Peaks result_;
@@ -304,11 +367,11 @@ void read_malloc(Peaks& r) {
 }
 #endif
 
-int child_main(int fd, Workload w, const Sizes& s, const Paths& p) {
+int child_main(int fd, const WorkloadInfo& w, const Sizes& s, const Paths& p) {
     Peaks r;
     {
-        Sampler sampler;
-        run_workload(w, s, p);
+        Sampler sampler(w.group);
+        run_workload(w.id, s, p);
         r = sampler.stop();
     }
 #if defined(__GLIBC__)
@@ -318,7 +381,8 @@ int child_main(int fd, Workload w, const Sizes& s, const Paths& p) {
     return n == static_cast<ssize_t>(sizeof r) ? 0 : 1;
 }
 
-bool run_child(Workload w, const Sizes& s, const Paths& p, Peaks& out) {
+bool run_child(const WorkloadInfo& w, const Sizes& s, const Paths& p,
+               Peaks& out) {
     int fds[2];
     if (::pipe(fds) != 0) return false;
     std::fflush(nullptr);
@@ -362,27 +426,31 @@ int main(int argc, char** argv) {
     const Paths paths = prepare(dir, sizes);
 
     int failures = 0;
-    std::printf("%-12s %9s %9s %9s %9s %9s %9s %12s\n", "workload", "peak_rss",
-                "end_rss", "peak_anon", "peak_new", "tracked", "lazy/pool",
+    std::printf("%-12s %9s %9s %9s %9s %9s %9s %-13s %9s %9s %12s\n",
+                "workload", "peak_rss", "end_rss", "peak_anon", "peak_new",
+                "root_live", "root_res", "pools", "live", "reserved",
                 "unattributed");
     for (const WorkloadInfo& info : WORKLOADS) {
 #if !defined(__GLIBC__)
         if (info.id == Workload::SPILL_CYCLE) continue;
 #endif
         Peaks r;
-        if (!run_child(info.id, sizes, paths, r)) {
+        if (!run_child(info, sizes, paths, r)) {
             std::printf("%-12s child failed  FAIL\n", info.name);
             ++failures;
             continue;
         }
         const std::int64_t unattributed =
             static_cast<std::int64_t>(r.peak_anon) -
-            static_cast<std::int64_t>(r.peak_tracked);
-        std::printf("%-12s %9.1f %9.1f %9.1f %9.1f %9.1f %4.0f/%-4.0f %12.1f\n",
-                    info.name, mib(r.peak_rss), mib(r.end_rss),
-                    mib(r.peak_anon), static_cast<double>(r.peak_live) / MIB,
-                    mib(r.peak_tracked), mib(r.peak_lazy), mib(r.peak_pool),
-                    static_cast<double>(unattributed) / MIB);
+            static_cast<std::int64_t>(r.peak_root_live);
+        std::printf(
+            "%-12s %9.1f %9.1f %9.1f %9.1f %9.1f %9.1f %-13s %9.1f %9.1f "
+            "%12.1f\n",
+            info.name, mib(r.peak_rss), mib(r.end_rss), mib(r.peak_anon),
+            static_cast<double>(r.peak_live) / MIB, mib(r.peak_root_live),
+            mib(r.peak_root_reserved), group_name(info.group),
+            mib(r.peak_group_live), mib(r.peak_group_reserved),
+            static_cast<double>(unattributed) / MIB);
         if (info.id == Workload::INDEX_BUILD)
             std::printf(
                 "%-12s rocksdb block cache %.1f MiB (fixed, in no gauge)\n",
@@ -395,15 +463,18 @@ int main(int argc, char** argv) {
                 info.name, mib(r.malloc_in_use), mib(r.malloc_heap),
                 mib(r.end_rss), mib(r.end_anon));
 #endif
-        if (info.id == Workload::GENESIS && r.peak_pool == 0) {
-            std::printf("%-12s pool_used did not move  FAIL\n", info.name);
+        if (info.id == Workload::GENESIS && r.peak_group_live == 0 &&
+            r.peak_group_reserved == 0) {
+            std::printf("%-12s no genesis pool held bytes  FAIL\n", info.name);
             ++failures;
         }
-        if (static_cast<std::int64_t>(r.peak_tracked) > r.peak_live) {
-            std::printf("%-12s tracked %.1f MiB above live %.1f MiB  FAIL\n",
-                        info.name, mib(r.peak_tracked),
-                        static_cast<double>(r.peak_live) / MIB);
-            ++failures;
+        if (static_cast<std::int64_t>(r.peak_root_live) >
+            static_cast<std::int64_t>(r.peak_anon) + LIVE_OVER_ANON_SLACK) {
+            std::printf(
+                "%-12s root live %.1f MiB above anon %.1f MiB + 16  %s\n",
+                info.name, mib(r.peak_root_live), mib(r.peak_anon),
+                smoke ? "FAIL" : "over");
+            if (smoke) ++failures;
         }
         if (r.peak_live >
             static_cast<std::int64_t>(r.peak_anon) + LIVE_OVER_ANON_SLACK) {
@@ -413,6 +484,6 @@ int main(int argc, char** argv) {
             if (smoke) ++failures;
         }
     }
-    std::printf("sizes in MiB; unattributed = peak anon - peak tracked\n");
+    std::printf("sizes in MiB; unattributed = peak anon - peak root live\n");
     return failures == 0 ? 0 : 1;
 }

@@ -6,7 +6,9 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/object_pool.h>
 #include <dftracer/utils/common/typedefs.h>
+#include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/coro/monitor.h>
+#include <dftracer/utils/runtime/coro/pool_resume.h>
 #include <dftracer/utils/runtime/coro/yield.h>
 
 #include <atomic>
@@ -42,6 +44,9 @@ struct PromiseBase {
     Executor* executor_{nullptr};
     std::atomic<bool>* cancellation_token_{nullptr};
     PromiseBase* root_promise_{nullptr};
+    /// The pool current when the coroutine was created; it enters it each
+    /// time it resumes.
+    memory::PoolTag pool_{memory::current_pool_tag()};
 #if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
     void* trace_handle_{nullptr};  ///< logging::coro_trace enter/leave handle
     const char* trace_file_{nullptr};  ///< coroutine definition site
@@ -139,7 +144,9 @@ class CoroTask {
                 std::coroutine_handle<promise_type>::from_promise(*this)};
         }
 
-        std::suspend_always initial_suspend() noexcept { return {}; }
+        detail::EnterPoolOnStart initial_suspend() noexcept {
+            return {this->pool_};
+        }
 
         struct FinalAwaiter {
             bool await_ready() noexcept { return false; }
@@ -160,10 +167,10 @@ class CoroTask {
 
         void unhandled_exception() { exception_ = std::current_exception(); }
 
-        /// Pass YieldAwaitable through unmodified so it is not
-        /// double-wrapped by YieldCheckAwaitable.
-        coro::YieldAwaitable await_transform(coro::YieldAwaitable y) noexcept {
-            return y;
+        /// Not double-wrapped by YieldCheckAwaitable: YieldAwaitable makes
+        /// its own timeslice check.
+        auto await_transform(coro::YieldAwaitable y) noexcept {
+            return detail::InPool<coro::YieldAwaitable>{y, this->pool_};
         }
 
         /// Wrap every other awaitable in a timeslice check.
@@ -173,13 +180,14 @@ class CoroTask {
         template <typename U>
         auto await_transform(U&& awaitable) noexcept {
             if constexpr (std::is_lvalue_reference_v<U>) {
-                return coro::detail::YieldCheckAwaitable<U>{awaitable};
+                return coro::detail::YieldCheckAwaitable<U>{awaitable,
+                                                            this->pool_};
             } else if constexpr (std::is_move_constructible_v<U>) {
                 return coro::detail::YieldCheckAwaitable<U>{
-                    std::move(awaitable)};
+                    std::move(awaitable), this->pool_};
             } else {
                 return coro::detail::YieldCheckAwaitable<U&&>{
-                    static_cast<U&&>(awaitable)};
+                    static_cast<U&&>(awaitable), this->pool_};
             }
         }
     };
@@ -311,6 +319,7 @@ class CoroTask {
      */
     void resume() {
         if (coro_handle_ && !coro_handle_.done()) {
+            memory::Scope scope{memory::Manager::get().general()};
             coro_handle_.resume();
         }
     }

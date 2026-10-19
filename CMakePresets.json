@@ -58,7 +58,6 @@
       "inherits": "release",
       "cacheVariables": {
         "DFTRACER_UTILS_BUILD_BENCHMARKS": "ON",
-        "DFTRACER_UTILS_TRACKED_BYTES": "ON",
         "DFTRACER_UTILS_TESTS": "ON",
         "DFTRACER_UTILS_BUILD_PYTHON": "ON",
         "DFTRACER_UTILS_BUILD_STATIC": "OFF"
@@ -200,6 +199,7 @@
         "duql_eval_bench",
         "group_transform_bench",
         "slice_bench",
+        "spill_harness",
         "dftracer_utils_ext"
       ],
       "jobs": 0

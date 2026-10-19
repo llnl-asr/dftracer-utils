@@ -182,6 +182,7 @@ Cache g_caches[CACHE_COUNT];
 std::atomic<std::uint64_t> g_cache_live{0};
 static_assert(CACHE_COUNT <= 64);
 std::atomic<std::ptrdiff_t> g_cache_reserved{0};
+std::atomic<std::size_t> g_budget_purged{0};
 pthread_key_t g_key;
 pthread_once_t g_once = PTHREAD_ONCE_INIT;
 
@@ -391,7 +392,10 @@ void push_free_heap(Heap* h) noexcept {
         std::memory_order_relaxed));
 }
 
+void before_map(std::size_t bytes);
+
 Heap* create_heap() {
+    before_map(HEAP_PAGE_SIZE);
     void* raw = map_aligned(HEAP_PAGE_SIZE);
     if (raw == nullptr) throw std::bad_alloc();
     if ((addr(raw) >> HEAP_ADDR_SHIFT) > HEAP_ADDR_MASK) {
@@ -690,6 +694,19 @@ void cache_put(std::size_t index, SpanHeader* s, std::size_t backed) noexcept {
     g_cache_live.fetch_or(std::uint64_t{1} << index, std::memory_order_acq_rel);
 }
 
+// A run whose purge fails is cached warm instead.
+void cache_put_purged(std::size_t index, SpanHeader* s) noexcept {
+    if (!purge_range(page_base(s, 1), s->map_bytes - HEAP_PAGE_SIZE)) {
+        cache_put(index, s, s->map_bytes);
+        return;
+    }
+    s->purged_mask = 1;
+    g_cache_reserved.fetch_add(static_cast<std::ptrdiff_t>(HEAP_PAGE_SIZE),
+                               std::memory_order_relaxed);
+    s->cached_since = now_ms();
+    stack_push(g_caches[index].cold, s);
+}
+
 void cache_take_accounting(std::size_t backed) noexcept {
     g_cache_reserved.fetch_sub(static_cast<std::ptrdiff_t>(backed),
                                std::memory_order_relaxed);
@@ -887,12 +904,52 @@ void trim_decayed(std::uint64_t now) noexcept {
     decay_live_caches(now, delay, UNLIMITED);
 }
 
+// Purges cached entries, old stacks before young ones, until `want` backed
+// bytes are gone. A popped entry belongs to this thread alone, and entries
+// stay mapped, so a concurrent pop from another heap is safe. A cache that a
+// decay pass holds is skipped: that pass is purging it already.
+std::size_t purge_cached(std::size_t want) noexcept {
+    std::size_t freed = 0;
+    for (bool young : {false, true}) {
+        for (std::size_t i = 0; i < CACHE_COUNT && freed < want; ++i) {
+            Cache& c = g_caches[i];
+            if (c.busy.exchange(true, std::memory_order_acquire)) continue;
+            std::atomic<std::uint64_t>& stack = young ? c.young : c.old;
+            while (freed < want) {
+                SpanHeader* e = stack_pop(stack);
+                if (e == nullptr) break;
+                std::size_t backed = span_backed(e);
+                purge_entry(e);
+                freed += backed - span_backed(e);
+                stack_push(c.cold, e);
+            }
+            c.busy.store(false, std::memory_order_release);
+        }
+    }
+    return freed;
+}
+
+// Backed bytes are page_reserved(): mapped bytes less purged pages, so they
+// bound what the heap adds to the resident set. Under the budget this is a walk
+// of the heap counters and a compare; it purges only when the map would cross.
+void before_map(std::size_t bytes) {
+    std::size_t budget = map_budget();
+    if (budget != 0) {
+        std::size_t backed = page_reserved();
+        if (backed + bytes > budget) {
+            std::size_t freed = purge_cached(backed + bytes - budget);
+            g_budget_purged.fetch_add(freed, std::memory_order_relaxed);
+        }
+    }
+    check_cap(bytes);
+}
+
 SpanHeader* new_span(Heap& h) {
     SpanHeader* s = cache_pop(g_caches[0]);
     if (s != nullptr) {
         adopt_cached_span(h, s);
     } else {
-        check_cap(HEAP_SPAN_SIZE);
+        before_map(HEAP_SPAN_SIZE);
         void* base = map_aligned(HEAP_SPAN_SIZE);
         if (base == nullptr) throw std::bad_alloc();
         s = new (base) SpanHeader{};
@@ -1092,7 +1149,7 @@ void free_medium_run(Heap& h, SpanHeader* s, std::size_t index) noexcept {
         s = adopt_cached_run(h, run);
     }
     if (s == nullptr) {
-        check_cap(bytes);
+        before_map(bytes);
         void* base = map_aligned(bytes);
         if (base == nullptr) throw std::bad_alloc();
         s = new (base) SpanHeader{};
@@ -1133,7 +1190,11 @@ void free_medium_run(Heap& h, SpanHeader* s, std::size_t index) noexcept {
     if (run_cacheable(s)) {
         asan_poison(user, s->usable);
         s->purged_mask = 0;
-        cache_put(1 + large_class(s->usable), s, s->map_bytes);
+        const std::size_t index = 1 + large_class(s->usable);
+        if (s->usable >= LARGE_PURGE_SIZE)
+            cache_put_purged(index, s);
+        else
+            cache_put(index, s, s->map_bytes);
         decay_step(h);
         return;
     }
@@ -1306,7 +1367,7 @@ void* page_grow_huge(void* p, std::size_t size, std::size_t align) {
     std::size_t old_usable = s->usable;
     std::size_t old_size = s->size;
     std::size_t bytes = round_up(offset + size, HEAP_PAGE_SIZE);
-    check_cap(bytes - old_bytes);
+    before_map(bytes - old_bytes);
     // The old block ends here and the new one starts after the move; a failed
     // move puts the old one back.
     asan_unpoison(p, old_usable);
@@ -1406,6 +1467,10 @@ PageStats page_stats() noexcept {
     std::ptrdiff_t live = attrib_live_total();
     return {static_cast<std::size_t>(std::max<std::ptrdiff_t>(live, 0)),
             page_reserved()};
+}
+
+std::size_t page_budget_purged() noexcept {
+    return g_budget_purged.load(std::memory_order_relaxed);
 }
 
 std::size_t page_heap_count() noexcept {

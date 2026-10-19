@@ -1,3 +1,4 @@
+#include <dftracer/utils/dataframe/internal/governor.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
 #include <dftracer/utils/dataframe/lazy/numeric.h>
 #include <dftracer/utils/memory/budget.h>
@@ -116,6 +117,8 @@ class CompareAggCursor : public Cursor {
           n_key_(n_key),
           budget_(budget) {}
 
+    std::uint64_t resident_bytes() const override { return gov_.reserved(); }
+
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         if (!built_) co_await build(max_rows);
         auto df = co_await gen_->next();
@@ -129,6 +132,14 @@ class CompareAggCursor : public Cursor {
     }
 
    private:
+    void govern(spill::Spool& left, spill::Spool& right) {
+        if (budget_ == 0 || budget_ == memory::NO_SPILL_BUDGET) return;
+        if (gov_.check(left.memory_bytes() + right.memory_bytes()) == 0) return;
+        left.spill();
+        right.spill();
+        gov_.spilled(left.memory_bytes() + right.memory_bytes());
+    }
+
     static std::uint64_t share_of(std::uint64_t budget) {
         return budget == 0 || budget == memory::NO_SPILL_BUDGET
                    ? memory::NO_SPILL_BUDGET
@@ -167,6 +178,7 @@ class CompareAggCursor : public Cursor {
             if (!m) break;
             note_types(ltypes, m->columns);
             lspool->add(std::move(m->columns), m->rows);
+            govern(*lspool, *rspool);
         }
         if (auto produced = in_->out_names(); produced && !produced->empty())
             lnames = std::move(*produced);
@@ -187,6 +199,7 @@ class CompareAggCursor : public Cursor {
                                    ? c.share()
                                    : c.materialize());
             rspool->add(std::move(cols), df->num_rows());
+            govern(*lspool, *rspool);
         }
 
         const std::vector<Field> lf = fields_of(lnames, ltypes);
@@ -209,6 +222,7 @@ class CompareAggCursor : public Cursor {
     LazyFrame other_;
     std::int64_t n_key_;
     std::uint64_t budget_;
+    Governor gov_{"compare_agg"};
     std::optional<LazyFrame> plan_;
     std::optional<coro::AsyncGenerator<DataFrame>> gen_;
     std::optional<std::vector<std::string>> out_names_;

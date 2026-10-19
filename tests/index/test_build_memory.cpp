@@ -1,12 +1,15 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/build/batch_builder.h>
+#include <dftracer/utils/index/build/index_fold_driver.h>
 #include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -14,9 +17,12 @@
 #include <rocksdb/iterator.h>
 #include <testing_utilities.h>
 
+#include <atomic>
+#include <chrono>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -110,6 +116,25 @@ std::string index_of(const std::string& trace, const std::string& dir) {
     return trace::internal::determine_index_path(trace, dir);
 }
 
+constexpr std::uint64_t MIB = std::uint64_t{1} << 20;
+
+struct Budget {
+    explicit Budget(std::size_t bytes) {
+        memory::Config c;
+        c.budget = bytes;
+        memory::configure(c);
+    }
+    ~Budget() { memory::configure(memory::Config{}); }
+};
+
+// A reservation of all the budget from a pool of its own, which fails when
+// anything else is reserved and posts the shortfall to the holders.
+memory::Status ask_for_budget() {
+    memory::PoolHandle pool = memory::Manager::get().root().child("ask");
+    REQUIRE(pool);
+    return pool->reserve(memory::Manager::get().budget()).status();
+}
+
 }  // namespace
 
 TEST_SUITE("IndexBuildMemory") {
@@ -195,5 +220,60 @@ TEST_SUITE("IndexBuildMemory") {
             CHECK(a == b);
             CHECK_FALSE(fs::exists(index_of(files[0], small_dir) + ".spill"));
         }
+    }
+
+    TEST_CASE("idle fold buffers are freed when a reservation asks for bytes") {
+        Budget budget(64 * MIB);
+        build::FoldBufferPool buffers;
+        std::vector<std::unique_ptr<build::FoldBufferPool::EventBuffer>> out;
+        for (int b = 0; b < 4; ++b) {
+            out.push_back(buffers.take());
+            for (int e = 0; e < 1000; ++e) out.back()->append();
+        }
+        for (auto& b : out) buffers.give(std::move(b));
+        REQUIRE(buffers.idle() == 4);
+
+        // The shortfall is past every idle byte, so every idle buffer goes.
+        memory::PoolHandle hold = memory::Manager::get().root().child("hold");
+        memory::Reservation held = hold->reserve(32 * MIB);
+        REQUIRE(held);
+        const std::uint64_t freed = build::g_fold_buffers_freed.load();
+        CHECK(ask_for_budget() == memory::Status::Pending);
+        auto again = buffers.take();
+        CHECK(buffers.idle() == 0);
+        CHECK(build::g_fold_buffers_freed.load() == freed + 4);
+        buffers.give(std::move(again));
+        CHECK(buffers.idle() == 1);
+    }
+
+    TEST_CASE(
+        "a build whose fold buffers are asked for writes the same index") {
+        dftu_utils_test::TestEnvironment env(10);
+        const std::vector<std::string> files = {
+            write_trace(env.get_dir(), "asked", 60000, 600, 1u << 20)};
+        const auto plain_dir = env.get_dir() + "/plain";
+        const auto asked_dir = env.get_dir() + "/asked";
+        const auto plain = run_build(files, plain_dir, memory::NO_SPILL_BUDGET);
+        REQUIRE(plain.indexed == 1);
+
+        Budget budget(64 * MIB);
+        memory::PoolHandle hold = memory::Manager::get().root().child("hold");
+        memory::Reservation held = hold->reserve(MIB);
+        REQUIRE(held);
+        const std::uint64_t freed = build::g_fold_buffers_freed.load();
+        std::atomic<bool> done{false};
+        std::thread asker([&] {
+            while (!done.load(std::memory_order_acquire)) {
+                (void)ask_for_budget();
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        });
+        const auto asked = run_build(files, asked_dir, memory::NO_SPILL_BUDGET);
+        done.store(true, std::memory_order_release);
+        asker.join();
+        REQUIRE(asked.indexed == 1);
+        CHECK(build::g_fold_buffers_freed.load() > freed);
+        CHECK(contents(index_of(files[0], plain_dir)) ==
+              contents(index_of(files[0], asked_dir)));
     }
 }

@@ -94,7 +94,9 @@ builddir="build/build-docker-${variant}"
 ctest_filter=""
 [ -n "$tests" ] && ctest_filter="-R '${tests}'"
 
-docker build -t "$image" -f "$root/${dockerfile}" "$root"
+# The Dockerfiles copy no files, so the build gets no context; the repo
+# context would send build/ along.
+docker build -t "$image" - < "$root/${dockerfile}"
 
 # Run as the invoking user, not root: tests that make a file unreadable expect
 # the read to fail, and root reads it anyway.

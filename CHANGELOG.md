@@ -76,6 +76,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   A memory reservation that shutdown cancels now reports `memory::Status::Cancelled` instead of `OverBudget`.
 - Speed up repeated `duql` queries that use a lookup side.
   A query reads the lookup store read-only and opens it for writing only to store a side it did not find, so repeated queries reuse one open handle and no process holds the store's write lock between queries.
+- Speed up trace scans by not zero-filling the read and decode buffers of each scan unit.
 
 ### Added
 

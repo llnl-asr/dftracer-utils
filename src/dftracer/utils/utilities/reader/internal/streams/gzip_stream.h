@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_GZIP_STREAM_H
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_GZIP_STREAM_H
 
+#include <dftracer/utils/dstd/raw_buffer.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/utilities/reader/error.h>
 #include <dftracer/utils/utilities/reader/internal/inflater.h>
@@ -39,7 +40,7 @@ class GzipStream : public StreamBase {
     // read_async(char*, size_t) below. Derived classes fill buffer_ via their
     // zero-copy read_async() override.
     static constexpr std::size_t DEFAULT_BUFFER_SIZE = 64 * 1024;  // 64KB
-    std::vector<char> buffer_;
+    dstd::RawBuffer<char> buffer_;
     std::size_t valid_bytes_;
     std::size_t buffer_pos_;  // Current position in buffer for copy-based reads
 
@@ -56,7 +57,7 @@ class GzipStream : public StreamBase {
           decompression_initialized_(false),
           use_member_(false),
           start_bytes_(0),
-          buffer_(buffer_size, 0),
+          buffer_(buffer_size),
           valid_bytes_(0),
           buffer_pos_(0) {}
 

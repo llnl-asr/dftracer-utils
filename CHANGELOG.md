@@ -74,6 +74,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Make executor shutdown wake every waiting coroutine with a cancelled error and wait until it ends before it frees the frame.
   This covers a semaphore, `AsyncMutex`, `Channel`, `AsyncOnce`, `SpawnFuture`, a timeout, `when_all`, `when_any`, a memory reservation and a read that waits for a peer.
   A memory reservation that shutdown cancels now reports `memory::Status::Cancelled` instead of `OverBudget`.
+- Speed up repeated `duql` queries that use a lookup side.
+  A query reads the lookup store read-only and opens it for writing only to store a side it did not find, so repeated queries reuse one open handle and no process holds the store's write lock between queries.
 
 ### Added
 

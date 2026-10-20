@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <thread>
 
@@ -34,6 +35,28 @@ auto plan_of(const std::string& gz) {
 std::shared_ptr<rdb::RocksDatabase> store_in(TestEnvironment& env) {
     return cache::open_lookup_db(env.get_dir() + "/lookups",
                                  rdb::RocksDatabase::OpenMode::ReadWrite);
+}
+
+std::string lookup_trace(TestEnvironment& env) {
+    const std::string plain = env.get_dir() + "/side.ndjson";
+    {
+        std::ofstream o(plain);
+        o << R"({"type":"run","run":1,"app":"laghos"})" << "\n";
+        o << R"({"type":"run","run":2,"app":"amg"})" << "\n";
+        for (int i = 0; i < 4; ++i)
+            o << R"({"type":"ev","i":)" << i << R"(,"run":)" << i % 2 + 1
+              << "}\n";
+    }
+    const std::string gz = plain + ".gz";
+    dftu_utils_test::compress_file_to_gzip(plain, gz);
+    fs::remove(plain);
+    dftracer::utils::index::Indexer::open({gz}).build();
+    return gz;
+}
+
+std::string lookup_query() {
+    return "let runs = where type == \"run\" | select run, app; where type "
+           "== \"ev\" | lookup runs on run | select i, app";
 }
 
 // Usage records hold last use in microseconds; keep successive uses apart.
@@ -158,6 +181,67 @@ TEST_SUITE("LookupStore") {
         CHECK_FALSE(cache::lookup_exists(*db, *sig));
         cache::persist_lookup(*db, *sig, "rows");
         CHECK(cache::read_lookup(*db, *sig) == "rows");
+    }
+
+    TEST_CASE("repeated queries that hit a stored side open the store twice") {
+        TestEnvironment env(200);
+        const std::string gz = lookup_trace(env);
+        const std::string q = lookup_query();
+        auto& manager = rdb::RocksDBManager::instance();
+        const auto before = manager.opens();
+        for (int query = 0; query < 20; ++query) {
+            const View v = View::from_file(gz, determine_index_path(gz, ""));
+            const auto g = run(v.duql(q).lazy().collect());
+            CHECK(g.num_rows() == 4);
+        }
+        // One read-write open to store the side, then one read-only open
+        // that every later query reuses.
+        CHECK(manager.opens() - before <= 2);
+    }
+
+    TEST_CASE("queries leave the store's write lock free") {
+        TestEnvironment env(200);
+        const std::string gz = lookup_trace(env);
+        const View v = View::from_file(gz, determine_index_path(gz, ""));
+        for (int query = 0; query < 3; ++query)
+            CHECK(run(v.duql(lookup_query()).lazy().collect()).num_rows() == 4);
+        const std::string path =
+            (fs::path(determine_index_path(gz, "")).parent_path() /
+             ".dftindex-cache" / "lookups")
+                .string();
+        REQUIRE(fs::exists(path));
+
+        rdb::RocksDatabase other;
+        CHECK_NOTHROW(
+            other.open(path, rdb::RocksDatabase::OpenMode::ReadWrite));
+    }
+
+    TEST_CASE("a store written after reads is seen by the next read") {
+        TestEnvironment env(200);
+        const std::string path = env.get_dir() + "/lookups";
+        {
+            auto db = cache::open_lookup_db(
+                path, rdb::RocksDatabase::OpenMode::ReadWrite);
+            REQUIRE(db);
+            cache::persist_lookup(*db, 1, "one");
+        }
+        {
+            auto ro = cache::open_lookup_db(
+                path, rdb::RocksDatabase::OpenMode::ReadOnly);
+            REQUIRE(ro);
+            CHECK(cache::lookup_exists(*ro, 1));
+            CHECK_FALSE(cache::lookup_exists(*ro, 2));
+        }
+        {
+            auto rw = cache::open_lookup_db(
+                path, rdb::RocksDatabase::OpenMode::ReadWrite);
+            REQUIRE(rw);
+            cache::persist_lookup(*rw, 2, "two");
+        }
+        auto ro =
+            cache::open_lookup_db(path, rdb::RocksDatabase::OpenMode::ReadOnly);
+        REQUIRE(ro);
+        CHECK(cache::lookup_exists(*ro, 2));
     }
 
     TEST_CASE("a store that cannot be opened is null") {

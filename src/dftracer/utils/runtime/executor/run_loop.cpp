@@ -3,14 +3,17 @@
 #include <dftracer/utils/runtime/executor/executor.h>
 #include <dftracer/utils/runtime/executor/run_loop.h>
 
-#include <utility>
+#include <chrono>
 
 namespace dftracer::utils {
 
 void RunLoop::enqueue(std::coroutine_handle<> handle, TaskIndex /*task_id*/) {
     if (!handle) return;
+    // Notify under the lock: once it drops, the owner can finish and destroy
+    // this loop, cv included.
     std::lock_guard<std::mutex> lock(mutex_);
     ready_.push_back(handle);
+    ready_cv_.notify_one();
 }
 
 void RunLoop::schedule_coroutine_resumption(std::coroutine_handle<> handle) {
@@ -33,7 +36,12 @@ void RunLoop::drive_until(const std::function<bool()>& done) {
     while (!done()) {
         if (!run_one()) {
             if (done()) break;
-            throw_stalled();
+            std::unique_lock<std::mutex> lock(mutex_);
+            if (!ready_.empty()) continue;
+            if (parked_.size() == 0) throw_stalled();
+            // A waiter parked here is woken by enqueue() from another thread.
+            ready_cv_.wait_for(lock, std::chrono::milliseconds(10),
+                               [&] { return !ready_.empty() || done(); });
         }
     }
     // Work the finished task left runnable (a producer woken to unwind after

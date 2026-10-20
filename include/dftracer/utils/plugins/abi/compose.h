@@ -46,7 +46,9 @@ typedef struct dftu_svc_compose {
        concatenated in order (out_size = sum of child out_sizes). */
     dftu_op* (*when_all)(void* h, dftu_op* const* ops, uint32_t n);
     /** Race: run all `n` ops on the same input, output is the first to finish
-       (all ops must share one out_size). */
+       (all ops must share one out_size). The other ops are cancelled and
+       awaited before the output is returned, so none runs after it. An op
+       that cannot be cancelled runs to its end first. */
     dftu_op* (*when_any)(void* h, dftu_op* const* ops, uint32_t n);
     /** Run `op` over `in`, writing `out` and *rc. `in`/`out` must outlive the
        await; sized by op's in_size/out_size. */

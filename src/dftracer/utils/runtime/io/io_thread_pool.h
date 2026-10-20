@@ -57,6 +57,16 @@ class IoThreadPool {
         return tracked_.load(std::memory_order_acquire);
     }
 
+    /// Operations that can wait on a peer indefinitely stop waiting and fail
+    /// with -ECANCELED, both those queued and those blocked. Sticky until the
+    /// next start().
+    void cancel() noexcept {
+        cancelling_.store(true, std::memory_order_release);
+    }
+    bool cancelling() const noexcept {
+        return cancelling_.load(std::memory_order_acquire);
+    }
+
    private:
     void worker_loop();
     void wake(std::size_t items);
@@ -70,6 +80,7 @@ class IoThreadPool {
     std::condition_variable cv_;
     std::atomic<bool> running_{false};
     std::atomic<std::size_t> tracked_{0};
+    std::atomic<bool> cancelling_{false};
 };
 
 }  // namespace dftracer::utils::io

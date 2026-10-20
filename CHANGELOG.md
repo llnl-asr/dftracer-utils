@@ -67,6 +67,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   Linux shared libraries now link with `-z defs`, so a shared library with an undefined symbol fails at link time.
 - Rename the library `dftracer_utils_core` to `dftracer_utils_runtime`, with its pkg-config and `find_package` names, and move its headers from `dftracer/utils/core/` to `dftracer/utils/runtime/`.
   The include-all header `dftracer/utils/core/core.h` is removed, so include the headers you use.
+- Make `when_any` cancel its losers and wait for them to stop before it returns, so no loser runs after `when_any` returns.
+  A loser stops at its next wait when it has a cancel token or a `cancel()`, and a loser with neither runs to its end.
+  A `CoroTask` loser stops at its next wait with no exception, and one that never started does not run.
+  `timeout()` gets a `cancel()`, so `when_any(op, timeout(5s))` returns when `op` does and no longer waits 5 s.
+- Make executor shutdown wake every waiting coroutine with a cancelled error and wait until it ends before it frees the frame.
+  This covers a semaphore, `AsyncMutex`, `Channel`, `AsyncOnce`, `SpawnFuture`, a timeout, `when_all`, `when_any`, a memory reservation and a read that waits for a peer.
+  A memory reservation that shutdown cancels now reports `memory::Status::Cancelled` instead of `OverBudget`.
 
 ### Added
 
@@ -143,6 +150,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix a crash or a "RunLoop stalled" error when several threads each ran a plan or a scan with `get()` and shared an `AsyncMutex`.
+  An unlock now resumes a waiter on its own executor, and a thread that drives a `RunLoop` waits for a waiter that another thread wakes.
 - Fix a read of string offsets from an unaligned address when a spilled or cached frame was read back.
   A string or binary column read its offsets in place from the saved bytes, and the length of a column name could put them at any byte.
 - Fix a crash with SIGILL when a build with GCC 12 read a gzip trace from the middle of the file.

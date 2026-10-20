@@ -112,6 +112,12 @@ class IoBackend {
     /// resume into a destroyed queue.
     virtual std::size_t in_flight() const { return 0; }
 
+    /// Cancel every operation in flight and fail any submitted later. Each
+    /// operation completes with -ECANCELED and resumes its waiter as usual,
+    /// so in_flight() falls to zero without waiting for the peer of a pipe or
+    /// socket. Sticky until stop(); thread-safe. Called by executor shutdown.
+    virtual void cancel_pending() {}
+
     /// Accept a connection on a listening socket.
     /// Returns the new client fd via IoAwaitable::result_.
     virtual IoAwaitable submit_accept(int listen_fd, struct sockaddr *addr,

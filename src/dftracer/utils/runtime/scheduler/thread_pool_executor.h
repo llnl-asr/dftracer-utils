@@ -6,6 +6,7 @@
 #include <dftracer/utils/common/typedefs.h>
 #include <dftracer/utils/runtime/coro/coro.h>
 #include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/executor/parked.h>
 #include <dftracer/utils/runtime/executor/timer_service.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
@@ -179,6 +180,11 @@ class ThreadPoolExecutor : public TaskExecutor {
     // I/O backend (owned by executor, created by factory)
     std::unique_ptr<io::IoBackend> io_backend_;
 
+    // Waiters that only another party can finish, and the token scopes watch.
+    ParkRegistry park_registry_;
+    std::shared_ptr<std::atomic<bool>> shutdown_token_ =
+        std::make_shared<std::atomic<bool>>(false);
+
     // Configuration (stored from ExecutorConfig)
     std::size_t io_pool_size_ = 0;
     io::IoBackendType io_backend_type_ = io::IoBackendType::Auto;
@@ -225,6 +231,14 @@ class ThreadPoolExecutor : public TaskExecutor {
 
     bool is_running() const override { return running_.load(); }
     void quiesce();
+
+    ParkNode* park(void* waiter, ParkCancelFn cancel) noexcept override {
+        return park_registry_.park(waiter, cancel);
+    }
+    void unpark(ParkNode* n) noexcept override { park_registry_.unpark(n); }
+    std::shared_ptr<std::atomic<bool>> shutdown_token() const override {
+        return shutdown_token_;
+    }
 
     std::size_t get_num_threads() const override { return num_threads_; }
 
@@ -301,6 +315,11 @@ class ThreadPoolExecutor : public TaskExecutor {
 
    private:
     void worker_thread(WorkerContext* context);
+
+    /// Cancels pending I/O and every parked waiter, and runs the woken frames
+    /// until each reaches its final suspend. Gives up with a warning when a
+    /// waiter stays parked without progress.
+    void cancel_in_flight();
 
     /**
      * Elastic policy loop (runs only when min_workers_ < num_threads_): grow

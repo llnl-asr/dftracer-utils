@@ -4,11 +4,16 @@
 #include <dftracer/utils/common/typedefs.h>
 #include <dftracer/utils/runtime/executor/timer_service.h>
 
+#include <atomic>
 #include <coroutine>
 #include <cstddef>
 #include <functional>
+#include <memory>
 
 namespace dftracer::utils {
+
+struct ParkNode;
+using ParkCancelFn = void (*)(void*) noexcept;
 
 namespace io {
 class IoBackend;
@@ -42,6 +47,23 @@ class Executor {
     /// is never run while it waits. Awaitables that wait for such a wake-up
     /// do not wait there.
     virtual bool runs_remote_wakeups() const noexcept { return true; }
+
+    /// Registers a waiter suspended on an awaitable that only another party
+    /// can finish, so shutdown can call `cancel(waiter)` (see ParkCancelFn).
+    /// Register once the waiter is queued and before its lock is released,
+    /// and unpark() the returned entry from await_resume. Default: no
+    /// registry, returns null and the waiter is never cancelled.
+    virtual ParkNode* park(void* /*waiter*/, ParkCancelFn) noexcept {
+        return nullptr;
+    }
+    virtual void unpark(ParkNode*) noexcept {}
+
+    /// Token set when the executor begins to shut down. Scopes created on
+    /// this executor count as cancelled once it is set. Null when the
+    /// executor never cancels.
+    virtual std::shared_ptr<std::atomic<bool>> shutdown_token() const {
+        return nullptr;
+    }
 
     /// Without a backend the io layer falls back to blocking syscalls.
     virtual bool has_io_backend() const noexcept = 0;

@@ -15,11 +15,6 @@ void schedule_coroutine_resumption_helper(Executor* executor,
 /// Parking a waiter with neither means it can never be woken.
 Executor* resume_executor_for(Executor* preferred) noexcept;
 
-/// Schedule a coroutine handle for deferred destruction.
-/// Used by SpawnFuture::detach() when the waiter handle is extracted
-/// but will never be resumed (preventing frame leaks).
-void schedule_destroy_helper(Executor* executor,
-                             std::coroutine_handle<> handle);
 }  // namespace dftracer::utils
 
 #endif  // DFTRACER_UTILS_RUNTIME_EXECUTOR_RESUMPTION_HELPER_H

@@ -19,6 +19,9 @@ extern "C" {
 typedef struct dftu_svc_coro {
     dftu_task* (*spawn)(void* h, dftu_work_fn fn, void* arg);
     dftu_task* (*when_all)(void* h, dftu_task* const* ts, uint32_t n);
+    /** Race: the output is the first task to finish. The other tasks are
+       cancelled and awaited before the output is returned, so none runs after
+       it. A task that cannot be cancelled runs to its end first. */
     dftu_task* (*when_any)(void* h, dftu_task* const* ts, uint32_t n);
     dftu_task* (*then)(void* h, dftu_task* t, dftu_work_fn fn, void* arg);
     /** Drive a coroutine: host awaits each dftu_task step() yields until NULL.

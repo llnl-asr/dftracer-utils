@@ -39,7 +39,9 @@ Result<void> configure_memory_from_env();
  * OverBudget, OverCap and Pending are ErrorCode::MemoryBudgetExceeded.
  * PoolTableFull and SlotTableFull are ErrorCode::Internal: no code names an
  * exhausted resource, and a full table is a sizing bug, not a budget a caller
- * can wait out. Ok is not an error and gives ErrorCode::Unknown.
+ * can wait out. Cancelled is ErrorCode::Unknown, as is the Cancelled
+ * condition (no code names a cancellation). Ok is not an error and gives
+ * ErrorCode::Unknown.
  */
 constexpr ErrorCode error_code_of(memory::Status status) noexcept {
     switch (status) {
@@ -50,6 +52,7 @@ constexpr ErrorCode error_code_of(memory::Status status) noexcept {
         case memory::Status::PoolTableFull:
         case memory::Status::SlotTableFull:
             return ErrorCode::Internal;
+        case memory::Status::Cancelled:
         case memory::Status::Ok:
             return ErrorCode::Unknown;
     }

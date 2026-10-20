@@ -100,6 +100,10 @@ class ThreadPoolFileOps : public IoBackend {
 
     std::size_t in_flight() const override { return pool_.tracked(); }
 
+    /// Reads, accepts and sends that wait on a peer complete with -ECANCELED;
+    /// operations that finish by themselves run to the end.
+    void cancel_pending() override { pool_.cancel(); }
+
     /// Called by await_suspend via SubmitContext::submit.
     /// Submits the IoRequest to the thread pool.
     static void submit_to_pool(SubmitContext* ctx, IoAwaitable* awaitable);

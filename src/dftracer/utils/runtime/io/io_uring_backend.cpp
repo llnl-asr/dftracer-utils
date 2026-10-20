@@ -11,11 +11,12 @@
 
 #include <cerrno>
 #include <cstring>
+#include <thread>
 
 // TSAN annotations for kernel-mediated synchronization (io_uring).
 // The kernel provides ordering between SQE submission and CQE completion,
 // but TSAN cannot observe it.  Annotate the boundary so TSAN sees the
-// happens-before edge: submit_fn → kernel → completion_loop.
+// happens-before edge: submit_fn -> kernel -> completion_loop.
 #if defined(__SANITIZE_THREAD__)
 #define DFTRACER_TSAN 1
 #elif defined(__has_feature)
@@ -25,6 +26,10 @@
 #endif
 
 namespace dftracer::utils::io {
+
+namespace {
+constexpr int CANCEL_SQE_RETRIES = 1000;
+}  // namespace
 
 // ============================================================================
 // Ring implementation
@@ -206,6 +211,8 @@ bool IoUringBackend::probe() {
 }
 
 void IoUringBackend::start() {
+    cancelling_.store(false, std::memory_order_release);
+    cancel_unsupported_.store(false, std::memory_order_release);
     if (!ring_.init(ring_entries_)) {
         DFTRACER_UTILS_LOG_ERROR("io_uring ring init failed (entries=%u)",
                                  ring_entries_);
@@ -241,6 +248,30 @@ void IoUringBackend::stop() {
     ring_.destroy();
 }
 
+void IoUringBackend::cancel_pending() {
+    cancelling_.store(true, std::memory_order_release);
+    std::lock_guard<std::mutex> lock(submit_mutex_);
+    auto* sqe = ring_.get_sqe();
+    // A full SQ drains once the kernel takes what is pending, so flush and
+    // retry; it is not a sign that cancel is unsupported.
+    for (int attempt = 0; sqe == nullptr && attempt < CANCEL_SQE_RETRIES;
+         ++attempt) {
+        ring_.flush();
+        sqe = ring_.get_sqe();
+        if (sqe == nullptr) std::this_thread::yield();
+    }
+    if (sqe == nullptr) {
+        DFTRACER_UTILS_LOG_ERROR("%s",
+                                 "io_uring submission queue stayed full; "
+                                 "pending operations were not cancelled");
+        return;
+    }
+    uring::prep_cancel_all(sqe);
+    uring::sqe_set_data(sqe, nullptr);
+    ring_.mark_pending();
+    ring_.flush();
+}
+
 void IoUringBackend::completion_loop() {
     while (completion_thread_.running()) {
         struct io_uring_cqe* cqe = nullptr;
@@ -263,6 +294,10 @@ void IoUringBackend::completion_loop() {
                 req->completion(req->completion_ctx, cqe->res);
             }
             delete req;
+            in_flight_.fetch_sub(1, std::memory_order_acq_rel);
+        } else if (cqe->res == -EINVAL) {
+            // Only the cancel request completes with -EINVAL and no request.
+            cancel_unsupported_.store(true, std::memory_order_release);
         }
         ring_.cqe_seen(cqe);
     }
@@ -366,7 +401,36 @@ void IoUringBackend::submit_fn(SubmitContext* ctx, IoAwaitable* awaitable) {
     req->completion = uring_ctx->completion;
     req->completion_ctx = uring_ctx->completion_ctx;
 
-    std::lock_guard<std::mutex> lock(backend->submit_mutex_);
+    std::unique_lock<std::mutex> lock(backend->submit_mutex_);
+
+    // Checked under the submit lock: cancel_pending() sets the flag before it
+    // takes the lock, so an operation either sees the flag here or is already
+    // on the ring when the cancel request is queued behind it.
+    if (backend->cancelling_.load(std::memory_order_acquire)) {
+        switch (uring_ctx->op) {
+            case IoOp::Read:
+            case IoOp::Readv:
+            case IoOp::Recv:
+            case IoOp::Accept:
+            case IoOp::Send: {
+                lock.unlock();
+                delete req;
+                const ssize_t cancelled = -ECANCELED;
+                if (awaitable != nullptr) {
+                    awaitable->result_ = cancelled;
+                } else if (uring_ctx->completion != nullptr) {
+                    uring_ctx->completion(uring_ctx->completion_ctx, cancelled);
+                }
+                delete uring_ctx;
+                if (awaitable != nullptr) {
+                    backend->executor_.enqueue(awaitable->handle_);
+                }
+                return;
+            }
+            default:
+                break;
+        }
+    }
 
     struct io_uring_sqe* sqe = backend->ring_.get_sqe();
     if (!sqe) {
@@ -521,6 +585,7 @@ void IoUringBackend::submit_fn(SubmitContext* ctx, IoAwaitable* awaitable) {
 
     uring::sqe_set_data(sqe, req);
     DFTRACER_TSAN_RELEASE(req);
+    backend->in_flight_.fetch_add(1, std::memory_order_acq_rel);
     backend->ring_.mark_pending();
     backend->maybe_flush_locked();
     delete uring_ctx;

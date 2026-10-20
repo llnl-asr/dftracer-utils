@@ -49,6 +49,9 @@ class JoinHandle {
     }
 
     struct JoinAwaitable {
+        /// A join is never a cancel point: the children it waits for end it.
+        static constexpr bool CANCEL_EXEMPT = true;
+
         JoinHandle* handle;
 
         bool await_ready() const noexcept {

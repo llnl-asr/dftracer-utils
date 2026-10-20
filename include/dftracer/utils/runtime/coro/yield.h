@@ -118,8 +118,12 @@ struct YieldCheckAwaitable {
     memory::PoolTag pool_;
     bool yielding_ = false;
     bool suspended_ = false;
+    /// The task was cancelled: it ends here, as cancelled, and the inner
+    /// awaitable is never touched.
+    bool cancelled_ = false;
 
     bool await_ready() noexcept(noexcept(inner_.await_ready())) {
+        if (cancelled_) return false;
         bool inner_ready = inner_.await_ready();
         if (inner_ready && timeslice_exceeded()) {
             yielding_ = true;
@@ -133,8 +137,18 @@ struct YieldCheckAwaitable {
     // sibling-call optimization (see CoroTask::await_suspend).
     template <typename Handle>
     auto await_suspend(Handle h) noexcept(noexcept(inner_.await_suspend(h))) {
-        suspended_ = true;
         using R = decltype(inner_.await_suspend(h));
+        if constexpr (requires { h.promise().finish_cancelled(); }) {
+            if (cancelled_) {
+                h.promise().finish_cancelled();
+                if constexpr (std::is_void_v<R> || std::is_same_v<R, bool>) {
+                    return true;
+                } else {
+                    return std::coroutine_handle<>{std::noop_coroutine()};
+                }
+            }
+        }
+        suspended_ = true;
         if constexpr (std::is_void_v<R> || std::is_same_v<R, bool>) {
             if (yielding_) {
                 yield_to_executor(h);

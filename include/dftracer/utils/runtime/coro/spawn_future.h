@@ -2,6 +2,9 @@
 #define DFTRACER_UTILS_RUNTIME_CORO_SPAWN_FUTURE_H
 
 #include <dftracer/utils/common/exception_helpers.h>
+#include <dftracer/utils/runtime/coro/cancelled.h>
+#include <dftracer/utils/runtime/executor/executor.h>
+#include <dftracer/utils/runtime/executor/parked.h>
 #include <dftracer/utils/runtime/executor/resumption_helper.h>
 
 #include <atomic>
@@ -14,10 +17,6 @@
 #include <utility>
 #include <variant>
 
-namespace dftracer::utils {
-class Executor;
-}  // namespace dftracer::utils
-
 namespace dftracer::utils::coro {
 
 /// Lock-free shared state for SpawnFuture<T>.
@@ -25,6 +24,7 @@ namespace dftracer::utils::coro {
 /// Encodes a 3-state machine in a single atomic uintptr_t:
 ///   0 = EMPTY  -- neither result nor waiter yet
 ///   1 = DONE   -- result stored, no waiter was registered
+///   2 = CANCELLED -- the waiter was woken early by shutdown
 ///   other      -- WAITING -- value is the waiter's coroutine_handle address
 ///
 /// Completion path (producer):
@@ -43,12 +43,16 @@ template <typename T>
 struct SharedState {
     static constexpr std::uintptr_t EMPTY = 0;
     static constexpr std::uintptr_t DONE = 1;
+    /// A waiter that shutdown woke early; not an address, so no frame matches.
+    static constexpr std::uintptr_t CANCELLED = 2;
 
     std::atomic<std::uintptr_t> flag{EMPTY};
     [[no_unique_address]] std::conditional_t<std::is_void_v<T>, std::monostate,
                                              std::optional<T>> result;
     std::exception_ptr exception;
     Executor* executor{nullptr};
+    /// Cancellation token of the spawned child, set by SpawnFuture::cancel().
+    std::shared_ptr<std::atomic<bool>> cancel_token;
 
     /// Called by the spawned coroutine on completion (non-void result).
     template <typename U = T>
@@ -80,7 +84,7 @@ struct SharedState {
     /// Transition to DONE and resume a registered waiter, if any.
     void notify_done() {
         auto prev = flag.exchange(DONE, std::memory_order_acq_rel);
-        if (prev != EMPTY && prev != DONE) {
+        if (prev != EMPTY && prev != DONE && prev != CANCELLED) {
             // prev is a waiting coroutine handle address.
             auto waiter = std::coroutine_handle<>::from_address(
                 reinterpret_cast<void*>(prev));
@@ -110,10 +114,18 @@ class SpawnFuture {
     explicit SpawnFuture(std::shared_ptr<SharedState<T>> state)
         : state_(std::move(state)) {}
 
-    SpawnFuture(SpawnFuture&&) noexcept = default;
-    SpawnFuture& operator=(SpawnFuture&&) noexcept = default;
+    SpawnFuture(SpawnFuture&& other) noexcept
+        : state_(std::move(other.state_)) {}
+    SpawnFuture& operator=(SpawnFuture&& other) noexcept {
+        state_ = std::move(other.state_);
+        return *this;
+    }
     SpawnFuture(const SpawnFuture&) = delete;
     SpawnFuture& operator=(const SpawnFuture&) = delete;
+
+    ~SpawnFuture() {
+        if (park_) executor_->unpark(park_);
+    }
 
     // ====================================================================
     // Awaitable interface
@@ -121,17 +133,50 @@ class SpawnFuture {
 
     bool await_ready() const noexcept { return state_->is_done(); }
 
+    /// co_await throws a cancelled error (see coro::is_cancelled) when the
+    /// executor shuts down while the spawn is still running; the spawn is not
+    /// stopped by that, and its scope still joins it.
     bool await_suspend(std::coroutine_handle<> awaiting) noexcept {
+        handle_ = awaiting;
+        executor_ = resume_executor_for(state_->executor);
+        // Registered before the flag publishes the waiter: once it does, the
+        // spawn may resume the frame on another thread at any moment.
+        if (executor_) {
+            park_ = executor_->park(this, &SpawnFuture::cancel_thunk);
+        }
         auto addr = reinterpret_cast<std::uintptr_t>(awaiting.address());
         auto expected = SharedState<T>::EMPTY;
-        // Try to register ourselves as the waiter.
-        // If CAS fails, the state is already DONE -- don't suspend.
-        return state_->flag.compare_exchange_strong(expected, addr,
-                                                    std::memory_order_acq_rel,
-                                                    std::memory_order_acquire);
+        // If the CAS fails the state is already DONE: do not suspend.
+        if (state_->flag.compare_exchange_strong(expected, addr,
+                                                 std::memory_order_acq_rel,
+                                                 std::memory_order_acquire)) {
+            return true;
+        }
+        if (park_) executor_->unpark(park_);
+        park_ = nullptr;
+        return false;
+    }
+
+    static void cancel_thunk(void* self) noexcept {
+        static_cast<SpawnFuture*>(self)->cancel_parked();
+    }
+
+    void cancel_parked() noexcept {
+        auto expected = reinterpret_cast<std::uintptr_t>(handle_.address());
+        if (state_->flag.compare_exchange_strong(
+                expected, SharedState<T>::CANCELLED, std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
+            cancelled_ = true;
+            schedule_coroutine_resumption_helper(executor_, handle_);
+        }
     }
 
     T await_resume() {
+        if (park_) {
+            executor_->unpark(park_);
+            park_ = nullptr;
+        }
+        if (cancelled_) throw_cancelled("future wait cancelled");
         if (state_->exception) {
             rethrow_and_clear(state_->exception);
         }
@@ -143,29 +188,20 @@ class SpawnFuture {
     /// Check if the spawned coroutine has completed.
     bool is_done() const { return state_->is_done(); }
 
-    /// Detach waiter -- prevents completion from resuming a destroyed handle.
-    /// Used by when_any to safely clean up losing wrappers.
-    /// If a waiter handle was registered (via await_suspend), it is
-    /// extracted and scheduled for deferred destruction since nobody
-    /// will resume it.
-    void detach() noexcept {
-        if (state_) {
-            auto prev = state_->flag.exchange(SharedState<T>::DONE,
-                                              std::memory_order_acq_rel);
-            if (prev != SharedState<T>::EMPTY && prev != SharedState<T>::DONE &&
-                state_->executor) {
-                // A waiter handle was registered but will never be
-                // resumed.  Schedule it for deferred destruction to
-                // prevent a frame leak.
-                auto stale = std::coroutine_handle<>::from_address(
-                    reinterpret_cast<void*>(prev));
-                schedule_destroy_helper(state_->executor, stale);
-            }
+    /// Ask the spawned coroutine to stop. Cooperative: the child sees it
+    /// through CoroScope::is_cancellation_requested(). Thread-safe, idempotent.
+    void cancel() noexcept {
+        if (state_ && state_->cancel_token) {
+            state_->cancel_token->store(true, std::memory_order_release);
         }
     }
 
    private:
     std::shared_ptr<SharedState<T>> state_;
+    std::coroutine_handle<> handle_{};
+    Executor* executor_ = nullptr;
+    ParkNode* park_ = nullptr;
+    bool cancelled_ = false;
 };
 
 }  // namespace dftracer::utils::coro

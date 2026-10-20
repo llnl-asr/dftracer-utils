@@ -1970,7 +1970,8 @@ coro::CoroTask<std::string> when_any_cancellation_parent_func(CoroScope& ctx) {
     auto winner_result = result.result;
     CHECK(winner_result == "fast_completed");
 
-    // Cancel remaining tasks (no-op without cancellation tokens)
+    // when_any already cancelled and awaited the losers; this is a no-op
+    // because spawned futures expose no tokens
     result.cancel_remaining();
 
     co_return winner_result;
@@ -2028,7 +2029,7 @@ static coro::CoroTask<int> timer_service_basic_func(CoroScope& ctx) {
     int winner = result.result;
     CHECK(winner == 99);
 
-    // Cancel the slow task
+    // when_any already cancelled and awaited the slow task before returning
     result.cancel_remaining();
 
     co_return winner;
@@ -2068,7 +2069,7 @@ static coro::CoroTask<std::string> fast_task_timeout_func(CoroScope& ctx) {
     auto winner_result = result.result;
     CHECK(winner_result == "fast_completed");
 
-    // Cancel the timeout
+    // when_any already cancelled and awaited the slow task before returning
     result.cancel_remaining();
 
     co_return winner_result;
@@ -2114,7 +2115,7 @@ static coro::CoroTask<int> multi_timeout_func(CoroScope& ctx) {
     int winner = result.result;
     CHECK(winner == 1);
 
-    // Cancel remaining tasks
+    // when_any already cancelled and awaited the slower tasks
     result.cancel_remaining();
 
     co_return winner;

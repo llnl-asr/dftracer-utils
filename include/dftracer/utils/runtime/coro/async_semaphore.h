@@ -1,8 +1,12 @@
 #ifndef DFTRACER_UTILS_RUNTIME_CORO_ASYNC_SEMAPHORE_H
 #define DFTRACER_UTILS_RUNTIME_CORO_ASYNC_SEMAPHORE_H
 
+#include <dftracer/utils/runtime/coro/cancelled.h>
+#include <dftracer/utils/runtime/executor/executor.h>
+#include <dftracer/utils/runtime/executor/parked.h>
 #include <dftracer/utils/runtime/executor/resumption_helper.h>
 
+#include <algorithm>
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
@@ -30,35 +34,74 @@ class CoroSemaphore {
     CoroSemaphore(const CoroSemaphore&) = delete;
     CoroSemaphore& operator=(const CoroSemaphore&) = delete;
 
+    /// co_await throws a cancelled error (see coro::is_cancelled) when the
+    /// executor shuts down while it waits; no permits are taken then.
     class AcquireOperation {
        public:
         AcquireOperation(CoroSemaphore& sem, std::uint64_t n) noexcept
             : sem_(sem), need_(n > sem.capacity_ ? sem.capacity_ : n) {}
 
+        ~AcquireOperation() {
+            if (park_) executor_->unpark(park_);
+        }
+
         bool await_ready() const noexcept { return false; }
 
         bool await_suspend(std::coroutine_handle<> h) noexcept {
+            std::lock_guard<std::mutex> lock(sem_.mtx_);
+            if (sem_.waiters_.empty() && sem_.available_ >= need_) {
+                sem_.available_ -= need_;
+                return false;
+            }
             // Captured on the acquirer's worker (acquire is only co_awaited
             // from a coroutine already running on an executor), so release()
             // can resume through a known-valid executor instead of the
             // releaser's current thread, which may be off-executor (an
             // io-completion thread) where yield_to_executor would silently drop
             // the resume.
-            dftracer::utils::Executor* exec = resume_executor_for(nullptr);
-            std::lock_guard<std::mutex> lock(sem_.mtx_);
-            if (sem_.waiters_.empty() && sem_.available_ >= need_) {
-                sem_.available_ -= need_;
-                return false;
+            executor_ = resume_executor_for(nullptr);
+            handle_ = h;
+            sem_.waiters_.push_back(Waiter{need_, h, executor_, this});
+            if (executor_) {
+                park_ = executor_->park(this, &AcquireOperation::cancel_thunk);
             }
-            sem_.waiters_.push_back(Waiter{need_, h, exec});
             return true;
         }
 
-        void await_resume() const noexcept {}
+        void await_resume() {
+            if (park_) [[unlikely]] {
+                const bool cancelled = park_->cancelled;
+                executor_->unpark(park_);
+                park_ = nullptr;
+                if (cancelled) throw_cancelled("semaphore acquire cancelled");
+            }
+        }
+
+        static void cancel_thunk(void* self) noexcept {
+            static_cast<AcquireOperation*>(self)->cancel_parked();
+        }
+
+        void cancel_parked() noexcept {
+            {
+                std::unique_lock<std::mutex> lock(sem_.mtx_, std::try_to_lock);
+                if (!lock) return;
+                auto it = std::find_if(
+                    sem_.waiters_.begin(), sem_.waiters_.end(),
+                    [this](const Waiter& w) { return w.op == this; });
+                if (it == sem_.waiters_.end()) return;
+                sem_.waiters_.erase(it);
+                park_->cancelled = true;
+            }
+            dftracer::utils::schedule_coroutine_resumption_helper(executor_,
+                                                                  handle_);
+        }
 
        private:
         CoroSemaphore& sem_;
         std::uint64_t need_;
+        dftracer::utils::Executor* executor_ = nullptr;
+        std::coroutine_handle<> handle_{};
+        ParkNode* park_ = nullptr;
     };
 
     /// Acquire `n` permits (co_await). `n` above capacity is clamped.
@@ -105,6 +148,7 @@ class CoroSemaphore {
         std::uint64_t need;
         std::coroutine_handle<> handle;
         dftracer::utils::Executor* executor;
+        const AcquireOperation* op;
     };
 
     const std::uint64_t capacity_;

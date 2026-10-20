@@ -164,6 +164,7 @@ set(TEST_CPP_SOURCES
     runtime/test_task_abi.cpp
     runtime/test_task_pool.cpp
     runtime/test_reserve_async.cpp
+    runtime/test_shutdown.cpp
     common/test_logging.cpp
     common/test_string_intern.cpp
     dstd/test_hash_partition.cpp
@@ -201,6 +202,7 @@ set(TEST_CPP_SOURCES
     coro/test_yield.cpp
     coro/test_when_all_heterogeneous.cpp
     coro/test_when_any_heterogeneous.cpp
+    coro/test_when_any_cancel.cpp
     coro/test_async_once.cpp
     coro/test_async_semaphore.cpp
     # Async I/O tests

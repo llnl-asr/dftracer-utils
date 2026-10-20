@@ -1875,6 +1875,7 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/memory_attribution_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/counter_contention_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/heap_bench.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/coro_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/pressure_read_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/slice_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/spill_harness.cpp)
@@ -1913,6 +1914,9 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
 
     add_test(NAME bench_smoke/heap COMMAND heap_bench --smoke)
     set_tests_properties(bench_smoke/heap PROPERTIES LABELS bench_smoke)
+
+    add_test(NAME bench_smoke/coro COMMAND coro_bench --smoke)
+    set_tests_properties(bench_smoke/coro PROPERTIES LABELS bench_smoke)
 
     add_test(NAME bench_smoke/slice COMMAND slice_bench --smoke)
     set_tests_properties(bench_smoke/slice PROPERTIES LABELS bench_smoke)

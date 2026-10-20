@@ -70,9 +70,26 @@ class CoroScope {
     std::vector<coro::Coro> coroutines_;
     std::atomic<bool> joined_{false};
 
-    /// Cancellation support
-    std::shared_ptr<std::atomic<bool>> cancellation_requested_{
-        std::make_shared<std::atomic<bool>>(false)};
+    /// Cancellation: each scope has its own flag, and a scope also counts as
+    /// cancelled while any scope it was spawned from is. A root scope also
+    /// watches its executor's shutdown token. One allocation per scope.
+    struct CancelChain {
+        std::atomic<bool> flag{false};
+        std::shared_ptr<std::atomic<bool>> external;
+        std::shared_ptr<const CancelChain> parent;
+    };
+
+    static std::shared_ptr<CancelChain> make_chain(
+        std::shared_ptr<std::atomic<bool>> external,
+        std::shared_ptr<const CancelChain> parent) {
+        auto chain = std::make_shared<CancelChain>();
+        chain->external = std::move(external);
+        chain->parent = std::move(parent);
+        return chain;
+    }
+
+    std::shared_ptr<CancelChain> cancel_chain_{
+        make_chain(executor_ ? executor_->shutdown_token() : nullptr, nullptr)};
 
     /// Internal: create a Coro wrapper, track it, and enqueue it.
     /// Returns the Coro's coroutine_handle for callers that need it.
@@ -100,13 +117,12 @@ class CoroScope {
 
     explicit CoroScope(Executor* executor) : executor_(executor) {}
 
-    /// Construct with an inherited cancellation token (for child scopes
-    /// spawned from a parent -- shares the parent's cancellation signal).
-    CoroScope(Executor* executor,
-              std::shared_ptr<std::atomic<bool>> cancellation_token)
-        : executor_(executor),
-          cancellation_requested_(std::move(cancellation_token)) {}
+   private:
+    /// Child scope of a spawn, running on the chain made for it.
+    CoroScope(Executor* executor, std::shared_ptr<CancelChain> chain)
+        : executor_(executor), cancel_chain_(std::move(chain)) {}
 
+   public:
     ~CoroScope() {
         if (!joined_ && !coroutines_.empty()) {
             DFTRACER_UTILS_LOG_WARN(
@@ -175,15 +191,16 @@ class CoroScope {
     coro::SpawnFuture<void> spawn(Func&& func) {
         auto state = std::make_shared<coro::SharedState<void>>();
         state->executor = executor_;
+        auto chain = make_chain(nullptr, cancel_chain_);
+        state->cancel_token =
+            std::shared_ptr<std::atomic<bool>>(chain, &chain->flag);
 
         auto make_coro =
-            [](auto f, Executor* exec,
-               std::shared_ptr<std::atomic<bool>> cancel_token,
+            [](auto f, Executor* exec, std::shared_ptr<CancelChain> own_chain,
                std::shared_ptr<coro::SharedState<void>> st) -> coro::Coro {
-            // Each spawned coroutine gets its own CoroScope (child) so it
-            // can safely outlive the parent scope (e.g., when_any completes
-            // while slow tasks are still running). Shares cancellation.
-            CoroScope child_scope(exec, std::move(cancel_token));
+            // Each spawned coroutine gets its own CoroScope (child) with its
+            // own cancel flag, so cancelling one child leaves its siblings.
+            CoroScope child_scope(exec, std::move(own_chain));
             try {
                 auto task = f(child_scope);
                 // Propagate executor to the CoroTask's PromiseBase
@@ -200,7 +217,7 @@ class CoroScope {
             co_await child_scope.join();
         };
         auto c = make_coro(std::forward<Func>(func), executor_,
-                           cancellation_requested_, state);
+                           std::move(chain), state);
         enqueue_coro(c);
         return coro::SpawnFuture<void>(std::move(state));
     }
@@ -228,12 +245,14 @@ class CoroScope {
     coro::SpawnFuture<R> spawn(Func&& func) {
         auto state = std::make_shared<coro::SharedState<R>>();
         state->executor = executor_;
+        auto chain = make_chain(nullptr, cancel_chain_);
+        state->cancel_token =
+            std::shared_ptr<std::atomic<bool>>(chain, &chain->flag);
 
         auto make_coro =
-            [](auto f, Executor* exec,
-               std::shared_ptr<std::atomic<bool>> cancel_token,
+            [](auto f, Executor* exec, std::shared_ptr<CancelChain> own_chain,
                std::shared_ptr<coro::SharedState<R>> st) -> coro::Coro {
-            CoroScope child_scope(exec, std::move(cancel_token));
+            CoroScope child_scope(exec, std::move(own_chain));
             try {
                 auto task = f(child_scope);
                 task.handle().promise().set_executor(exec);
@@ -247,7 +266,7 @@ class CoroScope {
         };
 
         auto c = make_coro(std::forward<Func>(func), executor_,
-                           cancellation_requested_, state);
+                           std::move(chain), state);
         enqueue_coro(c);
         return coro::SpawnFuture<R>(std::move(state));
     }
@@ -506,6 +525,7 @@ class CoroScope {
     template <typename Func>
         requires std::is_invocable_r_v<coro::CoroTask<void>, Func, CoroScope&>
     coro::CoroTask<void> coro_scope(Func&& scope_func) {
+        co_await coro::detail::OWNS_SCOPE;
         CoroScope child(executor_);
         std::exception_ptr error;
         try {
@@ -532,12 +552,24 @@ class CoroScope {
     // Cancellation Support
     // ====================================================================
 
+    /// True once this scope's token or that of any scope it was spawned from
+    /// is set.
     bool is_cancellation_requested() const {
-        return cancellation_requested_->load(std::memory_order_acquire);
+        for (const CancelChain* c = cancel_chain_.get(); c;
+             c = c->parent.get()) {
+            if (c->flag.load(std::memory_order_acquire)) return true;
+            if (c->external && c->external->load(std::memory_order_acquire)) {
+                return true;
+            }
+        }
+        return false;
     }
 
+    /// This scope's own token. Setting it cancels this scope and the scopes
+    /// spawned from it, not its parent or siblings.
     std::shared_ptr<std::atomic<bool>> get_cancellation_token() const {
-        return cancellation_requested_;
+        return std::shared_ptr<std::atomic<bool>>(cancel_chain_,
+                                                  &cancel_chain_->flag);
     }
 };
 
@@ -551,6 +583,7 @@ template <typename Func, typename... Args>
                                    Args...>
 inline coro::CoroTask<void> run_coro_scope(Executor* executor, Func scope_func,
                                            Args... args) {
+    co_await coro::detail::OWNS_SCOPE;
     CoroScope scope(executor);
     std::exception_ptr error;
     try {

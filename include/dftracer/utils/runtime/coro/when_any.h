@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/runtime/coro/cancelled.h>
 #include <dftracer/utils/runtime/coro/completion_state.h>
 #include <dftracer/utils/runtime/coro/coro.h>
 #include <dftracer/utils/runtime/coro/task.h>
@@ -13,6 +14,7 @@
 #include <chrono>
 #include <coroutine>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <memory>
 #include <optional>
@@ -32,6 +34,53 @@ namespace dftracer::utils::coro {
 template <typename T>
 using when_any_result_t =
     std::conditional_t<std::is_void_v<T>, std::monostate, T>;
+
+namespace detail {
+
+/// Awaits `a` in place. An awaitable that ends as cancelled (it has
+/// cancelled() and it is true) gives an empty result, not an exception, so a
+/// loser that was stopped costs no throw.
+template <typename A>
+struct CancelAware {
+    using Value = when_any_result_t<typename A::result_type>;
+
+    A& inner;
+
+    bool await_ready() { return inner.await_ready(); }
+
+    template <typename Handle>
+    auto await_suspend(Handle h) {
+        return inner.await_suspend(h);
+    }
+
+    std::optional<Value> await_resume() {
+        if constexpr (requires(const A& a) { a.cancelled(); }) {
+            if (inner.cancelled()) return std::nullopt;
+        }
+        if constexpr (std::is_void_v<typename A::result_type>) {
+            inner.await_resume();
+            return Value{};
+        } else {
+            return Value(inner.await_resume());
+        }
+    }
+};
+
+/// A loser that has a cancel hook and was never started is dropped without
+/// running once a winner exists.
+template <typename A>
+bool never_started(A& a) {
+    if constexpr (requires(A& x) {
+                      x.started();
+                      x.cancel();
+                  }) {
+        return !a.started();
+    } else {
+        return false;
+    }
+}
+
+}  // namespace detail
 
 // ============================================================================
 // WhenAnyResult - Result of when_any operation
@@ -79,16 +128,13 @@ struct WhenAnySharedState : WhenAnyCompletionState {
     WhenAnyResult<typename Awaitable::result_type> result;
     std::exception_ptr exception;
     std::vector<std::shared_ptr<std::atomic<bool>>> cancellation_tokens;
-    // Wrappers are fire-and-forget Coro instances managed by the
-    // executor's FinalAwaiter lifecycle.  No wrapper_tasks vector is
-    // needed -- the executor owns the frames after release().
-    std::atomic<std::size_t> wrappers_done{0};
-    std::size_t total_wrappers{0};
+    /// The first awaitable to end was cancelled, so there is no result.
+    bool cancelled_winner = false;
     std::vector<Awaitable> awaitables;
 
     explicit WhenAnySharedState(std::vector<Awaitable> aws)
         : awaitables(std::move(aws)) {
-        total_wrappers = awaitables.size();
+        wrappers_total_ = awaitables.size();
         cancellation_tokens.reserve(awaitables.size());
 
         for (auto& awaitable : awaitables) {
@@ -101,22 +147,45 @@ struct WhenAnySharedState : WhenAnyCompletionState {
         }
     }
 
-    ~WhenAnySharedState() {
-        // Detach all awaitables to prevent their completion paths from
-        // resuming wrapper coroutine handles.  Wrappers are managed by
-        // the executor (released Coro instances) so we do not destroy
-        // them here -- detach() schedules stale handles for deferred
-        // destruction via the executor's destroy_queue.
-        for (auto& a : awaitables) {
-            if constexpr (requires { a.detach(); }) {
-                a.detach();
+    /// Sets every token and calls cancel() on each loser that has one. A
+    /// cancel() that throws does not stop the others; the first error is
+    /// kept unless the winner already has one.
+    void cancel_losers(std::size_t winner) noexcept {
+        for (std::size_t j = 0; j < awaitables.size(); ++j) {
+            if (cancellation_tokens[j]) {
+                cancellation_tokens[j]->store(true, std::memory_order_release);
+            }
+            if (j != winner) {
+                if constexpr (requires { awaitables[j].cancel(); }) {
+                    try {
+                        awaitables[j].cancel();
+                    } catch (...) {
+                        if (!exception) exception = std::current_exception();
+                    }
+                }
             }
         }
+    }
+
+    /// Releases the awaiter once the winner is recorded, with `*error` if the
+    /// winner or its bookkeeping threw (null for none). Runs exactly once, by
+    /// the winner.
+    void finish_winner(std::size_t winner, std::exception_ptr* error) noexcept {
+        if (error != nullptr) exception = std::move(*error);
+        cancel_losers(winner);
+        on_first_complete();
     }
 };
 
 /**
  * WhenAnyAwaitable - Completes when first awaitable completes
+ *
+ * Losers are cancelled and awaited before when_any returns, so no loser runs
+ * after the awaiting coroutine resumes. Cancellation is cooperative: an
+ * awaitable may expose get_cancellation_token() (its token is set) and
+ * cancel() (called once from the winner's thread, possibly while the loser is
+ * suspended or running, so it must be thread-safe and make the loser finish).
+ * An awaitable with neither runs to completion and delays the return.
  *
  * Usage:
  * @code
@@ -148,35 +217,7 @@ class WhenAnyAwaitable {
 
     ~WhenAnyAwaitable() = default;
 
-    bool await_ready() {
-        for (std::size_t i = 0; i < state_->awaitables.size(); i++) {
-            if (state_->awaitables[i].await_ready()) {
-                try {
-                    state_->result.index = i;
-                    state_->result.result =
-                        state_->awaitables[i].await_resume();
-
-                    state_->result.remaining_cancellation_tokens.reserve(
-                        state_->cancellation_tokens.size() - 1);
-                    for (std::size_t j = 0;
-                         j < state_->cancellation_tokens.size(); ++j) {
-                        if (j != i && state_->cancellation_tokens[j]) {
-                            state_->result.remaining_cancellation_tokens
-                                .push_back(state_->cancellation_tokens[j]);
-                        }
-                    }
-
-                    state_->completed.store(true, std::memory_order_release);
-                    return true;
-                } catch (...) {
-                    state_->exception = std::current_exception();
-                    state_->completed.store(true, std::memory_order_release);
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
+    bool await_ready() const noexcept { return false; }
 
     template <typename Promise>
     bool await_suspend(std::coroutine_handle<Promise> h) {
@@ -195,7 +236,7 @@ class WhenAnyAwaitable {
             launch_wrapper(i);
         }
 
-        if (state_->completed.load(std::memory_order_acquire)) {
+        if (state_->released()) {
             return false;
         }
 
@@ -213,50 +254,42 @@ class WhenAnyAwaitable {
     }
 
     result_type await_resume() {
-        // Detach awaitables so that completing spawned tasks don't
-        // try to resume wrapper Coro handles that may already have
-        // been destroyed by the executor.  detach() now schedules
-        // any stale waiter handles for deferred destruction, which
-        // prevents the race between SpawnFuture::complete() and
-        // frame cleanup.
-        for (auto& token : state_->cancellation_tokens) {
-            if (token) token->store(true, std::memory_order_release);
-        }
-        for (auto& a : state_->awaitables) {
-            if constexpr (requires { a.detach(); }) {
-                a.detach();
-            }
-        }
+        state_->finish_wait();
+        state_->awaitables.clear();
         if (state_->exception) {
             rethrow_and_clear(state_->exception);
         }
+        if (state_->cancelled_winner) throw_cancelled("wait cancelled");
         return std::move(state_->result);
     }
 
    private:
     void launch_wrapper(std::size_t i) {
-        // Create a fire-and-forget Coro wrapper.  After release(),
-        // the executor owns the frame and FinalAwaiter will schedule
-        // deferred destruction when the wrapper completes.  This
-        // eliminates the circular reference (SharedState no longer
-        // owns wrapper frames) and the race where wrapper_tasks.clear()
-        // could destroy a frame that was enqueued for resumption.
+        // Fire-and-forget Coro wrapper. Every wrapper awaits its awaitable to
+        // the end and reports in on_wrapper_finished(), which resumes the
+        // awaiter after the last one.
         auto wrapper = [](std::shared_ptr<SharedState> state,
                           std::size_t index) -> coro::Coro {
+            if (state->completed.load(std::memory_order_acquire) &&
+                detail::never_started(state->awaitables[index])) {
+                state->on_wrapper_finished();
+                co_return;
+            }
+            bool won = false;
             try {
-                if (state->completed.load(std::memory_order_acquire)) {
-                    state->wrappers_done.fetch_add(1,
-                                                   std::memory_order_release);
-                    co_return;
-                }
-
-                auto result = co_await std::move(state->awaitables[index]);
+                auto outcome = co_await detail::CancelAware<Awaitable>{
+                    state->awaitables[index]};
 
                 bool expected = false;
-                if (state->completed.compare_exchange_strong(
-                        expected, true, std::memory_order_acq_rel)) {
+                won = state->completed.compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel);
+                if (won) {
                     state->result.index = index;
-                    state->result.result = std::move(result);
+                    if (outcome) {
+                        state->result.result = std::move(*outcome);
+                    } else {
+                        state->cancelled_winner = true;
+                    }
 
                     state->result.remaining_cancellation_tokens.reserve(
                         state->cancellation_tokens.size() - 1);
@@ -267,28 +300,17 @@ class WhenAnyAwaitable {
                                 .push_back(state->cancellation_tokens[j]);
                         }
                     }
-
-                    state->on_first_complete();
+                    state->finish_winner(index, nullptr);
                 }
-
-                state->wrappers_done.fetch_add(1, std::memory_order_release);
             } catch (...) {
-                auto ex = std::current_exception();
-                if (state->completed.load(std::memory_order_acquire)) {
-                    state->wrappers_done.fetch_add(1,
-                                                   std::memory_order_release);
-                    co_return;
-                }
-
                 bool expected = false;
-                if (state->completed.compare_exchange_strong(
-                        expected, true, std::memory_order_acq_rel)) {
-                    state->exception = std::move(ex);
-                    state->on_first_complete();
+                if (won || state->completed.compare_exchange_strong(
+                               expected, true, std::memory_order_acq_rel)) {
+                    std::exception_ptr error = std::current_exception();
+                    state->finish_winner(index, &error);
                 }
-
-                state->wrappers_done.fetch_add(1, std::memory_order_release);
             }
+            state->on_wrapper_finished();
             co_return;
         }(state_, i);
 
@@ -300,8 +322,8 @@ class WhenAnyAwaitable {
         // deferred destruction when the wrapper completes.
         auto h = wrapper.release();
         // Resume past initial_suspend.  The wrapper will either:
-        // (a) suspend at co_await SpawnFuture (most common), or
-        // (b) run to completion if SpawnFuture was already ready.
+        // (a) suspend at co_await on the awaitable (most common), or
+        // (b) run to completion if the awaitable was already ready.
         h.resume();
     }
 };
@@ -445,14 +467,17 @@ template <typename... Awaitables>
 struct WhenAnyTupleState : WhenAnyCompletionState {
     static constexpr std::size_t total_ = sizeof...(Awaitables);
 
-    std::tuple<Awaitables...> awaitables_;
+    std::optional<std::tuple<Awaitables...>> awaitables_;
     std::atomic<bool> completed{false};
     WhenAnyTupleResult<Awaitables...> result;
     std::exception_ptr exception;
+    /// The first awaitable to end was cancelled, so there is no result.
+    bool cancelled_winner = false;
     std::vector<std::shared_ptr<std::atomic<bool>>> cancellation_tokens;
 
     explicit WhenAnyTupleState(Awaitables&&... aws)
-        : awaitables_(std::forward<Awaitables>(aws)...) {
+        : awaitables_(std::in_place, std::forward<Awaitables>(aws)...) {
+        wrappers_total_ = total_;
         cancellation_tokens.reserve(total_);
         std::apply(
             [this](auto&... a) {
@@ -469,21 +494,71 @@ struct WhenAnyTupleState : WhenAnyCompletionState {
                     }(a),
                     ...);
             },
-            awaitables_);
+            *awaitables_);
     }
 
-    ~WhenAnyTupleState() {
-        std::apply(
-            [](auto&... a) {
-                (
-                    [&](auto& aw) {
-                        if constexpr (requires { aw.detach(); }) {
-                            aw.detach();
+    /// True for the first wrapper to call; it then owns the result.
+    bool claim() {
+        bool expected = false;
+        return completed.compare_exchange_strong(expected, true,
+                                                 std::memory_order_acq_rel);
+    }
+
+    template <std::size_t I, typename V>
+    void store_winner(V&& value) {
+        result.result_.template emplace<I>(std::forward<V>(value));
+        record_winner<I>();
+    }
+
+    /// Records the index and the tokens of the losers.
+    template <std::size_t I>
+    void record_winner() {
+        result.index = I;
+
+        result.remaining_cancellation_tokens_.reserve(total_ - 1);
+        for (std::size_t j = 0; j < cancellation_tokens.size(); ++j) {
+            if (j != I && cancellation_tokens[j]) {
+                result.remaining_cancellation_tokens_.push_back(
+                    cancellation_tokens[j]);
+            }
+        }
+    }
+
+    /// Releases the awaiter once the winner is recorded, with `error` if the
+    /// winner or its bookkeeping threw. Runs exactly once, by the winner.
+    template <std::size_t I>
+    void finish_winner(std::exception_ptr* error) noexcept {
+        if (error != nullptr) exception = std::move(*error);
+        cancel_losers(I, std::make_index_sequence<total_>{});
+        on_first_complete();
+    }
+
+    /// Sets every token and calls cancel() on each loser that has one. A
+    /// cancel() that throws does not stop the others; the first error is
+    /// kept unless the winner already has one.
+    template <std::size_t... Is>
+    void cancel_losers(std::size_t winner,
+                       std::index_sequence<Is...>) noexcept {
+        (
+            [&] {
+                if (cancellation_tokens[Is]) {
+                    cancellation_tokens[Is]->store(true,
+                                                   std::memory_order_release);
+                }
+                if (Is != winner) {
+                    if constexpr (requires {
+                                      std::get<Is>(*awaitables_).cancel();
+                                  }) {
+                        try {
+                            std::get<Is>(*awaitables_).cancel();
+                        } catch (...) {
+                            if (!exception)
+                                exception = std::current_exception();
                         }
-                    }(a),
-                    ...);
-            },
-            awaitables_);
+                    }
+                }
+            }(),
+            ...);
     }
 };
 
@@ -497,72 +572,33 @@ class WhenAnyTupleAwaitable {
     template <std::size_t I>
     void launch_one() {
         using A = std::tuple_element_t<I, std::tuple<Awaitables...>>;
-        using R = typename A::result_type;
-
         auto wrapper = [](std::shared_ptr<State> state) -> coro::Coro {
+            if (state->completed.load(std::memory_order_acquire) &&
+                detail::never_started(std::get<I>(*state->awaitables_))) {
+                state->on_wrapper_finished();
+                co_return;
+            }
+            bool won = false;
             try {
-                if (state->completed.load(std::memory_order_acquire)) {
-                    co_return;
-                }
-
-                if constexpr (std::is_void_v<R>) {
-                    co_await std::move(std::get<I>(state->awaitables_));
-
-                    bool expected = false;
-                    if (state->completed.compare_exchange_strong(
-                            expected, true, std::memory_order_acq_rel)) {
-                        state->result.index = I;
-                        state->result.result_.template emplace<I>(
-                            std::monostate{});
-
-                        state->result.remaining_cancellation_tokens_.reserve(
-                            State::total_ - 1);
-                        for (std::size_t j = 0;
-                             j < state->cancellation_tokens.size(); ++j) {
-                            if (j != I && state->cancellation_tokens[j]) {
-                                state->result.remaining_cancellation_tokens_
-                                    .push_back(state->cancellation_tokens[j]);
-                            }
-                        }
-
-                        state->on_first_complete();
+                auto outcome = co_await detail::CancelAware<A>{
+                    std::get<I>(*state->awaitables_)};
+                won = state->claim();
+                if (won) {
+                    if (outcome) {
+                        state->template store_winner<I>(std::move(*outcome));
+                    } else {
+                        state->template record_winner<I>();
+                        state->cancelled_winner = true;
                     }
-                } else {
-                    auto r =
-                        co_await std::move(std::get<I>(state->awaitables_));
-
-                    bool expected = false;
-                    if (state->completed.compare_exchange_strong(
-                            expected, true, std::memory_order_acq_rel)) {
-                        state->result.index = I;
-                        state->result.result_.template emplace<I>(std::move(r));
-
-                        state->result.remaining_cancellation_tokens_.reserve(
-                            State::total_ - 1);
-                        for (std::size_t j = 0;
-                             j < state->cancellation_tokens.size(); ++j) {
-                            if (j != I && state->cancellation_tokens[j]) {
-                                state->result.remaining_cancellation_tokens_
-                                    .push_back(state->cancellation_tokens[j]);
-                            }
-                        }
-
-                        state->on_first_complete();
-                    }
+                    state->template finish_winner<I>(nullptr);
                 }
             } catch (...) {
-                auto ex = std::current_exception();
-                if (state->completed.load(std::memory_order_acquire)) {
-                    co_return;
-                }
-
-                bool expected = false;
-                if (state->completed.compare_exchange_strong(
-                        expected, true, std::memory_order_acq_rel)) {
-                    state->exception = std::move(ex);
-                    state->on_first_complete();
+                if (won || state->claim()) {
+                    std::exception_ptr error = std::current_exception();
+                    state->template finish_winner<I>(&error);
                 }
             }
+            state->on_wrapper_finished();
             co_return;
         }(state_);
 
@@ -576,50 +612,6 @@ class WhenAnyTupleAwaitable {
         (launch_one<Is>(), ...);
     }
 
-    /// Check if the I-th awaitable is immediately ready; if so, populate
-    /// state and return true.
-    template <std::size_t I>
-    bool check_ready_one() {
-        using A = std::tuple_element_t<I, std::tuple<Awaitables...>>;
-        using R = typename A::result_type;
-
-        auto& aw = std::get<I>(state_->awaitables_);
-        if (!aw.await_ready()) {
-            return false;
-        }
-
-        try {
-            state_->result.index = I;
-            if constexpr (std::is_void_v<R>) {
-                aw.await_resume();
-                state_->result.result_.template emplace<I>(std::monostate{});
-            } else {
-                state_->result.result_.template emplace<I>(aw.await_resume());
-            }
-
-            state_->result.remaining_cancellation_tokens_.reserve(
-                State::total_ - 1);
-            for (std::size_t j = 0; j < state_->cancellation_tokens.size();
-                 ++j) {
-                if (j != I && state_->cancellation_tokens[j]) {
-                    state_->result.remaining_cancellation_tokens_.push_back(
-                        state_->cancellation_tokens[j]);
-                }
-            }
-
-            state_->completed.store(true, std::memory_order_release);
-        } catch (...) {
-            state_->exception = std::current_exception();
-            state_->completed.store(true, std::memory_order_release);
-        }
-        return true;
-    }
-
-    template <std::size_t... Is>
-    bool check_ready_any(std::index_sequence<Is...>) {
-        return (check_ready_one<Is>() || ...);
-    }
-
    public:
     using result_type = WhenAnyTupleResult<Awaitables...>;
 
@@ -628,10 +620,7 @@ class WhenAnyTupleAwaitable {
 
     ~WhenAnyTupleAwaitable() = default;
 
-    bool await_ready() {
-        return check_ready_any(
-            std::make_index_sequence<sizeof...(Awaitables)>{});
-    }
+    bool await_ready() const noexcept { return false; }
 
     template <typename Promise>
     bool await_suspend(std::coroutine_handle<Promise> h) {
@@ -644,7 +633,7 @@ class WhenAnyTupleAwaitable {
 
         launch_all(std::make_index_sequence<sizeof...(Awaitables)>{});
 
-        if (state_->completed.load(std::memory_order_acquire)) {
+        if (state_->released()) {
             return false;
         }
 
@@ -659,24 +648,12 @@ class WhenAnyTupleAwaitable {
     }
 
     result_type await_resume() {
-        for (auto& token : state_->cancellation_tokens) {
-            if (token) token->store(true, std::memory_order_release);
-        }
-        std::apply(
-            [](auto&... a) {
-                (
-                    [&](auto& aw) {
-                        if constexpr (requires { aw.detach(); }) {
-                            aw.detach();
-                        }
-                    }(a),
-                    ...);
-            },
-            state_->awaitables_);
-
+        state_->finish_wait();
+        state_->awaitables_.reset();
         if (state_->exception) {
             rethrow_and_clear(state_->exception);
         }
+        if (state_->cancelled_winner) throw_cancelled("wait cancelled");
         return std::move(state_->result);
     }
 };
@@ -701,7 +678,7 @@ auto when_any(A1&& a1, A2&& a2, Rest&&... rest) {
 }
 
 // ============================================================================
-// Timeout support (future enhancement)
+// Timeout support
 // ============================================================================
 
 /**
@@ -719,15 +696,55 @@ auto when_any(A1&& a1, A2&& a2, Rest&&... rest) {
  *     // Timeout occurred
  * }
  * @endcode
+ *
+ * co_await throws "Operation timed out" when the time passes, and a cancelled
+ * error (see coro::is_cancelled) after cancel() or when the executor shuts
+ * down. cancel() is thread-safe and may be called at any time, so a timeout
+ * that loses a when_any race does not hold the winner back.
  */
 template <typename Duration>
 class TimeoutAwaitable {
    private:
+    enum class Outcome : std::uint8_t { Pending, Fired, Cancelled };
+
+    struct State {
+        CompletionLatch latch;
+        std::coroutine_handle<> handle{};
+        Executor* executor = nullptr;
+        TimerService* timers = nullptr;
+        std::atomic<TimerService::TimerId> timer{0};
+        Outcome outcome = Outcome::Pending;
+        ParkNode* park = nullptr;
+
+        void cancel() noexcept {
+            if (latch.on_cancelled()) {
+                outcome = Outcome::Cancelled;
+                cancel_timer();
+                resume_continuation(executor, handle);
+            }
+        }
+
+        void on_fire() noexcept {
+            if (latch.on_completed()) {
+                outcome = Outcome::Fired;
+                resume_continuation(executor, handle);
+            }
+        }
+
+        void cancel_timer() noexcept {
+            const TimerService::TimerId id =
+                timer.exchange(0, std::memory_order_acq_rel);
+            if (id != 0 && timers) timers->cancel_timeout(id);
+        }
+
+        static void cancel_thunk(void* self) noexcept {
+            static_cast<State*>(self)->cancel();
+        }
+    };
+
     Duration duration_;
     TimerService* timer_service_;
-    std::atomic<bool> completed_{false};
-    std::shared_ptr<std::atomic<bool>> timed_out_;
-    uint64_t timer_id_{0};
+    std::shared_ptr<State> state_;
 
    public:
     using result_type = void;
@@ -735,44 +752,74 @@ class TimeoutAwaitable {
     explicit TimeoutAwaitable(Duration duration, TimerService* timer_service)
         : duration_(duration),
           timer_service_(timer_service),
-          timed_out_(std::make_shared<std::atomic<bool>>(false)) {}
+          state_(std::make_shared<State>()) {}
+
+    /// A copy waits on its own timer.
+    TimeoutAwaitable(const TimeoutAwaitable& other)
+        : duration_(other.duration_),
+          timer_service_(other.timer_service_),
+          state_(std::make_shared<State>()) {}
+    TimeoutAwaitable(TimeoutAwaitable&&) noexcept = default;
+    TimeoutAwaitable& operator=(const TimeoutAwaitable&) = delete;
+    TimeoutAwaitable& operator=(TimeoutAwaitable&&) = delete;
 
     ~TimeoutAwaitable() {
-        completed_.store(true, std::memory_order_release);
-        if (timer_service_ && timer_id_ != 0) {
-            timer_service_->cancel_timeout(timer_id_);
-        }
+        if (!state_) return;
+        // A fire that comes after this finds the latch cancelled and resumes
+        // nothing.
+        state_->latch.on_cancelled();
+        state_->cancel_timer();
+        if (state_->park) state_->executor->unpark(state_->park);
     }
 
     bool await_ready() const noexcept { return false; }
 
-    void await_suspend(std::coroutine_handle<> h) {
+    bool await_suspend(std::coroutine_handle<> h) {
         if (!timer_service_) {
             throw DFTUtilsException(
                 ErrorCode::Pipeline,
                 "TimeoutAwaitable: TimerService not available");
         }
 
-        timer_id_ = timer_service_->register_timeout(duration_, [this, h]() {
-            if (!completed_.load(std::memory_order_acquire)) {
-                timed_out_->store(true, std::memory_order_release);
-                memory::Scope scope{memory::Manager::get().general()};
-                h.resume();
-            }
-        });
+        State& st = *state_;
+        st.handle = h;
+        st.executor = resume_executor_for(nullptr);
+        st.timers = timer_service_;
+        if (st.executor) {
+            st.park = st.executor->park(&st, &State::cancel_thunk);
+        }
+        st.timer.store(timer_service_->register_timeout(
+                           duration_, [state = state_] { state->on_fire(); }),
+                       std::memory_order_release);
+        // From here on the fire or a cancel may resume the frame.
+        const std::uint8_t before = st.latch.on_suspended();
+        if (before & CompletionLatch::BIT_COMPLETED) {
+            st.outcome = Outcome::Fired;
+            return false;
+        }
+        if (before & CompletionLatch::BIT_CANCELLED) {
+            st.outcome = Outcome::Cancelled;
+            st.cancel_timer();
+            return false;
+        }
+        return true;
     }
 
     void await_resume() {
-        completed_.store(true, std::memory_order_release);
-
-        if (timed_out_->load(std::memory_order_acquire)) {
-            throw DFTUtilsException(ErrorCode::Pipeline, "Operation timed out");
+        State& st = *state_;
+        if (st.park) {
+            st.executor->unpark(st.park);
+            st.park = nullptr;
         }
+        st.cancel_timer();
+        if (st.outcome == Outcome::Cancelled) {
+            throw_cancelled("timeout cancelled");
+        }
+        throw DFTUtilsException(ErrorCode::Pipeline, "Operation timed out");
     }
 
-    std::shared_ptr<std::atomic<bool>> get_cancellation_token() const {
-        return timed_out_;
-    }
+    /// Ends the wait early. Thread-safe; does nothing once the wait is over.
+    void cancel() noexcept { state_->cancel(); }
 };
 
 /**

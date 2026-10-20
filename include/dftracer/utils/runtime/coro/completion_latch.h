@@ -12,28 +12,50 @@ class Executor;
 namespace coro {
 
 /// Coordinates an awaiter's suspension with child completion so exactly one
-/// side resumes the awaiting coroutine. Both sides fetch_or their bit on one
-/// atomic; whichever observes the other's bit already set is the side that
-/// resumes (single modification order => no lost or double wakeup).
+/// side resumes the awaiting coroutine. Each side fetch_ors its bit on one
+/// atomic; whichever observes the right bits already set is the side that
+/// resumes (single modification order => no lost or double wakeup). A third
+/// party, executor shutdown, may cancel the wait: it resumes the awaiter only
+/// when completion has not.
 class CompletionLatch {
    public:
-    /// The awaiter has suspended. Returns true if completion already happened
-    /// (the caller must then resume the continuation).
-    bool on_suspended() noexcept {
-        return (state_.fetch_or(BIT_SUSPENDED, std::memory_order_acq_rel) &
-                BIT_COMPLETED) != 0;
+    static constexpr std::uint8_t BIT_SUSPENDED = 1;
+    static constexpr std::uint8_t BIT_COMPLETED = 2;
+    static constexpr std::uint8_t BIT_CANCELLED = 4;
+
+    /// True when completion or cancellation already happened.
+    bool settled() const noexcept {
+        return (state_.load(std::memory_order_acquire) &
+                (BIT_COMPLETED | BIT_CANCELLED)) != 0;
     }
 
-    /// Completion finished. Returns true if the awaiter already suspended (the
-    /// caller must then resume the continuation).
+    /// The awaiter has suspended. Returns the bits that were set before: the
+    /// caller must resume the continuation when COMPLETED or CANCELLED was
+    /// already there.
+    std::uint8_t on_suspended() noexcept {
+        return state_.fetch_or(BIT_SUSPENDED, std::memory_order_acq_rel);
+    }
+
+    /// Completion finished. Returns true if the awaiter already suspended and
+    /// no cancellation resumed it (the caller must then resume the
+    /// continuation).
     bool on_completed() noexcept {
-        return (state_.fetch_or(BIT_COMPLETED, std::memory_order_acq_rel) &
-                BIT_SUSPENDED) != 0;
+        const std::uint8_t prev =
+            state_.fetch_or(BIT_COMPLETED, std::memory_order_acq_rel);
+        return (prev & BIT_SUSPENDED) != 0 && (prev & BIT_CANCELLED) == 0;
+    }
+
+    /// The wait was cancelled. Returns true if the awaiter already suspended
+    /// and nothing resumed it yet (the caller must then resume the
+    /// continuation, which is to report the cancellation).
+    bool on_cancelled() noexcept {
+        const std::uint8_t prev =
+            state_.fetch_or(BIT_CANCELLED, std::memory_order_acq_rel);
+        return (prev & BIT_SUSPENDED) != 0 &&
+               (prev & (BIT_COMPLETED | BIT_CANCELLED)) == 0;
     }
 
    private:
-    static constexpr std::uint8_t BIT_SUSPENDED = 1;
-    static constexpr std::uint8_t BIT_COMPLETED = 2;
     std::atomic<std::uint8_t> state_{0};
 };
 

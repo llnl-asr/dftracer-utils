@@ -120,6 +120,7 @@ TEST_CASE("memory statuses map to error codes") {
     CHECK(dut::error_code_of(Status::PoolTableFull) == ErrorCode::Internal);
     CHECK(dut::error_code_of(Status::SlotTableFull) == ErrorCode::Internal);
     CHECK(dut::error_code_of(Status::Ok) == ErrorCode::Unknown);
+    CHECK(dut::error_code_of(Status::Cancelled) == ErrorCode::Unknown);
 
     CHECK(std::string(dut::error_code_name(ErrorCode::MemoryBudgetExceeded)) ==
           "MEMORY_BUDGET_EXCEEDED");

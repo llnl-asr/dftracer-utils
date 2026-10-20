@@ -142,6 +142,7 @@ class WhenAllVectorAwaitable {
     }
 
     result_type await_resume() {
+        state_->finish_wait();
         if (state_->exception_) {
             rethrow_and_clear(state_->exception_);
         }
@@ -273,6 +274,7 @@ class WhenAllVectorAwaitable<Awaitable> {
     }
 
     void await_resume() {
+        state_->finish_wait();
         if (state_->exception_) {
             rethrow_and_clear(state_->exception_);
         }
@@ -384,6 +386,7 @@ class WhenAllTupleAwaitable {
     }
 
     result_type await_resume() {
+        state_->finish_wait();
         if (state_->exception_) {
             rethrow_and_clear(state_->exception_);
         }

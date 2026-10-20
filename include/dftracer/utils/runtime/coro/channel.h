@@ -2,6 +2,9 @@
 #define DFTRACER_UTILS_RUNTIME_CORO_CHANNEL_H
 
 #include <concurrentqueue.h>
+#include <dftracer/utils/runtime/coro/cancelled.h>
+#include <dftracer/utils/runtime/executor/executor.h>
+#include <dftracer/utils/runtime/executor/parked.h>
 #include <dftracer/utils/runtime/executor/resumption_helper.h>
 
 #include <atomic>
@@ -13,10 +16,6 @@
 #include <mutex>
 #include <optional>
 #include <utility>
-
-namespace dftracer::utils {
-class Executor;
-}
 
 namespace dftracer::utils::coro {
 
@@ -124,12 +123,16 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         }
     };
 
+    /// co_await throws a cancelled error (see coro::is_cancelled) when the
+    /// executor shuts down while it waits.
     class ReceiveAwaitable {
        private:
         Channel* channel_;
         std::optional<T> result_;
         ReceiveWaiterNode waiter_{};
         bool suspended_{false};
+        bool cancelled_{false};
+        dftracer::utils::ParkNode* park_{nullptr};
 
        public:
         explicit ReceiveAwaitable(Channel* channel) : channel_(channel) {}
@@ -247,6 +250,10 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
                     waiter_.next = nullptr;
                     channel_->enqueue_receive_waiter_locked(&waiter_);
                     suspended_ = true;
+                    if (waiter_.executor) {
+                        park_ = waiter_.executor->park(
+                            this, &ReceiveAwaitable::cancel_thunk);
+                    }
                     return true;
                 }
             }
@@ -291,36 +298,44 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         }
 
         std::optional<T> await_resume() {
+            if (park_) {
+                waiter_.executor->unpark(park_);
+                park_ = nullptr;
+            }
             suspended_ = false;
+            if (cancelled_) throw_cancelled("channel receive cancelled");
             return std::move(result_);
         }
 
+        static void cancel_thunk(void* self) noexcept {
+            static_cast<ReceiveAwaitable*>(self)->cancel_parked();
+        }
+
+        void cancel_parked() noexcept {
+            {
+                std::unique_lock<std::mutex> lock(channel_->state_mutex_,
+                                                  std::try_to_lock);
+                if (!lock || !channel_->remove_receive_waiter_locked(&waiter_))
+                    return;
+                cancelled_ = true;
+            }
+            schedule_coroutine_resumption_helper(waiter_.executor,
+                                                 waiter_.handle);
+        }
+
         ~ReceiveAwaitable() {
+            if (park_) waiter_.executor->unpark(park_);
             if (!suspended_ || !channel_) return;
 
             std::lock_guard<std::mutex> lock(channel_->state_mutex_);
-            ReceiveWaiterNode* prev = nullptr;
-            ReceiveWaiterNode* curr = channel_->recv_waiters_head_;
-            while (curr) {
-                if (curr == &waiter_) {
-                    if (prev) {
-                        prev->next = curr->next;
-                    } else {
-                        channel_->recv_waiters_head_ = curr->next;
-                    }
-                    if (channel_->recv_waiters_tail_ == curr) {
-                        channel_->recv_waiters_tail_ = prev;
-                    }
-                    waiter_.next = nullptr;
-                    suspended_ = false;
-                    return;
-                }
-                prev = curr;
-                curr = curr->next;
+            if (channel_->remove_receive_waiter_locked(&waiter_)) {
+                suspended_ = false;
             }
         }
     };
 
+    /// co_await throws a cancelled error (see coro::is_cancelled) when the
+    /// executor shuts down while it waits for room.
     class SendAwaitable {
        private:
         Channel* channel_;
@@ -328,6 +343,8 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         bool sent_{false};
         SendWaiterNode waiter_{};
         bool suspended_{false};
+        bool cancelled_{false};
+        dftracer::utils::ParkNode* park_{nullptr};
 
        public:
         SendAwaitable(Channel* channel, const T& item)
@@ -425,6 +442,10 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
                         waiter_.next = nullptr;
                         channel_->enqueue_send_waiter_locked(&waiter_);
                         suspended_ = true;
+                        if (waiter_.executor) {
+                            park_ = waiter_.executor->park(
+                                this, &SendAwaitable::cancel_thunk);
+                        }
                         return true;
                     }
 
@@ -461,32 +482,38 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         }
 
         bool await_resume() {
+            if (park_) {
+                waiter_.executor->unpark(park_);
+                park_ = nullptr;
+            }
             suspended_ = false;
+            if (cancelled_) throw_cancelled("channel send cancelled");
             return sent_;
         }
 
+        static void cancel_thunk(void* self) noexcept {
+            static_cast<SendAwaitable*>(self)->cancel_parked();
+        }
+
+        void cancel_parked() noexcept {
+            {
+                std::unique_lock<std::mutex> lock(channel_->state_mutex_,
+                                                  std::try_to_lock);
+                if (!lock || !channel_->remove_send_waiter_locked(&waiter_))
+                    return;
+                cancelled_ = true;
+            }
+            schedule_coroutine_resumption_helper(waiter_.executor,
+                                                 waiter_.handle);
+        }
+
         ~SendAwaitable() {
+            if (park_) waiter_.executor->unpark(park_);
             if (!suspended_ || !channel_) return;
 
             std::lock_guard<std::mutex> lock(channel_->state_mutex_);
-            SendWaiterNode* prev = nullptr;
-            SendWaiterNode* curr = channel_->send_waiters_head_;
-            while (curr) {
-                if (curr == &waiter_) {
-                    if (prev) {
-                        prev->next = curr->next;
-                    } else {
-                        channel_->send_waiters_head_ = curr->next;
-                    }
-                    if (channel_->send_waiters_tail_ == curr) {
-                        channel_->send_waiters_tail_ = prev;
-                    }
-                    waiter_.next = nullptr;
-                    suspended_ = false;
-                    return;
-                }
-                prev = curr;
-                curr = curr->next;
+            if (channel_->remove_send_waiter_locked(&waiter_)) {
+                suspended_ = false;
             }
         }
     };
@@ -570,6 +597,40 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         if (!send_waiters_tail_) {
             send_waiters_tail_ = node;
         }
+    }
+
+    bool remove_receive_waiter_locked(ReceiveWaiterNode* node) {
+        ReceiveWaiterNode* prev = nullptr;
+        for (ReceiveWaiterNode* curr = recv_waiters_head_; curr;
+             prev = curr, curr = curr->next) {
+            if (curr != node) continue;
+            if (prev) {
+                prev->next = curr->next;
+            } else {
+                recv_waiters_head_ = curr->next;
+            }
+            if (recv_waiters_tail_ == curr) recv_waiters_tail_ = prev;
+            node->next = nullptr;
+            return true;
+        }
+        return false;
+    }
+
+    bool remove_send_waiter_locked(SendWaiterNode* node) {
+        SendWaiterNode* prev = nullptr;
+        for (SendWaiterNode* curr = send_waiters_head_; curr;
+             prev = curr, curr = curr->next) {
+            if (curr != node) continue;
+            if (prev) {
+                prev->next = curr->next;
+            } else {
+                send_waiters_head_ = curr->next;
+            }
+            if (send_waiters_tail_ == curr) send_waiters_tail_ = prev;
+            node->next = nullptr;
+            return true;
+        }
+        return false;
     }
 
     SendWaiterNode* pop_send_waiter_locked() {

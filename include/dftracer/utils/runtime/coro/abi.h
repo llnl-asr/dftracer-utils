@@ -44,6 +44,10 @@ int dftu_task_run(dftu_runtime* rt, dftu_task* t);
 
 /* Combine n tasks into one; consumes the inputs. NULL if n == 0. */
 dftu_task* dftu_task_when_all(dftu_task* const* ts, uint32_t n);
+/* Like when_all, but the combined task finishes with the first input to
+   finish. The other inputs are cancelled and awaited before it finishes, so
+   none runs after it; an input that cannot be cancelled runs to its end
+   first. */
 dftu_task* dftu_task_when_any(dftu_task* const* ts, uint32_t n);
 
 #ifdef __cplusplus

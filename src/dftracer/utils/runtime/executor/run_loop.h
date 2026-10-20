@@ -2,8 +2,10 @@
 #define DFTRACER_UTILS_RUNTIME_EXECUTOR_RUN_LOOP_H
 
 #include <dftracer/utils/runtime/executor/executor.h>
+#include <dftracer/utils/runtime/executor/parked.h>
 #include <dftracer/utils/runtime/executor/timer_service.h>
 
+#include <condition_variable>
 #include <coroutine>
 #include <deque>
 #include <functional>
@@ -47,11 +49,17 @@ class RunLoop : public Executor {
      * Resume ready coroutines until `done()`, then run whatever the finished
      * work left runnable until the queue is empty.
      *
-     * Throws when the queue empties with `done()` still false: this loop is
-     * the only thing that could resume the awaited work, so waiting longer
-     * would hang forever.
+     * With the queue empty and `done()` false, waits while a parked waiter
+     * (see park()) exists, since another thread can still wake it. Throws
+     * when there is none: this loop is the only thing that could resume the
+     * awaited work, so waiting longer would hang forever.
      */
     void drive_until(const std::function<bool()>& done) override;
+
+    ParkNode* park(void* waiter, ParkCancelFn cancel) noexcept override {
+        return parked_.park(waiter, cancel);
+    }
+    void unpark(ParkNode* n) noexcept override { parked_.unpark(n); }
 
    private:
     bool run_one();
@@ -59,6 +67,8 @@ class RunLoop : public Executor {
     [[noreturn]] void throw_stalled();
 
     std::mutex mutex_;
+    std::condition_variable ready_cv_;
+    ParkRegistry parked_;
     std::deque<std::coroutine_handle<>> ready_;
     std::deque<std::coroutine_handle<>> pending_destroy_;
     TimerService timer_service_;

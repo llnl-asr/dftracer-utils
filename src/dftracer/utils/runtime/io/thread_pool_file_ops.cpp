@@ -2,12 +2,15 @@
 #include <dftracer/utils/runtime/io/io_sendfile.h>
 #include <dftracer/utils/runtime/io/thread_pool_file_ops.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/uio.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cerrno>
+#include <cstdint>
 
 namespace dftracer::utils::io {
 
@@ -15,6 +18,67 @@ namespace {
 // A socket call may wait on a peer indefinitely, so it is not tracked.
 bool is_file_op(IoOp op) {
     return op != IoOp::Accept && op != IoOp::Recv && op != IoOp::Send;
+}
+
+// Operations whose syscall can block on a peer for ever, so cancel_pending()
+// has to be able to interrupt their wait. File writes are left out: they do
+// not wait for a peer and the extra poll would slow every sequential write.
+bool waits_for_peer(IoOp op, short& events) {
+    switch (op) {
+        case IoOp::Read:
+        case IoOp::Readv:
+        case IoOp::Recv:
+        case IoOp::Accept:
+            events = POLLIN;
+            return true;
+        case IoOp::Send:
+            events = POLLOUT;
+            return true;
+        default:
+            return false;
+    }
+}
+
+// A regular file never waits for a peer, so a read of one skips the cancellable
+// wait. The type is looked up once per descriptor. The entry is dropped when
+// the descriptor is closed or opened through this backend; one closed and
+// reused behind its back keeps the old answer.
+constexpr int FD_KIND_SLOTS = 4096;
+constexpr std::uint8_t FD_UNKNOWN = 0;
+constexpr std::uint8_t FD_REGULAR = 1;
+constexpr std::uint8_t FD_OTHER = 2;
+std::atomic<std::uint8_t> g_fd_kind[FD_KIND_SLOTS];
+
+bool is_regular_file(int fd) {
+    if (fd < 0 || fd >= FD_KIND_SLOTS) return false;
+    std::uint8_t kind = g_fd_kind[fd].load(std::memory_order_relaxed);
+    if (kind == FD_UNKNOWN) {
+        struct stat st;
+        kind = (::fstat(fd, &st) == 0 && S_ISREG(st.st_mode)) ? FD_REGULAR
+                                                              : FD_OTHER;
+        g_fd_kind[fd].store(kind, std::memory_order_relaxed);
+    }
+    return kind == FD_REGULAR;
+}
+
+void forget_fd_kind(int fd) {
+    if (fd >= 0 && fd < FD_KIND_SLOTS) {
+        g_fd_kind[fd].store(FD_UNKNOWN, std::memory_order_relaxed);
+    }
+}
+
+// False when the pool was cancelled before the descriptor became ready. An
+// error or hang-up counts as ready: the syscall then reports it.
+bool wait_ready(int fd, short events, const IoThreadPool& pool) {
+    // poll() ignores a negative descriptor and would wait out every slice.
+    if (fd < 0) return true;
+    constexpr int SLICE_MS = 20;
+    struct pollfd pfd{fd, events, 0};
+    while (!pool.cancelling()) {
+        const int n = ::poll(&pfd, 1, SLICE_MS);
+        if (n != 0) return true;
+    }
+    return false;
 }
 }  // namespace
 
@@ -217,7 +281,10 @@ void ThreadPoolFileOps::submit_to_pool(SubmitContext* ctx,
     req->pool->submit([req] { execute_request(req); });
 }
 
-void ThreadPoolFileOps::execute_request(IoRequest* req) {
+namespace {
+
+// The raw syscall result: a count or fd, or -1 with errno set.
+ssize_t run_syscall(const IoRequest* req) {
     ssize_t result = 0;
     switch (req->op) {
         case IoOp::Read:
@@ -287,7 +354,28 @@ void ThreadPoolFileOps::execute_request(IoRequest* req) {
                 platform_sendfile(req->dest_fd, req->fd, req->offset, req->len);
             break;
     }
-    if (result < 0) result = -errno;
+    return result;
+}
+
+}  // namespace
+
+void ThreadPoolFileOps::execute_request(IoRequest* req) {
+    ssize_t result = 0;
+    short events = 0;
+    const bool may_wait = waits_for_peer(req->op, events) &&
+                          !((req->op == IoOp::Read || req->op == IoOp::Readv) &&
+                            is_regular_file(req->fd));
+    if (may_wait && !wait_ready(req->fd, events, *req->pool)) {
+        result = -ECANCELED;
+    } else {
+        result = run_syscall(req);
+        if (result < 0) result = -errno;
+        if (req->op == IoOp::Close) {
+            forget_fd_kind(req->fd);
+        } else if (req->op == IoOp::Open && result >= 0) {
+            forget_fd_kind(static_cast<int>(result));
+        }
+    }
 
     IoThreadPool* const pool = req->pool;
     const bool tracked = is_file_op(req->op);

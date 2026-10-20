@@ -11,6 +11,7 @@
 #include <sys/stat.h>
 #include <sys/uio.h>
 
+#include <atomic>
 #include <cstddef>
 #include <mutex>
 #include <string>
@@ -87,6 +88,18 @@ class IoUringBackend : public IoBackend {
     int flush() override;
     std::string name() const override { return "io_uring"; }
 
+    /// Counts requests on the ring. Reads zero once cancel_pending() found
+    /// the kernel cannot cancel them, so shutdown does not wait for a peer.
+    std::size_t in_flight() const override {
+        return cancel_unsupported_.load(std::memory_order_acquire)
+                   ? 0
+                   : in_flight_.load(std::memory_order_acquire);
+    }
+
+    /// Cancels the requests on the ring (kernel 5.19 or later) and fails
+    /// reads, accepts and sends submitted afterwards with -ECANCELED.
+    void cancel_pending() override;
+
     /// Static callback for SubmitContext::submit.
     static void submit_fn(SubmitContext* ctx, IoAwaitable* awaitable);
 
@@ -103,6 +116,9 @@ class IoUringBackend : public IoBackend {
     uring::Ring ring_;
     IoCompletionThread completion_thread_;
     std::mutex submit_mutex_;
+    std::atomic<std::size_t> in_flight_{0};
+    std::atomic<bool> cancelling_{false};
+    std::atomic<bool> cancel_unsupported_{false};
 };
 
 /// SubmitContext subclass for io_uring. Carries the operation

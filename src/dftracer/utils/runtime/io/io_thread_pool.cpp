@@ -10,6 +10,7 @@ IoThreadPool::~IoThreadPool() { stop(); }
 
 void IoThreadPool::start() {
     if (running_.load()) return;
+    cancelling_.store(false, std::memory_order_release);
     running_ = true;
     threads_.reserve(num_threads_);
     for (std::size_t i = 0; i < num_threads_; ++i) {

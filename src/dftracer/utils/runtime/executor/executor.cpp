@@ -52,14 +52,6 @@ void schedule_coroutine_resumption_helper(Executor* executor,
         "%s", "Coroutine resumption dropped: no executor to resume through");
 }
 
-// Helper function for when_any.h (avoids circular dependency)
-void schedule_destroy_helper(Executor* executor,
-                             std::coroutine_handle<> handle) {
-    if (executor && handle) {
-        executor->schedule_destroy(handle);
-    }
-}
-
 std::size_t available_parallelism() noexcept {
     auto* exec = Executor::current();
     return exec ? exec->get_num_threads() : 1;

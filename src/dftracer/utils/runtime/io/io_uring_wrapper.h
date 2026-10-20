@@ -156,6 +156,17 @@ inline void prep_nop(struct io_uring_sqe* sqe) {
     sqe->opcode = IORING_OP_NOP;
 }
 
+// Cancels every request in flight. Needs a 5.19 kernel; an older one
+// completes the cancel with -EINVAL.
+inline void prep_cancel_all(struct io_uring_sqe* sqe) {
+    constexpr __u32 CANCEL_ALL = 1U << 0;
+    constexpr __u32 CANCEL_ANY = 1U << 2;
+    std::memset(sqe, 0, sizeof(*sqe));
+    sqe->opcode = IORING_OP_ASYNC_CANCEL;
+    sqe->fd = -1;
+    sqe->cancel_flags = CANCEL_ALL | CANCEL_ANY;
+}
+
 inline void prep_close(struct io_uring_sqe* sqe, int fd) {
     std::memset(sqe, 0, sizeof(*sqe));
     sqe->opcode = IORING_OP_CLOSE;

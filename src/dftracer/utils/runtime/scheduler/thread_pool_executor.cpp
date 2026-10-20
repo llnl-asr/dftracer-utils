@@ -103,6 +103,7 @@ void ThreadPoolExecutor::start() {
     }
 
     running_ = true;
+    shutdown_token_->store(false, std::memory_order_release);
     workers_.clear();
     workers_.reserve(num_threads_);
     permits_.store(static_cast<std::ptrdiff_t>(num_threads_),
@@ -156,6 +157,7 @@ void ThreadPoolExecutor::shutdown() {
     }
 
     DFTRACER_UTILS_LOG_DEBUG("%s", "Shutting down executor");
+    cancel_in_flight();
     quiesce();
     running_ = false;
     wake_all_workers();
@@ -203,13 +205,42 @@ void ThreadPoolExecutor::shutdown() {
     DFTRACER_UTILS_LOG_DEBUG("%s", "Executor shutdown complete");
 }
 
+void ThreadPoolExecutor::cancel_in_flight() {
+    using Clock = std::chrono::steady_clock;
+    constexpr auto NO_PROGRESS_GRACE = std::chrono::seconds(2);
+
+    shutdown_token_->store(true, std::memory_order_release);
+    if (io_backend_) io_backend_->cancel_pending();
+
+    std::size_t last_left = park_registry_.size();
+    auto last_progress = Clock::now();
+    for (;;) {
+        park_registry_.cancel_all();
+        quiesce();
+        const std::size_t left = park_registry_.size();
+        if (left == 0) return;
+        if (left < last_left) {
+            last_left = left;
+            last_progress = Clock::now();
+        } else if (Clock::now() - last_progress > NO_PROGRESS_GRACE) {
+            DFTRACER_UTILS_LOG_WARN(
+                "Executor shutdown: %zu suspended frames did not wake when "
+                "cancelled and are abandoned",
+                left);
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(200));
+    }
+}
+
 // Runnable work finishes before the workers stop. A coroutine chain woken to
 // unwind, such as a scan producer whose consumer stopped early, is destroyed
 // mid-chain by the orphan sweep below otherwise, and every frame still
-// awaiting it leaks. Parked coroutines are not waited for: nothing here
-// would wake them. A worker inside a blocking handoff is parked too, not
-// busy: it waits on work the queue carries, or on something that never
-// comes, and either way it holds no run slot.
+// awaiting it leaks. This waits only for work that is runnable or in flight;
+// cancel_in_flight() wakes the parked coroutines and calls this between
+// rounds. A worker inside a blocking handoff is parked too, not busy: it
+// waits on work the queue carries, or on something that never comes, and
+// either way it holds no run slot.
 void ThreadPoolExecutor::quiesce() {
     for (;;) {
         if (live_workers_.load(std::memory_order_acquire) == 0) return;

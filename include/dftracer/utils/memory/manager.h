@@ -41,6 +41,9 @@ enum class Status : std::uint8_t {
     PoolTableFull,
     /// Every reclaimer or external slot is taken.
     SlotTableFull,
+    /// The wait was abandoned because the executor is shutting down. It is not
+    /// a budget condition and a retry cannot succeed.
+    Cancelled,
 };
 
 struct Limits {

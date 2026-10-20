@@ -173,16 +173,22 @@ std::vector<std::string> nest_rows_of(const DataFrame& f) {
     return out;
 }
 
+// The right side of a spilled join must outgrow the budget: three times the
+// largest budget below, at 16 bytes a row.
+constexpr int LARGEST_BUDGET = 4096;
+constexpr int RIGHT_ROWS = 3 * LARGEST_BUDGET / 16;
+constexpr int LEFT_ROWS = RIGHT_ROWS / 4;
+
 // Left rows over null keys, key 3 and a few others; right rows in which the
 // value is a function of the key (a lookup needs that), key 3 holding most.
 void block_tables(Table& l, Table& r) {
-    for (int i = 0; i < 400; ++i) {
+    for (int i = 0; i < LEFT_ROWS; ++i) {
         l.key.push_back(i % 7 == 0   ? Cell()
                         : i % 3 == 0 ? Cell(i % 11)
                                      : Cell(3));
         l.value.push_back(i);
     }
-    for (int i = 0; i < 1500; ++i) {
+    for (int i = 0; i < RIGHT_ROWS; ++i) {
         r.key.push_back(i % 13 == 0  ? Cell()
                         : i % 9 == 0 ? Cell(i % 17)
                                      : Cell(3));
@@ -208,8 +214,8 @@ const JoinHow HOWS[] = {JoinHow::Inner, JoinHow::Left, JoinHow::Right,
 TEST_SUITE("join spill") {
     TEST_CASE("a spilled join equals the nested loop and the in-memory join") {
         Rng rng{11};
-        const Table l = random_table(rng, 2000, 60, 8, 1);
-        const Table r = random_table(rng, 1500, 60, 8, 10);
+        const Table l = random_table(rng, RIGHT_ROWS * 4 / 3, 60, 8, 1);
+        const Table r = random_table(rng, RIGHT_ROWS, 60, 8, 10);
         const DataFrame lf = frame_of(l, "lk", "lv");
         const DataFrame rf = frame_of(r, "rk", "rv");
         for (const JoinHow how : HOWS) {
@@ -226,8 +232,8 @@ TEST_SUITE("join spill") {
     TEST_CASE("one key that fills the right side splits to the depth limit") {
         Rng rng{5};
         Table r;
-        Table l = random_table(rng, 300, 4, 0, 1);
-        for (int i = 0; i < 1500; ++i) {
+        Table l = random_table(rng, LEFT_ROWS, 4, 0, 1);
+        for (int i = 0; i < RIGHT_ROWS; ++i) {
             r.key.push_back(i % 50 == 0 ? Cell(i) : Cell(3));
             r.value.push_back(i);
         }
@@ -240,13 +246,13 @@ TEST_SUITE("join spill") {
     TEST_CASE(
         "one key that most rows of both sides hold joins block by block") {
         Table l, r;
-        for (int i = 0; i < 400; ++i) {
+        for (int i = 0; i < LEFT_ROWS; ++i) {
             l.key.push_back(i % 7 == 0   ? Cell()
                             : i % 3 == 0 ? Cell(i % 11)
                                          : Cell(3));
             l.value.push_back(i);
         }
-        for (int i = 0; i < 1500; ++i) {
+        for (int i = 0; i < RIGHT_ROWS; ++i) {
             r.key.push_back(i % 13 == 0  ? Cell()
                             : i % 9 == 0 ? Cell(i % 17)
                                          : Cell(3));
@@ -289,8 +295,8 @@ TEST_SUITE("join spill") {
     TEST_CASE("a lookup block by block refuses the conflict the join refuses") {
         Table l, r;
         block_tables(l, r);
-        r.value[1400] += 1;
-        r.key[1400] = 3;
+        r.value[RIGHT_ROWS - 100] += 1;
+        r.key[RIGHT_ROWS - 100] = 3;
         const DataFrame lf = frame_of(l, "lk", "lv");
         const DataFrame rf = frame_of(r, "rk", "rv");
         const std::string want = error_of(

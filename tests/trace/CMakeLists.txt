@@ -122,6 +122,8 @@ foreach(test_file ${TRACE_TEST_SOURCES})
   if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(${target_name} PRIVATE --coverage -fprofile-arcs
                                                    -ftest-coverage)
+    target_compile_definitions(${target_name}
+                               PRIVATE DFTRACER_UTILS_UNDER_COVERAGE)
     target_link_libraries(${target_name} PRIVATE --coverage)
   endif()
 

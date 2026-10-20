@@ -170,19 +170,50 @@ std::string random_query(std::mt19937& rng, int depth) {
     }
 }
 
-std::uint64_t view_count(const std::string& gz, const Query& q,
-                         bool prefilter) {
+// A few gzip members per file: each member is a scan unit, and every unit
+// costs a fixed stream setup per scan, so the line counts stop a little past
+// four members.
+constexpr std::size_t MEMBER_BYTES = 16 * 1024;
+constexpr int EVENT_LINES = 300;
+constexpr int GENERIC_LINES = 450;
+
+// A read buffer of one member, so each scan crosses several buffers; the 4 MB
+// default would zero-fill per scan for no gain.
+constexpr std::size_t READ_BUFFER_BYTES = MEMBER_BYTES;
+
+struct ViewCounts {
+    std::uint64_t prefiltered = 0;
+    std::uint64_t plain = 0;
+};
+
+// Plans once and scans the planned units with and without the pre-filter.
+ViewCounts view_counts(const std::string& gz, const Query& q) {
     views::detail::ViewPlan vp;
     vp.files.push_back(
         {gz, dftracer::utils::trace::internal::determine_index_path(gz, "")});
     vp.query = q;
     auto vdef = views::detail::make_vdef(vp, false);
-    vdef.prefilter = prefilter;
-    return views::detail::for_each_scanned_batch(
-               vp, vdef, 1, 0,
-               [](std::size_t, const std::vector<std::string_view>&) {})
-        .get()
-        .events_matched;
+    auto run = [&]() -> dftracer::utils::coro::CoroTask<ViewCounts> {
+        std::uint64_t skipped = 0;
+        auto units = co_await views::detail::gather_units(vp, vdef, skipped);
+        ViewCounts out;
+        for (const bool prefilter : {true, false}) {
+            vdef.prefilter = prefilter;
+            std::uint64_t matched = 0;
+            for (const auto& u : units) {
+                auto sin =
+                    views::detail::make_scanner_input(u, vdef, vdef.query);
+                sin.with_batch_size(READ_BUFFER_BYTES);
+                views::ViewScannerUtility scanner;
+                auto gen = scanner(sin);
+                while (auto b = co_await gen.next())
+                    matched += b->events_matched;
+            }
+            (prefilter ? out.prefiltered : out.plain) = matched;
+        }
+        co_return out;
+    };
+    return run().get();
 }
 
 std::size_t reader_count(const std::string& gz, const std::string& text) {
@@ -190,6 +221,7 @@ std::size_t reader_count(const std::string& gz, const std::string& text) {
         reader::TraceReader r({.file_path = gz});
         reader::ReadConfig cfg;
         cfg.query = text;
+        cfg.buffer_size = READ_BUFFER_BYTES;
         auto gen = r.read_json(cfg);
         std::size_t n = 0;
         while (auto line = co_await gen.next()) ++n;
@@ -204,6 +236,7 @@ std::int64_t arrow_count(const std::string& gz, const std::string& text) {
         reader::TraceReader r({.file_path = gz});
         reader::ReadConfig cfg;
         cfg.query = text;
+        cfg.buffer_size = READ_BUFFER_BYTES;
         auto gen = r.read_arrow(cfg);
         std::int64_t n = 0;
         while (auto b = co_await gen.next()) n += b->num_rows();
@@ -218,7 +251,7 @@ std::int64_t arrow_count(const std::string& gz, const std::string& text) {
 TEST_CASE("the pre-filter never drops a match") {
     dftu_utils_test::TestEnvironment env(10);
     std::mt19937 rng(20260925);
-    const auto lines = make_lines(rng, 3000);
+    const auto lines = make_lines(rng, EVENT_LINES);
     const std::string plain = env.get_dir() + "/fuzz.pfw";
     {
         std::ofstream out(plain);
@@ -226,7 +259,7 @@ TEST_CASE("the pre-filter never drops a match") {
     }
     const std::string gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
-                                                               16 * 1024));
+                                                               MEMBER_BYTES));
     fs::remove(plain);
     REQUIRE(dftu_utils_test::build_index(gz));
 
@@ -245,8 +278,9 @@ TEST_CASE("the pre-filter never drops a match") {
             ++all;
             if (lines[k].find("\"M\"") == std::string::npos) ++data;
         }
-        CHECK(view_count(gz, q, true) == data);
-        CHECK(view_count(gz, q, false) == data);
+        const ViewCounts v = view_counts(gz, q);
+        CHECK(v.prefiltered == data);
+        CHECK(v.plain == data);
         CHECK(reader_count(gz, text) == all);
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
         CHECK(arrow_count(gz, text) == static_cast<std::int64_t>(all));
@@ -259,7 +293,7 @@ TEST_CASE("the pre-filter never drops a match on generic records") {
     std::mt19937 rng(7);
     auto pick = [&](const auto& v) { return v[rng() % v.size()]; };
     std::vector<std::string> lines;
-    for (int i = 0; i < 3000; ++i) {
+    for (int i = 0; i < GENERIC_LINES; ++i) {
         const char* c = rng() % 2 ? ": " : ":";
         const char* sep = rng() % 2 ? ", " : ",";
         lines.push_back(std::string("{\"op\"") + c + "\"" + pick(NAMES) +
@@ -277,7 +311,7 @@ TEST_CASE("the pre-filter never drops a match on generic records") {
     }
     const std::string gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
-                                                               16 * 1024));
+                                                               MEMBER_BYTES));
     fs::remove(plain);
     REQUIRE(dftu_utils_test::build_index(gz));
 
@@ -318,8 +352,9 @@ TEST_CASE("the pre-filter never drops a match on generic records") {
                        parser.parse(p).value()))
                        ? 1
                        : 0;
-        CHECK(view_count(gz, q, true) == all);
-        CHECK(view_count(gz, q, false) == all);
+        const ViewCounts v = view_counts(gz, q);
+        CHECK(v.prefiltered == all);
+        CHECK(v.plain == all);
         CHECK(reader_count(gz, text) == all);
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
         CHECK(arrow_count(gz, text) == static_cast<std::int64_t>(all));

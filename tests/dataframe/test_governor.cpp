@@ -48,7 +48,11 @@ struct Budget {
     }
 };
 
-std::int64_t key_of(std::int64_t i) { return (i * 7919) % 100003; }
+// Distinct keys: ten rows per key in a full frame. A group-by or a set of the
+// keys needs state that grows with this.
+constexpr std::int64_t KEYS = 6553;
+
+std::int64_t key_of(std::int64_t i) { return (i * 7919) % KEYS; }
 
 // `morsels` morsels of `rows` rows: k, a scrambled key, and v = the row
 // number. `hook` runs before morsel i is made.
@@ -183,8 +187,12 @@ std::vector<std::string> rows_of(const DataFrame& f, bool sorted) {
 }
 
 constexpr std::int64_t MORSELS = 64;
-constexpr std::int64_t ROWS = 16384;
+constexpr std::int64_t ROWS = 1024;
+static_assert(MORSELS * ROWS >= 10 * KEYS);
 constexpr std::int64_t ASK_AT = 32;
+// A global budget the state at ASK_AT is a fair share of, and that the whole
+// frame stays under.
+constexpr std::uint64_t BUDGET = 4 * MIB;
 
 using Plan = std::function<LazyFrame(LazyFrame)>;
 
@@ -250,7 +258,7 @@ LazyFrame window_lag(const LazyFrame& plan) {
 }  // namespace
 
 TEST_CASE("a request posted to a sort makes it spill at the next morsel") {
-    Budget budget(64 * MIB);
+    Budget budget(BUDGET);
     std::uint16_t sort_pool = 0;
     std::size_t before = 0;
     std::size_t after = SIZE_MAX;
@@ -262,7 +270,7 @@ TEST_CASE("a request posted to a sort makes it spill at the next morsel") {
             REQUIRE(sorts.size() == 1);
             sort_pool = sorts.front().id;
             before = sorts.front().reserved;
-            asked = hog(60 * MIB);
+            asked = hog(BUDGET - BUDGET / 16);
         }
         if (i > ASK_AT) after = std::min(after, reserved_of(sort_pool));
     });
@@ -280,7 +288,7 @@ TEST_CASE("a request posted to a sort makes it spill at the next morsel") {
 }
 
 TEST_CASE("a request posted to a group by makes it spill at the next morsel") {
-    Budget budget(64 * MIB);
+    Budget budget(BUDGET);
     std::uint16_t group_pool = 0;
     std::size_t before = 0;
     std::size_t after = SIZE_MAX;
@@ -292,7 +300,7 @@ TEST_CASE("a request posted to a group by makes it spill at the next morsel") {
             REQUIRE(groups.size() == 1);
             group_pool = groups.front().id;
             before = groups.front().reserved;
-            asked = hog(64 * MIB - before / 2);
+            asked = hog(BUDGET - before / 2);
         }
         if (i > ASK_AT) after = std::min(after, reserved_of(group_pool));
     });
@@ -314,8 +322,8 @@ TEST_CASE("a request posted to a group by makes it spill at the next morsel") {
 
 TEST_CASE(
     "a second query's reservation over the budget makes the first spill") {
-    Budget budget(512 * MIB);
-    constexpr std::int64_t SECOND_ROWS = std::int64_t{1} << 20;
+    Budget budget(8 * BUDGET);
+    constexpr std::int64_t SECOND_ROWS = MORSELS * ROWS;
     std::uint16_t first_pool = 0;
     std::size_t before = 0;
     std::size_t after = SIZE_MAX;
@@ -331,7 +339,7 @@ TEST_CASE(
             // Room for less than a quarter of the second query's first
             // morsel: its own reservation cannot cover the shortfall, so
             // the rest is posted to the first query.
-            Budget::set(memory::Manager::get().root().reserved() + 2 * MIB);
+            Budget::set(memory::Manager::get().root().reserved() + BUDGET / 32);
             second_source = std::make_shared<Hooked>(1, SECOND_ROWS, nullptr);
             second_got = LazyFrame::scan(second_source)
                              .sort_by("k")
@@ -386,11 +394,11 @@ TEST_CASE("a run's pools close and its live bytes return to zero") {
 
 TEST_CASE(
     "a request posted to the other stateful cursors keeps their results") {
-    Budget budget(64 * MIB);
+    Budget budget(BUDGET);
 
     SUBCASE("topk hands its best rows to a sort") {
         const Asked r = run_asked(
-            [](LazyFrame lf) { return lf.topk("k", 50000); }, "query/topk");
+            [](LazyFrame lf) { return lf.topk("k", KEYS / 2); }, "query/topk");
         CHECK(r.before > 0);
         CHECK(r.status == memory::Status::Pending);
         CHECK(r.after == 0);
@@ -438,11 +446,11 @@ TEST_CASE(
 }
 
 TEST_CASE("a request posted to a join's build side turns it to grace") {
-    Budget budget(64 * MIB);
+    Budget budget(BUDGET);
     DataFrame left;
     left.names = {"k", "w"};
     std::vector<std::int64_t> k, w;
-    for (std::int64_t i = 0; i < 20000; ++i) {
+    for (std::int64_t i = 0; i < KEYS / 5; ++i) {
         k.push_back(i * 5);
         w.push_back(i);
     }
@@ -491,12 +499,12 @@ TEST_CASE("unique and head_by keep their results when a grow is refused") {
         DataFrame plain;
         std::size_t plain_dirs = 0;
         {
-            Budget roomy(512 * MIB);
+            Budget roomy(8 * BUDGET);
             plain = run(plan, plain_dirs);
         }
-        // Below the key set of 100003 keys: its grow is refused.
+        // Below the key set: its grow is refused.
         std::size_t tight_dirs = 0;
-        Budget tight(MIB);
+        Budget tight(BUDGET / 64);
         const DataFrame got = run(plan, tight_dirs);
         CHECK(plain.num_rows() > 0);
         CHECK(plain_dirs == 0);

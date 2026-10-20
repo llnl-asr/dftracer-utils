@@ -24,8 +24,10 @@ namespace scan = dftracer::utils::trace::views::detail::scan;
 namespace {
 
 constexpr std::size_t CKPT = 1u << 20;
-constexpr int EVENTS = 80000;
 constexpr std::size_t MEMBER_BYTES = 256u << 10;
+// A line is longer than 128 bytes, so the inflated trace spans more than 5
+// checkpoints and 20 members.
+constexpr int EVENTS = static_cast<int>(5 * CKPT / 128);
 
 struct Trace {
     std::vector<std::string> lines;
@@ -120,59 +122,63 @@ std::vector<std::int64_t> sorted_col(
     return v;
 }
 
+// Built once: every case reads the same two indexed copies.
+struct Fixture {
+    TestEnvironment env{10};
+    Trace t = make_trace();
+    Indexed one = make_indexed(env, t, "one", true);
+    Indexed many = make_indexed(env, t, "many", false);
+};
+
+const Fixture& fixture() {
+    static Fixture f;
+    return f;
+}
+
 }  // namespace
 
 TEST_SUITE("RestartScan") {
     TEST_CASE("a one-member trace scans like the same lines in many members") {
-        TestEnvironment env(10);
-        const Trace t = make_trace();
-        const Indexed one = make_indexed(env, t, "one", true);
-        const Indexed many = make_indexed(env, t, "many", false);
-
-        const auto pieces = members(one);
+        const Fixture& fx = fixture();
+        const auto pieces = members(fx.one);
         REQUIRE(pieces.size() > 3);
         CHECK(pieces[0].kind == GzipRecordKind::Head);
         for (std::size_t i = 1; i < pieces.size(); ++i)
             CHECK(pieces[i].kind == GzipRecordKind::Restart);
-        const auto multi = members(many);
+        const auto multi = members(fx.many);
         REQUIRE(multi.size() > 3);
         for (const auto& m : multi) CHECK(m.kind == GzipRecordKind::Member);
 
-        const auto a = View::from_files({one.file()}).collect().get();
-        const auto b = View::from_files({many.file()}).collect().get();
+        const auto a = View::from_files({fx.one.file()}).collect().get();
+        const auto b = View::from_files({fx.many.file()}).collect().get();
         REQUIRE(a.num_rows() == EVENTS);
         REQUIRE(b.num_rows() == EVENTS);
         CHECK(sorted_col(a, "ts") == sorted_col(b, "ts"));
         CHECK(sorted_col(a, "dur") == sorted_col(b, "dur"));
         std::int64_t sum = 0;
         for (auto d : sorted_col(a, "dur")) sum += d;
-        CHECK(sum == t.dur_sum);
+        CHECK(sum == fx.t.dur_sum);
     }
 
     TEST_CASE("a filtered count over pieces matches the generated lines") {
-        TestEnvironment env(10);
-        const Trace t = make_trace();
-        const Indexed one = make_indexed(env, t, "one", true);
-        const Indexed many = make_indexed(env, t, "many", false);
-        for (const auto& x : {one, many}) {
-            auto f = View::from_files({x.file()})
+        const Fixture& fx = fixture();
+        for (const Indexed* x : {&fx.one, &fx.many}) {
+            auto f = View::from_files({x->file()})
                          .duql(R"(name == "read" | agg { n = count() })")
                          .lazy()
                          .collect();
             const auto df = run(std::move(f));
             REQUIRE(df.num_rows() == 1);
-            CHECK(static_cast<std::int64_t>(bnum(df, 0, "n")) == t.reads);
+            CHECK(static_cast<std::int64_t>(bnum(df, 0, "n")) == fx.t.reads);
         }
     }
 
     TEST_CASE("the plan has one scan unit per piece") {
-        TestEnvironment env(10);
-        const Trace t = make_trace();
-        const Indexed one = make_indexed(env, t, "one", true);
-        const auto pieces = members(one);
+        const Fixture& fx = fixture();
+        const auto pieces = members(fx.one);
         REQUIRE(pieces.size() > 3);
 
-        ScanPlan plan = scan::from_files({one.file()});
+        ScanPlan plan = scan::from_files({fx.one.file()});
         ViewDefinition vdef = make_vdef(*plan, /*for_aggregation=*/false);
         std::uint64_t skipped = 0;
         const auto units = run(gather_units(*plan, vdef, skipped));

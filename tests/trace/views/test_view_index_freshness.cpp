@@ -15,6 +15,13 @@ namespace st = dftracer::utils::index::store;
 
 namespace {
 
+// One gzip member: the trace is a single chunk.
+constexpr int OLD_EVENTS = 2000;
+constexpr int NEW_EVENTS = 1500;
+// A line is about 80 bytes, so these events fill about 7 members.
+constexpr std::size_t MEMBER_BYTES = 64 * 1024;
+constexpr int MEMBER_EVENTS = 6000;
+
 void write_events(const std::string& gz, const char* cat, int n,
                   std::size_t member_bytes, const char* odd_cat = nullptr) {
     const std::string plain = gz + ".plain";
@@ -91,16 +98,16 @@ TEST_SUITE("ViewIndexFreshness") {
         TestEnvironment env(10);
         REQUIRE(env.is_valid());
         const std::string gz = env.get_dir() + "/t.pfw.gz";
-        write_events(gz, "A", 200000, 0);
+        write_events(gz, "A", OLD_EVENTS, 0);
         (void)run(
             dir_view(env.get_dir()).agg({{AggOp::Count, "", "n"}}).collect());
-        CHECK(rows(dir_view(env.get_dir()), R"(cat == "A")") == 200000);
+        CHECK(rows(dir_view(env.get_dir()), R"(cat == "A")") == OLD_EVENTS);
         CHECK(rows(dir_view(env.get_dir()), R"(cat == "B")") == 0);
 
-        rewrite_events(gz, "B", 150000);
+        rewrite_events(gz, "B", NEW_EVENTS);
         (void)run(
             dir_view(env.get_dir()).agg({{AggOp::Count, "", "n"}}).collect());
-        CHECK(rows(dir_view(env.get_dir()), R"(cat == "B")") == 150000);
+        CHECK(rows(dir_view(env.get_dir()), R"(cat == "B")") == NEW_EVENTS);
         CHECK(rows(dir_view(env.get_dir()), R"(cat == "A")") == 0);
     }
 
@@ -108,14 +115,14 @@ TEST_SUITE("ViewIndexFreshness") {
         TestEnvironment env(10);
         REQUIRE(env.is_valid());
         const std::string gz = env.get_dir() + "/t.pfw.gz";
-        write_events(gz, "A", 200000, 0);
+        write_events(gz, "A", OLD_EVENTS, 0);
         run(build_tier(gz));
         const auto first = by_cat(dir_view(env.get_dir()));
-        CHECK(count_by(first, "a") == 200000);
+        CHECK(count_by(first, "a") == OLD_EVENTS);
 
-        rewrite_events(gz, "B", 150000);
+        rewrite_events(gz, "B", NEW_EVENTS);
         const auto second = by_cat(dir_view(env.get_dir()));
-        CHECK(count_by(second, "b") == 150000);
+        CHECK(count_by(second, "b") == NEW_EVENTS);
         CHECK(count_by(second, "a") == 0);
     }
 
@@ -124,15 +131,15 @@ TEST_SUITE("ViewIndexFreshness") {
         TestEnvironment env(10);
         REQUIRE(env.is_valid());
         const std::string gz = env.get_dir() + "/t.pfw.gz";
-        write_events(gz, "A", 30000, 64 * 1024);
-        CHECK(rows(dir_view(env.get_dir()), R"(cat == "A")") == 30000);
+        write_events(gz, "A", MEMBER_EVENTS, MEMBER_BYTES);
+        CHECK(rows(dir_view(env.get_dir()), R"(cat == "A")") == MEMBER_EVENTS);
 
         const auto before = fs::last_write_time(gz);
         fs::last_write_time(gz, before + std::chrono::seconds(10));
         const auto want = static_cast<std::uint64_t>(
             st::internal::get_file_modification_time(gz));
 
-        CHECK(rows(dir_view(env.get_dir()), R"(cat == "A")") == 30000);
+        CHECK(rows(dir_view(env.get_dir()), R"(cat == "A")") == MEMBER_EVENTS);
         st::IndexDatabase db(determine_index_path(gz, ""),
                              st::IndexOpenMode::ReadOnly);
         const auto stat = db.get_file_stat(st::internal::get_logical_path(gz));
@@ -151,12 +158,12 @@ TEST_SUITE("ViewIndexFreshness") {
         fs::create_directories(d2);
         const std::string f1 = d1 + "/a.pfw.gz";
         const std::string f2 = d2 + "/b.pfw.gz";
-        write_events(f1, "A", 200000, 0);
-        write_events(f2, "C", 30000, 64 * 1024);
+        write_events(f1, "A", OLD_EVENTS, 0);
+        write_events(f2, "C", MEMBER_EVENTS, MEMBER_BYTES);
         run(build_tier(f1, root));
         run(build_tier(f2, root));
-        CHECK(rows(dir_view(d1, root), R"(cat == "A")") == 200000);
-        CHECK(rows(dir_view(d2, root), R"(cat == "C")") == 30000);
+        CHECK(rows(dir_view(d1, root), R"(cat == "A")") == OLD_EVENTS);
+        CHECK(rows(dir_view(d2, root), R"(cat == "C")") == MEMBER_EVENTS);
 
         const auto idx = determine_index_path(f1, root);
         std::int64_t id2 = -1;
@@ -166,8 +173,8 @@ TEST_SUITE("ViewIndexFreshness") {
             REQUIRE(id2 >= 0);
         }
 
-        rewrite_events(f1, "B", 150000);
-        CHECK(rows(dir_view(d1, root), R"(cat == "B")") == 150000);
+        rewrite_events(f1, "B", NEW_EVENTS);
+        CHECK(rows(dir_view(d1, root), R"(cat == "B")") == NEW_EVENTS);
 
         st::IndexDatabase db(idx, st::IndexOpenMode::ReadOnly);
         CHECK(db.get_file_info_id(st::internal::get_logical_path(f2)) == id2);
@@ -175,15 +182,15 @@ TEST_SUITE("ViewIndexFreshness") {
         REQUIRE(stat);
         CHECK(stat->mtime == static_cast<std::uint64_t>(
                                  st::internal::get_file_modification_time(f2)));
-        CHECK(rows(dir_view(d2, root), R"(cat == "C")") == 30000);
-        CHECK(count_by(by_cat(dir_view(d2, root)), "c") == 30000);
+        CHECK(rows(dir_view(d2, root), R"(cat == "C")") == MEMBER_EVENTS);
+        CHECK(count_by(by_cat(dir_view(d2, root)), "c") == MEMBER_EVENTS);
     }
 
     TEST_CASE("from_file without an index path prunes with the default index") {
         TestEnvironment env(10);
         REQUIRE(env.is_valid());
         const std::string gz = env.get_dir() + "/t.pfw.gz";
-        write_events(gz, "A", 60000, 64 * 1024, "RARE");
+        write_events(gz, "A", MEMBER_EVENTS, MEMBER_BYTES, "RARE");
         REQUIRE(dftu_utils_test::build_index(gz));
 
         NullSink sink;

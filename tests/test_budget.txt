@@ -1,0 +1,28 @@
+# Per-test time budgets for scripts/ci/test_budget.py: "test-name seconds"
+# per line. A test not listed here gets the default budget of 60 s and no
+# entry may exceed that default.
+
+schema_class_bad_member 60
+reader/test_reader_robustness 60
+server/test_viz_stats_fastpath 60
+index/test_build_memory 60
+index/test_prefilter_fuzz 60
+binaries/test_dftracer_server 60
+utilities/reader/test_gzip_restart_points 60
+trace/views/test_view_index_freshness 60
+trace/views/test_view_duql 60
+trace/views/test_view_duql_joins 60
+trace/views/test_agg_transform_memory 60
+trace/views/test_restart_scan 60
+trace/views/test_schemaless 60
+trace/views/test_view_duql_joins_t1 60
+trace/views/test_view_duql_joins_t2 60
+trace/views/test_view_duql_joins_t8 60
+dataframe/test_op_peak_memory 60
+dataframe/test_lazyframe 60
+dataframe/test_join_spill 60
+dataframe/test_groupby_scale 60
+dataframe/test_kernels_keep_layouts 60
+dataframe/test_spill_external 60
+dataframe/test_governor 60
+memory/test_heap 60

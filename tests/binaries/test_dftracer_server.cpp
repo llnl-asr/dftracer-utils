@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <arpa/inet.h>
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/server/trace_index.h>
 #include <doctest/doctest.h>
 #include <netinet/in.h>
 #include <signal.h>
@@ -1075,9 +1076,17 @@ TEST_CASE("DFTracer Server - untimed pages of many records") {
         return;
     }
 
-    // 300 records stay in the cached text of every match; 400000 (about
-    // 24 MB of rows) pass its limit, so each page is streamed and cached alone.
-    for (const int UNTIMED : {300, 400000}) {
+    // 300 records stay in the cached text of every match. The other count is
+    // the fewest whose rows, each at least NAME_BYTES long, pass its limit
+    // (a sixteenth of the result cache), so each page is streamed and cached
+    // alone.
+    constexpr std::size_t NAME_BYTES = 8192;
+    const std::string name(NAME_BYTES, 'k');
+    constexpr int PAST_LIMIT =
+        static_cast<int>(dftracer::utils::server::VIZ_RESULT_CACHE_BYTES / 16 /
+                         NAME_BYTES) +
+        1;
+    for (const int UNTIMED : {300, PAST_LIMIT}) {
         CAPTURE(UNTIMED);
         dftu_utils_test::TestEnvironment env(1);
         REQUIRE(env.is_valid());
@@ -1089,10 +1098,10 @@ TEST_CASE("DFTracer Server - untimed pages of many records") {
                "{\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":1,"
                "\"ts\":5000,\"dur\":10,\"ph\":\"X\",\"args\":{}}\n");
         for (int i = 1; i <= UNTIMED; ++i) {
-            std::string ev =
-                "{\"name\":\"k\",\"cat\":\"CUDA\",\"pid\":1,\"tid\":2,"
-                "\"ts\":0,\"dur\":" +
-                std::to_string(i) + ",\"ph\":\"X\",\"args\":{}}\n";
+            std::string ev = "{\"name\":\"" + name +
+                             "\",\"cat\":\"CUDA\",\"pid\":1,\"tid\":2,"
+                             "\"ts\":0,\"dur\":" +
+                             std::to_string(i) + ",\"ph\":\"X\",\"args\":{}}\n";
             gzputs(f, ev.c_str());
         }
         gzputs(f, "]\n");

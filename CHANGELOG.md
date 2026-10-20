@@ -227,6 +227,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   It also reads `raw/<set>/*.pfw.gz` for a set whose `compacted/<set>.pfw.gz` is missing instead of skipping the set ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 - Build the static zlib-ng archive as position-independent code, so a shared library links it when zlib-ng made no shared target (`BUILD_SHARED_LIBS` off) ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 - Grow an elastic runtime for a burst of tasks sent before its parked worker starts to run. The burst stayed on one worker for up to one `elastic_keepalive` (250 ms by default) before the pool grew.
+- Fix a select-all frame that listed `args.*` columns of other traces.
+  A plan declared the columns of every file in its index root, which holds all traces of one directory.
+  It now declares only the columns of its own files.
 
 ## [0.0.14] - 2026-10-10
 

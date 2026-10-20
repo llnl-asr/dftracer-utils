@@ -165,11 +165,12 @@ TEST_SUITE("QueryCache") {
         const std::uint64_t two = rollup_bytes(gz);
 
         // Room for two rollups of this shape; A is used again, so B goes.
-        ::setenv("DFTRACER_CACHE_MAX_BYTES", std::to_string(two).c_str(), 1);
+        ::setenv("DFTRACER_UTILS_CACHE_MAX_BYTES", std::to_string(two).c_str(),
+                 1);
         CHECK(materialize("dur >= 0") == a);
         materialize("dur >= 2");
         const auto left = rollup_sigs(gz);
-        ::unsetenv("DFTRACER_CACHE_MAX_BYTES");
+        ::unsetenv("DFTRACER_UTILS_CACHE_MAX_BYTES");
         REQUIRE(left.size() == 2);
         CHECK(std::find(left.begin(), left.end(), one[0]) != left.end());
         CHECK(rollup_bytes(gz) <= two);
@@ -196,9 +197,9 @@ TEST_SUITE("QueryCache") {
         TestEnvironment env(200);
         const auto gz = indexed_trace(env);
         const std::string idx = determine_index_path(gz, "");
-        ::setenv("DFTRACER_CACHE_MAX_BYTES", "1", 1);
+        ::setenv("DFTRACER_UTILS_CACHE_MAX_BYTES", "1", 1);
         View::from_file(gz, idx).duql(R"(name == "read")").materialize().get();
-        ::unsetenv("DFTRACER_CACHE_MAX_BYTES");
+        ::unsetenv("DFTRACER_UTILS_CACHE_MAX_BYTES");
         std::vector<std::string> views;
         std::error_code ec;
         for (fs::directory_iterator it(fs::path(cache_of(gz)) / "views", ec),

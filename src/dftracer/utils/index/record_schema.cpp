@@ -862,13 +862,13 @@ void load_into(Registry& reg, const std::string& path) {
     }
 }
 
-// The registry, with $DFTRACER_SCHEMA_PATH loaded on first use; a failed
+// The registry, with $DFTRACER_UTILS_SCHEMA_PATH loaded on first use; a failed
 // load throws here and is retried by the next access.
 Registry& registry() {
     static Registry r;
     static std::once_flag env;
     std::call_once(env, [] {
-        if (const auto paths = Env::get("DFTRACER_SCHEMA_PATH")) {
+        if (const auto paths = Env::get("DFTRACER_UTILS_SCHEMA_PATH")) {
             std::stringstream ss{std::string(*paths)};
             for (std::string p; std::getline(ss, p, ':');)
                 if (!p.empty()) load_into(r, p);
@@ -909,7 +909,7 @@ const RecordSchema& get_schema(std::string_view id) {
     throw DFTUtilsException::cat(
         ErrorCode::InvalidArgument, "unknown record schema ", std::string(id),
         " (registered: ", ids,
-        "); user schemas load from $DFTRACER_SCHEMA_PATH and "
+        "); user schemas load from $DFTRACER_UTILS_SCHEMA_PATH and "
         "<index_dir>/schemas/");
 }
 

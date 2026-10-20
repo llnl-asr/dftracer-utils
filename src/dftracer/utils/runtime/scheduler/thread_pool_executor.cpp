@@ -531,7 +531,7 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
                         ++tasks_started_;
                     }
                 }
-                DFTRACER_TSAN_ACQUIRE(pending_resume.address());
+                DFTRACER_UTILS_TSAN_ACQUIRE(pending_resume.address());
                 if (monitor) {
                     utilities::monitor_resume_begin(pending_entry.monitor_id);
                 }
@@ -613,7 +613,7 @@ void ThreadPoolExecutor::drive_until(const std::function<bool()>& done) {
         if (run_queue_.try_dequeue(entry)) {
             coro::reset_timeslice();
             if (entry.handle && !entry.handle.done()) {
-                DFTRACER_TSAN_ACQUIRE(entry.handle.address());
+                DFTRACER_UTILS_TSAN_ACQUIRE(entry.handle.address());
                 memory::Scope scope{general};
                 entry.handle.resume();
             }
@@ -707,7 +707,7 @@ void ThreadPoolExecutor::enqueue(std::coroutine_handle<> handle,
             handle.address(), task_id >= 0 ? utilities::CoroKind::Task
                                            : utilities::CoroKind::Spawn);
     }
-    DFTRACER_TSAN_RELEASE(handle.address());
+    DFTRACER_UTILS_TSAN_RELEASE(handle.address());
     run_queue_.enqueue(RunQueueEntry{handle, task_id, monitor_id});
     signal_global_work();
 }

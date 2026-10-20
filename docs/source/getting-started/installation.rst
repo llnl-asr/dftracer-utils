@@ -175,7 +175,7 @@ Pass with ``-D`` at configure time, for example
    * - ``DFTRACER_UTILS_ENABLE_PCH``
      - ``OFF``
      - Precompiled headers (faster cold builds). ccache cannot cache GCC's, so leave it off when using ccache.
-   * - ``DFTRACER_USE_ZLIB_NG``
+   * - ``DFTRACER_UTILS_USE_ZLIB_NG``
      - ``ON``
      - Use zlib-ng instead of madler/zlib (falls back on failure).
 

@@ -277,7 +277,7 @@ void load_locked(PathRegistry& r, const std::string& path) {
 void load_env(PathRegistry& r) {
     if (r.env_loaded) return;
     r.env_loaded = true;
-    const auto env = Env::get("DFTRACER_DUQL_PATH");
+    const auto env = Env::get("DFTRACER_UTILS_DUQL_PATH");
     if (!env) return;
     std::string_view rest = *env;
     while (!rest.empty()) {

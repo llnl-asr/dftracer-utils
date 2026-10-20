@@ -59,7 +59,7 @@ bool under_valgrind() {
 }
 
 std::string find_replay_binary() {
-    return dftu_utils_test::find_binary_by_name("DFTRACER_REPLAY_PATH",
+    return dftu_utils_test::find_binary_by_name("DFTRACER_UTILS_REPLAY_PATH",
                                                 "dftracer_replay");
 }
 
@@ -178,7 +178,7 @@ TEST_SUITE("DFTracerReplay") {
         if (binary.empty()) {
             MESSAGE(
                 "dftracer_replay binary not found, skipping. "
-                "Set DFTRACER_REPLAY_PATH env to specify location.");
+                "Set DFTRACER_UTILS_REPLAY_PATH env to specify location.");
             return;
         }
         CHECK(!binary.empty());

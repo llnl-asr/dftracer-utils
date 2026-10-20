@@ -123,7 +123,7 @@ set(DFTRACER_UTILS_DEPS_PREFIX
     "$ENV{DFTRACER_UTILS_DEPS_PREFIX}"
     CACHE PATH "Directory that keeps dependency installs between builds")
 option(DFTRACER_UTILS_ENABLE_MPI "Enable MPI support for call tree" OFF)
-option(DFTRACER_USE_ZLIB_NG "Use zlib-ng (compat) instead of madler/zlib; falls back to madler on failure" ON)
+option(DFTRACER_UTILS_USE_ZLIB_NG "Use zlib-ng (compat) instead of madler/zlib; falls back to madler on failure" ON)
 option(DFTRACER_UTILS_ENABLE_ARROW "Enable Arrow C Data Interface via nanoarrow" ON)
 option(DFTRACER_UTILS_ENABLE_VECTORSCAN "Use Vectorscan for duql regexes and the raw prefilter" ON)
 option(DFTRACER_UTILS_ENABLE_ARROW_IPC "Enable Arrow IPC file read/write via nanoarrow" ON)

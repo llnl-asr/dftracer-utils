@@ -69,7 +69,7 @@ class GzipLineByteStream : public GzipStream {
         }
 
         // Use stack allocation for small search buffer
-        alignas(DFTRACER_OPTIMAL_ALIGNMENT) unsigned char
+        alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT) unsigned char
             search_buffer[SEARCH_BUFFER_SIZE];
         std::size_t search_bytes;
         const auto read_ok =

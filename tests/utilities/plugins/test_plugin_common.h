@@ -1,5 +1,5 @@
-#ifndef DFTRACER_TESTS_PLUGIN_COMMON_H
-#define DFTRACER_TESTS_PLUGIN_COMMON_H
+#ifndef DFTRACER_UTILS_TESTS_PLUGIN_COMMON_H
+#define DFTRACER_UTILS_TESTS_PLUGIN_COMMON_H
 #include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -66,4 +66,4 @@ inline std::string result_text(dftracer::utils::plugins::PluginRun& run,
 
 }  // namespace test_plugin_common
 
-#endif  // DFTRACER_TESTS_PLUGIN_COMMON_H
+#endif  // DFTRACER_UTILS_TESTS_PLUGIN_COMMON_H

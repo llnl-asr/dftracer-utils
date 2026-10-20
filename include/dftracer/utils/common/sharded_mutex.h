@@ -46,8 +46,8 @@ class ShardedMutex {
         mutable std::mutex mutex;
 
         /// Padding to prevent false sharing between adjacent shards
-        alignas(
-            DFTRACER_CACHE_LINE_SIZE) char padding_[DFTRACER_CACHE_LINE_SIZE];
+        alignas(DFTRACER_UTILS_CACHE_LINE_SIZE) char padding_
+            [DFTRACER_UTILS_CACHE_LINE_SIZE];
     };
 
     std::array<Shard, NUM_SHARDS> shards_;

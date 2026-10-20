@@ -350,7 +350,7 @@ TEST_SUITE("SchemaRegistry") {
         const auto what = error_of([] { ix::get_schema("no_such"); });
         CHECK(mentions(what, "no_such"));
         CHECK(mentions(what, "dftracer"));
-        CHECK(mentions(what, "DFTRACER_SCHEMA_PATH"));
+        CHECK(mentions(what, "DFTRACER_UTILS_SCHEMA_PATH"));
         CHECK(mentions(what, "<index_dir>/schemas/"));
     }
 

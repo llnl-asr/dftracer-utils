@@ -20,8 +20,8 @@
 namespace {
 
 std::string find_gen_binary() {
-    return dftu_utils_test::find_binary_by_name("DFTRACER_GEN_FAKE_TRACE_PATH",
-                                                "dftracer_gen_fake_trace");
+    return dftu_utils_test::find_binary_by_name(
+        "DFTRACER_UTILS_GEN_FAKE_TRACE_PATH", "dftracer_gen_fake_trace");
 }
 
 std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env,
@@ -45,8 +45,8 @@ std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env,
 }
 
 std::string find_comparator_binary() {
-    return dftu_utils_test::find_binary_by_name("DFTRACER_COMPARATOR_PATH",
-                                                "dftracer_comparator");
+    return dftu_utils_test::find_binary_by_name(
+        "DFTRACER_UTILS_COMPARATOR_PATH", "dftracer_comparator");
 }
 
 int run_comparator(const std::string& binary,
@@ -99,7 +99,7 @@ TEST_SUITE("DFTracerComparator") {
         if (binary.empty()) {
             MESSAGE(
                 "dftracer_comparator binary not found, skipping. "
-                "Set DFTRACER_COMPARATOR_PATH env to specify location.");
+                "Set DFTRACER_UTILS_COMPARATOR_PATH env to specify location.");
             return;
         }
         CHECK(!binary.empty());

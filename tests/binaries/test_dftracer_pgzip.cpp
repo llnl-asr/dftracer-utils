@@ -30,7 +30,7 @@ std::string create_plain_pfw(dftu_utils_test::TestEnvironment& env,
 }
 
 std::string find_pgzip_binary() {
-    return dftu_utils_test::find_binary_by_name("DFTRACER_PGZIP_PATH",
+    return dftu_utils_test::find_binary_by_name("DFTRACER_UTILS_PGZIP_PATH",
                                                 "dftracer_pgzip");
 }
 
@@ -61,7 +61,7 @@ TEST_SUITE("DFTracerPgzip") {
         if (binary.empty()) {
             MESSAGE(
                 "dftracer_pgzip binary not found, skipping. "
-                "Set DFTRACER_PGZIP_PATH env to specify location.");
+                "Set DFTRACER_UTILS_PGZIP_PATH env to specify location.");
             return;
         }
         CHECK(!binary.empty());

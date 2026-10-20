@@ -45,7 +45,7 @@ struct Result {
 /// Called first by a test case that run() starts. doctest exits with 0 when no
 /// test case matches the name, and this tells run() that the case really ran.
 inline void announce() {
-    const char* fd = std::getenv("DFTRACER_FRESH_PROCESS_FD");
+    const char* fd = std::getenv("DFTRACER_UTILS_FRESH_PROCESS_FD");
     if (fd == nullptr) return;
     char byte = 'x';
     ssize_t written = ::write(std::atoi(fd), &byte, 1);
@@ -73,8 +73,8 @@ inline Result run(const char* test_case) {
         ::close(err[0]);
         ::dup2(err[1], STDERR_FILENO);
         ::close(err[1]);
-        ::setenv("DFTRACER_FRESH_PROCESS_FD", std::to_string(fds[1]).c_str(),
-                 1);
+        ::setenv("DFTRACER_UTILS_FRESH_PROCESS_FD",
+                 std::to_string(fds[1]).c_str(), 1);
         ::execl(self.c_str(), self.c_str(), filter.c_str(), "--no-skip",
                 static_cast<char*>(nullptr));
         ::_exit(127);

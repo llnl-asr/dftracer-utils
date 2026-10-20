@@ -14,7 +14,7 @@ namespace {
 // Force a usable scratch root before anything caches it, so ScratchSession is
 // exercisable on any host (including macOS, where no mount root is writable).
 const int g_force_scratch = [] {
-    setenv("DFTRACER_INDEX_SCRATCH", "/tmp", 1);
+    setenv("DFTRACER_UTILS_INDEX_SCRATCH", "/tmp", 1);
     return 0;
 }();
 }  // namespace
@@ -97,7 +97,7 @@ TEST_CASE("publish_path moves a built directory to its destination") {
 }
 
 TEST_CASE("should_stage honors the never override") {
-    setenv("DFTRACER_INDEX_STAGE", "never", 1);
+    setenv("DFTRACER_UTILS_INDEX_STAGE", "never", 1);
     CHECK_FALSE(should_stage("/tmp/anywhere"));
-    unsetenv("DFTRACER_INDEX_STAGE");
+    unsetenv("DFTRACER_UTILS_INDEX_STAGE");
 }

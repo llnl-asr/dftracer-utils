@@ -1,5 +1,5 @@
-#ifndef DFTRACER_TESTS_VIEW_COMMON_H
-#define DFTRACER_TESTS_VIEW_COMMON_H
+#ifndef DFTRACER_UTILS_TESTS_VIEW_COMMON_H
+#define DFTRACER_UTILS_TESTS_VIEW_COMMON_H
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
@@ -254,4 +254,4 @@ inline const SharedIndexedTrace& shared_trace() {
 }  // namespace test_view_common
 using namespace test_view_common;
 
-#endif  // DFTRACER_TESTS_VIEW_COMMON_H
+#endif  // DFTRACER_UTILS_TESTS_VIEW_COMMON_H

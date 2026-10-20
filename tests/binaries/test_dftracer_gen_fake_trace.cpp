@@ -17,8 +17,8 @@
 namespace {
 
 std::string find_gen_fake_trace_binary() {
-    return dftu_utils_test::find_binary_by_name("DFTRACER_GEN_FAKE_TRACE_PATH",
-                                                "dftracer_gen_fake_trace");
+    return dftu_utils_test::find_binary_by_name(
+        "DFTRACER_UTILS_GEN_FAKE_TRACE_PATH", "dftracer_gen_fake_trace");
 }
 
 int run_gen_fake_trace(const std::string& binary,
@@ -38,7 +38,8 @@ TEST_SUITE("DFTracerGenFakeTrace") {
         if (binary.empty()) {
             MESSAGE(
                 "dftracer_gen_fake_trace binary not found, skipping. "
-                "Set DFTRACER_GEN_FAKE_TRACE_PATH env to specify location.");
+                "Set DFTRACER_UTILS_GEN_FAKE_TRACE_PATH env to specify "
+                "location.");
             return;
         }
         CHECK(!binary.empty());

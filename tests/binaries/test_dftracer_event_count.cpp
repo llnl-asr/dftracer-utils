@@ -29,8 +29,8 @@ std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env, int num_events,
 }
 
 std::string find_event_count_binary() {
-    return dftu_utils_test::find_binary_by_name("DFTRACER_EVENT_COUNT_PATH",
-                                                "dftracer_event_count");
+    return dftu_utils_test::find_binary_by_name(
+        "DFTRACER_UTILS_EVENT_COUNT_PATH", "dftracer_event_count");
 }
 
 // Run binary, capture stdout, return it as a string.
@@ -71,7 +71,7 @@ TEST_SUITE("DFTracerEventCount") {
         if (binary.empty()) {
             MESSAGE(
                 "dftracer_event_count binary not found, skipping. "
-                "Set DFTRACER_EVENT_COUNT_PATH env to specify location.");
+                "Set DFTRACER_UTILS_EVENT_COUNT_PATH env to specify location.");
             return;
         }
         CHECK(!binary.empty());

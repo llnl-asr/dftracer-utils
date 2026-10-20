@@ -476,10 +476,10 @@ def detect_repo_url(repo_root: Path) -> str:
 
     Resolves to the canonical LLNL repo by default. A contributor's local
     fork remote must never leak into published source links, so `git remote`
-    is deliberately not consulted; set DFTRACER_DOCS_REPO_URL (or run under
+    is deliberately not consulted; set DFTRACER_UTILS_DOCS_REPO_URL (or run under
     ReadTheDocs / GitHub Actions) to point elsewhere.
     """
-    override = os.environ.get("DFTRACER_DOCS_REPO_URL")
+    override = os.environ.get("DFTRACER_UTILS_DOCS_REPO_URL")
     if override:
         return override.removesuffix(".git")
 
@@ -502,7 +502,7 @@ def detect_repo_url(repo_root: Path) -> str:
 
 def detect_source_ref(repo_root: Path) -> str:
     """Detect the git ref used for source links."""
-    override = os.environ.get("DFTRACER_DOCS_SOURCE_REF")
+    override = os.environ.get("DFTRACER_UTILS_DOCS_SOURCE_REF")
     if override:
         return override
 

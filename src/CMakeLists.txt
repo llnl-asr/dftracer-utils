@@ -1630,7 +1630,7 @@ install(
 # ##############################################################################
 
 if(DFTRACER_UTILS_BUILD_BINARIES)
-  set(DFTRACER_BINARIES
+  set(DFTRACER_UTILS_BINARIES
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_event_count.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_validate.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_pgzip.cpp
@@ -1647,9 +1647,9 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_gen_dlio_config.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_genesis_gen_dist.cpp)
 
-  set(DFTRACER_MPI_BINARIES "")
+  set(DFTRACER_UTILS_MPI_BINARIES "")
 
-  foreach(bin ${DFTRACER_BINARIES})
+  foreach(bin ${DFTRACER_UTILS_BINARIES})
     string(REPLACE ".cpp" "" bin_exec ${bin})
     string(REPLACE "${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/" ""
                    bin_exec ${bin_exec})
@@ -1709,14 +1709,14 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
   # its own copy for portability.
   # ----------------------------------------------------------------------------
   if(TARGET dftracer_server)
-    set(DFTRACER_WEB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../web)
-    set(DFTRACER_WEB_DIST ${DFTRACER_WEB_DIR}/dist/index.html)
-    set(DFTRACER_WEB_GENERATED
+    set(DFTRACER_UTILS_WEB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../web)
+    set(DFTRACER_UTILS_WEB_DIST ${DFTRACER_UTILS_WEB_DIR}/dist/index.html)
+    set(DFTRACER_UTILS_WEB_GENERATED
         ${CMAKE_BINARY_DIR}/generated/dftracer_web_assets.cpp)
-    set(DFTRACER_API_DIST ${DFTRACER_WEB_DIR}/dist/api.html)
-    set(DFTRACER_API_GENERATED
+    set(DFTRACER_UTILS_API_DIST ${DFTRACER_UTILS_WEB_DIR}/dist/api.html)
+    set(DFTRACER_UTILS_API_GENERATED
         ${CMAKE_BINARY_DIR}/generated/dftracer_api_assets.cpp)
-    set(DFTRACER_EMBED_SCRIPT
+    set(DFTRACER_UTILS_EMBED_SCRIPT
         ${CMAKE_CURRENT_SOURCE_DIR}/../cmake/scripts/embed_asset.cmake)
 
     find_program(NPM_EXECUTABLE npm)
@@ -1728,50 +1728,50 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
         web-ui
         COMMAND ${NPM_EXECUTABLE} install
         COMMAND ${NPM_EXECUTABLE} run build
-        WORKING_DIRECTORY ${DFTRACER_WEB_DIR}
+        WORKING_DIRECTORY ${DFTRACER_UTILS_WEB_DIR}
         COMMENT "Building DFTracer web UI (web/dist/index.html)"
         VERBATIM)
     endif()
 
-    set(_embed_deps ${DFTRACER_EMBED_SCRIPT})
+    set(_embed_deps ${DFTRACER_UTILS_EMBED_SCRIPT})
     if(DFTRACER_UTILS_BUILD_WEB_UI AND NPM_EXECUTABLE)
       add_custom_command(
-        OUTPUT ${DFTRACER_WEB_DIST}
+        OUTPUT ${DFTRACER_UTILS_WEB_DIST}
         COMMAND ${NPM_EXECUTABLE} install
         COMMAND ${NPM_EXECUTABLE} run build
-        WORKING_DIRECTORY ${DFTRACER_WEB_DIR}
+        WORKING_DIRECTORY ${DFTRACER_UTILS_WEB_DIR}
         COMMENT "Building DFTracer web UI (web/dist/index.html)"
         VERBATIM)
-      list(APPEND _embed_deps ${DFTRACER_WEB_DIST})
-    elseif(EXISTS ${DFTRACER_WEB_DIST})
-      list(APPEND _embed_deps ${DFTRACER_WEB_DIST})
+      list(APPEND _embed_deps ${DFTRACER_UTILS_WEB_DIST})
+    elseif(EXISTS ${DFTRACER_UTILS_WEB_DIST})
+      list(APPEND _embed_deps ${DFTRACER_UTILS_WEB_DIST})
     else()
       # Reconfigure once web/dist appears, so a later `npm run build` replaces
       # the placeholder without a manual cmake rerun.
       set_property(
         DIRECTORY
         APPEND
-        PROPERTY CMAKE_CONFIGURE_DEPENDS ${DFTRACER_WEB_DIR})
+        PROPERTY CMAKE_CONFIGURE_DEPENDS ${DFTRACER_UTILS_WEB_DIR})
     endif()
 
     add_custom_command(
-      OUTPUT ${DFTRACER_WEB_GENERATED}
-      COMMAND ${CMAKE_COMMAND} -DINPUT=${DFTRACER_WEB_DIST}
-              -DOUTPUT=${DFTRACER_WEB_GENERATED} -P ${DFTRACER_EMBED_SCRIPT}
+      OUTPUT ${DFTRACER_UTILS_WEB_GENERATED}
+      COMMAND ${CMAKE_COMMAND} -DINPUT=${DFTRACER_UTILS_WEB_DIST}
+              -DOUTPUT=${DFTRACER_UTILS_WEB_GENERATED} -P ${DFTRACER_UTILS_EMBED_SCRIPT}
       DEPENDS ${_embed_deps}
       COMMENT "Embedding web UI into dftracer_server"
       VERBATIM)
 
-    set(_api_embed_deps ${DFTRACER_EMBED_SCRIPT})
-    if(EXISTS ${DFTRACER_API_DIST})
-      list(APPEND _api_embed_deps ${DFTRACER_API_DIST})
+    set(_api_embed_deps ${DFTRACER_UTILS_EMBED_SCRIPT})
+    if(EXISTS ${DFTRACER_UTILS_API_DIST})
+      list(APPEND _api_embed_deps ${DFTRACER_UTILS_API_DIST})
     endif()
     add_custom_command(
-      OUTPUT ${DFTRACER_API_GENERATED}
+      OUTPUT ${DFTRACER_UTILS_API_GENERATED}
       COMMAND
-        ${CMAKE_COMMAND} -DINPUT=${DFTRACER_API_DIST}
-        -DOUTPUT=${DFTRACER_API_GENERATED} -DFUNC=viz_api_page_html
-        -DVAR=VIZ_API_PAGE_HTML -P ${DFTRACER_EMBED_SCRIPT}
+        ${CMAKE_COMMAND} -DINPUT=${DFTRACER_UTILS_API_DIST}
+        -DOUTPUT=${DFTRACER_UTILS_API_GENERATED} -DFUNC=viz_api_page_html
+        -DVAR=VIZ_API_PAGE_HTML -P ${DFTRACER_UTILS_EMBED_SCRIPT}
       DEPENDS ${_api_embed_deps}
       COMMENT "Embedding API explorer page into dftracer_server"
       VERBATIM)
@@ -1779,10 +1779,10 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
     target_sources(
       dftracer_server
       PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/viz/ui.cpp
-              ${DFTRACER_WEB_GENERATED} ${DFTRACER_API_GENERATED})
+              ${DFTRACER_UTILS_WEB_GENERATED} ${DFTRACER_UTILS_API_GENERATED})
   endif()
 
-  foreach(bin ${DFTRACER_MPI_BINARIES})
+  foreach(bin ${DFTRACER_UTILS_MPI_BINARIES})
     string(REPLACE ".cpp" "" bin_exec ${bin})
     string(REPLACE "${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/" ""
                    bin_exec ${bin_exec})
@@ -1821,10 +1821,10 @@ endif()
 option(DFTRACER_UTILS_BUILD_EXAMPLES "Build API examples" ON)
 
 if(DFTRACER_UTILS_BUILD_EXAMPLES)
-  set(DFTRACER_EXAMPLES
+  set(DFTRACER_UTILS_EXAMPLES
       ${CMAKE_CURRENT_SOURCE_DIR}/../examples/view_containment_example.cpp)
 
-  foreach(example ${DFTRACER_EXAMPLES})
+  foreach(example ${DFTRACER_UTILS_EXAMPLES})
     get_filename_component(example_name ${example} NAME_WE)
 
     add_executable(${example_name} ${example})
@@ -1861,7 +1861,7 @@ endif()
 option(DFTRACER_UTILS_BUILD_BENCHMARKS "Build standalone benchmarks" OFF)
 
 if(DFTRACER_UTILS_BUILD_BENCHMARKS)
-  set(DFTRACER_BENCHMARKS
+  set(DFTRACER_UTILS_BENCHMARKS
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/member_cache_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/dataframe_parallel_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/view_api_bench.cpp
@@ -1880,7 +1880,7 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/slice_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/spill_harness.cpp)
 
-  foreach(bench ${DFTRACER_BENCHMARKS})
+  foreach(bench ${DFTRACER_UTILS_BENCHMARKS})
     get_filename_component(bench_name ${bench} NAME_WE)
     add_executable(${bench_name} ${bench})
     target_add_rpath(${bench_name})

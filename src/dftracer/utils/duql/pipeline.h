@@ -420,7 +420,7 @@ struct PluginCatalog {
 /// `source` is the members of the record schema's source (`name = pipeline`
 /// and `def ...`, separated by `;`): its row sets are names for `from`,
 /// arrows and `lookup`, and its macros expand as the query's do, after the
-/// query's own and before those on `$DFTRACER_DUQL_PATH`. Without
+/// query's own and before those on `$DFTRACER_UTILS_DUQL_PATH`. Without
 /// `plugins`, every dotted function name is unknown. `leaves` lists the field
 /// paths a wildcard path (`a.*.b`) expands to (see wildcard.h), and without it
 /// a wildcard is an error.

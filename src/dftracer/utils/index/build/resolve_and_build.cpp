@@ -261,9 +261,9 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
                     std::error_code ec;
                     input_bytes += fs::file_size(f, ec);
                 }
-                const int factor =
-                    dftracer::utils::Env::get<int>("DFTRACER_INDEX_SIZE_FACTOR")
-                        .value_or(3);
+                const int factor = dftracer::utils::Env::get<int>(
+                                       "DFTRACER_UTILS_INDEX_SIZE_FACTOR")
+                                       .value_or(3);
                 scratch.emplace(input_bytes * static_cast<std::uint64_t>(
                                                   factor > 0 ? factor : 1));
                 if (scratch->valid()) {

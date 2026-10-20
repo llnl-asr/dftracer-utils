@@ -423,7 +423,7 @@ give the same schema (see :doc:`../../reference/record-schema`):
 
       Put the file where the index finds it: in ``<index_dir>/schemas/``,
       next to the ``.dftindex`` store (beside the data by default), or in a
-      directory named by ``DFTRACER_SCHEMA_PATH`` (``:``-separated).
+      directory named by ``DFTRACER_UTILS_SCHEMA_PATH`` (``:``-separated).
 
    .. tab-item:: Python
 

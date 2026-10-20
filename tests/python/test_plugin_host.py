@@ -22,8 +22,8 @@ def _find_plugin(name: str, env_var: str) -> str:
     return find_example_plugin(name, env_var, _REPO_ROOT)
 
 
-_PLUGIN = _find_plugin("event_counter", "DFTRACER_EVENT_COUNTER_PLUGIN_PATH")
-_RESULT_PLUGIN = _find_plugin("process_counts", "DFTRACER_PROCESS_COUNTS_PLUGIN_PATH")
+_PLUGIN = _find_plugin("event_counter", "DFTRACER_UTILS_EVENT_COUNTER_PLUGIN_PATH")
+_RESULT_PLUGIN = _find_plugin("process_counts", "DFTRACER_UTILS_PROCESS_COUNTS_PLUGIN_PATH")
 _skip = pytest.mark.skipif(
     not _PLUGIN, reason="no compiled event_counter plugin found in any build tree"
 )

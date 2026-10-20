@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/raw_buffer.h>
 #include <dftracer/utils/index/gzip/gzip_member_record.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/io/io.h>
@@ -363,9 +364,12 @@ class ReaderInflater {
             }
             if (next_read_ >= file_size_) {
                 // The last member was cut short: keep its complete lines.
+                std::vector<std::uint8_t> kept;
                 auto keep = compress::decode_truncated_member(
-                    comp_.data(), comp_.size(), member_owned_);
+                    comp_.data(), comp_.size(), kept);
                 if (!keep) co_return false;
+                member_owned_.resize(*keep);
+                std::memcpy(member_owned_.data(), kept.data(), *keep);
                 member_data_ = member_owned_.data();
                 member_len_ = *keep;
                 comp_off_ = file_size_;
@@ -390,8 +394,9 @@ class ReaderInflater {
         member_data_ = member_owned_.data();
         member_len_ = res.out_bytes;
         comp_off_ += res.in_bytes;
-        comp_.erase(comp_.begin(),
-                    comp_.begin() + static_cast<std::ptrdiff_t>(res.in_bytes));
+        const std::size_t rest = comp_.size() - res.in_bytes;
+        std::memmove(comp_.data(), comp_.data() + res.in_bytes, rest);
+        comp_.resize(rest);
         offset = static_cast<off_t>(comp_off_);
         co_return true;
     }
@@ -444,8 +449,8 @@ class ReaderInflater {
     }
 
     compress::GzipMemberDecompressor dec_;
-    std::vector<unsigned char> comp_;
-    std::vector<unsigned char> member_owned_;
+    dstd::RawBuffer<unsigned char> comp_;
+    dstd::RawBuffer<unsigned char> member_owned_;
     MemberDecodeCache::Bytes member_shared_;
     const unsigned char* member_data_ = nullptr;
     std::size_t member_len_ = 0;

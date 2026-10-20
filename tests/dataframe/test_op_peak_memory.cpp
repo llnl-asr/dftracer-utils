@@ -20,12 +20,15 @@
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cstdint>
@@ -35,9 +38,11 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -48,16 +53,26 @@ namespace {
 
 // 1M rows against an 8 MiB budget keeps the input several times the budget and
 // runs in under 10 s. At 4M rows and 16 MiB it took 30 s alone, and the macOS
-// coverage job on three cores ran past its 300 s timeout.
+// coverage job on three cores ran past its 300 s timeout. The coverage build
+// asserts no peak, only that every op finishes and spills, and runs the
+// kernels many times slower: it keeps the input four times the budget at a
+// tenth of the rows.
+#if defined(DFTRACER_UTILS_COVERAGE_BUILD)
+constexpr std::int64_t DEFAULT_ROWS = 100'000;
+constexpr std::uint64_t DEFAULT_BUDGET_MB = 1;
+#else
+constexpr std::int64_t DEFAULT_ROWS = 1'000'000;
+constexpr std::uint64_t DEFAULT_BUDGET_MB = 8;
+#endif
 std::int64_t rows_count() {
     const char* v = std::getenv("DFTU_OP_PEAK_ROWS");
-    return v ? std::strtoll(v, nullptr, 10) : 1'000'000;
+    return v ? std::strtoll(v, nullptr, 10) : DEFAULT_ROWS;
 }
 const std::int64_t ROWS = rows_count();
 // DFTU_OP_PEAK_BUDGET_MB overrides the budget (child and parent both read it).
 std::uint64_t budget_bytes() {
     const char* v = std::getenv("DFTU_OP_PEAK_BUDGET_MB");
-    return (v ? std::strtoull(v, nullptr, 10) : 8ULL) << 20;
+    return (v ? std::strtoull(v, nullptr, 10) : DEFAULT_BUDGET_MB) << 20;
 }
 const std::uint64_t BUDGET = budget_bytes();
 constexpr std::int64_t MORSEL_ROWS = 8192;
@@ -670,6 +685,8 @@ int child_main(const std::string& op) {
 std::string g_self;
 
 struct ChildResult {
+    bool piped = true;
+    bool forked = true;
     int status = -1;
     std::uint64_t peak_bytes = 0;
     double seconds = 0;
@@ -678,6 +695,7 @@ struct ChildResult {
 
 // A child that takes longer than this is killed and fails the test.
 constexpr std::chrono::seconds CHILD_TIMEOUT{300};
+constexpr std::size_t MAX_PARALLEL_CHILDREN = 4;
 
 // Peak RSS under a sanitizer or Valgrind is the tool's shadow memory, not the
 // engine's, so the bounds mean nothing there.
@@ -694,12 +712,33 @@ bool under_instrumentation() {
     return preload && std::strstr(preload, "vgpreload") != nullptr;
 }
 
+// Runs on worker threads, so it makes no assertion: the caller checks `piped`
+// and `forked`.
 ChildResult run_child(const std::string& op) {
     const auto started = std::chrono::steady_clock::now();
+    ChildResult r;
     int fds[2];
-    REQUIRE(::pipe(fds) == 0);
-    const pid_t pid = ::fork();
-    REQUIRE(pid >= 0);
+    pid_t pid;
+    {
+        // A pipe end that another thread's child inherited would hold that
+        // pipe open after its own child exits, so each pipe is made close-on-
+        // exec and forked under one lock.
+        static std::mutex spawn_mutex;
+        const std::lock_guard<std::mutex> lock(spawn_mutex);
+        if (::pipe(fds) != 0) {
+            r.piped = false;
+            return r;
+        }
+        ::fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+        ::fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+        pid = ::fork();
+        if (pid < 0) {
+            ::close(fds[0]);
+            ::close(fds[1]);
+            r.forked = false;
+            return r;
+        }
+    }
     if (pid == 0) {
         ::dup2(fds[1], 1);
         ::close(fds[0]);
@@ -709,7 +748,6 @@ ChildResult run_child(const std::string& op) {
         ::_exit(127);
     }
     ::close(fds[1]);
-    ChildResult r;
     char buf[256];
     bool timed_out = false;
     for (;;) {
@@ -793,6 +831,8 @@ TEST_CASE("each op stays within its bound at a small budget" *
           doctest::skip(under_instrumentation())) {
     const bool report = std::getenv("DFTU_OP_PEAK_REPORT") != nullptr;
     const ChildResult base = run_child("input_only");
+    REQUIRE(base.piped);
+    REQUIRE(base.forked);
     REQUIRE(base.status == 0);
     const std::uint64_t bound = BOUND_BUDGETS * BUDGET;
     if (report)
@@ -800,9 +840,31 @@ TEST_CASE("each op stays within its bound at a small budget" *
                     static_cast<unsigned long long>(base.peak_bytes >> 20),
                     static_cast<unsigned long long>(BUDGET >> 20),
                     static_cast<unsigned long long>(bound >> 20));
+    // Each child has its own address space, so its peak does not depend on the
+    // others running; they overlap to finish sooner.
+    std::map<std::string, ChildResult> results;
+    {
+        std::vector<std::string> names;
+        for (const auto& entry : recipes()) {
+            names.push_back(entry.first);
+            results[entry.first];
+        }
+        std::atomic<std::size_t> next{0};
+        std::vector<std::thread> workers;
+        const std::size_t width = std::clamp<std::size_t>(
+            std::thread::hardware_concurrency(), 1, MAX_PARALLEL_CHILDREN);
+        for (std::size_t w = 0; w < width; ++w)
+            workers.emplace_back([&] {
+                for (std::size_t i; (i = next.fetch_add(1)) < names.size();)
+                    results.at(names[i]) = run_child(names[i]);
+            });
+        for (std::thread& t : workers) t.join();
+    }
     for (const auto& [name, recipe] : recipes()) {
         const Expect& want = expectations().at(name);
-        const ChildResult r = run_child(name);
+        const ChildResult& r = results.at(name);
+        REQUIRE(r.piped);
+        REQUIRE(r.forked);
         REQUIRE_MESSAGE(r.status != -2, name, " ran past ",
                         CHILD_TIMEOUT.count(), " s");
         REQUIRE_MESSAGE(r.status == 0, name, " exited with ", r.status);

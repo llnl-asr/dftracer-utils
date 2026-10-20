@@ -20,6 +20,7 @@
 #include <cstring>
 #include <fstream>
 #include <string>
+#include <vector>
 
 #include "agg_parity_common.h"
 
@@ -28,20 +29,32 @@ namespace scan_detail = dftracer::utils::trace::views::detail;
 
 namespace {
 
-constexpr int EVENTS = 1'500'000;
 constexpr std::uint64_t BUDGET = 4ULL << 20;
 constexpr std::uint64_t MAX_EXTRA = 24ULL << 20;
 constexpr int RUNS = 3;
+
+// The bound on the extra peak depends on the scale: only a transform that held
+// a million scanned rows would exceed it. Coverage counters make each scan
+// about 100 times slower, so that build scans fewer rows with keys padded to
+// KEY_PAD bytes, which catches a larger regression only.
+#ifdef DFTRACER_UTILS_UNDER_COVERAGE
+constexpr std::size_t KEY_PAD = 320;
+constexpr int EVENTS = static_cast<int>((2 * MAX_EXTRA) / KEY_PAD);
+#else
+constexpr std::size_t KEY_PAD = 0;
+constexpr int EVENTS = 1'500'000;
+#endif
 
 std::string g_self;
 
 std::string write_trace(const std::string& dir) {
     const std::string pfw = dir + "/transform_memory.pfw";
+    const std::string pad = KEY_PAD ? "_" + std::string(KEY_PAD, 'x') : "";
     {
         std::ofstream ofs(pfw);
         for (int i = 0; i < EVENTS; ++i)
             ofs << R"({"ph":"X","name":"read","cat":"category_)" << (i % 500)
-                << R"(","pid":1,"tid":1,"ts":)" << (1000 + i * 10)
+                << pad << R"(","pid":1,"tid":1,"ts":)" << (1000 + i * 10)
                 << R"(,"dur":)" << (5 + i % 17) << R"(,"args":{}})" << "\n";
     }
     const std::string gz = pfw + ".gz";
@@ -74,7 +87,7 @@ int child_main(const std::string& mode, const std::string& gz) {
     return 0;
 }
 
-std::uint64_t run_child(const std::string& mode, const std::string& gz) {
+pid_t start_child(const std::string& mode, const std::string& gz) {
     const pid_t pid = ::fork();
     REQUIRE(pid >= 0);
     if (pid == 0) {
@@ -82,6 +95,10 @@ std::uint64_t run_child(const std::string& mode, const std::string& gz) {
                 gz.c_str(), static_cast<char*>(nullptr));
         ::_exit(127);
     }
+    return pid;
+}
+
+std::uint64_t peak_rss(pid_t pid) {
     int status = 0;
     struct rusage ru{};
     ::wait4(pid, &status, 0, &ru);
@@ -115,14 +132,20 @@ TEST_CASE("a group-key transform holds no more than one morsel" *
     REQUIRE(env.is_valid());
     const std::string gz = write_trace(env.get_dir());
     // One run's peak swings by about 20 MiB, so each side is the lowest of a
-    // few runs.
-    run_child("plain", gz);
+    // few runs. The first run builds the index; the rest start together, since
+    // each child's peak is its own.
+    peak_rss(start_child("plain", gz));
+    std::vector<pid_t> plain_runs;
+    std::vector<pid_t> transform_runs;
+    for (int i = 0; i < RUNS; ++i) {
+        plain_runs.push_back(start_child("plain", gz));
+        transform_runs.push_back(start_child("transform", gz));
+    }
     std::uint64_t plain = ~std::uint64_t{0};
     std::uint64_t transformed = ~std::uint64_t{0};
-    for (int i = 0; i < RUNS; ++i) {
-        plain = std::min(plain, run_child("plain", gz));
-        transformed = std::min(transformed, run_child("transform", gz));
-    }
+    for (const pid_t pid : plain_runs) plain = std::min(plain, peak_rss(pid));
+    for (const pid_t pid : transform_runs)
+        transformed = std::min(transformed, peak_rss(pid));
     const std::uint64_t extra = transformed > plain ? transformed - plain : 0;
     CHECK_MESSAGE(extra <= MAX_EXTRA, "the transform holds ", extra >> 20,
                   " MiB above the same aggregation without one (limit ",

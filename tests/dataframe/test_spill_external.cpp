@@ -32,8 +32,13 @@ namespace {
 
 constexpr std::size_t MIB = std::size_t{1} << 20;
 constexpr std::int64_t MORSELS = 64;
-constexpr std::int64_t ROWS = 16384;
+constexpr std::int64_t ROWS = 2048;
 constexpr std::int64_t LOOK_AT = 60;
+// The sort holds MORSELS * ROWS * 16 bytes = 2 MiB: half the global budget and
+// four times the sort's own.
+constexpr std::size_t GLOBAL_BUDGET = MIB;
+constexpr std::size_t SORT_BUDGET = GLOBAL_BUDGET / 2;
+constexpr std::size_t SMALL_SORT_BUDGET = SORT_BUDGET / 4;
 
 std::size_t spill_slot_bytes() {
     std::size_t total = 0;
@@ -132,7 +137,7 @@ TEST_CASE("spill bytes show as external") {
     SpillDirVar var;
     const bool on_disk = !dftracer::utils::is_memory_filesystem(
         dftracer::utils::filesystem_kind(var.dir.string()));
-    Budget budget(8 * MIB);
+    Budget budget(GLOBAL_BUDGET);
     REQUIRE(spill_slot_bytes() == 0);
 
     std::size_t seen = 0;
@@ -153,7 +158,7 @@ TEST_CASE("spill bytes show as external") {
     {
         const DataFrame out = LazyFrame::scan(source)
                                   .sort_by("k")
-                                  .memory_budget(4 * MIB)
+                                  .memory_budget(SORT_BUDGET)
                                   .collect()
                                   .get();
         CHECK(out.num_rows() == MORSELS * ROWS);
@@ -179,10 +184,12 @@ TEST_CASE("merged sort runs leave the spill slot before the query ends") {
     auto source = std::make_shared<Hooked>(MORSELS, ROWS, [&](std::int64_t i) {
         if (i == MORSELS - 1) before_merge = spill_slot_bytes();
     });
-    // A 1 MiB budget cuts about 64 runs and merges them four at a time, so
+    // The small budget cuts about 64 runs and merges them four at a time, so
     // two merge passes run before the first row comes out.
-    std::unique_ptr<Cursor> cursor =
-        LazyFrame::scan(source).sort_by("k").memory_budget(MIB).open_cursor();
+    std::unique_ptr<Cursor> cursor = LazyFrame::scan(source)
+                                         .sort_by("k")
+                                         .memory_budget(SMALL_SORT_BUDGET)
+                                         .open_cursor();
     std::optional<Morsel> first =
         dftracer::utils::default_runtime().submit(cursor->next(ROWS)).get();
     REQUIRE(first.has_value());

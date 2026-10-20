@@ -11,11 +11,13 @@
 #include <fstream>
 #include <future>
 #include <iomanip>
+#include <map>
 #include <memory>
 #include <random>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 #include "testing_utilities.h"
@@ -190,23 +192,49 @@ std::size_t extract_id_from_json(const std::string& line) {
     }
 }
 
-TEST_CASE("Robustness - Large file continuous stride reading") {
-    // Create 128MB test file with ~1KB JSON lines
-    LargeTestEnvironment env(128, 1024);
-    REQUIRE(env.is_valid());
+// A file and its index, built once per binary and shared by the cases that ask
+// for the same one: doctest runs a test case again for each of its sub cases,
+// and building a file of this size is much of the cost of the test.
+struct Prepared {
+    LargeTestEnvironment env;
+    std::string gz_file;
+    std::string idx_file;
+    std::size_t total_lines = 0;
 
-    std::string gz_file = env.create_large_gzip_file();
-    REQUIRE(!gz_file.empty());
-
-    std::string idx_file = env.get_index_path(gz_file);
-
-    // Build index with large chunks for efficiency
-    {
+    Prepared(std::size_t size_mb, std::size_t bytes_per_line,
+             double checkpoint_mb, bool with_lines = false)
+        : env(size_mb, bytes_per_line) {
+        REQUIRE(env.is_valid());
+        gz_file = env.create_large_gzip_file();
+        REQUIRE(!gz_file.empty());
+        idx_file = env.get_index_path(gz_file);
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(32.0));
+            with_lines ? CheckpointIndexerFactory::create(
+                             gz_file, idx_file, mb_to_b(checkpoint_mb), true)
+                       : CheckpointIndexerFactory::create(
+                             gz_file, idx_file, mb_to_b(checkpoint_mb));
         REQUIRE(indexer != nullptr);
         indexer->build();
+        if (with_lines) total_lines = indexer->get_num_lines();
     }
+};
+
+static Prepared& prepared(std::size_t size_mb, std::size_t bytes_per_line,
+                          double checkpoint_mb, bool with_lines = false) {
+    static std::map<std::tuple<std::size_t, std::size_t, double, bool>,
+                    std::unique_ptr<Prepared>>
+        made;
+    auto& slot = made[{size_mb, bytes_per_line, checkpoint_mb, with_lines}];
+    if (!slot)
+        slot = std::make_unique<Prepared>(size_mb, bytes_per_line,
+                                          checkpoint_mb, with_lines);
+    return *slot;
+}
+
+TEST_CASE("Robustness - Large file continuous stride reading") {
+    Prepared& fx = prepared(74, 1024, 32.0);
+    const std::string gz_file = fx.gz_file;
+    const std::string idx_file = fx.idx_file;
 
     auto reader = ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
     REQUIRE(reader != nullptr);
@@ -224,12 +252,13 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
         std::vector<std::pair<std::size_t, std::size_t>>
             id_ranges;  // first and last ID in each chunk
 
+        std::vector<char> buffer(buffer_size);
+
         // Read chunks with stride (each starts where previous ended +1)
         while (current_start < max_bytes) {
             std::size_t current_end =
                 std::min(current_start + chunk_size, max_bytes);
 
-            std::vector<char> buffer(buffer_size);
             std::size_t bytes_written = 0;
             std::string content;
 
@@ -360,21 +389,9 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
 }
 
 TEST_CASE("Robustness - Different buffer sizes consistency") {
-    LargeTestEnvironment env(64, 512);  // Smaller for faster testing
-    REQUIRE(env.is_valid());
-
-    std::string gz_file = env.create_large_gzip_file();
-    REQUIRE(!gz_file.empty());
-
-    std::string idx_file = env.get_index_path(gz_file);
-
-    // Build index
-    {
-        auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(16.0));
-        REQUIRE(indexer != nullptr);
-        indexer->build();
-    }
+    Prepared& fx = prepared(36, 512, 16.0);
+    const std::string gz_file = fx.gz_file;
+    const std::string idx_file = fx.idx_file;
 
     auto reader = ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
     REQUIRE(reader != nullptr);
@@ -441,21 +458,10 @@ TEST_CASE("Robustness - Different buffer sizes consistency") {
 }
 
 TEST_CASE("Robustness - Boundary edge cases") {
-    LargeTestEnvironment env(32, 256);  // Small for focused boundary testing
-    REQUIRE(env.is_valid());
-
-    std::string gz_file = env.create_large_gzip_file();
-    REQUIRE(!gz_file.empty());
-
-    std::string idx_file = env.get_index_path(gz_file);
-
-    // Build index with small chunks to create many boundaries
-    {
-        auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(1.0));
-        REQUIRE(indexer != nullptr);
-        indexer->build();
-    }
+    Prepared& fx = prepared(8, 256, 1.0);
+    const std::string gz_file = fx.gz_file;
+    const std::string idx_file = fx.idx_file;
+    LargeTestEnvironment& env = fx.env;
 
     auto reader = ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
     REQUIRE(reader != nullptr);
@@ -606,21 +612,10 @@ TEST_CASE("Robustness - Boundary edge cases") {
 }
 
 TEST_CASE("Robustness - Complete file sequential read") {
-    LargeTestEnvironment env(16, 128);  // Smaller file for complete read test
-    REQUIRE(env.is_valid());
-
-    std::string gz_file = env.create_large_gzip_file();
-    REQUIRE(!gz_file.empty());
-
-    std::string idx_file = env.get_index_path(gz_file);
-
-    // Build index
-    {
-        auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(8.0));
-        REQUIRE(indexer != nullptr);
-        indexer->build();
-    }
+    Prepared& fx = prepared(16, 128, 8.0);
+    const std::string gz_file = fx.gz_file;
+    const std::string idx_file = fx.idx_file;
+    LargeTestEnvironment& env = fx.env;
 
     auto reader = ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
     REQUIRE(reader != nullptr);
@@ -764,21 +759,9 @@ TEST_CASE("Robustness - Complete file sequential read") {
 }
 
 TEST_CASE("Robustness - JSON validation and consistency") {
-    LargeTestEnvironment env(32, 512);
-    REQUIRE(env.is_valid());
-
-    std::string gz_file = env.create_large_gzip_file();
-    REQUIRE(!gz_file.empty());
-
-    std::string idx_file = env.get_index_path(gz_file);
-
-    // Build index
-    {
-        auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(8.0));
-        REQUIRE(indexer != nullptr);
-        indexer->build();
-    }
+    Prepared& fx = prepared(20, 512, 8.0);
+    const std::string gz_file = fx.gz_file;
+    const std::string idx_file = fx.idx_file;
 
     auto reader = ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
     REQUIRE(reader != nullptr);
@@ -975,22 +958,9 @@ TEST_CASE("Robustness - JSON validation and consistency") {
 }
 
 TEST_CASE("Robustness - Complete file reading equivalence") {
-    LargeTestEnvironment env(64,
-                             512);  // Reasonable size for complete file test
-    REQUIRE(env.is_valid());
-
-    std::string gz_file = env.create_large_gzip_file();
-    REQUIRE(!gz_file.empty());
-
-    std::string idx_file = env.get_index_path(gz_file);
-
-    // Build index
-    {
-        auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(8.0));
-        REQUIRE(indexer != nullptr);
-        indexer->build();
-    }
+    Prepared& fx = prepared(20, 512, 8.0);
+    const std::string gz_file = fx.gz_file;
+    const std::string idx_file = fx.idx_file;
 
     auto reader = ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
     REQUIRE(reader != nullptr);
@@ -1101,11 +1071,11 @@ TEST_CASE("Robustness - Complete file reading equivalence") {
             std::size_t current_pos = 0;
             std::string last_line;
 
+            std::vector<char> buffer(buffer_size);
             while (current_pos < max_bytes) {
                 std::size_t end_pos =
                     std::min(current_pos + stride_size, max_bytes);
 
-                std::vector<char> buffer(buffer_size);
                 std::size_t bytes_written = 0;
                 std::string content;
 
@@ -1150,21 +1120,9 @@ TEST_CASE("Robustness - Complete file reading equivalence") {
 }
 
 TEST_CASE("Robustness - Memory and performance stress") {
-    LargeTestEnvironment env(8, 64);  // Smaller for stress test
-    REQUIRE(env.is_valid());
-
-    std::string gz_file = env.create_large_gzip_file();
-    REQUIRE(!gz_file.empty());
-
-    std::string idx_file = env.get_index_path(gz_file);
-
-    // Build index
-    {
-        auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(4.0));
-        REQUIRE(indexer != nullptr);
-        indexer->build();
-    }
+    Prepared& fx = prepared(4, 64, 1.0);
+    const std::string gz_file = fx.gz_file;
+    const std::string idx_file = fx.idx_file;
 
     SUBCASE("Many small reads with different buffer sizes") {
         std::vector<std::size_t> buffer_sizes = {256, 1024, 4096, 16384, 65536};
@@ -1348,77 +1306,20 @@ TEST_CASE("Robustness - Memory and performance stress") {
 }
 
 TEST_CASE("Robustness - Line-based reading stress tests") {
-    printf("=== Starting Line-based reading stress tests ===\n");
-    LargeTestEnvironment env(256, 1024);  // Much larger file with bigger lines
-                                          // to force successful checkpoints
-    REQUIRE(env.is_valid());
+    // A larger file with bigger lines and small chunks, to force many
+    // checkpoints with line counts.
+    Prepared& fx = prepared(16, 1024, 0.5, true);
+    const std::string gz_file = fx.gz_file;
+    const std::string idx_file = fx.idx_file;
+    LargeTestEnvironment& env = fx.env;
 
-    printf("Expected lines: %zu, bytes per line: %zu\n", env.get_num_lines(),
-           env.get_bytes_per_line());
+    printf("Expected lines: %zu, bytes per line: %zu, indexed lines: %zu\n",
+           env.get_num_lines(), env.get_bytes_per_line(), fx.total_lines);
 
-    std::string gz_file = env.create_large_gzip_file();
-    REQUIRE(!gz_file.empty());
-
-    // Check actual file size
-    std::ifstream file(gz_file, std::ios::binary | std::ios::ate);
-    if (file.is_open()) {
-        auto file_size = file.tellg();
-        printf("Created gzip file size: %lld bytes\n",
-               static_cast<long long>(file_size));
-        file.close();
-    }
-
-    std::string idx_file = env.get_index_path(gz_file);
-
-    // Build index with small chunks to force many checkpoints with line counts
-    {
-        printf("Creating indexer for file: %s\n", gz_file.c_str());
-        printf(
-            "Chunk size: 0.5 MB (small enough to create checkpoints during "
-            "processing)\n");
-        auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                        mb_to_b(0.5), true);
-        REQUIRE(indexer != nullptr);
-        printf("Building index...\n");
-        indexer->build();
-        printf("Index built successfully\n");
-
-        // Verify we have line data - skip tests if indexer doesn't support line
-        // reading
-        auto members = indexer->get_members();
-        std::size_t num_lines = indexer->get_num_lines();
-
-        printf("Members: %zu, Lines: %zu\n", members.size(), num_lines);
-
-        // Debug: Let's manually check the database file
-        printf("DEBUG: Manually checking database file: %s\n",
-               idx_file.c_str());
-
-        // Check if database file exists and its size
-        std::ifstream db_file(idx_file, std::ios::binary | std::ios::ate);
-        if (db_file.is_open()) {
-            auto db_size = db_file.tellg();
-            printf("DEBUG: Database file size: %lld bytes\n",
-                   static_cast<long long>(db_size));
-            db_file.close();
-        } else {
-            printf("DEBUG: Cannot open database file\n");
-        }
-
-        if (num_lines == 0) {
-            printf(
-                "WARN: Skipping line reading robustness tests - no line "
-                "data\n");
-            MESSAGE("Skipping line reading robustness tests - no line data");
-            return;
-        }
-
-        printf(
-            "Line reading robustness test setup: %zu members, %zu total "
-            "lines\n",
-            members.size(), num_lines);
-        INFO("Line reading robustness test setup: "
-             << members.size() << " members, " << num_lines << " total lines");
+    // Skip the tests if the indexer holds no line data.
+    if (fx.total_lines == 0) {
+        MESSAGE("Skipping line reading robustness tests - no line data");
+        return;
     }
 
     auto reader = ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
@@ -1717,23 +1618,10 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
 }
 
 TEST_CASE("Robustness - Line reading consistency across multiple readers") {
-    LargeTestEnvironment env(16, 128);  // Medium file for consistency testing
-    REQUIRE(env.is_valid());
-
-    std::string gz_file = env.create_large_gzip_file();
-    REQUIRE(!gz_file.empty());
-
-    std::string idx_file = env.get_index_path(gz_file);
-
-    // Build index
-    std::size_t total_lines = 0;
-    {
-        auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(4.0));
-        REQUIRE(indexer != nullptr);
-        indexer->build();
-        total_lines = indexer->get_num_lines();
-    }
+    Prepared& fx = prepared(16, 128, 4.0, true);
+    const std::string gz_file = fx.gz_file;
+    const std::string idx_file = fx.idx_file;
+    const std::size_t total_lines = fx.total_lines;
 
     SUBCASE("Multiple reader instances return identical results") {
         // Create multiple readers

@@ -18,9 +18,31 @@
 #include <limits>
 #include <new>
 
+#if defined(__SANITIZE_THREAD__)
+#define DFTRACER_UTILS_MEMORY_TSAN 1
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define DFTRACER_UTILS_MEMORY_TSAN 1
+#endif
+#endif
+
 namespace dftracer::utils::memory {
 
 namespace {
+
+#if defined(DFTRACER_UTILS_MEMORY_TSAN)
+// TSan does not model fences, so under TSan a seq_cst RMW on one shared word
+// stands in for each fence.
+std::atomic<std::uint32_t> fence_word{0};
+#endif
+
+inline void full_fence() noexcept {
+#if defined(DFTRACER_UTILS_MEMORY_TSAN)
+    fence_word.fetch_add(0, std::memory_order_seq_cst);
+#else
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+#endif
+}
 
 constexpr std::uint32_t STATE_FREE = 0;
 constexpr std::uint32_t STATE_OPEN = 1;
@@ -874,7 +896,7 @@ bool PoolAccess::reapable(Manager& m, Pool& p) noexcept {
         std::ptrdiff_t blocks = 0;
         own_totals(m, p.id_, bytes, blocks);
         if (bytes != 0 || blocks != 0) return false;
-        std::atomic_thread_fence(std::memory_order_seq_cst);
+        full_fence();
     }
     return true;
 }
@@ -1096,12 +1118,12 @@ bool ManagerAccess::push_wait(Manager& m, ReserveWait& w) noexcept {
         w.next_ = head;
     } while (!m.wait_head_.compare_exchange_weak(
         head, &w, std::memory_order_release, std::memory_order_relaxed));
-    std::atomic_thread_fence(std::memory_order_seq_cst);
+    full_fence();
     return grant(m, arrival);
 }
 
 void ManagerAccess::wake(Manager& m) noexcept {
-    std::atomic_thread_fence(std::memory_order_seq_cst);
+    full_fence();
     if (m.waiters_.load(std::memory_order_relaxed) == 0) return;
     grant(m, NO_WAITER);
 }

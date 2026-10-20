@@ -93,6 +93,12 @@ function(configure_sanitizers)
     message(STATUS "Enabling ThreadSanitizer")
     list(APPEND SANITIZER_FLAGS "-fsanitize=thread" "-fno-omit-frame-pointer")
     list(APPEND SANITIZER_LINK_FLAGS "-fsanitize=thread")
+    # GCC warns at each atomic_thread_fence under TSan. Our code uses none
+    # under TSan; the rest are in concurrentqueue (instantiated in our files)
+    # and zlib-ng, which we do not patch.
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+      list(APPEND SANITIZER_FLAGS "-Wno-tsan")
+    endif()
 
     # Set runtime options
     if(NOT DEFINED ENV{TSAN_OPTIONS})

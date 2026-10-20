@@ -418,8 +418,10 @@ TEST_CASE(
     SUBCASE("compare_agg") {
         const Asked r = run_asked(
             [](LazyFrame lf) {
+                // The request lands on the left side's state, so a small
+                // right side keeps the check and the run short.
                 return lf.compare_agg(LazyFrame::scan(std::make_shared<Hooked>(
-                                          MORSELS, ROWS, nullptr, false)),
+                                          4, ROWS, nullptr, false)),
                                       1);
             },
             "query/compare_agg", false);

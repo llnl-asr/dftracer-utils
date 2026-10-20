@@ -1393,7 +1393,7 @@ class Sides {
         if (keys[i]) try {
                 if (const auto db = ix::cache::open_lookup_db(
                         keys[i]->path,
-                        ix::store::RocksDatabase::OpenMode::ReadWrite))
+                        ix::store::RocksDatabase::OpenMode::ReadOnly))
                     if (auto bytes = ix::cache::read_lookup(*db, keys[i]->sig))
                         if (auto cached = df::frame_from_native(*bytes))
                             return std::make_shared<const df::DataFrame>(

@@ -191,6 +191,7 @@ std::shared_ptr<RocksDatabase> RocksDBManager::get_or_open(
             database->open(db_path, needs_upgrade
                                         ? RocksDatabase::OpenMode::ReadWrite
                                         : open_mode);
+            opens_.fetch_add(1);
         } catch (...) {
             std::lock_guard<std::mutex> lock(mutex_);
             opening_.erase(db_path);

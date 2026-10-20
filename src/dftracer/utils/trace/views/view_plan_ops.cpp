@@ -386,15 +386,25 @@ ColTypeMap harvest_path_types(const std::vector<ViewFile>& files) {
     return merged;
 }
 
-// Union the harvested column types across the view's distinct index roots,
-// reading each index's metadata in parallel. Seeds the base axis fields.
+// Union the column types of the view's own files, reading each distinct index
+// root in parallel. An index root also holds files the view does not read, so
+// only the view's files contribute. Seeds the base axis fields.
 ColTypeMap harvest_column_types(const std::vector<ViewFile>& files) {
-    // Distinct index roots (many files often share one index).
+    // Distinct index roots (many files often share one index), each with the
+    // logical paths of the view's files in it.
     std::vector<std::string> roots;
+    std::vector<std::vector<std::string>> root_files;
     for (const auto& f : files) {
         if (f.index_path.empty()) continue;
-        if (std::find(roots.begin(), roots.end(), f.index_path) == roots.end())
+        auto pos = std::find(roots.begin(), roots.end(), f.index_path);
+        if (pos == roots.end()) {
             roots.push_back(f.index_path);
+            root_files.emplace_back();
+            pos = roots.end() - 1;
+        }
+        root_files[static_cast<std::size_t>(pos - roots.begin())].push_back(
+            dftracer::utils::index::store::internal::get_logical_path(
+                f.file_path));
     }
 
     ColTypeMap merged;
@@ -411,13 +421,27 @@ ColTypeMap harvest_column_types(const std::vector<ViewFile>& files) {
             [&](std::int64_t begin, std::int64_t end) {
                 ColTypeMap local;
                 for (std::int64_t i = begin; i < end; ++i) {
+                    namespace st = dftracer::utils::index::store;
                     try {
-                        dftracer::utils::index::store::IndexDatabase db(
-                            roots[static_cast<std::size_t>(i)],
-                            dftracer::utils::index::store::IndexOpenMode::
-                                ReadOnly);
-                        for (auto& [name, t] : db.query_all_column_types())
-                            local.emplace(std::move(name), t);
+                        st::IndexDatabase db(roots[static_cast<std::size_t>(i)],
+                                             st::IndexOpenMode::ReadOnly);
+                        for (const std::string& logical :
+                             root_files[static_cast<std::size_t>(i)]) {
+                            const int fid = db.get_file_info_id(logical);
+                            if (fid < 0) continue;
+                            ColTypeMap one;
+                            for (auto& [path, t] : db.file_column_types(fid)) {
+                                std::string_view name = path;
+                                if (name.starts_with("args."))
+                                    name.remove_prefix(5);
+                                auto [at, fresh] =
+                                    one.emplace(std::string(name), t);
+                                if (!fresh)
+                                    at->second =
+                                        st::merge_column_type(at->second, t);
+                            }
+                            fold_col_map(local, one);
+                        }
                     } catch (...) {
                         // A missing or unreadable index contributes nothing.
                     }

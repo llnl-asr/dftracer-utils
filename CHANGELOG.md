@@ -230,6 +230,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Fix a select-all frame that listed `args.*` columns of other traces.
   A plan declared the columns of every file in its index root, which holds all traces of one directory.
   It now declares only the columns of its own files.
+- Fix a memory leak when a scan stops while RocksDB still prefetches index blocks.
+  An aborted read did not get its callback, so RocksDB never freed the state of that read.
 
 ## [0.0.14] - 2026-10-10
 

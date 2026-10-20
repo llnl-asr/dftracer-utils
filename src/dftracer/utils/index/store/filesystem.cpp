@@ -742,11 +742,20 @@ class DfTracerFileSystem final : public LocalFileSystemWrapper {
             handle->aborted = true;
         }
 
+        // As in RocksDB's posix AbortIO, an undelivered read gets its callback
+        // with Aborted: the callback frees RocksDB's per-read state.
         for (void* io_handle : io_handles) {
             auto* handle = static_cast<AsyncReadHandle*>(io_handle);
             std::unique_lock<std::mutex> lock(handle->mutex);
             handle->cv.wait(lock, [&] { return handle->finished; });
+            if (handle->callback_delivered) continue;
             handle->callback_delivered = true;
+            auto callback = handle->callback;
+            auto callback_arg = handle->callback_arg;
+            lock.unlock();
+            ::rocksdb::FSReadRequest req;
+            req.status = ::rocksdb::IOStatus::Aborted();
+            callback(req, callback_arg);
         }
 
         return ::rocksdb::IOStatus::OK();

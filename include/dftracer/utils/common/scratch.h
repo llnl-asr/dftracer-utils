@@ -8,9 +8,10 @@ namespace dftracer::utils {
 
 /// The best node-local scratch root discovered from the OS mount table (RAM
 /// tmpfs preferred over local disk, larger free space breaks ties), or "" when
-/// none is usable or staging is disabled. $DFTRACER_INDEX_SCRATCH overrides the
-/// choice; set it to "off"/"none"/"0" to disable staging entirely. Cached; this
-/// no-argument form ignores capacity, so use it only to test availability.
+/// none is usable or staging is disabled. $DFTRACER_UTILS_INDEX_SCRATCH
+/// overrides the choice; set it to "off"/"none"/"0" to disable staging
+/// entirely. Cached; this no-argument form ignores capacity, so use it only to
+/// test availability.
 const std::string& scratch_root() noexcept;
 
 /// `<mount>/<user>/dftracer-utils/spill` on the node-local disk mount with the
@@ -18,13 +19,14 @@ const std::string& scratch_root() noexcept;
 /// root is writable, the same under /var/tmp, then ~/.cache, if they are on a
 /// local disk. "" when there is none. RAM-backed (tmpfs) and network mounts
 /// never qualify: spill files there would count against the memory limit or be
-/// slow. Cached. Independent of $DFTRACER_INDEX_SCRATCH.
+/// slow. Cached. Independent of $DFTRACER_UTILS_INDEX_SCRATCH.
 const std::string& local_spill_root() noexcept;
 
 /// Whether an artifact whose final home is `dest` should be built on local
 /// scratch and copied back. True when a scratch root exists and either the
 /// destination is a network/parallel filesystem (the default "smart" policy) or
-/// $DFTRACER_INDEX_STAGE=always. Set $DFTRACER_INDEX_STAGE=never to force off.
+/// $DFTRACER_UTILS_INDEX_STAGE=always. Set $DFTRACER_UTILS_INDEX_STAGE=never to
+/// force off.
 bool should_stage(const std::string& dest) noexcept;
 
 /// A per-invocation scratch working directory:

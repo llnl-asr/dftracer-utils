@@ -162,7 +162,7 @@ struct RecordSchema {
 /// Every registered schema: the built-ins "dftracer", "generic" and
 /// "genesis" first, then user schemas in registration order. Schemas stay
 /// registered, and the pointers valid, until the process exits. The first
-/// registry access loads $DFTRACER_SCHEMA_PATH. Thread-safe.
+/// registry access loads $DFTRACER_UTILS_SCHEMA_PATH. Thread-safe.
 std::vector<const RecordSchema*> registered_schemas();
 
 /// The registered schema `id`, or null.

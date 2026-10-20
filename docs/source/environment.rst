@@ -148,7 +148,7 @@ duql
    * - Variable
      - Default
      - Effect
-   * - ``DFTRACER_DUQL_PATH``
+   * - ``DFTRACER_UTILS_DUQL_PATH``
      - unset
      - ``.duql`` macro files or directories, ``:``-separated. Loaded after the
        query's own macros and ``--duql-path``. See :doc:`guides/core/duql`.
@@ -188,27 +188,27 @@ RocksDB and indexing
        it explicitly also overrides the read-only fast path, which otherwise
        keeps every SST file open (``-1``) to avoid re-reading filter/index
        blocks on point lookups.
-   * - ``DFTRACER_SCHEMA_PATH``
+   * - ``DFTRACER_UTILS_SCHEMA_PATH``
      - unset
      - Record schema spec files or directories, ``:``-separated, registered
        on first use of the schema registry. See
        :doc:`reference/record-schema`.
-   * - ``DFTRACER_INDEX_SIZE_FACTOR``
+   * - ``DFTRACER_UTILS_INDEX_SIZE_FACTOR``
      - ``3``
      - Multiplier applied to total input bytes to size the scratch reservation
        when staging an index build to local scratch. Non-positive values are
        treated as ``1``.
-   * - ``DFTRACER_INDEX_SCRATCH``
+   * - ``DFTRACER_UTILS_INDEX_SCRATCH``
      - auto-detected best local mount
      - Forces the scratch staging root. A path is used directly (validated
        writable and roomy); ``off``, ``none``, ``0``, or ``false`` disables
        scratch staging entirely.
-   * - ``DFTRACER_INDEX_STAGE``
+   * - ``DFTRACER_UTILS_INDEX_STAGE``
      - stage only for network destinations
      - Controls when an index build stages to local scratch before publishing
        to its final destination. ``never``, ``off``, or ``0`` disables
        staging; ``always`` forces staging even for local destinations.
-   * - ``DFTRACER_CACHE_MAX_BYTES``
+   * - ``DFTRACER_UTILS_CACHE_MAX_BYTES``
      - ``2G``
      - Size cap for each query cache store (rollups and materialized views
        in ``.dftindex-cache``). A size such as ``512M`` or ``4G``. When a
@@ -295,7 +295,7 @@ console-script.
    * - Variable
      - Default
      - Effect
-   * - ``DFTRACER_PLUGIN_INCLUDE``
+   * - ``DFTRACER_UTILS_PLUGIN_INCLUDE``
      - bundled package headers, then a source-tree parent walk
      - Overrides the directory containing ``dftracer/utils/plugins/abi.h``,
        the plugin C ABI header. Takes priority over the other two lookups.
@@ -305,7 +305,7 @@ console-script.
        ``shutil.which("c++")`` then ``shutil.which("clang++")`` then
        ``"c++"`` when unset; it always selects a C++ compiler regardless of
        what ``CXX`` names.
-   * - ``DFTRACER_JIT_CACHE``
+   * - ``DFTRACER_UTILS_JIT_CACHE``
      - ``~/.cache/dftracer-utils/jit``
      - Directory for content-hashed compiled plugin/JIT shared objects, so an
        unchanged source never recompiles.

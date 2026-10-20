@@ -29,7 +29,7 @@ std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env, int num_events,
 }
 
 std::string find_index_binary() {
-    return dftu_utils_test::find_binary_by_name("DFTRACER_INDEX_PATH",
+    return dftu_utils_test::find_binary_by_name("DFTRACER_UTILS_INDEX_PATH",
                                                 "dftracer_index");
 }
 
@@ -50,7 +50,7 @@ TEST_SUITE("DFTracerIndex") {
         if (binary.empty()) {
             MESSAGE(
                 "dftracer_index binary not found, skipping. "
-                "Set DFTRACER_INDEX_PATH env to specify location.");
+                "Set DFTRACER_UTILS_INDEX_PATH env to specify location.");
             return;
         }
         CHECK(!binary.empty());

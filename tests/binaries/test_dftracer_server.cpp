@@ -78,10 +78,10 @@ std::string create_ns_pfw_gz(const std::string& dir) {
     return path;
 }
 
-/// Find the dftracer_server binary. Checks DFTRACER_SERVER_PATH env first,
-/// then common build paths relative to the test binary.
+/// Find the dftracer_server binary. Checks DFTRACER_UTILS_SERVER_PATH env
+/// first, then common build paths relative to the test binary.
 std::string find_server_binary() {
-    return dftu_utils_test::find_binary_by_name("DFTRACER_SERVER_PATH",
+    return dftu_utils_test::find_binary_by_name("DFTRACER_UTILS_SERVER_PATH",
                                                 "dftracer_server");
 }
 
@@ -360,7 +360,7 @@ TEST_CASE("DFTracer Server - binary exists") {
     if (binary.empty()) {
         MESSAGE(
             "dftracer_server binary not found, skipping integration "
-            "tests. Set DFTRACER_SERVER_PATH env to specify location.");
+            "tests. Set DFTRACER_UTILS_SERVER_PATH env to specify location.");
         return;
     }
     CHECK(!binary.empty());

@@ -309,7 +309,7 @@ def test_schema_path_environment_and_spec_edits(tmp_path):
     spec_dir.mkdir()
     spec = spec_dir / "nginx.yaml"
     spec.write_text("id: env_nginx\nfields: {remote_addr: {type: string}, status: {type: int}}\n")
-    env = {"DFTRACER_SCHEMA_PATH": str(spec_dir)}
+    env = {"DFTRACER_UTILS_SCHEMA_PATH": str(spec_dir)}
     build = f"""
         import dftracer.utils as d
         with d.Indexer(files=[{trace!r}], index_dir={index_dir!r}) as ix:
@@ -341,18 +341,18 @@ def test_schema_path_environment_and_spec_edits(tmp_path):
         import dftracer.utils as d
         d.TraceViewer({trace!r}, index_path={index_dir + "/.dftindex"!r}).collect()
     """
-    code, out = _run(read, {"DFTRACER_SCHEMA_PATH": ""})
+    code, out = _run(read, {"DFTRACER_UTILS_SCHEMA_PATH": ""})
     assert code == 1, out
     assert "Traceback" in out
-    assert "env_nginx" in out and "DFTRACER_SCHEMA_PATH" in out
+    assert "env_nginx" in out and "DFTRACER_UTILS_SCHEMA_PATH" in out
 
     # A changed trace is not re-indexed under another schema either.
     stat = os.stat(trace)
     os.utime(trace, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
-    code, out = _run(read, {"DFTRACER_SCHEMA_PATH": ""})
+    code, out = _run(read, {"DFTRACER_UTILS_SCHEMA_PATH": ""})
     assert code == 1, out
     assert "Traceback" in out
-    assert "env_nginx" in out and "DFTRACER_SCHEMA_PATH" in out
+    assert "env_nginx" in out and "DFTRACER_UTILS_SCHEMA_PATH" in out
 
 
 def test_old_locations_are_not_read(tmp_path):
@@ -373,7 +373,7 @@ def test_old_locations_are_not_read(tmp_path):
         print("ids", [s["id"] for s in d.schemas.list()])
         print("detected", d.schemas.detect({trace!r}))
         """,
-        {"DFTRACER_PROFILE_PATH": str(old), "DFTRACER_SCHEMA_PATH": ""},
+        {"DFTRACER_UTILS_PROFILE_PATH": str(old), "DFTRACER_UTILS_SCHEMA_PATH": ""},
     )
     assert code == 0, out
     assert "old_nginx" not in out

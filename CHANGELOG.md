@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Rename the environment variables, CMake options and macros that began with `DFTRACER_` to begin with `DFTRACER_UTILS_`, so they do not clash with DFTracer.
+  Set `DFTRACER_UTILS_CACHE_MAX_BYTES`, `DFTRACER_UTILS_DUQL_PATH`, `DFTRACER_UTILS_SCHEMA_PATH`, `DFTRACER_UTILS_INDEX_STAGE`, `DFTRACER_UTILS_INDEX_SCRATCH`, `DFTRACER_UTILS_INDEX_SIZE_FACTOR`, `DFTRACER_UTILS_JIT_CACHE`, `DFTRACER_UTILS_PLUGIN_INCLUDE` and `-DDFTRACER_UTILS_USE_ZLIB_NG`, and use `DFTRACER_UTILS_PLUGIN_FACTORY_SYMBOL` in plugins.
 - Make each stateful lazy op (sort, top-k, group by, joins, `asof`, `interval`, window, `head_by`, `unique`, `is_duplicated`, pivot and compare agg) hold its state in a pool of its query and spill when the memory manager asks for bytes back.
   A second query that needs memory over the budget now makes the first one spill instead of going past the budget.
 - Make `unique` and `is_duplicated` use up to half the peak memory, because their keys now sit in a chunked arena that never moves and their hash table grows four times at a time once it is large.

@@ -1041,7 +1041,7 @@ function(_try_zlib_ng OUT_VAR)
 endfunction()
 
 function(need_zlib)
-  if(DFTRACER_USE_ZLIB_NG)
+  if(DFTRACER_UTILS_USE_ZLIB_NG)
     _try_zlib_ng(_ZLIB_NG_OK)
     if(_ZLIB_NG_OK)
       set(ZLIB_CPM

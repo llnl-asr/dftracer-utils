@@ -14,7 +14,7 @@ namespace dftracer::utils::duql {
 /// the construct and the stage that adds it, for anything outside that
 /// subset, and for a parameter `params` does not bind. `source` is the text
 /// `program` was parsed from, for error positions. Its `def`s and those on
-/// `$DFTRACER_DUQL_PATH` expand first.
+/// `$DFTRACER_UTILS_DUQL_PATH` expand first.
 dftracer::utils::expected<duql::QueryNodePtr, duql::DuqlError> lower_filter(
     syntax::Program program, const duql::Params& params,
     std::string_view source);

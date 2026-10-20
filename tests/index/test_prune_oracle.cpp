@@ -3,7 +3,7 @@
 // consumer is `gather_units`, the path every View scan plans through. Dynamic
 // narrowing is not recorded: it races the running scan, and it prunes through
 // ChunkPruner, which is. Set
-// DFTRACER_PRUNE_ORACLE_RECORD=<path> to write a new recording instead.
+// DFTRACER_UTILS_PRUNE_ORACLE_RECORD=<path> to write a new recording instead.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/filesystem.h>
@@ -360,7 +360,7 @@ TEST_CASE("prune decisions match the recording") {
     Corpus corpus;
     const auto lines = run_oracle(corpus);
 
-    if (const char* out = std::getenv("DFTRACER_PRUNE_ORACLE_RECORD")) {
+    if (const char* out = std::getenv("DFTRACER_UTILS_PRUNE_ORACLE_RECORD")) {
         std::ofstream f(out);
         for (const auto& l : lines) f << l << "\n";
         MESSAGE("recorded " << lines.size() << " lines to "

@@ -901,7 +901,7 @@ def load_path(path: str) -> None:
     """Load the ``def`` macros of the ``.duql`` file ``path``, or of every
     ``.duql`` file in the directory ``path``, for every later query of the
     process. They expand after a query's and a source's own macros, like
-    those on ``$DFTRACER_DUQL_PATH``.
+    those on ``$DFTRACER_UTILS_DUQL_PATH``.
 
     Raises:
         DFTUtilsIOError: If a file cannot be read.

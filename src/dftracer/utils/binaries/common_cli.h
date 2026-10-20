@@ -437,7 +437,7 @@ struct DuqlArgs : CliSchema {
         p.add_argument("--duql-path")
             .help(
                 "A .duql macro file or a directory of them, read after "
-                "$DFTRACER_DUQL_PATH (repeatable)")
+                "$DFTRACER_UTILS_DUQL_PATH (repeatable)")
             .append()
             .default_value<std::vector<std::string>>({});
     }

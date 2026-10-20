@@ -18,10 +18,10 @@
 // but TSAN cannot observe it.  Annotate the boundary so TSAN sees the
 // happens-before edge: submit_fn -> kernel -> completion_loop.
 #if defined(__SANITIZE_THREAD__)
-#define DFTRACER_TSAN 1
+#define DFTRACER_UTILS_TSAN 1
 #elif defined(__has_feature)
 #if __has_feature(thread_sanitizer)
-#define DFTRACER_TSAN 1
+#define DFTRACER_UTILS_TSAN 1
 #endif
 #endif
 
@@ -286,7 +286,7 @@ void IoUringBackend::completion_loop() {
 
         auto* req = static_cast<IoUringRequest*>(uring::cqe_get_data(cqe));
         if (req) {
-            DFTRACER_TSAN_ACQUIRE(req);
+            DFTRACER_UTILS_TSAN_ACQUIRE(req);
             if (req->awaitable) {
                 req->awaitable->result_ = cqe->res;
                 executor_.enqueue(req->awaitable->handle_);
@@ -584,7 +584,7 @@ void IoUringBackend::submit_fn(SubmitContext* ctx, IoAwaitable* awaitable) {
     }
 
     uring::sqe_set_data(sqe, req);
-    DFTRACER_TSAN_RELEASE(req);
+    DFTRACER_UTILS_TSAN_RELEASE(req);
     backend->in_flight_.fetch_add(1, std::memory_order_acq_rel);
     backend->ring_.mark_pending();
     backend->maybe_flush_locked();

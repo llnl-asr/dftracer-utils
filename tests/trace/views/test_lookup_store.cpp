@@ -98,7 +98,7 @@ TEST_SUITE("LookupStore") {
         auto db = store_in(env);
         REQUIRE(db);
         const std::string value(1000, 'v');
-        ::setenv("DFTRACER_CACHE_MAX_BYTES",
+        ::setenv("DFTRACER_UTILS_CACHE_MAX_BYTES",
                  std::to_string(2 * entry_bytes(value.size())).c_str(), 1);
         cache::persist_lookup(*db, 1, value);
         tick();
@@ -107,7 +107,7 @@ TEST_SUITE("LookupStore") {
         CHECK(cache::read_lookup(*db, 1) == value);
         tick();
         cache::persist_lookup(*db, 3, value);
-        ::unsetenv("DFTRACER_CACHE_MAX_BYTES");
+        ::unsetenv("DFTRACER_UTILS_CACHE_MAX_BYTES");
         CHECK(cache::lookup_exists(*db, 1));
         CHECK_FALSE(cache::lookup_exists(*db, 2));
         CHECK(cache::lookup_exists(*db, 3));
@@ -118,7 +118,7 @@ TEST_SUITE("LookupStore") {
         auto db = store_in(env);
         REQUIRE(db);
         const std::string value(1000, 'v');
-        ::setenv("DFTRACER_CACHE_MAX_BYTES",
+        ::setenv("DFTRACER_UTILS_CACHE_MAX_BYTES",
                  std::to_string(2 * entry_bytes(value.size())).c_str(), 1);
         cache::persist_lookup(*db, 1, value);
         tick();
@@ -126,7 +126,7 @@ TEST_SUITE("LookupStore") {
         tick();
         CHECK(cache::lookup_exists(*db, 1));
         cache::persist_lookup(*db, 3, value);
-        ::unsetenv("DFTRACER_CACHE_MAX_BYTES");
+        ::unsetenv("DFTRACER_UTILS_CACHE_MAX_BYTES");
         CHECK_FALSE(cache::lookup_exists(*db, 1));
         CHECK(cache::lookup_exists(*db, 2));
         CHECK(cache::lookup_exists(*db, 3));
@@ -136,11 +136,11 @@ TEST_SUITE("LookupStore") {
         TestEnvironment env(200);
         auto db = store_in(env);
         REQUIRE(db);
-        ::setenv("DFTRACER_CACHE_MAX_BYTES", "100", 1);
+        ::setenv("DFTRACER_UTILS_CACHE_MAX_BYTES", "100", 1);
         cache::persist_lookup(*db, 1, std::string(1000, 'v'));
         CHECK_FALSE(cache::lookup_exists(*db, 1));
         cache::persist_lookup(*db, 2, "small");
-        ::unsetenv("DFTRACER_CACHE_MAX_BYTES");
+        ::unsetenv("DFTRACER_UTILS_CACHE_MAX_BYTES");
         CHECK(cache::read_lookup(*db, 2) == "small");
     }
 

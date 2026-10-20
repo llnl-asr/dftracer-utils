@@ -1,5 +1,5 @@
-#ifndef DFTRACER_TESTS_GROUPMAP_ORACLE_H
-#define DFTRACER_TESTS_GROUPMAP_ORACLE_H
+#ifndef DFTRACER_UTILS_TESTS_GROUPMAP_ORACLE_H
+#define DFTRACER_UTILS_TESTS_GROUPMAP_ORACLE_H
 
 // An independent, test-local reimplementation of the pre-convergence GroupMap
 // aggregation fold (the AggAccum map + to_batch materializer that the dataframe
@@ -899,4 +899,4 @@ inline dataframe::DataFrame groupmap_oracle(const detail::scan::ScanPlan& v) {
 
 }  // namespace gmoracle
 
-#endif  // DFTRACER_TESTS_GROUPMAP_ORACLE_H
+#endif  // DFTRACER_UTILS_TESTS_GROUPMAP_ORACLE_H

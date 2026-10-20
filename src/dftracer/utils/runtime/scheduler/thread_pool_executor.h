@@ -39,7 +39,7 @@ class ThreadPoolExecutor : public TaskExecutor {
 
    private:
     // Aligned to avoid false sharing between adjacent workers.
-    struct alignas(DFTRACER_OPTIMAL_ALIGNMENT) WorkerContext {
+    struct alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT) WorkerContext {
         std::size_t worker_id;
 
         // Health monitoring for watchdog
@@ -100,7 +100,8 @@ class ThreadPoolExecutor : public TaskExecutor {
     static constexpr std::size_t MAX_BLOCKING_REPLACEMENTS = 256;
 
     // Available run permits.
-    alignas(DFTRACER_OPTIMAL_ALIGNMENT) std::atomic<std::ptrdiff_t> permits_{0};
+    alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT)
+        std::atomic<std::ptrdiff_t> permits_{0};
     // Workers currently parked inside run_blocking.
     std::atomic<std::size_t> blocked_workers_{0};
     // Workers parked in acquire_permit waiting for a slot.
@@ -124,11 +125,11 @@ class ThreadPoolExecutor : public TaskExecutor {
 
     // Global tracking, padded to avoid false sharing between counters
     // and with work_signal_ below.
-    alignas(DFTRACER_OPTIMAL_ALIGNMENT)
+    alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT)
         std::atomic<std::size_t> tasks_completed_{0};
-    alignas(DFTRACER_OPTIMAL_ALIGNMENT) std::atomic<std::size_t> tasks_started_{
-        0};
-    alignas(DFTRACER_OPTIMAL_ALIGNMENT)
+    alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT)
+        std::atomic<std::size_t> tasks_started_{0};
+    alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT)
         std::atomic<std::size_t> total_tasks_submitted_{0};
 
     std::atomic<std::int64_t> last_activity_ns_;
@@ -157,8 +158,8 @@ class ThreadPoolExecutor : public TaskExecutor {
     };
 
     moodycamel::ConcurrentQueue<RunQueueEntry> run_queue_;
-    alignas(DFTRACER_OPTIMAL_ALIGNMENT) std::atomic<std::uint64_t> work_signal_{
-        0};
+    alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT)
+        std::atomic<std::uint64_t> work_signal_{0};
 
     // Idle park. run_queue_ is a moodycamel::ConcurrentQueue whose try_dequeue
     // can report empty while another producer's item is still in flight, even

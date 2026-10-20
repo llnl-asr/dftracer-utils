@@ -281,12 +281,13 @@ Result<Plugins::Impl::Loaded> load_plugin(const std::string& path,
     }
 
     auto factory = reinterpret_cast<dftu_plugin_factory>(
-        dlsym(handle, DFTRACER_PLUGIN_FACTORY_SYMBOL));
+        dlsym(handle, DFTRACER_UTILS_PLUGIN_FACTORY_SYMBOL));
     if (!factory) {
         dlclose(handle);
         return make_error(ErrorCode::NotFound,
                           "plugin '" + path + "' exports no '" +
-                              DFTRACER_PLUGIN_FACTORY_SYMBOL + "' symbol");
+                              DFTRACER_UTILS_PLUGIN_FACTORY_SYMBOL +
+                              "' symbol");
     }
 
     BuildHost build_host(plugin_name_from_path(path));

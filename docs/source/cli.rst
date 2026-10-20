@@ -51,7 +51,7 @@ repeated in each tool's section.
 - ``--duql <duql>`` (alias ``--query``) - duql filter
   (e.g., ``'cat == "POSIX" and dur > 1000'``)
 - ``--duql-path PATH`` - Load the ``.duql`` macro file or directory PATH
-  (repeatable), after ``$DFTRACER_DUQL_PATH``
+  (repeatable), after ``$DFTRACER_UTILS_DUQL_PATH``
 
 **Watchdog** (``WatchdogArgs``)
 
@@ -379,7 +379,7 @@ dftracer_stats
 - ``--top-n <count>`` - Number of results for top-N queries (0=show all, default: 0)
 - ``--top-n-pid-tid <count>`` - Max PID:TID pairs to display (0=show all, default: 10)
 - ``--duql <duql>`` (alias ``--query``) - duql filter (e.g., ``'cat == "POSIX" and dur > 1000'``)
-- ``--duql-path PATH`` - Load the ``.duql`` macro file or directory PATH (repeatable), after ``$DFTRACER_DUQL_PATH``
+- ``--duql-path PATH`` - Load the ``.duql`` macro file or directory PATH (repeatable), after ``$DFTRACER_UTILS_DUQL_PATH``
 - ``--group-by <dims...>`` - Group-by dimensions: name, cat, pid, tid, fhash, hhash, pid_tid (default: name for detailed)
 - ``--filter-names <names...>`` - Filter by event names
 - ``--filter-cats <cats...>`` - Filter by event categories
@@ -429,7 +429,7 @@ dftracer_view
 - ``--min-duration <us>`` - Minimum event duration in microseconds
 - ``--max-duration <us>`` - Maximum event duration in microseconds
 - ``-o, --output <path>`` - Output file path (default: stdout)
-- ``--duql-path PATH`` - Load the ``.duql`` macro file or directory PATH (repeatable), after ``$DFTRACER_DUQL_PATH``
+- ``--duql-path PATH`` - Load the ``.duql`` macro file or directory PATH (repeatable), after ``$DFTRACER_UTILS_DUQL_PATH``
 - ``--index-dir <path>`` - Directory where ``.dftindex`` stores are created
 - ``--no-auto-index`` - Disable automatic index building for files missing ``.dftindex``
 - ``--checkpoint-size <bytes>`` - Checkpoint size for auto-indexing in bytes (default: 33554432 B / 32 MB)
@@ -807,7 +807,7 @@ dftracer_comparator
 - ``--config <path>`` - JSON config file for hierarchical comparison (replaces ``--baseline``/``--variant``)
 - ``--preset <name>`` - Built-in comparison preset (see **Presets** below). Requires ``--baseline`` and ``--variant``
 - ``--duql <duql>`` (alias ``--query``) - duql filter. With ``--preset``, ANDed into every top-level node query to narrow results without replacing the preset structure (default: ``'cat == "POSIX" OR cat == "STDIO"'`` for plain mode)
-- ``--duql-path PATH`` - Load the ``.duql`` macro file or directory PATH (repeatable), after ``$DFTRACER_DUQL_PATH``
+- ``--duql-path PATH`` - Load the ``.duql`` macro file or directory PATH (repeatable), after ``$DFTRACER_UTILS_DUQL_PATH``
 - ``--group-by <keys>`` - Comma-separated group keys (default: cat,name)
 - ``--format <fmt>`` - Output format: ``table`` (default) or ``json``
 - ``-t, --time-interval <ms>`` - Time interval in milliseconds for bucketing (default: 5000)

@@ -173,8 +173,8 @@ std::shared_ptr<rdb::RocksDatabase> open_rollup_db(
 }
 
 std::uint64_t cache_max_bytes() {
-    const auto text =
-        dftracer::utils::Env::get<std::string_view>("DFTRACER_CACHE_MAX_BYTES");
+    const auto text = dftracer::utils::Env::get<std::string_view>(
+        "DFTRACER_UTILS_CACHE_MAX_BYTES");
     if (!text) return DEFAULT_CACHE_MAX_BYTES;
     return dftracer::utils::parse_bytes(*text).value_or(
         DEFAULT_CACHE_MAX_BYTES);

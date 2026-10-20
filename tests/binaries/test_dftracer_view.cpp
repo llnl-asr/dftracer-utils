@@ -61,7 +61,7 @@ std::string make_multimember_pfw_gz(dftu_utils_test::TestEnvironment& env,
 }
 
 std::string find_view_binary() {
-    return dftu_utils_test::find_binary_by_name("DFTRACER_VIEW_PATH",
+    return dftu_utils_test::find_binary_by_name("DFTRACER_UTILS_VIEW_PATH",
                                                 "dftracer_view");
 }
 
@@ -261,7 +261,7 @@ TEST_SUITE("DFTracerView") {
         if (binary.empty()) {
             MESSAGE(
                 "dftracer_view binary not found, skipping. "
-                "Set DFTRACER_VIEW_PATH env to specify location.");
+                "Set DFTRACER_UTILS_VIEW_PATH env to specify location.");
             return;
         }
         CHECK(!binary.empty());

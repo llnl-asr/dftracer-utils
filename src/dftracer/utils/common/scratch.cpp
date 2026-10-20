@@ -70,7 +70,7 @@ bool mount_has_room(const std::string& mount, FilesystemKind kind,
 }
 
 std::string compute_scratch_root(std::uint64_t needed) {
-    const std::string forced = env_str("DFTRACER_INDEX_SCRATCH");
+    const std::string forced = env_str("DFTRACER_UTILS_INDEX_SCRATCH");
     if (!forced.empty()) {
         const std::string f = lower(forced);
         if (f == "off" || f == "none" || f == "0" || f == "false") return {};
@@ -164,7 +164,7 @@ const std::string& local_spill_root() noexcept {
 }
 
 bool should_stage(const std::string& dest) noexcept {
-    const std::string mode = lower(env_str("DFTRACER_INDEX_STAGE"));
+    const std::string mode = lower(env_str("DFTRACER_UTILS_INDEX_STAGE"));
     if (mode == "never" || mode == "off" || mode == "0") return false;
     // Cheap gate first: a local destination is the common case and never
     // stages, so skip the mount probing and mountpoint walks entirely.

@@ -23,7 +23,7 @@ jobs:
     permissions:
       contents: read
       actions: write
-    name: build ({{ inputs.os }})
+    name: build (${{ inputs.os }})
     env:
       ROCKSDB_VERSION: ${{ inputs.rocksdb_version }}
       CMAKE_POLICY_VERSION_MINIMUM: 3.5
@@ -109,11 +109,12 @@ jobs:
 
       # tar keeps file modes and symlinks, which the artifact zip drops.
       # Object files are not needed to run the tests; coverage keeps its .gcno
-      # notes next to them. Static archives stay: the install tests need them.
+      # notes next to them. Static archives stay: the install tests need them,
+      # and so does .cpmsource, whose headers the install step copies.
       - name: Pack the build
         run: |
           dir=build/${{ (inputs.os == 'ubuntu-22.04' || inputs.os == 'macos-latest') && 'build-coverage' || 'build-tests' }}
-          tar --exclude='*.o' -cf build.tar "$dir"
+          tar --exclude='*.o' --exclude='.git' -cf build.tar "$dir" .cpmsource
           ls -lh build.tar
 
       - uses: actions/upload-artifact@v6.0.0
@@ -191,14 +192,6 @@ jobs:
       - name: Restore dependency installs
         run: scripts/ci/deps_cache.sh restore "ci-RelWithDebInfo" "$DFTRACER_UTILS_DEPS_PREFIX"
 
-      - name: Cache CPM dependency sources
-        uses: actions/cache@v5
-        with:
-          path: ${{ github.workspace }}/.cpmsource
-          key: cpmsource-lite-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
-          restore-keys: |
-            cpmsource-lite-v1-
-
       - name: Install dependencies (Ubuntu)
         if: runner.os == 'Linux'
         run: |
@@ -216,7 +209,7 @@ jobs:
             fi
           done
 
-      - uses: actions/download-artifact@v6.0.0
+      - uses: actions/download-artifact@v7.0.0
         with:
           name: build-${{ inputs.os }}
 

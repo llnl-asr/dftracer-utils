@@ -710,10 +710,9 @@ coro::CoroTask<int> run_gen_dist(CoroScope& ctx, const GenDistArgParse* cli,
     auto* totals_ptr = totals.data();
     auto* progress_ptr = &progress;
     auto* memory_ptr = &memory;
-    co_await ctx.scope([&indices, groups, order_ptr, memory_ptr, shares,
-                        writer_ptr, head_writer_ptr, totals_ptr, threads,
-                        progress_ptr](
-                           CoroScope& scope) -> coro::CoroTask<void> {
+    auto run_scope = [&indices, groups, order_ptr, memory_ptr, shares,
+                      writer_ptr, head_writer_ptr, totals_ptr, threads,
+                      progress_ptr](CoroScope& scope) -> coro::CoroTask<void> {
         scope.spawn([ch = indices->producer(), order_ptr](CoroScope&) mutable {
             return group_feeder(std::move(ch), order_ptr);
         });
@@ -726,7 +725,8 @@ coro::CoroTask<int> run_gen_dist(CoroScope& ctx, const GenDistArgParse* cli,
             });
         }
         co_return;
-    });
+    };
+    co_await ctx.scope(run_scope);
 
     bool io_error = false;
     std::size_t runs = 0;

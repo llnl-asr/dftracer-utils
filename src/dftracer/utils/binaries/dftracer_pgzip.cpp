@@ -186,10 +186,10 @@ static int run_pgzip(const PgzipArgParse& cli) {
             auto file_chan =
                 coro::make_channel<std::size_t>(executor_threads * 2);
 
-            co_await ctx.scope([&file_chan, files_ptr, results_ptr, mutex_ptr,
-                                compression_level, executor_threads,
-                                chunk_size](
-                                   CoroScope& scope) -> coro::CoroTask<void> {
+            auto compress_scope =
+                [&file_chan, files_ptr, results_ptr, mutex_ptr,
+                 compression_level, executor_threads,
+                 chunk_size](CoroScope& scope) -> coro::CoroTask<void> {
                 scope.spawn(
                     [ch = file_chan->producer(), num_files = files_ptr->size()](
                         CoroScope&) mutable -> coro::CoroTask<void> {
@@ -252,7 +252,8 @@ static int run_pgzip(const PgzipArgParse& cli) {
                 }
 
                 co_return;
-            });
+            };
+            co_await ctx.scope(compress_scope);
 
             co_return;
         },

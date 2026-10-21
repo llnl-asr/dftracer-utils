@@ -761,24 +761,23 @@ static PyObject *enumerate_gzip_members_fn(PyObject * /*self*/, PyObject *args,
                          const std::vector<std::string> *paths,
                          std::vector<std::vector<GzipMember>> *out)
                           -> dftracer::utils::coro::CoroTask<void> {
-                          co_await scope.scope(
+                          auto scan_scope =
                               [paths, out](dftracer::utils::CoroScope &child)
-                                  -> dftracer::utils::coro::CoroTask<void> {
-                                  for (std::size_t i = 0; i < paths->size();
-                                       ++i) {
-                                      const std::string &path = (*paths)[i];
-                                      auto *slot = &(*out)[i];
-                                      child.spawn(
-                                          [path,
-                                           slot](dftracer::utils::CoroScope &)
-                                              -> dftracer::utils::coro::CoroTask<
-                                                  void> {
-                                              co_await scan_one_gzip_file(path,
-                                                                          slot);
-                                          });
-                                  }
-                                  co_return;
-                              });
+                              -> dftracer::utils::coro::CoroTask<void> {
+                              for (std::size_t i = 0; i < paths->size(); ++i) {
+                                  const std::string &path = (*paths)[i];
+                                  auto *slot = &(*out)[i];
+                                  child.spawn(
+                                      [path, slot](dftracer::utils::CoroScope &)
+                                          -> dftracer::utils::coro::CoroTask<
+                                              void> {
+                                          co_await scan_one_gzip_file(path,
+                                                                      slot);
+                                      });
+                              }
+                              co_return;
+                          };
+                          co_await scope.scope(scan_scope);
                           co_return;
                       },
                       &files, &results),

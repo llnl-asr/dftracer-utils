@@ -89,7 +89,7 @@ coro::CoroTask<void> each_column(std::size_t n,
         for (std::size_t c = 0; c < n; ++c) fn(c);
         co_return;
     }
-    co_await run_coro_scope([&fn, n](CoroScope& scope) -> coro::CoroTask<void> {
+    auto columns_scope = [&fn, n](CoroScope& scope) -> coro::CoroTask<void> {
         std::vector<coro::SpawnFuture<void>> tasks;
         tasks.reserve(n);
         for (std::size_t c = 0; c < n; ++c)
@@ -97,7 +97,8 @@ coro::CoroTask<void> each_column(std::size_t n,
                 [&fn, c](CoroScope&) { return column_task(&fn, c); }));
         for (auto& task : tasks) co_await task;
         co_return;
-    });
+    };
+    co_await run_coro_scope(columns_scope);
 }
 
 // Collects parts of one result. Once the parts held in memory pass `budget`,

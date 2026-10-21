@@ -649,10 +649,10 @@ coro::CoroTask<void> TraceIndex::initialize() {
                     auto meta_chan =
                         coro::make_channel<std::size_t>(max_concurrent * 2);
 
-                    co_await ctx.scope([&meta_chan, files_ptr, large_files_ptr,
-                                        schemas_ptr,
-                                        max_concurrent](CoroScope& scope)
-                                           -> coro::CoroTask<void> {
+                    auto meta_scope =
+                        [&meta_chan, files_ptr, large_files_ptr, schemas_ptr,
+                         max_concurrent](
+                            CoroScope& scope) -> coro::CoroTask<void> {
                         scope.spawn(
                             [ch = meta_chan->producer(), large_files_ptr](
                                 CoroScope&) mutable -> coro::CoroTask<void> {
@@ -741,7 +741,8 @@ coro::CoroTask<void> TraceIndex::initialize() {
                             });
                         }
                         co_return;
-                    });
+                    };
+                    co_await ctx.scope(meta_scope);
 
                     for (auto fi : *large_files_ptr) {
                         const auto& info = (*files_ptr)[fi];

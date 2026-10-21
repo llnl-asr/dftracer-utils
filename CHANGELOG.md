@@ -168,6 +168,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix `memory::Stats::measured` and `unattributed` counting other processes when the process runs in a cgroup, such as a batch job or a container.
+  `measured` is now this process only, and the new `limit_used` holds the memory counted against `limit`, which the near-limit signal reads.
 - Fix memory that was freed early in `dftracer_validate`, other tools and the index build when built with GCC 12.
   A lambda with a by-value capture inside a `co_await` was destroyed twice, and the `coro_lambdas` check now rejects it.
 - Fix a data race in `when_all` over a list of tasks that return `bool`.

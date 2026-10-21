@@ -100,9 +100,10 @@ Memory and kernels
        names the variable.
    * - ``DFTRACER_UTILS_MEM_LIMIT_HEADROOM``
      - 5% of the limit, at least 256 MB
-     - How far below the process memory limit the measured memory may grow
-       before holders are asked to give bytes back. Bytes or a unit. A bad
-       value is an error that names the variable.
+     - How far below the process memory limit the memory counted against it
+       may grow before holders are asked to give bytes back. In a cgroup that
+       is the memory of every process in the group, not only this one. Bytes
+       or a unit. A bad value is an error that names the variable.
    * - ``DFTRACER_UTILS_MEM_SPILL_HEADROOM``
      - 2% of the budget, at least 32 MB
      - How far past the budget a pool that is spilling may reserve, so that

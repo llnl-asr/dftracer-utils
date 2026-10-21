@@ -70,6 +70,29 @@ struct CompletionState {
     bool cancelled_ = false;
 };
 
+/// Hands the children of a vector when_all / when_any to its wrapper
+/// coroutines. A wrapper takes the next free child when it is free, so the
+/// children that are done at once run one after another in one wrapper frame,
+/// and the launcher starts one more wrapper each time a wrapper suspends.
+class ChildClaims {
+   public:
+    /// The index of the next child; at or past the child count when none is
+    /// left. Relaxed: the read-modify-write makes each index unique, and the
+    /// children were written before any wrapper started.
+    std::size_t claim() noexcept {
+        return next_.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    /// True when every child is taken. A stale answer only starts a wrapper
+    /// that finds nothing and ends.
+    bool exhausted(std::size_t total) const noexcept {
+        return next_.load(std::memory_order_relaxed) >= total;
+    }
+
+   private:
+    std::atomic<std::size_t> next_{0};
+};
+
 /// All-of accounting: resumes only after every child completes, recording the
 /// first exception observed.
 struct WhenAllCompletionState : CompletionState {

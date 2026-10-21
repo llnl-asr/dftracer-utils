@@ -64,6 +64,7 @@ struct WhenAllVectorState : WhenAllCompletionState {
         std::is_same_v<typename Awaitable::result_type, bool>, unsigned char,
         typename Awaitable::result_type>;
     std::vector<Stored> results_;
+    ChildClaims claims_;
 
     explicit WhenAllVectorState(std::vector<Awaitable> awaitables)
         : awaitables_(std::move(awaitables)), results_(awaitables_.size()) {
@@ -116,9 +117,7 @@ class WhenAllVectorAwaitable {
             return false;
         }
 
-        for (std::size_t i = 0; i < state_->total_; i++) {
-            launch_wrapper(i);
-        }
+        while (!state_->claims_.exhausted(state_->total_)) launch_wrapper();
 
         // Check if all completed synchronously
         if (state_->completed_count_.load(std::memory_order_acquire) ==
@@ -152,18 +151,26 @@ class WhenAllVectorAwaitable {
     }
 
    private:
-    void launch_wrapper(std::size_t i) {
-        [](std::shared_ptr<WhenAllVectorState<Awaitable>> s,
-           std::size_t index) -> FireAndForget {
-            std::exception_ptr ex;
-            try {
-                s->results_[index] = co_await std::move(s->awaitables_[index]);
-                s->on_one_complete();
-            } catch (...) {
-                ex = std::current_exception();
+    /// Runs children until none is left to take or one suspends the wrapper.
+    void launch_wrapper() {
+        [](std::shared_ptr<WhenAllVectorState<Awaitable>> s) -> FireAndForget {
+            for (;;) {
+                const std::size_t index = s->claims_.claim();
+                if (index >= s->total_) co_return;
+                std::exception_ptr ex;
+                try {
+                    s->results_[index] =
+                        co_await std::move(s->awaitables_[index]);
+                } catch (...) {
+                    ex = std::current_exception();
+                }
+                if (ex) {
+                    s->on_exception(std::move(ex));
+                } else {
+                    s->on_one_complete();
+                }
             }
-            if (ex) s->on_exception(std::move(ex));
-        }(state_, i);
+        }(state_);
     }
 };
 
@@ -215,6 +222,7 @@ template <typename Awaitable>
     requires(std::is_void_v<typename Awaitable::result_type>)
 struct WhenAllVectorState<Awaitable> : WhenAllCompletionState {
     std::vector<Awaitable> awaitables_;
+    ChildClaims claims_;
 
     explicit WhenAllVectorState(std::vector<Awaitable> awaitables)
         : awaitables_(std::move(awaitables)) {
@@ -253,9 +261,7 @@ class WhenAllVectorAwaitable<Awaitable> {
             return false;
         }
 
-        for (std::size_t i = 0; i < state_->total_; ++i) {
-            launch_wrapper(i);
-        }
+        while (!state_->claims_.exhausted(state_->total_)) launch_wrapper();
 
         // Check if all tasks completed synchronously during launch_wrapper
         if (state_->completed_count_.load(std::memory_order_acquire) ==
@@ -283,18 +289,25 @@ class WhenAllVectorAwaitable<Awaitable> {
     }
 
    private:
-    void launch_wrapper(std::size_t i) {
-        [](std::shared_ptr<WhenAllVectorState<Awaitable>> s,
-           std::size_t index) -> FireAndForget {
-            std::exception_ptr ex;
-            try {
-                co_await std::move(s->awaitables_[index]);
-                s->on_one_complete();
-            } catch (...) {
-                ex = std::current_exception();
+    /// Runs children until none is left to take or one suspends the wrapper.
+    void launch_wrapper() {
+        [](std::shared_ptr<WhenAllVectorState<Awaitable>> s) -> FireAndForget {
+            for (;;) {
+                const std::size_t index = s->claims_.claim();
+                if (index >= s->total_) co_return;
+                std::exception_ptr ex;
+                try {
+                    co_await std::move(s->awaitables_[index]);
+                } catch (...) {
+                    ex = std::current_exception();
+                }
+                if (ex) {
+                    s->on_exception(std::move(ex));
+                } else {
+                    s->on_one_complete();
+                }
             }
-            if (ex) s->on_exception(std::move(ex));
-        }(state_, i);
+        }(state_);
     }
 };
 

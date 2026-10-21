@@ -18,9 +18,35 @@
 
 using dftracer::utils::FilesystemKind;
 using dftracer::utils::spill_dir;
-using dftu_utils_test::ScopedTestDir;
 
 namespace {
+
+// A test directory under the working directory, which ctest puts in the build
+// tree on disk. The system temp directory may be tmpfs, which the spill
+// directory refuses as a fallback and warns about.
+class DiskDir {
+   public:
+    explicit DiskDir(const std::string& tag)
+        : path_(fs::current_path() / (tag + "_" + std::to_string(::getpid()) +
+                                      "_" + std::to_string(next_id()))) {
+        fs::remove_all(path_);
+        fs::create_directories(path_);
+    }
+    DiskDir(const DiskDir&) = delete;
+    DiskDir& operator=(const DiskDir&) = delete;
+    ~DiskDir() {
+        std::error_code ec;
+        fs::remove_all(path_, ec);
+    }
+    const fs::path& path() const { return path_; }
+
+   private:
+    static unsigned next_id() {
+        static unsigned id = 0;
+        return id++;
+    }
+    fs::path path_;
+};
 
 struct EnvGuard {
     explicit EnvGuard(const char* value) {
@@ -35,7 +61,7 @@ struct EnvGuard {
 }  // namespace
 
 TEST_CASE("a set variable is the spill directory and is created") {
-    ScopedTestDir d("spill_dir_env");
+    DiskDir d("spill_dir_env");
     const std::string want = (d.path() / "nested" / "spill").string();
     EnvGuard env(want.c_str());
     auto dir = spill_dir();
@@ -45,7 +71,7 @@ TEST_CASE("a set variable is the spill directory and is created") {
 }
 
 TEST_CASE("a set variable that cannot be used is an error naming it") {
-    ScopedTestDir d("spill_dir_bad");
+    DiskDir d("spill_dir_bad");
     const fs::path file = d.path() / "file";
     std::ofstream(file) << "x";
     EnvGuard env(file.string().c_str());
@@ -71,7 +97,7 @@ TEST_CASE("an unset variable gives a writable directory that is not RAM") {
 
 TEST_CASE("without a variable or a local disk the first usable fallback wins") {
     using dftracer::utils::detail::choose_spill_dir;
-    ScopedTestDir d("spill_dir_fallback");
+    DiskDir d("spill_dir_fallback");
     const fs::path file = d.path() / "file";
     std::ofstream(file) << "x";
     const std::string good = (d.path() / "cache" / "spill").string();
@@ -87,7 +113,7 @@ TEST_CASE("a RAM-backed fallback is never the spill directory") {
         MESSAGE("/dev/shm is not tmpfs here; nothing RAM-backed to refuse");
         return;
     }
-    ScopedTestDir d("spill_dir_ram");
+    DiskDir d("spill_dir_ram");
     const std::string disk = (d.path() / "spill").string();
     const std::string ram = "/dev/shm/dftu_spill_dir_test";
     auto dir = choose_spill_dir("", "", {ram, disk});
@@ -102,7 +128,7 @@ TEST_CASE("a RAM-backed fallback is never the spill directory") {
 
 TEST_CASE("no usable spill directory is an error naming the variable") {
     using dftracer::utils::detail::choose_spill_dir;
-    ScopedTestDir d("spill_dir_none");
+    DiskDir d("spill_dir_none");
     const fs::path file = d.path() / "file";
     std::ofstream(file) << "x";
     auto dir = choose_spill_dir("", "", {(file / "sub").string()});
@@ -112,7 +138,7 @@ TEST_CASE("no usable spill directory is an error naming the variable") {
 }
 
 TEST_CASE("the sweep removes dead directories of this host only") {
-    ScopedTestDir root("sweep_host");
+    DiskDir root("sweep_host");
     EnvGuard env(root.path().c_str());
     char host[256] = {};
     ::gethostname(host, sizeof(host) - 1);

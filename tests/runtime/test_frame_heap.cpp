@@ -9,6 +9,7 @@
 #include <coroutine>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 
 #include "memory/fresh_process.h"
@@ -25,21 +26,26 @@ CoroTask<void> idle() { co_return; }
 // the frame on the stack.
 CoroTask<void> (*volatile MAKE_IDLE)() = idle;
 
-// Writes the faulting address in hex, so the parent can tell a jump through the
-// poison pattern from a crash on stale frame bytes.
-void report_fault(int, siginfo_t* info, void*) {
+// Writes `label` and `value` in hex to stderr without allocating.
+void write_hex(const char* label, std::uint64_t value) {
     static const char DIGITS[] = "0123456789abcdef";
-    char text[32] = "fault 0x";
-    std::size_t at = 8;
-    auto addr = reinterpret_cast<std::uintptr_t>(info->si_addr);
+    char text[64];
+    std::size_t at = 0;
+    while (*label != '\0') text[at++] = *label++;
+    text[at++] = '0';
+    text[at++] = 'x';
     for (int shift = 60; shift >= 0; shift -= 4) {
-        text[at++] = DIGITS[(addr >> shift) & 0xf];
+        text[at++] = DIGITS[(value >> shift) & 0xf];
     }
     text[at++] = '\n';
     ssize_t written = ::write(STDERR_FILENO, text, at);
     (void)written;
-    ::_exit(70);
 }
+
+// The fault address does not tell a jump through the poison from a crash on
+// stale bytes: x86-64 reports 0 for a non-canonical address such as the
+// poison. The child prints the frame's resume word instead.
+void report_fault(int, siginfo_t*, void*) { ::_exit(70); }
 
 }  // namespace
 
@@ -68,6 +74,9 @@ TEST_CASE("a resumed destroyed frame child" * doctest::skip()) {
         CoroTask<void> task = MAKE_IDLE();
         handle = task.handle();
     }
+    std::uint64_t resume_word = 0;
+    std::memcpy(&resume_word, handle.address(), sizeof(resume_word));
+    write_hex("resume word ", resume_word);
     handle.resume();
 }
 
@@ -78,5 +87,6 @@ TEST_CASE("a resumed destroyed frame crashes in debug mode") {
     REQUIRE(result.announced);
     CHECK(WIFEXITED(result.status));
     CHECK(WEXITSTATUS(result.status) == 70);
-    CHECK(result.output.find("fault 0xdddddddd") != std::string::npos);
+    CHECK(result.output.find("resume word 0xdddddddddddddddd") !=
+          std::string::npos);
 }

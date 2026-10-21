@@ -47,8 +47,17 @@ std::size_t spill_slot_bytes() {
     return total;
 }
 
-// `morsels` morsels of `rows` rows of a scrambled key and the row number;
-// `hook` runs before morsel i is made.
+// One splitmix64 step: spread bits, so spill files do not compress and their
+// size follows the row count on every codec.
+std::int64_t mix(std::uint64_t x) {
+    x += 0x9e3779b97f4a7c15ULL;
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+    return static_cast<std::int64_t>(x ^ (x >> 31));
+}
+
+// `morsels` morsels of `rows` rows of two columns of mixed bits; `hook` runs
+// before morsel i is made.
 class Hooked : public Source {
    public:
     using Hook = std::function<void(std::int64_t)>;
@@ -83,8 +92,10 @@ class Hooked : public Source {
                 v(static_cast<std::size_t>(rows_));
             for (std::int64_t i = 0; i < rows_; ++i) {
                 const std::int64_t row = at_ * rows_ + i;
-                k[static_cast<std::size_t>(i)] = (row * 7919) % 100003;
-                v[static_cast<std::size_t>(i)] = row;
+                k[static_cast<std::size_t>(i)] =
+                    mix(static_cast<std::uint64_t>(row));
+                v[static_cast<std::size_t>(i)] =
+                    mix(~static_cast<std::uint64_t>(row));
             }
             ++at_;
             Morsel m;

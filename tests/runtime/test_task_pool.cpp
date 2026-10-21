@@ -125,6 +125,19 @@ auto under(memory::Pool& pool, Make make) {
     return make();
 }
 
+// A worker destroys a finished frame shortly after get() returns, so a pool
+// that held it reaches `want` blocks a little later. A leaked block never goes
+// away, so the wait still fails then.
+bool settles_at(const memory::Pool& pool, std::size_t want) {
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (pool.blocks() != want) {
+        if (std::chrono::steady_clock::now() > deadline) return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return true;
+}
+
 }  // namespace
 
 TEST_CASE(
@@ -200,7 +213,7 @@ TEST_CASE("a task made without a scope charges the general pool") {
     const std::size_t added = general.live() - before;
     CHECK(added >= BIG_BLOCK);
     CHECK(added < 2 * BIG_BLOCK);
-    CHECK(submitter->blocks() == 0);
+    CHECK(settles_at(*submitter, 0));
     CHECK(enqueuer->blocks() == 0);
     blocks.free_all();
 }
@@ -222,7 +235,7 @@ TEST_CASE("children awaited or spawned inside a task take its pool") {
 
     REQUIRE(direct.held.size() == 1);
     REQUIRE(spawned.held.size() == 1);
-    CHECK(pool->blocks() == 2);
+    CHECK(settles_at(*pool, 2));
     CHECK(enqueuer->blocks() == 0);
     direct.free_all();
     spawned.free_all();

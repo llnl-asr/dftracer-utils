@@ -28,7 +28,9 @@ struct ChunkWriterConfig {
     std::size_t io_flush_bytes = 16 * 1024 * 1024;
     bool compress = true;
     int compression_level = 6;
-    bool json_array_wrapper = true;
+    /// Bytes the gzip writer may hold, as GzipWriterOptions::memory_budget.
+    /// The coalescing buffer of io_flush_bytes is on top of it.
+    std::uint64_t memory_budget = 0;
 
     using ChunkRotationCallback = std::function<void(
         std::size_t chunk_index, const std::string& chunk_path,
@@ -74,6 +76,8 @@ class ChunkWriter {
 
     std::size_t total_bytes_written() const { return total_bytes_; }
     std::size_t total_events_written() const { return total_events_; }
+    /// Most bytes the gzip writer reserved at once, known after close().
+    std::uint64_t peak_reserved_bytes() const { return peak_bytes_; }
     const std::vector<ChunkInfo>& chunks() const { return chunks_; }
     bool is_open() const { return open_; }
 
@@ -84,6 +88,7 @@ class ChunkWriter {
     bool open_ = false;
     std::size_t total_bytes_ = 0;
     std::size_t total_events_ = 0;
+    std::uint64_t peak_bytes_ = 0;
     std::vector<ChunkInfo> chunks_;
 };
 

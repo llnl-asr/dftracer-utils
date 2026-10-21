@@ -93,6 +93,48 @@ TEST_SUITE("gzip_rechunker") {
         fs::remove_all(dir);
     }
 
+    TEST_CASE("first_member samples past a tiny first member") {
+        auto dir = dftu_utils_test::make_unique_test_path("rechunk_sample");
+        fs::create_directories(dir);
+        const std::string gz = (dir / "wrapped.pfw.gz").string();
+        const auto payload = make_lines(5000);
+        {
+            gzc::GzipMemberCompressor comp;
+            auto head = comp.compress_member("[\n", 2);
+            auto body = comp.compress_member(payload.data(), payload.size());
+            REQUIRE(head.has_value());
+            REQUIRE(body.has_value());
+            std::ofstream ofs(gz, std::ios::binary);
+            ofs.write(reinterpret_cast<const char*>(head->data()),
+                      static_cast<std::streamsize>(head->size()));
+            ofs.write(reinterpret_cast<const char*>(body->data()),
+                      static_cast<std::streamsize>(body->size()));
+        }
+
+        int fd = ::open(gz.c_str(), O_RDONLY);
+        REQUIRE(fd >= 0);
+        ScopedFd sfd(fd);
+        struct stat st;
+        REQUIRE(::fstat(sfd.get(), &st) == 0);
+        const auto size = static_cast<std::uint64_t>(st.st_size);
+        constexpr std::size_t CAP = 10 * 1024 * 1024;
+
+        // Without a sample only the "[" member is read.
+        auto first = gzc::gzip_first_member(sfd.get(), size, CAP).get();
+        CHECK(first.uncompressed == 2);
+        CHECK_FALSE(first.exceeds_cap);
+
+        // With one, the next member counts too, and the cap still applies to
+        // the first member only.
+        auto sampled =
+            gzc::gzip_first_member(sfd.get(), size, 16, 1 << 20).get();
+        CHECK(sampled.uncompressed == 2 + payload.size());
+        CHECK(sampled.compressed == size);
+        CHECK_FALSE(sampled.exceeds_cap);
+
+        fs::remove_all(dir);
+    }
+
     TEST_CASE("rechunk preserves bytes and produces multiple members") {
         auto dir = dftu_utils_test::make_unique_test_path("rechunk_split");
         fs::create_directories(dir);

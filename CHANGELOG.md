@@ -9,6 +9,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Split traces without building an index.
+  `dftracer_split` reads each file once and writes chunk files of about `--chunk-size` as it goes, where it built an index of every file first and planned its chunks from it.
+  Chunk files are named `<app>-<group>_chunk<k>.pfw.gz`, and they no longer start with a `[` line or end with a `]` line.
+  A chunk file ends at the gzip member end nearest to `--chunk-size`, so its size is within about half a member of the request.
+- Bound the memory of the `dftracer_split` chunk writers by `--memory-budget`.
+  A group of files starts only while the budget holds its writer, and one group always runs.
+  Each writer used to assume a third of the memory, and the tracked heap reached 705 GiB on a 68 GB set.
+- Compress each gzip member into a buffer that is reused, and hand a full member to its compress job without a copy.
 - Write the bloom tier of a small file through the shared index write, so many small files share SST files.
   Only a file that spills while it is parsed writes runs of its own.
   On 1.09 GB of 77 KB traces (8,404 files) on Lustre, `dftracer_index` takes 189 s instead of 544 s with 96 threads and 84 s instead of 413 s with 16.
@@ -171,6 +179,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Removed
 
+- Remove the `--index-dir` and `--force` options of `dftracer_split`, since it builds no index.
+  Drop them from scripts that call it.
+  `--checkpoint-size` stays and sets the gzip member size.
+- Remove `ChunkManifestMapperUtility`, `DFTracerChunkManifest` and `DFTracerChunkSpec`.
+  `ChunkExtractorUtility` takes a list of gzip files and returns the chunk files it wrote.
 - Remove `tracked_bytes.h`, its gauges and the CMake option `DFTRACER_UTILS_TRACKED_BYTES`.
   Read the bytes of each pool with `memory::pool_stats()` instead.
 - Remove `MemoryPool` (`memory_pool.h`).

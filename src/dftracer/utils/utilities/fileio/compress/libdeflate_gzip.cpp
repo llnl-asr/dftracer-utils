@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <climits>
 #include <cstddef>
+#include <memory>
 
 namespace dftracer::utils::utilities::fileio::compress {
 
@@ -136,10 +137,19 @@ bool GzipMemberCompressor::compress_member_into(std::vector<std::uint8_t>& out,
                                                 const void* data,
                                                 std::size_t len) const {
     if (!c_) return false;
-    out.resize(bound(len));
-    auto n = compress(data, len, out.data(), out.size());
+    // The worst-case buffer is a member's size again, and a vector would zero
+    // fill and fault in all of it to keep a few percent. A per-thread scratch
+    // buffer is reused across members and only its used part is written.
+    const std::size_t cap = bound(len);
+    thread_local std::unique_ptr<std::uint8_t[]> scratch;
+    thread_local std::size_t scratch_cap = 0;
+    if (scratch_cap < cap) {
+        scratch.reset(new std::uint8_t[cap]);
+        scratch_cap = cap;
+    }
+    auto n = compress(data, len, scratch.get(), cap);
     if (!n) return false;
-    out.resize(*n);
+    out.assign(scratch.get(), scratch.get() + *n);
     return true;
 }
 

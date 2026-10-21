@@ -173,16 +173,18 @@ dftracer_split
 **Options:**
 
 - ``-n, --app-name <name>`` - Application name for output files (default: app)
-- ``-d, --directory <path>`` - Input directory containing trace files (``.pfw``, ``.jsonl`` or ``.ndjson``, plain or gzip) (default: .)
+- ``-d, --directory <path>`` - Input directory containing gzip trace files (``.pfw.gz``, ``.jsonl.gz`` or ``.ndjson.gz``) (default: .)
 - ``-o, --output <dir>`` - Output directory for split files (default: ./split)
 - ``-s, --chunk-size <MB>`` - Output file size in MB, approximate **compressed** on-disk size (default: 4)
-- ``-f, --force`` - Override existing files and force index recreation
 - ``-c, --compress`` - Compress output files with gzip (a value-less flag;
   output is gzip-compressed by default)
-- ``--checkpoint-size <bytes>`` - Checkpoint size for indexing in bytes; also
-  the gzip member size (default: 33554432 B / 32 MB)
+- ``--checkpoint-size <bytes>`` - Gzip member size of the output files in
+  uncompressed bytes (default: 33554432 B / 32 MB)
 - ``--executor-threads <count>`` - Number of worker threads for parallel processing (default: number of CPU cores)
-- ``--index-dir <path>`` - Directory to store index files (default: system temp directory)
+- ``--memory-budget <bytes>`` - Most memory the chunk writers hold, with units
+  (e.g. 64GB). Chunk files are written in groups at once, and a group is
+  admitted only while the budget holds its writer; one group always runs.
+  0 means a third of the available memory (default: 0)
 - ``--verify`` - Verify output chunks match input by comparing event IDs
 
 .. note::
@@ -192,6 +194,13 @@ dftracer_split
    granularity). They are orthogonal: a 32 MB compressed chunk holds ~300 MB
    uncompressed, so at an 8 MB checkpoint size it contains ~37 members. See
    :ref:`multi-member-gzip`.
+
+   ``dftracer_split`` reads each input file once and writes no index. It
+   estimates the compression ratio of a file from its first megabyte of gzip
+   data, so the size of a chunk file is approximate. A chunk file ends at the
+   member end nearest to its size, so it is within about half a member of
+   ``--chunk-size``. The last chunk file of a group of input files is
+   usually shorter.
 
 **Example:**
 

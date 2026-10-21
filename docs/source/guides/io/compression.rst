@@ -83,8 +83,9 @@ processing.
      - off
      - Verify output chunks match input by comparing event IDs.
 
-For split, the gzip *member* size is the ``--checkpoint-size`` (the shared
-indexing flag), because the member is the pruning and checkpoint unit:
+``dftracer_split`` reads each input file once and builds no index. For split,
+the gzip *member* size is ``--checkpoint-size``, because the member is the
+pruning and checkpoint unit:
 
 .. code-block:: bash
 

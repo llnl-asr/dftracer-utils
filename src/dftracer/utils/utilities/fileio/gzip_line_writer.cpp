@@ -534,14 +534,25 @@ coro::CoroTask<Result<GzipLineWriter>> GzipLineWriter::open(
 namespace {
 // Takes every complete member out of `buf` (caller holds any lock on it).
 std::vector<std::string> take_members(std::string& buf, std::size_t size) {
-    std::vector<std::string> out;
+    std::vector<std::pair<std::size_t, std::size_t>> spans;
     std::size_t pos = 0;
     while (buf.size() > pos + size) {
         const std::size_t nl = buf.find('\n', pos + size);
-        out.push_back(buf.substr(pos, nl + 1 - pos));
+        if (nl == std::string::npos) break;
+        spans.emplace_back(pos, nl + 1 - pos);
         pos = nl + 1;
     }
-    buf.erase(0, pos);
+    std::vector<std::string> out;
+    if (spans.empty()) return out;
+    // The last member takes over `buf` and only the tail after it is copied;
+    // copying every member would fault in a fresh member-sized buffer each.
+    for (std::size_t i = 0; i + 1 < spans.size(); ++i)
+        out.push_back(buf.substr(spans[i].first, spans[i].second));
+    std::string rest(buf, pos);
+    buf.resize(pos);
+    if (spans.back().first > 0) buf.erase(0, spans.back().first);
+    out.push_back(std::move(buf));
+    buf = std::move(rest);
     return out;
 }
 }  // namespace

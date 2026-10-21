@@ -25,15 +25,12 @@ coro::CoroTask<void> ChunkWriter::open() {
     opts.member_size = config_.member_size_bytes;
     opts.level = config_.compression_level;
     opts.compress = config_.compress;
+    opts.memory_budget = config_.memory_budget;
     opts.part_size = config_.chunk_size_bytes;
     opts.part_name = [this](std::size_t idx) {
         return config_.output_dir + "/" + config_.base_name + "_chunk" +
                std::to_string(idx) + ".pfw" + (config_.compress ? ".gz" : "");
     };
-    if (config_.json_array_wrapper) {
-        opts.part_header = "[\n";
-        opts.part_footer = "]\n";
-    }
     opts.on_part = [this](std::size_t part, const std::string& path,
                           std::uint64_t uc_bytes, std::uint64_t lines) {
         chunks_.push_back(ChunkInfo{
@@ -78,6 +75,7 @@ coro::CoroTask<void> ChunkWriter::close() {
     }
     auto summary = unwrap(co_await writer_->close());
     total_bytes_ = static_cast<std::size_t>(summary.c_bytes);
+    peak_bytes_ = summary.peak_bytes;
     writer_.reset();
 }
 

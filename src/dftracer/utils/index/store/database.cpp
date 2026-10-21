@@ -146,9 +146,8 @@ std::shared_ptr<::rocksdb::WriteBufferManager>& shared_write_buffer_manager() {
             constants::rocksdb::WRITE_BUFFER_BYTES, shared_block_cache());
     return mgr;
 }
-}  // namespace
 
-::rocksdb::Options RocksDatabase::default_options() {
+::rocksdb::Options make_default_options() {
     ::rocksdb::Options options;
     options.create_if_missing = true;
     options.create_missing_column_families = true;
@@ -167,7 +166,7 @@ std::shared_ptr<::rocksdb::WriteBufferManager>& shared_write_buffer_manager() {
     return options;
 }
 
-::rocksdb::ColumnFamilyOptions RocksDatabase::default_column_family_options() {
+::rocksdb::ColumnFamilyOptions make_default_column_family_options() {
     ::rocksdb::ColumnFamilyOptions options;
 
     ::rocksdb::BlockBasedTableOptions bbt;
@@ -205,9 +204,8 @@ std::shared_ptr<::rocksdb::WriteBufferManager>& shared_write_buffer_manager() {
     return options;
 }
 
-::rocksdb::ColumnFamilyOptions
-RocksDatabase::point_lookup_column_family_options() {
-    auto options = default_column_family_options();
+::rocksdb::ColumnFamilyOptions make_point_lookup_column_family_options() {
+    auto options = make_default_column_family_options();
 
     // Without a filter a get searches every SST whose range covers the key,
     // and large blocks mean decompressing 32 KB to return a few dozen bytes.
@@ -222,6 +220,28 @@ RocksDatabase::point_lookup_column_family_options() {
     // enough data blocks through the cache to evict the filters it needs.
     bbt.cache_index_and_filter_blocks = false;
     options.table_factory.reset(::rocksdb::NewBlockBasedTableFactory(bbt));
+    return options;
+}
+}  // namespace
+
+// Each options value is built once and copied. Building one default-constructs
+// a table factory, and that factory makes its own block cache, so a build per
+// call maps and frees a cache each time; copies share the same factory.
+::rocksdb::Options RocksDatabase::default_options() {
+    static const ::rocksdb::Options options = make_default_options();
+    return options;
+}
+
+::rocksdb::ColumnFamilyOptions RocksDatabase::default_column_family_options() {
+    static const ::rocksdb::ColumnFamilyOptions options =
+        make_default_column_family_options();
+    return options;
+}
+
+::rocksdb::ColumnFamilyOptions
+RocksDatabase::point_lookup_column_family_options() {
+    static const ::rocksdb::ColumnFamilyOptions options =
+        make_point_lookup_column_family_options();
     return options;
 }
 

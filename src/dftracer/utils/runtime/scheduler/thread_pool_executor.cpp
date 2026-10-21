@@ -58,7 +58,7 @@ void warmup_vendored_libs() noexcept {
 ThreadPoolExecutor::ThreadPoolExecutor(const ExecutorConfig& config)
     : num_threads_(config.num_threads == 0 ? hardware_concurrency()
                                            : config.num_threads),
-      last_activity_ns_(
+      last_progress_ns_(
           std::chrono::steady_clock::now().time_since_epoch().count()),
       idle_timeout_(config.idle_timeout),
       deadlock_timeout_(config.deadlock_timeout),
@@ -513,6 +513,9 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
         if (run_queue_.try_dequeue(pending_entry)) {
             idle_park = IDLE_PARK_MIN;
             coro::reset_timeslice();
+            context->resumes.store(
+                context->resumes.load(std::memory_order_relaxed) + 1,
+                std::memory_order_relaxed);
             std::coroutine_handle<> pending_resume = pending_entry.handle;
             if (pending_resume && !pending_resume.done()) {
                 // Id comes from the entry, not the promise: foreign promise
@@ -528,7 +531,6 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
                             std::chrono::steady_clock::now();
                         it->second.worker_id = context->worker_id;
                         it->second.location = TaskInfo::Executing;
-                        ++tasks_started_;
                     }
                 }
                 DFTRACER_UTILS_TSAN_ACQUIRE(pending_resume.address());
@@ -713,52 +715,45 @@ void ThreadPoolExecutor::enqueue(std::coroutine_handle<> handle,
 }
 
 bool ThreadPoolExecutor::is_responsive() const {
-    // If shutdown was requested, consider unresponsive
-    if (shutdown_requested_.load()) {
+    if (shutdown_requested_.load() || !running_.load()) {
         return false;
     }
 
-    // If not running, not responsive
-    if (!running_.load()) {
-        return false;
-    }
-
-    // Check if all threads might be deadlocked
-    // (all threads busy but no progress for a while)
-    std::size_t started = tasks_started_.load();
-    std::size_t completed = tasks_completed_.load();
-    std::size_t active = started - completed;
-
-    if (active >= num_threads_) {
-        // All threads busy - check if making progress
-        auto now = std::chrono::steady_clock::now();
-        auto last_ns = last_activity_ns_.load(std::memory_order_acquire);
-        auto last_tp = std::chrono::steady_clock::time_point(
-            std::chrono::steady_clock::duration(last_ns));
-        auto idle_time = now - last_tp;
-
-        // If all threads busy but no activity for deadlock_timeout,
-        // likely deadlocked
-        if (idle_time > deadlock_timeout_) {
-            DFTRACER_UTILS_LOG_WARN(
-                "Executor appears deadlocked: %zu threads, %zu active "
-                "tasks, idle for %lld ms",
-                num_threads_, active,
-                static_cast<long long>(
-                    std::chrono::duration_cast<std::chrono::milliseconds>(
-                        idle_time)
-                        .count()));
-            return false;
+    // Deadlocked means work is pending and no worker has resumed anything
+    // for deadlock_timeout_. Task start and end counts cannot tell: one task
+    // may run for hours while its coroutines make progress.
+    std::uint64_t resumes = 0;
+    bool busy = run_queue_.size_approx() > 0;
+    {
+        std::lock_guard<std::mutex> lock(workers_mutex_);
+        for (const auto& worker : workers_) {
+            resumes += worker->resumes.load(std::memory_order_relaxed);
+            busy = busy || !worker->is_idle.load(std::memory_order_relaxed);
         }
     }
 
-    return true;
-}
+    const auto now = std::chrono::steady_clock::now();
+    const auto now_ns = now.time_since_epoch().count();
+    if (!busy || seen_resumes_.exchange(resumes) != resumes) {
+        last_progress_ns_.store(now_ns, std::memory_order_relaxed);
+        return true;
+    }
 
-void ThreadPoolExecutor::mark_activity() {
-    last_activity_ns_.store(
-        std::chrono::steady_clock::now().time_since_epoch().count(),
-        std::memory_order_release);
+    const auto stalled =
+        now - std::chrono::steady_clock::time_point(
+                  std::chrono::steady_clock::duration(
+                      last_progress_ns_.load(std::memory_order_relaxed)));
+    if (stalled > deadlock_timeout_) {
+        DFTRACER_UTILS_LOG_WARN(
+            "Executor appears deadlocked: %zu threads, work pending, nothing "
+            "resumed for %lld ms",
+            num_threads_,
+            static_cast<long long>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(stalled)
+                    .count()));
+        return false;
+    }
+    return true;
 }
 
 ExecutorProgress ThreadPoolExecutor::get_progress() const {
@@ -961,10 +956,6 @@ coro::Coro ThreadPoolExecutor::run_task(std::shared_ptr<Task> task,
     }
     context->last_activity = std::chrono::steady_clock::now();
 
-    // Mark task start
-    mark_activity();
-    ++tasks_started_;
-
     // Update task registry to RUNNING
     {
         std::unique_lock<std::shared_mutex> lock(registry_mutex_);
@@ -1016,8 +1007,6 @@ coro::Coro ThreadPoolExecutor::run_task(std::shared_ptr<Task> task,
                 "Task ID %ld ('%s') completed successfully", task->get_id(),
                 task->get_name());
 
-            // Mark task completion
-            mark_activity();
             ++tasks_completed_;
             if (finishing) finishing->tasks_executed++;
 
@@ -1054,7 +1043,6 @@ coro::Coro ThreadPoolExecutor::run_task(std::shared_ptr<Task> task,
 
                 task->set_exception(task_error);
 
-                mark_activity();
                 ++tasks_completed_;
                 if (finishing) finishing->tasks_executed++;
 
@@ -1079,7 +1067,6 @@ coro::Coro ThreadPoolExecutor::run_task(std::shared_ptr<Task> task,
 
                 task->set_exception(task_error);
 
-                mark_activity();
                 ++tasks_completed_;
                 if (finishing) finishing->tasks_executed++;
 

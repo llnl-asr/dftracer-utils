@@ -73,13 +73,13 @@ class BloomFold : public trace::views::detail::Fold {
     void observe(const Lane& lane,
                  const trace::views::detail::FoldBatch& batch);
     bool spills() const { return !spill_dir_.empty(); }
-    /// Whether finish_spilled writes the tier rather than write(): spill is
-    /// enabled and the fold holds chunks or runs. write() writes nothing for
-    /// a file without records.
+    /// Whether finish_spilled writes the tier rather than write(): the file
+    /// spilled while it was parsed. A file that fit its share goes through
+    /// the shared write, so many small files share SSTs rather than each
+    /// writing, syncing and ingesting runs of its own.
     bool writes_runs() const {
         if (spill_dir_.empty() || files_.empty()) return false;
-        const FileState& fs = files_.begin()->second;
-        return !fs.spill.runs.empty() || !fs.chunks.empty();
+        return !files_.begin()->second.spill.runs.empty();
     }
     void seal_unit(const trace::views::detail::ScanUnit& /*unit*/) override {}
     void drop_unit(const trace::views::detail::ScanUnit& unit) override;

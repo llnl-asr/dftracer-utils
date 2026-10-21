@@ -87,8 +87,7 @@ inline coro::CoroTask<void> index_batch_write_worker(
             spilled;
         for (auto& job : batch) {
             if (!job.success) continue;
-            // A fold with spill enabled writes its tier as runs even when it
-            // never spilled: sorted runs ingest faster than a write batch.
+            // Only a file that spilled while parsed writes its tier as runs.
             const bool spills = job.bloom_fold && job.bloom_fold->writes_runs();
             try {
                 if (!job.tier_only) {

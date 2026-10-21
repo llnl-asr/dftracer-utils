@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Write the bloom tier of a small file through the shared index write, so many small files share SST files.
+  Only a file that spills while it is parsed writes runs of its own.
+  On 1.09 GB of 77 KB traces (8,404 files) on Lustre, `dftracer_index` takes 189 s instead of 544 s with 96 threads and 84 s instead of 413 s with 16.
 - Check the indexes of many files of one index root at once, so only a file that must build its index waits for the root.
   On the same set, `dftracer_event_count` takes 37 s instead of 101 s and `dftracer_info` takes 31 s instead of 91 s.
 - Let only one idle executor worker poll on the short timer, so a quiet pool does not wake all of its workers.

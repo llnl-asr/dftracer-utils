@@ -219,6 +219,7 @@ set(TEST_CPP_SOURCES
     coro/test_when_any_cancel.cpp
     coro/test_async_once.cpp
     coro/test_async_semaphore.cpp
+    coro/test_async_mutex.cpp
     # Async I/O tests
     io/test_async_io.cpp
     # Task Graph tests

@@ -64,9 +64,17 @@ class AsyncMutex {
     /// steps of an uncontended lock and unlock.
     static constexpr std::uint32_t LOCKED_WAITERS = 2;
 
-    /// The unlock that finds waiters. Out of line, and the only frame a chain
-    /// of unlocks adds per waiter, because unlock() is inlined into its caller.
+    /// The unlock that finds waiters. Out of line, so the uncontended
+    /// unlock() stays a few inline instructions.
     [[gnu::noinline]] inline void unlock_contended();
+
+    /// Waiters that a same-thread unlock handed the lock to while an outer
+    /// unlock on this thread was still resuming one. The outer unlock resumes
+    /// them in order after its waiter returns, so a chain of hand-offs keeps
+    /// a fixed stack depth.
+    static inline thread_local AsyncMutexLockOperation* handoff_head_ = nullptr;
+    static inline thread_local AsyncMutexLockOperation* handoff_tail_ = nullptr;
+    static inline thread_local bool handing_off_ = false;
 
     void push_locked(AsyncMutexLockOperation* op) noexcept;
     void remove_locked(AsyncMutexLockOperation* op) noexcept;
@@ -271,8 +279,30 @@ void AsyncMutex::unlock_contended() {
                                                               next->awaiter_);
         return;
     }
+    // `next` is off the queue, so its links are free to chain the hand-offs.
+    if (handing_off_) {
+        next->next_ = nullptr;
+        if (handoff_tail_) {
+            handoff_tail_->next_ = next;
+        } else {
+            handoff_head_ = next;
+        }
+        handoff_tail_ = next;
+        return;
+    }
+    handing_off_ = true;
     memory::Scope scope{memory::Manager::get().general()};
-    next->awaiter_.resume();
+    for (;;) {
+        // Read the handle first: resuming may end the waiter's frame, which
+        // holds `next`.
+        std::coroutine_handle<> awaiter = next->awaiter_;
+        awaiter.resume();
+        next = handoff_head_;
+        if (next == nullptr) break;
+        handoff_head_ = next->next_;
+        if (handoff_head_ == nullptr) handoff_tail_ = nullptr;
+    }
+    handing_off_ = false;
 }
 
 }  // namespace dftracer::utils::coro

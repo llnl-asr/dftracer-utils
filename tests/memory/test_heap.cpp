@@ -542,6 +542,30 @@ TEST_CASE("a large block is charged at most an eighth above its size") {
     }
 }
 
+TEST_CASE("heap_peak keeps the most mapped bytes") {
+    if (config().backend != Backend::PageHeap) return;
+    constexpr std::size_t BYTES = 64 * MIB;
+    auto* p = static_cast<char*>(page_allocate(BYTES, 16));
+    for (std::size_t i = 0; i < BYTES; i += 4096) p[i] = 1;
+    page_deallocate(p, BYTES);
+    page_trim(Mode::All);
+    CHECK(page_reserved_peak() >= BYTES);
+    CHECK(page_reserved() < BYTES);
+}
+
+TEST_CASE("used_peak keeps the most live bytes, not the mapped ones") {
+    if (config().backend != Backend::PageHeap) return;
+    constexpr std::size_t BYTES = 256 * MIB;
+    auto* p = static_cast<char*>(page_allocate(BYTES, 16));
+    for (std::size_t i = 0; i < BYTES; i += 4096) p[i] = 1;
+    // Mapping past each 64 MiB step samples the live bytes.
+    CHECK(page_used_peak() >= BYTES / 2);
+    CHECK(page_used_peak() <= page_reserved_peak());
+    page_deallocate(p, BYTES);
+    page_trim(Mode::All);
+    CHECK(page_used_peak() >= BYTES / 2);
+}
+
 TEST_CASE("a cached large run is reused only for its own class") {
     void* a = page_allocate(3 * MIB, 16);
     page_deallocate(a, 3 * MIB);

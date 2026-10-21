@@ -124,6 +124,19 @@ Memory and kernels
        at exit or a scratch pool leaked. Do not set it for a normal run. The
        Python extension turns it off at import. Any value other than ``0`` or
        ``1`` stops the process at the first allocation.
+   * - ``DFTRACER_UTILS_MEMORY_REPORT``
+     - ``0``
+     - ``1`` prints one line to stderr at exit, such as
+       ``dftracer-utils memory: peak=... live=... measured=... limit=...
+       heap_peak=... used_peak=...``. ``live``, ``measured`` and ``limit`` are
+       the values at exit. ``peak`` is the most live bytes seen when the
+       counters were read, so a tool that never reads them shows ``0``.
+       ``heap_peak`` is the most bytes the page heap had mapped at once, exact
+       for any run; mapped address space can far exceed what the process
+       touches. ``used_peak`` is the most bytes in use, read each time the page
+       heap has mapped another 64 MiB, so it can trail the true peak by that
+       much. Both are ``0`` on the system backend. It works with the exit check
+       on or off.
    * - ``DFTRACER_UTILS_STRING_PREDICATE``
      - ``auto``
      - Scan used by the string class predicates (``isalpha``, ``isdigit`` and

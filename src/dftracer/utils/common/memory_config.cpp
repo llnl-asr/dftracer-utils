@@ -59,6 +59,9 @@ Result<void> configure_memory_from_env() {
             return;
         }
         memory::configure(*config);
+        namespace s = constants::memory_settings;
+        auto report = Env::get<int>(s::REPORT_ENV);
+        memory::set_exit_report(report ? *report != 0 : s::DEFAULT_REPORT);
     });
     return first;
 }

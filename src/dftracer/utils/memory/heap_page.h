@@ -51,6 +51,12 @@ void* page_reallocate(void* p, std::size_t old_size, std::size_t new_size,
 PageStats page_stats() noexcept;
 /// The reserved field of page_stats() alone, without walking the pools.
 std::size_t page_reserved() noexcept;
+/// The most mapped bytes seen at a map from the operating system, counting the
+/// bytes being mapped.
+std::size_t page_reserved_peak() noexcept;
+/// The most live bytes seen, read each time the bytes mapped so far pass
+/// another USED_SAMPLE_BYTES, so it can trail the true peak by that much.
+std::size_t page_used_peak() noexcept;
 /// Backed bytes purged so far because a map would have passed the budget.
 std::size_t page_budget_purged() noexcept;
 /// Push the calling thread's buffered remote frees to their pages.

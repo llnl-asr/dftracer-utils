@@ -189,6 +189,7 @@ set(TEST_CPP_SOURCES
     common/test_filesystem_info.cpp
     common/test_memory_budget.cpp
     common/test_memory_config.cpp
+    common/test_memory_report.cpp
     runtime/test_async_semaphore.cpp
     common/test_external_sort.cpp
     common/test_spill_dir.cpp

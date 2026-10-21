@@ -380,11 +380,45 @@ void bump(std::atomic<std::ptrdiff_t>& counter, std::size_t n,
         std::memory_order_relaxed);
 }
 
+std::atomic<std::size_t> g_reserved_peak{0};
+std::atomic<std::size_t> g_used_peak{0};
+std::atomic<std::size_t> g_mapped_total{0};
+std::atomic<std::size_t> g_next_used_sample{0};
+
+constexpr std::size_t USED_SAMPLE_BYTES = std::size_t{64} << 20;
+
+void raise_peak(std::atomic<std::size_t>& peak, std::size_t value) noexcept {
+    std::size_t seen = peak.load(std::memory_order_relaxed);
+    while (seen < value && !peak.compare_exchange_weak(
+                               seen, value, std::memory_order_relaxed)) {
+    }
+}
+
+// The live total walks every pool and thread cache, so it is read once per
+// USED_SAMPLE_BYTES mapped rather than at every map.
+void sample_used(std::size_t bytes) noexcept {
+    const std::size_t total =
+        g_mapped_total.fetch_add(bytes, std::memory_order_relaxed) + bytes;
+    std::size_t next = g_next_used_sample.load(std::memory_order_relaxed);
+    if (total < next ||
+        !g_next_used_sample.compare_exchange_strong(
+            next, total + USED_SAMPLE_BYTES, std::memory_order_relaxed))
+        return;
+    // The bytes being mapped are not live yet, but are about to be.
+    if (const auto live = attrib_live_total_if_ready())
+        raise_peak(g_used_peak, static_cast<std::size_t>(
+                                    std::max<std::ptrdiff_t>(*live, 0)) +
+                                    bytes);
+}
+
 // Called before bytes are mapped, never for a cached span or run: those move
 // between the cache and a heap and leave the total as it was.
 void check_cap(std::size_t bytes) {
     std::size_t cap = hard_cap();
-    if (cap != 0 && page_reserved() + bytes > cap) [[unlikely]]
+    std::size_t after = page_reserved() + bytes;
+    raise_peak(g_reserved_peak, after);
+    sample_used(bytes);
+    if (cap != 0 && after > cap) [[unlikely]]
         throw std::bad_alloc();
 }
 
@@ -1495,6 +1529,14 @@ std::size_t page_reserved() noexcept {
     }
     reserved += g_cache_reserved.load(std::memory_order_relaxed);
     return static_cast<std::size_t>(std::max<std::ptrdiff_t>(reserved, 0));
+}
+
+std::size_t page_reserved_peak() noexcept {
+    return g_reserved_peak.load(std::memory_order_relaxed);
+}
+
+std::size_t page_used_peak() noexcept {
+    return g_used_peak.load(std::memory_order_relaxed);
 }
 
 PageStats page_stats() noexcept {

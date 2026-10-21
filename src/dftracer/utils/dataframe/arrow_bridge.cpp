@@ -1,3 +1,4 @@
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/arrow_bridge.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 

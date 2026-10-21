@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_COMMON_FILESYSTEM_H
 #define DFTRACER_UTILS_COMMON_FILESYSTEM_H
 
+#include <dftracer/utils/common/config.h>
 
 #if defined(DFTRACER_UTILS_HAS_STD_FILESYSTEM)
 

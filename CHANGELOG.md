@@ -166,6 +166,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix a data race in `when_all` over a list of tasks that return `bool`.
+  Each result now has its own storage, so two tasks that end at the same time no longer write one byte.
 - Fix index databases that were written with zlib, and aggregation rows that were written with no compression, in builds with zstd enabled.
 - Fix a crash or a "RunLoop stalled" error when several threads each ran a plan or a scan with `get()` and shared an `AsyncMutex`.
   An unlock now resumes a waiter on its own executor, and a thread that drives a `RunLoop` waits for a waiter that another thread wakes.

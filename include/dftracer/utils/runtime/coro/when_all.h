@@ -58,7 +58,12 @@ struct FireAndForget {
 template <typename Awaitable>
 struct WhenAllVectorState : WhenAllCompletionState {
     std::vector<Awaitable> awaitables_;
-    std::vector<typename Awaitable::result_type> results_;
+    /// std::vector<bool> packs neighbours into one byte, so two wrappers
+    /// writing them would race; bool results take one byte each.
+    using Stored = std::conditional_t<
+        std::is_same_v<typename Awaitable::result_type, bool>, unsigned char,
+        typename Awaitable::result_type>;
+    std::vector<Stored> results_;
 
     explicit WhenAllVectorState(std::vector<Awaitable> awaitables)
         : awaitables_(std::move(awaitables)), results_(awaitables_.size()) {
@@ -138,7 +143,12 @@ class WhenAllVectorAwaitable {
         if (state_->exception_) {
             rethrow_and_clear(state_->exception_);
         }
-        return std::move(state_->results_);
+        if constexpr (std::is_same_v<typename Awaitable::result_type, bool>) {
+            return result_type(state_->results_.begin(),
+                               state_->results_.end());
+        } else {
+            return std::move(state_->results_);
+        }
     }
 
    private:

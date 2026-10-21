@@ -206,6 +206,7 @@ set(TEST_CPP_SOURCES
     coro/test_coro.cpp
     coro/test_yield.cpp
     coro/test_when_all_heterogeneous.cpp
+    coro/test_when_all_vector.cpp
     coro/test_when_any_heterogeneous.cpp
     coro/test_when_any_cancel.cpp
     coro/test_async_once.cpp

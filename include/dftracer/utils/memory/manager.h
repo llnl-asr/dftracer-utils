@@ -725,12 +725,24 @@ Reporter set_reporter(Reporter reporter) noexcept;
 void set_exit_check(bool enabled) noexcept;
 
 /**
+ * @brief Print one line at process exit with the peak, live, measured and
+ * limit bytes of Stats.
+ *
+ * Off by default; constants::memory_settings::REPORT_ENV turns it on through
+ * configure_memory_from_env. The line goes to the reporter after the exit
+ * hooks have run, with the exit check on or off, and allocates nothing
+ * through this library.
+ */
+void set_exit_report(bool enabled) noexcept;
+
+/**
  * @brief Run `hook` at exit, before the exit check reads the counters.
  *
  * For a library whose threads still free blocks at exit, such as a runtime
  * whose workers destroy the last frames: its hook stops those threads.
  * Hooks run in reverse order of registration and only when the exit check
- * is on. At most a few are kept; one more aborts. Safe from any thread.
+ * or the exit report is on. At most a few are kept; one more aborts. Safe from
+ * any thread.
  */
 void add_exit_hook(void (*hook)()) noexcept;
 

@@ -46,6 +46,8 @@ inline constexpr bool DEFAULT_DEBUG = false;
 inline constexpr const char* EXIT_CHECK_ENV =
     "DFTRACER_UTILS_MEMORY_EXIT_CHECK";
 inline constexpr bool DEFAULT_EXIT_CHECK = false;
+inline constexpr const char* REPORT_ENV = "DFTRACER_UTILS_MEMORY_REPORT";
+inline constexpr bool DEFAULT_REPORT = false;
 }  // namespace memory_settings
 
 namespace indexer {

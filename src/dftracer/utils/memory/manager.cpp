@@ -71,6 +71,7 @@ std::atomic<Manager*> g_manager{nullptr};
 std::atomic<AttribCache*> g_attrib_caches{nullptr};
 std::atomic<Reporter> g_reporter{nullptr};
 std::atomic<bool> g_exit_check{false};
+std::atomic<bool> g_exit_report{false};
 std::atomic<bool> g_exit_hook{false};
 constexpr std::size_t EXIT_HOOK_SLOTS = 8;
 std::atomic<void (*)()> g_exit_hooks[EXIT_HOOK_SLOTS];
@@ -379,7 +380,9 @@ void ManagerAccess::report_sites(Manager& m, std::uint16_t pool) noexcept {
 // Fails the process when bytes are still live that no host buffer owns, or a
 // scratch pool leaked. Debug mode adds the callers of the live blocks.
 void ManagerAccess::exit_check() noexcept {
-    if (!g_exit_check.load(std::memory_order_relaxed)) return;
+    const bool check = g_exit_check.load(std::memory_order_relaxed);
+    const bool summary = g_exit_report.load(std::memory_order_relaxed);
+    if (!check && !summary) return;
     std::size_t hooks = std::min(
         g_exit_hook_count.load(std::memory_order_acquire), EXIT_HOOK_SLOTS);
     while (hooks > 0) {
@@ -387,6 +390,20 @@ void ManagerAccess::exit_check() noexcept {
         if (hook != nullptr) hook();
     }
     Manager& m = Manager::get();
+    if (summary) {
+        Stats st = m.stats();
+        char line[REPORT_BYTES];
+        int len = std::snprintf(
+            line, sizeof(line),
+            "dftracer-utils memory: peak=%zu live=%zu measured=%zu "
+            "limit=%zu heap_peak=%zu used_peak=%zu\n",
+            st.peak, st.live, st.measured, st.limit,
+            active_backend() == Backend::PageHeap ? page_reserved_peak() : 0,
+            active_backend() == Backend::PageHeap ? page_used_peak() : 0);
+        report(line, std::min<std::size_t>(static_cast<std::size_t>(len),
+                                           sizeof(line) - 1));
+    }
+    if (!check) return;
     debug_drain();
     debug_drain_held(DEBUG_ALL_POOLS);
     std::ptrdiff_t live = attrib_live_total() - exported_total(m);
@@ -421,13 +438,22 @@ void ManagerAccess::exit_check() noexcept {
     ::_Exit(constants::EXIT_CHECK_STATUS);
 }
 
-void set_exit_check(bool enabled) noexcept {
-    g_exit_check.store(enabled, std::memory_order_relaxed);
-    if (enabled && !g_exit_hook.exchange(true, std::memory_order_relaxed)) {
+static void register_exit_hook() noexcept {
+    if (!g_exit_hook.exchange(true, std::memory_order_relaxed)) {
         if (std::atexit([] { ManagerAccess::exit_check(); }) != 0) {
             abort_with("dftracer-utils memory: cannot register exit hook\n");
         }
     }
+}
+
+void set_exit_check(bool enabled) noexcept {
+    g_exit_check.store(enabled, std::memory_order_relaxed);
+    if (enabled) register_exit_hook();
+}
+
+void set_exit_report(bool enabled) noexcept {
+    g_exit_report.store(enabled, std::memory_order_relaxed);
+    if (enabled) register_exit_hook();
 }
 
 void add_exit_hook(void (*hook)()) noexcept {
@@ -551,6 +577,12 @@ void attrib_set_scope(AttribCache& cache, std::uint16_t id) noexcept {
     hot.id.store(id, std::memory_order_relaxed);
     cache.scope = id;
     cache.tag_id = 0xffff;
+}
+
+std::optional<std::ptrdiff_t> attrib_live_total_if_ready() noexcept {
+    if (g_manager.load(std::memory_order_acquire) == nullptr)
+        return std::nullopt;
+    return attrib_live_total();
 }
 
 std::ptrdiff_t attrib_live_total() noexcept {

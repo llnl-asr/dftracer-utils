@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 
 namespace dftracer::utils::memory {
 
@@ -97,6 +98,9 @@ void attrib_register(AttribCache& cache) noexcept;
 /// Bytes charged to every pool and not yet credited, from the flushed
 /// counters and every cache.
 std::ptrdiff_t attrib_live_total() noexcept;
+/// attrib_live_total, or nullopt before the manager exists; never makes it,
+/// so the heap can call it while it maps.
+std::optional<std::ptrdiff_t> attrib_live_total_if_ready() noexcept;
 
 /// The cache of the calling thread's page heap when that is the active
 /// backend, else null; also null before the thread first allocates.

@@ -361,10 +361,7 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
     }
 }
 
-// The name stays on one line so the task check can grep for it.
-// clang-format off
-TEST_CASE("a generator dropped between two yields after a scope fan-out does not terminate") {
-    // clang-format on
+TEST_CASE("a generator dropped after a scope fan-out does not terminate") {
     Runtime rt(ExecutorConfig{.num_threads = 4}, false);
 
     struct Source {

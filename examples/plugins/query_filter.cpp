@@ -44,7 +44,8 @@ struct QueryFilter {
     }
 };
 
-extern "C" DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h, const dftu_value* config) {
+extern "C" DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(
+    dftu_plugin_host* h, const dftu_value* config) {
     (void)h;
     return make_plugin<QueryFilter>(config);
 }

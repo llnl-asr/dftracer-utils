@@ -11,11 +11,9 @@
 // table-driven shape and the same default-less is_audited() switch, so a new
 // TypeId with no row here fails instead of being silently skipped.
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-// clang-format off
-#include <nanoarrow/nanoarrow.h>
 #include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/scalar.h>
-// clang-format on
+#include <nanoarrow/nanoarrow.h>
 
 #include "builders_arrow_types.h"
 

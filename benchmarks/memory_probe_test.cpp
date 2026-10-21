@@ -46,7 +46,8 @@ int main() {
     if (before.cgroup_present && during.cgroup_present) {
         check_moved("cgroup_anon", before.cgroup_anon, during.cgroup_anon);
     } else {
-        std::printf("cgroup_anon  absent (no cgroup v2 memory.stat); skipped\n");
+        std::printf(
+            "cgroup_anon  absent (no cgroup v2 memory.stat); skipped\n");
     }
 
     const bool live_up =

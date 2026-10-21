@@ -1,17 +1,16 @@
 // Benchmark: parallel group-by via the dataframe parallel_for seam.
 //
-// group_agg already fans out per-chunk AggStates through parallel_for and merges
-// the partials. With no backend installed it runs serial; this bench installs a
-// std::thread backend and reports group_by wall-clock at 1/2/4/8 workers so the
-// speedup is measured, not assumed.
+// group_agg already fans out per-chunk AggStates through parallel_for and
+// merges the partials. With no backend installed it runs serial; this bench
+// installs a std::thread backend and reports group_by wall-clock at 1/2/4/8
+// workers so the speedup is measured, not assumed.
 //
 // Built only with DFTRACER_UTILS_BUILD_BENCHMARKS=ON; run manually. Use an
 // optimized build (the dev preset, -O2) - a Debug build's numbers are noise.
 //
 //   dataframe_parallel_bench [rows] [groups]
 
-#include <dftracer/utils/runtime/coro/task.h>
-#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/field_stat.h>
@@ -20,8 +19,8 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/series.h>
-
-#include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/runtime.h>
 
 #include <algorithm>
 #include <atomic>
@@ -47,8 +46,8 @@ DataFrame run(dftracer::utils::coro::CoroTask<DataFrame> t) {
 int g_threads = 1;
 
 // Backend contract: call `body` once per grain-sized chunk (group_agg indexes
-// its partials by begin/grain), distributing chunks across g_threads workers via
-// an atomic counter (dynamic schedule).
+// its partials by begin/grain), distributing chunks across g_threads workers
+// via an atomic counter (dynamic schedule).
 void thread_backend(void*, std::int64_t n, std::int64_t grain,
                     void (*body)(void*, std::int64_t, std::int64_t),
                     void* bctx) {
@@ -250,8 +249,9 @@ int main(int argc, char** argv) {
     const double st_ser = time_stat();
     install_runtime_parallel_backend();
     const double st_par = time_stat();
-    std::printf("field_stat_reduce: serial %6.2f ms | runtime %6.2f ms (%.2fx)\n",
-                st_ser, st_par, st_ser / st_par);
+    std::printf(
+        "field_stat_reduce: serial %6.2f ms | runtime %6.2f ms (%.2fx)\n",
+        st_ser, st_par, st_ser / st_par);
 
     // unique: parallel row-key gen + radix-partitioned lock-free dedup.
     auto time_unique = [&](int reps) {
@@ -282,9 +282,10 @@ int main(int argc, char** argv) {
         for (std::int64_t i = 0; uq_ok && i < uq_serial_out.num_rows(); ++i)
             uq_ok = uv[i] == pv[i];
     }
-    std::printf("unique (all-distinct): serial %8.2f ms | runtime %8.2f ms "
-                "(%.2fx) correctness: %s\n",
-                uq_ser, uq_par, uq_ser / uq_par, uq_ok ? "OK" : "MISMATCH");
+    std::printf(
+        "unique (all-distinct): serial %8.2f ms | runtime %8.2f ms "
+        "(%.2fx) correctness: %s\n",
+        uq_ser, uq_par, uq_ser / uq_par, uq_ok ? "OK" : "MISMATCH");
     ok = ok && uq_ok;
 
     // Duplicate-heavy scenario (single low-cardinality column): the case
@@ -326,19 +327,20 @@ int main(int argc, char** argv) {
         for (std::int64_t i = 0; uqd_ok && i < uqd_serial_out.num_rows(); ++i)
             uqd_ok = uv[i] == pv[i];
     }
-    std::printf("unique (dup-heavy, %lld groups): serial %8.2f ms | runtime "
-                "%8.2f ms (%.2fx) correctness: %s\n",
-                static_cast<long long>(groups), uqd_ser, uqd_par,
-                uqd_ser / uqd_par, uqd_ok ? "OK" : "MISMATCH");
+    std::printf(
+        "unique (dup-heavy, %lld groups): serial %8.2f ms | runtime "
+        "%8.2f ms (%.2fx) correctness: %s\n",
+        static_cast<long long>(groups), uqd_ser, uqd_par, uqd_ser / uqd_par,
+        uqd_ok ? "OK" : "MISMATCH");
     ok = ok && uqd_ok;
 
     auto time_isdup = [&](bool want_unique, int reps) {
         double best = 1e300;
         for (int r = 0; r < reps; ++r) {
             const auto t0 = std::chrono::steady_clock::now();
-            DataFrame out = run(want_unique
-                               ? dup_df.lazy().is_unique().collect()
-                               : dup_df.lazy().is_duplicated().collect());
+            DataFrame out =
+                run(want_unique ? dup_df.lazy().is_unique().collect()
+                                : dup_df.lazy().is_duplicated().collect());
             const auto t1 = std::chrono::steady_clock::now();
             do_not_optimize(out.num_rows());
             best = std::min(
@@ -361,9 +363,10 @@ int main(int argc, char** argv) {
         for (std::int64_t i = 0; dup_ok && i < dup_serial_out.num_rows(); ++i)
             dup_ok = bit_at(sa, i) == bit_at(sb, i);
     }
-    std::printf("is_duplicated: serial %8.2f ms | runtime %8.2f ms (%.2fx) "
-                "correctness: %s\n",
-                dup_ser, dup_par, dup_ser / dup_par, dup_ok ? "OK" : "MISMATCH");
+    std::printf(
+        "is_duplicated: serial %8.2f ms | runtime %8.2f ms (%.2fx) "
+        "correctness: %s\n",
+        dup_ser, dup_par, dup_ser / dup_par, dup_ok ? "OK" : "MISMATCH");
     ok = ok && dup_ok;
 
     set_parallel_backend(nullptr, nullptr);
@@ -379,9 +382,10 @@ int main(int argc, char** argv) {
         for (std::int64_t i = 0; uni_ok && i < uni_serial_out.num_rows(); ++i)
             uni_ok = bit_at(sa, i) == bit_at(sb, i);
     }
-    std::printf("is_unique: serial %8.2f ms | runtime %8.2f ms (%.2fx) "
-                "correctness: %s\n",
-                uni_ser, uni_par, uni_ser / uni_par, uni_ok ? "OK" : "MISMATCH");
+    std::printf(
+        "is_unique: serial %8.2f ms | runtime %8.2f ms (%.2fx) "
+        "correctness: %s\n",
+        uni_ser, uni_par, uni_ser / uni_par, uni_ok ? "OK" : "MISMATCH");
     ok = ok && uni_ok;
 
     // String predicate row loop (regex / LIKE): the compute-bound per-row
@@ -415,9 +419,10 @@ int main(int argc, char** argv) {
     bool re_ok = re_serial_out.length() == re_par_out.length();
     for (std::int64_t i = 0; re_ok && i < re_serial_out.length(); ++i)
         re_ok = bit_at(re_serial_out, i) == bit_at(re_par_out, i);
-    std::printf("str_matches (regex): serial %8.2f ms | runtime %8.2f ms "
-                "(%.2fx) correctness: %s\n",
-                re_ser, re_par, re_ser / re_par, re_ok ? "OK" : "MISMATCH");
+    std::printf(
+        "str_matches (regex): serial %8.2f ms | runtime %8.2f ms "
+        "(%.2fx) correctness: %s\n",
+        re_ser, re_par, re_ser / re_par, re_ok ? "OK" : "MISMATCH");
     ok = ok && re_ok;
 
     auto time_like = [&](int reps) {
@@ -442,9 +447,10 @@ int main(int argc, char** argv) {
     bool lk_ok = lk_serial_out.length() == lk_par_out.length();
     for (std::int64_t i = 0; lk_ok && i < lk_serial_out.length(); ++i)
         lk_ok = bit_at(lk_serial_out, i) == bit_at(lk_par_out, i);
-    std::printf("str_like (glob): serial %8.2f ms | runtime %8.2f ms (%.2fx) "
-                "correctness: %s\n",
-                lk_ser, lk_par, lk_ser / lk_par, lk_ok ? "OK" : "MISMATCH");
+    std::printf(
+        "str_like (glob): serial %8.2f ms | runtime %8.2f ms (%.2fx) "
+        "correctness: %s\n",
+        lk_ser, lk_par, lk_ser / lk_par, lk_ok ? "OK" : "MISMATCH");
     ok = ok && lk_ok;
 
     // quantile/median: the full VQSort over a wide numeric column.
@@ -470,9 +476,10 @@ int main(int argc, char** argv) {
     const double q_par = time_quantile(5);
     const double q_par_val = quantile(qcol, 0.5);
     bool q_ok = q_ser_val == q_par_val;
-    std::printf("quantile(0.5): serial %8.2f ms | runtime %8.2f ms (%.2fx) "
-                "correctness: %s\n",
-                q_ser, q_par, q_ser / q_par, q_ok ? "OK" : "MISMATCH");
+    std::printf(
+        "quantile(0.5): serial %8.2f ms | runtime %8.2f ms (%.2fx) "
+        "correctness: %s\n",
+        q_ser, q_par, q_ser / q_par, q_ok ? "OK" : "MISMATCH");
     ok = ok && q_ok;
 
     // rolling_var: O(n*window) with each row's window independent.
@@ -521,14 +528,16 @@ int main(int argc, char** argv) {
             if (na != nb) {
                 rv_ok = false;
             } else if (!na) {
-                rv_ok = std::abs(a2[i] - b2[i]) < 1e-6 * (1.0 + std::abs(a2[i]));
+                rv_ok =
+                    std::abs(a2[i] - b2[i]) < 1e-6 * (1.0 + std::abs(a2[i]));
             }
         }
     }
-    std::printf("rolling_var(w=%lld): serial %8.2f ms | runtime %8.2f ms "
-                "(%.2fx) correctness: %s\n",
-                static_cast<long long>(rwin), rv_ser, rv_par, rv_ser / rv_par,
-                rv_ok ? "OK" : "MISMATCH");
+    std::printf(
+        "rolling_var(w=%lld): serial %8.2f ms | runtime %8.2f ms "
+        "(%.2fx) correctness: %s\n",
+        static_cast<long long>(rwin), rv_ser, rv_par, rv_ser / rv_par,
+        rv_ok ? "OK" : "MISMATCH");
     ok = ok && rv_ok;
 
     // topk_indices (via top_k): SIMD partial sort of a wide numeric column.
@@ -556,7 +565,8 @@ int main(int argc, char** argv) {
         const auto tt1 = std::chrono::steady_clock::now();
         do_not_optimize(r.length());
         tk_ser = std::min(
-            tk_ser, std::chrono::duration<double, std::milli>(tt1 - tt0).count());
+            tk_ser,
+            std::chrono::duration<double, std::milli>(tt1 - tt0).count());
     }
     install_runtime_parallel_backend();
     Series tk_par_out = time_topk(3);
@@ -567,7 +577,8 @@ int main(int argc, char** argv) {
         const auto tt1 = std::chrono::steady_clock::now();
         do_not_optimize(r.length());
         tk_par = std::min(
-            tk_par, std::chrono::duration<double, std::milli>(tt1 - tt0).count());
+            tk_par,
+            std::chrono::duration<double, std::milli>(tt1 - tt0).count());
     }
     bool tk_ok = tk_serial_out.length() == tk_par_out.length();
     {
@@ -580,10 +591,11 @@ int main(int argc, char** argv) {
         std::sort(pv.begin(), pv.end());
         tk_ok = tk_ok && sv == pv;
     }
-    std::printf("top_k(k=%lld): serial %8.2f ms | runtime %8.2f ms (%.2fx) "
-                "correctness: %s\n",
-                static_cast<long long>(topk_k), tk_ser, tk_par, tk_ser / tk_par,
-                tk_ok ? "OK" : "MISMATCH");
+    std::printf(
+        "top_k(k=%lld): serial %8.2f ms | runtime %8.2f ms (%.2fx) "
+        "correctness: %s\n",
+        static_cast<long long>(topk_k), tk_ser, tk_par, tk_ser / tk_par,
+        tk_ok ? "OK" : "MISMATCH");
     ok = ok && tk_ok;
 
     // to_dummies: O(n*d) nested string-eq loop fixed to an O(n) bucket pass.
@@ -631,22 +643,24 @@ int main(int argc, char** argv) {
         const auto tt1 = std::chrono::steady_clock::now();
         do_not_optimize(r.num_rows());
         td_par = std::min(
-            td_par, std::chrono::duration<double, std::milli>(tt1 - tt0).count());
+            td_par,
+            std::chrono::duration<double, std::milli>(tt1 - tt0).count());
     }
     bool td_ok = td_serial_out.num_rows() == td_par_out.num_rows() &&
-                td_serial_out.num_columns() == td_par_out.num_columns();
+                 td_serial_out.num_columns() == td_par_out.num_columns();
     for (std::int64_t c = 1;
-        td_ok && c < static_cast<std::int64_t>(td_serial_out.num_columns());
-        ++c) {
+         td_ok && c < static_cast<std::int64_t>(td_serial_out.num_columns());
+         ++c) {
         const Series& a2 = td_serial_out.columns[static_cast<std::size_t>(c)];
         const Series& b2 = td_par_out.columns[static_cast<std::size_t>(c)];
         for (std::int64_t i = 0; td_ok && i < a2.length(); ++i)
             td_ok = a2.data<std::int8_t>()[i] == b2.data<std::int8_t>()[i];
     }
-    std::printf("to_dummies (%lld groups): serial %8.2f ms | runtime %8.2f ms "
-                "(%.2fx) correctness: %s\n",
-                static_cast<long long>(groups), td_ser, td_par, td_ser / td_par,
-                td_ok ? "OK" : "MISMATCH");
+    std::printf(
+        "to_dummies (%lld groups): serial %8.2f ms | runtime %8.2f ms "
+        "(%.2fx) correctness: %s\n",
+        static_cast<long long>(groups), td_ser, td_par, td_ser / td_par,
+        td_ok ? "OK" : "MISMATCH");
     ok = ok && td_ok;
 
     // hash_partition: per-row multi-col hash into shared buckets.
@@ -677,7 +691,8 @@ int main(int argc, char** argv) {
         for (const auto& p : r) total += p.num_rows();
         do_not_optimize(total);
         hp_ser = std::min(
-            hp_ser, std::chrono::duration<double, std::milli>(tt1 - tt0).count());
+            hp_ser,
+            std::chrono::duration<double, std::milli>(tt1 - tt0).count());
     }
     install_runtime_parallel_backend();
     std::vector<DataFrame> hp_par_out = time_hp(3);
@@ -690,16 +705,18 @@ int main(int argc, char** argv) {
         for (const auto& p : r) total += p.num_rows();
         do_not_optimize(total);
         hp_par = std::min(
-            hp_par, std::chrono::duration<double, std::milli>(tt1 - tt0).count());
+            hp_par,
+            std::chrono::duration<double, std::milli>(tt1 - tt0).count());
     }
     std::int64_t hp_ser_total = 0, hp_par_total = 0;
     for (const auto& p : hp_serial_out) hp_ser_total += p.num_rows();
     for (const auto& p : hp_par_out) hp_par_total += p.num_rows();
     bool hp_ok = hp_ser_total == drows && hp_par_total == drows &&
-                hp_serial_out.size() == hp_par_out.size();
-    std::printf("hash_partition (64 parts): serial %8.2f ms | runtime %8.2f "
-                "ms (%.2fx) correctness: %s\n",
-                hp_ser, hp_par, hp_ser / hp_par, hp_ok ? "OK" : "MISMATCH");
+                 hp_serial_out.size() == hp_par_out.size();
+    std::printf(
+        "hash_partition (64 parts): serial %8.2f ms | runtime %8.2f "
+        "ms (%.2fx) correctness: %s\n",
+        hp_ser, hp_par, hp_ser / hp_par, hp_ok ? "OK" : "MISMATCH");
     ok = ok && hp_ok;
 
     // is_in: general (string) path, no SIMD fast path.
@@ -727,7 +744,8 @@ int main(int argc, char** argv) {
         const auto tt1 = std::chrono::steady_clock::now();
         do_not_optimize(r.length());
         iin_ser = std::min(
-            iin_ser, std::chrono::duration<double, std::milli>(tt1 - tt0).count());
+            iin_ser,
+            std::chrono::duration<double, std::milli>(tt1 - tt0).count());
     }
     install_runtime_parallel_backend();
     Series iin_par_out = time_is_in(3);
@@ -738,14 +756,16 @@ int main(int argc, char** argv) {
         const auto tt1 = std::chrono::steady_clock::now();
         do_not_optimize(r.length());
         iin_par = std::min(
-            iin_par, std::chrono::duration<double, std::milli>(tt1 - tt0).count());
+            iin_par,
+            std::chrono::duration<double, std::milli>(tt1 - tt0).count());
     }
     bool iin_ok = iin_serial_out.length() == iin_par_out.length();
     for (std::int64_t i = 0; iin_ok && i < iin_serial_out.length(); ++i)
         iin_ok = bit_at(iin_serial_out, i) == bit_at(iin_par_out, i);
-    std::printf("is_in (string): serial %8.2f ms | runtime %8.2f ms (%.2fx) "
-                "correctness: %s\n",
-                iin_ser, iin_par, iin_ser / iin_par, iin_ok ? "OK" : "MISMATCH");
+    std::printf(
+        "is_in (string): serial %8.2f ms | runtime %8.2f ms (%.2fx) "
+        "correctness: %s\n",
+        iin_ser, iin_par, iin_ser / iin_par, iin_ok ? "OK" : "MISMATCH");
     ok = ok && iin_ok;
 
     // sort_by_multi: std::stable_sort of indices with a multi-col comparator.
@@ -776,7 +796,8 @@ int main(int argc, char** argv) {
         const auto tt1 = std::chrono::steady_clock::now();
         do_not_optimize(r.num_rows());
         sbm_ser = std::min(
-            sbm_ser, std::chrono::duration<double, std::milli>(tt1 - tt0).count());
+            sbm_ser,
+            std::chrono::duration<double, std::milli>(tt1 - tt0).count());
     }
     install_runtime_parallel_backend();
     DataFrame sbm_par_out = time_sbm(3);
@@ -787,7 +808,8 @@ int main(int argc, char** argv) {
         const auto tt1 = std::chrono::steady_clock::now();
         do_not_optimize(r.num_rows());
         sbm_par = std::min(
-            sbm_par, std::chrono::duration<double, std::milli>(tt1 - tt0).count());
+            sbm_par,
+            std::chrono::duration<double, std::milli>(tt1 - tt0).count());
     }
     bool sbm_ok = sbm_serial_out.num_rows() == sbm_par_out.num_rows();
     {
@@ -800,9 +822,10 @@ int main(int argc, char** argv) {
         for (std::int64_t i = 0; sbm_ok && i < sbm_serial_out.num_rows(); ++i)
             sbm_ok = ka[i] == kb[i] && va[i] == vb[i];
     }
-    std::printf("sort_by_multi: serial %8.2f ms | runtime %8.2f ms (%.2fx) "
-                "correctness: %s\n",
-                sbm_ser, sbm_par, sbm_ser / sbm_par, sbm_ok ? "OK" : "MISMATCH");
+    std::printf(
+        "sort_by_multi: serial %8.2f ms | runtime %8.2f ms (%.2fx) "
+        "correctness: %s\n",
+        sbm_ser, sbm_par, sbm_ser / sbm_par, sbm_ok ? "OK" : "MISMATCH");
     ok = ok && sbm_ok;
 
     // cumsum: two-pass parallel prefix scan (dense, no nulls) over the wide
@@ -830,7 +853,8 @@ int main(int argc, char** argv) {
         const auto tt1 = std::chrono::steady_clock::now();
         do_not_optimize(r.length());
         cs_ser = std::min(
-            cs_ser, std::chrono::duration<double, std::milli>(tt1 - tt0).count());
+            cs_ser,
+            std::chrono::duration<double, std::milli>(tt1 - tt0).count());
     }
     install_runtime_parallel_backend();
     Series cs_par_out = time_cumsum(3);
@@ -841,7 +865,8 @@ int main(int argc, char** argv) {
         const auto tt1 = std::chrono::steady_clock::now();
         do_not_optimize(r.length());
         cs_par = std::min(
-            cs_par, std::chrono::duration<double, std::milli>(tt1 - tt0).count());
+            cs_par,
+            std::chrono::duration<double, std::milli>(tt1 - tt0).count());
     }
     bool cs_ok = cs_serial_out.length() == cs_par_out.length();
     {
@@ -850,9 +875,10 @@ int main(int argc, char** argv) {
         for (std::int64_t i = 0; cs_ok && i < cs_serial_out.length(); ++i)
             cs_ok = a2[i] == b2[i];
     }
-    std::printf("cumsum: serial %8.2f ms | runtime %8.2f ms (%.2fx) "
-                "correctness: %s\n",
-                cs_ser, cs_par, cs_ser / cs_par, cs_ok ? "OK" : "MISMATCH");
+    std::printf(
+        "cumsum: serial %8.2f ms | runtime %8.2f ms (%.2fx) "
+        "correctness: %s\n",
+        cs_ser, cs_par, cs_ser / cs_par, cs_ok ? "OK" : "MISMATCH");
     ok = ok && cs_ok;
 
     // cummax: same scan, max-combine.
@@ -879,7 +905,8 @@ int main(int argc, char** argv) {
         const auto tt1 = std::chrono::steady_clock::now();
         do_not_optimize(r.length());
         cx_ser = std::min(
-            cx_ser, std::chrono::duration<double, std::milli>(tt1 - tt0).count());
+            cx_ser,
+            std::chrono::duration<double, std::milli>(tt1 - tt0).count());
     }
     install_runtime_parallel_backend();
     Series cx_par_out = time_cummax(3);
@@ -890,7 +917,8 @@ int main(int argc, char** argv) {
         const auto tt1 = std::chrono::steady_clock::now();
         do_not_optimize(r.length());
         cx_par = std::min(
-            cx_par, std::chrono::duration<double, std::milli>(tt1 - tt0).count());
+            cx_par,
+            std::chrono::duration<double, std::milli>(tt1 - tt0).count());
     }
     bool cx_ok = cx_serial_out.length() == cx_par_out.length();
     {
@@ -899,9 +927,10 @@ int main(int argc, char** argv) {
         for (std::int64_t i = 0; cx_ok && i < cx_serial_out.length(); ++i)
             cx_ok = a2[i] == b2[i];
     }
-    std::printf("cummax: serial %8.2f ms | runtime %8.2f ms (%.2fx) "
-                "correctness: %s\n",
-                cx_ser, cx_par, cx_ser / cx_par, cx_ok ? "OK" : "MISMATCH");
+    std::printf(
+        "cummax: serial %8.2f ms | runtime %8.2f ms (%.2fx) "
+        "correctness: %s\n",
+        cx_ser, cx_par, cx_ser / cx_par, cx_ok ? "OK" : "MISMATCH");
     ok = ok && cx_ok;
 
     // Elementwise add: two 20M Float64 columns. Bandwidth-bound - measure
@@ -959,9 +988,10 @@ int main(int argc, char** argv) {
         for (std::int64_t i = 0; add_ok && i < add_serial_out.length(); ++i)
             add_ok = a2[i] == b2[i];
     }
-    std::printf("add (2x20M f64): serial %8.2f ms | runtime %8.2f ms (%.2fx) "
-                "correctness: %s\n",
-                add_ser, add_par, add_ser / add_par, add_ok ? "OK" : "MISMATCH");
+    std::printf(
+        "add (2x20M f64): serial %8.2f ms | runtime %8.2f ms (%.2fx) "
+        "correctness: %s\n",
+        add_ser, add_par, add_ser / add_par, add_ok ? "OK" : "MISMATCH");
     ok = ok && add_ok;
 
     // Cast i64 -> f64 over 20M rows: bandwidth-bound single-pass convert.
@@ -1010,10 +1040,10 @@ int main(int argc, char** argv) {
         for (std::int64_t i = 0; cast_ok && i < cast_serial_out.length(); ++i)
             cast_ok = a2[i] == b2[i];
     }
-    std::printf("cast i64->f64 (20M): serial %8.2f ms | runtime %8.2f ms "
-                "(%.2fx) correctness: %s\n",
-                cast_ser, cast_par, cast_ser / cast_par,
-                cast_ok ? "OK" : "MISMATCH");
+    std::printf(
+        "cast i64->f64 (20M): serial %8.2f ms | runtime %8.2f ms "
+        "(%.2fx) correctness: %s\n",
+        cast_ser, cast_par, cast_ser / cast_par, cast_ok ? "OK" : "MISMATCH");
     ok = ok && cast_ok;
 
     // concat_columns: many large parts, each a disjoint memcpy destination.
@@ -1022,8 +1052,7 @@ int main(int argc, char** argv) {
     std::vector<Series> parts;
     parts.reserve(static_cast<std::size_t>(nparts));
     for (std::int64_t p = 0; p < nparts; ++p)
-        parts.push_back(
-            Series::flat_i64(v.data() + p * part_len, part_len));
+        parts.push_back(Series::flat_i64(v.data() + p * part_len, part_len));
     std::vector<const Series*> part_ptrs;
     for (const Series& part : parts) part_ptrs.push_back(&part);
     auto time_concat = [&](int reps) {
@@ -1071,10 +1100,11 @@ int main(int argc, char** argv) {
         for (std::int64_t i = 0; ccat_ok && i < ccat_serial_out.length(); ++i)
             ccat_ok = a2[i] == b2[i];
     }
-    std::printf("concat_columns (%lld parts): serial %8.2f ms | runtime "
-                "%8.2f ms (%.2fx) correctness: %s\n",
-                static_cast<long long>(nparts), ccat_ser, ccat_par,
-                ccat_ser / ccat_par, ccat_ok ? "OK" : "MISMATCH");
+    std::printf(
+        "concat_columns (%lld parts): serial %8.2f ms | runtime "
+        "%8.2f ms (%.2fx) correctness: %s\n",
+        static_cast<long long>(nparts), ccat_ser, ccat_par, ccat_ser / ccat_par,
+        ccat_ok ? "OK" : "MISMATCH");
     ok = ok && ccat_ok;
 
     // interpolate: nulls every 32 rows create many independent short runs.
@@ -1084,11 +1114,10 @@ int main(int argc, char** argv) {
     for (std::int64_t i = 0; i < rows; ++i) {
         interp_v[static_cast<std::size_t>(i)] = static_cast<double>(i % 1000);
         if (i % 32 != 0)
-            interp_valid[static_cast<std::size_t>(i >> 3)] &=
-                ~(1u << (i & 7));
+            interp_valid[static_cast<std::size_t>(i >> 3)] &= ~(1u << (i & 7));
     }
-    Series interp_col =
-        Series::flat(TypeId::Float64, interp_v.data(), rows, interp_valid.data());
+    Series interp_col = Series::flat(TypeId::Float64, interp_v.data(), rows,
+                                     interp_valid.data());
     auto time_interp = [&](int reps) {
         double best = 1e300;
         Series r;
@@ -1132,16 +1161,17 @@ int main(int argc, char** argv) {
         const double* a2 = interp_serial_out.data<double>();
         const double* b2 = interp_par_out.data<double>();
         for (std::int64_t i = 0; interp_ok && i < interp_serial_out.length();
-            ++i) {
+             ++i) {
             const bool na = interp_serial_out.is_null(i);
             const bool nb = interp_par_out.is_null(i);
             interp_ok = na == nb && (na || a2[i] == b2[i]);
         }
     }
-    std::printf("interpolate (null every 32): serial %8.2f ms | runtime "
-                "%8.2f ms (%.2fx) correctness: %s\n",
-                interp_ser, interp_par, interp_ser / interp_par,
-                interp_ok ? "OK" : "MISMATCH");
+    std::printf(
+        "interpolate (null every 32): serial %8.2f ms | runtime "
+        "%8.2f ms (%.2fx) correctness: %s\n",
+        interp_ser, interp_par, interp_ser / interp_par,
+        interp_ok ? "OK" : "MISMATCH");
     ok = ok && interp_ok;
 
     // dictionary_encode: 5M low-cardinality strings (1261 distinct values).
@@ -1168,7 +1198,8 @@ int main(int argc, char** argv) {
         const auto tt1 = std::chrono::steady_clock::now();
         do_not_optimize(r.length());
         de_ser = std::min(
-            de_ser, std::chrono::duration<double, std::milli>(tt1 - tt0).count());
+            de_ser,
+            std::chrono::duration<double, std::milli>(tt1 - tt0).count());
     }
     install_runtime_parallel_backend();
     Series de_par_out = time_dictenc(3);
@@ -1179,7 +1210,8 @@ int main(int argc, char** argv) {
         const auto tt1 = std::chrono::steady_clock::now();
         do_not_optimize(r.length());
         de_par = std::min(
-            de_par, std::chrono::duration<double, std::milli>(tt1 - tt0).count());
+            de_par,
+            std::chrono::duration<double, std::milli>(tt1 - tt0).count());
     }
     // Dictionary encoding must match exactly: same first-seen dict order and
     // same per-row codes, so decode both back to plain strings and compare
@@ -1189,9 +1221,10 @@ int main(int argc, char** argv) {
     bool de_ok = de_serial_mat.length() == de_par_mat.length();
     for (std::int64_t i = 0; de_ok && i < de_serial_mat.length(); ++i)
         de_ok = de_serial_mat.string_at(i) == de_par_mat.string_at(i);
-    std::printf("dictionary_encode (5M, 1261 distinct): serial %8.2f ms | "
-                "runtime %8.2f ms (%.2fx) correctness: %s\n",
-                de_ser, de_par, de_ser / de_par, de_ok ? "OK" : "MISMATCH");
+    std::printf(
+        "dictionary_encode (5M, 1261 distinct): serial %8.2f ms | "
+        "runtime %8.2f ms (%.2fx) correctness: %s\n",
+        de_ser, de_par, de_ser / de_par, de_ok ? "OK" : "MISMATCH");
     ok = ok && de_ok;
 
     // ewm_mean: affine-transform prefix scan. Random walk data (not a flat
@@ -1203,7 +1236,7 @@ int main(int argc, char** argv) {
             acc += static_cast<double>(
                        (static_cast<std::uint64_t>(i) * 2654435761ULL) %
                        1000003ULL) /
-                   1000003.0 -
+                       1000003.0 -
                    0.5;
             ewm_v[static_cast<std::size_t>(i)] = acc;
         }
@@ -1233,7 +1266,8 @@ int main(int argc, char** argv) {
         const auto tt1 = std::chrono::steady_clock::now();
         do_not_optimize(r.length());
         ewm_ser = std::min(
-            ewm_ser, std::chrono::duration<double, std::milli>(tt1 - tt0).count());
+            ewm_ser,
+            std::chrono::duration<double, std::milli>(tt1 - tt0).count());
     }
     install_runtime_parallel_backend();
     Series ewm_par_out = time_ewm(5);
@@ -1244,7 +1278,8 @@ int main(int argc, char** argv) {
         const auto tt1 = std::chrono::steady_clock::now();
         do_not_optimize(r.length());
         ewm_par = std::min(
-            ewm_par, std::chrono::duration<double, std::milli>(tt1 - tt0).count());
+            ewm_par,
+            std::chrono::duration<double, std::milli>(tt1 - tt0).count());
     }
     // Affine composition reassociates the recurrence's rounding, so require a
     // tight relative tolerance rather than bit-identical equality.
@@ -1260,10 +1295,11 @@ int main(int argc, char** argv) {
             if (rel > 1e-9) ewm_ok = false;
         }
     }
-    std::printf("ewm_mean (alpha=%.2f): serial %8.2f ms | runtime %8.2f ms "
-                "(%.2fx) correctness: %s (max rel err %.3e)\n",
-                ewm_alpha, ewm_ser, ewm_par, ewm_ser / ewm_par,
-                ewm_ok ? "OK" : "MISMATCH", ewm_max_rel);
+    std::printf(
+        "ewm_mean (alpha=%.2f): serial %8.2f ms | runtime %8.2f ms "
+        "(%.2fx) correctness: %s (max rel err %.3e)\n",
+        ewm_alpha, ewm_ser, ewm_par, ewm_ser / ewm_par,
+        ewm_ok ? "OK" : "MISMATCH", ewm_max_rel);
     ok = ok && ewm_ok;
 
     // ewm_std: same data/alpha as ewm_mean above.
@@ -1290,7 +1326,8 @@ int main(int argc, char** argv) {
         const auto tt1 = std::chrono::steady_clock::now();
         do_not_optimize(r.length());
         es_ser = std::min(
-            es_ser, std::chrono::duration<double, std::milli>(tt1 - tt0).count());
+            es_ser,
+            std::chrono::duration<double, std::milli>(tt1 - tt0).count());
     }
     install_runtime_parallel_backend();
     Series es_par_out = time_ewm_std(5);
@@ -1301,7 +1338,8 @@ int main(int argc, char** argv) {
         const auto tt1 = std::chrono::steady_clock::now();
         do_not_optimize(r.length());
         es_par = std::min(
-            es_par, std::chrono::duration<double, std::milli>(tt1 - tt0).count());
+            es_par,
+            std::chrono::duration<double, std::milli>(tt1 - tt0).count());
     }
     bool es_ok = es_serial_out.length() == es_par_out.length();
     double es_max_rel = 0.0;
@@ -1324,12 +1362,12 @@ int main(int argc, char** argv) {
         }
         if (es_valid_mismatch > 0) es_ok = false;
     }
-    std::printf("ewm_std  (alpha=%.2f): serial %8.2f ms | runtime %8.2f ms "
-                "(%.2fx) correctness: %s (max rel err %.3e, valid mismatches "
-                "%lld)\n",
-                ewm_alpha, es_ser, es_par, es_ser / es_par,
-                es_ok ? "OK" : "MISMATCH", es_max_rel,
-                static_cast<long long>(es_valid_mismatch));
+    std::printf(
+        "ewm_std  (alpha=%.2f): serial %8.2f ms | runtime %8.2f ms "
+        "(%.2fx) correctness: %s (max rel err %.3e, valid mismatches "
+        "%lld)\n",
+        ewm_alpha, es_ser, es_par, es_ser / es_par, es_ok ? "OK" : "MISMATCH",
+        es_max_rel, static_cast<long long>(es_valid_mismatch));
     ok = ok && es_ok;
 
     // Lazy optimizer win: sort_by then a selective filter. Eager sorts all
@@ -1337,7 +1375,8 @@ int main(int argc, char** argv) {
     // sort runs only on the survivors. Same result (survivors in sorted order),
     // very different cost. Both run with the backend installed.
     install_runtime_parallel_backend();
-    const std::int64_t keep_from = rows - rows / 20;  // keep ~5% (v = row index)
+    const std::int64_t keep_from =
+        rows - rows / 20;  // keep ~5% (v = row index)
     dftu_scalar thr{};
     thr.kind = DFTU_SCALAR_TAG_I64;
     thr.value.i = keep_from;
@@ -1389,7 +1428,7 @@ int main(int argc, char** argv) {
     dftu_scalar half{};
     half.kind = DFTU_SCALAR_TAG_I64;
     half.value.i = rows / 2;
-    Expr vpos = expr_cmp(CmpOp::Gt, expr_col(1), half);       // v > rows/2
+    Expr vpos = expr_cmp(CmpOp::Gt, expr_col(1), half);  // v > rows/2
     Expr kv = expr_binary(BinaryOp::Add, expr_col(0), expr_col(1));  // k + v
     auto eager_map = [&]() {
         Series m = df.column("v") > (rows / 2);
@@ -1399,10 +1438,10 @@ int main(int argc, char** argv) {
     };
     auto lazy_map = [&]() {
         return run(df.lazy()
-            .filter(vpos)
-            .with_column("kv", kv)
-            .select({"k", "kv"})
-            .collect());
+                       .filter(vpos)
+                       .with_column("kv", kv)
+                       .select({"k", "kv"})
+                       .collect());
     };
     const double mp_eager = time_it(eager_map, 5);
     const double mp_lazy = time_it(lazy_map, 5);

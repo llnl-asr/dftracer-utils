@@ -13,10 +13,8 @@
 #include <vector>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-// clang-format off
-#include <nanoarrow/nanoarrow.h>
 #include <dftracer/utils/dataframe/arrow.h>
-// clang-format on
+#include <nanoarrow/nanoarrow.h>
 #endif
 
 using namespace dftracer::utils::dataframe;

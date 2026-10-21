@@ -7,13 +7,8 @@
 #include <vector>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-// clang-format off
-// nanoarrow.h must precede arrow.h: arrow.h (via plugins/arrow_abi.h) defines
-// ArrowSchema/ArrowArray under the ARROW_C_DATA_INTERFACE guard but not
-// ArrowArrayStream, which nanoarrow.h's inline helpers then need complete.
-#include <nanoarrow/nanoarrow.h>
 #include <dftracer/utils/dataframe/arrow.h>
-// clang-format on
+#include <nanoarrow/nanoarrow.h>
 
 using dftracer::utils::dataframe::DataType;
 using dftracer::utils::dataframe::decimal128;

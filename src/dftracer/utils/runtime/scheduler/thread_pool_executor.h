@@ -45,6 +45,9 @@ class ThreadPoolExecutor : public TaskExecutor {
         // Health monitoring for watchdog
         std::atomic<bool> is_idle{false};
         std::atomic<uint64_t> tasks_executed{0};
+        // Run-queue entries this worker resumed. Written only by its own
+        // thread; is_responsive() sums them to see progress.
+        std::atomic<std::uint64_t> resumes{0};
         std::chrono::steady_clock::time_point last_activity;
 
         // Current task info (for debugging/watchdog)
@@ -128,11 +131,12 @@ class ThreadPoolExecutor : public TaskExecutor {
     alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT)
         std::atomic<std::size_t> tasks_completed_{0};
     alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT)
-        std::atomic<std::size_t> tasks_started_{0};
-    alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT)
         std::atomic<std::size_t> total_tasks_submitted_{0};
 
-    std::atomic<std::int64_t> last_activity_ns_;
+    // Resume total and time of the last is_responsive() call that saw it
+    // change.
+    mutable std::atomic<std::uint64_t> seen_resumes_{0};
+    mutable std::atomic<std::int64_t> last_progress_ns_;
 
     std::atomic<bool> shutdown_requested_{false};
 
@@ -333,8 +337,6 @@ class ThreadPoolExecutor : public TaskExecutor {
         TaskIndex task_id, std::unordered_set<TaskIndex>& processed) const;
 
     void notify_completion(std::shared_ptr<Task> task);
-
-    void mark_activity();
 
     void signal_global_work();
 

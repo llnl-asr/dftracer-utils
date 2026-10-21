@@ -14,6 +14,8 @@
 #include <thread>
 #include <vector>
 
+#include "fresh_process.h"
+
 using namespace dftracer::utils::memory;
 
 namespace {
@@ -307,4 +309,27 @@ TEST_CASE("configure sets what config reports and zero selects the default") {
     got = config();
     CHECK(got.hard_cap == 0);
     CHECK(got.budget > 0);
+}
+
+TEST_CASE("a block kept to exit fails the exit check" * doctest::skip()) {
+    fresh_process::announce();
+    set_exit_check(true);
+    g_kept = allocate(64, 16);
+}
+
+TEST_CASE("a block a hook frees passes the exit check" * doctest::skip()) {
+    fresh_process::announce();
+    set_exit_check(true);
+    g_kept = allocate(64, 16);
+    add_exit_hook(&free_kept);
+}
+
+TEST_CASE("exit hooks run before the exit check") {
+    auto kept = fresh_process::run("a block kept to exit fails the exit check");
+    REQUIRE(kept.announced);
+    CHECK(WIFEXITED(kept.status));
+    CHECK(WEXITSTATUS(kept.status) == constants::EXIT_CHECK_STATUS);
+    auto freed =
+        fresh_process::run("a block a hook frees passes the exit check");
+    CHECK(freed.ok());
 }

@@ -72,6 +72,9 @@ std::atomic<AttribCache*> g_attrib_caches{nullptr};
 std::atomic<Reporter> g_reporter{nullptr};
 std::atomic<bool> g_exit_check{false};
 std::atomic<bool> g_exit_hook{false};
+constexpr std::size_t EXIT_HOOK_SLOTS = 8;
+std::atomic<void (*)()> g_exit_hooks[EXIT_HOOK_SLOTS];
+std::atomic<std::size_t> g_exit_hook_count{0};
 
 void write_report(std::string_view text) noexcept {
     const char* data = text.data();
@@ -377,6 +380,12 @@ void ManagerAccess::report_sites(Manager& m, std::uint16_t pool) noexcept {
 // scratch pool leaked. Debug mode adds the callers of the live blocks.
 void ManagerAccess::exit_check() noexcept {
     if (!g_exit_check.load(std::memory_order_relaxed)) return;
+    std::size_t hooks = std::min(
+        g_exit_hook_count.load(std::memory_order_acquire), EXIT_HOOK_SLOTS);
+    while (hooks > 0) {
+        void (*hook)() = g_exit_hooks[--hooks].load(std::memory_order_acquire);
+        if (hook != nullptr) hook();
+    }
     Manager& m = Manager::get();
     debug_drain();
     debug_drain_held(DEBUG_ALL_POOLS);
@@ -419,6 +428,15 @@ void set_exit_check(bool enabled) noexcept {
             abort_with("dftracer-utils memory: cannot register exit hook\n");
         }
     }
+}
+
+void add_exit_hook(void (*hook)()) noexcept {
+    std::size_t slot =
+        g_exit_hook_count.fetch_add(1, std::memory_order_acq_rel);
+    if (slot >= EXIT_HOOK_SLOTS) {
+        abort_with("dftracer-utils memory: too many exit hooks\n");
+    }
+    g_exit_hooks[slot].store(hook, std::memory_order_release);
 }
 
 Manager* ManagerAccess::create() noexcept {

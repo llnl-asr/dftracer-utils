@@ -269,7 +269,9 @@ endif()
 dftracer_utils_interface_versions("${CMAKE_CURRENT_SOURCE_DIR}/VERSION"
                                   "${CMAKE_BINARY_DIR}/include")
 
-set_coverage_compiler_flags(DFTRACER_UTILS_TESTS AND DFTRACER_UTILS_COVERAGE)
+if(DFTRACER_UTILS_TESTS AND DFTRACER_UTILS_COVERAGE)
+  set_coverage_compiler_flags()
+endif()
 
 check_std_filesystem()
 

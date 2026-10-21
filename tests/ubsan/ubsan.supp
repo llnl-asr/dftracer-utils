@@ -1,0 +1,11 @@
+# UndefinedBehaviorSanitizer suppressions for false vptr reports.
+#
+# A std::shared_ptr control block made in one shared library and released in
+# another fails the vptr check: our libraries build with hidden visibility and
+# libstdc++ is not built with UBSan, so each side has its own type info for
+# the same control block type, and UBSan reports "does not point to an object
+# of type '_Sp_counted_base'" (seen with GCC 12.1 for std::filesystem
+# iterators and for shared_ptr<SpillCharge>). The object is valid; ASan and
+# Valgrind report nothing there. GCC's UBSan matches the pattern against the
+# mangled type name.
+vptr_check:*_Sp_counted*

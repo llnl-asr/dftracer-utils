@@ -155,7 +155,12 @@ int cli_main(int argc, char** argv, const char* name, const char* description,
     program.add_description(description);
     CliT cli(program);
     if (!setup_and_parse(cli, argc, argv)) return 1;
-    return run(cli);
+    try {
+        return run(cli);
+    } catch (const std::exception& err) {
+        DFTRACER_UTILS_LOG_ERROR("Error: %s", err.what());
+        return 1;
+    }
 }
 
 // Human-readable byte count, e.g. "1.5 MB" or "3.0 MB/s"; see

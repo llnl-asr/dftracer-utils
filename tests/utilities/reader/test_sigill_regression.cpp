@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/object_pool.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
+#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/runtime/coro/frame.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/utilities/reader/internal/gzip_reader.h>
@@ -28,18 +29,17 @@ namespace gz = dftracer::utils::utilities::fileio::compress;
 
 namespace {
 
-// Leaves every pooled coroutine frame size class holding recycled blocks full
-// of 0xFF, as a long run leaves them after other coroutines finish.
+// Leaves every heap size class a coroutine frame can use holding free blocks
+// full of 0xFF, as a long run leaves them after other coroutines finish.
 void dirty_frame_pool() {
-    auto& pool = ObjectPool::instance();
     for (std::size_t size = 8; size <= 2048; size += 8) {
         std::vector<void*> blocks;
         for (int i = 0; i < 16; ++i) {
-            void* p = pool.allocate(size);
+            void* p = memory::allocate(size, coro::FRAME_ALIGN);
             std::memset(p, 0xFF, size);
             blocks.push_back(p);
         }
-        for (void* p : blocks) pool.deallocate(p, size);
+        for (void* p : blocks) memory::deallocate(p, size);
     }
 }
 

@@ -154,7 +154,6 @@ COMPONENT_GROUPS = [
             "dftracer::utils::PipelineError",
             "dftracer::utils::TimerService",
             "dftracer::utils::ShardedMutex",
-            "dftracer::utils::ObjectPool",
             "dftracer::utils::BufferPool",
             "dftracer::utils::StringIntern",
             "dftracer::utils::StringArena",

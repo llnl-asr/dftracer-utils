@@ -15,6 +15,8 @@ inline constexpr std::size_t DEBUG_SITE_GROUPS = 1024;
 inline constexpr std::uint8_t DEBUG_FREED_FILL = 0xdd;
 inline constexpr std::uint8_t DEBUG_REDZONE_FILL = 0xfb;
 inline constexpr std::uint16_t DEBUG_ALL_POOLS = 0xffff;
+/// Retained blocks the process can hold; the array is reserved, not backed.
+inline constexpr std::size_t DEBUG_HELD_BLOCKS = std::size_t{1} << 24;
 
 /// Live blocks of one pool that one caller address allocated.
 struct DebugSite {
@@ -37,6 +39,15 @@ void* debug_allocate(std::size_t size, std::size_t align, void* site);
 /// and held in quarantine, and the oldest quarantined block must still hold
 /// its fill or the process aborts.
 void debug_deallocate(void* p, std::size_t size, bool sized) noexcept;
+
+/// Free like a sized debug_deallocate(), but keep the block out of reuse in
+/// the held list until debug_drain_held() releases it. Aborts when the list is
+/// full.
+void debug_retain(void* p, std::size_t size) noexcept;
+
+/// Check and release the retained blocks charged to pool @p pool, or all of
+/// them for DEBUG_ALL_POOLS.
+void debug_drain_held(std::uint16_t pool) noexcept;
 
 /// Move a block to a new one of @p new_size bytes in the pool of the old one,
 /// recorded at @p site. The free of the old block is checked as a sized free

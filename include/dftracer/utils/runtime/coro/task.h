@@ -4,10 +4,10 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/common/object_pool.h>
 #include <dftracer/utils/common/typedefs.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/coro/cancelled.h>
+#include <dftracer/utils/runtime/coro/frame.h>
 #include <dftracer/utils/runtime/coro/monitor.h>
 #include <dftracer/utils/runtime/coro/pool_resume.h>
 #include <dftracer/utils/runtime/coro/yield.h>
@@ -31,7 +31,7 @@ class Executor;
 
 namespace dftracer::utils::coro {
 
-struct PromiseBase {
+struct PromiseBase : FrameAllocation {
     std::atomic<bool> awaiting_async_{false};
     /// Set (release) when the coroutine reaches its final suspend, so a thread
     /// blocking on it sees its result through the matching acquire.
@@ -68,13 +68,6 @@ struct PromiseBase {
     const char* trace_file_{nullptr};  ///< coroutine definition site
     std::uint_least32_t trace_line_{0};
 #endif
-
-    static void* operator new(std::size_t size) {
-        return ObjectPool::instance().allocate(size);
-    }
-    static void operator delete(void* ptr, std::size_t size) {
-        ObjectPool::instance().deallocate(ptr, size);
-    }
 
     void set_scheduler(Scheduler* s) { scheduler_ = s; }
     void set_executor(Executor* e) { executor_ = e; }

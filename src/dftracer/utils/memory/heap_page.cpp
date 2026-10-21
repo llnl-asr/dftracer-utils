@@ -20,6 +20,8 @@
 
 namespace dftracer::utils::memory {
 
+thread_local AttribCache* t_page_attrib = nullptr;
+
 namespace {
 
 constexpr std::size_t PAGES_PER_SPAN = HEAP_SPAN_SIZE / HEAP_PAGE_SIZE;
@@ -116,8 +118,10 @@ struct PageDesc {
 
 struct Heap;
 
+// owner and kind are read on every free, so they sit in one cache line that is
+// not the first: spans are 4 MiB aligned and every span starts in the same
+// cache set as the pools of ids and the hot heap fields.
 struct SpanHeader {
-    Heap* owner;
     SpanHeader* prev;
     SpanHeader* next;
     std::size_t map_bytes;
@@ -127,6 +131,7 @@ struct SpanHeader {
     std::uint64_t purged_mask;
     std::uint64_t cached_since;
     std::atomic<SpanHeader*> cache_next;
+    Heap* owner;
     std::uint32_t free_pages;
     SpanKind kind;
     std::uint16_t pool_id;
@@ -232,16 +237,22 @@ struct SmallLayout {
     std::uint32_t delta;
 };
 
-constexpr SmallLayout make_small_layout(std::size_t block) noexcept {
+// The ids of a page start at `color` bytes, a different one for each class.
+// Pages are 64 KiB aligned, so with all ids at offset 0 the ids lines of the
+// classes in use fall into one cache set, and a few classes evict each other
+// on every allocation and free.
+constexpr SmallLayout make_small_layout(std::size_t block,
+                                        std::size_t color) noexcept {
     bool in_header = block >= HEADER_IDS_MIN_BLOCK;
     std::size_t capacity = HEAP_PAGE_SIZE / block;
     std::size_t side = 0;
     if (!in_header) {
-        while (round_up(capacity * 2, SMALL_MAX_ALIGN) + capacity * block >
+        while (round_up(capacity * 2, SMALL_MAX_ALIGN) + color +
+                   capacity * block >
                HEAP_PAGE_SIZE) {
             --capacity;
         }
-        side = round_up(capacity * 2, SMALL_MAX_ALIGN);
+        side = round_up(capacity * 2, SMALL_MAX_ALIGN) + color;
     }
     std::uint64_t magic = ((std::uint64_t{1} << 32) + block - 1) / block;
     return {static_cast<std::uint32_t>(capacity),
@@ -252,7 +263,7 @@ constexpr SmallLayout make_small_layout(std::size_t block) noexcept {
 constexpr std::array<SmallLayout, CLASS_COUNT> make_small_layouts() noexcept {
     std::array<SmallLayout, CLASS_COUNT> layouts{};
     for (std::size_t i = 0; i < CLASS_COUNT; ++i) {
-        layouts[i] = make_small_layout(CLASS_SIZES[i]);
+        layouts[i] = make_small_layout(CLASS_SIZES[i], ((i * 5) % 16) * 64);
     }
     return layouts;
 }
@@ -263,8 +274,10 @@ constexpr std::array<SmallLayout, CLASS_COUNT> SMALL_LAYOUTS =
 std::uint16_t* page_ids(SpanHeader* span, std::size_t index,
                         const SmallLayout& layout) noexcept {
     if (layout.side != 0) {
+        std::size_t color =
+            layout.side - round_up(layout.capacity * 2, SMALL_MAX_ALIGN);
         return reinterpret_cast<std::uint16_t*>(reinterpret_cast<char*>(span) +
-                                                index * HEAP_PAGE_SIZE);
+                                                index * HEAP_PAGE_SIZE + color);
     }
     return reinterpret_cast<std::uint16_t*>(reinterpret_cast<char*>(span) +
                                             HEADER_IDS_OFFSET) +
@@ -289,15 +302,34 @@ char* page_base(SpanHeader* span, std::size_t index) noexcept {
     return reinterpret_cast<char*>(addr(span) + index * HEAP_PAGE_SIZE);
 }
 
-std::size_t class_index(std::size_t size) noexcept {
+constexpr std::size_t class_index(std::size_t size) noexcept {
     if (size <= 64) return (size + MIN_ALIGN - 1) / MIN_ALIGN - 1;
     std::size_t k = std::bit_width(size - 1) - 1U;
     std::size_t q = (size - 1 - (std::size_t{1} << k)) >> (k - 2);
     return 4 + (k - 6) * 4 + q;
 }
 
+// Every class size up to TABLE_MAX is a multiple of MIN_ALIGN, so the class of
+// a size is the class of its round up to MIN_ALIGN.
+constexpr std::size_t TABLE_MAX = 1024;
+
+constexpr std::array<std::uint8_t, TABLE_MAX / MIN_ALIGN + 1>
+make_class_table() noexcept {
+    std::array<std::uint8_t, TABLE_MAX / MIN_ALIGN + 1> table{};
+    for (std::size_t i = 0; i < table.size(); ++i) {
+        table[i] = static_cast<std::uint8_t>(
+            class_index(std::max<std::size_t>(i * MIN_ALIGN, 1)));
+    }
+    return table;
+}
+
+constexpr std::array<std::uint8_t, TABLE_MAX / MIN_ALIGN + 1> CLASS_TABLE =
+    make_class_table();
+
 std::size_t class_for(std::size_t size, std::size_t align) noexcept {
-    std::size_t idx = class_index(std::max<std::size_t>(size, 1));
+    std::size_t idx = size <= TABLE_MAX
+                          ? CLASS_TABLE[(size + MIN_ALIGN - 1) / MIN_ALIGN]
+                          : class_index(size);
     if (align > MIN_ALIGN) {
         while (CLASS_SIZES[idx] % align != 0) ++idx;
     }
@@ -495,6 +527,7 @@ void thread_exit(void* arg) {
     drain_inbox(*h);
     attrib_set_scope(h->attrib, GENERAL_POOL_ID);
     t_heap = nullptr;
+    t_page_attrib = nullptr;
     push_free_heap(h);
 }
 
@@ -530,6 +563,7 @@ Heap& attach_heap() {
     Heap* h = pop_free_heap();
     if (h == nullptr) h = create_heap();
     t_heap = h;
+    if (active_backend() == Backend::PageHeap) t_page_attrib = &h->attrib;
     if (::pthread_setspecific(g_key, h) != 0) {
         abort_with("dftracer-utils memory: cannot register thread heap\n");
     }

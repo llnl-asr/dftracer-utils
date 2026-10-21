@@ -156,6 +156,29 @@ TEST_CASE("a freed block holds the fill pattern") {
     debug_drain();
 }
 
+TEST_CASE("a retained block stays out of reuse until its pool closes") {
+    CaptureReports capture_reports;
+    PoolHandle pool = Manager::get().root().child("debug retained");
+    {
+        Scope scope{*pool};
+        auto* p = static_cast<unsigned char*>(allocate(64, 16));
+        std::memset(p, 7, 64);
+        deallocate_retained(p, 64);
+        CHECK(pool->blocks() == 1);
+        for (int i = 0; i < 4 * static_cast<int>(DEBUG_QUARANTINE_BLOCKS);
+             ++i) {
+            void* q = allocate(64, 16);
+            REQUIRE(q != p);
+            deallocate(q, 64);
+        }
+        for (std::size_t i = 0; i < 64; ++i) {
+            REQUIRE(p[i] == DEBUG_FREED_FILL);
+        }
+    }
+    pool.close();
+    CHECK(g_reports.empty());
+}
+
 TEST_CASE("blocks keep their alignment and the redzone does not move them") {
     for (std::size_t align = 1; align <= 4096; align *= 2) {
         void* p = allocate(48, align);

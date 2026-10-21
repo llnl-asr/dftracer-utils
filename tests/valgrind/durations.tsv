@@ -288,7 +288,6 @@ dataframe/test_cut_flags	7.1
 dataframe/test_cast_pairs	7.1
 coro/test_generator	7.1
 coro/test_coro	7.1
-common/test_object_pool	7.1
 utilities/plugins/test_plugin_abi_gate	7.0
 utilities/common/statistics/test_timestamp_histogram	7.0
 utilities/common/arrow/test_arrow_column_builder	7.0

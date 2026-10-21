@@ -1,9 +1,9 @@
 #ifndef DFTRACER_UTILS_RUNTIME_CORO_CORO_H
 #define DFTRACER_UTILS_RUNTIME_CORO_CORO_H
 
-#include <dftracer/utils/common/object_pool.h>
 #include <dftracer/utils/common/typedefs.h>
 #include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/runtime/coro/frame.h>
 #include <dftracer/utils/runtime/coro/pool_resume.h>
 
 #include <atomic>
@@ -70,14 +70,7 @@ class Coro {
     std::coroutine_handle<CoroPromise> handle_;
 };
 
-struct CoroPromise {
-    static void* operator new(std::size_t size) {
-        return ObjectPool::instance().allocate(size);
-    }
-    static void operator delete(void* ptr, std::size_t size) {
-        ObjectPool::instance().deallocate(ptr, size);
-    }
-
+struct CoroPromise : FrameAllocation {
     std::exception_ptr exception{nullptr};
 
     /// Join group: points to JoinHandle's atomic counter.

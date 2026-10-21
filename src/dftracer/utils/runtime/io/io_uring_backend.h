@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_RUNTIME_IO_IO_URING_BACKEND_H
 #ifdef DFTRACER_UTILS_HAVE_IO_URING
 
-#include <dftracer/utils/common/object_pool.h>
+#include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/io/io_completion_thread.h>
@@ -26,10 +26,10 @@ namespace dftracer::utils::io {
 /// recover the IoAwaitable pointer on completion.
 struct IoUringRequest {
     static void* operator new(std::size_t size) {
-        return ObjectPool::instance().allocate(size);
+        return memory::allocate(size, __STDCPP_DEFAULT_NEW_ALIGNMENT__);
     }
-    static void operator delete(void* ptr, std::size_t size) {
-        ObjectPool::instance().deallocate(ptr, size);
+    static void operator delete(void* ptr, std::size_t size) noexcept {
+        memory::deallocate(ptr, size);
     }
 
     IoAwaitable* awaitable = nullptr;
@@ -125,10 +125,10 @@ class IoUringBackend : public IoBackend {
 /// details needed to prepare an SQE on await_suspend.
 struct IoUringSubmitCtx : SubmitContext {
     static void* operator new(std::size_t size) {
-        return ObjectPool::instance().allocate(size);
+        return memory::allocate(size, __STDCPP_DEFAULT_NEW_ALIGNMENT__);
     }
-    static void operator delete(void* ptr, std::size_t size) {
-        ObjectPool::instance().deallocate(ptr, size);
+    static void operator delete(void* ptr, std::size_t size) noexcept {
+        memory::deallocate(ptr, size);
     }
 
     IoOp op = IoOp::Read;

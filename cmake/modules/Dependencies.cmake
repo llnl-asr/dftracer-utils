@@ -2286,30 +2286,7 @@ function(add_stdfs_if_needed TARGET)
   endif()
 endfunction()
 
-# Report which ObjectPool atomics path object_pool.h auto-selects under the
-# active -march (DWCAS if the 16-byte CAS is lock-free, else the packed 64-bit
-# CAS). We add no ISA flags on purpose: forcing -mcx16/+lse would raise the
-# binary's CPU floor and could SIGILL on older hardware. Both paths are
-# lock-free and correct everywhere; the fast path turns on automatically when
-# the toolchain already targets a capable baseline (Apple Silicon,
-# -march=native).
-macro(check_dwcas)
-  if(NOT DEFINED DFTRACER_UTILS_HAS_DWCAS)
-    try_compile(_dftracer_has_dwcas "${CMAKE_BINARY_DIR}/temp"
-                "${CMAKE_CURRENT_SOURCE_DIR}/cmake/tests/has_dwcas.cpp")
-    set(DFTRACER_UTILS_HAS_DWCAS
-        ${_dftracer_has_dwcas}
-        CACHE INTERNAL
-              "ObjectPool: 16-byte CAS is lock-free under active flags")
-  endif()
-
-  dftracer_utils_section("ObjectPool atomics")
-  if(DFTRACER_UTILS_HAS_DWCAS)
-    dftracer_utils_ok("DWCAS fast path (lock-free 16-byte CAS)")
-  else()
-    dftracer_utils_ok("Packed fallback (lock-free 64-bit CAS, portable)")
-  endif()
-
+macro(link_libatomic)
   # libatomic safety net for targets that can't inline the atomic (e.g. 32-bit;
   # every 64-bit target we ship is inline lock-free and does not need it). Only
   # apply the directory-scope link when dftracer-utils owns the build, never

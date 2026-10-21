@@ -45,6 +45,8 @@ struct Group {
 std::atomic<Slot*> g_table{nullptr};
 std::atomic<std::uintptr_t> g_quarantine[DEBUG_QUARANTINE_BLOCKS];
 std::atomic<std::uint32_t> g_cursor{0};
+std::atomic<std::atomic<std::uintptr_t>*> g_held{nullptr};
+std::atomic<std::size_t> g_held_count{0};
 
 std::size_t hash_of(std::uintptr_t key, std::uint16_t extra = 0) noexcept {
     std::uint64_t h = (key >> 4) ^ (std::uint64_t{extra} << 48);
@@ -128,6 +130,53 @@ void release(void* p) noexcept {
     base_deallocate(p);
 }
 
+std::atomic<std::uintptr_t>* held_list() noexcept {
+    auto* h = g_held.load(std::memory_order_acquire);
+    if (h != nullptr) [[likely]]
+        return h;
+    constexpr std::size_t bytes =
+        DEBUG_HELD_BLOCKS * sizeof(std::atomic<std::uintptr_t>);
+    void* raw = ::mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
+    if (raw == MAP_FAILED) {
+        abort_with("dftracer-utils memory: cannot map the held list\n");
+    }
+    std::atomic<std::uintptr_t>* expected = nullptr;
+    auto* mine = static_cast<std::atomic<std::uintptr_t>*>(raw);
+    if (!g_held.compare_exchange_strong(expected, mine,
+                                        std::memory_order_acq_rel)) {
+        ::munmap(raw, bytes);
+        return expected;
+    }
+    return mine;
+}
+
+// Marks the block freed, checks it and fills it. The block is not released.
+void retire(void* p, std::size_t size, bool sized) noexcept {
+    Slot* s = lookup(p, false);
+    if (s == nullptr) {
+        die("free of a pointer this library did not allocate", p, 0, 0);
+    }
+    std::uint32_t expected = STATE_LIVE;
+    if (!s->state.compare_exchange_strong(expected, STATE_FREED,
+                                          std::memory_order_acq_rel)) {
+        die("double free", p, s->size.load(std::memory_order_relaxed),
+            s->site.load(std::memory_order_relaxed));
+    }
+    std::size_t have = s->size.load(std::memory_order_relaxed);
+    std::uintptr_t site = s->site.load(std::memory_order_relaxed);
+    if (sized && size != have) {
+        die("sized free does not match the allocated size", p, have, site);
+    }
+    auto* bytes = static_cast<unsigned char*>(p);
+    for (std::size_t i = 0; i < DEBUG_REDZONE_BYTES; ++i) {
+        if (bytes[have + i] != DEBUG_REDZONE_FILL) {
+            die("the redzone behind the block was written", p, have, site);
+        }
+    }
+    std::memset(p, DEBUG_FREED_FILL, have + DEBUG_REDZONE_BYTES);
+}
+
 }  // namespace
 
 void* debug_allocate(std::size_t size, std::size_t align, void* site) {
@@ -153,33 +202,42 @@ void* debug_allocate(std::size_t size, std::size_t align, void* site) {
 
 void debug_deallocate(void* p, std::size_t size, bool sized) noexcept {
     if (p == nullptr) return;
-    Slot* s = lookup(p, false);
-    if (s == nullptr) {
-        die("free of a pointer this library did not allocate", p, 0, 0);
-    }
-    std::uint32_t expected = STATE_LIVE;
-    if (!s->state.compare_exchange_strong(expected, STATE_FREED,
-                                          std::memory_order_acq_rel)) {
-        die("double free", p, s->size.load(std::memory_order_relaxed),
-            s->site.load(std::memory_order_relaxed));
-    }
-    std::size_t have = s->size.load(std::memory_order_relaxed);
-    std::uintptr_t site = s->site.load(std::memory_order_relaxed);
-    if (sized && size != have) {
-        die("sized free does not match the allocated size", p, have, site);
-    }
-    auto* bytes = static_cast<unsigned char*>(p);
-    for (std::size_t i = 0; i < DEBUG_REDZONE_BYTES; ++i) {
-        if (bytes[have + i] != DEBUG_REDZONE_FILL) {
-            die("the redzone behind the block was written", p, have, site);
-        }
-    }
-    std::memset(p, DEBUG_FREED_FILL, have + DEBUG_REDZONE_BYTES);
+    retire(p, size, sized);
     std::uint32_t slot = g_cursor.fetch_add(1, std::memory_order_relaxed) %
                          DEBUG_QUARANTINE_BLOCKS;
     auto old = g_quarantine[slot].exchange(reinterpret_cast<std::uintptr_t>(p),
                                            std::memory_order_acq_rel);
     if (old != 0) release(reinterpret_cast<void*>(old));
+}
+
+void debug_retain(void* p, std::size_t size) noexcept {
+    if (p == nullptr) return;
+    retire(p, size, true);
+    std::size_t at = g_held_count.fetch_add(1, std::memory_order_relaxed);
+    if (at >= DEBUG_HELD_BLOCKS) {
+        abort_with("dftracer-utils memory: the held list is full\n");
+    }
+    held_list()[at].store(reinterpret_cast<std::uintptr_t>(p),
+                          std::memory_order_release);
+}
+
+void debug_drain_held(std::uint16_t pool) noexcept {
+    auto* list = g_held.load(std::memory_order_acquire);
+    if (list == nullptr) return;
+    std::size_t count = std::min(g_held_count.load(std::memory_order_relaxed),
+                                 DEBUG_HELD_BLOCKS);
+    for (std::size_t i = 0; i < count; ++i) {
+        auto entry = list[i].load(std::memory_order_acquire);
+        if (entry == 0) continue;
+        if (pool != DEBUG_ALL_POOLS) {
+            Slot* s = lookup(reinterpret_cast<void*>(entry), false);
+            if (s->pool.load(std::memory_order_relaxed) != pool) continue;
+        }
+        if (list[i].compare_exchange_strong(entry, 0,
+                                            std::memory_order_acq_rel)) {
+            release(reinterpret_cast<void*>(entry));
+        }
+    }
 }
 
 // Always a new block: the redzone sits right behind the old size.

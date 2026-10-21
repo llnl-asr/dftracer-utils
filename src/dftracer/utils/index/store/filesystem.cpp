@@ -1,6 +1,6 @@
 #include <dftracer/utils/common/config.h>
-#include <dftracer/utils/common/object_pool.h>
 #include <dftracer/utils/index/store/filesystem.h>
+#include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/runtime/executor/executor.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/io/io_thread_pool.h>
@@ -39,11 +39,11 @@ struct AsyncReadHandle {
     explicit AsyncReadHandle(DfTracerFileSystem* owner_) : owner(owner_) {}
 
     static void* operator new(std::size_t size) {
-        return ObjectPool::instance().allocate(size);
+        return memory::allocate(size, __STDCPP_DEFAULT_NEW_ALIGNMENT__);
     }
 
     static void operator delete(void* ptr, std::size_t size) noexcept {
-        ObjectPool::instance().deallocate(ptr, size);
+        memory::deallocate(ptr, size);
     }
 
     DfTracerFileSystem* owner;

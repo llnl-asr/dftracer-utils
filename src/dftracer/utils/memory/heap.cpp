@@ -289,6 +289,24 @@ void deallocate(void* p, std::size_t size) noexcept {
     }
 }
 
+void deallocate_retained(void* p, std::size_t size) noexcept {
+    switch (static_cast<Dispatch>(g_dispatch.load(std::memory_order_acquire))) {
+        case Dispatch::PageHeap:
+            page_deallocate(p, size);
+            return;
+        case Dispatch::System:
+            system_deallocate(p, size);
+            return;
+        default:
+            if (p != nullptr && debug_enabled()) {
+                debug_retain(p, size);
+                return;
+            }
+            deallocate_other(p, size, true);
+            return;
+    }
+}
+
 void* reallocate(void* p, std::size_t old_size, std::size_t new_size,
                  std::size_t align) {
     switch (dispatch()) {

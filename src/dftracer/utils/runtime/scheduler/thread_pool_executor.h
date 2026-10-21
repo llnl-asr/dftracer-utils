@@ -175,6 +175,9 @@ class ThreadPoolExecutor : public TaskExecutor {
     // hot enqueue path, or a semaphore-backed queue.
     std::mutex idle_mutex_;
     std::condition_variable idle_cv_;
+    // Set while one idle worker parks on the short backoff; the others park
+    // for IDLE_PARK_MAX.
+    std::atomic<bool> idle_poller_{false};
     static constexpr std::chrono::milliseconds IDLE_PARK_MIN{1};
     static constexpr std::chrono::milliseconds IDLE_PARK_MAX{256};
 

@@ -884,7 +884,7 @@ static coro::CoroTask<std::vector<std::string>> collect_files(
         }
 
         auto files = co_await cli::scan_directory_trace_files(
-            ctx, directory, /*recursive=*/false);
+            ctx, directory, /*recursive=*/true);
 
         if (files.empty()) {
             DFTRACER_UTILS_LOG_ERROR("No trace files found in: %s",

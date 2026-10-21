@@ -821,6 +821,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                          [&](CoroScope&) -> coro::CoroTask<void> {
                              norm = co_await dftracer::utils::index::build::
                                  normalize_members_for_ingest(std::move(files),
+                                                              index_dir,
                                                               checkpoint_size);
                          });
         files = std::move(norm.files);

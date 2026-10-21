@@ -277,7 +277,7 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
     if (!directory.empty()) {
         PatternDirectoryScannerUtility scanner;
         PatternDirectoryScannerUtilityInput scan_input{
-            directory, trace_file_patterns(), false};
+            directory, trace_file_patterns(), true};
         auto matched = co_await scanner(scan_input);
         for (const auto& entry : matched) files.push_back(entry.path.string());
     } else {
@@ -298,6 +298,7 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
                          [&](CoroScope&) -> coro::CoroTask<void> {
                              norm = co_await dftracer::utils::index::build::
                                  normalize_members_for_ingest(std::move(files),
+                                                              index_dir,
                                                               checkpoint_size);
                          });
         files = std::move(norm.files);

@@ -863,8 +863,9 @@ TEST_SUITE("DFTracerView") {
                                 "-d", env.get_dir()}) != 0);
     }
 
-    // A single-member input is normalized to bounded multi-member gzip in a
-    // sibling split/ dir; the original file is never touched. A tiny
+    // A single-member input is normalized to bounded multi-member gzip beside
+    // its index, in <index root>.split/; nothing is written beside the input
+    // and the original file is never touched. A tiny
     // --checkpoint-size forces the rechunk on the small fixture.
     TEST_CASE("single-member input auto-splits non-destructively") {
         auto binary = find_view_binary();
@@ -883,14 +884,15 @@ TEST_SUITE("DFTracerView") {
                      "2048", "-d", env.get_dir()});
         CHECK(rc == 0);
 
-        const std::string split_copy =
-            env.get_dir() + "/split/" + fs::path(orig).filename().string();
+        const std::string split_copy = env.get_dir() + "/.dftindex.split/" +
+                                       fs::path(orig).filename().string();
         CHECK(fs::exists(split_copy));            // multi-member copy created
         CHECK(fs::file_size(orig) == orig_size);  // original untouched
+        CHECK_FALSE(fs::exists(env.get_dir() + "/split"));
     }
 
     // A multi-member input whose members already fit under the checkpoint size
-    // is left alone (no split/ dir).
+    // is left alone (no split copy).
     TEST_CASE("multi-member input under the cap is not re-split") {
         auto binary = find_view_binary();
         if (binary.empty()) {
@@ -906,10 +908,11 @@ TEST_SUITE("DFTracerView") {
                      "1048576", "-d", env.get_dir()});
         CHECK(rc == 0);
         CHECK_FALSE(fs::exists(env.get_dir() + "/split"));
+        CHECK_FALSE(fs::exists(env.get_dir() + "/.dftindex.split"));
     }
 
     // A multi-member input whose members exceed the checkpoint size is
-    // re-normalized to bounded members in split/.
+    // re-normalized to bounded members beside its index.
     TEST_CASE("multi-member input over the cap is re-split") {
         auto binary = find_view_binary();
         if (binary.empty()) {
@@ -925,8 +928,9 @@ TEST_SUITE("DFTracerView") {
             binary, {"--group-by", "cat", "--agg", "count", "--checkpoint-size",
                      "2048", "-d", env.get_dir()});
         CHECK(rc == 0);
-        CHECK(fs::exists(env.get_dir() + "/split/" +
+        CHECK(fs::exists(env.get_dir() + "/.dftindex.split/" +
                          fs::path(mm).filename().string()));
+        CHECK_FALSE(fs::exists(env.get_dir() + "/split"));
     }
 }
 

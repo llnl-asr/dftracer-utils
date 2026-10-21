@@ -225,7 +225,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     // Discover input files
     filesystem::PatternDirectoryScannerUtility scanner;
     filesystem::PatternDirectoryScannerUtilityInput scan_input{
-        log_dir, filesystem::trace_file_patterns(), false};
+        log_dir, filesystem::trace_file_patterns(), true};
     auto matched_entries = co_await scanner(scan_input);
 
     std::vector<std::string> input_files;
@@ -249,7 +249,8 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
         cli::run_on_pool(cli->pipeline, "dftracer_index normalize",
                          [&](CoroScope&) -> coro::CoroTask<void> {
                              norm = co_await normalize_members_for_ingest(
-                                 std::move(input_files), checkpoint_size);
+                                 std::move(input_files), index_dir,
+                                 checkpoint_size);
                          });
         input_files = std::move(norm.files);
         for (const auto& [src, dst] : norm.split)

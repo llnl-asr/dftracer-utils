@@ -1102,22 +1102,23 @@ static coro::CoroTask<int> run_detailed_stats(
     bool json_output_for_detailed = config_ptr->json_output;
     std::size_t top_n_for_detailed = config_ptr->top_n;
 
-    co_await ctx.scope(
+    auto detailed_scope =
         [files_ptr, executor_threads_for_detailed, index_dir_for_detailed_ptr,
          needs_hash_resolution_for_detailed, json_output_for_detailed,
          top_n_for_detailed, query_ptr, filter_names_ptr, filter_cats_ptr,
          group_by_ptr, aggregate_detailed_ptr, aggregate_mutex_ptr,
          output_mutex_ptr,
          json_results_ptr](CoroScope& scope) -> coro::CoroTask<void> {
-            run_detailed_query_workers(
-                scope, files_ptr, executor_threads_for_detailed,
-                index_dir_for_detailed_ptr, needs_hash_resolution_for_detailed,
-                json_output_for_detailed, top_n_for_detailed, query_ptr,
-                filter_names_ptr, filter_cats_ptr, group_by_ptr,
-                aggregate_detailed_ptr, aggregate_mutex_ptr, output_mutex_ptr,
-                json_results_ptr);
-            co_return;
-        });
+        run_detailed_query_workers(
+            scope, files_ptr, executor_threads_for_detailed,
+            index_dir_for_detailed_ptr, needs_hash_resolution_for_detailed,
+            json_output_for_detailed, top_n_for_detailed, query_ptr,
+            filter_names_ptr, filter_cats_ptr, group_by_ptr,
+            aggregate_detailed_ptr, aggregate_mutex_ptr, output_mutex_ptr,
+            json_results_ptr);
+        co_return;
+    };
+    co_await ctx.scope(detailed_scope);
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;

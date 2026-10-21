@@ -168,6 +168,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix memory that was freed early in `dftracer_validate`, other tools and the index build when built with GCC 12.
+  A lambda with a by-value capture inside a `co_await` was destroyed twice, and the `coro_lambdas` check now rejects it.
 - Fix a data race in `when_all` over a list of tasks that return `bool`.
   Each result now has its own storage, so two tasks that end at the same time no longer write one byte.
 - Fix index databases that were written with zlib, and aggregation rows that were written with no compression, in builds with zstd enabled.

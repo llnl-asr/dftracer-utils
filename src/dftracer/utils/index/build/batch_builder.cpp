@@ -517,14 +517,13 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
         parse_workers /
             std::max<std::size_t>(1, std::min(state->num_files, parse_workers)),
         1, MAX_PARSE_AHEAD);
-    co_await scope->scope([parse_workers, write_workers, next_index_ptr,
-                           done_ptr, parse_ns_ptr, results_ptr, parsed_jobs_ptr,
-                           prepared_ptr, checkpoint_size, bloom_config_ptr,
-                           agg_fold_factory_ptr, build_bloom, tier_only,
-                           parse_ahead, admission_ptr, write_chan_ptr, db_ptr,
-                           metrics_ptr, sink_factory_ptr, sink_commit_ptr,
-                           spill_commit_ptr, progress_ptr](
-                              CoroScope& child) -> coro::CoroTask<void> {
+    auto pipeline_scope =
+        [parse_workers, write_workers, next_index_ptr, done_ptr, parse_ns_ptr,
+         results_ptr, parsed_jobs_ptr, prepared_ptr, checkpoint_size,
+         bloom_config_ptr, agg_fold_factory_ptr, build_bloom, tier_only,
+         parse_ahead, admission_ptr, write_chan_ptr, db_ptr, metrics_ptr,
+         sink_factory_ptr, sink_commit_ptr, spill_commit_ptr,
+         progress_ptr](CoroScope& child) -> coro::CoroTask<void> {
         for (std::size_t w = 0; w < parse_workers; ++w) {
             child.spawn(
                 [next_index_ptr, done_ptr, parse_ns_ptr, results_ptr,
@@ -551,25 +550,30 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
                         write_chan_ptr, WRITE_BATCH_SIZE, metrics_ptr,
                         *sink_factory_ptr, *sink_commit_ptr, *spill_commit_ptr);
                 } else {
-                    co_await index::build::index_batch_write_worker(
-                        write_chan_ptr, WRITE_BATCH_SIZE, metrics_ptr,
-                        [db_ptr] { return db_ptr->begin_write(); },
-                        [](index::store::IndexWrite& sink) {
-                            static_cast<
-                                index::store::IndexDatabaseWriterContext&>(sink)
-                                .commit();
-                        },
+                    auto begin_write = [db_ptr] {
+                        return db_ptr->begin_write();
+                    };
+                    auto commit_write = [](index::store::IndexWrite& sink) {
+                        static_cast<index::store::IndexDatabaseWriterContext&>(
+                            sink)
+                            .commit();
+                    };
+                    auto ingest_runs =
                         [db_ptr](std::vector<
                                  index::store::IndexDatabaseSstWriterContext::
                                      Artifacts>
                                      runs) {
                             ingest_spill_runs(*db_ptr, std::move(runs));
-                        });
+                        };
+                    co_await index::build::index_batch_write_worker(
+                        write_chan_ptr, WRITE_BATCH_SIZE, metrics_ptr,
+                        begin_write, commit_write, ingest_runs);
                 }
             });
         }
         co_return;
-    });
+    };
+    co_await scope->scope(pipeline_scope);
 
     if (!admission->spill_root.empty()) {
         std::error_code ec;

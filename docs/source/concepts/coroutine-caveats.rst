@@ -141,6 +141,33 @@ pipeline coroutine (with one minimal public entry point that just moves its
 arguments and returns) was the fix. Which approach wins is code-dependent; the
 guiding metric is *fewer live non-trivial locals across suspension points.*
 
+Lambda temporaries in a co_await
+--------------------------------
+
+GCC 12.1 destroys a lambda temporary twice when the lambda captures by value and
+is written inside a ``co_await`` expression. The captures are freed early, then
+freed again, which shows as a heap-use-after-free in ASan and as invalid reads in
+Valgrind. GCC 13 does not do this. A prvalue object, a named object and a named
+lambda are each destroyed once.
+
+So a lambda inside a ``co_await`` expression may capture only ``&``, ``&name`` or
+``this``. Any other capture goes into a named lambda that is awaited after it:
+
+.. code-block:: cpp
+
+   // Wrong: the by-value capture is destroyed twice on GCC 12.1.
+   co_await ctx.scope([files](CoroScope& scope) -> CoroTask<void> { ... });
+
+   // Right: the lambda is a named local.
+   auto run_scope = [files](CoroScope& scope) -> CoroTask<void> { ... };
+   co_await ctx.scope(run_scope);
+
+The bodies of lambdas inside the expression are not part of it, and a
+``co_await`` in such a body is checked as its own expression. The ``coro_lambdas``
+ctest (``cmake/scripts/check_coro_lambdas.cmake``) fails on every violation under
+``src/`` and ``include/``, and ``coro_lambdas_self`` checks the check against
+the cases in ``tests/cmake/coro_lambdas/``.
+
 Symmetric transfer and the stack
 --------------------------------
 

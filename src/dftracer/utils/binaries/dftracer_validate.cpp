@@ -144,8 +144,9 @@ static coro::CoroTask<int> run_validate(const ValidateArgParse* cli) {
          executor_threads](CoroScope& ctx) -> coro::CoroTask<void> {
             if (files->empty()) co_return;
             results.resize(files->size());
-            co_await ctx.scope([files, &results, executor_threads](
-                                   CoroScope& scope) -> coro::CoroTask<void> {
+            auto validate_scope =
+                [files, &results,
+                 executor_threads](CoroScope& scope) -> coro::CoroTask<void> {
                 cli::parallel_for_each(
                     scope, std::views::iota(std::size_t{0}, files->size()),
                     executor_threads,
@@ -153,7 +154,8 @@ static coro::CoroTask<int> run_validate(const ValidateArgParse* cli) {
                         co_await validate_file((*files)[idx], &results[idx]);
                     });
                 co_return;
-            });
+            };
+            co_await ctx.scope(validate_scope);
             co_return;
         },
         "Validate");

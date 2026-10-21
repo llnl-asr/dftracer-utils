@@ -207,12 +207,12 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
                 co_await prewarm_viz_summary(*index_ptr);
             });
 #endif
-            co_await listener.accept_loop(
-                ctx,
+            auto on_connection =
                 [router_ptr](int client_fd,
                              struct sockaddr_in addr) -> coro::CoroTask<void> {
-                    co_await handle_connection(client_fd, addr, *router_ptr);
-                });
+                co_await handle_connection(client_fd, addr, *router_ptr);
+            };
+            co_await listener.accept_loop(ctx, on_connection);
         },
         "Server");
 

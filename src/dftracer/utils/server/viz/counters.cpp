@@ -168,14 +168,16 @@ coro::CoroTask<HttpResponse> handle_viz_counters(const HttpRequest& req,
     if (view.query) v = v.filter(*view.query);
     if (!single_file || fields.by_path) v = v.time_range(begin, end);
 
+    auto fold_events = [begin, bucket_us, nb, &fields](
+                           CounterAcc& acc,
+                           const std::vector<std::string_view>& events) {
+        if (acc.ops.empty()) acc.init(nb);
+        fields.for_each_event(events, [&](std::string_view ev) {
+            fold_counter(ev, begin, bucket_us, nb, acc);
+        });
+    };
     auto r = co_await v.map_batches<CounterAcc>(
-        [begin, bucket_us, nb, &fields](
-            CounterAcc& acc, const std::vector<std::string_view>& events) {
-            if (acc.ops.empty()) acc.init(nb);
-            fields.for_each_event(events, [&](std::string_view ev) {
-                fold_counter(ev, begin, bucket_us, nb, acc);
-            });
-        },
+        fold_events,
         [](CounterAcc&& x, CounterAcc&& y) {
             if (y.ops.empty()) return std::move(x);
             if (x.ops.empty()) return std::move(y);

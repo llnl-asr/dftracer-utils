@@ -173,6 +173,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 - Fix a stack overflow crash of `dftracer_stats` and `dftracer_comparator` on thousands of files that share one index root.
 - Fix the executor watchdog taking a busy executor for a deadlocked one when a long task runs with `--executor-threads 1`, which aborted `dftracer_split`.
+- Fix the CLI tools dumping core on an error that leaves the tool, such as a watchdog timeout.
+  They now print the error and exit with status 1.
 - Fix `memory::Stats::measured` and `unattributed` counting other processes when the process runs in a cgroup, such as a batch job or a container.
   `measured` is now this process only, and the new `limit_used` holds the memory counted against `limit`, which the near-limit signal reads.
 - Fix memory that was freed early in `dftracer_validate`, other tools and the index build when built with GCC 12.

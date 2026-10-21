@@ -3,7 +3,7 @@ if(UV_EXECUTABLE)
   add_test(
     NAME duql_grammar
     COMMAND
-      ${UV_EXECUTABLE} run --no-project --with lark python
+      ${UV_EXECUTABLE} run --no-project --python ">=3.8" --with lark python
       ${CMAKE_SOURCE_DIR}/scripts/check_duql_grammar.py --samples
       ${CMAKE_CURRENT_SOURCE_DIR}/grammar_samples.duql)
 else()

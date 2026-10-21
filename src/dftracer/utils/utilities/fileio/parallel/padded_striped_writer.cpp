@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <exception>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -92,8 +93,7 @@ struct Chunk {
 // Everything the packer and its children touch. The writer holds it by
 // pointer, so no coroutine points into the writer or the frame that owns it.
 struct PaddedStripedImpl {
-    explicit PaddedStripedImpl(std::size_t stripe_size)
-        : stripe_size(stripe_size) {}
+    explicit PaddedStripedImpl(std::size_t stripe) : stripe_size(stripe) {}
 
     std::string path;
     int fd = -1;
@@ -110,6 +110,11 @@ struct PaddedStripedImpl {
 
     void abandon() {}
 
+    // join_and_clean() stops before the close when a shutdown cancels it.
+    ~PaddedStripedImpl() {
+        if (fd >= 0) ::close(fd);
+    }
+
     coro::CoroTask<void> join_and_clean() {
         co_await drain_packer();
         if (fd >= 0) {
@@ -124,10 +129,19 @@ struct PaddedStripedImpl {
         if (!packer_drained) {
             producers.clear();
             if (packer_future.has_value()) {
-                auto rc = co_await *packer_future;
+                // A shutdown cancels the wait with an exception; the scope
+                // must still be joined before the Impl can be destroyed.
+                int rc = 0;
+                std::exception_ptr cancelled;
+                try {
+                    rc = co_await *packer_future;
+                } catch (...) {
+                    cancelled = std::current_exception();
+                }
                 packer_future.reset();
                 co_await packer_scope->join();
                 packer_drained = true;
+                if (cancelled) std::rethrow_exception(cancelled);
                 if (rc != 0) co_return rc;
             }
             packer_drained = true;

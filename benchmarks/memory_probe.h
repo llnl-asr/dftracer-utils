@@ -25,10 +25,10 @@
 /**
  * Memory readings and an allocation counter for bench executables.
  *
- * Exactly one .cpp of an executable defines DFTU_MEMORY_PROBE_DEFINE_NEW
- * before including this header. That replaces the global operator new and
- * delete of the whole executable with counting versions. Never define it in a
- * library or in the Python extension.
+ * Exactly one .cpp of an executable defines
+ * DFTRACER_UTILS_MEMORY_PROBE_DEFINE_NEW before including this header. That
+ * replaces the global operator new and delete of the whole executable with
+ * counting versions. Never define it in a library or in the Python extension.
  */
 namespace dftu::memory_probe {
 
@@ -188,7 +188,7 @@ inline void* counted_alloc_or_throw(std::size_t size, std::size_t align) {
 
 }  // namespace dftu::memory_probe
 
-#ifdef DFTU_MEMORY_PROBE_DEFINE_NEW
+#ifdef DFTRACER_UTILS_MEMORY_PROBE_DEFINE_NEW
 
 namespace mp_detail = dftu::memory_probe::detail;
 

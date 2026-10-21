@@ -38,6 +38,21 @@
 //                                 live bytes ended where they started)
 //   heap_bench --case NAME --alloc system|heap
 //                                (one case in this process; prints RESULT)
+//   heap_bench --record FILE     (driver; write the page heap counts per case
+//                                 as JSON: the median instructions per op
+//                                 over the rounds, allocations per op and
+//                                 the largest bytes the heap held from the
+//                                 operating system)
+//   heap_bench --check FILE      (driver; fail when a case retires more than
+//                                 max(2%, its recorded spread) more
+//                                 instructions per op, makes more
+//                                 allocations per op or holds more than 5%
+//                                 more heap than the record; wall time is only
+//                                 printed)
+//
+// An op always allocates one block, so allocations per op is 1 by
+// construction; the record keeps it so a case that changes its workload shows
+// up. Instructions are counted over the whole run of a case, set-up included.
 
 #include <dftracer/utils/memory/heap_page.h>
 #include <sys/resource.h>
@@ -61,6 +76,8 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+#include "bench_counters.h"
 
 namespace mem = dftracer::utils::memory;
 
@@ -91,29 +108,34 @@ struct Scale {
 constexpr Scale SMOKE_SCALE{64, 4, 2000, 64, 2000, 32};
 constexpr Scale FULL_SCALE{4096, 500, 400000, 1024, 400000, 4000};
 
+struct Outcome {
+    double ns_per_op;
+    double ops;
+};
+
 struct HeapPolicy {
-    static void* allocate(std::size_t n) { return mem::page_allocate(n, 16); }
-    static void release(void* p, std::size_t n) { mem::page_deallocate(p, n); }
+    static void *allocate(std::size_t n) { return mem::page_allocate(n, 16); }
+    static void release(void *p, std::size_t n) { mem::page_deallocate(p, n); }
 };
 
 struct MallocPolicy {
-    static void* allocate(std::size_t n) {
-        void* p = std::malloc(n);
+    static void *allocate(std::size_t n) {
+        void *p = std::malloc(n);
         if (p == nullptr) std::abort();
         return p;
     }
-    static void release(void* p, std::size_t) { std::free(p); }
+    static void release(void *p, std::size_t) { std::free(p); }
 };
 
-void touch(void* p) { *static_cast<volatile unsigned char*>(p) = 1; }
+void touch(void *p) { *static_cast<volatile unsigned char *>(p) = 1; }
 
 double elapsed_ns(Clock::time_point start, Clock::time_point end) {
     return std::chrono::duration<double, std::nano>(end - start).count();
 }
 
 template <class A>
-double small_case(std::size_t size, bool lifo, const Scale& scale) {
-    std::vector<void*> blocks(scale.batch);
+Outcome small_case(std::size_t size, bool lifo, const Scale &scale) {
+    std::vector<void *> blocks(scale.batch);
     auto start = Clock::now();
     for (std::size_t rep = 0; rep < scale.reps; ++rep) {
         for (std::size_t i = 0; i < scale.batch; ++i) {
@@ -131,30 +153,30 @@ double small_case(std::size_t size, bool lifo, const Scale& scale) {
         }
     }
     auto end = Clock::now();
-    return elapsed_ns(start, end) /
-           static_cast<double>(scale.batch * scale.reps);
+    auto ops = static_cast<double>(scale.batch * scale.reps);
+    return {elapsed_ns(start, end) / ops, ops};
 }
 
 template <class A>
-double medium_free_case(const Scale& scale) {
+Outcome medium_free_case(const Scale &scale) {
     double total_ns = 0;
     std::size_t frees = 0;
-    std::vector<void*> blocks(scale.medium_count);
+    std::vector<void *> blocks(scale.medium_count);
     for (int rep = 0; rep < 8; ++rep) {
-        for (auto& b : blocks) {
+        for (auto &b : blocks) {
             b = A::allocate(MEDIUM_FREE_SIZE);
             touch(b);
         }
         auto start = Clock::now();
-        for (void* b : blocks) A::release(b, MEDIUM_FREE_SIZE);
+        for (void *b : blocks) A::release(b, MEDIUM_FREE_SIZE);
         total_ns += elapsed_ns(start, Clock::now());
         frees += blocks.size();
     }
-    return total_ns / static_cast<double>(frees);
+    return {total_ns / static_cast<double>(frees), static_cast<double>(frees)};
 }
 
 struct Slot {
-    void* p;
+    void *p;
     std::size_t size;
 };
 
@@ -165,10 +187,10 @@ struct alignas(CACHE_LINE) Ring {
 };
 
 template <class A>
-void produce(Ring& ring, std::size_t blocks) {
+void produce(Ring &ring, std::size_t blocks) {
     for (std::size_t i = 0; i < blocks; ++i) {
         std::size_t size = CROSS_SIZES[i % CROSS_SIZES.size()];
-        void* p = A::allocate(size);
+        void *p = A::allocate(size);
         touch(p);
         std::size_t head = ring.head.load(std::memory_order_relaxed);
         while (head - ring.tail.load(std::memory_order_acquire) == RING_SLOTS) {
@@ -180,7 +202,7 @@ void produce(Ring& ring, std::size_t blocks) {
 }
 
 template <class A>
-void consume(Ring& ring, std::size_t blocks) {
+void consume(Ring &ring, std::size_t blocks) {
     for (std::size_t done = 0; done < blocks;) {
         std::size_t tail = ring.tail.load(std::memory_order_relaxed);
         if (tail == ring.head.load(std::memory_order_acquire)) {
@@ -195,7 +217,7 @@ void consume(Ring& ring, std::size_t blocks) {
 }
 
 template <class A>
-double cross_case(std::size_t pairs, const Scale& scale) {
+Outcome cross_case(std::size_t pairs, const Scale &scale) {
     std::vector<Ring> rings(pairs);
     std::atomic<std::size_t> ready{0};
     std::atomic<bool> go{false};
@@ -216,9 +238,10 @@ double cross_case(std::size_t pairs, const Scale& scale) {
     while (ready.load() < 2 * pairs) std::this_thread::yield();
     auto start = Clock::now();
     go.store(true, std::memory_order_release);
-    for (auto& t : threads) t.join();
+    for (auto &t : threads) t.join();
     auto end = Clock::now();
-    return elapsed_ns(start, end) / static_cast<double>(scale.cross_blocks);
+    return {elapsed_ns(start, end) / static_cast<double>(scale.cross_blocks),
+            static_cast<double>(scale.cross_blocks * pairs)};
 }
 
 struct Step {
@@ -226,7 +249,7 @@ struct Step {
     std::uint32_t size;
 };
 
-std::vector<Step> mixed_trace(const Scale& scale) {
+std::vector<Step> mixed_trace(const Scale &scale) {
     std::mt19937_64 rng(SEED);
     std::vector<Step> trace;
     trace.reserve(scale.mixed_steps);
@@ -249,12 +272,12 @@ std::vector<Step> mixed_trace(const Scale& scale) {
 }
 
 template <class A>
-double mixed_case(const Scale& scale) {
+Outcome mixed_case(const Scale &scale) {
     std::vector<Step> trace = mixed_trace(scale);
-    std::vector<void*> live(scale.mixed_slots, nullptr);
+    std::vector<void *> live(scale.mixed_slots, nullptr);
     std::vector<std::uint32_t> sizes(scale.mixed_slots, 0);
     auto start = Clock::now();
-    for (const Step& step : trace) {
+    for (const Step &step : trace) {
         if (live[step.slot] != nullptr) {
             A::release(live[step.slot], sizes[step.slot]);
         }
@@ -266,27 +289,28 @@ double mixed_case(const Scale& scale) {
     for (std::size_t i = 0; i < live.size(); ++i) {
         if (live[i] != nullptr) A::release(live[i], sizes[i]);
     }
-    return elapsed_ns(start, end) / static_cast<double>(trace.size());
+    return {elapsed_ns(start, end) / static_cast<double>(trace.size()),
+            static_cast<double>(trace.size())};
 }
 
 template <class A>
-double mixed_budget_case(const Scale& scale, std::size_t budget) {
+Outcome mixed_budget_case(const Scale &scale, std::size_t budget) {
     mem::Config config;
     config.budget = budget;
     mem::configure(config);
-    double ns = mixed_case<A>(scale);
+    Outcome outcome = mixed_case<A>(scale);
     mem::configure(mem::Config{});
-    return ns;
+    return outcome;
 }
 
 struct Case {
     std::string name;
-    std::function<double(bool heap, const Scale&)> run;
+    std::function<Outcome(bool heap, const Scale &)> run;
 };
 
 template <class Fn>
-std::function<double(bool, const Scale&)> both(Fn fn) {
-    return [fn](bool heap, const Scale& scale) {
+std::function<Outcome(bool, const Scale &)> both(Fn fn) {
+    return [fn](bool heap, const Scale &scale) {
         return heap ? fn(HeapPolicy{}, scale) : fn(MallocPolicy{}, scale);
     };
 }
@@ -298,13 +322,13 @@ std::vector<Case> make_cases() {
             std::string name = "small " + std::to_string(size) + "B " +
                                (lifo ? "lifo" : "batch");
             cases.push_back(
-                {name, both([size, lifo](auto policy, const Scale& scale) {
+                {name, both([size, lifo](auto policy, const Scale &scale) {
                      using A = decltype(policy);
                      return small_case<A>(size, lifo, scale);
                  })});
         }
     }
-    cases.push_back({"medium free", both([](auto policy, const Scale& scale) {
+    cases.push_back({"medium free", both([](auto policy, const Scale &scale) {
                          return medium_free_case<decltype(policy)>(scale);
                      })});
     std::size_t cores =
@@ -315,17 +339,17 @@ std::vector<Case> make_cases() {
         std::string name = "xthread " + std::to_string(pairs) + "p" +
                            std::to_string(pairs) + "c";
         if (pairs == cores) name += " (all cores)";
-        cases.push_back({name, both([pairs](auto policy, const Scale& scale) {
+        cases.push_back({name, both([pairs](auto policy, const Scale &scale) {
                              return cross_case<decltype(policy)>(pairs, scale);
                          })});
     }
-    cases.push_back({"mixed", both([](auto policy, const Scale& scale) {
+    cases.push_back({"mixed", both([](auto policy, const Scale &scale) {
                          return mixed_case<decltype(policy)>(scale);
                      })});
-    for (auto [name, budget] : {std::pair<const char*, std::size_t>{
+    for (auto [name, budget] : {std::pair<const char *, std::size_t>{
                                     "mixed budget", 1024 * 1024 * MIB},
                                 {"mixed tight", 64 * MIB}}) {
-        cases.push_back({name, both([budget](auto policy, const Scale& scale) {
+        cases.push_back({name, both([budget](auto policy, const Scale &scale) {
                              return mixed_budget_case<decltype(policy)>(scale,
                                                                         budget);
                          })});
@@ -340,10 +364,12 @@ double median(std::vector<double> values) {
 
 struct ChildResult {
     double ns;
+    double instr_per_op;
+    double heap_bytes;
     double rss_mib;
 };
 
-std::optional<ChildResult> run_child(const char* self, const std::string& name,
+std::optional<ChildResult> run_child(const char *self, const std::string &name,
                                      bool heap) {
     int fds[2];
     if (::pipe(fds) != 0) return std::nullopt;
@@ -353,7 +379,7 @@ std::optional<ChildResult> run_child(const char* self, const std::string& name,
         ::dup2(fds[1], STDOUT_FILENO);
         ::close(fds[1]);
         ::execl(self, self, "--case", name.c_str(), "--alloc",
-                heap ? "heap" : "system", static_cast<char*>(nullptr));
+                heap ? "heap" : "system", static_cast<char *>(nullptr));
         ::_exit(127);
     }
     ::close(fds[1]);
@@ -367,9 +393,10 @@ std::optional<ChildResult> run_child(const char* self, const std::string& name,
     int status = 0;
     struct rusage usage{};
     ::wait4(pid, &status, 0, &usage);
-    double ns = 0;
+    ChildResult result{};
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0 ||
-        std::sscanf(out.c_str(), "RESULT %lf", &ns) != 1) {
+        std::sscanf(out.c_str(), "RESULT %lf %lf %lf", &result.ns,
+                    &result.instr_per_op, &result.heap_bytes) != 3) {
         return std::nullopt;
     }
 #if defined(__APPLE__)
@@ -377,15 +404,106 @@ std::optional<ChildResult> run_child(const char* self, const std::string& name,
 #else
     double rss_bytes = static_cast<double>(usage.ru_maxrss) * 1024.0;
 #endif
-    return ChildResult{ns, rss_bytes / static_cast<double>(MIB)};
+    result.rss_mib = rss_bytes / static_cast<double>(MIB);
+    return result;
 }
 
-int drive(const char* self, int rounds) {
+// What --record stores and --check compares, for the page heap side of a case.
+struct Recorded {
+    std::string name;
+    double instr = 0.0;
+    double allocs = 1.0;
+    double heap = 0.0;
+    double instr_spread_pct = 0.0;
+};
+
+constexpr double CHECK_INSTR_PCT = 2.0;
+constexpr double CHECK_ALLOC_SLACK = 0.001;
+constexpr double CHECK_HEAP_PCT = 5.0;
+
+bool write_record(const char *path, const std::vector<Recorded> &rows) {
+    std::FILE *f = std::fopen(path, "w");
+    if (f == nullptr) return false;
+    std::fprintf(f, "{\n");
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        std::fprintf(
+            f,
+            "  \"%s\": {\"instr_per_op\": %.3f, \"allocs_per_op\": "
+            "%.4f, \"peak_heap_bytes\": %.0f, \"instr_spread_pct\": %.3f}%s\n",
+            rows[i].name.c_str(), rows[i].instr, rows[i].allocs, rows[i].heap,
+            rows[i].instr_spread_pct, i + 1 < rows.size() ? "," : "");
+    }
+    std::fprintf(f, "}\n");
+    return std::fclose(f) == 0;
+}
+
+bool read_record(const char *path, std::vector<Recorded> &rows) {
+    std::FILE *f = std::fopen(path, "r");
+    if (f == nullptr) return false;
+    char line[512];
+    while (std::fgets(line, sizeof(line), f) != nullptr) {
+        char name[128];
+        Recorded r;
+        if (std::sscanf(line,
+                        " \"%127[^\"]\": {\"instr_per_op\": %lf, "
+                        "\"allocs_per_op\": %lf, \"peak_heap_bytes\": %lf, "
+                        "\"instr_spread_pct\": %lf",
+                        name, &r.instr, &r.allocs, &r.heap,
+                        &r.instr_spread_pct) == 5) {
+            r.name = name;
+            rows.push_back(r);
+        }
+    }
+    std::fclose(f);
+    return !rows.empty();
+}
+
+double pct_change(double now, double base) {
+    return base > 0.0 ? (now / base - 1.0) * 100.0 : 0.0;
+}
+
+int check_record(const char *path, const std::vector<Recorded> &now) {
+    std::vector<Recorded> base;
+    if (!read_record(path, base)) {
+        std::fprintf(stderr, "cannot read record: %s\n", path);
+        return 1;
+    }
+    int worse = 0;
+    for (const Recorded &n : now) {
+        for (const Recorded &b : base) {
+            if (b.name != n.name) continue;
+            bool have_instr = n.instr > 0.0 && b.instr > 0.0;
+            double instr_change = pct_change(n.instr, b.instr);
+            double heap_change = pct_change(n.heap, b.heap);
+            double allowed = std::max(CHECK_INSTR_PCT, b.instr_spread_pct);
+            bool bad_instr = have_instr && instr_change > allowed;
+            bool bad_allocs = n.allocs > b.allocs + CHECK_ALLOC_SLACK;
+            bool bad_heap = heap_change > CHECK_HEAP_PCT;
+            std::fprintf(
+                stderr,
+                "check %-28s instr %9.1f vs %9.1f (%+.2f%%, allowed %.1f%%)%s "
+                "allocs "
+                "%.3f vs "
+                "%.3f%s heap %.0f vs %.0f (%+.1f%%)%s\n",
+                n.name.c_str(), n.instr, b.instr, instr_change, allowed,
+                have_instr ? (bad_instr ? " WORSE" : " ok") : " unavailable",
+                n.allocs, b.allocs, bad_allocs ? " WORSE" : " ok", n.heap,
+                b.heap, heap_change, bad_heap ? " WORSE" : " ok");
+            if (bad_instr || bad_allocs || bad_heap) ++worse;
+        }
+    }
+    return worse == 0 ? 0 : 1;
+}
+
+int drive(const char *self, int rounds, const char *record, const char *check) {
     std::vector<Case> cases = make_cases();
     std::vector<std::vector<double>> ns[2];
     std::vector<std::vector<double>> rss[2];
-    for (auto& side : ns) side.resize(cases.size());
-    for (auto& side : rss) side.resize(cases.size());
+    std::vector<std::vector<double>> instr[2];
+    std::vector<double> heap_bytes(cases.size(), 0.0);
+    for (auto &side : ns) side.resize(cases.size());
+    for (auto &side : rss) side.resize(cases.size());
+    for (auto &side : instr) side.resize(cases.size());
     std::printf("heap_bench rounds=%d order=system,heap per case, hw=%u\n",
                 rounds, std::thread::hardware_concurrency());
     for (int round = 0; round < rounds; ++round) {
@@ -400,36 +518,58 @@ int drive(const char* self, int rounds) {
                 }
                 ns[side][c].push_back(result->ns);
                 rss[side][c].push_back(result->rss_mib);
+                instr[side][c].push_back(result->instr_per_op);
+                if (side == 1) {
+                    heap_bytes[c] = std::max(heap_bytes[c], result->heap_bytes);
+                }
                 std::printf(
-                    "raw round=%d case=\"%s\" alloc=%s ns=%.3f rss_mib=%.1f\n",
+                    "raw round=%d case=\"%s\" alloc=%s ns=%.3f "
+                    "instr_per_op=%.1f rss_mib=%.1f\n",
                     round, cases[c].name.c_str(), side == 1 ? "heap" : "system",
-                    result->ns, result->rss_mib);
+                    result->ns, result->instr_per_op, result->rss_mib);
                 std::fflush(stdout);
             }
         }
     }
     std::printf(
-        "\n| case | system median ns | heap median ns | ratio | peak RSS "
-        "system MiB | peak RSS heap MiB |\n|---|---|---|---|---|---|\n");
+        "\n| case | system median ns | heap median ns | ratio | system "
+        "instr/op "
+        "| heap instr/op | peak RSS system MiB | peak RSS heap MiB | heap "
+        "bytes |\n|---|---|---|---|---|---|---|---|---|\n");
+    std::vector<Recorded> rows;
     for (std::size_t c = 0; c < cases.size(); ++c) {
         double sys = median(ns[0][c]);
         double heap = median(ns[1][c]);
-        std::printf("| %s | %.1f | %.1f | %.2f | %.1f | %.1f |\n",
-                    cases[c].name.c_str(), sys, heap, heap / sys,
-                    median(rss[0][c]), median(rss[1][c]));
+        std::printf(
+            "| %s | %.1f | %.1f | %.2f | %.1f | %.1f | %.1f | %.1f | "
+            "%.0f |\n",
+            cases[c].name.c_str(), sys, heap, heap / sys, median(instr[0][c]),
+            median(instr[1][c]), median(rss[0][c]), median(rss[1][c]),
+            heap_bytes[c]);
+        auto [low, high] =
+            std::minmax_element(instr[1][c].begin(), instr[1][c].end());
+        double mid = median(instr[1][c]);
+        rows.push_back({cases[c].name, mid, 1.0, heap_bytes[c],
+                        mid > 0.0 ? (*high - *low) / mid * 100.0 : 0.0});
     }
-    return 0;
+    int status = 0;
+    if (record != nullptr && !write_record(record, rows)) {
+        std::fprintf(stderr, "cannot write record: %s\n", record);
+        status = 1;
+    }
+    if (check != nullptr && check_record(check, rows) != 0) status = 1;
+    return status;
 }
 
 int smoke() {
     std::vector<Case> cases = make_cases();
     int failures = 0;
-    for (const Case& c : cases) {
+    for (const Case &c : cases) {
         for (bool heap : {false, true}) {
             std::size_t live_before = mem::page_stats().live;
-            double ns = c.run(heap, SMOKE_SCALE);
+            Outcome outcome = c.run(heap, SMOKE_SCALE);
             std::size_t live_after = mem::page_stats().live;
-            bool ran = ns > 0.0;
+            bool ran = outcome.ns_per_op > 0.0;
             bool freed = !heap || live_after == live_before;
             std::printf("smoke %-28s %-6s %s\n", c.name.c_str(),
                         heap ? "heap" : "system",
@@ -440,17 +580,22 @@ int smoke() {
     return failures == 0 ? 0 : 1;
 }
 
-int run_one(const std::string& name, const std::string& alloc) {
+int run_one(const std::string &name, const std::string &alloc) {
     bool heap = alloc == "heap";
-    for (const Case& c : make_cases()) {
+    for (const Case &c : make_cases()) {
         if (c.name != name) continue;
         std::size_t live_before = mem::page_stats().live;
-        double ns = c.run(heap, FULL_SCALE);
+        std::uint64_t instr_before = dftu::bench::instructions_retired();
+        Outcome outcome = c.run(heap, FULL_SCALE);
+        std::uint64_t instr_after = dftu::bench::instructions_retired();
         if (heap && mem::page_stats().live != live_before) {
             std::fprintf(stderr, "live bytes did not return to start\n");
             return 1;
         }
-        std::printf("RESULT %.3f\n", ns);
+        std::printf(
+            "RESULT %.3f %.3f %zu\n", outcome.ns_per_op,
+            static_cast<double>(instr_after - instr_before) / outcome.ops,
+            heap ? mem::page_stats().reserved : std::size_t{0});
         return 0;
     }
     std::fprintf(stderr, "unknown case: %s\n", name.c_str());
@@ -459,7 +604,8 @@ int run_one(const std::string& name, const std::string& alloc) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
+    dftu::bench::init_counters();
     std::string_view first = argc > 1 ? argv[1] : "";
     if (first == "--smoke" && argc == 2) return smoke();
     if (first == "--case" && argc == 5 &&
@@ -467,13 +613,24 @@ int main(int argc, char** argv) {
         return run_one(argv[2], argv[4]);
     }
     int rounds = DEFAULT_ROUNDS;
-    if (first == "--rounds" && argc == 3) {
-        rounds = std::atoi(argv[2]);
-    } else if (argc != 1) {
-        std::fprintf(stderr,
-                     "usage: heap_bench [--smoke | --rounds N | --case NAME "
-                     "--alloc system|heap]\n");
-        return 2;
+    const char *record = nullptr;
+    const char *check = nullptr;
+    for (int i = 1; i < argc; ++i) {
+        std::string_view arg = argv[i];
+        bool has_value = i + 1 < argc;
+        if (arg == "--rounds" && has_value) {
+            rounds = std::atoi(argv[++i]);
+        } else if (arg == "--record" && has_value) {
+            record = argv[++i];
+        } else if (arg == "--check" && has_value) {
+            check = argv[++i];
+        } else {
+            std::fprintf(stderr,
+                         "usage: heap_bench [--smoke | [--rounds N] [--record "
+                         "FILE] [--check FILE] | --case NAME --alloc "
+                         "system|heap]\n");
+            return 2;
+        }
     }
-    return rounds > 0 ? drive(argv[0], rounds) : 2;
+    return rounds > 0 ? drive(argv[0], rounds, record, check) : 2;
 }

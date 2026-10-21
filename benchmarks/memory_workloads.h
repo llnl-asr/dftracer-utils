@@ -23,7 +23,8 @@
 /**
  * Workloads that the memory benches share: a synthetic frame source for
  * group_by, sort and join plans, and a generated genesis run directory.
- * Inline only. The including .cpp decides about DFTU_MEMORY_PROBE_DEFINE_NEW.
+ * Inline only. The including .cpp decides about
+ * DFTRACER_UTILS_MEMORY_PROBE_DEFINE_NEW.
  */
 namespace dftu::memory_workloads {
 

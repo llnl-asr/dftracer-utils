@@ -24,6 +24,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   On the same set, `dftracer_event_count` takes 37 s instead of 101 s and `dftracer_info` takes 31 s instead of 91 s.
 - Compress the upper RocksDB levels with zstd level 1 and no dictionary, and keep level 9 with a dictionary for the bottom level only.
 - Let only one idle executor worker poll on the short timer, so a quiet pool does not wake all of its workers.
+- Read the trace files in all subfolders of `-d` in `dftracer_index`, `dftracer_event_count`, `dftracer_info`, `dftracer_stats`, `dftracer_split`, `dftracer_comparator` and `dftracer_run`, as `dftracer_view` and `dftracer_validate` already did.
+  Folders that hold index data or split output are skipped.
+- Write the bounded multi-member copy of a single-member trace beside the trace's index, in `<index root>.split/`, instead of in a `split/` folder next to the trace.
+  With `--index-dir`, the tools no longer write anything into the folders of their inputs.
 - Shrink the fixed cost of a string table from about 1.5 MB to about 120 KB, because its directories are now made as strings arrive.
   An index build makes one table per file, so a set of thousands of small files held several GB in empty tables.
 - Rename the environment variables, CMake options and macros that began with `DFTRACER_` to begin with `DFTRACER_UTILS_`, so they do not clash with DFTracer.
@@ -181,6 +185,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Removed
 
+- Remove the `-r` and `--recursive` options of `dftracer_replay`, since it now reads every subfolder of a directory input.
+  Drop them from scripts that call it.
 - Remove the `--index-dir` and `--force` options of `dftracer_split`, since it builds no index.
   Drop them from scripts that call it.
   `--checkpoint-size` stays and sets the gzip member size.

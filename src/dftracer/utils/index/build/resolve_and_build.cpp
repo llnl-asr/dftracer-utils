@@ -381,14 +381,15 @@ coro::CoroTask<void> ensure_index_fresh(CoroScope* scope, std::string directory,
 }
 
 coro::CoroTask<MemberNormalizeResult> normalize_members_for_ingest(
-    std::vector<std::string> files, std::uint64_t member_size) {
+    std::vector<std::string> files, std::string index_dir,
+    std::uint64_t member_size) {
     namespace gzc = utilities::fileio::compress;
     MemberNormalizeResult result;
     result.files.reserve(files.size());
     for (auto& f : files) {
-        const std::string parent = fs::path(f).parent_path().string();
+        // Beside the file's index, never beside the input.
         const std::string split_dir =
-            (parent.empty() ? std::string(".") : parent) + "/split";
+            trace::internal::determine_index_path(f, index_dir) + ".split";
         bool did = false;
         std::string nf = co_await gzc::rechunk_to_dir_if_needed(
             f, split_dir, member_size, did);

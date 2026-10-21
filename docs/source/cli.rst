@@ -136,7 +136,7 @@ dftracer_info
 **Options:**
 
 - ``--files <files...>`` - Compressed files to inspect (GZIP, TAR.GZ)
-- ``-d, --directory <path>`` - Directory containing files to inspect
+- ``-d, --directory <path>`` - Directory containing files to inspect, read with all of its subfolders
 - ``--query <type>`` - Query type: ``summary`` (aggregate all files, default) or ``detailed`` (per-file output including detailed statistics)
 - ``-f, --force-rebuild`` - Force rebuild index files
 - ``--checkpoint-size <bytes>`` - Checkpoint size for indexing in bytes (default: 33554432 B / 32 MB)
@@ -173,7 +173,7 @@ dftracer_split
 **Options:**
 
 - ``-n, --app-name <name>`` - Application name for output files (default: app)
-- ``-d, --directory <path>`` - Input directory containing gzip trace files (``.pfw.gz``, ``.jsonl.gz`` or ``.ndjson.gz``) (default: .)
+- ``-d, --directory <path>`` - Input directory containing gzip trace files (``.pfw.gz``, ``.jsonl.gz`` or ``.ndjson.gz``), read with all of its subfolders (default: .)
 - ``-o, --output <dir>`` - Output directory for split files (default: ./split)
 - ``-s, --chunk-size <MB>`` - Output file size in MB, approximate **compressed** on-disk size (default: 4)
 - ``-c, --compress`` - Compress output files with gzip (a value-less flag;
@@ -231,7 +231,7 @@ dftracer_event_count
 
 **Options:**
 
-- ``-d, --directory <path>`` - Directory containing .pfw.gz files (default: .)
+- ``-d, --directory <path>`` - Directory containing .pfw.gz files, read with all of its subfolders (default: .)
 - ``-f, --force`` - Force index recreation
 - ``--checkpoint-size <bytes>`` - Checkpoint size for indexing in bytes (default: 33554432 B / 32 MB)
 - ``--executor-threads <count>`` - Number of worker threads for parallel processing (default: number of CPU cores)
@@ -381,7 +381,7 @@ dftracer_stats
 
 **Options:**
 
-- ``-d, --directory <path>`` - Directory containing trace files (``.pfw``, ``.jsonl`` or ``.ndjson``, plain or gzip) (default: .)
+- ``-d, --directory <path>`` - Directory containing trace files (``.pfw``, ``.jsonl`` or ``.ndjson``, plain or gzip), read with all of its subfolders (default: .)
 - ``--files <files...>`` - Explicit list of trace files
 - ``--index-dir <path>`` - Directory to store index files (default: system temp directory)
 - ``--report <type>`` - Report type: summary, categories, names, pid_tids, time_range, duration, top-names, top-categories, detailed (default: summary)
@@ -521,7 +521,7 @@ dftracer_index
 
 **Options:**
 
-- ``-d, --directory <path>`` - Input directory containing trace files (``.pfw``, ``.jsonl`` or ``.ndjson``, plain or gzip) (default: .)
+- ``-d, --directory <path>`` - Input directory containing trace files (``.pfw``, ``.jsonl`` or ``.ndjson``, plain or gzip), read with all of its subfolders (default: .)
 - ``--dimensions <dims>`` - Comma-separated args fields to index by name, nested ones included (e.g., level,mode,io.size)
 - ``--schema <id>`` - Record schema of every trace: a registered id, such as ``dftracer`` or ``generic`` (default: detected per file from its first lines)
 - ``--memory-budget <bytes>`` - Bytes the build may hold at once; past it large files are indexed fewer at a time and spill to disk (default: 0 = about a third of available memory; accepts units such as 512MB)
@@ -566,7 +566,7 @@ plugins run, unless ``--no-auto-index`` is given.
 
 **Options:**
 
-- ``-d, --directory <path>`` - Directory containing trace files
+- ``-d, --directory <path>`` - Directory containing trace files, read with all of its subfolders
 - ``--files <files...>`` - Trace files (.pfw.gz)
 - ``--index-dir <path>`` - Directory where ``.dftindex`` stores are created
 - ``--checkpoint-size <bytes>`` - Checkpoint size for gzip indexing in bytes (default: 33554432 B / 32 MB)
@@ -716,12 +716,11 @@ dftracer_replay
 
 **Options:**
 
-- ``inputs`` - Trace files (.pfw.gz) or directories containing trace files [required]
+- ``inputs`` - Trace files (.pfw.gz) or directories, read with all of their subfolders [required]
 - ``--no-timing`` - Ignore original timing and execute as fast as possible
 - ``--dry-run`` - Parse and analyze traces without executing operations
 - ``--dftracer-mode`` - Use DFTracer sleep-based replay (sleep for operation duration instead of doing actual I/O)
 - ``--no-sleep`` - When used with --dftracer-mode, disable sleep calls for maximum speed
-- ``-r, --recursive`` - Recursively search directories for trace files
 - ``--use-call-tree`` - Build and use call tree structure for hierarchical replay
 - ``--hierarchical-replay`` - Replay operations respecting parent-child call hierarchy (requires --use-call-tree)
 - ``--respect-call-hierarchy`` - Replay child nodes immediately after parent (requires --use-call-tree and --hierarchical-replay)

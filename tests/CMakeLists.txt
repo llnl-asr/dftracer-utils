@@ -475,6 +475,7 @@ set(TEST_BINARY_SOURCES
     binaries/test_dftracer_replay.cpp
     binaries/test_dftracer_comparator.cpp
     binaries/test_dftracer_run.cpp
+    binaries/test_nested_inputs.cpp
     )
 
 if(DFTRACER_UTILS_ENABLE_MPI)
@@ -564,6 +565,9 @@ foreach(test_file ${TEST_BINARY_SOURCES})
   elseif(bin_exec STREQUAL "binaries/test_dftracer_view")
     set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
       "DFTRACER_UTILS_VIEW_PATH=$<TARGET_FILE:dftracer_view>")
+  elseif(bin_exec STREQUAL "binaries/test_nested_inputs")
+    set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+      "DFTRACER_UTILS_INDEX_PATH=$<TARGET_FILE:dftracer_index>;DFTRACER_UTILS_EVENT_COUNT_PATH=$<TARGET_FILE:dftracer_event_count>;DFTRACER_UTILS_INFO_PATH=$<TARGET_FILE:dftracer_info>;DFTRACER_UTILS_STATS_PATH=$<TARGET_FILE:dftracer_stats>;DFTRACER_UTILS_SPLIT_PATH=$<TARGET_FILE:dftracer_split>;DFTRACER_UTILS_COMPARATOR_PATH=$<TARGET_FILE:dftracer_comparator>;DFTRACER_UTILS_REPLAY_PATH=$<TARGET_FILE:dftracer_replay>")
   elseif(bin_exec STREQUAL "binaries/test_dftracer_replay")
     set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
       "DFTRACER_UTILS_REPLAY_PATH=$<TARGET_FILE:dftracer_replay>;ASAN_OPTIONS=detect_leaks=0;LSAN_OPTIONS=detect_leaks=0")

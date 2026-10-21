@@ -73,8 +73,9 @@ coro::CoroTask<void> ensure_index_fresh(CoroScope* scope, std::string directory,
                                         std::string file, std::string index_dir,
                                         bool force_rebuild = false);
 
-/// Rewrite any single/oversized-member input to bounded multi-member gzip in a
-/// sibling `split/` dir (non-destructive; the original is untouched), so index
+/// Rewrite any single/oversized-member input to bounded multi-member gzip in
+/// `<index root>.split/` beside the file's index (non-destructive; the
+/// original is untouched and nothing is written beside it), so index
 /// and reader never hold a giant member. Returns the file list with those
 /// inputs replaced by their split copies, plus the (original, split) pairs for
 /// a warning. Call before indexing and read from the returned files so both
@@ -84,7 +85,8 @@ struct MemberNormalizeResult {
     std::vector<std::pair<std::string, std::string>> split;
 };
 coro::CoroTask<MemberNormalizeResult> normalize_members_for_ingest(
-    std::vector<std::string> files, std::uint64_t member_size = 0);
+    std::vector<std::string> files, std::string index_dir,
+    std::uint64_t member_size = 0);
 
 }  // namespace dftracer::utils::index::build
 

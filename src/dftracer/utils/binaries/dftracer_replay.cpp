@@ -3,7 +3,7 @@
 // DAG:
 //   scan -> execute
 //
-// scan    : enumerate inputs (.pfw / .pfw.gz, recursive optional)
+// scan    : enumerate inputs (.pfw / .pfw.gz, directories recursively)
 // execute : either ReplayEngine::run_pipelined (producer+consumer with
 //           Channel<Trace> so read/parse latency is hidden behind the
 //           consumer's apply_timing+execute) or, when --use-call-tree is
@@ -51,7 +51,6 @@ class ReplayArgParse : public cli::ArgParse {
     bool dry_run = false;
     bool dftracer_mode = false;
     bool no_sleep = false;
-    bool recursive = false;
     bool use_call_tree = false;
     bool hierarchical_replay = false;
     bool respect_call_hierarchy = false;
@@ -103,10 +102,6 @@ class ReplayArgParse : public cli::ArgParse {
                 "When used with --dftracer-mode, disable sleep calls for "
                 "maximum speed")
             .flag();
-        p.add_argument("-r", "--recursive")
-            .help("Recursively search directories for trace files")
-            .flag();
-
         p.add_argument("--use-call-tree")
             .help("Build and use call tree structure for hierarchical replay")
             .flag();
@@ -199,7 +194,6 @@ class ReplayArgParse : public cli::ArgParse {
         dry_run = p.get<bool>("--dry-run");
         dftracer_mode = p.get<bool>("--dftracer-mode");
         no_sleep = p.get<bool>("--no-sleep");
-        recursive = p.get<bool>("--recursive");
         use_call_tree = p.get<bool>("--use-call-tree");
         hierarchical_replay = p.get<bool>("--hierarchical-replay");
         respect_call_hierarchy = p.get<bool>("--respect-call-hierarchy");
@@ -294,8 +288,7 @@ coro::CoroTask<void> task_scan(RunCtx* ctx, CoroScope& scope) {
     const auto t0 = std::chrono::steady_clock::now();
 
     ctx->trace_files = co_await cli::collect_input_trace_files(
-        scope, ctx->cli->inputs, ctx->cli->recursive,
-        [](const std::string& in) {
+        scope, ctx->cli->inputs, /*recursive=*/true, [](const std::string& in) {
             DFTRACER_UTILS_LOG_ERROR("Input not found or not accessible: %s",
                                      in.c_str());
         });

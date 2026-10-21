@@ -28,6 +28,7 @@ Command line
    dftracer_replay ./traces --dry-run
 
 The inputs are one or more ``.pfw`` or ``.pfw.gz`` files or directories.
+A directory is read with all of its subfolders.
 
 Selected flags
 ~~~~~~~~~~~~~~
@@ -42,9 +43,6 @@ Selected flags
    * - ``inputs``
      - (required)
      - Trace files or directories.
-   * - ``-r``, ``--recursive``
-     - off
-     - Recurse into directories.
    * - ``--no-timing``
      - off
      - Ignore original timing; run as fast as possible.

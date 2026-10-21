@@ -12,6 +12,7 @@
 #include <dftracer/utils/trace/chunk_verifier_utility.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_rechunker.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
+#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -252,12 +253,22 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
     DFTRACER_UTILS_LOG_INFO("%s", "Discovering input files...");
 
     std::vector<std::string> input_files;
-    for (const auto& entry : fs::directory_iterator(log_dir)) {
-        if (entry.is_regular_file()) {
-            std::string path = entry.path().string();
-            if (utilities::filesystem::is_trace_file(path)) {
-                input_files.push_back(path);
-            }
+    {
+        utilities::filesystem::PatternDirectoryScannerUtility scanner;
+        auto matched = co_await scanner(
+            utilities::filesystem::PatternDirectoryScannerUtilityInput{
+                log_dir, utilities::filesystem::trace_file_patterns(), true});
+        // Never read back this run's own output.
+        std::error_code ec;
+        const fs::path out_root = fs::weakly_canonical(output_dir, ec);
+        for (const auto& entry : matched) {
+            std::string path = entry.path.string();
+            if (!utilities::filesystem::is_trace_file(path)) continue;
+            const fs::path p = fs::weakly_canonical(entry.path, ec);
+            const auto rel = p.lexically_relative(out_root);
+            if (!out_root.empty() && !rel.empty() && *rel.begin() != "..")
+                continue;
+            input_files.push_back(std::move(path));
         }
     }
 

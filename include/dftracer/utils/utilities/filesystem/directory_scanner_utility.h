@@ -19,8 +19,7 @@ namespace dftracer::utils::utilities::filesystem {
 /// source files (double-counting events). Two kinds:
 /// - Index-artifact dirs (`.dftindex`, `.dftindex-cache`, `.dftindex_staging`
 ///   and older `.dftindex-views`): index data, rollups and materialized views.
-/// - `split/`: rechunked/split output written as a sibling by
-///   `normalize_members_for_ingest` and by the `dftracer_split` CLI. A
+/// - `split/`: the default output of the `dftracer_split` CLI. A
 ///   recursive scan re-run after a split would otherwise pick up both the
 ///   original trace and its split copy.
 /// - `schemas/`: record schema specs (`*.json`, `*.yaml`) beside an index.

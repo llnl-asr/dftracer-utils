@@ -322,7 +322,7 @@ coro::CoroTask<ResolverResult> Resolver::operator()(
     if (!input.directory.empty()) {
         utilities::filesystem::PatternDirectoryScannerUtilityInput scan_input{
             input.directory, utilities::filesystem::trace_file_patterns(),
-            false};
+            true};
         std::vector<utilities::filesystem::FileEntry> matched;
         matched = co_await scanner_(ctx, scan_input);
         result.all_files.reserve(matched.size());

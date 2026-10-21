@@ -17,13 +17,21 @@
 
 namespace {
 
+// Inputs live in their own folder: split reads every subfolder of -d, so an
+// output folder inside it would be read back as input by the next run.
+std::string input_dir(dftu_utils_test::TestEnvironment& env) {
+    const std::string dir = env.get_dir() + "/in";
+    fs::create_directories(dir);
+    return dir;
+}
+
 std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env, int num_events,
                           int id) {
     auto trace_gz = env.create_dft_test_gzip_file(num_events);
     if (trace_gz.empty()) return "";
 
     std::string pfw_path =
-        env.get_dir() + "/trace_" + std::to_string(id) + ".pfw.gz";
+        input_dir(env) + "/trace_" + std::to_string(id) + ".pfw.gz";
     fs::rename(trace_gz, pfw_path);
     return pfw_path;
 }
@@ -142,7 +150,7 @@ TEST_SUITE("DFTracerSplit") {
         REQUIRE(!f.empty());
 
         std::string out_dir = env.get_dir() + "/split_out";
-        int rc = run_split(binary, {"-d", env.get_dir(), "-o", out_dir,
+        int rc = run_split(binary, {"-d", input_dir(env), "-o", out_dir,
                                     "--disable-watchdog"});
         CHECK(rc == 0);
         REQUIRE(fs::exists(out_dir));
@@ -167,7 +175,7 @@ TEST_SUITE("DFTracerSplit") {
         // members. checkpoint-size is the gzip member size.
         std::string mm = env.get_dir() + "/split_mm";
         int rc = run_split(binary,
-                           {"-d", env.get_dir(), "-o", mm, "--checkpoint-size",
+                           {"-d", input_dir(env), "-o", mm, "--checkpoint-size",
                             "1048576", "--disable-watchdog"});
         CHECK(rc == 0);
         REQUIRE(fs::exists(mm));
@@ -176,7 +184,7 @@ TEST_SUITE("DFTracerSplit") {
         // A checkpoint larger than the data -> one member per output file.
         std::string sm = env.get_dir() + "/split_sm";
         rc = run_split(binary,
-                       {"-d", env.get_dir(), "-o", sm, "--checkpoint-size",
+                       {"-d", input_dir(env), "-o", sm, "--checkpoint-size",
                         "1073741824", "--disable-watchdog"});
         CHECK(rc == 0);
         REQUIRE(fs::exists(sm));
@@ -196,7 +204,7 @@ TEST_SUITE("DFTracerSplit") {
 
         std::string one = env.get_dir() + "/split_one";
         int rc = run_split(
-            binary, {"-d", env.get_dir(), "-o", one, "--disable-watchdog"});
+            binary, {"-d", input_dir(env), "-o", one, "--disable-watchdog"});
         CHECK(rc == 0);
         REQUIRE(fs::exists(one));
 
@@ -204,7 +212,7 @@ TEST_SUITE("DFTracerSplit") {
         // past that, so 256 KB members give several chunk files.
         std::string many = env.get_dir() + "/split_many";
         rc = run_split(binary,
-                       {"-d", env.get_dir(), "-o", many, "-s", "64KB",
+                       {"-d", input_dir(env), "-o", many, "-s", "64KB",
                         "--checkpoint-size", "262144", "--disable-watchdog"});
         CHECK(rc == 0);
         REQUIRE(fs::exists(many));
@@ -227,14 +235,14 @@ TEST_SUITE("DFTracerSplit") {
         }
 
         std::string open_dir = env.get_dir() + "/split_open";
-        int rc = run_split(binary, {"-d", env.get_dir(), "-o", open_dir,
+        int rc = run_split(binary, {"-d", input_dir(env), "-o", open_dir,
                                     "--verify", "--disable-watchdog"});
         CHECK(rc == 0);
         REQUIRE(fs::exists(open_dir));
 
         std::string tight_dir = env.get_dir() + "/split_tight";
         rc = run_split(
-            binary, {"-d", env.get_dir(), "-o", tight_dir, "--memory-budget",
+            binary, {"-d", input_dir(env), "-o", tight_dir, "--memory-budget",
                      "1MB", "--verify", "--disable-watchdog"});
         CHECK(rc == 0);
         REQUIRE(fs::exists(tight_dir));
@@ -258,7 +266,7 @@ TEST_SUITE("DFTracerSplit") {
         REQUIRE(!create_pfw_gz(env, 50, 1).empty());
 
         std::string out_dir = env.get_dir() + "/split_verify";
-        int rc = run_split(binary, {"-d", env.get_dir(), "-o", out_dir,
+        int rc = run_split(binary, {"-d", input_dir(env), "-o", out_dir,
                                     "--verify", "--disable-watchdog"});
         CHECK(rc == 0);
     }
@@ -278,7 +286,7 @@ TEST_SUITE("DFTracerSplit") {
         REQUIRE(!f.empty());
 
         std::string out_dir = env.get_dir() + "/split_lines";
-        int rc = run_split(binary, {"-d", env.get_dir(), "-o", out_dir,
+        int rc = run_split(binary, {"-d", input_dir(env), "-o", out_dir,
                                     "--disable-watchdog"});
         CHECK(rc == 0);
         REQUIRE(fs::exists(out_dir));
@@ -303,11 +311,36 @@ TEST_SUITE("DFTracerSplit") {
         REQUIRE(!create_pfw_gz(env, 30, 1).empty());
 
         std::string out_dir = env.get_dir() + "/split_multi";
-        int rc = run_split(binary, {"-d", env.get_dir(), "-o", out_dir,
+        int rc = run_split(binary, {"-d", input_dir(env), "-o", out_dir,
                                     "--disable-watchdog"});
         CHECK(rc == 0);
         REQUIRE(fs::exists(out_dir));
         CHECK(count_gz_files(out_dir) > 0);
+    }
+
+    TEST_CASE("a rerun does not read its own output back") {
+        auto binary = find_split_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_split binary not found, skipping.");
+            return;
+        }
+
+        dftu_utils_test::TestEnvironment env(100);
+        REQUIRE(env.is_valid());
+        REQUIRE(!create_pfw_gz(env, 2000, 0).empty());
+
+        const std::string out = input_dir(env) + "/chunks";
+        REQUIRE(run_split(binary, {"-d", input_dir(env), "-o", out,
+                                   "--disable-watchdog"}) == 0);
+        const auto first = count_gz_lines_in_dir(out);
+        REQUIRE(first > 0);
+        fs::remove_all(out);
+        REQUIRE(run_split(binary, {"-d", input_dir(env), "-o", out,
+                                   "--disable-watchdog"}) == 0);
+        fs::create_directories(out + "/stale");
+        REQUIRE(run_split(binary, {"-d", input_dir(env), "-o", out,
+                                   "--disable-watchdog"}) == 0);
+        CHECK(count_gz_lines_in_dir(out) == first);
     }
 
     TEST_CASE("empty directory returns non-zero") {
@@ -321,7 +354,7 @@ TEST_SUITE("DFTracerSplit") {
         REQUIRE(env.is_valid());
 
         std::string out_dir = env.get_dir() + "/split_empty";
-        int rc = run_split(binary, {"-d", env.get_dir(), "-o", out_dir,
+        int rc = run_split(binary, {"-d", input_dir(env), "-o", out_dir,
                                     "--disable-watchdog"});
         CHECK(rc != 0);
     }
@@ -337,12 +370,12 @@ TEST_SUITE("DFTracerSplit") {
         REQUIRE(env.is_valid());
 
         {
-            std::ofstream plain(env.get_dir() + "/plain.pfw");
+            std::ofstream plain(input_dir(env) + "/plain.pfw");
             plain << "{\"name\":\"read\",\"cat\":\"POSIX\",\"ph\":\"X\"}\n";
         }
 
         std::string out_dir = env.get_dir() + "/split_plain";
-        int rc = run_split(binary, {"-d", env.get_dir(), "-o", out_dir,
+        int rc = run_split(binary, {"-d", input_dir(env), "-o", out_dir,
                                     "--disable-watchdog"});
         CHECK(rc != 0);
         CHECK(count_gz_files(out_dir) == 0);

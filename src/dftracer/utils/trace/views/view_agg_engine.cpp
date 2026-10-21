@@ -1,10 +1,10 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
 #include <dftracer/utils/index/store/database.h>
@@ -982,8 +982,8 @@ class TransformSource final : public dataframe::Source {
         }
 
        private:
-        std::shared_ptr<dftracer::utils::StringIntern> intern_ =
-            std::make_shared<dftracer::utils::StringIntern>();
+        std::shared_ptr<dftracer::utils::dstd::StringIntern> intern_ =
+            std::make_shared<dftracer::utils::dstd::StringIntern>();
         std::vector<std::uint32_t> ids_;
         coro::AsyncGenerator<dataframe::DataFrame> batches_;
         std::vector<AggInputSpec::Transform> tfs_;
@@ -1005,7 +1005,7 @@ class TransformSource final : public dataframe::Source {
 
 dataframe::DataFrame build_agg_input_frame(
     const std::vector<FoldEvent>& events,
-    const dftracer::utils::StringIntern& intern, const AggInputSpec& spec,
+    const dftracer::utils::dstd::StringIntern& intern, const AggInputSpec& spec,
     const dftracer::utils::index::plan::GroupResolver* resolver) {
     dataframe::DataFrame f =
         events_to_frame(events, intern,

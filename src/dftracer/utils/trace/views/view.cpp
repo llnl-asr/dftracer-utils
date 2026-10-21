@@ -1,9 +1,9 @@
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/platform_compat.h>
-#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/dstd/string_arena.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/cache/mv_store.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_escape.h>
@@ -55,7 +55,8 @@ void ViewSession::attach_fold(
 }
 
 void ViewSession::attach_fold_factory(
-    std::function<std::unique_ptr<detail::Fold>(dftracer::utils::StringIntern&)>
+    std::function<
+        std::unique_ptr<detail::Fold>(dftracer::utils::dstd::StringIntern&)>
         make,
     std::function<void()> finalize) {
     detail::add_fold_factory(*state_, std::move(make), std::move(finalize));
@@ -211,7 +212,7 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
     // each worker interns its own strings, so build_row_frame resolves them per
     // worker.
     struct Slot {
-        dftracer::utils::StringIntern intern;
+        dftracer::utils::dstd::StringIntern intern;
         detail::FoldEventBuffer events;
     };
     auto slots = std::make_shared<std::vector<std::shared_ptr<Slot>>>();
@@ -282,7 +283,7 @@ void ViewSession::add_containment_branch(
     std::shared_ptr<dataframe::DataFrame> out_fg,
     std::shared_ptr<std::string> out_partial) {
     const auto& bp = *branch;
-    auto intern = std::make_shared<dftracer::utils::StringIntern>();
+    auto intern = std::make_shared<dftracer::utils::dstd::StringIntern>();
     auto spec =
         std::make_shared<detail::ContainmentSpec>(detail::make_containment_spec(
             *intern, partition, ts, dur, name, group,
@@ -600,9 +601,9 @@ coro::CoroTask<ExportStats> scan_batches(
         cap && limit ? std::min(cap, limit) : (cap ? cap : limit));
 }
 
-coro::CoroTask<ExportStats> scan_folds(scan::ScanPlan v,
-                                       std::span<detail::Fold* const> folds,
-                                       dftracer::utils::StringIntern& intern) {
+coro::CoroTask<ExportStats> scan_folds(
+    scan::ScanPlan v, std::span<detail::Fold* const> folds,
+    dftracer::utils::dstd::StringIntern& intern) {
     co_return co_await scan::run_folds(v, folds, intern);
 }
 
@@ -761,7 +762,7 @@ coro::CoroTask<ExportStats> View::for_each_batch(
 
 coro::CoroTask<ExportStats> View::run_folds(
     std::span<detail::Fold* const> folds,
-    dftracer::utils::StringIntern& intern) const {
+    dftracer::utils::dstd::StringIntern& intern) const {
     return scan_folds(absorbed("run_folds", Need::EventsHead), folds, intern);
 }
 

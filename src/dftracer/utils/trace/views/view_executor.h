@@ -14,7 +14,7 @@
 #include <memory>
 #include <span>
 
-namespace dftracer::utils {
+namespace dftracer::utils::dstd {
 class StringIntern;
 }
 
@@ -110,11 +110,10 @@ coro::CoroTask<std::string> run_flamegraph_partial(
 // their ids agree and per-worker slices merge. `dyn_prune` (optional) is
 // forwarded to fuse() so a cursor's narrow() can still prune units not yet
 // claimed.
-coro::CoroTask<ExportStats> run_folds(const ViewPlan& plan,
-                                      std::span<Fold* const> folds,
-                                      dftracer::utils::StringIntern& intern,
-                                      DynamicPrune* dyn_prune = nullptr,
-                                      coro::CoroSemaphore* gate = nullptr);
+coro::CoroTask<ExportStats> run_folds(
+    const ViewPlan& plan, std::span<Fold* const> folds,
+    dftracer::utils::dstd::StringIntern& intern,
+    DynamicPrune* dyn_prune = nullptr, coro::CoroSemaphore* gate = nullptr);
 
 // Build-only terminal: materialize the filtered-trace MV (row query) or the
 // rollup (aggregation) and return scan stats. A no-op when the MV already
@@ -254,7 +253,8 @@ void propose_base_prune(ViewSessionState& state, duql::Query q);
 // constructs it with the scan's intern, `finalize` runs after the merge.
 void add_fold_factory(
     ViewSessionState& state,
-    std::function<std::unique_ptr<Fold>(dftracer::utils::StringIntern&)> make,
+    std::function<std::unique_ptr<Fold>(dftracer::utils::dstd::StringIntern&)>
+        make,
     std::function<void()> finalize);
 coro::CoroTask<ExportStats> run_session(
     std::shared_ptr<ViewSessionState> state);

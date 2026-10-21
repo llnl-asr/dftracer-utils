@@ -8,9 +8,9 @@ namespace dftracer::utils::trace::views::detail {
 
 namespace {
 
-dataframe::DataFrame base_frame(EventRows events,
-                                const dftracer::utils::StringIntern& intern,
-                                const ColumnSpec& spec) {
+dataframe::DataFrame base_frame(
+    EventRows events, const dftracer::utils::dstd::StringIntern& intern,
+    const ColumnSpec& spec) {
     dataframe::DataFrame f = build_row_frame(events, intern, spec.select,
                                              spec.time_scale, spec.by_path);
     if (spec.json)
@@ -28,7 +28,7 @@ dataframe::DataFrame base_frame(EventRows events,
 }  // namespace
 
 dataframe::DataFrame events_to_frame(
-    EventRows events, const dftracer::utils::StringIntern& intern,
+    EventRows events, const dftracer::utils::dstd::StringIntern& intern,
     const ColumnSpec& spec) {
     dataframe::DataFrame f = base_frame(events, intern, spec);
     if (spec.emit_dyn)
@@ -41,7 +41,8 @@ dataframe::DataFrame events_to_frame(
 }
 
 dataframe::Morsel events_to_morsel(
-    EventRows events, std::shared_ptr<dftracer::utils::StringIntern> intern,
+    EventRows events,
+    std::shared_ptr<dftracer::utils::dstd::StringIntern> intern,
     const ColumnSpec& spec) {
     dataframe::DataFrame f = events_to_frame(events, *intern, spec);
 

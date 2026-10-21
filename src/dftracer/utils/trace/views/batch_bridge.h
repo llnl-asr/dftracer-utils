@@ -1,9 +1,9 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_BATCH_BRIDGE_H
 #define DFTRACER_UTILS_TRACE_VIEWS_BATCH_BRIDGE_H
 
-#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 
@@ -50,13 +50,14 @@ struct ColumnSpec {
 /// `spec.select`, then the auto-numeric dyn columns appended when
 /// `spec.emit_dyn`.
 dataframe::DataFrame events_to_frame(
-    EventRows events, const dftracer::utils::StringIntern& intern,
+    EventRows events, const dftracer::utils::dstd::StringIntern& intern,
     const ColumnSpec& spec);
 
 /// The same columns as a morsel, each named in Morsel::name_ids. `intern` is
 /// shared with the morsel, which keeps it alive.
 dataframe::Morsel events_to_morsel(
-    EventRows events, std::shared_ptr<dftracer::utils::StringIntern> intern,
+    EventRows events,
+    std::shared_ptr<dftracer::utils::dstd::StringIntern> intern,
     const ColumnSpec& spec);
 
 /// The records of `batch` that `keep` accepts, in scan order. `keep` is called

@@ -1,9 +1,9 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_ENGINE_AGG_FOLD_H
 #define DFTRACER_UTILS_TRACE_VIEWS_ENGINE_AGG_FOLD_H
 
-#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/trace/views/aggfold.h>
 #include <dftracer/utils/trace/views/batch_bridge.h>
@@ -32,7 +32,7 @@ namespace dftracer::utils::trace::views::detail {
 class EngineAggFold : public Fold {
    public:
     EngineAggFold(const ViewPlan& plan,
-                  const dftracer::utils::StringIntern& intern,
+                  const dftracer::utils::dstd::StringIntern& intern,
                   bool apply_query = false)
         : plan_(&plan),
           intern_(&intern),
@@ -116,7 +116,7 @@ class EngineAggFold : public Fold {
     }
 
     const ViewPlan* plan_;
-    const dftracer::utils::StringIntern* intern_;
+    const dftracer::utils::dstd::StringIntern* intern_;
     AggInputSpec spec_;
     dftracer::utils::dataframe::LoweredGroupAggs lowered_;
     RecordPhase phase_target_;

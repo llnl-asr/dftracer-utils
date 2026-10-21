@@ -9,10 +9,10 @@
 // engine aggregation path rather than a wrapper around it.
 
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/field_stat.h>
 #include <dftracer/utils/dataframe/sketch.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/schemas/dft/agg/reserved_args.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -51,10 +51,10 @@ using detail::AggSchema;
 using detail::GROUP_SEP;
 using detail::SET_SEP;
 using detail::ViewPlan;
-using dftracer::utils::StringIntern;
 using dftracer::utils::dataframe::FieldNum;
 using dftracer::utils::dataframe::FieldStat;
 using dftracer::utils::dataframe::FieldStatDomain;
+using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::trace::RecordPhase;
 using dftracer::utils::trace::views::AggOp;
 using dftracer::utils::trace::views::AggSpec;
@@ -734,9 +734,10 @@ inline bool plan_wants_names(const ViewPlan& plan) {
 // pid -> rank from a PR metadata event ({"name":"PR","pid":P,
 // "args":{"name":"rank","value":"N"}}); others are ignored.
 inline void harvest_pr_rank(
-    const detail::FoldEvent& ev, const dftracer::utils::StringIntern& intern,
+    const detail::FoldEvent& ev,
+    const dftracer::utils::dstd::StringIntern& intern,
     std::unordered_map<std::uint64_t, std::string>& ranks) {
-    if (ev.name_id == dftracer::utils::StringIntern::NO_ID ||
+    if (ev.name_id == dftracer::utils::dstd::StringIntern::NO_ID ||
         intern.resolve(ev.name_id) != "PR")
         return;
     std::string_view rank;

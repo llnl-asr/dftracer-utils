@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_RUNTIME_CORO_YIELD_H
 
 #include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/runtime/coro/pool_resume.h>
 
 #include <atomic>
 #include <chrono>
@@ -111,11 +112,11 @@ namespace detail {
 /// timeslice is exceeded, forces a yield before continuing.
 /// When the inner is NOT ready (coroutine will suspend anyway),
 /// passes through with zero overhead -- no clock read.
-/// After a suspension the coroutine enters its pool `pool_` again.
+/// After a suspension the coroutine enters its context again.
 template <typename Inner>
 struct YieldCheckAwaitable {
     Inner inner_;
-    memory::PoolTag pool_;
+    const RunContext* context_;
     bool yielding_ = false;
     bool suspended_ = false;
     /// The task was cancelled: it ends here, as cancelled, and the inner
@@ -171,7 +172,7 @@ struct YieldCheckAwaitable {
 
     auto await_resume() noexcept(noexcept(inner_.await_resume()))
         -> decltype(inner_.await_resume()) {
-        if (suspended_) memory::enter_pool(pool_);
+        if (suspended_) context_->enter();
         return inner_.await_resume();
     }
 };

@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_TRACE_ARGS_MAP_H
 #define DFTRACER_UTILS_TRACE_ARGS_MAP_H
 
-#include <dftracer/utils/common/string_intern.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 
 #include <cstdint>
@@ -165,8 +165,8 @@ class ArgsMap {
     Map data_;
     bool valid_ = false;
 
-    static dftracer::utils::StringIntern& key_intern() {
-        static dftracer::utils::StringIntern instance;
+    static dftracer::utils::dstd::StringIntern& key_intern() {
+        static dftracer::utils::dstd::StringIntern instance;
         return instance;
     }
 

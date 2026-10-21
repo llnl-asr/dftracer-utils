@@ -572,7 +572,7 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
         // in `artifacts->list` with bloom/dict - no separate per-file sink.
         batch_config->agg_fold_factory =
             [agg_config_ptr, agg_intern](
-                dftracer::utils::StringIntern &build_intern, int file_id)
+                dftracer::utils::dstd::StringIntern &build_intern, int file_id)
             -> std::unique_ptr<
                 dftracer::utils::index::schemas::dft::agg::AggregationFold> {
             return std::make_unique<
@@ -988,7 +988,8 @@ static PyMethodDef SstDistributionMethods[] = {
     {"enable_aggregation_deterministic_ids",
      DFTU_PYCFUNCTION(enable_aggregation_deterministic_ids_fn), METH_NOARGS,
      "enable_aggregation_deterministic_ids() -> None\n"
-     "Flip the global aggregation StringIntern into deterministic-id mode "
+     "Flip the global aggregation dstd::StringIntern into deterministic-id "
+     "mode "
      "so the same string maps to the same 32-bit id in every worker "
      "process. Call once at worker startup BEFORE any aggregation work."},
     {"move_artifacts", DFTU_PYCFUNCTION(move_artifacts_fn),

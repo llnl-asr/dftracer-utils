@@ -1,11 +1,11 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_LAZYFRAME_H
 #define DFTRACER_UTILS_DATAFRAME_LAZYFRAME_H
 
-#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/runtime/coro/async_generator.h>
 #include <dftracer/utils/runtime/coro/task.h>
 
@@ -38,7 +38,7 @@ struct MorselDyn {
     /// One interned id per column of Morsel::columns, resolved via `intern`;
     /// empty means positional alignment with the plan schema.
     std::vector<std::uint32_t> name_ids;
-    std::shared_ptr<const dftracer::utils::StringIntern> intern;
+    std::shared_ptr<const dftracer::utils::dstd::StringIntern> intern;
 };
 
 /// A chunk of columns flowing through the lazy pipeline. Carries no names - the

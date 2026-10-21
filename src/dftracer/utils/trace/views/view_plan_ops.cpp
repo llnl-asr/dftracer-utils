@@ -1,5 +1,5 @@
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/common/string_intern.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/cache/mv_store.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -585,7 +585,7 @@ void ensure_catalog(const ScanPlan& plan_) {
     only->views_root = plan_->views_root;
     only->memory_budget = plan_->memory_budget;
     only->cancelled = plan_->cancelled;
-    dftracer::utils::StringIntern intern;
+    dftracer::utils::dstd::StringIntern intern;
     default_runtime().run_blocking(
         "view_ensure_catalog", [&](CoroScope&) -> coro::CoroTask<void> {
             co_await detail::run_folds(*only, {}, intern, nullptr, nullptr);
@@ -1199,11 +1199,10 @@ dataframe::DataFrame merge_flamegraph_partials(
     return detail::merge_flamegraph_partials(partials);
 }
 
-coro::CoroTask<ExportStats> run_folds(ScanPlan plan_,
-                                      std::span<detail::Fold* const> folds,
-                                      dftracer::utils::StringIntern& intern,
-                                      detail::DynamicPrune* dyn_prune,
-                                      coro::CoroSemaphore* gate) {
+coro::CoroTask<ExportStats> run_folds(
+    ScanPlan plan_, std::span<detail::Fold* const> folds,
+    dftracer::utils::dstd::StringIntern& intern,
+    detail::DynamicPrune* dyn_prune, coro::CoroSemaphore* gate) {
     co_return co_await detail::run_folds(*plan_, folds, intern, dyn_prune,
                                          gate);
 }

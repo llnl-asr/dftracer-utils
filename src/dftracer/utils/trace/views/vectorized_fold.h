@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_VECTORIZED_FOLD_H
 #define DFTRACER_UTILS_TRACE_VIEWS_VECTORIZED_FOLD_H
 
-#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
@@ -34,7 +34,7 @@ class VectorizedFold : public Fold {
     /// `intern` is the scan's shared, caller-owned interner (build_row_frame
     /// resolves string ids through it); `select` projects columns (empty =
     /// every column); `time_scale` multiplies ts/dur.
-    VectorizedFold(const dftracer::utils::StringIntern& intern, Init init,
+    VectorizedFold(const dftracer::utils::dstd::StringIntern& intern, Init init,
                    OnBatch on_batch, Merge merge,
                    std::vector<std::string> select = {},
                    double time_scale = 1.0)
@@ -81,7 +81,7 @@ class VectorizedFold : public Fold {
     const State& result() const { return state_; }
 
    private:
-    const dftracer::utils::StringIntern* intern_;
+    const dftracer::utils::dstd::StringIntern* intern_;
     Init init_;
     OnBatch on_batch_;
     Merge merge_;

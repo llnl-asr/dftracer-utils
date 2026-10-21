@@ -51,8 +51,8 @@ coro::CoroTask<index::build::IndexBuildBatchResult> batch_index_and_aggregate(
     auto agg_config_ptr =
         std::make_shared<AggregationConfig>(std::move(agg_config));
     batch_config->agg_fold_factory =
-        [agg_config_ptr, intern](dftracer::utils::StringIntern& build_intern,
-                                 int file_id)
+        [agg_config_ptr, intern](
+            dftracer::utils::dstd::StringIntern& build_intern, int file_id)
         -> std::unique_ptr<index::schemas::dft::agg::AggregationFold> {
         return std::make_unique<index::schemas::dft::agg::AggregationFold>(
             build_intern, intern, *agg_config_ptr, file_id);

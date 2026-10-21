@@ -1,4 +1,4 @@
-#include <dftracer/utils/common/string_intern.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_logic.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_map.h>
@@ -65,7 +65,7 @@ run_comparison_aggregation(
     // the same string ids and merge key-for-key.
     auto intern_table = std::make_shared<
         dftracer::utils::index::schemas::dft::agg::AggInternTable>();
-    dftracer::utils::StringIntern& intern = intern_table->intern;
+    dftracer::utils::dstd::StringIntern& intern = intern_table->intern;
     const dftracer::utils::index::schemas::dft::agg::AggregationConfig& config =
         agg_config;
 

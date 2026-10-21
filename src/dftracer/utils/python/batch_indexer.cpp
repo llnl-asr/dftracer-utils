@@ -1,7 +1,7 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/filesystem.h>
-#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/dstd/hash/hash_combine.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>

@@ -62,7 +62,7 @@ bool RunLoop::run_one() {
         ready_.pop_front();
     }
     if (handle && !handle.done()) {
-        memory::Scope scope{memory::Manager::get().general()};
+        memory::Scope scope{memory::Manager::get().general(), nullptr};
         handle.resume();
     }
     // Released spawned frames (scope.spawn) route their destruction to the

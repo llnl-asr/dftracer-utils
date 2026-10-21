@@ -1344,7 +1344,7 @@ std::unique_ptr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
     // and released once the cursor hands a morsel off.
     auto channel = coro::make_channel<dftracer::utils::dataframe::Morsel>(0);
     auto budget = std::make_shared<coro::CoroSemaphore>(memory_budget);
-    auto intern = std::make_shared<dftracer::utils::StringIntern>();
+    auto intern = std::make_shared<dftracer::utils::dstd::StringIntern>();
     const double time_scale = v->time_scale;
     // Backing state for Cursor::narrow(): fuse() polls it per unit for as
     // long as this scan runs, so a narrow() call after the scan has already
@@ -1376,7 +1376,7 @@ std::unique_ptr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
            std::shared_ptr<coro::Channel<dftracer::utils::dataframe::Morsel>>
                ch,
            std::shared_ptr<coro::CoroSemaphore> sem,
-           std::shared_ptr<dftracer::utils::StringIntern> iv,
+           std::shared_ptr<dftracer::utils::dstd::StringIntern> iv,
            std::shared_ptr<detail::DynamicPrune> dp, bool emit_dyn,
            std::shared_ptr<coro::CoroSemaphore> gt) -> coro::CoroTask<void> {
         detail::StreamRowFold fold(ch, sem, iv, vv->select, ts,

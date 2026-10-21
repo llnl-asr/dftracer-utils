@@ -5,7 +5,7 @@
 // could do; what is under test is the machinery around it, not the shape.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/string_intern.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -31,7 +31,7 @@
 #include <vector>
 
 using dftracer::utils::Runtime;
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::NamedResultRegistry;
 using dftracer::utils::plugins::PluginFold;
 using dftracer::utils::plugins::RegisteredState;

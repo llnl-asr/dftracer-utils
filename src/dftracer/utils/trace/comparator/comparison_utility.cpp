@@ -31,7 +31,7 @@ double vec_mean(const std::vector<double>& v) {
 
 // Empty cat_filter merges every entry; otherwise only entries with that cat.
 CollapsedMetrics merge_collapsed(const CollapsedMap& cm,
-                                 const StringIntern& intern,
+                                 const dstd::StringIntern& intern,
                                  std::string_view cat_filter = "") {
     CollapsedMetrics total;
     std::vector<double> counts, dur_means, size_means, xfers, bws;
@@ -54,12 +54,13 @@ CollapsedMetrics merge_collapsed(const CollapsedMap& cm,
     return total;
 }
 
-CollapsedMetrics merge_all(const CollapsedMap& cm, const StringIntern& intern) {
+CollapsedMetrics merge_all(const CollapsedMap& cm,
+                           const dstd::StringIntern& intern) {
     return merge_collapsed(cm, intern);
 }
 
 CollapsedMetrics merge_by_cat(const CollapsedMap& cm,
-                              const StringIntern& intern,
+                              const dstd::StringIntern& intern,
                               std::string_view cat) {
     return merge_collapsed(cm, intern, cat);
 }
@@ -96,7 +97,7 @@ GroupComparison make_group(std::string_view label,
 static std::map<std::string_view, std::vector<GroupComparison>>
 build_per_cat_groups(const CollapsedMap& base_collapsed,
                      const CollapsedMap& var_collapsed,
-                     const StringIntern& intern,
+                     const dstd::StringIntern& intern,
                      const std::vector<std::string>& metrics,
                      const std::vector<double>& percentiles) {
     static const CollapsedMetrics EMPTY{};

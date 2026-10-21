@@ -3,7 +3,7 @@
 
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/field_ref.h>
-#include <dftracer/utils/common/string_intern.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/trace/event.h>
@@ -203,7 +203,7 @@ inline simdjson::dom::element resolve_json_path(simdjson::dom::element root,
 inline void append_scalar_arg(
     std::vector<std::pair<std::uint32_t, FoldEvent::ArgValue>>& into,
     std::vector<FoldEvent::SpecialValue>& specials, std::uint32_t key_id,
-    simdjson::dom::element v, dftracer::utils::StringIntern& intern,
+    simdjson::dom::element v, dftracer::utils::dstd::StringIntern& intern,
     bool top = false) {
     using T = simdjson::dom::element_type;
     using S = FoldEvent::Special;
@@ -256,7 +256,7 @@ inline void append_scalar_arg(
 /// dftracer args are flattened (`path.0`, `path.key`).
 void flatten_container(FoldEvent& ev, std::string path,
                        simdjson::dom::element v,
-                       dftracer::utils::StringIntern& intern);
+                       dftracer::utils::dstd::StringIntern& intern);
 
 /// Capture a field the POD does not natively carry (top-level type/ph/id, or a
 /// nested a.b/a[0]), JSON type preserved. A name that misses at the event root
@@ -265,7 +265,7 @@ void flatten_container(FoldEvent& ev, std::string path,
 /// schema field goes to `top_fields` so a same-named args key cannot shadow it;
 /// everything else to `args`. No-op when the path is absent.
 inline void capture_extra_field(FoldEvent& ev, simdjson::dom::element root,
-                                dftracer::utils::StringIntern& intern,
+                                dftracer::utils::dstd::StringIntern& intern,
                                 const std::string& name) {
     bool ok = false;
     simdjson::dom::element v = resolve_json_path(root, name, ok);
@@ -292,7 +292,7 @@ inline void capture_extra_field(FoldEvent& ev, simdjson::dom::element root,
 /// ev.schema_leaves by exact path for the index build's path catalog; the
 /// axis and structural keys (pid/tid/ts/dur/ph/id) are excluded.
 void capture_schema_leaves(FoldEvent& ev, simdjson::dom::element root,
-                           dftracer::utils::StringIntern& intern,
+                           dftracer::utils::dstd::StringIntern& intern,
                            bool skip_args = false);
 
 /// What one decoding worker learns from its records, valid for one intern and
@@ -331,7 +331,7 @@ struct DecodeHints {
 /// `schema_leaves` and its value is not decoded.
 void decode_record_into(
     FoldEvent& ev, simdjson::dom::element root,
-    dftracer::utils::StringIntern& intern, bool capture_schema = true,
+    dftracer::utils::dstd::StringIntern& intern, bool capture_schema = true,
     const std::vector<std::string>* paths = nullptr,
     const dftracer::utils::index::RecordSchema* record_schema = nullptr,
     const std::vector<const dftracer::utils::index::FieldSpec*>* path_fields =
@@ -351,7 +351,7 @@ inline constexpr std::size_t INDEX_MAX_CHILDREN = 256;
 /// walk.
 void build_fold_event_into(FoldEvent& ev, const DFTracerEvent& scalars,
                            simdjson::dom::element args, bool has_args,
-                           dftracer::utils::StringIntern& intern,
+                           dftracer::utils::dstd::StringIntern& intern,
                            bool needs_args, DecodeHints* leaves = nullptr);
 
 /// Parse a DOM object into `ev` (reset first) as an owned event. Every string
@@ -363,7 +363,7 @@ void build_fold_event_into(FoldEvent& ev, const DFTracerEvent& scalars,
 /// build's column harvest.
 void extract_fold_event_into(
     FoldEvent& ev, simdjson::dom::element root,
-    dftracer::utils::StringIntern& intern, bool needs_args,
+    dftracer::utils::dstd::StringIntern& intern, bool needs_args,
     const std::vector<std::string>* extra_fields = nullptr,
     bool capture_schema = false, DecodeHints* hints = nullptr);
 

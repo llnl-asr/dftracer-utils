@@ -538,7 +538,7 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
                 {
                     // Our coroutines enter their own pool; anything else
                     // charges the general pool.
-                    memory::Scope scope{general};
+                    memory::Scope scope{general, nullptr};
                     pending_resume.resume();
                 }
                 if (monitor) {
@@ -614,7 +614,7 @@ void ThreadPoolExecutor::drive_until(const std::function<bool()>& done) {
             coro::reset_timeslice();
             if (entry.handle && !entry.handle.done()) {
                 DFTRACER_UTILS_TSAN_ACQUIRE(entry.handle.address());
-                memory::Scope scope{general};
+                memory::Scope scope{general, nullptr};
                 entry.handle.resume();
             }
             drain_thread_local_destroys();

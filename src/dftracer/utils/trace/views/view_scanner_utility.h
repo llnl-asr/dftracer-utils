@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_SCANNER_UTILITY_H
 
 #include <dftracer/utils/common/config.h>
-#include <dftracer/utils/common/string_intern.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/runtime/coro/async_generator.h>
@@ -40,7 +40,7 @@ struct ViewScannerInput {
     /// emits an owned interned FoldEvent (in ViewScannerBatch::fold_events)
     /// instead of a string_view, so the fold consumer does not re-parse. The
     /// intern table is shared across workers for consistent ids.
-    dftracer::utils::StringIntern* fold_intern = nullptr;
+    dftracer::utils::dstd::StringIntern* fold_intern = nullptr;
     /// Where fold mode decodes events. The caller keeps one per worker across
     /// units so its slots keep their capacity; null uses a buffer private to
     /// the scan. The events a batch exposes live here until the generator is

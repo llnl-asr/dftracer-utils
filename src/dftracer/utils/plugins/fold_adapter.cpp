@@ -67,7 +67,7 @@ coro::CoroTask<void>* as_task(::dftu_task* t) {
 const char* host_resolve(void* h, dftu_str id, std::uint32_t* out_len) {
     if (out_len) *out_len = 0;
     if (id == DFTU_STR_NONE ||
-        id >= dftracer::utils::StringIntern::FAST_CAPACITY)
+        id >= dftracer::utils::dstd::StringIntern::FAST_CAPACITY)
         return nullptr;
     auto& intern = static_cast<PluginFold*>(h)->intern_table();
     std::string_view sv = intern.resolve(id);
@@ -1140,7 +1140,7 @@ int PluginFold::close_trace_writer(::dftu_trace_writer* w) {
 }
 
 PluginFold::PluginFold(const dftu_plugin* plugin,
-                       dftracer::utils::StringIntern& intern,
+                       dftracer::utils::dstd::StringIntern& intern,
                        SharedResultRegistry* results,
                        NamedResultRegistry* named_results,
                        std::string plugin_name, std::uint64_t memory_budget,

@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_OUTPUT_H
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_OUTPUT_H
 
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_map.h>
@@ -56,7 +57,7 @@ struct EventAggregatorOutput {
     std::vector<std::shared_ptr<AssociationTracker>> trackers;
     bool success = true;
 
-    const StringIntern& strings() const {
+    const dstd::StringIntern& strings() const {
         if (!intern) {
             throw DFTUtilsException(ErrorCode::Internal,
                                     "aggregation output has no intern table");

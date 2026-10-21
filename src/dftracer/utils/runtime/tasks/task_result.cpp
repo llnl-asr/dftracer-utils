@@ -45,7 +45,7 @@ void TaskResult::publish(State s) {
     }
     cv_.notify_all();
     // Resume coroutine continuations OUTSIDE the lock.
-    memory::Scope scope{memory::Manager::get().general()};
+    memory::Scope scope{memory::Manager::get().general(), nullptr};
     for (auto h : to_resume) {
         if (h && !h.done()) {
             h.resume();

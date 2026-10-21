@@ -1,7 +1,6 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/expr.h>
@@ -12,6 +11,7 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/fields.h>
 #include <dftracer/utils/duql/group_fold.h>
@@ -118,9 +118,9 @@ bool is_number(df::TypeId t) {
 // hands out: its own when it has every declared column, else the declared
 // ones by position, as the ops above read it, then its own. Columns past the
 // declared ones are those its input returned beyond its schema.
-std::vector<std::uint32_t> frame_ids(const df::DataFrame& f,
-                                     const std::vector<std::string>& declared,
-                                     dftracer::utils::StringIntern& intern) {
+std::vector<std::uint32_t> frame_ids(
+    const df::DataFrame& f, const std::vector<std::string>& declared,
+    dftracer::utils::dstd::StringIntern& intern) {
     const bool by_name =
         std::all_of(declared.begin(), declared.end(), [&](const auto& n) {
             return std::find(f.names.begin(), f.names.end(), n) !=
@@ -182,7 +182,8 @@ class FinishSource final : public df::Source {
                 df::DataFrame f =
                     finish_(co_await df::join_chunks(std::move(collected)));
                 if (!projection_.empty()) f = f.select(projection_);
-                intern_ = std::make_shared<dftracer::utils::StringIntern>();
+                intern_ =
+                    std::make_shared<dftracer::utils::dstd::StringIntern>();
                 ids_ = frame_ids(f, declared_, *intern_);
                 rows_ = df::InMemorySource(std::move(f)).scan({}).cursor;
             }
@@ -200,7 +201,7 @@ class FinishSource final : public df::Source {
         std::vector<std::string> projection_;
         std::vector<std::string> declared_;
         std::unique_ptr<df::Cursor> rows_;
-        std::shared_ptr<dftracer::utils::StringIntern> intern_;
+        std::shared_ptr<dftracer::utils::dstd::StringIntern> intern_;
         std::vector<std::uint32_t> ids_;
     };
 
@@ -264,8 +265,8 @@ class MapSource final : public df::Source {
         }
 
        private:
-        std::shared_ptr<dftracer::utils::StringIntern> intern_ =
-            std::make_shared<dftracer::utils::StringIntern>();
+        std::shared_ptr<dftracer::utils::dstd::StringIntern> intern_ =
+            std::make_shared<dftracer::utils::dstd::StringIntern>();
         std::vector<std::uint32_t> ids_;
         coro::AsyncGenerator<df::DataFrame> batches_;
         Map map_;

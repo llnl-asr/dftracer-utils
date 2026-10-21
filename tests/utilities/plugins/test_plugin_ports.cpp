@@ -3,7 +3,7 @@
 // covering the same-batch delivery, the ordering rule, and the per-batch reset.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/string_intern.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
@@ -18,7 +18,7 @@
 #include <vector>
 
 namespace views = dftracer::utils::trace::views;
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::PluginFold;
 using views::detail::FoldBatch;
 using views::detail::FoldEvent;

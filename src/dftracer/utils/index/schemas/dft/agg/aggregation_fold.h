@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_FOLD_H
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_FOLD_H
 
-#include <dftracer/utils/common/string_intern.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_core.h>
@@ -33,7 +33,7 @@ namespace dftracer::utils::index::schemas::dft::agg {
 class PodAccessor {
    public:
     PodAccessor(const trace::views::detail::FoldEvent& ev,
-                const dftracer::utils::StringIntern& intern)
+                const dftracer::utils::dstd::StringIntern& intern)
         : ev_(ev), intern_(intern) {}
 
     bool is_metadata() const {
@@ -106,7 +106,8 @@ class PodAccessor {
     }
 
    private:
-    static constexpr std::uint32_t NO_ID = dftracer::utils::StringIntern::NO_ID;
+    static constexpr std::uint32_t NO_ID =
+        dftracer::utils::dstd::StringIntern::NO_ID;
 
     const trace::views::detail::FoldEvent::ArgValue* find(
         std::string_view key) const {
@@ -126,7 +127,7 @@ class PodAccessor {
     }
 
     const trace::views::detail::FoldEvent& ev_;
-    const dftracer::utils::StringIntern& intern_;
+    const dftracer::utils::dstd::StringIntern& intern_;
 };
 
 /// Builds the aggregation index tier (AGGREGATION + SYSTEM_METRICS records) as
@@ -138,7 +139,7 @@ class PodAccessor {
 /// outputs are returned out-of-band (they are not column-family records).
 class AggregationFold : public trace::views::detail::Fold {
    public:
-    AggregationFold(dftracer::utils::StringIntern& build_intern,
+    AggregationFold(dftracer::utils::dstd::StringIntern& build_intern,
                     index::schemas::dft::agg::AggInternPtr agg_intern,
                     index::schemas::dft::agg::AggregationConfig config,
                     int file_id = -1)
@@ -210,7 +211,7 @@ class AggregationFold : public trace::views::detail::Fold {
     }
 
    private:
-    dftracer::utils::StringIntern* build_intern_;
+    dftracer::utils::dstd::StringIntern* build_intern_;
     index::schemas::dft::agg::AggInternPtr agg_intern_;
     index::schemas::dft::agg::AggregationConfig config_;
     int file_id_;

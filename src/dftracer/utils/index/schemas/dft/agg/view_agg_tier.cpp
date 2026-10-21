@@ -782,7 +782,7 @@ bool agg_tier_collect(const trace::views::detail::ViewPlan& plan,
     const index::plan::GroupResolver* resolver =
         any_transform ? ensure_resolver(plan) : nullptr;
 
-    const StringIntern& intern = tc->handle->agg->intern();
+    const dstd::StringIntern& intern = tc->handle->agg->intern();
     char fbuf[::dftracer::utils::hash::HEX64_DIGITS];
     std::vector<std::string> keys;
     std::vector<utilities::common::statistics::DDSketch> sketch_store;
@@ -887,7 +887,7 @@ bool events_profiles_collect(const trace::views::detail::ViewPlan& plan,
     dataframe::agg_seed_begin(*ev_state, nkeys);
     dataframe::agg_seed_begin(*prof_state, nkeys);
 
-    const StringIntern& intern = tc->handle->agg->intern();
+    const dstd::StringIntern& intern = tc->handle->agg->intern();
     char fbuf[::dftracer::utils::hash::HEX64_DIGITS];
     std::vector<std::string> keys;
     std::vector<utilities::common::statistics::DDSketch> sketch_store;

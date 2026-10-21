@@ -189,7 +189,7 @@ MetricStats deserialize_metric_stats(BinaryReader& r, double accuracy) {
 
 void serialize_agg_key_into(std::string& out, AggMapType map_type,
                             const AggregationKey& key,
-                            const StringIntern& intern) {
+                            const dstd::StringIntern& intern) {
     out.clear();
     auto cat = intern.resolve(key.cat_id);
     auto name = intern.resolve(key.name_id);
@@ -222,7 +222,7 @@ void serialize_agg_key_into(
     std::string& out, AggMapType map_type, std::string_view cat,
     std::string_view name, std::uint64_t pid, std::uint64_t tid,
     std::string_view hhash, std::string_view fhash, std::uint64_t time_bucket,
-    StringIntern& intern,
+    dstd::StringIntern& intern,
     const std::vector<std::pair<std::string_view, std::string_view>>*
         extra_keys) {
     const std::uint16_t shard = compute_shard(cat, name, pid, tid);
@@ -260,7 +260,7 @@ void serialize_agg_key_into(
 }
 
 std::string serialize_agg_key(AggMapType map_type, const AggregationKey& key,
-                              const StringIntern& intern) {
+                              const dstd::StringIntern& intern) {
     std::string out;
     out.reserve(47);
     serialize_agg_key_into(out, map_type, key, intern);

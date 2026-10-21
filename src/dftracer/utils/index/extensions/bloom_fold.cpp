@@ -25,10 +25,10 @@ namespace dftracer::utils::index::extensions {
 namespace {
 
 using BV = index::schemas::dft::BloomCore;
-constexpr std::uint32_t NO_ID = dftracer::utils::StringIntern::NO_ID;
+constexpr std::uint32_t NO_ID = dftracer::utils::dstd::StringIntern::NO_ID;
 
-std::string_view resolve_or_empty(const dftracer::utils::StringIntern& intern,
-                                  std::uint32_t id) {
+std::string_view resolve_or_empty(
+    const dftracer::utils::dstd::StringIntern& intern, std::uint32_t id) {
     return id == NO_ID ? std::string_view{} : intern.resolve(id);
 }
 
@@ -48,7 +48,7 @@ std::string capture_path(const std::string& dim) { return "args." + dim; }
 
 }  // namespace
 
-BloomFold::BloomFold(dftracer::utils::StringIntern& intern,
+BloomFold::BloomFold(dftracer::utils::dstd::StringIntern& intern,
                      index::schemas::dft::BloomCore::ChunkIndexerConfig config)
     : intern_(&intern), config_(std::move(config)) {
     config_.validate();

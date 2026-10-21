@@ -171,9 +171,10 @@ set(TEST_CPP_SOURCES
     runtime/test_coro_scope_join.cpp
     runtime/test_frame_heap.cpp
     common/test_logging.cpp
-    common/test_string_intern.cpp
+    common/test_intern_table.cpp
     dstd/test_hash_partition.cpp
     dstd/test_hex64.cpp
+    dstd/test_string_intern.cpp
     dstd/test_eviction_policy.cpp
     dstd/test_containers.cpp
     dstd/test_function.cpp

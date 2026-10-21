@@ -1,4 +1,4 @@
-#include <dftracer/utils/common/string_intern.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_logic.h>
 #include <dftracer/utils/index/schemas/dft/agg/reserved_args.h>
 #include <dftracer/utils/trace/args_map.h>
@@ -61,7 +61,7 @@ std::uint64_t compute_time_bucket(std::uint64_t timestamp,
 
 AggregationKey build_aggregation_key(const trace::DFTracerEvent& ev,
                                      const AggregationConfig& config,
-                                     StringIntern& intern) {
+                                     dstd::StringIntern& intern) {
     AggregationKey key;
     std::string cat_storage;
     key.cat_id = intern.get_or_insert(
@@ -105,7 +105,7 @@ void update_aggregation_entry(const trace::DFTracerEvent& ev,
                               const AggregationConfig& config,
                               AggregationMap& aggregations,
                               const AggregationKey& key,
-                              const StringIntern& intern) {
+                              const dstd::StringIntern& intern) {
     auto it = aggregations.find(key);
     if (it == aggregations.end()) {
         it = aggregations

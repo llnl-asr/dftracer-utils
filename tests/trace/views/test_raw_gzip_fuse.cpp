@@ -38,7 +38,7 @@
 using namespace dftracer::utils::trace::views::detail;
 using namespace dftracer::utils::index::build;
 using namespace dftracer::utils::index::extensions;
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
 using dftu_utils_test::run_coro;
 namespace dataframe = dftracer::utils::dataframe;
 

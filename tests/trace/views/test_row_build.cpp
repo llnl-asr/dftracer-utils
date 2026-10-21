@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/runtime/coro/async_semaphore.h>
 #include <dftracer/utils/runtime/coro/channel.h>
 #include <dftracer/utils/runtime/coro/task.h>
@@ -20,10 +20,10 @@
 #include <utility>
 #include <vector>
 
-using dftracer::utils::StringIntern;
 using dftracer::utils::coro::Channel;
 using dftracer::utils::coro::CoroSemaphore;
 using dftracer::utils::coro::CoroTask;
+using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::trace::RecordPhase;
 using dftracer::utils::trace::views::detail::ArgKinds;
 using dftracer::utils::trace::views::detail::ArgType;

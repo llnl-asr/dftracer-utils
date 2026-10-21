@@ -60,9 +60,9 @@ struct PromiseBase : FrameAllocation {
     /// CoroTask::await_suspend for an awaiter that has propagate_cancel().
     bool (*parent_cancel_)(std::coroutine_handle<>) noexcept {nullptr};
     PromiseBase* root_promise_{nullptr};
-    /// The pool current when the coroutine was created; it enters it each
-    /// time it resumes.
-    memory::PoolTag pool_{memory::current_pool_tag()};
+    /// The pool and intern table current when the coroutine was created; it
+    /// enters them each time it resumes.
+    detail::RunContext context_;
 #if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
     void* trace_handle_{nullptr};  ///< logging::coro_trace enter/leave handle
     const char* trace_file_{nullptr};  ///< coroutine definition site
@@ -200,7 +200,7 @@ class CoroTask {
         }
 
         detail::EnterPoolOnStart initial_suspend() noexcept {
-            return {this->pool_};
+            return {&this->context_};
         }
 
         struct FinalAwaiter {
@@ -240,7 +240,7 @@ class CoroTask {
         /// its own timeslice check.
         auto await_transform(coro::YieldAwaitable y) {
             return detail::InPool<coro::YieldAwaitable>{
-                y, this->pool_, false, this->cancel_requested()};
+                y, &this->context_, false, this->cancel_requested()};
         }
 
         /// Wrap every other awaitable in a timeslice check.
@@ -252,13 +252,14 @@ class CoroTask {
             const bool cancelled = at_cancel_point<U>();
             if constexpr (std::is_lvalue_reference_v<U>) {
                 return coro::detail::YieldCheckAwaitable<U>{
-                    awaitable, this->pool_, false, false, cancelled};
+                    awaitable, &this->context_, false, false, cancelled};
             } else if constexpr (std::is_move_constructible_v<U>) {
                 return coro::detail::YieldCheckAwaitable<U>{
-                    std::move(awaitable), this->pool_, false, false, cancelled};
+                    std::move(awaitable), &this->context_, false, false,
+                    cancelled};
             } else {
                 return coro::detail::YieldCheckAwaitable<U&&>{
-                    static_cast<U&&>(awaitable), this->pool_, false, false,
+                    static_cast<U&&>(awaitable), &this->context_, false, false,
                     cancelled};
             }
         }

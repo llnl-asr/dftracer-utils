@@ -110,7 +110,7 @@ struct ReplayResult {
     std::size_t failed_events = 0;
     std::chrono::microseconds total_duration{0};
     std::chrono::microseconds execution_duration{0};
-    /// Keys are non-owning views into the replay StringIntern pool.
+    /// Keys are non-owning views into the replay dstd::StringIntern pool.
     std::unordered_map<std::string_view, std::size_t> function_counts;
     std::unordered_map<std::string_view, std::size_t> category_counts;
     std::vector<std::string> error_messages;
@@ -172,7 +172,7 @@ class PosixExecutor : public TraceExecutor {
     std::string get_name() const override { return "POSIX"; }
 
    private:
-    /// Keys are interned via the replay StringIntern pool.
+    /// Keys are interned via the replay dstd::StringIntern pool.
     std::unordered_map<std::string_view, int> open_files_;
     /// Scratch buffer reused across reads and writes.
     std::vector<char> io_buffer_;

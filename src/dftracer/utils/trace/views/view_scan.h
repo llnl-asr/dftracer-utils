@@ -46,14 +46,14 @@ ScanShape scan_shape(const ViewDefinition& vdef);
 // bloom, so a repeat scan of an already-built index attaches nothing.
 std::vector<std::unique_ptr<Fold>> select_index_folds(
     const ViewPlan& plan, const ViewDefinition& vdef,
-    dftracer::utils::StringIntern& intern);
+    dftracer::utils::dstd::StringIntern& intern);
 
 // The fold that writes the path catalog of the files that lack one, or null
 // when every file has it or the scan cannot establish it. Its slot is the first
 // full scan of a trace.
 std::unique_ptr<Fold> select_catalog_fold(
     const ViewPlan& plan, const ViewDefinition& vdef,
-    dftracer::utils::StringIntern& intern);
+    dftracer::utils::dstd::StringIntern& intern);
 
 // One candidate chunk to scan: a byte range within a file's index.
 struct ScanUnit {
@@ -138,7 +138,7 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
     const std::function<void(std::size_t,
                              const std::vector<std::string_view>&)>& on_batch,
     std::span<Fold* const> folds = {},
-    dftracer::utils::StringIntern* intern = nullptr);
+    dftracer::utils::dstd::StringIntern* intern = nullptr);
 
 }  // namespace dftracer::utils::trace::views::detail
 

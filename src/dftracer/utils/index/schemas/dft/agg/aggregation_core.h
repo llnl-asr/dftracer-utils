@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_CORE_H
 
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/common/string_intern.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_logic.h>
@@ -112,7 +112,7 @@ void aggregate_system_event(const Acc& acc, AggState& st,
 /// flush-threshold check are the caller's job (out-of-band / backend-specific).
 template <class Acc>
 void aggregate_event(const Acc& acc, AggState& st, const AggregationConfig& cfg,
-                     StringIntern& intern) {
+                     dstd::StringIntern& intern) {
     if (acc.is_metadata()) return;
 
     bool is_preaggregated_system = false;

@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_KEY_H
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_KEY_H
 
-#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/dstd/hash/hex64.h>
+#include <dftracer/utils/dstd/string_intern.h>
 
 #include <cstdint>
 #include <memory>
@@ -95,19 +95,19 @@ struct AggregationKey {
     AggregationKey& operator=(AggregationKey&&) = default;
 
     /// Ids are meaningless without the table that issued them.
-    std::string_view cat(const StringIntern& intern) const {
+    std::string_view cat(const dstd::StringIntern& intern) const {
         return intern.resolve(cat_id);
     }
-    std::string_view name(const StringIntern& intern) const {
+    std::string_view name(const dstd::StringIntern& intern) const {
         return intern.resolve(name_id);
     }
-    std::string_view hhash(const StringIntern& intern) const {
+    std::string_view hhash(const dstd::StringIntern& intern) const {
         return hhash_id ? intern.resolve(hhash_id) : std::string_view{};
     }
     /// Hex text of the file hash. Inline hashes render into `buf`; interned
     /// fallbacks come straight from the table.
     std::string_view fhash_str(
-        const StringIntern& intern,
+        const dstd::StringIntern& intern,
         char (&buf)[::dftracer::utils::hash::HEX64_DIGITS]) const {
         if (!fhash_inline) {
             return fhash ? intern.resolve(static_cast<std::uint32_t>(fhash))

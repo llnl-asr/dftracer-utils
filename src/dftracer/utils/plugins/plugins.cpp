@@ -635,7 +635,7 @@ View Plugins::prune(const View& view) const {
 }
 
 coro::CoroTask<Result<PluginRun>> Plugins::run(const View& view) const {
-    dftracer::utils::StringIntern intern;
+    dftracer::utils::dstd::StringIntern intern;
     PluginRun out;
     // One registry for the whole scan; every plugin's finalize publishes its
     // merged accumulators here and later plugins read them by name.
@@ -685,7 +685,7 @@ trace::views::Deferred<PluginRun> Plugins::attach(
         // explicit session budget.
         session.attach_fold_factory(
             [plugin, shared, named, name,
-             states](dftracer::utils::StringIntern& intern)
+             states](dftracer::utils::dstd::StringIntern& intern)
                 -> std::unique_ptr<views::detail::Fold> {
                 return std::make_unique<PluginFold>(
                     plugin, intern, shared.get(), named, name, 0, states);

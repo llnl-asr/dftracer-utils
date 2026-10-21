@@ -2,7 +2,7 @@
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
-#include <dftracer/utils/common/string_intern.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/index_batch_writer.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
@@ -52,7 +52,7 @@ struct ParsedBloomJob {
     index::gzip::GzipBuildArtifacts artifacts;
     // The intern feeds the folds during the parse only; write reads the
     // already-resolved chunk/dictionary state, so the folds outlive it.
-    std::unique_ptr<dftracer::utils::StringIntern> intern;
+    std::unique_ptr<dftracer::utils::dstd::StringIntern> intern;
     std::unique_ptr<index::extensions::BloomFold> bloom_fold;
     std::unique_ptr<index::extensions::RowSetFold> rowset_fold;
     std::unique_ptr<index::schemas::dft::agg::AggregationFold> agg_fold;
@@ -239,7 +239,8 @@ static coro::CoroTask<void> parse_and_emit_worker(
             std::vector<views::Fold*> fold_ptrs;
             std::optional<index::build::IndexFoldDriver> driver;
             if (!pf.slice.skip_file_scoped_writes) {
-                job.intern = std::make_unique<dftracer::utils::StringIntern>();
+                job.intern =
+                    std::make_unique<dftracer::utils::dstd::StringIntern>();
                 if (build_bloom) {
                     job.bloom_fold =
                         std::make_unique<index::extensions::BloomFold>(

@@ -4,6 +4,11 @@
 Run --record before changing tests. Its .info.sha256.json sidecar binds coverage
 paths to source contents. Compare runs must select the same tests as the record.
 Recording keeps artifacts even when a test exceeds its time budget.
+
+A full coverage run takes longer than a task check may run, so --result saves
+the outcome of a run with a hash of every tracked file the run depends on, and
+--check-result passes only when that saved run passed with the same options on
+the same files.
 """
 
 from __future__ import annotations
@@ -27,7 +32,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SECONDS = 60.0
+# A baseline hash a recorder knew was stale, for a file other work changes.
+STALE_HASH = "stale-at-record"
 SOURCE_DIRS = ("src", "include")
+STAMP_PATHS = (
+    "src",
+    "include",
+    "tests",
+    "cmake",
+    "scripts/ci",
+    "CMakeLists.txt",
+    "CMakePresets.json",
+)
 
 
 @dataclass
@@ -61,7 +77,9 @@ def read_budgets(path: Path) -> dict[str, float]:
     return result
 
 
-def check_junit(path: Path, budgets: dict[str, float]) -> tuple[list[str], int]:
+def check_junit(
+    path: Path, budgets: dict[str, float], allow_skip: frozenset[str] = frozenset()
+) -> tuple[list[str], int]:
     cases = list(ET.parse(path).getroot().iter("testcase"))
     if not cases:
         raise ValueError(f"{path}: no tests ran")
@@ -78,7 +96,8 @@ def check_junit(path: Path, budgets: dict[str, float]) -> tuple[list[str], int]:
             problems.append(f"FAILED: {name}")
         if case.find("skipped") is not None or case.get("status") in ("notrun", "disabled"):
             skipped += 1
-            problems.append(f"NOT RUN: {name}")
+            if name not in allow_skip:
+                problems.append(f"NOT RUN: {name}")
     print(f"tests: {len(cases)}, skipped: {skipped}")
     return problems, len(cases)
 
@@ -150,6 +169,42 @@ def source_hashes(root: Path) -> dict[str, str]:
     }
 
 
+def stamp_hashes(root: Path) -> dict[str, str]:
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z", "--", *STAMP_PATHS],
+        cwd=root,
+        capture_output=True,
+        check=True,
+    ).stdout.split(b"\0")
+    return {name: sha256(root / name) for name in sorted(n.decode() for n in tracked if n)}
+
+
+def result_options(args: argparse.Namespace) -> dict[str, object]:
+    return {
+        "tests": args.tests,
+        "allow_skip": sorted(args.allow_skip),
+        "baseline": str(args.baseline) if args.baseline else None,
+    }
+
+
+def check_result(path: Path, options: dict[str, object], root: Path) -> list[str]:
+    saved = json.loads(path.read_text())
+    problems = []
+    if saved["options"] != options:
+        problems.append(f"options differ: saved {saved['options']}, given {options}")
+    if not saved["passed"]:
+        problems.append("the saved run failed: " + "; ".join(saved["problems"]))
+    current = stamp_hashes(root)
+    changed = sorted(
+        name
+        for name in set(saved["hashes"]) | set(current)
+        if saved["hashes"].get(name) != current.get(name)
+    )
+    if changed:
+        problems.append(f"{len(changed)} files changed since the run: " + ", ".join(changed[:20]))
+    return problems
+
+
 def sidecar(path: Path) -> Path:
     return path.with_suffix(path.suffix + ".sha256.json")
 
@@ -172,6 +227,9 @@ def compare(
     problems = []
     for name, before in sorted(baseline.items()):
         recorded = hashes.get(name)
+        if recorded == STALE_HASH:
+            print(f"NOT COMPARED (stale at record): {name}")
+            continue
         if not isinstance(recorded, str) or re.fullmatch(r"[0-9a-f]{64}", recorded) is None:
             raise ValueError(f"{name}: baseline has no valid source SHA-256")
         source = root / name
@@ -250,6 +308,7 @@ def run(args: argparse.Namespace) -> int:
     if not (build / "CMakeCache.txt").is_file():
         raise ValueError(f"{build}: not a configured build directory")
     budgets = read_budgets(ROOT / "tests/test_budget.txt")
+    stamp = stamp_hashes(ROOT) if args.result else {}
     metadata = None
     if args.baseline:
         metadata = json.loads(sidecar(args.baseline).read_text())
@@ -283,7 +342,7 @@ def run(args: argparse.Namespace) -> int:
             env=env,
             check=False,
         ).returncode
-        problems, count = check_junit(junit, budgets)
+        problems, count = check_junit(junit, budgets, frozenset(args.allow_skip))
         if args.record:
             args.record.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(junit, args.record.with_suffix(".junit.xml"))
@@ -304,6 +363,25 @@ def run(args: argparse.Namespace) -> int:
                 problems.extend(
                     compare(baseline, read_lcov(trace, ROOT), metadata["sources"], ROOT)
                 )
+        if args.result:
+            if stamp_hashes(ROOT) != stamp:
+                problems.append("tracked files changed during the run")
+            args.result.parent.mkdir(parents=True, exist_ok=True)
+            args.result.write_text(
+                json.dumps(
+                    {
+                        "options": result_options(args),
+                        "passed": not problems,
+                        "problems": problems,
+                        "tests": count,
+                        "hashes": stamp,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            print(f"RESULT: {args.result}")
         for problem in problems:
             print(problem)
         print(f"{'FAIL' if problems else 'PASS'}: {count} tests")
@@ -358,6 +436,16 @@ class SelfTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.differences()
 
+    def test_stale_hash(self) -> None:
+        self.hashes["src/sample.cpp"] = STALE_HASH
+        out = StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(self.differences(), [])
+        self.assertIn("NOT COMPARED (stale at record)", out.getvalue())
+        self.hashes["src/sample.cpp"] = "stale"
+        with self.assertRaises(ValueError):
+            self.differences()
+
     def test_missing_current_file(self) -> None:
         lost = compare(read_lcov(self.before, self.root), {}, self.hashes, self.root)
         self.assertTrue(any("lines: 1, 2" in p for p in lost))
@@ -385,11 +473,11 @@ class SelfTest(unittest.TestCase):
             [],
         )
 
-    def junit(self, cases: str) -> tuple[list[str], int]:
+    def junit(self, cases: str, allow_skip: frozenset[str] = frozenset()) -> tuple[list[str], int]:
         path = self.root / "junit.xml"
         path.write_text("<testsuite>" + cases + "</testsuite>")
         with redirect_stdout(StringIO()):
-            return check_junit(path, {"custom": 10})
+            return check_junit(path, {"custom": 10}, allow_skip)
 
     def test_over_budget(self) -> None:
         problems, count = self.junit('<testcase name="custom" time="10.001"/>')
@@ -409,9 +497,39 @@ class SelfTest(unittest.TestCase):
         )
         self.assertEqual(len(problems), 2)
 
+    def test_allowed_skip(self) -> None:
+        cases = '<testcase name="skip" time="0"><skipped/></testcase><testcase name="other" time="0"><skipped/></testcase>'
+        problems, _ = self.junit(cases, frozenset({"skip"}))
+        self.assertEqual(problems, ["NOT RUN: other"])
+
     def test_empty_junit(self) -> None:
         with self.assertRaises(ValueError):
             self.junit("")
+
+    def test_check_result(self) -> None:
+        subprocess.run(["git", "init", "-q"], cwd=self.root, check=True)
+        subprocess.run(["git", "add", "src/sample.cpp"], cwd=self.root, check=True)
+        options = {"tests": ".*", "allow_skip": [], "baseline": None}
+        result = self.root / "result.json"
+
+        def save(passed: bool) -> None:
+            saved = {
+                "options": options,
+                "passed": passed,
+                "problems": [] if passed else ["FAILED: x"],
+                "tests": 1,
+                "hashes": stamp_hashes(self.root),
+            }
+            result.write_text(json.dumps(saved))
+
+        save(True)
+        self.assertEqual(check_result(result, options, self.root), [])
+        self.assertTrue(check_result(result, {**options, "tests": "^a/"}, self.root))
+        save(False)
+        self.assertTrue(check_result(result, options, self.root))
+        save(True)
+        self.source.write_text("int changed;\n")
+        self.assertTrue(check_result(result, options, self.root))
 
     def test_invalid_times(self) -> None:
         for value in ("nan", "inf", "-1", "bad"):
@@ -442,6 +560,21 @@ def main() -> int:
     parser.add_argument(
         "--tests", help="ctest regular expression; must match the baseline selection"
     )
+    parser.add_argument(
+        "--allow-skip",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="a test that skips on this platform by design; repeatable",
+    )
+    parser.add_argument(
+        "--result", type=Path, help="save the outcome of this run for --check-result"
+    )
+    parser.add_argument(
+        "--check-result",
+        type=Path,
+        help="pass only if this saved run passed with the same options on the same files",
+    )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
         "--record", type=Path, help="write baseline LCOV, source hashes and test timings"
@@ -449,10 +582,26 @@ def main() -> int:
     mode.add_argument("--baseline", type=Path, help="fail on lost covered lines or branches")
     args = parser.parse_args()
     if args.self_test:
-        if args.build or args.tests or args.record or args.baseline:
+        if (
+            args.build
+            or args.tests
+            or args.record
+            or args.baseline
+            or args.allow_skip
+            or args.result
+            or args.check_result
+        ):
             parser.error("--self-test cannot be combined with a test run")
         suite = unittest.defaultTestLoader.loadTestsFromTestCase(SelfTest)
         return int(not unittest.TextTestRunner().run(suite).wasSuccessful())
+    if args.check_result:
+        if args.build or args.record or args.result or not args.tests:
+            parser.error("--check-result takes --tests, --allow-skip and --baseline only")
+        problems = check_result(args.check_result, result_options(args), ROOT)
+        for problem in problems:
+            print(problem)
+        print("FAIL" if problems else f"PASS: saved run {args.check_result}")
+        return int(bool(problems))
     if not args.build or not args.tests:
         parser.error("provide --build and --tests, or use --self-test")
     try:

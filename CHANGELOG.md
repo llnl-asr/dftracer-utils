@@ -90,6 +90,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Move `StringIntern` to `dftracer/utils/dstd/string_intern.h` in the `dftracer::utils::dstd` namespace.
   Include the new header and name `dstd::StringIntern`, because `common/string_intern.h` is gone.
 - Make `StringIntern::insert_at_id` return `Ok`, `Conflict` or `OutOfRange` instead of throwing.
+- Speed up `when_all` and `when_any` over a list of tasks, because tasks that end at once now share one wrapper coroutine.
+  A `when_all` of 8 tasks that are already done now makes 9 frame allocations instead of 16.
 
 ### Added
 

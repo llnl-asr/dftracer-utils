@@ -131,6 +131,7 @@ struct WhenAnySharedState : WhenAnyCompletionState {
     /// The first awaitable to end was cancelled, so there is no result.
     bool cancelled_winner = false;
     std::vector<Awaitable> awaitables;
+    ChildClaims claims;
 
     explicit WhenAnySharedState(std::vector<Awaitable> aws)
         : awaitables(std::move(aws)) {
@@ -232,8 +233,8 @@ class WhenAnyAwaitable {
             return false;
         }
 
-        for (std::size_t i = 0; i < state_->awaitables.size(); i++) {
-            launch_wrapper(i);
+        while (!state_->claims.exhausted(state_->wrappers_total_)) {
+            launch_wrapper();
         }
 
         if (state_->released()) {
@@ -264,55 +265,61 @@ class WhenAnyAwaitable {
     }
 
    private:
-    void launch_wrapper(std::size_t i) {
-        // Fire-and-forget Coro wrapper. Every wrapper awaits its awaitable to
-        // the end and reports in on_wrapper_finished(), which resumes the
-        // awaiter after the last one.
-        auto wrapper = [](std::shared_ptr<SharedState> state,
-                          std::size_t index) -> coro::Coro {
-            if (state->completed.load(std::memory_order_acquire) &&
-                detail::never_started(state->awaitables[index])) {
-                state->on_wrapper_finished();
-                co_return;
-            }
-            bool won = false;
-            try {
-                auto outcome = co_await detail::CancelAware<Awaitable>{
-                    state->awaitables[index]};
+    void launch_wrapper() {
+        // Fire-and-forget Coro wrapper. It takes the next child it can, awaits
+        // it to the end and reports in on_wrapper_finished() for it, until no
+        // child is left or one suspends it; the launcher then starts another
+        // wrapper. on_wrapper_finished() resumes the awaiter after the last
+        // child.
+        auto wrapper = [](std::shared_ptr<SharedState> state) -> coro::Coro {
+            for (;;) {
+                const std::size_t index = state->claims.claim();
+                // Not awaitables.size(): the awaiter clears the vector once the
+                // last child has reported in, while this loop is still ending.
+                if (index >= state->wrappers_total_) co_return;
+                if (state->completed.load(std::memory_order_acquire) &&
+                    detail::never_started(state->awaitables[index])) {
+                    state->on_wrapper_finished();
+                    continue;
+                }
+                bool won = false;
+                try {
+                    auto outcome = co_await detail::CancelAware<Awaitable>{
+                        state->awaitables[index]};
 
-                bool expected = false;
-                won = state->completed.compare_exchange_strong(
-                    expected, true, std::memory_order_acq_rel);
-                if (won) {
-                    state->result.index = index;
-                    if (outcome) {
-                        state->result.result = std::move(*outcome);
-                    } else {
-                        state->cancelled_winner = true;
-                    }
-
-                    state->result.remaining_cancellation_tokens.reserve(
-                        state->cancellation_tokens.size() - 1);
-                    for (std::size_t j = 0;
-                         j < state->cancellation_tokens.size(); ++j) {
-                        if (j != index && state->cancellation_tokens[j]) {
-                            state->result.remaining_cancellation_tokens
-                                .push_back(state->cancellation_tokens[j]);
+                    bool expected = false;
+                    won = state->completed.compare_exchange_strong(
+                        expected, true, std::memory_order_acq_rel);
+                    if (won) {
+                        state->result.index = index;
+                        if (outcome) {
+                            state->result.result = std::move(*outcome);
+                        } else {
+                            state->cancelled_winner = true;
                         }
+
+                        state->result.remaining_cancellation_tokens.reserve(
+                            state->cancellation_tokens.size() - 1);
+                        for (std::size_t j = 0;
+                             j < state->cancellation_tokens.size(); ++j) {
+                            if (j != index && state->cancellation_tokens[j]) {
+                                state->result.remaining_cancellation_tokens
+                                    .push_back(state->cancellation_tokens[j]);
+                            }
+                        }
+                        state->finish_winner(index, nullptr);
                     }
-                    state->finish_winner(index, nullptr);
+                } catch (...) {
+                    bool expected = false;
+                    if (won || state->completed.compare_exchange_strong(
+                                   expected, true, std::memory_order_acq_rel)) {
+                        std::exception_ptr error = std::current_exception();
+                        state->finish_winner(index, &error);
+                    }
                 }
-            } catch (...) {
-                bool expected = false;
-                if (won || state->completed.compare_exchange_strong(
-                               expected, true, std::memory_order_acq_rel)) {
-                    std::exception_ptr error = std::current_exception();
-                    state->finish_winner(index, &error);
-                }
+                state->on_wrapper_finished();
             }
-            state->on_wrapper_finished();
-            co_return;
-        }(state_, i);
+        }(state_);
 
         // Set executor on the Coro's promise so FinalAwaiter can
         // schedule deferred destruction via the worker's TLS list.

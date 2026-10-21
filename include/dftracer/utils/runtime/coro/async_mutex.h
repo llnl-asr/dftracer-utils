@@ -52,7 +52,7 @@ class AsyncMutex {
 
     AsyncMutexLockOperation lock() noexcept;
 
-    void unlock();
+    [[gnu::always_inline]] void unlock();
 
    private:
     friend class AsyncMutexLockOperation;
@@ -63,6 +63,10 @@ class AsyncMutex {
     /// with queue_mutex_ held, except the FREE-to-LOCKED and LOCKED-to-FREE
     /// steps of an uncontended lock and unlock.
     static constexpr std::uint32_t LOCKED_WAITERS = 2;
+
+    /// The unlock that finds waiters. Out of line, and the only frame a chain
+    /// of unlocks adds per waiter, because unlock() is inlined into its caller.
+    [[gnu::noinline]] inline void unlock_contended();
 
     void push_locked(AsyncMutexLockOperation* op) noexcept;
     void remove_locked(AsyncMutexLockOperation* op) noexcept;
@@ -119,13 +123,20 @@ class AsyncMutexLockOperation {
                                                   std::memory_order_relaxed)) {
             return false;
         }
+        return queue(awaiter);
+    }
 
+    /// The contended case, kept out of line so the uncontended lock stays a
+    /// few inline instructions.
+    [[gnu::noinline]] bool queue(std::coroutine_handle<> awaiter) noexcept {
+        std::uint32_t s;
         awaiter_ = awaiter;
         executor_ = dftracer::utils::resume_executor_for(nullptr);
         bool acquired = false;
         {
             std::lock_guard<std::mutex> lock(mutex_.queue_mutex_);
-            // The state read above is stale: a slow unlock may have freed it.
+            // The caller found it locked, but a slow unlock may have freed it
+            // since.
             s = mutex_.state_.load(std::memory_order_relaxed);
             for (;;) {
                 if (s == AsyncMutex::FREE) {
@@ -228,7 +239,7 @@ inline void AsyncMutex::remove_locked(AsyncMutexLockOperation* op) noexcept {
     }
 }
 
-inline void AsyncMutex::unlock() {
+[[gnu::always_inline]] inline void AsyncMutex::unlock() {
     assert(state_.load(std::memory_order_relaxed) != FREE);
 
     std::uint32_t s = LOCKED;
@@ -236,7 +247,10 @@ inline void AsyncMutex::unlock() {
                                        std::memory_order_relaxed)) {
         return;
     }
+    unlock_contended();
+}
 
+void AsyncMutex::unlock_contended() {
     AsyncMutexLockOperation* next;
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);

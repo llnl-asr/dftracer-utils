@@ -17,7 +17,7 @@
 // are allocated but never touched are live without being resident; a full run
 // prints them as "over" and does not count them.
 
-#define DFTU_MEMORY_PROBE_DEFINE_NEW
+#define DFTRACER_UTILS_MEMORY_PROBE_DEFINE_NEW
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dataframe/dataframe.h>

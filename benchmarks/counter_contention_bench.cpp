@@ -31,7 +31,7 @@
 // Every run checks that live bytes end at zero, that the freed bytes equal the
 // allocated bytes and that both equal the bytes the size tables imply.
 
-#define DFTU_MEMORY_PROBE_DEFINE_NEW
+#define DFTRACER_UTILS_MEMORY_PROBE_DEFINE_NEW
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>

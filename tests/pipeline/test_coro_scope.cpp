@@ -213,14 +213,14 @@ TEST_CASE("CoroScope - Manual join") {
 
     auto task = make_task(
         [&](CoroScope& ctx) -> coro::CoroTask<void> {
-            CoroScope scope(ctx.get_executor());
+            auto scope = CoroScope::long_lived(ctx.get_executor());
             for (int i = 0; i < 5; ++i) {
-                scope.spawn([&counter](CoroScope&) -> coro::CoroTask<void> {
+                scope->spawn([&counter](CoroScope&) -> coro::CoroTask<void> {
                     ++counter;
                     co_return;
                 });
             }
-            co_await scope.join();
+            co_await scope->join();
             CHECK(counter.load() == 5);
             co_return;
         },

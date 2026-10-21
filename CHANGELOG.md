@@ -73,6 +73,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   A loser stops at its next wait when it has a cancel token or a `cancel()`, and a loser with neither runs to its end.
   A `CoroTask` loser stops at its next wait with no exception, and one that never started does not run.
   `timeout()` gets a `cancel()`, so `when_any(op, timeout(5s))` returns when `op` does and no longer waits 5 s.
+- Make a `CoroScope` that spawned children and is destroyed without `join()` abort the process in every build, where it used to log a warning and let its children run on.
+  A scope now comes only from `run_coro_scope`, `with_scope`, `Runtime::scope()` or a spawn; an owner that joins the scope itself uses `CoroScope::long_lived()`.
+- Make a `GzipLineWriter` or `PaddedStripedWriter` destroyed without `close()` on an executor thread hand its cleanup to a task instead of blocking that thread.
+  Off an executor thread it still waits for the cleanup, and with no runtime left it leaks its state with a warning.
 - Make executor shutdown wake every waiting coroutine with a cancelled error and wait until it ends before it frees the frame.
   This covers a semaphore, `AsyncMutex`, `Channel`, `AsyncOnce`, `SpawnFuture`, a timeout, `when_all`, `when_any`, a memory reservation and a read that waits for a peer.
   A memory reservation that shutdown cancels now reports `memory::Status::Cancelled` instead of `OverBudget`.

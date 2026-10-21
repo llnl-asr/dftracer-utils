@@ -280,11 +280,11 @@ TEST_CASE("CoroScope - spawn_producer unwinds registration on spawn failure") {
     // Using an executor that gets shut down immediately to force failure.
     ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 1});
     executor.shutdown();
-    CoroScope scope(&executor);
+    auto scope = CoroScope::long_lived(&executor);
     coro::Channel<int> channel(4);
 
     CHECK_THROWS_AS(
-        scope.spawn_producer(
+        scope->spawn_producer(
             channel, [](CoroScope&) -> coro::Generator<int> { co_yield 1; }),
         std::runtime_error);
 
@@ -295,11 +295,11 @@ TEST_CASE("CoroScope - spawn_producer unwinds registration on spawn failure") {
 TEST_CASE("CoroScope - spawn_transforms unwinds bulk registration on failure") {
     ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 1});
     executor.shutdown();
-    CoroScope scope(&executor);
+    auto scope = CoroScope::long_lived(&executor);
     coro::Channel<int> input(4);
     coro::Channel<int> output(4);
 
-    CHECK_THROWS_AS(scope.spawn_transforms(
+    CHECK_THROWS_AS(scope->spawn_transforms(
                         input, output, 3,
                         [](CoroScope&, int value) -> coro::CoroTask<int> {
                             co_return value;

@@ -980,33 +980,31 @@ coro::Coro ThreadPoolExecutor::run_task(std::shared_ptr<Task> task,
     task->result().mark_running();
 
     {
-        CoroScope scope(this);
         std::exception_ptr task_error;
 
         DFTRACER_UTILS_LOG_DEBUG("Worker %zu executing task ID %ld ('%s')",
                                  context->worker_id, task->get_id(),
                                  task->get_name());
 
-        try {
-            auto coro_task = task->execute(scope, *input);
-            // Propagate executor to the CoroTask's PromiseBase so that
-            // nested awaitables (when_any, channel, etc.) can schedule
-            // resumptions.  run_task() is a Coro (CoroPromise, not
-            // PromiseBase), so the normal PromiseBase propagation in
-            // CoroTask::await_suspend doesn't fire.
-            coro_task.handle().promise().set_executor(this);
-            std::any result = co_await std::move(coro_task);
+        // run_coro_scope joins the scope to wait for any sub-spawned
+        // coroutines; the body never throws, it records task_error.
+        co_await run_coro_scope(
+            this, [&, this](CoroScope& scope) -> coro::CoroTask<void> {
+                try {
+                    auto coro_task = task->execute(scope, *input);
+                    // Propagate executor to the CoroTask's PromiseBase so that
+                    // nested awaitables (when_any, channel, etc.) can schedule
+                    // resumptions.  run_task() is a Coro (CoroPromise, not
+                    // PromiseBase), so the normal PromiseBase propagation in
+                    // CoroTask::await_suspend doesn't fire.
+                    coro_task.handle().promise().set_executor(this);
+                    std::any result = co_await std::move(coro_task);
 
-            // Set result via TaskResult
-            task->set_result(std::move(result));
-        } catch (...) {
-            task_error = std::current_exception();
-        }
-
-        // Always join scope to wait for any sub-spawned coroutines.
-        // Without this, the scope's JoinHandle would be destroyed
-        // while FinalAwaiters still reference it (use-after-free).
-        co_await scope.join();
+                    task->set_result(std::move(result));
+                } catch (...) {
+                    task_error = std::current_exception();
+                }
+            });
 
         // After the awaits we may have resumed on a different worker; the
         // starting `context` can be freed (retired), so touch the live resumer.

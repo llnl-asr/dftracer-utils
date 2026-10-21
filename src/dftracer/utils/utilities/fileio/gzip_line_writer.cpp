@@ -7,6 +7,7 @@
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
+#include <dftracer/utils/utilities/fileio/long_lived_release.h>
 #include <dftracer/utils/utilities/fileio/parallel/merge.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
 
@@ -141,7 +142,8 @@ struct GzipLineWriter::Impl {
     std::string base;
     GzipWriterOptions opts;
     std::size_t workers;
-    CoroScope scope;
+    std::unique_ptr<CoroScope> scope_owner{CoroScope::long_lived()};
+    CoroScope& scope{*scope_owner};
     std::unique_ptr<coro::CoroSemaphore> slots;
     coro::CoroSemaphore compute;
     coro::AsyncMutex drain_mu;
@@ -177,20 +179,15 @@ struct GzipLineWriter::Impl {
     bool cleaned = false;
     bool closed = false;
 
-    ~Impl() {
-        if (cleaned || closed) return;
+    bool settled() const { return cleaned || closed; }
+
+    void abandon() {
         set_error(ErrorCode::Internal, "writer destroyed without close");
-        try {
-            default_runtime().run_blocking(
-                "gzip_line_writer_abort",
-                [this](CoroScope&) -> coro::CoroTask<void> {
-                    co_await fail();
-                    co_return;
-                });
-        } catch (...) {
-            std::error_code ec;
-            for (auto& p : created) fs::remove(p, ec);
-        }
+    }
+
+    coro::CoroTask<void> join_and_clean() {
+        co_await fail();
+        co_return;
     }
 
     bool multi() const { return opts.part_size > 0; }
@@ -499,8 +496,16 @@ GzipLineWriter::GzipLineWriter() = default;
 GzipLineWriter::GzipLineWriter(std::unique_ptr<Impl> impl)
     : impl_(std::move(impl)) {}
 GzipLineWriter::GzipLineWriter(GzipLineWriter&&) noexcept = default;
-GzipLineWriter& GzipLineWriter::operator=(GzipLineWriter&&) noexcept = default;
-GzipLineWriter::~GzipLineWriter() = default;
+GzipLineWriter& GzipLineWriter::operator=(GzipLineWriter&& o) noexcept {
+    if (this != &o) {
+        release_long_lived(std::move(impl_), "gzip_line_writer_abort");
+        impl_ = std::move(o.impl_);
+    }
+    return *this;
+}
+GzipLineWriter::~GzipLineWriter() {
+    release_long_lived(std::move(impl_), "gzip_line_writer_abort");
+}
 
 coro::CoroTask<Result<GzipLineWriter>> GzipLineWriter::open(
     std::string path, GzipWriterOptions opts) {
@@ -519,7 +524,10 @@ coro::CoroTask<Result<GzipLineWriter>> GzipLineWriter::open(
     auto impl =
         std::make_unique<Impl>(std::move(path), std::move(opts), workers);
     const auto open_part_ok = co_await impl->open_part();
-    if (!open_part_ok) co_return unexpected(impl->get_error());
+    if (!open_part_ok) {
+        DFTUtilsError err = co_await impl->fail();
+        co_return unexpected(std::move(err));
+    }
     co_return GzipLineWriter(std::move(impl));
 }
 

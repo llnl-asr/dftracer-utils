@@ -824,6 +824,32 @@ TEST_CASE("GzipLineWriter - producer refused when ordered, close needs flush") {
     CHECK(!fs::exists(path));
 }
 
+TEST_CASE("GzipLineWriter - a drop without close on an executor joins") {
+    auto path = dftu_utils_test::make_unique_test_path("glw_dropped.pfw.gz");
+    GzipWriterOptions o;
+    o.member_size = 500;
+    o.workers = 2;
+    std::atomic<bool> on_executor{false};
+    Runtime rt(4);
+    rt.scope("glw_dropped", [&](CoroScope&) -> coro::CoroTask<void> {
+          {
+              auto wr = co_await GzipLineWriter::open(path.string(), o);
+              REQUIRE(wr.has_value());
+              for (std::size_t i = 0; i < 100; ++i)
+                  REQUIRE(co_await wr->append(line(i, 40)));
+              on_executor = Executor::current() != nullptr;
+          }
+          co_return;
+      }).wait();
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (fs::exists(path) && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    CHECK_FALSE(fs::exists(path));
+    CHECK(on_executor.load());
+    rt.shutdown();
+}
+
 TEST_CASE("GzipLineWriter - producers stay within the memory budget") {
     auto path = dftu_utils_test::make_unique_test_path("glw_budget.pfw.gz");
     constexpr std::size_t PRODUCERS = 8, PER = 4000, MEMBER = 64 * 1024;

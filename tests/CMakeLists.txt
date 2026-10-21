@@ -142,6 +142,9 @@ endif()
 add_test(NAME agg_families
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_agg_families.cmake)
+add_test(NAME long_lived_scopes
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_long_lived_scopes.cmake)
 add_test(NAME coro_conditions
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_coro_conditions.cmake)
@@ -165,6 +168,7 @@ set(TEST_CPP_SOURCES
     runtime/test_task_pool.cpp
     runtime/test_reserve_async.cpp
     runtime/test_shutdown.cpp
+    runtime/test_coro_scope_join.cpp
     common/test_logging.cpp
     common/test_string_intern.cpp
     dstd/test_hash_partition.cpp

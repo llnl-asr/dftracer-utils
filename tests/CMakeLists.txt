@@ -259,6 +259,7 @@ set(TEST_CPP_SOURCES
     index/test_index_pass_parallel.cpp
     index/test_catalog.cpp
     index/test_build_memory.cpp
+    index/test_read_bytes.cpp
     index/test_record_schema.cpp
     index/test_schema_registry.cpp
     index/test_schema_class.cpp

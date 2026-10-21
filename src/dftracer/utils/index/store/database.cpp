@@ -180,11 +180,7 @@ std::shared_ptr<::rocksdb::WriteBufferManager>& shared_write_buffer_manager() {
 
 #ifdef DFTRACER_UTILS_ENABLE_ZSTD
     options.compression = ::rocksdb::kZSTD;
-    options.compression_opts.level = constants::rocksdb::ZSTD_COMPRESSION_LEVEL;
-    options.compression_opts.max_dict_bytes =
-        constants::rocksdb::ZSTD_MAX_DICT_BYTES;
-    options.compression_opts.zstd_max_train_bytes =
-        constants::rocksdb::ZSTD_MAX_TRAIN_BYTES;
+    options.compression_opts.level = constants::rocksdb::ZSTD_UPPER_LEVEL;
     options.compression_opts.enabled = true;
     options.bottommost_compression = ::rocksdb::kZSTD;
     options.bottommost_compression_opts.level =

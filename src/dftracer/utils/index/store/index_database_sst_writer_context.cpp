@@ -31,6 +31,10 @@ std::string emit_sst(
     ::rocksdb::Options writer_options(
         index::store::RocksDatabase::default_options(),
         index::store::RocksDatabase::default_column_family_options());
+    // SstFileWriter takes the bottommost codec when one is set. An ingested
+    // SST is compacted again, so it gets the fast upper-level codec.
+    writer_options.bottommost_compression =
+        ::rocksdb::kDisableCompressionOption;
     ::rocksdb::SstFileWriter writer(env_opts, writer_options);
 
     auto status = writer.Open(path);

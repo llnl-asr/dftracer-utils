@@ -82,8 +82,12 @@ static constexpr std::size_t FILE_IO_BUFFER_SIZE =
 }  // namespace reader
 
 namespace rocksdb {
-/// ZSTD dictionary training tuning shared by every DB-open path.
+/// ZSTD dictionary training tuning for the bottom level, shared by every
+/// DB-open path.
 static constexpr int ZSTD_COMPRESSION_LEVEL = 9;
+/// Upper LSM levels, which compaction rewrites again: a fast level and no
+/// dictionary, so a level that is soon rewritten is not trained or squeezed.
+static constexpr int ZSTD_UPPER_LEVEL = 1;
 static constexpr std::size_t ZSTD_MAX_DICT_BYTES = 262144;        ///< 256KB
 static constexpr std::size_t ZSTD_MAX_TRAIN_BYTES = 1024 * 1024;  ///< 1MB
 

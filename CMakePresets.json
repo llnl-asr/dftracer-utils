@@ -338,6 +338,7 @@
       "displayName": "Run UBSAN Tests",
       "configurePreset": "ubsan",
       "environment": {
+        "UBSAN_OPTIONS": "print_stacktrace=1:suppressions=${sourceDir}/tests/ubsan/ubsan.supp",
         "DFTRACER_UTILS_ELASTIC": "0"
       },
       "execution": {
@@ -352,6 +353,7 @@
       "displayName": "Run ASAN+UBSAN Tests",
       "configurePreset": "asan-ubsan",
       "environment": {
+        "UBSAN_OPTIONS": "print_stacktrace=1:suppressions=${sourceDir}/tests/ubsan/ubsan.supp",
         "DFTRACER_UTILS_ELASTIC": "0"
       },
       "execution": {

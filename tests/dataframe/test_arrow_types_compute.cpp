@@ -15,16 +15,11 @@
 // bytes, and Decimal128 arithmetic goes through the documented (lossy)
 // Float64 cast.
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-// clang-format off
-// nanoarrow.h must precede arrow.h: arrow.h (via plugins/arrow_abi.h) defines
-// ArrowSchema/ArrowArray under the ARROW_C_DATA_INTERFACE guard but not
-// ArrowArrayStream, which nanoarrow.h's inline helpers then need complete.
-#include <nanoarrow/nanoarrow.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
 #include <dftracer/utils/dataframe/scalar.h>
-// clang-format on
+#include <nanoarrow/nanoarrow.h>
 
 namespace df = dftracer::utils::dataframe;
 

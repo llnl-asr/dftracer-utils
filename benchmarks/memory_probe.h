@@ -62,7 +62,8 @@ inline std::int64_t live_bytes() {
     return live_bytes_counter().load(std::memory_order_relaxed);
 }
 
-/** Count of `new` calls with a request size in [2^(b-1), 2^b); bucket 0 is size 0. */
+/** Count of `new` calls with a request size in [2^(b-1), 2^b); bucket 0 is size
+ * 0. */
 inline std::uint64_t histogram_count(std::size_t bucket) {
     return histogram_counters()[bucket].load(std::memory_order_relaxed);
 }
@@ -78,7 +79,8 @@ inline Reading read() {
     task_vm_info_data_t info{};
     mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
     if (task_info(mach_task_self(), TASK_VM_INFO,
-                  reinterpret_cast<task_info_t>(&info), &count) == KERN_SUCCESS) {
+                  reinterpret_cast<task_info_t>(&info),
+                  &count) == KERN_SUCCESS) {
         r.current_rss = info.resident_size;
         r.anon = info.phys_footprint;
     }
@@ -245,7 +247,8 @@ void operator delete(void* p, std::size_t, std::align_val_t) noexcept {
 void operator delete[](void* p, std::size_t, std::align_val_t) noexcept {
     mp_detail::counted_free(p);
 }
-void operator delete(void* p, std::align_val_t, const std::nothrow_t&) noexcept {
+void operator delete(void* p, std::align_val_t,
+                     const std::nothrow_t&) noexcept {
     mp_detail::counted_free(p);
 }
 void operator delete[](void* p, std::align_val_t,

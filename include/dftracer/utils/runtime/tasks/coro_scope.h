@@ -20,7 +20,6 @@
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils {
 
@@ -67,7 +66,7 @@ class CoroScope {
    private:
     Executor* executor_;
     coro::JoinHandle join_handle_;
-    std::vector<coro::Coro> coroutines_;
+    std::atomic<bool> spawned_{false};
     std::atomic<bool> joined_{false};
 
     /// Cancellation: each scope has its own flag, and a scope also counts as
@@ -100,6 +99,7 @@ class CoroScope {
                 "Cannot spawn coroutine: executor is not running");
         }
         join_handle_.track(c);
+        spawned_.store(true, std::memory_order_release);
         c.handle().promise().executor = executor_;
         auto handle = c.handle();
         // Transfer ownership: set released=true BEFORE enqueueing so
@@ -111,41 +111,35 @@ class CoroScope {
         executor_->enqueue(handle);
     }
 
-   public:
-    /// Binds to the executor driving this thread.
-    CoroScope() : executor_(Executor::current()) {}
-
     explicit CoroScope(Executor* executor) : executor_(executor) {}
 
-   private:
     /// Child scope of a spawn, running on the chain made for it.
     CoroScope(Executor* executor, std::shared_ptr<CancelChain> chain)
         : executor_(executor), cancel_chain_(std::move(chain)) {}
 
+    template <typename Func, typename... Args>
+        requires std::is_invocable_r_v<coro::CoroTask<void>, Func, CoroScope&,
+                                       Args...>
+    friend coro::CoroTask<void> run_coro_scope(Executor* executor,
+                                               Func scope_func, Args... args);
+
    public:
+    /// A scope for an owner that outlives the call that made it and joins it
+    /// itself (a writer's member). Everything its children touch must live in
+    /// heap state the owner holds by pointer, and the owner's destructor must
+    /// join the scope off the executor thread or hand it to a joiner task.
+    /// The long_lived_scopes ctest lists the callers.
+    static std::unique_ptr<CoroScope> long_lived(
+        Executor* executor = Executor::current()) {
+        return std::unique_ptr<CoroScope>(new CoroScope(executor));
+    }
+
     ~CoroScope() {
-        if (!joined_ && !coroutines_.empty()) {
-            DFTRACER_UTILS_LOG_WARN(
-                "CoroScope destroyed without join()! "
-                "%zu coroutines still pending -- releasing to executor.",
-                coroutines_.size());
-            // Release un-joined coroutines so the executor can manage their
-            // lifetime. Without this, destroying the Coro objects would destroy
-            // the coroutine frames while workers may still be executing them
-            // (use-after-free). release() sets the 'released' flag so that
-            // FinalAwaiter schedules deferred destruction via the executor.
-            for (auto& c : coroutines_) {
-                if (!c.done()) {
-                    // Detach from join group before releasing -- the
-                    // JoinHandle lives in this scope and is about to be
-                    // destroyed. Nulling the pointers prevents FinalAwaiter
-                    // from accessing the destroyed counter/continuation.
-                    auto& p = c.handle().promise();
-                    p.join_counter = nullptr;
-                    p.join_continuation = nullptr;
-                    (void)c.release();
-                }
-            }
+        if (!joined_.load(std::memory_order_acquire) &&
+            spawned_.load(std::memory_order_acquire)) {
+            DFTRACER_UTILS_LOG_ERROR(
+                "CoroScope destroyed without join() after spawning children");
+            std::terminate();
         }
     }
 
@@ -513,7 +507,6 @@ class CoroScope {
     /// Alias for join() -- backward compatibility with old join_all() callers.
     coro::CoroTask<void> join_all() { return join(); }
 
-    std::size_t size() const { return coroutines_.size(); }
     // ====================================================================
     // Accessor / Utility
     // ====================================================================
@@ -596,6 +589,25 @@ inline coro::CoroTask<void> run_coro_scope(Executor* executor, Func scope_func,
         rethrow_and_clear(error);
     }
     co_return;
+}
+
+/// Runs `task` as a detached coroutine on `executor`. False, and `task` never
+/// runs, when the executor is null or not running.
+inline bool spawn_detached(Executor* executor, coro::CoroTask<void> task) {
+    if (!executor || !executor->is_running()) return false;
+    auto make_coro = [](coro::CoroTask<void> t, Executor* exec) -> coro::Coro {
+        try {
+            t.handle().promise().set_executor(exec);
+            co_await std::move(t);
+        } catch (...) {
+            DFTRACER_UTILS_LOG_ERROR("detached task failed");
+        }
+    };
+    auto c = make_coro(std::move(task), executor);
+    c.handle().promise().executor = executor;
+    auto handle = c.release();
+    executor->enqueue(handle);
+    return true;
 }
 
 /// Same, on the executor already driving this thread. Lets a utility fan

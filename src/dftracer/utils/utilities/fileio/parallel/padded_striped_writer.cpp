@@ -3,6 +3,7 @@
 #include <dftracer/utils/runtime/coro/channel.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <dftracer/utils/utilities/fileio/long_lived_release.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
 #include <dftracer/utils/utilities/fileio/parallel/pwrite_fully.h>
 #include <fcntl.h>
@@ -83,150 +84,53 @@ void pad_to_stripe(std::vector<std::uint8_t>& out, std::size_t stripe_size) {
     }
 }
 
-class PaddedStripedWriter : public ParallelWriter {
-   public:
-    struct Chunk {
-        std::vector<std::uint8_t> data;
-        std::shared_ptr<coro::Channel<MemberSpan>> ack;
-    };
+struct Chunk {
+    std::vector<std::uint8_t> data;
+    std::shared_ptr<coro::Channel<ParallelWriter::MemberSpan>> ack;
+};
 
-    explicit PaddedStripedWriter(std::size_t stripe_size)
-        : stripe_size_(stripe_size) {}
+// Everything the packer and its children touch. The writer holds it by
+// pointer, so no coroutine points into the writer or the frame that owns it.
+struct PaddedStripedImpl {
+    explicit PaddedStripedImpl(std::size_t stripe_size)
+        : stripe_size(stripe_size) {}
 
-    coro::CoroTask<int> open(std::string path, std::size_t num_workers,
-                             bool /*gzip_extension*/,
-                             CoroScope* /*scope*/) override {
-        path_ = std::move(path);
-        ssize_t fd = co_await ::dftracer::utils::io::open(
-            path_.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd < 0) {
-            DFTRACER_UTILS_LOG_ERROR("Failed to open padded output: %s",
-                                     path_.c_str());
-            co_return -1;
+    std::string path;
+    int fd = -1;
+    std::size_t stripe_size;
+    std::atomic<std::uint64_t> next_stripe_idx{0};
+
+    std::unique_ptr<CoroScope> packer_scope;
+    std::shared_ptr<coro::Channel<Chunk>> channel;
+    std::vector<coro::ChannelProducer<Chunk>> producers;
+    std::optional<coro::SpawnFuture<int>> packer_future;
+    bool packer_drained = false;
+
+    bool settled() const { return fd < 0 && (packer_drained || !packer_scope); }
+
+    void abandon() {}
+
+    coro::CoroTask<void> join_and_clean() {
+        co_await drain_packer();
+        if (fd >= 0) {
+            co_await ::dftracer::utils::io::close(fd);
+            fd = -1;
         }
-        fd_ = static_cast<int>(fd);
-        next_stripe_idx_.store(0, std::memory_order_relaxed);
-        per_worker_last_.assign(num_workers, std::nullopt);
-
-        // Valid-gzip placeholder so callers that skip write_header still
-        // produce a file gunzip can walk.
-        std::vector<std::uint8_t> pad;
-        pad.reserve(stripe_size_);
-        pad_to_stripe(pad, stripe_size_);
-        const auto pwrite_bytes_rc =
-            co_await pwrite_bytes(pad.data(), pad.size(), 0);
-        if (pwrite_bytes_rc != 0) {
-            co_return -1;
-        }
-
-        // Set up the chunk channel + N pre-registered producers (one per
-        // worker). The packer exits once all producers are released.
-        channel_ = coro::make_channel<Chunk>(CHUNK_CHANNEL_CAPACITY);
-        producers_.reserve(num_workers);
-        for (std::size_t i = 0; i < num_workers; ++i) {
-            producers_.emplace_back(channel_->producer());
-        }
-
-        // The packer runs in a scope of its own: a caller joins its scope
-        // before it calls close(), and close() is what lets the packer end,
-        // so a packer in the caller's scope would never be joined.
-        packer_scope_ = std::make_unique<CoroScope>();
-        packer_future_ = packer_scope_->spawn(
-            [this, consumer = channel_->consumer()](
-                CoroScope& s) mutable -> coro::CoroTask<int> {
-                co_return co_await run_packer(s, std::move(consumer));
-            });
-        co_return 0;
     }
 
-    coro::CoroTask<int> write_header(ByteView data) override {
-        if (data.size() + PAD_MEMBER_FIXED_OVERHEAD > stripe_size_) {
-            DFTRACER_UTILS_LOG_ERROR(
-                "padded writer: header %zu + pad overhead exceeds stripe %zu",
-                data.size(), stripe_size_);
-            co_return -1;
-        }
-        std::vector<std::uint8_t> buf;
-        buf.reserve(stripe_size_);
-        buf.insert(
-            buf.end(), reinterpret_cast<const std::uint8_t*>(data.data()),
-            reinterpret_cast<const std::uint8_t*>(data.data()) + data.size());
-        pad_to_stripe(buf, stripe_size_);
-        co_return co_await pwrite_bytes(buf.data(), buf.size(), 0);
-    }
-
-    coro::CoroTask<int> write_chunk(std::size_t worker_idx,
-                                    ByteView data) override {
-        if (worker_idx >= producers_.size()) {
-            DFTRACER_UTILS_LOG_ERROR("padded writer: worker_idx %zu >= %zu",
-                                     worker_idx, producers_.size());
-            co_return -1;
-        }
-        if (data.size() + PAD_MEMBER_FIXED_OVERHEAD > stripe_size_) {
-            DFTRACER_UTILS_LOG_ERROR(
-                "padded writer: chunk %zu + pad overhead exceeds stripe %zu",
-                data.size(), stripe_size_);
-            co_return -1;
-        }
-        Chunk c;
-        c.data.assign(
-            reinterpret_cast<const std::uint8_t*>(data.data()),
-            reinterpret_cast<const std::uint8_t*>(data.data()) + data.size());
-        c.ack = coro::make_channel<MemberSpan>(1);
-        auto ack = c.ack;
-        bool ok = co_await producers_[worker_idx].send(std::move(c));
-        if (!ok) co_return -1;
-        auto span = co_await ack->receive();
-        if (!span) co_return -1;
-        per_worker_last_[worker_idx] = *span;
-        co_return 0;
-    }
-
-    coro::CoroTask<int> write_footer(ByteView data) override {
-        const auto drain_rc = co_await drain_packer();
-        if (drain_rc != 0) co_return -1;
-        const auto stripes = next_stripe_idx_.load(std::memory_order_relaxed);
-        const auto offset = (stripes + 1) * stripe_size_;  // +1 for header
-        co_return co_await pwrite_all(data, static_cast<off_t>(offset));
-    }
-
-    coro::CoroTask<int> close() override {
-        const auto drain_packer_rc = co_await drain_packer();
-        if (drain_packer_rc != 0) {
-            if (fd_ >= 0) {
-                co_await ::dftracer::utils::io::close(fd_);
-                fd_ = -1;
-            }
-            co_return -1;
-        }
-        if (fd_ < 0) co_return 0;
-        auto rc = co_await ::dftracer::utils::io::close(fd_);
-        fd_ = -1;
-        co_return static_cast<int>(rc);
-    }
-
-    std::vector<std::string> output_paths() const override { return {path_}; }
-
-    std::optional<MemberSpan> last_member(
-        std::size_t worker_idx) const override {
-        if (worker_idx >= per_worker_last_.size()) return std::nullopt;
-        return per_worker_last_[worker_idx];
-    }
-
-   private:
     // Drop all producer slots so the channel reports EOF to the packer, then
     // wait for the packer to emit its final stripe. Safe to call twice.
     coro::CoroTask<int> drain_packer() {
-        if (!packer_drained_) {
-            producers_.clear();
-            if (packer_future_.has_value()) {
-                auto rc = co_await *packer_future_;
-                packer_future_.reset();
-                co_await packer_scope_->join();
-                packer_drained_ = true;
+        if (!packer_drained) {
+            producers.clear();
+            if (packer_future.has_value()) {
+                auto rc = co_await *packer_future;
+                packer_future.reset();
+                co_await packer_scope->join();
+                packer_drained = true;
                 if (rc != 0) co_return rc;
             }
-            packer_drained_ = true;
+            packer_drained = true;
         }
         co_return 0;
     }
@@ -234,9 +138,9 @@ class PaddedStripedWriter : public ParallelWriter {
     coro::CoroTask<int> run_packer(CoroScope& parent_scope,
                                    coro::ChannelConsumer<Chunk> consumer) {
         std::vector<std::uint8_t> buf;
-        buf.reserve(stripe_size_);
+        buf.reserve(stripe_size);
         std::uint64_t current_stripe_idx =
-            next_stripe_idx_.fetch_add(1, std::memory_order_relaxed);
+            next_stripe_idx.fetch_add(1, std::memory_order_relaxed);
 
         std::deque<coro::SpawnFuture<int>> in_flight;
         int final_rc = 0;
@@ -256,8 +160,8 @@ class PaddedStripedWriter : public ParallelWriter {
             in_flight.push_back(parent_scope.spawn(
                 [this, p = std::move(payload),
                  emit_idx](CoroScope&) mutable -> coro::CoroTask<int> {
-                    pad_to_stripe(p, stripe_size_);
-                    const auto offset = (emit_idx + 1) * stripe_size_;
+                    pad_to_stripe(p, stripe_size);
+                    const auto offset = (emit_idx + 1) * stripe_size;
                     co_return co_await pwrite_bytes(p.data(), p.size(),
                                                     static_cast<off_t>(offset));
                 }));
@@ -269,16 +173,16 @@ class PaddedStripedWriter : public ParallelWriter {
             if (!chunk) break;
             if (!buf.empty() &&
                 buf.size() + chunk->data.size() + PAD_MEMBER_FIXED_OVERHEAD >
-                    stripe_size_) {
+                    stripe_size) {
                 co_await launch_emit(std::move(buf), current_stripe_idx);
                 buf.clear();
-                buf.reserve(stripe_size_);
+                buf.reserve(stripe_size);
                 current_stripe_idx =
-                    next_stripe_idx_.fetch_add(1, std::memory_order_relaxed);
+                    next_stripe_idx.fetch_add(1, std::memory_order_relaxed);
             }
             if (chunk->ack) {
-                MemberSpan span{
-                    (current_stripe_idx + 1) * stripe_size_ + buf.size(),
+                ParallelWriter::MemberSpan span{
+                    (current_stripe_idx + 1) * stripe_size + buf.size(),
                     static_cast<std::uint64_t>(chunk->data.size())};
                 co_await chunk->ack->send(std::move(span));
                 chunk->ack->close();
@@ -295,28 +199,163 @@ class PaddedStripedWriter : public ParallelWriter {
         co_return final_rc;
     }
 
-    coro::CoroTask<int> pwrite_all(ByteView data, off_t offset) {
-        co_return co_await pwrite_bytes(
-            reinterpret_cast<const std::uint8_t*>(data.data()), data.size(),
-            offset);
-    }
-
     coro::CoroTask<int> pwrite_bytes(const std::uint8_t* bytes,
                                      std::size_t size, off_t offset) {
-        co_return co_await pwrite_fully(fd_, path_.c_str(), bytes, size,
-                                        offset);
+        co_return co_await pwrite_fully(fd, path.c_str(), bytes, size, offset);
+    }
+};
+
+class PaddedStripedWriter : public ParallelWriter {
+   public:
+    explicit PaddedStripedWriter(std::size_t stripe_size)
+        : impl_(std::make_unique<PaddedStripedImpl>(stripe_size)) {}
+
+    PaddedStripedWriter(PaddedStripedWriter&&) noexcept = default;
+    PaddedStripedWriter& operator=(PaddedStripedWriter&& o) noexcept {
+        if (this != &o) {
+            release();
+            impl_ = std::move(o.impl_);
+            per_worker_last_ = std::move(o.per_worker_last_);
+        }
+        return *this;
+    }
+    ~PaddedStripedWriter() override { release(); }
+
+    coro::CoroTask<int> open(std::string path, std::size_t num_workers,
+                             bool /*gzip_extension*/,
+                             CoroScope* /*scope*/) override {
+        PaddedStripedImpl& s = *impl_;
+        s.path = std::move(path);
+        ssize_t fd = co_await ::dftracer::utils::io::open(
+            s.path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0) {
+            DFTRACER_UTILS_LOG_ERROR("Failed to open padded output: %s",
+                                     s.path.c_str());
+            co_return -1;
+        }
+        s.fd = static_cast<int>(fd);
+        s.next_stripe_idx.store(0, std::memory_order_relaxed);
+        per_worker_last_.assign(num_workers, std::nullopt);
+
+        // Valid-gzip placeholder so callers that skip write_header still
+        // produce a file gunzip can walk.
+        std::vector<std::uint8_t> pad;
+        pad.reserve(s.stripe_size);
+        pad_to_stripe(pad, s.stripe_size);
+        const auto pwrite_bytes_rc =
+            co_await s.pwrite_bytes(pad.data(), pad.size(), 0);
+        if (pwrite_bytes_rc != 0) {
+            co_return -1;
+        }
+
+        // Set up the chunk channel + N pre-registered producers (one per
+        // worker). The packer exits once all producers are released.
+        s.channel = coro::make_channel<Chunk>(CHUNK_CHANNEL_CAPACITY);
+        s.producers.reserve(num_workers);
+        for (std::size_t i = 0; i < num_workers; ++i) {
+            s.producers.emplace_back(s.channel->producer());
+        }
+
+        // The packer runs in a scope of its own: a caller joins its scope
+        // before it calls close(), and close() is what lets the packer end,
+        // so a packer in the caller's scope would never be joined.
+        s.packer_scope = CoroScope::long_lived();
+        s.packer_future = s.packer_scope->spawn(
+            [impl = impl_.get(), consumer = s.channel->consumer()](
+                CoroScope& scope) mutable -> coro::CoroTask<int> {
+                co_return co_await impl->run_packer(scope, std::move(consumer));
+            });
+        co_return 0;
     }
 
-    std::string path_;
-    int fd_ = -1;
-    std::size_t stripe_size_;
-    std::atomic<std::uint64_t> next_stripe_idx_{0};
+    coro::CoroTask<int> write_header(ByteView data) override {
+        PaddedStripedImpl& s = *impl_;
+        if (data.size() + PAD_MEMBER_FIXED_OVERHEAD > s.stripe_size) {
+            DFTRACER_UTILS_LOG_ERROR(
+                "padded writer: header %zu + pad overhead exceeds stripe %zu",
+                data.size(), s.stripe_size);
+            co_return -1;
+        }
+        std::vector<std::uint8_t> buf;
+        buf.reserve(s.stripe_size);
+        buf.insert(
+            buf.end(), reinterpret_cast<const std::uint8_t*>(data.data()),
+            reinterpret_cast<const std::uint8_t*>(data.data()) + data.size());
+        pad_to_stripe(buf, s.stripe_size);
+        co_return co_await s.pwrite_bytes(buf.data(), buf.size(), 0);
+    }
 
-    std::unique_ptr<CoroScope> packer_scope_;
-    std::shared_ptr<coro::Channel<Chunk>> channel_;
-    std::vector<coro::ChannelProducer<Chunk>> producers_;
-    std::optional<coro::SpawnFuture<int>> packer_future_;
-    bool packer_drained_ = false;
+    coro::CoroTask<int> write_chunk(std::size_t worker_idx,
+                                    ByteView data) override {
+        PaddedStripedImpl& s = *impl_;
+        if (worker_idx >= s.producers.size()) {
+            DFTRACER_UTILS_LOG_ERROR("padded writer: worker_idx %zu >= %zu",
+                                     worker_idx, s.producers.size());
+            co_return -1;
+        }
+        if (data.size() + PAD_MEMBER_FIXED_OVERHEAD > s.stripe_size) {
+            DFTRACER_UTILS_LOG_ERROR(
+                "padded writer: chunk %zu + pad overhead exceeds stripe %zu",
+                data.size(), s.stripe_size);
+            co_return -1;
+        }
+        Chunk c;
+        c.data.assign(
+            reinterpret_cast<const std::uint8_t*>(data.data()),
+            reinterpret_cast<const std::uint8_t*>(data.data()) + data.size());
+        c.ack = coro::make_channel<MemberSpan>(1);
+        auto ack = c.ack;
+        bool ok = co_await s.producers[worker_idx].send(std::move(c));
+        if (!ok) co_return -1;
+        auto span = co_await ack->receive();
+        if (!span) co_return -1;
+        per_worker_last_[worker_idx] = *span;
+        co_return 0;
+    }
+
+    coro::CoroTask<int> write_footer(ByteView data) override {
+        PaddedStripedImpl& s = *impl_;
+        const auto drain_rc = co_await s.drain_packer();
+        if (drain_rc != 0) co_return -1;
+        const auto stripes = s.next_stripe_idx.load(std::memory_order_relaxed);
+        const auto offset = (stripes + 1) * s.stripe_size;  // +1 for header
+        co_return co_await s.pwrite_bytes(
+            reinterpret_cast<const std::uint8_t*>(data.data()), data.size(),
+            static_cast<off_t>(offset));
+    }
+
+    coro::CoroTask<int> close() override {
+        PaddedStripedImpl& s = *impl_;
+        const auto drain_packer_rc = co_await s.drain_packer();
+        if (drain_packer_rc != 0) {
+            if (s.fd >= 0) {
+                co_await ::dftracer::utils::io::close(s.fd);
+                s.fd = -1;
+            }
+            co_return -1;
+        }
+        if (s.fd < 0) co_return 0;
+        auto rc = co_await ::dftracer::utils::io::close(s.fd);
+        s.fd = -1;
+        co_return static_cast<int>(rc);
+    }
+
+    std::vector<std::string> output_paths() const override {
+        return {impl_->path};
+    }
+
+    std::optional<MemberSpan> last_member(
+        std::size_t worker_idx) const override {
+        if (worker_idx >= per_worker_last_.size()) return std::nullopt;
+        return per_worker_last_[worker_idx];
+    }
+
+   private:
+    void release() {
+        release_long_lived(std::move(impl_), "padded_striped_writer_abort");
+    }
+
+    std::unique_ptr<PaddedStripedImpl> impl_;
     std::vector<std::optional<MemberSpan>> per_worker_last_;
 };
 

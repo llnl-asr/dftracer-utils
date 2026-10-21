@@ -724,6 +724,16 @@ Reporter set_reporter(Reporter reporter) noexcept;
  */
 void set_exit_check(bool enabled) noexcept;
 
+/**
+ * @brief Run `hook` at exit, before the exit check reads the counters.
+ *
+ * For a library whose threads still free blocks at exit, such as a runtime
+ * whose workers destroy the last frames: its hook stops those threads.
+ * Hooks run in reverse order of registration and only when the exit check
+ * is on. At most a few are kept; one more aborts. Safe from any thread.
+ */
+void add_exit_hook(void (*hook)()) noexcept;
+
 }  // namespace dftracer::utils::memory
 
 #endif  // DFTRACER_UTILS_MEMORY_MANAGER_H

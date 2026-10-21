@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_config.h>
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/scheduler/watchdog.h>
 
@@ -204,6 +205,23 @@ namespace {
 std::mutex g_default_mtx;
 std::shared_ptr<Runtime> g_default_runtime;
 bool g_default_is_lazy = false;
+
+// The memory exit check runs from atexit, which can come before this global is
+// destroyed; stopping the default runtime first lets its workers free their
+// last frames before the check reads.
+void shutdown_default_runtime() {
+    std::shared_ptr<Runtime> rt;
+    {
+        std::lock_guard<std::mutex> lock(g_default_mtx);
+        rt = g_default_runtime;
+    }
+    if (rt) rt->shutdown();
+}
+
+void hook_default_runtime_exit() {
+    [[maybe_unused]] static const bool hooked =
+        (memory::add_exit_hook(&shutdown_default_runtime), true);
+}
 }  // namespace
 
 bool elastic_default_enabled() {
@@ -225,6 +243,7 @@ std::shared_ptr<Runtime> default_runtime_shared() {
         cfg.min_workers = elastic_default_enabled() ? 1 : 0;
         g_default_runtime = std::make_shared<Runtime>(cfg);
         g_default_is_lazy = true;
+        hook_default_runtime_exit();
     }
     return g_default_runtime;
 }
@@ -240,6 +259,7 @@ void set_default_runtime(std::shared_ptr<Runtime> rt) {
     std::lock_guard<std::mutex> lock(g_default_mtx);
     g_default_runtime = std::move(rt);
     g_default_is_lazy = false;
+    hook_default_runtime_exit();
 }
 
 bool try_install_default_runtime(std::shared_ptr<Runtime> rt) {
@@ -247,6 +267,7 @@ bool try_install_default_runtime(std::shared_ptr<Runtime> rt) {
     if (g_default_runtime && !g_default_is_lazy) return false;
     g_default_runtime = std::move(rt);
     g_default_is_lazy = false;
+    hook_default_runtime_exit();
     return true;
 }
 

@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_DSTD_STRING_INTERN_H
 #define DFTRACER_UTILS_DSTD_STRING_INTERN_H
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -20,11 +21,11 @@ class StringIntern {
     using IndexSlot = std::atomic<std::uint64_t>;
 
    public:
-    /// id -> string lives in lazily allocated blocks behind a fixed directory,
-    /// so an idle table costs the directory rather than the whole id space.
-    static constexpr std::size_t BLOCK_BITS = 12;
+    /// id -> string lives in lazily allocated blocks behind a two-level
+    /// directory, so a small table costs a few KB rather than the id space.
+    static constexpr std::size_t BLOCK_BITS = 10;
     static constexpr std::size_t BLOCK_SIZE = 1u << BLOCK_BITS;
-    static constexpr std::size_t DIRECTORY_SIZE = 1u << 16;
+    static constexpr std::size_t DIRECTORY_SIZE = 1u << 18;
     static constexpr std::size_t FAST_CAPACITY = BLOCK_SIZE * DIRECTORY_SIZE;
 
     static constexpr std::uint32_t NO_ID = UINT32_MAX;
@@ -32,7 +33,7 @@ class StringIntern {
     /// Chunks start at FIRST_CHUNK_BYTES and double up to CHUNK_BYTES, so a
     /// small table stays small; a record larger than CHUNK_BYTES gets a chunk
     /// of its own size. Records are `{u32 len, u32 chunk, bytes}` padded to 4.
-    static constexpr std::size_t FIRST_CHUNK_BYTES = std::size_t{1} << 12;
+    static constexpr std::size_t FIRST_CHUNK_BYTES = std::size_t{1} << 7;
     static constexpr std::size_t CHUNK_BYTES = std::size_t{1} << 20;
 
     /// Owned bytes that a column can hold by `shared_ptr`. `size()` is the
@@ -133,7 +134,7 @@ class StringIntern {
 
     static constexpr std::size_t SHARDS = 64;
     static_assert((SHARDS & (SHARDS - 1)) == 0);
-    static constexpr std::size_t INITIAL_INDEX_SLOTS = 1u << 8;
+    static constexpr std::size_t INITIAL_INDEX_SLOTS = 1u << 4;
 
     /// Open-addressed string -> id lookup; slots hold `(low 32 hash bits <<
     /// 32) | (id + 1)`, so 0 is free and growth never rehashes a string.
@@ -156,6 +157,26 @@ class StringIntern {
     };
 
     static void release_bytes(void* p, std::size_t bytes) noexcept;
+
+    /// N entries in two levels: a small top array and leaves of LEAF entries
+    /// made on first use, so a table that holds few strings costs a few KB
+    /// rather than the whole directory. Entries never move once made.
+    template <class Block, std::size_t N>
+    struct Directory {
+        static constexpr std::size_t LEAF_BITS = 10;
+        static constexpr std::size_t LEAF = std::size_t{1} << LEAF_BITS;
+        static constexpr std::size_t TOP = (N + LEAF - 1) / LEAF;
+        using Entry = std::atomic<Block*>;
+
+        Block* load(std::size_t i) const noexcept {
+            const Entry* leaf =
+                top[i >> LEAF_BITS].load(std::memory_order_acquire);
+            return leaf ? leaf[i & (LEAF - 1)].load(std::memory_order_acquire)
+                        : nullptr;
+        }
+
+        std::array<std::atomic<Entry*>, TOP> top{};
+    };
 
     template <class T>
     class Array {
@@ -199,12 +220,18 @@ class StringIntern {
     static void free_array(T* a, std::size_t n) noexcept;
     template <class T>
     Array<T> make_owned(std::size_t n) const;
+    template <class Block, std::size_t N>
+    typename Directory<Block, N>::Entry& entry(Directory<Block, N>& dir,
+                                               std::size_t i);
+    template <class Block, std::size_t N>
+    void free_directory(Directory<Block, N>& dir,
+                        std::size_t block_size) noexcept;
     std::shared_ptr<Chunk> make_chunk(std::size_t bytes);
 
     memory::Pool* pool_;
-    Array<std::atomic<Slot*>> directory_;
-    Array<std::atomic<LogSlot*>> log_;
-    Array<std::atomic<ChunkRef*>> chunk_dir_;
+    Directory<Slot, DIRECTORY_SIZE> directory_;
+    Directory<LogSlot, DIRECTORY_SIZE> log_;
+    Directory<ChunkRef, CHUNK_DIRECTORY_SIZE> chunk_dir_;
     Array<Shard> shards_;
     std::atomic<std::size_t> num_chunks_{0};
     std::atomic<std::size_t> log_next_{0};

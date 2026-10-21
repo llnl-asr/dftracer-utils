@@ -27,9 +27,6 @@ void StringIntern::release_bytes(void* p, std::size_t bytes) noexcept {
 
 StringIntern::StringIntern(memory::Pool* pool)
     : pool_(pool ? pool : &memory::Manager::get().general()),
-      directory_(make_owned<std::atomic<Slot*>>(DIRECTORY_SIZE)),
-      log_(make_owned<std::atomic<LogSlot*>>(DIRECTORY_SIZE)),
-      chunk_dir_(make_owned<std::atomic<ChunkRef*>>(CHUNK_DIRECTORY_SIZE)),
       shards_(make_owned<Shard>(SHARDS)) {}
 
 StringIntern::~StringIntern() {
@@ -42,13 +39,9 @@ StringIntern::~StringIntern() {
             old = next;
         }
     }
-    for (std::size_t i = 0; i < CHUNK_DIRECTORY_SIZE; ++i)
-        free_array(chunk_dir_[i].load(std::memory_order_relaxed),
-                   CHUNK_BLOCK_SIZE);
-    for (std::size_t i = 0; i < DIRECTORY_SIZE; ++i) {
-        free_array(directory_[i].load(std::memory_order_relaxed), BLOCK_SIZE);
-        free_array(log_[i].load(std::memory_order_relaxed), BLOCK_SIZE);
-    }
+    free_directory(chunk_dir_, CHUNK_BLOCK_SIZE);
+    free_directory(directory_, BLOCK_SIZE);
+    free_directory(log_, BLOCK_SIZE);
 }
 
 std::uint32_t StringIntern::get_or_insert(std::string_view sv) {
@@ -131,7 +124,7 @@ std::size_t StringIntern::entry_count() const {
     auto n = entry_count_.load(std::memory_order_acquire);
     const auto start = n;
     for (;; ++n) {
-        auto* block = log_[n >> BLOCK_BITS].load(std::memory_order_acquire);
+        auto* block = log_.load(n >> BLOCK_BITS);
         if (!block ||
             block[n & (BLOCK_SIZE - 1)].load(std::memory_order_acquire) == 0)
             break;
@@ -145,7 +138,7 @@ std::size_t StringIntern::entry_count() const {
 }
 
 std::uint32_t StringIntern::entry_id(std::size_t n) const {
-    auto* block = log_[n >> BLOCK_BITS].load(std::memory_order_acquire);
+    auto* block = log_.load(n >> BLOCK_BITS);
     if (!block) return 0;
     const auto v = block[n & (BLOCK_SIZE - 1)].load(std::memory_order_acquire);
     return v == 0 ? 0 : v - 1;
@@ -158,7 +151,7 @@ std::string_view StringIntern::intern(std::string_view sv) {
 /// The record bound to `id`, or null when the slot is free.
 const char* StringIntern::slot_value(std::uint32_t id) const {
     if (id >= FAST_CAPACITY) return nullptr;
-    auto* block = directory_[id >> BLOCK_BITS].load(std::memory_order_acquire);
+    auto* block = directory_.load(id >> BLOCK_BITS);
     if (!block) return nullptr;
     return block[id & (BLOCK_SIZE - 1)].load(std::memory_order_acquire);
 }
@@ -178,8 +171,7 @@ std::uint32_t StringIntern::record_chunk(const char* rec) {
 /// An entry is written once before any record in its chunk is published, so
 /// a reader that saw such a record may read it.
 const StringIntern::ChunkRef* StringIntern::chunk_ref(std::uint32_t i) const {
-    auto* block =
-        chunk_dir_[i >> CHUNK_BLOCK_BITS].load(std::memory_order_acquire);
+    auto* block = chunk_dir_.load(i >> CHUNK_BLOCK_BITS);
     return &block[i & (CHUNK_BLOCK_SIZE - 1)];
 }
 
@@ -199,7 +191,7 @@ std::uint32_t StringIntern::add_chunk(std::size_t bytes) {
     if (n >= CHUNK_DIRECTORY_SIZE * CHUNK_BLOCK_SIZE) {
         throw std::length_error("string intern: exhausted the chunk table");
     }
-    auto& dir = chunk_dir_[n >> CHUNK_BLOCK_BITS];
+    auto& dir = entry(chunk_dir_, n >> CHUNK_BLOCK_BITS);
     auto* block = dir.load(std::memory_order_acquire);
     if (!block) {
         auto* fresh = make_array<ChunkRef>(CHUNK_BLOCK_SIZE);
@@ -331,7 +323,7 @@ void StringIntern::advance_num_strings(std::uint32_t id) {
 /// never sees a hole below the count it returns.
 void StringIntern::log_entry(std::uint32_t id) {
     const auto n = log_next_.fetch_add(1, std::memory_order_relaxed);
-    auto& dir = log_[n >> BLOCK_BITS];
+    auto& dir = entry(log_, n >> BLOCK_BITS);
     auto* block = dir.load(std::memory_order_acquire);
     if (!block) {
         auto* fresh = make_array<LogSlot>(BLOCK_SIZE);
@@ -351,7 +343,7 @@ bool StringIntern::bind_slot(std::uint32_t id, const char* str, bool cas) {
         throw std::length_error("string intern: exhausted the id space at " +
                                 std::to_string(id));
     }
-    auto& dir = directory_[id >> BLOCK_BITS];
+    auto& dir = entry(directory_, id >> BLOCK_BITS);
     auto* block = dir.load(std::memory_order_acquire);
     if (!block) {
         auto* fresh = make_array<Slot>(BLOCK_SIZE);
@@ -404,6 +396,37 @@ void StringIntern::free_array(T* a, std::size_t n) noexcept {
 template <class T>
 StringIntern::Array<T> StringIntern::make_owned(std::size_t n) const {
     return Array<T>(make_array<T>(n), n);
+}
+
+template <class Block, std::size_t N>
+typename StringIntern::Directory<Block, N>::Entry& StringIntern::entry(
+    Directory<Block, N>& dir, std::size_t i) {
+    using D = Directory<Block, N>;
+    auto& top = dir.top[i >> D::LEAF_BITS];
+    auto* leaf = top.load(std::memory_order_acquire);
+    if (!leaf) {
+        auto* fresh = make_array<typename D::Entry>(D::LEAF);
+        if (top.compare_exchange_strong(leaf, fresh,
+                                        std::memory_order_acq_rel)) {
+            leaf = fresh;
+        } else {
+            free_array(fresh, D::LEAF);
+        }
+    }
+    return leaf[i & (D::LEAF - 1)];
+}
+
+template <class Block, std::size_t N>
+void StringIntern::free_directory(Directory<Block, N>& dir,
+                                  std::size_t block_size) noexcept {
+    using D = Directory<Block, N>;
+    for (auto& top : dir.top) {
+        auto* leaf = top.load(std::memory_order_relaxed);
+        if (!leaf) continue;
+        for (std::size_t i = 0; i < D::LEAF; ++i)
+            free_array(leaf[i].load(std::memory_order_relaxed), block_size);
+        free_array(leaf, D::LEAF);
+    }
 }
 
 std::shared_ptr<StringIntern::Chunk> StringIntern::make_chunk(

@@ -1,5 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/memory/manager.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -18,6 +19,22 @@ using dftracer::utils::dstd::StringIntern;
 using Status = StringIntern::InsertStatus;
 
 TEST_SUITE("StringIntern") {
+    TEST_CASE("StringIntern - a table of a few strings costs a few KB") {
+        // A build makes one table per file, so a fixed cost per table grows
+        // with the file count: 8,404 tables of about 1 MB each held 9 GB.
+        namespace memory = dftracer::utils::memory;
+        memory::PoolHandle pool =
+            memory::Manager::get().general().child("intern size");
+        {
+            StringIntern intern(pool.get());
+            for (int i = 0; i < 100; ++i)
+                intern.get_or_insert("s" + std::to_string(i));
+            MESSAGE("bytes for 100 strings: " << pool->live());
+            CHECK(pool->live() < 128 * 1024);
+        }
+        CHECK(pool->live() == 0);
+    }
+
     TEST_CASE("StringIntern - round trips every string it is given") {
         StringIntern intern;
         std::vector<std::uint32_t> ids;

@@ -26,24 +26,37 @@ namespace dftracer::utils::utilities::fileio::compress {
 /// memory and must be rechunked first. Matches the reader's default guard.
 inline constexpr std::size_t RECHUNK_MEMBER_CAP = std::size_t{1} << 31;
 
-/// True if the file's first gzip member decodes to more than `cap` uncompressed
-/// bytes, i.e. it would force an unbounded whole-member decode downstream and
-/// must be rechunked first. A bounded first member (whether the file is single-
-/// or multi-member) returns false, since the read/index paths handle it fine.
-/// Bounded memory: decodes at most one member, discarding output, stopping once
-/// output passes `cap`.
-inline coro::CoroTask<bool> gzip_needs_rechunk(int fd, std::uint64_t file_size,
-                                               std::size_t cap) {
-    if (file_size == 0) co_return false;
+/// What decoding the start of a file shows. `compressed` and `uncompressed`
+/// count the bytes read and produced up to the point where the decode stopped.
+struct FirstMember {
+    bool exceeds_cap = false;
+    std::uint64_t compressed = 0;
+    std::uint64_t uncompressed = 0;
+};
+
+/// Decodes the first gzip member of the file, discarding the output, and stops
+/// once the output passes `cap`. Bounded memory: one member at most, never
+/// held. With `sample_bytes` the decode goes on through the next members until
+/// it has read that many compressed bytes, so a tiny first member (a "[" line
+/// of its own) does not decide the ratio. `exceeds_cap` is about the first
+/// member only.
+inline coro::CoroTask<FirstMember> gzip_first_member(
+    int fd, std::uint64_t file_size, std::size_t cap,
+    std::uint64_t sample_bytes = 0) {
+    FirstMember member;
+    if (file_size == 0) co_return member;
 
     z_stream zs{};
-    if (inflateInit2(&zs, 15 + 16) != Z_OK) co_return false;
+    if (inflateInit2(&zs, 15 + 16) != Z_OK) co_return member;
 
     std::vector<unsigned char> in(1u << 20);
     std::vector<unsigned char> out(1u << 20);
     std::uint64_t off = 0;
     std::uint64_t produced = 0;
-    bool result = false;
+    std::uint64_t member_produced = 0;
+    std::uint64_t finished = 0;  // compressed bytes of the members that ended
+    bool in_first = true;
+    bool counted = false;
 
     while (true) {
         if (zs.avail_in == 0) {
@@ -61,20 +74,46 @@ inline coro::CoroTask<bool> gzip_needs_rechunk(int fd, std::uint64_t file_size,
         zs.next_out = out.data();
         zs.avail_out = static_cast<uInt>(out.size());
         int rc = inflate(&zs, Z_NO_FLUSH);
-        produced += out.size() - zs.avail_out;
+        const std::uint64_t got = out.size() - zs.avail_out;
+        produced += got;
+        member_produced += got;
 
-        if (produced > cap) {  // first member exceeds the cap: rechunk
-            result = true;
+        if (in_first && member_produced > cap) {  // rechunk
+            member.exceeds_cap = true;
             break;
         }
-        // First member ended within the cap (or corrupt): the fast path is
-        // safe. A corrupt/truncated stream is left for the normal path to
-        // report, since rechunking would not help.
+        if (rc == Z_STREAM_END) {
+            finished += zs.total_in;
+            in_first = false;
+            const bool more = zs.avail_in > 0 || off < file_size;
+            if (finished >= sample_bytes || !more ||
+                inflateReset2(&zs, 15 + 16) != Z_OK) {
+                counted = true;
+                break;
+            }
+            member_produced = 0;
+            continue;
+        }
+        // The first member ended within the cap (or is corrupt): the fast path
+        // is safe. A corrupt or truncated stream is left for the normal path
+        // to report, since rechunking would not help.
         if (rc != Z_OK) break;
     }
 
+    member.compressed = counted ? finished : finished + zs.total_in;
+    member.uncompressed = produced;
     inflateEnd(&zs);
-    co_return result;
+    co_return member;
+}
+
+/// True if the file's first gzip member decodes to more than `cap` uncompressed
+/// bytes, i.e. it would force an unbounded whole-member decode downstream and
+/// must be rechunked first. A bounded first member (whether the file is single-
+/// or multi-member) returns false, since the read/index paths handle it fine.
+inline coro::CoroTask<bool> gzip_needs_rechunk(int fd, std::uint64_t file_size,
+                                               std::size_t cap) {
+    const FirstMember member = co_await gzip_first_member(fd, file_size, cap);
+    co_return member.exceeds_cap;
 }
 
 /// Decodes `in_path` (single huge member or otherwise; plain text is read as

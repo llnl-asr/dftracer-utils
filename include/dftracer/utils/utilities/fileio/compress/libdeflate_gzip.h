@@ -90,11 +90,11 @@ class GzipMemberCompressor {
                                         void* out, std::size_t out_cap) const;
 
     /// Compress one gzip member into `out`, resized to the exact member length.
-    /// `out`'s capacity is reused across calls, so a caller that keeps one
-    /// scratch buffer pays no per-member heap allocation once it is warm.
-    /// Returns false on failure (leaving `out` in an unspecified state). Prefer
-    /// this over compress_member() on hot paths and over the manual
-    /// bound()+resize()+ compress() dance everywhere.
+    /// `out`'s capacity is reused when it is large enough, and the worst-case
+    /// buffer is never allocated in `out`. Returns false on failure (leaving
+    /// `out` in an unspecified state). Prefer this over compress_member() on
+    /// hot paths and over the manual bound()+resize()+ compress() dance
+    /// everywhere.
     bool compress_member_into(std::vector<std::uint8_t>& out, const void* data,
                               std::size_t len) const;
 

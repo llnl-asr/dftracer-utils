@@ -896,30 +896,30 @@ Build complex task graphs with fan-out, fan-in, map, and reduce. Example from ``
    auto graph = TaskGraph::builder({.name = "DFTracerSplit"});
 
    // Phase 1: Parallel file processing
-   auto file_metadata = graph.parallel<Metadata>(
+   auto file_probes = graph.parallel<FileProbe>(
        input_files.size(),
-       [&input_files](CoroScope&, std::size_t idx) -> coro::CoroTask<Metadata> {
+       [&input_files](CoroScope&, std::size_t idx) -> coro::CoroTask<FileProbe> {
            // Each task processes one file
-           co_return collect_metadata(input_files[idx]);
+           co_return probe_file(input_files[idx]);
        },
-       {.name = "ProcessFile"});
+       {.name = "ProbeFile"});
 
-   // Phase 2: Reduce all metadata into chunk manifests
-   auto manifests = graph.reduce<std::vector<Manifest>>(
-       file_metadata, split_every{input_files.size()},
-       [](CoroScope&, std::vector<Metadata> all) -> coro::CoroTask<std::vector<Manifest>> {
-           co_return create_manifests(all);
+   // Phase 2: Reduce all probes into groups of files
+   auto groups = graph.reduce<std::vector<FileGroup>>(
+       file_probes, split_every{input_files.size()},
+       [](CoroScope&, std::vector<FileProbe> all) -> coro::CoroTask<std::vector<FileGroup>> {
+           co_return group_files(all);
        },
-       {.name = "CreateManifests"});
+       {.name = "GroupFiles"});
 
    // Phase 3: Create extraction task with combiner
    auto extractor = make_task(...);
-   extractor->depends_on(manifests.task());
+   extractor->depends_on(groups.task());
    graph.add(extractor);
 
    // Execute pipeline
    Pipeline pipeline(config);
-   pipeline.set_source(file_metadata.tasks());
+   pipeline.set_source(file_probes.tasks());
    pipeline.set_destination(extractor);
    pipeline.execute();
 

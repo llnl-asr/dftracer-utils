@@ -4,32 +4,78 @@
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/trace/chunk_extractor_utility.h>
 #include <dftracer/utils/utilities/fileio/chunk_writer.h>
-#include <dftracer/utils/utilities/fileio/lines/streaming_line_reader.h>
+#include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
-#include <dftracer/utils/utilities/reader/internal/reader_factory.h>
+
+#include <algorithm>
 
 namespace dftracer::utils::trace {
 
-namespace hash = dftracer::utils::utilities::hash;
-
 using utilities::fileio::ChunkWriter;
 using utilities::fileio::ChunkWriterConfig;
-using namespace utilities::fileio::lines;
+namespace lines = utilities::fileio::lines;
+
+std::string_view event_of_line(std::string_view line) {
+    const char* trimmed;
+    std::size_t trimmed_length;
+    if (json::trim_and_validate(line.data(), line.length(), trimmed,
+                                trimmed_length) &&
+        trimmed_length > 8) {
+        return std::string_view(trimmed, trimmed_length);
+    }
+    return {};
+}
+
+ExtractionBudget plan_extraction_budget(std::uint64_t total_bytes,
+                                        std::size_t max_parallel,
+                                        std::size_t threads,
+                                        std::size_t member_size_bytes) {
+    const std::uint64_t member = member_size_bytes;
+    const std::uint64_t floor = 4 * member;
+    const std::uint64_t ceiling =
+        floor * (std::max<std::size_t>(threads, 1) + 2);
+    const std::uint64_t share =
+        total_bytes / std::max<std::size_t>(max_parallel, 1);
+    ExtractionBudget budget;
+    budget.writer_bytes = std::clamp(share, floor, ceiling);
+    budget.reserve_bytes =
+        budget.writer_bytes + ChunkWriterConfig{}.io_flush_bytes;
+    return budget;
+}
+
+ExtractionAdmission::ExtractionAdmission(std::uint64_t total_bytes,
+                                         std::uint64_t reserve_bytes,
+                                         std::size_t max_parallel)
+    : semaphore_(std::min<std::uint64_t>(
+          total_bytes, reserve_bytes * std::max<std::size_t>(max_parallel, 1))),
+      held_(std::min(reserve_bytes, total_bytes)) {}
+
+coro::CoroTask<void> ExtractionAdmission::enter() {
+    co_await semaphore_.acquire(held_);
+    const std::size_t running =
+        in_flight_.fetch_add(1, std::memory_order_relaxed) + 1;
+    std::size_t seen = peak_in_flight_.load(std::memory_order_relaxed);
+    while (running > seen && !peak_in_flight_.compare_exchange_weak(
+                                 seen, running, std::memory_order_relaxed)) {
+    }
+}
+
+void ExtractionAdmission::leave() {
+    in_flight_.fetch_sub(1, std::memory_order_relaxed);
+    semaphore_.release(held_);
+}
 
 coro::CoroTask<ChunkExtractorUtilityOutput> ChunkExtractorUtility::operator()(
     const ChunkExtractorUtilityInput& input) {
     DFTRACER_UTILS_TRACE_SCOPE("extract chunks");
     ChunkExtractorUtilityOutput result;
     result.chunk_index = input.chunk_index;
-    result.success = false;
 
     try {
         co_return co_await extract_and_write(input);
     } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_ERROR("Failed to extract chunk %d: %s",
+        DFTRACER_UTILS_LOG_ERROR("Failed to extract chunks of group %d: %s",
                                  input.chunk_index, e.what());
-        result.output_path = input.output_dir + "/" + input.app_name + "-" +
-                             std::to_string(input.chunk_index) + ".pfw";
         co_return result;
     }
 }
@@ -39,17 +85,15 @@ ChunkExtractorUtility::extract_and_write(
     const ChunkExtractorUtilityInput& input) {
     ChunkExtractorUtilityOutput result;
     result.chunk_index = input.chunk_index;
-    result.size_mb = 0.0;
-    result.events = 0;
-    result.success = false;
 
     ChunkWriterConfig writer_config;
     writer_config.output_dir = input.output_dir;
     writer_config.base_name =
         input.app_name + "-" + std::to_string(input.chunk_index);
-    writer_config.chunk_size_bytes = std::numeric_limits<std::size_t>::max();
+    writer_config.chunk_size_bytes = input.chunk_size_bytes;
     writer_config.member_size_bytes = input.member_size_bytes;
     writer_config.compress = input.compress;
+    writer_config.memory_budget = input.memory_budget;
 
     ChunkWriter writer(writer_config);
     co_await writer.open();
@@ -57,98 +101,22 @@ ChunkExtractorUtility::extract_and_write(
     std::size_t content_hash = 0;
     utilities::hash::HasherUtility hasher;
 
-    for (const auto& spec : input.manifest.specs) {
-        if (spec.has_line_info()) {
-            auto reader_config =
-                StreamingLineReaderConfig()
-                    .with_file(spec.file_path)
-                    .with_index(spec.index_path)
-                    .with_line_range(spec.start_line, spec.end_line);
-            auto line_gen = StreamingLineReader::read_async(reader_config);
+    for (const auto& file : input.files) {
+        auto line_gen = lines::sources::async_streaming_gz_lines(file);
+        for (;;) {
+            auto line_opt = co_await line_gen.next();
+            if (!line_opt) break;
+            const auto& line = *line_opt;
+            const std::string_view event = event_of_line(
+                std::string_view(line.content.data(), line.content.length()));
+            if (!event.empty()) {
+                co_await writer.write_line(
+                    ByteView(event.data(), event.size()));
 
-            for (;;) {
-                auto line_opt = co_await line_gen.next();
-                if (!line_opt) break;
-                const auto& line = *line_opt;
-                const char* trimmed;
-                std::size_t trimmed_length;
-                if (json::trim_and_validate(line.content.data(),
-                                            line.content.length(), trimmed,
-                                            trimmed_length) &&
-                    trimmed_length > 8) {
-                    co_await writer.write_line(
-                        ByteView(trimmed, trimmed_length));
-
-                    if (input.compute_hash) {
-                        hasher.reset();
-                        hasher.update(
-                            std::string_view(trimmed, trimmed_length));
-                        content_hash += hasher.get_hash().value;
-                    }
-                }
-            }
-        } else {
-            if (!spec.index_path.empty()) {
-                auto reader =
-                    utilities::reader::internal::ReaderFactory::create(
-                        spec.file_path, spec.index_path);
-                auto line_gen = sources::async_indexed_file_bytes(
-                    reader, spec.start_byte, spec.end_byte);
-
-                for (;;) {
-                    auto line_opt = co_await line_gen.next();
-                    if (!line_opt) break;
-                    const auto& line = *line_opt;
-                    const char* trimmed;
-                    std::size_t trimmed_length;
-                    if (json::trim_and_validate(line.content.data(),
-                                                line.content.length(), trimmed,
-                                                trimmed_length) &&
-                        trimmed_length > 8) {
-                        co_await writer.write_line(
-                            ByteView(trimmed, trimmed_length));
-
-                        if (input.compute_hash) {
-                            hasher.reset();
-                            hasher.update(
-                                std::string_view(trimmed, trimmed_length));
-                            content_hash += hasher.get_hash().value;
-                        }
-                    }
-                }
-            } else {
-                // No index: stream the gzip trace and clip to the byte range
-                // ourselves. Offsets are into the uncompressed stream, and a
-                // line starting before the range belongs to the previous
-                // chunk.
-                auto line_gen =
-                    sources::async_streaming_gz_lines(spec.file_path);
-                std::size_t byte_pos = 0;
-
-                for (;;) {
-                    auto line_opt = co_await line_gen.next();
-                    if (!line_opt) break;
-                    const auto& line = *line_opt;
-                    const std::size_t line_start = byte_pos;
-                    byte_pos += line.content.length() + 1;
-                    if (line_start < spec.start_byte) continue;
-                    if (spec.end_byte > 0 && line_start >= spec.end_byte) break;
-                    const char* trimmed;
-                    std::size_t trimmed_length;
-                    if (json::trim_and_validate(line.content.data(),
-                                                line.content.length(), trimmed,
-                                                trimmed_length) &&
-                        trimmed_length > 8) {
-                        co_await writer.write_line(
-                            ByteView(trimmed, trimmed_length));
-
-                        if (input.compute_hash) {
-                            hasher.reset();
-                            hasher.update(
-                                std::string_view(trimmed, trimmed_length));
-                            content_hash += hasher.get_hash().value;
-                        }
-                    }
+                if (input.compute_hash) {
+                    hasher.reset();
+                    hasher.update(event);
+                    content_hash += hasher.get_hash().value;
                 }
             }
         }
@@ -156,16 +124,16 @@ ChunkExtractorUtility::extract_and_write(
 
     co_await writer.close();
 
-    result.output_path = writer.chunks().empty() ? "" : writer.chunks()[0].path;
+    result.chunks = writer.chunks();
     result.events = writer.total_events_written();
-    result.size_mb = input.manifest.total_size_mb;
     result.event_hash = content_hash;
+    result.peak_bytes = writer.peak_reserved_bytes();
     result.success = true;
 
     DFTRACER_UTILS_LOG_DEBUG(
-        "Chunk %d: %zu events, %.2f MB written to %s (hash=0x%zx)",
-        input.chunk_index, result.events, result.size_mb,
-        result.output_path.c_str(), result.event_hash);
+        "Group %d: %zu events in %zu chunk files (hash=0x%zx)",
+        input.chunk_index, result.events, result.chunks.size(),
+        result.event_hash);
 
     co_return result;
 }

@@ -314,14 +314,15 @@ struct FilesArgs : CliSchema {
 /// to the process.
 struct MemoryArgs : CliSchema {
     std::uint64_t memory_budget = 0;
+    std::string help =
+        "Most memory the tool holds, with units (e.g. 64GB). Work beyond it "
+        "spills to DFTRACER_UTILS_SPILL_DIR. 0 means a third of the "
+        "available memory";
 
     void register_on(argparse::ArgumentParser& p) override {
         p.add_group("Memory");
         p.add_argument("--memory-budget")
-            .help(
-                "Most memory the tool holds, with units (e.g. 64GB). Work "
-                "beyond it spills to DFTRACER_UTILS_SPILL_DIR. 0 means a "
-                "third of the available memory")
+            .help(help)
             .default_value(std::string("0"));
     }
 
@@ -392,6 +393,11 @@ struct IndexingArgs : CliSchema {
 
     std::string index_dir_help = "Directory for .dftindex stores";
     std::string force_help = "Force index recreation";
+    std::string checkpoint_help =
+        "Checkpoint size for gzip indexing (default: " +
+        std::to_string(constants::indexer::DEFAULT_CHECKPOINT_SIZE) +
+        "). Accepts units, e.g. 512KB, 4MB";
+    std::string group = "Indexing";
     bool with_index_dir = true;
     bool with_force = true;
 
@@ -399,16 +405,14 @@ struct IndexingArgs : CliSchema {
     explicit IndexingArgs(bool f) : with_force(f) {}
 
     void register_on(argparse::ArgumentParser& p) override {
-        p.add_group("Indexing");
+        p.add_group(group);
         if (with_index_dir) {
             p.add_argument("--index-dir")
                 .help(index_dir_help)
                 .default_value<std::string>("");
         }
         p.add_argument("--checkpoint-size")
-            .help("Checkpoint size for gzip indexing (default: " +
-                  std::to_string(constants::indexer::DEFAULT_CHECKPOINT_SIZE) +
-                  "). Accepts units, e.g. 512KB, 4MB")
+            .help(checkpoint_help)
             .default_value(
                 std::to_string(constants::indexer::DEFAULT_CHECKPOINT_SIZE));
         if (with_force) {

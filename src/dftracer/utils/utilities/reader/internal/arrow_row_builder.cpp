@@ -1,3 +1,4 @@
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/utilities/reader/internal/arrow_row_builder.h>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW

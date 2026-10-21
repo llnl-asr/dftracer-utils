@@ -1,3 +1,4 @@
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_merge_operator.h>

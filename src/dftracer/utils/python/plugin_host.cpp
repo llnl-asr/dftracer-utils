@@ -1,4 +1,5 @@
 #define PY_SSIZE_T_CLEAN
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>

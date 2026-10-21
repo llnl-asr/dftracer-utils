@@ -1,3 +1,4 @@
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>

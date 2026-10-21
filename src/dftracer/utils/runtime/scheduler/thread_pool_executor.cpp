@@ -577,6 +577,12 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
             // Give up the permit for a waiting/surplus thread, then park.
             release_permit(context);
             idle_workers_.fetch_add(1, std::memory_order_acq_rel);
+            // One idle worker at a time backs off from the short park; the
+            // rest re-check once after IDLE_PARK_MIN, which covers a missed
+            // wakeup, and then park on the long one, so a quiet pool does not
+            // wake every worker on the backoff ladder.
+            const bool poller =
+                !idle_poller_.exchange(true, std::memory_order_acq_rel);
             {
                 std::unique_lock<std::mutex> lock(idle_mutex_);
                 if (work_signal_.load(std::memory_order_acquire) !=
@@ -584,9 +590,12 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
                     idle_cv_.wait_for(lock, idle_park) !=
                         std::cv_status::timeout)
                     idle_park = IDLE_PARK_MIN;
+                else if (!poller)
+                    idle_park = IDLE_PARK_MAX;
                 else if (idle_park < IDLE_PARK_MAX)
                     idle_park *= 2;
             }
+            if (poller) idle_poller_.store(false, std::memory_order_release);
             idle_workers_.fetch_sub(1, std::memory_order_acq_rel);
         }
     }

@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/raw_buffer.h>
 #include <dftracer/utils/index/build/index_visitor.h>
 #include <dftracer/utils/index/gzip/checkpoint_size.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
@@ -51,7 +52,7 @@ namespace {
 // numbers and appends them to the shared `members` vector in order.
 
 struct ParallelInflateMsg {
-    std::unique_ptr<std::vector<unsigned char>> data;
+    std::unique_ptr<dftracer::utils::dstd::RawBuffer<unsigned char>> data;
     // Per-worker monotonic sequence. Load-bearing: moodycamel (our channel
     // backend) does not guarantee strict FIFO without producer tokens, so
     // the dispatcher reorders by this before handing chunks to visitors.
@@ -80,18 +81,28 @@ using ParallelChan = dftracer::utils::coro::Channel<ParallelInflateMsg>;
 
 namespace compress = dftracer::utils::utilities::fileio::compress;
 
+using Bytes = dftracer::utils::dstd::RawBuffer<unsigned char>;
+
+// Drop the first `n` bytes, keeping the capacity.
+static void drop_front(Bytes& b, std::size_t n) noexcept {
+    if (n == 0) return;
+    std::memmove(b.data(), b.data() + n, b.size() - n);
+    b.resize(b.size() - n);
+}
+
 // Decode the gzip member starting at compressed offset `c_off` into `out`
-// (grown as needed). Returns the number of compressed bytes the member
-// consumed, or nullopt on read/decode failure. Peak memory is one member.
+// (grown as needed), reading it through `comp`, which the caller reuses.
+// Neither buffer is zeroed: the read and the decode write every byte used.
+// Returns the number of compressed bytes the member consumed, or nullopt on
+// read/decode failure. Peak memory is one member.
 static dftracer::utils::coro::CoroTask<std::optional<std::uint64_t>>
 decode_member_at(int fd, std::uint64_t c_off, std::uint64_t file_size,
-                 const compress::GzipMemberDecompressor& dec,
-                 std::vector<unsigned char>& out, std::size_t& out_len,
-                 bool& truncated) {
+                 const compress::GzipMemberDecompressor& dec, Bytes& out,
+                 Bytes& comp, std::size_t& out_len, bool& truncated) {
     truncated = false;
     constexpr std::size_t READ_CHUNK = 1u << 20;
     if (out.size() < (1u << 20)) out.resize(1u << 20);
-    std::vector<unsigned char> comp;
+    comp.clear();
     std::uint64_t next_read = c_off;
     compress::DecompressResult res{};
     while (true) {
@@ -107,9 +118,12 @@ decode_member_at(int fd, std::uint64_t c_off, std::uint64_t file_size,
         }
         if (next_read >= file_size) {
             if (comp.empty()) co_return std::nullopt;
+            std::vector<std::uint8_t> cut;
             auto keep = compress::decode_truncated_member(comp.data(),
-                                                          comp.size(), out);
+                                                          comp.size(), cut);
             if (!keep) co_return std::nullopt;
+            out.resize(cut.size());
+            std::memcpy(out.data(), cut.data(), cut.size());
             out_len = *keep;
             truncated = true;
             co_return static_cast<std::uint64_t>(comp.size());
@@ -181,7 +195,7 @@ static dftracer::utils::coro::CoroTask<std::uint64_t> next_member_start(
     co_return to;
 }
 
-using InflateBuffer = std::unique_ptr<std::vector<unsigned char>>;
+using InflateBuffer = std::unique_ptr<Bytes>;
 
 // The inflate buffers of one file. A message moves its buffer to the
 // dispatcher, which hands it back once the visitors have read it: a fresh
@@ -199,7 +213,7 @@ class InflateBuffers {
                 return b;
             }
         }
-        return std::make_unique<std::vector<unsigned char>>();
+        return std::make_unique<Bytes>();
     }
     void give(InflateBuffer b) {
         if (!b) return;
@@ -237,7 +251,7 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
         ~End() { inflateEnd(z); }
     } end_guard{&zs};
 
-    std::vector<unsigned char> in(READ_CHUNK);
+    Bytes in(READ_CHUNK);
     InflateBuffer buf = buffers.take();
     buf->clear();
     // Growing a piece by doubling would leave a 64 MB buffer for a 32 MB one.
@@ -249,7 +263,7 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
     stop = false;
 
     auto emit = [&](ParallelInflateMsg& msg) {
-        std::vector<unsigned char>& data = *buf;
+        Bytes& data = *buf;
         std::size_t start = 0;
         if (strip) {
             start = data.size();
@@ -269,8 +283,7 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
                                      : since_newline + (data.size() - start);
         msg.data_len = data.size() - start;
         if (ship_bytes) {
-            data.erase(data.begin(),
-                       data.begin() + static_cast<std::ptrdiff_t>(start));
+            drop_front(data, start);
             msg.data = std::move(buf);
             buf = buffers.take();
             buf->reserve(split_at + OUT_STEP);
@@ -290,7 +303,7 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
             next_read += static_cast<std::uint64_t>(n);
         }
 
-        std::vector<unsigned char>& piece = *buf;
+        Bytes& piece = *buf;
         const std::size_t old = piece.size();
         piece.resize(old + OUT_STEP);
         zs.next_out = piece.data() + old;
@@ -324,7 +337,7 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
     }
 
     ParallelInflateMsg msg;
-    std::vector<unsigned char>& piece = *buf;
+    Bytes& piece = *buf;
     if (cut) {
         std::size_t keep = piece.size();
         while (keep > 0 && piece[keep - 1] != '\n') --keep;
@@ -369,6 +382,7 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
     if (!dec.valid()) co_return false;
 
     InflateBuffer buf = buffers.take();
+    Bytes comp;
     std::uint64_t c_off = range_c_start;
     std::uint64_t seq = 0;
     bool first = true;
@@ -401,7 +415,7 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
         }
         std::size_t out_len = 0;
         bool truncated = false;
-        std::vector<unsigned char>& out = *buf;
+        Bytes& out = *buf;
         // A buffer comes back as long as its last message; one shorter than
         // the member, by its ISIZE, would make the decode start over. ISIZE is
         // the four bytes before the next header, so the last member, which a
@@ -413,8 +427,8 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
                 out.size() <= m.isize)
                 out.resize(std::size_t{m.isize} + 1);
         }
-        auto in_bytes = co_await decode_member_at(fd, c_off, file_size, dec,
-                                                  out, out_len, truncated);
+        auto in_bytes = co_await decode_member_at(
+            fd, c_off, file_size, dec, out, comp, out_len, truncated);
         if (!in_bytes) co_return false;
         if (truncated && out_len == 0) {
             ParallelInflateMsg msg;
@@ -446,8 +460,7 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
         msg.data_len = emit_len;
         if (ship_bytes) {
             out.resize(out_len);
-            out.erase(out.begin(),
-                      out.begin() + static_cast<std::ptrdiff_t>(emit_start));
+            drop_front(out, emit_start);
             msg.data = std::move(buf);
             buf = buffers.take();
         }
@@ -463,12 +476,12 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
     // Non-last slice: capture the line straddling this slice's end by decoding
     // the next slice's first member and emitting up to and including its first
     // \n. No member record for it (member_ended stays false).
-    std::vector<unsigned char>& out = *buf;
+    Bytes& out = *buf;
     if (extend_to_newline_past_end && range_c_end < file_size) {
         std::size_t out_len = 0;
         bool truncated = false;
-        auto in_bytes = co_await decode_member_at(fd, range_c_end, file_size,
-                                                  dec, out, out_len, truncated);
+        auto in_bytes = co_await decode_member_at(
+            fd, range_c_end, file_size, dec, out, comp, out_len, truncated);
         if (!in_bytes) co_return false;
         std::size_t take = out_len;
         for (std::size_t i = 0; i < out_len; ++i) {
@@ -481,9 +494,10 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
         msg.seq = seq++;
         msg.lines = count_newlines(out.data(), take);
         msg.data_len = take;
-        if (ship_bytes)
-            msg.data = std::make_unique<std::vector<unsigned char>>(
-                out.data(), out.data() + take);
+        if (ship_bytes) {
+            msg.data = std::make_unique<Bytes>(take);
+            std::memcpy(msg.data->data(), out.data(), take);
+        }
         msg.member_ended = false;
         co_await producer.send(std::move(msg));
     }

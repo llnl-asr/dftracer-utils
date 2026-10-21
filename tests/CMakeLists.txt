@@ -445,6 +445,12 @@ add_subdirectory(memory)
 add_subdirectory(layout)
 
 # +++++++++++++++++++++++++++++++++++++++++
+# Benchmark Scripts
+# +++++++++++++++++++++++++++++++++++++++++
+
+add_subdirectory(bench)
+
+# +++++++++++++++++++++++++++++++++++++++++
 # Binary Integration Tests
 # +++++++++++++++++++++++++++++++++++++++++
 

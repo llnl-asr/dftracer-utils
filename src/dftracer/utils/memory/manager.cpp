@@ -651,6 +651,7 @@ void ManagerAccess::refresh(Manager& m, bool read_process) noexcept {
     if (read_process ||
         now >= m.next_sample_ms_.load(std::memory_order_relaxed)) {
         m.measured_.store(read_process_memory(), std::memory_order_relaxed);
+        m.limit_used_.store(read_limit_memory(), std::memory_order_relaxed);
         m.next_sample_ms_.store(now + constants::PRESSURE_SAMPLE_MS,
                                 std::memory_order_relaxed);
     }
@@ -662,7 +663,7 @@ void ManagerAccess::refresh(Manager& m, bool read_process) noexcept {
     std::size_t headroom = m.limit_headroom();
     bool near_limit =
         limit > headroom &&
-        m.measured_.load(std::memory_order_relaxed) > limit - headroom;
+        m.limit_used_.load(std::memory_order_relaxed) > limit - headroom;
     m.pressure_.store(over_budget || near_limit, std::memory_order_relaxed);
 }
 
@@ -688,6 +689,7 @@ Stats Manager::stats() {
     const std::size_t counted = ManagerAccess::counted_total(*this);
     out.external = counted + ManagerAccess::reported_total(*this);
     out.measured = measured_.load(std::memory_order_relaxed);
+    out.limit_used = limit_used_.load(std::memory_order_relaxed);
     std::size_t ours = out.reserved + counted;
     out.unattributed = out.measured > ours ? out.measured - ours : 0;
     out.limit = ManagerAccess::limit(*this);

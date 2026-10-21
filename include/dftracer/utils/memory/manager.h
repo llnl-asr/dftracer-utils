@@ -514,11 +514,16 @@ struct Stats {
     std::size_t budget;
     /// Sum of the external slots, counted and reported bytes.
     std::size_t external;
-    /// Anonymous and shared memory of the process (resident footprint on
+    /// Anonymous and shared memory of this process (resident footprint on
     /// macOS), read when stats() runs.
     std::size_t measured;
+    /// The memory counted against `limit`: in a cgroup, its anonymous and
+    /// shared memory, which includes every process of the group (other jobs
+    /// in a container or a batch allocation); else `measured`.
+    std::size_t limit_used;
     /// measured minus reserved and counted external, zero when that is
-    /// negative: memory of Python, pandas, pyarrow and the C library.
+    /// negative: memory of Python, pandas, pyarrow and the C library in this
+    /// process.
     std::size_t unattributed;
     /// The process limit: the cgroup limit, else the available memory at the
     /// first read.
@@ -599,6 +604,7 @@ class Manager {
     std::atomic<std::size_t> spill_headroom_{0};
     std::atomic<std::size_t> limit_{0};
     std::atomic<std::size_t> measured_{0};
+    std::atomic<std::size_t> limit_used_{0};
     std::atomic<std::uint64_t> next_sample_ms_{0};
     std::atomic<std::uint64_t> wait_arrivals_{0};
     std::atomic<ReserveWait*> wait_head_{nullptr};

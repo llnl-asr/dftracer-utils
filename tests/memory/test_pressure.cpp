@@ -1,7 +1,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/memory/constants.h>
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/memory/manager.h>
 #include <doctest/doctest.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include <cstddef>
 #include <cstdlib>
@@ -40,7 +43,14 @@ void touch(char* p, std::size_t bytes) {
 bool far_from_limit() {
     Stats s = Manager::get().stats();
     return s.limit > Manager::get().limit_headroom() &&
-           s.measured + Manager::get().limit_headroom() < s.limit;
+           s.limit_used + Manager::get().limit_headroom() < s.limit;
+}
+
+void* g_kept = nullptr;
+
+void free_kept() {
+    deallocate(g_kept, 64);
+    g_kept = nullptr;
 }
 
 }  // namespace
@@ -57,6 +67,38 @@ TEST_CASE("measured grows after touching 64 MiB of plain malloc memory") {
     CHECK(after.reserved == before.reserved);
     CHECK(after.unattributed >= before.unattributed + 48 * MIB);
     std::free(p);
+}
+
+TEST_CASE("measured is this process while another process allocates") {
+    Manager& m = Manager::get();
+    int ready[2];
+    int done[2];
+    REQUIRE(::pipe(ready) == 0);
+    REQUIRE(::pipe(done) == 0);
+    const Stats before = m.stats();
+    const pid_t child = ::fork();
+    REQUIRE(child >= 0);
+    if (child == 0) {
+        auto* p = static_cast<char*>(std::malloc(64 * MIB));
+        if (p != nullptr) touch(p, 64 * MIB);
+        char byte = 1;
+        ssize_t n = ::write(ready[1], &byte, 1);
+        n = ::read(done[0], &byte, 1);
+        (void)n;
+        ::_exit(p != nullptr ? 0 : 1);
+    }
+    char byte = 0;
+    REQUIRE(::read(ready[0], &byte, 1) == 1);
+    const Stats after = m.stats();
+    CHECK(after.measured < before.measured + 16 * MIB);
+    CHECK(after.unattributed < before.unattributed + 16 * MIB);
+    if (after.limit > 0) CHECK(after.limit_used >= after.measured);
+    REQUIRE(::write(done[1], &byte, 1) == 1);
+    int status = 0;
+    REQUIRE(::waitpid(child, &status, 0) == child);
+    CHECK(WIFEXITED(status));
+    CHECK(WEXITSTATUS(status) == 0);
+    for (int fd : {ready[0], ready[1], done[0], done[1]}) ::close(fd);
 }
 
 TEST_CASE("unattributed is measured minus ours") {

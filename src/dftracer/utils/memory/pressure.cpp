@@ -156,7 +156,9 @@ std::uint64_t read_number(const char* dir, const char* file) noexcept {
 
 }  // namespace
 
-std::size_t read_process_memory() noexcept {
+std::size_t read_process_memory() noexcept { return memory_from_status(); }
+
+std::size_t read_limit_memory() noexcept {
     Cgroup cg = find_cgroup();
     if (cg.version != Version::None) return memory_from_stat(cg);
     return memory_from_status();
@@ -194,11 +196,14 @@ std::size_t read_process_memory() noexcept {
     return static_cast<std::size_t>(info.phys_footprint);
 }
 
+std::size_t read_limit_memory() noexcept { return read_process_memory(); }
+
 std::size_t read_process_limit() noexcept { return 0; }
 
 #else
 
 std::size_t read_process_memory() noexcept { return 0; }
+std::size_t read_limit_memory() noexcept { return 0; }
 std::size_t read_process_limit() noexcept { return 0; }
 
 #endif

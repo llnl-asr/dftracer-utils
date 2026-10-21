@@ -176,6 +176,7 @@ set(TEST_CPP_SOURCES
     runtime/test_shutdown.cpp
     runtime/test_coro_scope_join.cpp
     runtime/test_frame_heap.cpp
+    runtime/test_io_backend_env.cpp
     common/test_logging.cpp
     common/test_intern_table.cpp
     dstd/test_hash_partition.cpp

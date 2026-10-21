@@ -50,6 +50,11 @@ inline constexpr const char* REPORT_ENV = "DFTRACER_UTILS_MEMORY_REPORT";
 inline constexpr bool DEFAULT_REPORT = false;
 }  // namespace memory_settings
 
+namespace io_settings {
+/// auto, io_uring, epoll, kqueue or threadpool.
+inline constexpr const char* BACKEND_ENV = "DFTRACER_UTILS_IO_BACKEND";
+}  // namespace io_settings
+
 namespace indexer {
 static constexpr std::size_t ZLIB_WINDOW_SIZE = 32768;
 static constexpr int ZLIB_GZIP_WINDOW_BITS = 31;    ///< 15 + 16 for gzip format

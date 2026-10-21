@@ -24,17 +24,17 @@ static constexpr std::uint8_t METRIC_FMT_FULL_WITH_SKETCH = 2;
 
 void serialize_agg_key_into(std::string& out, AggMapType map_type,
                             const AggregationKey& key,
-                            const StringIntern& intern);
+                            const dstd::StringIntern& intern);
 
 void serialize_agg_key_into(
     std::string& out, AggMapType map_type, std::string_view cat,
     std::string_view name, std::uint64_t pid, std::uint64_t tid,
     std::string_view hhash, std::string_view fhash, std::uint64_t time_bucket,
-    StringIntern& intern,
+    dstd::StringIntern& intern,
     const std::vector<std::pair<std::string_view, std::string_view>>*
         extra_keys = nullptr);
 std::string serialize_agg_key(AggMapType map_type, const AggregationKey& key,
-                              const StringIntern& intern);
+                              const dstd::StringIntern& intern);
 
 struct DeserializedAggKey {
     AggMapType map_type;
@@ -95,8 +95,8 @@ inline std::uint64_t decode_varint(const std::uint8_t*& p,
 /// the trailing key/value pairs into `out.extra_keys` (PROFILE epoch/step); the
 /// hot EVENT path leaves it false so no extra work is done.
 inline bool parse_agg_key_view(std::string_view data,
-                               const StringIntern& intern, AggKeyView& out,
-                               bool want_extra_keys = false) {
+                               const dstd::StringIntern& intern,
+                               AggKeyView& out, bool want_extra_keys = false) {
     if (data.size() < 6) return false;
 
     const auto* p = reinterpret_cast<const std::uint8_t*>(data.data());

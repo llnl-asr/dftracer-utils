@@ -76,7 +76,7 @@ AggRun start_aggregation(const std::string& index_path,
         {config.time_interval_us, config.params_hash(), config.group_by_file});
     auto cfg = std::make_shared<agg::AggregationConfig>(config);
     run.factory = [cfg, intern = run.merger->intern_table()](
-                      dftracer::utils::StringIntern& build_intern,
+                      dftracer::utils::dstd::StringIntern& build_intern,
                       int file_id) {
         return std::make_unique<agg::AggregationFold>(build_intern, intern,
                                                       *cfg, file_id);

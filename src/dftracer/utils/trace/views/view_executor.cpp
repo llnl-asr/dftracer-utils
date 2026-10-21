@@ -289,7 +289,7 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
     if (!export_bootstrap_eligible(plan)) co_return false;
 
     for (const auto& f : plan.files) {
-        dftracer::utils::StringIntern intern;
+        dftracer::utils::dstd::StringIntern intern;
         const auto& schema = plan_record_schema(plan);
         dftracer::utils::index::extensions::BloomFold bloom(
             intern, dftracer::utils::index::build::for_schema({}, schema));
@@ -360,7 +360,7 @@ coro::CoroTask<ExportStats> run_export(const ViewPlan& base_plan,
     // Build whatever index artifacts this scan can establish along the way.
     // Nothing attaches unless the scan already satisfies it, so this cannot
     // make the read slower than not having it.
-    dftracer::utils::StringIntern intern;
+    dftracer::utils::dstd::StringIntern intern;
     auto folds = select_index_folds(plan, vdef, intern);
     std::vector<Fold*> fold_ptrs;
     for (auto& f : folds) fold_ptrs.push_back(f.get());
@@ -499,11 +499,10 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
     co_return st;
 }
 
-coro::CoroTask<ExportStats> run_folds(const ViewPlan& plan,
-                                      std::span<Fold* const> folds,
-                                      dftracer::utils::StringIntern& intern,
-                                      DynamicPrune* dyn_prune,
-                                      coro::CoroSemaphore* gate) {
+coro::CoroTask<ExportStats> run_folds(
+    const ViewPlan& plan, std::span<Fold* const> folds,
+    dftracer::utils::dstd::StringIntern& intern, DynamicPrune* dyn_prune,
+    coro::CoroSemaphore* gate) {
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
     auto catalog = select_catalog_fold(plan, vdef, intern);
     std::vector<Fold*> all(folds.begin(), folds.end());
@@ -545,7 +544,7 @@ coro::CoroTask<BootstrapFile> bootstrap_file(
     std::size_t parse_ahead, bool keep_state, std::mutex* persist) {
     namespace gzi = dftracer::utils::index::gzip;
     BootstrapFile out;
-    dftracer::utils::StringIntern intern;
+    dftracer::utils::dstd::StringIntern intern;
     EngineAggFold agg(*plan, intern, /*apply_query=*/true);
     const auto& schema = plan_record_schema(*plan);
     dftracer::utils::index::extensions::BloomFold bloom(
@@ -924,7 +923,7 @@ coro::CoroTask<TypedResult> run_collect_typed(const ViewPlan& plan,
     // built); scan the raw trace so collect_typed
     // returns rows rather than silently empty.
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
-    dftracer::utils::StringIntern intern;
+    dftracer::utils::dstd::StringIntern intern;
     TypedCollectFold fold(intern);
     std::array<Fold*, 1> folds{&fold};
     co_await fuse(plan, vdef, folds, intern);
@@ -963,11 +962,11 @@ class DistinctRowFold : public Fold {
    public:
     struct Key {
         RowKeySource::Kind field = RowKeySource::Kind::Arg;
-        std::uint32_t arg_full = dftracer::utils::StringIntern::NO_ID;
-        std::uint32_t arg_bare = dftracer::utils::StringIntern::NO_ID;
+        std::uint32_t arg_full = dftracer::utils::dstd::StringIntern::NO_ID;
+        std::uint32_t arg_bare = dftracer::utils::dstd::StringIntern::NO_ID;
     };
 
-    DistinctRowFold(const dftracer::utils::StringIntern& intern,
+    DistinctRowFold(const dftracer::utils::dstd::StringIntern& intern,
                     std::vector<std::string> select, std::vector<Key> keys,
                     double time_scale, bool keep_metadata, bool by_path)
         : intern_(&intern),
@@ -1089,7 +1088,7 @@ class DistinctRowFold : public Fold {
     static constexpr std::uint8_t KIND_DBL = 8;
 
     static void append_id(std::string& out, std::uint32_t id) {
-        if (id == dftracer::utils::StringIntern::NO_ID) {
+        if (id == dftracer::utils::dstd::StringIntern::NO_ID) {
             out.push_back('\0');
             return;
         }
@@ -1139,8 +1138,8 @@ class DistinctRowFold : public Fold {
                 case Kind::Refused: {
                     const FoldEvent::ArgValue* v =
                         distinct_find_arg(ev, k.arg_full);
-                    if (!v &&
-                        k.arg_bare != dftracer::utils::StringIntern::NO_ID)
+                    if (!v && k.arg_bare !=
+                                  dftracer::utils::dstd::StringIntern::NO_ID)
                         v = distinct_find_arg(ev, k.arg_bare);
                     if (!v) {
                         scratch_.push_back('\0');
@@ -1175,7 +1174,7 @@ class DistinctRowFold : public Fold {
                                           0.5);
     }
 
-    const dftracer::utils::StringIntern* intern_;
+    const dftracer::utils::dstd::StringIntern* intern_;
     std::vector<std::string> select_;
     std::vector<Key> keys_;
     std::vector<std::uint8_t> kinds_;
@@ -1206,7 +1205,7 @@ bool distinct_keyable(const ViewPlan& plan,
 
 coro::CoroTask<dataframe::DataFrame> run_collect_rows(const ViewPlan& plan) {
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
-    dftracer::utils::StringIntern intern;
+    dftracer::utils::dstd::StringIntern intern;
     const bool by_path = plan_by_path(plan);
     NativeRowFold fold(intern, plan.select, plan.time_scale,
                        metadata_rows(plan), by_path);
@@ -1236,7 +1235,7 @@ coro::CoroTask<dataframe::DataFrame> run_collect_rows(const ViewPlan& plan) {
 coro::CoroTask<dataframe::DataFrame> run_collect_rows_distinct(
     const ViewPlan& plan, const std::vector<std::int64_t>& key_idx) {
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
-    dftracer::utils::StringIntern intern;
+    dftracer::utils::dstd::StringIntern intern;
     const bool by_path = plan_by_path(plan);
     std::vector<DistinctRowFold::Key> keys;
     std::vector<std::string> subset;
@@ -1280,7 +1279,7 @@ coro::CoroTask<R> run_containment_terminal(
     std::string ts_field, std::string dur_field, std::string name_field,
     std::vector<std::string> group, R (ContainmentFold::*build)() const) {
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
-    dftracer::utils::StringIntern intern;
+    dftracer::utils::dstd::StringIntern intern;
     ContainmentFold fold(
         intern, std::move(partition), std::move(ts_field), std::move(dur_field),
         std::move(name_field), plan.time_scale, std::move(group),
@@ -1436,7 +1435,8 @@ coro::CoroTask<ExportStats> run_scan_batches(
 // `make` builds it with the scan's intern so ids agree and per-worker slices
 // merge; `finalize` runs after the merge.
 struct FoldFactory {
-    std::function<std::unique_ptr<Fold>(dftracer::utils::StringIntern&)> make;
+    std::function<std::unique_ptr<Fold>(dftracer::utils::dstd::StringIntern&)>
+        make;
     std::function<void()> finalize;
 };
 
@@ -1485,7 +1485,8 @@ void add_stream_branch(
 
 void add_fold_factory(
     ViewSessionState& state,
-    std::function<std::unique_ptr<Fold>(dftracer::utils::StringIntern&)> make,
+    std::function<std::unique_ptr<Fold>(dftracer::utils::dstd::StringIntern&)>
+        make,
     std::function<void()> finalize) {
     state.fold_factories.push_back({std::move(make), std::move(finalize)});
 }
@@ -1761,8 +1762,8 @@ coro::CoroTask<ExportStats> run_session(
     ViewDefinition avdef = make_vdef(scan_plan, /*for_aggregation=*/true);
     // Streamed morsels hold the intern their ids resolve through, and outlive
     // this scan in their consumers' hands.
-    auto intern_owner = std::make_shared<dftracer::utils::StringIntern>();
-    dftracer::utils::StringIntern& intern = *intern_owner;
+    auto intern_owner = std::make_shared<dftracer::utils::dstd::StringIntern>();
+    dftracer::utils::dstd::StringIntern& intern = *intern_owner;
 
     std::vector<std::unique_ptr<StreamRowFold>> streams;
     streams.reserve(state->stream_branches.size());
@@ -1846,7 +1847,7 @@ coro::CoroTask<ExportStats> run_export_counters(const ViewPlan& plan,
                                                 ExportSink& sink) {
     ensure_schema(plan);
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/true);
-    dftracer::utils::StringIntern intern;
+    dftracer::utils::dstd::StringIntern intern;
     EngineAggFold agg(plan, intern);
     std::array<Fold*, 1> folds{&agg};
     ExportStats stats = co_await fuse(plan, vdef, folds, intern);

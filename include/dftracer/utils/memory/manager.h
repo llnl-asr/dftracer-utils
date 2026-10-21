@@ -614,19 +614,23 @@ class Manager {
 /**
  * @brief Charge the blocks this thread allocates to a pool until destruction.
  *
- * Nests and restores the previous pool. It sets the pool of the calling
- * thread, so a task that resumes on another thread opens its own Scope there.
- * The pool must stay open while any Scope names it.
+ * Nests and restores the previous pool and the task pointer (see TaskTag).
+ * It sets the pool of the calling thread, so a task that resumes on another
+ * thread opens its own Scope there. The one-argument form leaves the task
+ * pointer as it is; the two-argument form sets it for the lifetime of the
+ * Scope. The pool must stay open while any Scope names it.
  */
 class Scope {
    public:
     explicit Scope(Pool& pool) noexcept;
+    Scope(Pool& pool, void* user) noexcept;
     Scope(const Scope&) = delete;
     Scope& operator=(const Scope&) = delete;
     ~Scope();
 
    private:
     AttribCache* cache_;
+    void* previous_user_;
     std::uint16_t previous_;
 };
 
@@ -646,6 +650,34 @@ struct PoolTag {
 
 /// The tag of current_pool().
 PoolTag current_pool_tag() noexcept;
+
+/**
+ * @brief The pool and the opaque pointer a task runs with.
+ *
+ * The pointer is the calling thread's task pointer: this library never reads
+ * it, a higher layer sets it with set_task_user() and a Scope clears it.
+ */
+struct TaskTag {
+    PoolTag pool;
+    void* user = nullptr;
+};
+
+/// current_pool_tag() and the task pointer of the calling thread.
+TaskTag current_task() noexcept;
+
+/**
+ * @brief Make the tagged pool and task pointer the calling thread's, as
+ * enter_pool() does for the pool, without restoring them.
+ *
+ * Returns early when both already match.
+ */
+void enter_task(TaskTag tag) noexcept;
+
+/// The task pointer of the calling thread, null if none was set.
+void* task_user() noexcept;
+
+/// Set the task pointer of the calling thread.
+void set_task_user(void* user) noexcept;
 
 /**
  * @brief Make the tagged pool the calling thread's scope without restoring

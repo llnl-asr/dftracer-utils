@@ -185,7 +185,7 @@ namespace {
 std::string serialize_observed_columns(
     const std::set<std::uint32_t>& extra_key_ids,
     const std::set<std::string>& custom_metric_names,
-    const StringIntern& intern) {
+    const dstd::StringIntern& intern) {
     namespace rocks = index::store;
     std::string out;
     auto put_str = [&](std::string_view s) {
@@ -207,7 +207,7 @@ std::string serialize_observed_columns(
 void deserialize_observed_columns(std::string_view data,
                                   std::set<std::uint32_t>& extra_key_ids,
                                   std::set<std::string>& custom_metric_names,
-                                  StringIntern& intern) {
+                                  dstd::StringIntern& intern) {
     namespace rocks = index::store;
     std::size_t off = 0;
     auto read_u32 = [&]() -> std::uint32_t {

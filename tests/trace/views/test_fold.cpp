@@ -14,7 +14,7 @@
 #include "test_view_common.h"
 
 using namespace dftracer::utils::trace::views::detail;
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
 
 namespace {
 

@@ -15,7 +15,7 @@
 
 namespace dftracer::utils::trace::comparator {
 
-TraceMetadata extract_metadata(const StringIntern& intern,
+TraceMetadata extract_metadata(const dstd::StringIntern& intern,
                                const AggregationMap& aggregations,
                                std::size_t file_count) {
     TraceMetadata meta;
@@ -148,7 +148,7 @@ std::string percentile_label(const std::string& prefix, double p) {
 }
 
 // Key for (cat, name, time_bucket), uses string_view pointing into the
-// caller's StringIntern table (or string literals in tests).
+// caller's dstd::StringIntern table (or string literals in tests).
 struct WindowKey {
     std::string_view cat;
     std::string_view name;
@@ -182,7 +182,8 @@ double safe_div(double a, double b) { return b > 0.0 ? a / b : 0.0; }
 }  // anonymous namespace
 
 CollapsedMap collapse_by_group(const AggregationMap& aggregations,
-                               const StringIntern& src, StringIntern& dst) {
+                               const dstd::StringIntern& src,
+                               dstd::StringIntern& dst) {
     std::unordered_map<WindowKey, WindowMax, WindowKeyHash> windows;
 
     for (const auto& [key, m] : aggregations) {

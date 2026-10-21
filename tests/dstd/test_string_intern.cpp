@@ -1,6 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/string_intern.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -9,13 +8,14 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <vector>
 
-using dftracer::utils::DFTUtilsException;
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
+using Status = StringIntern::InsertStatus;
 
 TEST_SUITE("StringIntern") {
     TEST_CASE("StringIntern - round trips every string it is given") {
@@ -37,26 +37,32 @@ TEST_SUITE("StringIntern") {
         // A free slot inside the table is a genuine absent string.
         CHECK(intern.resolve(id + 1).empty());
         CHECK_THROWS_AS(intern.resolve(StringIntern::FAST_CAPACITY),
-                        DFTUtilsException);
+                        std::out_of_range);
     }
 
     TEST_CASE("StringIntern - insert_at_id preserves loaded ids") {
         StringIntern intern;
-        intern.insert_at_id(5000000, "loaded");
+        CHECK(intern.insert_at_id(5000000, "loaded") == Status::Ok);
         CHECK(intern.resolve(5000000) == "loaded");
         CHECK(intern.get_or_insert("loaded") == 5000000);
-        intern.insert_at_id(5000000, "loaded");
+        CHECK(intern.insert_at_id(5000000, "loaded") == Status::Ok);
         CHECK(intern.resolve(5000000) == "loaded");
         // Ids are index-local, so a second dictionary claiming the same id
         // must not silently take over or be silently dropped.
-        CHECK_THROWS_AS(intern.insert_at_id(5000000, "other"),
-                        DFTUtilsException);
+        CHECK(intern.insert_at_id(5000000, "other") == Status::Conflict);
         CHECK(intern.resolve(5000000) == "loaded");
+    }
+
+    TEST_CASE("StringIntern - insert_at_id reports an id past the table") {
+        StringIntern intern;
+        CHECK(intern.insert_at_id(StringIntern::FAST_CAPACITY, "x") ==
+              Status::OutOfRange);
+        CHECK(intern.size() == 0u);
     }
 
     TEST_CASE("StringIntern - new strings never reuse a loaded id") {
         StringIntern intern;
-        intern.insert_at_id(42, "loaded");
+        CHECK(intern.insert_at_id(42, "loaded") == Status::Ok);
         for (int i = 0; i < 100; ++i) {
             auto id = intern.get_or_insert("fresh_" + std::to_string(i));
             CHECK(id != 42u);
@@ -293,7 +299,7 @@ TEST_SUITE("StringIntern") {
             try {
                 intern.get_or_insert(key);
                 kept.push_back(key);
-            } catch (const DFTUtilsException&) {
+            } catch (const std::logic_error&) {
                 threw = true;
             }
         }
@@ -306,7 +312,7 @@ TEST_SUITE("StringIntern") {
     TEST_CASE("StringIntern - insert_at_id aliases a known string") {
         StringIntern intern;
         const auto first = intern.get_or_insert("shared");
-        intern.insert_at_id(first + 7, "shared");
+        CHECK(intern.insert_at_id(first + 7, "shared") == Status::Ok);
         CHECK(intern.resolve(first) == "shared");
         CHECK(intern.resolve(first + 7) == "shared");
         CHECK(intern.get_or_insert("shared") == first);

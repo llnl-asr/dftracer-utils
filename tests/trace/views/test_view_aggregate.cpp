@@ -272,7 +272,7 @@ TEST_SUITE("View") {
         dataframe::LazyResult<dataframe::DataFrame> plan =
             base.branch<dataframe::DataFrame>([total](ViewSession& s) {
                 s.attach_fold_factory(
-                    [total](dftracer::utils::StringIntern&)
+                    [total](dftracer::utils::dstd::StringIntern&)
                         -> std::unique_ptr<
                             dftracer::utils::trace::views::detail::Fold> {
                         return std::make_unique<CountFold>(total);

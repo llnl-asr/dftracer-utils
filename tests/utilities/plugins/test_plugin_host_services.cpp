@@ -6,7 +6,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/constants.h>
-#include <dftracer/utils/common/string_intern.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
 // fold_adapter.h transitively pulls nanoarrow (ArrowArray/ArrowSchema); it must
 // precede plugin.h so arrow_abi.h no-ops rather than tripping nanoarrow's outer
@@ -44,7 +44,7 @@
 
 using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::PluginFold;
 namespace coro = dftracer::utils::coro;
 

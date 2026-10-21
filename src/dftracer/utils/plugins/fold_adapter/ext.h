@@ -1,9 +1,9 @@
 #ifndef DFTRACER_UTILS_PLUGINS_FOLD_ADAPTER_EXT_H
 #define DFTRACER_UTILS_PLUGINS_FOLD_ADAPTER_EXT_H
 
-#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/agg_spill.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
 
 #include <string>
@@ -31,10 +31,10 @@ struct AggAccum {
     dataframe::AggSpiller spiller;
 };
 
-inline std::string_view resolve_id(dftracer::utils::StringIntern& intern,
+inline std::string_view resolve_id(dftracer::utils::dstd::StringIntern& intern,
                                    dftu_str id) {
     if (id == DFTU_STR_NONE ||
-        id >= dftracer::utils::StringIntern::FAST_CAPACITY)
+        id >= dftracer::utils::dstd::StringIntern::FAST_CAPACITY)
         return {};
     return intern.resolve(id);
 }

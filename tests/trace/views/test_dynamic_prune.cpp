@@ -5,10 +5,10 @@
 // without the caller re-planning.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/scalar.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/duql/builder.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
@@ -34,7 +34,7 @@
 #include "test_view_common.h"
 
 using namespace dftracer::utils::trace::views::detail;
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
 namespace q = dftracer::utils::duql;
 namespace scan = dftracer::utils::trace::views::detail::scan;
 using scan::ScanPlan;

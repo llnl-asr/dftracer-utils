@@ -13,7 +13,7 @@ using namespace dftracer::utils::index::schemas::dft::agg;
 
 namespace {
 
-dftracer::utils::StringIntern& test_intern() {
+dftracer::utils::dstd::StringIntern& test_intern() {
     static auto table = make_intern_table();
     return table->intern;
 }

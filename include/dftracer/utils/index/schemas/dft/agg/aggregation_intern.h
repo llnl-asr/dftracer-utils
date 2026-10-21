@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_INTERN_H
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_INTERN_H
 
-#include <dftracer/utils/common/string_intern.h>
+#include <dftracer/utils/dstd/string_intern.h>
 
 #include <atomic>
 #include <cstdint>
@@ -13,7 +13,7 @@ namespace dftracer::utils::index::schemas::dft::agg {
 /// String ids in aggregation keys are index-local: id 3 is a different string
 /// in every index, so a process touching two indexes needs a table per index.
 struct AggInternTable {
-    StringIntern intern;
+    dstd::StringIntern intern;
     /// Entries already in that index's dictionary; a flush appends past it.
     std::atomic<std::uint32_t> flushed_entries{0};
 };

@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_PLUGINS_FOLD_ADAPTER_H
 
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/common/string_intern.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/result_registry.h>
@@ -155,7 +155,8 @@ class PluginFold : public trace::views::detail::Fold {
     /// the fold makes one instance of each per slice and drives it like an
     /// accumulator. It must outlive the fold; null means the plugin registered
     /// none.
-    PluginFold(const dftu_plugin* plugin, dftracer::utils::StringIntern& intern,
+    PluginFold(const dftu_plugin* plugin,
+               dftracer::utils::dstd::StringIntern& intern,
                SharedResultRegistry* results = nullptr,
                NamedResultRegistry* named_results = nullptr,
                std::string plugin_name = {}, std::uint64_t memory_budget = 0,
@@ -260,7 +261,7 @@ class PluginFold : public trace::views::detail::Fold {
     // only); null for a stream-only or unknown id. Lets then()/when_all pipe
     // host utilities through the dftu_op engine.
 
-    dftracer::utils::StringIntern& intern_table() { return *intern_; }
+    dftracer::utils::dstd::StringIntern& intern_table() { return *intern_; }
     ::dftu_writer* create_writer(const char* path, std::uint32_t num_workers,
                                  int gzip);
     ::dftu_trace_writer* create_trace_writer(const char* path);
@@ -296,7 +297,7 @@ class PluginFold : public trace::views::detail::Fold {
 
     const dftu_plugin* plugin_;
     std::string plugin_name_;
-    dftracer::utils::StringIntern* intern_;
+    dftracer::utils::dstd::StringIntern* intern_;
     void* slice_;
     dftu_plugin_host host_{};
     ::dftu_task* pending_ = nullptr;

@@ -27,7 +27,7 @@
 #include <utility>
 #include <vector>
 
-namespace dftracer::utils {
+namespace dftracer::utils::dstd {
 class StringIntern;
 }
 
@@ -431,11 +431,11 @@ class ViewSession {
     }
 
     /// Attach an externally-built Fold to the shared scan. `make` constructs it
-    /// with the scan's StringIntern so ids agree and per-worker slices merge;
-    /// `finalize` runs after the scan while the fold is still alive. Forces a
-    /// scan (a plugin cannot be served from a rollup).
+    /// with the scan's dstd::StringIntern so ids agree and per-worker slices
+    /// merge; `finalize` runs after the scan while the fold is still alive.
+    /// Forces a scan (a plugin cannot be served from a rollup).
     void attach_fold_factory(std::function<std::unique_ptr<detail::Fold>(
-                                 dftracer::utils::StringIntern&)>
+                                 dftracer::utils::dstd::StringIntern&)>
                                  make,
                              std::function<void()> finalize);
 
@@ -883,7 +883,7 @@ class View : public dataframe::LazyOps<View> {
     /// `intern` so their ids agree and per-worker slices merge.
     coro::CoroTask<ExportStats> run_folds(
         std::span<detail::Fold* const> folds,
-        dftracer::utils::StringIntern& intern) const;
+        dftracer::utils::dstd::StringIntern& intern) const;
 
     /// The trace self-description, one entry per process, from each file's
     /// "end" event (TraceConfig). Ignores this view's filters.

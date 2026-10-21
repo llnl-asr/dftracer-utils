@@ -718,11 +718,18 @@ Pool& current_pool() {
 }
 
 Scope::Scope(Pool& pool) noexcept
-    : cache_(&attrib_fast()), previous_(cache_->scope) {
+    : cache_(&attrib_fast()),
+      previous_user_(cache_->user),
+      previous_(cache_->scope) {
     if (pool.id() != previous_) attrib_set_scope(*cache_, pool.id());
 }
 
+Scope::Scope(Pool& pool, void* user) noexcept : Scope(pool) {
+    cache_->user = user;
+}
+
 Scope::~Scope() {
+    cache_->user = previous_user_;
     if (cache_->scope != previous_) attrib_set_scope(*cache_, previous_);
 }
 
@@ -736,6 +743,34 @@ PoolTag current_pool_tag() noexcept {
     }
     return PoolTag{cache.tag_generation, id};
 }
+
+TaskTag current_task() noexcept {
+    AttribCache& cache = attrib_fast();
+    std::uint16_t id = cache.scope;
+    if (cache.tag_id != id) [[unlikely]] {
+        cache.tag_generation =
+            ManagerAccess::slot(Manager::get(), id).generation();
+        cache.tag_id = id;
+    }
+    return TaskTag{PoolTag{cache.tag_generation, id}, cache.user};
+}
+
+void enter_task(TaskTag tag) noexcept {
+    AttribCache& cache = attrib_fast();
+    cache.user = tag.user;
+    if (cache.scope == tag.pool.id) return;
+    std::uint16_t id = GENERAL_POOL_ID;
+    if (tag.pool.id < ManagerAccess::slot_count(Manager::get())) {
+        Pool& p = ManagerAccess::slot(Manager::get(), tag.pool.id);
+        if (PoolAccess::is_open(p) && p.generation() == tag.pool.generation)
+            id = tag.pool.id;
+    }
+    if (cache.scope != id) attrib_set_scope(cache, id);
+}
+
+void* task_user() noexcept { return attrib_fast().user; }
+
+void set_task_user(void* user) noexcept { attrib_fast().user = user; }
 
 void enter_pool(PoolTag tag) noexcept {
     AttribCache& cache = attrib_fast();

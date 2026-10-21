@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_BLOOM_FOLD_H
 
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/common/string_intern.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/schemas/dft/bloom_core.h>
 #include <dftracer/utils/index/store/index_database.h>
@@ -31,7 +31,7 @@ class BloomFold : public trace::views::detail::Fold {
     /// Indexes config.extra_dimensions besides the fixed dimensions: each is
     /// an args key or a dotted path below args.
     explicit BloomFold(
-        dftracer::utils::StringIntern& intern,
+        dftracer::utils::dstd::StringIntern& intern,
         index::schemas::dft::BloomCore::ChunkIndexerConfig config = {});
     /// Removes the spill runs unless finish_spilled handed them off.
     ~BloomFold() override;
@@ -212,7 +212,7 @@ class BloomFold : public trace::views::detail::Fold {
         ankerl::unordered_dense::map<std::uint32_t, PathEvidence> evidence;
     };
 
-    dftracer::utils::StringIntern* intern_;
+    dftracer::utils::dstd::StringIntern* intern_;
     index::schemas::dft::BloomCore::ChunkIndexerConfig config_;
     // Interned args key (or captured path) of each extra dimension, in
     // config_.extra_dimensions order.

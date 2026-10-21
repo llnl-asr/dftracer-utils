@@ -14,7 +14,7 @@ using scan::ScanPlan;
 
 TEST_SUITE("Pipeline plan") {
     TEST_CASE("execute rejects a shape no lowering handles") {
-        dftracer::utils::StringIntern intern;
+        dftracer::utils::dstd::StringIntern intern;
 
         views_detail::Pipeline with_ops;
         with_ops.ops.push_back(

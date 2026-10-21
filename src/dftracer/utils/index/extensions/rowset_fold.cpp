@@ -182,7 +182,7 @@ df::Series series_of(const std::vector<RowSetFold::Value>& c) {
 
 }  // namespace
 
-RowSetFold::RowSetFold(dftracer::utils::StringIntern& intern,
+RowSetFold::RowSetFold(dftracer::utils::dstd::StringIntern& intern,
                        std::vector<IndexedRowSet> rowsets,
                        std::uint64_t budget_bytes)
     : intern_(&intern),

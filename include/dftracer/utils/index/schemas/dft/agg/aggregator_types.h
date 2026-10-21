@@ -77,7 +77,7 @@ struct AggregationEntry {
 
     /// ValueMap of this entry's fields (cat, name, pid, tid, hhash, fhash,
     /// time_bucket, extra_keys, and aggregation metrics), for query evaluation.
-    duql::ValueMap to_value_map(const StringIntern& intern) const {
+    duql::ValueMap to_value_map(const dstd::StringIntern& intern) const {
         duql::ValueMap fields;
         fields["cat"] = std::string(key.cat(intern));
         fields["name"] = std::string(key.name(intern));
@@ -120,7 +120,8 @@ struct AggregationEntry {
         return fields;
     }
 
-    bool matches(const duql::Query& query, const StringIntern& intern) const {
+    bool matches(const duql::Query& query,
+                 const dstd::StringIntern& intern) const {
         return query.evaluate(to_value_map(intern));
     }
 };
@@ -142,7 +143,7 @@ struct AggregationBatch {
     /// The table the entries' string ids belong to.
     AggInternPtr intern;
 
-    const StringIntern& strings() const {
+    const dstd::StringIntern& strings() const {
         if (!intern) {
             throw DFTUtilsException(ErrorCode::Internal,
                                     "aggregation batch has no intern table");

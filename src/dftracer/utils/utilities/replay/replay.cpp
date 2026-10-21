@@ -1,7 +1,7 @@
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/dataframe/containment.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/runtime/coro/when_all.h>
@@ -27,8 +27,8 @@ namespace {
 // Process-wide intern pool for replay strings. Function names, categories,
 // and per-file hashes (fhash/hhash) have either small bounded cardinality
 // (~tens for cat/name) or stable identity per file (fhash).
-dftracer::utils::StringIntern& replay_intern() {
-    static dftracer::utils::StringIntern instance;
+dftracer::utils::dstd::StringIntern& replay_intern() {
+    static dftracer::utils::dstd::StringIntern instance;
     return instance;
 }
 

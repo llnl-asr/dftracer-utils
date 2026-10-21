@@ -22,7 +22,7 @@ Pipeline lower_fused_folds(const ViewPlan& plan, const ViewDefinition& vdef,
 }
 
 coro::CoroTask<ExportStats> execute(Pipeline pipeline,
-                                    dftracer::utils::StringIntern& intern,
+                                    dftracer::utils::dstd::StringIntern& intern,
                                     const CoverageSet* covered,
                                     std::uint64_t limit) {
     if (!pipeline.ops.empty())

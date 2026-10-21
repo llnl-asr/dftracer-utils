@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_BUILD_INDEX_FOLD_DRIVER_H
 #define DFTRACER_UTILS_INDEX_BUILD_INDEX_FOLD_DRIVER_H
 
-#include <dftracer/utils/common/string_intern.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/index_visitor.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
@@ -135,7 +135,7 @@ class FoldBufferPool final : public memory::Reclaimer {
 /// members are done, then writes each fold via its write method.
 class IndexFoldDriver : public index::build::IndexVisitor {
    public:
-    IndexFoldDriver(dftracer::utils::StringIntern& intern,
+    IndexFoldDriver(dftracer::utils::dstd::StringIntern& intern,
                     std::span<trace::views::detail::Fold* const> folds,
                     std::string file_path, std::string index_path,
                     std::vector<std::string> extra_fields = {})
@@ -266,7 +266,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     // What a parse needs from the driver, shared with the parse tasks so a
     // task never reads the driver itself.
     struct ParseConfig {
-        dftracer::utils::StringIntern* intern;
+        dftracer::utils::dstd::StringIntern* intern;
         index::Decoder decoder;
         const index::RecordSchema* record_schema;
         bool needs_args;
@@ -572,7 +572,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     std::vector<std::unique_ptr<json::RecordParser>> parsers_;
     std::unique_ptr<json::RecordParser> inline_parser_;
     FoldBufferPool buffers_;
-    dftracer::utils::StringIntern* intern_;
+    dftracer::utils::dstd::StringIntern* intern_;
     std::vector<trace::views::detail::Fold*> folds_;
     index::Decoder decoder_ = index::Decoder::Dftracer;
     const index::RecordSchema* record_schema_ = nullptr;

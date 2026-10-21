@@ -86,9 +86,9 @@ struct CoroPromise : FrameAllocation {
 
     TaskIndex task_id{-1};
 
-    /// The pool current when the coroutine was created; it enters it each
-    /// time it resumes.
-    memory::PoolTag pool{memory::current_pool_tag()};
+    /// The pool and intern table current when the coroutine was created; it
+    /// enters them each time it resumes.
+    detail::RunContext context;
 
     /// True when Coro::release() transferred ownership to the queue.
     /// FinalAwaiter uses this to schedule deferred destruction.
@@ -98,11 +98,11 @@ struct CoroPromise : FrameAllocation {
         return Coro{std::coroutine_handle<CoroPromise>::from_promise(*this)};
     }
 
-    detail::EnterPoolOnStart initial_suspend() noexcept { return {pool}; }
+    detail::EnterPoolOnStart initial_suspend() noexcept { return {&context}; }
 
     template <typename U>
     auto await_transform(U&& awaitable) noexcept {
-        return detail::in_pool(std::forward<U>(awaitable), pool);
+        return detail::in_pool(std::forward<U>(awaitable), context);
     }
 
     struct FinalAwaiter {

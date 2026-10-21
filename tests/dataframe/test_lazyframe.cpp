@@ -1,5 +1,4 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
@@ -10,6 +9,7 @@
 #include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/runtime/coro/async_generator.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -24,7 +24,6 @@
 #include <utility>
 #include <vector>
 
-using dftracer::utils::StringIntern;
 using dftracer::utils::coro::CoroTask;
 using dftracer::utils::dataframe::Agg;
 using dftracer::utils::dataframe::agg_argmax;
@@ -44,6 +43,7 @@ using dftracer::utils::dataframe::OpArgs;
 using dftracer::utils::dataframe::Series;
 using dftracer::utils::dataframe::Source;
 using dftracer::utils::dataframe::TypeId;
+using dftracer::utils::dstd::StringIntern;
 
 namespace {
 

@@ -19,8 +19,11 @@
 
 namespace dftracer::utils {
 class CoroScope;
-class StringIntern;
 }  // namespace dftracer::utils
+
+namespace dftracer::utils::dstd {
+class StringIntern;
+}  // namespace dftracer::utils::dstd
 
 namespace dftracer::utils::index::schemas::dft::agg {
 class AggregationFold;
@@ -103,7 +106,7 @@ struct IndexBuildBatchConfig {
     /// IndexBuildBatchResult::agg_outputs.
     using AggFoldFactory = std::function<
         std::unique_ptr<index::schemas::dft::agg::AggregationFold>(
-            dftracer::utils::StringIntern& build_intern, int file_id)>;
+            dftracer::utils::dstd::StringIntern& build_intern, int file_id)>;
     AggFoldFactory agg_fold_factory;
 
     /// Optional callback with (files_done, total_files) as files finish

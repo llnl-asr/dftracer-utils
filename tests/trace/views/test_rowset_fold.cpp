@@ -17,7 +17,7 @@ using namespace dftracer::utils::trace::views::detail;
 using namespace dftracer::utils::index::extensions;
 namespace ix = dftracer::utils::index;
 namespace df = dftracer::utils::dataframe;
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
 
 namespace {
 

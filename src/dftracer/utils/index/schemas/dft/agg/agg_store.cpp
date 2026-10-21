@@ -256,8 +256,24 @@ void load_dictionary(const RocksDatabase& db, AggInternTable& table) {
         } catch (const std::exception&) {
             continue;
         }
-        table.intern.insert_at_id(
-            id, std::string_view(it->value().data(), it->value().size()));
+        const std::string_view value(it->value().data(), it->value().size());
+        switch (table.intern.insert_at_id(id, value)) {
+            case dstd::StringIntern::InsertStatus::Ok:
+                break;
+            case dstd::StringIntern::InsertStatus::Conflict:
+                throw DFTUtilsException(
+                    ErrorCode::InvalidArgument,
+                    "string intern: id " + std::to_string(id) +
+                        " is already '" +
+                        std::string(table.intern.resolve(id)) +
+                        "', cannot rebind to '" + std::string(value) +
+                        "' (dictionaries from two indexes in one table?)");
+            case dstd::StringIntern::InsertStatus::OutOfRange:
+                throw DFTUtilsException(ErrorCode::InvalidArgument,
+                                        "string intern: id " +
+                                            std::to_string(id) +
+                                            " is out of range");
+        }
     }
     table.flushed_entries.store(
         static_cast<std::uint32_t>(table.intern.entry_count()),

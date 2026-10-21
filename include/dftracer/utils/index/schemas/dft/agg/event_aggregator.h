@@ -29,7 +29,7 @@ class EventAggregator {
     /// The table its keys resolve against, shared with anything else holding
     /// this index open.
     const AggInternPtr& intern_table() const { return intern_; }
-    StringIntern& intern() const { return intern_->intern; }
+    dstd::StringIntern& intern() const { return intern_->intern; }
 
     void merge_chunk(ChunkAggregationOutput&& chunk_output);
 

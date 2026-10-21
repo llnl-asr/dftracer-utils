@@ -196,8 +196,8 @@ class PartsCursor : public Cursor {
 
    private:
     std::shared_ptr<const std::vector<DataFrame>> parts_;
-    std::shared_ptr<dftracer::utils::StringIntern> intern_ =
-        std::make_shared<dftracer::utils::StringIntern>();
+    std::shared_ptr<dftracer::utils::dstd::StringIntern> intern_ =
+        std::make_shared<dftracer::utils::dstd::StringIntern>();
     std::size_t next_ = 0;
 };
 

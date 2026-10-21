@@ -173,9 +173,9 @@ class AsyncGenerator {
         std::coroutine_handle<> continuation_{};
         /// The CoroTask handoff, once per next(): see CoroTask::await_suspend.
         std::atomic<bool> handoff_{false};
-        /// The pool current when the generator was created; it enters it
-        /// each time it resumes.
-        memory::PoolTag pool_{memory::current_pool_tag()};
+        /// The pool and intern table current when the generator was created;
+        /// it enters them each time it resumes.
+        detail::RunContext context_;
 
         T* value_ptr() noexcept {
             return std::launder(reinterpret_cast<T*>(value_storage_));
@@ -193,20 +193,22 @@ class AsyncGenerator {
                 std::coroutine_handle<promise_type>::from_promise(*this)};
         }
 
-        detail::EnterPoolOnStart initial_suspend() noexcept { return {pool_}; }
+        detail::EnterPoolOnStart initial_suspend() noexcept {
+            return {&context_};
+        }
 
         auto yield_value(T value) noexcept {
             clear_value();
             ::new (static_cast<void*>(value_storage_)) T(std::move(value));
             has_value_ = true;
-            return ToConsumer{pool_};
+            return ToConsumer{&context_};
         }
 
-        auto final_suspend() noexcept { return ToConsumer{pool_}; }
+        auto final_suspend() noexcept { return ToConsumer{&context_}; }
 
         template <typename U>
         auto await_transform(U&& awaitable) noexcept {
-            return detail::in_pool(std::forward<U>(awaitable), pool_);
+            return detail::in_pool(std::forward<U>(awaitable), context_);
         }
 
         void return_void() noexcept {}
@@ -215,7 +217,7 @@ class AsyncGenerator {
 
         // The consumer may destroy the frame once the exchange is done.
         struct ToConsumer {
-            memory::PoolTag pool;
+            const detail::RunContext* context;
 
             bool await_ready() noexcept { return false; }
             void await_suspend(std::coroutine_handle<promise_type> h) noexcept {
@@ -225,7 +227,7 @@ class AsyncGenerator {
                     p.handoff_.exchange(true, std::memory_order_acq_rel))
                     next.resume();
             }
-            void await_resume() noexcept { memory::enter_pool(pool); }
+            void await_resume() noexcept { context->enter(); }
         };
     };
 

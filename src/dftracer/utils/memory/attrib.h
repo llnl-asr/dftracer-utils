@@ -62,6 +62,9 @@ struct AttribCache {
     // names stays open, so its generation cannot change.
     std::uint16_t tag_id = 0xffff;
     std::uint32_t tag_generation = 0;
+    // Opaque to this library: a higher layer's per-task pointer, saved and
+    // cleared by Scope and carried by TaskTag.
+    void* user = nullptr;
 };
 
 /// Add the entry's counts to its pool's counters and zero it.

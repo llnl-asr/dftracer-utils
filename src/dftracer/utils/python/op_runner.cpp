@@ -16,7 +16,7 @@ namespace {
 namespace coro = dftracer::utils::coro;
 using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::PluginFold;
 
 // The compose host is a real PluginFold with a do-nothing slice: the op graph
@@ -63,7 +63,7 @@ PyObject* jit_run_op(PyObject*, PyObject* args) {
     int rc = -1;
     bool ran = false;
     {
-        StringIntern intern;
+        dstd::StringIntern intern;
         ::dftu_plugin* plugin =
             dftracer::utils::plugins::make_plugin<TrivialSlice>(nullptr);
         {

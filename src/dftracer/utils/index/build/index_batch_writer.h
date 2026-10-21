@@ -35,7 +35,7 @@ struct ParsedIndexJob {
     index::gzip::GzipBuildArtifacts artifacts;
     // Owns the folds' intern so it outlives them through the channel; declared
     // first so it is destroyed last.
-    std::unique_ptr<dftracer::utils::StringIntern> intern;
+    std::unique_ptr<dftracer::utils::dstd::StringIntern> intern;
     std::unique_ptr<BloomFold> bloom_fold;
     std::unique_ptr<RowSetFold> rowset_fold;
     std::unique_ptr<AggregationFold> agg_fold;

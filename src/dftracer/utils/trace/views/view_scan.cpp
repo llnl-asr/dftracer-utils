@@ -1,7 +1,7 @@
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
-#include <dftracer/utils/common/string_intern.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
 #include <dftracer/utils/index/extensions/catalog_fold.h>
@@ -433,7 +433,7 @@ bool any_file_missing_catalog(const ViewPlan& plan) {
 
 std::vector<std::unique_ptr<Fold>> select_index_folds(
     const ViewPlan& plan, const ViewDefinition& vdef,
-    dftracer::utils::StringIntern& intern) {
+    dftracer::utils::dstd::StringIntern& intern) {
     std::vector<std::unique_ptr<Fold>> kept;
     if (plan.files.empty() || !any_file_missing_bloom(plan)) return kept;
 
@@ -448,7 +448,7 @@ std::vector<std::unique_ptr<Fold>> select_index_folds(
 
 std::unique_ptr<Fold> select_catalog_fold(
     const ViewPlan& plan, const ViewDefinition& vdef,
-    dftracer::utils::StringIntern& intern) {
+    dftracer::utils::dstd::StringIntern& intern) {
     namespace ix = dftracer::utils::index;
     if (plan.files.empty() || !any_file_missing_catalog(plan)) return nullptr;
     auto fold = std::make_unique<ix::extensions::CatalogFold>(
@@ -463,7 +463,7 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
     std::uint64_t limit,
     const std::function<void(std::size_t,
                              const std::vector<std::string_view>&)>& on_batch,
-    std::span<Fold* const> folds, dftracer::utils::StringIntern* intern) {
+    std::span<Fold* const> folds, dftracer::utils::dstd::StringIntern* intern) {
     std::uint64_t skipped = 0;
     auto units = co_await gather_units(plan, vdef, skipped);
     // 0 means one worker per unit (max parallelism); otherwise cap the fan-out.

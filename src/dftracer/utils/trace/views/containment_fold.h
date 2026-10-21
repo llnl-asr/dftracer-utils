@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_CONTAINMENT_FOLD_H
 #define DFTRACER_UTILS_TRACE_VIEWS_CONTAINMENT_FOLD_H
 
-#include <dftracer/utils/common/string_intern.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
@@ -60,7 +60,7 @@ struct ContainmentSpec {
 };
 
 ContainmentSpec make_containment_spec(
-    dftracer::utils::StringIntern& intern,
+    dftracer::utils::dstd::StringIntern& intern,
     const std::vector<std::string>& partition, const std::string& start_field,
     const std::string& dur_field, const std::string& name_field,
     const std::vector<std::string>& group = {},
@@ -71,7 +71,7 @@ ContainmentSpec make_containment_spec(
 // `intern` is used to intern the combined group-key value when the spec sets a
 // group (thread-safe: the shared intern).
 bool containment_row(const FoldEvent& ev, const ContainmentSpec& spec,
-                     dftracer::utils::StringIntern& intern,
+                     dftracer::utils::dstd::StringIntern& intern,
                      ContainmentRow& out);
 
 // Group rows into lanes (rows sharing the lane key), each sorted by start
@@ -83,25 +83,25 @@ std::vector<std::vector<std::int64_t>> sorted_lanes(
 dataframe::DataFrame build_call_tree(
     const std::vector<ContainmentRow>& rows,
     const std::vector<std::vector<std::int64_t>>& lanes,
-    const dftracer::utils::StringIntern& intern, const TimeOut& out);
+    const dftracer::utils::dstd::StringIntern& intern, const TimeOut& out);
 dataframe::DataFrame build_flamegraph(
     const std::vector<ContainmentRow>& rows,
     const std::vector<std::vector<std::int64_t>>& lanes,
-    const dftracer::utils::StringIntern& intern, const TimeOut& out);
+    const dftracer::utils::dstd::StringIntern& intern, const TimeOut& out);
 
 // Both frames from one buffer, sorting each lane once. .first = call_tree,
 // .second = flamegraph.
 std::pair<dataframe::DataFrame, dataframe::DataFrame> build_containment_both(
     const std::vector<ContainmentRow>& rows,
-    const dftracer::utils::StringIntern& intern, const TimeOut& out);
+    const dftracer::utils::dstd::StringIntern& intern, const TimeOut& out);
 
 // Distributed flamegraph: a rank folds its rows into an arena and serializes it
 // (flamegraph_partial); rank 0 merges every rank's blob by name path and emits
 // the node frame (merge_flamegraph_partials). The arena is the mergeable
 // partial for MPI gather and Dask tree-reduce alike.
-std::string flamegraph_partial(const std::vector<ContainmentRow>& rows,
-                               const dftracer::utils::StringIntern& intern,
-                               const TimeOut& out);
+std::string flamegraph_partial(
+    const std::vector<ContainmentRow>& rows,
+    const dftracer::utils::dstd::StringIntern& intern, const TimeOut& out);
 dataframe::DataFrame merge_flamegraph_partials(
     const std::vector<std::string_view>& partials);
 
@@ -113,7 +113,7 @@ dataframe::DataFrame merge_flamegraph_partials(
 class ContainmentFold : public Fold {
    public:
     ContainmentFold(
-        dftracer::utils::StringIntern& intern,
+        dftracer::utils::dstd::StringIntern& intern,
         std::vector<std::string> partition, std::string start_field = "ts",
         std::string dur_field = "dur", std::string name_field = "name",
         double time_scale = 1.0, std::vector<std::string> group = {},
@@ -153,7 +153,7 @@ class ContainmentFold : public Fold {
     // Non-const: the group-key harvest interns a combined value per event. The
     // intern is shared across sliced folds and is thread-safe, like the parse
     // path that also interns during the fused scan.
-    dftracer::utils::StringIntern* intern_;
+    dftracer::utils::dstd::StringIntern* intern_;
     ContainmentSpec spec_;
     std::vector<ContainmentRow> rows_;
 };

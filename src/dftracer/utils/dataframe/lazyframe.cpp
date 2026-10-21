@@ -5599,7 +5599,7 @@ class CollectedSource final : public Source {
     class Named final : public Cursor {
        public:
         Named(std::unique_ptr<Cursor> in, std::vector<std::uint32_t> ids,
-              std::shared_ptr<dftracer::utils::StringIntern> intern)
+              std::shared_ptr<dftracer::utils::dstd::StringIntern> intern)
             : in_(std::move(in)),
               ids_(std::move(ids)),
               intern_(std::move(intern)) {}
@@ -5617,13 +5617,13 @@ class CollectedSource final : public Source {
        private:
         std::unique_ptr<Cursor> in_;
         std::vector<std::uint32_t> ids_;
-        std::shared_ptr<dftracer::utils::StringIntern> intern_;
+        std::shared_ptr<dftracer::utils::dstd::StringIntern> intern_;
     };
 
     Schema schema_;
     std::shared_ptr<const DataFrame> frame_;
-    std::shared_ptr<dftracer::utils::StringIntern> intern_ =
-        std::make_shared<dftracer::utils::StringIntern>();
+    std::shared_ptr<dftracer::utils::dstd::StringIntern> intern_ =
+        std::make_shared<dftracer::utils::dstd::StringIntern>();
     std::vector<std::uint32_t> ids_;
 };
 

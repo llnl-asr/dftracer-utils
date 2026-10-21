@@ -57,7 +57,8 @@ set(DFTRACER_UTILS_MEMORY_SOURCES
 # -----------------------------------------
 
 set(DFTRACER_UTILS_DSTD_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/base64.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/base64.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/string_intern.cpp)
 
 # -----------------------------------------
 # Common library sources
@@ -75,6 +76,7 @@ set(DFTRACER_UTILS_COMMON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/spill_dir.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/spill_file.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/env.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/intern_table.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/timer.cpp)
 
 # -----------------------------------------
@@ -1876,6 +1878,7 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/counter_contention_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/heap_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/coro_bench.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/string_intern_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/pressure_read_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/slice_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/spill_harness.cpp)
@@ -1917,6 +1920,9 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
 
     add_test(NAME bench_smoke/coro COMMAND coro_bench --smoke)
     set_tests_properties(bench_smoke/coro PROPERTIES LABELS bench_smoke)
+
+    add_test(NAME bench_smoke/string_intern COMMAND string_intern_bench --smoke)
+    set_tests_properties(bench_smoke/string_intern PROPERTIES LABELS bench_smoke)
 
     add_test(NAME bench_smoke/slice COMMAND slice_bench --smoke)
     set_tests_properties(bench_smoke/slice PROPERTIES LABELS bench_smoke)

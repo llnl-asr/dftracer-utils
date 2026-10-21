@@ -29,13 +29,13 @@ namespace dftracer::utils::coro {
 /// Coroutine that destroys its own frame on completion.
 struct FireAndForget {
     struct promise_type : FrameAllocation {
-        /// The pool current when the wrapper was created; it enters it again
-        /// each time it resumes.
-        memory::PoolTag pool{memory::current_pool_tag()};
+        /// The pool and intern table current when the wrapper was created; it
+        /// enters them again each time it resumes.
+        detail::RunContext context;
 
         template <typename U>
         auto await_transform(U&& awaitable) noexcept {
-            return detail::in_pool(std::forward<U>(awaitable), pool);
+            return detail::in_pool(std::forward<U>(awaitable), context);
         }
 
         FireAndForget get_return_object() { return {}; }

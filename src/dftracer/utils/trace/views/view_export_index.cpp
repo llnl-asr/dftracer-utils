@@ -1,7 +1,7 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
-#include <dftracer/utils/common/string_intern.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
@@ -80,7 +80,7 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
     const std::string index_path = trace::internal::determine_index_path(
         opts.output_path, opts.index_path);
     const auto& schema = plan_record_schema(plan);
-    dftracer::utils::StringIntern intern;
+    dftracer::utils::dstd::StringIntern intern;
     dftracer::utils::index::extensions::BloomFold bloom(
         intern, dftracer::utils::index::build::for_schema({}, schema));
     std::array<Fold*, 1> folds{&bloom};

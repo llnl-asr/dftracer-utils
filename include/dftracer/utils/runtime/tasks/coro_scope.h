@@ -195,6 +195,9 @@ class CoroScope {
             // Each spawned coroutine gets its own CoroScope (child) with its
             // own cancel flag, so cancelling one child leaves its siblings.
             CoroScope child_scope(exec, std::move(own_chain));
+            // Publish an exception only after the handler ends: the awaiter
+            // may run at once, and the handler still holds the thrown object.
+            std::exception_ptr error;
             try {
                 auto task = f(child_scope);
                 // Propagate executor to the CoroTask's PromiseBase
@@ -205,9 +208,9 @@ class CoroScope {
                 co_await std::move(task);
                 st->complete();
             } catch (...) {
-                auto ex = std::current_exception();
-                st->complete_with_exception(std::move(ex));
+                error = std::current_exception();
             }
+            if (error) st->complete_with_exception(std::move(error));
             co_await child_scope.join();
         };
         auto c = make_coro(std::forward<Func>(func), executor_,
@@ -247,15 +250,16 @@ class CoroScope {
             [](auto f, Executor* exec, std::shared_ptr<CancelChain> own_chain,
                std::shared_ptr<coro::SharedState<R>> st) -> coro::Coro {
             CoroScope child_scope(exec, std::move(own_chain));
+            std::exception_ptr error;
             try {
                 auto task = f(child_scope);
                 task.handle().promise().set_executor(exec);
                 R result = co_await std::move(task);
                 st->complete(std::move(result));
             } catch (...) {
-                auto ex = std::current_exception();
-                st->complete_with_exception(std::move(ex));
+                error = std::current_exception();
             }
+            if (error) st->complete_with_exception(std::move(error));
             co_await child_scope.join();
         };
 

@@ -288,7 +288,9 @@ TEST_CASE("a frame destroyed while it waits leaks nothing") {
     std::this_thread::sleep_for(100ms);
     CHECK(!resumed.load());
     CHECK(root().reserved() == 0);
-    CHECK(general.blocks() == before);
+    // The warm-up frame may still be counted in `before`: a worker destroys
+    // it just after get() returns. A leak can only add blocks.
+    CHECK(general.blocks() <= before);
 }
 
 TEST_CASE("many waiters on several workers end exact") {

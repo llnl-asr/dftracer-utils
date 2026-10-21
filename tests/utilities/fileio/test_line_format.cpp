@@ -167,8 +167,9 @@ TEST_CASE("line_format - run-time parse errors") {
 
 TEST_CASE("line_format - writer output equals hand-built lines") {
     namespace fs = std::filesystem;
-    const auto dir = fs::temp_directory_path() / "dftu_line_format_test";
-    fs::create_directories(dir);
+    // A unique folder: two test processes must not share and remove it.
+    dftu_utils_test::ScopedTestDir scoped("dftu_line_format_test");
+    const fs::path& dir = scoped.path();
     const std::string p1 = (dir / "ordered.gz").string();
     const std::string p2 = (dir / "producer.gz").string();
     auto lf = JsonLineFormat::parse(R"({"id":{},"n":"{}","v":{}})");
@@ -229,5 +230,4 @@ TEST_CASE("line_format - writer output equals hand-built lines") {
         return out;
     };
     CHECK(lines(gunzip_all(p2)) == lines(want));
-    fs::remove_all(dir);
 }

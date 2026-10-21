@@ -31,11 +31,10 @@ namespace {
 // short string key) takes more than sixteen, so the cases that reach it use
 // PACKED_ROWS and the rest stop a sixteenth of a morsel past four.
 constexpr std::int64_t MORSEL = std::int64_t{1} << 16;
-// A quarter under Valgrind.
-const std::int64_t ROWS = static_cast<std::int64_t>(
-    DFTRACER_UTILS_VALGRIND_SCALE(4 * MORSEL + MORSEL / 16, 4));
-const std::int64_t PACKED_ROWS =
-    static_cast<std::int64_t>(DFTRACER_UTILS_VALGRIND_SCALE(17 * MORSEL, 4));
+// Not scaled down under Valgrind: each is the smallest size that crosses its
+// driver's threshold, so a smaller input would test another path.
+constexpr std::int64_t ROWS = 4 * MORSEL + MORSEL / 16;
+constexpr std::int64_t PACKED_ROWS = 17 * MORSEL;
 // Eight rows per group: nearly every row opens or extends a small group.
 constexpr std::int64_t ROWS_PER_GROUP = 8;
 // Repeats of one group-by that must give the same bits. The point is the

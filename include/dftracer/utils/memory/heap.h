@@ -102,6 +102,17 @@ void deallocate(void* p) noexcept;
 void deallocate(void* p, std::size_t size) noexcept;
 
 /**
+ * @brief Free a block like deallocate(), for a coroutine frame.
+ *
+ * With constants::DEBUG_ENV on, the block is filled with the freed pattern
+ * and its memory is not given to any other allocation until the pool the
+ * block was charged to closes or the process exits, so a late resume of the
+ * frame or a read through it finds the pattern. The pool counts the block
+ * until then. Without the debug mode this is deallocate().
+ */
+void deallocate_retained(void* p, std::size_t size) noexcept;
+
+/**
  * @brief Resize a block from allocate() whose requested size is @p old_size.
  *
  * Returns @p p when the block already fits @p new_size at @p align, else a

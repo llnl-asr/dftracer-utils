@@ -31,6 +31,11 @@
 //   coro_bench --reps R              (R reps per case)
 //   coro_bench --case NAME           (one case)
 //   coro_bench --format csv|table    (output shape)
+//   coro_bench --record FILE         (write the per-case median and spread
+//                                     over the reps as JSON)
+//   coro_bench --check FILE          (fail when a case is slower than the
+//                                     recorded median by more than
+//                                     max(3%, its recorded spread))
 //   coro_bench --smoke               (about 2% of the sizes, 1 rep, and every
 //                                     result must be positive and correct)
 
@@ -47,6 +52,10 @@
 #include <dftracer/utils/runtime/tasks/task.h>
 #include <fcntl.h>
 #include <unistd.h>
+
+#ifdef __APPLE__
+#include <pthread/qos.h>
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -319,7 +328,73 @@ Stats summarize(std::vector<double> values) {
     return s;
 }
 
-int run(const std::vector<Case>& cases, int reps, bool smoke, bool csv) {
+constexpr double CHECK_MIN_PCT = 3.0;
+
+struct Recorded {
+    std::string name;
+    double median = 0.0;
+    double spread_pct = 0.0;
+};
+
+bool write_record(const char* path, const std::vector<Recorded>& rows) {
+    std::FILE* f = std::fopen(path, "w");
+    if (f == nullptr) return false;
+    std::fprintf(f, "{\n");
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        std::fprintf(f,
+                     "  \"%s\": {\"median\": %.3f, \"spread_pct\": %.3f}%s\n",
+                     rows[i].name.c_str(), rows[i].median, rows[i].spread_pct,
+                     i + 1 < rows.size() ? "," : "");
+    }
+    std::fprintf(f, "}\n");
+    return std::fclose(f) == 0;
+}
+
+bool read_record(const char* path, std::vector<Recorded>& rows) {
+    std::FILE* f = std::fopen(path, "r");
+    if (f == nullptr) return false;
+    char line[512];
+    while (std::fgets(line, sizeof(line), f) != nullptr) {
+        char name[128];
+        Recorded r;
+        if (std::sscanf(line,
+                        " \"%127[^\"]\": {\"median\": %lf, \"spread_pct\": %lf",
+                        name, &r.median, &r.spread_pct) == 3) {
+            r.name = name;
+            rows.push_back(r);
+        }
+    }
+    std::fclose(f);
+    return !rows.empty();
+}
+
+int check_record(const char* path, const std::vector<Recorded>& now) {
+    std::vector<Recorded> base;
+    if (!read_record(path, base)) {
+        std::fprintf(stderr, "cannot read record: %s\n", path);
+        return 1;
+    }
+    int slower = 0;
+    for (const Recorded& n : now) {
+        for (const Recorded& b : base) {
+            if (b.name != n.name) continue;
+            double allowed = std::max(CHECK_MIN_PCT, b.spread_pct);
+            double change = (n.median / b.median - 1.0) * 100.0;
+            bool bad = change > allowed;
+            std::fprintf(stderr,
+                         "check %-24s %8.1f vs %8.1f ns (%+.1f%%, allowed "
+                         "%.1f%%) %s\n",
+                         n.name.c_str(), n.median, b.median, change, allowed,
+                         bad ? "SLOWER" : "ok");
+            if (bad) ++slower;
+        }
+    }
+    return slower == 0 ? 0 : 1;
+}
+
+int run(const std::vector<Case>& cases, int reps, bool smoke, bool csv,
+        const char* record, const char* check) {
+    std::vector<Recorded> rows;
     if (csv) {
         std::printf("name,median_ns_per_op,min,max,spread_pct\n");
     } else {
@@ -346,6 +421,7 @@ int run(const std::vector<Case>& cases, int reps, bool smoke, bool csv) {
             per_op.push_back(r.total_ns / static_cast<double>(ops));
         }
         Stats s = summarize(per_op);
+        rows.push_back({c.name, s.median, s.spread_pct});
         if (!ok) {
             ++failures;
             std::fprintf(stderr, "case failed: %s\n", c.name);
@@ -359,23 +435,36 @@ int run(const std::vector<Case>& cases, int reps, bool smoke, bool csv) {
         }
         std::fflush(stdout);
     }
-    return failures == 0 ? 0 : 1;
+    int status = failures == 0 ? 0 : 1;
+    if (record != nullptr && !write_record(record, rows)) {
+        std::fprintf(stderr, "cannot write record: %s\n", record);
+        status = 1;
+    }
+    if (check != nullptr && check_record(check, rows) != 0) status = 1;
+    return status;
 }
 
 int usage() {
     std::fprintf(stderr,
                  "usage: coro_bench [--smoke] [--reps R] [--case NAME] "
-                 "[--format csv|table]\n");
+                 "[--format csv|table] [--record FILE] [--check FILE]\n");
     return 2;
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
+#ifdef __APPLE__
+    // Executor threads inherit this class, so they stay on performance cores
+    // and the timings do not depend on where the scheduler put a thread.
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#endif
     int reps = DEFAULT_REPS;
     bool smoke = false;
     bool csv = false;
     std::string only;
+    const char* record = nullptr;
+    const char* check = nullptr;
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
         bool has_value = i + 1 < argc;
@@ -385,6 +474,10 @@ int main(int argc, char** argv) {
             reps = std::atoi(argv[++i]);
         } else if (arg == "--case" && has_value) {
             only = argv[++i];
+        } else if (arg == "--record" && has_value) {
+            record = argv[++i];
+        } else if (arg == "--check" && has_value) {
+            check = argv[++i];
         } else if (arg == "--format" && has_value) {
             std::string_view fmt = argv[++i];
             if (fmt != "csv" && fmt != "table") return usage();
@@ -408,5 +501,5 @@ int main(int argc, char** argv) {
         }
         cases = std::move(picked);
     }
-    return run(cases, reps, smoke, csv);
+    return run(cases, reps, smoke, csv, record, check);
 }

@@ -379,6 +379,7 @@ void ManagerAccess::exit_check() noexcept {
     if (!g_exit_check.load(std::memory_order_relaxed)) return;
     Manager& m = Manager::get();
     debug_drain();
+    debug_drain_held(DEBUG_ALL_POOLS);
     std::ptrdiff_t live = attrib_live_total() - exported_total(m);
     bool leaked = m.leaked_.load(std::memory_order_relaxed);
     if (live == 0 && !leaked) return;
@@ -531,6 +532,7 @@ void attrib_set_scope(AttribCache& cache, std::uint16_t id) noexcept {
     }
     hot.id.store(id, std::memory_order_relaxed);
     cache.scope = id;
+    cache.tag_id = 0xffff;
 }
 
 std::ptrdiff_t attrib_live_total() noexcept {
@@ -712,11 +714,11 @@ Reporter set_reporter(Reporter reporter) noexcept {
 }
 
 Pool& current_pool() {
-    return ManagerAccess::slot(Manager::get(), attrib_local().scope);
+    return ManagerAccess::slot(Manager::get(), attrib_fast().scope);
 }
 
 Scope::Scope(Pool& pool) noexcept
-    : cache_(&attrib_local()), previous_(cache_->scope) {
+    : cache_(&attrib_fast()), previous_(cache_->scope) {
     if (pool.id() != previous_) attrib_set_scope(*cache_, pool.id());
 }
 
@@ -725,12 +727,18 @@ Scope::~Scope() {
 }
 
 PoolTag current_pool_tag() noexcept {
-    std::uint16_t id = attrib_local().scope;
-    return PoolTag{ManagerAccess::slot(Manager::get(), id).generation(), id};
+    AttribCache& cache = attrib_fast();
+    std::uint16_t id = cache.scope;
+    if (cache.tag_id != id) [[unlikely]] {
+        cache.tag_generation =
+            ManagerAccess::slot(Manager::get(), id).generation();
+        cache.tag_id = id;
+    }
+    return PoolTag{cache.tag_generation, id};
 }
 
 void enter_pool(PoolTag tag) noexcept {
-    AttribCache& cache = attrib_local();
+    AttribCache& cache = attrib_fast();
     if (cache.scope == tag.id) return;
     std::uint16_t id = GENERAL_POOL_ID;
     if (tag.id < ManagerAccess::slot_count(Manager::get())) {
@@ -945,6 +953,7 @@ void PoolAccess::close(Pool& p, std::uint32_t generation) noexcept {
         .open_children_.fetch_sub(1, std::memory_order_relaxed);
 
     debug_drain();
+    debug_drain_held(p.id_);
     char text[REPORT_BYTES];
     char where[REPORT_BYTES / 2];
     std::size_t where_size = path(m, p.id_, where, sizeof(where) - 1);

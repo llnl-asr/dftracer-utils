@@ -494,3 +494,31 @@ TEST_CASE("pool table full scenario" * doctest::skip()) {
     CHECK_FALSE(none);
     CHECK(none.status() == Status::PoolTableFull);
 }
+
+TEST_CASE("a tag follows the scope and goes stale when its slot is reused") {
+    PoolTag first;
+    std::uint16_t id = 0;
+    {
+        PoolHandle a = root().child("tag a");
+        REQUIRE(a);
+        id = a->id();
+        Scope scope{*a};
+        first = current_pool_tag();
+        CHECK(first.id == id);
+    }
+    PoolHandle b = root().child("tag b");
+    REQUIRE(b);
+    PoolTag second;
+    {
+        Scope scope{*b};
+        second = current_pool_tag();
+        CHECK(second.id == b->id());
+    }
+    if (b->id() != id) return;
+    CHECK(second.generation != first.generation);
+    Scope outer{Manager::get().general()};
+    enter_pool(first);
+    CHECK(current_pool().id() == Manager::get().general().id());
+    enter_pool(second);
+    CHECK(current_pool().id() == b->id());
+}

@@ -57,6 +57,11 @@ struct AttribCache {
     AttribEntry entries[ATTRIB_ENTRIES];
     std::atomic<AttribCache*> next{nullptr};
     std::uint16_t scope = GENERAL_POOL_ID;
+    // The generation of pool `tag_id`, read when the scope was last named by
+    // current_pool_tag; valid while tag_id equals scope. A pool that a scope
+    // names stays open, so its generation cannot change.
+    std::uint16_t tag_id = 0xffff;
+    std::uint32_t tag_generation = 0;
 };
 
 /// Add the entry's counts to its pool's counters and zero it.
@@ -90,8 +95,20 @@ void attrib_register(AttribCache& cache) noexcept;
 /// counters and every cache.
 std::ptrdiff_t attrib_live_total() noexcept;
 
+/// The cache of the calling thread's page heap when that is the active
+/// backend, else null; also null before the thread first allocates.
+extern thread_local AttribCache* t_page_attrib;
+
 /// The calling thread's cache for the active backend.
 AttribCache& attrib_local();
+
+/// attrib_local() with the page heap case read straight from the thread.
+inline AttribCache& attrib_fast() {
+    AttribCache* cache = t_page_attrib;
+    if (cache != nullptr) [[likely]]
+        return *cache;
+    return attrib_local();
+}
 AttribCache& page_attrib();
 AttribCache& system_attrib();
 /// After fork() in the child: caches of threads that did not survive.

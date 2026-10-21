@@ -184,6 +184,36 @@ that span suspend points, bookkeeping). The Heap Allocation eLision Optimization
 wrapper code. Treat a coroutine call as an allocation in hot paths, which is
 another reason the code prefers a few larger coroutines over many tiny ones.
 
+Frames of ``CoroTask``, ``Coro``, ``AsyncGenerator`` and the ``when_all``
+wrapper come from the page heap, through ``memory::allocate`` and
+``memory::deallocate_retained``. A frame is counted in the memory pool that is
+current at the call that creates the coroutine, the task's pool, and goes
+back to that pool when the frame is destroyed. A frame is freed, not recycled,
+so AddressSanitizer and Valgrind see a use of a destroyed frame.
+
+With ``DFTRACER_UTILS_MEMORY_DEBUG=1``, a destroyed frame is filled with a
+poison pattern and its memory is not given to any other allocation until the
+task's pool closes or the process exits. Resuming a destroyed frame, or
+reading through it, then finds the pattern and crashes at the cause instead
+of running on stale bytes. The pool counts the retained frame until then, and
+the debug mode holds at most 16 Mi retained frames.
+
+Join and cancel rules
+---------------------
+
+Two rules keep a child coroutine from outliving the frame that it points into:
+
+#. **A scope is joined by construction.** The ``CoroScope`` constructor is
+   private. Only ``run_coro_scope``, ``with_scope``, the runtime's scope and a
+   scope's own child spawns make one, and a scope that is destroyed without a
+   join calls ``std::terminate``. A scope that lives across many calls (the
+   gzip writer, the padded striped writer) is made through
+   ``CoroScope::long_lived`` and must be joined before its owner closes.
+#. **``when_any`` waits for its losers.** It cancels the losers and awaits them
+   before it returns, so no loser outlives the parent. The cancel token is
+   cooperative: ``when_any`` returns as late as the slowest loser takes to see
+   the token, so a loser checks the token at each ``co_await`` it has.
+
 Practical rules for this codebase
 ---------------------------------
 

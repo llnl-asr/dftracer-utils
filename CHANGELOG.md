@@ -73,6 +73,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   A loser stops at its next wait when it has a cancel token or a `cancel()`, and a loser with neither runs to its end.
   A `CoroTask` loser stops at its next wait with no exception, and one that never started does not run.
   `timeout()` gets a `cancel()`, so `when_any(op, timeout(5s))` returns when `op` does and no longer waits 5 s.
+- Allocate coroutine frames (`CoroTask`, `Coro`, `AsyncGenerator` and the `when_all` wrapper) from the page heap and count them in the memory pool of their task.
+  With `DFTRACER_UTILS_MEMORY_DEBUG=1` a destroyed frame is poisoned and kept out of reuse until its pool closes, so a late resume crashes on the poison.
+  A scratch pool that closes while a frame made under it is still alive now reports a leak.
+- Speed up small allocations in the page heap by 3 to 6% on macOS.
 - Make a `CoroScope` that spawned children and is destroyed without `join()` abort the process in every build, where it used to log a warning and let its children run on.
   A scope now comes only from `run_coro_scope`, `with_scope`, `Runtime::scope()` or a spawn; an owner that joins the scope itself uses `CoroScope::long_lived()`.
 - Make a `GzipLineWriter` or `PaddedStripedWriter` destroyed without `close()` on an executor thread hand its cleanup to a task instead of blocking that thread.

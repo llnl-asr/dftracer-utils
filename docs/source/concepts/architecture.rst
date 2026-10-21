@@ -16,8 +16,8 @@ static variant (``src/CMakeLists.txt``), aggregated behind
 
 - ``dftracer_utils_runtime`` is the async runtime: coroutines, the task
   executor and scheduler, the io backend, the pipeline machinery, RocksDB
-  wrappers, and shared primitives (string interning, object pools, sharded
-  maps, the error type). It knows nothing about traces.
+  wrappers, and shared primitives (string interning, sharded maps, the
+  error type). It knows nothing about traces.
 - ``dftracer_utils_json`` is the simdjson-backed JSON layer: parsing and
   the JSON value type.
 - ``dftracer_utils_duql`` is the duql filter language: the predicate IR, the string

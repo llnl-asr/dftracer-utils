@@ -169,6 +169,7 @@ set(TEST_CPP_SOURCES
     runtime/test_reserve_async.cpp
     runtime/test_shutdown.cpp
     runtime/test_coro_scope_join.cpp
+    runtime/test_frame_heap.cpp
     common/test_logging.cpp
     common/test_string_intern.cpp
     dstd/test_hash_partition.cpp
@@ -185,7 +186,6 @@ set(TEST_CPP_SOURCES
     common/test_external_sort.cpp
     common/test_spill_dir.cpp
     common/test_str_format.cpp
-    common/test_object_pool.cpp
     # Pipeline tests
     pipeline/test_pipeline.cpp
 

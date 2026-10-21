@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/runtime/coro/frame.h>
 #include <dftracer/utils/runtime/coro/pool_resume.h>
 
 #include <atomic>
@@ -165,7 +166,7 @@ class AsyncGenerator {
    public:
     using value_type = T;
 
-    struct promise_type {
+    struct promise_type : FrameAllocation {
         alignas(T) std::byte value_storage_[sizeof(T)];
         bool has_value_ = false;
         std::exception_ptr exception_;

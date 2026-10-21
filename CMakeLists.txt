@@ -233,9 +233,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/PythonHelpers.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/Sanitizer.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/PrecompiledHeader.cmake)
 
-# Enable the lock-free 16-byte CAS (DWCAS) fast path for ObjectPool when the
-# target supports it; otherwise the header transparently uses a packed fallback.
-check_dwcas()
+link_libatomic()
 
 configure_sanitizers()
 print_sanitizer_status()
@@ -299,12 +297,6 @@ dftracer_utils_item("Async I/O      "
                     "io_uring=${DFTRACER_UTILS_HAVE_IO_URING} kqueue=${DFTRACER_UTILS_HAVE_KQUEUE}"
 )
 dftracer_utils_item("Lustre API     " "${DFTRACER_UTILS_HAVE_LUSTREAPI}")
-if(DFTRACER_UTILS_HAS_DWCAS)
-  set(_dftracer_atomics_path "DWCAS (lock-free 16-byte CAS)")
-else()
-  set(_dftracer_atomics_path "packed (lock-free 64-bit CAS, portable)")
-endif()
-dftracer_utils_item("Atomics path   " "${_dftracer_atomics_path}")
 
 add_subdirectory(src)
 

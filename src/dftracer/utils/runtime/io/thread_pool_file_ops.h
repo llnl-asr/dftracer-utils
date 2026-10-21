@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_RUNTIME_IO_THREAD_POOL_FILE_OPS_H
 #define DFTRACER_UTILS_RUNTIME_IO_THREAD_POOL_FILE_OPS_H
 
-#include <dftracer/utils/common/object_pool.h>
+#include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/io/io_op.h>
 #include <dftracer/utils/runtime/io/io_thread_pool.h>
@@ -21,10 +21,10 @@ namespace dftracer::utils::io {
 /// Heap-allocated per I/O operation, freed after completion.
 struct IoRequest : SubmitContext {
     static void* operator new(std::size_t size) {
-        return ObjectPool::instance().allocate(size);
+        return memory::allocate(size, __STDCPP_DEFAULT_NEW_ALIGNMENT__);
     }
-    static void operator delete(void* ptr, std::size_t size) {
-        ObjectPool::instance().deallocate(ptr, size);
+    static void operator delete(void* ptr, std::size_t size) noexcept {
+        memory::deallocate(ptr, size);
     }
 
     IoOp op = IoOp::Read;

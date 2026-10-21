@@ -188,8 +188,8 @@ TEST_CASE("a task made without a scope charges the general pool") {
     Blocks blocks;
     blocks.size = BIG_BLOCK;
 
-    CoroTask<void> task = hop_then_allocate(&blocks, &hops);
     const std::size_t before = general.live();
+    CoroTask<void> task = hop_then_allocate(&blocks, &hops);
     {
         memory::Scope scope{*submitter};
         rt.submit(std::move(task)).get();
@@ -234,9 +234,9 @@ TEST_CASE("get() charges the task's pool and keeps the caller's scope") {
     memory::PoolHandle caller = open_pool("caller");
     Blocks blocks;
 
-    CoroTask<void> task =
-        under(*pool, [&] { return allocate_and_yield_once(&blocks); });
     {
+        CoroTask<void> task =
+            under(*pool, [&] { return allocate_and_yield_once(&blocks); });
         memory::Scope scope{*caller};
         task.get();
         CHECK(memory::current_pool().id() == caller->id());
@@ -249,7 +249,10 @@ TEST_CASE("get() charges the task's pool and keeps the caller's scope") {
 
 TEST_CASE("a task whose pool closed before it ran charges the general pool") {
     memory::Pool& general = memory::Manager::get().general();
-    memory::PoolHandle pool = open_pool("closed");
+    // A Results pool may close with the task's frame still live.
+    memory::PoolHandle pool = memory::Manager::get().root().child(
+        "closed", memory::PoolKind::Results);
+    REQUIRE(pool);
     Blocks blocks;
     blocks.size = BIG_BLOCK;
 

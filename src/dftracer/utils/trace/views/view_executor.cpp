@@ -29,7 +29,6 @@
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/memory/budget.h>
-#include <dftracer/utils/runtime/coro/async_mutex.h>
 #include <dftracer/utils/runtime/coro/when_all.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -649,10 +648,12 @@ coro::CoroTask<bool> try_collect_bootstrap(const ViewPlan& plan,
         auto root = trace::internal::index_root(entry.first);
         roots.emplace(root.get(), std::move(root));
     }
-    std::vector<coro::AsyncMutexGuard> building;
+    std::vector<trace::internal::RootPermit> building;
     for (const auto& entry : roots) {
-        co_await entry.second->building.lock();
-        building.emplace_back(entry.second->building);
+        co_await entry.second->gate.acquire(
+            trace::internal::IndexRoot::ALL_PERMITS);
+        building.emplace_back(*entry.second,
+                              trace::internal::IndexRoot::ALL_PERMITS);
     }
     // A spill run is keyed by the file id, so the ids are reserved before
     // the build; a reserved id marks no file as indexed.

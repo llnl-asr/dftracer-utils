@@ -298,44 +298,41 @@ coro::CoroTask<std::vector<ScanUnit>> gather_units(const ViewPlan& plan,
     std::vector<std::vector<ScanUnit>> per_file(plan.files.size());
     std::vector<std::uint64_t> skip_v(plan.files.size(), 0);
     std::vector<std::exception_ptr> errors(plan.files.size());
-    std::vector<std::uint64_t> uc_sizes(plan.files.size(), 0);
-    std::vector<std::size_t> n_ckpts_v(plan.files.size(), 0);
+    std::vector<std::uint64_t> uc_sizes(plan.files.size());
+    std::vector<std::size_t> ckpt_counts(plan.files.size());
+    for (std::size_t fi = 0; fi < plan.files.size(); ++fi) {
+        uc_sizes[fi] = plan.files[fi].uncompressed_size;
+        ckpt_counts[fi] = plan.files[fi].num_checkpoints;
+    }
 
-    // Metadata first: it can write to an index root that files share, and a
-    // write cannot start while a sibling's planner holds that root read-only.
+    // Every file's metadata first, then the planners: a planner holds the
+    // index root open read-only, and a file that must still build its index
+    // there cannot open it read-write while it does.
     co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
         for (std::size_t fi = 0; fi < plan.files.size(); ++fi) {
+            if (uc_sizes[fi] != 0 && ckpt_counts[fi] != 0) continue;
             scope.spawn([&, fi](CoroScope&) -> coro::CoroTask<void> {
                 // The scope does not rethrow a spawned task's exception.
                 try {
                     if (is_cancelled(plan)) co_return;
                     const auto& f = plan.files[fi];
-                    const std::size_t ckpt =
-                        checkpoint_size_or_default(f.checkpoint_size);
-                    std::uint64_t uc_size = f.uncompressed_size;
-                    std::size_t n_ckpts = f.num_checkpoints;
-                    const std::string& index_path = f.index_path;
-
-                    if (uc_size == 0 || n_ckpts == 0) {
-                        trace::MetadataCollectorUtility meta;
-                        auto md = co_await meta(
-                            trace::MetadataCollectorUtilityInput::from_file(
-                                f.file_path)
-                                .with_checkpoint_size(ckpt)
-                                .with_force_rebuild(false)
-                                .with_index(index_path));
-                        // Fail loudly: dropping the file would silently omit
-                        // its events from the result.
-                        if (!md.success)
-                            throw DFTUtilsException(
-                                ErrorCode::Io,
-                                "gather_units: metadata read failed for " +
-                                    f.file_path + ": " + md.error_message);
-                        uc_size = md.uncompressed_size;
-                        n_ckpts = md.num_checkpoints;
-                    }
-                    uc_sizes[fi] = uc_size;
-                    n_ckpts_v[fi] = n_ckpts;
+                    trace::MetadataCollectorUtility meta;
+                    auto md = co_await meta(
+                        trace::MetadataCollectorUtilityInput::from_file(
+                            f.file_path)
+                            .with_checkpoint_size(
+                                checkpoint_size_or_default(f.checkpoint_size))
+                            .with_force_rebuild(false)
+                            .with_index(f.index_path));
+                    // Fail loudly: dropping the file would silently omit its
+                    // events from the result.
+                    if (!md.success)
+                        throw DFTUtilsException(
+                            ErrorCode::Io,
+                            "gather_units: metadata read failed for " +
+                                f.file_path + ": " + md.error_message);
+                    uc_sizes[fi] = md.uncompressed_size;
+                    ckpt_counts[fi] = md.num_checkpoints;
                 } catch (...) {
                     errors[fi] = std::current_exception();
                 }
@@ -349,7 +346,6 @@ coro::CoroTask<std::vector<ScanUnit>> gather_units(const ViewPlan& plan,
     co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
         for (std::size_t fi = 0; fi < plan.files.size(); ++fi) {
             scope.spawn([&, fi](CoroScope&) -> coro::CoroTask<void> {
-                // The scope does not rethrow a spawned task's exception.
                 try {
                     if (is_cancelled(plan)) co_return;
                     const auto& f = plan.files[fi];
@@ -363,7 +359,7 @@ coro::CoroTask<std::vector<ScanUnit>> gather_units(const ViewPlan& plan,
                         .with_index_path(fs::exists(index_path) ? index_path
                                                                 : "")
                         .with_uncompressed_size(uc_sizes[fi])
-                        .with_num_checkpoints(n_ckpts_v[fi]);
+                        .with_num_checkpoints(ckpt_counts[fi]);
                     // Path-decoded files prune time through their time field.
                     if (plan.time_range && !vdef.by_path)
                         pin.with_time_range(plan.time_range->first,

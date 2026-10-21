@@ -34,6 +34,14 @@ Runtime and scheduler
      - hardware concurrency
      - Fixes the I/O backend (io_uring/kqueue) thread-pool size independently
        of the compute pool. Same parsing rule as ``DFTRACER_UTILS_THREADS``.
+   * - ``DFTRACER_UTILS_IO_BACKEND``
+     - ``auto``
+     - Forces the I/O backend of every runtime that would pick one itself:
+       ``auto``, ``io_uring``, ``epoll``, ``kqueue`` or ``threadpool``. A
+       backend this platform or build lacks, or any other value, stops the
+       runtime from starting with an error; it never falls back. Use
+       ``threadpool`` to trace the tools with DFTracer's preload, which sees
+       only libc calls and so misses io_uring.
    * - ``DFTRACER_UTILS_HW_CONCURRENCY``
      - ``std::thread::hardware_concurrency()`` (or ``1`` if that is ``0``)
      - Overrides the detected core count used to size thread pools when the

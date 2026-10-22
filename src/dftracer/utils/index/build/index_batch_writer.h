@@ -27,6 +27,8 @@ using index::schemas::dft::agg::AggregationFold;
 
 struct ParsedIndexJob {
     int file_id = 0;
+    /// The index holds no data for `file_id` yet, so nothing is cleared.
+    bool fresh_id = false;
     std::string file_path;
     std::string logical_path;
     /// Written with the file's data, so a file is registered only once its
@@ -100,15 +102,18 @@ inline coro::CoroTask<void> index_batch_write_worker(
                     // bloom fold does not rewrite would describe old ones. A
                     // spilled tier clears in its own first run instead: this
                     // batch may commit after that ingest.
+                    // A fresh id has no old data, and each clear is a range
+                    // delete that compaction must carry.
                     for (auto ext : index::store::ALL_EXTENSIONS)
-                        if (!spills &&
+                        if (!spills && !job.fresh_id &&
                             ext != index::store::IndexExtension::Members)
                             index::store::records::clear_file(sink, ext,
                                                               job.file_id);
                     // Plugin data is never in a spill run, so it clears here.
-                    index::store::records::clear_file(
-                        sink, index::store::IndexExtension::Plugin,
-                        job.file_id);
+                    if (!job.fresh_id)
+                        index::store::records::clear_file(
+                            sink, index::store::IndexExtension::Plugin,
+                            job.file_id);
                     // After the clears, which cover core.profile too.
                     if (job.schema)
                         index::store::records::put_profile(

@@ -43,6 +43,9 @@ struct PreparedFile {
     std::uint64_t file_mtime = 0;
     std::uint64_t file_size = 0;
     int file_id = 0;
+    /// The id was reserved by this build, so the index holds no data for it
+    /// and its tiers need no clearing.
+    bool fresh_id = false;
     IndexBuildBatchConfig::FileSlice slice;
 };
 
@@ -80,11 +83,16 @@ PreparedFile prepare_file(std::size_t i, const std::string& file_path,
 std::vector<PreparedFile> prepare_file_identities(
     const std::string& index_path, const std::vector<std::string>& file_paths) {
     index::store::IndexDatabase db(index_path);
+    // Ids come from a counter that only grows, so one at or past it before
+    // the assignment was never used in this index.
+    const int first_fresh = db.reserve_file_id_range(0);
     const auto ids = db.assign_file_ids(file_paths);
     std::vector<PreparedFile> prepared;
     prepared.reserve(file_paths.size());
-    for (std::size_t i = 0; i < file_paths.size(); ++i)
+    for (std::size_t i = 0; i < file_paths.size(); ++i) {
         prepared.push_back(prepare_file(i, file_paths[i], index_path, ids[i]));
+        prepared.back().fresh_id = ids[i] >= first_fresh;
+    }
     return prepared;
 }
 
@@ -396,6 +404,7 @@ static coro::CoroTask<void> parse_and_emit_worker(
         // it), and leave the result behind in parsed_jobs[idx].
         index::build::ParsedIndexJob send_job;
         send_job.file_id = pf.file_id;
+        send_job.fresh_id = pf.fresh_id;
         send_job.file_path = pf.file_path;
         send_job.logical_path = pf.logical_path;
         send_job.record = {static_cast<std::uint32_t>(pf.file_id),

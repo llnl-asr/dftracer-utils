@@ -101,6 +101,9 @@ struct Admission {
     std::atomic<std::size_t> in_flight{0};
     std::atomic<std::size_t> max_in_flight{0};
     std::atomic<std::size_t> spilled{0};
+    /// Event buffers shared by every file's fold driver, so a file starts
+    /// with the capacity the files before it grew.
+    FoldBufferPool buffers;
 
     // The permits a file of `size` compressed bytes takes: the View's
     // per-file estimate, clamped so a file above the budget runs alone.
@@ -270,6 +273,7 @@ static coro::CoroTask<void> parse_and_emit_worker(
                 driver.emplace(*job.intern, fold_ptrs, pf.file_path,
                                pf.index_path);
                 driver->set_record_schema(schema);
+                driver->share_buffers(admission->buffers);
                 driver->set_parse_ahead(parse_ahead);
                 // A slice sees part of the chunks, and a file payload built
                 // from them could rule out the whole file.

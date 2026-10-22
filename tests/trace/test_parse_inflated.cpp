@@ -28,10 +28,9 @@ std::vector<std::string> parse_names(const std::string& data,
     auto buf = padded(data);
     std::size_t line_no = 0;
     std::vector<std::string> names;
-    carry = parse_buffer(parser, buf, data.size(), 0, line_no,
-                         /*needs_args_map=*/true, [&](const EventRecord& r) {
-                             names.emplace_back(r.ev.name);
-                         });
+    carry = parse_buffer(
+        parser, buf, data.size(), 0, line_no,
+        [&](const EventRecord& r) { names.emplace_back(r.ev.name); });
     return names;
 }
 

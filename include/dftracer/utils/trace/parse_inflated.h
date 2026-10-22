@@ -100,9 +100,9 @@ std::size_t parse_lines(simdjson::dom::parser& parser, const char* base,
 /// Iterate parsed dftracer events from one inflated buffer (NDJSON plus
 /// simdjson padding; the caller strips any "[" / "]" delimiter lines).
 /// `chunk_buffer` is held shared so an EventRecord's string_view can outlive
-/// the loop. `needs_args_map` takes the slower parse path that materializes the
-/// args map. Returns the trailing incomplete line for the caller to carry into
-/// the next buffer.
+/// the loop. Only the scalar fields are parsed into the event; args stay in
+/// the record's DOM element. Returns the trailing incomplete line for the
+/// caller to carry into the next buffer.
 ///
 /// Parsed only through the last newline, not by parse_many's own truncation
 /// (which reads zero when a chunk is cut mid-string, leaving the next chunk to
@@ -114,28 +114,24 @@ template <typename Cb>
 std::size_t parse_buffer(simdjson::dom::parser& parser,
                          std::shared_ptr<std::string> chunk_buffer,
                          std::size_t len, std::size_t checkpoint_idx,
-                         std::size_t& line_number, bool needs_args_map,
-                         Cb&& cb) {
+                         std::size_t& line_number, Cb&& cb) {
     if (!chunk_buffer || len == 0) return 0;
-    return parse_lines(parser, chunk_buffer->data(), len,
-                       [&](simdjson::dom::element root, std::string_view src) {
-                           if (!root.is_object()) return;
-                           json::JsonValue json(root);
-                           DFTracerEvent ev;
-                           simdjson::dom::element args_dom{};
-                           bool has_args = false;
-                           bool ok = needs_args_map
-                                         ? DFTracerEvent::parse(
-                                               json, ev, args_dom, has_args)
-                                         : DFTracerEvent::parse_scalars(
-                                               root, ev, args_dom, has_args);
-                           if (!ok) return;
-                           std::size_t ln = line_number++;
-                           EventRecord record{ev,           json,           src,
-                                              chunk_buffer, checkpoint_idx, ln,
-                                              args_dom,     has_args};
-                           cb(record);
-                       });
+    return parse_lines(
+        parser, chunk_buffer->data(), len,
+        [&](simdjson::dom::element root, std::string_view src) {
+            if (!root.is_object()) return;
+            json::JsonValue json(root);
+            DFTracerEvent ev;
+            simdjson::dom::element args_dom{};
+            bool has_args = false;
+            if (!DFTracerEvent::parse_scalars(root, ev, args_dom, has_args))
+                return;
+            std::size_t ln = line_number++;
+            EventRecord record{ev,           json,           src,
+                               chunk_buffer, checkpoint_idx, ln,
+                               args_dom,     has_args};
+            cb(record);
+        });
 }
 
 }  // namespace dftracer::utils::trace

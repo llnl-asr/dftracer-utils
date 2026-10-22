@@ -164,6 +164,14 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         record_schema_ = schema.fields.empty() ? nullptr : &schema;
     }
 
+    /// Take event buffers from `pool`, shared with other drivers, instead of
+    /// a pool of this driver's own. `pool` must outlive the driver and every
+    /// batch it hands out; call before the first chunk.
+    void share_buffers(FoldBufferPool& pool) {
+        buffers_ = &pool;
+        own_buffers_.reset();
+    }
+
     /// Also hand each chunk's record lines to `builders`, which must outlive
     /// the parse.
     void set_plugin_builders(index::extensions::PluginBuilders* builders) {
@@ -206,7 +214,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
                       1;
             auto piece = std::make_unique<Parsed>();
             piece->checkpoint_idx = checkpoint_idx;
-            piece->batch = buffers_.take();
+            piece->batch = buffers_->take();
             piece->buf = std::make_shared<std::string>();
             piece->buf->reserve(partial_.size() + (end - off) +
                                 simdjson::SIMDJSON_PADDING);
@@ -219,7 +227,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
                     inline_parser_ = std::make_unique<json::RecordParser>();
                 parse_into(*config(), *inline_parser_, *piece);
                 step(*piece);
-                buffers_.give(std::move(piece->batch));
+                buffers_->give(std::move(piece->batch));
                 continue;
             }
             if (in_flight_.size() >= parse_ahead_) co_await step_oldest();
@@ -317,7 +325,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         } else {
             trace::parse_buffer(
                 parser, c.buf, total, c.checkpoint_idx, line_number,
-                cfg.needs_args, [&](const trace::EventRecord& r) {
+                [&](const trace::EventRecord& r) {
                     if (cfg.keep_lines) c.lines.push_back(r.line);
                     trace::views::detail::FoldEvent& ev = c.batch->append();
                     trace::views::detail::build_fold_event_into(
@@ -384,7 +392,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         }
         co_await permits_->acquire(1);
         std::shared_ptr<const Parsed> piece(
-            done.release(), PieceRelease{permits_.get(), &buffers_});
+            done.release(), PieceRelease{permits_.get(), buffers_});
         for (std::size_t i = 0; i < folds_.size(); ++i) {
             if (folds_[i] == bloom_) continue;
             std::optional<coro::SpawnFuture<void>> prev = std::move(tails_[i]);
@@ -544,7 +552,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
                     co_await step_ahead(std::move(done));
                 } else {
                     step(*done);
-                    buffers_.give(std::move(done->batch));
+                    buffers_->give(std::move(done->batch));
                     parsers_.push_back(std::move(done->parser));
                 }
             } catch (...) {
@@ -571,7 +579,11 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     std::vector<std::optional<coro::SpawnFuture<void>>> tails_;
     std::vector<std::unique_ptr<json::RecordParser>> parsers_;
     std::unique_ptr<json::RecordParser> inline_parser_;
-    FoldBufferPool buffers_;
+    // Event buffers come from `buffers_`: a pool of the driver's own, or one
+    // shared by every file of a build so a slot keeps its vectors' capacity
+    // from file to file.
+    std::optional<FoldBufferPool> own_buffers_{std::in_place};
+    FoldBufferPool* buffers_ = &*own_buffers_;
     dftracer::utils::dstd::StringIntern* intern_;
     std::vector<trace::views::detail::Fold*> folds_;
     index::Decoder decoder_ = index::Decoder::Dftracer;

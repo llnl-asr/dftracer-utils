@@ -1,4 +1,5 @@
 #include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/hasher.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/memory/allocator.h>
 #include <dftracer/utils/memory/manager.h>
@@ -367,10 +368,14 @@ bool StringIntern::bind_slot(std::uint32_t id, const char* str, bool cas) {
     return true;
 }
 
-/// Fixed, unlike std::hash, whose result varies by standard library:
-/// deterministic ids must agree across independently built processes.
-std::size_t StringIntern::hash(std::string_view sv) {
-    return utils::hash::fnv1a_mix(utils::hash::fnv1a_hash(sv));
+/// Deterministic ids are this hash, so they must agree across independently
+/// built processes and stay as stored: FNV-1a, fixed unlike std::hash. Other
+/// tables use only the order of their inserts, so they take wyhash, which
+/// reads eight bytes a step rather than one.
+std::size_t StringIntern::hash(std::string_view sv) const {
+    if (deterministic_ids_.load(std::memory_order_relaxed))
+        return utils::hash::fnv1a_mix(utils::hash::fnv1a_hash(sv));
+    return Hash<std::string_view>{}(sv);
 }
 
 template <class T>

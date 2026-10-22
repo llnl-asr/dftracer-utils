@@ -213,7 +213,7 @@ class StringIntern {
     void advance_num_strings(std::uint32_t id);
     void log_entry(std::uint32_t id);
     bool bind_slot(std::uint32_t id, const char* str, bool cas);
-    static std::size_t hash(std::string_view sv);
+    std::size_t hash(std::string_view sv) const;
     template <class T>
     T* make_array(std::size_t n) const;
     template <class T>

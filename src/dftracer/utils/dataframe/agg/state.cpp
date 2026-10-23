@@ -1592,9 +1592,8 @@ void agg_merge(AggState& into, const AggState& other) {
     agg_merge(into, other, order);
 }
 
-void agg_merge(AggState& into, const AggState& other_in,
+void agg_merge(AggState& into, const AggState& other,
                const std::vector<std::int64_t>& order) {
-    const AggState& other = settled(other_in);
     into.settle_light();
     if (!other.inited) return;
     if (!into.inited) {

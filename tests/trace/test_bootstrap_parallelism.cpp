@@ -136,6 +136,24 @@ TEST_SUITE("BootstrapParallelism") {
         set_default_runtime(nullptr);
     }
 
+    TEST_CASE("an export bootstrap commits its sink at the sink limit") {
+        dftu_utils_test::TestEnvironment env(10);
+        std::vector<std::string> files;
+        for (int i = 0; i < FILES; ++i)
+            files.push_back(write_trace(env.get_dir(), i));
+        set_default_runtime(std::make_shared<Runtime>(WORKERS));
+
+        trace::views::detail::bootstrap_counters().reset();
+        const auto lines = export_lines(files, env.get_dir() + "/idx");
+        CHECK(lines.size() == static_cast<std::size_t>(FILES) * EVENTS);
+        const auto commits =
+            trace::views::detail::bootstrap_counters().sink_commits.load();
+        CHECK(commits >= 1);
+        CHECK(commits < FILES / 8);
+
+        set_default_runtime(nullptr);
+    }
+
     TEST_CASE("the SST count does not grow with the files") {
         dftu_utils_test::TestEnvironment env(10);
         std::vector<std::string> files;

@@ -152,7 +152,8 @@ TEST_SUITE("BloomFold") {
             BloomFold fold(intern);
             fold.enable_spill(1, dropped, 1);
             drive(fold);
-            CHECK(fold.spill_runs() == 3);
+            // The three spills fill one run, far under the run size floor.
+            CHECK(fold.spill_runs() == 1);
             CHECK(fs::exists(dropped));
         }
         CHECK_FALSE(fs::exists(dropped));
@@ -165,8 +166,8 @@ TEST_SUITE("BloomFold") {
             drive(fold);
             runs = fold.finish_spilled(1).size();
         }
-        // Three spilled runs, one with the chunks left and one closing run.
-        CHECK(runs == 5);
+        // The spilled run, one with the chunks left and one closing run.
+        CHECK(runs == 3);
         CHECK(fs::exists(kept));
     }
 

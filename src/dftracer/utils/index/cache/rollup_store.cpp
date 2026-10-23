@@ -12,6 +12,7 @@
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/store/column_families.h>
 #include <dftracer/utils/index/store/db_manager.h>
+#include <dftracer/utils/index/store/internal/scan_prefix.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dftracer/utils/utilities/common/serialization/binary_codec.h>
@@ -227,25 +228,24 @@ void persist_rollup(rdb::RocksDatabase& db, std::uint64_t sig,
 
 bool rollup_exists(const rdb::RocksDatabase& db, std::uint64_t sig) {
     std::string val;
-    return db.get(rollup_desc_key(sig), &val, rdb::cf::ROLLUP).ok();
+    return rdb::internal::get_checked("rollup read", db, rollup_desc_key(sig),
+                                      &val, rdb::cf::ROLLUP);
 }
 
 dataframe::AggStatePtr read_rollup(const rdb::RocksDatabase& db,
                                    std::uint64_t sig) {
     const std::string prefix = rollup_row_key(sig, "");  // 0x01 | sig
-    auto it = db.new_iterator(rdb::cf::ROLLUP);
     dataframe::AggStatePtr merged;
-    for (it->Seek(prefix); it->Valid(); it->Next()) {
-        const std::string_view k(it->key().data(), it->key().size());
-        if (k.size() < prefix.size() || k.substr(0, prefix.size()) != prefix)
-            break;
-        std::string blob(it->value().data(), it->value().size());
-        auto one = dataframe::agg_deserialize(blob);
-        if (!merged)
-            merged = std::move(one);
-        else
-            dataframe::agg_merge(*merged, *one);
-    }
+    rdb::internal::scan_prefix_iterator(
+        "rollup scan", prefix, [&] { return db.new_iterator(rdb::cf::ROLLUP); },
+        [&](::rocksdb::Iterator& it) {
+            std::string blob(it.value().data(), it.value().size());
+            auto one = dataframe::agg_deserialize(blob);
+            if (!merged)
+                merged = std::move(one);
+            else
+                dataframe::agg_merge(*merged, *one);
+        });
     return merged;
 }
 
@@ -281,62 +281,64 @@ std::optional<dataframe::DataFrame> find_subsuming_rollup(
     std::vector<trace::views::GroupKey> best_gb;
     bool have_best = false;
 
-    auto it = db.new_iterator(rdb::cf::ROLLUP);
-    for (it->Seek(std::string_view(&desc_tag, 1)); it->Valid(); it->Next()) {
-        const std::string_view k(it->key().data(), it->key().size());
-        if (k.empty() || k[0] != '\x00') break;
-        if (k.size() != 9) continue;
+    rdb::internal::scan_from(
+        "rollup descriptor scan", db.new_iterator(rdb::cf::ROLLUP),
+        std::string_view(&desc_tag, 1), [&](::rocksdb::Iterator& it) {
+            const std::string_view k(it.key().data(), it.key().size());
+            if (k.empty() || k[0] != '\x00') return false;
+            if (k.size() != 9) return true;
 
-        const std::string_view v(it->value().data(), it->value().size());
-        if (v.size() < 20) continue;
-        codec::BinaryReader br(v);
-        if (br.be64() != q_rest) continue;
-        const std::uint64_t r_bucket = br.be64();
+            const std::string_view v(it.value().data(), it.value().size());
+            if (v.size() < 20) return true;
+            codec::BinaryReader br(v);
+            if (br.be64() != q_rest) return true;
+            const std::uint64_t r_bucket = br.be64();
 
-        // Bucket compatibility: a query with a time bucket can only be served
-        // by a rollup whose bucket evenly divides it (coarsen finer ->
-        // coarser). A query without a bucket collapses any rollup's buckets, so
-        // it always matches. The reverse (finer query, coarser rollup) is
-        // unserviceable.
-        if (plan.time_bucket_us > 0 &&
-            (r_bucket == 0 || plan.time_bucket_us % r_bucket != 0))
-            continue;
+            // Bucket compatibility: a query with a time bucket can only be
+            // served by a rollup whose bucket evenly divides it (coarsen finer
+            // -> coarser). A query without a bucket collapses any rollup's
+            // buckets, so it always matches. The reverse (finer query, coarser
+            // rollup) is unserviceable.
+            if (plan.time_bucket_us > 0 &&
+                (r_bucket == 0 || plan.time_bucket_us % r_bucket != 0))
+                return true;
 
-        std::vector<trace::views::GroupKey> r_gb;
-        const std::uint32_t n = br.be32();
-        r_gb.reserve(n);
-        for (std::uint32_t i = 0; i < n; ++i) {
-            trace::views::GroupKey gk;
-            gk.kind = static_cast<trace::views::GroupKey::Kind>(br.be32());
-            gk.arg = std::string(br.str());
-            r_gb.push_back(std::move(gk));
-        }
-        if (have_best && r_gb.size() >= best_gb.size()) continue;
+            std::vector<trace::views::GroupKey> r_gb;
+            const std::uint32_t n = br.be32();
+            r_gb.reserve(n);
+            for (std::uint32_t i = 0; i < n; ++i) {
+                trace::views::GroupKey gk;
+                gk.kind = static_cast<trace::views::GroupKey::Kind>(br.be32());
+                gk.arg = std::string(br.str());
+                r_gb.push_back(std::move(gk));
+            }
+            if (have_best && r_gb.size() >= best_gb.size()) return true;
 
-        bool subset = true;
-        for (const auto& qg : plan.group_by) {
-            bool found = false;
-            for (const auto& rg : r_gb)
-                if (rg.kind == qg.kind && rg.arg == key_identity(qg)) {
-                    found = true;
+            bool subset = true;
+            for (const auto& qg : plan.group_by) {
+                bool found = false;
+                for (const auto& rg : r_gb)
+                    if (rg.kind == qg.kind && rg.arg == key_identity(qg)) {
+                        found = true;
+                        break;
+                    }
+                if (!found) {
+                    subset = false;
                     break;
                 }
-            if (!found) {
-                subset = false;
-                break;
             }
-        }
-        if (!subset) continue;
+            if (!subset) return true;
 
-        best_sig =
-            read_u64_be(reinterpret_cast<const std::uint8_t*>(k.data() + 1));
-        best_bucket = r_bucket;
-        best_gb = std::move(r_gb);
-        have_best = true;
-        if (best_gb.size() == plan.group_by.size() &&
-            best_bucket == plan.time_bucket_us)
-            break;  // exact: optimal
-    }
+            best_sig = read_u64_be(
+                reinterpret_cast<const std::uint8_t*>(k.data() + 1));
+            best_bucket = r_bucket;
+            best_gb = std::move(r_gb);
+            have_best = true;
+            if (best_gb.size() == plan.group_by.size() &&
+                best_bucket == plan.time_bucket_us)
+                return false;  // exact: optimal
+            return true;
+        });
 
     if (!have_best) return std::nullopt;
     auto fine = read_rollup(db, best_sig);

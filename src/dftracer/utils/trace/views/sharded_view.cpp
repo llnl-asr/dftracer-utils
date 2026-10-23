@@ -14,6 +14,7 @@
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/index_write.h>
+#include <dftracer/utils/index/store/internal/scan_prefix.h>
 #include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -290,25 +291,28 @@ std::size_t merge_shard_set(const std::string& root,
                 const auto prefix = layout::kind_prefix(
                     layout::Ext::Host, layout::host::FILE_BY_PATH);
                 auto write = out_db.begin_write();
-                auto it = s->new_iterator(rcf::DEFAULT);
-                for (it->Seek(prefix); it->Valid(); it->Next()) {
-                    const std::string_view key(it->key().data(),
-                                               it->key().size());
-                    if (!key.starts_with(prefix)) break;
-                    auto record = layout::decode_file_record(std::string_view(
-                        it->value().data(), it->value().size()));
-                    if (!record)
-                        throw DFTUtilsException(
-                            ErrorCode::Parse,
-                            "shard " + shard.path +
-                                " holds a malformed file record");
-                    const int old_id = static_cast<int>(record->file_id);
-                    record->file_id = static_cast<std::uint32_t>(next_file_id);
-                    remap[old_id] = next_file_id++;
-                    dftracer::utils::index::store::records::put_file_record(
-                        *write, key.substr(prefix.size()), *record);
-                    ++files;
-                }
+                dftracer::utils::index::store::internal::scan_prefix_iterator(
+                    "shard file registry scan", prefix,
+                    [&] { return s->new_iterator(rcf::DEFAULT); },
+                    [&](::rocksdb::Iterator& it) {
+                        const std::string_view key(it.key().data(),
+                                                   it.key().size());
+                        auto record =
+                            layout::decode_file_record(std::string_view(
+                                it.value().data(), it.value().size()));
+                        if (!record)
+                            throw DFTUtilsException(
+                                ErrorCode::Parse,
+                                "shard " + shard.path +
+                                    " holds a malformed file record");
+                        const int old_id = static_cast<int>(record->file_id);
+                        record->file_id =
+                            static_cast<std::uint32_t>(next_file_id);
+                        remap[old_id] = next_file_id++;
+                        dftracer::utils::index::store::records::put_file_record(
+                            *write, key.substr(prefix.size()), *record);
+                        ++files;
+                    });
                 write->commit();
             }
 

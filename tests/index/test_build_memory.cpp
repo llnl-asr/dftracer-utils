@@ -1,6 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/build/batch_builder.h>
+#include <dftracer/utils/index/build/file_admission.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
 #include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/index/store/db_manager.h>
@@ -108,6 +110,9 @@ std::vector<std::pair<std::string, std::string>> contents(
             out.emplace_back(std::string(store::layout::family_name(family)) +
                                  "|" + it->key().ToString(),
                              it->value().ToString());
+        // A scan that stopped on an error, such as too many open SSTs, would
+        // read as a smaller index.
+        REQUIRE_MESSAGE(it->status().ok(), it->status().ToString());
     }
     return out;
 }
@@ -138,17 +143,40 @@ memory::Status ask_for_budget() {
 }  // namespace
 
 TEST_SUITE("IndexBuildMemory") {
-    TEST_CASE("large files are admitted one at a time") {
+    TEST_CASE("files are admitted by the bytes they hold, not one per worker") {
         dftu_utils_test::TestEnvironment env(10);
         std::vector<std::string> files;
         for (int i = 0; i < 4; ++i)
             files.push_back(
                 write_trace(env.get_dir(), "t" + std::to_string(i), 2000, 20));
-        // Each file's estimate is at least 64 MB, above half of 100 MB.
-        const auto r = run_build(files, env.get_dir() + "/idx", 100ULL << 20);
-        CHECK(r.indexed == 4);
-        CHECK(r.failed == 0);
-        CHECK(r.metrics.max_files_in_flight == 1);
+        constexpr std::size_t WORKERS = 4;
+        constexpr std::uint64_t HELD_QUANTUM = MIB;
+        const std::uint64_t held =
+            (build::FileAdmission::estimate(
+                 build::FileAdmission::plaintext_estimate(
+                     0, fs::file_size(files[0])))
+                 .total +
+             HELD_QUANTUM - 1) /
+            HELD_QUANTUM * HELD_QUANTUM;
+        const std::uint64_t tight =
+            4 * constants::file_admission::MIN_SINK_BYTES *
+            constants::file_admission::SINK_BUDGET_DIVISOR;
+        const auto plan = build::FileAdmission::plan_sinks(
+            tight, WORKERS, build::g_max_sink_bytes.load());
+        const std::uint64_t room =
+            tight - plan.workers * plan.sink_bytes -
+            tight / constants::file_admission::UNTRACKED_DIVISOR;
+        // The pool holds fewer files than the build has workers.
+        REQUIRE(room / held < WORKERS);
+        const auto few = run_build(files, env.get_dir() + "/few", tight);
+        const auto many = run_build(files, env.get_dir() + "/many", 32 * tight);
+        REQUIRE(few.indexed == 4);
+        REQUIRE(many.indexed == 4);
+        CHECK(few.failed == 0);
+        CHECK(few.metrics.max_files_in_flight >= 1);
+        CHECK(few.metrics.max_files_in_flight <=
+              std::max<std::uint64_t>(room / held, 1));
+        CHECK(many.metrics.max_files_in_flight >= 2);
     }
 
     TEST_CASE("parsing ahead writes the same index as one parse at a time") {
@@ -185,14 +213,60 @@ TEST_SUITE("IndexBuildMemory") {
         const std::vector<std::string> files = {
             write_trace(env.get_dir(), "many", 12000, 600, 2048)};
         const auto big_dir = env.get_dir() + "/big";
-        const auto small_dir = env.get_dir() + "/small";
         const auto big = run_build(files, big_dir, memory::NO_SPILL_BUDGET);
-        const auto small = run_build(files, small_dir, 1 << 20);
         REQUIRE(big.indexed == 1);
-        REQUIRE(small.indexed == 1);
-        CHECK(small.metrics.files_spilled == 1);
-        CHECK(contents(index_of(files[0], big_dir)) ==
-              contents(index_of(files[0], small_dir)));
+        const auto expect = contents(index_of(files[0], big_dir));
+        REQUIRE_FALSE(expect.empty());
+        // A budget far below one file's state is slow, not wrong: the spill
+        // share has a floor, so the runs stay few and every family matches.
+        for (std::uint64_t budget : {1 * MIB, 8 * MIB}) {
+            CAPTURE(budget);
+            const auto dir = env.get_dir() + "/small" + std::to_string(budget);
+            const auto small = run_build(files, dir, budget);
+            REQUIRE(small.indexed == 1);
+            CHECK(small.failed == 0);
+            CHECK(small.metrics.files_spilled == 1);
+            CHECK(small.metrics.max_spill_runs >= 1);
+            CHECK(small.metrics.max_spill_runs <=
+                  constants::file_admission::MAX_SPILL_RUNS);
+            const auto got = contents(index_of(files[0], dir));
+            REQUIRE(got.size() == expect.size());
+            CHECK(got == expect);
+        }
+    }
+
+    TEST_CASE("the size of a spill run grows so the run count stays bounded") {
+        namespace ext = dftracer::utils::index::extensions;
+        constexpr std::uint64_t SHARE = 1 * MIB;
+        constexpr std::uint64_t TIER =
+            constants::file_admission::MAX_SPILL_TIER_BYTES;
+        std::uint64_t written = 0;
+        std::size_t runs = 0;
+        for (; written < TIER; ++runs)
+            written += ext::BloomFold::run_limit(SHARE, runs);
+        CHECK(runs <= constants::file_admission::MAX_SPILL_RUNS);
+        CHECK(ext::BloomFold::run_limit(SHARE, 0) ==
+              constants::file_admission::MIN_SPILL_RUN_BYTES);
+        CHECK(ext::BloomFold::run_limit(64 * MIB, 0) == 16 * MIB);
+    }
+
+    TEST_CASE("a spill run that cannot be written fails the build") {
+        dftu_utils_test::TestEnvironment env(10);
+        const std::vector<std::string> files = {
+            write_trace(env.get_dir(), "blocked", 12000, 600, 2048)};
+        const auto dir = env.get_dir() + "/blocked_idx";
+        const auto index = index_of(files[0], dir);
+        // A regular file where the spill directory goes: no run can open.
+        fs::create_directories(fs::path(index).parent_path());
+        {
+            std::ofstream(index + ".spill") << "not a directory";
+        }
+        const auto r = run_build(files, dir, 1 * MIB);
+        CHECK(r.indexed == 0);
+        CHECK(r.failed == 1);
+        REQUIRE(r.results.size() == 1);
+        CHECK_FALSE(r.results[0].success);
+        CHECK_FALSE(r.results[0].error_message.empty());
     }
 
     TEST_CASE("a spilled build writes the same index as an unbounded one") {

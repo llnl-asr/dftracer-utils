@@ -561,11 +561,20 @@ An index build holds each file's chunk evidence until the file is written,
 and several files are built at once. ``memory_budget`` caps that the same
 way ``TraceViewer.memory_budget`` caps a scan: 0 (the default) is about a
 third of available memory, and a byte count or a size such as ``"4GB"`` sets
-it. Under the budget, fewer large files are built at a time, and a file
+it. A file starts only when the bytes it is expected to hold fit the budget
+beside the files already running, and a file that does not fit waits its turn,
+so the number of files at once follows the budget and not the worker count.
+Each worker also keeps at least 8 MiB of output it has not committed, in half of the
+budget, so a budget of 64 MB or less runs at most 4 workers.
+Workers that have no file help the files that run: they parse pieces of a file
+at the same time, as many as there are free workers and room for. A file
 whose evidence outgrows its share writes its finished chunks to sorted runs
 beside the index (``<index>.spill``) and commits them with the rest of the
-file in one atomic ingest. The index holds the same data either way; a build
-that spills is slower.
+file in one atomic ingest. A run is never smaller than 4 MiB, so even a budget of
+1 MiB writes a few runs and not thousands. A file larger than the budget runs alone, with a
+quarter of the budget left for its pieces.
+The index holds the same data whatever the budget, the worker count or the
+order in which the pieces were parsed; a build that spills is slower.
 
 .. tab-set::
 

@@ -1880,6 +1880,7 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/gzip_line_writer_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/gzip_crc_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/index_bench.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/index_diff.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/duql_eval_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/duql_mask_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/prefilter_bench.cpp

@@ -8,6 +8,7 @@
 #include <dftracer/utils/index/schemas/dft/agg/system_metrics_serialization.h>
 #include <dftracer/utils/index/store/column_families.h>
 #include <dftracer/utils/index/store/database.h>
+#include <dftracer/utils/index/store/internal/scan_prefix.h>
 #include <dftracer/utils/index/store/layout.h>
 #include <rocksdb/iterator.h>
 
@@ -96,29 +97,25 @@ std::size_t for_each_in(std::unique_ptr<::rocksdb::Iterator> it,
     std::uint8_t seek[2];
     write_u16_be(seek, begin);
     std::size_t n = 0;
-    if (after.empty()) {
-        it->Seek(::rocksdb::Slice(reinterpret_cast<const char*>(seek), 2));
-    } else {
-        it->Seek(::rocksdb::Slice(after.data(), after.size()));
-        if (it->Valid() &&
-            it->key() == ::rocksdb::Slice(after.data(), after.size()))
-            it->Next();
-    }
-    for (; it->Valid(); it->Next()) {
-        const auto k = it->key();
-        if (k.size() < 2) continue;
-        const auto shard =
-            read_u16_be(reinterpret_cast<const std::uint8_t*>(k.data()));
-        if (shard >= end || shard >= AGG_KEY_NUM_SHARDS) break;
-        ++n;
-        const auto v = it->value();
-        if (!fn(std::string_view(k.data(), k.size()),
-                std::string_view(v.data(), v.size())))
-            break;
-    }
-    if (!it->status().ok())
-        throw DFTUtilsException::cat(
-            ErrorCode::Io, "aggregation tier scan: ", it->status().ToString());
+    const std::string_view start =
+        after.empty() ? std::string_view(reinterpret_cast<const char*>(seek), 2)
+                      : after;
+    index::store::internal::scan_from(
+        "aggregation tier scan", std::move(it), start,
+        [&](::rocksdb::Iterator& at) {
+            const auto k = at.key();
+            if (!after.empty() &&
+                k == ::rocksdb::Slice(after.data(), after.size()))
+                return true;
+            if (k.size() < 2) return true;
+            const auto shard =
+                read_u16_be(reinterpret_cast<const std::uint8_t*>(k.data()));
+            if (shard >= end || shard >= AGG_KEY_NUM_SHARDS) return false;
+            ++n;
+            const auto v = at.value();
+            return fn(std::string_view(k.data(), k.size()),
+                      std::string_view(v.data(), v.size()));
+        });
     return n;
 }
 
@@ -141,20 +138,22 @@ void for_each_partial(const RocksDatabase& db, int file_id, Fn&& fn) {
     const auto prefix = index::store::layout::file_prefix(
         index::store::layout::Ext::Agg, index::store::layout::agg_kind::PARTIAL,
         static_cast<std::uint32_t>(file_id));
-    auto it = db.new_iterator(index::store::cf::BLOB);
-    for (it->Seek(prefix); it->Valid(); it->Next()) {
-        const std::string_view key(it->key().data(), it->key().size());
-        if (!key.starts_with(prefix)) break;
-        const auto value =
-            std::string_view(it->value().data(), it->value().size());
-        const auto body = index::store::layout::payload(
-            value, index::store::layout::Ext::Agg,
-            index::store::layout::agg_kind::PARTIAL);
-        if (key.size() != prefix.size() + 21 || !body)
-            throw DFTUtilsException(ErrorCode::Parse,
-                                    "aggregation partial: malformed record");
-        const auto tail = key.substr(prefix.size());
-        if (!fn(index::store::layout::read_u32(tail),
+    index::store::internal::scan_from(
+        "aggregation partial scan", db.new_iterator(index::store::cf::BLOB),
+        prefix, [&](::rocksdb::Iterator& it) {
+            const std::string_view key(it.key().data(), it.key().size());
+            if (!key.starts_with(prefix)) return false;
+            const auto value =
+                std::string_view(it.value().data(), it.value().size());
+            const auto body = index::store::layout::payload(
+                value, index::store::layout::Ext::Agg,
+                index::store::layout::agg_kind::PARTIAL);
+            if (key.size() != prefix.size() + 21 || !body)
+                throw DFTUtilsException(
+                    ErrorCode::Parse, "aggregation partial: malformed record");
+            const auto tail = key.substr(prefix.size());
+            return fn(
+                index::store::layout::read_u32(tail),
                 index::store::layout::read_u32(tail.substr(4)),
                 index::store::layout::read_u32(tail.substr(8)),
                 index::store::layout::read_u32(tail.substr(12)),
@@ -162,13 +161,8 @@ void for_each_partial(const RocksDatabase& db, int file_id, Fn&& fn) {
                 static_cast<PartialKind>(static_cast<std::uint8_t>(tail[20])),
                 std::span<const std::uint8_t>(
                     reinterpret_cast<const std::uint8_t*>(body->data()),
-                    body->size())))
-            break;
-    }
-    if (!it->status().ok())
-        throw DFTUtilsException::cat(
-            ErrorCode::Io,
-            "aggregation partial scan: ", it->status().ToString());
+                    body->size()));
+        });
 }
 
 std::optional<TimeBounds> read_time_bounds(const RocksDatabase& db);

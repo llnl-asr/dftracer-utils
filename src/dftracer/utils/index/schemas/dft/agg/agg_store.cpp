@@ -242,35 +242,38 @@ void write_tracker(RocksDatabase& db, std::string_view bytes) {
 
 void load_dictionary(const RocksDatabase& db, AggInternTable& table) {
     const auto prefix = dict_prefix();
-    auto it = db.new_iterator(cf::BLOB);
-    for (it->Seek(prefix); it->Valid(); it->Next()) {
-        const std::string_view key(it->key().data(), it->key().size());
-        if (!key.starts_with(prefix)) break;
-        const auto body = layout::payload(
-            std::string_view(it->value().data(), it->value().size()),
-            layout::Ext::Agg, layout::agg_kind::DICT);
-        if (key.size() != prefix.size() + 4 || !body)
-            throw DFTUtilsException(ErrorCode::Parse,
-                                    "aggregation dictionary: malformed entry");
-        const std::uint32_t id = layout::read_u32(key.substr(prefix.size()));
-        switch (table.intern.insert_at_id(id, *body)) {
-            case dstd::StringIntern::InsertStatus::Ok:
-                break;
-            case dstd::StringIntern::InsertStatus::Conflict:
+    index::store::internal::scan_prefix_iterator(
+        "aggregation dictionary scan", prefix,
+        [&] { return db.new_iterator(cf::BLOB); },
+        [&](::rocksdb::Iterator& it) {
+            const std::string_view key(it.key().data(), it.key().size());
+            const auto body = layout::payload(
+                std::string_view(it.value().data(), it.value().size()),
+                layout::Ext::Agg, layout::agg_kind::DICT);
+            if (key.size() != prefix.size() + 4 || !body)
                 throw DFTUtilsException(
-                    ErrorCode::InvalidArgument,
-                    "string intern: id " + std::to_string(id) +
-                        " is already '" +
-                        std::string(table.intern.resolve(id)) +
-                        "', cannot rebind to '" + std::string(*body) +
-                        "' (dictionaries from two indexes in one table?)");
-            case dstd::StringIntern::InsertStatus::OutOfRange:
-                throw DFTUtilsException(ErrorCode::InvalidArgument,
-                                        "string intern: id " +
-                                            std::to_string(id) +
-                                            " is out of range");
-        }
-    }
+                    ErrorCode::Parse,
+                    "aggregation dictionary: malformed entry");
+            const std::uint32_t id =
+                layout::read_u32(key.substr(prefix.size()));
+            switch (table.intern.insert_at_id(id, *body)) {
+                case dstd::StringIntern::InsertStatus::Ok:
+                    break;
+                case dstd::StringIntern::InsertStatus::Conflict:
+                    throw DFTUtilsException(
+                        ErrorCode::InvalidArgument,
+                        "string intern: id " + std::to_string(id) +
+                            " is already '" +
+                            std::string(table.intern.resolve(id)) +
+                            "', cannot rebind to '" + std::string(*body) +
+                            "' (dictionaries from two indexes in one table?)");
+                case dstd::StringIntern::InsertStatus::OutOfRange:
+                    throw DFTUtilsException(ErrorCode::InvalidArgument,
+                                            "string intern: id " +
+                                                std::to_string(id) +
+                                                " is out of range");
+            }
+        });
     table.flushed_entries.store(
         static_cast<std::uint32_t>(table.intern.entry_count()),
         std::memory_order_relaxed);
@@ -315,15 +318,16 @@ void clear(RocksDatabase& db) {
     const auto prefix =
         layout::kind_prefix(layout::Ext::Host, layout::host::MANIFEST);
     const std::size_t agg_entry = prefix.size() + 4 + 2;
-    auto it = db.new_iterator(cf::DEFAULT);
-    for (it->Seek(prefix); it->Valid(); it->Next()) {
-        const std::string_view key(it->key().data(), it->key().size());
-        if (!key.starts_with(prefix)) break;
-        if (key.size() == agg_entry &&
-            layout::read_u16(key.substr(prefix.size() + 4)) ==
-                static_cast<std::uint16_t>(layout::Ext::Agg))
-            db.del(batch, cf::DEFAULT, key);
-    }
+    index::store::internal::scan_prefix_iterator(
+        "aggregation manifest scan", prefix,
+        [&] { return db.new_iterator(cf::DEFAULT); },
+        [&](::rocksdb::Iterator& it) {
+            const std::string_view key(it.key().data(), it.key().size());
+            if (key.size() == agg_entry &&
+                layout::read_u16(key.substr(prefix.size() + 4)) ==
+                    static_cast<std::uint16_t>(layout::Ext::Agg))
+                db.del(batch, cf::DEFAULT, key);
+        });
     check(db.commit_batch(batch), "aggregation tier clear", db);
     intern_for_index(db.path())->flushed_entries.store(
         0, std::memory_order_relaxed);

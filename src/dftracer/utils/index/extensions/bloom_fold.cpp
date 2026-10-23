@@ -1,3 +1,4 @@
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
@@ -15,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <exception>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <string_view>
@@ -377,7 +379,21 @@ void BloomFold::enable_spill(std::uint64_t share, std::string dir, int file_id,
 }
 
 std::size_t BloomFold::spill_runs() const {
-    return files_.empty() ? 0 : files_.begin()->second.spill.runs.size();
+    if (files_.empty()) return 0;
+    const auto& sp = files_.begin()->second.spill;
+    return sp.runs.size() + (sp.open ? 1 : 0);
+}
+
+std::uint64_t BloomFold::run_limit(std::uint64_t share,
+                                   std::size_t runs) noexcept {
+    namespace fa = constants::file_admission;
+    const std::uint64_t base =
+        std::max<std::uint64_t>(share / 4, fa::MIN_SPILL_RUN_BYTES);
+    const std::size_t doublings =
+        std::min(runs / fa::SPILL_RUNS_PER_DOUBLING, fa::MAX_SPILL_DOUBLINGS);
+    return base > (std::numeric_limits<std::uint64_t>::max() >> doublings)
+               ? std::numeric_limits<std::uint64_t>::max()
+               : base << doublings;
 }
 
 void BloomFold::chunk_started(FileState& fs, std::uint64_t cp) {
@@ -391,17 +407,17 @@ void BloomFold::chunk_started(FileState& fs, std::uint64_t cp) {
 void BloomFold::spill(FileState& fs, std::uint64_t upto) {
     auto& sp = fs.spill;
     if (!sp.acc) sp.acc.emplace(config_);
-    auto open_run = [&] {
-        return std::make_unique<index::store::IndexDatabaseSstWriterContext>(
-            spill_dir_, "run_" + std::to_string(sp.runs.size()));
-    };
-    auto run = open_run();
-    if (sp.runs.empty() && !spill_fresh_)
-        for (auto ext : BV::tier_extensions(config_))
-            index::store::records::clear_file(*run, ext, spill_file_id_);
-    std::uint64_t buffered = 0;
     for (std::uint64_t cp = sp.next; cp < upto; ++cp) {
-        buffered += resident_bytes(fs, cp);
+        if (!sp.open) {
+            sp.open =
+                std::make_unique<index::store::IndexDatabaseSstWriterContext>(
+                    spill_dir_, "run_" + std::to_string(sp.runs.size()));
+            if (sp.runs.empty() && !spill_fresh_)
+                for (auto ext : BV::tier_extensions(config_))
+                    index::store::records::clear_file(*sp.open, ext,
+                                                      spill_file_id_);
+        }
+        sp.buffered += resident_bytes(fs, cp);
         AutoKeys own;
         if (auto ac = fs.auto_chunks.find(cp); ac != fs.auto_chunks.end()) {
             for (const auto& [k, f] : ac->second) {
@@ -414,8 +430,8 @@ void BloomFold::spill(FileState& fs, std::uint64_t upto) {
                       });
         }
         const ChunkState chunk = assemble_chunk(fs, cp, dims_of(own), own);
-        BV::write_chunk(*run, spill_file_id_, cp, chunk, dims_of(own), config_,
-                        *sp.acc);
+        BV::write_chunk(*sp.open, spill_file_id_, cp, chunk, dims_of(own),
+                        config_, *sp.acc);
         sp.events += chunk.statistics.total_events;
         std::vector<std::uint32_t> ids;
         ids.reserve(own.size());
@@ -424,13 +440,12 @@ void BloomFold::spill(FileState& fs, std::uint64_t upto) {
             sp.key_union.insert(key.id);
         }
         sp.keys.push_back({cp, chunk.statistics.total_events, std::move(ids)});
-        if (buffered > spill_share_ / 4 && cp + 1 < upto) {
-            sp.runs.push_back(run->commit());
-            run = open_run();
-            buffered = 0;
+        if (sp.buffered > run_limit(spill_share_, sp.runs.size())) {
+            sp.runs.push_back(sp.open->commit());
+            sp.open.reset();
+            sp.buffered = 0;
         }
     }
-    sp.runs.push_back(run->commit());
     sp.next = upto;
     sp.resident = 0;
 }
@@ -441,6 +456,11 @@ BloomFold::finish_spilled(int file_id) {
     const std::string& file = files_.begin()->first;
     FileState& fs = files_.begin()->second;
     auto& sp = fs.spill;
+    if (sp.open) {
+        sp.runs.push_back(sp.open->commit());
+        sp.open.reset();
+        sp.buffered = 0;
+    }
     const std::uint64_t end =
         fs.chunks.empty() ? sp.next
                           : std::max(sp.next, fs.chunks.rbegin()->first + 1);
@@ -530,7 +550,7 @@ BloomFold::finish_spilled(int file_id) {
 BloomFold::~BloomFold() {
     if (spill_dir_.empty()) return;
     for (const auto& [file, fs] : files_)
-        if (!fs.spill.runs.empty() && !fs.spill.handed_off) {
+        if ((!fs.spill.runs.empty() || fs.spill.open) && !fs.spill.handed_off) {
             std::error_code ec;
             fs::remove_all(spill_dir_, ec);
         }

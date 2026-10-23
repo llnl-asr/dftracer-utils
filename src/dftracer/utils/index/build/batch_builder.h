@@ -214,6 +214,8 @@ struct IndexBuildBatchMetrics {
     std::size_t max_files_in_flight = 0;
     /// Files whose build state passed their share and spilled to disk.
     std::size_t files_spilled = 0;
+    /// The most spill runs one file wrote while it was parsed.
+    std::size_t max_spill_runs = 0;
 };
 
 struct IndexBuildBatchResult {

@@ -2,6 +2,7 @@
 #include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/index/cache/lru.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
+#include <dftracer/utils/index/store/internal/scan_prefix.h>
 #include <dftracer/utils/utilities/common/serialization/binary_codec.h>
 
 #include <algorithm>
@@ -55,7 +56,9 @@ void touch_usage(rdb::RocksDatabase& db, std::string_view cf,
                  std::uint64_t sig) {
     if (db.is_read_only()) return;
     std::string usage;
-    if (!db.get(usage_key(sig), &usage, cf).ok() || usage.size() != USAGE_BYTES)
+    if (!rdb::internal::get_checked("cache usage read", db, usage_key(sig),
+                                    &usage, cf) ||
+        usage.size() != USAGE_BYTES)
         return;
     codec::BinaryReader br(usage);
     check_status(
@@ -71,20 +74,21 @@ void evict_lru(rdb::RocksDatabase& db, std::string_view cf, std::uint64_t keep,
     };
     std::vector<Entry> entries;
     std::uint64_t total = 0;
-    auto it = db.new_iterator(cf);
-    for (it->Seek(std::string_view(&USAGE_TAG, 1)); it->Valid(); it->Next()) {
-        const std::string_view k(it->key().data(), it->key().size());
-        if (k.empty() || k[0] != USAGE_TAG) break;
-        const std::string_view v(it->value().data(), it->value().size());
-        if (k.size() != 9 || v.size() != USAGE_BYTES) continue;
-        codec::BinaryReader kr(k.substr(1));
-        codec::BinaryReader vr(v);
-        const std::uint64_t sig = kr.be64();
-        const std::uint64_t bytes = vr.be64();
-        entries.push_back({sig, bytes, vr.be64()});
-        total += bytes;
-    }
-    check_status(it->status(), "cache usage scan");
+    rdb::internal::scan_from(
+        "cache usage scan", db.new_iterator(cf),
+        std::string_view(&USAGE_TAG, 1), [&](::rocksdb::Iterator& it) {
+            const std::string_view k(it.key().data(), it.key().size());
+            if (k.empty() || k[0] != USAGE_TAG) return false;
+            const std::string_view v(it.value().data(), it.value().size());
+            if (k.size() != 9 || v.size() != USAGE_BYTES) return true;
+            codec::BinaryReader kr(k.substr(1));
+            codec::BinaryReader vr(v);
+            const std::uint64_t sig = kr.be64();
+            const std::uint64_t bytes = vr.be64();
+            entries.push_back({sig, bytes, vr.be64()});
+            total += bytes;
+            return true;
+        });
     const std::uint64_t budget = cache_max_bytes();
     if (total <= budget) return;
     std::sort(entries.begin(), entries.end(),

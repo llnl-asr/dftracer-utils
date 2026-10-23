@@ -244,23 +244,22 @@ void scan_files(const rocks::RocksDatabase& db, Ext ext, std::uint8_t kind,
     const auto [lo, hi] = std::minmax_element(file_ids.begin(), file_ids.end());
     const auto kind_prefix = layout::kind_prefix(ext, kind);
     const auto start = layout::file_prefix(ext, kind, fid(*lo));
-    auto it =
-        db.new_iterator(layout::family_name(layout::family_of(ext, kind)));
-    for (it->Seek(::rocksdb::Slice(start.data(), start.size())); it->Valid();
-         it->Next()) {
-        const std::string_view key(it->key().data(), it->key().size());
-        if (!key.starts_with(kind_prefix) ||
-            key.size() < layout::KEY_PREFIX_BYTES)
-            break;
-        const int file_id = static_cast<int>(tail_u32(key, 3));
-        if (file_id > *hi) break;
-        if (!wanted.contains(file_id)) continue;
-        const std::string_view value(it->value().data(), it->value().size());
-        if (auto body = layout::payload(value, ext, kind))
-            fn(file_id, key, *body);
-    }
-    if (!it->status().ok())
-        throw_db_error("Failed to scan index data", it->status());
+    scan_from(
+        "Failed to scan index data",
+        db.new_iterator(layout::family_name(layout::family_of(ext, kind))),
+        start, [&](::rocksdb::Iterator& it) {
+            const std::string_view key(it.key().data(), it.key().size());
+            if (!key.starts_with(kind_prefix) ||
+                key.size() < layout::KEY_PREFIX_BYTES)
+                return false;
+            const int file_id = static_cast<int>(tail_u32(key, 3));
+            if (file_id > *hi) return false;
+            if (!wanted.contains(file_id)) return true;
+            const std::string_view value(it.value().data(), it.value().size());
+            if (auto body = layout::payload(value, ext, kind))
+                fn(file_id, key, *body);
+            return true;
+        });
 }
 
 }  // namespace
@@ -401,9 +400,8 @@ void IndexDatabase::init_schema() {
     writer->init_schema();
     writer->commit();
     // Rollups moved to <index>/cache; drop the rows older builds left here.
-    auto it = impl_->db_->new_iterator(cf::ROLLUP);
-    it->SeekToFirst();
-    if (it->Valid()) {
+    if (any_key_with_prefix("Failed to scan the legacy rollup family",
+                            impl_->db_->new_iterator(cf::ROLLUP), {})) {
         auto status = impl_->db_->delete_range(
             std::string_view(), std::string(32, '\xFF'), cf::ROLLUP);
         if (!status.ok())
@@ -441,23 +439,21 @@ std::vector<std::pair<std::string, ExtensionState>>
 IndexDatabase::plugin_extension_states(int file_id) const {
     std::vector<std::pair<std::string, ExtensionState>> out;
     const auto prefix = layout::manifest_key(fid(file_id), Ext::Plugin);
-    auto it = impl_->db_->new_iterator(cf::DEFAULT);
-    for (it->Seek(::rocksdb::Slice(prefix.data(), prefix.size())); it->Valid();
-         it->Next()) {
-        const std::string_view key(it->key().data(), it->key().size());
-        if (!key.starts_with(prefix)) break;
-        if (key.size() <= prefix.size() || key.back() != '\0') continue;
-        auto entry = layout::decode_manifest(
-            std::string_view(it->value().data(), it->value().size()));
-        if (!entry) continue;
-        out.emplace_back(
-            std::string(
-                key.substr(prefix.size(), key.size() - prefix.size() - 1)),
-            ExtensionState{entry->version, entry->params_hash,
-                           entry->status == layout::ExtStatus::Ready});
-    }
-    if (!it->status().ok())
-        throw_db_error("Failed to read the manifest", it->status());
+    scan_prefix_iterator(
+        "Failed to read the manifest", prefix,
+        [&] { return impl_->db_->new_iterator(cf::DEFAULT); },
+        [&](::rocksdb::Iterator& it) {
+            const std::string_view key(it.key().data(), it.key().size());
+            if (key.size() <= prefix.size() || key.back() != '\0') return;
+            auto entry = layout::decode_manifest(
+                std::string_view(it.value().data(), it.value().size()));
+            if (!entry) return;
+            out.emplace_back(
+                std::string(
+                    key.substr(prefix.size(), key.size() - prefix.size() - 1)),
+                ExtensionState{entry->version, entry->params_hash,
+                               entry->status == layout::ExtStatus::Ready});
+        });
     return out;
 }
 
@@ -503,14 +499,8 @@ std::optional<std::string> IndexDatabase::path_file_value(
 bool IndexDatabase::has_postings(int file_id, std::string_view path) const {
     const auto prefix =
         layout::path_prefix(Ext::Postings, pk::IN_FILE, fid(file_id), path);
-    auto it = impl_->db_->new_iterator(cf::POSTINGS);
-    it->Seek(::rocksdb::Slice(prefix.data(), prefix.size()));
-    const bool found =
-        it->Valid() && std::string_view(it->key().data(), it->key().size())
-                           .starts_with(prefix);
-    if (!it->status().ok())
-        throw_db_error("Failed to read postings", it->status());
-    return found;
+    return any_key_with_prefix("Failed to read postings",
+                               impl_->db_->new_iterator(cf::POSTINGS), prefix);
 }
 
 bool IndexDatabase::has_posting(int file_id, std::string_view path,

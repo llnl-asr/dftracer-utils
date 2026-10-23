@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cstring>
+#include <limits>
 
 namespace dftracer::utils::index::extensions {
 
@@ -75,21 +76,36 @@ void ChunkDimensionStats::observe(std::string_view value) {
     }
 }
 
+void ChunkDimensionStats::observe(std::string_view value, std::uint32_t& slot) {
+    if (slot != NO_SLOT) {
+        ++present;
+        ++(value_counts->begin() + slot)->second;
+        return;
+    }
+    observe(value);
+    slot = static_cast<std::uint32_t>(value_counts->find(value) -
+                                      value_counts->begin());
+}
+
 void ChunkDimensionStats::observe_range_only(std::uint64_t value) {
     ++present;
     distinct_count++;
-    auto str = std::to_string(value);
+    char buf[std::numeric_limits<std::uint64_t>::digits10 + 2];
+    const auto text = [&] {
+        const auto end = std::to_chars(buf, buf + sizeof(buf), value).ptr;
+        return std::string_view(buf, static_cast<std::size_t>(end - buf));
+    };
     if (min_value.empty()) {
-        min_value = str;
-        max_value = str;
+        min_value = text();
+        max_value = min_value;
     } else {
         std::uint64_t cur_min = 0, cur_max = 0;
         std::from_chars(min_value.data(), min_value.data() + min_value.size(),
                         cur_min);
         std::from_chars(max_value.data(), max_value.data() + max_value.size(),
                         cur_max);
-        if (value < cur_min) min_value = str;
-        if (value > cur_max) max_value = str;
+        if (value < cur_min) min_value = text();
+        if (value > cur_max) max_value = text();
     }
 }
 

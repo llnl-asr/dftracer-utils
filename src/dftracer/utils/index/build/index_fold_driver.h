@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_BUILD_INDEX_FOLD_DRIVER_H
 #define DFTRACER_UTILS_INDEX_BUILD_INDEX_FOLD_DRIVER_H
 
+#include <dftracer/utils/dstd/intern_cache.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/index_visitor.h>
@@ -499,20 +500,29 @@ class IndexFoldDriver : public index::build::IndexVisitor {
                         cfg.skip_never_indexed);
                 });
         } else {
+            trace::views::detail::DecodeHints hints;
+            dftracer::utils::dstd::InternCache cache(intern);
             trace::parse_buffer(
                 parser, c.buf, total, c.checkpoint_idx, line_number,
                 [&](const trace::EventRecord& r) {
                     if (cfg.keep_lines) c.lines.push_back(r.line);
                     trace::views::detail::FoldEvent& ev = c.batch->append();
+                    trace::views::detail::DecodeHints* leaves =
+                        cfg.capture_schema &&
+                                trace::views::detail::args_leaves_in_walk(
+                                    cfg.needs_args, r.has_args, r.args_dom)
+                            ? &hints
+                            : nullptr;
                     trace::views::detail::build_fold_event_into(
                         ev, r.ev, r.args_dom, r.has_args, intern,
-                        cfg.needs_args);
+                        cfg.needs_args, leaves, &cache);
                     for (const auto& name : cfg.extra_fields)
                         trace::views::detail::capture_extra_field(
                             ev, r.json.element(), intern, name);
                     if (cfg.capture_schema)
                         trace::views::detail::capture_schema_leaves(
-                            ev, r.json.element(), intern);
+                            ev, r.json.element(), intern, leaves != nullptr,
+                            &hints);
                 });
         }
     }

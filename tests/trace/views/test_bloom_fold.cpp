@@ -471,11 +471,12 @@ TEST_SUITE("BloomCore") {
         BloomCore::ChunkState a, b;
         BloomCore::init_chunk_state(a, config, {});
         BloomCore::init_chunk_state(b, config, {});
-        BloomCore::PidTidCache cache;
-        BloomCore::observe_data(a, cache, "read", "POSIX", 9, 1, 9, 9, true, "",
-                                "", "");
-        BloomCore::observe_data(b, cache, "read", "POSIX", 10, 1, 10, 10, true,
-                                "", "", "");
+        BloomCore::EventCache cache_a;
+        BloomCore::EventCache cache_b;
+        BloomCore::observe_data(a, cache_a, 0, 1, "read", "POSIX", 9, 1, 9, 9,
+                                true, "", "", "");
+        BloomCore::observe_data(b, cache_b, 0, 1, "read", "POSIX", 10, 1, 10,
+                                10, true, "", "", "");
         BloomCore::merge_chunk_state(a, b);
         const auto& ts = a.fixed_dim_stats[BloomCore::FdTs];
         CHECK(ts.min_value == "9");

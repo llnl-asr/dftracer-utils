@@ -277,8 +277,12 @@ std::string join_value_types(const std::string& a, const std::string& b) {
 bool observe_type(index::extensions::ChunkDimensionStats& ds,
                   const char* type) {
     ++ds.present;
-    if (ds.value_type == "mixed") return false;
-    if (ds.value_type == type) return true;
+    // The value types ("string", "uint", "int", "double", "mixed") start with
+    // distinct letters, so the first byte tells them apart.
+    if (!ds.value_type.empty()) {
+        if (ds.value_type[0] == 'm') return false;
+        if (ds.value_type[0] == type[0]) return true;
+    }
     const std::string joined = join_value_types(ds.value_type, type);
     if (joined != ds.value_type) ds.value_type = joined;
     if (joined == "mixed") {
@@ -460,14 +464,66 @@ void BloomCore::observe_metadata(ChunkState& chunk,
     index::store::add_metadata_value(chunk.metadata.names, record_name);
 }
 
-void BloomCore::observe_data(ChunkState& chunk, PidTidCache& cache,
+BloomCore::EventCache::NameSlot& BloomCore::EventCache::name_slot(
+    std::uint32_t name_id, std::uint32_t cat_id) {
+    const std::uint64_t key = (std::uint64_t{name_id} << 32) | cat_id;
+    NameSlot& slot = names_[(key * 0x9E3779B97F4A7C15ULL) >> 56];
+    if (slot.epoch != epoch_ || slot.key != key) {
+        slot = NameSlot{};
+        slot.key = key;
+        slot.epoch = epoch_;
+    }
+    return slot;
+}
+
+BloomCore::EventCache::PidSlot& BloomCore::EventCache::pid_slot(
+    std::uint64_t pid, std::uint64_t tid) {
+    PidSlot& slot =
+        pids_[((pid * 0x9E3779B97F4A7C15ULL) ^ (tid * 0xC2B2AE3D27D4EB4FULL)) >>
+              56];
+    if (slot.epoch != epoch_ || slot.pid != pid || slot.tid != tid) {
+        slot = PidSlot{};
+        slot.pid = pid;
+        slot.tid = tid;
+        slot.epoch = epoch_;
+        slot.pid_len = static_cast<std::uint8_t>(
+            std::to_chars(slot.pid_buf, slot.pid_buf + sizeof(slot.pid_buf),
+                          pid)
+                .ptr -
+            slot.pid_buf);
+        slot.tid_len = static_cast<std::uint8_t>(
+            std::to_chars(slot.tid_buf, slot.tid_buf + sizeof(slot.tid_buf),
+                          tid)
+                .ptr -
+            slot.tid_buf);
+    }
+    return slot;
+}
+
+void BloomCore::observe_data(ChunkState& chunk, EventCache& cache,
+                             std::uint32_t name_id, std::uint32_t cat_id,
                              std::string_view name, std::string_view cat,
                              std::uint64_t pid, std::uint64_t tid,
                              std::uint64_t ts, std::uint64_t dur, bool has_dur,
                              std::string_view hhash, std::string_view fhash,
                              std::string_view shash) {
-    chunk.statistics.update_from_event(name, cat, pid, tid, ts, dur, has_dur);
+    EventCache::NameSlot& ns = cache.name_slot(name_id, cat_id);
+    EventCache::PidSlot& ps = cache.pid_slot(pid, tid);
+    chunk.statistics.update_from_event(ns.stats, ps.stats, name, cat, pid, tid,
+                                       ts, dur, has_dur);
 
+    // A value already in a chunk's bloom adds nothing, so a slot remembers
+    // that it was added and skips the probe.
+    auto observe_known = [&chunk](int bloom_idx, std::size_t dim_idx,
+                                  std::string_view val, bool& in_bloom,
+                                  std::uint32_t& dim_slot) {
+        if (val.empty()) return;
+        if (bloom_idx >= 0 && !in_bloom) {
+            chunk.fixed_blooms[bloom_idx].add(val);
+            in_bloom = true;
+        }
+        chunk.fixed_dim_stats[dim_idx].observe(val, dim_slot);
+    };
     auto observe_fixed = [&chunk](int bloom_idx, std::size_t dim_idx,
                                   std::string_view val) {
         if (val.empty()) return;
@@ -475,33 +531,21 @@ void BloomCore::observe_data(ChunkState& chunk, PidTidCache& cache,
         chunk.fixed_dim_stats[dim_idx].observe(val);
     };
 
-    observe_fixed(BfName, FdName, name);
-    observe_fixed(BfCat, FdCat, cat);
+    observe_known(BfName, FdName, name, ns.name_in_bloom, ns.name_dim);
+    observe_known(BfCat, FdCat, cat, ns.cat_in_bloom, ns.cat_dim);
 
-    if (pid != cache.last_pid || cache.pid_len == 0) {
-        auto [pp, _1] = std::to_chars(
-            cache.pid_buf, cache.pid_buf + sizeof(cache.pid_buf), pid);
-        cache.pid_len = static_cast<std::uint8_t>(pp - cache.pid_buf);
-        cache.last_pid = pid;
-    }
-    if (tid != cache.last_tid || cache.tid_len == 0) {
-        auto [tp, _2] = std::to_chars(
-            cache.tid_buf, cache.tid_buf + sizeof(cache.tid_buf), tid);
-        cache.tid_len = static_cast<std::uint8_t>(tp - cache.tid_buf);
-        cache.last_tid = tid;
-    }
-    std::string_view pid_sv(cache.pid_buf, cache.pid_len);
-    std::string_view tid_sv(cache.tid_buf, cache.tid_len);
-
-    observe_fixed(BfPid, FdPid, pid_sv);
-    observe_fixed(BfTid, FdTid, tid_sv);
+    const std::string_view pid_sv(ps.pid_buf, ps.pid_len);
+    const std::string_view tid_sv(ps.tid_buf, ps.tid_len);
+    observe_known(BfPid, FdPid, pid_sv, ps.pid_in_bloom, ps.pid_dim);
+    observe_known(BfTid, FdTid, tid_sv, ps.tid_in_bloom, ps.tid_dim);
 
     char pt_buf[52];
-    std::memcpy(pt_buf, cache.pid_buf, cache.pid_len);
-    pt_buf[cache.pid_len] = ':';
-    std::memcpy(pt_buf + cache.pid_len + 1, cache.tid_buf, cache.tid_len);
-    std::string_view pt_sv(pt_buf, cache.pid_len + 1 + cache.tid_len);
-    observe_fixed(-1, FdPidTid, pt_sv);
+    std::memcpy(pt_buf, ps.pid_buf, ps.pid_len);
+    pt_buf[ps.pid_len] = ':';
+    std::memcpy(pt_buf + ps.pid_len + 1, ps.tid_buf, ps.tid_len);
+    const std::string_view pt_sv(pt_buf, ps.pid_len + 1 + ps.tid_len);
+    bool no_bloom = false;
+    observe_known(-1, FdPidTid, pt_sv, no_bloom, ps.pid_tid_dim);
 
     chunk.fixed_dim_stats[FdTs].observe_range_only(ts);
     chunk.fixed_dim_stats[FdDur].observe_range_only(dur);

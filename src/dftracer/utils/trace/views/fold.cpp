@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/numbers.h>
+#include <dftracer/utils/index/event_cost.h>
 #include <dftracer/utils/index/store/file.h>
 #include <dftracer/utils/json/canonical.h>
 #include <dftracer/utils/json/json_escape.h>
@@ -18,6 +19,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <map>
 #include <optional>
@@ -60,10 +62,26 @@ struct ScanPermit {
     ScanPermit& operator=(const ScanPermit&) = delete;
 };
 
-std::uint32_t intern_string(dftracer::utils::dstd::StringIntern& intern,
-                            simdjson::dom::element val) {
+// Interns through `cache` when there is one.
+struct Ids {
+    dftracer::utils::dstd::StringIntern& intern;
+    dftracer::utils::dstd::InternCache* cache;
+
+    std::uint32_t get_or_insert(std::string_view sv) {
+        return cache ? cache->get_or_insert(sv) : intern.get_or_insert(sv);
+    }
+};
+
+std::uint32_t intern_string(Ids& ids, simdjson::dom::element val) {
     if (!val.is_string()) return dftracer::utils::dstd::StringIntern::NO_ID;
-    return intern.get_or_insert(val.get_string().value_unsafe());
+    return ids.get_or_insert(val.get_string().value_unsafe());
+}
+
+std::uint32_t intern_leaf_path(dftracer::utils::dstd::StringIntern& intern,
+                               std::string_view path) {
+    dftracer::utils::index::event_cost::g_leaf_path_interns.fetch_add(
+        1, std::memory_order_relaxed);
+    return intern.get_or_insert(path);
 }
 
 std::uint8_t leaf_type_tag(simdjson::dom::element v) {
@@ -117,7 +135,7 @@ void enumerate_leaves(std::string& path, simdjson::dom::element v,
         return;
     }
     if (!path.empty())
-        ev.schema_leaves.emplace_back(intern.get_or_insert(path),
+        ev.schema_leaves.emplace_back(intern_leaf_path(intern, path),
                                       leaf_type_tag(v));
 }
 
@@ -127,7 +145,7 @@ std::uint32_t arg_leaf_id(DecodeHints& h,
     auto resolve = [&] {
         std::string path("args.");
         path.append(key);
-        return intern.get_or_insert(path);
+        return intern_leaf_path(intern, path);
     };
     if (key_id < DecodeHints::FIELD_CACHE_IDS) {
         if (key_id >= h.arg_leaf.size())
@@ -143,14 +161,52 @@ std::uint32_t arg_leaf_id(DecodeHints& h,
     return it->second;
 }
 
+std::uint64_t pack_key(std::string_view key) {
+    std::uint64_t packed = 0;
+    std::memcpy(&packed, key.data(), key.size());
+    return packed;
+}
+
+std::uint32_t top_leaf_id(DecodeHints& h,
+                          dftracer::utils::dstd::StringIntern& intern,
+                          std::string_view key) {
+    const bool small = key.size() <= sizeof(std::uint64_t);
+    const std::uint64_t packed = small ? pack_key(key) : 0;
+    for (const auto& leaf : h.top_leaf)
+        if (leaf.key.size() == key.size() &&
+            (small ? leaf.packed == packed : leaf.key == key))
+            return leaf.id;
+    const std::uint32_t id = intern_leaf_path(intern, key);
+    h.top_leaf.push_back({std::string(key), packed, id});
+    return id;
+}
+
+// The record keys that are axes or structure, not catalog paths. A switch on
+// the length and bytes keeps this to a few byte compares per key.
+bool is_axis_key(std::string_view k, bool skip_args) {
+    const char* p = k.data();
+    switch (k.size()) {
+        case 2:
+            return (p[0] == 'i' && p[1] == 'd') ||
+                   (p[0] == 't' && p[1] == 's') || (p[0] == 'p' && p[1] == 'h');
+        case 3:
+            return (p[0] == 'p' && p[1] == 'i' && p[2] == 'd') ||
+                   (p[0] == 't' && p[1] == 'i' && p[2] == 'd') ||
+                   (p[0] == 'd' && p[1] == 'u' && p[2] == 'r');
+        case 4:
+            return skip_args && p[0] == 'a' && p[1] == 'r' && p[2] == 'g' &&
+                   p[3] == 's';
+        default:
+            return false;
+    }
+}
+
 void append_arg_leaf(FoldEvent& ev, std::uint32_t key_id, std::string_view key,
-                     simdjson::dom::element v,
-                     dftracer::utils::dstd::StringIntern& intern,
-                     DecodeHints* leaves) {
-    append_scalar_arg(ev.args, ev.specials, key_id, v, intern);
+                     simdjson::dom::element v, Ids& ids, DecodeHints* leaves) {
+    append_scalar_arg(ev.args, ev.specials, key_id, v, ids);
     if (leaves)
-        ev.schema_leaves.emplace_back(arg_leaf_id(*leaves, intern, key_id, key),
-                                      leaf_type_tag(v));
+        ev.schema_leaves.emplace_back(
+            arg_leaf_id(*leaves, ids.intern, key_id, key), leaf_type_tag(v));
 }
 
 // Flatten a nested arg into dotted scalar keys named as event.h flatten_arg
@@ -181,7 +237,8 @@ void flatten_nested_arg(std::string& path, simdjson::dom::element v,
         }
         return;
     }
-    append_arg_leaf(ev, intern.get_or_insert(path), path, v, intern, leaves);
+    Ids ids{intern, nullptr};
+    append_arg_leaf(ev, intern.get_or_insert(path), path, v, ids, leaves);
 }
 
 }  // namespace
@@ -379,8 +436,10 @@ void FoldPortBus::clear() {
 void build_fold_event_into(FoldEvent& ev, const DFTracerEvent& scalars,
                            simdjson::dom::element args, bool has_args,
                            dftracer::utils::dstd::StringIntern& intern,
-                           bool needs_args, DecodeHints* leaves) {
+                           bool needs_args, DecodeHints* leaves,
+                           dftracer::utils::dstd::InternCache* cache) {
     if (!needs_args) leaves = nullptr;
+    Ids ids{intern, cache};
     reset_fold_event(ev);
     ev.phase = scalars.phase;
     ev.pid = scalars.pid;
@@ -388,8 +447,8 @@ void build_fold_event_into(FoldEvent& ev, const DFTracerEvent& scalars,
     ev.ts = scalars.ts;
     ev.dur = scalars.dur;
     ev.has_dur = scalars.has_dur;
-    if (!scalars.cat.empty()) ev.cat_id = intern.get_or_insert(scalars.cat);
-    if (!scalars.name.empty()) ev.name_id = intern.get_or_insert(scalars.name);
+    if (!scalars.cat.empty()) ev.cat_id = ids.get_or_insert(scalars.cat);
+    if (!scalars.name.empty()) ev.name_id = ids.get_or_insert(scalars.name);
 
     if (!has_args) return;
 
@@ -398,12 +457,11 @@ void build_fold_event_into(FoldEvent& ev, const DFTracerEvent& scalars,
     for (auto field : args.get_object()) {
         std::string_view key = field.key;
         if (key == "fhash" || key == "hhash") {
-            const std::uint32_t id = intern_string(intern, field.value);
+            const std::uint32_t id = intern_string(ids, field.value);
             (key == "fhash" ? ev.fhash_id : ev.hhash_id) = id;
             if (leaves)
                 ev.schema_leaves.emplace_back(
-                    arg_leaf_id(*leaves, intern, intern.get_or_insert(key),
-                                key),
+                    arg_leaf_id(*leaves, intern, ids.get_or_insert(key), key),
                     leaf_type_tag(field.value));
         } else if (needs_args) {
             const simdjson::dom::element v = field.value;
@@ -415,8 +473,8 @@ void build_fold_event_into(FoldEvent& ev, const DFTracerEvent& scalars,
                     break;
                 }
                 default:
-                    append_arg_leaf(ev, intern.get_or_insert(key), key, v,
-                                    intern, leaves);
+                    append_arg_leaf(ev, ids.get_or_insert(key), key, v, ids,
+                                    leaves);
             }
         }
     }
@@ -434,12 +492,8 @@ void extract_fold_event_into(FoldEvent& ev, simdjson::dom::element root,
         reset_fold_event(ev);
         return;
     }
-    // An empty or non-object args is left to the leaf walk, which records it.
-    simdjson::dom::object args_obj;
     DecodeHints* leaves =
-        capture_schema && needs_args && has_args &&
-                args.get_object().get(args_obj) == simdjson::SUCCESS &&
-                args_obj.size() > 0
+        capture_schema && args_leaves_in_walk(needs_args, has_args, args)
             ? hints
             : nullptr;
     build_fold_event_into(ev, scalars, args, has_args, intern, needs_args,
@@ -448,7 +502,7 @@ void extract_fold_event_into(FoldEvent& ev, simdjson::dom::element root,
         for (const auto& name : *extra_fields)
             capture_extra_field(ev, root, intern, name);
     if (capture_schema)
-        capture_schema_leaves(ev, root, intern, leaves != nullptr);
+        capture_schema_leaves(ev, root, intern, leaves != nullptr, leaves);
 }
 
 namespace {
@@ -813,16 +867,22 @@ void decode_record_into(
 
 void capture_schema_leaves(FoldEvent& ev, simdjson::dom::element root,
                            dftracer::utils::dstd::StringIntern& intern,
-                           bool skip_args) {
+                           bool skip_args, DecodeHints* hints) {
     // The axis and structural keys are not catalog paths.
     simdjson::dom::object obj;
     if (root.get_object().get(obj) != simdjson::SUCCESS) return;
     std::string path;
     for (auto kv : obj) {
         const std::string_view k = kv.key;
-        if (k == "pid" || k == "tid" || k == "ts" || k == "dur" || k == "ph" ||
-            k == "id" || (skip_args && k == "args"))
+        if (is_axis_key(k, skip_args)) continue;
+        const auto type = kv.value.type();
+        if (hints && !k.empty() &&
+            type != simdjson::dom::element_type::OBJECT &&
+            type != simdjson::dom::element_type::ARRAY) {
+            ev.schema_leaves.emplace_back(top_leaf_id(*hints, intern, k),
+                                          leaf_type_tag(kv.value));
             continue;
+        }
         path.assign(k);
         enumerate_leaves(path, kv.value, intern, ev);
     }

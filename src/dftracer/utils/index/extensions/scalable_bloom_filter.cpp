@@ -36,10 +36,13 @@ void ScalableBloomFilter::open_level(std::size_t capacity) {
 }
 
 void ScalableBloomFilter::add(std::string_view value) {
-    if (possibly_contains(value)) return;
+    const BloomFilter::Hashes hashes = BloomFilter::hash(value);
+    ++hashed_;
+    for (const auto& level : levels_)
+        if (level.filter.possibly_contains(hashes)) return;
 
     auto& active = levels_.back();
-    active.filter.add(value);
+    active.filter.add(hashes);
     ++active.distinct;
     ++distinct_;
 
@@ -49,8 +52,9 @@ void ScalableBloomFilter::add(std::string_view value) {
 }
 
 bool ScalableBloomFilter::possibly_contains(std::string_view value) const {
+    const BloomFilter::Hashes hashes = BloomFilter::hash(value);
     for (const auto& level : levels_) {
-        if (level.filter.possibly_contains(value)) return true;
+        if (level.filter.possibly_contains(hashes)) return true;
     }
     return false;
 }

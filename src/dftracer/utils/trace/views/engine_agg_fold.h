@@ -108,6 +108,11 @@ class EngineAggFold : public Fold {
     /// The merged partial; the caller finalizes, serializes, or merges it.
     dftracer::utils::dataframe::AggState& state() { return *state_; }
 
+    /// Hands the state over; the fold takes no more events afterwards.
+    dftracer::utils::dataframe::AggStatePtr take_state() {
+        return std::move(state_);
+    }
+
    private:
     static bool arg_free_field(const std::string& f) {
         return f.empty() || f == "ts" || f == "dur" || f == "te" ||

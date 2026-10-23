@@ -7,6 +7,7 @@
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <dftracer/utils/utilities/filesystem/types.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -151,6 +152,14 @@ class Indexer {
     static Indexer open(std::vector<std::string> paths,
                         IndexerOptions options = {});
 
+    /// Opens trace files a caller already scanned, with the size and mtime
+    /// that scan read. Nothing is walked or stat'ed again until the first
+    /// status(), build() or rebuild() has used them; after that, and for
+    /// every call on an Indexer from open(), each call stats the files.
+    static Indexer open_scanned(
+        std::vector<utilities::filesystem::FileEntry> files,
+        IndexerOptions options = {});
+
     /// Which files are ready for the requested tiers. Writes nothing.
     coro::CoroTask<IndexStatus> status(CoroScope& scope) const;
     /// Builds the requested tiers for files that lack them or changed since
@@ -203,6 +212,12 @@ class Indexer {
    private:
     struct Impl;
     explicit Indexer(std::shared_ptr<Impl> impl);
+    static void validate_options(Impl& impl);
+    static Indexer finish_open(std::shared_ptr<Impl> impl);
+    /// status() over files already stat'ed.
+    coro::CoroTask<IndexStatus> status_of(
+        CoroScope& scope,
+        std::vector<utilities::filesystem::FileEntry> entries) const;
     std::shared_ptr<Impl> impl_;
 };
 

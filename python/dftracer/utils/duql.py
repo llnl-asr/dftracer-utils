@@ -12,7 +12,7 @@ give the same plan and rows::
         .sort(-c("total"))
         .take(10)
     )
-    q.text()      # 'duql 0.1\\nfrom "trace.pfw.gz"\\n| where ...'
+    q.text()      # 'duql 0.0\\nfrom "trace.pfw.gz"\\n| where ...'
     q.collect()   # a DataFrame
 
 Every builder call only builds; ``collect``, ``count``, ``first``, ``stream``

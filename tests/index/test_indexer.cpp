@@ -138,6 +138,22 @@ TEST_SUITE("Indexer") {
         rt.shutdown();
     }
 
+    TEST_CASE("status stats the files when it runs, not when open ran") {
+        Runtime rt(4);
+        TestEnvironment env(10);
+        const auto a = env.create_dft_test_gzip_file(30);
+        CHECK(Indexer::open({a}, with_runtime(rt)).build().indexed == 1);
+
+        auto ix = Indexer::open({a}, with_runtime(rt));
+        const auto replacement = env.create_dft_test_gzip_file(55);
+        fs::copy_file(replacement, a, fs::copy_options::overwrite_existing);
+        touch_later(a);
+        CHECK(ix.status().needs_work == std::vector<std::string>{a});
+        CHECK(ix.build().indexed == 1);
+        CHECK(ix.status().needs_work.empty());
+        rt.shutdown();
+    }
+
     TEST_CASE("a missing bloom tier is added") {
         Runtime rt(4);
         TestEnvironment env(10);

@@ -150,10 +150,6 @@ struct Fixture {
 
         // One merge per key: the SST emitter combines same-key operands, so
         // each SST stays key-unique either way.
-        w.put(layout::Family::Aggregation, "\xFF\xFD\x01", "name-one");
-        w.put(layout::Family::Aggregation, "\xFF\xFD\x02", "name-two");
-        w.merge(layout::Family::Aggregation, "agg-key-1", "operand-1");
-        w.merge(layout::Family::Aggregation, "agg-key-2", "operand-2");
         w.merge(layout::Family::SystemMetrics, "sys-key-1", "sys-1");
         w.merge(layout::Family::SystemMetrics, "sys-key-2", "sys-2");
 

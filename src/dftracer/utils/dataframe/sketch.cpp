@@ -1,4 +1,5 @@
 #include <dftracer/utils/dataframe/sketch.h>
+#include <dftracer/utils/dstd/little_endian.h>
 
 #include <algorithm>
 #include <cmath>
@@ -226,6 +227,44 @@ void BasicDDSketch<BINS>::add_key(std::int32_t key, double value,
 }
 
 template <int BINS>
+void BasicDDSketch<BINS>::reserve_keys(int min_key, int max_key) {
+    if constexpr (GROWS) {
+        if (max_key - min_key + 1 > MAX_BINS) min_key = max_key - MAX_BINS + 1;
+        if (!initialized_) {
+            const int span = max_key - min_key + 1;
+            grow_to(std::min(span + RESERVE_MARGIN, MAX_BINS));
+            offset_ = min_key;
+            min_key_ = min_key;
+            max_key_ = min_key;
+            num_bins_ = 1;
+            initialized_ = true;
+            return;
+        }
+        const int lo = std::min(min_key, min_key_);
+        const int hi = std::max(max_key, max_key_);
+        if (hi - lo + 1 > MAX_BINS) return;
+        const int span = hi - lo + 1;
+        if (store_.size() < static_cast<std::size_t>(span))
+            grow_to(std::min(span + RESERVE_MARGIN, MAX_BINS));
+        if (lo < min_key_) {
+            const int shift = min_key_ - lo;
+            std::memmove(
+                &store_[shift], &store_[0],
+                static_cast<std::size_t>(num_bins_) * sizeof(std::uint32_t));
+            std::memset(
+                &store_[0], 0,
+                static_cast<std::size_t>(shift) * sizeof(std::uint32_t));
+            offset_ = lo;
+            min_key_ = lo;
+            num_bins_ = max_key_ - min_key_ + 1;
+        }
+    } else {
+        (void)min_key;
+        (void)max_key;
+    }
+}
+
+template <int BINS>
 void BasicDDSketch<BINS>::merge(const BasicDDSketch& other) {
     if (other.count_ == 0) return;
 
@@ -250,7 +289,7 @@ void BasicDDSketch<BINS>::merge(const BasicDDSketch& other) {
 
     int merged_min = std::min(min_key_, other.min_key_);
     int merged_max = std::max(max_key_, other.max_key_);
-    ensure_bins(std::min(merged_max - merged_min + 1, MAX_BINS));
+    grow_to(std::min(merged_max - merged_min + 1, MAX_BINS));
 
     if (merged_max - merged_min + 1 > MAX_BINS) {
         collapse_to_fit(merged_max);
@@ -349,6 +388,19 @@ std::size_t BasicDDSketch<BINS>::memory_usage() const {
     return sizeof(BasicDDSketch);
 }
 
+namespace {
+constexpr std::size_t SERIALIZED_HEADER_SIZE =
+    sizeof(double) * 3 + sizeof(std::uint64_t) * 2 + sizeof(std::int32_t) +
+    sizeof(std::uint32_t);
+}  // namespace
+
+template <int BINS>
+std::size_t BasicDDSketch<BINS>::serialized_size() const {
+    const auto num = static_cast<std::size_t>(
+        std::min(num_bins_, static_cast<int>(MAX_BINS)));
+    return SERIALIZED_HEADER_SIZE + num * sizeof(std::uint32_t);
+}
+
 template <int BINS>
 std::vector<std::uint8_t> BasicDDSketch<BINS>::serialize() const {
     std::vector<std::uint8_t> buf;
@@ -357,67 +409,35 @@ std::vector<std::uint8_t> BasicDDSketch<BINS>::serialize() const {
 }
 
 template <int BINS>
-void BasicDDSketch<BINS>::serialize_into(std::vector<std::uint8_t>& buf) const {
-    constexpr std::size_t HEADER_SIZE =
-        sizeof(double) * 3 + sizeof(std::uint64_t) * 2 + sizeof(std::int32_t) +
-        sizeof(std::uint32_t);
-
-    auto num = static_cast<std::uint32_t>(
+void BasicDDSketch<BINS>::write_to(std::uint8_t* p) const {
+    const auto num = static_cast<std::uint32_t>(
         std::min(num_bins_, static_cast<int>(MAX_BINS)));
-    std::size_t total = HEADER_SIZE + num * sizeof(std::uint32_t);
-    buf.resize(total);
-    std::uint8_t* p = buf.data();
 
-    std::memcpy(p, &gamma_, sizeof(double));
-    p += sizeof(double);
-    std::memcpy(p, &min_, sizeof(double));
-    p += sizeof(double);
-    std::memcpy(p, &max_, sizeof(double));
-    p += sizeof(double);
-    std::memcpy(p, &count_, sizeof(std::uint64_t));
-    p += sizeof(std::uint64_t);
-    std::memcpy(p, &zero_count_, sizeof(std::uint64_t));
-    p += sizeof(std::uint64_t);
-
-    auto off32 = static_cast<std::int32_t>(offset_);
-    std::memcpy(p, &off32, sizeof(std::int32_t));
-    p += sizeof(std::int32_t);
-    std::memcpy(p, &num, sizeof(std::uint32_t));
-    p += sizeof(std::uint32_t);
-
-    if (num > 0) std::memcpy(p, store_.data(), num * sizeof(std::uint32_t));
+    write_f64_le(p, gamma_);
+    write_f64_le(p + 8, min_);
+    write_f64_le(p + 16, max_);
+    write_u64_le(p + 24, count_);
+    write_u64_le(p + 32, zero_count_);
+    write_u32_le(p + 40, static_cast<std::uint32_t>(offset_));
+    write_u32_le(p + 44, num);
+    p += SERIALIZED_HEADER_SIZE;
+    for (std::uint32_t i = 0; i < num; ++i)
+        write_u32_le(p + std::size_t{i} * 4, store_[i]);
 }
 
 template <int BINS>
 BasicDDSketch<BINS> BasicDDSketch<BINS>::deserialize(const std::uint8_t* data,
                                                      std::size_t len) {
-    constexpr std::size_t HEADER_SIZE =
-        sizeof(double) * 3 + sizeof(std::uint64_t) * 2 + sizeof(std::int32_t) +
-        sizeof(std::uint32_t);
-
-    if (len < HEADER_SIZE) {
-        return BasicDDSketch{};
-    }
-
+    LeReader r(data, len);
     BasicDDSketch s;
-    const std::uint8_t* p = data;
-
-    std::memcpy(&s.gamma_, p, sizeof(double));
-    p += sizeof(double);
+    std::int32_t off32 = 0;
+    std::uint32_t num = 0;
+    if (!r.f64(s.gamma_)) return BasicDDSketch{};
     if (!std::isfinite(s.gamma_) || s.gamma_ <= 1.0) return BasicDDSketch{};
     s.log_gamma_ = std::log(s.gamma_);
-    std::memcpy(&s.min_, p, sizeof(double));
-    p += sizeof(double);
-    std::memcpy(&s.max_, p, sizeof(double));
-    p += sizeof(double);
-    std::memcpy(&s.count_, p, sizeof(std::uint64_t));
-    p += sizeof(std::uint64_t);
-    std::memcpy(&s.zero_count_, p, sizeof(std::uint64_t));
-    p += sizeof(std::uint64_t);
-
-    std::int32_t off32 = 0;
-    std::memcpy(&off32, p, sizeof(std::int32_t));
-    p += sizeof(std::int32_t);
+    if (!r.f64(s.min_) || !r.f64(s.max_) || !r.u64(s.count_) ||
+        !r.u64(s.zero_count_) || !r.i32(off32) || !r.u32(num))
+        return BasicDDSketch{};
     // Keys of a real value stay far inside this range; a wider offset would
     // overflow the key arithmetic in add and merge.
     constexpr std::int32_t MAX_KEY_MAGNITUDE = 1 << 29;
@@ -425,17 +445,13 @@ BasicDDSketch<BINS> BasicDDSketch<BINS>::deserialize(const std::uint8_t* data,
         return BasicDDSketch{};
     s.offset_ = static_cast<int>(off32);
 
-    std::uint32_t num = 0;
-    std::memcpy(&num, p, sizeof(std::uint32_t));
-    p += sizeof(std::uint32_t);
-
     if (num > MAX_BINS) num = MAX_BINS;
-    if (len < HEADER_SIZE + num * sizeof(std::uint32_t)) {
-        return BasicDDSketch{};
-    }
+    const std::uint8_t* bins = r.take(std::size_t{num} * sizeof(std::uint32_t));
+    if (!bins) return BasicDDSketch{};
 
     s.ensure_bins(static_cast<int>(num));
-    if (num > 0) std::memcpy(s.store_.data(), p, num * sizeof(std::uint32_t));
+    for (std::uint32_t i = 0; i < num; ++i)
+        s.store_[i] = read_u32_le(bins + std::size_t{i} * 4);
     s.min_key_ = s.offset_;
     s.max_key_ = s.offset_ + static_cast<int>(num) - 1;
     s.num_bins_ = static_cast<int>(num);

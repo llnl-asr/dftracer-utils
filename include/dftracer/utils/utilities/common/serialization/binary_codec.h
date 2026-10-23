@@ -2,154 +2,54 @@
 #define DFTRACER_UTILS_UTILITIES_COMMON_SERIALIZATION_BINARY_CODEC_H
 
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/big_endian.h>
 
 #include <cstdint>
 #include <cstring>
 #include <span>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 
+// Length-prefixed framing and a throwing reader on top of the dstd codec in
+// dstd/big_endian.h. The integers, doubles and varints are written with
+// append_u*_be, append_f64_be and append_varint from there.
 namespace dftracer::utils::utilities::common::serialization {
 
-// =============================================================================
-// Binary Writer Utilities
-// =============================================================================
-
-inline void put_u8(std::string& out, std::uint8_t v) {
-    out.push_back(static_cast<char>(v));
-}
-
-inline void put_be16(std::string& out, std::uint16_t v) {
-    out.push_back(static_cast<char>(v >> 8));
-    out.push_back(static_cast<char>(v));
-}
-
-inline void put_be32(std::string& out, std::uint32_t v) {
-    out.push_back(static_cast<char>(v >> 24));
-    out.push_back(static_cast<char>(v >> 16));
-    out.push_back(static_cast<char>(v >> 8));
-    out.push_back(static_cast<char>(v));
-}
-
-inline void put_be64(std::string& out, std::uint64_t v) {
-    out.push_back(static_cast<char>(v >> 56));
-    out.push_back(static_cast<char>(v >> 48));
-    out.push_back(static_cast<char>(v >> 40));
-    out.push_back(static_cast<char>(v >> 32));
-    out.push_back(static_cast<char>(v >> 24));
-    out.push_back(static_cast<char>(v >> 16));
-    out.push_back(static_cast<char>(v >> 8));
-    out.push_back(static_cast<char>(v));
-}
-
-inline void put_double(std::string& out, double v) {
-    std::uint64_t bits;
-    std::memcpy(&bits, &v, 8);
-    put_be64(out, bits);
-}
-
+/// u16 length, then the bytes.
 inline void put_str(std::string& out, std::string_view s) {
-    put_be16(out, static_cast<std::uint16_t>(s.size()));
+    append_u16_be(out, static_cast<std::uint16_t>(s.size()));
     out.append(s.data(), s.size());
 }
 
-inline void put_varint(std::string& out, std::uint64_t v) {
-    while (v >= 0x80) {
-        out.push_back(static_cast<char>(v | 0x80));
-        v >>= 7;
-    }
-    out.push_back(static_cast<char>(v));
-}
-
+/// u32 length, then the bytes.
 inline void put_blob(std::string& out, std::span<const std::uint8_t> data) {
-    put_be32(out, static_cast<std::uint32_t>(data.size()));
+    append_u32_be(out, static_cast<std::uint32_t>(data.size()));
     out.append(reinterpret_cast<const char*>(data.data()), data.size());
 }
 
-// =============================================================================
-// Raw Pointer Writer Utilities (for pre-sized buffers)
-// =============================================================================
-
-inline char* write_varint(char* p, std::uint64_t v) {
-    while (v >= 0x80) {
-        *p++ = static_cast<char>(v | 0x80);
-        v >>= 7;
-    }
-    *p++ = static_cast<char>(v);
-    return p;
-}
-
-inline char* write_be64(char* p, std::uint64_t v) {
-    p[0] = static_cast<char>(v >> 56);
-    p[1] = static_cast<char>(v >> 48);
-    p[2] = static_cast<char>(v >> 40);
-    p[3] = static_cast<char>(v >> 32);
-    p[4] = static_cast<char>(v >> 24);
-    p[5] = static_cast<char>(v >> 16);
-    p[6] = static_cast<char>(v >> 8);
-    p[7] = static_cast<char>(v);
-    return p + 8;
-}
-
-inline char* write_double(char* p, double v) {
-    std::uint64_t bits;
-    std::memcpy(&bits, &v, 8);
-    return write_be64(p, bits);
-}
-
-inline char* write_str(char* p, std::string_view s) {
-    const auto n = static_cast<std::uint16_t>(s.size());
-    p[0] = static_cast<char>(n >> 8);
-    p[1] = static_cast<char>(n);
+/// Writes a put_str frame at p, which has room for it, and returns the end.
+inline std::uint8_t* write_str(std::uint8_t* p, std::string_view s) {
+    write_u16_be(p, static_cast<std::uint16_t>(s.size()));
     p += 2;
     std::memcpy(p, s.data(), s.size());
     return p + s.size();
 }
 
-// =============================================================================
-// Binary Reader Class
-// =============================================================================
-
+/// Cursor over a byte string. Every read that does not fit throws
+/// DFTUtilsException(ErrorCode::Parse).
 class BinaryReader {
    public:
     explicit BinaryReader(std::string_view data) : data_(data) {}
 
     std::uint8_t u8() { return static_cast<std::uint8_t>(take(1)[0]); }
 
-    std::uint16_t be16() {
-        auto s = take(2);
-        return static_cast<std::uint16_t>(
-            (static_cast<std::uint8_t>(s[0]) << 8) |
-            static_cast<std::uint8_t>(s[1]));
-    }
+    std::uint16_t be16() { return read_u16_be(bytes(take(2))); }
 
-    std::uint32_t be32() {
-        auto s = take(4);
-        return (static_cast<std::uint32_t>(static_cast<std::uint8_t>(s[0]))
-                << 24) |
-               (static_cast<std::uint32_t>(static_cast<std::uint8_t>(s[1]))
-                << 16) |
-               (static_cast<std::uint32_t>(static_cast<std::uint8_t>(s[2]))
-                << 8) |
-               static_cast<std::uint32_t>(static_cast<std::uint8_t>(s[3]));
-    }
+    std::uint32_t be32() { return read_u32_be(bytes(take(4))); }
 
-    std::uint64_t be64() {
-        auto s = take(8);
-        std::uint64_t v = 0;
-        for (int i = 0; i < 8; ++i) {
-            v = (v << 8) | static_cast<std::uint8_t>(s[i]);
-        }
-        return v;
-    }
+    std::uint64_t be64() { return read_u64_be(bytes(take(8))); }
 
-    double f64() {
-        std::uint64_t bits = be64();
-        double v;
-        std::memcpy(&v, &bits, 8);
-        return v;
-    }
+    double f64() { return read_f64_be(bytes(take(8))); }
 
     std::string_view blob() {
         auto len = be32();
@@ -169,16 +69,15 @@ class BinaryReader {
     }
 
     std::uint64_t varint() {
+        const auto* p = bytes(data_.substr(off_));
+        const auto* end = p + (data_.size() - off_);
         std::uint64_t v = 0;
-        unsigned shift = 0;
-        while (off_ < data_.size()) {
-            auto b = static_cast<std::uint8_t>(data_[off_++]);
-            v |= static_cast<std::uint64_t>(b & 0x7F) << shift;
-            if ((b & 0x80) == 0) return v;
-            shift += 7;
-        }
-        throw DFTUtilsException(ErrorCode::Parse,
-                                "binary_codec: truncated varint");
+        if (!read_varint(p, end, v))
+            throw DFTUtilsException(ErrorCode::Parse,
+                                    "binary_codec: truncated varint");
+        off_ = static_cast<std::size_t>(
+            p - reinterpret_cast<const std::uint8_t*>(data_.data()));
+        return v;
     }
 
     bool has_remaining() const { return off_ < data_.size(); }
@@ -188,6 +87,10 @@ class BinaryReader {
     std::size_t offset() const { return off_; }
 
    private:
+    static const std::uint8_t* bytes(std::string_view s) {
+        return reinterpret_cast<const std::uint8_t*>(s.data());
+    }
+
     std::string_view take(std::size_t n) {
         if (off_ + n > data_.size()) {
             throw DFTUtilsException(ErrorCode::Parse,

@@ -17,18 +17,23 @@ namespace {
 struct StackSpan {
     std::uintptr_t lowest = UINTPTR_MAX;
     std::uintptr_t highest = 0;
-    void record(const void* p) {
-        const auto a = reinterpret_cast<std::uintptr_t>(p);
+    void record(std::uintptr_t a) {
         lowest = std::min(lowest, a);
         highest = std::max(highest, a);
     }
 };
 
+// An address on the current thread's stack. GCC keeps every local of a
+// coroutine in its heap frame, so a local of the waiter itself would measure
+// how far apart the frames are, not the stack depth.
+[[gnu::noinline]] std::uintptr_t stack_address() {
+    return reinterpret_cast<std::uintptr_t>(__builtin_frame_address(0));
+}
+
 coro::CoroTask<void> waiter(coro::AsyncMutex& mutex, StackSpan& span,
                             std::size_t& acquired) {
     co_await mutex.lock();
-    volatile char marker = 0;
-    span.record(const_cast<const char*>(&marker));
+    span.record(stack_address());
     ++acquired;
     mutex.unlock();
 }

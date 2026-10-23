@@ -111,6 +111,14 @@ TEST_SUITE("shard_manifest") {
               dir.path().string());
     }
 
+    TEST_CASE("a manifest with no format version has none, not 0") {
+        auto m = parse_manifest(R"({"shards":[]})");
+        CHECK_FALSE(m.format_version.has_value());
+        auto written = parse_manifest(to_json(sample()));
+        REQUIRE(written.format_version.has_value());
+        CHECK(*written.format_version == 8);
+    }
+
     TEST_CASE("malformed JSON throws") {
         CHECK_THROWS_AS(parse_manifest("{ not json"), DFTUtilsException);
     }

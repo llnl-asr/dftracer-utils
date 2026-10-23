@@ -5,7 +5,7 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
 #include <dftracer/utils/dataframe/series.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregator.h>
+#include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -204,7 +204,6 @@ std::string cell(const df::Series& c, std::int64_t i) {
 // via the aggregator; returns the shard's .dftindex path.
 std::string build_aggregated_shard(dftu_utils_test::TestEnvironment& env,
                                    const std::string& tag, int num_events) {
-    namespace agg = dftracer::utils::index::schemas::dft::agg;
     namespace internal = dftracer::utils::trace::internal;
     std::string dir = env.get_dir() + "/" + tag;
     fs::create_directories(dir);
@@ -212,22 +211,9 @@ std::string build_aggregated_shard(dftu_utils_test::TestEnvironment& env,
     std::string gz = dir + "/t.pfw.gz";
     fs::rename(src, gz);
 
-    agg::AggregatorInput input;
-    input.directory = dir;
-    input.force_rebuild = true;
-    dftracer::utils::Runtime rt(4);
-    auto task = dftracer::utils::run_coro_scope(
-        rt.executor(),
-        [&](dftracer::utils::CoroScope& ctx)
-            -> dftracer::utils::coro::CoroTask<void> {
-            agg::Aggregator u;
-            auto gen = u(ctx, input);
-            while (co_await gen.next()) {
-            }
-            co_return;
-        });
-    rt.submit(std::move(task), "build-shard").wait();
-    rt.shutdown();
+    dftracer::utils::index::IndexerOptions options;
+    options.aggregation.emplace();
+    dftracer::utils::index::Indexer::open({gz}, options).build();
     return internal::determine_index_path(gz, "");
 }
 
@@ -863,11 +849,11 @@ TEST_SUITE("DFTracerView") {
                                 "-d", env.get_dir()}) != 0);
     }
 
-    // A single-member input is normalized to bounded multi-member gzip beside
-    // its index, in <index root>.split/; nothing is written beside the input
-    // and the original file is never touched. A tiny
-    // --checkpoint-size forces the rechunk on the small fixture.
-    TEST_CASE("single-member input auto-splits non-destructively") {
+    // A single-member input larger than the checkpoint size is read through
+    // the restart points of its index: nothing is rewritten and the original
+    // file is never touched. A tiny --checkpoint-size makes the small fixture
+    // a big member.
+    TEST_CASE("single-member input over the checkpoint size is read in place") {
         auto binary = find_view_binary();
         if (binary.empty()) {
             MESSAGE("dftracer_view binary not found, skipping.");
@@ -883,17 +869,14 @@ TEST_SUITE("DFTracerView") {
             binary, {"--group-by", "cat", "--agg", "count", "--checkpoint-size",
                      "2048", "-d", env.get_dir()});
         CHECK(rc == 0);
-
-        const std::string split_copy = env.get_dir() + "/.dftindex.split/" +
-                                       fs::path(orig).filename().string();
-        CHECK(fs::exists(split_copy));            // multi-member copy created
-        CHECK(fs::file_size(orig) == orig_size);  // original untouched
+        CHECK(fs::file_size(orig) == orig_size);
         CHECK_FALSE(fs::exists(env.get_dir() + "/split"));
+        CHECK_FALSE(fs::exists(env.get_dir() + "/.dftindex.split"));
     }
 
     // A multi-member input whose members already fit under the checkpoint size
     // is left alone (no split copy).
-    TEST_CASE("multi-member input under the cap is not re-split") {
+    TEST_CASE("multi-member input under the cap is read in place") {
         auto binary = find_view_binary();
         if (binary.empty()) {
             MESSAGE("dftracer_view binary not found, skipping.");
@@ -909,28 +892,6 @@ TEST_SUITE("DFTracerView") {
         CHECK(rc == 0);
         CHECK_FALSE(fs::exists(env.get_dir() + "/split"));
         CHECK_FALSE(fs::exists(env.get_dir() + "/.dftindex.split"));
-    }
-
-    // A multi-member input whose members exceed the checkpoint size is
-    // re-normalized to bounded members beside its index.
-    TEST_CASE("multi-member input over the cap is re-split") {
-        auto binary = find_view_binary();
-        if (binary.empty()) {
-            MESSAGE("dftracer_view binary not found, skipping.");
-            return;
-        }
-        dftu_utils_test::TestEnvironment env(100);
-        REQUIRE(env.is_valid());
-        std::string mm = make_multimember_pfw_gz(env, 200, 8192, 0);
-        REQUIRE(!mm.empty());
-
-        int rc = run_view(
-            binary, {"--group-by", "cat", "--agg", "count", "--checkpoint-size",
-                     "2048", "-d", env.get_dir()});
-        CHECK(rc == 0);
-        CHECK(fs::exists(env.get_dir() + "/.dftindex.split/" +
-                         fs::path(mm).filename().string()));
-        CHECK_FALSE(fs::exists(env.get_dir() + "/split"));
     }
 }
 

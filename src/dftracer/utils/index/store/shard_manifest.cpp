@@ -50,7 +50,7 @@ void append_escaped(std::string& out, std::string_view s) {
 std::string to_json(const IndexShardManifest& manifest) {
     std::string out;
     out += "{\n  \"format_version\": ";
-    out += std::to_string(manifest.format_version);
+    out += std::to_string(manifest.format_version.value());
     out += ",\n  \"shards\": [";
     for (std::size_t i = 0; i < manifest.shards.size(); ++i) {
         const IndexShardEntry& e = manifest.shards[i];

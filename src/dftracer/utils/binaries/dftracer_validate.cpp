@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/archive_format.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/json/line.h>
@@ -31,7 +32,7 @@ using dftracer::utils::utilities::fileio::lines::sources::
 class ValidateArgParse : public cli::ArgParse {
    public:
     cli::DirectoryArgs directory{cli::DirMode::DefaultEmpty};
-    cli::FilesArgs files_args{"Trace files to validate (.pfw, .pfw.gz)"};
+    cli::FilesArgs files_args{"Trace files to validate (.pfw.gz)"};
     cli::PipelineArgs pipeline;
 
     explicit ValidateArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
@@ -59,7 +60,7 @@ coro::CoroTask<std::vector<std::string>> collect_files(
     for (auto& f : cli_files) {
         if (cli::is_trace_file(f)) files.push_back(std::move(f));
     }
-    if (!directory.empty() && fs::exists(directory)) {
+    if (!directory.empty() && dftracer::utils::input_exists(directory)) {
         auto scanned = co_await cli::scan_directory_trace_files(
             ctx, directory, /*recursive=*/true);
         files.insert(files.end(), std::make_move_iterator(scanned.begin()),
@@ -208,7 +209,7 @@ static coro::CoroTask<int> run_validate(const ValidateArgParse* cli) {
 int main(int argc, char** argv) {
     return cli::cli_main<ValidateArgParse>(
         argc, argv, "dftracer_validate",
-        "Validate DFTracer .pfw / .pfw.gz trace files: every non-wrapper line "
+        "Validate DFTracer .pfw.gz trace files: every non-wrapper line "
         "must be valid JSON. Parallel C++ equivalent of the dftracer_validate "
         "script.",
         [](ValidateArgParse& cli) { return run_validate(&cli).get(); });

@@ -70,6 +70,7 @@ set(DFTRACER_UTILS_COMMON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/format_detector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/filesystem.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/filesystem_info.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/input_stat.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/scratch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/memory_budget.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/memory_config.cpp
@@ -202,24 +203,17 @@ set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/plugin_extension.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/kinds/time_bounds.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/scalable_bloom_filter.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/agg_db_open.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/agg_store.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/aggregation_augmentation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/aggregation_drain.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/aggregation_fold.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/aggregation_intern.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/aggregation_logic.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/aggregation_merge_operator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/aggregation_metrics.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/aggregation_runner.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/aggregation_serialization.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/aggregator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/quantile_store.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/agg_partial.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/agg_query.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/association_tracker.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/dft_trace_writer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/event_aggregator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/system_metrics_merge_operator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/system_metrics_serialization.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/agg/view_agg_tier.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/bloom_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/merged_statistics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/chunk_statistics.cpp
@@ -263,6 +257,8 @@ list(APPEND DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_duql.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_aggregate.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_agg_engine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_agg_partials.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_system_collect.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_scan.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/native_row_fold.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/stream_row_fold.cpp
@@ -440,7 +436,7 @@ create_library(
   BUILD_STATIC
   ${DFTRACER_UTILS_BUILD_STATIC}
   PUBLIC_LINK_LIBRARIES
-  Threads::Threads
+  Threads::Threads ${CMAKE_DL_LIBS}
   PUBLIC_INCLUDE_DIRS
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -448,7 +444,7 @@ create_library(
   PRIVATE_COMPILE_OPTIONS
   ${COVERAGE_COMPILE_OPTIONS}
   PKG_CONFIG_LIBS_PRIVATE
-  "-lpthread")
+  "-lpthread -ldl")
 
 foreach(variant objects shared static)
   dftu_variant_target(VARIANT_TARGET dftracer_utils_memory ${variant})
@@ -470,6 +466,18 @@ foreach(variant objects shared static)
     endif()
   endif()
 endforeach()
+
+# The global operator new and delete of an executable. Only executables link
+# it: inside a shared library it would interpose for the whole host process.
+# Sanitizers bring their own allocator, so they keep the system one.
+if(NOT DFTRACER_UTILS_ENABLE_ASAN AND NOT DFTRACER_UTILS_ENABLE_TSAN)
+  add_library(dftracer_utils_global_new OBJECT
+              ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/global_new.cpp)
+  target_include_directories(
+    dftracer_utils_global_new PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include
+                                      ${CMAKE_CURRENT_SOURCE_DIR})
+  target_set_warnings(dftracer_utils_global_new)
+endif()
 
 create_library(
   NAME
@@ -1663,6 +1671,9 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
 
     # Link to unified library (which includes both runtime and utilities)
     target_link_libraries(${bin_exec} PRIVATE dftracer_utils argparse::argparse)
+    if(TARGET dftracer_utils_global_new)
+      target_link_libraries(${bin_exec} PRIVATE dftracer_utils_global_new)
+    endif()
 
     target_include_directories(
       ${bin_exec} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include
@@ -1867,6 +1878,7 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/dataframe_parallel_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/view_api_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/gzip_line_writer_bench.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/gzip_crc_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/index_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/duql_eval_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/duql_mask_bench.cpp
@@ -1878,6 +1890,7 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/heap_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/coro_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/string_intern_bench.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/quantile_store_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/pressure_read_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/slice_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/spill_harness.cpp)

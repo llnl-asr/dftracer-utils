@@ -13,6 +13,8 @@ set(TRACE_TEST_SOURCES
     test_index_builder.cpp
     test_metadata_collector.cpp
     test_time_metric.cpp
+    test_bootstrap_parallelism.cpp
+    test_bootstrap_peak.cpp
 
     # Indexing
     indexing/test_bloom_filter.cpp
@@ -38,6 +40,7 @@ set(TRACE_TEST_SOURCES
     views/test_metadata_query.cpp
     views/test_field_filter.cpp
     views/test_view_aggregate.cpp
+    views/test_view_partials.cpp
     views/test_time_window.cpp
     views/test_generic_view.cpp
     views/test_schema_view.cpp
@@ -82,17 +85,13 @@ set(TRACE_TEST_SOURCES
 
     # Aggregators
     aggregators/test_aggregation_metrics.cpp
-    aggregators/test_aggregation_rollup.cpp
-    aggregators/test_aggregation_key.cpp
     aggregators/test_aggregation_config.cpp
-    aggregators/test_aggregation_serialization.cpp
-    aggregators/test_variance_tier.cpp
-    aggregators/test_aggregator_utility.cpp
-    aggregators/test_event_aggregator_utility.cpp
-    aggregators/test_aggregation_augmentation.cpp
     aggregators/test_system_metrics.cpp
     aggregators/test_system_metrics_merge_operator.cpp
-    aggregators/test_dft_trace_writer.cpp
+    aggregators/test_agg_parity.cpp
+    aggregators/test_quantile_store.cpp
+    aggregators/test_agg_partial.cpp
+    aggregators/test_agg_query.cpp
 
     # Comparator
     comparator/test_comparison_result.cpp
@@ -155,3 +154,20 @@ foreach(threads 1 2 8)
       "${CMAKE_CURRENT_BINARY_DIR}/workdirs/trace_views_test_view_duql_joins"
     ENVIRONMENT "DFTRACER_UTILS_THREADS=${threads}")
 endforeach()
+
+
+# The parity test replays references recorded from the CLI tools and the View.
+target_compile_definitions(trace_aggregators_test_agg_parity PRIVATE
+  DFTRACER_UTILS_AGG_PARITY_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/aggregators/data")
+add_dependencies(trace_aggregators_test_agg_parity
+                 dftracer_comparator dftracer_gen_dlio_config)
+set_tests_properties(trace/aggregators/test_agg_parity PROPERTIES
+  ENVIRONMENT "DFTRACER_UTILS_COMPARATOR_PATH=$<TARGET_FILE:dftracer_comparator>;DFTRACER_UTILS_GEN_DLIO_CONFIG_PATH=$<TARGET_FILE:dftracer_gen_dlio_config>"
+  TIMEOUT 600)
+
+# The allocator counts its allocations only in debug mode, which is fixed
+# before the first allocation.
+set_tests_properties(trace/aggregators/test_quantile_store PROPERTIES
+  ENVIRONMENT "DFTRACER_UTILS_MEMORY_DEBUG=1")
+set_tests_properties(trace/aggregators/test_agg_partial PROPERTIES
+  ENVIRONMENT "DFTRACER_UTILS_MEMORY_DEBUG=1")

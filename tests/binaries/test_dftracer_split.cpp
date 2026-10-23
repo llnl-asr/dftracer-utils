@@ -380,4 +380,32 @@ TEST_SUITE("DFTracerSplit") {
         CHECK(rc != 0);
         CHECK(count_gz_files(out_dir) == 0);
     }
+
+    TEST_CASE("a plain trace error names the file and says it is not gzip") {
+        auto binary = find_split_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_split binary not found, skipping.");
+            return;
+        }
+
+        dftu_utils_test::TestEnvironment env(100);
+        REQUIRE(env.is_valid());
+
+        {
+            std::ofstream plain(input_dir(env) + "/plain.pfw");
+            plain << "{\"name\":\"read\",\"cat\":\"POSIX\",\"ph\":\"X\"}\n";
+        }
+
+        dftu_utils_test::set_test_library_path(binary);
+        int rc = 0;
+        const std::string out = dftu_utils_test::run_process_capture(
+            binary,
+            {"-d", input_dir(env), "-o", env.get_dir() + "/split_plain",
+             "--disable-watchdog"},
+            true, &rc);
+        CHECK(rc != 0);
+        CHECK(out.find("plain.pfw") != std::string::npos);
+        CHECK(out.find("is not gzip") != std::string::npos);
+        CHECK(out.find("0 chunk files") == std::string::npos);
+    }
 }

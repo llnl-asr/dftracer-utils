@@ -72,9 +72,10 @@ bool needs_rechunk(const std::string& path, std::size_t cap) {
     ScopedFd sfd(fd);
     struct stat st;
     REQUIRE(::fstat(sfd.get(), &st) == 0);
-    return gzc::gzip_needs_rechunk(sfd.get(),
-                                   static_cast<std::uint64_t>(st.st_size), cap)
-        .get();
+    return gzc::gzip_first_member(sfd.get(),
+                                  static_cast<std::uint64_t>(st.st_size), cap)
+        .get()
+        .exceeds_cap;
 }
 
 }  // namespace
@@ -156,39 +157,6 @@ TEST_SUITE("gzip_rechunker") {
         for (std::size_t i = 0; i + 1 < last_bytes.size(); ++i) {
             CHECK(last_bytes[i] == '\n');
         }
-
-        fs::remove_all(dir);
-    }
-
-    TEST_CASE(
-        "rechunk_to_dir_if_needed splits into a dir, else passes through") {
-        auto dir = dftu_utils_test::make_unique_test_path("rechunk_ingest");
-        fs::create_directories(dir);
-        const std::string in = (dir / "trace.pfw.gz").string();
-        const auto payload = make_lines(5000);
-        write_single_member_gz(in, payload);
-        const std::string split_dir = (dir / "split").string();
-
-        // Under a small member cap the single member is rewritten to a bounded
-        // multi-member copy in split/, non-destructively.
-        bool did = false;
-        std::string got =
-            gzc::rechunk_to_dir_if_needed(in, split_dir, 8 * 1024, did).get();
-        CHECK(did);
-        CHECK(got == split_dir + "/trace.pfw.gz");
-        REQUIRE(fs::exists(got));
-        auto [content, members] = decode_all(got);
-        CHECK(content == payload);  // bytes preserved
-        CHECK(members > 1);         // now multi-member
-        CHECK(fs::exists(in));      // original untouched
-
-        // A cap above the member size leaves the file alone.
-        bool did2 = false;
-        std::string got2 =
-            gzc::rechunk_to_dir_if_needed(in, split_dir, 10 * 1024 * 1024, did2)
-                .get();
-        CHECK_FALSE(did2);
-        CHECK(got2 == in);
 
         fs::remove_all(dir);
     }

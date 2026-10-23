@@ -66,9 +66,8 @@ DLIO Config Generation
 End-to-end pipeline that converts a directory of raw DFTracer logs into a DLIO
 training-loop YAML configuration:
 
-- **trace_loader**: pulls the ``AGGREGATION`` column family (re-attaches the
-  merge operator at open time) and synthesizes per-rank sample arrays from
-  per-(pid, time_bucket) entries.
+- **trace_loader**: reads the aggregation partials of the index and
+  synthesizes per-rank sample arrays from per-(pid, time window) groups.
 - **BarrierSimulator**: simulates one DLIO training run across the captured
   ranks/steps, scoring an end-to-end duration, rank variance, and ``fetch.block``
   CDF similarity against the empirical trace.

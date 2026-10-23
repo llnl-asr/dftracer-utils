@@ -84,6 +84,13 @@ void* allocate(std::size_t size, std::size_t align);
 void* allocate(std::size_t size, std::size_t align, Pool& pool);
 
 /**
+ * @brief Allocate like allocate(size, align, pool), but name @p site as the
+ * caller in the debug mode, for a wrapper such as the global operator new
+ * whose own address says nothing.
+ */
+void* allocate_at(std::size_t size, std::size_t align, Pool& pool, void* site);
+
+/**
  * @brief Allocate like allocate() and return null instead of throwing.
  *
  * Null means the hard cap or the operating system refused. A bad alignment
@@ -93,6 +100,11 @@ void* try_allocate(std::size_t size, std::size_t align) noexcept;
 
 /// Free a block from allocate(); null is a no-op.
 void deallocate(void* p) noexcept;
+
+/// Blocks handed out since the process started, a resize counted as one. Only
+/// the debug mode (DFTRACER_UTILS_MEMORY_DEBUG=1) counts; it is 0 without it,
+/// and the normal path pays nothing.
+std::uint64_t debug_allocation_count() noexcept;
 
 /**
  * @brief Free a block from allocate() whose requested size is @p size.

@@ -32,7 +32,7 @@ struct IndexShardEntry {
 /// shards were built with; a reader rejects a manifest whose version it cannot
 /// read.
 struct IndexShardManifest {
-    std::uint32_t format_version = 0;
+    std::optional<std::uint32_t> format_version;
     std::vector<IndexShardEntry> shards;
 };
 

@@ -249,6 +249,12 @@ SchemaDetection explain_schema(std::span<const std::string_view> lines);
 /// read.
 SchemaDetection explain_file_schema(const std::string& file_path);
 
+/// The same over an open file of `size` bytes modified at `mtime_ns`
+/// nanoseconds since the epoch, read with pread. `fd` stays open and owned by
+/// the caller.
+SchemaDetection explain_file_schema(const std::string& file_path, int fd,
+                                    std::uint64_t size, std::int64_t mtime_ns);
+
 /// `d` as a JSON object: chosen (id), objects, records, and scores, each with
 /// id, required (the count of required paths) and share.
 std::string to_json(const SchemaDetection& d);
@@ -258,6 +264,11 @@ const RecordSchema& detect_schema(std::span<const std::string_view> lines);
 
 /// explain_file_schema(file_path).chosen.
 const RecordSchema& detect_file_schema(const std::string& file_path);
+
+/// explain_file_schema(file_path, fd, size, mtime_ns).chosen.
+const RecordSchema& detect_file_schema(const std::string& file_path, int fd,
+                                       std::uint64_t size,
+                                       std::int64_t mtime_ns);
 
 }  // namespace dftracer::utils::index
 

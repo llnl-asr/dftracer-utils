@@ -154,6 +154,24 @@ inline void attrib_credit(AttribCache& cache, std::uint16_t id,
     }
 }
 
+/// Charge one block to pool @p id, which is not always the scope, without
+/// changing the scope; @p delta is as for attrib_charge.
+inline void attrib_charge_to(AttribCache& cache, std::uint16_t id,
+                             std::int64_t delta) noexcept {
+    AttribEntry* e = &cache.hot;
+    if (id != cache.scope) {
+        e = &cache.entries[id % ATTRIB_ENTRIES];
+        if (e->id.load(std::memory_order_relaxed) != id) [[unlikely]] {
+            attrib_switch(*e, id);
+        }
+    }
+    std::int64_t word = e->word.load(std::memory_order_relaxed) + delta;
+    e->word.store(word, std::memory_order_relaxed);
+    if (attrib_bytes(word) >= ATTRIB_FLUSH_BYTES) [[unlikely]] {
+        attrib_flush(*e);
+    }
+}
+
 /// Charge a block of any size to the cache's scope.
 inline void attrib_charge_any(AttribCache& cache, std::size_t bytes) noexcept {
     if (bytes <= static_cast<std::size_t>(ATTRIB_FLUSH_BYTES)) [[likely]] {

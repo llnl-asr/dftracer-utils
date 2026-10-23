@@ -21,6 +21,7 @@ set(UTILITIES_TEST_SOURCES
 
     # DLIO config generation
     dlio/test_barrier_simulator.cpp
+    dlio/test_trace_loader.cpp
 
     # Sketches
     common/statistics/test_ddsketch.cpp
@@ -56,6 +57,7 @@ set(UTILITIES_TEST_SOURCES
     fileio/test_gzip_line_writer.cpp
     fileio/test_line_format.cpp
     fileio/test_gzip_sink.cpp
+    fileio/test_gzip_crc.cpp
 
     # I/O Parallel
     fileio/parallel/test_layout_sizing.cpp

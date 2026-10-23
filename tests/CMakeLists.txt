@@ -183,6 +183,8 @@ set(TEST_CPP_SOURCES
     common/test_intern_table.cpp
     dstd/test_hash_partition.cpp
     dstd/test_hex64.cpp
+    dstd/test_big_endian.cpp
+    dstd/test_little_endian.cpp
     dstd/test_string_intern.cpp
     dstd/test_eviction_policy.cpp
     dstd/test_containers.cpp
@@ -197,6 +199,7 @@ set(TEST_CPP_SOURCES
     common/test_external_sort.cpp
     common/test_spill_dir.cpp
     common/test_str_format.cpp
+    common/test_hw_concurrency.cpp
     # Pipeline tests
     pipeline/test_pipeline.cpp
 
@@ -258,16 +261,34 @@ set(TEST_CPP_SOURCES
     index/test_member_pieces.cpp
     index/test_index_pass_parallel.cpp
     index/test_catalog.cpp
+    index/test_bloom_open_counts.cpp
     index/test_build_memory.cpp
     index/test_read_bytes.cpp
     index/test_build_file_count.cpp
+    index/test_build_parallelism.cpp
+    index/test_build_peak.cpp
+    index/test_big_member_reads.cpp
+    index/test_parser_reuse.cpp
     index/test_parse_allocations.cpp
+    index/test_agg_partials_store.cpp
+    index/test_input_syscalls.cpp
+    index/test_fold_driver.cpp
     index/test_record_schema.cpp
     index/test_schema_registry.cpp
     index/test_schema_class.cpp
     index/test_prefilter.cpp
     index/test_prefilter_fuzz.cpp
     )
+
+# Test-only syscall counter injected into the CLI tools by
+# index/test_input_syscalls. It links none of our libraries.
+add_library(input_syscalls_interpose SHARED index/input_syscalls_interpose.cpp)
+set_target_properties(input_syscalls_interpose PROPERTIES
+  CXX_VISIBILITY_PRESET default VISIBILITY_INLINES_HIDDEN OFF)
+target_set_warnings(input_syscalls_interpose)
+if(UNIX AND NOT APPLE)
+  target_link_libraries(input_syscalls_interpose PRIVATE ${CMAKE_DL_LIBS})
+endif()
 
 foreach(test_file ${TEST_CPP_SOURCES})
   # Extract path and filename
@@ -342,6 +363,24 @@ foreach(test_file ${TEST_CPP_SOURCES})
      OR bin_exec STREQUAL "index/test_indexer"
      OR bin_exec STREQUAL "reader/test_reader")
     set_tests_properties(${bin_exec} PROPERTIES RUN_SERIAL TRUE)
+  endif()
+
+  # The allocator counts its allocations only in debug mode, which is fixed
+  # before the first allocation.
+  if(bin_exec STREQUAL "index/test_parse_allocations")
+    set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+                                           "DFTRACER_UTILS_MEMORY_DEBUG=1")
+  endif()
+
+  if(bin_exec STREQUAL "index/test_input_syscalls")
+    add_dependencies(${target_name} input_syscalls_interpose
+      dftracer_index dftracer_event_count dftracer_info dftracer_stats
+      dftracer_view dftracer_split dftracer_validate dftracer_comparator
+      dftracer_replay)
+    target_compile_definitions(${target_name} PRIVATE
+      DFTRACER_UTILS_TEST_INTERPOSE_PATH="$<TARGET_FILE:input_syscalls_interpose>"
+      DFTRACER_UTILS_TEST_BIN_DIR="$<TARGET_FILE_DIR:dftracer_index>")
+    set_tests_properties(${bin_exec} PROPERTIES TIMEOUT 300 RUN_SERIAL TRUE)
   endif()
 
   # Robustness test generates large (128 MB) gzip files; coverage
@@ -817,3 +856,50 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
   set_tests_properties(${PACKAGE_DISCOVERY_TESTS} PROPERTIES FIXTURES_REQUIRED
                                                              "installed_package")
 endif()
+
+# +++++++++++++++++++++++++++++++++++++++++
+# Global operator new
+# +++++++++++++++++++++++++++++++++++++++++
+
+# Every C++ test executable runs on our heap, as the CLI tools do. The memory
+# tests count blocks and bytes exactly, so they keep the C library's operator
+# new; memory_test_global_new links the replacement itself.
+function(dftu_link_global_new_to_tests)
+  if(NOT TARGET dftracer_utils_global_new)
+    return()
+  endif()
+  set(pending ${CMAKE_SOURCE_DIR}/tests)
+  set(targets "")
+  while(pending)
+    list(POP_FRONT pending dir)
+    get_property(
+      dir_targets
+      DIRECTORY ${dir}
+      PROPERTY BUILDSYSTEM_TARGETS)
+    list(APPEND targets ${dir_targets})
+    get_property(
+      subdirs
+      DIRECTORY ${dir}
+      PROPERTY SUBDIRECTORIES)
+    list(APPEND pending ${subdirs})
+  endwhile()
+  foreach(target ${targets})
+    get_target_property(type ${target} TYPE)
+    if(NOT type STREQUAL "EXECUTABLE" OR target MATCHES "^memory_")
+      continue()
+    endif()
+    get_target_property(sources ${target} SOURCES)
+    set(has_cxx FALSE)
+    foreach(source ${sources})
+      if(source MATCHES "\\.(cpp|cc|cxx)$")
+        set(has_cxx TRUE)
+      endif()
+    endforeach()
+    if(has_cxx)
+      target_link_libraries(${target} PRIVATE dftracer_utils_global_new)
+    endif()
+  endforeach()
+endfunction()
+
+cmake_language(DEFER DIRECTORY ${CMAKE_SOURCE_DIR} CALL
+               dftu_link_global_new_to_tests)

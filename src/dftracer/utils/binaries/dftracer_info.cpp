@@ -1,6 +1,7 @@
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/archive_format.h>
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
@@ -364,7 +365,7 @@ static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
         ScopedTimer _t(stages, "collect_and_classify");
 
         if (!directory.empty()) {
-            if (!fs::exists(directory)) {
+            if (!dftracer::utils::input_exists(directory)) {
                 DFTRACER_UTILS_LOG_ERROR("Directory does not exist: %s",
                                          directory.c_str());
                 co_return 1;

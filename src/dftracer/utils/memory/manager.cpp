@@ -1,3 +1,4 @@
+#include <cxxabi.h>
 #include <dftracer/utils/memory/attrib.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/memory/debug.h>
@@ -6,6 +7,7 @@
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/memory/pressure.h>
 #include <dftracer/utils/memory/settings.h>
+#include <dlfcn.h>
 #include <pthread.h>
 #include <sys/mman.h>
 #include <time.h>
@@ -72,7 +74,9 @@ std::atomic<AttribCache*> g_attrib_caches{nullptr};
 std::atomic<Reporter> g_reporter{nullptr};
 std::atomic<bool> g_exit_check{false};
 std::atomic<bool> g_exit_report{false};
+std::atomic<std::uint16_t> g_exit_exempt{0};
 std::atomic<bool> g_exit_hook{false};
+std::atomic<bool> g_exit_ran{false};
 constexpr std::size_t EXIT_HOOK_SLOTS = 8;
 std::atomic<void (*)()> g_exit_hooks[EXIT_HOOK_SLOTS];
 std::atomic<std::size_t> g_exit_hook_count{0};
@@ -377,12 +381,107 @@ void ManagerAccess::report_sites(Manager& m, std::uint16_t pool) noexcept {
         &context);
 }
 
+constexpr std::size_t TOP_SITES = 20;
+constexpr std::size_t TOP_PEAK_SITES = 25;
+
+// The symbol of a caller address, or its module and offset when the symbol is
+// not exported.
+static void describe_site(std::uintptr_t site, char* out,
+                          std::size_t capacity) {
+    Dl_info info{};
+    void* address = reinterpret_cast<void*>(site);
+    if (::dladdr(address, &info) == 0) {
+        std::snprintf(out, capacity, "0x%llx",
+                      static_cast<unsigned long long>(site));
+        return;
+    }
+    if (info.dli_sname != nullptr) {
+        int status = 0;
+        char* name =
+            abi::__cxa_demangle(info.dli_sname, nullptr, nullptr, &status);
+        std::snprintf(
+            out, capacity, "%s+0x%llx",
+            status == 0 && name != nullptr ? name : info.dli_sname,
+            static_cast<unsigned long long>(
+                site - reinterpret_cast<std::uintptr_t>(info.dli_saddr)));
+        std::free(name);
+        return;
+    }
+    std::snprintf(out, capacity, "%s+0x%llx",
+                  info.dli_fname != nullptr ? info.dli_fname : "?",
+                  static_cast<unsigned long long>(
+                      site - reinterpret_cast<std::uintptr_t>(info.dli_fbase)));
+}
+
+static void report_top_sites(bool by_peak) noexcept {
+    char text[REPORT_BYTES];
+    int n = std::snprintf(text, sizeof(text),
+                          "dftracer-utils memory: top %zu sites by %s bytes\n",
+                          TOP_SITES, by_peak ? "peak" : "live");
+    report(text, static_cast<std::size_t>(n));
+    debug_top_sites(
+        TOP_SITES, by_peak,
+        [](void*, const DebugSiteTotal& total) noexcept {
+            char where[REPORT_BYTES / 2];
+            describe_site(total.site, where, sizeof(where));
+            char line[REPORT_BYTES];
+            int len =
+                std::snprintf(line, sizeof(line),
+                              "dftracer-utils memory: site live=%zu peak=%zu "
+                              "allocations=%zu %s\n",
+                              total.live, total.peak, total.allocations, where);
+            report(line, std::min<std::size_t>(static_cast<std::size_t>(len),
+                                               sizeof(line) - 1));
+        },
+        nullptr);
+}
+
+static void report_peak_sites() noexcept {
+    struct Sum {
+        std::size_t covered = 0;
+    } sum;
+    char lines[TOP_PEAK_SITES][REPORT_BYTES];
+    std::size_t count = 0;
+    struct Context {
+        Sum* sum;
+        char (*lines)[REPORT_BYTES];
+        std::size_t* count;
+    } context{&sum, lines, &count};
+    DebugPeak peak = debug_top_sites_at_peak(
+        TOP_PEAK_SITES,
+        [](void* raw, const DebugSiteTotal& total) noexcept {
+            auto& c = *static_cast<Context*>(raw);
+            c.sum->covered += total.live;
+            char where[REPORT_BYTES / 2];
+            describe_site(total.site, where, sizeof(where));
+            std::snprintf(c.lines[*c.count], REPORT_BYTES,
+                          "dftracer-utils memory: peak site live=%zu "
+                          "allocations=%zu %s\n",
+                          total.live, total.allocations, where);
+            ++*c.count;
+        },
+        &context);
+    char text[REPORT_BYTES];
+    int n = std::snprintf(
+        text, sizeof(text),
+        "dftracer-utils memory: at the process peak %zu live bytes, the top "
+        "%zu sites hold %zu, blocks above 1 MiB hold %zu\n",
+        peak.total, count, sum.covered, peak.big);
+    report(text, std::min<std::size_t>(static_cast<std::size_t>(n),
+                                       sizeof(text) - 1));
+    for (std::size_t i = 0; i < count; ++i) {
+        report(lines[i], std::strlen(lines[i]));
+    }
+}
+
 // Fails the process when bytes are still live that no host buffer owns, or a
 // scratch pool leaked. Debug mode adds the callers of the live blocks.
 void ManagerAccess::exit_check() noexcept {
+    if (g_exit_ran.exchange(true, std::memory_order_relaxed)) return;
     const bool check = g_exit_check.load(std::memory_order_relaxed);
     const bool summary = g_exit_report.load(std::memory_order_relaxed);
-    if (!check && !summary) return;
+    const bool sites = debug_enabled();
+    if (!check && !summary && !sites) return;
     std::size_t hooks = std::min(
         g_exit_hook_count.load(std::memory_order_acquire), EXIT_HOOK_SLOTS);
     while (hooks > 0) {
@@ -403,10 +502,22 @@ void ManagerAccess::exit_check() noexcept {
         report(line, std::min<std::size_t>(static_cast<std::size_t>(len),
                                            sizeof(line) - 1));
     }
+    if (sites) {
+        report_top_sites(false);
+        report_top_sites(true);
+        report_peak_sites();
+    }
     if (!check) return;
     debug_drain();
     debug_drain_held(DEBUG_ALL_POOLS);
+    const std::uint16_t exempt = g_exit_exempt.load(std::memory_order_relaxed);
     std::ptrdiff_t live = attrib_live_total() - exported_total(m);
+    if (exempt != 0) {
+        std::ptrdiff_t bytes = 0;
+        std::ptrdiff_t blocks = 0;
+        PoolAccess::own_totals(m, exempt, bytes, blocks);
+        live -= bytes;
+    }
     bool leaked = m.leaked_.load(std::memory_order_relaxed);
     if (live == 0 && !leaked) return;
     char text[REPORT_BYTES];
@@ -421,7 +532,7 @@ void ManagerAccess::exit_check() noexcept {
         std::ptrdiff_t bytes = 0;
         std::ptrdiff_t blocks = 0;
         PoolAccess::own_totals(m, static_cast<std::uint16_t>(i), bytes, blocks);
-        if (bytes == 0 && blocks == 0) continue;
+        if ((bytes == 0 && blocks == 0) || i == exempt) continue;
         char where[REPORT_BYTES / 2];
         std::size_t size = PoolAccess::path(m, static_cast<std::uint16_t>(i),
                                             where, sizeof(where) - 1);
@@ -449,6 +560,16 @@ static void register_exit_hook() noexcept {
 void set_exit_check(bool enabled) noexcept {
     g_exit_check.store(enabled, std::memory_order_relaxed);
     if (enabled) register_exit_hook();
+}
+
+void rearm_exit_check() noexcept {
+    if (std::atexit([] { ManagerAccess::exit_check(); }) != 0) {
+        abort_with("dftracer-utils memory: cannot register exit hook\n");
+    }
+}
+
+void exempt_from_exit_check(Pool& pool) noexcept {
+    g_exit_exempt.store(pool.id(), std::memory_order_relaxed);
 }
 
 void set_exit_report(bool enabled) noexcept {
@@ -511,6 +632,7 @@ Manager* ManagerAccess::create() noexcept {
         abort_with("dftracer-utils memory: cannot register fork hook\n");
     }
     if (exit_check_env()) set_exit_check(true);
+    if (debug_enabled()) register_exit_hook();
     return m;
 }
 

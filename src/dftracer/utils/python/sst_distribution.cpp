@@ -4,7 +4,6 @@
 #include <dftracer/utils/index/gzip/gzip_member_scanner.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_key.h>
 #include <dftracer/utils/index/schemas/dft/agg/association_tracker.h>
 #include <dftracer/utils/index/store/index_database_sst_writer_context.h>
 #include <dftracer/utils/index/store/index_write.h>
@@ -86,8 +85,8 @@ std::string artifact_field(std::size_t family) {
            "_sst";
 }
 
-/// Convert a Python artifacts dict to the C++ Artifacts struct. Missing,
-/// None, or empty-string entries become nullopt. Returns false on type
+/// Convert a Python artifacts dict to the C++ Artifacts struct. Missing
+/// or None entries and empty strings are dropped. Returns false on type
 /// errors (exception set).
 bool artifacts_from_dict(PyObject *dict,
                          IndexDatabaseSstWriterContext::Artifacts *out) {
@@ -99,15 +98,24 @@ bool artifacts_from_dict(PyObject *dict,
         const auto field = artifact_field(f);
         PyObject *val = PyDict_GetItemString(dict, field.c_str());  // borrowed
         if (!val || val == Py_None) continue;
-        if (!PyUnicode_Check(val)) {
-            PyErr_Format(PyExc_TypeError, "artifacts['%s'] must be str or None",
+        if (!PyList_Check(val)) {
+            PyErr_Format(PyExc_TypeError,
+                         "artifacts['%s'] must be a list of str or None",
                          field.c_str());
             return false;
         }
-        const char *s = as_utf8(val);
-        if (!s) return false;
-        if (s[0] == '\0') continue;
-        out->sst[f] = std::string(s);
+        for (Py_ssize_t i = 0; i < PyList_GET_SIZE(val); ++i) {
+            PyObject *item = PyList_GET_ITEM(val, i);  // borrowed
+            if (!PyUnicode_Check(item)) {
+                PyErr_Format(PyExc_TypeError,
+                             "artifacts['%s'] must be a list of str",
+                             field.c_str());
+                return false;
+            }
+            const char *s = as_utf8(item);
+            if (!s) return false;
+            if (s[0] != '\0') out->sst[f].emplace_back(s);
+        }
     }
     return true;
 }
@@ -116,9 +124,15 @@ PyObject *artifacts_to_dict(const IndexDatabaseSstWriterContext::Artifacts &a) {
     PyObject *dict = PyDict_New();
     if (!dict) return NULL;
     for (std::size_t f = 0; f < a.sst.size(); ++f) {
-        const auto &slot = a.sst[f];
-        PyObject *v = slot.has_value() ? PyUnicode_FromString(slot->c_str())
-                                       : (Py_INCREF(Py_None), Py_None);
+        PyObject *v = PyList_New(static_cast<Py_ssize_t>(a.sst[f].size()));
+        for (std::size_t i = 0; v && i < a.sst[f].size(); ++i) {
+            PyObject *item = PyUnicode_FromString(a.sst[f][i].c_str());
+            if (!item) {
+                Py_CLEAR(v);
+                break;
+            }
+            PyList_SET_ITEM(v, static_cast<Py_ssize_t>(i), item);
+        }
         if (!v ||
             PyDict_SetItemString(dict, artifact_field(f).c_str(), v) != 0) {
             Py_XDECREF(v);
@@ -568,7 +582,7 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
             dftracer::utils::index::schemas::dft::agg::intern_for_index(
                 index_dir);
         // The fold writes aggregation SSTs through the batch build's own SST
-        // sink (routed to aggregation.sst / system_metrics.sst), so they land
+        // sink (routed to blob.sst / system_metrics.sst), so they land
         // in `artifacts->list` with bloom/dict - no separate per-file sink.
         batch_config->agg_fold_factory =
             [agg_config_ptr, agg_intern](

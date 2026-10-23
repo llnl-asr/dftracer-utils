@@ -242,12 +242,20 @@ void* allocate(std::size_t size, std::size_t align) {
     }
 }
 
-void* allocate(std::size_t size, std::size_t align, Pool& pool) {
-    ScopeOverride scope{attrib_local(), pool.id()};
-    if (debug_enabled()) {
-        return debug_allocate(size, align, __builtin_return_address(0));
+void* allocate_at(std::size_t size, std::size_t align, Pool& pool, void* site) {
+    switch (static_cast<Dispatch>(g_dispatch.load(std::memory_order_acquire))) {
+        case Dispatch::PageHeap:
+            return page_allocate_to(size, align, pool.id());
+        default:
+            break;
     }
+    ScopeOverride scope{attrib_local(), pool.id()};
+    if (debug_enabled()) return debug_allocate(size, align, site);
     return allocate(size, align);
+}
+
+void* allocate(std::size_t size, std::size_t align, Pool& pool) {
+    return allocate_at(size, align, pool, __builtin_return_address(0));
 }
 
 void* try_allocate(std::size_t size, std::size_t align) noexcept {

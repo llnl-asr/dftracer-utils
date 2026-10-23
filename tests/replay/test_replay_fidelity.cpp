@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <fstream>
 #include <mutex>
@@ -42,14 +43,14 @@ namespace {
 // dry_run=true skips actual I/O so the consumer's per-event work is
 // dominated by apply_timing sleep.
 void write_evenly_spaced_trace(const std::string& path, std::size_t n,
-                               std::uint64_t step_us) {
-    const std::uint64_t base_ts = 1'000'000;
+                               std::uint64_t step_us, std::uint32_t pid = 12345,
+                               std::uint64_t base_ts = 1'000'000) {
     std::ostringstream f;
     f << "[\n";
     for (std::size_t i = 0; i < n; ++i) {
-        f << R"({"id":)" << i
-          << R"(,"name":"read","cat":"POSIX","pid":12345,"tid":12345,"ts":)"
-          << (base_ts + i * step_us) << R"(,"dur":10,"ph":"X","args":{}})";
+        f << R"({"id":)" << i << R"(,"name":"read","cat":"POSIX","pid":)" << pid
+          << R"(,"tid":)" << pid << R"(,"ts":)" << (base_ts + i * step_us)
+          << R"(,"dur":10,"ph":"X","args":{}})";
         if (i + 1 < n) f << ",";
         f << "\n";
     }
@@ -112,6 +113,18 @@ FidelityStats analyze(const std::vector<DispatchSample>& samples) {
     out.expected_trace_span_us =
         static_cast<std::int64_t>(last.trace_ts - first.trace_ts);
     return out;
+}
+
+void run_pipelined(ReplayEngine& engine, const std::vector<std::string>& files,
+                   ReplayResult& result, std::size_t threads) {
+    Pipeline pipeline(PipelineConfig::parallel(threads));
+    auto root = make_task(
+        [&engine, &files, &result](CoroScope& scope) -> coro::CoroTask<void> {
+            co_await engine.run_pipelined(scope, files, result, /*cap=*/64);
+        },
+        "replay_pipelined");
+    pipeline.set_source(root);
+    pipeline.execute();
 }
 
 bool is_ci_env() {
@@ -283,6 +296,130 @@ TEST_CASE("Replay fidelity - first-event anchor reset survives warmup gap") {
                               << "us < 70ms (wall-clock unreliable under "
                                  "Valgrind/CI slowdown)");
     check_fidelity(stats, "anchor-reset");
+
+    std::error_code ec;
+    fs::remove_all(temp_dir, ec);
+}
+
+TEST_CASE("Replay pipelined - files replay at the same time") {
+    dftracer::utils::logger::init();
+
+    fs::path temp_dir =
+        dftu_utils_test::make_unique_test_path("dftracer_replay_concurrent");
+    fs::create_directories(temp_dir);
+    const std::string file_a = (temp_dir / "a.pfw.gz").string();
+    const std::string file_b = (temp_dir / "b.pfw.gz").string();
+    constexpr std::size_t N = 8;
+    constexpr std::uint32_t PID_A = 100;
+    constexpr std::uint32_t PID_B = 200;
+    write_evenly_spaced_trace(file_a, N, 1, PID_A);
+    write_evenly_spaced_trace(file_b, N, 1, PID_B);
+
+    // The first event of each file waits until the other file has dispatched
+    // an event. A serial replay can never satisfy both waits, so one of them
+    // gives up after the deadline and the check below fails.
+    std::mutex m;
+    std::condition_variable cv;
+    bool seen_a = false;
+    bool seen_b = false;
+    bool gave_up = false;
+    ReplayConfig config;
+    config.maintain_timing = false;
+    config.dry_run = true;
+    config.on_dispatch = [&](const Trace& t,
+                             std::chrono::steady_clock::time_point) {
+        std::unique_lock lock(m);
+        const bool is_a = t.pid == PID_A;
+        (is_a ? seen_a : seen_b) = true;
+        cv.notify_all();
+        if (!cv.wait_for(lock, std::chrono::seconds(10),
+                         [&] { return is_a ? seen_b : seen_a; }))
+            gave_up = true;
+    };
+
+    ReplayEngine engine(config);
+    ReplayResult result;
+    run_pipelined(engine, {file_a, file_b}, result, 4);
+
+    CHECK_FALSE(gave_up);
+    CHECK(result.total_events == 2 * N);
+    CHECK(result.executed_events == 2 * N);
+    CHECK(result.pid_counts[PID_A] == N);
+    CHECK(result.pid_counts[PID_B] == N);
+
+    std::error_code ec;
+    fs::remove_all(temp_dir, ec);
+}
+
+TEST_CASE("Replay pipelined - each file keeps its own timeline") {
+    dftracer::utils::logger::init();
+
+    fs::path temp_dir =
+        dftu_utils_test::make_unique_test_path("dftracer_replay_lanes");
+    fs::create_directories(temp_dir);
+    const std::string file_a = (temp_dir / "a.pfw.gz").string();
+    const std::string file_b = (temp_dir / "b.pfw.gz").string();
+    constexpr std::size_t N = 20;
+    constexpr std::uint64_t STEP_US = 5'000;
+    constexpr std::uint32_t PID_A = 100;
+    constexpr std::uint32_t PID_B = 200;
+    // File b starts an hour of trace time after file a. With one shared
+    // timeline its events would each wait the 10 s cap.
+    write_evenly_spaced_trace(file_a, N, STEP_US, PID_A, 1'000'000);
+    write_evenly_spaced_trace(file_b, N, STEP_US, PID_B, 3'601'000'000);
+
+    DispatchRecorder rec_a;
+    DispatchRecorder rec_b;
+    ReplayConfig config;
+    config.maintain_timing = true;
+    config.dry_run = false;
+    config.on_dispatch = [&](const Trace& t,
+                             std::chrono::steady_clock::time_point now) {
+        (t.pid == PID_A ? rec_a : rec_b).record(t, now);
+    };
+
+    ReplayEngine engine(config);
+    ReplayResult result;
+    run_pipelined(engine, {file_a, file_b}, result, 4);
+
+    CHECK(result.total_events == 2 * N);
+    REQUIRE(rec_a.samples.size() == N);
+    REQUIRE(rec_b.samples.size() == N);
+    check_fidelity(analyze(rec_a.samples), "lane a");
+    check_fidelity(analyze(rec_b.samples), "lane b");
+
+    std::error_code ec;
+    fs::remove_all(temp_dir, ec);
+}
+
+TEST_CASE("Replay pipelined - max_events caps the whole run") {
+    dftracer::utils::logger::init();
+
+    fs::path temp_dir =
+        dftu_utils_test::make_unique_test_path("dftracer_replay_cap");
+    fs::create_directories(temp_dir);
+    constexpr std::size_t FILES = 3;
+    constexpr std::size_t N = 50;
+    constexpr std::size_t MAX_EVENTS = 60;
+    std::vector<std::string> files;
+    for (std::size_t i = 0; i < FILES; ++i) {
+        files.push_back(
+            (temp_dir / ("f" + std::to_string(i) + ".pfw.gz")).string());
+        write_evenly_spaced_trace(files.back(), N, 1,
+                                  static_cast<std::uint32_t>(100 + i));
+    }
+
+    ReplayConfig config;
+    config.maintain_timing = false;
+    config.dry_run = true;
+    config.max_events = MAX_EVENTS;
+
+    ReplayEngine engine(config);
+    ReplayResult result;
+    run_pipelined(engine, files, result, 4);
+
+    CHECK(result.total_events == FILES * N);
+    CHECK(result.executed_events == MAX_EVENTS);
 
     std::error_code ec;
     fs::remove_all(temp_dir, ec);

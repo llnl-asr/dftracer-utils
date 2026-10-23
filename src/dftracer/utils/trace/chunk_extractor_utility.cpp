@@ -101,8 +101,11 @@ ChunkExtractorUtility::extract_and_write(
     std::size_t content_hash = 0;
     utilities::hash::HasherUtility hasher;
 
-    for (const auto& file : input.files) {
-        auto line_gen = lines::sources::async_streaming_gz_lines(file);
+    for (std::size_t i = 0; i < input.files.size(); ++i) {
+        const auto& file = input.files[i];
+        auto line_gen = lines::sources::async_streaming_gz_lines(
+            file, 0, 0, true,
+            i < input.open_files.size() ? input.open_files[i] : nullptr);
         for (;;) {
             auto line_opt = co_await line_gen.next();
             if (!line_opt) break;

@@ -1,6 +1,7 @@
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/scoped_fd.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/coro/async_semaphore.h>
 #include <dftracer/utils/runtime/io/io.h>
@@ -112,11 +113,15 @@ struct FileProbe {
     std::uint64_t bytes = 0;
     double ratio = 1.0;  ///< Uncompressed bytes per compressed byte
     bool ok = false;
+    /// The probe's open descriptor of `path`, kept for the extraction when the
+    /// open-file budget allows, else null.
+    dstd::SharedPtr<ScopedFd> fd;
 };
 
 /// Files that one writer streams, in order, into chunk files.
 struct FileGroup {
     std::vector<std::string> files;
+    std::vector<dstd::SharedPtr<ScopedFd>> open_files;
     double ratio = 1.0;
 };
 
@@ -173,6 +178,7 @@ std::vector<FileGroup> group_files(const std::vector<FileProbe>& probes,
     for (const auto& probe : probes) {
         if (!probe.ok) continue;
         group.files.push_back(probe.path);
+        group.open_files.push_back(probe.fd);
         group_bytes += static_cast<double>(probe.bytes);
         group_plain += static_cast<double>(probe.bytes) * probe.ratio;
         if (group_bytes >= static_cast<double>(target)) close_group();
@@ -258,15 +264,23 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
         auto matched = co_await scanner(
             utilities::filesystem::PatternDirectoryScannerUtilityInput{
                 log_dir, utilities::filesystem::trace_file_patterns(), true});
-        // Never read back this run's own output.
+        // Never read back this run's own output. The output directory is
+        // resolved once and a file is tested by its walked path, so no input
+        // file or the input root is resolved again. A symlink that points into
+        // the output directory from outside its spelling is not caught.
         std::error_code ec;
-        const fs::path out_root = fs::weakly_canonical(output_dir, ec);
+        const fs::path out_canonical = fs::weakly_canonical(output_dir, ec);
+        const fs::path out_walked =
+            fs::absolute(fs::path(output_dir), ec).lexically_normal();
+        auto inside = [](const fs::path& p, const fs::path& root) {
+            const auto rel = p.lexically_relative(root);
+            return !root.empty() && !rel.empty() && *rel.begin() != "..";
+        };
         for (const auto& entry : matched) {
             std::string path = entry.path.string();
             if (!utilities::filesystem::is_trace_file(path)) continue;
-            const fs::path p = fs::weakly_canonical(entry.path, ec);
-            const auto rel = p.lexically_relative(out_root);
-            if (!out_root.empty() && !rel.empty() && *rel.begin() != "..")
+            if (inside(entry.path, out_canonical) ||
+                inside(entry.path, out_walked))
                 continue;
             input_files.push_back(std::move(path));
         }
@@ -276,6 +290,17 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
         DFTRACER_UTILS_LOG_ERROR("No trace files found in %s", log_dir.c_str());
         co_return 1;
     }
+    bool plain_input = false;
+    for (const auto& path : input_files) {
+        if (!path.ends_with(".gz")) {
+            DFTRACER_UTILS_LOG_ERROR(
+                "%s is not gzip; dftracer_split reads gzip traces only. Gzip "
+                "it first with dftracer_pgzip",
+                path.c_str());
+            plain_input = true;
+        }
+    }
+    if (plain_input) co_return 1;
     std::sort(input_files.begin(), input_files.end());
 
     DFTRACER_UTILS_LOG_INFO("Found %zu input files", input_files.size());
@@ -294,19 +319,16 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
     RechunkDir rechunk_dir;
     auto* rechunk_dir_ptr = &rechunk_dir;
     auto* input_files_ptr = &input_files;
+    std::atomic<std::size_t> open_count{0};
+    auto* open_count_ptr = &open_count;
+    const std::size_t open_budget = cli::open_file_budget();
     auto file_probes = graph.parallel<FileProbe>(
         input_files.size(),
-        [input_files_ptr, rechunk_dir_ptr, member_size_bytes](
-            CoroScope&, std::size_t idx) -> coro::CoroTask<FileProbe> {
+        [input_files_ptr, rechunk_dir_ptr, member_size_bytes, open_count_ptr,
+         open_budget](CoroScope&,
+                      std::size_t idx) -> coro::CoroTask<FileProbe> {
             FileProbe probe;
             probe.path = (*input_files_ptr)[idx];
-            if (!probe.path.ends_with(".gz")) {
-                DFTRACER_UTILS_LOG_ERROR(
-                    "Not a gzip trace: %s (dftracer traces must be "
-                    "gzip-compressed)",
-                    probe.path.c_str());
-                co_return probe;
-            }
             ssize_t fd = co_await io::open(probe.path.c_str(), O_RDONLY);
             if (fd < 0) {
                 DFTRACER_UTILS_LOG_ERROR("Cannot open %s", probe.path.c_str());
@@ -321,12 +343,18 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
             const gzc::FirstMember first = co_await gzc::gzip_first_member(
                 sfd.get(), probe.bytes, gzc::RECHUNK_MEMBER_CAP,
                 RATIO_SAMPLE_BYTES);
-            sfd.reset();
             if (first.compressed > 0) {
                 probe.ratio =
                     std::clamp(static_cast<double>(first.uncompressed) /
                                    static_cast<double>(first.compressed),
                                1.0, MAX_DEFLATE_RATIO);
+            }
+            if (!first.exceeds_cap &&
+                open_count_ptr->fetch_add(1, std::memory_order_relaxed) <
+                    open_budget) {
+                probe.fd = dstd::make_shared<ScopedFd>(std::move(sfd));
+            } else {
+                sfd.reset();
             }
             if (first.exceeds_cap) {
                 std::string out = rechunk_dir_ptr->get() + "/" +
@@ -408,6 +436,7 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
                     ExtractInput::from_files(static_cast<int>(i + 1),
                                              std::move(groups[i].files))
                         .with_output_dir(*output_dir_ptr)
+                        .with_open_files(std::move(groups[i].open_files))
                         .with_app_name(*app_name_ptr)
                         .with_compression(compress)
                         .with_compute_hash(verify)

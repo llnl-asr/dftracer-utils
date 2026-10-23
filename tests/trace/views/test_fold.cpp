@@ -442,6 +442,36 @@ TEST_SUITE("Fold") {
         CHECK(buf.events().size() == 1);
     }
 
+    TEST_CASE("clearing a buffer cuts back what a huge batch or event grew") {
+        FoldEventBuffer buf;
+        const std::size_t slots = FoldEventBuffer::RETAIN_SLOTS + 100;
+        FoldEvent& first = buf.append();
+        first.args.resize(10 * FoldEventBuffer::RETAIN_ENTRIES);
+        first.schema_leaves.resize(10 * FoldEventBuffer::RETAIN_ENTRIES);
+        for (std::size_t i = 1; i < slots; ++i)
+            CHECK(buf.append().args.capacity() <=
+                  FoldEventBuffer::RETAIN_ENTRIES);
+        CHECK(buf.slot_capacity() >= slots);
+        buf.clear();
+        CHECK(buf.empty());
+        CHECK(buf.slot_capacity() <= FoldEventBuffer::RETAIN_SLOTS);
+
+        for (std::size_t i = 0; i < slots; ++i) {
+            FoldEvent& ev = buf.append();
+            CHECK(ev.args.capacity() <= FoldEventBuffer::RETAIN_ENTRIES);
+            CHECK(ev.schema_leaves.capacity() <=
+                  FoldEventBuffer::RETAIN_ENTRIES);
+        }
+        buf.clear();
+        CHECK(buf.slot_capacity() <= FoldEventBuffer::RETAIN_SLOTS);
+
+        FoldEventBuffer small;
+        small.append().args.resize(FoldEventBuffer::RETAIN_ENTRIES);
+        small.clear();
+        CHECK(small.append().args.capacity() >=
+              FoldEventBuffer::RETAIN_ENTRIES);
+    }
+
     TEST_CASE("EventRows over a pick list reads only the picked events") {
         std::vector<FoldEvent> evs(5);
         for (std::size_t i = 0; i < evs.size(); ++i) evs[i].ts = 10 * i;

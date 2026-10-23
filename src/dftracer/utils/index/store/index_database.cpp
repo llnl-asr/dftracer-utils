@@ -1,8 +1,9 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_merge_operator.h>
 #include <dftracer/utils/index/schemas/dft/agg/system_metrics_merge_operator.h>
 #include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/index/store/db_manager.h>
@@ -22,6 +23,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <charconv>
 #include <cstring>
 #include <limits>
@@ -275,29 +277,14 @@ namespace {
 #endif
 }
 
-// Every open registers the aggregation merge operators: RocksDBManager shares
-// one handle per path, and ingested aggregation SSTs hold merge operands.
+// Every open registers the system metrics merge operator: RocksDBManager shares
+// one handle per path, and ingested system metrics SSTs hold merge operands.
 rocks::RocksDatabase::CfOptionsOverride make_aggregation_cf_override() {
-    using index::schemas::dft::agg::AggregationMergeOperator;
     using index::schemas::dft::agg::SystemMetricsMergeOperator;
-    auto agg_merge_op = std::make_shared<AggregationMergeOperator>();
     auto sys_merge_op = std::make_shared<SystemMetricsMergeOperator>();
-    return [agg_merge_op, sys_merge_op](const std::string& cf_name,
-                                        ::rocksdb::ColumnFamilyOptions& opts) {
-        if (cf_name == cf::AGGREGATION) {
-            opts.merge_operator = agg_merge_op;
-            ::rocksdb::BlockBasedTableOptions bbt;
-            bbt.block_size = 32 * 1024;
-            bbt.format_version = 7;
-            bbt.index_block_restart_interval = 16;
-            bbt.whole_key_filtering = false;
-            bbt.separate_key_value_in_data_block = true;
-            opts.table_factory.reset(::rocksdb::NewBlockBasedTableFactory(bbt));
-            opts.level0_file_num_compaction_trigger = 2;
-            opts.max_bytes_for_level_multiplier = 20;
-            opts.compression = select_compression_type();
-            opts.bottommost_compression = select_compression_type();
-        } else if (cf_name == cf::SYSTEM_METRICS) {
+    return [sys_merge_op](const std::string& cf_name,
+                          ::rocksdb::ColumnFamilyOptions& opts) {
+        if (cf_name == cf::SYSTEM_METRICS) {
             opts.merge_operator = sys_merge_op;
             opts.compression = select_compression_type();
             opts.bottommost_compression = select_compression_type();
@@ -314,6 +301,14 @@ struct IndexDatabase::Impl {
     std::shared_ptr<rocks::RocksDatabase> db_;
 };
 
+namespace {
+std::atomic<std::uint64_t> read_write_open_count{0};
+}
+
+std::uint64_t IndexDatabase::read_write_opens() noexcept {
+    return read_write_open_count.load(std::memory_order_relaxed);
+}
+
 IndexDatabase::IndexDatabase(const std::string& index_path,
                              IndexOpenMode open_mode)
     : impl_(std::make_unique<Impl>()) {
@@ -324,6 +319,7 @@ IndexDatabase::IndexDatabase(const std::string& index_path,
     impl_->db_ = rocks::RocksDBManager::instance().get_or_open(
         impl_->db_path_, impl_->open_mode_, make_aggregation_cf_override());
     if (impl_->open_mode_ == rocks::RocksDatabase::OpenMode::ReadWrite) {
+        read_write_open_count.fetch_add(1, std::memory_order_relaxed);
         init_schema();
     }
 }
@@ -345,8 +341,8 @@ void IndexDatabase::bulk_ingest(const SstArtifactRegistry& registry,
                                 const StringViewSet& skip_cfs) {
     // One atomic multi-CF ingest: a single manifest edit, so the manifest
     // entries in the registry family commit together with their data.
-    // Overlapping index-wide SSTs (dictionaries) and aggregation SSTs are fine
-    // with allow_global_seqno, which assigns seqnos in list order.
+    // Overlapping index-wide SSTs (dictionaries) and system metrics SSTs are
+    // fine with allow_global_seqno, which assigns seqnos in list order.
     std::vector<std::pair<std::string_view, const std::vector<std::string>*>>
         per_cf;
     for (std::size_t f = 0; f < layout::FAMILY_COUNT; ++f) {
@@ -382,7 +378,7 @@ std::vector<int> IndexDatabase::assign_file_ids(
 namespace {
 std::string next_file_id_value(std::uint32_t next) {
     std::string body;
-    layout::append_u32(body, next);
+    append_u32_be(body, next);
     return layout::with_header(Ext::Host, layout::host::NEXT_FILE_ID, body);
 }
 }  // namespace
@@ -521,7 +517,7 @@ bool IndexDatabase::has_posting(int file_id, std::string_view path,
                                 std::uint64_t value_hash) const {
     auto key =
         layout::path_prefix(Ext::Postings, pk::IN_FILE, fid(file_id), path);
-    layout::append_u64(key, value_hash);
+    append_u64_be(key, value_hash);
     std::string value;
     auto status = impl_->db_->get(key, &value, cf::POSTINGS);
     if (status.IsNotFound()) return false;
@@ -534,7 +530,7 @@ std::vector<std::uint64_t> IndexDatabase::posting_granules(
     std::vector<std::uint64_t> out;
     auto prefix =
         layout::path_prefix(Ext::Postings, pk::IN_GRANULE, fid(file_id), path);
-    layout::append_u64(prefix, value_hash);
+    append_u64_be(prefix, value_hash);
     scan_keys(*impl_->db_, Ext::Postings, pk::IN_GRANULE, prefix,
               [&](std::string_view key) {
                   if (key.size() == prefix.size() + 4)
@@ -574,18 +570,29 @@ std::optional<IndexDatabase::FileStat> IndexDatabase::get_file_stat(
     return FileStat{record->mtime, record->size};
 }
 
-std::uint32_t IndexDatabase::get_format_version() const {
+std::optional<std::uint32_t> IndexDatabase::get_format_version() const {
     auto body =
         get(*impl_->db_, Ext::Host, layout::host::FORMAT, layout::format_key());
-    return body ? layout::read_u32(*body) : 0;
+    if (!body) return std::nullopt;
+    return layout::read_u32(*body);
 }
 
 bool IndexDatabase::format_outdated() const {
-    return get_format_version() != FORMAT_VERSION;
+    const auto stored = get_format_version();
+    return !stored || *stored != FORMAT_VERSION;
 }
 
 IndexDatabase::Freshness IndexDatabase::check_freshness(
     const std::string& file_path) const {
+    dftracer::utils::InputFileStat st;
+    if (!dftracer::utils::stat_input(file_path, st))
+        return check_freshness(file_path, 0, 0);
+    return check_freshness(file_path, st.size, st.mtime);
+}
+
+IndexDatabase::Freshness IndexDatabase::check_freshness(
+    const std::string& file_path, std::uint64_t size,
+    std::int64_t mtime) const {
     // Stat-only by design: mtime + size are the only O(1) freshness signals,
     // and this runs on every index open and every stale scan, so it must not
     // read the file body. A same-size edit with a deliberately restored mtime
@@ -599,11 +606,8 @@ IndexDatabase::Freshness IndexDatabase::check_freshness(
     auto stored = get_file_stat(logical);
     if (!stored) return Freshness::Stale;  // record predates stat tracking
 
-    const auto current_mtime = static_cast<std::uint64_t>(
-        index::store::internal::get_file_modification_time(file_path));
-    const auto current_size =
-        index::store::internal::file_size_bytes(file_path);
-    if (stored->mtime != current_mtime || stored->size != current_size) {
+    if (stored->mtime != static_cast<std::uint64_t>(mtime) ||
+        stored->size != size) {
         return Freshness::Stale;
     }
     return Freshness::Fresh;

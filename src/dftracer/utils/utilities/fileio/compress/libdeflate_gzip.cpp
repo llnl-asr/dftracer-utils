@@ -1,3 +1,4 @@
+#include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <libdeflate.h>
 #include <zlib.h>
@@ -31,6 +32,11 @@ void resolve_dispatch() {
 }
 
 }  // namespace
+
+std::uint32_t gzip_crc32(std::uint32_t crc, const void* data, std::size_t len) {
+    resolve_dispatch();
+    return libdeflate_crc32(crc, data, len);
+}
 
 GzipMemberDecompressor::GzipMemberDecompressor()
     : d_((resolve_dispatch(), libdeflate_alloc_decompressor())) {}
@@ -162,8 +168,9 @@ std::optional<std::vector<std::uint8_t>> GzipMemberCompressor::compress_member(
 
 std::optional<std::size_t> decode_truncated_member(
     const void* comp, std::size_t comp_len, std::vector<std::uint8_t>& out) {
-    z_stream zs{};
-    if (inflateInit2(&zs, 16 + MAX_WBITS) != Z_OK) return std::nullopt;
+    GzipStreamInflater gz;
+    if (!gz.init(16 + MAX_WBITS)) return std::nullopt;
+    z_stream& zs = gz.z();
     const auto* in = static_cast<const Bytef*>(comp);
     std::size_t in_left = comp_len;
     std::size_t produced = 0;
@@ -183,7 +190,7 @@ std::optional<std::size_t> decode_truncated_member(
             std::min<std::size_t>(out.size() - produced, UINT_MAX);
         zs.next_out = out.data() + produced;
         zs.avail_out = static_cast<uInt>(room);
-        const int rc = inflate(&zs, Z_NO_FLUSH);
+        const int rc = gz.inflate(Z_NO_FLUSH);
         produced += room - zs.avail_out;
         if (rc == Z_STREAM_END) {
             complete = true;
@@ -197,7 +204,6 @@ std::optional<std::size_t> decode_truncated_member(
         ok = false;  // Z_DATA_ERROR, Z_NEED_DICT, Z_MEM_ERROR
         break;
     }
-    inflateEnd(&zs);
     if (!ok) return std::nullopt;
     if (complete) return produced;
     std::size_t keep = produced;

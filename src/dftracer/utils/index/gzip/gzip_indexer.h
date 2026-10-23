@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/common/archive_format.h>
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/index/build/index_visitor.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/gzip_member_scanner.h>
@@ -58,8 +59,16 @@ struct GzipMemberSlice {
 /// When `slice` is non-null, only the specified member range is
 /// processed. The caller is responsible for ensuring `slice->members`
 /// outlives this coroutine.
+
 coro::CoroTask<std::optional<GzipBuildArtifacts>> build_gzip_index_artifacts(
     const std::string &gz_path, std::uint64_t ckpt_size,
+    const CheckpointIndexer::VisitorList &visitors, CoroScope *scope = nullptr,
+    const GzipMemberSlice *slice = nullptr, std::size_t ways = 0);
+
+/// The same over an open file. `fd` stays open and owned by the caller;
+/// `gz_path` only names the file in messages.
+coro::CoroTask<std::optional<GzipBuildArtifacts>> build_gzip_index_artifacts(
+    int fd, const std::string &gz_path, std::uint64_t ckpt_size,
     const CheckpointIndexer::VisitorList &visitors, CoroScope *scope = nullptr,
     const GzipMemberSlice *slice = nullptr, std::size_t ways = 0);
 
@@ -104,6 +113,7 @@ class GzipIndexer : public CheckpointIndexer {
     bool find_member(std::size_t target_offset,
                      GzipMemberRecord &member) const override;
     std::vector<GzipMemberRecord> get_members() const override;
+    dstd::Vector<std::uint64_t> piece_heads() const override;
     std::string restart_window(std::uint64_t member_idx) const override;
 
     inline ArchiveFormat get_format_type() const override {
@@ -131,6 +141,7 @@ class GzipIndexer : public CheckpointIndexer {
     mutable std::atomic<std::uint64_t> cached_checkpoint_size{0};
     mutable std::atomic<bool> cached_checkpoint_size_ready{false};
     mutable std::vector<GzipMemberRecord> cached_members;
+    mutable dstd::Vector<std::uint64_t> cached_heads;
     mutable std::mutex cached_members_mutex;
     mutable std::atomic<bool> cached_loaded{false};
 

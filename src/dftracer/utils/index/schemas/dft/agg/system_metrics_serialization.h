@@ -9,6 +9,10 @@
 
 namespace dftracer::utils::index::schemas::dft::agg {
 
+/// System rows are keyed by a big-endian shard below this, so their column
+/// family can be range-split.
+static constexpr std::uint16_t AGG_KEY_NUM_SHARDS = 4096;
+
 /// Per-event-name keying so cpu/memory/etc keep separate buckets and the
 /// dfanalyzer side can pivot them into named columns (sys_cpu_idle_pct, ...).
 struct SystemMetricKey {

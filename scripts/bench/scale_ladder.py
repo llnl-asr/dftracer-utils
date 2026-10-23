@@ -13,9 +13,9 @@ scratch dir is inside a set.
 Each run reads its set through a fresh dir of symlinks in the run dir (in/),
 one link per trace file, named by its path in the set with "/" replaced by
 "__". Tools that do not walk subdirs then see every file of a nested set, and
-files a tool writes next to its inputs (the split/ copies of single-member
-gzip files) land in the run dir. After each run the script stops with exit 2
-when a file or dir owned by this user in the set is newer than the run start.
+files a tool writes next to its inputs land in the run dir. After each run the
+script stops with exit 2 when a file or dir owned by this user in the set is
+newer than the run start.
 
 Tools: index event_count info stats view split validate pgzip comparator replay.
   - A single-file set is passed with --files where the tool has it (info,
@@ -33,6 +33,11 @@ Tools: index event_count info stats view split validate pgzip comparator replay.
     decompressed, .pfw files copied) in the run dir, always at least one file.
     The size is in the note column. A set with no .pfw or .pfw.gz file has no
     pgzip row.
+
+Before the first timed run of each set, one untimed pass reads every input
+file once (--warm-threads reader threads) so the first tool and thread count
+do not pay cold reads. Its wall time goes to stderr and to the note column of
+the first row of the set. --no-warm skips it.
 
 Every tool runs with DFTRACER_UTILS_MEMORY_REPORT=1; heap_peak and peak come
 from the "dftracer-utils memory:" line on its stderr. Threads: --executor-threads
@@ -76,6 +81,7 @@ import socket
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 TOOLS = [
     "index",
@@ -298,6 +304,23 @@ def walk_set(path):
                 continue
             files.append(p)
     return files, total
+
+
+def read_file(path):
+    n = 0
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(1 << 22)
+            if not chunk:
+                return n
+            n += len(chunk)
+
+
+def warm_inputs(files, threads):
+    start = time.monotonic()
+    with ThreadPoolExecutor(max_workers=max(1, threads)) as pool:
+        nbytes = sum(pool.map(read_file, files))
+    return time.monotonic() - start, nbytes
 
 
 def git_commit(root):
@@ -591,6 +614,9 @@ def parse_args(argv):
     p.add_argument("--check", metavar="FILE.tsv")
     p.add_argument("--known", metavar="FILE.tsv")
     p.add_argument("--repeat", type=int, default=1)
+    p.add_argument("--no-warm", action="store_true",
+                   help="skip the untimed read of each set before its runs")
+    p.add_argument("--warm-threads", type=int, default=8)
     p.add_argument("--pgzip-max-mib", type=int, default=256)
     p.add_argument("--commit", help="commit column (default: git HEAD)")
     p.add_argument("--exec-measure", action="store_true", help=argparse.SUPPRESS)
@@ -666,6 +692,12 @@ def main(argv):
     for name, path in sets:
         is_file = os.path.isfile(path)
         files, total = walk_set(path)
+        warm_note = ""
+        if not args.no_warm:
+            secs, nbytes = warm_inputs(files, args.warm_threads)
+            warm_note = "warm read %d files, %d bytes, %.2f s" % (
+                len(files), nbytes, secs)
+            print("%s: %s" % (name, warm_note), file=sys.stderr)
         for tool in tools:
             if tool == "pgzip" and not any(
                     f.endswith((".pfw", ".pfw.gz")) for f in files):
@@ -679,12 +711,13 @@ def main(argv):
                         scratch, name, tool,
                         "t%s_r%d_%s" % (threads or "default", rep, stamp))
                     os.makedirs(run_dir)
-                    note = ""
+                    note, warm_note = warm_note, ""
                     stage = os.path.join(run_dir, "pfw")
                     if tool == "pgzip":
                         n, used = stage_pgzip(
                             files, stage, args.pgzip_max_mib * 1024 * 1024)
-                        note = "pgzip staged %d files, %d bytes" % (n, used)
+                        note = (note + " pgzip staged %d files, %d bytes"
+                                % (n, used)).strip()
                     in_path = link_inputs(
                         path, files, os.path.join(run_dir, "in"))
                     cmd, idx, out = build_cmd(

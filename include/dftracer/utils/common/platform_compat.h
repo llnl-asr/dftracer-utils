@@ -79,14 +79,27 @@
 #include <cstdlib>
 #include <thread>
 
+#if defined(__linux__)
+#include <sched.h>
+#endif
+
 namespace dftracer::utils {
 
-/// Cores this machine reports, never 0. Overridable with
+/// CPUs this process may run on (its affinity mask on Linux, else the cores
+/// the machine reports), never 0. Overridable with
 /// DFTRACER_UTILS_HW_CONCURRENCY.
 inline std::size_t hardware_concurrency() {
     if (const auto v = Env::get<std::uint64_t>("DFTRACER_UTILS_HW_CONCURRENCY");
         v && *v > 0)
         return static_cast<std::size_t>(*v);
+#if defined(__linux__)
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    if (sched_getaffinity(0, sizeof(set), &set) == 0) {
+        const int allowed = CPU_COUNT(&set);
+        if (allowed > 0) return static_cast<std::size_t>(allowed);
+    }
+#endif
     auto n = std::thread::hardware_concurrency();
     return n == 0 ? 1u : static_cast<std::size_t>(n);
 }

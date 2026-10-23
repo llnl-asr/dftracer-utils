@@ -8,7 +8,6 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregator.h>
 #include <dftracer/utils/index/store/column_families.h>
 #include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/runtime/runtime.h>

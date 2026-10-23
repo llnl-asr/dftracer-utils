@@ -103,25 +103,64 @@ inline void reset_fold_event(FoldEvent& ev) {
 }
 
 /// FoldEvents a decoding worker reuses from batch to batch. clear() keeps
-/// every slot, and a slot keeps its vectors' capacity, so steady-state decode
-/// allocates nothing per event. Only the first size() slots are live.
+/// the slots, and a slot keeps its vectors' capacity, so steady-state decode
+/// allocates nothing per event; a batch of more than RETAIN_SLOTS events, or a
+/// slot with a vector of more than RETAIN_ENTRIES, is cut back to those on
+/// clear(). Only the first size() slots are live.
 class FoldEventBuffer {
    public:
+    static constexpr std::size_t RETAIN_SLOTS = 16384;
+    static constexpr std::size_t RETAIN_ENTRIES = 64;
+
     /// The next slot, in whatever state its last use left it; the decoder
-    /// resets it.
+    /// resets it. A new slot starts with the capacities of the one before it,
+    /// so it allocates each vector once rather than growing it per record.
     FoldEvent& append() {
-        if (live_ == slots_.size()) slots_.emplace_back();
+        if (live_ == slots_.size()) {
+            const bool seeded = !slots_.empty();
+            FoldEvent& ev = slots_.emplace_back();
+            if (seeded) {
+                const FoldEvent& prev = slots_[slots_.size() - 2];
+                ev.args.reserve(seed(prev.args.capacity()));
+                ev.top_fields.reserve(seed(prev.top_fields.capacity()));
+                ev.specials.reserve(seed(prev.specials.capacity()));
+                ev.schema_leaves.reserve(seed(prev.schema_leaves.capacity()));
+            }
+        }
         return slots_[live_++];
     }
     /// Drop the slot append() returned last (a record the caller rejects).
     void discard_last() { --live_; }
-    void clear() { live_ = 0; }
+    void clear() {
+        for (std::size_t i = 0; i < live_; ++i) {
+            FoldEvent& ev = slots_[i];
+            trim(ev.args);
+            trim(ev.top_fields);
+            trim(ev.specials);
+            trim(ev.schema_leaves);
+        }
+        live_ = 0;
+        if (slots_.size() > RETAIN_SLOTS) {
+            slots_.resize(RETAIN_SLOTS);
+            slots_.shrink_to_fit();
+        }
+    }
     bool empty() const { return live_ == 0; }
     std::size_t size() const { return live_; }
+    /// Slots allocated, live or idle.
+    std::size_t slot_capacity() const { return slots_.capacity(); }
     const FoldEvent& back() const { return slots_[live_ - 1]; }
     std::span<const FoldEvent> events() const { return {slots_.data(), live_}; }
 
    private:
+    static std::size_t seed(std::size_t capacity) {
+        return capacity < RETAIN_ENTRIES ? capacity : RETAIN_ENTRIES;
+    }
+    template <class V>
+    static void trim(V& v) {
+        if (v.capacity() > RETAIN_ENTRIES) V().swap(v);
+    }
+
     std::vector<FoldEvent> slots_;
     std::size_t live_ = 0;
 };

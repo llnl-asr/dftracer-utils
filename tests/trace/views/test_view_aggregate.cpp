@@ -2,7 +2,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregator.h>
+#include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/store/column_families.h>
 #include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -119,21 +119,12 @@ dataframe::DataFrame scan_only(const scan::ScanPlan& v) {
     return detail::apply_agg_post_ops(std::move(result), *v);
 }
 
-// Build the sidecar aggregation tier the way the aggregator does, so
-// agg_tier_collect can answer without a scan.
+// Build the sidecar aggregation tier the way the aggregator does, so the
+// chunk partials can answer without a scan.
 void build_tier_index(const std::string& gz) {
-    namespace aggregators = dftracer::utils::index::schemas::dft::agg;
-    aggregators::AggregatorInput input;
-    input.directory = fs::path(gz).parent_path().string();
-    input.force_rebuild = true;
-    Runtime rt(4);
-    rt.run_blocking("build-tier", [&](CoroScope& ctx) -> coro::CoroTask<void> {
-        aggregators::Aggregator agg;
-        auto gen = agg(ctx, input);
-        while (co_await gen.next()) {
-        }
-        co_return;
-    });
+    dftracer::utils::index::IndexerOptions options;
+    options.aggregation.emplace();
+    dftracer::utils::index::Indexer::open({gz}, options).build();
 }
 
 // A trace with a numeric arg ("level") and overlapping durations, so one trace

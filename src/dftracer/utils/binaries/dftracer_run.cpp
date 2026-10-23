@@ -290,20 +290,6 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
         co_return 1;
     }
 
-    // Normalize single-member inputs to multi-member gzip so each checkpoint is
-    // a real member.
-    if (!no_auto_index) {
-        dftracer::utils::index::build::MemberNormalizeResult norm;
-        cli::run_on_pool(cli->pipeline, "dftracer_run normalize",
-                         [&](CoroScope&) -> coro::CoroTask<void> {
-                             norm = co_await dftracer::utils::index::build::
-                                 normalize_members_for_ingest(std::move(files),
-                                                              index_dir,
-                                                              checkpoint_size);
-                         });
-        files = std::move(norm.files);
-    }
-
     // A load or fold-ordering failure must stop the run before any scanning.
     auto plugins = build_plugins(*plugin_args);
     if (!plugins) {

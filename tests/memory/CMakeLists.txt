@@ -8,7 +8,7 @@ set(MEMORY_TEST_SOURCES test_system_backend.cpp test_heap.cpp
                         test_pool_threads.cpp test_reclaim.cpp
                         test_pressure.cpp test_debug.cpp test_allocator.cpp
                         test_arena.cpp test_block.cpp test_block_threads.cpp
-                        test_reserve_wait.cpp)
+                        test_reserve_wait.cpp test_global_new.cpp)
 
 find_package(Threads REQUIRED)
 
@@ -41,6 +41,24 @@ foreach(test_file ${MEMORY_TEST_SOURCES})
     memory/${bin_exec} PROPERTIES ENVIRONMENT
                                   "DFTRACER_UTILS_MEMORY_BACKEND=system")
 endforeach()
+
+# The global operator new of the executable is our heap; the debug mode counts
+# its allocations. It runs on both backends.
+if(TARGET dftracer_utils_global_new)
+  target_link_libraries(memory_test_global_new
+                        PRIVATE dftracer_utils_global_new)
+  set_tests_properties(
+    memory/test_global_new
+    PROPERTIES ENVIRONMENT
+               "DFTRACER_UTILS_MEMORY_BACKEND=system;DFTRACER_UTILS_MEMORY_DEBUG=1")
+  add_test(NAME memory/test_global_new_page_heap COMMAND memory_test_global_new)
+  set_tests_properties(
+    memory/test_global_new_page_heap
+    PROPERTIES ENVIRONMENT
+               "DFTRACER_UTILS_MEMORY_BACKEND=page_heap;DFTRACER_UTILS_MEMORY_DEBUG=1")
+else()
+  set_tests_properties(memory/test_global_new PROPERTIES DISABLED TRUE)
+endif()
 
 # The pool tests run once per backend: the loop above runs them on the
 # system backend.

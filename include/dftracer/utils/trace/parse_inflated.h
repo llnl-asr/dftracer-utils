@@ -41,9 +41,15 @@ inline void strip_array_delimiters(char* buf, std::size_t len) {
     }
 }
 
+/// Bytes of lines one parse_many batch covers. The parser's capacity follows
+/// the batch, not the buffer; a line longer than half of it is parsed alone.
+inline constexpr std::size_t PARSE_BATCH_BYTES = std::size_t{128} << 10;
+
 /// Calls `emit(root, source)` for every JSON document on the complete lines
 /// of `base[0, len)`, with parse_buffer's batch-then-line-by-line recovery.
 /// Returns the bytes after the last newline, which the caller carries.
+/// Documents are read in batches of PARSE_BATCH_BYTES on the calling thread,
+/// so a buffer of any size grows the parser by at most its longest line.
 template <typename Emit>
 std::size_t parse_lines(simdjson::dom::parser& parser, const char* base,
                         std::size_t len, Emit&& emit) {
@@ -57,41 +63,64 @@ std::size_t parse_lines(simdjson::dom::parser& parser, const char* base,
     // A record longer than the whole chunk: carry it to the next.
     if (parse_len == 0) return len;
 
-    std::size_t covered = 0;
-    {
-        simdjson::dom::document_stream stream;
-        auto err = parser.parse_many(base, parse_len, parse_len).get(stream);
-        if (!err) {
-            for (auto it = stream.begin(); it != stream.end(); ++it) {
-                if ((*it).error()) continue;
-                std::string_view src = it.source();
-                emit((*it).value_unsafe(), src);
-                covered =
-                    static_cast<std::size_t>(src.data() - base) + src.size();
+    parser.threaded = false;
+    // `pos` is the start of the lines not yet delivered.
+    std::size_t pos = 0;
+    while (pos < parse_len) {
+        std::size_t covered = pos;
+        {
+            simdjson::dom::document_stream stream;
+            auto err =
+                parser
+                    .parse_many(base + pos, parse_len - pos, PARSE_BATCH_BYTES)
+                    .get(stream);
+            if (!err) {
+                for (auto it = stream.begin(); it != stream.end(); ++it) {
+                    if ((*it).error()) continue;
+                    std::string_view src = it.source();
+                    emit((*it).value_unsafe(), src);
+                    covered = static_cast<std::size_t>(src.data() - base) +
+                              src.size();
+                }
             }
         }
-    }
+        if (covered >= parse_len) break;
 
-    // A bad record can desync parse_many's single structural scan and swallow
-    // the rest of the batch as one rejected document. Re-parse whatever it did
-    // not reach, line by line, so a malformed record drops only itself.
-    if (covered < parse_len) {
-        std::size_t pos = covered;
-        if (pos > 0) {  // resume at the line after the last record parsed
-            while (pos < parse_len && base[pos] != '\n') ++pos;
-            if (pos < parse_len) ++pos;
+        // The stream stopped before the end: a record that does not fit a
+        // batch, or a bad record that desynced the batch's single structural
+        // scan and swallowed the rest of it as one rejected document.
+        std::size_t start = covered;
+        if (start > pos) {  // resume at the line after the last record parsed
+            while (start < parse_len && base[start] != '\n') ++start;
+            if (start < parse_len) ++start;
         }
-        while (pos < parse_len) {
-            std::size_t end = pos;
-            while (end < parse_len && base[end] != '\n') ++end;
-            if (end > pos) {
-                auto r = parser.parse(base + pos, end - pos);
+        std::size_t end = start;
+        while (end < parse_len && base[end] != '\n') ++end;
+        const bool long_line = end - start > PARSE_BATCH_BYTES / 2;
+        if (long_line) {
+            if (end > start) {
+                auto r = parser.parse(base + start, end - start);
                 if (!r.error())
                     emit(r.value_unsafe(),
-                         std::string_view(base + pos, end - pos));
+                         std::string_view(base + start, end - start));
             }
             pos = end + 1;
+            continue;
         }
+        // Re-parse whatever it did not reach, line by line, so a malformed
+        // record drops only itself.
+        for (std::size_t at = start; at < parse_len;) {
+            std::size_t stop = at;
+            while (stop < parse_len && base[stop] != '\n') ++stop;
+            if (stop > at) {
+                auto r = parser.parse(base + at, stop - at);
+                if (!r.error())
+                    emit(r.value_unsafe(),
+                         std::string_view(base + at, stop - at));
+            }
+            at = stop + 1;
+        }
+        break;
     }
 
     return len - parse_len;

@@ -72,7 +72,7 @@ with a stage name is a stage, so a field with that name at the start is
 written with backticks: ```sample` == 1``. After a ``|``, a name followed
 by ``(`` that is not a stage name is a pipeline macro call (see `Macros`_).
 
-The first line may declare the language version, as ``duql 0.1`` or
+The first line may declare the language version, as ``duql 0.0`` or
 ``duql 0``. A query runs when its major version equals the engine's and its
 minor version is not greater. A missing minor counts as ``0``. Printed queries
 always carry the engine's version.

@@ -1,4 +1,5 @@
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/index/store/key_codec.h>
 
 #include <stdexcept>
@@ -13,12 +14,7 @@ T decode_big_endian(std::string_view bytes) {
         throw DFTUtilsException(ErrorCode::Parse,
                                 "KeyCodec: invalid big-endian integer width");
     }
-
-    T value = 0;
-    for (unsigned char byte : bytes) {
-        value = static_cast<T>((value << 8U) | byte);
-    }
-    return value;
+    return read_be<T>(reinterpret_cast<const std::uint8_t*>(bytes.data()));
 }
 
 }  // namespace
@@ -46,15 +42,11 @@ std::uint64_t KeyCodec::decode_be64(std::string_view bytes) {
 }
 
 void KeyCodec::append_be32(std::string& out, std::uint32_t value) {
-    for (int shift = 24; shift >= 0; shift -= 8) {
-        out.push_back(static_cast<char>((value >> shift) & 0xFFU));
-    }
+    append_u32_be(out, value);
 }
 
 void KeyCodec::append_be64(std::string& out, std::uint64_t value) {
-    for (int shift = 56; shift >= 0; shift -= 8) {
-        out.push_back(static_cast<char>((value >> shift) & 0xFFU));
-    }
+    append_u64_be(out, value);
 }
 
 KeyBuilder& KeyBuilder::append_tag(std::string_view tag) {

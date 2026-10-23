@@ -29,6 +29,18 @@ class DynamicPrune;
 bool export_bootstrap_eligible(const ViewPlan& plan);
 bool collect_bootstrap_eligible(const ViewPlan& plan);
 
+/// Files the first-touch bootstrap has in flight, for tests: the most at once
+/// since the last reset.
+struct BootstrapCounters {
+    std::atomic<std::size_t> in_flight{0};
+    std::atomic<std::size_t> max_in_flight{0};
+    void reset() {
+        in_flight.store(0, std::memory_order_relaxed);
+        max_in_flight.store(0, std::memory_order_relaxed);
+    }
+};
+BootstrapCounters& bootstrap_counters();
+
 coro::CoroTask<ExportStats> run_export(const ViewPlan& plan, ExportSink& sink);
 
 // Write matching events as a new multi-member trace via the parallel writer

@@ -38,6 +38,10 @@ struct ResolverInput {
     std::string directory;
     std::string index_dir;
     std::vector<std::string> files;
+    /// Files already scanned, with the size and mtime that scan read. When not
+    /// empty they replace `directory` and `files`: nothing is walked or
+    /// stat'ed again.
+    std::vector<utilities::filesystem::FileEntry> entries;
 
     bool require_checkpoints = true;
     bool require_bloom = false;
@@ -101,6 +105,14 @@ struct ResolverResult {
 
     std::size_t total_cached() const { return cached.size(); }
 };
+
+/// The files of `result` as scanned, to resolve them again without a walk or a
+/// stat.
+std::vector<utilities::filesystem::FileEntry> scanned_entries(
+    const ResolverResult& result);
+/// Only the files of `items`.
+std::vector<utilities::filesystem::FileEntry> scanned_entries(
+    const ResolverResult& result, const std::vector<FileWorkItem>& items);
 
 class Resolver {
    public:

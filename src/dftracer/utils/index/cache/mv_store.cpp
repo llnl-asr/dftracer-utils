@@ -1,4 +1,5 @@
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/duql/subsumption.h>
@@ -31,7 +32,7 @@ namespace {
 constexpr const char* VIEWS_DIRNAME = "views";
 constexpr const char* MANIFEST_NAME = "manifest";
 constexpr const char* LAST_USED_NAME = "last_used";
-constexpr int MANIFEST_VERSION = 1;
+constexpr int MANIFEST_VERSION = 0;
 constexpr std::size_t SLUG_MAX = 80;
 
 struct BaseId {
@@ -41,13 +42,9 @@ struct BaseId {
 };
 
 std::optional<BaseId> stat_base(const std::string& path) {
-    std::error_code ec;
-    const auto sz = fs::file_size(path, ec);
-    if (ec) return std::nullopt;
-    const auto wt = fs::last_write_time(path, ec);
-    if (ec) return std::nullopt;
-    return BaseId{path, static_cast<std::uint64_t>(sz),
-                  static_cast<std::int64_t>(wt.time_since_epoch().count())};
+    dftracer::utils::InputFileStat st;
+    if (!dftracer::utils::stat_input(path, st)) return std::nullopt;
+    return BaseId{path, st.size, st.mtime};
 }
 
 // Base-file identities of the plan, sorted by path so the identity hash and
@@ -188,6 +185,10 @@ std::optional<Manifest> read_manifest(const std::string& dir) {
     try {
         simdjson::dom::parser parser;
         simdjson::dom::element root = parser.load(path);
+        std::int64_t version = 0;
+        if (root["version"].get(version) != simdjson::SUCCESS ||
+            version != MANIFEST_VERSION)
+            return std::nullopt;
         Manifest m;
         std::string_view schema;
         if (root["schema"].get(schema) == simdjson::SUCCESS)
@@ -338,10 +339,9 @@ std::vector<trace::views::ViewFile> gather_view_files(const std::string& dir) {
 
 std::uint64_t total_size(const std::vector<trace::views::ViewFile>& files) {
     std::uint64_t sum = 0;
-    std::error_code ec;
     for (const auto& f : files) {
-        const auto sz = fs::file_size(f.file_path, ec);
-        if (!ec) sum += sz;
+        dftracer::utils::InputFileStat st;
+        if (dftracer::utils::stat_input(f.file_path, st)) sum += st.size;
     }
     return sum;
 }

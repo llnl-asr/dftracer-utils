@@ -87,7 +87,10 @@ namespace fs = ghc::filesystem;
 
 #endif
 
+#include <sys/stat.h>
+
 #include <chrono>
+#include <cstdint>
 #include <ctime>
 
 namespace dftracer::utils {
@@ -101,6 +104,46 @@ inline std::time_t file_mtime_seconds(fs::file_time_type ftime) {
             ftime - fs::file_time_type::clock::now() +
             std::chrono::system_clock::now());
     return std::chrono::system_clock::to_time_t(sctp);
+}
+
+/// Type, size and mtime of one path from a single stat that follows symlinks.
+struct InputFileStat {
+    std::uint64_t size = 0;
+    /// Unix seconds, equal to file_mtime_seconds of the same file.
+    std::int64_t mtime = 0;
+    /// Nanoseconds since the epoch, to tell two writes within one second.
+    std::int64_t mtime_ns = 0;
+    bool is_directory = false;
+    bool is_regular_file = false;
+};
+
+/// The modification time of `st` in nanoseconds since the epoch.
+inline std::int64_t stat_mtime_ns(const struct stat& st) {
+#ifdef __APPLE__
+    const struct timespec& ts = st.st_mtimespec;
+#else
+    const struct timespec& ts = st.st_mtim;
+#endif
+    return static_cast<std::int64_t>(ts.tv_sec) * 1000000000 +
+           static_cast<std::int64_t>(ts.tv_nsec);
+}
+
+inline InputFileStat input_file_stat_from(const struct stat& st) {
+    InputFileStat out;
+    out.size = static_cast<std::uint64_t>(st.st_size);
+    out.mtime = static_cast<std::int64_t>(st.st_mtime);
+    out.mtime_ns = stat_mtime_ns(st);
+    out.is_directory = S_ISDIR(st.st_mode);
+    out.is_regular_file = S_ISREG(st.st_mode);
+    return out;
+}
+
+/// One stat of `path`. Returns false when the path cannot be stat'ed.
+inline bool stat_path(const char* path, InputFileStat& out) {
+    struct stat st{};
+    if (::stat(path, &st) != 0) return false;
+    out = input_file_stat_from(st);
+    return true;
 }
 
 /// Best-effort cleanup: remove `path` if it exists, ignoring any error.

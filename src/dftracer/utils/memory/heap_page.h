@@ -35,6 +35,9 @@ struct PageStats {
 };
 
 void* page_allocate(std::size_t size, std::size_t align);
+/// Like page_allocate, but charge the block to pool @p pool whatever the
+/// scope of the calling thread, without a scope switch for a small block.
+void* page_allocate_to(std::size_t size, std::size_t align, std::uint16_t pool);
 void page_deallocate(void* p) noexcept;
 void page_deallocate(void* p, std::size_t size) noexcept;
 void page_trim(Mode mode) noexcept;

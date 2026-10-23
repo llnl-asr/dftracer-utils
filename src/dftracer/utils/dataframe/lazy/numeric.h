@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_DATAFRAME_LAZY_NUMERIC_H
 
 #include <dftracer/utils/dataframe/lazy/common.h>
+#include <dftracer/utils/dstd/little_endian.h>
 
 namespace dftracer::utils::dataframe::lazy_internal {
 
@@ -28,17 +29,6 @@ inline bool num_class(TypeId t, NumClass& cls) {
         default:
             return false;
     }
-}
-
-inline std::uint64_t double_bits(double d) {
-    std::uint64_t u;
-    std::memcpy(&u, &d, sizeof u);
-    return u;
-}
-inline double bits_double(std::uint64_t u) {
-    double d;
-    std::memcpy(&d, &u, sizeof d);
-    return d;
 }
 
 // The cells of a numeric column as 64-bit patterns (an int64, a uint64 or a

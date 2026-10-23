@@ -2,14 +2,18 @@
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
+#include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_serialization.h>
+#include <dftracer/utils/index/schemas/dft/agg/system_metrics_serialization.h>
 #include <dftracer/utils/index/store/column_families.h>
 #include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/index_database_writer_context.h>
+#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -18,6 +22,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -69,11 +74,14 @@ ShardedView ShardedView::from_manifest(const std::string& root) {
                 ")");
     }
     if (manifest->format_version !=
-        dftracer::utils::index::store::IndexDatabase::FORMAT_VERSION) {
+        std::optional<std::uint32_t>(
+            dftracer::utils::index::store::IndexDatabase::FORMAT_VERSION)) {
         throw DFTUtilsException(
             ErrorCode::InvalidArgument,
             "shard manifest format version " +
-                std::to_string(manifest->format_version) +
+                (manifest->format_version
+                     ? std::to_string(*manifest->format_version)
+                     : std::string("(missing)")) +
                 " does not match this build's " +
                 std::to_string(dftracer::utils::index::store::IndexDatabase::
                                    FORMAT_VERSION));
@@ -227,6 +235,7 @@ std::size_t merge_shard_set(const std::string& root,
 
     agg::AggInternTable out_intern;
     std::size_t files = 0;
+    int next_file_id = 0;
     std::optional<agg::tier::Config> config;
 
     {
@@ -258,29 +267,11 @@ std::size_t merge_shard_set(const std::string& root,
                 }
             }
 
-            // Re-key the aggregation tier into the unified intern; the value
-            // (metrics) carries no interned strings, so it copies verbatim and
-            // the merge operator combines groups that recur across shards.
-            // System metrics keys carry raw hhash/name, so they copy verbatim.
+            // System metrics keys carry raw hhash/name, so their rows copy
+            // verbatim and the merge operator combines the ones that recur
+            // across shards.
             {
                 agg::tier::Writer w(*out);
-                std::string newkey;
-                agg::tier::for_each_row(
-                    *s, 0, agg::AGG_KEY_NUM_SHARDS,
-                    [&](std::string_view key, std::string_view value) {
-                        agg::AggKeyView kv;
-                        if (!agg::parse_agg_key_view(key, shard_intern.intern,
-                                                     kv,
-                                                     /*want_extra_keys=*/true))
-                            return true;
-                        newkey.clear();
-                        agg::serialize_agg_key_into(
-                            newkey, kv.map_type, kv.cat, kv.name, kv.pid,
-                            kv.tid, kv.hhash, kv.fhash_str, kv.time_bucket,
-                            out_intern.intern, &kv.extra_keys);
-                        w.merge_row(newkey, value);
-                        return true;
-                    });
                 agg::tier::for_each_system_row(
                     *s, 0, agg::AGG_KEY_NUM_SHARDS,
                     [&w](std::string_view key, std::string_view value) {
@@ -290,38 +281,113 @@ std::size_t merge_shard_set(const std::string& root,
                 w.finish();
             }
 
-            // A shard file keeps its id, so its dftracer.agg entry does too.
-            if (config) {
-                std::vector<int> aggregated;
-                for (const auto& [path, id] : sdb.query_all_file_info_ids()) {
-                    auto state = sdb.extension_state(
-                        id, dftracer::utils::index::store::IndexExtension::Agg);
-                    if (state && state->ready &&
-                        state->params_hash == config->params_hash)
-                        aggregated.push_back(id);
-                }
-                agg::tier::put_files(*out, aggregated, config->params_hash);
-            }
-
-            // Copy the file registry records so the consolidated index knows
-            // its files; the tier read matches on path, and the per-file ids
-            // the records carry are unused by a tier query.
+            // Each shard numbers its files from the start, so a file takes
+            // the next id of the consolidated index; its registry record and
+            // its partials carry that id.
+            dstd::HashMap<int, int> remap;
             {
                 namespace layout = dftracer::utils::index::store::layout;
                 const auto prefix = layout::kind_prefix(
                     layout::Ext::Host, layout::host::FILE_BY_PATH);
-                auto b = out->begin_batch();
+                auto write = out_db.begin_write();
                 auto it = s->new_iterator(rcf::DEFAULT);
                 for (it->Seek(prefix); it->Valid(); it->Next()) {
                     const std::string_view key(it->key().data(),
                                                it->key().size());
                     if (!key.starts_with(prefix)) break;
-                    out->put(b, rcf::DEFAULT, key,
-                             std::string_view(it->value().data(),
-                                              it->value().size()));
+                    auto record = layout::decode_file_record(std::string_view(
+                        it->value().data(), it->value().size()));
+                    if (!record)
+                        throw DFTUtilsException(
+                            ErrorCode::Parse,
+                            "shard " + shard.path +
+                                " holds a malformed file record");
+                    const int old_id = static_cast<int>(record->file_id);
+                    record->file_id = static_cast<std::uint32_t>(next_file_id);
+                    remap[old_id] = next_file_id++;
+                    dftracer::utils::index::store::records::put_file_record(
+                        *write, key.substr(prefix.size()), *record);
                     ++files;
                 }
-                out->commit_batch(b);
+                write->commit();
+            }
+
+            // The dftracer.agg entry of a file follows its new id.
+            if (config) {
+                std::vector<int> aggregated;
+                std::vector<int> aggregated_old;
+                for (const auto& [path, id] : sdb.query_all_file_info_ids()) {
+                    auto state = sdb.extension_state(
+                        id, dftracer::utils::index::store::IndexExtension::Agg);
+                    if (state && state->ready &&
+                        state->params_hash == config->params_hash) {
+                        aggregated.push_back(remap[id]);
+                        aggregated_old.push_back(id);
+                    }
+                }
+                agg::tier::put_files(*out, aggregated, config->params_hash);
+
+                // The partials carry dictionary ids in their cat, name, host,
+                // extra and arg keys; pid, tid and file hashes inside are raw.
+                // Each quantile store holds its own accuracy, so the accuracy
+                // argument of the parse does not reach the bytes written.
+                auto write = out_db.begin_write();
+                dstd::Vector<std::uint8_t> bytes;
+                for (const int old_id : aggregated_old) {
+                    const int new_id = remap[old_id];
+                    agg::tier::for_each_partial(
+                        *s, old_id,
+                        [&](std::uint32_t chunk, std::uint32_t cat,
+                            std::uint32_t name, std::uint32_t host,
+                            std::uint32_t extra, agg::PartialKind kind,
+                            std::span<const std::uint8_t> body) {
+                            const std::uint32_t new_cat =
+                                out_intern.intern.get_or_insert(
+                                    shard_intern.intern.resolve(cat));
+                            const std::uint32_t new_name =
+                                out_intern.intern.get_or_insert(
+                                    shard_intern.intern.resolve(name));
+                            const std::uint32_t new_extra =
+                                out_intern.intern.get_or_insert(
+                                    shard_intern.intern.resolve(extra));
+                            const std::uint32_t new_host =
+                                out_intern.intern.get_or_insert(
+                                    shard_intern.intern.resolve(host));
+                            std::string_view payload(
+                                reinterpret_cast<const char*>(body.data()),
+                                body.size());
+                            auto parsed = agg::AggPartial::deserialize(
+                                dstd::Span<const std::uint8_t>(body.data(),
+                                                               body.size()));
+                            if (!parsed)
+                                throw DFTUtilsException(
+                                    ErrorCode::Parse,
+                                    "aggregation partial: malformed record");
+                            if (!parsed->args.empty()) {
+                                for (auto& a : parsed->args)
+                                    a.id = out_intern.intern.get_or_insert(
+                                        shard_intern.intern.resolve(a.id));
+                                std::sort(parsed->args.begin(),
+                                          parsed->args.end(),
+                                          [](const agg::ArgStat& x,
+                                             const agg::ArgStat& y) {
+                                              return x.id < y.id;
+                                          });
+                                bytes.clear();
+                                parsed->serialize_into(bytes);
+                                payload = std::string_view(
+                                    reinterpret_cast<const char*>(bytes.data()),
+                                    bytes.size());
+                            }
+                            dftracer::utils::index::store::records::
+                                put_agg_partial(*write, new_id, chunk, new_cat,
+                                                new_name, new_host, new_extra,
+                                                static_cast<std::uint8_t>(kind),
+                                                payload);
+                            return true;
+                        });
+                }
+                write->commit();
             }
         }
 

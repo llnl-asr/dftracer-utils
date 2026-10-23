@@ -79,7 +79,6 @@ index/test_record_schema	28.6
 dataframe/test_join_spill	27.1
 utilities/common/statistics/test_mixture	27.0
 utilities/reader/test_large_gzip_members	26.5
-trace/aggregators/test_dft_trace_writer	26.1
 utilities/indexer/test_rocksdb_storage	25.9
 utilities/plugins/test_plugin_agg_spill	25.5
 utilities/fileio/lines/sources/test_async_indexed_file_line_generator	25.3
@@ -116,9 +115,7 @@ dataframe/test_variance_stable	15.5
 utilities/plugins/test_plugin_order	15.2
 utilities/indexer/test_sst_ingest_spike	15.2
 utilities/indexer/test_hash_table_aggregation	15.2
-trace/aggregators/test_aggregator_utility	15.1
 trace/test_trace_config	15.0
-trace/aggregators/test_event_aggregator_utility	14.9
 utilities/plugins/test_plugin_public_config	14.8
 utilities/plugins/test_plugin_c_abi	14.7
 utilities/plugins/test_plugin_transform	14.6
@@ -254,8 +251,6 @@ common/test_memory_budget	7.4
 utilities/reader/test_member_decode_cache	7.3
 utilities/fileio/test_truncated_member	7.3
 trace/comparator/test_is_data_transfer_op	7.3
-trace/aggregators/test_variance_tier	7.3
-trace/aggregators/test_aggregation_serialization	7.3
 pipeline/test_pipeline_elasticity	7.3
 dataframe/test_string_view	7.3
 dataframe/test_concat_text	7.3
@@ -293,8 +288,6 @@ utilities/common/statistics/test_timestamp_histogram	7.0
 utilities/common/arrow/test_arrow_column_builder	7.0
 trace/views/test_row_build	7.0
 trace/comparator/test_tree_table_formatter	7.0
-trace/aggregators/test_aggregation_rollup	7.0
-trace/aggregators/test_aggregation_key	7.0
 server/test_query_params	7.0
 server/test_http_response	7.0
 server/test_http_parser	7.0
@@ -324,7 +317,6 @@ trace/test_time_metric	6.8
 trace/statistics/test_trace_statistics	6.8
 trace/indexing/test_shard_manifest	6.8
 trace/comparator/test_comparison_result	6.8
-trace/aggregators/test_aggregation_augmentation	6.8
 layout/test_sizes	6.8
 trace/comparator/test_comparison_config	6.7
 index/test_layout	6.7

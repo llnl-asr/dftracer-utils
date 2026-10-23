@@ -5,11 +5,9 @@
 #include <dftracer/utils/dataframe/field_stat.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/utilities/common/statistics/ddsketch.h>
-#include <dftracer/utils/utilities/common/statistics/distinct_sketch.h>
 
 #include <bit>
 #include <cstdint>
-#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -88,10 +86,6 @@ struct MetricStats {
     double get_kurtosis() const;
 };
 
-using CustomMetricsMap =
-    ankerl::unordered_dense::map<std::string, MetricStats,
-                                 TransparentStringHash, TransparentStringEqual>;
-
 /// Return the entry for `name`, inserting a value constructed from `accuracy`
 /// if absent. Works for any transparent-lookup map whose mapped_type is
 /// constructible from a sketch accuracy. Returns a reference (no copy).
@@ -105,91 +99,6 @@ typename Map::mapped_type& find_or_create(Map& map, std::string_view name,
     }
     return it->second;
 }
-
-struct AggregationMetrics {
-    std::uint64_t count = 0;
-
-    MetricStats duration;
-    MetricStats size;
-    MetricStats offset;
-
-    std::uint64_t ts = std::numeric_limits<std::uint64_t>::max();
-    std::uint64_t te = 0;
-
-    std::unique_ptr<StringViewMap<std::string>> boundary_associations;
-    std::uint64_t parent_pid = 0;
-
-    std::unique_ptr<CustomMetricsMap> custom_metrics;
-
-    /// Only populated when the file hash is out of the key.
-    utilities::common::statistics::DistinctSketch distinct_files;
-
-    double sketch_accuracy = 0.01;
-
-    explicit AggregationMetrics(double relative_accuracy = 0.01)
-        : duration(relative_accuracy),
-          size(relative_accuracy),
-          offset(relative_accuracy),
-          sketch_accuracy(relative_accuracy) {}
-
-    AggregationMetrics(const AggregationMetrics& other)
-        : count(other.count),
-          duration(other.duration),
-          size(other.size),
-          offset(other.offset),
-          ts(other.ts),
-          te(other.te),
-          boundary_associations(
-              other.boundary_associations
-                  ? std::make_unique<StringViewMap<std::string>>(
-                        *other.boundary_associations)
-                  : nullptr),
-          parent_pid(other.parent_pid),
-          custom_metrics(
-              other.custom_metrics
-                  ? std::make_unique<CustomMetricsMap>(*other.custom_metrics)
-                  : nullptr),
-          distinct_files(other.distinct_files),
-          sketch_accuracy(other.sketch_accuracy) {}
-
-    AggregationMetrics& operator=(const AggregationMetrics& other) {
-        if (this != &other) {
-            count = other.count;
-            duration = other.duration;
-            size = other.size;
-            offset = other.offset;
-            ts = other.ts;
-            te = other.te;
-            boundary_associations =
-                other.boundary_associations
-                    ? std::make_unique<StringViewMap<std::string>>(
-                          *other.boundary_associations)
-                    : nullptr;
-            parent_pid = other.parent_pid;
-            custom_metrics =
-                other.custom_metrics
-                    ? std::make_unique<CustomMetricsMap>(*other.custom_metrics)
-                    : nullptr;
-            sketch_accuracy = other.sketch_accuracy;
-        }
-        return *this;
-    }
-
-    AggregationMetrics(AggregationMetrics&&) = default;
-    AggregationMetrics& operator=(AggregationMetrics&&) = default;
-
-    void update_duration(std::uint64_t dur, bool compute_percentiles = false);
-    void update_size(std::uint64_t sz, bool compute_percentiles = false);
-    void update_offset(std::uint64_t off, bool compute_percentiles = false);
-    void update_timestamp(std::uint64_t event_ts, std::uint64_t dur);
-    void update_timestamp_clamped(std::uint64_t event_ts, std::uint64_t dur,
-                                  std::uint64_t bucket_start,
-                                  std::uint64_t bucket_size);
-    void update_custom_metric(std::string_view name, std::uint64_t value,
-                              bool compute_percentiles = false);
-
-    void merge_from(const AggregationMetrics& other);
-};
 
 }  // namespace dftracer::utils::index::schemas::dft::agg
 

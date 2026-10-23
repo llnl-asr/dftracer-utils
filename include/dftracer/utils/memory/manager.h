@@ -307,8 +307,10 @@ class ReclaimSlot {
 };
 
 /**
- * @brief Bytes the process holds outside this library, such as the RocksDB
- * memtables and caches, released on destruction.
+ * @brief Bytes the process holds outside this library, such as spill files in
+ * a RAM-backed directory, released on destruction. Memory that comes from the
+ * global operator new of an executable, RocksDB's included, is in the heap
+ * already and must not be attached here as well.
  *
  * Counted bytes count toward the budget like reservations do; reported
  * bytes, such as spill files on a disk, show in Stats::external only. Empty
@@ -734,6 +736,29 @@ void set_exit_check(bool enabled) noexcept;
  * through this library.
  */
 void set_exit_report(bool enabled) noexcept;
+
+/**
+ * @brief Register the exit hook once more, so it runs before the static
+ * destructors of every object constructed after this call.
+ *
+ * The first allocation of the process creates the manager and registers the
+ * hook, which can be inside the static initialization of a shared library,
+ * and the hook then runs after the destructors of that library's globals that
+ * its exit hooks use. An executable that replaces the global operator new
+ * calls this once its libraries are initialized. The hook runs once: the
+ * later registration finds it done.
+ */
+void rearm_exit_check() noexcept;
+
+/**
+ * @brief Leave the live blocks of @p pool out of the exit check.
+ *
+ * For a pool that holds process-lifetime blocks that no check can tell from
+ * a leak, such as the blocks of the global operator new, where RocksDB and the
+ * C++ runtime keep singletons to the end. The pool still counts in every
+ * counter and report. Only one pool is exempt; a later call replaces it.
+ */
+void exempt_from_exit_check(Pool& pool) noexcept;
 
 /**
  * @brief Run `hook` at exit, before the exit check reads the counters.

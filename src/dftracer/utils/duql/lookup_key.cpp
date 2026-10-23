@@ -1,4 +1,5 @@
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/duql/lookup.h>
 
 #include <algorithm>
@@ -16,17 +17,8 @@ constexpr char DOUBLE_TAG = 'd';
 constexpr char STRING_TAG = 's';
 constexpr char BOOL_TAG = 'b';
 
-void put_u64(std::string& out, std::uint64_t v) {
-    for (int i = 7; i >= 0; --i)
-        out += static_cast<char>((v >> (i * 8)) & 0xFF);
-}
-
 std::uint64_t get_u64(std::string_view s) {
-    std::uint64_t v = 0;
-    for (int i = 0; i < 8; ++i)
-        v = (v << 8) |
-            static_cast<unsigned char>(s[static_cast<std::size_t>(i)]);
-    return v;
+    return read_u64_be(reinterpret_cast<const std::uint8_t*>(s.data()));
 }
 
 }  // namespace
@@ -34,7 +26,7 @@ std::uint64_t get_u64(std::string_view s) {
 void append_int_key(std::string& out, bool negative, std::uint64_t magnitude) {
     out += INT_TAG;
     out += negative && magnitude != 0 ? '-' : '+';
-    put_u64(out, magnitude);
+    append_u64_be(out, magnitude);
 }
 
 bool append_double_key(std::string& out, double v) {
@@ -45,15 +37,13 @@ bool append_double_key(std::string& out, double v) {
         return true;
     }
     out += DOUBLE_TAG;
-    std::uint64_t bits = 0;
-    std::memcpy(&bits, &v, sizeof bits);
-    put_u64(out, bits);
+    append_f64_be(out, v);
     return true;
 }
 
 void append_string_key(std::string& out, std::string_view v) {
     out += STRING_TAG;
-    put_u64(out, v.size());
+    append_u64_be(out, v.size());
     out += v;
 }
 
@@ -79,9 +69,7 @@ std::string key_text(std::string_view key) {
             out += std::to_string(get_u64(key.substr(1)));
             key.remove_prefix(9);
         } else if (tag == DOUBLE_TAG) {
-            const std::uint64_t bits = get_u64(key);
-            double d = 0;
-            std::memcpy(&d, &bits, sizeof d);
+            const double d = bits_double(get_u64(key));
             char buf[32];
             std::snprintf(buf, sizeof buf, "%.17g", d);
             out += buf;

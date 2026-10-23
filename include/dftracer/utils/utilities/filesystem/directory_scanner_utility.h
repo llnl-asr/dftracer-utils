@@ -9,8 +9,12 @@
 #include <dftracer/utils/utilities/filesystem/types.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 
+#include <algorithm>
+#include <atomic>
 #include <cerrno>
+#include <cstddef>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -29,6 +33,14 @@ inline bool is_excluded_scan_dir(const fs::path& p) {
     const std::string name = p.filename().string();
     return name.rfind(".dftindex", 0) == 0 || name == "split" ||
            name == "schemas";
+}
+
+/// The stat batches a directory scan has run in this process. A scan of one
+/// directory runs one batch per slice of its entries, so the count is above
+/// one when the stats went through the executor in parallel.
+inline std::atomic<std::size_t>& scan_stat_batches() {
+    static std::atomic<std::size_t> batches{0};
+    return batches;
 }
 
 struct DirectoryScannerUtilityInput {
@@ -119,32 +131,79 @@ class DirectoryScannerUtility {
     }
 
    private:
-    /// Recursive parallel scan: read one directory level, spawn a child scan
-    /// per subdirectory (so many directories are read concurrently), then
-    /// merge. Uses error codes instead of exceptions so an unreadable directory
-    /// is skipped rather than aborting the whole scan.
+    static constexpr std::size_t STAT_BATCH = 16;
+
+    struct StatBatch {
+        std::vector<FileEntry> entries;
+        std::vector<fs::path> subdirs;
+    };
+
+    /// Classifies and stats one slice of a directory listing. A symlink to a
+    /// directory is listed, not entered.
+    static StatBatch stat_batch(const std::vector<fs::directory_entry>& listing,
+                                std::size_t begin, std::size_t end,
+                                bool populate_size) {
+        scan_stat_batches().fetch_add(1, std::memory_order_relaxed);
+        StatBatch out;
+        for (std::size_t i = begin; i < end; ++i) {
+            const fs::directory_entry& entry = listing[i];
+            std::error_code ec;
+            if (!entry.is_symlink(ec) && entry.is_directory(ec)) {
+                if (is_excluded_scan_dir(entry.path())) continue;
+                out.entries.emplace_back(entry, populate_size);
+                out.subdirs.push_back(entry.path());
+            } else if (populate_size) {
+                out.entries.emplace_back(entry.path(), true);
+            } else {
+                out.entries.emplace_back(entry, false);
+            }
+        }
+        return out;
+    }
+
+    /// Recursive parallel scan: list one directory level, stat its entries in
+    /// batches over @p ctx, spawn a child scan per subdirectory, then merge in
+    /// listing order. Uses error codes instead of exceptions so an unreadable
+    /// directory is skipped rather than aborting the whole scan.
     static coro::CoroTask<std::vector<FileEntry>> scan_parallel(
         CoroScope& ctx, fs::path dir, bool populate_size) {
-        std::vector<FileEntry> files;
-        std::vector<coro::SpawnFuture<std::vector<FileEntry>>> subdirs;
-
+        std::vector<fs::directory_entry> listing;
         std::error_code ec;
         fs::directory_iterator it(dir, ec);
         const fs::directory_iterator end;
-        for (; !ec && it != end; it.increment(ec)) {
-            const fs::directory_entry& entry = *it;
-            std::error_code sec;
-            if (entry.is_directory(sec) && !entry.is_symlink(sec)) {
-                if (is_excluded_scan_dir(entry.path())) continue;
-                files.emplace_back(entry, populate_size);
+        for (; !ec && it != end; it.increment(ec)) listing.push_back(*it);
+
+        std::vector<coro::SpawnFuture<StatBatch>> batches;
+        batches.reserve(listing.size() / STAT_BATCH + 1);
+        auto shared_listing =
+            std::make_shared<const std::vector<fs::directory_entry>>(
+                std::move(listing));
+        for (std::size_t begin = 0; begin < shared_listing->size();
+             begin += STAT_BATCH) {
+            const std::size_t stop =
+                std::min(begin + STAT_BATCH, shared_listing->size());
+            batches.push_back(
+                ctx.spawn([shared_listing, begin, stop, populate_size](
+                              CoroScope&) -> coro::CoroTask<StatBatch> {
+                    co_return stat_batch(*shared_listing, begin, stop,
+                                         populate_size);
+                }));
+        }
+        auto stated = co_await coro::when_all(std::move(batches));
+
+        std::vector<FileEntry> files;
+        std::vector<coro::SpawnFuture<std::vector<FileEntry>>> subdirs;
+        for (auto& batch : stated) {
+            files.insert(files.end(),
+                         std::make_move_iterator(batch.entries.begin()),
+                         std::make_move_iterator(batch.entries.end()));
+            for (auto& sub : batch.subdirs) {
                 subdirs.push_back(ctx.spawn(
-                    [p = entry.path(), populate_size](CoroScope& child)
+                    [p = std::move(sub), populate_size](CoroScope& child)
                         -> coro::CoroTask<std::vector<FileEntry>> {
                         co_return co_await scan_parallel(child, p,
                                                          populate_size);
                     }));
-            } else {
-                files.emplace_back(entry, populate_size);
             }
         }
 

@@ -207,6 +207,7 @@ struct IndexBuildBatchConfig {
 struct IndexBuildBatchMetrics {
     std::uint64_t parse_ns = 0;
     std::uint64_t write_ns = 0;
+    std::uint64_t schema_ns = 0;
     std::size_t files_enqueued = 0;
     std::size_t files_parsed = 0;
     std::size_t files_written = 0;

@@ -225,6 +225,17 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     }
     std::printf("==========================================\n\n");
 
+    using StageClock = std::chrono::steady_clock;
+    auto stage_start = StageClock::now();
+    auto log_stage = [&stage_start](const char* name) {
+        const auto now = StageClock::now();
+        DFTRACER_UTILS_LOG_DEBUG(
+            "dftracer_index: stage=%s ms=%.2f", name,
+            std::chrono::duration<double, std::milli>(now - stage_start)
+                .count());
+        stage_start = now;
+    };
+
     // Discover input files
     filesystem::PatternDirectoryScannerUtility scanner;
     filesystem::PatternDirectoryScannerUtilityInput scan_input{
@@ -247,6 +258,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     }
 
     DFTRACER_UTILS_LOG_INFO("Found %zu input files", input_files.size());
+    log_stage("scan");
 
     // Files in logical path order get file ids in that order, so a run of ids
     // is a run of paths and the index's SSTs of different runs do not overlap.
@@ -270,6 +282,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
         input_files = std::move(files);
         scanned_sizes = std::move(sizes);
     }
+    log_stage("sort");
 
     // On-disk sizes are compressed for .pfw.gz; estimate_per_file_bytes expands
     // them (PER_FILE_EXPANSION_FACTOR) to a decompressed + aggregated peak.
@@ -294,6 +307,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
         first_fresh_file_id = coord_db.reserve_file_id_range(0);
         preassigned_file_ids = coord_db.assign_file_ids(input_files);
     }
+    log_stage("assign_ids");
 
     const std::string staging_root =
         (fs::path(index_dir) / ".dftindex_staging").string();
@@ -353,6 +367,12 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     pipeline.set_source(streaming_task);
     pipeline.set_destination(streaming_task);
     pipeline.execute();
+    log_stage("build");
+    DFTRACER_UTILS_LOG_DEBUG(
+        "dftracer_index: thread_ms parse=%.2f schema=%.2f sink_commit=%.2f",
+        static_cast<double>(batch_result.metrics.parse_ns) / 1e6,
+        static_cast<double>(batch_result.metrics.schema_ns) / 1e6,
+        static_cast<double>(batch_result.metrics.write_ns) / 1e6);
 
     SstArtifactRegistry registry;
     {
@@ -364,17 +384,21 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
             for (auto& run : runs) registry.append(std::move(run));
     }
     {
+        log_stage("collect_artifacts");
         IndexDatabase ingest_db(index_dir);
+        log_stage("open_ingest_db");
         auto t0 = std::chrono::high_resolution_clock::now();
         ingest_db.bulk_ingest(registry, {});
         auto t1 = std::chrono::high_resolution_clock::now();
         DFTRACER_UTILS_LOG_INFO(
             "dftracer_index: bulk_ingest=%.2fms",
             std::chrono::duration<double, std::milli>(t1 - t0).count());
+        log_stage("ingest");
     }
 
     std::error_code ec;
     fs::remove_all(staging_root, ec);
+    log_stage("close");
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;

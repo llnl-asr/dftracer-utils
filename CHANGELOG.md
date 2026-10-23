@@ -14,6 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   The peak of a build no longer grows by about 100 MB for each extra worker.
 - Admit the files of an index build and a cold first query by the bytes each holds under the memory budget instead of one per worker, let workers with no file parse pieces of files in flight, and give the strings of a file the same ids whatever the parse order.
   A build under any memory budget, a 1 MiB one included, stores the same index as an unbounded build: spill runs are never smaller than 4 MiB, so a tiny budget no longer writes thousands of SSTs that a scan could not open at once, and a cold first export commits its sink at its limit instead of after every file.
+- Cut the serial stages of `dftracer_index`: the directory walk stats the entries of a folder in batches of 16 over the executor, and the final ingest links the staged SSTs into the database without the reopen and fsync RocksDB adds to each file (the SST writer already synced them) and removes the staged names in parallel.
+  On the 8,404 minife traces at 48 threads the walk takes 0.53 s where it took 1.3 s, the ingest of 1,124 SSTs 3.0 s where it took 5.2 s, and the run 9.2 s where it took 12.1 s. The stored index is unchanged.
 - Rebuild the indexes and caches made before this change on first use.
   Every interface and format version of the library is now 0, and a stored index, view cache, viz summary or frame in another version is not read.
   A missing or unreadable manifest or format record also means a rebuild.

@@ -3,6 +3,7 @@
 
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/field_ref.h>
+#include <dftracer/utils/dstd/intern_cache.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/json_value.h>
@@ -260,11 +261,11 @@ inline simdjson::dom::element resolve_json_path(simdjson::dom::element root,
 /// exact as int64 (a uint64 above INT64_MAX as double), a bool as 0/1. A null,
 /// a bool and an empty array or object also go to `specials`; a non-empty
 /// array or object appends nothing.
+template <class Intern>
 inline void append_scalar_arg(
     std::vector<std::pair<std::uint32_t, FoldEvent::ArgValue>>& into,
     std::vector<FoldEvent::SpecialValue>& specials, std::uint32_t key_id,
-    simdjson::dom::element v, dftracer::utils::dstd::StringIntern& intern,
-    bool top = false) {
+    simdjson::dom::element v, Intern& intern, bool top = false) {
     using T = simdjson::dom::element_type;
     using S = FoldEvent::Special;
     switch (v.type()) {
@@ -348,12 +349,18 @@ inline void capture_extra_field(FoldEvent& ev, simdjson::dom::element root,
         append_scalar_arg(into, ev.specials, key_id, v, intern, schema_field);
 }
 
+struct DecodeHints;
+
 /// Enumerate every scalar or null leaf of `root` (arbitrarily nested) into
 /// ev.schema_leaves by exact path for the index build's path catalog; the
 /// axis and structural keys (pid/tid/ts/dur/ph/id) are excluded.
+///
+/// With `hints`, the path id of a top-level scalar is remembered in `hints`, so
+/// a record interns no path string after its first of that key.
 void capture_schema_leaves(FoldEvent& ev, simdjson::dom::element root,
                            dftracer::utils::dstd::StringIntern& intern,
-                           bool skip_args = false);
+                           bool skip_args = false,
+                           DecodeHints* hints = nullptr);
 
 /// What one decoding worker learns from its records, valid for one intern and
 /// one record schema: the argument count of the previous record, as the next
@@ -373,7 +380,26 @@ struct DecodeHints {
     /// index below FIELD_CACHE_IDS, by map above.
     std::vector<std::uint32_t> arg_leaf;
     ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> arg_leaf_far;
+    /// The path id of each top-level key whose value is a scalar. `packed`
+    /// holds a key of up to 8 bytes, zero padded, so it compares as a word.
+    struct TopLeaf {
+        std::string key;
+        std::uint64_t packed;
+        std::uint32_t id;
+    };
+    std::vector<TopLeaf> top_leaf;
 };
+
+/// Whether build_fold_event_into, given DecodeHints, walks the record's args
+/// into `schema_leaves` itself: only a non-empty args object, which the leaf
+/// walk would otherwise visit a second time. An empty or non-object args is
+/// left to capture_schema_leaves, which records it.
+inline bool args_leaves_in_walk(bool needs_args, bool has_args,
+                                simdjson::dom::element args) {
+    simdjson::dom::object obj;
+    return needs_args && has_args &&
+           args.get_object().get(obj) == simdjson::SUCCESS && obj.size() > 0;
+}
 
 /// Decode a record of no known trace format into `ev` (reset first), as an
 /// owned data event (by_path): every
@@ -408,11 +434,13 @@ inline constexpr std::size_t INDEX_MAX_CHILDREN = 256;
 /// DFTracerEvent::parse_scalars already. Every string is interned, so the
 /// result outlives `args`'s parser. With `leaves` (and `needs_args`), each
 /// argument leaf also goes into `schema_leaves` as "args.<key>", in the same
-/// walk.
+/// walk. With `cache`, bound to `intern`, a string the cache has seen is not
+/// looked up in `intern` again.
 void build_fold_event_into(FoldEvent& ev, const DFTracerEvent& scalars,
                            simdjson::dom::element args, bool has_args,
                            dftracer::utils::dstd::StringIntern& intern,
-                           bool needs_args, DecodeHints* leaves = nullptr);
+                           bool needs_args, DecodeHints* leaves = nullptr,
+                           dftracer::utils::dstd::InternCache* cache = nullptr);
 
 /// Parse a DOM object into `ev` (reset first) as an owned event. Every string
 /// is interned, so the result stays valid after the parser that produced `root`

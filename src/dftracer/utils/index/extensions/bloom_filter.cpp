@@ -2,6 +2,7 @@
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/index/extensions/bloom_filter.h>
+#include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
 
 #include <algorithm>
 #include <cmath>
@@ -99,64 +100,44 @@ BloomFilter BloomFilter::from_blob(const unsigned char* data,
                        static_cast<std::size_t>(num_entries));
 }
 
-void BloomFilter::compute_hashes(std::string_view value, std::uint64_t& h1,
-                                 std::uint64_t& h2) const {
-    hasher_.reset();
-    hasher_.update(value);
-    std::uint64_t raw = hasher_.get_hash().value;
+BloomFilter::Hashes BloomFilter::hash(std::string_view value) {
+    utilities::hash::Fnv1aHasherUtility hasher;
+    hasher.update(value);
+    const std::uint64_t raw = hasher.get_hash().value;
     // FNV-1a leaves correlated high bits for similar short keys, which
     // breaks Lemire reduction in the blocked path. Run a SplitMix64-style
     // finisher to fully avalanche, then derive a second hash for masking.
-    h1 = raw;
+    std::uint64_t h1 = raw;
     h1 = (h1 ^ (h1 >> 30)) * hash::SPLITMIX64_MUL1;
     h1 = (h1 ^ (h1 >> 27)) * hash::SPLITMIX64_MUL2;
     h1 ^= (h1 >> 31);
-    h2 = raw + hash::GOLDEN_RATIO;
+    std::uint64_t h2 = raw + hash::GOLDEN_RATIO;
     h2 = (h2 ^ (h2 >> 30)) * hash::SPLITMIX64_MUL1;
     h2 = (h2 ^ (h2 >> 27)) * hash::SPLITMIX64_MUL2;
     h2 ^= (h2 >> 31);
+    return {h1, h2};
 }
 
-void BloomFilter::add(std::string_view value) {
-    if (last_value_valid_ && value.size() == last_value_size_ &&
-        std::memcmp(last_value_buf_.data(), value.data(), value.size()) == 0) {
-        ++num_entries_;
-        return;
-    }
-
-    std::uint64_t h1, h2;
-    compute_hashes(value, h1, h2);
-
+void BloomFilter::add(const Hashes& hashes) {
     std::size_t num_blocks = num_bits_ / BLOCK_BITS;
-    std::size_t blk = block_index(h1, num_blocks);
+    std::size_t blk = block_index(hashes.block, num_blocks);
     auto* block =
         reinterpret_cast<std::uint32_t*>(bits_.data() + blk * BLOCK_BYTES);
 
     std::uint32_t mask[BLOCK_WORDS];
-    compute_block_mask(h2, mask);
+    compute_block_mask(hashes.mask, mask);
     for (std::size_t i = 0; i < BLOCK_WORDS; ++i) block[i] |= mask[i];
     ++num_entries_;
-
-    if (value.size() <= LAST_VALUE_CAP) {
-        std::memcpy(last_value_buf_.data(), value.data(), value.size());
-        last_value_size_ = value.size();
-        last_value_valid_ = true;
-    } else {
-        last_value_valid_ = false;
-    }
 }
 
-bool BloomFilter::possibly_contains(std::string_view value) const {
-    std::uint64_t h1, h2;
-    compute_hashes(value, h1, h2);
-
+bool BloomFilter::possibly_contains(const Hashes& hashes) const {
     std::size_t num_blocks = num_bits_ / BLOCK_BITS;
-    std::size_t blk = block_index(h1, num_blocks);
+    std::size_t blk = block_index(hashes.block, num_blocks);
     const auto* block = reinterpret_cast<const std::uint32_t*>(
         bits_.data() + blk * BLOCK_BYTES);
 
     std::uint32_t mask[BLOCK_WORDS];
-    compute_block_mask(h2, mask);
+    compute_block_mask(hashes.mask, mask);
     for (std::size_t i = 0; i < BLOCK_WORDS; ++i) {
         if ((block[i] & mask[i]) != mask[i]) return false;
     }

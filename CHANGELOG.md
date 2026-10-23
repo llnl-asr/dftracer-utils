@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Cut the CPU an index build spends per event by about 25% on minife traces at one thread: schema leaf paths are interned once per record shape and key, chunk statistics and dimension counts find their entries by interned id, a bloom insert hashes its value once and a value already in a chunk's bloom is not probed again. The stored index is unchanged.
 - Bound the parse memory of each worker in an index build and a cold first query: a chunk is parsed in pieces of at most 1 MiB and 8192 lines, `parse_many` reads batches of 128 KiB on the calling thread, a record longer than a batch is parsed alone, and event buffers cut back what a huge batch or event grew when they are returned.
   The peak of a build no longer grows by about 100 MB for each extra worker.
 - Admit the files of an index build and a cold first query by the bytes each holds under the memory budget instead of one per worker, let workers with no file parse pieces of files in flight, and give the strings of a file the same ids whatever the parse order.

@@ -1,5 +1,6 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/index/event_cost.h>
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <simdjson.h>
@@ -15,50 +16,77 @@
 
 namespace dftracer::utils::index::schemas::dft {
 
+namespace {
+
+using utilities::common::statistics::DDSketch;
+using utilities::common::statistics::Log2Histogram;
+
+template <class V>
+std::uint32_t slot_of(StringViewMap<V>& map, std::string_view key) {
+    auto it = map.find(key);
+    if (it == map.end()) it = map.emplace(std::string(key), V{}).first;
+    return static_cast<std::uint32_t>(it - map.begin());
+}
+
+template <class V>
+V& at_slot(StringViewMap<V>& map, std::uint32_t slot) {
+    return (map.begin() + slot)->second;
+}
+
+}  // namespace
+
 void ChunkStatistics::update_from_event(std::string_view name,
+                                        std::string_view cat, std::uint64_t pid,
+                                        std::uint64_t tid, std::uint64_t ts,
+                                        std::uint64_t dur, bool has_dur) {
+    NameSlots names;
+    PidSlots pids;
+    update_from_event(names, pids, name, cat, pid, tid, ts, dur, has_dur);
+}
+
+void ChunkStatistics::update_from_event(NameSlots& names, PidSlots& pids,
+                                        std::string_view name,
                                         std::string_view cat, std::uint64_t pid,
                                         std::uint64_t tid, std::uint64_t ts,
                                         std::uint64_t dur, bool has_dur) {
     ++total_events;
 
-    constexpr std::size_t pid_tid_buf_size =
-        (2 * std::numeric_limits<std::uint64_t>::digits10) + 3;
-    char pt_buf[pid_tid_buf_size];
-    auto [pp, ec1] = std::to_chars(pt_buf, pt_buf + sizeof(pt_buf), pid);
-    if (ec1 != std::errc{} || pp == pt_buf + sizeof(pt_buf)) {
-        throw DFTUtilsException(ErrorCode::Internal, "failed to format pid");
+    if (names.category_count == NO_SLOT) {
+        index::event_cost::g_stats_string_lookups.fetch_add(
+            1, std::memory_order_relaxed);
+        names.category_count = slot_of(category_counts, cat);
+        names.name_count = slot_of(name_counts, name);
+        // name -> category is a property of the name, recorded for every event.
+        if (name_category.find(name) == name_category.end())
+            name_category.emplace(std::string(name), cat);
     }
-    *pp++ = ':';
-    auto [tp, ec2] = std::to_chars(pp, pt_buf + sizeof(pt_buf), tid);
-    if (ec2 != std::errc{}) {
-        throw DFTUtilsException(ErrorCode::Internal, "failed to format tid");
-    }
-    std::string_view pt_sv(pt_buf, tp - pt_buf);
-
-    // Increment counts with a single lookup - allocate a string only on
-    // first observation.
-    auto bump = [](auto& map, std::string_view key) {
-        auto it = map.find(key);
-        if (it == map.end()) {
-            map.emplace(std::string(key), 1);
-        } else {
-            it->second++;
+    if (pids.pid_tid_count == NO_SLOT) {
+        constexpr std::size_t pid_tid_buf_size =
+            (2 * std::numeric_limits<std::uint64_t>::digits10) + 3;
+        char pt_buf[pid_tid_buf_size];
+        auto [pp, ec1] = std::to_chars(pt_buf, pt_buf + sizeof(pt_buf), pid);
+        if (ec1 != std::errc{} || pp == pt_buf + sizeof(pt_buf)) {
+            throw DFTUtilsException(ErrorCode::Internal,
+                                    "failed to format pid");
         }
-    };
-    bump(category_counts, cat);
-    bump(name_counts, name);
-    bump(pid_tid_counts, pt_sv);
+        *pp++ = ':';
+        auto [tp, ec2] = std::to_chars(pp, pt_buf + sizeof(pt_buf), tid);
+        if (ec2 != std::errc{}) {
+            throw DFTUtilsException(ErrorCode::Internal,
+                                    "failed to format tid");
+        }
+        pids.pid_tid_count =
+            slot_of(pid_tid_counts, std::string_view(pt_buf, tp - pt_buf));
+    }
+    ++at_slot(category_counts, names.category_count);
+    ++at_slot(name_counts, names.name_count);
+    ++at_slot(pid_tid_counts, pids.pid_tid_count);
 
     if (ts < min_timestamp_us) min_timestamp_us = ts;
     if (ts > 0 && ts < min_nonzero_timestamp_us) min_nonzero_timestamp_us = ts;
     std::uint64_t end_ts = ts + dur;
     if (end_ts > max_timestamp_us) max_timestamp_us = end_ts;
     timestamp_histogram.add(ts);
-
-    // name -> category is a property of the name, recorded for every event.
-    if (name_category.find(name) == name_category.end()) {
-        name_category.emplace(std::string(name), cat);
-    }
 
     // Duration aggregates (global and per-name) count only events that carry a
     // duration, so a counter or instant with no dur field never lands in them.
@@ -85,47 +113,34 @@ void ChunkStatistics::update_from_event(std::string_view name,
     duration_sketch.add(dur_d);
     duration_histogram.add(dur);
 
-    // name_duration_sketches: transparent find, allocate only on first
-    // observation, then reuse the interned key for the other name_*_ maps.
-    auto sketch_it = name_duration_sketches.find(name);
-    if (sketch_it == name_duration_sketches.end()) {
-        auto [new_it, _] = name_duration_sketches.emplace(
-            std::string(name), utilities::common::statistics::DDSketch{});
-        sketch_it = new_it;
+    if (names.name_sketch == NO_SLOT) {
+        names.name_sketch = slot_of(name_duration_sketches, name);
+        names.name_histogram = slot_of(name_duration_histograms, name);
+        names.name_sum = slot_of(name_duration_sums, name);
+        names.name_sum_sq = slot_of(name_duration_sum_sqs, name);
+        names.cat_sketch = slot_of(cat_duration_sketches, cat);
+        names.cat_sum = slot_of(cat_duration_sums, cat);
     }
-    sketch_it->second.add(dur_d);
-
-    const std::string& name_key = sketch_it->first;
-    name_duration_histograms[name_key].add(dur);
-    name_duration_sums[name_key] += dur_d;
-    name_duration_sum_sqs[name_key] += dur_d * dur_d;
-
-    // Per-category duration aggregates (for group-by-cat stats).
-    auto cat_it = cat_duration_sketches.find(cat);
-    if (cat_it == cat_duration_sketches.end()) {
-        cat_it = cat_duration_sketches
-                     .emplace(std::string(cat),
-                              utilities::common::statistics::DDSketch{})
-                     .first;
-    }
-    cat_it->second.add(dur_d);
-    cat_duration_sums[cat_it->first] += dur_d;
+    at_slot(name_duration_sketches, names.name_sketch).add(dur_d);
+    at_slot(name_duration_histograms, names.name_histogram).add(dur);
+    at_slot(name_duration_sums, names.name_sum) += dur_d;
+    at_slot(name_duration_sum_sqs, names.name_sum_sq) += dur_d * dur_d;
+    at_slot(cat_duration_sketches, names.cat_sketch).add(dur_d);
+    at_slot(cat_duration_sums, names.cat_sum) += dur_d;
 
     // Per-pid duration aggregates, keyed by the decimal pid so the key matches
     // the viz group-by-pid value.
-    char pid_buf[std::numeric_limits<std::uint64_t>::digits10 + 2];
-    auto [pe, pec] = std::to_chars(pid_buf, pid_buf + sizeof(pid_buf), pid);
-    std::string_view pid_key(pid_buf, static_cast<std::size_t>(pe - pid_buf));
-    if (pec != std::errc{}) return;
-    auto pid_it = pid_duration_sketches.find(pid_key);
-    if (pid_it == pid_duration_sketches.end()) {
-        pid_it = pid_duration_sketches
-                     .emplace(std::string(pid_key),
-                              utilities::common::statistics::DDSketch{})
-                     .first;
+    if (pids.pid_sketch == NO_SLOT) {
+        char pid_buf[std::numeric_limits<std::uint64_t>::digits10 + 2];
+        auto [pe, pec] = std::to_chars(pid_buf, pid_buf + sizeof(pid_buf), pid);
+        if (pec != std::errc{}) return;
+        const std::string_view pid_key(pid_buf,
+                                       static_cast<std::size_t>(pe - pid_buf));
+        pids.pid_sketch = slot_of(pid_duration_sketches, pid_key);
+        pids.pid_sum = slot_of(pid_duration_sums, pid_key);
     }
-    pid_it->second.add(dur_d);
-    pid_duration_sums[pid_it->first] += dur_d;
+    at_slot(pid_duration_sketches, pids.pid_sketch).add(dur_d);
+    at_slot(pid_duration_sums, pids.pid_sum) += dur_d;
 }
 
 void ChunkStatistics::merge_from(const ChunkStatistics& other) {

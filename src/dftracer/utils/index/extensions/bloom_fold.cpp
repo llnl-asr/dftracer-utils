@@ -598,7 +598,9 @@ void BloomFold::observe(const Lane& lane,
                         const trace::views::detail::FoldBatch& batch) {
     ChunkState& chunk = *lane.chunk_;
     AutoChunk& auto_chunk = *lane.auto_chunk_;
-    BV::PidTidCache pidtid;
+    // A parse never suspends, so no two observes share a thread's cache.
+    thread_local BV::EventCache cache;
+    cache.clear();
 
     for (const auto& e : batch.events) {
         if (e.phase == trace::RecordPhase::Metadata) {
@@ -635,8 +637,9 @@ void BloomFold::observe(const Lane& lane,
         }
 
         if (config_.fixed_dimensions) {
-            BV::observe_data(chunk, pidtid, name, cat, e.pid, e.tid, e.ts,
-                             e.dur, e.has_dur, hhash, fhash, shash);
+            BV::observe_data(chunk, cache, e.name_id, e.cat_id, name, cat,
+                             e.pid, e.tid, e.ts, e.dur, e.has_dur, hhash, fhash,
+                             shash);
             // A record without a top-level dur (an aggregated one) matches
             // `dur` on args.dur, so the dur zone covers it too.
             if (!e.has_dur)

@@ -10,9 +10,11 @@
 #include <rocksdb/slice.h>
 #include <rocksdb/table.h>
 #include <rocksdb/write_buffer_manager.h>
+#include <sys/resource.h>
 
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
 #include <cstdlib>
 #include <functional>
 #include <mutex>
@@ -245,6 +247,21 @@ bool RocksDatabase::is_point_lookup_cf(std::string_view name) noexcept {
     return name == index::store::cf::DEFAULT || name == index::store::cf::BLOB;
 }
 
+namespace {
+
+int read_only_max_open_files() {
+    constexpr int MIN_OPEN_FILES = 16;
+    struct rlimit limit{};
+    if (::getrlimit(RLIMIT_NOFILE, &limit) != 0 ||
+        limit.rlim_cur == RLIM_INFINITY)
+        return -1;
+    const auto half = static_cast<std::uint64_t>(limit.rlim_cur) / 2;
+    return static_cast<int>(
+        std::clamp<std::uint64_t>(half, MIN_OPEN_FILES, INT32_MAX));
+}
+
+}  // namespace
+
 bool RocksDatabase::open(const std::string& db_path, OpenMode open_mode) {
     close();
     db_path_ = db_path;
@@ -262,11 +279,11 @@ bool RocksDatabase::open(const std::string& db_path, OpenMode open_mode) {
         // Read paths do heavy point lookups (e.g. dfanalyzer hash resolution);
         // with a small table cache the SST readers get evicted and every lookup
         // re-opens the file to re-read its filter/index blocks, which thrashes.
-        // There is no write-side fd pressure here, so keep every SST open
-        // unless an explicit env cap is set.
+        // Keep as many SSTs open as half the descriptor limit allows, so an
+        // index with thousands of SSTs still opens. An env cap overrides it.
         if (!Env::get<int>("DFTRACER_UTILS_ROCKSDB_MAX_OPEN_FILES")
                  .has_value()) {
-            db_options.max_open_files = -1;
+            db_options.max_open_files = read_only_max_open_files();
         }
     }
     file_system_ = make_dftracer_file_system();
@@ -333,6 +350,25 @@ bool RocksDatabase::open(const std::string& db_path, OpenMode open_mode) {
     column_families_.clear();
     for (std::size_t i = 0; i < descriptors.size(); ++i) {
         column_families_.emplace(descriptors[i].name, handles[i]);
+    }
+
+    // An index of an earlier build still has the per-key aggregation column
+    // family, which nothing reads or writes now; its data is derived from the
+    // traces, so it is dropped.
+    if (open_mode_ == OpenMode::ReadWrite) {
+        const auto legacy = column_families_.find(
+            std::string(index::store::cf::LEGACY_AGGREGATION));
+        if (legacy != column_families_.end()) {
+            auto drop = db_->DropColumnFamily(legacy->second);
+            if (!drop.ok()) {
+                throw DFTUtilsException(
+                    ErrorCode::Io,
+                    "Failed to drop the legacy aggregation column family of '" +
+                        db_path_ + "': " + drop.ToString());
+            }
+            db_->DestroyColumnFamilyHandle(legacy->second);
+            column_families_.erase(legacy);
+        }
     }
 
     return true;
@@ -486,6 +522,16 @@ std::unique_ptr<::rocksdb::Iterator> RocksDatabase::new_iterator(
     opts.max_subcompactions = 8;
     return db_->CompactRange(opts, column_family_handle(column_family), nullptr,
                              nullptr);
+}
+
+std::size_t RocksDatabase::files_at_level(std::string_view column_family,
+                                          int level) const {
+    std::string value;
+    if (!db_->GetProperty(column_family_handle(column_family),
+                          "rocksdb.num-files-at-level" + std::to_string(level),
+                          &value))
+        return 0;
+    return static_cast<std::size_t>(std::strtoull(value.c_str(), nullptr, 10));
 }
 
 ::rocksdb::Status RocksDatabase::ingest_external_files(

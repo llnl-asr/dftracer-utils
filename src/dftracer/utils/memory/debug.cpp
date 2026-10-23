@@ -42,9 +42,26 @@ struct Group {
     bool used;
 };
 
+struct alignas(32) SiteTotal {
+    std::atomic<std::uintptr_t> site;
+    std::atomic<std::ptrdiff_t> live;
+    std::atomic<std::size_t> peak;
+    std::atomic<std::size_t> allocations;
+};
+
+std::atomic<SiteTotal*> g_totals{nullptr};
+// Per-site live bytes at the last snapshot, indexed like the totals.
+std::atomic<std::ptrdiff_t>* g_at_peak = nullptr;
+std::atomic<std::ptrdiff_t> g_live_total{0};
+std::atomic<std::ptrdiff_t> g_live_big{0};
+std::atomic<std::size_t> g_snapshot_floor{DEBUG_PEAK_MIN_STEP};
+std::atomic<bool> g_snapshotting{false};
+std::atomic<std::size_t> g_peak_total{0};
+std::atomic<std::size_t> g_peak_big{0};
 std::atomic<Slot*> g_table{nullptr};
 std::atomic<std::uintptr_t> g_quarantine[DEBUG_QUARANTINE_BLOCKS];
 std::atomic<std::uint32_t> g_cursor{0};
+std::atomic<std::uint64_t> g_allocations{0};
 std::atomic<std::atomic<std::uintptr_t>*> g_held{nullptr};
 std::atomic<std::size_t> g_held_count{0};
 
@@ -62,6 +79,118 @@ std::size_t hash_of(std::uintptr_t key, std::uint16_t extra = 0) noexcept {
                   "allocated at site 0x%llx\n",
                   what, p, size, static_cast<unsigned long long>(site));
     abort_with(message);
+}
+
+SiteTotal* totals() noexcept {
+    SiteTotal* t = g_totals.load(std::memory_order_acquire);
+    if (t != nullptr) [[likely]]
+        return t;
+    constexpr std::size_t bytes = DEBUG_SITE_TOTALS * sizeof(SiteTotal);
+    void* raw = ::mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
+    if (raw == MAP_FAILED) {
+        abort_with("dftracer-utils memory: cannot map the site totals\n");
+    }
+    SiteTotal* expected = nullptr;
+    if (!g_totals.compare_exchange_strong(expected,
+                                          static_cast<SiteTotal*>(raw),
+                                          std::memory_order_acq_rel)) {
+        ::munmap(raw, bytes);
+        return expected;
+    }
+    return static_cast<SiteTotal*>(raw);
+}
+
+// Null when the table is full; that caller is then left out of the totals.
+SiteTotal* total_of(std::uintptr_t site) noexcept {
+    if (site == 0) site = 1;
+    SiteTotal* t = totals();
+    std::size_t i = hash_of(site) & (DEBUG_SITE_TOTALS - 1);
+    for (std::size_t n = 0; n < DEBUG_SITE_TOTALS;
+         ++n, i = (i + 1) & (DEBUG_SITE_TOTALS - 1)) {
+        std::uintptr_t k = t[i].site.load(std::memory_order_acquire);
+        if (k == site) return &t[i];
+        if (k != 0) continue;
+        std::uintptr_t expected = 0;
+        if (t[i].site.compare_exchange_strong(expected, site,
+                                              std::memory_order_acq_rel) ||
+            expected == site) {
+            return &t[i];
+        }
+    }
+    return nullptr;
+}
+
+// Copies the per-site live bytes when the total passed the floor. Takes one
+// pass over the totals, and a thread that finds another one running leaves it.
+[[gnu::noinline]] void snapshot(std::size_t total) noexcept {
+    if (g_snapshotting.exchange(true, std::memory_order_acquire)) return;
+    if (total >= g_snapshot_floor.load(std::memory_order_relaxed)) {
+        SiteTotal* t = totals();
+        if (g_at_peak == nullptr) {
+            constexpr std::size_t bytes =
+                DEBUG_SITE_TOTALS * sizeof(std::atomic<std::ptrdiff_t>);
+            void* raw = ::mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
+                               MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
+            if (raw == MAP_FAILED) {
+                abort_with("dftracer-utils memory: cannot map the peak\n");
+            }
+            g_at_peak = static_cast<std::atomic<std::ptrdiff_t>*>(raw);
+        }
+        for (std::size_t i = 0; i < DEBUG_SITE_TOTALS; ++i) {
+            if (t[i].site.load(std::memory_order_acquire) == 0) continue;
+            g_at_peak[i].store(t[i].live.load(std::memory_order_relaxed),
+                               std::memory_order_relaxed);
+        }
+        auto big = g_live_big.load(std::memory_order_relaxed);
+        g_peak_big.store(big > 0 ? static_cast<std::size_t>(big) : 0,
+                         std::memory_order_relaxed);
+        g_peak_total.store(total, std::memory_order_release);
+        g_snapshot_floor.store(
+            total +
+                std::max(total / 100 * DEBUG_PEAK_PERCENT, DEBUG_PEAK_MIN_STEP),
+            std::memory_order_relaxed);
+    }
+    g_snapshotting.store(false, std::memory_order_release);
+}
+
+void count_allocation(std::uintptr_t site, std::size_t size) noexcept {
+    SiteTotal* t = total_of(site);
+    if (t == nullptr) return;
+    t->allocations.fetch_add(1, std::memory_order_relaxed);
+    if (size > DEBUG_BIG_BLOCK_BYTES) {
+        g_live_big.fetch_add(static_cast<std::ptrdiff_t>(size),
+                             std::memory_order_relaxed);
+    }
+    auto live = t->live.fetch_add(static_cast<std::ptrdiff_t>(size),
+                                  std::memory_order_relaxed) +
+                static_cast<std::ptrdiff_t>(size);
+    std::size_t peak = t->peak.load(std::memory_order_relaxed);
+    while (static_cast<std::size_t>(live) > peak &&
+           !t->peak.compare_exchange_weak(peak, static_cast<std::size_t>(live),
+                                          std::memory_order_relaxed)) {
+    }
+    auto total = g_live_total.fetch_add(static_cast<std::ptrdiff_t>(size),
+                                        std::memory_order_relaxed) +
+                 static_cast<std::ptrdiff_t>(size);
+    if (static_cast<std::size_t>(total) >=
+        g_snapshot_floor.load(std::memory_order_relaxed)) [[unlikely]] {
+        snapshot(static_cast<std::size_t>(total));
+    }
+}
+
+void count_free(std::uintptr_t site, std::size_t size) noexcept {
+    g_live_total.fetch_sub(static_cast<std::ptrdiff_t>(size),
+                           std::memory_order_relaxed);
+    if (size > DEBUG_BIG_BLOCK_BYTES) {
+        g_live_big.fetch_sub(static_cast<std::ptrdiff_t>(size),
+                             std::memory_order_relaxed);
+    }
+    SiteTotal* t = total_of(site);
+    if (t != nullptr) {
+        t->live.fetch_sub(static_cast<std::ptrdiff_t>(size),
+                          std::memory_order_relaxed);
+    }
 }
 
 Slot* table() noexcept {
@@ -174,12 +303,18 @@ void retire(void* p, std::size_t size, bool sized) noexcept {
             die("the redzone behind the block was written", p, have, site);
         }
     }
+    count_free(site, have);
     std::memset(p, DEBUG_FREED_FILL, have + DEBUG_REDZONE_BYTES);
 }
 
 }  // namespace
 
+std::uint64_t debug_allocation_count() noexcept {
+    return g_allocations.load(std::memory_order_relaxed);
+}
+
 void* debug_allocate(std::size_t size, std::size_t align, void* site) {
+    g_allocations.fetch_add(1, std::memory_order_relaxed);
     if (size > std::numeric_limits<std::size_t>::max() - DEBUG_REDZONE_BYTES) {
         throw std::bad_alloc();
     }
@@ -195,6 +330,7 @@ void* debug_allocate(std::size_t size, std::size_t align, void* site) {
     s->site.store(reinterpret_cast<std::uintptr_t>(site),
                   std::memory_order_relaxed);
     s->pool.store(attrib_local().scope, std::memory_order_relaxed);
+    count_allocation(reinterpret_cast<std::uintptr_t>(site), size);
     std::memset(static_cast<char*>(p) + size, DEBUG_REDZONE_FILL,
                 DEBUG_REDZONE_BYTES);
     return p;
@@ -271,6 +407,64 @@ void debug_drain() noexcept {
         auto old = entry.exchange(0, std::memory_order_acq_rel);
         if (old != 0) release(reinterpret_cast<void*>(old));
     }
+}
+
+void debug_top_sites(std::size_t count, bool by_peak, DebugTotalVisit visit,
+                     void* context) noexcept {
+    SiteTotal* t = g_totals.load(std::memory_order_acquire);
+    if (t == nullptr) return;
+    constexpr std::size_t MAX_TOP = 64;
+    count = std::min(count, MAX_TOP);
+    DebugSiteTotal best[MAX_TOP];
+    std::size_t have = 0;
+    auto key = [by_peak](const DebugSiteTotal& v) {
+        return by_peak ? v.peak : v.live;
+    };
+    for (std::size_t i = 0; i < DEBUG_SITE_TOTALS; ++i) {
+        std::uintptr_t site = t[i].site.load(std::memory_order_acquire);
+        if (site == 0) continue;
+        auto live = t[i].live.load(std::memory_order_relaxed);
+        DebugSiteTotal v{site, live > 0 ? static_cast<std::size_t>(live) : 0,
+                         t[i].peak.load(std::memory_order_relaxed),
+                         t[i].allocations.load(std::memory_order_relaxed)};
+        if (key(v) == 0) continue;
+        std::size_t at = have;
+        while (at > 0 && key(best[at - 1]) < key(v)) --at;
+        if (at >= count) continue;
+        if (have < count) ++have;
+        for (std::size_t j = have - 1; j > at; --j) best[j] = best[j - 1];
+        best[at] = v;
+    }
+    for (std::size_t i = 0; i < have; ++i) visit(context, best[i]);
+}
+
+DebugPeak debug_top_sites_at_peak(std::size_t count, DebugTotalVisit visit,
+                                  void* context) noexcept {
+    DebugPeak peak{g_peak_total.load(std::memory_order_acquire),
+                   g_peak_big.load(std::memory_order_relaxed)};
+    SiteTotal* t = g_totals.load(std::memory_order_acquire);
+    if (t == nullptr || g_at_peak == nullptr || peak.total == 0) return peak;
+    constexpr std::size_t MAX_TOP = 64;
+    count = std::min(count, MAX_TOP);
+    DebugSiteTotal best[MAX_TOP];
+    std::size_t have = 0;
+    for (std::size_t i = 0; i < DEBUG_SITE_TOTALS; ++i) {
+        std::uintptr_t site = t[i].site.load(std::memory_order_acquire);
+        if (site == 0) continue;
+        auto live = g_at_peak[i].load(std::memory_order_relaxed);
+        if (live <= 0) continue;
+        DebugSiteTotal v{site, static_cast<std::size_t>(live),
+                         t[i].peak.load(std::memory_order_relaxed),
+                         t[i].allocations.load(std::memory_order_relaxed)};
+        std::size_t at = have;
+        while (at > 0 && best[at - 1].live < v.live) --at;
+        if (at >= count) continue;
+        if (have < count) ++have;
+        for (std::size_t j = have - 1; j > at; --j) best[j] = best[j - 1];
+        best[at] = v;
+    }
+    for (std::size_t i = 0; i < have; ++i) visit(context, best[i]);
+    return peak;
 }
 
 void debug_for_each_site(std::uint16_t pool, DebugVisit visit,

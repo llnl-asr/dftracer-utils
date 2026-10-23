@@ -6,9 +6,8 @@ DLIO Config Generation
 The ``dlio`` utilities power the ``dftracer_gen_dlio_config`` binary
 (see :doc:`/cli` for the CLI reference).
 The binary indexes and aggregates its input directory automatically
-(calling the shared ``aggregation_runner`` library function to populate the
-``AGGREGATION`` column family) - there is no separate aggregation step -
-and emits a DLIO-compatible YAML config describing per-component timing
+(the same index build the other tools use, with the aggregation partials) -
+there is no separate aggregation step - and emits a DLIO-compatible YAML config describing per-component timing
 distributions.
 
 .. code-block:: cpp
@@ -25,15 +24,20 @@ Pipeline overview
 
 End-to-end the module composes five pieces:
 
-1. **trace_loader** opens an existing RocksDB read-only (with the AGGREGATION
-   merge operator re-attached), iterates the ``AGGREGATION`` column family,
-   groups entries by ``(cat, name, pid, time_bucket)``, and synthesizes a flat
-   per-rank sample stream per component (``fetch.block``, ``fetch.iter``,
-   ``preprocess``, ``item`` by default; the selecting ``(cat, name)`` per
-   component is configurable via ``TraceLoaderOptions`` / ``load_event_map``).
-   Sketches are used for inverse-CDF sampling when the aggregation run set
-   ``AggregationConfig::compute_percentiles`` (``dftracer_gen_dlio_config``
-   always sets it); otherwise the per-call mean is replicated.
+1. **trace_loader** runs one aggregation query (``run_agg_query``) over the
+   indexed files, grouped by ``(pid, time_bucket, cat, name)`` with the bucket
+   set by ``AggregationConfig::time_interval_us``. It reads the stored chunk
+   partials and merges them; it re-reads a chunk only when a partial holds
+   more than one pid or crosses a bucket boundary, and
+   ``AggregatedTraces::chunks_reread`` counts those reads. From the rows it
+   synthesizes a flat per-rank sample stream per component (``fetch.block``,
+   ``fetch.iter``, ``preprocess``, ``item`` by default; the selecting
+   ``(cat, name)`` per component is configurable via ``TraceLoaderOptions`` /
+   ``load_event_map``). Duration quantiles drive the inverse-CDF sampling: a
+   partial of up to 64 events answers with exact quantiles, a larger one with
+   a DDSketch of relative accuracy ``AggregationConfig::sketch_accuracy``.
+   Rows are visited in ``(pid, bucket, cat, name)`` order, so the draws of one
+   seed are the same on every run.
 
 2. The distribution fitter (:doc:`API reference
    </cpp_api/utilities>`, under
@@ -62,12 +66,15 @@ trace_loader
    opts.preprocess = {"cpu", "transform"};   // remap one component directly, or
    load_event_map("event_map.yaml", opts);   // overlay a YAML/JSON map file
 
-   AggregatedTraces traces = load_aggregated_traces(db_path, opts);
+   // index_path: the index store of `files`; config: the AggregationConfig
+   // the index was built with.
+   AggregatedTraces traces =
+       load_aggregated_traces(index_path, files, config, opts);
 
-   if (!traces.any_data) { /* no DLIO events in this DB */ }
-   if (!traces.sketches_available) {
-       // The aggregation run had compute_percentiles off. We fell back to
-       // mean replication; rerun with it enabled for higher-fidelity output.
+   if (!traces.any_data) { /* no DLIO events in these files */ }
+   if (!traces.quantiles_available) {
+       // No component had duration quantiles; samples replicate the
+       // per-call mean.
    }
 
 Returns an ``AggregatedTraces`` with:
@@ -79,8 +86,8 @@ Returns an ``AggregatedTraces`` with:
   (the input to ``fit_all_single_distributions``).
 - ``fetch_block_stats`` / ``fetch_iter_stats`` / ``preprocess_stats`` /
   ``getitem_stats`` - ``Statistic`` objects (see :doc:`API reference
-  </cpp_api/utilities>`), with merged DDSketches
-  attached when available.
+  </cpp_api/utilities>`), with the merged duration
+  quantiles attached when available.
 - ``trace_e2e_duration`` and per-component ``ComponentTimeMetrics`` with both
   ``accumulated_time`` (sum of ``count x mean``) and ``union_time`` (true
   wall-clock union via ``sweep_union`` over per-entry ``(ts, te)`` boundaries).

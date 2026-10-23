@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/common/scoped_fd.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/runtime/coro/async_generator.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_member_reader.h>
@@ -11,6 +12,7 @@
 #include <sys/stat.h>
 
 #include <cstring>
+#include <memory>
 #include <string>
 
 namespace dftracer::utils::utilities::fileio::lines::sources {
@@ -18,23 +20,31 @@ namespace dftracer::utils::utilities::fileio::lines::sources {
  * @brief Async generator that yields lines from .gz files without an index.
  *
  * Decodes the file a gzip member at a time with libdeflate (peak memory one
- * member) and splits the decompressed bytes into lines. A single foreign
- * member too large to decode in memory throws with a hint to run
- * dftracer_split. A last member cut short yields its complete lines unless
- * `recover_truncated` is false, when it throws instead.
+ * member) and splits the decompressed bytes into lines. A member too large to
+ * hold whole is read with a zlib stream a step of whole lines at a time. A
+ * last member cut short yields its complete lines unless
+ * `recover_truncated` is false, when it throws instead. A caller that holds
+ * the file open passes it as `open_file`, which is then read instead of
+ * opening `file_path` again and is closed with its last owner.
  */
 inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
     std::string file_path, std::size_t start_line = 0, std::size_t end_line = 0,
-    bool recover_truncated = true) {
-    ssize_t fd_result =
-        co_await ::dftracer::utils::io::open(file_path.c_str(), O_RDONLY);
-    if (fd_result < 0) {
-        throw DFTUtilsException(
-            ErrorCode::Io,
-            "Cannot open compressed file: " + file_path + " (errno=" +
-                std::to_string(static_cast<int>(-fd_result)) + ")");
+    bool recover_truncated = true,
+    dftracer::utils::dstd::SharedPtr<dftracer::utils::ScopedFd> open_file =
+        nullptr) {
+    dftracer::utils::ScopedFd owned;
+    if (!open_file) {
+        ssize_t fd_result =
+            co_await ::dftracer::utils::io::open(file_path.c_str(), O_RDONLY);
+        if (fd_result < 0) {
+            throw DFTUtilsException(
+                ErrorCode::Io,
+                "Cannot open compressed file: " + file_path + " (errno=" +
+                    std::to_string(static_cast<int>(-fd_result)) + ")");
+        }
+        owned = dftracer::utils::ScopedFd(static_cast<int>(fd_result));
     }
-    dftracer::utils::ScopedFd fd(static_cast<int>(fd_result));
+    dftracer::utils::ScopedFd& fd = open_file ? *open_file : owned;
 
     struct stat st;
     if (::fstat(fd.get(), &st) != 0) {
@@ -49,7 +59,7 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
 
     try {
         auto bytes = compress::decode_gzip_members(
-            fd.get(), file_size, std::size_t{1} << 31, recover_truncated);
+            fd.get(), file_size, std::size_t{32} << 20, recover_truncated);
         for (;;) {
             auto chunk = co_await bytes.next();
             if (!chunk) break;
@@ -74,7 +84,7 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
                         co_yield Line(line, current_line);
                     }
                     if (end_line > 0 && current_line >= end_line) {
-                        fd.reset();
+                        owned.reset();
                         co_return;
                     }
                     line_buffer.clear();

@@ -682,8 +682,8 @@ TEST_CASE("the run record carries keys, settings and the summary") {
     REQUIRE(r.runs.size() == 1);
     const auto first = lines_of(r.runs[0].lines()).at(0);
     CHECK(str(first, "/gtype") == "run");
-    CHECK(num(first, "/version") == 1);
-    CHECK(first.rfind(R"({"gtype":"run","version":1,)", 0) == 0);
+    CHECK(num(first, "/version") == 0);
+    CHECK(first.rfind(R"({"gtype":"run","version":0,)", 0) == 0);
     CHECK(num(first, "/sketch_accuracy") == doctest::Approx(0.01));
     CHECK(str(first, "/method") == "prorate");
     CHECK(str(first, "/papi_set") == "set1");

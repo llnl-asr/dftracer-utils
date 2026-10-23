@@ -1,4 +1,5 @@
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <simdjson.h>
@@ -301,8 +302,7 @@ std::vector<std::uint8_t> ChunkStatistics::serialize_sketch_map(
     // NOTE(perf): pre-reserve header + estimated ~512 bytes per sketch entry
     buf.reserve(sizeof(std::uint32_t) + num * 512);
 
-    buf.resize(sizeof(std::uint32_t));
-    std::memcpy(buf.data(), &num, sizeof(std::uint32_t));
+    append_u32_le(buf, num);
 
     std::vector<std::uint8_t> sketch_blob;
     for (const auto& [key, sketch] : sketches) {
@@ -310,18 +310,10 @@ std::vector<std::uint8_t> ChunkStatistics::serialize_sketch_map(
         auto key_len = static_cast<std::uint32_t>(key.size());
         auto blob_len = static_cast<std::uint32_t>(sketch_blob.size());
 
-        std::size_t offset = buf.size();
-        buf.resize(offset + sizeof(std::uint32_t) + key_len +
-                   sizeof(std::uint32_t) + blob_len);
-        std::uint8_t* p = buf.data() + offset;
-
-        std::memcpy(p, &key_len, sizeof(std::uint32_t));
-        p += sizeof(std::uint32_t);
-        std::memcpy(p, key.data(), key_len);
-        p += key_len;
-        std::memcpy(p, &blob_len, sizeof(std::uint32_t));
-        p += sizeof(std::uint32_t);
-        std::memcpy(p, sketch_blob.data(), blob_len);
+        append_u32_le(buf, key_len);
+        buf.insert(buf.end(), key.data(), key.data() + key_len);
+        append_u32_le(buf, blob_len);
+        buf.insert(buf.end(), sketch_blob.begin(), sketch_blob.end());
     }
 
     return buf;
@@ -408,31 +400,23 @@ ChunkStatistics::deserialize_name_duration_sketches(const std::uint8_t* data,
     StringViewMap<utilities::common::statistics::DDSketch> result;
     if (!data || len < sizeof(std::uint32_t)) return result;
 
-    const std::uint8_t* p = data;
-    const std::uint8_t* end = data + len;
-
+    LeReader r(data, len);
     std::uint32_t num_entries = 0;
-    std::memcpy(&num_entries, p, sizeof(std::uint32_t));
-    p += sizeof(std::uint32_t);
+    r.u32(num_entries);
 
-    for (std::uint32_t i = 0; i < num_entries && p < end; ++i) {
-        if (p + sizeof(std::uint32_t) > end) break;
+    for (std::uint32_t i = 0; i < num_entries && r.remaining() > 0; ++i) {
         std::uint32_t key_len = 0;
-        std::memcpy(&key_len, p, sizeof(std::uint32_t));
-        p += sizeof(std::uint32_t);
-
-        if (p + key_len + sizeof(std::uint32_t) > end) break;
-        std::string key(reinterpret_cast<const char*>(p), key_len);
-        p += key_len;
+        if (!r.u32(key_len)) break;
+        const std::uint8_t* key_bytes = r.take(key_len);
+        if (!key_bytes) break;
+        std::string key(reinterpret_cast<const char*>(key_bytes), key_len);
 
         std::uint32_t blob_len = 0;
-        std::memcpy(&blob_len, p, sizeof(std::uint32_t));
-        p += sizeof(std::uint32_t);
-
-        if (p + blob_len > end) break;
-        result[key] =
-            utilities::common::statistics::DDSketch::deserialize(p, blob_len);
-        p += blob_len;
+        if (!r.u32(blob_len)) break;
+        const std::uint8_t* blob = r.take(blob_len);
+        if (!blob) break;
+        result[key] = utilities::common::statistics::DDSketch::deserialize(
+            blob, blob_len);
     }
 
     return result;

@@ -1,26 +1,18 @@
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/trace/comparator/comparison_utility.h>
 
 #include <algorithm>
 #include <cmath>
 #include <map>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 namespace dftracer::utils::trace::comparator {
 
 namespace {
 
-struct AggregationKeyEq {
-    bool operator()(const AggregationKey& a,
-                    const AggregationKey& b) const noexcept {
-        return a == b;
-    }
-};
-
-using KeySet =
-    std::unordered_set<AggregationKey, AggregationKeyHash, AggregationKeyEq>;
+using KeySet = dstd::HashSet<GroupKey, GroupKeyHash>;
 
 double vec_mean(const std::vector<double>& v) {
     if (v.empty()) return 0.0;
@@ -37,7 +29,7 @@ CollapsedMetrics merge_collapsed(const CollapsedMap& cm,
     std::vector<double> counts, dur_means, size_means, xfers, bws;
     for (const auto& [key, entry] : cm) {
         if (!cat_filter.empty() && key.cat(intern) != cat_filter) continue;
-        total.merged.merge_from(entry.merged);
+        total.merged.merge(entry.merged);
         counts.push_back(entry.count_mean);
         dur_means.push_back(entry.dur_mean_of_means);
         size_means.push_back(entry.size_mean_of_means);
@@ -128,31 +120,6 @@ build_per_cat_groups(const CollapsedMap& base_collapsed,
     return by_cat;
 }
 
-std::vector<GroupComparison> ComparisonUtility::join_visitor(
-    const ComparisonVisitorPair& pair) const {
-    // Retained for API compatibility; unused by build_result_tree.
-    // Baseline and variant come from different indexes, so their ids only
-    // become comparable once collapsed into one table.
-    auto table = dftracer::utils::index::schemas::dft::agg::make_intern_table();
-    auto& intern = table->intern;
-    auto base_collapsed = collapse_by_group(pair.baseline.aggregations,
-                                            pair.baseline.strings(), intern);
-    auto var_collapsed = collapse_by_group(pair.variant.aggregations,
-                                           pair.variant.strings(), intern);
-
-    auto by_cat = build_per_cat_groups(base_collapsed, var_collapsed, intern,
-                                       pair.node.resolved_metrics,
-                                       pair.node.resolved_percentiles);
-
-    std::vector<GroupComparison> groups;
-    for (auto& [cat, cat_groups] : by_cat) {
-        for (auto& g : cat_groups) {
-            groups.push_back(std::move(g));
-        }
-    }
-    return groups;
-}
-
 void ComparisonUtility::sort_by_regression(
     std::vector<GroupComparison>& groups) const {
     std::sort(groups.begin(), groups.end(),
@@ -180,17 +147,10 @@ void ComparisonUtility::apply_threshold(std::vector<GroupComparison>& groups,
 NodeResult ComparisonUtility::build_result_tree(
     const ComparisonNode& node,
     const std::vector<ComparisonVisitorPair>& visitors,
-    std::size_t& visitor_index) const {
+    const dstd::StringIntern& intern, std::size_t& visitor_index) const {
     const ComparisonVisitorPair& pair = visitors[visitor_index++];
-
-    // Baseline and variant come from different indexes, so their ids only
-    // become comparable once collapsed into one intern table.
-    auto table = dftracer::utils::index::schemas::dft::agg::make_intern_table();
-    auto& intern = table->intern;
-    auto base_collapsed = collapse_by_group(pair.baseline.aggregations,
-                                            pair.baseline.strings(), intern);
-    auto var_collapsed = collapse_by_group(pair.variant.aggregations,
-                                           pair.variant.strings(), intern);
+    const CollapsedMap& base_collapsed = *pair.baseline;
+    const CollapsedMap& var_collapsed = *pair.variant;
 
     const auto& metrics = pair.node.resolved_metrics;
     const auto& percentiles = pair.node.resolved_percentiles;
@@ -205,8 +165,8 @@ NodeResult ComparisonUtility::build_result_tree(
     result.groups = {};  // Detail lives in children.
 
     result.summary.label = "";
-    result.summary.baseline_present = !pair.baseline.aggregations.empty();
-    result.summary.variant_present = !pair.variant.aggregations.empty();
+    result.summary.baseline_present = !base_collapsed.empty();
+    result.summary.variant_present = !var_collapsed.empty();
     result.summary.metrics =
         compare_metrics(base_total, var_total, metrics, percentiles);
     result.summary.worst_pct_change = worst_regression(result.summary.metrics);
@@ -242,7 +202,7 @@ NodeResult ComparisonUtility::build_result_tree(
 
     for (const auto& cfg_child : node.children) {
         result.children.push_back(
-            build_result_tree(cfg_child, visitors, visitor_index));
+            build_result_tree(cfg_child, visitors, intern, visitor_index));
     }
 
     return result;
@@ -253,8 +213,8 @@ coro::CoroTask<Result<ComparisonUtilityOutput>> ComparisonUtility::operator()(
     DFTRACER_UTILS_TRACE_SCOPE("compare");
     ComparisonUtilityOutput output;
     std::size_t visitor_index = 0;
-    output.result =
-        build_result_tree(input.root_node, input.visitors, visitor_index);
+    output.result = build_result_tree(input.root_node, input.visitors,
+                                      *input.strings, visitor_index);
     co_return output;
 }
 

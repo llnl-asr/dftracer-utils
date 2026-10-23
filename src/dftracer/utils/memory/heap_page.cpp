@@ -1122,7 +1122,9 @@ PageDesc* new_small_page(Heap& h, std::size_t cls) {
     return d;
 }
 
-void* allocate_small(Heap& h, std::size_t size, std::size_t align) {
+template <bool Fixed>
+void* allocate_small(Heap& h, std::size_t size, std::size_t align,
+                     std::uint16_t pool) {
     std::size_t cls = class_for(size, align);
     PageDesc* d = h.avail[cls];
     if (d == nullptr) [[unlikely]] {
@@ -1150,8 +1152,13 @@ void* allocate_small(Heap& h, std::size_t size, std::size_t align) {
         list_remove(h.avail[cls], d);
         d->listed = false;
     }
-    d->ids[slot] = h.attrib.scope;
-    attrib_charge(h.attrib, layout.delta);
+    if constexpr (Fixed) {
+        d->ids[slot] = pool;
+        attrib_charge_to(h.attrib, pool, layout.delta);
+    } else {
+        d->ids[slot] = h.attrib.scope;
+        attrib_charge(h.attrib, layout.delta);
+    }
     asan_unpoison(p, size);
     vg_alloc(p, size, block);
     return p;
@@ -1394,8 +1401,22 @@ void* page_allocate(std::size_t size, std::size_t align) {
     check_align(align);
     Heap& h = local_heap();
     if (size <= SMALL_MAX && align <= SMALL_MAX_ALIGN) {
-        return allocate_small(h, size, align);
+        return allocate_small<false>(h, size, align, 0);
     }
+    if (size <= MEDIUM_MAX && align <= MEDIUM_MAX) {
+        return allocate_medium(h, size, align);
+    }
+    return allocate_mapped(h, size, align);
+}
+
+void* page_allocate_to(std::size_t size, std::size_t align,
+                       std::uint16_t pool) {
+    check_align(align);
+    Heap& h = local_heap();
+    if (size <= SMALL_MAX && align <= SMALL_MAX_ALIGN) {
+        return allocate_small<true>(h, size, align, pool);
+    }
+    ScopeOverride scope{h.attrib, pool};
     if (size <= MEDIUM_MAX && align <= MEDIUM_MAX) {
         return allocate_medium(h, size, align);
     }

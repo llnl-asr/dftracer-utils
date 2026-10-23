@@ -29,6 +29,8 @@ class GzipStream : public StreamBase {
     bool is_finished_;
     bool decompression_initialized_;
     bool use_member_;
+    /// The stream starts at a restart piece whose first byte is inside a line.
+    bool mid_line_start_ = false;
 
     // Less frequently accessed members
     std::string current_gz_path_;
@@ -136,6 +138,7 @@ class GzipStream : public StreamBase {
         inflater_.reset();
         member_ = dftracer::utils::index::gzip::GzipMemberRecord();
         use_member_ = false;
+        mid_line_start_ = false;
         decompression_initialized_ = false;
     }
 
@@ -185,6 +188,12 @@ class GzipStream : public StreamBase {
                                 std::hash<std::string>{}(current_gz_path_));
         }
 
+        if (indexer_) {
+            inflater_.set_member_bound(static_cast<std::size_t>(
+                std::max<std::uint64_t>(indexer_->get_checkpoint_size(), 1)));
+            inflater_.set_index_hint(indexer_->piece_heads());
+        }
+
         // A range starting past the end of the file yields nothing, so skip
         // the seek entirely rather than decoding up to EOF to discover that.
         if (max_file_bytes_ > 0 && start_bytes_ >= max_file_bytes_) {
@@ -201,6 +210,7 @@ class GzipStream : public StreamBase {
             use_member_ = co_await inflater_.seek_to_member(
                 fd_, file_offset_, member_, member_window(),
                 expected_out_bytes());
+            mid_line_start_ = use_member_ && piece_starts_mid_line();
             if (use_member_)
                 DFTRACER_UTILS_LOG_DEBUG(
                     "Using member %" PRIu64 " at uncompressed offset %" PRIu64
@@ -248,6 +258,16 @@ class GzipStream : public StreamBase {
 
     bool is_at_target_end() const {
         return current_position_ >= target_end_bytes_;
+    }
+
+    /// A restart piece starts where the inflater stopped, and the byte before
+    /// it is the last of its window: inside a line unless that is a newline.
+    bool piece_starts_mid_line() const {
+        if (member_.kind !=
+            dftracer::utils::index::gzip::GzipRecordKind::Restart)
+            return false;
+        const std::string window = member_window();
+        return window.empty() || window.back() != '\n';
     }
 
     std::string member_window() const {

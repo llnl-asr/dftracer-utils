@@ -124,8 +124,8 @@ class Indexer:
     At least one of 'directory' or 'files' must be provided.
 
     Args:
-        directory: Directory containing trace files (.pfw, .jsonl
-            and .ndjson, plain or gzip).
+        directory: Directory containing gzip trace files (.pfw.gz,
+            .jsonl.gz and .ndjson.gz).
         files: List of specific file paths to index.
         index_dir: Directory for .dftindex stores (default: next to files).
         require_checkpoint: Build checkpoint tier (default True).

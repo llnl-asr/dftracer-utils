@@ -182,6 +182,16 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
                 result.needs_augmentation =
                     same_interval.params_hash() == stored->params_hash;
             }
+        } else if (aggregate) {
+            // Partials with no config record are of a build that kept it in
+            // another place, and their keys may be in another layout: they
+            // are never read, and the tier is built again.
+            for (const auto& [path, reg] : registry)
+                if (db.extension_state(reg.file_id,
+                                       index::store::IndexExtension::Agg)) {
+                    result.aggregation_stale = true;
+                    break;
+                }
         }
         std::vector<std::pair<FileWorkItem, bool>> agg_candidates;
         auto rebuilt_whole = [&](int file_id) {
@@ -314,12 +324,51 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
 
 }  // namespace
 
+std::vector<utilities::filesystem::FileEntry> scanned_entries(
+    const ResolverResult& result) {
+    std::vector<utilities::filesystem::FileEntry> out;
+    out.reserve(result.all_files.size());
+    for (std::size_t i = 0; i < result.all_files.size(); ++i) {
+        utilities::filesystem::FileEntry entry;
+        entry.path = result.all_files[i];
+        entry.size = result.all_file_sizes[i];
+        entry.mtime = result.all_file_mtimes[i];
+        entry.is_regular_file = true;
+        out.push_back(std::move(entry));
+    }
+    return out;
+}
+
+std::vector<utilities::filesystem::FileEntry> scanned_entries(
+    const ResolverResult& result, const std::vector<FileWorkItem>& items) {
+    std::vector<utilities::filesystem::FileEntry> out;
+    out.reserve(items.size());
+    for (const auto& item : items) {
+        utilities::filesystem::FileEntry entry;
+        entry.path = item.file_path;
+        entry.size = result.all_file_sizes[item.file_index];
+        entry.mtime = result.all_file_mtimes[item.file_index];
+        entry.is_regular_file = true;
+        out.push_back(std::move(entry));
+    }
+    return out;
+}
+
 coro::CoroTask<ResolverResult> Resolver::operator()(
     CoroScope& ctx, const ResolverInput& input) const {
     DFTRACER_UTILS_TRACE_SCOPE("resolve index");
     ResolverResult result;
 
-    if (!input.directory.empty()) {
+    if (!input.entries.empty()) {
+        result.all_files.reserve(input.entries.size());
+        result.all_file_sizes.reserve(input.entries.size());
+        result.all_file_mtimes.reserve(input.entries.size());
+        for (const auto& entry : input.entries) {
+            result.all_files.push_back(entry.path.string());
+            result.all_file_sizes.push_back(entry.size);
+            result.all_file_mtimes.push_back(entry.mtime);
+        }
+    } else if (!input.directory.empty()) {
         utilities::filesystem::PatternDirectoryScannerUtilityInput scan_input{
             input.directory, utilities::filesystem::trace_file_patterns(),
             true};
@@ -338,12 +387,9 @@ coro::CoroTask<ResolverResult> Resolver::operator()(
         result.all_file_sizes.assign(input.files.size(), 0);
         result.all_file_mtimes.assign(input.files.size(), 0);
         for (std::size_t i = 0; i < input.files.size(); ++i) {
-            std::error_code ec;
-            auto sz = fs::file_size(input.files[i], ec);
-            if (!ec) result.all_file_sizes[i] = static_cast<std::size_t>(sz);
-            result.all_file_mtimes[i] = static_cast<std::uint64_t>(
-                index::store::internal::get_file_modification_time(
-                    input.files[i]));
+            const utilities::filesystem::FileEntry entry(input.files[i]);
+            result.all_file_sizes[i] = entry.size;
+            result.all_file_mtimes[i] = entry.mtime;
         }
     }
 

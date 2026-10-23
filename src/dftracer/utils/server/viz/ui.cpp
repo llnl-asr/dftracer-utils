@@ -30,7 +30,7 @@ std::string openapi_json(const Router& router) {
     b.start_object();
     b.append_key_value("title", "DFTracer Server API");
     b.append_comma();
-    b.append_key_value("version", "1");
+    b.append_key_value("version", "0");
     b.append_comma();
     b.append_key_value("description", "Query and visualize DFTracer traces.");
     b.end_object();

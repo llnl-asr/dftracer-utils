@@ -99,6 +99,16 @@ void expect_abort(const char* test_case, const char* text) {
 
 TEST_CASE("the test runs with the debug wrapper") { CHECK(debug_enabled()); }
 
+TEST_CASE("the allocation count rises by one per allocation") {
+    constexpr std::uint64_t N = 25;
+    void* blocks[N];
+    const auto before = debug_allocation_count();
+    for (auto& b : blocks) b = allocate(48, 16);
+    CHECK(debug_allocation_count() - before == N);
+    for (auto* b : blocks) deallocate(b);
+    CHECK(debug_allocation_count() - before == N);
+}
+
 TEST_CASE("a planted leak in a scratch pool reports its path and sites") {
     CaptureReports capture_reports;
     PoolHandle pool = Manager::get().root().child("debug leak");

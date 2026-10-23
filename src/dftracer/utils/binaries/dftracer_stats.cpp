@@ -1,5 +1,6 @@
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/build/batch_builder.h>
@@ -75,7 +76,7 @@ struct StatsConfig {
 class StatsArgParse : public cli::ArgParse {
    public:
     cli::DirectoryArgs directory{cli::DirMode::DefaultEmpty};
-    cli::FilesArgs files_args{"Trace files to inspect (.pfw, .pfw.gz)"};
+    cli::FilesArgs files_args{"Trace files to inspect (.pfw.gz)"};
     cli::PipelineArgs pipeline;
     cli::IndexingArgs indexing;
     cli::DuqlArgs duql_args;
@@ -877,7 +878,7 @@ static coro::CoroTask<std::vector<std::string>> collect_files(
     CoroScope& ctx, const std::vector<std::string>& cli_files,
     std::string directory) {
     if (!directory.empty()) {
-        if (!fs::exists(directory)) {
+        if (!dftracer::utils::input_exists(directory)) {
             DFTRACER_UTILS_LOG_ERROR("Directory does not exist: %s",
                                      directory.c_str());
             co_return std::vector<std::string>{};

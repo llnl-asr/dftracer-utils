@@ -1,5 +1,7 @@
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/index/build/index_write_lock.h>
 #include <dftracer/utils/index/extensions/bloom_filter.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
@@ -71,6 +73,60 @@ BloomFold::BloomFold(dftracer::utils::dstd::StringIntern& intern,
     dur_key_ = intern_->get_or_insert("dur");
 }
 
+BloomFold::Catalog BloomFold::file_catalog(const std::string& file) {
+    auto it = files_.find(file);
+    if (it == files_.end()) return {};
+    flush_shapes(it->second);
+    return catalog(it->second);
+}
+
+void BloomFold::observe_shape(FileState& fs,
+                              std::span<const SchemaLeaf> leaves) {
+    if (leaves.empty()) return;
+    auto same = [&](const Shape& s) {
+        return std::equal(leaves.begin(), leaves.end(), s.leaves.begin(),
+                          s.leaves.end());
+    };
+    if (fs.last_shape < fs.shapes.size() && same(fs.shapes[fs.last_shape])) {
+        ++fs.shapes[fs.last_shape].events;
+        return;
+    }
+    std::uint64_t h = leaves.size();
+    for (const auto& [id, tag] : leaves)
+        h = hash::splitmix64(h ^ ((std::uint64_t{id} << 8) | tag));
+    for (;; ++h) {
+        auto [it, fresh] = fs.shape_ids.try_emplace(
+            h, static_cast<std::uint32_t>(fs.shapes.size()));
+        if (fresh) {
+            Shape& s = fs.shapes.emplace_back();
+            s.leaves.assign(leaves.begin(), leaves.end());
+        } else if (!same(fs.shapes[it->second]))
+            continue;
+        fs.last_shape = it->second;
+        ++fs.shapes[it->second].events;
+        return;
+    }
+}
+
+void BloomFold::flush_shapes(FileState& fs) {
+    dstd::HashMap<std::uint64_t, std::uint64_t> total;
+    for (Shape& s : fs.shapes) {
+        if (s.events == 0) continue;
+        for (const auto& [id, tag] : s.leaves)
+            total[(std::uint64_t{id} << 8) | tag] += s.events;
+        s.events = 0;
+    }
+    for (const auto& [key, n] : total) {
+        const auto tag = static_cast<std::uint8_t>(key & 0xFF);
+        auto& stat = fs.paths[static_cast<std::uint32_t>(key >> 8)];
+        observe_catalog_path(stat, tag);
+        ++catalog_observations_;
+        if (static_cast<index::store::PathType>(tag) !=
+            index::store::PathType::NullValue)
+            stat.count += n - 1;
+    }
+}
+
 BloomFold::Catalog BloomFold::catalog(const FileState& fs) const {
     Catalog out;
     out.reserve(fs.paths.size());
@@ -130,10 +186,15 @@ void BloomFold::summarize(PathEvidence& ev, const AutoField& f) const {
 BloomFold::AutoKeys BloomFold::select_auto_keys(
     const std::string& file, const FileState& fs, std::uint64_t data_chunks,
     const std::map<std::string, std::uint32_t>& keys) const {
-    std::error_code ec;
-    const auto file_bytes = fs::file_size(file, ec);
+    std::uint64_t file_bytes = 0;
+    if (file_bytes_) {
+        file_bytes = *file_bytes_;
+    } else {
+        dftracer::utils::InputFileStat st;
+        if (dftracer::utils::stat_input(file, st)) file_bytes = st.size;
+    }
     const auto share = static_cast<std::uint64_t>(
-        config_.stats_share * static_cast<double>(ec ? 0 : file_bytes));
+        config_.stats_share * static_cast<double>(file_bytes));
     const std::uint64_t cap = std::max(index::build::STATS_FLOOR_BYTES, share);
     const double fpr = config_.false_positive_rate;
     const std::uint64_t file_bloom_floor =
@@ -230,6 +291,7 @@ BloomFold::ChunkState BloomFold::assemble_chunk(
 
 BloomFold::AutoKeys BloomFold::auto_keys(const std::string& file,
                                          FileState& fs) {
+    flush_shapes(fs);
     std::uint64_t data_chunks = 0;
     for (const auto& chunk : fs.spill.keys)
         if (chunk.events > 0) ++data_chunks;
@@ -306,11 +368,12 @@ std::uint64_t BloomFold::resident_bytes(const FileState& fs,
     return n;
 }
 
-void BloomFold::enable_spill(std::uint64_t share, std::string dir,
-                             int file_id) {
+void BloomFold::enable_spill(std::uint64_t share, std::string dir, int file_id,
+                             bool fresh_id) {
     spill_share_ = share;
     spill_dir_ = std::move(dir);
     spill_file_id_ = file_id;
+    spill_fresh_ = fresh_id;
 }
 
 std::size_t BloomFold::spill_runs() const {
@@ -333,7 +396,7 @@ void BloomFold::spill(FileState& fs, std::uint64_t upto) {
             spill_dir_, "run_" + std::to_string(sp.runs.size()));
     };
     auto run = open_run();
-    if (sp.runs.empty())
+    if (sp.runs.empty() && !spill_fresh_)
         for (auto ext : BV::tier_extensions(config_))
             index::store::records::clear_file(*run, ext, spill_file_id_);
     std::uint64_t buffered = 0;
@@ -399,8 +462,8 @@ BloomFold::finish_spilled(int file_id) {
     {
         auto deletes = open_run();
         // A file that never spilled clears its tier here, as its first spill
-        // run would have.
-        if (sp.runs.empty())
+        // run would have. A fresh id has nothing to clear.
+        if (sp.runs.empty() && !spill_fresh_)
             for (auto ext : BV::tier_extensions(config_))
                 index::store::records::clear_file(*deletes, ext, file_id);
         for (std::uint32_t k : sp.key_union)
@@ -486,7 +549,11 @@ void BloomFold::step(const trace::views::detail::FoldBatch& batch) {
 }
 
 BloomFold::Lane BloomFold::open(const trace::views::detail::FoldBatch& batch) {
-    FileState& fs = files_[batch.unit.file_path];
+    if (!last_state_ || last_file_ != batch.unit.file_path) {
+        last_state_ = &files_[batch.unit.file_path];
+        last_file_ = batch.unit.file_path;
+    }
+    FileState& fs = *last_state_;
     if (fs.index_path.empty()) fs.index_path = batch.unit.index_path;
 
     const std::uint64_t cp = batch.unit.checkpoint_idx;
@@ -503,8 +570,7 @@ BloomFold::Lane BloomFold::open(const trace::views::detail::FoldBatch& batch) {
 
     for (const auto& e : batch.events)
         if (e.phase != trace::RecordPhase::Metadata)
-            for (const auto& [leaf_id, tag] : e.schema_leaves)
-                observe_catalog_path(fs.paths[leaf_id], tag);
+            observe_shape(fs, e.schema_leaves);
     return lane;
 }
 
@@ -600,7 +666,9 @@ void BloomFold::drop_unit(const trace::views::detail::ScanUnit& unit) {
 
 void BloomFold::merge(trace::views::detail::Fold& slice) {
     auto& other = static_cast<BloomFold&>(slice);
+    last_state_ = nullptr;
     for (auto& [file, ofs] : other.files_) {
+        flush_shapes(ofs);
         FileState& fs = files_[file];
         if (fs.index_path.empty()) fs.index_path = ofs.index_path;
         for (auto& [cp, ochunk] : ofs.chunks) {

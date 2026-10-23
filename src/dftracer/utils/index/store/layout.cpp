@@ -1,4 +1,5 @@
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/index/store/layout.h>
 
 #include <algorithm>
@@ -8,7 +9,7 @@ namespace dftracer::utils::index::store::layout {
 
 namespace {
 
-constexpr std::array<KindSpec, 23> KINDS = {{
+constexpr std::array<KindSpec, 26> KINDS = {{
     {Ext::Members, members::MEMBER, Family::Members},
     {Ext::Members, members::METADATA, Family::Registry},
     {Ext::Members, members::RESTART, Family::Blob},
@@ -32,9 +33,12 @@ constexpr std::array<KindSpec, 23> KINDS = {{
     {Ext::Plugin, path_kind::DATA, Family::Blob},
     {Ext::Plugin, path_kind::FILE, Family::Blob},
     {Ext::Rowset, rowset_kind::FRAME, Family::Blob},
+    {Ext::Agg, agg_kind::PARTIAL, Family::Blob},
+    {Ext::Agg, agg_kind::META, Family::Blob},
+    {Ext::Agg, agg_kind::DICT, Family::Blob},
 }};
 
-constexpr std::uint8_t PAYLOAD_VERSION = 1;
+constexpr std::uint8_t PAYLOAD_VERSION = 0;
 constexpr std::uint8_t CODEC_RAW = 0;
 
 std::uint16_t type_id(Ext ext, std::uint8_t kind) {
@@ -56,8 +60,6 @@ std::string_view family_name(Family family) {
             return "blob";
         case Family::Postings:
             return "postings";
-        case Family::Aggregation:
-            return "aggregation";
         case Family::SystemMetrics:
             return "system_metrics";
     }
@@ -122,67 +124,48 @@ Family family_of(Ext ext, std::uint8_t kind) {
     return Family::Registry;
 }
 
-// Every extension is at version 1 until the first release: stored formats
+// Every extension is at version 0 until the first release: stored formats
 // change freely before then, and a development index is deleted, not migrated.
-std::uint32_t ext_version(Ext /*ext*/) { return 1; }
-
-void append_u16(std::string& out, std::uint16_t value) {
-    out.push_back(static_cast<char>(value >> 8U));
-    out.push_back(static_cast<char>(value & 0xFFU));
-}
-
-void append_u32(std::string& out, std::uint32_t value) {
-    for (int shift = 24; shift >= 0; shift -= 8)
-        out.push_back(static_cast<char>((value >> shift) & 0xFFU));
-}
-
-void append_u64(std::string& out, std::uint64_t value) {
-    for (int shift = 56; shift >= 0; shift -= 8)
-        out.push_back(static_cast<char>((value >> shift) & 0xFFU));
-}
+std::uint32_t ext_version(Ext /*ext*/) { return 0; }
 
 namespace {
 template <typename T>
-T read_be(std::string_view bytes) {
+T read_be_checked(std::string_view bytes) {
     if (bytes.size() < sizeof(T))
         throw DFTUtilsException(ErrorCode::Parse,
                                 "index layout: truncated integer");
-    T value = 0;
-    for (std::size_t i = 0; i < sizeof(T); ++i)
-        value = static_cast<T>((value << 8U) |
-                               static_cast<unsigned char>(bytes[i]));
-    return value;
+    return read_be<T>(reinterpret_cast<const std::uint8_t*>(bytes.data()));
 }
 }  // namespace
 
 std::uint16_t read_u16(std::string_view bytes) {
-    return read_be<std::uint16_t>(bytes);
+    return read_be_checked<std::uint16_t>(bytes);
 }
 std::uint32_t read_u32(std::string_view bytes) {
-    return read_be<std::uint32_t>(bytes);
+    return read_be_checked<std::uint32_t>(bytes);
 }
 std::uint64_t read_u64(std::string_view bytes) {
-    return read_be<std::uint64_t>(bytes);
+    return read_be_checked<std::uint64_t>(bytes);
 }
 
 std::string kind_prefix(Ext ext, std::uint8_t kind) {
     std::string key;
     key.reserve(KEY_PREFIX_BYTES + 16);
-    append_u16(key, static_cast<std::uint16_t>(ext));
+    append_u16_be(key, static_cast<std::uint16_t>(ext));
     key.push_back(static_cast<char>(kind));
     return key;
 }
 
 std::string file_prefix(Ext ext, std::uint8_t kind, std::uint32_t file_id) {
     auto key = kind_prefix(ext, kind);
-    append_u32(key, file_id);
+    append_u32_be(key, file_id);
     return key;
 }
 
 std::string granule_key(Ext ext, std::uint8_t kind, std::uint32_t file_id,
                         std::uint32_t granule) {
     auto key = file_prefix(ext, kind, file_id);
-    append_u32(key, granule);
+    append_u32_be(key, granule);
     return key;
 }
 
@@ -210,11 +193,11 @@ std::string prefix_end(std::string_view prefix) {
 std::string with_header(Ext ext, std::uint8_t kind, std::string_view payload) {
     std::string value;
     value.reserve(VALUE_HEADER_BYTES + payload.size());
-    append_u16(value, type_id(ext, kind));
+    append_u16_be(value, type_id(ext, kind));
     value.push_back(static_cast<char>(PAYLOAD_VERSION));
     value.push_back(static_cast<char>(CODEC_RAW));
     value.push_back(0);
-    append_u32(value, static_cast<std::uint32_t>(payload.size()));
+    append_u32_be(value, static_cast<std::uint32_t>(payload.size()));
     value.append(payload);
     return value;
 }
@@ -237,7 +220,7 @@ std::string manifest_prefix(std::uint32_t file_id) {
 
 std::string manifest_key(std::uint32_t file_id, Ext ext) {
     auto key = manifest_prefix(file_id);
-    append_u16(key, static_cast<std::uint16_t>(ext));
+    append_u16_be(key, static_cast<std::uint16_t>(ext));
     return key;
 }
 
@@ -252,7 +235,7 @@ std::string encode_path_stat(const PathStat& stat) {
     std::string out;
     out.push_back(static_cast<char>(stat.type));
     out.push_back(static_cast<char>(stat.seen));
-    append_u64(out, stat.count);
+    append_u64_be(out, stat.count);
     return out;
 }
 
@@ -267,8 +250,8 @@ std::optional<PathStat> decode_path_stat(std::string_view body) {
 
 std::string encode_manifest(const ManifestEntry& entry) {
     std::string body;
-    append_u32(body, entry.version);
-    append_u64(body, entry.params_hash);
+    append_u32_be(body, entry.version);
+    append_u64_be(body, entry.params_hash);
     body.push_back(static_cast<char>(entry.status));
     return with_header(Ext::Host, host::MANIFEST, body);
 }
@@ -310,10 +293,10 @@ std::string file_by_id_key(std::uint32_t file_id) {
 
 std::string encode_file_record(const FileRecord& record) {
     std::string body;
-    append_u32(body, record.file_id);
-    append_u64(body, record.mtime);
-    append_u64(body, record.hash);
-    append_u64(body, record.size);
+    append_u32_be(body, record.file_id);
+    append_u64_be(body, record.mtime);
+    append_u64_be(body, record.hash);
+    append_u64_be(body, record.size);
     return with_header(Ext::Host, host::FILE_BY_PATH, body);
 }
 
@@ -337,12 +320,12 @@ constexpr std::uint32_t OVER_CAP = 0xFFFFFFFFU;
 void append_list(std::string& out,
                  const std::optional<std::vector<std::string>>& list) {
     if (!list) {
-        append_u32(out, OVER_CAP);
+        append_u32_be(out, OVER_CAP);
         return;
     }
-    append_u32(out, static_cast<std::uint32_t>(list->size()));
+    append_u32_be(out, static_cast<std::uint32_t>(list->size()));
     for (const auto& v : *list) {
-        append_u32(out, static_cast<std::uint32_t>(v.size()));
+        append_u32_be(out, static_cast<std::uint32_t>(v.size()));
         out.append(v);
     }
 }
@@ -372,7 +355,7 @@ bool read_list(std::string_view& in,
 
 std::string encode_chunk_metadata(const ChunkMetadata& metadata) {
     std::string body;
-    append_u64(body, metadata.records);
+    append_u64_be(body, metadata.records);
     append_list(body, metadata.names);
     append_list(body, metadata.paths);
     return body;

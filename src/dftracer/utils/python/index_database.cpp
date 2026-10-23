@@ -154,8 +154,9 @@ static PyObject *IndexDatabase_write_agg_config(IndexDatabaseObject *self,
     const auto config = dftracer::utils::python::agg_config_from_py(config_obj);
     if (!run_blocking([&] {
             dftracer::utils::index::schemas::dft::agg::tier::write_config(
-                *self->db->db(), {config.time_interval_us, config.params_hash(),
-                                  config.group_by_file});
+                *self->db->db(),
+                {config.time_interval_us, config.params_hash(),
+                 config.group_by_file, config.extra_group_keys});
         }))
         return NULL;
     Py_RETURN_NONE;
@@ -270,7 +271,7 @@ static PyMethodDef IndexDatabase_methods[] = {
      "Ingest all SSTs collected in the SstArtifactRegistry.\n"
      "skip_cfs is an optional iterable of CF names whose SSTs are left "
      "outside the unified DB (used by distributed builds to keep "
-     "AGGREGATION/SYSTEM_METRICS SSTs addressable by manifest)."},
+     "SYSTEM_METRICS SSTs addressable by manifest)."},
     {"write_agg_config", DFTU_PYCFUNCTION(IndexDatabase_write_agg_config),
      METH_VARARGS,
      "write_agg_config(aggregation_config) -> None\n"

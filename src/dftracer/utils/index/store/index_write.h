@@ -7,6 +7,7 @@
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/layout.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -28,12 +29,36 @@ class IndexWrite {
                        std::string_view operand) = 0;
     virtual void delete_range(layout::Family family, std::string_view begin,
                               std::string_view end) = 0;
+    /// Removes exactly `key`.
+    virtual void del(layout::Family family, std::string_view key) = 0;
+
+    /// Marks `file_id` as reserved by this build: the index holds no data for
+    /// it, so the clears of `records` write nothing for it. -1 marks none.
+    void set_fresh_file(int file_id) noexcept { fresh_file_ = file_id; }
+    bool is_fresh_file(int file_id) const noexcept {
+        return file_id == fresh_file_;
+    }
+
+    /// Bytes this write holds in memory so far, for a caller that commits when
+    /// a write has grown past a budget.
+    std::size_t buffered_bytes() const noexcept { return buffered_bytes_; }
+
+   protected:
+    void note_bytes(std::size_t bytes) noexcept { buffered_bytes_ += bytes; }
+    void set_buffered_bytes(std::size_t bytes) noexcept {
+        buffered_bytes_ = bytes;
+    }
+
+   private:
+    int fresh_file_ = -1;
+    std::size_t buffered_bytes_ = 0;
 };
 
 /// Record writers. Each value gets the layout header of its (ext, kind).
 namespace records {
 
 /// Removes every key `file_id` owns for `ext`, its manifest entry included.
+/// Does nothing for a fresh file.
 void clear_file(IndexWrite& w, layout::Ext ext, int file_id);
 
 /// Marks `ext` built for `file_id` with the current code version. Written in
@@ -108,6 +133,14 @@ void put_catalog_path(IndexWrite& w, int file_id, std::string_view path,
 /// The rows of row set `name` of the file, as an Arrow IPC frame.
 void put_rowset(IndexWrite& w, int file_id, std::string_view name,
                 std::string_view frame);
+
+/// One partial of the file's aggregation, `payload` the serialized AggPartial;
+/// the ids are dictionary ids of the category, name, host hash text and extra
+/// key values.
+void put_agg_partial(IndexWrite& w, int file_id, std::uint64_t chunk,
+                     std::uint32_t cat_id, std::uint32_t name_id,
+                     std::uint32_t host_id, std::uint32_t extra_id,
+                     std::uint8_t kind, std::string_view payload);
 
 }  // namespace records
 

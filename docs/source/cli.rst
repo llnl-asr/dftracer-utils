@@ -72,8 +72,8 @@ repeated in each tool's section.
 **Inputs** (``DirectoryArgs`` / ``FilesArgs``)
 
 - ``-d, --directory <path>`` - Directory containing trace files
-- ``--files <files...>`` - Trace files (``.pfw``, ``.jsonl``, ``.ndjson``
-  or ``.json``, plain or gzip)
+- ``--files <files...>`` - Gzip trace files (``.pfw.gz``, ``.jsonl.gz``,
+  ``.ndjson.gz`` or ``.json.gz``)
 
 **Logging**
 
@@ -381,7 +381,7 @@ dftracer_stats
 
 **Options:**
 
-- ``-d, --directory <path>`` - Directory containing trace files (``.pfw``, ``.jsonl`` or ``.ndjson``, plain or gzip), read with all of its subfolders (default: .)
+- ``-d, --directory <path>`` - Directory containing gzip trace files (``.pfw.gz``, ``.jsonl.gz`` or ``.ndjson.gz``), read with all of its subfolders (default: .)
 - ``--files <files...>`` - Explicit list of trace files
 - ``--index-dir <path>`` - Directory to store index files (default: system temp directory)
 - ``--report <type>`` - Report type: summary, categories, names, pid_tids, time_range, duration, top-names, top-categories, detailed (default: summary)
@@ -427,7 +427,7 @@ dftracer_view
 **Options:**
 
 - ``--files <files...>`` - Trace files to process (.pfw.gz)
-- ``-d, --directory <path>`` - Directory scanned recursively for trace files (``.pfw``, ``.jsonl`` or ``.ndjson``, plain or gzip)
+- ``-d, --directory <path>`` - Directory scanned recursively for gzip trace files (``.pfw.gz``, ``.jsonl.gz`` or ``.ndjson.gz``)
 - ``--preset <name>`` - Predefined view: io, compute, dlio
 - ``--recipe <path>`` - Custom view JSON file path
 - ``--save-recipe <path>`` - Save the constructed view to a JSON file
@@ -521,7 +521,7 @@ dftracer_index
 
 **Options:**
 
-- ``-d, --directory <path>`` - Input directory containing trace files (``.pfw``, ``.jsonl`` or ``.ndjson``, plain or gzip), read with all of its subfolders (default: .)
+- ``-d, --directory <path>`` - Input directory containing gzip trace files (``.pfw.gz``, ``.jsonl.gz`` or ``.ndjson.gz``), read with all of its subfolders (default: .)
 - ``--dimensions <dims>`` - Comma-separated args fields to index by name, nested ones included (e.g., level,mode,io.size)
 - ``--schema <id>`` - Record schema of every trace: a registered id, such as ``dftracer`` or ``generic`` (default: detected per file from its first lines)
 - ``--memory-budget <bytes>`` - Bytes the build may hold at once; past it large files are indexed fewer at a time and spill to disk (default: 0 = about a third of available memory; accepts units such as 512MB)
@@ -753,7 +753,7 @@ dftracer_replay
     dftracer_replay ./traces/rank_0.pfw.gz --dry-run --log-level debug
 
     # Replay only POSIX read operations
-    dftracer_replay -d ./traces -r --filter-category POSIX --filter-function read
+    dftracer_replay ./traces --filter-category POSIX --filter-function read
 
 For detailed usage, see :doc:`utilities/replay`.
 
@@ -874,7 +874,10 @@ there are no regressions.
 
 **Output columns:**
 
-- **baseline / variant** - Metric values for each side (with +/-stdev when multiple time windows)
+- **baseline / variant** - Metric values for each side (with +/-stdev when multiple time windows).
+  ``count``, the ``dur`` and ``size`` means, ``transfer_size`` and ``bandwidth`` are per time
+  window (``--time-interval``) and use the busiest (pid, tid) pair of each window; the
+  shown value is the mean of those window peaks. The percentiles and the totals cover every event.
 - **delta** - Absolute difference (variant - baseline)
 - **change** - Percentage change
 - **sig** - Cohen's d significance marker: ``~`` negligible, ``*`` small, ``**`` medium, ``***`` large

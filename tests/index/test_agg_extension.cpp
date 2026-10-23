@@ -207,34 +207,7 @@ TEST_SUITE("AggExtension") {
         CHECK(count_reads({a, b}) == 100);
     }
 
-    TEST_CASE("a corrupt aggregation tier names the index directory") {
-        namespace layout = dftracer::utils::index::store::layout;
-        TestEnvironment env(10);
-        const auto gz = write_trace(env.get_dir(), "bad", 50, 1000);
-        Indexer::open({gz}, with_aggregation(1'000'000)).build();
-        {
-            IndexDatabase db(index_of(gz));
-            auto w = db.begin_write();
-            // An operand the aggregation merge operator cannot read.
-            w->merge(layout::Family::Aggregation, "\xFF\xFE", "garbage");
-            w->commit();
-        }
-        IndexDatabase db(index_of(gz), index::store::IndexOpenMode::ReadOnly);
-        bool threw = false;
-        try {
-            (void)index::schemas::dft::agg::tier::read_config(*db.db());
-        } catch (const std::exception& e) {
-            threw = true;
-            const std::string message = e.what();
-            CHECK(message.find(index_of(gz)) != std::string::npos);
-            CHECK(message.find("corrupt") != std::string::npos);
-            CHECK(message.find("delete that directory and build the index "
-                               "again") != std::string::npos);
-        }
-        CHECK(threw);
-    }
-
-    TEST_CASE("a corrupt aggregation tier is cleared and built again") {
+    TEST_CASE("an unreadable aggregation config is built again") {
         namespace layout = dftracer::utils::index::store::layout;
         TestEnvironment env(10);
         const auto gz = write_trace(env.get_dir(), "fix", 50, 1000);
@@ -243,8 +216,17 @@ TEST_SUITE("AggExtension") {
         {
             IndexDatabase db(index_of(gz));
             auto w = db.begin_write();
-            w->merge(layout::Family::Aggregation, "\xFF\xFE", "garbage");
+            // A record with no value header is in no format the reader knows.
+            auto key = layout::file_prefix(
+                layout::Ext::Agg, layout::agg_kind::META, layout::INDEX_WIDE);
+            key.append("config");
+            w->put(layout::Family::Blob, key, "garbage");
             w->commit();
+        }
+        {
+            IndexDatabase db(index_of(gz),
+                             index::store::IndexOpenMode::ReadOnly);
+            CHECK_FALSE(index::schemas::dft::agg::tier::read_config(*db.db()));
         }
         auto ix = Indexer::open({gz}, with_aggregation(1'000'000));
         ix.build();

@@ -712,7 +712,7 @@ class DaskTraceViewer:
 
     def collect_typed(self):
         """Distributed one-pass typed read -> {regular, aggregated, counters}
-        pyarrow Tables, fanning disjoint aggregation-CF shard ranges across
+        pyarrow Tables, fanning disjoint group ranges (hash shards) of the partials across
         workers (the index-wide tier can't be file-sharded)."""
         import pyarrow as pa
 
@@ -1009,7 +1009,7 @@ def _build_sst_task(
     # Opaque native aggregation-config object, forwarded straight to build_sst_batch.
     aggregation_config: "Optional[Union[bool, AggregationConfig]]" = None,
     enable_det_ids: bool = False,
-) -> Tuple[List[Dict[str, Optional[str]]], bytes]:
+) -> Tuple[List[Dict[str, List[str]]], bytes]:
     """Dask worker task: build per-worker SSTs and relocate to shared FS.
 
     Returns ``(artifact_dicts, tracker_blob)``."""
@@ -1051,9 +1051,9 @@ def _build_sst_task(
 
     n_moved = 0
     if shared_staging and shared_staging != local_staging:
-        # Keep per-sink subdir to avoid aggregation.sst collisions.
+        # Keep per-sink subdir to avoid blob.sst collisions.
         base = os.path.join(shared_staging, batch_id)
-        relocated: List[Dict[str, Optional[str]]] = []
+        relocated: List[Dict[str, List[str]]] = []
         for i, d in enumerate(artifact_dicts):
             relocated.append(move_artifacts(d, os.path.join(base, f"sub_{i}")))
         artifact_dicts = relocated
@@ -1327,7 +1327,7 @@ def distributed_index(
     worker_ids: List[int] = []
     worker_addrs: List[str] = []
     # Each entry is (artifact_dicts, tracker_blob) returned by _build_sst_task.
-    worker_results: List[Tuple[List[Dict[str, Optional[str]]], bytes]] = []
+    worker_results: List[Tuple[List[Dict[str, List[str]]], bytes]] = []
     if client is None:
         for w, (paths_w, ids_w, slices_w) in enumerate(
             zip(worker_file_lists, worker_file_ids, worker_slices)
@@ -1399,7 +1399,6 @@ def distributed_index(
     registry = _SstArtifactRegistry()
     total_artifacts = 0
     tracker_blobs: List[bytes] = []
-    has_aggregation = False
     for wres in worker_results:
         if isinstance(wres, tuple) and len(wres) == 2:
             dicts, tracker_blob = wres
@@ -1410,8 +1409,6 @@ def distributed_index(
         for d in dicts:
             registry.append(d)
             total_artifacts += 1
-            if isinstance(d, dict) and (d.get("aggregation_sst") or d.get("system_metrics_sst")):
-                has_aggregation = True
     _log.info(
         "distributed_index: collected %d artifacts in %.2fs",
         total_artifacts,
@@ -1431,7 +1428,7 @@ def distributed_index(
         _time.monotonic() - _t_ingest,
         total_artifacts,
     )
-    if aggregation_config is not None and has_aggregation:
+    if aggregation_config is not None and total_artifacts:
         _t_meta = _time.monotonic()
         db.write_agg_config(aggregation_config)
         if tracker_blobs:

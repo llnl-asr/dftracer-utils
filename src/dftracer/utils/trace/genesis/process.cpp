@@ -1030,7 +1030,7 @@ class SetAcc {
    private:
     void append_run(string_builder& sb) const {
         const RunKeys& keys = spec_->keys;
-        sb.append_raw(R"({"gtype":"run","version":1,)");
+        sb.append_raw(R"({"gtype":"run","version":0,)");
         append_run_keys(sb, id_, keys);
         sb.append_comma();
         sb.append_key_value("method", std::string_view("prorate"));

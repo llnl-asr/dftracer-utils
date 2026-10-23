@@ -1,7 +1,7 @@
-# Check that only the aggregation tier's store (agg/agg_store.cpp) reads or
-# writes the aggregation and system_metrics column families. The index store
-# may name them where it defines them: the family names, the column family
-# options with the merge operators, and the SST writer's merge setup.
+# Check that only the aggregation extension's store (agg/agg_store.cpp) reads
+# or writes the system_metrics column family. The index store may name it where
+# it defines it: the family name, the column family options with the merge
+# operator, and the SST writer's merge setup.
 #
 # Usage: cmake -DSOURCE_DIR=<repo root> -P check_agg_families.cmake
 
@@ -27,7 +27,7 @@ foreach(path ${sources})
     continue()
   endif()
   file(STRINGS "${path}" hits
-       REGEX "(cf|Family)::(AGGREGATION|SYSTEM_METRICS)")
+       REGEX "(cf|Family)::SYSTEM_METRICS")
   foreach(line ${hits})
     string(STRIP "${line}" line)
     if(NOT line MATCHES "^//")
@@ -38,6 +38,6 @@ endforeach()
 
 if(errors)
   message(FATAL_ERROR
-          "aggregation families named outside agg/agg_store.cpp:\n${errors}")
+          "system_metrics family named outside agg/agg_store.cpp:\n${errors}")
 endif()
-message(STATUS "aggregation families ok")
+message(STATUS "system_metrics family ok")

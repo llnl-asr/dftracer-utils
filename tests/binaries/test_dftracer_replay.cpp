@@ -646,6 +646,43 @@ TEST_SUITE("DFTracerReplay") {
         fs::remove_all(temp_dir, ec);
     }
 
+    TEST_CASE("the thread count does not change the result") {
+        auto binary = find_replay_binary();
+        REQUIRE_FALSE(binary.empty());
+
+        fs::path temp_dir =
+            dftu_utils_test::make_unique_test_path("replay_threads");
+        fs::create_directories(temp_dir);
+        std::vector<std::string> args = {"--dry-run", "--no-timing"};
+        std::size_t expected = 0;
+        for (std::size_t i = 0; i < 6; ++i) {
+            const std::string path =
+                (temp_dir / ("trace" + std::to_string(i) + ".pfw")).string();
+            create_sample_trace(path, 3 + i);
+            args.push_back(path);
+            expected += 3 + i;
+        }
+
+        auto count_after = [](const std::string& out, const std::string& key) {
+            const auto at = out.find(key);
+            REQUIRE(at != std::string::npos);
+            return std::stoull(out.substr(at + key.size()));
+        };
+        for (const char* threads : {"1", "4"}) {
+            auto run_args = args;
+            run_args.insert(run_args.begin(), {"--executor-threads", threads});
+            int rc = 0;
+            auto output = run_replay_capture(binary, run_args, &rc);
+            INFO("threads " << threads << ": " << output);
+            CHECK(rc == 0);
+            CHECK(count_after(output, "Total events: ") == expected);
+            CHECK(count_after(output, "Executed: ") == expected);
+        }
+
+        std::error_code ec;
+        fs::remove_all(temp_dir, ec);
+    }
+
     TEST_CASE("directory with trace files") {
         auto binary = find_replay_binary();
         if (binary.empty()) {

@@ -2,9 +2,11 @@
 #define DFTRACER_UTILS_TRACE_COMPARATOR_COMPARISON_RESULT_H
 
 #include <dftracer/utils/common/config.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_key.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_map.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_metrics.h>
+#include <dftracer/utils/dataframe/field_stat.h>
+#include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/utilities/common/arrow/arrow_export.h>
 #endif
@@ -12,17 +14,13 @@
 #include <cmath>
 #include <cstdint>
 #include <string>
-#include <unordered_map>
+#include <string_view>
 #include <vector>
 
 namespace dftracer::utils::trace::comparator {
 
-using dftracer::utils::index::schemas::dft::agg::AggregationKey;
-using dftracer::utils::index::schemas::dft::agg::AggregationKeyEqual;
-using dftracer::utils::index::schemas::dft::agg::AggregationKeyHash;
-using dftracer::utils::index::schemas::dft::agg::AggregationMap;
-using dftracer::utils::index::schemas::dft::agg::AggregationMetrics;
-using dftracer::utils::index::schemas::dft::agg::MetricStats;
+using dftracer::utils::index::schemas::dft::agg::AggPartial;
+using dftracer::utils::index::schemas::dft::agg::QuantileStore;
 
 /// Metric-name classification, shared by the Arrow exporter and the tree
 /// formatter so the atomic-name set cannot drift between them. Atomic names are
@@ -133,11 +131,12 @@ struct ComparisonOutput {
 /// Per-(category, operation) collapsed metrics aggregated across
 /// processes and time windows.
 ///
-/// Within each time window: max across processes.
+/// Within each time window: max across (pid, tid) pairs, the busiest thread.
 /// Across windows: mean +/- stdev of per-window max values.
 struct CollapsedMetrics {
-    /// DDSketch merged across all windows for percentile queries.
-    AggregationMetrics merged{0.01};
+    /// Everything of the group merged across windows and processes: the
+    /// count, the duration and size stats and their quantile stores.
+    AggPartial merged{};
     /// Mean of per-window max event counts.
     double count_mean = 0.0;
     /// Mean of per-window mean durations.
@@ -159,29 +158,38 @@ struct CollapsedMetrics {
     std::size_t num_windows = 0;
 };
 
+/// A (category, operation) group. The ids are in the table the comparison
+/// shares between its two sides.
+struct GroupKey {
+    std::uint32_t cat_id = 0;
+    std::uint32_t name_id = 0;
+
+    bool operator==(const GroupKey&) const = default;
+
+    std::string_view cat(const dstd::StringIntern& intern) const {
+        return intern.resolve(cat_id);
+    }
+    std::string_view name(const dstd::StringIntern& intern) const {
+        return intern.resolve(name_id);
+    }
+};
+
+struct GroupKeyHash {
+    using is_avalanching = void;
+    std::size_t operator()(const GroupKey& k) const noexcept {
+        return static_cast<std::size_t>(hash::splitmix64(
+            (static_cast<std::uint64_t>(k.cat_id) << 32) | k.name_id));
+    }
+};
+
 /// Map from (category, operation) key to collapsed metrics.
-using CollapsedMap =
-    std::unordered_map<AggregationKey, CollapsedMetrics, AggregationKeyHash,
-                       AggregationKeyEqual>;
+using CollapsedMap = dstd::HashMap<GroupKey, CollapsedMetrics, GroupKeyHash>;
 
-/// Extract trace metadata (unique PIDs, TIDs, makespan) from raw
-/// aggregation output.
-TraceMetadata extract_metadata(const dstd::StringIntern& intern,
-                               const AggregationMap& aggregations,
-                               std::size_t file_count);
-
-/// Collapse aggregation output by grouping on (category, name) and
-/// merging across time windows.
-/// `src` resolves the input keys; the collapsed keys are interned into `dst`,
-/// so two runs collapsed against one `dst` are comparable.
-CollapsedMap collapse_by_group(const AggregationMap& aggregations,
-                               const dstd::StringIntern& src,
-                               dstd::StringIntern& dst);
-
-/// Compute Cohen's d effect size from two MetricStats with sample
-/// counts.
-double compute_cohens_d(const MetricStats& baseline, std::uint64_t n_base,
-                        const MetricStats& variant, std::uint64_t n_var);
+/// Compute Cohen's d effect size from two FieldStats with sample counts.
+double compute_cohens_d(const dataframe::FieldStat& baseline,
+                        std::uint64_t n_base,
+                        const dataframe::FieldStat& variant,
+                        std::uint64_t n_var);
 
 /// Classify a Cohen's d value into a Significance level.
 Significance classify_significance(double cohens_d);

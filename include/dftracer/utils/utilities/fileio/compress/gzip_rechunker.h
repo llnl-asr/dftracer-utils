@@ -7,6 +7,7 @@
 #include <dftracer/utils/common/scoped_fd.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/io/io.h>
+#include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -15,15 +16,15 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace dftracer::utils::utilities::fileio::compress {
 
-/// The read and index paths decode a whole gzip member at once (libdeflate), so
-/// a single foreign member larger than this cannot be handled with bounded
-/// memory and must be rechunked first. Matches the reader's default guard.
+/// A member larger than this is worth rewriting as smaller members: the
+/// readers stream it, but a multi-member file is read faster and in parallel.
 inline constexpr std::size_t RECHUNK_MEMBER_CAP = std::size_t{1} << 31;
 
 /// What decoding the start of a file shows. `compressed` and `uncompressed`
@@ -46,11 +47,15 @@ inline coro::CoroTask<FirstMember> gzip_first_member(
     FirstMember member;
     if (file_size == 0) co_return member;
 
-    z_stream zs{};
-    if (inflateInit2(&zs, 15 + 16) != Z_OK) co_return member;
+    GzipStreamInflater gz;
+    if (!gz.init(15 + 16)) co_return member;
+    z_stream& zs = gz.z();
 
-    std::vector<unsigned char> in(1u << 20);
-    std::vector<unsigned char> out(1u << 20);
+    constexpr std::size_t BUFFER_BYTES = std::size_t{1} << 20;
+    const std::size_t in_bytes = static_cast<std::size_t>(
+        std::min<std::uint64_t>(BUFFER_BYTES, file_size));
+    auto in = std::make_unique_for_overwrite<unsigned char[]>(in_bytes);
+    auto out = std::make_unique_for_overwrite<unsigned char[]>(BUFFER_BYTES);
     std::uint64_t off = 0;
     std::uint64_t produced = 0;
     std::uint64_t member_produced = 0;
@@ -62,19 +67,19 @@ inline coro::CoroTask<FirstMember> gzip_first_member(
         if (zs.avail_in == 0) {
             if (off >= file_size) break;
             const std::size_t want = static_cast<std::size_t>(
-                std::min<std::uint64_t>(in.size(), file_size - off));
-            const ssize_t n = co_await io::pread(fd, in.data(), want,
-                                                 static_cast<off_t>(off));
+                std::min<std::uint64_t>(in_bytes, file_size - off));
+            const ssize_t n =
+                co_await io::pread(fd, in.get(), want, static_cast<off_t>(off));
             if (n <= 0) break;
             off += static_cast<std::uint64_t>(n);
-            zs.next_in = in.data();
+            zs.next_in = in.get();
             zs.avail_in = static_cast<uInt>(n);
         }
 
-        zs.next_out = out.data();
-        zs.avail_out = static_cast<uInt>(out.size());
-        int rc = inflate(&zs, Z_NO_FLUSH);
-        const std::uint64_t got = out.size() - zs.avail_out;
+        zs.next_out = out.get();
+        zs.avail_out = static_cast<uInt>(BUFFER_BYTES);
+        int rc = gz.inflate(Z_NO_FLUSH);
+        const std::uint64_t got = BUFFER_BYTES - zs.avail_out;
         produced += got;
         member_produced += got;
 
@@ -83,11 +88,10 @@ inline coro::CoroTask<FirstMember> gzip_first_member(
             break;
         }
         if (rc == Z_STREAM_END) {
-            finished += zs.total_in;
+            finished += gz.total_in();
             in_first = false;
             const bool more = zs.avail_in > 0 || off < file_size;
-            if (finished >= sample_bytes || !more ||
-                inflateReset2(&zs, 15 + 16) != Z_OK) {
+            if (finished >= sample_bytes || !more || !gz.reset()) {
                 counted = true;
                 break;
             }
@@ -100,20 +104,9 @@ inline coro::CoroTask<FirstMember> gzip_first_member(
         if (rc != Z_OK) break;
     }
 
-    member.compressed = counted ? finished : finished + zs.total_in;
+    member.compressed = counted ? finished : finished + gz.total_in();
     member.uncompressed = produced;
-    inflateEnd(&zs);
     co_return member;
-}
-
-/// True if the file's first gzip member decodes to more than `cap` uncompressed
-/// bytes, i.e. it would force an unbounded whole-member decode downstream and
-/// must be rechunked first. A bounded first member (whether the file is single-
-/// or multi-member) returns false, since the read/index paths handle it fine.
-inline coro::CoroTask<bool> gzip_needs_rechunk(int fd, std::uint64_t file_size,
-                                               std::size_t cap) {
-    const FirstMember member = co_await gzip_first_member(fd, file_size, cap);
-    co_return member.exceeds_cap;
 }
 
 /// Decodes `in_path` (single huge member or otherwise; plain text is read as
@@ -143,8 +136,9 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
     const bool plain = co_await io::pread(in_fd.get(), magic, 2, 0) != 2 ||
                        magic[0] != 0x1f || magic[1] != 0x8b;
 
-    z_stream zs{};
-    if (!plain && inflateInit2(&zs, 15 + 16) != Z_OK) {
+    GzipStreamInflater gz;
+    z_stream& zs = gz.z();
+    if (!plain && !gz.init(15 + 16)) {
         throw DFTUtilsException(ErrorCode::Compression,
                                 "inflateInit2 failed for " + in_path);
     }
@@ -201,14 +195,14 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
 
         zs.next_out = out.data();
         zs.avail_out = static_cast<uInt>(out.size());
-        rc = inflate(&zs, Z_NO_FLUSH);
+        rc = gz.inflate(Z_NO_FLUSH);
         co_await feed(
             std::string_view(reinterpret_cast<const char*>(out.data()),
                              out.size() - zs.avail_out));
 
         if (rc == Z_STREAM_END) {
-            if (zs.total_in >= file_size && zs.avail_in == 0) break;
-            if (inflateReset2(&zs, 15 + 16) != Z_OK) {
+            if (gz.total_in() >= file_size && zs.avail_in == 0) break;
+            if (!gz.reset()) {
                 ok = false;
                 break;
             }
@@ -217,52 +211,11 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
         }
     }
 
-    if (!plain) inflateEnd(&zs);
     if (!ok) {
         throw DFTUtilsException(ErrorCode::Compression,
                                 "decompression failed for " + in_path);
     }
     unwrap(co_await writer.close(carry));
-}
-
-/// If `path`'s first gzip member exceeds `member_size` uncompressed (a single
-/// huge member), rechunk it to ~member_size members at `<dir>/<basename>` and
-/// return that path; a plain (not gzip) file with content becomes
-/// `<dir>/<basename>.gz` the same way. Else return `path` unchanged.
-/// Non-destructive; a split copy newer than the source is reused. `did_split`
-/// = true when a split copy is returned. `member_size` 0 = default checkpoint
-/// size.
-inline coro::CoroTask<std::string> rechunk_to_dir_if_needed(
-    std::string path, std::string dir, std::size_t member_size,
-    bool& did_split) {
-    did_split = false;
-    ssize_t fd = co_await io::open(path.c_str(), O_RDONLY);
-    if (fd < 0) co_return path;
-    ScopedFd sfd(static_cast<int>(fd));
-    struct stat st;
-    if (::fstat(sfd.get(), &st) != 0) co_return path;
-    const auto fsize = static_cast<std::uint64_t>(st.st_size);
-    if (fsize == 0) co_return path;
-    unsigned char magic[2] = {0, 0};
-    const bool plain = co_await io::pread(sfd.get(), magic, 2, 0) != 2 ||
-                       magic[0] != 0x1f || magic[1] != 0x8b;
-    const std::size_t cap = member_size ? member_size : RECHUNK_MEMBER_CAP;
-    const bool needs =
-        plain || co_await gzip_needs_rechunk(sfd.get(), fsize, cap);
-    sfd.reset();
-    if (!needs) co_return path;
-
-    std::string split_path = dir + "/" + fs::path(path).filename().string();
-    if (plain && !split_path.ends_with(".gz")) split_path += ".gz";
-    did_split = true;
-    struct stat sst;
-    const bool fresh =
-        ::stat(split_path.c_str(), &sst) == 0 && sst.st_mtime >= st.st_mtime;
-    if (!fresh) {
-        fs::create_directories(dir);
-        co_await gzip_rechunk_to_members(path, split_path, member_size, 6);
-    }
-    co_return split_path;
 }
 
 }  // namespace dftracer::utils::utilities::fileio::compress

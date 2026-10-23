@@ -10,9 +10,6 @@
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_serialization.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregator_types.h>
-#include <dftracer/utils/index/schemas/dft/agg/event_aggregator.h>
 #include <dftracer/utils/index/schemas/dft/agg/system_metrics.h>
 #include <dftracer/utils/index/schemas/dft/agg/system_metrics_serialization.h>
 #include <dftracer/utils/index/store/db_manager.h>

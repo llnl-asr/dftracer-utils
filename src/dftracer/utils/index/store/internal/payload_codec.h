@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_INDEX_STORE_INTERNAL_PAYLOAD_CODEC_H
 #define DFTRACER_UTILS_INDEX_STORE_INTERNAL_PAYLOAD_CODEC_H
 
+#include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/index/store/error.h>
-#include <dftracer/utils/index/store/key_codec.h>
 
 #include <cstdint>
 #include <cstdio>
@@ -43,32 +43,13 @@ inline void append_u8(std::string& out, std::uint8_t value) {
     out.push_back(static_cast<char>(value));
 }
 
-inline void append_u32(std::string& out, std::uint32_t value) {
-    index::store::KeyCodec::append_be32(out, value);
-}
-
-inline void append_u64(std::string& out, std::uint64_t value) {
-    index::store::KeyCodec::append_be64(out, value);
-}
-
-inline void append_i64(std::string& out, std::int64_t value) {
-    index::store::KeyCodec::append_be64(out, static_cast<std::uint64_t>(value));
-}
-
-inline void append_double(std::string& out, double value) {
-    static_assert(sizeof(double) == sizeof(std::uint64_t));
-    std::uint64_t bits = 0;
-    std::memcpy(&bits, &value, sizeof(bits));
-    append_u64(out, bits);
-}
-
 inline void append_string(std::string& out, std::string_view value) {
-    append_u32(out, static_cast<std::uint32_t>(value.size()));
+    append_u32_be(out, static_cast<std::uint32_t>(value.size()));
     out.append(value.data(), value.size());
 }
 
 inline void append_blob(std::string& out, std::span<const unsigned char> blob) {
-    append_u32(out, static_cast<std::uint32_t>(blob.size()));
+    append_u32_be(out, static_cast<std::uint32_t>(blob.size()));
     out.append(reinterpret_cast<const char*>(blob.data()), blob.size());
 }
 
@@ -78,18 +59,19 @@ class Cursor {
 
     std::uint8_t u8() { return static_cast<std::uint8_t>(take(1)[0]); }
 
-    std::uint32_t u32() { return index::store::KeyCodec::decode_be32(take(4)); }
+    std::uint32_t u32() {
+        return read_u32_be(
+            reinterpret_cast<const std::uint8_t*>(take(4).data()));
+    }
 
-    std::uint64_t u64() { return index::store::KeyCodec::decode_be64(take(8)); }
+    std::uint64_t u64() {
+        return read_u64_be(
+            reinterpret_cast<const std::uint8_t*>(take(8).data()));
+    }
 
     std::int64_t i64() { return static_cast<std::int64_t>(u64()); }
 
-    double f64() {
-        std::uint64_t bits = u64();
-        double value = 0.0;
-        std::memcpy(&value, &bits, sizeof(value));
-        return value;
-    }
+    double f64() { return bits_double(u64()); }
 
     std::string_view str_view() {
         auto len = static_cast<std::size_t>(u32());

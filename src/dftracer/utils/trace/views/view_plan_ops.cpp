@@ -1,4 +1,5 @@
 #include <ankerl/unordered_dense.h>
+#include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/cache/mv_store.h>
@@ -195,19 +196,15 @@ void ensure_indexes_fresh(const std::vector<ViewFile>& files) {
         std::lock_guard<std::mutex> lock(confirmed_files().mu);
         for (const auto& f : files) {
             if (f.index_path.empty()) continue;
-            std::error_code ec;
-            const auto mtime = fs::last_write_time(f.file_path, ec);
-            if (ec) continue;
-            const auto size = fs::file_size(f.file_path, ec);
-            if (ec) continue;
+            dftracer::utils::InputFileStat file_stat;
+            if (!dftracer::utils::stat_input(f.file_path, file_stat)) continue;
             const std::string logical =
                 st::internal::get_logical_path(f.file_path);
             std::string key = logical;
             key += '\n';
-            key += std::to_string(
-                static_cast<long long>(mtime.time_since_epoch().count()));
+            key += std::to_string(static_cast<long long>(file_stat.mtime));
             key += '\n';
-            key += std::to_string(size);
+            key += std::to_string(file_stat.size);
             key += '\n';
             key += f.index_path;
             key += '\n';

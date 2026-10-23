@@ -1,14 +1,17 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/index/schemas/dft/agg/aggregator.h>
+#include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <dftracer/utils/trace/agg_query.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
 #include <fstream>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -52,21 +55,12 @@ std::string make_x_trace(TestEnvironment& env, const std::string& tag,
 namespace aggregators = dftracer::utils::index::schemas::dft::agg;
 
 // Build a full sidecar index including the aggregation tier the way the
-// aggregator does, so agg_tier_collect can answer without a scan.
-void build_shard_index(const std::string& gz) {
-    aggregators::AggregatorInput input;
-    input.directory = fs::path(gz).parent_path().string();
-    input.force_rebuild = true;
-    run_coro(
-        [&](dftracer::utils::CoroScope& ctx)
-            -> dftracer::utils::coro::CoroTask<void> {
-            aggregators::Aggregator agg;
-            auto gen = agg(ctx, input);
-            while (co_await gen.next()) {
-            }
-            co_return;
-        },
-        "sharded-view-test");
+// aggregator does, so the chunk partials can answer without a scan.
+void build_shard_index(const std::string& gz,
+                       const aggregators::AggregationConfig& config = {}) {
+    dftracer::utils::index::IndexerOptions options;
+    options.aggregation = config;
+    dftracer::utils::index::Indexer::open({gz}, options).build();
 }
 
 // Render a DataFrame canonically (String columns are the group keys, numeric
@@ -91,6 +85,97 @@ std::vector<std::string> canon(const dataframe::DataFrame& b) {
     }
     std::sort(rows.begin(), rows.end());
     return rows;
+}
+
+struct QueryOut {
+    struct Row {
+        std::uint64_t count = 0;
+        double sum = 0;
+        double p50 = 0;
+        double p90 = 0;
+    };
+    std::map<std::string, Row> rows;
+    std::size_t chunks_reread = 0;
+};
+
+QueryOut run_query(const dftracer::utils::trace::AggQuery& q) {
+    QueryOut out;
+    std::string error;
+    run_coro(
+        [&](dftracer::utils::CoroScope&)
+            -> dftracer::utils::coro::CoroTask<void> {
+            auto r = co_await dftracer::utils::trace::run_agg_query(q);
+            if (!r) {
+                error = r.error().format();
+                co_return;
+            }
+            out.chunks_reread = r->stats.chunks_reread;
+            for (const auto& [k, p] : r->rows)
+                out.rows[std::string(r->text(k.cat)) + "|" +
+                         std::string(r->text(k.name))] = {
+                    p.count, p.duration.sum, p.duration_q.quantile(0.5),
+                    p.duration_q.quantile(0.9)};
+            co_return;
+        },
+        "sharded-view-agg-query");
+    REQUIRE_MESSAGE(error.empty(), error);
+    return out;
+}
+
+void check_merged_partials(const std::string& tag,
+                           const aggregators::AggregationConfig& config) {
+    TestEnvironment env(200);
+    REQUIRE(env.is_valid());
+    std::string a = make_x_trace(env, tag + "alpha", 30, 20);
+    std::string b = make_x_trace(env, tag + "beta", 10, 40);
+    std::string ia = determine_index_path(a, "");
+    std::string ib = determine_index_path(b, "");
+    build_shard_index(a, config);
+    build_shard_index(b, config);
+
+    std::string root = env.get_dir() + "/set";
+    write_shard_set(root, {ia, ib});
+    std::string out = env.get_dir() + "/merged";
+    merge_shard_set(root, out);
+    std::string merged_idx = determine_index_path("x", out);
+
+    fs::remove(a);
+    fs::remove(b);
+
+    dftracer::utils::trace::AggQuery sharded;
+    sharded.config = config;
+    sharded.quantiles = config.compute_percentiles;
+    sharded.sources.resize(2);
+    sharded.sources[0].index_path = dstd::String(ia.data(), ia.size());
+    sharded.sources[0].files.push_back(dstd::String(a.data(), a.size()));
+    sharded.sources[1].index_path = dstd::String(ib.data(), ib.size());
+    sharded.sources[1].files.push_back(dstd::String(b.data(), b.size()));
+    const QueryOut expected = run_query(sharded);
+    REQUIRE(expected.chunks_reread == 0);
+    REQUIRE(expected.rows.size() == 2);
+
+    dftracer::utils::trace::AggQuery one;
+    one.config = config;
+    one.quantiles = config.compute_percentiles;
+    one.sources.resize(1);
+    one.sources[0].index_path =
+        dstd::String(merged_idx.data(), merged_idx.size());
+    one.sources[0].files.push_back(dstd::String(a.data(), a.size()));
+    one.sources[0].files.push_back(dstd::String(b.data(), b.size()));
+    const QueryOut got = run_query(one);
+    CHECK(got.chunks_reread == 0);
+    CHECK(got.rows.size() == expected.rows.size());
+    for (const auto& [key, value] : expected.rows) {
+        const auto it = got.rows.find(key);
+        REQUIRE_MESSAGE(it != got.rows.end(), key);
+        CHECK_MESSAGE(it->second.count == value.count, key);
+        CHECK_MESSAGE(it->second.sum == value.sum, key);
+        if (config.compute_percentiles) {
+            CHECK_MESSAGE(value.p90 > 0, key);
+            CHECK_MESSAGE(it->second.p50 == value.p50, key);
+            CHECK_MESSAGE(it->second.p90 == value.p90, key);
+        }
+    }
 }
 
 }  // namespace
@@ -385,9 +470,45 @@ TEST_SUITE("ShardedView") {
         CHECK(merged == sharded);
     }
 
+    // The partials must reach the merged index, or a query reads the traces.
+    TEST_CASE("merge_shard_set copies the aggregation partials") {
+        check_merged_partials("p", {});
+    }
+
+    // A shard built with another sketch accuracy keeps its quantiles.
+    TEST_CASE("merge_shard_set keeps quantiles of a non-default accuracy") {
+        aggregators::AggregationConfig config;
+        config.compute_percentiles = true;
+        config.sketch_accuracy = 0.05;
+        check_merged_partials("q", config);
+    }
+
     TEST_CASE("from_manifest throws when the manifest is absent") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         CHECK_THROWS(ShardedView::from_manifest(env.get_dir() + "/nope"));
+    }
+
+    TEST_CASE("from_manifest rejects a manifest with no or another version") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        std::string root = env.get_dir() + "/set";
+        fs::create_directories(root);
+
+        {
+            std::ofstream ofs(root + "/shards.json", std::ios::trunc);
+            ofs << R"({"shards":[]})";
+        }
+        CHECK_THROWS(ShardedView::from_manifest(root));
+
+        IndexShardManifest other;
+        other.format_version = IndexDatabase::FORMAT_VERSION + 1;
+        write_shard_manifest(root, other);
+        CHECK_THROWS(ShardedView::from_manifest(root));
+
+        IndexShardManifest current;
+        current.format_version = IndexDatabase::FORMAT_VERSION;
+        write_shard_manifest(root, current);
+        CHECK_NOTHROW(ShardedView::from_manifest(root));
     }
 }

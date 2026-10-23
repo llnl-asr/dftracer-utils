@@ -29,6 +29,9 @@ enum class GzipDecode : std::uint8_t {
     InsufficientSpace,
 };
 
+/// CRC32 as zlib's crc32(), computed by libdeflate. Start from 0. Thread-safe.
+std::uint32_t gzip_crc32(std::uint32_t crc, const void* data, std::size_t len);
+
 /// Reusable, not thread-safe (one per thread), move-only.
 class GzipMemberDecompressor {
    public:

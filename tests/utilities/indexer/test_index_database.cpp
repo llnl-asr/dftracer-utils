@@ -1,5 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
@@ -19,6 +20,7 @@ using dftracer::utils::index::schemas::dft::ChunkStatistics;
 using dftracer::utils::index::store::ColumnType;
 using dftracer::utils::index::store::IndexDatabase;
 namespace layout = dftracer::utils::index::store::layout;
+using dftracer::utils::append_u32_be;
 
 namespace {
 
@@ -35,7 +37,7 @@ void register_files(IndexDatabase& db, const std::vector<std::string>& paths) {
 
 void set_format_version(IndexDatabase& db, std::uint32_t version) {
     std::string body;
-    layout::append_u32(body, version);
+    append_u32_be(body, version);
     db.db()->put(
         layout::format_key(),
         layout::with_header(layout::Ext::Host, layout::host::FORMAT, body));
@@ -562,6 +564,54 @@ TEST_SUITE("IndexDatabase staleness") {
         auto result = db.find_stale_files({a});
         CHECK(result.format_outdated);
         CHECK(result.stale());
+    }
+}
+
+TEST_SUITE("IndexDatabase manifest") {
+    TEST_CASE("only a decoded, ready manifest at this version is current") {
+        using dftracer::utils::index::store::IndexExtension;
+        auto root = dftu_utils_test::make_unique_test_path("manifest_current");
+        IndexDatabase db((root / ".dftindex").string());
+        db.init_schema();
+        int file_id;
+        {
+            auto writer = db.begin_write();
+            file_id = dftu_utils_test::register_test_file(
+                *writer, "trace.pfw.gz", 0xAAAA);
+            writer->commit();
+        }
+
+        CHECK_FALSE(
+            db.extension_state(file_id, IndexExtension::Zonemap).has_value());
+        CHECK_FALSE(db.extension_current(file_id, IndexExtension::Zonemap));
+
+        {
+            auto writer = db.begin_write();
+            dftu_utils_test::mark_built(*writer, file_id);
+            writer->commit();
+        }
+        CHECK(db.extension_current(file_id, IndexExtension::Zonemap));
+
+        db.db()->put(layout::manifest_key(static_cast<std::uint32_t>(file_id),
+                                          IndexExtension::Zonemap),
+                     std::string("not a manifest"));
+        CHECK_FALSE(
+            db.extension_state(file_id, IndexExtension::Zonemap).has_value());
+        CHECK_FALSE(db.extension_current(file_id, IndexExtension::Zonemap));
+        CHECK(db.extension_current(file_id, IndexExtension::Members));
+    }
+
+    TEST_CASE("an index with no stored format is outdated") {
+        auto root = dftu_utils_test::make_unique_test_path("format_missing");
+        IndexDatabase db((root / ".dftindex").string());
+        db.init_schema();
+        CHECK(db.get_format_version() == IndexDatabase::FORMAT_VERSION);
+        CHECK_FALSE(db.format_outdated());
+        db.db()->del(layout::format_key());
+        CHECK_FALSE(db.get_format_version().has_value());
+        CHECK(db.format_outdated());
+        db.db()->put(layout::format_key(), std::string("garbage"));
+        CHECK(db.format_outdated());
     }
 }
 

@@ -126,7 +126,7 @@ where name in $names and name not in $skip and path like $p and path not ilike $
 ---
 time_range $t0 .. $t0 + 10s | time_range 1s .. | time_range .. 5s overlap | bucket 1s fill as sec | sample $n seed $s | union runs | union "b.pfw.gz"
 ---
-duql 0.1
+duql 0.0
 let runs = where type == "run";
 where run -> runs.app == "laghos"
 ---

@@ -1,6 +1,8 @@
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/common/scoped_fd.h>
 #include <dftracer/utils/duql/builder.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -10,16 +12,21 @@
 #include <dftracer/utils/json/line.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
+#include <fcntl.h>
 #include <simdjson.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <yaml-cpp/yaml.h>
 #include <zlib.h>
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cstdlib>
 #include <fstream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <shared_mutex>
 #include <sstream>
@@ -40,19 +47,22 @@ constexpr std::size_t MAX_RECORD = 256u * 1024 * 1024;
 // without its newline too, until it returns false or MAX_TEXT bytes were
 // read.
 template <typename Emit>
-void for_each_head_line(const std::string& path, Emit&& emit) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in)
-        throw DFTUtilsException::cat(ErrorCode::Io,
-                                     "cannot read trace for schema "
-                                     "detection: ",
-                                     path);
+void for_each_head_line(int fd, const std::string& path, Emit&& emit) {
     std::vector<char> comp(CHUNK);
-    in.read(comp.data(), 2);
-    const bool gz = in.gcount() == 2 &&
+    off_t offset = 0;
+    // Reads the next chunk; returns the byte count, 0 at the end, -1 on error.
+    auto read_chunk = [&](std::size_t n) -> ssize_t {
+        ssize_t got;
+        do {
+            got = ::pread(fd, comp.data(), n, offset);
+        } while (got < 0 && errno == EINTR);
+        if (got > 0) offset += got;
+        return got;
+    };
+    const bool gz = read_chunk(2) == 2 &&
                     static_cast<unsigned char>(comp[0]) == 0x1f &&
                     static_cast<unsigned char>(comp[1]) == 0x8b;
-    in.seekg(0);
+    offset = 0;
     std::string text;
     std::size_t consumed = 0;
     bool done = false;
@@ -76,8 +86,8 @@ void for_each_head_line(const std::string& path, Emit&& emit) {
         if (text.size() > MAX_RECORD) done = true;
     };
     if (!gz) {
-        while (!done && in.read(comp.data(), CHUNK).gcount() > 0)
-            feed(comp.data(), static_cast<std::size_t>(in.gcount()));
+        for (ssize_t got; !done && (got = read_chunk(CHUNK)) > 0;)
+            feed(comp.data(), static_cast<std::size_t>(got));
     } else {
         z_stream zs{};
         // Concatenated members decode as one stream (inflateReset at each
@@ -89,8 +99,7 @@ void for_each_head_line(const std::string& path, Emit&& emit) {
         bool eof = false;
         while (!done) {
             if (zs.avail_in == 0 && !eof) {
-                in.read(comp.data(), CHUNK);
-                const auto got = in.gcount();
+                const ssize_t got = read_chunk(CHUNK);
                 eof = got <= 0;
                 zs.next_in = reinterpret_cast<Bytef*>(comp.data());
                 zs.avail_in = eof ? 0 : static_cast<uInt>(got);
@@ -1001,35 +1010,75 @@ SchemaDetection explain_schema(std::span<const std::string_view> lines) {
     return d.finish();
 }
 
-SchemaDetection explain_file_schema(const std::string& file_path) {
-    struct Cached {
-        fs::file_time_type mtime;
-        std::uintmax_t size = 0;
-        std::size_t schemas = 0;
-        SchemaDetection detection;
-    };
-    static std::mutex mu;
-    static std::unordered_map<std::string, Cached> cache;
-    std::error_code ec;
-    const auto mtime = fs::last_write_time(file_path, ec);
-    const auto size = ec ? 0 : fs::file_size(file_path, ec);
+namespace {
+
+struct CachedDetection {
+    std::int64_t mtime_ns = 0;
+    std::uint64_t size = 0;
+    std::size_t schemas = 0;
+    SchemaDetection detection;
+};
+
+struct DetectionCache {
+    std::mutex mu;
+    // A std map: this is a process-lifetime static, and pool memory alive at
+    // exit would fail the memory exit check.
+    std::unordered_map<std::string, CachedDetection> map;
+};
+
+DetectionCache& detection_cache() {
+    static DetectionCache cache;
+    return cache;
+}
+
+// Cached per process by path, modification time, size and the registered
+// schemas.
+std::optional<SchemaDetection> cached_detection(const std::string& file_path,
+                                                std::uint64_t size,
+                                                std::int64_t mtime_ns) {
     const std::size_t schemas = registry().size();
-    if (!ec) {
-        std::lock_guard lock(mu);
-        const auto it = cache.find(file_path);
-        if (it != cache.end() && it->second.mtime == mtime &&
-            it->second.size == size && it->second.schemas == schemas)
-            return it->second.detection;
-    }
+    std::lock_guard lock(detection_cache().mu);
+    const auto it = detection_cache().map.find(file_path);
+    if (it != detection_cache().map.end() && it->second.mtime_ns == mtime_ns &&
+        it->second.size == size && it->second.schemas == schemas)
+        return it->second.detection;
+    return std::nullopt;
+}
+
+}  // namespace
+
+SchemaDetection explain_file_schema(const std::string& file_path, int fd,
+                                    std::uint64_t size, std::int64_t mtime_ns) {
+    if (const auto hit = cached_detection(file_path, size, mtime_ns))
+        return *hit;
     Detector d;
-    for_each_head_line(file_path,
+    for_each_head_line(fd, file_path,
                        [&](std::string_view line) { return d.add(line); });
     SchemaDetection out = d.finish();
-    if (!ec) {
-        std::lock_guard lock(mu);
-        cache.insert_or_assign(file_path, Cached{mtime, size, schemas, out});
+    {
+        std::lock_guard lock(detection_cache().mu);
+        detection_cache().map.insert_or_assign(
+            file_path, CachedDetection{mtime_ns, size, registry().size(), out});
     }
     return out;
+}
+
+SchemaDetection explain_file_schema(const std::string& file_path) {
+    InputFileStat st;
+    if (!stat_input(file_path, st))
+        throw DFTUtilsException::cat(ErrorCode::Io,
+                                     "cannot read trace for schema "
+                                     "detection: ",
+                                     file_path);
+    if (const auto hit = cached_detection(file_path, st.size, st.mtime_ns))
+        return *hit;
+    ScopedFd fd(::open(file_path.c_str(), O_RDONLY));
+    if (fd.get() < 0)
+        throw DFTUtilsException::cat(ErrorCode::Io,
+                                     "cannot read trace for schema "
+                                     "detection: ",
+                                     file_path);
+    return explain_file_schema(file_path, fd.get(), st.size, st.mtime_ns);
 }
 
 std::string to_json(const SchemaDetection& d) {
@@ -1055,6 +1104,12 @@ const RecordSchema& detect_schema(std::span<const std::string_view> lines) {
 
 const RecordSchema& detect_file_schema(const std::string& file_path) {
     return *explain_file_schema(file_path).chosen;
+}
+
+const RecordSchema& detect_file_schema(const std::string& file_path, int fd,
+                                       std::uint64_t size,
+                                       std::int64_t mtime_ns) {
+    return *explain_file_schema(file_path, fd, size, mtime_ns).chosen;
 }
 
 std::optional<std::int64_t> iso8601_micros(std::string_view s) {

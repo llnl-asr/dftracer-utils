@@ -1,6 +1,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/versions.h>
+#include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/duql/syntax/tree.h>
 #include <dftracer/utils/index/cache/lookup_store.h>
@@ -28,7 +29,7 @@ namespace {
 std::string value_key(std::uint64_t sig) {
     std::string key;
     key.push_back('\x01');
-    codec::put_be64(key, sig);
+    append_u64_be(key, sig);
     return key;
 }
 

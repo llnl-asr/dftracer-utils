@@ -11,7 +11,7 @@ no work. ``collect()`` runs the plan in a single pass and returns a
 (``containment``, the partials, ``statistics(lazy=True)``) return a
 :class:`~dftracer.utils.LazyResult`, which also runs on ``collect()``. When an
 index exists next to the traces, the same query is served from the index
-(chunk pruning, aggregation tiers, summaries) instead of a full decompress.
+(chunk pruning, aggregation partials, summaries) instead of a full decompress.
 
 .. code-block:: python
 

@@ -1,19 +1,33 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/internal/utils.h>
+#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
 #include <cctype>
 
 namespace dftracer::utils::trace::internal {
 
+namespace {
+
+bool is_directory_input(const std::string& path) {
+    dftracer::utils::InputFileStat st;
+    return dftracer::utils::stat_input(path, st) && st.is_directory;
+}
+
+}  // namespace
+
 std::string determine_index_path(const std::string& path,
                                  const std::string& index_dir) {
     fs::path data_path(path);
-    fs::path root = index_dir.empty() ? (fs::is_directory(data_path)
-                                             ? data_path
-                                             : data_path.parent_path())
-                                      : fs::path(index_dir);
+    // A trace file name needs no stat to tell it from a directory.
+    fs::path root = index_dir.empty()
+                        ? (!utilities::filesystem::is_trace_file(path) &&
+                                   is_directory_input(path)
+                               ? data_path
+                               : data_path.parent_path())
+                        : fs::path(index_dir);
     return dftracer::utils::index::store::internal::normalize_index_root(
         root.string());
 }

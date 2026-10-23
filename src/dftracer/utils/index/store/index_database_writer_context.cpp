@@ -1,3 +1,4 @@
+#include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/index/store/error.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/db_error.h>
@@ -21,6 +22,7 @@ IndexDatabaseWriterContext::~IndexDatabaseWriterContext() = default;
 void IndexDatabaseWriterContext::put(layout::Family family,
                                      std::string_view key,
                                      std::string_view value) {
+    note_bytes(key.size() + value.size());
     auto status = db_->put(batch_, layout::family_name(family), key, value);
     if (!status.ok()) internal::throw_db_error("Failed to stage put", status);
 }
@@ -28,6 +30,7 @@ void IndexDatabaseWriterContext::put(layout::Family family,
 void IndexDatabaseWriterContext::merge(layout::Family family,
                                        std::string_view key,
                                        std::string_view operand) {
+    note_bytes(key.size() + operand.size());
     auto status = db_->merge(batch_, layout::family_name(family), key, operand);
     if (!status.ok()) internal::throw_db_error("Failed to stage merge", status);
 }
@@ -35,10 +38,19 @@ void IndexDatabaseWriterContext::merge(layout::Family family,
 void IndexDatabaseWriterContext::delete_range(layout::Family family,
                                               std::string_view begin,
                                               std::string_view end) {
+    note_bytes(begin.size() + end.size());
     auto status =
         db_->delete_range(batch_, layout::family_name(family), begin, end);
     if (!status.ok())
         internal::throw_db_error("Failed to stage range delete", status);
+}
+
+void IndexDatabaseWriterContext::del(layout::Family family,
+                                     std::string_view key) {
+    note_bytes(key.size());
+    auto status = db_->del(batch_, layout::family_name(family), key);
+    if (!status.ok())
+        internal::throw_db_error("Failed to stage delete", status);
 }
 
 void IndexDatabaseWriterContext::commit() {
@@ -62,7 +74,7 @@ void IndexDatabaseWriterContext::init_schema() {
         it->SeekToFirst();
         if (it->Valid()) return;
         std::string body;
-        layout::append_u32(body, IndexDatabase::FORMAT_VERSION);
+        append_u32_be(body, IndexDatabase::FORMAT_VERSION);
         put(layout::Family::Registry, layout::format_key(),
             layout::with_header(layout::Ext::Host, layout::host::FORMAT, body));
         for (auto ext :
@@ -70,7 +82,7 @@ void IndexDatabaseWriterContext::init_schema() {
               layout::Ext::Bloom, layout::Ext::Counts, layout::Ext::Postings,
               layout::Ext::Stats}) {
             std::string id;
-            layout::append_u16(id, static_cast<std::uint16_t>(ext));
+            append_u16_be(id, static_cast<std::uint16_t>(ext));
             put(layout::Family::Registry, layout::ext_registry_key(ext),
                 layout::with_header(layout::Ext::Host, layout::host::EXT, id));
         }
@@ -103,7 +115,7 @@ int IndexDatabaseWriterContext::file_id_for(std::string_view logical_path) {
     }
     const auto file_id = static_cast<std::uint32_t>(cached_next_file_id_++);
     std::string body;
-    layout::append_u32(body, file_id + 1);
+    append_u32_be(body, file_id + 1);
     put(layout::Family::Registry, layout::next_file_id_key(),
         layout::with_header(layout::Ext::Host, layout::host::NEXT_FILE_ID,
                             body));

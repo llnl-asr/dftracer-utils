@@ -44,7 +44,7 @@ size string.
 AggregationConfig
 -----------------
 
-Configuration for the aggregation tier, passed via
+Configuration for the aggregation partials, passed via
 ``require_aggregation=AggregationConfig(...)``. Exported from
 ``dftracer.utils``.
 

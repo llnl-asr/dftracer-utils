@@ -1,7 +1,11 @@
 #ifndef DFTRACER_UTILS_UTILITIES_DLIO_TRACE_LOADER_H
 #define DFTRACER_UTILS_UTILITIES_DLIO_TRACE_LOADER_H
 
-#include <dftracer/utils/utilities/common/statistics/ddsketch.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/index/schemas/dft/agg/quantile_store.h>
 #include <dftracer/utils/utilities/dlio/barrier_simulator.h>
 #include <dftracer/utils/utilities/dlio/statistic.h>
 
@@ -13,7 +17,8 @@
 
 namespace dftracer::utils::utilities::dlio {
 
-using DDSketch = ::dftracer::utils::utilities::common::statistics::DDSketch;
+using QuantileStore =
+    ::dftracer::utils::index::schemas::dft::agg::QuantileStore;
 
 /// Default DLIO category / event names; overridable per-component via
 /// TraceLoaderOptions.
@@ -41,15 +46,14 @@ struct AggregatedTraces {
     std::vector<double> computation_times;  ///< fetch.block
     std::vector<double> preprocess_times;   ///< preprocess
 
-    /// Sketches merged across all (rank, bucket) entries for each component.
-    /// Nullable: only populated if the aggregator was run with
-    /// --compute-percentiles.
-    std::shared_ptr<DDSketch> fetch_block_sketch;
-    std::shared_ptr<DDSketch> fetch_iter_sketch;
-    std::shared_ptr<DDSketch> preprocess_sketch;
-    std::shared_ptr<DDSketch> getitem_sketch;
+    /// Duration quantiles merged across all (rank, bucket) entries for each
+    /// component. Null when the component has no events.
+    dstd::SharedPtr<QuantileStore> fetch_block_quantiles;
+    dstd::SharedPtr<QuantileStore> fetch_iter_quantiles;
+    dstd::SharedPtr<QuantileStore> preprocess_quantiles;
+    dstd::SharedPtr<QuantileStore> getitem_quantiles;
 
-    /// Statistics with min/max/mean/count populated, sketch attached when
+    /// Statistics with min/max/mean/count populated, quantiles attached when
     /// present.
     Statistic fetch_block_stats;
     Statistic fetch_iter_stats;
@@ -76,11 +80,15 @@ struct AggregatedTraces {
     /// True if any AGGREGATION entry was found.
     bool any_data = false;
 
-    /// True if at least one DDSketch was present in the CF. Drives whether
-    /// sample synthesis uses inverse-CDF or mean replication.
-    bool sketches_available = false;
+    /// True if any component has duration quantiles. Drives whether sample
+    /// synthesis uses inverse-CDF or mean replication.
+    bool quantiles_available = false;
 
-    /// Time bucket width in microseconds (from AggGlobalConfig).
+    /// Chunks the query read again from the trace. Zero when the stored
+    /// partials answered every (pid, bucket, cat, name) group.
+    std::uint64_t chunks_reread = 0;
+
+    /// Time bucket width in microseconds (from the aggregation config).
     std::uint64_t time_interval_us = 0;
 };
 
@@ -88,7 +96,7 @@ struct TraceLoaderOptions {
     /// Hard cap on samples synthesized per (cat, name, pid, bucket) entry, so a
     /// single high-count bucket cannot blow up memory. 0 disables the cap.
     std::uint64_t max_samples_per_entry = 100;
-    /// Seed for inverse-CDF sketch sampling.
+    /// Seed for inverse-CDF quantile sampling.
     std::uint64_t seed = 0xD15710;
 
     /// Per-component (cat, name) selectors; defaults are the DLIO event names.
@@ -101,12 +109,16 @@ struct TraceLoaderOptions {
     EventSelector item{std::string(CATEGORY_DATA), std::string(EVENT_ITEM)};
 };
 
-/// Loads aggregated DLIO trace data from a dftracer RocksDB. Opens the database
-/// read-only, iterates the AGGREGATION column family, and materializes per-rank
-/// trace arrays, distribution sample arrays, and trace-side
-/// ComponentTimeMetrics.
-AggregatedTraces load_aggregated_traces(const std::string& db_path,
-                                        const TraceLoaderOptions& options = {});
+/// Loads aggregated DLIO trace data with one aggregation query over `files`,
+/// grouped by (pid, `config.time_interval_us` window, cat, name), and
+/// materializes per-rank trace arrays, distribution sample arrays, and
+/// trace-side ComponentTimeMetrics. `index_path` is the index store of `files`
+/// and `config` the config it was built with. Blocks until the query ends.
+/// Throws DFTUtilsException when the query fails.
+AggregatedTraces load_aggregated_traces(
+    const std::string& index_path, const dstd::Vector<dstd::String>& files,
+    const index::schemas::dft::agg::AggregationConfig& config,
+    const TraceLoaderOptions& options = {});
 
 /// Overlays (cat, name) overrides from a YAML or JSON file onto the component
 /// selectors in `options`. Top-level keys fetch_block, fetch_iter, preprocess

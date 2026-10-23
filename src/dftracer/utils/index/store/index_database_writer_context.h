@@ -29,6 +29,7 @@ class IndexDatabaseWriterContext : public IndexWrite {
                std::string_view operand) override;
     void delete_range(layout::Family family, std::string_view begin,
                       std::string_view end) override;
+    void del(layout::Family family, std::string_view key) override;
 
     void commit();
 

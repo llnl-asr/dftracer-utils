@@ -8,13 +8,12 @@
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
+#include <dftracer/utils/index/store/index_database_sst_writer_context.h>
 #include <dftracer/utils/index/store/index_write.h>
-#include <dftracer/utils/runtime/coro/channel.h>
-#include <dftracer/utils/runtime/coro/task.h>
 
 #include <atomic>
-#include <chrono>
 #include <cstddef>
+#include <exception>
 #include <memory>
 #include <string>
 #include <vector>
@@ -56,140 +55,62 @@ struct BatchWriterMetrics {
     std::atomic<std::size_t> batches_committed{0};
 };
 
-/// Drain `channel`, group `ParsedIndexJob`s into batches of `batch_size`,
-/// and commit each batch through a fresh `IndexWrite` produced by
-/// `make_sink()`. The caller-provided `commit_sink(sink)` finalises the
-/// batch: for RocksDB-backed writes it calls `.commit()`; for SST-backed
-/// writes it flushes to disk and routes `Artifacts` to a registry.
-///
-/// `MakeSink` must be invocable as `() -> std::unique_ptr<IndexWrite>`
-/// (or any subclass thereof). `CommitSink` must be invocable as
-/// `(IndexWrite&) -> void`.
-///
-/// A job whose bloom fold spilled writes its tier as runs instead: they go to
-/// `commit_spill(runs)` after the batch commits, as that file's own ingest.
-template <typename MakeSink, typename CommitSink, typename CommitSpill>
-inline coro::CoroTask<void> index_batch_write_worker(
-    coro::Channel<ParsedIndexJob>* channel, std::size_t batch_size,
-    BatchWriterMetrics* metrics, MakeSink make_sink, CommitSink commit_sink,
-    CommitSpill commit_spill) {
-    std::vector<ParsedIndexJob> batch;
-    batch.reserve(batch_size);
+/// The spill runs of one file, committed as that file's own ingest once the
+/// sink they were written beside has committed.
+struct SpilledFile {
+    std::string file_path;
+    std::vector<index::store::IndexDatabaseSstWriterContext::Artifacts> runs;
+};
 
-    auto flush = [&]() {
-        if (batch.empty()) return;
-        auto start = std::chrono::steady_clock::now();
-
-        auto sink_owned = make_sink();
-        index::store::IndexWrite& sink = *sink_owned;
-        std::vector<std::pair<
-            ParsedIndexJob*,
-            std::vector<
-                index::store::IndexDatabaseSstWriterContext::Artifacts>>>
-            spilled;
-        for (auto& job : batch) {
-            if (!job.success) continue;
-            // Only a file that spilled while parsed writes its tier as runs.
-            const bool spills = job.bloom_fold && job.bloom_fold->writes_runs();
-            try {
-                if (!job.tier_only) {
-                    if (!job.logical_path.empty())
-                        index::store::records::put_file_record(
-                            sink, job.logical_path, job.record);
-                    index::gzip::persist_gzip_index_artifacts(sink, job.file_id,
-                                                              job.artifacts);
-                    // New members renumber the chunks, so tier data the
-                    // bloom fold does not rewrite would describe old ones. A
-                    // spilled tier clears in its own first run instead: this
-                    // batch may commit after that ingest.
-                    // A fresh id has no old data, and each clear is a range
-                    // delete that compaction must carry.
-                    for (auto ext : index::store::ALL_EXTENSIONS)
-                        if (!spills && !job.fresh_id &&
-                            ext != index::store::IndexExtension::Members)
-                            index::store::records::clear_file(sink, ext,
-                                                              job.file_id);
-                    // Plugin data is never in a spill run, so it clears here.
-                    if (!job.fresh_id)
-                        index::store::records::clear_file(
-                            sink, index::store::IndexExtension::Plugin,
-                            job.file_id);
-                    // After the clears, which cover core.profile too.
-                    if (job.schema)
-                        index::store::records::put_profile(
-                            sink, job.file_id, job.schema->id,
-                            job.schema->params_hash());
-                }
-                if (spills)
-                    spilled.emplace_back(
-                        &job, job.bloom_fold->finish_spilled(job.file_id));
-                else if (job.bloom_fold)
-                    job.bloom_fold->write(sink, job.file_id);
-                if (job.plugin_builders)
-                    job.plugin_builders->write(sink, job.file_id);
-                if (job.rowset_fold) job.rowset_fold->write(sink, job.file_id);
-                if (job.agg_fold) job.agg_fold->write(sink);
-            } catch (const std::exception& e) {
-                job.success = false;
-                job.error_message = e.what();
-                DFTRACER_UTILS_LOG_ERROR(
-                    "Failed to write index for %s: %s; file dropped from index",
-                    job.file_path.c_str(), e.what());
-            }
+/// Write `job` into `sink`, which the caller commits. A file whose bloom fold
+/// spilled writes its tier as runs instead: they are appended to `spilled`.
+/// Returns false, with `job.error_message` set, when the write failed; what
+/// was already written for the file is left in the sink.
+inline bool write_index_job(index::store::IndexWrite& sink, ParsedIndexJob& job,
+                            std::vector<SpilledFile>& spilled) {
+    sink.set_fresh_file(job.fresh_id ? job.file_id : -1);
+    // Only a file that spilled while parsed writes its tier as runs.
+    const bool spills = job.bloom_fold && job.bloom_fold->writes_runs();
+    try {
+        if (!job.tier_only) {
+            if (!job.logical_path.empty())
+                index::store::records::put_file_record(sink, job.logical_path,
+                                                       job.record);
+            index::gzip::persist_gzip_index_artifacts(sink, job.file_id,
+                                                      job.artifacts);
+            // New members renumber the chunks, so tier data the bloom fold
+            // does not rewrite would describe old ones. A spilled tier clears
+            // in its own first run instead: this sink may commit after that
+            // ingest. A fresh id has no old data, so its clears write nothing.
+            for (auto ext : index::store::ALL_EXTENSIONS)
+                if (!spills && ext != index::store::IndexExtension::Members)
+                    index::store::records::clear_file(sink, ext, job.file_id);
+            // Plugin data is never in a spill run, so it clears here.
+            index::store::records::clear_file(
+                sink, index::store::IndexExtension::Plugin, job.file_id);
+            // After the clears, which cover core.profile too.
+            if (job.schema)
+                index::store::records::put_profile(sink, job.file_id,
+                                                   job.schema->id,
+                                                   job.schema->params_hash());
         }
-        commit_sink(sink);
-        for (auto& [job, runs] : spilled) {
-            try {
-                commit_spill(std::move(runs));
-            } catch (const std::exception& e) {
-                job->success = false;
-                job->error_message = e.what();
-                DFTRACER_UTILS_LOG_ERROR(
-                    "Failed to ingest the spilled index of %s: %s",
-                    job->file_path.c_str(), e.what());
-            }
-        }
-
-        auto end = std::chrono::steady_clock::now();
-        if (metrics) {
-            metrics->write_ns.fetch_add(
-                static_cast<std::uint64_t>(
-                    std::chrono::duration_cast<std::chrono::nanoseconds>(end -
-                                                                         start)
-                        .count()),
-                std::memory_order_relaxed);
-            std::size_t written = 0;
-            for (const auto& job : batch) {
-                if (job.success) ++written;
-            }
-            metrics->files_written.fetch_add(written,
-                                             std::memory_order_relaxed);
-            metrics->batches_committed.fetch_add(1, std::memory_order_relaxed);
-        }
-        batch.clear();
-    };
-
-    // Each job carries its file's hash table, so a batch of the nominal size
-    // holds every entry of `batch_size` high-cardinality files at once. Flush
-    // early once the accumulated entries cross a budget to bound peak heap.
-    static constexpr std::size_t MAX_BATCH_HASH_ENTRIES = 2u * 1024 * 1024;
-    std::size_t batch_hash_entries = 0;
-
-    for (;;) {
-        auto item = co_await channel->receive();
-        if (!item) break;
-        std::size_t entries =
-            item->rowset_fold ? item->rowset_fold->entry_count() : 0;
-        batch.push_back(std::move(*item));
-        batch_hash_entries += entries;
-        if (batch.size() >= batch_size ||
-            batch_hash_entries >= MAX_BATCH_HASH_ENTRIES) {
-            flush();
-            batch_hash_entries = 0;
-        }
+        if (spills)
+            spilled.push_back(
+                {job.file_path, job.bloom_fold->finish_spilled(job.file_id)});
+        else if (job.bloom_fold)
+            job.bloom_fold->write(sink, job.file_id);
+        if (job.plugin_builders) job.plugin_builders->write(sink, job.file_id);
+        if (job.rowset_fold) job.rowset_fold->write(sink, job.file_id);
+        if (job.agg_fold) job.agg_fold->write(sink);
+    } catch (const std::exception& e) {
+        job.success = false;
+        job.error_message = e.what();
+        DFTRACER_UTILS_LOG_ERROR(
+            "Failed to write index for %s: %s; file dropped from index",
+            job.file_path.c_str(), e.what());
+        return false;
     }
-    flush();
-    co_return;
+    return true;
 }
 
 }  // namespace dftracer::utils::index::build

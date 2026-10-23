@@ -1,10 +1,10 @@
 #ifndef DFTRACER_UTILS_INDEX_STORE_INTERNAL_INDEX_ENCODING_H
 #define DFTRACER_UTILS_INDEX_STORE_INTERNAL_INDEX_ENCODING_H
 
+#include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/index/gzip/gzip_member_record.h>
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/index/store/internal/payload_codec.h>
-#include <dftracer/utils/index/store/key_codec.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -38,11 +38,10 @@ std::string encode_count_map_value(const Map& counts) {
     value.reserve(sizeof(std::uint32_t) +
                   counts.size() *
                       (sizeof(std::uint32_t) + sizeof(std::uint64_t)));
-    index::store::KeyCodec::append_be32(
-        value, static_cast<std::uint32_t>(counts.size()));
+    append_u32_be(value, static_cast<std::uint32_t>(counts.size()));
     for (const auto& [key, count] : counts) {
         append_string(value, key);
-        append_u64(value, count);
+        append_u64_be(value, count);
     }
     return value;
 }

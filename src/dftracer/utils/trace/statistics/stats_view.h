@@ -3,6 +3,8 @@
 
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/internal/column_read.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/trace/views/view.h>
 
@@ -106,9 +108,12 @@ class StatsView {
         st.duration_min_us = std::numeric_limits<std::uint64_t>::max();
 
         // One scan serves every breakdown; a materialized one reads its rollup.
-        std::vector<dataframe::LazyFrame> plans{cat_agg().lazy()};
+        // With pid/tid counts wanted, the category aggregate is grouped by
+        // pid and tid too, and both breakdowns come from its rows.
+        const std::size_t keys = needs.pid_tids ? 3 : 1;
+        std::vector<dataframe::LazyFrame> plans{
+            (needs.pid_tids ? cat_pid_agg() : cat_agg()).lazy()};
         if (needs.names) plans.push_back(name_agg().lazy());
-        if (needs.pid_tids) plans.push_back(pid_agg().lazy());
         std::vector<dataframe::DataFrame> frames =
             co_await dataframe::collect_all(std::move(plans));
 
@@ -124,10 +129,23 @@ class StatsView {
         const dataframe::Series& ctmin = c.columns[col(c, "tmin")];
         const dataframe::Series& ctmax = c.columns[col(c, "tmax")];
 
+        dstd::HashMap<dstd::String, std::size_t> cat_at;
         for (std::int64_t i = 0; i < c.num_rows(); ++i) {
             const std::uint64_t ni = static_cast<std::uint64_t>(i64_at(cn, i));
-            st.category_counts.emplace_back(
-                std::string(c.columns[0].string_at(i)), ni);
+            if (keys == 1) {
+                st.category_counts.emplace_back(
+                    std::string(c.columns[0].string_at(i)), ni);
+            } else {
+                const std::string_view cat = c.columns[0].string_at(i);
+                const auto it = cat_at.find(cat);
+                if (it == cat_at.end()) {
+                    cat_at.emplace(dstd::String(cat),
+                                   st.category_counts.size());
+                    st.category_counts.emplace_back(std::string(cat), ni);
+                } else {
+                    st.category_counts[it->second].second += ni;
+                }
+            }
             st.total_events += ni;
             st.duration_count += ni;
             st.duration_sum_us += i64_at(cdsum, i);
@@ -164,16 +182,22 @@ class StatsView {
                     static_cast<std::uint64_t>(i64_at(nn, i)));
         }
         if (needs.pid_tids) {
-            const dataframe::DataFrame& pb = frames.back();
-            const dataframe::Series& pn = pb.columns[col(pb, "n")];
-            const dataframe::Series& pid_col = pb.columns[0];
-            const dataframe::Series& tid_col = pb.columns[1];
-            st.pid_tid_counts.reserve(static_cast<std::size_t>(pb.num_rows()));
-            for (std::int64_t i = 0; i < pb.num_rows(); ++i)
-                st.pid_tid_counts.emplace_back(
-                    std::string(pid_col.string_at(i)) + ":" +
-                        std::string(tid_col.string_at(i)),
-                    static_cast<std::uint64_t>(i64_at(pn, i)));
+            const dataframe::Series& pid_col = c.columns[1];
+            const dataframe::Series& tid_col = c.columns[2];
+            dstd::HashMap<dstd::String, std::size_t> pid_tid_at;
+            for (std::int64_t i = 0; i < c.num_rows(); ++i) {
+                std::string key = std::string(pid_col.string_at(i)) + ":" +
+                                  std::string(tid_col.string_at(i));
+                const auto n = static_cast<std::uint64_t>(i64_at(cn, i));
+                const auto it = pid_tid_at.find(std::string_view(key));
+                if (it == pid_tid_at.end()) {
+                    pid_tid_at.emplace(dstd::String(key),
+                                       st.pid_tid_counts.size());
+                    st.pid_tid_counts.emplace_back(std::move(key), n);
+                } else {
+                    st.pid_tid_counts[it->second].second += n;
+                }
+            }
         }
         co_return st;
     }
@@ -182,23 +206,15 @@ class StatsView {
     /// Idempotent: only the selected groups whose rollup does not already exist
     /// are (re)built, and if all are present it is a no-op with no scan.
     coro::CoroTask<void> materialize(StatNeeds needs = {}) const {
-        const bool want_cat = !cat_agg().reconstruct_if_cached().has_value();
+        const views::View cat = needs.pid_tids ? cat_pid_agg() : cat_agg();
+        const bool want_cat = !cat.reconstruct_if_cached().has_value();
         const bool want_name =
             needs.names && !name_agg().reconstruct_if_cached().has_value();
-        const bool want_pid =
-            needs.pid_tids && !pid_agg().reconstruct_if_cached().has_value();
-        if (!want_cat && !want_name && !want_pid) co_return;
+        if (!want_cat && !want_name) co_return;
 
-        if (want_cat) {
-            const views::View agg = cat_agg();
-            co_await agg.materialize();
-        }
+        if (want_cat) co_await cat.materialize();
         if (want_name) {
             const views::View agg = name_agg();
-            co_await agg.materialize();
-        }
-        if (want_pid) {
-            const views::View agg = pid_agg();
             co_await agg.materialize();
         }
     }
@@ -248,6 +264,11 @@ class StatsView {
         return {{views::AggOp::Count, "", "n"}};
     }
 
+    views::View cat_pid_agg() const {
+        std::vector<views::GroupKey> keys = cat_keys();
+        for (auto& k : pid_keys()) keys.push_back(std::move(k));
+        return view().group_by(std::move(keys)).agg(cat_specs());
+    }
     views::View cat_agg() const {
         return view().group_by(cat_keys()).agg(cat_specs());
     }

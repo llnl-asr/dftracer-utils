@@ -1,15 +1,14 @@
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_metrics.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_serialization.h>
-#include <dftracer/utils/index/schemas/dft/agg/event_aggregator.h>
-#include <dftracer/utils/index/store/database.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
+#include <dftracer/utils/trace/agg_query.h>
 #include <dftracer/utils/utilities/dlio/trace_loader.h>
 #include <yaml-cpp/yaml.h>
 
 #include <algorithm>
 #include <cstdint>
-#include <cstdio>
 #include <map>
 #include <random>
 #include <stdexcept>
@@ -22,12 +21,9 @@ namespace dftracer::utils::utilities::dlio {
 namespace {
 
 namespace agg = dftracer::utils::index::schemas::dft::agg;
-namespace rdb = dftracer::utils::index::store;
 
 constexpr double US_TO_S = 1e-6;
 
-// AGGREGATION CF contains data keys (varint-encoded) and reserved system keys
-// prefixed with 0xFF{FD,FE,FF}. Filter those out.
 inline bool matches(std::string_view a, std::string_view b) { return a == b; }
 
 struct ComponentAccumulator {
@@ -38,8 +34,9 @@ struct ComponentAccumulator {
         per_pid_bucket_samples;
     // Boundary list (in microseconds) for sweep_union of trace-side wall clock.
     std::vector<Boundary> boundaries;
-    // Merged sketch across all entries; nullptr until first sketch is seen.
-    std::shared_ptr<DDSketch> sketch;
+    // Merged duration quantiles across all entries; null until the first
+    // entry with values is seen.
+    dstd::SharedPtr<QuantileStore> quantiles;
     // Aggregate accumulators.
     double accumulated_time_s = 0.0;  // sum of count * mean (s)
     std::uint64_t total_count = 0;
@@ -60,25 +57,28 @@ void apply_minmax(ComponentAccumulator& acc, double min_us, double max_us) {
 }
 
 // Synthesize per-call durations (seconds) for a single (cat, name, pid, bucket)
-// entry. When a sketch is available we draw `n` samples via inverse-CDF for
+// entry. When quantiles are available we draw `n` samples via inverse-CDF for
 // within-bucket variance; otherwise we replicate the per-call mean. `n` is
 // clamped to `max_samples` if non-zero.
-void synthesize_samples(const agg::AggregationMetrics& metrics,
+void synthesize_samples(const agg::AggPartial& partial,
                         std::uint64_t max_samples, std::mt19937_64& rng,
                         std::vector<double>& out) {
-    if (metrics.count == 0) return;
+    if (partial.count == 0) return;
     const auto desired =
-        max_samples == 0 ? metrics.count : std::min(metrics.count, max_samples);
+        max_samples == 0 ? partial.count : std::min(partial.count, max_samples);
     if (desired == 0) return;
 
-    const double mean_s = metrics.duration.mean() * US_TO_S;
-    if (metrics.duration.sketch) {
+    const double mean_s = partial.duration.n == 0
+                              ? 0.0
+                              : partial.duration.sum /
+                                    static_cast<double>(partial.duration.n) *
+                                    US_TO_S;
+    if (partial.duration_q.count() > 0) {
         std::uniform_real_distribution<double> u01(0.0, 1.0);
         out.reserve(out.size() + desired);
         for (std::uint64_t i = 0; i < desired; ++i) {
             const double q = u01(rng);
-            const double v_us = metrics.duration.sketch->quantile(q);
-            out.push_back(v_us * US_TO_S);
+            out.push_back(partial.duration_q.quantile(q) * US_TO_S);
         }
     } else {
         out.insert(out.end(), desired, mean_s);
@@ -111,28 +111,41 @@ std::vector<std::vector<double>> flatten_per_rank(
 
 }  // namespace
 
-AggregatedTraces load_aggregated_traces(const std::string& db_path,
+AggregatedTraces load_aggregated_traces(const std::string& index_path,
+                                        const dstd::Vector<dstd::String>& files,
+                                        const agg::AggregationConfig& config,
                                         const TraceLoaderOptions& options) {
-    // The AGGREGATION CF was created with a merge operator; we must re-attach
-    // it (read-only) so RocksDB will let us iterate the CF. Without the merge
-    // operator, NewIterator() returns "merge_operator_ must be set".
-    auto db_handle =
-        agg::tier::open(db_path, rdb::RocksDatabase::OpenMode::ReadOnly);
-    if (!db_handle) {
-        throw DFTUtilsException(ErrorCode::Io,
-                                "dlio: failed to open RocksDB at " + db_path);
-    }
-    auto& db = *db_handle;
-
-    // The intern dictionary must be populated before any key parsing happens.
-    auto intern_table = agg::intern_for_index(db_path);
-    agg::tier::load_dictionary(db, *intern_table);
-    const auto& intern = intern_table->intern;
-
     AggregatedTraces out;
+    out.time_interval_us = config.time_interval_us;
 
-    if (auto cfg = agg::tier::read_config(db))
-        out.time_interval_us = cfg->time_interval_us;
+    const EventSelector* const selectors[] = {
+        &options.fetch_block, &options.fetch_iter, &options.preprocess,
+        &options.item};
+    trace::AggQuery query;
+    trace::AggQuerySource source;
+    source.index_path = dstd::String(index_path);
+    source.files = files;
+    query.sources.push_back(std::move(source));
+    query.config = config;
+    query.by_pid = true;
+    query.window_us = config.time_interval_us;
+    query.quantiles = true;
+    query.args = false;
+    for (const auto* sel : selectors) {
+        const dstd::String name(sel->name);
+        if (std::find(query.names.begin(), query.names.end(), name) ==
+            query.names.end())
+            query.names.push_back(name);
+    }
+
+    auto queried = trace::run_agg_query(query).get();
+    if (!queried) {
+        throw DFTUtilsException(
+            ErrorCode::Io,
+            "dlio: aggregation query failed: " + queried.error().format());
+    }
+    trace::AggQueryResult& result = *queried;
+    out.chunks_reread = result.stats.chunks_reread;
 
     ComponentAccumulator acc_fetch_block;
     ComponentAccumulator acc_fetch_iter;
@@ -142,68 +155,78 @@ AggregatedTraces load_aggregated_traces(const std::string& db_path,
     std::unordered_set<std::uint64_t> pid_set;
     std::mt19937_64 rng(options.seed);
 
-    agg::tier::for_each_row(
-        db, 0, agg::AGG_KEY_NUM_SHARDS,
-        [&](std::string_view key_sv, std::string_view val_sv) {
-            agg::AggKeyView kv;
-            if (!agg::parse_agg_key_view(key_sv, intern, kv)) return true;
+    // The row map has no order, and the sample draws share one generator, so
+    // rows go by their key. Names, not ids: ids follow the order of interning.
+    dstd::Vector<const trace::AggQueryResult::Rows::value_type*> rows;
+    rows.reserve(result.rows.size());
+    for (const auto& row : result.rows) rows.push_back(&row);
+    std::sort(rows.begin(), rows.end(), [&](const auto* a, const auto* b) {
+        const trace::AggKey& x = a->first;
+        const trace::AggKey& y = b->first;
+        if (x.pid != y.pid) return x.pid < y.pid;
+        if (x.window != y.window) return x.window < y.window;
+        const auto cx = result.text(x.cat);
+        const auto cy = result.text(y.cat);
+        if (cx != cy) return cx < cy;
+        return result.text(x.name) < result.text(y.name);
+    });
 
-            ComponentAccumulator* target = nullptr;
-            if (matches(kv.cat, options.fetch_block.cat) &&
-                matches(kv.name, options.fetch_block.name)) {
-                target = &acc_fetch_block;
-            } else if (matches(kv.cat, options.fetch_iter.cat) &&
-                       matches(kv.name, options.fetch_iter.name)) {
-                target = &acc_fetch_iter;
-            } else if (matches(kv.cat, options.preprocess.cat) &&
-                       matches(kv.name, options.preprocess.name)) {
-                target = &acc_preprocess;
-            } else if (matches(kv.cat, options.item.cat) &&
-                       matches(kv.name, options.item.name)) {
-                target = &acc_getitem;
-            } else {
-                return true;
-            }
+    for (const auto* row : rows) {
+        const trace::AggKey& key = row->first;
+        const agg::AggPartial& partial = row->second;
+        const std::string_view cat = result.text(key.cat);
+        const std::string_view name = result.text(key.name);
 
-            auto metrics = agg::deserialize_agg_value(val_sv);
-            if (metrics.count == 0) return true;
+        ComponentAccumulator* target = nullptr;
+        if (matches(cat, options.fetch_block.cat) &&
+            matches(name, options.fetch_block.name)) {
+            target = &acc_fetch_block;
+        } else if (matches(cat, options.fetch_iter.cat) &&
+                   matches(name, options.fetch_iter.name)) {
+            target = &acc_fetch_iter;
+        } else if (matches(cat, options.preprocess.cat) &&
+                   matches(name, options.preprocess.name)) {
+            target = &acc_preprocess;
+        } else if (matches(cat, options.item.cat) &&
+                   matches(name, options.item.name)) {
+            target = &acc_getitem;
+        } else {
+            continue;
+        }
 
-            out.any_data = true;
-            pid_set.insert(kv.pid);
+        if (partial.count == 0) continue;
 
-            // Synthesize per-call samples for this entry.
-            auto& bucket_vec =
-                target->per_pid_bucket_samples[kv.pid][kv.time_bucket];
-            synthesize_samples(metrics, options.max_samples_per_entry, rng,
-                               bucket_vec);
+        out.any_data = true;
+        pid_set.insert(key.pid);
 
-            // Accumulate component-level state.
-            target->accumulated_time_s +=
-                static_cast<double>(metrics.duration.total()) * US_TO_S;
-            target->total_count += metrics.count;
-            apply_minmax(*target, static_cast<double>(metrics.duration.min()),
-                         static_cast<double>(metrics.duration.max()));
+        // Synthesize per-call samples for this entry.
+        auto& bucket_vec = target->per_pid_bucket_samples[key.pid][key.window];
+        synthesize_samples(partial, options.max_samples_per_entry, rng,
+                           bucket_vec);
 
-            // Real per-entry (ts, te) interval for trace-side union time.
-            if (metrics.te > metrics.ts) {
-                target->boundaries.push_back(
-                    {static_cast<std::int64_t>(metrics.ts), +1});
-                target->boundaries.push_back(
-                    {static_cast<std::int64_t>(metrics.te), -1});
-            }
+        // Accumulate component-level state.
+        target->accumulated_time_s += partial.duration.sum * US_TO_S;
+        target->total_count += partial.count;
+        if (partial.duration.n > 0)
+            apply_minmax(*target, partial.duration.min, partial.duration.max);
 
-            // Merge sketch when present.
-            if (metrics.duration.sketch) {
-                out.sketches_available = true;
-                if (!target->sketch) {
-                    target->sketch =
-                        std::make_shared<DDSketch>(*metrics.duration.sketch);
-                } else {
-                    target->sketch->merge(*metrics.duration.sketch);
-                }
-            }
-            return true;
-        });
+        // Real per-entry (ts, te) interval for trace-side union time.
+        if (partial.te > partial.ts) {
+            target->boundaries.push_back(
+                {static_cast<std::int64_t>(partial.ts), +1});
+            target->boundaries.push_back(
+                {static_cast<std::int64_t>(partial.te), -1});
+        }
+
+        // Merge quantiles when present.
+        if (partial.duration_q.count() > 0) {
+            out.quantiles_available = true;
+            if (!target->quantiles)
+                target->quantiles =
+                    dstd::make_shared<QuantileStore>(config.sketch_accuracy);
+            target->quantiles->merge(partial.duration_q);
+        }
+    }
 
     if (!out.any_data) {
         return out;
@@ -247,25 +270,25 @@ AggregatedTraces load_aggregated_traces(const std::string& db_path,
         }
     }
 
-    // Sketches + Statistic objects.
+    // Quantiles + Statistic objects.
     auto attach_stat = [](Statistic& stat, const ComponentAccumulator& a) {
         if (!a.min_max_seen) return;
         // Seed Statistic with min and max (in seconds) so its fallback quantile
-        // path has reasonable bounds even without a sketch.
+        // path has reasonable bounds even without quantiles.
         stat.update(a.min_us * US_TO_S);
         if (a.max_us != a.min_us) stat.update(a.max_us * US_TO_S);
-        if (a.sketch) {
-            stat.attach_sketch(a.sketch);
+        if (a.quantiles) {
+            stat.attach_quantiles(a.quantiles);
         }
     };
     attach_stat(out.fetch_block_stats, acc_fetch_block);
     attach_stat(out.fetch_iter_stats, acc_fetch_iter);
     attach_stat(out.preprocess_stats, acc_preprocess);
     attach_stat(out.getitem_stats, acc_getitem);
-    out.fetch_block_sketch = acc_fetch_block.sketch;
-    out.fetch_iter_sketch = acc_fetch_iter.sketch;
-    out.preprocess_sketch = acc_preprocess.sketch;
-    out.getitem_sketch = acc_getitem.sketch;
+    out.fetch_block_quantiles = acc_fetch_block.quantiles;
+    out.fetch_iter_quantiles = acc_fetch_iter.quantiles;
+    out.preprocess_quantiles = acc_preprocess.quantiles;
+    out.getitem_quantiles = acc_getitem.quantiles;
 
     // Trace-side ComponentTimeMetrics: accumulated + union (in seconds).
     auto fill_metrics = [](ComponentTimeMetrics& m, ComponentAccumulator& a) {
@@ -308,14 +331,6 @@ AggregatedTraces load_aggregated_traces(const std::string& db_path,
 
     // Trace rank variance = variance of per-rank wall clock.
     out.trace_rank_variance = variance(per_rank_wall);
-
-    if (!out.sketches_available) {
-        std::fprintf(stderr,
-                     "dlio: warning - AGGREGATION CF has no DDSketch data. "
-                     "Distribution fitting will use mean-replication samples; "
-                     "re-index with percentile aggregation enabled "
-                     "for higher-fidelity DLIO configs.\n");
-    }
 
     return out;
 }

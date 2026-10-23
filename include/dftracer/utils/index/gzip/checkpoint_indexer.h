@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/common/archive_format.h>
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/index_visitor.h>
 #include <dftracer/utils/index/gzip/gzip_member_record.h>
 #include <dftracer/utils/runtime/coro/task.h>
@@ -53,6 +54,10 @@ class CheckpointIndexer {
     /// Every member record in file order. Empty when the file was never
     /// indexed.
     virtual std::vector<GzipMemberRecord> get_members() const = 0;
+
+    /// The compressed offsets of the HEAD records: the members too big to hold
+    /// whole. Empty when there are none or the file was never indexed.
+    virtual dstd::Vector<std::uint64_t> piece_heads() const = 0;
 
     /// The 32 KiB inflate window of RESTART piece `member_idx`; empty when
     /// the index has none for it.

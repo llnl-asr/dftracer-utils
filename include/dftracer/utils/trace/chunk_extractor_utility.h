@@ -2,6 +2,8 @@
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFTRACER_CHUNK_EXTRACTOR_UTILITY_H
 
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/scoped_fd.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/runtime/coro/async_semaphore.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/fileio/chunk_writer.h>
@@ -25,6 +27,9 @@ namespace dftracer::utils::trace {
 struct ChunkExtractorUtilityInput {
     int chunk_index = 0;  ///< Group number, part of the output file names
     std::vector<std::string> files;
+    /// If not empty, parallel to `files`: an open descriptor of each file, read
+    /// instead of opening it. A null entry opens the file.
+    std::vector<dstd::SharedPtr<ScopedFd>> open_files;
     std::string output_dir;
     std::string app_name;
     bool compress = false;
@@ -43,6 +48,12 @@ struct ChunkExtractorUtilityInput {
         input.chunk_index = index;
         input.files = std::move(f);
         return input;
+    }
+
+    ChunkExtractorUtilityInput& with_open_files(
+        std::vector<dstd::SharedPtr<ScopedFd>> fds) {
+        open_files = std::move(fds);
+        return *this;
     }
 
     ChunkExtractorUtilityInput& with_output_dir(std::string dir) {

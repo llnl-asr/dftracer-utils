@@ -443,64 +443,6 @@ def install_extension_stub() -> None:
         ) -> dict[str, object]:
             return {}
 
-    class Aggregator(_BaseNative):
-        def __init__(self, runtime: Runtime | None = None) -> None:
-            self.runtime = runtime
-
-        def process(
-            self,
-            directory: str,
-            time_interval_ms: float = 5000.0,
-            group_keys: list[str] | None = None,
-            categories: list[str] | None = None,
-            names: list[str] | None = None,
-            index_dir: str = "",
-            checkpoint_size: int = 33554432,
-            force_rebuild: bool = False,
-            chunk_size_mb: int = 64,
-            batch_size_mb: int = 4,
-            event_batch_size: int = 10000,
-            custom_metric_fields: list[str] | None = None,
-            compute_percentiles: bool = False,
-        ) -> object:
-            return None
-
-        def __call__(
-            self,
-            directory: str,
-            time_interval_ms: float = 5000.0,
-            group_keys: list[str] | None = None,
-            categories: list[str] | None = None,
-            names: list[str] | None = None,
-            index_dir: str = "",
-            checkpoint_size: int = 33554432,
-            force_rebuild: bool = False,
-            chunk_size_mb: int = 64,
-            batch_size_mb: int = 4,
-            event_batch_size: int = 10000,
-            custom_metric_fields: list[str] | None = None,
-            compute_percentiles: bool = False,
-        ) -> object:
-            return None
-
-        def iter_arrow(
-            self,
-            directory: str,
-            time_interval_ms: float = 5000.0,
-            group_keys: list[str] | None = None,
-            categories: list[str] | None = None,
-            names: list[str] | None = None,
-            index_dir: str = "",
-            checkpoint_size: int = 33554432,
-            force_rebuild: bool = False,
-            chunk_size_mb: int = 64,
-            batch_size_mb: int = 4,
-            event_batch_size: int = 10000,
-            custom_metric_fields: list[str] | None = None,
-            compute_percentiles: bool = False,
-        ) -> Iterator[object]:
-            return iter(())
-
     class IndexDatabase(_BaseNative):
         """Handle to a .dftindex RocksDB store.
 
@@ -548,7 +490,7 @@ def install_extension_stub() -> None:
 
         def write_aggregation_tracker(self, blobs: list[bytes]) -> None:
             """Merge serialized AssociationTracker blobs and write the result
-            to the aggregation tier."""
+            to the index."""
             return None
 
     class SstArtifactRegistry(_BaseNative):

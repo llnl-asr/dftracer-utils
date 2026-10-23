@@ -1,0 +1,37 @@
+train:
+  computation_time:
+    type: mixture
+    n_components: 2
+    components:
+      - weight: 0.19899424879725694
+        params:
+          type: normal
+          mean: 0.0001823823530715676
+          stdev: 3.4343146038708205e-05
+      - weight: 0.8010057512027424
+        params:
+          type: normal
+          mean: 0.00038967849300656853
+          stdev: 0.00010999362180306444
+    max_bound: 0.0005726425395781332
+reader:
+  preprocess_time:
+    type: mixture
+    n_components: 3
+    components:
+      - weight: 0.2731550111161462
+        params:
+          type: normal
+          mean: 0.00012283580877489554
+          stdev: 2.0027633266408587e-05
+      - weight: 0.5522680965754156
+        params:
+          type: normal
+          mean: 0.00020175216303682032
+          stdev: 3.663843887149761e-05
+      - weight: 0.1745768923084375
+        params:
+          type: normal
+          mean: 0.00027041060712004375
+          stdev: 1.2285961260357298e-05
+    max_bound: 0.00027872835803603014

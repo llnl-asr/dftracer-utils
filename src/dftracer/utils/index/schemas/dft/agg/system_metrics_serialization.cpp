@@ -1,4 +1,4 @@
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_serialization.h>
+#include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/index/schemas/dft/agg/system_metrics_serialization.h>
 #include <dftracer/utils/utilities/common/serialization/binary_codec.h>
 #include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
@@ -10,11 +10,8 @@ namespace dftracer::utils::index::schemas::dft::agg {
 namespace {
 
 using utilities::common::serialization::BinaryReader;
-using utilities::common::serialization::put_be16;
 using utilities::common::serialization::put_blob;
-using utilities::common::serialization::put_double;
 using utilities::common::serialization::put_str;
-using utilities::common::serialization::put_varint;
 
 // Shard prefix so the SYSTEM_METRICS CF can be range-split like the AGG CF; a
 // host/metric's buckets share one shard.
@@ -30,13 +27,13 @@ std::uint16_t system_shard(std::string_view hhash, std::string_view name) {
 // moments are the running mean as the pair shift + cmean and the central second
 // moment (the sum of (x - mean)^2), from which the stddev derives.
 void serialize_float_metric_stats(std::string& out, const MetricStats& ms) {
-    put_varint(out, ms.count());
-    put_double(out, ms.total());
-    put_double(out, ms.min());
-    put_double(out, ms.max());
-    put_double(out, ms.shift());
-    put_double(out, ms.cmean());
-    put_double(out, ms.m2());
+    append_varint(out, ms.count());
+    append_f64_be(out, ms.total());
+    append_f64_be(out, ms.min());
+    append_f64_be(out, ms.max());
+    append_f64_be(out, ms.shift());
+    append_f64_be(out, ms.cmean());
+    append_f64_be(out, ms.m2());
     if (ms.sketch) {
         out.push_back(1);
         auto blob = ms.sketch->serialize();
@@ -70,10 +67,10 @@ void serialize_system_key_into(std::string& out, std::string_view hhash,
                                std::uint64_t time_bucket) {
     out.clear();
     out.reserve(6 + hhash.size() + name.size() + 10);
-    put_be16(out, system_shard(hhash, name));
+    append_u16_be(out, system_shard(hhash, name));
     put_str(out, hhash);
     put_str(out, name);
-    put_varint(out, time_bucket);
+    append_varint(out, time_bucket);
 }
 
 std::string serialize_system_key(std::string_view hhash, std::string_view name,
@@ -97,13 +94,13 @@ void serialize_system_value_into(std::string& out,
     out.clear();
     out.reserve(128);
 
-    put_varint(out, m.count);
-    put_varint(out, m.ts);
-    put_varint(out, m.te);
+    append_varint(out, m.count);
+    append_varint(out, m.ts);
+    append_varint(out, m.te);
 
     std::uint32_t num_metrics =
         m.metrics ? static_cast<std::uint32_t>(m.metrics->size()) : 0;
-    put_varint(out, num_metrics);
+    append_varint(out, num_metrics);
 
     if (m.metrics) {
         for (const auto& [name, stats] : *m.metrics) {

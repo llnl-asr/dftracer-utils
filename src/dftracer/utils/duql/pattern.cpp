@@ -1,4 +1,5 @@
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/duql/pattern_engine.h>
 #include <dftracer/utils/duql/substr_simd.h>
 #include <hwy/highway.h>
@@ -837,7 +838,7 @@ std::vector<std::pair<std::size_t, std::string>> capture_names(
     pcre2_pattern_info(p.regex->code, PCRE2_INFO_NAMETABLE, &table);
     for (std::uint32_t i = 0; i < count; ++i) {
         const PCRE2_SPTR e = table + static_cast<std::size_t>(i) * size;
-        names.emplace_back((static_cast<std::size_t>(e[0]) << 8) | e[1],
+        names.emplace_back(read_u16_be(e),
                            reinterpret_cast<const char*>(e + 2));
     }
     std::sort(names.begin(), names.end());

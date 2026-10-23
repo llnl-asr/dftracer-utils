@@ -2,11 +2,13 @@
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_sst_writer_context.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
@@ -19,6 +21,7 @@
 #include <chrono>
 #include <memory>
 #include <mutex>
+#include <numeric>
 #include <optional>
 
 using namespace dftracer::utils;
@@ -229,9 +232,12 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     auto matched_entries = co_await scanner(scan_input);
 
     std::vector<std::string> input_files;
+    std::vector<std::size_t> scanned_sizes;
     input_files.reserve(matched_entries.size());
+    scanned_sizes.reserve(matched_entries.size());
     for (const auto& entry : matched_entries) {
         input_files.push_back(entry.path.string());
+        scanned_sizes.push_back(entry.size);
     }
 
     if (input_files.empty()) {
@@ -242,34 +248,33 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
 
     DFTRACER_UTILS_LOG_INFO("Found %zu input files", input_files.size());
 
-    // Normalize single-member inputs to bounded multi-member gzip so the build
-    // never OOMs; readers use the same split/ copies.
+    // Files in logical path order get file ids in that order, so a run of ids
+    // is a run of paths and the index's SSTs of different runs do not overlap.
     {
-        MemberNormalizeResult norm;
-        cli::run_on_pool(cli->pipeline, "dftracer_index normalize",
-                         [&](CoroScope&) -> coro::CoroTask<void> {
-                             norm = co_await normalize_members_for_ingest(
-                                 std::move(input_files), index_dir,
-                                 checkpoint_size);
-                         });
-        input_files = std::move(norm.files);
-        for (const auto& [src, dst] : norm.split)
-            DFTRACER_UTILS_LOG_WARN(
-                "auto-split single-member input (original kept): %s -> %s",
-                src.c_str(), dst.c_str());
+        std::vector<std::string> logical(input_files.size());
+        for (std::size_t i = 0; i < input_files.size(); ++i)
+            logical[i] =
+                index::store::internal::get_logical_path(input_files[i]);
+        std::vector<std::size_t> order(input_files.size());
+        std::iota(order.begin(), order.end(), std::size_t{0});
+        std::sort(order.begin(), order.end(),
+                  [&](std::size_t a, std::size_t b) {
+                      return logical[a] < logical[b];
+                  });
+        std::vector<std::string> files(input_files.size());
+        std::vector<std::size_t> sizes(input_files.size());
+        for (std::size_t i = 0; i < order.size(); ++i) {
+            files[i] = std::move(input_files[order[i]]);
+            sizes[i] = scanned_sizes[order[i]];
+        }
+        input_files = std::move(files);
+        scanned_sizes = std::move(sizes);
     }
 
     // On-disk sizes are compressed for .pfw.gz; estimate_per_file_bytes expands
     // them (PER_FILE_EXPANSION_FACTOR) to a decompressed + aggregated peak.
-    std::vector<std::size_t> file_sizes;
-    file_sizes.reserve(input_files.size());
-    for (const auto& f : input_files) {
-        std::error_code ec;
-        const auto sz = fs::file_size(f, ec);
-        file_sizes.push_back(ec ? 0 : sz);
-    }
     const std::size_t required_bytes =
-        estimate_per_file_bytes(file_sizes) * file_sizes.size();
+        estimate_per_file_bytes(scanned_sizes) * scanned_sizes.size();
     cli::warn_if_memory_tight(required_bytes);
 
     auto pipeline_config =
@@ -280,9 +285,13 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     auto start_time = std::chrono::high_resolution_clock::now();
 
     std::vector<int> preassigned_file_ids;
+    int first_fresh_file_id = 0;
     {
         IndexDatabase coord_db(index_dir);
         coord_db.init_schema();
+        // Ids come from a counter that only grows, so one at or past it
+        // before the assignment was never used in this index.
+        first_fresh_file_id = coord_db.reserve_file_id_range(0);
         preassigned_file_ids = coord_db.assign_file_ids(input_files);
     }
 
@@ -296,7 +305,9 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
 
     auto batch_config = std::make_shared<IndexBuildBatchConfig>();
     batch_config->file_paths = std::move(input_files);
+    batch_config->file_costs.assign(scanned_sizes.begin(), scanned_sizes.end());
     batch_config->preassigned_file_ids = std::move(preassigned_file_ids);
+    batch_config->first_fresh_file_id = first_fresh_file_id;
     batch_config->index_dir = index_dir;
     batch_config->checkpoint_size = checkpoint_size;
     batch_config->parallelism = executor_threads;
@@ -386,7 +397,14 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     }
     std::printf("==========================================\n");
 
-    co_return 0;
+    for (const auto& r : batch_result.results) {
+        if (!r.success && !r.was_skipped) {
+            DFTRACER_UTILS_LOG_ERROR("Failed to index %s: %s",
+                                     r.file_path.c_str(),
+                                     r.error_message.c_str());
+        }
+    }
+    co_return batch_result.failed > 0 ? 1 : 0;
 }
 
 int main(int argc, char** argv) {

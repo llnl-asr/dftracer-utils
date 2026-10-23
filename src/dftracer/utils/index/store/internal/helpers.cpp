@@ -1,4 +1,5 @@
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
@@ -45,16 +46,12 @@ std::string normalize_index_root(std::string_view path) {
 }
 
 time_t get_file_modification_time(const std::string &file_path) {
-    std::error_code ec;
-    auto ftime = fs::last_write_time(file_path, ec);
-    if (ec) return 0;
-    return dftracer::utils::file_mtime_seconds(ftime);
+    dftracer::utils::InputFileStat st;
+    if (!dftracer::utils::stat_input(file_path, st)) return 0;
+    return static_cast<time_t>(st.mtime);
 }
 
 std::uint64_t calculate_file_hash(const std::string &file_path) {
-    // Fast fingerprint: hash file_size + first 64KB + last 64KB.
-    constexpr std::size_t SAMPLE_SIZE = 64 * 1024;
-
     int fd = ::open(file_path.c_str(), O_RDONLY);
     if (fd < 0) {
         DFTRACER_UTILS_LOG_ERROR("Cannot open file for hash calculation: %s",
@@ -67,7 +64,16 @@ std::uint64_t calculate_file_hash(const std::string &file_path) {
         ::close(fd);
         return 0;
     }
-    auto file_size = static_cast<std::size_t>(st.st_size);
+    const auto hash =
+        calculate_file_hash(fd, static_cast<std::uint64_t>(st.st_size));
+    ::close(fd);
+    return hash;
+}
+
+std::uint64_t calculate_file_hash(int fd, std::uint64_t file_size_u64) {
+    // Fast fingerprint: hash file_size + first 64KB + last 64KB.
+    constexpr std::size_t SAMPLE_SIZE = 64 * 1024;
+    const auto file_size = static_cast<std::size_t>(file_size_u64);
 
     static thread_local dftracer::utils::utilities::hash::HasherUtility hasher;
     hasher.reset();
@@ -99,20 +105,13 @@ std::uint64_t calculate_file_hash(const std::string &file_path) {
         }
     }
 
-    ::close(fd);
     return static_cast<std::uint64_t>(hasher.get_hash().value);
 }
 
 std::uint64_t file_size_bytes(const std::string &path) {
-    struct stat st{};
-    if (stat(path.c_str(), &st) == 0) {
-#if defined(_WIN32)
-        if ((st.st_mode & _S_IFREG) != 0)
-            return static_cast<std::uint64_t>(st.st_size);
-#else
-        if (S_ISREG(st.st_mode)) return static_cast<std::uint64_t>(st.st_size);
-#endif
-    }
+    dftracer::utils::InputFileStat st;
+    if (dftracer::utils::stat_input(path, st) && st.is_regular_file)
+        return st.size;
 
     int fd = ::open(path.c_str(), O_RDONLY);
     if (fd < 0) return 0;

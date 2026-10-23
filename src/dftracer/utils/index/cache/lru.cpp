@@ -1,4 +1,5 @@
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/index/cache/lru.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
 #include <dftracer/utils/utilities/common/serialization/binary_codec.h>
@@ -18,8 +19,8 @@ constexpr char USAGE_TAG = '\x02';
 
 std::string usage_value(std::uint64_t bytes, std::uint64_t last_used) {
     std::string v;
-    codec::put_be64(v, bytes);
-    codec::put_be64(v, last_used);
+    append_u64_be(v, bytes);
+    append_u64_be(v, last_used);
     return v;
 }
 
@@ -41,7 +42,7 @@ void check_status(const ::rocksdb::Status& st, const char* what) {
 std::string usage_key(std::uint64_t sig) {
     std::string key;
     key.push_back(USAGE_TAG);
-    codec::put_be64(key, sig);
+    append_u64_be(key, sig);
     return key;
 }
 

@@ -432,16 +432,29 @@ std::unique_ptr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
             // LineStream then drops [first_line_num, start) and serves
             // [start, end]. Decoding from the containing member avoids
             // re-inflating earlier members.
-            // A restart piece does not start at a line start, so only
-            // whole members and the heads of split members qualify.
+            // A restart piece starts inside a line unless the byte before it
+            // is a newline. The folds count a line in the piece where it
+            // ends, so the line the piece opens is `first_line_num`, and the
+            // piece owns its lines from the next one on when it opens
+            // mid-line. A piece qualifies when the first line it owns whole
+            // is at or before `start`; one whose window is missing does not.
             bool found_start = false;
-            for (const auto &member : members) {
-                if (member.kind != index::gzip::GzipRecordKind::Restart &&
-                    member.first_line_num <= start) {
-                    start_bytes = member.uc_offset;
-                    actual_start_line = member.first_line_num;
-                    found_start = true;
+            std::size_t at = members.size();
+            while (at > 0 && !found_start) {
+                --at;
+                const auto &member = members[at];
+                if (member.first_line_num > start) continue;
+                std::size_t first_owned = member.first_line_num;
+                if (member.kind == index::gzip::GzipRecordKind::Restart) {
+                    const std::string window =
+                        indexer->restart_window(member.member_idx);
+                    if (window.empty()) continue;
+                    if (window.back() != '\n') ++first_owned;
+                    if (first_owned > start) continue;
                 }
+                start_bytes = member.uc_offset;
+                actual_start_line = first_owned;
+                found_start = true;
             }
             if (!found_start) {
                 start_bytes = 0;

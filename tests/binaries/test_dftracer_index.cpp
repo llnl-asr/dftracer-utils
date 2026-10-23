@@ -8,6 +8,7 @@
 #include <zlib.h>
 
 #include <cstdlib>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -31,6 +32,12 @@ std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env, int num_events,
 std::string find_index_binary() {
     return dftu_utils_test::find_binary_by_name("DFTRACER_UTILS_INDEX_PATH",
                                                 "dftracer_index");
+}
+
+void write_plain_pfw(const std::string& path) {
+    std::ofstream plain(path);
+    plain << "{\"name\":\"read\",\"cat\":\"POSIX\",\"ph\":\"X\","
+             "\"pid\":1,\"tid\":1,\"ts\":1,\"dur\":1}\n";
 }
 
 int run_index(const std::string& binary, const std::vector<std::string>& args) {
@@ -147,5 +154,46 @@ TEST_SUITE("DFTracerIndex") {
                                  "--stats-share", "0"}) != 0);
         CHECK(run_index(binary, {"-d", env.get_dir(), "--force",
                                  "--stats-share", "1.5"}) != 0);
+    }
+
+    TEST_CASE("a plain trace makes the run fail and names the file") {
+        auto binary = find_index_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_index binary not found, skipping.");
+            return;
+        }
+
+        dftu_utils_test::TestEnvironment env(100);
+        REQUIRE(env.is_valid());
+
+        const std::string plain = env.get_dir() + "/plain.pfw";
+        write_plain_pfw(plain);
+
+        dftu_utils_test::set_test_library_path(binary);
+        int rc = 0;
+        const std::string out = dftu_utils_test::run_process_capture(
+            binary, {"-d", env.get_dir(), "--force"}, true, &rc);
+        CHECK(rc != 0);
+        CHECK(out.find("plain.pfw") != std::string::npos);
+        CHECK(out.find("is not gzip") != std::string::npos);
+    }
+
+    TEST_CASE("a plain trace beside a good one fails the run but indexes it") {
+        auto binary = find_index_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_index binary not found, skipping.");
+            return;
+        }
+
+        dftu_utils_test::TestEnvironment env(100);
+        REQUIRE(env.is_valid());
+
+        auto good = create_pfw_gz(env, 100, 0);
+        REQUIRE(!good.empty());
+        write_plain_pfw(env.get_dir() + "/plain.pfw");
+
+        CHECK(run_index(binary, {"-d", env.get_dir(), "--force"}) != 0);
+        CHECK(fs::exists(
+            dftracer::utils::trace::internal::determine_index_path(good, "")));
     }
 }

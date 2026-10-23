@@ -1,9 +1,11 @@
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>  // expr_canonical
+#include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/index/cache/lru.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
@@ -29,17 +31,6 @@ namespace codec = utilities::common::serialization;
 namespace dataframe = dftracer::utils::dataframe;
 
 namespace {
-
-void put_be64(std::string& out, std::uint64_t v) {
-    for (int shift = 56; shift >= 0; shift -= 8)
-        out.push_back(static_cast<char>((v >> shift) & 0xFF));
-}
-
-std::uint64_t get_be64(std::string_view b) {
-    std::uint64_t v = 0;
-    for (unsigned char c : b) v = (v << 8) | c;
-    return v;
-}
 
 // Every plan field except group_by - the basis shared by plan_signature and
 // rest_signature.
@@ -93,11 +84,10 @@ void add_rest_fields(std::string& sig,
               [](auto* a, auto* b) { return a->file_path < b->file_path; });
     for (auto* f : files) {
         add(f->file_path);
-        std::error_code ec;
-        add(std::to_string(fs::file_size(f->file_path, ec)));
-        auto wt = fs::last_write_time(f->file_path, ec);
-        add(std::to_string(
-            static_cast<long long>(ec ? 0 : wt.time_since_epoch().count())));
+        dftracer::utils::InputFileStat st;
+        const bool ok = dftracer::utils::stat_input(f->file_path, st);
+        add(std::to_string(ok ? st.size : 0));
+        add(std::to_string(static_cast<long long>(ok ? st.mtime : 0)));
     }
     add(plan.query ? plan.query->source() : "");
     for (const trace::views::detail::ComputedColumn& c : plan.computed) {
@@ -152,7 +142,7 @@ std::string rollup_row_key(std::uint64_t sig, std::string_view group_key) {
     std::string key;
     key.reserve(9 + group_key.size());
     key.push_back('\x01');
-    put_be64(key, sig);
+    append_u64_be(key, sig);
     key.append(group_key);
     return key;
 }
@@ -161,7 +151,7 @@ std::string rollup_desc_key(std::uint64_t sig) {
     std::string key;
     key.reserve(9);
     key.push_back('\x00');
-    put_be64(key, sig);
+    append_u64_be(key, sig);
     return key;
 }
 
@@ -218,11 +208,11 @@ void persist_rollup(rdb::RocksDatabase& db, std::uint64_t sig,
     // time bucket (for coarsening) + this view's grouping (kind + key identity
     // per key, in order).
     std::string desc;
-    codec::put_be64(desc, rest_sig);
-    codec::put_be64(desc, time_bucket_us);
-    codec::put_be32(desc, static_cast<std::uint32_t>(group_by.size()));
+    append_u64_be(desc, rest_sig);
+    append_u64_be(desc, time_bucket_us);
+    append_u32_be(desc, static_cast<std::uint32_t>(group_by.size()));
     for (const auto& gk : group_by) {
-        codec::put_be32(desc, static_cast<std::uint32_t>(gk.kind));
+        append_u32_be(desc, static_cast<std::uint32_t>(gk.kind));
         codec::put_str(desc, key_identity(gk));
     }
     bytes += 9 + desc.size() + 9 + USAGE_BYTES;
@@ -338,7 +328,8 @@ std::optional<dataframe::DataFrame> find_subsuming_rollup(
         }
         if (!subset) continue;
 
-        best_sig = get_be64(k.substr(1, 8));
+        best_sig =
+            read_u64_be(reinterpret_cast<const std::uint8_t*>(k.data() + 1));
         best_bucket = r_bucket;
         best_gb = std::move(r_gb);
         have_best = true;

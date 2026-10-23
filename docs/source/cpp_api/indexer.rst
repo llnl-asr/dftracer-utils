@@ -12,7 +12,7 @@ The index module in ``dftracer::utils::index``. ``Indexer``
 (``dftracer/utils/index/indexer.h``) is the entry point for building and
 inspecting an index; the sections after it document the installed layer
 types (RocksDB storage, gzip checkpoints, index extensions, the dftracer
-record schema and its aggregation tier, the chunk indexer and the pruner) that
+record schema and its aggregation partials, the chunk indexer and the pruner) that
 other public headers still expose.
 
 Type relationships

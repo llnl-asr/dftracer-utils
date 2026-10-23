@@ -88,6 +88,10 @@ class RocksDatabase {
     ::rocksdb::Status compact(
         std::string_view column_family = index::store::cf::DEFAULT);
 
+    /// SST files the column family holds at `level`, from RocksDB's
+    /// "rocksdb.num-files-at-level<N>"; 0 when the property is unavailable.
+    std::size_t files_at_level(std::string_view column_family, int level) const;
+
     /// Bulk-ingest externally built SST files into the named column family.
     /// Keys across the SSTs must be sorted and non-overlapping unless the
     /// caller requests `ingest_behind`, which pushes entries to the bottom

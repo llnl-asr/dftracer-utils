@@ -21,7 +21,7 @@ without worrying about redundant work.
    .. tab-item:: Python
 
       ``Indexer`` builds the checkpoint and bloom-filter tiers (and,
-      optionally, a pre-aggregated tier). ``ensure_indexed()`` checks what is
+      optionally, the aggregation partials). ``ensure_indexed()`` checks what is
       already built and only builds what is missing:
 
       .. code-block:: python
@@ -43,7 +43,7 @@ without worrying about redundant work.
       exists.
 
       Both ``require_checkpoint`` and ``require_bloom`` default to ``True``.
-      Add the pre-aggregated tier with ``require_aggregation``:
+      Add the aggregation partials with ``require_aggregation``:
 
       .. code-block:: python
 
@@ -152,7 +152,7 @@ without worrying about redundant work.
          * - Flag
            - Meaning
          * - ``-d`` / ``--directory``
-           - Directory to scan for ``.pfw``/``.pfw.gz`` files (default ``.``)
+           - Directory to scan for ``.pfw.gz`` files (default ``.``)
          * - ``--index-dir``
            - Directory for the ``.dftindex`` store (default: next to the data)
          * - ``-f`` / ``--force``
@@ -247,20 +247,29 @@ Upgrading the library can also invalidate an index: each on-disk index records
 the ``FORMAT_VERSION`` it was built with, and a build with another version
 rebuilds the index rather than reading it. Changing a bloom setting (such as
 the false positive rate) rebuilds only the extensions it affects. Changing the
-aggregation config (such as ``time_interval_ms``), or a change to a trace whose
-events are in the aggregation tier, clears that tier and aggregates every file
-again, and leaves the other extensions in place: the tier merges all files'
-events without recording which file each came from, so one file's share cannot
-be replaced. Until the next build, queries the tier cannot answer exactly read
-the traces instead. An index directory is cheap to rebuild, so this needs no
-action from you beyond letting the next build run.
+aggregation config (such as ``time_interval_ms``), or a change to a trace
+whose events are in the partials, rebuilds the partials of the files it
+touches, and leaves the other extensions in place. Until the next build,
+queries the partials cannot answer read the traces instead. An index directory
+is cheap to rebuild, so this needs no action from you beyond letting the next
+build run. An index built before the partials replaced the per-key aggregation
+column family still holds that column family; the first read-write open drops
+it.
 
-The tier builds for files of any record schema. For a path schema it answers
-the group keys ``name``, ``pid`` and ``tid`` (its name, entity and lane roles)
-and aggregates of its duration and time fields, when each role
-field is required, the name is a ``string``, the others are ``int``, times are
-in ``us`` and the source has no ``data`` row set. Any other query reads the
-traces.
+The aggregation keeps one partial per chunk, category, name and host: counts,
+sums, extremes, moments, quantile stores, per-argument statistics and the
+distinct processes, threads and files of the chunk. A query merges the partials
+it needs. A group-by on category, name, host, or on pid and tid when a chunk
+holds one process and thread, is answered from the partials alone. A key the
+partials do not hold (file, extra keys), a time window that cuts a chunk, or a
+filter on an event field is answered by reading the chunks that the chunk
+index selects, so such a query needs the traces.
+
+The partials build for files of any record schema. For a path schema they
+answer the group keys ``name``, ``pid`` and ``tid`` (its name, entity and lane
+roles) and aggregates of its duration and time fields, when each role field is
+required, the name is a ``string``, the others are ``int``, times are in ``us``
+and the source has no ``data`` row set. Any other query reads the traces.
 
 Inspect, rebuild or drop one extension
 --------------------------------------
@@ -328,7 +337,7 @@ rebuilding the rest.
 (the chunks a View row or aggregation scan reads) and, for each pruning extension, the chunks it would rule
 out if it were the only one. It writes nothing. A dropped extension is built
 again by the next build only while ``extensions`` names it. ``core.members``,
-``core.rowset`` and ``dftracer.agg`` (the aggregation tier, rebuilt by a build
+``core.rowset`` and ``dftracer.agg`` (the aggregation partials, rebuilt by a build
 with ``require_aggregation``) cannot be rebuilt or dropped alone.
 
 Index traces that are not dftracer traces
@@ -391,8 +400,8 @@ an error naming the row set when the schema's source defines none. Declare
 your format as a record schema to use them. A viewer reads
 files of one schema: mixing dftracer traces and generic files in one viewer
 raises an error naming both; an empty file, or one of metadata only, takes
-no vote. A directory viewer finds ``.jsonl`` and ``.ndjson``
-files next to ``.pfw`` traces, plain or gzip, and so does the indexer.
+no vote. A directory viewer finds ``.jsonl.gz`` and ``.ndjson.gz``
+files next to ``.pfw.gz`` traces, and so does the indexer.
 
 .. _describe-your-own-record-format:
 
@@ -581,7 +590,7 @@ that spills is slower.
 
          $ dftracer_index --directory traces/ --memory-budget 2GB
 
-Memory not covered: the aggregation tier, and the per-file totals that grow
+Memory not covered: the aggregation partials, and the per-file totals that grow
 with distinct values rather than with the trace's length (file blooms, file
 statistics, the path catalog).
 

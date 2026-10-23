@@ -290,7 +290,7 @@ bool observe_type(index::extensions::ChunkDimensionStats& ds,
 }
 
 void observe_bounds(index::extensions::ChunkDimensionStats& ds,
-                    const std::string& text) {
+                    std::string_view text) {
     if (ds.min_value.empty() || index::extensions::dimension_value_less(
                                     text, ds.min_value, ds.value_type))
         ds.min_value = text;
@@ -300,7 +300,7 @@ void observe_bounds(index::extensions::ChunkDimensionStats& ds,
 }
 
 void observe_stats(index::extensions::ChunkDimensionStats& ds,
-                   const std::string& text, const char* type) {
+                   std::string_view text, const char* type) {
     if (observe_type(ds, type)) observe_bounds(ds, text);
 }
 
@@ -392,7 +392,7 @@ void BloomCore::observe_value(ChunkDimensionStats& stats, double value) {
 
 void BloomCore::observe_value(ChunkDimensionStats& stats,
                               std::string_view value) {
-    observe_stats(stats, std::string(value), "string");
+    observe_stats(stats, value, "string");
 }
 
 void BloomCore::observe_extra(ChunkState& chunk, std::size_t e,
@@ -417,9 +417,8 @@ void BloomCore::observe_extra(ChunkState& chunk, std::size_t e, double value) {
 
 void BloomCore::observe_extra(ChunkState& chunk, std::size_t e,
                               std::string_view value) {
-    const std::string text(value);
-    chunk.extra_blooms[e].add(text);
-    observe_stats(chunk.extra_dim_stats[e], text, "string");
+    chunk.extra_blooms[e].add(value);
+    observe_stats(chunk.extra_dim_stats[e], value, "string");
 }
 
 void BloomCore::init_chunk_state(ChunkState& chunk,

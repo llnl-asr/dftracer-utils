@@ -1,7 +1,9 @@
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/json/line.h>
 #include <dftracer/utils/runtime/coro/task.h>
@@ -59,6 +61,38 @@ MetadataCollectorUtility::operator()(
     }
 }
 
+namespace {
+
+// The index record of `file` when the index holds it unchanged since the
+// stat the caller read; the stat check is the one the scan already made, so
+// the file is not opened again.
+std::optional<internal::IndexedFile> fresh_index_record(
+    const std::string& index_path, const std::string& file,
+    const dftracer::utils::InputFileStat& st) {
+    namespace store = dftracer::utils::index::store;
+    try {
+        store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
+        const int id =
+            db.get_file_info_id(store::internal::get_logical_path(file));
+        if (id < 0 || db.check_freshness(file, st.size, st.mtime) !=
+                          store::IndexDatabase::Freshness::Fresh)
+            return std::nullopt;
+        const auto checkpoint_size = db.get_checkpoint_size(id);
+        if (checkpoint_size == 0) return std::nullopt;
+        return internal::IndexedFile{{st.mtime, st.size},
+                                     db.get_num_lines(id),
+                                     db.get_max_bytes(id),
+                                     checkpoint_size,
+                                     db.query_gzip_members(id).size()};
+    } catch (const std::exception& e) {
+        DFTRACER_UTILS_LOG_DEBUG("Index of %s unreadable (%s)", file.c_str(),
+                                 e.what());
+        return std::nullopt;
+    }
+}
+
+}  // namespace
+
 coro::CoroTask<MetadataCollectorUtilityOutput>
 MetadataCollectorUtility::process_compressed(
     const MetadataCollectorUtilityInput& input) {
@@ -69,18 +103,17 @@ MetadataCollectorUtility::process_compressed(
     try {
         meta.format = dftracer::utils::index::gzip::CheckpointIndexerFactory::
             detect_format(input.file_path);
-        meta.compressed_size = fs::file_size(input.file_path);
+        dftracer::utils::InputFileStat input_stat;
+        if (!dftracer::utils::stat_input(input.file_path, input_stat))
+            throw DFTUtilsException::cat(ErrorCode::Io, "cannot stat ",
+                                         input.file_path);
+        meta.compressed_size = input_stat.size;
 
         const std::shared_ptr<internal::IndexRoot> root =
             internal::index_root(input.index_path);
-        const std::pair<std::int64_t, std::uint64_t> stamp{
-            static_cast<std::int64_t>(
-                index::store::internal::get_file_modification_time(
-                    input.file_path)),
-            index::store::internal::file_size_bytes(input.file_path)};
-        std::error_code ec;
-        const fs::path canonical = fs::weakly_canonical(input.file_path, ec);
-        const std::string file_key = ec ? input.file_path : canonical.string();
+        const std::pair<std::int64_t, std::uint64_t> stamp{input_stat.mtime,
+                                                           input_stat.size};
+        const std::string& file_key = input.file_path;
 
         using dftracer::utils::index::gzip::CheckpointIndexer;
         using dftracer::utils::index::gzip::CheckpointIndexerFactory;
@@ -113,10 +146,12 @@ MetadataCollectorUtility::process_compressed(
             co_await root->gate.acquire(1);
             const internal::RootPermit reading(*root, 1);
             if (fs::exists(input.index_path)) {
-                const auto indexer = CheckpointIndexerFactory::create(
-                    input.file_path, input.index_path, input.checkpoint_size,
-                    false);
-                if (!indexer->need_rebuild()) seen = take(*indexer);
+                seen = fresh_index_record(input.index_path, input.file_path,
+                                          input_stat);
+                if (seen) {
+                    std::lock_guard<std::mutex> lock(root->current_mutex);
+                    root->current[file_key] = *seen;
+                }
             }
         }
         if (!seen) {
@@ -166,7 +201,7 @@ MetadataCollectorUtility::process_compressed(
             co_return meta;
         }
 
-        std::size_t file_size_bytes = fs::file_size(input.file_path);
+        std::size_t file_size_bytes = input_stat.size;
         double size_mb =
             static_cast<double>(file_size_bytes) / (1024.0 * 1024.0);
 

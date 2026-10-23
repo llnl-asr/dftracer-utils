@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/memory_config.h>
@@ -22,6 +23,7 @@
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
+#include <sys/resource.h>
 
 #include <algorithm>
 #include <argparse/argparse.hpp>
@@ -155,6 +157,9 @@ int cli_main(int argc, char** argv, const char* name, const char* description,
     program.add_description(description);
     CliT cli(program);
     if (!setup_and_parse(cli, argc, argv)) return 1;
+    // One cache of input stats for this run; it ends with the run. It starts
+    // after the parse, which exits the process itself for --help.
+    dftracer::utils::InputStatScope input_stats;
     try {
         return run(cli);
     } catch (const std::exception& err) {
@@ -280,7 +285,7 @@ struct DirectoryArgs : CliSchema {
             DFTRACER_UTILS_LOG_ERROR("%s", "--directory is required");
             return false;
         }
-        if (!value.empty() && !fs::exists(value)) {
+        if (!value.empty() && !dftracer::utils::input_exists(value)) {
             DFTRACER_UTILS_LOG_ERROR("Directory does not exist: %s",
                                      value.c_str());
             return false;
@@ -291,7 +296,7 @@ struct DirectoryArgs : CliSchema {
 
 struct FilesArgs : CliSchema {
     std::string help =
-        "Trace files (.pfw, .jsonl, .ndjson, .json; plain or .gz)";
+        "Gzip trace files (.pfw.gz, .jsonl.gz, .ndjson.gz, .json.gz)";
     std::vector<std::string> value;
 
     FilesArgs() = default;
@@ -569,6 +574,25 @@ inline std::vector<std::string> split_csv(const std::string& str) {
     return out;
 }
 
+// How many input files a tool may hold open at once. Raises the soft limit on
+// open files to the hard limit and keeps half of it for the tool's other
+// files, so a pass over the inputs hands each file's descriptor on to the next
+// pass instead of opening it again.
+inline std::size_t open_file_budget() {
+    struct rlimit lim{};
+    if (::getrlimit(RLIMIT_NOFILE, &lim) != 0) return 0;
+    if (lim.rlim_cur < lim.rlim_max) {
+        lim.rlim_cur = lim.rlim_max;
+        if (::setrlimit(RLIMIT_NOFILE, &lim) != 0)
+            ::getrlimit(RLIMIT_NOFILE, &lim);
+    }
+    constexpr rlim_t RESERVED = 256;
+    if (lim.rlim_cur == RLIM_INFINITY) return static_cast<std::size_t>(1) << 20;
+    return lim.rlim_cur > RESERVED
+               ? static_cast<std::size_t>((lim.rlim_cur - RESERVED) / 2)
+               : 0;
+}
+
 // Warn when an aggregated workload of `required_bytes` will not fit in one
 // process (peak is ~PEAK_MEMORY_FACTOR x that); the message says how much
 // memory or how many nodes it needs. `available_bytes = 0` detects it
@@ -612,13 +636,12 @@ coro::CoroTask<std::vector<std::string>> collect_input_trace_files(
     OnMissing&& on_missing) {
     std::vector<std::string> out;
     for (const auto& in : inputs) {
-        std::error_code ec;
-        if (fs::is_directory(in, ec)) {
+        if (dftracer::utils::input_is_directory(in)) {
             auto scanned =
                 co_await scan_directory_trace_files(ctx, in, recursive);
             out.insert(out.end(), std::make_move_iterator(scanned.begin()),
                        std::make_move_iterator(scanned.end()));
-        } else if (fs::is_regular_file(in, ec)) {
+        } else if (dftracer::utils::input_is_regular_file(in)) {
             out.push_back(in);
         } else {
             on_missing(in);
@@ -651,10 +674,33 @@ int run_single_task(const std::string& name, const PipelineArgs& pipeline,
 }
 
 // Split out so the run_single_task lambda below holds no coroutine locals,
-// which ICEs GCC 12/13.
+// which ICEs GCC 12/13. Scans `directory` (or stats `files`) once, brings the
+// indexes of what it found up to date and leaves the scan in `entries` for the
+// caller to resolve again without walking or stat'ing the files a second time.
 inline coro::CoroTask<int> ensure_indexes_fresh_task(
-    CoroScope& ctx, dftracer::utils::index::Indexer indexer,
-    bool force_rebuild) {
+    CoroScope& ctx, std::string directory, std::vector<std::string> files,
+    std::string index_dir, bool force_rebuild,
+    std::vector<utilities::filesystem::FileEntry>* entries,
+    std::optional<dftracer::utils::index::schemas::dft::agg::AggregationConfig>
+        aggregation = std::nullopt,
+    std::size_t checkpoint_size = 0) {
+    if (!directory.empty()) {
+        utilities::filesystem::PatternDirectoryScannerUtility scanner;
+        *entries = co_await scanner(
+            ctx,
+            utilities::filesystem::PatternDirectoryScannerUtilityInput{
+                directory, utilities::filesystem::trace_file_patterns(), true});
+    } else {
+        for (const auto& f : files) entries->emplace_back(fs::path(f));
+    }
+    if (entries->empty()) co_return 0;
+    dftracer::utils::index::IndexerOptions options;
+    options.index_dir = std::move(index_dir);
+    options.bloom->required = false;
+    options.aggregation = std::move(aggregation);
+    if (checkpoint_size != 0) options.checkpoint_size = checkpoint_size;
+    auto indexer = dftracer::utils::index::Indexer::open_scanned(
+        *entries, std::move(options));
     if (force_rebuild)
         co_await indexer.rebuild(ctx);
     else
@@ -662,26 +708,23 @@ inline coro::CoroTask<int> ensure_indexes_fresh_task(
     co_return 0;
 }
 
-inline int ensure_indexes_fresh_blocking(const std::string& name,
-                                         const PipelineArgs& pipeline,
-                                         const std::string& directory,
-                                         std::vector<std::string> files,
-                                         const std::string& index_dir,
-                                         bool force_rebuild = false) {
-    std::vector<std::string> paths = directory.empty()
-                                         ? std::move(files)
-                                         : std::vector<std::string>{directory};
-    if (paths.empty()) return 0;
-    dftracer::utils::index::IndexerOptions options;
-    options.index_dir = index_dir;
-    options.bloom->required = false;
-    auto indexer = dftracer::utils::index::Indexer::open(std::move(paths),
-                                                         std::move(options));
-    return run_single_task(name, pipeline,
-                           [&](CoroScope& ctx) -> coro::CoroTask<int> {
-                               co_return co_await ensure_indexes_fresh_task(
-                                   ctx, indexer, force_rebuild);
-                           });
+// The files found, as scanned, for a Resolver call that must not scan again.
+inline std::vector<utilities::filesystem::FileEntry>
+ensure_indexes_fresh_blocking(
+    const std::string& name, const PipelineArgs& pipeline,
+    const std::string& directory, std::vector<std::string> files,
+    const std::string& index_dir, bool force_rebuild = false,
+    std::optional<dftracer::utils::index::schemas::dft::agg::AggregationConfig>
+        aggregation = std::nullopt,
+    std::size_t checkpoint_size = 0) {
+    std::vector<utilities::filesystem::FileEntry> entries;
+    if (directory.empty() && files.empty()) return entries;
+    run_single_task(name, pipeline, [&](CoroScope& ctx) -> coro::CoroTask<int> {
+        co_return co_await ensure_indexes_fresh_task(
+            ctx, directory, std::move(files), index_dir, force_rebuild,
+            &entries, std::move(aggregation), checkpoint_size);
+    });
+    return entries;
 }
 
 // Channel-backed fan-out: a single bounded producer feeds `items` (moved in)

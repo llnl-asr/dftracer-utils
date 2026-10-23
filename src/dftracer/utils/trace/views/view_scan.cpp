@@ -48,7 +48,7 @@ const dftracer::utils::index::RecordSchema& plan_record_schema(
     std::vector<ix::plan::RowSetFile> files;
     files.reserve(plan.files.size());
     for (const auto& f : plan.files)
-        files.push_back({f.file_path, f.index_path});
+        files.push_back({f.file_path, f.index_path, f.fd ? f.fd->get() : -1});
     const ix::RecordSchema* found = &ix::plan::files_schema(files);
     // Registered record_schemas live until the process exits, so the pointer
     // never dangles.

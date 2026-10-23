@@ -1,3 +1,4 @@
+#include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/index/store/internal/index_encoding.h>
 #include <dftracer/utils/index/store/internal/payload_codec.h>
 
@@ -6,12 +7,12 @@ namespace dftracer::utils::index::store::internal::encoding {
 std::string encode_gzip_member_value(
     const index::gzip::GzipMemberRecord& member) {
     std::string value;
-    append_u64(value, member.c_offset);
-    append_u64(value, member.c_size);
-    append_u64(value, member.uc_offset);
-    append_u64(value, member.uc_size);
-    append_u64(value, member.first_line_num);
-    append_u64(value, member.last_line_num);
+    append_u64_be(value, member.c_offset);
+    append_u64_be(value, member.c_size);
+    append_u64_be(value, member.uc_offset);
+    append_u64_be(value, member.uc_size);
+    append_u64_be(value, member.first_line_num);
+    append_u64_be(value, member.last_line_num);
     if (member.kind != index::gzip::GzipRecordKind::Member) {
         value.push_back(static_cast<char>(member.kind));
         value.push_back(static_cast<char>(member.bits));
@@ -24,24 +25,24 @@ std::string encode_metadata_record(std::uint64_t checkpoint_size,
                                    std::uint64_t total_uc_size,
                                    std::uint64_t flags) {
     std::string value;
-    append_u64(value, checkpoint_size);
-    append_u64(value, total_lines);
-    append_u64(value, total_uc_size);
-    append_u64(value, flags);
+    append_u64_be(value, checkpoint_size);
+    append_u64_be(value, total_lines);
+    append_u64_be(value, total_uc_size);
+    append_u64_be(value, flags);
     return value;
 }
 
 std::string encode_chunk_statistics_value(
     const index::schemas::dft::ChunkStatistics& stats) {
     std::string value;
-    append_u64(value, stats.total_events);
-    append_u64(value, stats.min_timestamp_us);
-    append_u64(value, stats.max_timestamp_us);
-    append_i64(value, stats.duration_sum_us);
-    append_u64(value, stats.duration_min_us);
-    append_u64(value, stats.duration_max_us);
-    append_u64(value, stats.duration_count);
-    append_double(value, stats.duration_m2);
+    append_u64_be(value, stats.total_events);
+    append_u64_be(value, stats.min_timestamp_us);
+    append_u64_be(value, stats.max_timestamp_us);
+    append_u64_be(value, static_cast<std::uint64_t>(stats.duration_sum_us));
+    append_u64_be(value, stats.duration_min_us);
+    append_u64_be(value, stats.duration_max_us);
+    append_u64_be(value, stats.duration_count);
+    append_f64_be(value, stats.duration_m2);
 
     auto duration_sketch = stats.duration_sketch.serialize();
     append_blob(value, duration_sketch);

@@ -2,12 +2,14 @@
 #define DFTRACER_UTILS_UTILITIES_FILESYSTEM_DIRECTORY_SCANNER_UTILITY_H
 
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/coro/when_all.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/filesystem/types.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 
+#include <cerrno>
 #include <functional>
 #include <string>
 #include <vector>
@@ -68,13 +70,16 @@ class DirectoryScannerUtility {
      */
     coro::CoroTask<std::vector<FileEntry>> operator()(
         CoroScope& ctx, const DirectoryScannerUtilityInput& input) const {
-        if (!fs::exists(input.path)) {
-            throw fs::filesystem_error(
-                "Directory does not exist", input.path,
-                std::make_error_code(std::errc::no_such_file_or_directory));
+        dftracer::utils::InputFileStat root_stat;
+        if (!dftracer::utils::stat_input(input.path, root_stat)) {
+            std::error_code root_ec(errno, std::generic_category());
+            if (root_ec == std::errc::no_such_file_or_directory)
+                throw fs::filesystem_error("Directory does not exist",
+                                           input.path, root_ec);
+            throw fs::filesystem_error("Cannot stat directory", input.path,
+                                       root_ec);
         }
-
-        if (!fs::is_directory(input.path)) {
+        if (!root_stat.is_directory) {
             throw fs::filesystem_error(
                 "Path is not a directory", input.path,
                 std::make_error_code(std::errc::not_a_directory));

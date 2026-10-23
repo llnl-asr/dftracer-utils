@@ -9,6 +9,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Bound the parse memory of each worker in an index build and a cold first query: a chunk is parsed in pieces of at most 1 MiB and 8192 lines, `parse_many` reads batches of 128 KiB on the calling thread, a record longer than a batch is parsed alone, and event buffers cut back what a huge batch or event grew when they are returned.
+  The peak of a build no longer grows by about 100 MB for each extra worker.
+- Rebuild the indexes and caches made before this change on first use.
+  Every interface and format version of the library is now 0, and a stored index, view cache, viz summary or frame in another version is not read.
+  A missing or unreadable manifest or format record also means a rebuild.
+
+- Make the tools stat each input file once and open it once per pass over its bytes.
+  The directory walk reads the size and mtime of a file in one stat, and the later steps reuse them where they used to stat it again.
+  `dftracer_index` opens each file once and reads its hash, schema and gzip index from that open file, and `dftracer_view` and `dftracer_split` keep the descriptor of the first look at a file for the pass that follows.
+  On a parallel file system this cuts the metadata calls per input (a Corona run of 500 files made 12 stat calls and 4 opens per file in `dftracer_index`, and 57 stat calls per file in `dftracer_stats`).
+  `dftracer_stats` reads the files once to build the category and the pid and tid counts, where it read them twice.
+- Keep one file in flight per worker in the first run of `dftracer_view` and any View over unindexed traces, with each worker writing its files into its own SST sink and one ingest per index root, where the run took files in waves of 16 and wrote each file's index under one lock.
+  Each worker merges the aggregate states of its files as they finish, a sink commits once it holds 32 MiB of memory (it counted only keys and values before), and the export first run takes the same path with one open of each index root.
+  A worker that fails stops the others.
+  A read-only open of an index caps the files RocksDB keeps open at half the descriptor limit, so an index of thousands of SSTs opens under a limit of 1,024.
+- Index the trace files in subfolders of `-d` before `dftracer_event_count` counts, as the other tools do, where it indexed only the top folder up front and built the rest as it counted.
+- Check whether `dftracer_split` input files lie in the output folder by their walked path, and the output folder by its canonical path, instead of resolving every input file.
+  A symlink that points into the output folder through a different spelling is no longer skipped.
+- Replay the input files of `dftracer_replay` in parallel, as many at once as `--executor-threads`.
+  Each file keeps its own open files and its own timeline, so files of different processes or times no longer wait on the first file's clock.
+  `--max-events` still caps the whole run.
 - Split traces without building an index.
   `dftracer_split` reads each file once and writes chunk files of about `--chunk-size` as it goes, where it built an index of every file first and planned its chunks from it.
   Chunk files are named `<app>-<group>_chunk<k>.pfw.gz`, and they no longer start with a `[` line or end with a `]` line.
@@ -26,8 +47,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Let only one idle executor worker poll on the short timer, so a quiet pool does not wake all of its workers.
 - Read the trace files in all subfolders of `-d` in `dftracer_index`, `dftracer_event_count`, `dftracer_info`, `dftracer_stats`, `dftracer_split`, `dftracer_comparator` and `dftracer_run`, as `dftracer_view` and `dftracer_validate` already did.
   Folders that hold index data or split output are skipped.
-- Write the bounded multi-member copy of a single-member trace beside the trace's index, in `<index root>.split/`, instead of in a `split/` folder next to the trace.
-  With `--index-dir`, the tools no longer write anything into the folders of their inputs.
+- Read a gzip member larger than the checkpoint size through the restart points its index holds, in bounded memory, and write no copy of it.
+  The line-range reader starts at a restart piece, and a read that starts at one drops the line it opens, which belongs to the piece before.
+  The tools read a plain trace only after it is gzipped (`dftracer_pgzip`).
+  `dftracer_index`, `dftracer_view` and `dftracer_run` no longer write a gzip copy under `split/`.
+- Build the index of a set of files with every worker busy: a worker takes a block of consecutive file ids, writes each file into its block's SSTs as it finishes and frees its state, so memory grows with the workers and not with the files, and the SSTs of the blocks do not overlap, so the ingest leaves no files in level 0.
+  `dftracer_index` on the 8,404-file minife set takes 14 s instead of 60 s at 48 threads.
 - Shrink the fixed cost of a string table from about 1.5 MB to about 120 KB, because its directories are now made as strings arrive.
   An index build makes one table per file, so a set of thousands of small files held several GB in empty tables.
 - Rename the environment variables, CMake options and macros that began with `DFTRACER_` to begin with `DFTRACER_UTILS_`, so they do not clash with DFTracer.
@@ -187,6 +212,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 - Remove the `-r` and `--recursive` options of `dftracer_replay`, since it now reads every subfolder of a directory input.
   Drop them from scripts that call it.
+- Remove `ReplayEngine::add_executor` and `ReplayEngine::process_trace_line`.
+  Each replayed file now gets its own POSIX or DFTracer executor.
 - Remove the `--index-dir` and `--force` options of `dftracer_split`, since it builds no index.
   Drop them from scripts that call it.
   `--checkpoint-size` stays and sets the gzip member size.
@@ -199,6 +226,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix `dftracer_index` exiting with status 0 when a file failed to index, and `dftracer_split` reporting 0 chunk files for a plain input.
+  Both now print that the file is not gzip and exit with status 1.
 - Fix a stack overflow crash of `dftracer_stats` and `dftracer_comparator` on thousands of files that share one index root.
 - Fix the executor watchdog taking a busy executor for a deadlocked one when a long task runs with `--executor-threads 1`, which aborted `dftracer_split`.
 - Fix the CLI tools dumping core on an error that leaves the tool, such as a watchdog timeout.

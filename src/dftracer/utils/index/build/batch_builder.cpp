@@ -313,11 +313,18 @@ static coro::CoroTask<void> parse_and_write_worker(
                 namespace views = trace::views::detail;
                 index::gzip::CheckpointIndexer::VisitorList visitors;
                 index::load_index_schemas(pf.index_path);
+                const auto s0 = std::chrono::steady_clock::now();
                 const index::RecordSchema& schema =
                     admission->schema.empty()
                         ? index::detect_file_schema(
                               pf.file_path, fd, pf.file_size, pf.file_mtime_ns)
                         : index::get_schema(admission->schema);
+                writer->metrics->schema_ns.fetch_add(
+                    static_cast<std::uint64_t>(
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::steady_clock::now() - s0)
+                            .count()),
+                    std::memory_order_relaxed);
                 job.schema = &schema;
                 const auto file_config =
                     index::build::for_schema(bloom_config, schema);
@@ -695,6 +702,8 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
     state->metrics.files_parsed = state->num_files;
     state->metrics.write_ns =
         writer_metrics->write_ns.load(std::memory_order_relaxed);
+    state->metrics.schema_ns =
+        writer_metrics->schema_ns.load(std::memory_order_relaxed);
     state->metrics.files_written =
         writer_metrics->files_written.load(std::memory_order_relaxed);
     state->metrics.max_files_in_flight = admission->files.max_in_flight();
@@ -838,6 +847,7 @@ static void merge_partial_into(IndexBuildBatchResult& out,
     out.total_events += partial.total_events;
     out.metrics.parse_ns += partial.metrics.parse_ns;
     out.metrics.write_ns += partial.metrics.write_ns;
+    out.metrics.schema_ns += partial.metrics.schema_ns;
     out.metrics.files_enqueued += partial.metrics.files_enqueued;
     out.metrics.files_parsed += partial.metrics.files_parsed;
     out.metrics.files_written += partial.metrics.files_written;
@@ -1002,6 +1012,7 @@ coro::CoroTask<IndexBuildBatchResult> BatchBuilder::process(
         auto& m = out.metrics;
         m.parse_ns += got.metrics.parse_ns;
         m.write_ns += got.metrics.write_ns;
+        m.schema_ns += got.metrics.schema_ns;
         m.files_enqueued += got.metrics.files_enqueued;
         m.files_parsed += got.metrics.files_parsed;
         m.files_written += got.metrics.files_written;

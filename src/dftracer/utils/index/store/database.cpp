@@ -11,6 +11,7 @@
 #include <rocksdb/table.h>
 #include <rocksdb/write_buffer_manager.h>
 #include <sys/resource.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <atomic>
@@ -19,6 +20,7 @@
 #include <functional>
 #include <mutex>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -258,6 +260,25 @@ int read_only_max_open_files() {
     const auto half = static_cast<std::uint64_t>(limit.rlim_cur) / 2;
     return static_cast<int>(
         std::clamp<std::uint64_t>(half, MIN_OPEN_FILES, INT32_MAX));
+}
+
+/// Unlinks the staged SSTs an ingest linked into the database. One unlink is a
+/// metadata round trip on a network file system, so many run at once.
+void unlink_staged(const std::vector<const std::vector<std::string>*>& lists) {
+    constexpr std::size_t MAX_UNLINKERS = 16;
+    std::vector<const std::string*> paths;
+    for (const auto* list : lists)
+        for (const auto& path : *list) paths.push_back(&path);
+    const std::size_t workers = std::min(MAX_UNLINKERS, paths.size());
+    std::vector<std::thread> threads;
+    threads.reserve(workers);
+    for (std::size_t w = 0; w < workers; ++w) {
+        threads.emplace_back([&paths, w, workers] {
+            for (std::size_t i = w; i < paths.size(); i += workers)
+                ::unlink(paths[i]->c_str());
+        });
+    }
+    for (auto& t : threads) t.join();
 }
 
 }  // namespace
@@ -541,8 +562,9 @@ std::size_t RocksDatabase::files_at_level(std::string_view column_family,
         return ::rocksdb::Status::OK();
     }
     ::rocksdb::IngestExternalFileOptions opts;
-    // Rename same-FS staged SSTs instead of copying; RocksDB copies on failure.
-    opts.move_files = true;
+    // Hard-link same-FS staged SSTs instead of copying; RocksDB copies on
+    // failure. The staged names go afterwards, in parallel (unlink_staged).
+    opts.link_files = true;
     // Offline bulk build with no live readers, so skip the snapshot/seqno sync.
     opts.snapshot_consistency = false;
     opts.allow_global_seqno = true;
@@ -551,19 +573,23 @@ std::size_t RocksDatabase::files_at_level(std::string_view column_family,
     opts.write_global_seqno = false;
     opts.allow_blocking_flush = true;
     opts.ingest_behind = ingest_behind;
-    return db_->IngestExternalFile(column_family_handle(column_family),
-                                   external_files, opts);
+    IngestReopenSkip skip_reopen(*file_system_);
+    auto status = db_->IngestExternalFile(column_family_handle(column_family),
+                                          external_files, opts);
+    if (status.ok()) unlink_staged({&external_files});
+    return status;
 }
 
 ::rocksdb::Status RocksDatabase::ingest_external_files_multi(
     const std::vector<
         std::pair<std::string_view, const std::vector<std::string>*>>& per_cf) {
     ::rocksdb::IngestExternalFileOptions opts;
-    opts.move_files = true;
+    opts.link_files = true;
     opts.snapshot_consistency = false;
     opts.allow_global_seqno = true;
     opts.write_global_seqno = false;
     opts.allow_blocking_flush = true;
+    IngestReopenSkip skip_reopen(*file_system_);
 
     std::vector<::rocksdb::IngestExternalFileArg> args;
     args.reserve(per_cf.size());
@@ -576,7 +602,13 @@ std::size_t RocksDatabase::files_at_level(std::string_view column_family,
         args.push_back(std::move(arg));
     }
     if (args.empty()) return ::rocksdb::Status::OK();
-    return db_->IngestExternalFiles(args);
+    auto status = db_->IngestExternalFiles(args);
+    if (status.ok()) {
+        std::vector<const std::vector<std::string>*> lists;
+        for (const auto& arg : args) lists.push_back(&arg.external_files);
+        unlink_staged(lists);
+    }
+    return status;
 }
 
 }  // namespace dftracer::utils::index::store

@@ -51,6 +51,7 @@ struct ParsedIndexJob {
 
 struct BatchWriterMetrics {
     std::atomic<std::uint64_t> write_ns{0};
+    std::atomic<std::uint64_t> schema_ns{0};
     std::atomic<std::size_t> files_written{0};
     std::atomic<std::size_t> batches_committed{0};
 };

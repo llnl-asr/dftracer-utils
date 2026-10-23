@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/common/scratch.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
@@ -28,6 +29,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <system_error>
+#include <unordered_map>
 
 namespace dftracer::utils::index::build {
 
@@ -296,6 +298,15 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
         auto batch_config =
             std::make_shared<index::build::IndexBuildBatchConfig>();
         batch_config->file_paths = files_needing_work;
+        if (result.all_file_sizes.size() == result.all_files.size()) {
+            dstd::HashMap<std::string_view, std::uint64_t> size_of;
+            size_of.reserve(result.all_files.size());
+            for (std::size_t i = 0; i < result.all_files.size(); ++i)
+                size_of.emplace(result.all_files[i], result.all_file_sizes[i]);
+            for (const auto& f : files_needing_work)
+                batch_config->file_costs.push_back(
+                    size_of[std::string_view(f)]);
+        }
         batch_config->index_dir = build_index_dir;
         batch_config->checkpoint_size = input.checkpoint_size;
         batch_config->parallelism = parallelism;

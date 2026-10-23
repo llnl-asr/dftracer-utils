@@ -84,6 +84,26 @@ struct FoldEvent {
     std::vector<std::pair<std::uint32_t, std::uint8_t>> schema_leaves;
 };
 
+/// Rewrite every interned id of `ev` through `map`, indexed by the old id.
+inline void remap_ids(FoldEvent& ev, std::span<const std::uint32_t> map) {
+    constexpr std::uint32_t NO_ID = dftracer::utils::dstd::StringIntern::NO_ID;
+    const auto at = [&](std::uint32_t& id) {
+        if (id != NO_ID) id = map[id];
+    };
+    at(ev.cat_id);
+    at(ev.name_id);
+    at(ev.fhash_id);
+    at(ev.hhash_id);
+    for (auto* list : {&ev.args, &ev.top_fields})
+        for (auto& [key, value] : *list) {
+            key = map[key];
+            if (auto* text = std::get_if<std::uint32_t>(&value))
+                *text = map[*text];
+        }
+    for (auto& s : ev.specials) s.key = map[s.key];
+    for (auto& leaf : ev.schema_leaves) leaf.first = map[leaf.first];
+}
+
 /// Reset `ev` to a default event, keeping the capacity of its vectors so a
 /// reused slot decodes the next record without allocating.
 inline void reset_fold_event(FoldEvent& ev) {
@@ -151,6 +171,7 @@ class FoldEventBuffer {
     std::size_t slot_capacity() const { return slots_.capacity(); }
     const FoldEvent& back() const { return slots_[live_ - 1]; }
     std::span<const FoldEvent> events() const { return {slots_.data(), live_}; }
+    std::span<FoldEvent> events_mut() { return {slots_.data(), live_}; }
 
    private:
     static std::size_t seed(std::size_t capacity) {

@@ -82,7 +82,8 @@ class BloomFold : public trace::views::detail::Fold {
     /// writing, syncing and ingesting runs of its own.
     bool writes_runs() const {
         if (spill_dir_.empty() || files_.empty()) return false;
-        return !files_.begin()->second.spill.runs.empty();
+        const auto& sp = files_.begin()->second.spill;
+        return !sp.runs.empty() || sp.open != nullptr;
     }
     void seal_unit(const trace::views::detail::ScanUnit& /*unit*/) override {}
     void drop_unit(const trace::views::detail::ScanUnit& unit) override;
@@ -117,6 +118,14 @@ class BloomFold : public trace::views::detail::Fold {
     /// The on-disk size of the file being folded, which caps its auto keys.
     /// Unset, the size is read from the path when the file is written.
     void set_file_bytes(std::uint64_t bytes) { file_bytes_ = bytes; }
+    /// Bytes the open run of a file that has written @p runs runs holds before
+    /// it is committed, for a spill @p share. It never falls under
+    /// MIN_SPILL_RUN_BYTES and doubles every SPILL_RUNS_PER_DOUBLING runs, so
+    /// a tiny budget writes few large runs, not many small ones: every run is
+    /// SSTs that overlap in L0, and a family with more of them than
+    /// descriptors cannot be scanned.
+    static std::uint64_t run_limit(std::uint64_t share,
+                                   std::size_t runs) noexcept;
     /// Runs written so far; 0 means the file is still wholly in memory.
     std::size_t spill_runs() const;
     /// For a file with spill enabled, with or without runs so far: writes the
@@ -213,6 +222,10 @@ class BloomFold : public trace::views::detail::Fold {
         ankerl::unordered_dense::set<std::uint32_t> key_union;
         std::vector<index::store::IndexDatabaseSstWriterContext::Artifacts>
             runs;
+        /// The run being filled; it commits once it holds run_limit() bytes.
+        std::unique_ptr<index::store::IndexDatabaseSstWriterContext> open;
+        /// Estimated bytes `open` holds.
+        std::uint64_t buffered = 0;
         bool handed_off = false;
     };
 

@@ -11,6 +11,7 @@
 #include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/internal/scan_prefix.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dftracer/utils/utilities/common/serialization/binary_codec.h>
 
@@ -110,7 +111,8 @@ std::optional<std::string> read_lookup(rdb::RocksDatabase& db,
 
 bool lookup_exists(const rdb::RocksDatabase& db, std::uint64_t sig) {
     std::string value;
-    return db.get(value_key(sig), &value, rdb::cf::ROLLUP).ok();
+    return rdb::internal::get_checked("lookup read", db, value_key(sig), &value,
+                                      rdb::cf::ROLLUP);
 }
 
 void persist_lookup(rdb::RocksDatabase& db, std::uint64_t sig,

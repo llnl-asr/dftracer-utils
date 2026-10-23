@@ -429,12 +429,13 @@ std::string write_multi_member(const std::string& dir, int members = 40,
 
 std::vector<std::string> record_index_pass(const std::string& gz,
                                            const std::string& idx,
-                                           std::size_t parse_ahead) {
+                                           std::size_t workers) {
     StringIntern intern;
     RecordingFold rec(intern);
     std::array<Fold*, 1> folds{&rec};
     IndexFoldDriver driver(intern, folds, gz, idx);
-    driver.set_parse_ahead(parse_ahead);
+    dftracer::utils::index::build::ParseGate gate(nullptr, workers);
+    if (workers > 1) driver.set_parse_gate(gate);
     run_coro(
         [&](CoroScope& scope) -> dftracer::utils::coro::CoroTask<void> {
             dftracer::utils::index::gzip::CheckpointIndexer::VisitorList vl;
@@ -531,7 +532,8 @@ TEST_CASE("a fold that throws while parsing ahead ends the index pass") {
     ThrowingFold thrower;
     std::array<Fold*, 2> folds{&bloom, &thrower};
     IndexFoldDriver driver(intern, folds, gz, env.get_dir() + "/idx");
-    driver.set_parse_ahead(8);
+    dftracer::utils::index::build::ParseGate gate(nullptr, 8);
+    driver.set_parse_gate(gate);
     bool threw = false;
     run_coro(
         [&](CoroScope& scope) -> dftracer::utils::coro::CoroTask<void> {

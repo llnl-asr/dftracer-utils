@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/build/batch_builder.h>
+#include <dftracer/utils/index/build/file_admission.h>
 #include <dftracer/utils/index/build/index_batch_writer.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
@@ -20,7 +21,6 @@
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/memory/budget.h>
-#include <dftracer/utils/runtime/coro/async_semaphore.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -105,39 +105,27 @@ std::vector<PreparedFile> prepare_file_identities(
 
 }  // namespace
 
-// Files in flight under the memory budget; `sem` is null when unbounded.
+// What the files of one build share: admission by the memory budget, the sink
+// size, the spill location and the event buffers.
 struct Admission {
-    std::unique_ptr<coro::CoroSemaphore> sem;
-    std::uint64_t capacity = 0;
+    Admission(std::uint64_t budget, std::size_t workers,
+              std::uint64_t sink_bytes_each, std::size_t sinks,
+              std::size_t file_count)
+        : sink_limit(sink_bytes_each),
+          files(budget, workers, sink_bytes_each * sinks, file_count) {}
+
+    /// Bytes a sink holds before its worker commits it.
+    std::size_t sink_limit;
+    FileAdmission files;
     /// Where a file's spill runs go; empty when files do not spill.
     std::string spill_root;
     /// RecordSchema id for every file; empty detects each file's.
     std::string schema;
-    std::atomic<std::size_t> in_flight{0};
-    std::atomic<std::size_t> max_in_flight{0};
     std::atomic<std::size_t> spilled{0};
+    std::atomic<std::size_t> max_spill_runs{0};
     /// Event buffers shared by every file's fold driver, so a file starts
     /// with the capacity the files before it grew.
     FoldBufferPool buffers;
-
-    // The permits a file of `size` compressed bytes takes: the View's
-    // per-file estimate, clamped so a file above the budget runs alone.
-    std::uint64_t permits(std::uint64_t size) const {
-        const auto est = static_cast<std::uint64_t>(
-            estimate_per_file_bytes({static_cast<std::size_t>(size)}));
-        return std::min(est, capacity);
-    }
-    void enter() {
-        const auto n = in_flight.fetch_add(1, std::memory_order_relaxed) + 1;
-        auto seen = max_in_flight.load(std::memory_order_relaxed);
-        while (n > seen && !max_in_flight.compare_exchange_weak(
-                               seen, n, std::memory_order_relaxed)) {
-        }
-    }
-    void leave(std::uint64_t n) {
-        in_flight.fetch_sub(1, std::memory_order_relaxed);
-        if (sem) sem->release(n);
-    }
 };
 
 struct BatchWriteState {
@@ -267,7 +255,8 @@ static coro::CoroTask<void> parse_and_write_worker(
     index::build::ChunkIndexerConfig bloom_config,
     std::atomic<std::uint64_t>* parse_ns_ptr,
     const IndexBuildBatchConfig::AggFoldFactory* agg_fold_factory_ptr,
-    bool build_bloom, bool tier_only, std::size_t parse_ahead,
+    bool build_bloom, bool tier_only,
+    const std::vector<std::uint64_t>* costs_ptr,
     const IndexBuildBatchConfig::ProgressFn* progress_ptr, Admission* admission,
     BlockWriter* writer) {
     namespace gzip_indexer = index::gzip;
@@ -285,20 +274,28 @@ static coro::CoroTask<void> parse_and_write_worker(
             // One open of the input serves the size and mtime, the hash, the
             // schema probe and the gzip index build.
             dstd::SharedPtr<ScopedFd> input_fd = std::move(pf.input_fd);
+            // A file of known size takes its place in the budget before it is
+            // opened; one of unknown size is opened to read its size first.
+            struct stat input_stat{};
+            FileAdmission::Ticket ticket;
+            bool admitted = false;
+            if (!costs_ptr->empty()) {
+                ticket = co_await admission->files.admit(
+                    FileAdmission::plaintext_estimate(0, (*costs_ptr)[idx]));
+                admitted = true;
+            }
             if (!input_fd)
                 input_fd = dstd::make_shared<ScopedFd>(
                     ::open(pf.file_path.c_str(), O_RDONLY));
             const int fd = input_fd->get();
-            struct stat input_stat{};
             if (fd >= 0 && ::fstat(fd, &input_stat) == 0) {
                 pf.file_size = static_cast<std::uint64_t>(input_stat.st_size);
                 pf.file_mtime = static_cast<std::uint64_t>(input_stat.st_mtime);
                 pf.file_mtime_ns = stat_mtime_ns(input_stat);
             }
-            const std::uint64_t permits =
-                admission->sem ? admission->permits(pf.file_size) : 0;
-            if (admission->sem) co_await admission->sem->acquire(permits);
-            admission->enter();
+            if (!admitted)
+                ticket = co_await admission->files.admit(
+                    FileAdmission::plaintext_estimate(0, pf.file_size));
             IndexBuildResult result;
             result.file_path = pf.file_path;
             result.index_path = pf.index_path;
@@ -343,7 +340,7 @@ static coro::CoroTask<void> parse_and_write_worker(
                         if (!admission->spill_root.empty() &&
                             pf.slice.members == nullptr)
                             job.bloom_fold->enable_spill(
-                                permits,
+                                ticket.elastic_bytes(),
                                 admission->spill_root + "/file_" +
                                     std::to_string(pf.file_id),
                                 pf.file_id, pf.fresh_id);
@@ -364,7 +361,7 @@ static coro::CoroTask<void> parse_and_write_worker(
                                    pf.index_path);
                     driver->set_record_schema(schema);
                     driver->share_buffers(admission->buffers);
-                    driver->set_parse_ahead(parse_ahead);
+                    driver->set_parse_gate(admission->files.gate());
                     // A slice sees part of the chunks, and a file payload built
                     // from them could rule out the whole file.
                     if (build_bloom && pf.slice.members == nullptr) {
@@ -391,7 +388,7 @@ static coro::CoroTask<void> parse_and_write_worker(
                 }
                 auto arts = co_await gzip_indexer::build_gzip_index_artifacts(
                     fd, pf.file_path, checkpoint_size, visitors, scope,
-                    slice_ptr, parse_ahead);
+                    slice_ptr, admission->files.inflate_ways());
                 if (!arts) {
                     result.error_message =
                         "Failed to build gzip index artifacts";
@@ -410,6 +407,16 @@ static coro::CoroTask<void> parse_and_write_worker(
                         if (job.bloom_fold->spill_runs() > 0) {
                             admission->spilled.fetch_add(
                                 1, std::memory_order_relaxed);
+                            const std::size_t runs =
+                                job.bloom_fold->spill_runs();
+                            std::size_t seen = admission->max_spill_runs.load(
+                                std::memory_order_relaxed);
+                            while (runs > seen &&
+                                   !admission->max_spill_runs
+                                        .compare_exchange_weak(
+                                            seen, runs,
+                                            std::memory_order_relaxed)) {
+                            }
                             DFTRACER_UTILS_LOG_INFO(
                                 "IndexBatch: %s spilled %zu runs",
                                 basename_of(pf.file_path).c_str(),
@@ -468,7 +475,6 @@ static coro::CoroTask<void> parse_and_write_worker(
 
             if (!parse_ok) {
                 (*results_ptr)[idx] = std::move(result);
-                admission->leave(permits);
                 continue;
             }
 
@@ -478,7 +484,6 @@ static coro::CoroTask<void> parse_and_write_worker(
             if (pf.slice.skip_file_scoped_writes) {
                 (*results_ptr)[idx] = std::move(result);
                 (*parsed_jobs_ptr)[idx] = std::move(job);
-                admission->leave(permits);
                 continue;
             }
 
@@ -526,13 +531,12 @@ static coro::CoroTask<void> parse_and_write_worker(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
                     std::chrono::steady_clock::now() - w0)
                     .count());
-            admission->leave(permits);
+            ticket = {};
             // A sink that has grown past the budget commits and the next file
             // opens another: the ids of a block are consecutive, so the SSTs of
             // the two sinks still do not overlap.
             if (open.sink &&
-                open.sink->buffered_bytes() >=
-                    g_max_sink_bytes.load(std::memory_order_relaxed))
+                open.sink->buffered_bytes() >= admission->sink_limit)
                 commit_open_sink(writer, open, results_ptr, prepared_ptr);
         }
 
@@ -571,11 +575,7 @@ dstd::Vector<std::size_t> cut_blocks(std::size_t files,
 // are consecutive, so its SSTs overlap no other block's.
 static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
                                                    BatchWriteState* state) {
-    // Chunks a file parses ahead of its folds at most; each holds its
-    // plaintext and its events.
-    static constexpr std::size_t MAX_PARSE_AHEAD = 16;
-    const std::size_t parse_workers =
-        std::max<std::size_t>(1, state->parallelism);
+    std::size_t parse_workers = std::max<std::size_t>(1, state->parallelism);
     // One block of consecutive files per worker, so a worker's SSTs cover one
     // run of file ids and the ingest has about one SST per worker and key
     // prefix. Blocks hold about equal work, so the workers finish together.
@@ -598,17 +598,24 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
             std::make_shared<index::store::IndexDatabase>(state->index_path);
     }
 
-    auto admission = std::make_shared<Admission>();
-    if (state->memory_budget != memory::NO_SPILL_BUDGET) {
-        admission->capacity =
-            memory::resolve_spill_budget(state->memory_budget);
-        admission->sem =
-            std::make_unique<coro::CoroSemaphore>(admission->capacity);
-        if (!state->sink_factory || state->spill_commit)
-            admission->spill_root = state->spill_dir.empty()
-                                        ? state->index_path + ".spill"
-                                        : state->spill_dir;
-    }
+    // The workers' sinks hold up to their limit each, so the budget sets the
+    // workers and the limit, and the files get what is left.
+    constexpr std::uint64_t NO_BUDGET = memory::NO_SPILL_BUDGET;
+    const std::uint64_t budget =
+        state->memory_budget == NO_BUDGET
+            ? NO_BUDGET
+            : memory::resolve_spill_budget(state->memory_budget);
+    const auto plan = FileAdmission::plan_sinks(
+        budget, parse_workers,
+        g_max_sink_bytes.load(std::memory_order_relaxed));
+    parse_workers = plan.workers;
+    auto admission = std::make_shared<Admission>(
+        budget, parse_workers, plan.sink_bytes,
+        std::min(state->num_files, parse_workers), state->num_files);
+    if (budget != NO_BUDGET && (!state->sink_factory || state->spill_commit))
+        admission->spill_root = state->spill_dir.empty()
+                                    ? state->index_path + ".spill"
+                                    : state->spill_dir;
     admission->schema = state->schema;
     auto* admission_ptr = admission.get();
     auto next_block = std::make_shared<std::atomic<std::size_t>>(0);
@@ -653,31 +660,26 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
     const IndexBuildBatchConfig::ProgressFn* progress_ptr =
         state->progress ? &state->progress : nullptr;
 
-    // Workers outnumber the files when there are few: the cores left over parse
-    // a file's chunks ahead of its folds.
-    const std::size_t parse_ahead = std::clamp<std::size_t>(
-        parse_workers /
-            std::max<std::size_t>(1, std::min(state->num_files, parse_workers)),
-        1, MAX_PARSE_AHEAD);
+    const auto* costs_ptr = &state->file_costs;
     auto pipeline_scope =
         [parse_workers, block_starts_ptr, next_block_ptr, done_ptr,
          parse_ns_ptr, results_ptr, parsed_jobs_ptr, prepared_ptr,
          checkpoint_size, bloom_config_ptr, agg_fold_factory_ptr, build_bloom,
-         tier_only, parse_ahead, admission_ptr, writer_ptr,
+         tier_only, costs_ptr, admission_ptr, writer_ptr,
          progress_ptr](CoroScope& child) -> coro::CoroTask<void> {
         for (std::size_t w = 0; w < parse_workers; ++w) {
             child.spawn(
                 [block_starts_ptr, next_block_ptr, done_ptr, parse_ns_ptr,
                  results_ptr, parsed_jobs_ptr, prepared_ptr, checkpoint_size,
                  bloom_config_ptr, agg_fold_factory_ptr, build_bloom, tier_only,
-                 parse_ahead, progress_ptr, admission_ptr,
+                 costs_ptr, progress_ptr, admission_ptr,
                  writer_ptr](CoroScope& own_scope) -> coro::CoroTask<void> {
                     co_await parse_and_write_worker(
                         &own_scope, next_block_ptr, block_starts_ptr, done_ptr,
                         results_ptr, parsed_jobs_ptr, prepared_ptr,
                         checkpoint_size, *bloom_config_ptr, parse_ns_ptr,
-                        agg_fold_factory_ptr, build_bloom, tier_only,
-                        parse_ahead, progress_ptr, admission_ptr, writer_ptr);
+                        agg_fold_factory_ptr, build_bloom, tier_only, costs_ptr,
+                        progress_ptr, admission_ptr, writer_ptr);
                 });
         }
         co_return;
@@ -695,10 +697,11 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
         writer_metrics->write_ns.load(std::memory_order_relaxed);
     state->metrics.files_written =
         writer_metrics->files_written.load(std::memory_order_relaxed);
-    state->metrics.max_files_in_flight =
-        admission->max_in_flight.load(std::memory_order_relaxed);
+    state->metrics.max_files_in_flight = admission->files.max_in_flight();
     state->metrics.files_spilled =
         admission->spilled.load(std::memory_order_relaxed);
+    state->metrics.max_spill_runs =
+        admission->max_spill_runs.load(std::memory_order_relaxed);
     DFTRACER_UTILS_LOG_INFO(
         "IndexBatch: streaming pipeline complete (parsed=%zu written=%zu)",
         state->num_files, state->metrics.files_written);
@@ -839,6 +842,8 @@ static void merge_partial_into(IndexBuildBatchResult& out,
     out.metrics.files_parsed += partial.metrics.files_parsed;
     out.metrics.files_written += partial.metrics.files_written;
     out.metrics.files_spilled += partial.metrics.files_spilled;
+    out.metrics.max_spill_runs =
+        std::max(out.metrics.max_spill_runs, partial.metrics.max_spill_runs);
     out.metrics.max_files_in_flight = std::max(
         out.metrics.max_files_in_flight, partial.metrics.max_files_in_flight);
     for (auto& ao : partial.agg_outputs) {
@@ -1003,6 +1008,8 @@ coro::CoroTask<IndexBuildBatchResult> BatchBuilder::process(
         m.max_files_in_flight =
             std::max(m.max_files_in_flight, got.metrics.max_files_in_flight);
         m.files_spilled += got.metrics.files_spilled;
+        m.max_spill_runs =
+            std::max(m.max_spill_runs, got.metrics.max_spill_runs);
         for (auto& a : got.agg_outputs) out.agg_outputs.push_back(std::move(a));
     }
     co_return out;

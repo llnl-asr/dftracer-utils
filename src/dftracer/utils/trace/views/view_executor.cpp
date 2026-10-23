@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
+#include <dftracer/utils/index/build/file_admission.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
 #include <dftracer/utils/index/cache/mv_store.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
@@ -328,6 +329,8 @@ struct BootstrapSink {
         dftracer::utils::index::store::IndexDatabaseSstWriterContext>
         sink;
     std::vector<std::vector<SstArtifacts>> spilled;
+    /// Bytes the sink holds before its worker commits it.
+    std::size_t limit = 0;
 };
 
 void commit_bootstrap_sink(BootstrapSink& open) {
@@ -335,6 +338,8 @@ void commit_bootstrap_sink(BootstrapSink& open) {
     if (open.sink) {
         written = open.sink->commit();
         open.sink.reset();
+        bootstrap_counters().sink_commits.fetch_add(1,
+                                                    std::memory_order_relaxed);
     }
     std::lock_guard<std::mutex> lock(open.root->mu);
     if (written && !written->empty())
@@ -345,7 +350,7 @@ void commit_bootstrap_sink(BootstrapSink& open) {
 }
 
 // Writes one built file into the sink, which commits once it holds
-// g_max_sink_bytes: its SSTs then cover this block of file ids alone.
+// its limit: its SSTs then cover this block of file ids alone.
 void write_bootstrap_file(
     BootstrapSink& open, const ViewFile& f, int file_id,
     const dftracer::utils::index::gzip::GzipBuildArtifacts& arts,
@@ -363,10 +368,7 @@ void write_bootstrap_file(
         dftracer::utils::index::store::internal::get_logical_path(f.file_path),
         f.file_path, arts, schema, bloom, rowsets, hash, file_id);
     if (!runs.empty()) open.spilled.push_back(std::move(runs));
-    if (open.sink->buffered_bytes() >=
-        dftracer::utils::index::build::g_max_sink_bytes.load(
-            std::memory_order_relaxed))
-        commit_bootstrap_sink(open);
+    if (open.sink->buffered_bytes() >= open.limit) commit_bootstrap_sink(open);
 }
 
 // Each root takes everything its sinks wrote in one ingest.
@@ -451,11 +453,23 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
     // them one after another, and each root ingests once.
     BootstrapStores stores;
     co_await open_bootstrap_stores(plan, stores);
+    // One sink per root is open at a time, so each may hold a worker's share.
+    const std::uint64_t budget =
+        plan.memory_budget == memory::NO_SPILL_BUDGET
+            ? memory::NO_SPILL_BUDGET
+            : memory::resolve_spill_budget(plan.memory_budget);
+    const std::size_t sink_limit =
+        dftracer::utils::index::build::FileAdmission::plan_sinks(
+            budget, 1,
+            dftracer::utils::index::build::g_max_sink_bytes.load(
+                std::memory_order_relaxed))
+            .sink_bytes;
     dstd::Vector<BootstrapSink> open;
     dstd::Map<std::string, std::size_t> slot_of;
     for (const auto& root : stores.roots) {
         slot_of.emplace(root->index_path, open.size());
-        open.push_back({root.get(), &stores.sink_names, nullptr, {}});
+        open.push_back(
+            {root.get(), &stores.sink_names, nullptr, {}, sink_limit});
     }
 
     for (std::size_t i = 0; i < plan.files.size(); ++i) {
@@ -701,8 +715,6 @@ namespace {
 // A worker per core takes a block of consecutive files of equal cost, one file
 // at a time, and writes each into an SST sink of its block, so the SSTs of two
 // blocks overlap no other block's. Each index root is ingested once at the end.
-constexpr std::size_t MAX_PARSE_AHEAD = 16;
-
 // One file's first-touch result: its aggregate state with `keep_state`. `ok`
 // is false when the build failed.
 struct BootstrapFile {
@@ -723,8 +735,8 @@ struct BootstrapRun {
     dstd::Vector<BootstrapBlock> blocks;
     // The merged state of each block's files, in file order.
     dstd::Vector<dataframe::AggStatePtr> states;
-    std::uint64_t spill_share;
-    std::size_t parse_ahead;
+    dftracer::utils::index::build::FileAdmission* admission = nullptr;
+    std::size_t sink_limit = 0;
     bool keep_state;
     std::atomic<std::size_t> next_block{0};
     std::atomic<bool> failed{false};
@@ -740,6 +752,21 @@ coro::CoroTask<BootstrapFile> bootstrap_file(BootstrapRun* run, ViewFile f,
     namespace gzi = dftracer::utils::index::gzip;
     const ViewPlan* plan = run->plan;
     BootstrapFile out;
+    std::uint64_t compressed = 0;
+    if (f.uncompressed_size == 0) {
+        // The size of a file never indexed comes from its descriptor, which
+        // the pass then reads through.
+        if (!f.fd)
+            f.fd = dstd::make_shared<ScopedFd>(
+                ::open(f.file_path.c_str(), O_RDONLY));
+        struct stat st{};
+        if (f.fd->get() >= 0 && ::fstat(f.fd->get(), &st) == 0)
+            compressed = static_cast<std::uint64_t>(st.st_size);
+    }
+    const std::uint64_t plaintext =
+        dftracer::utils::index::build::FileAdmission::plaintext_estimate(
+            f.uncompressed_size, compressed);
+    auto ticket = co_await run->admission->admit(plaintext);
     auto& counters = bootstrap_counters();
     const auto now =
         counters.in_flight.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -758,8 +785,8 @@ coro::CoroTask<BootstrapFile> bootstrap_file(BootstrapRun* run, ViewFile f,
         intern, dftracer::utils::index::build::for_schema({}, schema));
     dftracer::utils::index::extensions::RowSetFold rowsets(
         intern, dftracer::utils::index::indexed_rowsets(schema));
-    if (run->spill_share != memory::NO_SPILL_BUDGET)
-        bloom.enable_spill(run->spill_share,
+    if (ticket.elastic_bytes() != memory::NO_SPILL_BUDGET)
+        bloom.enable_spill(ticket.elastic_bytes(),
                            bootstrap_spill_root(f.index_path) + "/file_" +
                                std::to_string(file_id),
                            file_id);
@@ -768,7 +795,7 @@ coro::CoroTask<BootstrapFile> bootstrap_file(BootstrapRun* run, ViewFile f,
         intern, folds, f.file_path, f.index_path, extra_capture_fields(*plan));
     driver.set_record_schema(schema);
     driver.share_buffers(run->buffers);
-    driver.set_parse_ahead(run->parse_ahead);
+    driver.set_parse_gate(run->admission->gate());
 
     gzi::GzipBuildArtifacts arts;
     bool built = false;
@@ -777,7 +804,7 @@ coro::CoroTask<BootstrapFile> bootstrap_file(BootstrapRun* run, ViewFile f,
     visitors.emplace_back(driver);
     co_await dftracer::utils::run_coro_scope(
         build_bootstrap_artifacts, f.file_path, std::move(visitors), &arts,
-        &built, run->parse_ahead, f.fd, &hash);
+        &built, run->admission->inflate_ways(), f.fd, &hash);
     if (!built) co_return out;
     ExportStats read;
     read.chunks_scanned = arts.members.size();
@@ -799,8 +826,11 @@ coro::CoroTask<bool> bootstrap_worker(BootstrapRun* run) {
                 run->next_block.fetch_add(1, std::memory_order_relaxed);
             if (b >= run->blocks.size()) break;
             const BootstrapBlock block = run->blocks[b];
-            BootstrapSink open{
-                block.root, &run->stores->sink_names, nullptr, {}};
+            BootstrapSink open{block.root,
+                               &run->stores->sink_names,
+                               nullptr,
+                               {},
+                               run->sink_limit};
             auto& merged = run->states[b];
             for (std::size_t k = block.begin; k < block.end; ++k) {
                 if (run->failed.load(std::memory_order_relaxed))
@@ -881,10 +911,22 @@ coro::CoroTask<bool> try_collect_bootstrap(const ViewPlan& plan,
     run.states.resize(run.blocks.size());
     const std::size_t at_once =
         std::max<std::size_t>(1, std::min(run.blocks.size(), workers));
-    run.parse_ahead =
-        std::clamp<std::size_t>(workers / at_once, 1, MAX_PARSE_AHEAD);
-    run.spill_share = share_spill_budget(plan.memory_budget, at_once);
-    co_await dftracer::utils::run_coro_scope(bootstrap_workers, &run, at_once);
+    const std::uint64_t budget =
+        plan.memory_budget == memory::NO_SPILL_BUDGET
+            ? memory::NO_SPILL_BUDGET
+            : memory::resolve_spill_budget(plan.memory_budget);
+    const auto sinks = dftracer::utils::index::build::FileAdmission::plan_sinks(
+        budget, workers,
+        dftracer::utils::index::build::g_max_sink_bytes.load(
+            std::memory_order_relaxed));
+    const std::size_t active = std::min(at_once, sinks.workers);
+    run.sink_limit = sinks.sink_bytes;
+    dftracer::utils::index::build::FileAdmission admission(
+        budget, sinks.workers,
+        budget == memory::NO_SPILL_BUDGET ? 0 : sinks.sink_bytes * active,
+        plan.files.size());
+    run.admission = &admission;
+    co_await dftracer::utils::run_coro_scope(bootstrap_workers, &run, active);
     if (run.failed.load(std::memory_order_relaxed)) co_return false;
     ingest_bootstrap(stores);
     if (!resolved_transform) {

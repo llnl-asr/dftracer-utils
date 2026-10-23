@@ -2,6 +2,7 @@
 #include <dftracer/utils/index/store/error.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/db_error.h>
+#include <dftracer/utils/index/store/internal/scan_prefix.h>
 
 #include <utility>
 
@@ -70,9 +71,9 @@ void IndexDatabaseWriterContext::init_schema() {
         // A database holding data without a format key has another layout:
         // stamping it would make that data look current, so it stays
         // outdated and is rebuilt.
-        auto it = db_->new_iterator();
-        it->SeekToFirst();
-        if (it->Valid()) return;
+        if (internal::any_key_with_prefix("Failed to scan the index",
+                                          db_->new_iterator(), {}))
+            return;
         std::string body;
         append_u32_be(body, IndexDatabase::FORMAT_VERSION);
         put(layout::Family::Registry, layout::format_key(),

@@ -267,6 +267,8 @@ set(TEST_CPP_SOURCES
     index/test_build_file_count.cpp
     index/test_build_parallelism.cpp
     index/test_build_peak.cpp
+    index/test_design_a.cpp
+    index/test_scan_errors.cpp
     index/test_big_member_reads.cpp
     index/test_parser_reuse.cpp
     index/test_parse_allocations.cpp

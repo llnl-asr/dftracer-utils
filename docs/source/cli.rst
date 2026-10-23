@@ -524,7 +524,7 @@ dftracer_index
 - ``-d, --directory <path>`` - Input directory containing gzip trace files (``.pfw.gz``, ``.jsonl.gz`` or ``.ndjson.gz``), read with all of its subfolders (default: .)
 - ``--dimensions <dims>`` - Comma-separated args fields to index by name, nested ones included (e.g., level,mode,io.size)
 - ``--schema <id>`` - Record schema of every trace: a registered id, such as ``dftracer`` or ``generic`` (default: detected per file from its first lines)
-- ``--memory-budget <bytes>`` - Bytes the build may hold at once; past it large files are indexed fewer at a time and spill to disk (default: 0 = about a third of available memory; accepts units such as 512MB)
+- ``--memory-budget <bytes>`` - Bytes the build may hold at once; a file starts when its expected bytes fit, so past the budget fewer files run at a time, and large files spill to disk; each worker holds at least 8 MiB of the output it has not committed, in half of the budget, so a budget of 64 MB or less runs at most 4 workers (default: 0 = about a third of available memory; accepts units such as 512MB)
 - ``--stats-share <fraction>`` - Also index each file's other paths, most frequent first, while their evidence fits this fraction of the file's compressed size, at least 8 MiB: numbers get a per-chunk min/max, strings a per-chunk bloom up to 256 distinct values (default: 0.05; must be in (0, 1])
 - ``--path-budget <n>`` - Ceiling on how many other paths get evidence (default: 0, no count limit)
 - ``-f, --force`` - Force index recreation even if already built

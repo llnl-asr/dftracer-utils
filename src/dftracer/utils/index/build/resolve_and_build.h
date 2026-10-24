@@ -63,6 +63,14 @@ struct ResolveAndBuildInput {
 coro::CoroTask<ResolverResult> resolve_and_build_index(
     CoroScope* scope, ResolveAndBuildInput input);
 
+/// The files of `input` that need a whole-file build: not indexed, changed
+/// since they were, or indexed with other settings than `input` names. Uses the
+/// same decision as resolve_and_build_index, with the size and mtime of
+/// `input.entries` when it holds them. An index in another format is removed
+/// first. Each entry holds the path, size and mtime.
+coro::CoroTask<std::vector<utilities::filesystem::FileEntry>>
+files_needing_index(ResolverInput input);
+
 /// Rebuilds any index root for `directory`/`files` that is missing or stale, so
 /// read-before-use entry points never see a changed source. Named coroutines
 /// with by-value params (CP.53) so callers, especially coroutine lambdas, hold

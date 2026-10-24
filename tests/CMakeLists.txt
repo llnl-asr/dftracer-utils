@@ -260,6 +260,7 @@ set(TEST_CPP_SOURCES
     index/test_kinds.cpp
     index/test_member_pieces.cpp
     index/test_index_pass_parallel.cpp
+    index/test_index_skip.cpp
     index/test_catalog.cpp
     index/test_bloom_open_counts.cpp
     index/test_build_memory.cpp
@@ -386,6 +387,12 @@ foreach(test_file ${TEST_CPP_SOURCES})
       DFTRACER_UTILS_TEST_INTERPOSE_PATH="$<TARGET_FILE:input_syscalls_interpose>"
       DFTRACER_UTILS_TEST_BIN_DIR="$<TARGET_FILE_DIR:dftracer_index>")
     set_tests_properties(${bin_exec} PROPERTIES TIMEOUT 300 RUN_SERIAL TRUE)
+  endif()
+
+  if(bin_exec STREQUAL "index/test_index_skip")
+    add_dependencies(${target_name} dftracer_index)
+    target_compile_definitions(${target_name} PRIVATE
+      DFTRACER_UTILS_TEST_INDEX_BINARY="$<TARGET_FILE:dftracer_index>")
   endif()
 
   # Robustness test generates large (128 MB) gzip files; coverage

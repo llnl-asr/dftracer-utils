@@ -4,7 +4,9 @@
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/dstd/intern_cache.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/trace/event.h>
@@ -388,6 +390,22 @@ struct DecodeHints {
         std::uint32_t id;
     };
     std::vector<TopLeaf> top_leaf;
+    /// The keys of the record being decoded by append_dftracer_record that are
+    /// catalog paths, in order, kept from its one walk of the record.
+    struct WalkedKey {
+        std::string_view key;
+        simdjson::dom::element value;
+    };
+    dftracer::utils::dstd::Vector<WalkedKey> walked;
+    /// The key at each position of the previous record's args object, with its
+    /// interned id, and of its leaf keys, with their path id. A record of the
+    /// same shape finds its keys by one compare, not by hashing them.
+    struct KeyAt {
+        dftracer::utils::dstd::String key;
+        std::uint32_t id = dftracer::utils::dstd::StringIntern::NO_ID;
+    };
+    dftracer::utils::dstd::Vector<KeyAt> arg_key_at;
+    dftracer::utils::dstd::Vector<KeyAt> top_key_at;
 };
 
 /// Whether build_fold_event_into, given DecodeHints, walks the record's args
@@ -441,6 +459,20 @@ void build_fold_event_into(FoldEvent& ev, const DFTracerEvent& scalars,
                            dftracer::utils::dstd::StringIntern& intern,
                            bool needs_args, DecodeHints* leaves = nullptr,
                            dftracer::utils::dstd::InternCache* cache = nullptr);
+
+/// Decode a DFTracer record into the next slot of `batch` in one walk of its
+/// keys and one walk of its args: the scalars, the args (when `needs_args`, and
+/// the fhash and hhash ids always) and, with `capture_schema`, the schema
+/// leaves. The result equals build_fold_event_into and capture_schema_leaves
+/// run on DFTracerEvent::parse_scalars. Returns false, appending no slot, for a
+/// record that is not an object or has no phase. `hints` is the calling
+/// worker's own and is not shared between threads. `cache`, bound to `intern`,
+/// answers a string it has seen before.
+bool append_dftracer_record(FoldEventBuffer& batch, simdjson::dom::element root,
+                            dftracer::utils::dstd::StringIntern& intern,
+                            bool needs_args, bool capture_schema,
+                            DecodeHints& hints,
+                            dftracer::utils::dstd::InternCache* cache);
 
 /// Parse a DOM object into `ev` (reset first) as an owned event. Every string
 /// is interned, so the result stays valid after the parser that produced `root`

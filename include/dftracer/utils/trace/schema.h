@@ -108,9 +108,19 @@ inline RecordPhase read_phase(const json::JsonValue& v) {
 }
 
 inline RecordPhase read_phase(simdjson::dom::element v) {
-    if (v.is_uint64()) return phase_from_int(v.get_uint64().value_unsafe());
-    if (v.is_string()) return phase_from_letter(v.get_string().value_unsafe());
-    return RecordPhase::Unknown;
+    switch (v.type()) {
+        case simdjson::dom::element_type::INT64:
+        case simdjson::dom::element_type::UINT64: {
+            std::uint64_t n = 0;
+            if (v.get_uint64().get(n) == simdjson::SUCCESS)
+                return phase_from_int(n);
+            return RecordPhase::Unknown;
+        }
+        case simdjson::dom::element_type::STRING:
+            return phase_from_letter(v.get_string().value_unsafe());
+        default:
+            return RecordPhase::Unknown;
+    }
 }
 
 /// On-demand values are single-use; type() is checked before the one consuming

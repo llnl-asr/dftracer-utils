@@ -8,6 +8,7 @@
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/runtime/coro/async_semaphore.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <dftracer/utils/trace/internal/parse_walks.h>
 #include <dftracer/utils/trace/views/event_source.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
@@ -86,21 +87,34 @@ std::uint32_t intern_leaf_path(dftracer::utils::dstd::StringIntern& intern,
 
 std::uint8_t leaf_type_tag(simdjson::dom::element v) {
     using dftracer::utils::index::store::PathType;
+    using T = simdjson::dom::element_type;
     PathType t = PathType::NullValue;
-    if (v.is_string())
-        t = PathType::String;
-    else if (v.is_int64())
-        t = PathType::Int;
-    else if (v.is_uint64())
-        t = PathType::Uint;
-    else if (v.is_double())
-        t = PathType::Double;
-    else if (v.is_bool())
-        t = PathType::Bool;
-    else if (v.is_array())
-        t = PathType::Array;
-    else if (v.is_object())
-        t = PathType::Object;
+    switch (v.type()) {
+        case T::STRING:
+            t = PathType::String;
+            break;
+        case T::INT64:
+            t = PathType::Int;
+            break;
+        case T::UINT64:
+            t = v.get_int64().error() == simdjson::SUCCESS ? PathType::Int
+                                                           : PathType::Uint;
+            break;
+        case T::DOUBLE:
+            t = PathType::Double;
+            break;
+        case T::BOOL:
+            t = PathType::Bool;
+            break;
+        case T::ARRAY:
+            t = PathType::Array;
+            break;
+        case T::OBJECT:
+            t = PathType::Object;
+            break;
+        default:
+            break;
+    }
     return static_cast<std::uint8_t>(t);
 }
 
@@ -886,6 +900,223 @@ void capture_schema_leaves(FoldEvent& ev, simdjson::dom::element root,
         path.assign(k);
         enumerate_leaves(path, kv.value, intern, ev);
     }
+}
+
+namespace {
+
+template <std::size_t N>
+bool key_is(std::string_view key, const char (&literal)[N]) {
+    return key.size() == N - 1 && std::memcmp(key.data(), literal, N - 1) == 0;
+}
+
+bool read_uint(simdjson::dom::element v, std::uint64_t& out) {
+    std::uint64_t n = 0;
+    if (v.get_uint64().get(n) != simdjson::SUCCESS) return false;
+    out = n;
+    return true;
+}
+
+bool read_text(simdjson::dom::element v, std::string_view& out) {
+    std::string_view text;
+    if (v.get_string().get(text) != simdjson::SUCCESS) return false;
+    out = text;
+    return true;
+}
+
+}  // namespace
+
+namespace {
+
+// The most positions of an args object or a record whose keys are remembered.
+constexpr std::size_t MAX_KEY_POSITIONS = 64;
+
+// Whether the `n` bytes at `a` and `b` are equal, without a library call for a
+// key of up to 16 bytes: two loads that overlap cover it.
+bool same_bytes(const char* a, const char* b, std::size_t n) {
+    if (n >= 8) {
+        if (n > 16) return std::memcmp(a, b, n) == 0;
+        std::uint64_t a0, a1, b0, b1;
+        std::memcpy(&a0, a, 8);
+        std::memcpy(&b0, b, 8);
+        std::memcpy(&a1, a + n - 8, 8);
+        std::memcpy(&b1, b + n - 8, 8);
+        return ((a0 ^ b0) | (a1 ^ b1)) == 0;
+    }
+    if (n >= 4) {
+        std::uint32_t a0, a1, b0, b1;
+        std::memcpy(&a0, a, 4);
+        std::memcpy(&b0, b, 4);
+        std::memcpy(&a1, a + n - 4, 4);
+        std::memcpy(&b1, b + n - 4, 4);
+        return ((a0 ^ b0) | (a1 ^ b1)) == 0;
+    }
+    for (std::size_t i = 0; i < n; ++i)
+        if (a[i] != b[i]) return false;
+    return true;
+}
+
+// The id of `key` found at position `pos` of the record being decoded: the
+// remembered one when the previous record had the same key there, otherwise
+// `resolve(key)`, which is remembered.
+template <class Resolve>
+std::uint32_t key_at(dftracer::utils::dstd::Vector<DecodeHints::KeyAt>& slots,
+                     std::size_t pos, std::string_view key, Resolve&& resolve) {
+    if (pos >= MAX_KEY_POSITIONS) return resolve(key);
+    if (pos >= slots.size()) slots.resize(pos + 1);
+    DecodeHints::KeyAt& slot = slots[pos];
+    if (slot.id != dftracer::utils::dstd::StringIntern::NO_ID &&
+        slot.key.size() == key.size() &&
+        same_bytes(slot.key.data(), key.data(), key.size()))
+        return slot.id;
+    slot.id = resolve(key);
+    slot.key.assign(key.data(), key.size());
+    return slot.id;
+}
+
+}  // namespace
+
+bool append_dftracer_record(FoldEventBuffer& batch, simdjson::dom::element root,
+                            dftracer::utils::dstd::StringIntern& intern,
+                            bool needs_args, bool capture_schema,
+                            DecodeHints& hints,
+                            dftracer::utils::dstd::InternCache* cache) {
+    simdjson::dom::object top;
+    if (root.get_object().get(top) != simdjson::SUCCESS) return false;
+    trace::internal::parse_walks::record_walk();
+
+    RecordPhase phase = RecordPhase::Unknown;
+    std::uint64_t pid = 0, tid = 0, ts = 0, dur = 0;
+    std::string_view cat, name;
+    bool has_ph = false;
+    bool has_dur = false;
+    bool has_args = false;
+    simdjson::dom::object args;
+    hints.walked.clear();
+
+    // The axis keys are not catalog paths; every other key is kept, in order,
+    // for the leaf pass below.
+    for (auto field : top) {
+        const std::string_view key = field.key;
+        const simdjson::dom::element val = field.value;
+        bool leaf = capture_schema;
+        switch (key.size()) {
+            case 2:
+                if (key_is(key, "ph")) {
+                    phase = trace::read_phase(val);
+                    has_ph = true;
+                    leaf = false;
+                } else if (key_is(key, "ts")) {
+                    read_uint(val, ts);
+                    leaf = false;
+                } else if (key_is(key, "id")) {
+                    leaf = false;
+                }
+                break;
+            case 3:
+                if (key_is(key, "pid")) {
+                    read_uint(val, pid);
+                    leaf = false;
+                } else if (key_is(key, "tid")) {
+                    read_uint(val, tid);
+                    leaf = false;
+                } else if (key_is(key, "dur")) {
+                    if (read_uint(val, dur)) has_dur = true;
+                    leaf = false;
+                } else if (key_is(key, "cat")) {
+                    read_text(val, cat);
+                }
+                break;
+            case 4:
+                if (key_is(key, "name")) {
+                    read_text(val, name);
+                } else if (key_is(key, "args")) {
+                    if (val.get_object().get(args) == simdjson::SUCCESS)
+                        has_args = true;
+                }
+                break;
+            default:
+                break;
+        }
+        if (leaf) hints.walked.push_back({key, val});
+    }
+    if (!has_ph) return false;
+
+    FoldEvent& ev = batch.append();
+    Ids ids{intern, cache};
+    reset_fold_event(ev);
+    ev.phase = phase;
+    ev.pid = pid;
+    ev.tid = tid;
+    ev.ts = ts;
+    ev.dur = dur;
+    ev.has_dur = has_dur;
+    if (!cat.empty()) ev.cat_id = ids.get_or_insert(cat);
+    if (!name.empty()) ev.name_id = ids.get_or_insert(name);
+
+    // A non-empty args object is walked once, for the event and, with
+    // needs_args, for its leaves; otherwise args is a leaf of the record pass.
+    const bool args_walked = has_args && args.size() > 0;
+    if (has_args) {
+        trace::internal::parse_walks::args_walk();
+        DecodeHints* const leaves =
+            needs_args && args_walked && capture_schema ? &hints : nullptr;
+        const auto key_id = [&](std::string_view key) {
+            return ids.get_or_insert(key);
+        };
+        std::size_t pos = 0;
+        for (auto field : args) {
+            const std::string_view key = field.key;
+            const simdjson::dom::element v = field.value;
+            const std::size_t at = pos++;
+            if (key_is(key, "fhash") || key_is(key, "hhash")) {
+                const std::uint32_t id = intern_string(ids, v);
+                (key[0] == 'f' ? ev.fhash_id : ev.hhash_id) = id;
+                if (leaves)
+                    ev.schema_leaves.emplace_back(
+                        arg_leaf_id(*leaves, intern,
+                                    key_at(hints.arg_key_at, at, key, key_id),
+                                    key),
+                        leaf_type_tag(v));
+            } else if (needs_args) {
+                switch (v.type()) {
+                    case simdjson::dom::element_type::OBJECT:
+                    case simdjson::dom::element_type::ARRAY: {
+                        std::string nested(key);
+                        flatten_nested_arg(nested, v, intern, ev, leaves);
+                        break;
+                    }
+                    default:
+                        append_arg_leaf(
+                            ev, key_at(hints.arg_key_at, at, key, key_id), key,
+                            v, ids, leaves);
+                }
+            }
+        }
+    }
+
+    if (!capture_schema) return true;
+    // Like capture_schema_leaves with skip_args: every args key is skipped
+    // when the args walk emitted the leaves; otherwise args is a leaf in place.
+    const bool args_in_walk = needs_args && args_walked;
+    std::size_t at = 0;
+    for (const auto& [key, val] : hints.walked) {
+        const std::size_t pos = at++;
+        if (args_in_walk && key_is(key, "args")) continue;
+        const auto type = val.type();
+        if (!key.empty() && type != simdjson::dom::element_type::OBJECT &&
+            type != simdjson::dom::element_type::ARRAY) {
+            ev.schema_leaves.emplace_back(key_at(hints.top_key_at, pos, key,
+                                                 [&](std::string_view k) {
+                                                     return top_leaf_id(
+                                                         hints, intern, k);
+                                                 }),
+                                          leaf_type_tag(val));
+            continue;
+        }
+        hints.path.assign(key);
+        enumerate_leaves(hints.path, val, intern, ev);
+    }
+    return true;
 }
 
 std::vector<std::string> extra_capture_fields(const ViewPlan& plan) {

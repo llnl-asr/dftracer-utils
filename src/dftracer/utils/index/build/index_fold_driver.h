@@ -486,7 +486,6 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         std::size_t total = c.buf->size();
         trace::strip_array_delimiters(c.buf->data(), total);
         c.buf->resize(total + simdjson::SIMDJSON_PADDING, '\0');
-        std::size_t line_number = 0;
         if (cfg.decoder == index::Decoder::Path) {
             trace::parse_lines(
                 parser, c.buf->data(), total,
@@ -502,27 +501,17 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         } else {
             trace::views::detail::DecodeHints hints;
             dftracer::utils::dstd::InternCache cache(intern);
-            trace::parse_buffer(
-                parser, c.buf, total, c.checkpoint_idx, line_number,
-                [&](const trace::EventRecord& r) {
-                    if (cfg.keep_lines) c.lines.push_back(r.line);
-                    trace::views::detail::FoldEvent& ev = c.batch->append();
-                    trace::views::detail::DecodeHints* leaves =
-                        cfg.capture_schema &&
-                                trace::views::detail::args_leaves_in_walk(
-                                    cfg.needs_args, r.has_args, r.args_dom)
-                            ? &hints
-                            : nullptr;
-                    trace::views::detail::build_fold_event_into(
-                        ev, r.ev, r.args_dom, r.has_args, intern,
-                        cfg.needs_args, leaves, &cache);
+            trace::parse_lines(
+                parser, c.buf->data(), total,
+                [&](simdjson::dom::element root, std::string_view line) {
+                    if (!trace::views::detail::append_dftracer_record(
+                            *c.batch, root, intern, cfg.needs_args,
+                            cfg.capture_schema, hints, &cache))
+                        return;
+                    if (cfg.keep_lines) c.lines.push_back(line);
                     for (const auto& name : cfg.extra_fields)
                         trace::views::detail::capture_extra_field(
-                            ev, r.json.element(), intern, name);
-                    if (cfg.capture_schema)
-                        trace::views::detail::capture_schema_leaves(
-                            ev, r.json.element(), intern, leaves != nullptr,
-                            &hints);
+                            c.batch->events_mut().back(), root, intern, name);
                 });
         }
     }

@@ -148,6 +148,36 @@ class IndexArgParse : public cli::ArgParse {
     }
 };
 
+// Split out so the run_single_task lambda holds no coroutine locals, which
+// ICEs GCC 12/13.
+static coro::CoroTask<int> select_stale_task(
+    ResolverInput input, std::vector<utilities::filesystem::FileEntry>* stale) {
+    *stale = co_await files_needing_index(std::move(input));
+    co_return 0;
+}
+
+static void print_summary(double seconds, std::size_t indexed,
+                          std::size_t skipped, std::size_t failed,
+                          std::size_t events,
+                          const std::vector<std::string>& dimensions) {
+    std::printf("\n");
+    std::printf("==========================================\n");
+    std::printf("Bloom Index Results\n");
+    std::printf("==========================================\n");
+    std::printf("  Execution time: %.2f seconds\n", seconds);
+    std::printf("  Files processed: %zu\n", indexed);
+    std::printf("  Files skipped: %zu\n", skipped);
+    std::printf("  Files failed: %zu\n", failed);
+    std::printf("  Events processed: %zu\n", events);
+    std::printf("  Dimensions indexed: %zu\n", dimensions.size());
+    std::printf("  Dimensions: ");
+    for (std::size_t i = 0; i < dimensions.size(); ++i) {
+        std::printf("%s%s", dimensions[i].c_str(),
+                    i < dimensions.size() - 1 ? ", " : "\n");
+    }
+    std::printf("==========================================\n");
+}
+
 static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     const auto log_dir = fs::absolute(cli->directory.value).string();
     const auto& dimensions_str = cli->dimensions;
@@ -240,6 +270,46 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     auto matched_entries =
         cli::scan_trace_files_on_pool(cli->pipeline, log_dir);
 
+    const auto start_time = std::chrono::high_resolution_clock::now();
+    if (matched_entries.empty()) {
+        DFTRACER_UTILS_LOG_ERROR("No trace files found in: %s",
+                                 log_dir.c_str());
+        co_return 1;
+    }
+    DFTRACER_UTILS_LOG_INFO("Found %zu input files", matched_entries.size());
+    log_stage("scan");
+
+    // A file whose index is current is skipped: the freshness decision is the
+    // resolver's, from the size and mtime the scan read.
+    std::size_t skipped_fresh = 0;
+    if (!force_rebuild) {
+        ResolverInput resolve_input;
+        resolve_input.entries = matched_entries;
+        resolve_input.index_dir = index_dir;
+        resolve_input.require_checkpoints = true;
+        resolve_input.require_bloom = true;
+        resolve_input.checkpoint_size = checkpoint_size;
+        resolve_input.bloom_config = indexer_config;
+        resolve_input.schema = cli->record_schema;
+        std::vector<utilities::filesystem::FileEntry> stale;
+        cli::run_single_task(
+            "DFTracer Bloom Indexer", cli->pipeline, [&](CoroScope&) {
+                return select_stale_task(std::move(resolve_input), &stale);
+            });
+        skipped_fresh = matched_entries.size() - stale.size();
+        matched_entries = std::move(stale);
+        log_stage("resolve");
+    }
+
+    if (matched_entries.empty()) {
+        print_summary(
+            std::chrono::duration<double>(
+                std::chrono::high_resolution_clock::now() - start_time)
+                .count(),
+            0, skipped_fresh, 0, 0, all_dimensions);
+        co_return 0;
+    }
+
     std::vector<std::string> input_files;
     std::vector<std::size_t> scanned_sizes;
     input_files.reserve(matched_entries.size());
@@ -248,15 +318,6 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
         input_files.push_back(entry.path.string());
         scanned_sizes.push_back(entry.size);
     }
-
-    if (input_files.empty()) {
-        DFTRACER_UTILS_LOG_ERROR("No trace files found in: %s",
-                                 log_dir.c_str());
-        co_return 1;
-    }
-
-    DFTRACER_UTILS_LOG_INFO("Found %zu input files", input_files.size());
-    log_stage("scan");
 
     // Files in logical path order get file ids in that order, so a run of ids
     // is a run of paths and the index's SSTs of different runs do not overlap.
@@ -292,8 +353,6 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
         cli::build_pipeline_config("DFTracer Bloom Indexer", cli->pipeline);
 
     Pipeline pipeline(pipeline_config);
-
-    auto start_time = std::chrono::high_resolution_clock::now();
 
     std::vector<int> preassigned_file_ids;
     int first_fresh_file_id = 0;
@@ -401,23 +460,10 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
 
-    std::printf("\n");
-    std::printf("==========================================\n");
-    std::printf("Bloom Index Results\n");
-    std::printf("==========================================\n");
-    std::printf("  Execution time: %.2f seconds\n", duration.count() / 1000.0);
-    std::printf("  Files processed: %zu\n", batch_result.indexed);
-    std::printf("  Files skipped: %zu\n", batch_result.skipped);
-    std::printf("  Files failed: %zu\n", batch_result.failed);
-    std::printf("  Events processed: %zu\n",
-                static_cast<std::size_t>(batch_result.total_events));
-    std::printf("  Dimensions indexed: %zu\n", all_dimensions.size());
-    std::printf("  Dimensions: ");
-    for (std::size_t i = 0; i < all_dimensions.size(); ++i) {
-        std::printf("%s%s", all_dimensions[i].c_str(),
-                    i < all_dimensions.size() - 1 ? ", " : "\n");
-    }
-    std::printf("==========================================\n");
+    print_summary(duration.count() / 1000.0, batch_result.indexed,
+                  batch_result.skipped + skipped_fresh, batch_result.failed,
+                  static_cast<std::size_t>(batch_result.total_events),
+                  all_dimensions);
 
     for (const auto& r : batch_result.results) {
         if (!r.success && !r.was_skipped) {

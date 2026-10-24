@@ -239,6 +239,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix a second `dftracer_index` run on unchanged files indexing every file again.
+  It now skips them, indexes a file again only when its size, its mtime or the index settings changed, and `--force` still indexes all.
 - Fix `dftracer_index` exiting with status 0 when a file failed to index, and `dftracer_split` reporting 0 chunk files for a plain input.
   Both now print that the file is not gzip and exit with status 1.
 - Fix a stack overflow crash of `dftracer_stats` and `dftracer_comparator` on thousands of files that share one index root.

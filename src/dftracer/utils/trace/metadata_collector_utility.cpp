@@ -145,7 +145,7 @@ MetadataCollectorUtility::process_compressed(
         if (!seen && !input.force_rebuild) {
             co_await root->gate.acquire(1);
             const internal::RootPermit reading(*root, 1);
-            if (fs::exists(input.index_path)) {
+            if (input_exists(input.index_path)) {
                 seen = fresh_index_record(input.index_path, input.file_path,
                                           input_stat);
                 if (seen) {
@@ -162,13 +162,14 @@ MetadataCollectorUtility::process_compressed(
                 *root, internal::IndexRoot::ALL_PERMITS);
             if (!input.force_rebuild) seen = known();
             if (!seen) {
-                meta.has_index = fs::exists(input.index_path);
+                meta.has_index = input_exists(input.index_path);
                 std::shared_ptr<CheckpointIndexer> indexer;
                 if (!meta.has_index || input.force_rebuild) {
                     if (input.force_rebuild && meta.has_index) {
                         DFTRACER_UTILS_LOG_DEBUG("Removing existing index: %s",
                                                  input.index_path.c_str());
                         fs::remove_all(input.index_path);
+                        forget_input(input.index_path);
                     }
                     DFTRACER_UTILS_LOG_DEBUG("Building index for: %s",
                                              input.file_path.c_str());

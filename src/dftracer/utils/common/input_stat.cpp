@@ -36,6 +36,13 @@ void InputStatCache::insert(const std::string& path, const InputFileStat& st) {
     map_->emplace(dstd::String(path.data(), path.size()), st);
 }
 
+void InputStatCache::erase(const std::string& path) {
+    std::unique_lock lock(mutex_);
+    if (!map_) return;
+    const auto it = map_->find(std::string_view(path));
+    if (it != map_->end()) map_->erase(it);
+}
+
 InputStatScope::InputStatScope() {
     std::lock_guard<std::mutex> lock(g_published_mutex);
     if (g_published) return;
@@ -56,6 +63,11 @@ bool stat_input(const std::string& path, InputFileStat& out) {
     if (!stat_path(path.c_str(), out)) return false;
     cache->insert(path, out);
     return true;
+}
+
+void forget_input(const std::string& path) {
+    const dstd::SharedPtr<InputStatCache> cache = published();
+    if (cache) cache->erase(path);
 }
 
 }  // namespace dftracer::utils

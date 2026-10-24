@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Stat the shared index folder once in a `dftracer_view` run, where each input file made up to 4 stat calls and 7 lstat calls on it.
+  A view of the 8,404 minife traces makes 34,954 stat calls cold and 33,780 warm where it made 51,756 and 67,392, and 8,148 lstat calls warm where it made 66,913.
 - Ingest the index files of a cold `dftracer_view` from each worker as it finishes its files, where one thread ingested all of them after the parse.
   A cold view of the 8,404 minife traces at 48 threads takes 7.5 to 8.6 s where it took 11.1 to 12.1 s, with the stored index unchanged.
 - Stat the files of a directory scan on the pool of `dftracer_view`, `dftracer_index`, `dftracer_split` and `dftracer_run` instead of one at a time on the main thread.

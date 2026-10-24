@@ -212,7 +212,7 @@ void ensure_indexes_fresh(const std::vector<ViewFile>& files) {
             if (confirmed_files().keys.contains(key)) continue;
 
             auto [it, opened] = dbs.try_emplace(f.index_path);
-            if (opened && fs::exists(f.index_path)) {
+            if (opened && input_exists(f.index_path)) {
                 try {
                     it->second.emplace(f.index_path,
                                        st::IndexOpenMode::ReadOnly);

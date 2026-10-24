@@ -18,6 +18,7 @@ class InputStatCache {
    public:
     bool find(const std::string& path, InputFileStat& out) const;
     void insert(const std::string& path, const InputFileStat& st);
+    void erase(const std::string& path);
 
    private:
     mutable std::shared_mutex mutex_;
@@ -52,6 +53,10 @@ bool stat_input(const std::string& path, InputFileStat& out);
 inline bool stat_input(const fs::path& path, InputFileStat& out) {
     return stat_input(path.string(), out);
 }
+
+/// Drops `path` from the published cache; no-op without one. A caller that
+/// deletes a path it may have stat'ed through stat_input() calls it.
+void forget_input(const std::string& path);
 
 /// Whether `path` exists, is a directory, or is a regular file, through the
 /// published cache.

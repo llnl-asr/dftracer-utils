@@ -1,6 +1,7 @@
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/platform_compat.h>
@@ -95,8 +96,13 @@ namespace dftracer::utils::trace::views::detail {
 // Every file is a clean first touch: it has an index path that does not exist
 // yet, so a bootstrap can build it (and there is nothing to read instead).
 static bool all_files_fresh(const ViewPlan& plan) {
-    for (const auto& f : plan.files)
-        if (f.index_path.empty() || fs::exists(f.index_path)) return false;
+    const std::string* checked = nullptr;
+    for (const auto& f : plan.files) {
+        if (f.index_path.empty()) return false;
+        if (checked && *checked == f.index_path) continue;
+        if (input_exists(f.index_path)) return false;
+        checked = &f.index_path;
+    }
     return true;
 }
 
@@ -1142,7 +1148,7 @@ ViewPlan resolve_bucket_origin(const ViewPlan& plan) {
     const bool by_path = plan_by_path(plan);
     const ix::Roles& roles = plan_record_schema(plan).roles;
     for (const auto& f : plan.files) {
-        if (f.index_path.empty() || !fs::exists(f.index_path)) continue;
+        if (f.index_path.empty() || !input_exists(f.index_path)) continue;
         try {
             dftracer::utils::index::store::IndexDatabase db(
                 f.index_path,

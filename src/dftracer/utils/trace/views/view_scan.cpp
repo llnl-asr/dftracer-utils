@@ -1,6 +1,7 @@
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
@@ -356,8 +357,8 @@ coro::CoroTask<std::vector<ScanUnit>> gather_units(const ViewPlan& plan,
                     ViewPlannerInput pin;
                     pin.with_view(vdef)
                         .with_file_path(f.file_path)
-                        .with_index_path(fs::exists(index_path) ? index_path
-                                                                : "")
+                        .with_index_path(input_exists(index_path) ? index_path
+                                                                  : "")
                         .with_uncompressed_size(uc_sizes[fi])
                         .with_num_checkpoints(ckpt_counts[fi]);
                     // Path-decoded files prune time through their time field.
